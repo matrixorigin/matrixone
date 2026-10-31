@@ -413,6 +413,18 @@ func ExpandObjectStatsToBatch(
 	return nil
 }
 
+// DeletePersisted deletes every object this writer persisted (or may have
+// persisted through a commit-ambiguous Sync) without tearing the writer
+// down: a producer that fails mid-protocol removes its partial output
+// instead of leaving unowned files in the object store. See
+// ioutil.Sinker.DeletePersisted for the ownership snapshot semantics.
+func (w *CNS3Writer) DeletePersisted(ctx context.Context) ([]string, error) {
+	if w.sinker == nil {
+		return nil, nil
+	}
+	return w.sinker.DeletePersisted(ctx)
+}
+
 func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
 
 	w.ResetBlockInfoBat()

@@ -619,6 +619,12 @@ func (h *PartitionChangesHandle) swapCurrentHandleToVisibleState(ctx context.Con
 		h.visibleResources,
 		h.visibleStateStartRelation(),
 	)
+	if err == nil {
+		// The visible-state handle h.end-stamps every row it serves;
+		// provenance consumers certify this range as synthetic through
+		// the resources' observer seam (r53 D156(E) amendment).
+		engine.NotifyVisibleStateRecoverySubstitution(h.visibleResources)
+	}
 	return err
 }
 

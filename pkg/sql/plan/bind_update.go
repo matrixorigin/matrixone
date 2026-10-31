@@ -2365,6 +2365,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		}
 		if appendMainContext {
 			updateCtxList = append(updateCtxList, updateCtx)
+			if !isMultiTargetUpdate && updatePkMoveLinkEligible(dmlCtx.objRefs[i], tableDef) {
+				// Synthetic ctx marking that this genuine UPDATE may contain
+				// pk-move provenance: the operator records old->new pk links
+				// per moved row into mo_catalog.mo_data_branch_update_link,
+				// plus a never-committed same-key continuity marker when a
+				// non-key edit replaces a workspace-minted row an earlier
+				// statement's move recorded. pk-unchanged updates of durable
+				// rows emit nothing. REPLACE and ODKU never reach this path,
+				// so they keep delete+insert semantics.
+				updateCtxList = append(updateCtxList, buildUpdatePkMoveLinkPlanCtx(int32(len(updateCtxList)-1)))
+			}
 			lockTargets = append(lockTargets, &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				ObjRef:             dmlCtx.objRefs[i],

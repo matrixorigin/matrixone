@@ -444,7 +444,7 @@ func TestIssue26796DumpAllClearsVacatedSlotsThroughFullSlice(t *testing.T) {
 	require.NotPanics(t, func() {
 		txn.Lock()
 		defer txn.Unlock()
-		require.NoError(t, txn.dumpBatchLocked(context.Background(), -1))
+		require.NoError(t, txn.dumpBatchLocked(context.Background(), -1, -1))
 	}, "commit-time dump with a retired hole must not panic while clearing vacated slots")
 
 	txn.Lock()

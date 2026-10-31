@@ -17,6 +17,9 @@ package engine
 import (
 	"context"
 	"os"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // ChangeRangeLimit is an opt-in memory bound for range replay. Callers that
@@ -97,4 +100,26 @@ func ChangeRangeSpillFromContext(ctx context.Context) ChangeRangeSpillConfig {
 	}
 	config, _ := ctx.Value(changeRangeSpillContextKey{}).(ChangeRangeSpillConfig)
 	return config
+}
+
+// changeRangeCapacityMessage marks the capacity class: an attached
+// ChangeRangeLimit was exhausted while assembling a replay stream. The class
+// is distinct from caller misconfiguration (validation errors) and from
+// integrity errors (stale or unservable history): consumers that attached the
+// bound recognize it to take their own capacity lane instead of treating the
+// read as corrupt.
+const changeRangeCapacityMessage = "change range exceeded its attached in-memory bound"
+
+// NewChangeRangeCapacityError reports exhaustion of an attached
+// ChangeRangeLimit during replay assembly. It is a capacity-class error:
+// nothing about the underlying stream was unreadable or corrupt, and retrying
+// with a larger (or no) attached bound serves the identical rows.
+func NewChangeRangeCapacityError(detail string) error {
+	return moerr.NewInternalErrorNoCtxf("%s: %s", changeRangeCapacityMessage, detail)
+}
+
+// IsChangeRangeCapacityError reports whether err belongs to the capacity
+// class produced by NewChangeRangeCapacityError.
+func IsChangeRangeCapacityError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), changeRangeCapacityMessage)
 }

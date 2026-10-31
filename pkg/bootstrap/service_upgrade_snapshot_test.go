@@ -120,7 +120,7 @@ func TestApplySnapshotDecisionPageRechecksOwnership(t *testing.T) {
 					case strings.HasPrefix(sql, "select state from mo_version"):
 						return testCatalogUpgradeState(t, versions.StateCreated), nil
 					case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where id = 7 for update"):
-						res := buildUpgradeVersionResult(7, tc.state, "4.0.6", "4.0.7", 41, 0, versions.Yes, versions.Yes, 0, 0)
+						res := buildUpgradeVersionResult(7, tc.state, "4.0.6", "4.0.7", 43, 0, versions.Yes, versions.Yes, 0, 0)
 						t.Cleanup(func() { mpool.DeleteMPool(res.Mp) })
 						return res, nil
 					case sql == catalog.SnapshotLifecycleGateSQL:
@@ -144,7 +144,7 @@ func TestApplySnapshotDecisionPageRechecksOwnership(t *testing.T) {
 				}, &testTxnOperator{})
 				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(*service) {})
 				t.Cleanup(s.stopper.Stop)
-				err = s.applySnapshotDecisionPage(t.Context(), versions.VersionUpgrade{ID: 7, ToVersion: "4.0.7", FinalVersion: "4.0.7", FinalVersionOffset: 41}, []snapshotDecisionRecord{*d})
+				err = s.applySnapshotDecisionPage(t.Context(), versions.VersionUpgrade{ID: 7, ToVersion: "4.0.7", FinalVersion: "4.0.7", FinalVersionOffset: 43}, []snapshotDecisionRecord{*d})
 				if tc.wantError != "" {
 					require.ErrorContains(t, err, tc.wantError)
 				} else {

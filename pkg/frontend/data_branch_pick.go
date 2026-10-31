@@ -160,6 +160,7 @@ func pickMergeDiffs(
 	stmt *tree.DataBranchPick,
 	tblStuff tableStuff,
 	produce func(emitFunc) error,
+	depKeys map[string]struct{},
 ) (err error) {
 
 	var (
@@ -213,7 +214,7 @@ func pickMergeDiffs(
 			return false, err
 		}
 		if err := appendPickedBatchRows(ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys); err != nil {
+			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys, depKeys); err != nil {
 			return false, err
 		}
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
@@ -254,6 +255,7 @@ func appendPickedBatchRows(
 	userConflictOpt *tree.ConflictOpt,
 	skipSet map[string]struct{},
 	acceptedDirectUpdateKeys map[string]struct{},
+	depKeys map[string]struct{},
 ) (err error) {
 	// PICK only cares about two kinds of batches from hashDiff:
 	//   1. target INSERT (side=target, kind=INSERT) — source rows to add/replace
@@ -266,12 +268,28 @@ func appendPickedBatchRows(
 	if wrapped.side == diffSideBase && wrapped.kind != diffDelete {
 		return nil
 	}
+	if wrapped.keyMovingUpdate && wrapped.side == diffSideTarget {
+		if wrapped.kind == diffDelete {
+			// The LCA before-image rides along for conflict checks only.
+			return nil
+		}
+		return appendPickedKeyMovingRows(
+			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
+			skipSet, acceptedDirectUpdateKeys,
+		)
+	}
+
 	directUpdate, err := dataBranchDirectUpdateBatch(tblStuff, wrapped, appender.batchInfo)
 	if err != nil {
 		return err
 	}
 
 	row := make([]any, len(tblStuff.def.colNames))
+	var depKeyPacker *types.Packer
+	if depKeys != nil {
+		depKeyPacker = types.NewPacker()
+		defer depKeyPacker.Close()
+	}
 
 	for rowIdx := range wrapped.batch.RowCount() {
 		if ctx.Err() != nil {
@@ -283,6 +301,36 @@ func appendPickedBatchRows(
 		pkKey, err2 := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
 		if err2 != nil {
 			return err2
+		}
+
+		// Dependency-admitted keys (pk-move link endpoints outside the
+		// literal KEYS set) exist only to reassemble proven moves: rows not
+		// claimed by a key-moving fold are not part of the selection.
+		if depKeyPacker != nil {
+			depKeyPacker.Reset()
+			if err2 = vector.EncodeRowToPacker(
+				depKeyPacker, wrapped.batch.Vecs[tblStuff.def.pkColIdx], rowIdx,
+			); err2 != nil {
+				return err2
+			}
+			if _, depOnly := depKeys[string(depKeyPacker.Bytes())]; depOnly {
+				if wrapped.side == diffSideBase {
+					// A conflict victim at a dependency key may still be
+					// consumed by a claimed fold; only defer it (marker),
+					// never apply/FAIL/SKIP it on its own.
+					if userConflictOpt != nil && userConflictOpt.Opt == tree.CONFLICT_ACCEPT &&
+						acceptedDirectUpdateKeys != nil && wrapped.hasReplacement {
+						acceptedDirectUpdateKeys[pkKey] = struct{}{}
+					}
+					continue
+				}
+				// Target-side row at a dependency key without a proven
+				// fold: not selected. Drop any deferred marker with it.
+				if acceptedDirectUpdateKeys != nil {
+					delete(acceptedDirectUpdateKeys, pkKey)
+				}
+				continue
+			}
 		}
 
 		// Handle conflict semantics for picked keys.
@@ -352,6 +400,143 @@ func appendPickedBatchRows(
 	}
 
 	return nil
+}
+
+// appendPickedKeyMovingRows applies target-side key-moving update rows under
+// PICK. Each batch row carries its new values while keyMovingOldKeys[i]
+// holds row i's OLD primary key for the WHERE predicate. Preserved ACCEPT
+// conflict markers ride on the OLD key when the destination changed the
+// moved row itself, and on the NEW key when an independent destination row
+// already claims it — the latter wins back the key with an explicit victim
+// delete before the move writes it.
+//
+// Under WHEN CONFLICT SKIP the consumer enforces the user's clause itself:
+// the producer was forced to CONFLICT_ACCEPT so every folded move arrives
+// here. Skipping only the move whose own old key is conflict-marked is not
+// enough — a skipped move no longer vacates its old key on the destination,
+// so any surviving folded move landing at that key would fire its
+// authorized victim delete against the very row the clause kept (and
+// declared ON DELETE actions would erase its family). The skip set is
+// therefore resolved BEFORE any row applies through the same
+// move-dependency closure the fold planner uses
+// (cascadeKeyMovingFoldKeep via shrinkKeyMovingFoldCascade): dependents of
+// a skipped move are skipped with it, transitively (r25 review F1).
+func appendPickedKeyMovingRows(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	wrapped batchWithKind,
+	tmpValsBuffer *bytes.Buffer,
+	appender sqlValuesAppender,
+	skipSet map[string]struct{},
+	acceptedDirectUpdateKeys map[string]struct{},
+) (err error) {
+	if len(wrapped.keyMovingOldKeys) != wrapped.batch.RowCount() {
+		return moerr.NewInternalErrorNoCtxf(
+			"data branch key-moving update has %d old keys for %d rows",
+			len(wrapped.keyMovingOldKeys), wrapped.batch.RowCount())
+	}
+	if len(wrapped.keyMovingWhereKeys) != 0 &&
+		len(wrapped.keyMovingWhereKeys) != wrapped.batch.RowCount() {
+		return moerr.NewInternalErrorNoCtxf(
+			"data branch key-moving update has %d where keys for %d rows",
+			len(wrapped.keyMovingWhereKeys), wrapped.batch.RowCount())
+	}
+	if len(skipSet) != 0 && wrapped.batch.RowCount() > 0 {
+		var initialDrops []int64
+		for rowIdx := range wrapped.batch.RowCount() {
+			oldRow := wrapped.keyMovingOldKeys[rowIdx]
+			if oldRow == nil {
+				return moerr.NewInternalErrorNoCtxf(
+					"data branch key-moving update row %d misses its old key", rowIdx)
+			}
+			var oldKeyStr string
+			if oldKeyStr, err = formatPKValuesAsString(ses, tblStuff, oldRow); err != nil {
+				return err
+			}
+			if _, skipped := skipSet[oldKeyStr]; skipped {
+				initialDrops = append(initialDrops, int64(rowIdx))
+			}
+		}
+		if len(initialDrops) != 0 {
+			var ok bool
+			if wrapped, ok, err = shrinkKeyMovingFoldCascade(
+				ses, tblStuff, wrapped, initialDrops); err != nil {
+				return err
+			} else if !ok {
+				return nil
+			}
+		}
+	}
+	row := make([]any, len(tblStuff.def.colNames))
+	for rowIdx := range wrapped.batch.RowCount() {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		oldRow := wrapped.keyMovingOldKeys[rowIdx]
+		if oldRow == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"data branch key-moving update row %d misses its old key", rowIdx)
+		}
+		var oldKeyStr string
+		if oldKeyStr, err = formatPKValuesAsString(ses, tblStuff, oldRow); err != nil {
+			return err
+		}
+		if acceptedDirectUpdateKeys != nil {
+			// Consume the preserved conflict markers riding on either
+			// endpoint of the move. The destination's own change to the
+			// moved row loses by the user's choice; a destination row
+			// holding the new key is removed inline by execKeyMovingUpdate.
+			delete(acceptedDirectUpdateKeys, oldKeyStr)
+			var newKeyStr string
+			if newKeyStr, err = extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx); err != nil {
+				return err
+			}
+			delete(acceptedDirectUpdateKeys, newKeyStr)
+		}
+		if err = extractDataBranchApplyRow(
+			ctx, ses, tblStuff, wrapped.batch, rowIdx, nil, row,
+			"data branch pick key-moving batch shape mismatch",
+		); err != nil {
+			return err
+		}
+		if err = execKeyMovingUpdate(
+			ctx, ses, appender.bh, appender.writeFile, tblStuff,
+			row, pickKeyMovingWhereRow(wrapped, rowIdx),
+			keyMovingRowVictimAuthorized(wrapped, rowIdx), wrapped.restoreMissing,
+			tmpValsBuffer,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// formatPKValuesAsString serializes the primary-key values held in a []any
+// row (the keyMovingOldKeys form) into the same canonical string that
+// extractPKAsString produces for batch rows, so old keys match the conflict
+// markers recorded for the delete half of the update.
+func formatPKValuesAsString(
+	ses *Session,
+	tblStuff tableStuff,
+	row []any,
+) (string, error) {
+	var buf bytes.Buffer
+
+	for i, colIdx := range tblStuff.def.pkColIdxes {
+		if row[colIdx] == nil {
+			buf.WriteString("NULL")
+		} else {
+			if err := formatValIntoString(ses, row[colIdx], tblStuff.def.colTypes[colIdx], &buf); err != nil {
+				return "", err
+			}
+		}
+		if i < len(tblStuff.def.pkColIdxes)-1 {
+			buf.WriteByte(',')
+		}
+	}
+
+	return buf.String(), nil
 }
 
 // extractPKAsString serializes the PK column(s) of a batch row into a

@@ -2535,6 +2535,20 @@ func TestGCFiles(t *testing.T) {
 		}
 
 		for i := range files {
+			if j == 1 {
+				// The second round must write under fresh names: with the
+				// first round's names reused, every [0,2] entry stays
+				// referenced by the second round's entries outside the
+				// range, and the D121 live-reference guard in
+				// gcObjsByIdxRange filters the whole set out instead of
+				// reaching the (full) worker pool this round exercises.
+				// The guard keys on ObjectName.String(), the
+				// [NameStringOff, NameStringOff+NameStringLen) window, so
+				// the distinguishing byte has to land inside that window.
+				name := make(objectio.ObjectName, objectio.ObjectNameLen)
+				name[objectio.NameStringOff] = byte(0x10 + i)
+				objectio.SetObjectStatsObjectName(&files[i], name)
+			}
 			objectio.SetObjectStatsBlkCnt(&files[i], 1)
 			objectio.SetObjectStatsRowCnt(&files[i], 1)
 			bat := colexec.AllocCNS3ResultBat(false)

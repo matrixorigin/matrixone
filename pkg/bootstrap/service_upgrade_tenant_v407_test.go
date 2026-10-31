@@ -52,7 +52,7 @@ func TestV407TaskCompletionAfterLastAccountCommit(t *testing.T) {
 			case strings.HasPrefix(sql, "select account_id, create_version from mo_account"):
 				return ownRecoveryResult(t, buildUpgradeTenantAccountRows([]int32{1, 2}, accountVersions)), nil
 			case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "for update"):
-				return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateUpgradingTenant, "4.0.6", "4.0.7", 41, 0, versions.Yes, versions.Yes, 2, 2)), nil
+				return ownRecoveryResult(t, buildUpgradeVersionResult(10, versions.StateUpgradingTenant, "4.0.6", "4.0.7", 43, 0, versions.Yes, versions.Yes, 2, 2)), nil
 			case strings.HasPrefix(sql, "update mo_upgrade_tenant set ready = 1"):
 				taskReady = versions.Yes
 				taskUpdates++

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 func (update *MultiUpdate) String(buf *bytes.Buffer) {
@@ -65,7 +67,8 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	if update.ctr.updateCtxInfos == nil {
 		update.ctr.updateCtxInfos = make(map[string]*updateCtxInfo)
 		for _, updateCtx := range update.MultiUpdateCtx {
-			if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) {
+			isPkMoveLink := isUpdatePkMoveLinkCtx(updateCtx)
+			if !isPkMoveLink && !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) {
 				update.mainTable = updateCtx.TableDef.TblId
 			}
 
@@ -77,7 +80,9 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			}
 
 			tableType := UpdateMainTable
-			if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
+			if isPkMoveLink {
+				tableType = UpdatePkMoveLinkTable
+			} else if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
 				tableType = UpdateUniqueIndexTable
 			} else if catalog.IsSecondaryIndexTable(updateCtx.TableDef.Name) {
 				tableType = UpdateSecondaryIndexTable
@@ -90,14 +95,41 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		if update.Action != UpdateWriteS3 {
-			if info.Source == nil {
+			// D221: a cached prepared-compile operator survives across
+			// executions while MultiUpdate.Reset keeps updateCtxInfos,
+			// so the retention relation handle cached by
+			// resolvePkMoveRetentionSource must re-bind to the EXECUTING
+			// transaction here exactly like info.Source; otherwise
+			// staged identity rows ride the first, already-removed
+			// transaction's workspace. A re-bind failure aborts the
+			// statement — degrading would risk writing into a dead
+			// workspace.
+			if info.retentionSource != nil {
+				if err := info.retentionSource.Reset(proc.GetTxnOperator()); err != nil {
+					return err
+				}
+			}
+			if info.Source == nil && !info.pkMoveLinkDisabled {
 				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
 				if err != nil {
+					if isUpdatePkMoveLinkCtx(updateCtx) && isPkMoveLinkTableMissingErr(err) {
+						// Tenants created before v4.0.15 lack the link
+						// table; degrade to the legacy delete+insert diff
+						// behaviour instead of failing the update. Any
+						// OTHER resolution failure is fatal here: the
+						// statement aborts, so user rows and provenance
+						// links always commit or abort together.
+						info.pkMoveLinkDisabled = true
+						logutil.Warn("skip pk-move update links: link table unavailable", zap.Error(err))
+						continue
+					}
 					return err
 				}
 				info.Source = rel
-			} else if err := info.Source.Reset(proc.GetTxnOperator()); err != nil {
-				return err
+			} else if info.Source != nil {
+				if err := info.Source.Reset(proc.GetTxnOperator()); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -229,6 +261,14 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 			return vm.CancelResult, err
 		}
 
+		// This operator only BUFFERS the update to S3; the durable write
+		// happens in the downstream UpdateFlushS3Info operator, which
+		// stages independent per-table delete/insert streams. The old->new
+		// pairing the pk-move link protocol needs exists only in the
+		// buffered batch, so s3WriterDelegate.append records the link rows
+		// (with NULL replacement identity) from the same target-deduped
+		// batch it splits; the commit-timestamp tie binds the fold.
+
 		result := vm.NewCallResult()
 		result.Batch = batch.EmptyBatch
 		return result, nil
@@ -315,6 +355,17 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	for i, action := range actions {
 		if actionType(action) == actionAffectedRows {
 			update.addAffectedRowsFunc(rowCounts[i])
+			continue
+		}
+		if actionType(action) == actionPkMoveLink {
+			// Link provenance stages in this (coordinator) workspace; a
+			// resolution failure degrades to legacy behaviour instead of
+			// failing the flush, mirroring the producer-side disable.
+			if err := update.flushPkMoveLinkBatch(
+				proc, analyzer, tables[i], nameData[i].UnsafeGetString(nameArea),
+				batData[i].GetByteSlice(batArea)); err != nil {
+				return vm.CancelResult, err
+			}
 			continue
 		}
 		source, err := update.getSourceByID(tables[i], proc)
@@ -407,6 +458,106 @@ func (update *MultiUpdate) updateFlushS3Info(proc *process.Process, analyzer pro
 	return input, nil
 }
 
+// flushPkMoveLinkBatch stages one ferried pk-move link batch into the
+// coordinator's committing workspace. Only this workspace's fill hook and
+// commit prune complete provenance (identity back-fill, marker
+// consumption, lineage heals, dead-replacement retirement), so the S3
+// producers send their synthesized link batches here instead of writing
+// a producer-local relation.
+//
+// The ferried record names the OWNER table: the synthetic link ctx's plan
+// TableDef is schema-only with TblId 0 (a per-account virtual catalog
+// table), so a by-id lookup can never resolve it. The receiver matches the
+// owner id to its own link ctx and resolves the relation through the same
+// lazy per-account path the workspace route uses; an unresolvable link
+// table (a tenant predating v4.0.15) degrades to legacy diff behaviour
+// rather than failing the flush.
+func (update *MultiUpdate) flushPkMoveLinkBatch(
+	proc *process.Process,
+	analyzer process.Analyzer,
+	ownerTableID uint64,
+	name string,
+	data []byte,
+) (err error) {
+	raw := batch.NewOffHeapEmpty()
+	defer raw.Clean(proc.Mp())
+	if err = raw.UnmarshalBinaryWithAnyMp(data, proc.Mp()); err != nil {
+		return err
+	}
+
+	var linkCtx *MultiUpdateCtx
+	for _, updateCtx := range update.MultiUpdateCtx {
+		if !isUpdatePkMoveLinkCtx(updateCtx) {
+			continue
+		}
+		ownerIdx := updateCtx.TargetUpdateCtxIdx
+		if ownerIdx < 0 || ownerIdx >= len(update.MultiUpdateCtx) {
+			continue
+		}
+		if targetTableID(update.MultiUpdateCtx[ownerIdx]) == ownerTableID {
+			linkCtx = updateCtx
+			break
+		}
+	}
+	if linkCtx == nil {
+		logutil.Warn("skip ferried pk-move update links: no link context for owner table",
+			zap.Uint64("table_id", ownerTableID))
+		return nil
+	}
+	source, err := update.resolvePkMoveLinkSource(proc, linkCtx)
+	if err != nil || source == nil {
+		return err
+	}
+
+	bat := raw
+	if name != "" {
+		// The producer spilled its buffered links to one object per link
+		// ctx (see spillPkMoveLinkBufs) and ferried the block-info.
+		// Rebuild the exact row shape an in-memory batch would have
+		// staged so every downstream workspace consumer (fill hook,
+		// identity completion, lineage heal) sees one uniform layout.
+		// The ferry row PUBLISHED the spill records: cleanup ownership
+		// transferred here, to the committing consumer, which deletes
+		// object and marker after the staging below succeeds (the
+		// producer's reset/free now skip them; a consumer that never
+		// runs leaves them to the marker's expired GC replay).
+		if name != pkMoveLinkSpillName {
+			return moerr.NewInternalError(proc.Ctx,
+				fmt.Sprintf("unexpected pk-move link ferry transport %q", name))
+		}
+		if bat, err = update.loadSpilledPkMoveLinkBatch(proc, raw, linkCtx); err != nil {
+			return err
+		}
+		defer bat.Clean(proc.Mp())
+	}
+	crs := analyzer.GetOpCounterSet()
+	newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+	newCtx = update.writeContext(newCtx, ownerTableID)
+	// Retention genesis rides the same transaction on the S3 ferry route
+	// (D159): stage the identity row for the ferried link batch's owner —
+	// a landing failure aborts the statement and the cut removes both.
+	// D218: only a ferried batch carrying a real moved-address row admits
+	// genesis; continuity markers alone stage nothing.
+	ownerIdx := linkCtx.TargetUpdateCtxIdx
+	if ownerIdx >= 0 && ownerIdx < len(update.MultiUpdateCtx) &&
+		pkMoveLinkBatchHasRealMove(bat) {
+		if err = update.stagePkMoveRetentionRows(
+			proc, analyzer, linkCtx, update.MultiUpdateCtx[ownerIdx]); err != nil {
+			return err
+		}
+	}
+	if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
+		return source.Write(newCtx, bat)
+	}); err != nil {
+		return err
+	}
+	if name != "" {
+		update.consumePkMoveLinkSpillOwnership(proc, raw)
+	}
+	analyzer.AddWrittenRows(int64(bat.RowCount()))
+	return nil
+}
+
 func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer process.Analyzer, bat *batch.Batch) (err error) {
 	targetBatches := make(map[int]*batch.Batch)
 	defer func() {
@@ -438,6 +589,15 @@ func (update *MultiUpdate) updateOneBatch(proc *process.Process, analyzer proces
 			targetBatches[targetIdx] = contextBatch
 		}
 		if contextBatch.RowCount() == 0 {
+			continue
+		}
+
+		if isUpdatePkMoveLinkCtx(updateCtx) {
+			if pkMoveLinkWriteAction(update.Action) {
+				if err = update.insertUpdatePkMoveLinkRows(proc, analyzer, updateCtx, update.MultiUpdateCtx[targetIdx], contextBatch); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 
@@ -849,7 +1009,9 @@ func (update *MultiUpdate) resetMultiUpdateCtxs() {
 		}
 
 		tableType := UpdateMainTable
-		if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
+		if isUpdatePkMoveLinkCtx(updateCtx) {
+			tableType = UpdatePkMoveLinkTable
+		} else if catalog.IsUniqueIndexTable(updateCtx.TableDef.Name) {
 			tableType = UpdateUniqueIndexTable
 		} else if catalog.IsSecondaryIndexTable(updateCtx.TableDef.Name) {
 			tableType = UpdateSecondaryIndexTable
@@ -863,7 +1025,17 @@ func (update *MultiUpdate) resetMultiSources(proc *process.Process) error {
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := lookupUpdateCtxInfo(update.ctr.updateCtxInfos, updateCtx)
 		info.Source = nil
+		// D221: the cached retention handle dies with its transaction
+		// too; clearing it lets the lazy resolver re-resolve under the
+		// executing txn (the sticky pkMoveRetentionDisabled degrade bit
+		// is preserved).
+		info.retentionSource = nil
 		if update.Action != UpdateWriteS3 {
+			if isUpdatePkMoveLinkCtx(updateCtx) {
+				// Resolved lazily by insertUpdatePkMoveLinkRows so tenants
+				// without the link table degrade instead of erroring.
+				continue
+			}
 			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, update.Engine, updateCtx.ObjRef)
 			if err != nil {
 				return err

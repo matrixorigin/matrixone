@@ -5167,6 +5167,8 @@ func TestCompactExpiredAlterDataBranchLineage(t *testing.T) {
 			wantDeletes: true,
 			wantSQLSuffix: []string{
 				"delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')",
+				"delete from mo_catalog.mo_data_branch_update_link where link_id >= x'0000000000000002' and link_id < x'0000000000000003'",
+				"delete from mo_catalog.mo_data_branch_link_retention where row_kind = 0 and table_id = 2",
 				"delete from mo_catalog.mo_branch_metadata where table_id in (2) and (level = 'alter' or level like 'alter:%')",
 			},
 		},

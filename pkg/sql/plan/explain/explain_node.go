@@ -893,6 +893,10 @@ func (ndesc *NodeDescribeImpl) GetUpdateCtxInfo(ctx context.Context, options *Ex
 	var lines []string
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		for _, updateCtx := range ndesc.Node.UpdateCtxList {
+			if plan2.IsDataBranchUpdateLinkPlanCtx(updateCtx) {
+				// internal pk-move provenance write: keep EXPLAIN output stable
+				continue
+			}
 			buf := bytes.NewBuffer(make([]byte, 0, 512))
 			buf.WriteString("Table: " + updateCtx.TableDef.Name)
 			if len(updateCtx.InsertCols) > 0 {

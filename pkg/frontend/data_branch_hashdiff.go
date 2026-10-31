@@ -15,10 +15,14 @@
 package frontend
 
 import (
+	"bytes"
+	"container/heap"
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -995,9 +999,11 @@ func hashDiff(
 	var (
 		baseDataHashmap      databranchutils.BranchHashmap
 		baseTombstoneHashmap databranchutils.BranchHashmap
+		basePkMoveEvidence   *pkMoveStreamEvidence
 
 		tarDataHashmap      databranchutils.BranchHashmap
 		tarTombstoneHashmap databranchutils.BranchHashmap
+		tarPkMoveEvidence   *pkMoveStreamEvidence
 	)
 
 	defer func() {
@@ -1031,17 +1037,24 @@ func hashDiff(
 		logutil.Info("DataBranch-HashDiff-Done", fields...)
 	}()
 
+	// The evidence capture matches findDeleteAndUpdateBat's own provider
+	// gate (apply-capable diff over a real-pk table): chain walks consume
+	// it only when those same conditions hold there.
+	wantPkMoveEvidence := copt.expandUpdate && tblStuff.def.pkKind != fakeKind
+
 	buildBaseStart := time.Now()
-	if baseDataHashmap, baseTombstoneHashmap, err = buildHashmapForTable(
+	if baseDataHashmap, baseTombstoneHashmap, basePkMoveEvidence, err = buildHashmapForTable(
 		ctx, ses.proc.Mp(), &tblStuff, baseHandle, "base", pickKeyHashmap,
+		wantPkMoveEvidence,
 	); err != nil {
 		return
 	}
 	buildBaseCost = time.Since(buildBaseStart)
 
 	buildTargetStart := time.Now()
-	if tarDataHashmap, tarTombstoneHashmap, err = buildHashmapForTable(
+	if tarDataHashmap, tarTombstoneHashmap, tarPkMoveEvidence, err = buildHashmapForTable(
 		ctx, ses.proc.Mp(), &tblStuff, tarHandle, "target", pickKeyHashmap,
+		wantPkMoveEvidence,
 	); err != nil {
 		return
 	}
@@ -1059,8 +1072,8 @@ func hashDiff(
 	} else {
 		if err = hashDiffIfHasLCA(
 			ctx, ses, bh, dagInfo, tblStuff, copt, emit,
-			tarDataHashmap, tarTombstoneHashmap,
-			baseDataHashmap, baseTombstoneHashmap,
+			tarDataHashmap, tarTombstoneHashmap, tarPkMoveEvidence,
+			baseDataHashmap, baseTombstoneHashmap, basePkMoveEvidence,
 		); err != nil {
 			return
 		}
@@ -1080,8 +1093,10 @@ func hashDiffIfHasLCA(
 	emit emitFunc,
 	tarDataHashmap databranchutils.BranchHashmap,
 	tarTombstoneHashmap databranchutils.BranchHashmap,
+	tarPkMoveEvidence *pkMoveStreamEvidence,
 	baseDataHashmap databranchutils.BranchHashmap,
 	baseTombstoneHashmap databranchutils.BranchHashmap,
+	basePkMoveEvidence *pkMoveStreamEvidence,
 ) (err error) {
 
 	// Resolve per-side LCA snapshots once. Both sides must resolve
@@ -1133,13 +1148,54 @@ func hashDiffIfHasLCA(
 		baseDeleteBatches  []batchWithKind
 		baseUpdateBatches  []batchWithKind
 		restoreMissingKeys = make(map[string]struct{})
+		// parkedRestoreBatches holds the restored-from-delete insert
+		// emissions until every surviving key-moving move of this table
+		// has been planned and emitted. A restore lands at the lineage's
+		// landed key, which a surviving move in this same window may
+		// first need to vacate: replayed before that move, the restore
+		// insert's authorized victim delete removes the very occupant the
+		// move was going to relocate, and the move's UPDATE then rewrites
+		// (and cascades onto) the restored row — the destination silently
+		// loses both lineages the clause meant to keep (r23 review F1).
+		// The walk resolves restore-vs-move dependency order HERE (the
+		// drain after phase 2); the topological ranker continues to
+		// resolve move-vs-move order upstream.
+		parkedRestoreBatches []batchWithKind
+		// skippedKeyMovingOldKeys records the OLD keys of key-moving updates
+		// whose delete half was suppressed by a SKIP conflict, so the insert
+		// half can drop the same move instead of overwriting the destination.
+		skippedKeyMovingOldKeys = make(map[string]struct{})
 		// A source update reaches this matcher as a delete of its LCA row followed
 		// by an insert of its replacement row. Record destination updates that
 		// changed an indexed special column so their source replacement can use a
 		// full-row native UPDATE even after the destination batch is consumed.
 		destinationChangedIndexedSpecialKeys = make(map[string]struct{})
 		sourceNativeUpdateKeys               = make(map[string]struct{})
+		// destinationMovedNewKeys maps the OLD key of a destination-side
+		// key-moving update to the NEW primary-key values the destination
+		// moved that row to. When the source moved the same original row
+		// (both sides moved it in this window), the accepted source version
+		// must be applied to the destination row at the key where it
+		// currently lives; applying it at the vacated old key would update
+		// zero rows and silently drop the source move.
+		destinationMovedNewKeys = make(map[string][]any)
+		// keyMovingResolvedNewKeys records the NEW keys of folded source pk
+		// moves that the delete/update conflict matcher already resolved
+		// against destination batches. The independent-occupant check at
+		// apply time must skip those keys: their collision was settled by
+		// the resolver, not bypassed.
+		keyMovingResolvedNewKeys = make(map[string]struct{})
 	)
+
+	// Release any parked restore batch the walk never drained (error paths);
+	// successfully drained entries are zeroed one by one as they emit.
+	defer func() {
+		for i := range parkedRestoreBatches {
+			if parkedRestoreBatches[i].batch != nil {
+				tblStuff.retPool.releaseRetBatch(parkedRestoreBatches[i].batch, false)
+			}
+		}
+	}()
 
 	rememberDestinationChangedIndexedSpecialKeys := func(wrapped batchWithKind) error {
 		if copt.conflictOpt == nil || copt.conflictOpt.Opt != tree.CONFLICT_ACCEPT ||
@@ -1159,10 +1215,44 @@ func hashDiffIfHasLCA(
 
 	handleBaseDeleteAndUpdates := func(wrapped batchWithKind) error {
 		wrapped.side = diffSideBase
-		if err2 := sortDataBranchBatchByPrimaryKey(
+		if wrapped.keyMovingUpdate && wrapped.kind == diffInsert {
+			// Key-moving batches arrive in topological apply order; the
+			// merge-joins below need primary-key order, and every sidecar
+			// must be permuted identically or rows detach from their keys.
+			if err2 := reorderKeyMovingBatch(
+				wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(), nil,
+				wrapped.keyMovingOldKeys, wrapped.keyMovingWhereKeys,
+				wrapped.keyMovingVictimAuth, wrapped.keyMovingUnchangedOcc,
+			); err2 != nil {
+				return err2
+			}
+		} else if err2 := sortDataBranchBatchByPrimaryKey(
 			wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
+		}
+		if wrapped.kind == diffInsert && wrapped.keyMovingUpdate {
+			for rowIdx := range wrapped.batch.RowCount() {
+				if rowIdx >= len(wrapped.keyMovingOldKeys) || wrapped.keyMovingOldKeys[rowIdx] == nil {
+					return moerr.NewInternalErrorNoCtxf(
+						"data branch key-moving update row %d misses its old key", rowIdx)
+				}
+				key, keyErr := formatPKValuesAsString(ses, tblStuff, wrapped.keyMovingOldKeys[rowIdx])
+				if keyErr != nil {
+					return keyErr
+				}
+				// The destination moved this row to a new key inside the
+				// window; remember where it lives now.
+				newKeys := make([]any, len(tblStuff.def.colNames))
+				for _, colIdx := range tblStuff.def.pkColIdxes {
+					if err2 := extractDataBranchSQLRowValue(
+						ctx, ses, wrapped.batch.Vecs[colIdx], colIdx, newKeys, rowIdx,
+					); err2 != nil {
+						return err2
+					}
+				}
+				destinationMovedNewKeys[key] = newKeys
+			}
 		}
 		if wrapped.kind == diffDelete {
 			baseDeleteBatches = append(baseDeleteBatches, wrapped)
@@ -1179,41 +1269,258 @@ func hashDiffIfHasLCA(
 	handleTarDeleteAndUpdates := func(wrapped batchWithKind) (err2 error) {
 		wrapped.side = diffSideTarget
 		var pickConflictBat *batch.Batch
+
+		// resolveKeyMovingNewKeyOccupantRows enforces conflict semantics
+		// for every live destination row sitting at a folded move's NEW
+		// key, over one insert batch and its victim-authorization flags.
+		// Two occupant kinds exist, and neither may be deleted silently:
+		//
+		//   - DESTINATION-DELTA occupant (present in baseDataHashmap): a
+		//     genuine merge conflict that never reaches foo() (only
+		//     destination deletes/updates are conflict-matched), so this
+		//     pass applies the effective option: SKIP drops the move
+		//     whole, ACCEPT authorizes the inline victim delete (PICK
+		//     additionally preserves the victim for conflict
+		//     materialization), FAIL — and a bare statement, matching
+		//     fail-like same-kind overlaps — is a conflict error.
+		//   - UNCHANGED occupant (never touched by the destination since
+		//     the branch point; the fold plan withheld victim
+		//     authorization): no statement on either side wrote that row,
+		//     so FAIL/bare is a conflict error, SKIP drops the move
+		//     whole, and ACCEPT installs nothing — authorization stays
+		//     withheld and the statement meets the raw duplicate-key
+		//     guard atomically at apply, exactly as legacy delete+insert
+		//     replay would.
+		//
+		// Keys the matcher already resolved (markKeyMovingResolved) are
+		// skipped. Ordinary folded inserts and restored-from-delete
+		// inserts share this arbiter: a restored row the destination
+		// deleted at its OLD key lands at its NEW key just like any
+		// folded move, so an independent destination row already holding
+		// the landed key must lose (ACCEPT), keep (SKIP), or abort
+		// (FAIL) the restore exactly the same way — before emission,
+		// never as a duplicate-key accident at apply. ACCEPT grants the
+		// authorization in place (victimAuth); the caller shrinks the
+		// batch and every parallel sidecar by the returned rows.
+		resolveKeyMovingNewKeyOccupantRows := func(bat *batch.Batch, victimAuth []bool, operation string) (dropSels []int64, err error) {
+			if bat.RowCount() == 0 || baseDataHashmap == nil {
+				return nil, nil
+			}
+			// effOpt is the conflict option this resolution obeys. PICK
+			// forces the producer option to ACCEPT so its consumer sees
+			// every preserved conflict, but the folded move's independent
+			// occupant must follow the clause the user actually wrote.
+			effOpt := copt.conflictOpt
+			if copt.preservePickConflicts {
+				effOpt = copt.pickUserConflictOpt
+			}
+			packer := types.NewPacker()
+			defer packer.Close()
+			for rowIdx := range bat.RowCount() {
+				key, keyErr := extractPKAsString(ses, tblStuff, bat, rowIdx)
+				if keyErr != nil {
+					return nil, keyErr
+				}
+				if _, resolved := keyMovingResolvedNewKeys[key]; resolved {
+					continue
+				}
+				authorized := rowIdx < len(victimAuth) && victimAuth[rowIdx]
+				packer.Reset()
+				if err := vector.EncodeRowToPacker(
+					packer, bat.Vecs[tblStuff.def.pkColIdx], rowIdx,
+				); err != nil {
+					return nil, err
+				}
+				ret, gerr := baseDataHashmap.GetByEncodedKey(packer.Bytes())
+				if gerr != nil {
+					return nil, gerr
+				}
+				if ret.Exists && len(ret.Rows) == 1 {
+					// Destination-delta occupant: a tracked conflict.
+					if effOpt == nil || effOpt.Opt == tree.CONFLICT_FAIL {
+						return nil, moerr.NewInternalErrorNoCtxf(
+							"conflict: %s %s and %s %s on pk(%s)",
+							wrapped.name, operation,
+							tblStuff.baseRel.GetTableName(), diffInsert, key)
+					}
+					switch effOpt.Opt {
+					case tree.CONFLICT_SKIP:
+						// The destination keeps its row; the move drops as
+						// a whole (its delete half is conflict-only and
+						// inert).
+						dropSels = append(dropSels, int64(rowIdx))
+					default:
+						// ACCEPT: the victim is a tracked destination
+						// change, so the clause authorizes removing it
+						// inline at apply; PICK additionally preserves it
+						// for conflict materialization.
+						if copt.preservePickConflicts {
+							tuple, _, decErr := baseDataHashmap.DecodeRow(ret.Rows[0])
+							if decErr != nil {
+								return nil, decErr
+							}
+							if pickConflictBat == nil {
+								pickConflictBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							}
+							if err := appendTupleToBat(ses, pickConflictBat, tuple, tblStuff); err != nil {
+								return nil, err
+							}
+						}
+						if !authorized && len(victimAuth) != 0 {
+							victimAuth[rowIdx] = true
+						}
+					}
+					continue
+				}
+				if authorized {
+					continue
+				}
+				// Unchanged occupant (or an unauthorized fixture row):
+				// never deleted inline; the clause decides.
+				if effOpt == nil || effOpt.Opt == tree.CONFLICT_FAIL {
+					return nil, moerr.NewInternalErrorNoCtxf(
+						"conflict: %s %s and %s %s on pk(%s)",
+						wrapped.name, operation,
+						tblStuff.baseRel.GetTableName(), diffInsert, key)
+				}
+				if effOpt.Opt == tree.CONFLICT_SKIP {
+					dropSels = append(dropSels, int64(rowIdx))
+				}
+			}
+			return dropSels, nil
+		}
+
+		if wrapped.keyMovingUpdate && wrapped.kind == diffInsert && len(skippedKeyMovingOldKeys) > 0 {
+			// SKIP suppressed the delete half of these moves on conflict; the
+			// move as a whole keeps the destination version, so drop the
+			// matching insert rows too — and, through the dependency
+			// cascade, every folded move that needed one of the dropped
+			// lineages to vacate its landed key (r24 review F1).
+			var initialDrops []int64
+			for rowIdx := range wrapped.batch.RowCount() {
+				if rowIdx >= len(wrapped.keyMovingOldKeys) || wrapped.keyMovingOldKeys[rowIdx] == nil {
+					return moerr.NewInternalErrorNoCtxf(
+						"data branch key-moving update row %d misses its old key", rowIdx)
+				}
+				key, keyErr := formatPKValuesAsString(ses, tblStuff, wrapped.keyMovingOldKeys[rowIdx])
+				if keyErr != nil {
+					return keyErr
+				}
+				if _, skipped := skippedKeyMovingOldKeys[key]; !skipped {
+					continue
+				}
+				delete(skippedKeyMovingOldKeys, key)
+				initialDrops = append(initialDrops, int64(rowIdx))
+			}
+			var alive bool
+			if wrapped, alive, err2 = shrinkKeyMovingFoldCascade(
+				ses, tblStuff, wrapped, initialDrops); err2 != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return err2
+			}
+			if !alive {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return nil
+			}
+		}
 		if wrapped.kind == diffInsert && wrapped.fromUpdate && len(restoreMissingKeys) > 0 {
-			var keep []int64
+			var (
+				keep                []int64
+				keepOldKeys         [][]any
+				restoreOldKeys      [][]any
+				restoreVictimAuth   []bool
+				restoreUnchangedOcc []bool
+			)
 			restoreBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
 			for rowIdx := range wrapped.batch.RowCount() {
-				key, keyErr := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
+				var (
+					key    string
+					keyErr error
+				)
+				if wrapped.keyMovingUpdate {
+					// The restore marker rides on the OLD key: the destination
+					// deleted the very row the source then moved elsewhere.
+					if rowIdx >= len(wrapped.keyMovingOldKeys) || wrapped.keyMovingOldKeys[rowIdx] == nil {
+						tblStuff.retPool.releaseRetBatch(restoreBat, false)
+						return moerr.NewInternalErrorNoCtxf(
+							"data branch key-moving update row %d misses its old key", rowIdx)
+					}
+					key, keyErr = formatPKValuesAsString(ses, tblStuff, wrapped.keyMovingOldKeys[rowIdx])
+				} else {
+					key, keyErr = extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
+				}
 				if keyErr != nil {
 					tblStuff.retPool.releaseRetBatch(restoreBat, false)
 					return keyErr
 				}
 				if _, restore := restoreMissingKeys[key]; !restore {
 					keep = append(keep, int64(rowIdx))
+					if wrapped.keyMovingUpdate {
+						keepOldKeys = append(keepOldKeys, wrapped.keyMovingOldKeys[rowIdx])
+					}
 					continue
 				}
 				if err2 = restoreBat.UnionOne(wrapped.batch, int64(rowIdx), ses.proc.Mp()); err2 != nil {
 					tblStuff.retPool.releaseRetBatch(restoreBat, false)
 					return err2
 				}
+				if wrapped.keyMovingUpdate {
+					// The restored row is a proven move: carry the selected
+					// old-key identity and the fold's authorizations with
+					// it so the apply consumers can consume the ACCEPT
+					// conflict marker riding on the old key (PICK) and run
+					// the authorized victim delete at the landed key
+					// before re-inserting what the destination deleted.
+					restoreOldKeys = append(restoreOldKeys, wrapped.keyMovingOldKeys[rowIdx])
+					restoreVictimAuth = append(restoreVictimAuth,
+						keyMovingRowVictimAuthorized(wrapped, rowIdx))
+					restoreUnchangedOcc = append(restoreUnchangedOcc,
+						rowIdx < len(wrapped.keyMovingUnchangedOcc) && wrapped.keyMovingUnchangedOcc[rowIdx])
+				}
 				delete(restoreMissingKeys, key)
+			}
+			// Landed-key occupant resolution for the restored rows: a
+			// restored move lands at its NEW key exactly like an ordinary
+			// folded move, so an independent destination row already
+			// holding that key must follow the same clause — ACCEPT
+			// authorizes the inline victim delete (PICK additionally
+			// preserves the victim for conflict materialization), SKIP
+			// drops the restore whole, FAIL aborts. Without this pass the
+			// ACCEPT restore insert met the tracked occupant as a
+			// duplicate key at apply (r22 review F4).
+			if wrapped.keyMovingUpdate {
+				dropSels, rerr := resolveKeyMovingNewKeyOccupantRows(
+					restoreBat, restoreVictimAuth, wrapped.logicalOperation())
+				if rerr != nil {
+					tblStuff.retPool.releaseRetBatch(restoreBat, false)
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return rerr
+				}
+				if len(dropSels) != 0 {
+					restoreBat.Shrink(dropSels, true)
+					restoreOldKeys = removeKeyMovingOldKeys(restoreOldKeys, dropSels)
+					restoreVictimAuth = removeKeyMovingBoolFlags(restoreVictimAuth, dropSels)
+					restoreUnchangedOcc = removeKeyMovingBoolFlags(restoreUnchangedOcc, dropSels)
+				}
 			}
 			if restoreBat.Vecs[0].Length() > 0 {
 				restoreBat.SetRowCount(restoreBat.Vecs[0].Length())
-				if stop, e := emitBatch(emit, batchWithKind{
-					batch:          restoreBat,
-					kind:           diffInsert,
-					name:           wrapped.name,
-					side:           wrapped.side,
-					fromUpdate:     true,
-					restoreMissing: true,
-				}, false, tblStuff.retPool); e != nil {
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-					return e
-				} else if stop {
-					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
-					return nil
-				}
+				// Park the restore until every surviving move of this table
+				// has been planned and emitted; the drain after phase 2 emits
+				// the parked restores in encounter order (see the declaration
+				// of parkedRestoreBatches for the dependency-order argument).
+				parkedRestoreBatches = append(parkedRestoreBatches, batchWithKind{
+					batch:                 restoreBat,
+					kind:                  diffInsert,
+					name:                  wrapped.name,
+					side:                  wrapped.side,
+					fromUpdate:            true,
+					restoreMissing:        true,
+					keyMovingUpdate:       wrapped.keyMovingUpdate,
+					keyMovingOldKeys:      restoreOldKeys,
+					keyMovingVictimAuth:   restoreVictimAuth,
+					keyMovingUnchangedOcc: restoreUnchangedOcc,
+				})
 			} else {
 				tblStuff.retPool.releaseRetBatch(restoreBat, false)
 			}
@@ -1221,7 +1528,40 @@ func hashDiffIfHasLCA(
 				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 				return nil
 			}
-			wrapped.batch.Shrink(keep, true)
+			// Keep the rows that were not restored; the restored ones already
+			// left through restoreBat. negate=false keeps the given rows — the
+			// previous negate=true inverted that and would have re-processed
+			// restored rows as ordinary inserts once a batch held both kinds.
+			wrapped.batch.Shrink(keep, false)
+			if wrapped.keyMovingUpdate {
+				wrapped.keyMovingOldKeys = keepOldKeys
+				wrapped.keyMovingVictimAuth = keepKeyMovingBoolFlags(wrapped.keyMovingVictimAuth, keep)
+				wrapped.keyMovingUnchangedOcc = keepKeyMovingBoolFlags(wrapped.keyMovingUnchangedOcc, keep)
+			}
+		}
+		if wrapped.keyMovingUpdate && wrapped.kind == diffInsert && len(destinationMovedNewKeys) > 0 {
+			// The destination moved the same original row in this window.
+			// Retarget the accepted source replacement at the destination
+			// row's current key so the native UPDATE lands instead of
+			// silently matching zero rows at the vacated old key.
+			for rowIdx := range wrapped.batch.RowCount() {
+				if rowIdx >= len(wrapped.keyMovingOldKeys) || wrapped.keyMovingOldKeys[rowIdx] == nil {
+					return moerr.NewInternalErrorNoCtxf(
+						"data branch key-moving update row %d misses its old key", rowIdx)
+				}
+				key, keyErr := formatPKValuesAsString(ses, tblStuff, wrapped.keyMovingOldKeys[rowIdx])
+				if keyErr != nil {
+					return keyErr
+				}
+				whereRow, moved := destinationMovedNewKeys[key]
+				if !moved {
+					continue
+				}
+				if wrapped.keyMovingWhereKeys == nil {
+					wrapped.keyMovingWhereKeys = make([][]any, wrapped.batch.RowCount())
+				}
+				wrapped.keyMovingWhereKeys[rowIdx] = whereRow
+			}
 		}
 		if copt.conflictOpt != nil && copt.conflictOpt.Opt == tree.CONFLICT_ACCEPT &&
 			copt.expandUpdate && wrapped.kind == diffInsert && wrapped.fromUpdate &&
@@ -1236,7 +1576,66 @@ func hashDiffIfHasLCA(
 				}
 			}
 		}
+		// resolveKeyMovingNewKeyOccupants applies the shared landed-key
+		// occupant arbiter (resolveKeyMovingNewKeyOccupantRows) to the
+		// handler batch and shrinks every keyMoving sidecar by the dropped
+		// rows, extended through the move-dependency cascade so a
+		// SKIP-dropped move drags down every folded move whose landed key
+		// it would have vacated (r24 review F1). MERGE+ACCEPT no longer
+		// skips this pass: only a tracked destination change may grant the
+		// inline delete now.
+		resolveKeyMovingNewKeyOccupants := func() error {
+			if !wrapped.keyMovingUpdate || wrapped.kind != diffInsert ||
+				wrapped.batch.RowCount() == 0 || baseDataHashmap == nil {
+				return nil
+			}
+			dropSels, err := resolveKeyMovingNewKeyOccupantRows(
+				wrapped.batch, wrapped.keyMovingVictimAuth, wrapped.logicalOperation())
+			if err != nil {
+				return err
+			}
+			if len(dropSels) != 0 {
+				wrapped, _, err = shrinkKeyMovingFoldCascade(ses, tblStuff, wrapped, dropSels)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		// emitPickConflicts flushes the preserved destination victims.
+		emitPickConflicts := func() (bool, error) {
+			if pickConflictBat == nil {
+				return false, nil
+			}
+			bat := pickConflictBat
+			pickConflictBat = nil
+			return emitBatch(emit, batchWithKind{
+				batch:          bat,
+				kind:           diffDelete,
+				name:           tblStuff.baseRel.GetTableName(),
+				side:           diffSideBase,
+				hasReplacement: wrapped.kind == diffInsert || wrapped.fromUpdate,
+			}, false, tblStuff.retPool)
+		}
+
 		if len(baseUpdateBatches) == 0 && len(baseDeleteBatches) == 0 && len(sourceNativeUpdateKeys) == 0 {
+			// No ordinary delete/update conflict to check; independent
+			// destination inserts at folded new keys still need resolution.
+			if err2 = resolveKeyMovingNewKeyOccupants(); err2 != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return err2
+			}
+			if stop, e := emitPickConflicts(); e != nil {
+				return e
+			} else if stop {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return nil
+			}
+			if wrapped.batch.RowCount() == 0 {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return nil
+			}
 			// no need to check conflict
 			if stop, e := emitBatch(emit, wrapped, false, tblStuff.retPool); e != nil {
 				return e
@@ -1246,7 +1645,20 @@ func hashDiffIfHasLCA(
 			return nil
 		}
 
-		if err2 = sortDataBranchBatchByPrimaryKey(
+		// Key-moving insert batches arrive in topological apply order and
+		// carry sidecar slices: sort them by primary key for the conflict
+		// merge-joins below, permuting every sidecar identically so no
+		// permutation can detach a row from its keys or flags. The
+		// topological order is restored before emission.
+		if wrapped.keyMovingUpdate && wrapped.kind == diffInsert {
+			if err2 = reorderKeyMovingBatch(
+				wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(), nil,
+				wrapped.keyMovingOldKeys, wrapped.keyMovingWhereKeys,
+				wrapped.keyMovingVictimAuth, wrapped.keyMovingUnchangedOcc,
+			); err2 != nil {
+				return err2
+			}
+		} else if err2 = sortDataBranchBatchByPrimaryKey(
 			wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(),
 		); err2 != nil {
 			return err2
@@ -1261,6 +1673,18 @@ func hashDiffIfHasLCA(
 				pickConflictBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
 			}
 			return pickConflictBat.UnionOne(baseWrapped.batch, int64(rowIdx), ses.proc.Mp())
+		}
+
+		markKeyMovingResolved := func(tarWrapped batchWithKind, i int) error {
+			if !tarWrapped.keyMovingUpdate || tarWrapped.kind != diffInsert {
+				return nil
+			}
+			key, keyErr := extractPKAsString(ses, tblStuff, tarWrapped.batch, i)
+			if keyErr != nil {
+				return keyErr
+			}
+			keyMovingResolvedNewKeys[key] = struct{}{}
+			return nil
 		}
 
 		checkConflict := func(tarWrapped, baseWrapped batchWithKind) (sels1, sels2 []int64, err3 error) {
@@ -1292,6 +1716,9 @@ func hashDiffIfHasLCA(
 							); err3 != nil {
 								return
 							} else if cmp == 0 {
+								if err3 = markKeyMovingResolved(tarWrapped, i); err3 != nil {
+									return
+								}
 								sels1 = append(sels1, int64(i))
 								sels2 = append(sels2, int64(j))
 							}
@@ -1327,11 +1754,17 @@ func hashDiffIfHasLCA(
 						if err3 = appendPickConflict(baseWrapped, j); err3 != nil {
 							return
 						}
+						if err3 = markKeyMovingResolved(tarWrapped, i); err3 != nil {
+							return
+						}
 						// only keep the rows from tar
 						sels2 = append(sels2, int64(j))
 						i++
 						j++
 					} else if copt.conflictOpt.Opt == tree.CONFLICT_SKIP {
+						if err3 = markKeyMovingResolved(tarWrapped, i); err3 != nil {
+							return
+						}
 						sels1 = append(sels1, int64(i))
 						sels2 = append(sels2, int64(j))
 						i++
@@ -1373,10 +1806,67 @@ func hashDiffIfHasLCA(
 					return
 				} else {
 					if len(sels1) != 0 {
-						wrapped.batch.Shrink(sels1, true)
+						if wrapped.keyMovingUpdate && wrapped.kind == diffDelete &&
+							copt.conflictOpt != nil && copt.conflictOpt.Opt == tree.CONFLICT_SKIP {
+							// The delete half of the move lost the conflict under
+							// SKIP; remember the old keys so the insert half
+							// drops the same moves (the destination wins).
+							for _, rowIdx := range sels1 {
+								key, keyErr := extractPKAsString(ses, tblStuff, wrapped.batch, int(rowIdx))
+								if keyErr != nil {
+									return keyErr
+								}
+								skippedKeyMovingOldKeys[key] = struct{}{}
+							}
+						}
+						if wrapped.keyMovingUpdate && wrapped.kind == diffInsert &&
+							copt.conflictOpt != nil && copt.conflictOpt.Opt == tree.CONFLICT_SKIP {
+							// SKIP removes the conflicting folded moves as a
+							// whole: drag down every surviving move whose
+							// landed key one of them would have vacated, or
+							// its authorized victim delete would erase the
+							// destination row the clause kept (r24 review F1).
+							if wrapped, _, err2 = shrinkKeyMovingFoldCascade(
+								ses, tblStuff, wrapped, sels1); err2 != nil {
+								return err2
+							}
+						} else {
+							wrapped.batch.Shrink(sels1, true)
+							if len(wrapped.keyMovingOldKeys) != 0 {
+								wrapped.keyMovingOldKeys = removeKeyMovingOldKeys(wrapped.keyMovingOldKeys, sels1)
+								if len(wrapped.keyMovingWhereKeys) != 0 {
+									wrapped.keyMovingWhereKeys = removeKeyMovingOldKeys(wrapped.keyMovingWhereKeys, sels1)
+								}
+							}
+							if len(wrapped.keyMovingVictimAuth) != 0 {
+								wrapped.keyMovingVictimAuth = removeKeyMovingBoolFlags(wrapped.keyMovingVictimAuth, sels1)
+								if len(wrapped.keyMovingUnchangedOcc) != 0 {
+									wrapped.keyMovingUnchangedOcc = removeKeyMovingBoolFlags(
+										wrapped.keyMovingUnchangedOcc, sels1)
+								}
+							}
+						}
 					}
 
 					if len(sels2) != 0 {
+						if baseWrapped.keyMovingUpdate && len(baseWrapped.keyMovingOldKeys) != 0 {
+							// A pruned destination move must stop retargeting
+							// accepted source replacements.
+							for _, rowIdx := range sels2 {
+								if int(rowIdx) >= len(baseWrapped.keyMovingOldKeys) ||
+									baseWrapped.keyMovingOldKeys[rowIdx] == nil {
+									continue
+								}
+								key, keyErr := formatPKValuesAsString(
+									ses, tblStuff, baseWrapped.keyMovingOldKeys[rowIdx])
+								if keyErr != nil {
+									return keyErr
+								}
+								delete(destinationMovedNewKeys, key)
+							}
+							baseWrapped.keyMovingOldKeys = removeKeyMovingOldKeys(
+								baseWrapped.keyMovingOldKeys, sels2)
+						}
 						baseWrapped.batch.Shrink(sels2, true)
 					}
 				}
@@ -1413,17 +1903,39 @@ func hashDiffIfHasLCA(
 			return false
 		})
 
-		if pickConflictBat != nil {
-			if stop, e := emitBatch(emit, batchWithKind{
-				batch:          pickConflictBat,
-				kind:           diffDelete,
-				name:           tblStuff.baseRel.GetTableName(),
-				side:           diffSideBase,
-				hasReplacement: wrapped.kind == diffInsert || wrapped.fromUpdate,
-			}, false, tblStuff.retPool); e != nil {
-				return e
-			} else if stop {
-				return nil
+		// Resolve folded moves against independent destination inserts at
+		// their new keys (rows the delete/update matcher never sees).
+		if err2 = resolveKeyMovingNewKeyOccupants(); err2 != nil {
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			return err2
+		}
+
+		if stop, e := emitPickConflicts(); e != nil {
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			return e
+		} else if stop {
+			tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+			return nil
+		}
+		if wrapped.keyMovingUpdate && wrapped.kind == diffInsert {
+			// The conflict stage merged in primary-key order; the apply
+			// replays in the producer's topological order, so a move whose
+			// source row another move lands on applies after it and never
+			// meets that row as a victim at its new key.
+			rank, rankErr := keyMovingApplyRanks(ses, tblStuff, wrapped)
+			if rankErr != nil {
+				tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+				return rankErr
+			}
+			if rank != nil {
+				if err2 = reorderKeyMovingBatch(
+					wrapped.batch, tblStuff.def.pkColIdx, ses.proc.Mp(), rank,
+					wrapped.keyMovingOldKeys, wrapped.keyMovingWhereKeys,
+					wrapped.keyMovingVictimAuth, wrapped.keyMovingUnchangedOcc,
+				); err2 != nil {
+					tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
+					return err2
+				}
 			}
 		}
 		if len(sourceNativeUpdateKeys) != 0 {
@@ -1471,6 +1983,7 @@ func hashDiffIfHasLCA(
 			branchTS = baseLCAProbe
 			hashmap1 = baseDataHashmap
 			hashmap2 = baseTombstoneHashmap
+			evidence = basePkMoveEvidence
 			name     = tblStuff.baseRel.GetTableName()
 		)
 
@@ -1478,6 +1991,7 @@ func hashDiffIfHasLCA(
 			branchTS = tarLCAProbe
 			hashmap1 = tarDataHashmap
 			hashmap2 = tarTombstoneHashmap
+			evidence = tarPkMoveEvidence
 			name = tblStuff.tarRel.GetTableName()
 		}
 
@@ -1505,7 +2019,7 @@ func hashDiffIfHasLCA(
 					case tmpCh <- wrapped:
 						return nil
 					}
-				}, branchTS, copt.expandUpdate, hashmap1, hashmap2, -1,
+				}, branchTS, copt.expandUpdate, hashmap1, hashmap2, evidence, -1,
 			); err3 != nil {
 				atomicErr.Store(err3)
 			}
@@ -1519,15 +2033,15 @@ func hashDiffIfHasLCA(
 	stepHandler := func(forBase bool) (err2 error) {
 		if copt.onlineApply {
 			name, side, branchTS := tblStuff.baseRel.GetTableName(), diffSideBase, baseLCAProbe
-			hashmap1, hashmap2, handle := baseDataHashmap, baseTombstoneHashmap, handleBaseDeleteAndUpdates
+			hashmap1, hashmap2, evidence, handle := baseDataHashmap, baseTombstoneHashmap, basePkMoveEvidence, handleBaseDeleteAndUpdates
 			if !forBase {
 				name, side, branchTS = tblStuff.tarRel.GetTableName(), diffSideTarget, tarLCAProbe
-				hashmap1, hashmap2, handle = tarDataHashmap, tarTombstoneHashmap, handleTarDeleteAndUpdates
+				hashmap1, hashmap2, evidence, handle = tarDataHashmap, tarTombstoneHashmap, tarPkMoveEvidence, handleTarDeleteAndUpdates
 			}
 			// Delivery owns the batch even on failure. Held batches remain in
 			// retPool until the agency unwinds; handlers release emitted failures.
 			return findDeleteAndUpdateBat(ctx, ses, bh, tblStuff, name, side,
-				handle, branchTS, copt.expandUpdate, hashmap1, hashmap2, 1)
+				handle, branchTS, copt.expandUpdate, hashmap1, hashmap2, evidence, 1)
 		}
 
 		var (
@@ -1591,6 +2105,37 @@ func hashDiffIfHasLCA(
 	if err = stepHandler(false); err != nil {
 		return
 	}
+
+	// Drain the parked restores only now: a restore lands at its
+	// lineage's landed key, and a surviving move in this same window may
+	// first need to vacate that key. Emitted ahead of the moves, the
+	// restore's authorized victim delete removed the very occupant the
+	// move was about to relocate, and the move's UPDATE then rewrote
+	// (and cascaded onto) the restored row — the destination silently
+	// lost both lineages the clause meant to keep (r23 review F1). Every
+	// surviving move of this table is emitted by this point (the
+	// topological ranker resolved move-vs-move order upstream), so a
+	// restore's victim delete now fires into a vacated key and its
+	// insert lands on exactly what the clause accepted.
+	for i := range parkedRestoreBatches {
+		parked := parkedRestoreBatches[i]
+		// Zero before emitting: emitBatch owns every attempted batch
+		// (handlers release emitted failures), so the error-path defer
+		// must only ever see batches the walk never attempted.
+		parkedRestoreBatches[i] = batchWithKind{}
+		var stop bool
+		if stop, err = emitBatch(emit, parked, false, tblStuff.retPool); err != nil {
+			return err
+		}
+		if stop {
+			for j := i + 1; j < len(parkedRestoreBatches); j++ {
+				tblStuff.retPool.releaseRetBatch(parkedRestoreBatches[j].batch, false)
+				parkedRestoreBatches[j] = batchWithKind{}
+			}
+			break
+		}
+	}
+
 	if len(restoreMissingKeys) != 0 {
 		return moerr.NewInternalErrorNoCtxf(
 			"data branch source update is missing %d replacement row(s)",
@@ -1829,12 +2374,112 @@ func findDeleteAndUpdateBat(
 	tblStuff tableStuff, tblName string, side int, deliver func(batchWithKind) error, branchTS types.TS,
 	expandUpdate bool,
 	dataHashmap, tombstoneHashmap databranchutils.BranchHashmap,
+	pkMoveEvidence *pkMoveStreamEvidence,
 	parallelism int,
 ) (err error) {
 
 	maxTombstoneBatchCnt := tblStuff.maxTombstoneBatchCnt
 	if maxTombstoneBatchCnt <= 0 {
 		maxTombstoneBatchCnt = maxSqlBatchCnt
+	}
+
+	// Prepare on-demand access to the recorded pk moves for this side so
+	// tombstones produced by a pk-moving UPDATE can be folded back into one
+	// native destination UPDATE instead of a delete+insert pair. Only apply
+	// contexts (expandUpdate) consume them, fake-pk tables never record
+	// links, and tenants without the catalog table degrade to legacy
+	// replay. The provider probes every physical table whose stream feeds
+	// this side (multi-generation branches) and bounds write_ts by each
+	// table's collect window; it caps its cache and fails closed past the
+	// cap.
+	var pkMoveProvider *pkMoveLinkProvider
+	if expandUpdate && tblStuff.def.pkKind != fakeKind {
+		var windows []pkMoveLinkTableWindow
+		switch side {
+		case diffSideBase:
+			windows = tblStuff.pkMoveBaseWindows
+		case diffSideTarget:
+			windows = tblStuff.pkMoveTarWindows
+		}
+		// Fall back to the endpoint table with no time bound when the
+		// collect path did not record windows (unit-test fixtures).
+		if len(windows) == 0 {
+			var rel engine.Relation
+			switch side {
+			case diffSideBase:
+				rel = tblStuff.baseRel
+			case diffSideTarget:
+				rel = tblStuff.tarRel
+			}
+			if rel != nil {
+				if id := rel.GetTableID(ctx); id != 0 {
+					windows = []pkMoveLinkTableWindow{{
+						tableID: id,
+						endPhys: math.MaxInt64,
+					}}
+				}
+			}
+		}
+		if len(windows) != 0 && bh != nil {
+			// Existence is per owner account (D220 (B.4)): a pre-upgrade
+			// owner degrades to complete absence for its own windows
+			// only; the provider serves every other owner's windows
+			// instead of collapsing the whole diff to legacy replay.
+			if windows, err = pkMoveWindowsWithCatalog(ctx, ses, bh, windows); err != nil {
+				return err
+			}
+			if len(windows) != 0 {
+				pkMoveProvider = newPkMoveLinkProvider(ctx, ses, bh, windows)
+			}
+		}
+	}
+	// claimed records the final keys proven lineages claimed during
+	// this diff; unseen tombstones at those keys are displaced
+	// occupants the fold already replaced, so the tombstones must be
+	// absorbed (skipped), not replayed as deletes.
+	claimed := newPkMoveClaimedKeys()
+
+	// The walk's tombstone evidence normally arrives from
+	// buildHashmapForTable's pre-reconciliation capture (see
+	// pkMoveStreamEvidence): generations deleted inside this window are
+	// already netted out of the maps here, so a capture against the maps
+	// would miss exactly the cross-transaction departures it exists to
+	// record. The inline capture below is the degraded fallback for
+	// direct callers without build-threaded evidence (unit-test fixtures);
+	// it still runs before this function's own shard loop starts holding
+	// the tombstone map exclusively.
+	var pkMoveView *pkMoveHashmapView
+	if pkMoveProvider != nil {
+		var departed map[pkMoveDepartKey]types.TS
+		var tombs map[string][]pkMoveTombRef
+		var capped bool
+		var tainted map[types.TS]struct{}
+		if pkMoveEvidence != nil {
+			departed, tombs, capped, tainted = pkMoveEvidence.departed,
+				pkMoveEvidence.tombs, pkMoveEvidence.capped, pkMoveEvidence.tainted
+		} else if departed, tombs, capped, err = capturePkMoveStreamEvidence(
+			ctx, dataHashmap, tombstoneHashmap, parallelism,
+		); err != nil {
+			return err
+		}
+		pkMoveView = &pkMoveHashmapView{
+			data: dataHashmap, departed: departed, tombs: tombs,
+			capped: capped, tainted: tainted,
+		}
+	}
+
+	// Prove, claim, and order every pk-move fold of this side BEFORE the
+	// shard loop matches or emits a single row: chunk boundaries and shard
+	// scheduling can then never race provenance against legacy matching or
+	// against another fold (a replacement consumed by same-key matching, an
+	// occupant deleted by an out-of-order apply). The loop below only
+	// consults the finished plan.
+	pkMovePlan, err := resolveAndBuildPkMoveFolds(
+		ctx, ses, bh, tblStuff, side, pkMoveProvider, pkMoveView,
+		tombstoneHashmap, claimed, branchTS.ToTimestamp(),
+	)
+	if err != nil {
+		return err
 	}
 
 	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
@@ -1925,63 +2570,13 @@ func findDeleteAndUpdateBat(
 				var stagedUpdateBat *batch.Batch
 				var nativeUpdateBat *batch.Batch
 				var updateDeleteBat *batch.Batch
-				if _, err2 = dataHashmap.PopByVectorsStream(
-					[]*vector.Vector{dBat.Vecs[tblStuff.def.pkColIdx]}, false,
-					func(idx int, _ []byte, row []byte) error {
-						seen[idx] = true
+				streamPkVec := dBat.Vecs[tblStuff.def.pkColIdx]
+				var streamIdx []int
 
-						if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
-							return err2
-						}
-
-						var cmp int
-						skipPKCols := tblStuff.def.pkKind != fakeKind
-						if cmp, err2 = compareTupleWithBatchRow(
-							tblStuff, tuple, dBat, idx, skipPKCols,
-						); err2 != nil {
-							return err2
-						}
-						if cmp == 0 {
-							return nil
-						}
-
-						// delete on lca and insert into tar ==> update
-						requiresNativeUpdate := false
-						if expandUpdate {
-							var updateErr error
-							requiresNativeUpdate, updateErr = dataBranchUpdateRequiresNativeUpdateFromBatch(
-								tblStuff, tuple, dBat, idx,
-							)
-							if updateErr != nil {
-								return updateErr
-							}
-						}
-						updateBat := stagedUpdateBat
-						if requiresNativeUpdate {
-							updateBat = nativeUpdateBat
-						}
-						if updateBat == nil {
-							updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
-							if requiresNativeUpdate {
-								nativeUpdateBat = updateBat
-							} else {
-								stagedUpdateBat = updateBat
-							}
-						}
-						if expandUpdate && updateDeleteBat == nil {
-							updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
-						}
-						if expandUpdate {
-							if err2 = updateDeleteBat.UnionOne(dBat, int64(idx), ses.proc.Mp()); err2 != nil {
-								return err2
-							}
-						}
-						if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
-							return err2
-						}
-						return nil
-					},
-				); err2 != nil {
+				releaseWithStreamPk := func() {
+					if streamIdx != nil {
+						streamPkVec.Free(ses.proc.Mp())
+					}
 					tblStuff.retPool.releaseRetBatch(dBat, false)
 					tblStuff.retPool.releaseRetBatch(tBat2, false)
 					if stagedUpdateBat != nil {
@@ -1993,13 +2588,141 @@ func findDeleteAndUpdateBat(
 					if updateDeleteBat != nil {
 						tblStuff.retPool.releaseRetBatch(updateDeleteBat, false)
 					}
-					return err2
+				}
+
+				// Provenance classification runs BEFORE any matching or
+				// emission: the central fold pass already claimed every
+				// replacement row, so its winner anchors and the displaced
+				// occupants the folds replaced are marked seen here and
+				// legacy matching below only ever touches rows provenance
+				// left alone — in any chunk or shard order.
+				if pkMovePlan != nil {
+					seenPacker := types.NewPacker()
+					for i := 0; i < dBat.RowCount(); i++ {
+						if dBat.Vecs[tblStuff.def.pkColIdx].IsNull(uint64(i)) {
+							continue
+						}
+						seenPacker.Reset()
+						if err2 = vector.EncodeRowToPacker(
+							seenPacker, dBat.Vecs[tblStuff.def.pkColIdx], i,
+						); err2 != nil {
+							seenPacker.Close()
+							releaseWithStreamPk()
+							return err2
+						}
+						kb := seenPacker.Bytes()
+						if _, anchor := pkMovePlan.anchorKeys[string(kb)]; anchor {
+							seen[i] = true
+							continue
+						}
+						if claimed.has(kb) {
+							// A lineage fold replaced the row at this
+							// key: the unseen tombstone belongs to the
+							// displaced previous occupant and is
+							// absorbed — replaying it as a delete would
+							// kill the row the fold installs.
+							seen[i] = true
+						}
+					}
+					seenPacker.Close()
+				}
+
+				// Legacy same-key matching probes only the rows provenance
+				// left unclaimed.
+				if pkMovePlan != nil {
+					streamIdx = make([]int, 0, dBat.RowCount())
+					streamPkVec = vector.NewVec(*dBat.Vecs[tblStuff.def.pkColIdx].GetType())
+					for i := 0; i < dBat.RowCount(); i++ {
+						if seen[i] {
+							continue
+						}
+						if err2 = streamPkVec.UnionOne(
+							dBat.Vecs[tblStuff.def.pkColIdx], int64(i), ses.proc.Mp(),
+						); err2 != nil {
+							streamPkVec.Free(ses.proc.Mp())
+							streamIdx = nil
+							releaseWithStreamPk()
+							return err2
+						}
+						streamIdx = append(streamIdx, i)
+					}
+				}
+
+				if streamPkVec.Length() > 0 {
+					if _, err2 = dataHashmap.PopByVectorsStream(
+						[]*vector.Vector{streamPkVec}, false,
+						func(idx int, key []byte, row []byte) error {
+							origIdx := idx
+							if streamIdx != nil {
+								origIdx = streamIdx[idx]
+							}
+							seen[origIdx] = true
+
+							if tuple, _, err2 = dataHashmap.DecodeRow(row); err2 != nil {
+								return err2
+							}
+
+							var cmp int
+							skipPKCols := tblStuff.def.pkKind != fakeKind
+							if cmp, err2 = compareTupleWithBatchRow(
+								tblStuff, tuple, dBat, origIdx, skipPKCols,
+							); err2 != nil {
+								return err2
+							}
+							if cmp == 0 {
+								return nil
+							}
+
+							// delete on lca and insert into tar ==> update
+							requiresNativeUpdate := false
+							if expandUpdate {
+								var updateErr error
+								requiresNativeUpdate, updateErr = dataBranchUpdateRequiresNativeUpdateFromBatch(
+									tblStuff, tuple, dBat, origIdx,
+								)
+								if updateErr != nil {
+									return updateErr
+								}
+							}
+							updateBat := stagedUpdateBat
+							if requiresNativeUpdate {
+								updateBat = nativeUpdateBat
+							}
+							if updateBat == nil {
+								updateBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+								if requiresNativeUpdate {
+									nativeUpdateBat = updateBat
+								} else {
+									stagedUpdateBat = updateBat
+								}
+							}
+							if expandUpdate && updateDeleteBat == nil {
+								updateDeleteBat = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+							}
+							if expandUpdate {
+								if err2 = updateDeleteBat.UnionOne(dBat, int64(origIdx), ses.proc.Mp()); err2 != nil {
+									return err2
+								}
+							}
+							if err2 = appendTupleToBat(ses, updateBat, tuple, tblStuff); err2 != nil {
+								return err2
+							}
+							return nil
+						},
+					); err2 != nil {
+						releaseWithStreamPk()
+						return err2
+					}
+				}
+				if streamIdx != nil {
+					streamPkVec.Free(ses.proc.Mp())
 				}
 
 				for i := 0; i < dBat.RowCount(); i++ {
 					if seen[i] {
 						continue
 					}
+
 					// delete on lca
 					if err2 = tBat2.UnionOne(dBat, int64(i), ses.proc.Mp()); err2 != nil {
 						tblStuff.retPool.releaseRetBatch(dBat, false)
@@ -2141,10 +2864,1319 @@ func findDeleteAndUpdateBat(
 		return nil
 
 	}, parallelism); err != nil {
+		releasePkMoveFoldPlan(tblStuff, pkMovePlan)
 		return
 	}
 
+	// The proven folds deliver last, in apply order: topological so a move
+	// whose source row another move lands on applies first, lexicographic
+	// everywhere else. Consumers must preserve this order through their own
+	// re-sorts (they reorder for conflict merging only and restore it
+	// before emission).
+	if pkMovePlan != nil {
+		if err = deliver(batchWithKind{
+			name:            tblName,
+			side:            side,
+			fromUpdate:      true,
+			keyMovingUpdate: true,
+			batch:           pkMovePlan.deleteBat,
+			kind:            diffDelete,
+		}); err != nil {
+			tblStuff.retPool.releaseRetBatch(pkMovePlan.insertBat, false)
+			return err
+		}
+		if err = deliver(batchWithKind{
+			name:                  tblName,
+			side:                  side,
+			fromUpdate:            true,
+			requiresNativeUpdate:  true,
+			keyMovingUpdate:       true,
+			keyMovingOldKeys:      pkMovePlan.oldKeys,
+			keyMovingVictimAuth:   pkMovePlan.victimAuth,
+			keyMovingUnchangedOcc: pkMovePlan.unchangedOcc,
+			batch:                 pkMovePlan.insertBat,
+			kind:                  diffInsert,
+		}); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// releasePkMoveFoldPlan returns an undelivered fold plan's batches to their
+// pool (error paths before delivery).
+func releasePkMoveFoldPlan(tblStuff tableStuff, plan *pkMoveFoldPlan) {
+	if plan == nil {
+		return
+	}
+	if plan.deleteBat != nil {
+		tblStuff.retPool.releaseRetBatch(plan.deleteBat, false)
+		plan.deleteBat = nil
+	}
+	if plan.insertBat != nil {
+		tblStuff.retPool.releaseRetBatch(plan.insertBat, false)
+		plan.insertBat = nil
+	}
+}
+
+// pkMoveFoldPlan carries one side's fully resolved key-moving folds: every
+// fold was proven, claimed, and ordered BEFORE any shard-loop chunk matched
+// or emitted a row, so legacy same-key matching can never consume a
+// replacement that a different chunk's anchor needs. Chunk boundaries and
+// shard order no longer influence fold outcomes.
+type pkMoveFoldPlan struct {
+	// anchorKeys are the OLD-key encodings of emitted folds; the shard loop
+	// marks their LCA-hit rows seen so anchor tombstones never re-enter
+	// legacy delete/update emission.
+	anchorKeys map[string]struct{}
+	// deleteBat / insertBat carry the folds in apply order (topologically:
+	// a move whose source row another move lands on applies first, so no
+	// fold's new-key handling ever meets a row that is itself moving away;
+	// lexicographic by final key everywhere else, so replay is
+	// deterministic). oldKeys / victimAuth / unchangedOcc align by row.
+	deleteBat    *batch.Batch
+	insertBat    *batch.Batch
+	oldKeys      [][]any
+	victimAuth   []bool
+	unchangedOcc []bool
+}
+
+// pkMoveLCAAnchorProbe resolves one batch of anchor tombstones against
+// the LCA snapshot. A var so the fold pass's unit tests can pin LCA
+// relevance without a SQL executor; production always runs
+// handleDelsOnLCA.
+var pkMoveLCAAnchorProbe = handleDelsOnLCA
+
+// pkMoveFoldCandidate is one anchor tombstone considered for a fold: its
+// key/row id address the anchor, and a successful chain walk fills the
+// landed (proven replacement) coordinates.
+type pkMoveFoldCandidate struct {
+	key      []byte
+	rid      types.Rowid
+	finalPK  []byte
+	finalRow []byte
+	resolved bool
+}
+
+// resolveAndBuildPkMoveFolds proves and materializes every pk-move fold of
+// one side's diff in a single pre-loop pass:
+//
+//  0. Capped evidence fails the pass closed BEFORE any legacy meaning is
+//     assigned: a cut-off tombstone index means the diff cannot tell a
+//     moved row's departure from an independent delete. When the link
+//     catalog proves NO move was recorded in window, legacy replay is the
+//     proven-absence semantics every tombstone would receive anyway;
+//     otherwise the apply aborts (statement-atomic) rather than risk a
+//     destructive DELETE+INSERT replay under a declared cascade.
+//  1. Relevance BEFORE resolution: every candidate anchor tombstone from
+//     the pre-captured index probes the LCA snapshot in ONE
+//     handleDelsOnLCA call, and candidates whose old key the destination
+//     lineage does not hold (source-only lineages) or that a PICK
+//     admitted as dependency keys only are excluded from walks AND from
+//     the unresolved-provenance abort of step 3 — their stream rows keep
+//     legacy meaning no matter what their provenance would conclude, so
+//     an empty net merge over source-only history stays a no-op.
+//  2. Every RELEVANT anchor is walked (resolvePkMoveChainVerdict) in
+//     deterministic (key, cts, rowid) order; resolved anchors are
+//     fold-grade before-images by construction of step 1's probe.
+//  3. Each materialized fold pops its proven replacement out of the data
+//     map and records it in claimed, so the shard loop's legacy matching —
+//     in ANY chunk or shard order — operates only on rows provenance did
+//     not take. At most one fold emits per old key (earliest anchor commit
+//     wins); later anchors of the same key keep legacy meaning (their
+//     replacement rows flow on as ordinary inserts).
+//  4. Emitted folds are ordered so that a move landing on the key another
+//     fold vacates applies after it. A key-rotation cycle (or a fold
+//     depending on one) cannot be replayed as in-place native UPDATEs —
+//     every landing key still holds a member row until that member moves —
+//     and legacy replay would silently swap payloads while children stay
+//     attached to the wrong lineage, so a cyclic plan ABORTS the apply
+//     loudly before emission instead of degrading.
+//  5. Each fold classifies its new-key victim claim: a source tombstone
+//     at the new key authorizes removing the displaced key-holder (plain
+//     merge delete semantics, just ordered before the UPDATE); a live
+//     destination row with NO source tombstone at the new key is either
+//     the conflict resolver's business (destination delta rows) or an
+//     unchanged-since-branch occupant the apply must never silently
+//     delete (flagged in unchangedOcc, victim authorization withheld).
+//
+// Anything unproven in a RELEVANT lineage (missing link, ambiguous
+// evidence, raced claim) fails closed with the unresolved-provenance
+// abort; proven absence keeps delete+insert meaning.
+func resolveAndBuildPkMoveFolds(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	tblStuff tableStuff,
+	side int,
+	provider *pkMoveLinkProvider,
+	view *pkMoveHashmapView,
+	tombstoneHashmap databranchutils.BranchHashmap,
+	claimed *pkMoveClaimedKeys,
+	branchTS timestamp.Timestamp,
+) (plan *pkMoveFoldPlan, err error) {
+	if provider == nil || view == nil || len(tblStuff.def.pkColIdxes) == 0 {
+		return nil, nil
+	}
+
+	tombKeys := make([]string, 0, len(view.tombs))
+	for ks := range view.tombs {
+		tombKeys = append(tombKeys, ks)
+	}
+	sort.Strings(tombKeys)
+	var cands []pkMoveFoldCandidate
+	var prefKeys [][]byte
+	for _, ks := range tombKeys {
+		kb := []byte(ks)
+		prefKeys = append(prefKeys, kb)
+		for _, ref := range view.tombs[ks] {
+			cands = append(cands, pkMoveFoldCandidate{key: kb, rid: ref.rowID})
+		}
+	}
+	if len(cands) == 0 {
+		if !view.capped {
+			return nil, nil
+		}
+		// The capture budget cut the tombstone index off: it is empty
+		// because evidence was dropped, not because the window was
+		// quiet. A catalog proving NO move was recorded in window lets
+		// every tombstone keep the proven-absence verdict — complete
+		// evidence of no update intent — and legacy replay stays the
+		// rows' own semantics. With links present, nothing distinguishes
+		// a move's departure from an independent delete, and a
+		// DELETE+INSERT replay could cascade a declared delete action
+		// onto dependents of a row that MOVED: abort instead.
+		var exists bool
+		if exists, err = provider.anyPkMoveLinkInWindow(); err != nil {
+			return nil, err
+		} else if exists {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"data branch cannot apply this diff with complete primary-key update evidence: the tombstone capture exceeded its entry budget (%d rows) and recorded pk-update provenance exists in window; the apply is aborted so declared ON UPDATE actions are never replaced by destructive deletes",
+				pkMoveEvidenceMaxEntries)
+		}
+		return nil, nil
+	}
+	if err = provider.prefetchContinuations(prefKeys); err != nil {
+		return nil, err
+	}
+
+	// Link-free windows settle on the verdict walk alone: with no
+	// recorded update intent anywhere in the window, a complete probe
+	// space answers "no move" for every candidate without hydrating a
+	// single LCA row. Anything less than a proven absence (disabled
+	// provider, poisoned evidence) falls through to the general path
+	// and is adjudicated there exactly as before.
+	var linksExist bool
+	if linksExist, err = provider.anyPkMoveLinkInWindow(); err != nil {
+		return nil, err
+	}
+	if !linksExist {
+		allNone := true
+		for _, c := range cands {
+			if _, _, v := provider.resolvePkMoveChainVerdict(view, c.key, c.rid); v != pkMoveProvenNone {
+				allNone = false
+				break
+			}
+		}
+		if allNone {
+			return nil, nil
+		}
+	}
+
+	// Verdict walk before LCA hydration. Only an anchor whose recorded
+	// intent needs adjudication — a resolved move or an unprovable one —
+	// ever travels to the LCA probe; candidates with complete evidence
+	// of no move intent keep the legacy DELETE+INSERT replay without
+	// touching the destination snapshot, and PICK dependency-only keys
+	// are admitted only to reassemble selected lineages, so they drop
+	// here exactly as the post-probe filter used to drop them. The
+	// abort below exists to protect destination lineages; relevance
+	// (an LCA hit) still gates it, so a lineage the destination never
+	// held cannot earn one.
+	var survivors []pkMoveFoldCandidate
+	for _, c := range cands {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if _, depOnly := tblStuff.pickDepKeys[string(c.key)]; depOnly {
+			continue
+		}
+		var verdict pkMoveResolution
+		c.finalPK, c.finalRow, verdict =
+			provider.resolvePkMoveChainVerdict(view, c.key, c.rid)
+		switch verdict {
+		case pkMoveResolved:
+			c.resolved = true
+			survivors = append(survivors, c)
+		case pkMoveProvenNone:
+			// Complete evidence shows no update intent (or affirmatively
+			// proves a foreign lineage): the legacy DELETE+INSERT replay
+			// is the row's own semantics.
+		case pkMoveProvenDeleted:
+			// Recorded provenance proves the lineage moved and complete
+			// stream evidence proves the moved lineage was terminated by
+			// a plain deletion: the transaction's net effect is the
+			// anchor tombstone's own DELETE, and declared ON DELETE
+			// actions apply through the legacy replay path.
+		case pkMoveUnresolved:
+			// Recorded or plausibly-existing provenance could not be
+			// proven (hop cap, probe budget, corrupt or ambiguous stream
+			// evidence, poisoned key, disabled provider). Whether it can
+			// abort is decided by relevance below: a source-only lineage
+			// keeps legacy meaning exactly as before.
+			survivors = append(survivors, c)
+		}
+	}
+	if len(survivors) == 0 {
+		return nil, nil
+	}
+
+	// Probe the LCA snapshot for the survivors in maxTombstoneBatchCnt-row
+	// chunks — the same bounded shape the shard loop feeds
+	// handleDelsOnLCA (pk value, row id, encoded key) — and keep only the
+	// before-image rows of RESOLVED folds. A chunk's full row images are
+	// released as soon as its hits are classified, so a window deleting
+	// many wide rows pays one chunk of payload instead of the
+	// whole-diff retention this pass used to require outside the
+	// hashmap budget.
+	maxChunk := tblStuff.maxTombstoneBatchCnt
+	if maxChunk <= 0 {
+		maxChunk = maxSqlBatchCnt
+	}
+	packer := types.NewPacker()
+	defer packer.Close()
+	var dBatAll *batch.Batch
+	releaseKept := func() {
+		if dBatAll != nil {
+			tblStuff.retPool.releaseRetBatch(dBatAll, false)
+			dBatAll = nil
+		}
+	}
+	var resolved []pkMoveFoldCandidate
+	unresolved := 0
+	for start := 0; start < len(survivors); start += maxChunk {
+		if ctx.Err() != nil {
+			releaseKept()
+			return nil, ctx.Err()
+		}
+		end := min(start+maxChunk, len(survivors))
+		anchorBat := tblStuff.retPool.acquireRetBatch(tblStuff, true)
+		for _, c := range survivors[start:end] {
+			var tuple types.Tuple
+			if tuple, _, err = tombstoneHashmap.DecodeRow(c.key); err != nil {
+				tblStuff.retPool.releaseRetBatch(anchorBat, true)
+				releaseKept()
+				return nil, err
+			}
+			if err = vector.AppendAny(anchorBat.Vecs[0], tuple[0], false, ses.proc.Mp()); err != nil {
+				tblStuff.retPool.releaseRetBatch(anchorBat, true)
+				releaseKept()
+				return nil, err
+			}
+			if err = vector.AppendFixed(anchorBat.Vecs[1], c.rid, false, ses.proc.Mp()); err != nil {
+				tblStuff.retPool.releaseRetBatch(anchorBat, true)
+				releaseKept()
+				return nil, err
+			}
+			if err = vector.AppendBytes(anchorBat.Vecs[2], c.key, false, ses.proc.Mp()); err != nil {
+				tblStuff.retPool.releaseRetBatch(anchorBat, true)
+				releaseKept()
+				return nil, err
+			}
+		}
+		anchorBat.SetRowCount(anchorBat.Vecs[0].Length())
+		var dBat *batch.Batch
+		dBat, err = pkMoveLCAAnchorProbe(ctx, ses, bh, anchorBat, tblStuff, branchTS)
+		tblStuff.retPool.releaseRetBatch(anchorBat, true)
+		if err != nil {
+			releaseKept()
+			return nil, err
+		}
+
+		// Classify the chunk's hits: LCA-holding anchor keys, encoded the
+		// way candidacy queries them. Only resolved folds keep their
+		// before-image rows; unrelevant candidates and unresolvable hits
+		// leave nothing behind.
+		chunkHits := make(map[string]struct{}, dBat.RowCount())
+		resolvedKeys := make(map[string]struct{})
+		for _, c := range survivors[start:end] {
+			if c.resolved {
+				resolvedKeys[string(c.key)] = struct{}{}
+			}
+		}
+		for i := 0; i < dBat.RowCount(); i++ {
+			if dBat.Vecs[tblStuff.def.pkColIdx].IsNull(uint64(i)) {
+				continue
+			}
+			packer.Reset()
+			if err = vector.EncodeRowToPacker(packer, dBat.Vecs[tblStuff.def.pkColIdx], i); err != nil {
+				tblStuff.retPool.releaseRetBatch(dBat, false)
+				releaseKept()
+				return nil, err
+			}
+			ks := string(packer.Bytes())
+			chunkHits[ks] = struct{}{}
+			if _, keep := resolvedKeys[ks]; keep {
+				if dBatAll == nil {
+					dBatAll = tblStuff.retPool.acquireRetBatch(tblStuff, false)
+				}
+				if err = dBatAll.UnionOne(dBat, int64(i), ses.proc.Mp()); err != nil {
+					tblStuff.retPool.releaseRetBatch(dBat, false)
+					releaseKept()
+					return nil, err
+				}
+			}
+		}
+		tblStuff.retPool.releaseRetBatch(dBat, false)
+		for _, c := range survivors[start:end] {
+			if _, held := chunkHits[string(c.key)]; !held {
+				continue
+			}
+			if c.resolved {
+				resolved = append(resolved, c)
+			} else {
+				// The provenance of a destination-held lineage could
+				// not be proven. Replaying this row as DELETE+INSERT
+				// could cascade the declared DELETE action onto
+				// dependents of a row that actually MOVED, so the whole
+				// apply aborts atomically instead of downgrading it
+				// silently.
+				unresolved++
+			}
+		}
+	}
+	if dBatAll != nil {
+		dBatAll.SetRowCount(dBatAll.Vecs[0].Length())
+	}
+	if unresolved > 0 {
+		releaseKept()
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"data branch cannot apply %d tombstone row(s): their recorded primary-key update provenance could not be resolved completely (evidence budget, chain hop limit, or ambiguous stream evidence); the apply is aborted so declared ON UPDATE actions are never replaced by destructive deletes", unresolved)
+	}
+	if len(resolved) == 0 {
+		releaseKept()
+		return nil, nil
+	}
+
+	// Live destination occupancy matters only on the apply side: the other
+	// side's folds drive conflict bookkeeping, which has no victims. The
+	// probe is batched (one chunked SQL covers every fold key) because a
+	// per-fold round trip drowns merges at scale in point queries.
+	var occupancyProbe func([][]byte, []types.Tuple) (map[string]bool, error)
+	if side == diffSideTarget {
+		occupancyProbe = func(keys [][]byte, tuples []types.Tuple) (map[string]bool, error) {
+			return probeDstOccupancyAtFoldKeys(ctx, ses, bh, tblStuff, keys, tuples)
+		}
+	}
+	defer releaseKept()
+	return assemblePkMoveFoldPlan(
+		ctx, ses, tblStuff, view, claimed, dBatAll, resolved, occupancyProbe,
+	)
+}
+
+// pkMoveFoldHeap is the ready set of the fold plan's Kahn pass: fold
+// indexes ordered by the plan's deterministic choice. The fold order it
+// yields is identical to the lexicographic minimum over all ready folds.
+type pkMoveFoldHeap struct {
+	idx  []int
+	less func(a, b int) bool
+}
+
+func (h pkMoveFoldHeap) Len() int { return len(h.idx) }
+func (h pkMoveFoldHeap) Less(i, j int) bool {
+	return h.less(h.idx[i], h.idx[j])
+}
+func (h pkMoveFoldHeap) Swap(i, j int) { h.idx[i], h.idx[j] = h.idx[j], h.idx[i] }
+func (h *pkMoveFoldHeap) Push(x any)   { h.idx = append(h.idx, x.(int)) }
+func (h *pkMoveFoldHeap) Pop() any {
+	old := h.idx
+	n := len(old)
+	v := old[n-1]
+	h.idx = old[:n-1]
+	return v
+}
+
+// assemblePkMoveFoldPlan is the SQL-free core of the fold pass: given the
+// resolved anchor candidates and the LCA before-image rows they probed,
+// emit the fully ordered fold plan. occupancyProbe batch-reports live
+// destination occupancy at the requested fold keys (nil means "no live
+// occupancy" and keeps every victim authorization at its proven default).
+func assemblePkMoveFoldPlan(
+	ctx context.Context,
+	ses *Session,
+	tblStuff tableStuff,
+	view *pkMoveHashmapView,
+	claimed *pkMoveClaimedKeys,
+	dBatAll *batch.Batch,
+	resolved []pkMoveFoldCandidate,
+	occupancyProbe func([][]byte, []types.Tuple) (map[string]bool, error),
+) (plan *pkMoveFoldPlan, err error) {
+	// hit keys -> the LCA before-image row index in dBatAll.
+	hitIdxByKey := make(map[string]int, dBatAll.RowCount())
+	packer := types.NewPacker()
+	defer packer.Close()
+	for i := 0; i < dBatAll.RowCount(); i++ {
+		if dBatAll.Vecs[tblStuff.def.pkColIdx].IsNull(uint64(i)) {
+			continue
+		}
+		packer.Reset()
+		if err = vector.EncodeRowToPacker(packer, dBatAll.Vecs[tblStuff.def.pkColIdx], i); err != nil {
+			return nil, err
+		}
+		ks := string(packer.Bytes())
+		if _, dup := hitIdxByKey[ks]; !dup {
+			hitIdxByKey[ks] = i
+		}
+	}
+
+	type fold struct {
+		oldKey     string
+		anchorRID  types.Rowid
+		finalPK    []byte
+		finalRow   []byte
+		finalTuple types.Tuple
+		lcaIdx     int
+		oldRow     []any
+	}
+	// Phase 1: candidate selection. Nothing here mutates the stream view
+	// or the claimed/anchor maps: a candidate that does not survive the
+	// dependency pass below leaves zero trace, so its anchor tombstone and
+	// replacement row replay through the legacy path exactly as if the
+	// fold had never been considered.
+	var folds []fold
+	seenCandKey := make(map[string]struct{})
+	for _, c := range resolved {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		ks := string(c.key)
+		lcaIdx, hit := hitIdxByKey[ks]
+		if !hit {
+			// Unreachable by construction (resolveAndBuildPkMoveFolds
+			// pre-filters misses) but kept as a cheap invariant: a
+			// source-only lineage has no destination lineage to cascade,
+			// no fold to emit, nothing popped — born-died netting replays
+			// it.
+			continue
+		}
+		if _, depOnly := tblStuff.pickDepKeys[ks]; depOnly {
+			// PICK selection is by proven row lineage, and a fold may only
+			// be produced for a literally picked anchor. Dependency keys
+			// admitted by the closure exist to reassemble the SELECTED
+			// lineage; an unrelated lineage whose resurrected key collides
+			// with a dependency key must not become an applied move.
+			continue
+		}
+		if _, dup := seenCandKey[ks]; dup {
+			// One candidate per old key: the earliest anchor (candidate
+			// order is (key, cts, rowid)) owns the destination lineage;
+			// later anchors of the same key keep legacy meaning and their
+			// replacements flow on as ordinary inserts. The key stays owned
+			// even if its candidate later fails materialization: a
+			// contradicting stream fails the anchor closed instead of
+			// letting a weaker duplicate take over.
+			continue
+		}
+		seenCandKey[ks] = struct{}{}
+		finalRow := append([]byte(nil), c.finalRow...)
+		tuple, _, decErr := view.data.DecodeRow(finalRow)
+		if decErr != nil {
+			err = decErr
+			return nil, err
+		}
+		oldRow := make([]any, len(tblStuff.def.colNames))
+		for _, colIdx := range tblStuff.def.pkColIdxes {
+			if err = extractDataBranchSQLRowValue(
+				ctx, ses, dBatAll.Vecs[colIdx], colIdx, oldRow, lcaIdx,
+			); err != nil {
+				return nil, err
+			}
+		}
+		folds = append(folds, fold{
+			oldKey:     ks,
+			anchorRID:  c.rid,
+			finalPK:    c.finalPK,
+			finalRow:   finalRow,
+			finalTuple: tuple,
+			lcaIdx:     lcaIdx,
+			oldRow:     oldRow,
+		})
+	}
+	if len(folds) == 0 {
+		return nil, nil
+	}
+
+	// Phase 2: topological apply order over candidates. Move X precedes
+	// move Y when Y lands on the key X vacates (Y.finalPK == X.oldKey):
+	// replaying the vacating move first means a landing fold never meets,
+	// at its new key, a row that is itself about to move away. Kahn with a
+	// lexicographic choice for determinism; the ready set lives in a heap
+	// because re-scanning all remaining folds per emitted fold is
+	// quadratic and dominates merges at scale.
+	//
+	// Residue after the ready set drains is a genuine key-rotation cycle
+	// or a fold depending on one. A cycle cannot be replayed as in-place
+	// native UPDATEs: every landing key of the cycle still holds a member
+	// row until that member itself moves. Legacy DELETE+INSERT replay is
+	// not a safe fallback either: same-key matching would swap payloads
+	// while each destination child stays attached to the row id at its
+	// own key — the lineage that moved away — so dependents end on the
+	// WRONG lineage without any FK violation staying loud. The apply
+	// therefore aborts statement-atomically here instead of silently
+	// emitting either replay shape.
+	oldKeyIdx := make(map[string][]int, len(folds))
+	finalPkIdx := make(map[string][]int, len(folds))
+	for i := range folds {
+		oldKeyIdx[folds[i].oldKey] = append(oldKeyIdx[folds[i].oldKey], i)
+		finalPkIdx[string(folds[i].finalPK)] = append(finalPkIdx[string(folds[i].finalPK)], i)
+	}
+	indegree := make([]int, len(folds))
+	for i := range folds {
+		indegree[i] = len(oldKeyIdx[string(folds[i].finalPK)])
+		if string(folds[i].finalPK) == folds[i].oldKey {
+			// A fold landing back on its own anchor key applies as an
+			// in-place update: no OTHER fold has to vacate anything for
+			// it. The blanket count registered the fold as its own
+			// prerequisite, which would deadlock the scheduler into a
+			// false key-rotation cycle for any net no-op or payload-only
+			// return to the original key (two committed moves 2->3->2
+			// resolve to exactly this shape). The apply ranker
+			// (keyMovingApplyRanks) already excludes the same self-edge.
+			indegree[i]--
+		}
+	}
+	less := func(a, b int) bool {
+		c := bytes.Compare(folds[a].finalPK, folds[b].finalPK)
+		if c != 0 {
+			return c < 0
+		}
+		if folds[a].oldKey != folds[b].oldKey {
+			return folds[a].oldKey < folds[b].oldKey
+		}
+		return bytes.Compare(folds[a].anchorRID[:], folds[b].anchorRID[:]) < 0
+	}
+	ready := pkMoveFoldHeap{less: less}
+	for i := range folds {
+		if indegree[i] == 0 {
+			ready.idx = append(ready.idx, i)
+		}
+	}
+	heap.Init(&ready)
+	var topo []int
+	for ready.Len() != 0 {
+		picked := heap.Pop(&ready).(int)
+		topo = append(topo, picked)
+		// Emitting `picked` vacates picked.oldKey: every fold landing on
+		// that key loses one unapplied prerequisite. A self-landing fold
+		// is never its own prerequisite (see the count above), so the
+		// pop must not decrement it here either — mirrors the apply
+		// ranker's exclusion.
+		for _, y := range finalPkIdx[folds[picked].oldKey] {
+			if y == picked {
+				continue
+			}
+			indegree[y]--
+			if indegree[y] == 0 {
+				heap.Push(&ready, y)
+			}
+		}
+	}
+	if len(topo) != len(folds) {
+		// Cyclic residue: no apply order replays a key rotation as
+		// native UPDATEs, and legacy replay silently mis-attaches
+		// dependents. Abort the whole apply before any fold pops,
+		// claims, or anchors — the statement rolls back atomically, and
+		// the error names the safe rework (a delete plus re-insert
+		// records no move provenance and merges as ordinary changes).
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"data branch cannot apply %d primary-key update(s) whose landed keys participate in a key rotation cycle: a cycle cannot be replayed as native UPDATEs, and replaying it as DELETE+INSERT would silently detach dependents onto the wrong lineage; the apply is aborted statement-atomically so declared ON UPDATE actions are never silently lost. Rework the source branch so the lineage does not rotate keys (delete and re-insert the rows instead of updating their keys) and retry",
+			len(folds)-len(topo))
+	}
+
+	// Phase 2.5: unique replacement ownership. Two provenance chains may
+	// never claim the same replacement: a pair ending on one final row is
+	// two anchors whose LCA lineages the verdict walk could not separate
+	// (the recorded incoming provenance was insufficient to assign the
+	// claim to one lineage), and a pair ending on one final key with
+	// DIFFERENT rows contradicts the one-committed-image-per-key stream.
+	// Consuming the row for the fold that happens to pop first here and
+	// replaying the losing anchor's tombstone as a legacy DELETE would
+	// rewrite one lineage as the other and cascade declared actions onto
+	// the wrong dependents without any error. Abort the whole apply
+	// statement-atomically BEFORE any fold pops, claims, or anchors —
+	// the same contract the cyclic residue abort above establishes.
+	claimOwners := make(map[string][]int, len(folds))
+	for i := range folds {
+		fpk := string(folds[i].finalPK)
+		claimOwners[fpk] = append(claimOwners[fpk], i)
+	}
+	for fpk, owners := range claimOwners {
+		if len(owners) < 2 {
+			continue
+		}
+		for _, idx := range owners[1:] {
+			if string(folds[idx].finalRow) != string(folds[owners[0]].finalRow) {
+				return nil, moerr.NewInternalErrorNoCtxf(
+					"data branch cannot apply %d primary-key update(s): their provenance chains claim conflicting replacement rows at the same final key x'%x'; the stream evidence is contradictory (one committed image per key per instant), so the apply is aborted statement-atomically instead of letting pop order pick a lineage",
+					len(owners), []byte(fpk))
+			}
+		}
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"data branch cannot apply %d primary-key update(s): their provenance chains claim the same replacement row at final key x'%x'; the anchors' LCA lineage could not be distinguished, so folding one chain and replaying the other anchor as DELETE would rewrite one lineage as the other; the apply is aborted statement-atomically so declared ON UPDATE actions are never silently lost. Rework the source branch so the competing lineage does not land on the same replacement (delete and re-insert instead of updating keys) and retry",
+			len(owners), []byte(fpk))
+	}
+
+	// Phase 3: materialize the DAG-safe folds in apply order. Only now do
+	// the stream-view side effects happen: popping the proven replacement
+	// out of the data map and claiming its key, so the shard loop's legacy
+	// matching operates only on rows provenance did not take. With unique
+	// ownership enforced above, a pop that finds nothing can no longer be
+	// consumption by a competing fold: the row the walk claimed is absent
+	// from the very stream it was resolved from — contradictory evidence
+	// — and degrading to legacy replay would DELETE the anchor's key.
+	anchorKeys := make(map[string]struct{}, len(topo))
+	materialized := make([]int, 0, len(topo))
+	for _, idx := range topo {
+		f := folds[idx]
+		var removed int
+		if removed, err = view.data.PopByEncodedKeyValue(f.finalPK, f.finalRow, false); err != nil {
+			return nil, err
+		}
+		if removed == 0 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"data branch cannot apply this primary-key update plan: one proven replacement row is absent from the diff stream (contradictory evidence); the apply is aborted statement-atomically instead of replaying its anchor as a destructive delete")
+		}
+		anchorKeys[f.oldKey] = struct{}{}
+		claimed.add(f.finalPK)
+		materialized = append(materialized, idx)
+	}
+	if len(materialized) == 0 {
+		return nil, nil
+	}
+
+	// Victim authorization is needed before emission but probes in bulk:
+	// folds without a selected source tombstone at the landed key go
+	// through one batched occupancy read instead of one query per fold.
+	tombAuth := make([]bool, len(materialized))
+	for i, idx := range materialized {
+		// An in-window source tombstone at the new key authorizes removing
+		// the displaced key-holder — but only when that deletion is part of
+		// THIS replay's selection. MERGE selects everything a source
+		// tombstone deletes; PICK selects only literal keys, and a tombstone
+		// sitting on a dependency (or unselected) key must never erase a
+		// destination row whose lineage the pick leaves alone.
+		tombAuth[i] = len(view.tombstonesAt(folds[idx].finalPK)) != 0
+		if tombAuth[i] && len(tblStuff.pickLiteralKeys) != 0 {
+			_, picked := tblStuff.pickLiteralKeys[string(folds[idx].finalPK)]
+			tombAuth[i] = picked
+		}
+	}
+	var occupied map[string]bool
+	if occupancyProbe != nil {
+		var probeKeys [][]byte
+		var probeTuples []types.Tuple
+		for i, idx := range materialized {
+			if tombAuth[i] {
+				continue
+			}
+			probeKeys = append(probeKeys, folds[idx].finalPK)
+			probeTuples = append(probeTuples, folds[idx].finalTuple)
+		}
+		if len(probeKeys) != 0 {
+			if occupied, err = occupancyProbe(probeKeys, probeTuples); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	plan = &pkMoveFoldPlan{anchorKeys: anchorKeys}
+	deleteBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	insertBat := tblStuff.retPool.acquireRetBatch(tblStuff, false)
+	plan.deleteBat, plan.insertBat = deleteBat, insertBat
+	releaseOnErr := func() {
+		tblStuff.retPool.releaseRetBatch(deleteBat, false)
+		tblStuff.retPool.releaseRetBatch(insertBat, false)
+		plan.deleteBat, plan.insertBat = nil, nil
+	}
+	for i, idx := range materialized {
+		f := folds[idx]
+		if err = deleteBat.UnionOne(dBatAll, int64(f.lcaIdx), ses.proc.Mp()); err != nil {
+			releaseOnErr()
+			return nil, err
+		}
+		if err = appendTupleToBat(ses, insertBat, f.finalTuple, tblStuff); err != nil {
+			releaseOnErr()
+			return nil, err
+		}
+		plan.oldKeys = append(plan.oldKeys, f.oldRow)
+
+		auth := true
+		unchanged := false
+		// No selected source tombstone covers the new key and the batched
+		// probe found a live destination occupant there: classify the
+		// occupancy. A delta-tracked row is the conflict resolver's
+		// business (it grants authorization when ACCEPT preserves the
+		// victim); an occupant the destination never changed since the
+		// branch point must NEVER be silently deleted — authorization
+		// stays withheld and the option logic downstream decides
+		// (FAIL/bare error, SKIP drop, ACCEPT meets the raw duplicate-key
+		// guard atomically).
+		if !tombAuth[i] && occupied[string(f.finalPK)] {
+			auth = false
+			unchanged = true
+		}
+		plan.victimAuth = append(plan.victimAuth, auth)
+		plan.unchangedOcc = append(plan.unchangedOcc, unchanged)
+	}
+	deleteBat.SetRowCount(deleteBat.Vecs[0].Length())
+	insertBat.SetRowCount(insertBat.Vecs[0].Length())
+	return plan, nil
+}
+
+// probeDstOccupancyAtFoldKeys reports, per requested fold key, whether the
+// destination table holds a live row at that key right now. Probes are
+// batched: each chunk packs the keys into one SQL as an OR of exact key
+// predicates — the per-fold count(*) shape issued one round trip per
+// moved row, which at diff scale (tens of thousands of moves) drowned the
+// merge in point queries. The probe runs on the merge's own transaction,
+// so it sees exactly the state the apply will meet; the whole merge
+// applies single-statement afterwards.
+//
+// The result selects the physical primary-key column, so re-encoding each
+// returned row reproduces the stream hash map's encoded key directly.
+//
+// tuples are decoded data-row tuples from the stream hash map: their
+// width carries the rowid (and commit-ts) prefix/suffix the stream adds
+// around the physical columns, so column lookup goes through
+// getTupleColumnValue, never raw positions.
+func probeDstOccupancyAtFoldKeys(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	tblStuff tableStuff,
+	keys [][]byte,
+	tuples []types.Tuple,
+) (map[string]bool, error) {
+	occupied := make(map[string]bool, len(keys))
+	if len(keys) != len(tuples) {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"pk-move occupancy probe keys %d != tuples %d", len(keys), len(tuples))
+	}
+	if len(keys) == 0 {
+		return occupied, nil
+	}
+	tableName := qualifiedTableName(
+		tblStuff.baseRel.GetTableDef(ctx).DbName,
+		tblStuff.baseRel.GetTableDef(ctx).Name,
+	)
+	pkColName := quoteIdentifierForSQL(tblStuff.def.baseColNames[tblStuff.def.pkColIdx])
+	packer := types.NewPacker()
+	defer packer.Close()
+	for start := 0; start < len(keys); start += pkMoveOccupancyProbeChunk {
+		end := start + pkMoveOccupancyProbeChunk
+		if end > len(keys) {
+			end = len(keys)
+		}
+		buf := acquireBuffer(tblStuff.bufPool)
+		buf.WriteString("select ")
+		buf.WriteString(pkColName)
+		buf.WriteString(" from ")
+		buf.WriteString(tableName)
+		buf.WriteString(" where ")
+		buildErr := error(nil)
+		for i := start; i < end && buildErr == nil; i++ {
+			if i > start {
+				buf.WriteString(" or ")
+			}
+			row := make([]any, len(tblStuff.def.colNames))
+			for _, colIdx := range tblStuff.def.pkColIdxes {
+				if row[colIdx], buildErr = getTupleColumnValue(tuples[i], tblStuff, colIdx); buildErr != nil {
+					break
+				}
+			}
+			if buildErr == nil {
+				buildErr = writeExactDataBranchKeyPredicate(ses, tblStuff, row, buf)
+			}
+		}
+		sql := buf.String()
+		releaseBuffer(tblStuff.bufPool, buf)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		ret, err := runSql(ctx, ses, bh, sql, nil, nil)
+		if err != nil {
+			return nil, err
+		}
+		var readErr error
+		ret.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
+			if len(cols) != 1 {
+				readErr = moerr.NewInternalErrorNoCtxf(
+					"unexpected pk-move occupancy probe width %d", len(cols))
+				return false
+			}
+			for i := 0; i < rowCnt; i++ {
+				packer.Reset()
+				if e := vector.EncodeRowToPacker(packer, cols[0], i); e != nil {
+					readErr = e
+					return false
+				}
+				occupied[string(append([]byte(nil), packer.Bytes()...))] = true
+			}
+			return true
+		})
+		ret.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	return occupied, nil
+}
+
+// reorderKeyMovingBatch permutes a key-moving batch and every aligned
+// sidecar (old keys, where-key overrides, victim authorization,
+// unchanged-occupant flags) into one shared order. With rank == nil the
+// order is ascending primary key (the merge-join order the conflict stage
+// needs); with rank != nil it is the recorded topological apply rank per
+// row, restored before emission so folds interacting through one another's
+// keys replay in dependency order. A present sidecar must align with the
+// batch rows; an absent (empty) one is skipped.
+func reorderKeyMovingBatch(
+	bat *batch.Batch,
+	pkColIdx int,
+	mp *mpool.MPool,
+	rank []uint64,
+	oldKeys, whereKeys [][]any,
+	victimAuth, unchangedOcc []bool,
+) error {
+	if bat == nil {
+		return nil
+	}
+	rowCnt := bat.Vecs[0].Length()
+	for _, sc := range []struct {
+		name string
+		n    int
+	}{
+		{"old keys", len(oldKeys)},
+		{"where keys", len(whereKeys)},
+		{"victim authorization", len(victimAuth)},
+		{"unchanged-occupant flags", len(unchangedOcc)},
+	} {
+		if sc.n != 0 && sc.n != rowCnt {
+			return moerr.NewInternalErrorNoCtxf(
+				"key-moving update batch rows %d != %s %d", rowCnt, sc.name, sc.n)
+		}
+	}
+	if rowCnt <= 1 {
+		return nil
+	}
+
+	cols := make([]*vector.Vector, 0, len(bat.Vecs)+3)
+	cols = append(cols, bat.Vecs...)
+	sortKeyCol := pkColIdx
+	if rank != nil {
+		if len(rank) != rowCnt {
+			return moerr.NewInternalErrorNoCtxf(
+				"key-moving update batch rows %d != apply ranks %d", rowCnt, len(rank))
+		}
+		rankVec := vector.NewVec(types.T_uint64.ToType())
+		defer rankVec.Free(mp)
+		for i := 0; i < rowCnt; i++ {
+			if err := vector.AppendFixed(rankVec, rank[i], false, mp); err != nil {
+				return err
+			}
+		}
+		cols = append(cols, rankVec)
+		sortKeyCol = len(cols) - 1
+	} else if pkVec := bat.Vecs[pkColIdx]; isDataBranchFloatType(*pkVec.GetType()) {
+		// Mirror sortDataBranchBatchByPrimaryKey: bit-distinct FLOAT/DOUBLE
+		// keys sort by their identity column.
+		identityVec := vector.NewVec(types.T_uint64.ToType())
+		defer identityVec.Free(mp)
+		for row := 0; row < pkVec.Length(); row++ {
+			identity, isNull, err := dataBranchFloatPKIdentityAt(pkVec, row)
+			if err != nil {
+				return err
+			}
+			if err = vector.AppendFixed(identityVec, identity, isNull, mp); err != nil {
+				return err
+			}
+		}
+		cols = append(cols, identityVec)
+		sortKeyCol = len(cols) - 1
+	}
+
+	indexVec := vector.NewVec(types.T_uint64.ToType())
+	defer indexVec.Free(mp)
+	for i := 0; i < rowCnt; i++ {
+		if err := vector.AppendFixed(indexVec, uint64(i), false, mp); err != nil {
+			return err
+		}
+	}
+	cols = append(cols, indexVec)
+
+	if err := mergeutil.SortColumnsByIndex(cols, sortKeyCol, mp); err != nil {
+		return err
+	}
+
+	perm := vector.MustFixedColNoTypeCheck[uint64](indexVec)
+	permuteAny := func(p [][]any) {
+		if len(p) == 0 {
+			return
+		}
+		sorted := make([][]any, len(p))
+		for pos := range perm {
+			sorted[pos] = p[perm[pos]]
+		}
+		copy(p, sorted)
+	}
+	permuteBool := func(p []bool) {
+		if len(p) == 0 {
+			return
+		}
+		sorted := make([]bool, len(p))
+		for pos := range perm {
+			sorted[pos] = p[perm[pos]]
+		}
+		copy(p, sorted)
+	}
+	permuteAny(oldKeys)
+	permuteAny(whereKeys)
+	permuteBool(victimAuth)
+	permuteBool(unchangedOcc)
+	return nil
+}
+
+// sortKeyMovingUpdateBat sorts a key-moving insert batch by pk while
+// permuting the parallel key sidecars (old keys, and where-key overrides
+// when the destination moved the same row) identically.
+func sortKeyMovingUpdateBat(bat *batch.Batch, pkColIdx int, mp *mpool.MPool, parallels ...[][]any) error {
+	var oldKeys, whereKeys [][]any
+	if len(parallels) > 0 {
+		oldKeys = parallels[0]
+	}
+	if len(parallels) > 1 {
+		whereKeys = parallels[1]
+	}
+	return reorderKeyMovingBatch(bat, pkColIdx, mp, nil, oldKeys, whereKeys, nil, nil)
+}
+
+// keyMovingApplyRanks recomputes the deterministic topological apply rank
+// of each surviving key-moving row: a move whose NEW key is another
+// surviving move's EFFECTIVE WHERE key (destination-lineage override when
+// installed, else the shared old key) applies after it, so no fold
+// installs its row on top of a lineage that is itself about to move away.
+// Ranking on the original old keys is unsafe once the conflict resolver
+// retargets a move onto destination-moved lineage: two moves can then
+// predicate on each other's new keys even though their source keys do not
+// interact, and the wrong order makes one UPDATE rewrite a row the other
+// just installed. Deterministic tie-breaks match the producer's emission
+// order, so a batch the conflict stage never reordered keeps its arrival
+// order exactly. Returns nil when there is nothing to restore.
+func keyMovingApplyRanks(
+	ses *Session,
+	tblStuff tableStuff,
+	wrapped batchWithKind,
+) ([]uint64, error) {
+	rowCnt := wrapped.batch.RowCount()
+	if rowCnt <= 1 || len(wrapped.keyMovingOldKeys) != rowCnt {
+		return nil, nil
+	}
+	if len(wrapped.keyMovingWhereKeys) != 0 &&
+		len(wrapped.keyMovingWhereKeys) != rowCnt {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"data branch key-moving update has %d where keys for %d rows",
+			len(wrapped.keyMovingWhereKeys), rowCnt)
+	}
+	oldKeyStrs := make([]string, rowCnt)
+	newKeyStrs := make([]string, rowCnt)
+	for i := range rowCnt {
+		var err error
+		// Rank on the key the apply actually predicates on: the
+		// destination-lineage WHERE override when one is installed, else
+		// the shared old key (mirrors pickKeyMovingWhereRow). Ranking on
+		// the original old keys would order two retargeted moves by keys
+		// neither one touches, letting a later UPDATE match a row an
+		// earlier one just installed.
+		effKey := pickKeyMovingWhereRow(wrapped, i)
+		if effKey == nil {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"data branch key-moving update row %d misses its old key", i)
+		}
+		if oldKeyStrs[i], err = formatPKValuesAsString(ses, tblStuff, effKey); err != nil {
+			return nil, err
+		}
+		if newKeyStrs[i], err = extractPKAsString(ses, tblStuff, wrapped.batch, i); err != nil {
+			return nil, err
+		}
+	}
+	oldKeyIdx := make(map[string][]int, rowCnt)
+	newKeyIdx := make(map[string][]int, rowCnt)
+	for i := range rowCnt {
+		oldKeyIdx[oldKeyStrs[i]] = append(oldKeyIdx[oldKeyStrs[i]], i)
+		newKeyIdx[newKeyStrs[i]] = append(newKeyIdx[newKeyStrs[i]], i)
+	}
+	indegree := make([]int, rowCnt)
+	for i := range rowCnt {
+		indegree[i] = len(oldKeyIdx[newKeyStrs[i]])
+		if oldKeyStrs[i] == newKeyStrs[i] {
+			// A row whose effective WHERE key equals its NEW key needs no
+			// other row to vacate anything: source and destination both
+			// moved this lineage to the same final key, so the apply is an
+			// in-place update. The blanket count above registered the row
+			// as its own prerequisite, which would deadlock the scheduler
+			// into a false cycle.
+			indegree[i]--
+		}
+	}
+	less := func(a, b int) bool {
+		if newKeyStrs[a] != newKeyStrs[b] {
+			return newKeyStrs[a] < newKeyStrs[b]
+		}
+		return a < b
+	}
+	// Push-driven Kahn pass over the same edges: the ready set is seeded
+	// once and each least-ready row pops from a min-heap ordered by the
+	// same deterministic comparator, so a batch of N rows costs O(N log N)
+	// heap operations instead of N full rescans of the remaining set. The
+	// yielded order is identical: both forms always take the least element
+	// of the same ready set at every step.
+	ready := &pkMoveFoldHeap{less: less}
+	for i := range rowCnt {
+		if indegree[i] == 0 {
+			heap.Push(ready, i)
+		}
+	}
+	rank := make([]uint64, rowCnt)
+	pos := 0
+	popped := 0
+	for ready.Len() > 0 {
+		picked := heap.Pop(ready).(int)
+		popped++
+		rank[picked] = uint64(pos)
+		pos++
+		// Emitting `picked` vacates its OLD key: every move landing on
+		// that key (its NEW key) loses one unapplied prerequisite. The
+		// row itself is never its own prerequisite (see the count above),
+		// so a same-key row must not be decremented here either.
+		for _, y := range newKeyIdx[oldKeyStrs[picked]] {
+			if y == picked {
+				continue
+			}
+			indegree[y]--
+			if indegree[y] == 0 {
+				heap.Push(ready, y)
+			}
+		}
+	}
+	if popped != rowCnt {
+		// A key-rotation cycle cannot be replayed as in-place native
+		// UPDATEs, and the fold-plan pass already aborts cyclic plans
+		// before emission — residue here means a producer bug.
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"data branch key-moving update reached apply with a cyclic plan (%d rows)", rowCnt-popped)
+	}
+	return rank, nil
+}
+
+// removeKeyMovingOldKeys mirrors batch.Shrink(removed, true) for the sidecar
+// old-key list of a key-moving update batch: conflict suppression drops rows
+// from the batch, and the old keys must drop the same positions to stay
+// aligned with the rows they describe.
+func removeKeyMovingOldKeys(oldKeys [][]any, removed []int64) [][]any {
+	drop := make(map[int64]struct{}, len(removed))
+	for _, s := range removed {
+		drop[s] = struct{}{}
+	}
+	kept := make([][]any, 0, len(oldKeys)-len(removed))
+	for i, k := range oldKeys {
+		if _, ok := drop[int64(i)]; !ok {
+			kept = append(kept, k)
+		}
+	}
+	return kept
+}
+
+// removeKeyMovingBoolFlags is removeKeyMovingOldKeys for the bool sidecars
+// (victim authorization, unchanged-occupant flags): the same row positions
+// drop so every sidecar stays aligned with the batch it describes.
+func removeKeyMovingBoolFlags(flags []bool, removed []int64) []bool {
+	if len(flags) == 0 {
+		return flags
+	}
+	drop := make(map[int64]struct{}, len(removed))
+	for _, s := range removed {
+		drop[s] = struct{}{}
+	}
+	kept := make([]bool, 0, len(flags)-len(removed))
+	for i, f := range flags {
+		if _, ok := drop[int64(i)]; !ok {
+			kept = append(kept, f)
+		}
+	}
+	return kept
+}
+
+// keepKeyMovingBoolFlags mirrors batch.Shrink(keep, false) for the bool
+// sidecars: only the listed row positions survive. Positions past the
+// slice (absent authorization) keep the fail-closed zero value.
+func keepKeyMovingBoolFlags(flags []bool, keep []int64) []bool {
+	if len(flags) == 0 {
+		return flags
+	}
+	kept := make([]bool, 0, len(keep))
+	for _, s := range keep {
+		if int(s) < len(flags) {
+			kept = append(kept, flags[s])
+		} else {
+			kept = append(kept, false)
+		}
+	}
+	return kept
+}
+
+// cascadeKeyMovingFoldKeep extends an initial folded-move drop set to a
+// fixpoint over move dependencies. A folded move lands at the key the
+// source vacated; when SKIP removes a move as a whole (conflict at its
+// landed key, or its delete half losing a destination conflict), the
+// surviving destination row at the move's OLD key stays — the lineage no
+// longer frees that key for any other folded move that lands there. A
+// dependent move whose landed (new) key equals a dropped move's old key
+// must drop too, transitively, or its authorized victim delete would
+// erase the very destination row the clause kept and its UPDATE would
+// rewrite that lineage onto the kept row (r24 review F1). The old-key
+// and new-key string forms are interchangeable here, exactly as the
+// skippedKeyMovingOldKeys pairing above already assumes.
+//
+// cascadeKeyMovingFoldKeyOps counts the key-encoding operations
+// cascadeKeyMovingFoldKeep performs (old-key formats plus new-key
+// extractions) so the dependency-closure regression can bound the work
+// deterministically instead of timing it (r54 review F4).
+var cascadeKeyMovingFoldKeyOps atomic.Uint64
+
+// Returns the surviving row indices in ascending order. initialDrops may
+// name any folded-row positions; dependents are computed against the
+// rows that still survive after each round.
+func cascadeKeyMovingFoldKeep(
+	ses *Session,
+	tblStuff tableStuff,
+	bat *batch.Batch,
+	oldKeys [][]any,
+	initialDrops []int64,
+) (keep []int64, err error) {
+	rowCount := bat.RowCount()
+	dropped := make(map[int64]bool, len(initialDrops))
+	formatOld := func(rowIdx int) (string, error) {
+		cascadeKeyMovingFoldKeyOps.Add(1)
+		if rowIdx >= len(oldKeys) || oldKeys[rowIdx] == nil {
+			return "", moerr.NewInternalErrorNoCtxf(
+				"data branch key-moving update row %d misses its old key", rowIdx)
+		}
+		return formatPKValuesAsString(ses, tblStuff, oldKeys[rowIdx])
+	}
+	vacated := make([]string, 0, len(initialDrops))
+	seenVacated := make(map[string]struct{}, len(initialDrops))
+	enqueueVacated := func(key string) {
+		if _, ok := seenVacated[key]; ok {
+			return
+		}
+		seenVacated[key] = struct{}{}
+		vacated = append(vacated, key)
+	}
+	for _, s := range initialDrops {
+		dropped[s] = true
+		key, keyErr := formatOld(int(s))
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		enqueueVacated(key)
+	}
+	// One extraction pass records where every still-surviving move LANDS:
+	// reverse dependencies never change as rows drop, so the closure
+	// below walks each vacated key once instead of rescanning the whole
+	// batch after every dropped move (r54 review F4: an ascending chain
+	// whose last move drops used to cost ~N(N-1)/2 key extractions).
+	landedIndex := make(map[string][]int64, rowCount)
+	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+		if dropped[int64(rowIdx)] {
+			continue
+		}
+		cascadeKeyMovingFoldKeyOps.Add(1)
+		newKey, keyErr := extractPKAsString(ses, tblStuff, bat, rowIdx)
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		landedIndex[newKey] = append(landedIndex[newKey], int64(rowIdx))
+	}
+	for head := 0; head < len(vacated); head++ {
+		for _, rowIdx := range landedIndex[vacated[head]] {
+			if dropped[rowIdx] {
+				continue
+			}
+			dropped[rowIdx] = true
+			key, keyErr := formatOld(int(rowIdx))
+			if keyErr != nil {
+				return nil, keyErr
+			}
+			enqueueVacated(key)
+		}
+	}
+	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+		if !dropped[int64(rowIdx)] {
+			keep = append(keep, int64(rowIdx))
+		}
+	}
+	return keep, nil
+}
+
+// shrinkKeyMovingFoldCascade shrinks a folded key-moving insert batch and
+// every aligned sidecar by the clause-driven drop set extended through
+// move dependencies (cascadeKeyMovingFoldKeep). Returns false when no row
+// survives, so the caller can release the batch and stop processing it.
+func shrinkKeyMovingFoldCascade(
+	ses *Session,
+	tblStuff tableStuff,
+	wrapped batchWithKind,
+	initialDrops []int64,
+) (batchWithKind, bool, error) {
+	keep, err := cascadeKeyMovingFoldKeep(
+		ses, tblStuff, wrapped.batch, wrapped.keyMovingOldKeys, initialDrops)
+	if err != nil {
+		return wrapped, false, err
+	}
+	if len(keep) == 0 {
+		wrapped.batch.Shrink(keep, false)
+		wrapped.keyMovingOldKeys = nil
+		wrapped.keyMovingWhereKeys = nil
+		wrapped.keyMovingVictimAuth = nil
+		wrapped.keyMovingUnchangedOcc = nil
+		return wrapped, false, nil
+	}
+	wrapped.batch.Shrink(keep, false)
+	wrapped.keyMovingOldKeys = keepKeyMovingOldKeys(wrapped.keyMovingOldKeys, keep)
+	if len(wrapped.keyMovingWhereKeys) != 0 {
+		wrapped.keyMovingWhereKeys = keepKeyMovingOldKeys(wrapped.keyMovingWhereKeys, keep)
+	}
+	wrapped.keyMovingVictimAuth = keepKeyMovingBoolFlags(wrapped.keyMovingVictimAuth, keep)
+	wrapped.keyMovingUnchangedOcc = keepKeyMovingBoolFlags(wrapped.keyMovingUnchangedOcc, keep)
+	return wrapped, true, nil
+}
+
+// keepKeyMovingOldKeys is keepKeyMovingBoolFlags for the old-key/where-key
+// sidecars: only the listed row positions survive.
+func keepKeyMovingOldKeys(oldKeys [][]any, keep []int64) [][]any {
+	if len(oldKeys) == 0 {
+		return oldKeys
+	}
+	kept := make([][]any, 0, len(keep))
+	for _, s := range keep {
+		if int(s) < len(oldKeys) {
+			kept = append(kept, oldKeys[s])
+		} else {
+			kept = append(kept, nil)
+		}
+	}
+	return kept
 }
 
 func appendTupleToBat(ses *Session, bat *batch.Batch, tuple types.Tuple, tblStuff tableStuff) error {
@@ -2726,9 +4758,11 @@ func buildHashmapForTable(
 	handles []engine.ChangesHandle,
 	side string,
 	pickKeyHashmap databranchutils.BranchHashmap,
+	wantPkMoveEvidence bool,
 ) (
 	dataHashmap databranchutils.BranchHashmap,
 	tombstoneHashmap databranchutils.BranchHashmap,
+	pkMoveEvidence *pkMoveStreamEvidence,
 	err error,
 ) {
 	var (
@@ -2870,7 +4904,35 @@ func buildHashmapForTable(
 		return err
 	}
 
-	for _, handle := range handles {
+	// Synthetic-window certification (r53 D156(E) amendment): each
+	// drained handle is certified against the three observable serving
+	// modes whose rows carry the window's END instant instead of the
+	// rows' recorded commit instants — (a) an empty lower bound routed
+	// the drain to the end-stamping checkpoint state reader (recorded
+	// by constructChangeHandles), (b) a batch served under the Snapshot
+	// hint, (c) a visible-state recovery substitution counted by the
+	// apply's recovery resources across this handle's CONSTRUCTION or
+	// drain — the dispatcher can install the end-stamping reader while
+	// the handle splits its range, before any drain baseline exists
+	// (recorded per window by constructChangeHandles), and mid-drain
+	// splits still surface as a counter delta across the drain. A
+	// certified window's end instant is tainted: instant-bearing
+	// extracts equal to it never bind pk-move provenance, while the
+	// window's rows still serve net-effect replay unchanged. Window
+	// metadata is appended under the same condition that appends the
+	// handle, so the slices stay index-aligned.
+	windowEnds := tblStuff.tarWindowEnds
+	windowFromEmpty := tblStuff.tarWindowFromEmpty
+	windowSubstConstruct := tblStuff.tarWindowSubstConstruct
+	if side == "base" {
+		windowEnds = tblStuff.baseWindowEnds
+		windowFromEmpty = tblStuff.baseWindowFromEmpty
+		windowSubstConstruct = tblStuff.baseWindowSubstConstruct
+	}
+	tainted := make(map[types.TS]struct{})
+	for handleIdx, handle := range handles {
+		substBefore := tblStuff.recoveryResources.recoverySubstitutions()
+		snapshotHinted := false
 		for {
 			select {
 			case <-ctx.Done():
@@ -2878,13 +4940,17 @@ func buildHashmapForTable(
 				return
 			default:
 			}
-			if dataBat, tombstoneBat, _, err = handle.Next(
+			var hint engine.ChangesHandle_Hint
+			if dataBat, tombstoneBat, hint, err = handle.Next(
 				ctx, mp,
 			); err != nil {
 				return
 			} else if dataBat == nil && tombstoneBat == nil {
 				// out of data
 				break
+			}
+			if hint == engine.ChangesHandle_Snapshot {
+				snapshotHinted = true
 			}
 
 			tableName := ""
@@ -2921,6 +4987,15 @@ func buildHashmapForTable(
 
 			if err = putVectors(tombstoneBat, true); err != nil {
 				return
+			}
+		}
+		if handleIdx < len(windowEnds) {
+			synthetic := snapshotHinted ||
+				(handleIdx < len(windowSubstConstruct) && windowSubstConstruct[handleIdx]) ||
+				tblStuff.recoveryResources.recoverySubstitutions() != substBefore ||
+				(handleIdx < len(windowFromEmpty) && windowFromEmpty[handleIdx])
+			if synthetic {
+				tainted[windowEnds[handleIdx]] = struct{}{}
 			}
 		}
 	}
@@ -3007,6 +5082,25 @@ func buildHashmapForTable(
 				3.1. the last one is an update: only keep the last update op
 				3.2. the last one is a deletion: only keep the last deletion op
 	*/
+
+	// Preserve identity evidence for pk-move chain walks BEFORE the
+	// reconciliation below nets born-and-died generations out of the maps:
+	// a version inserted and deleted inside this window ends with
+	// staleDataCount >= totalTombstones and disappears entirely (data row
+	// popped, tombstone consumed), which is the correct net effect for
+	// plain replay but erases the tombstone+birth record a
+	// cross-transaction chain hop binds to. Capturing here is one extra
+	// pass over the in-window tombstones, gated on the diff being
+	// apply-capable; the gated-off consumers (reads, fake-pk tables)
+	// never consult links.
+	if wantPkMoveEvidence && tombstoneHashmap.ItemCount() != 0 {
+		pkMoveEvidence = &pkMoveStreamEvidence{tainted: tainted}
+		if pkMoveEvidence.departed, pkMoveEvidence.tombs, pkMoveEvidence.capped, err = capturePkMoveStreamEvidence(
+			ctx, dataHashmap, tombstoneHashmap, -1,
+		); err != nil {
+			return
+		}
+	}
 
 	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (
@@ -3111,7 +5205,7 @@ func buildHashmapForTable(
 		}
 		return nil
 	}, -1); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	return

@@ -16,12 +16,15 @@ package logtailreplay
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -38,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/tidwall/btree"
@@ -3098,6 +3102,21 @@ func writeTestWideObjectWithCommitTS(
 		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
 	)
 	require.NoError(t, err)
+	return writeTestWideObjectToFS(t, mp, fs, rows, payloadBytes, types.BuildTS(150, 0)), fs
+}
+
+// writeTestWideObjectToFS writes one wide-rows object into a
+// caller-owned file service, so several objects can share one fs for a
+// multi-window CN handle. The commit-ts column carries (100, i); the
+// returned entry stamps the given create instant.
+func writeTestWideObjectToFS(
+	t *testing.T,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	rows, payloadBytes int,
+	createTS types.TS,
+) *objectio.ObjectEntry {
+	t.Helper()
 	writer := ioutil.ConstructWriter(
 		0, []uint16{0, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS},
 		-1, false, false, fs,
@@ -3110,9 +3129,16 @@ func writeTestWideObjectWithCommitTS(
 	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
 	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
 	payload := []byte(strings.Repeat("w", payloadBytes))
+	// Distinct objects must not share primary keys or rowids: callers
+	// writing several objects with different create stamps get a
+	// per-object key space and block id, so the merge/coalesce fold
+	// treats every window as its own keyed lineage instead of
+	// deduplicating key-identical windows.
 	var blk types.Blockid
+	blkSeed := uint64(createTS.Physical())<<16 | uint64(createTS.Logical())
+	copy(blk[:], types.EncodeUint64(&blkSeed))
 	for i := 0; i < rows; i++ {
-		rowKey := uint64(i)
+		rowKey := blkSeed<<32 | uint64(i)
 		copy(payload, types.EncodeUint64(&rowKey))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, mp))
 		require.NoError(t, vector.AppendFixed(
@@ -3123,14 +3149,311 @@ func writeTestWideObjectWithCommitTS(
 		))
 	}
 	bat.SetRowCount(rows)
-	_, err = writer.WriteBatch(bat)
+	_, err := writer.WriteBatch(bat)
 	require.NoError(t, err)
 	blocks, _, err := writer.Sync(context.Background())
 	require.NoError(t, err)
 	bat.Clean(mp)
 	stats := writer.Stats()
 	require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats, uint32(len(blocks))))
-	return &objectio.ObjectEntry{ObjectStats: stats, CreateTime: types.BuildTS(150, 0)}, fs
+	return &objectio.ObjectEntry{ObjectStats: stats, CreateTime: createTS}
+}
+
+// writeTestSkewedObjectToFS writes one object into a caller-owned file
+// service whose payload column carries the given per-row widths, so a
+// window estimate faces an arbitrary width distribution — one skewed
+// value among uniformly narrow rows — instead of the uniform helper's
+// homogeneous rows. Rows commit at rowTSBase plus their index in
+// logical ticks, keeping each row's instant inside the range the
+// handle under test is built with; the returned entry stamps the given
+// create instant. Payloads otherwise match the uniform wide writer:
+// the block-seeded key prefix followed by 'w' fill of the given width.
+func writeTestSkewedObjectToFS(
+	t *testing.T,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	widths []int,
+	createTS types.TS,
+	rowTSBase types.TS,
+) *objectio.ObjectEntry {
+	t.Helper()
+	writer := ioutil.ConstructWriter(
+		0, []uint16{0, objectio.SEQNUM_ROWID, objectio.SEQNUM_COMMITTS},
+		-1, false, false, fs,
+	)
+	// Same chunked-column policy as the uniform wide writer, so the
+	// window reads exercise the production direct-reader layout.
+	writer.SetChunkedColumnPolicy(func() bool { return true })
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	var blk types.Blockid
+	blkSeed := uint64(createTS.Physical())<<16 | uint64(createTS.Logical())
+	copy(blk[:], types.EncodeUint64(&blkSeed))
+	for i, w := range widths {
+		payload := []byte(strings.Repeat("w", w+8))
+		rowKey := blkSeed<<32 | uint64(i)
+		copy(payload, types.EncodeUint64(&rowKey))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], payload, false, mp))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[1], types.NewRowid(&blk, uint32(i+1)), false, mp,
+		))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[2], types.BuildTS(
+				rowTSBase.Physical(), rowTSBase.Logical()+uint32(i),
+			), false, mp,
+		))
+	}
+	bat.SetRowCount(len(widths))
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(context.Background())
+	require.NoError(t, err)
+	bat.Clean(mp)
+	stats := writer.Stats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats, uint32(len(blocks))))
+	return &objectio.ObjectEntry{ObjectStats: stats, CreateTime: createTS}
+}
+
+// writeTestSkewedTombstoneObjectToFS is the skewed test object's
+// tombstone-layout twin: the rowid column carries seqnum
+// TombstoneAttr_Rowid_SeqNum=0, the payload pk column seqnum
+// TombstoneAttr_PK_SeqNum=1, commit-ts last, so the persisted
+// tombstone normalization path accepts the served windows.
+func writeTestSkewedTombstoneObjectToFS(
+	t *testing.T,
+	mp *mpool.MPool,
+	fs fileservice.FileService,
+	widths []int,
+	createTS types.TS,
+	rowTSBase types.TS,
+) *objectio.ObjectEntry {
+	t.Helper()
+	writer := ioutil.ConstructWriter(
+		0, []uint16{
+			objectio.TombstoneAttr_Rowid_SeqNum,
+			objectio.TombstoneAttr_PK_SeqNum,
+			objectio.SEQNUM_COMMITTS,
+		},
+		-1, false, false, fs,
+	)
+	writer.SetChunkedColumnPolicy(func() bool { return true })
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+	var blk types.Blockid
+	blkSeed := uint64(createTS.Physical())<<16 | uint64(createTS.Logical())
+	copy(blk[:], types.EncodeUint64(&blkSeed))
+	for i, w := range widths {
+		payload := []byte(strings.Repeat("w", w+8))
+		rowKey := blkSeed<<32 | uint64(i)
+		copy(payload, types.EncodeUint64(&rowKey))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[0], types.NewRowid(&blk, uint32(i+1)), false, mp,
+		))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], payload, false, mp))
+		require.NoError(t, vector.AppendFixed(
+			bat.Vecs[2], types.BuildTS(
+				rowTSBase.Physical(), rowTSBase.Logical()+uint32(i),
+			), false, mp,
+		))
+	}
+	bat.SetRowCount(len(widths))
+	_, err := writer.WriteBatch(bat)
+	require.NoError(t, err)
+	blocks, _, err := writer.Sync(context.Background())
+	require.NoError(t, err)
+	bat.Clean(mp)
+	stats := writer.Stats()
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats, uint32(len(blocks))))
+	return &objectio.ObjectEntry{ObjectStats: stats, CreateTime: createTS}
+}
+
+// testChunkMetasForTest reads one chunked column's stored chunk table
+// straight from the file image: the 16-byte magic/count prefix followed
+// by the fixed 24-byte chunk entries (rowStart/rowCount/offset/length/
+// originSize). Independent of the production parser on purpose — the
+// union-peak simulation below must be derived from the ON-DISK layout,
+// not from a copy of the code under test. Returns nil for non-chunked
+// columns.
+func testChunkMetasForTest(
+	t *testing.T,
+	ctx context.Context,
+	fs fileservice.FileService,
+	name string,
+	ext objectio.Extent,
+) (metas [][3]int) {
+	t.Helper()
+	readRange := func(off, size int64) []byte {
+		ioVec := &fileservice.IOVector{
+			FilePath: name,
+			Entries: []fileservice.IOEntry{{
+				Offset:      off,
+				Size:        size,
+				ToCacheData: fileservice.CacheOriginalData,
+			}},
+			Policy: fileservice.SkipAllCache,
+		}
+		require.NoError(t, fs.Read(ctx, ioVec))
+		out := slices.Clone(ioVec.Entries[0].CachedData.Bytes())
+		ioVec.Release()
+		return out
+	}
+	prefix := readRange(int64(ext.Offset()), 16)
+	require.Equal(t, []byte("MOCOLCH1"), prefix[:8])
+	count := int(binary.LittleEndian.Uint32(prefix[12:16]))
+	header := readRange(int64(ext.Offset()), int64(16+count*24))
+	totalRows := int(binary.LittleEndian.Uint32(header[8:12]))
+	rows := 0
+	for i := 0; i < count; i++ {
+		src := header[16+i*24:]
+		rowCount := int(binary.LittleEndian.Uint32(src[4:8]))
+		originSize := int(binary.LittleEndian.Uint32(src[16:20]))
+		require.Equal(t, rows, int(binary.LittleEndian.Uint32(src[0:4])))
+		metas = append(metas, [3]int{rows, rowCount, originSize})
+		rows += rowCount
+	}
+	require.Equal(t, totalRows, rows)
+	return metas
+}
+
+// mirrorPersistedWindowPeak derives, INDEPENDENTLY of the estimator, the
+// peak a bounded window read can reach while materializing its columns:
+// flat columns decode in one shot (their fresh buffer set IS the peak),
+// while a chunk-encoded column is accumulated chunk part by part — each
+// union grows the destination with the replacement buffer allocated
+// before the previous one is freed, the part itself alive until after
+// the union — so one step peaks at previous+replacement+part coexisting.
+// The simulation walks the object's REAL stored chunk table (read from
+// the file image by testChunkMetasForTest) with the shared allocator
+// capacity arithmetic, so the peak is computed from the actual layout,
+// never by re-running the estimator's formula. widths carries the
+// payload widths the test wrote (payload bytes per row are widths[i]+8).
+// It returns (peak, retainedBound, chunked):
+//   - peak is the simulated materialization peak the estimate must
+//     never under-count;
+//   - retainedBound is the metadata composition one fresh buffer set
+//     per column costs (the estimator multiplies the chunked share of
+//     this by three, so est <= 3*retainedBound must also hold);
+//   - chunked reports whether the varlena column is chunk-encoded.
+func mirrorPersistedWindowPeak(
+	t *testing.T,
+	ctx context.Context,
+	fs fileservice.FileService,
+	stats *objectio.ObjectStats,
+	blockID uint32,
+	rowOffset, maxRows, maxBytes int,
+	widths []int,
+) (peak, retainedBound int, chunked bool) {
+	t.Helper()
+	loc := stats.BlockLocation(uint16(blockID), 8192)
+	meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+	require.NoError(t, err)
+	dataMeta := meta.MustGetMeta(objectio.SchemaData)
+	blockMeta := dataMeta.GetBlockMeta(blockID)
+	var decodedBytes uint64
+	for seqnum := uint16(0); seqnum < blockMeta.GetMetaColumnCount(); seqnum++ {
+		decodedBytes += uint64(blockMeta.ColumnMeta(seqnum).Location().OriginSize())
+	}
+	totalRows := int(blockMeta.GetRows())
+	windowRows := totalRows - rowOffset
+	if windowRows < 0 {
+		windowRows = 0
+	}
+	if maxRows > 0 {
+		windowRows = min(windowRows, max(1, maxRows/4))
+	}
+	if decodedBytes > 0 && totalRows > 0 && maxBytes > 0 {
+		windowByteBudget := max(1, maxBytes/4)
+		windowRows = min(windowRows, max(1, int(uint64(windowByteBudget)*uint64(totalRows)/decodedBytes)))
+	}
+	windowEnd := rowOffset + windowRows
+	charge := func(b int64) int {
+		rounded, _ := grownCapacity(0, int(b))
+		return rounded
+	}
+	nullMap := func(rows int) int { return (rows + 63) / 64 * 8 }
+	retainedFixed := 0
+	type varColumn struct {
+		retained int // its fresh buffer set
+		peak     int // its materialization peak, union transients included
+	}
+	var varColumns []varColumn
+	for seqnum := uint16(0); seqnum < blockMeta.GetMetaColumnCount(); seqnum++ {
+		cm := blockMeta.ColumnMeta(seqnum)
+		if fixed := types.T(cm.DataType()).FixedLength(); fixed > 0 {
+			retainedFixed += charge(int64(windowRows)*int64(fixed)) + charge(int64(nullMap(windowRows)))
+			continue
+		}
+		origin := int64(cm.Location().OriginSize())
+		area := origin - types.VarlenaSize*int64(totalRows)
+		if area < 0 {
+			area = origin
+		}
+		colRetained := charge(types.VarlenaSize*int64(windowRows)) + charge(area) + charge(int64(nullMap(windowRows)))
+		retainedBound += colRetained
+		ext := cm.Location()
+		var metas [][3]int
+		if ext.Alg() == compress.Lz4Chunked {
+			// Only a chunk-encoded extent carries a stored chunk table;
+			// flat extents hold no header to walk.
+			metas = testChunkMetasForTest(t, ctx, fs, loc.Name().String(), ext)
+			require.NotEmpty(t, metas)
+		}
+		chunked = chunked || len(metas) > 0
+		if len(metas) == 0 {
+			// Single-shot materialization: the fresh buffer set is the
+			// peak itself.
+			varColumns = append(varColumns, varColumn{colRetained, colRetained})
+			continue
+		}
+		// Union-loop simulation over the stored chunk table: previous,
+		// replacement and the chunk part coexist at each step.
+		dstRows, dstAreaRaw := 0, 0
+		dstDataCap, dstAreaCap := 0, 0
+		colPeak := 0
+		for _, m := range metas {
+			chunkStart, chunkEnd := m[0], m[0]+m[1]
+			if chunkEnd <= rowOffset || chunkStart >= windowEnd {
+				continue
+			}
+			partStart := max(rowOffset, chunkStart)
+			partEnd := min(windowEnd, chunkEnd)
+			partRows := partEnd - partStart
+			partAreaRaw := 0
+			for j := partStart; j < partEnd; j++ {
+				partAreaRaw += widths[j] + 8
+			}
+			partDataCap := charge(types.VarlenaSize * int64(partRows))
+			partAreaCap := charge(int64(partAreaRaw))
+			newRows := dstRows + partRows
+			newAreaRaw := dstAreaRaw + partAreaRaw
+			newDataCap, _ := grownCapacity(dstDataCap, types.VarlenaSize*newRows)
+			newAreaCap, _ := grownCapacity(dstAreaCap, newAreaRaw)
+			stepPeak := dstDataCap + partDataCap + newDataCap +
+				dstAreaCap + partAreaCap + newAreaCap +
+				3*charge(int64(nullMap(newRows)))
+			colPeak = max(colPeak, stepPeak)
+			dstRows, dstAreaRaw = newRows, newAreaRaw
+			dstDataCap, dstAreaCap = newDataCap, newAreaCap
+		}
+		require.Equal(t, windowRows, dstRows)
+		// The window's retained set of this column then stays live
+		// while any further columns materialize.
+		colPeak = max(colPeak, dstDataCap+dstAreaCap+charge(int64(nullMap(windowRows))))
+		varColumns = append(varColumns, varColumn{colRetained, colPeak})
+	}
+	// Columns materialize one after another; the worst moment is one
+	// column at its materialization peak while every other column's
+	// retained buffer set is already live.
+	peak = retainedFixed
+	for _, vc := range varColumns {
+		others := retainedBound - vc.retained
+		peak = max(peak, retainedFixed+others+vc.peak)
+	}
+	return peak, retainedBound + retainedFixed, chunked
 }
 
 func writeTestObjectWithAbort(
@@ -3933,4 +4256,2682 @@ func TestSelectRangeNetEffectRowsKeepsTrailingDeleteInRecovery(t *testing.T) {
 	keepFirst, keepLast = selectRangeNetEffectRows(single, single, false, false)
 	require.True(t, keepFirst)
 	require.False(t, keepLast)
+}
+
+// D156(G) r53: the default-policy constructors complete the
+// ChangeRangeLimit plumbing, and assembly enforces the attached bound over
+// the combined live working set.
+
+func TestNewChangesHandlerReadsAttachedRangeLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state, src, _, _ := newPartitionStateRangeRows(t, mp, 3, false)
+	state.start = types.BuildTS(1, 0)
+
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows:  8,
+		MaxInMemoryBytes: 64 << 20,
+	})
+	handle, err := NewChangesHandler(
+		ctx, state, types.BuildTS(1, 0), types.BuildTS(3, 0),
+		false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 8, handle.maxInMemoryRows)
+	require.Equal(t, 64<<20, handle.maxInMemoryBytes)
+	require.True(t, handle.deferRangeLimitToAssembly,
+		"the default-policy constructors enforce the attached bound at assembly, not via the spill-family chunk flush")
+	require.NoError(t, handle.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestNewChangesHandlerRejectsRowsWithoutBytes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	state, src, _, _ := newPartitionStateRangeRows(t, mp, 3, false)
+	state.start = types.BuildTS(1, 0)
+	defer src.Clean(mp)
+
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: 8,
+	})
+	_, err := NewChangesHandler(
+		ctx, state, types.BuildTS(1, 0), types.BuildTS(3, 0),
+		false, objectio.BlockMaxRows, 0, mp, nil,
+	)
+	require.Error(t, err)
+	require.False(t, engine.IsChangeRangeCapacityError(err),
+		"limit misconfiguration is a caller programming error, not a capacity signal")
+}
+
+func TestCheckpointEntriesChangesHandlerReadsAttachedRangeLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	_, fs := writeTestObjectWithCommitTS(t, mp, []types.TS{types.BuildTS(10, 0)})
+
+	// Rows without bytes is rejected before any object loading.
+	badCtx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows: 8,
+	})
+	_, err := newChangesHandlerWithCheckpointEntries(
+		badCtx, 42, "sid", nil,
+		types.BuildTS(1, 0), types.BuildTS(3, 0),
+		false, objectio.BlockMaxRows, 0, mp, fs,
+		checkpointObjectSelectionRange, false,
+	)
+	require.Error(t, err)
+	require.False(t, engine.IsChangeRangeCapacityError(err))
+
+	ctx := engine.WithChangeRangeLimit(context.Background(), engine.ChangeRangeLimit{
+		MaxInMemoryRows:  8,
+		MaxInMemoryBytes: 64 << 20,
+	})
+	handle, err := newChangesHandlerWithCheckpointEntries(
+		ctx, 42, "sid", nil,
+		types.BuildTS(1, 0), types.BuildTS(3, 0),
+		false, objectio.BlockMaxRows, 0, mp, fs,
+		checkpointObjectSelectionRange, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 8, handle.maxInMemoryRows)
+	require.Equal(t, 64<<20, handle.maxInMemoryBytes)
+	require.NoError(t, handle.Close())
+	require.Zero(t, mp.CurrNB())
+}
+
+// 20 persisted rows under an attached rows=8 limit must surface the
+// capacity-class error DURING assembly: the whole-window unions accumulate
+// past the budget, and no over-budget result batch ever leaves the handle.
+func TestDefaultPolicyAssemblyAccountingRowsLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	tsValues := make([]types.TS, 20)
+	for i := range tsValues {
+		tsValues[i] = types.BuildTS(10, uint32(i))
+	}
+
+	newHandler := func(limit engine.ChangeRangeLimit) (*ChangeHandler, *mpool.MPool) {
+		obj, fs := writeTestObjectWithCommitTS(t, mp, tsValues)
+		scheduler := tasks.NewParallelJobScheduler(2)
+		h := &ChangeHandler{
+			coarseMaxRow:              int(objectio.BlockMaxRows),
+			scheduler:                 scheduler,
+			maxInMemoryRows:           limit.MaxInMemoryRows,
+			maxInMemoryBytes:          limit.MaxInMemoryBytes,
+			deferRangeLimitToAssembly: true,
+			quick:                     true,
+			mp:                        mp,
+			lastPrint:                 time.Now(),
+			LogThreshold:              time.Hour,
+		}
+		dataBase := &baseHandle{changesHandle: h}
+		dataBase.cnObjectHandle = NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, dataBase, mp)
+		h.dataHandle = dataBase
+		h.tombstoneHandle = &baseHandle{changesHandle: h}
+		return h, mp
+	}
+
+	drain := func(limit engine.ChangeRangeLimit) (rows int, stamps []types.TS, err error) {
+		h, m := newHandler(limit)
+		for {
+			data, _, _, nextErr := h.Next(context.Background(), m)
+			if nextErr != nil {
+				h.Close()
+				return rows, stamps, nextErr
+			}
+			if data == nil {
+				h.Close()
+				return rows, stamps, nil
+			}
+			rows += data.RowCount()
+			commitTSs := vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])
+			stamps = append(stamps, commitTSs...)
+			data.Clean(m)
+		}
+	}
+
+	// rows=8: assembly crosses the bound before EOF; the emitted prefix is
+	// bounded and the error carries the capacity class.
+	rows, _, err := drain(engine.ChangeRangeLimit{MaxInMemoryRows: 8, MaxInMemoryBytes: 64 << 20})
+	require.Error(t, err)
+	require.True(t, engine.IsChangeRangeCapacityError(err),
+		"got %v", err)
+	require.LessOrEqual(t, rows, 8,
+		"no over-budget result batch is ever emitted")
+
+	// One notch larger drains the identical window with identical stamps.
+	rows, stamps64, err := drain(engine.ChangeRangeLimit{MaxInMemoryRows: 64, MaxInMemoryBytes: 64 << 20})
+	require.NoError(t, err)
+	require.Equal(t, 20, rows)
+	require.Len(t, stamps64, 20)
+
+	// An unattached read serves the identical stream (content and order).
+	rowsU, stampsU, err := drain(engine.ChangeRangeLimit{})
+	require.NoError(t, err)
+	require.Equal(t, rows, rowsU)
+	require.Equal(t, stamps64, stampsU)
+	require.Zero(t, mp.CurrNB())
+}
+
+// The in-memory replay buffer joins the combined working set AT
+// CONSTRUCTION: a wide in-memory window under a byte budget, and a row
+// window under a row budget, fail while the buffer materializes — the
+// complete allocation is charged before any drain begins — and the
+// surviving handler drains the identical window with retained memory
+// inside the admitted envelope.
+func TestDefaultPolicyAssemblyAccountingChargesInMemoryBuffer(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const rows = 24
+
+	build := func(limit engine.ChangeRangeLimit) (*ChangeHandler, *batch.Batch, error) {
+		state, src, _, _ := newPartitionStateRangeWideRows(t, mp, rows, 8<<10)
+		state.start = types.BuildTS(1, 0)
+		ctx := engine.WithChangeRangeLimit(context.Background(), limit)
+		h, err := NewChangesHandler(
+			ctx, state, types.BuildTS(1, 0), types.BuildTS(3, 0),
+			false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		if err != nil {
+			src.Clean(mp)
+			return nil, nil, err
+		}
+		h.lastPrint = time.Now()
+		return h, src, nil
+	}
+
+	// Byte bound: 24 rows of 8KB payload cross it while the buffer
+	// materializes; the capacity event is the construction itself, and
+	// nothing survived it.
+	_, _, err := build(engine.ChangeRangeLimit{MaxInMemoryRows: 1 << 20, MaxInMemoryBytes: 32 << 10})
+	require.Error(t, err)
+	require.True(t, engine.IsChangeRangeCapacityError(err), "got %v", err)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	// Row bound: the ninth buffered row crosses it at construction.
+	_, _, err = build(engine.ChangeRangeLimit{MaxInMemoryRows: 8, MaxInMemoryBytes: 1 << 24})
+	require.Error(t, err)
+	require.True(t, engine.IsChangeRangeCapacityError(err), "got %v", err)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	// A budget that admits the working set drains the identical window;
+	// retained memory (buffer plus served pages) stays inside the
+	// admitted envelope, and nothing leaks. Retained memory is measured
+	// through the pool's on-heap ownership counter: this build keeps
+	// vector allocations under ownership accounts, so per-pool CurrNB
+	// does not reflect them.
+	baseline := mp.OnHeapCurrNB()
+	h, src, err := build(engine.ChangeRangeLimit{MaxInMemoryRows: 64, MaxInMemoryBytes: 1 << 24})
+	require.NoError(t, err)
+	peak := int64(0)
+	sample := func() {
+		if cur := mp.OnHeapCurrNB() - baseline; cur > peak {
+			peak = cur
+		}
+	}
+	sample()
+	got := 0
+	for {
+		data, _, _, nextErr := h.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		if data == nil {
+			break
+		}
+		got += data.RowCount()
+		data.Clean(mp)
+		sample()
+	}
+	require.Equal(t, rows, got)
+	sample()
+	require.Greater(t, peak, int64(0), "the buffer's retained allocation was measured")
+	require.Less(t, peak, int64(1<<24),
+		"retained memory stays inside the admitted byte bound")
+	require.NoError(t, h.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// Replayed in-memory deletes are retained in the compact layout:
+// PartitionState.HandleRowsDelete replaces every delete entry's batch
+// with the lone PK vector. A bounded (ChangeRangeLimit-attached)
+// construction walks each retained tombstone through fillRowCols BEFORE
+// the delete writer sees the row, so the estimator must select the PK
+// vector the writer selects; indexing the legacy logtail position
+// (Vecs[2]) on a compact batch panics index-out-of-range. This test
+// drives the production constructor over replay-produced compact
+// deletes: an under-budget window is refused through the capacity
+// class — the estimator can only charge those rows by reading the
+// compact PK vector — and the admitted window drains the identical
+// tombstone stream with the compact batch's payloads.
+func TestDefaultPolicyTombstoneConstructionReadsCompactRetainedDeletes(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	const rows = 8
+	commitTS := types.BuildTS(2, 1)
+	packer := types.NewPacker()
+	defer packer.Close()
+
+	build := func() (*PartitionState, func()) {
+		// noData=false so replay retains each delete entry's batch, which
+		// HandleRowsDelete then compacts to the PK vector alone.
+		state := NewPartitionState("", false, 42, false)
+		state.start = types.TS{}
+		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		tsVec := vector.NewVec(types.T_TS.ToType())
+		pkVec := vector.NewVec(types.T_int64.ToType())
+		tbRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		cleanup := func() {
+			rowIDVec.Free(mp)
+			tsVec.Free(mp)
+			pkVec.Free(mp)
+			tbRowIDVec.Free(mp)
+		}
+		blockID := types.Blockid{}
+		for row := 0; row < rows; row++ {
+			rowID := types.NewRowid(&blockID, uint32(row))
+			require.NoError(t, vector.AppendFixed(rowIDVec, rowID, false, mp))
+			require.NoError(t, vector.AppendFixed(tsVec, commitTS, false, mp))
+			require.NoError(t, vector.AppendFixed(pkVec, int64(row), false, mp))
+			require.NoError(t, vector.AppendFixed(tbRowIDVec, rowID, false, mp))
+		}
+		state.HandleRowsDelete(context.Background(), &api.Batch{
+			Attrs: []string{"rowid", "time", "pk", "tbrowid"},
+			Vecs: []api.Vector{
+				mustVectorToProto(rowIDVec),
+				mustVectorToProto(tsVec),
+				mustVectorToProto(pkVec),
+				mustVectorToProto(tbRowIDVec),
+			},
+		}, packer, mp)
+		// Pin the precondition: the retained delete batches are the
+		// replay-produced compact layout, the PK vector alone.
+		replayIter := state.NewRawReplayRowsIter()
+		defer replayIter.Close()
+		compact := 0
+		for replayIter.Next() {
+			require.Equal(t, 1, len(replayIter.Entry().Batch.Vecs))
+			compact++
+		}
+		require.Equal(t, rows, compact)
+		return state, cleanup
+	}
+
+	open := func(limit engine.ChangeRangeLimit) (*ChangeHandler, *PartitionState, func(), error) {
+		state, cleanup := build()
+		ctx := engine.WithChangeRangeLimit(context.Background(), limit)
+		handle, err := NewChangesHandler(
+			ctx, state, types.TS{}, types.BuildTS(3, 0),
+			false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		if err != nil {
+			cleanup()
+			return nil, nil, nil, err
+		}
+		return handle, state, cleanup, nil
+	}
+
+	// An under-budget window is refused through the capacity class.
+	_, _, _, err := open(engine.ChangeRangeLimit{
+		MaxInMemoryRows:  rows / 2,
+		MaxInMemoryBytes: 64 << 20,
+	})
+	require.Error(t, err)
+	require.True(t, engine.IsChangeRangeCapacityError(err), "got %v", err)
+	require.Zero(t, mp.CurrNB())
+
+	// The admitted window drains the identical tombstone stream. The row
+	// budget must also cover the construction sort, which retains the
+	// unsorted buffer and the sorted copy at once (2*rows live); the
+	// pre-admission charge for each buffered row is the estimator's, so
+	// this path stays the exact one the compact layout broke.
+	handle, _, cleanup, err := open(engine.ChangeRangeLimit{
+		MaxInMemoryRows:  3 * rows,
+		MaxInMemoryBytes: 64 << 20,
+	})
+	require.NoError(t, err)
+	got := make(map[int64]types.TS)
+	for {
+		data, tombstone, _, nextErr := handle.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		if data == nil && tombstone == nil {
+			break
+		}
+		require.Nil(t, data, "no retained inserts exist in this state")
+		pks := vector.MustFixedColWithTypeCheck[int64](tombstone.Vecs[0])
+		tss := vector.MustFixedColWithTypeCheck[types.TS](tombstone.Vecs[1])
+		for i, pk := range pks {
+			got[pk] = tss[i]
+		}
+		tombstone.Clean(mp)
+	}
+	require.NoError(t, handle.Close())
+	require.Len(t, got, rows)
+	for row := 0; row < rows; row++ {
+		require.Equal(t, commitTS, got[int64(row)],
+			"the served payloads are the compact batch's PKs and each entry's commit time")
+	}
+	cleanup()
+	require.Zero(t, mp.CurrNB())
+}
+
+// A replay source batch stays fully allocated until its handle closes —
+// long after Next/QuickNext deep-copied the served window out of it — so
+// the source buffer and the destination copies COEXIST. The bound is
+// charged against that complete retained set: a budget that admits the
+// buffer alone but not the coexistence peak fails the first assembly
+// charge (construction still succeeds, pinning that the working set grew
+// during assembly), and a budget that admits the peak drains the
+// identical stream.
+func TestDefaultPolicyAssemblyAccountingCountsRetainedSourceBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const rows = 8
+	const payload = 8 << 10
+
+	open := func(limit engine.ChangeRangeLimit) (*ChangeHandler, *batch.Batch, error) {
+		state, src, _, _ := newPartitionStateRangeWideRows(t, mp, rows, payload)
+		state.start = types.BuildTS(1, 0)
+		ctx := engine.WithChangeRangeLimit(context.Background(), limit)
+		h, err := NewChangesHandler(
+			ctx, state, types.BuildTS(1, 0), types.BuildTS(3, 0),
+			false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		if err != nil {
+			src.Clean(mp)
+			return nil, nil, err
+		}
+		h.lastPrint = time.Now()
+		return h, src, nil
+	}
+
+	// Calibrate the true retained allocation through the real constructor.
+	cal, calSrc, err := open(engine.ChangeRangeLimit{})
+	require.NoError(t, err)
+	bufHandle, ok := cal.dataHandle.inMemoryHandle.(*BatchHandle)
+	require.True(t, ok)
+	require.NotNil(t, bufHandle)
+	require.NotNil(t, bufHandle.batches)
+	require.Equal(t, rows, bufHandle.batches.RowCount())
+	bufBytes := bufHandle.batches.Allocated()
+	require.NoError(t, cal.Close())
+	calSrc.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	// Calibrate the true construction transient: growth-faithful
+	// admission charges each buffer-growth step's replacement
+	// coexistence (the destination for a row's bytes is allocated before
+	// the previous buffer is freed), so the smallest budget admitting
+	// construction sits above the final buffer size. The bisection runs
+	// the production constructor itself, so the number cannot drift
+	// from the admitted arithmetic.
+	minBudget := -1
+	lo, hi := 0, 16<<20
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		tryH, trySrc, tryErr := open(engine.ChangeRangeLimit{
+			MaxInMemoryRows:  1 << 20,
+			MaxInMemoryBytes: mid,
+		})
+		if tryErr != nil {
+			require.True(t, engine.IsChangeRangeCapacityError(tryErr),
+				"construction refuses through the capacity class, got %v", tryErr)
+			lo = mid + 1
+			continue
+		}
+		minBudget = mid
+		hi = mid - 1
+		require.NoError(t, tryH.Close())
+		trySrc.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
+	}
+	require.GreaterOrEqual(t, minBudget, bufBytes,
+		"the construction transient can never drop below the final buffer")
+
+	// Admits construction exactly, but not the coexistence peak: the
+	// buffer is retained whole (bufBytes) while the gate additionally
+	// charges the destination deep-copy growth (roughly a second
+	// buffer), so the FIRST drain charge crosses. The pre-growth gate
+	// rejects ahead of any assembly allocation, so the off-heap
+	// high-water across the rejected drain stays at zero: no
+	// CloneWindow copy is ever allocated against the tight budget.
+	tight := engine.ChangeRangeLimit{
+		MaxInMemoryRows:  1 << 20,
+		MaxInMemoryBytes: minBudget,
+	}
+	h, src, err := open(tight)
+	require.NoError(t, err, "the buffer alone fits the budget; coexistence is an assembly event")
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	_, _, _, nextErr := h.Next(context.Background(), mp)
+	require.Error(t, nextErr)
+	require.True(t, engine.IsChangeRangeCapacityError(nextErr), "got %v", nextErr)
+	rejectPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.Zero(t, rejectPeak, "rejection happened before any assembly allocation")
+	require.NoError(t, h.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	// Admits the coexistence peak: the identical stream drains, with the
+	// retained allocation never exceeding source-copies arithmetic.
+	roomy := engine.ChangeRangeLimit{
+		MaxInMemoryRows:  1 << 20,
+		MaxInMemoryBytes: 2*bufBytes + 64<<10,
+	}
+	h, src, err = open(roomy)
+	require.NoError(t, err)
+	// The destination deep-copy allocates off-heap through CloneWindow, so
+	// it is measured on the pool's off-heap counter (CurrNB); the retained
+	// source buffer is on-heap (OnHeapCurrNB, held inside the baseline).
+	baseOff := mp.CurrNB()
+	peak := int64(0)
+	sample := func() {
+		if cur := mp.CurrNB() - baseOff; cur > peak {
+			peak = cur
+		}
+	}
+	got := 0
+	for {
+		data, _, _, nextErr := h.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		if data == nil {
+			break
+		}
+		got += data.RowCount()
+		// Measure while the served copy and the retained source buffer
+		// coexist: cleaning first would hide the assembly growth.
+		sample()
+		data.Clean(mp)
+	}
+	require.Equal(t, rows, got)
+	require.Greater(t, peak, int64(0), "the coexistence copy was measured")
+	require.LessOrEqual(t, peak, int64(bufBytes)+int64(bufBytes)/2,
+		"drain-time growth over the constructed buffer is at most its deep copy")
+	require.Zero(t, mp.CurrNB()-baseOff, "the served copy is fully released")
+	require.NoError(t, h.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// Persisted CN assembly enforces the attached bound BEFORE the union
+// growth: the head serve window is a retained source from prefetch until
+// discard, so the admitted envelope must cover source and destination
+// copy together. A budget that fits the window but not the coexistence
+// rejects the FIRST drain without any assembly allocation surviving the
+// rejection — pre-gate code allocated the whole copy first — while a
+// budget one byte larger drains the identical stream, and a stage-wise
+// drive of the production gate proves the window is retained until the
+// copy completes and the copy never exceeds its projected charge. The
+// byte arithmetic narrows only the assembly envelope; the production
+// coupling that also narrows the prefetch read is covered by
+// TestDefaultPolicyAssemblyAccountingRowsLimit and the live capacity
+// lanes. This build's CN assembly allocates on the pool's on-heap
+// ownership ledger, so the counters below sample OnHeapCurrNB.
+func TestDefaultPolicyAssemblyAccountingRejectsBeforeGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	tsValues := make([]types.TS, 20)
+	for i := range tsValues {
+		tsValues[i] = types.BuildTS(10, uint32(i))
+	}
+
+	var lastObj *objectio.ObjectEntry
+	var lastFS fileservice.FileService
+	newHandler := func(limit engine.ChangeRangeLimit) *ChangeHandler {
+		obj, fs := writeTestObjectWithCommitTS(t, mp, tsValues)
+		scheduler := tasks.NewParallelJobScheduler(2)
+		h := &ChangeHandler{
+			coarseMaxRow:              int(objectio.BlockMaxRows),
+			scheduler:                 scheduler,
+			deferRangeLimitToAssembly: true,
+			quick:                     true,
+			mp:                        mp,
+			lastPrint:                 time.Now(),
+			LogThreshold:              time.Hour,
+		}
+		dataBase := &baseHandle{changesHandle: h}
+		dataBase.cnObjectHandle = NewCNObjectHandle(false, []*objectio.ObjectEntry{obj}, fs, dataBase, mp)
+		h.dataHandle = dataBase
+		h.tombstoneHandle = &baseHandle{changesHandle: h}
+		// Attach after the handle snapshot of maxInMemory* so the CN
+		// read keeps whole-block windows; see the comment above.
+		h.maxInMemoryRows = limit.MaxInMemoryRows
+		h.maxInMemoryBytes = limit.MaxInMemoryBytes
+		lastObj, lastFS = obj, fs
+		return h
+	}
+
+	// Calibrate through the real projection: the prospective charge
+	// materializes the head serve window exactly once, so the retained
+	// window, the destination-growth charge, and the source-read
+	// estimate are measured together and transfer to every fresh handler
+	// over the identical deterministic object. The growth charge exceeds
+	// the window storage: the prepared commit-ts const column is stored
+	// once but materializes per row in the destination.
+	generous := engine.ChangeRangeLimit{
+		MaxInMemoryRows:  1 << 20,
+		MaxInMemoryBytes: 64 << 20,
+	}
+	cal := newHandler(generous)
+	addRows, addBytes, err := cal.dataHandle.prospectiveQuickCharge(context.Background(), nil, &cal.dataGrowth)
+	require.NoError(t, err)
+	require.Equal(t, len(tsValues), addRows)
+	require.Positive(t, addBytes)
+	liveRows, liveBytes := cal.assemblyLiveRowsBytes(nil, nil)
+	t.Logf("cal: liveRows=%d liveBytes=%d addBytes=%d calOnHeap=%d", liveRows, liveBytes, addBytes, mp.OnHeapCurrNB())
+	require.Equal(t, addRows, liveRows)
+	require.Positive(t, liveBytes)
+	require.Less(t, liveBytes, addBytes,
+		"the materialized copy charges at least the retained window itself")
+	// The source-read admission is the second gate on this path: the
+	// window's metadata estimate must fit the budget on its own before
+	// any buffer exists, and it must measure at least the retained
+	// window itself.
+	estRows, estBytes, err := estimatePersistedWindow(
+		context.Background(), lastFS, &lastObj.ObjectStats, 0, 0,
+		generous.MaxInMemoryRows, generous.MaxInMemoryBytes, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, len(tsValues), estRows)
+	require.GreaterOrEqual(t, estBytes, liveBytes,
+		"the source-read estimate never under-counts the retained window")
+	t.Logf("cal: estRows=%d estBytes=%d", estRows, estBytes)
+	require.NoError(t, cal.Close())
+	require.Zero(t, mp.CurrNB())
+
+	// One byte short of both admissions rejects: the real Next wiring
+	// fails the FIRST drain with the capacity class (at the source-read
+	// gate or the growth gate, whichever binds first), emits nothing,
+	// and every assembly allocation is released — the on-heap counter
+	// returns exactly to its pre-drain baseline. Pre-gate code allocated
+	// the whole destination copy before its post-serve check, which
+	// admitted this bound and returned the page.
+	binding := liveBytes + addBytes
+	if estBytes < binding {
+		binding = estBytes
+	}
+	tight := engine.ChangeRangeLimit{
+		MaxInMemoryRows:  1 << 20,
+		MaxInMemoryBytes: binding - 1,
+	}
+	h := newHandler(tight)
+	baseOnHeap := mp.OnHeapCurrNB()
+	data, _, _, nextErr := h.Next(context.Background(), mp)
+	require.Error(t, nextErr)
+	require.True(t, engine.IsChangeRangeCapacityError(nextErr), "got %v", nextErr)
+	require.Nil(t, data, "no over-budget result batch is ever emitted")
+	require.Equal(t, baseOnHeap, mp.OnHeapCurrNB(),
+		"the rejection allocated no destination copy and released the head window")
+	require.Zero(t, mp.CurrNB())
+	require.NoError(t, h.Close())
+	require.Equal(t, baseOnHeap, mp.OnHeapCurrNB())
+	require.Zero(t, mp.CurrNB())
+
+	// The exact binding envelope admits the coexistence: the identical
+	// stream drains through the real Next wiring with identical stamps.
+	admit := engine.ChangeRangeLimit{
+		MaxInMemoryRows:  1 << 20,
+		MaxInMemoryBytes: max(liveBytes+addBytes, estBytes),
+	}
+	h = newHandler(admit)
+	got := 0
+	var stamps []types.TS
+	for {
+		data, _, _, nextErr := h.Next(context.Background(), mp)
+		require.NoError(t, nextErr)
+		if data == nil {
+			break
+		}
+		got += data.RowCount()
+		stamps = append(stamps,
+			vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])...)
+		data.Clean(mp)
+	}
+	require.Equal(t, len(tsValues), got)
+	// CN serve windows stamp the object's create instant onto every row.
+	wantStamps := make([]types.TS, len(tsValues))
+	for i := range wantStamps {
+		wantStamps[i] = types.BuildTS(50, 0)
+	}
+	require.Equal(t, wantStamps, stamps)
+	require.NoError(t, h.Close())
+	require.Zero(t, mp.CurrNB())
+
+	// Stage-wise drive of the production gate sequence: after the
+	// projection, the head window is retained and charged; admission
+	// changes nothing; the real assembly serve then grows the
+	// destination only after the combined charge was admitted, the copy
+	// never exceeds its projected charge, and the source is released
+	// exactly when the copy completes. The memory-FS column storage is
+	// not billed to this pool's ledgers, so the window is observed
+	// through the handler's own cache while the union growth (billed
+	// on-heap) is observed through the ledger.
+	h = newHandler(admit)
+	stageBase := mp.OnHeapCurrNB()
+	addR, addB, err := h.dataHandle.prospectiveQuickCharge(context.Background(), nil, &h.dataGrowth)
+	require.NoError(t, err)
+	require.Equal(t, addRows, addR)
+	require.Equal(t, addBytes, addB)
+	require.Len(t, h.dataHandle.cnObjectHandle.cache, 1)
+	require.Equal(t, liveBytes, h.dataHandle.cnObjectHandle.cache[0].Allocated(),
+		"the head serve window is retained from the projection on")
+	afterProjection := mp.OnHeapCurrNB()
+	var dst, tomb *batch.Batch
+	require.NoError(t, h.admitAssemblyGrowth(&dst, &tomb, addR, addB, mp))
+	require.Equal(t, afterProjection, mp.OnHeapCurrNB(),
+		"admission itself allocates nothing")
+	require.NoError(t, h.dataHandle.QuickNext(context.Background(), &dst, mp))
+	h.dataGrowth.commitPending()
+	require.NotNil(t, dst)
+	require.Equal(t, len(tsValues), dst.RowCount())
+	require.LessOrEqual(t, dst.Allocated(), addB,
+		"the materialized copy never exceeds its projected charge")
+	modeledCaps := 0
+	for _, vecModel := range h.dataGrowth.vecs {
+		modeledCaps += vecModel.dataCap + vecModel.areaCap + vecModel.bitmapCap
+	}
+	require.GreaterOrEqual(t, modeledCaps, dst.Allocated(),
+		"the committed growth model never under-tracks the destination capacities")
+	require.Empty(t, h.dataHandle.cnObjectHandle.cache,
+		"the source window was released exactly when the copy completed")
+	serveDelta := mp.OnHeapCurrNB() - afterProjection
+	require.Greater(t, serveDelta, int64(0))
+	require.LessOrEqual(t, serveDelta, int64(dst.Allocated()),
+		"the destination copy is the only allocation the serve added (prepare bookkeeping left with the window)")
+	dst.Clean(mp)
+	require.Equal(t, stageBase, mp.OnHeapCurrNB())
+	require.NoError(t, h.Close())
+	require.Zero(t, mp.CurrNB())
+}
+
+// newPartitionStateRangeMixedRows builds an in-memory partition state
+// with tombRows deleted rows at instants (2, i) followed by dataRows
+// live rows at instants (3, i), on disjoint primary keys.
+func newPartitionStateRangeMixedRows(
+	t *testing.T,
+	mp *mpool.MPool,
+	tombRows, dataRows int,
+) (*PartitionState, *batch.Batch) {
+	t.Helper()
+	state := NewPartitionState("", true, 42, false)
+	src := batch.NewWithSize(4)
+	src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk", "payload"})
+	src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+	src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+	src.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+	blockID := types.Blockid{}
+	rowSeq := 0
+	addRow := func(pk int64, ts types.TS, deleted bool) {
+		rowOffset := uint32(rowSeq)
+		rowSeq++
+		rowID := types.NewRowid(&blockID, rowOffset)
+		require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[1], ts, false, mp))
+		require.NoError(t, vector.AppendFixed(src.Vecs[2], pk, false, mp))
+		require.NoError(t, vector.AppendBytes(src.Vecs[3], []byte{byte(pk)}, false, mp))
+		state.rows.Set(&RowEntry{
+			BlockID: blockID, RowID: rowID, Offset: int64(rowOffset),
+			Time: ts, ID: int64(rowOffset), Deleted: deleted, Batch: src,
+		})
+	}
+	for i := 0; i < tombRows; i++ {
+		addRow(int64(100+i), types.BuildTS(2, uint32(i)), true)
+	}
+	for i := 0; i < dataRows; i++ {
+		addRow(int64(200+i), types.BuildTS(3, uint32(i)), false)
+	}
+	src.SetRowCount(rowSeq)
+	state.start = types.BuildTS(1, 0)
+	return state, src
+}
+
+// The engine serves a change stream page whenever EITHER side reaches
+// its size boundary, and the capture's skipDeletes policy only steers
+// net-effect merging — it never suppresses standalone tombstone pages.
+// A consumer that treats data == nil as exhaustion therefore truncates
+// this stream after its first page; the governed protocol drains until
+// BOTH sides are nil. An attached (generous) bound must serve the
+// byte-identical page sequence.
+func TestDefaultPolicyChangeRangeServesStandaloneTombstonePages(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const tombRows, dataRows = 6, 3
+
+	drain := func(ctx context.Context) (tombTSs, dataTSs []types.TS, pages [][2]int) {
+		state, src := newPartitionStateRangeMixedRows(t, mp, tombRows, dataRows)
+		h, err := NewChangesHandler(
+			ctx, state, types.BuildTS(1, 0), types.BuildTS(4, 0),
+			true, // skipDeletes: the capture's own policy
+			2,    // maxRow: a tiny page boundary, making the split deterministic
+			0, mp, nil,
+		)
+		require.NoError(t, err)
+		h.lastPrint = time.Now()
+		defer func() {
+			require.NoError(t, h.Close())
+			src.Clean(mp)
+		}()
+		for {
+			data, tombstone, _, nextErr := h.Next(ctx, mp)
+			require.NoError(t, nextErr)
+			if data == nil && tombstone == nil {
+				break
+			}
+			page := [2]int{}
+			if tombstone != nil {
+				page[0] = tombstone.RowCount()
+				tombTSs = append(tombTSs,
+					vector.MustFixedColWithTypeCheck[types.TS](tombstone.Vecs[len(tombstone.Vecs)-1])...)
+				tombstone.Clean(mp)
+			}
+			if data != nil {
+				page[1] = data.RowCount()
+				dataTSs = append(dataTSs,
+					vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])...)
+				data.Clean(mp)
+			}
+			pages = append(pages, page)
+		}
+		return
+	}
+
+	tombTSs, dataTSs, pages := drain(context.Background())
+	require.NotEmpty(t, pages)
+	require.Equal(t, [2]int{tombRows - 2, 0}, pages[0],
+		"the first page is tombstone-ONLY at the size boundary: data==nil must not end a consumer's drain")
+	require.Equal(t, [2]int{2, dataRows}, pages[1],
+		"the later data arrives on a following page after the tombstone-only page")
+	require.Len(t, tombTSs, tombRows, "skipDeletes never suppresses the tombstone stream")
+	require.Len(t, dataTSs, dataRows)
+	require.Equal(t, types.BuildTS(2, 0), tombTSs[0])
+	require.Equal(t, types.BuildTS(3, 0), dataTSs[0])
+	require.Greater(t, len(pages), 1)
+
+	// An attached (generous) bound serves the byte-identical page
+	// sequence, and nothing leaks.
+	lTombTSs, lDataTSs, lPages := drain(engine.WithChangeRangeLimit(
+		context.Background(),
+		engine.ChangeRangeLimit{MaxInMemoryRows: 64, MaxInMemoryBytes: 64 << 20},
+	))
+	require.Equal(t, tombTSs, lTombTSs)
+	require.Equal(t, dataTSs, lDataTSs)
+	require.Equal(t, pages, lPages)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// The destination growth model is the admission gate's accounting
+// oracle: every charge it computes must never fall below the allocation
+// the real append path performs, across fixed, variable-width, nullable,
+// and const columns, single-shot and per-row serves. The pin is tight:
+// modeled capacities are produced by the same mpool.GrowCapacity
+// arithmetic as the allocator, so a material over-count would surface as
+// false capacity errors and any under-count as an over-budget serve.
+func TestDefaultPolicyGrowthModelMirrorsAllocator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	newSrc := func() *batch.Batch {
+		src := batch.NewWithSize(3)
+		src.SetAttributes([]string{"fixed", "str", "nullable"})
+		src.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		src.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		src.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+		widths := []int{0, 600, 24, 4096, 8, 40}
+		for i := 0; i < 54; i++ {
+			require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(i), false, mp))
+			blob := make([]byte, widths[i%len(widths)])
+			for j := range blob {
+				blob[j] = byte(i + j)
+			}
+			require.NoError(t, vector.AppendBytes(src.Vecs[1], blob, false, mp))
+			require.NoError(t, vector.AppendFixed(src.Vecs[2], int32(i), i%3 == 0, mp))
+		}
+		src.SetRowCount(54)
+		return src
+	}
+	modeledCaps := func(m *dstGrowthModel) (total int) {
+		for _, v := range m.vecs {
+			total += v.dataCap + v.areaCap + v.bitmapCap
+		}
+		return
+	}
+	requireCoverFit := func(model *dstGrowthModel, dst *batch.Batch, what string) {
+		require.GreaterOrEqual(t, modeledCaps(model), dst.Allocated(),
+			"%s: the model must never under-track the destination", what)
+		require.LessOrEqual(t, modeledCaps(model), dst.Allocated()+96*len(dst.Vecs),
+			"%s: the model's over-count must stay within one slack band per column", what)
+	}
+
+	// Per-row serve (the row-mode append path): the model charges BEFORE
+	// each allocate-then-copy append; after committing, the tracked
+	// capacities cover the destination's reported allocation at every
+	// row.
+	t.Run("per_row_appends", func(t *testing.T) {
+		src := newSrc()
+		defer src.Clean(mp)
+		dst := batch.NewWithSize(3)
+		for i := range dst.Vecs {
+			dst.Vecs[i] = vector.NewVec(*src.Vecs[i].GetType())
+		}
+		var model dstGrowthModel
+		for row := 0; row < 54; row++ {
+			model.chargeServeGrow(dst.Vecs[0].Length(), src, row, row+1, false)
+			for i := range dst.Vecs {
+				appendFromEntry(src.Vecs[i], dst.Vecs[i], row, mp)
+			}
+			model.commitPending()
+			requireCoverFit(&model, dst, fmt.Sprintf("row %d", row))
+		}
+		dst.Clean(mp)
+	})
+
+	// Whole-window serves of the clone family: a creation serve clones
+	// the first window (bulk data PreExtend, per-row varlena area,
+	// one-shot bitmap copy — BatchHandle/AObjectHandle next onto an empty
+	// destination), then a second window appends onto the accumulated
+	// destination one row at a time (appendFromEntry). Charging the
+	// second window as one shot would settle below the real capacity:
+	// the allocator's amortized per-row growth overshoots a single
+	// round-up (20 int64 rows settle at 256 bytes of data capacity, not
+	// the 160 a one-shot grow reports).
+	t.Run("window_appends", func(t *testing.T) {
+		src := newSrc()
+		defer src.Clean(mp)
+		dst := batch.NewWithSize(3)
+		for i := range dst.Vecs {
+			dst.Vecs[i] = vector.NewVec(*src.Vecs[i].GetType())
+		}
+		var model dstGrowthModel
+		// Creation: CloneWindow, as the serve's first window performs.
+		model.chargeServeGrow(0, src, 0, 20, false)
+		for i := range dst.Vecs {
+			cloned, err := src.Vecs[i].CloneWindow(0, 20, mp)
+			require.NoError(t, err)
+			dst.Vecs[i].Free(mp)
+			dst.Vecs[i] = cloned
+		}
+		dst.SetRowCount(dst.Vecs[0].Length())
+		model.commitPending()
+		requireCoverFit(&model, dst, "creation window [0,20)")
+		// Append onto the nonempty destination: per-row growth.
+		model.chargeServeGrow(dst.Vecs[0].Length(), src, 20, 54, false)
+		for i := range dst.Vecs {
+			for row := 20; row < 54; row++ {
+				appendFromEntry(src.Vecs[i], dst.Vecs[i], row, mp)
+			}
+		}
+		dst.SetRowCount(dst.Vecs[0].Length())
+		model.commitPending()
+		requireCoverFit(&model, dst, "appended window [20,54)")
+		dst.Clean(mp)
+	})
+
+	// Const broadcasts: a const column is stored once in the source but
+	// materializes per appended row in the destination (the CN
+	// prepared-window shape), including a null const and an out-of-line
+	// varlen const.
+	t.Run("const_broadcasts", func(t *testing.T) {
+		src := batch.NewWithSize(3)
+		tsConst, err := vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(50, 0), 20, mp)
+		require.NoError(t, err)
+		src.Vecs[0] = tsConst
+		src.Vecs[1] = vector.NewConstNull(types.T_varchar.ToType(), 20, mp)
+		wide := make([]byte, 600)
+		for i := range wide {
+			wide[i] = byte(i)
+		}
+		strConst, err := vector.NewConstBytes(types.T_varchar.ToType(), wide, 20, mp)
+		require.NoError(t, err)
+		src.Vecs[2] = strConst
+		src.SetRowCount(20)
+		defer src.Clean(mp)
+
+		dst := batch.NewWithSize(3)
+		for i := range dst.Vecs {
+			dst.Vecs[i] = vector.NewVec(*src.Vecs[i].GetType())
+		}
+		var model dstGrowthModel
+		model.chargeServeGrow(0, src, 0, 20, true)
+		sels := make([]int64, 20)
+		for j := range sels {
+			sels[j] = int64(j)
+		}
+		for i := range dst.Vecs {
+			require.NoError(t, dst.Vecs[i].Union(src.Vecs[i], sels, mp))
+		}
+		model.commitPending()
+		requireCoverFit(&model, dst, "const broadcast union")
+		dst.Clean(mp)
+	})
+
+	// Allocator rounding boundary: 5000 constant commit-TS values carry
+	// 60000 payload bytes, which the allocator's size classes settle at
+	// the next class — the union pregrow and the charge must agree with
+	// the allocated capacity exactly, or admission under-counts the
+	// materialized broadcast (the legacy payload-plus-slack estimate
+	// charged 60689 for a 65536 allocation).
+	t.Run("const_rounding_boundary", func(t *testing.T) {
+		const rows = 5000
+		src := batch.NewWithSize(1)
+		tsConst, err := vector.NewConstFixed(types.T_TS.ToType(), types.BuildTS(50, 0), rows, mp)
+		require.NoError(t, err)
+		src.Vecs[0] = tsConst
+		src.SetRowCount(rows)
+		defer src.Clean(mp)
+
+		payload := rows * types.T_TS.ToType().TypeSize()
+		wantCap, ok := mpool.GrowCapacity(0, int64(payload))
+		require.True(t, ok)
+		require.Greater(t, int(wantCap), payload,
+			"the payload sits strictly below a size class, so the boundary is discriminating")
+
+		dst := batch.NewWithSize(1)
+		dst.Vecs[0] = vector.NewVec(types.T_TS.ToType())
+		var model dstGrowthModel
+		model.chargeServeGrow(0, src, 0, rows, true)
+		sels := make([]int64, rows)
+		for j := range sels {
+			sels[j] = int64(j)
+		}
+		require.NoError(t, dst.Vecs[0].Union(src.Vecs[0], sels, mp))
+		model.commitPending()
+		requireCoverFit(&model, dst, "const rounding boundary")
+		require.Equal(t, int(wantCap), model.vecs[0].dataCap,
+			"the charge is the allocator class, not the payload")
+		dst.Clean(mp)
+	})
+
+	// Staging isolation: a dropped stage (schema boundary, aborted serve)
+	// must leave the tracked state untouched, so the next charge is
+	// computed against the real destination capacities.
+	t.Run("dropped_stage_isolation", func(t *testing.T) {
+		src := newSrc()
+		defer src.Clean(mp)
+		dst := batch.NewWithSize(3)
+		for i := range dst.Vecs {
+			dst.Vecs[i] = vector.NewVec(*src.Vecs[i].GetType())
+		}
+		var model dstGrowthModel
+		model.chargeServeGrow(0, src, 0, 10, false)
+		for i := range dst.Vecs {
+			cloned, err := src.Vecs[i].CloneWindow(0, 10, mp)
+			require.NoError(t, err)
+			dst.Vecs[i].Free(mp)
+			dst.Vecs[i] = cloned
+		}
+		dst.SetRowCount(dst.Vecs[0].Length())
+		model.commitPending()
+		requireCoverFit(&model, dst, "after committed rows")
+		before := modeledCaps(&model)
+		model.chargeServeGrow(dst.Vecs[0].Length(), src, 10, 54, false)
+		model.dropPending()
+		require.Equal(t, before, modeledCaps(&model),
+			"a dropped stage must not move the tracked state")
+		model.chargeServeGrow(dst.Vecs[0].Length(), src, 10, 12, false)
+		for i := range dst.Vecs {
+			for row := 10; row < 12; row++ {
+				appendFromEntry(src.Vecs[i], dst.Vecs[i], row, mp)
+			}
+		}
+		model.commitPending()
+		requireCoverFit(&model, dst, "after the retained serve")
+		dst.Clean(mp)
+	})
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// Row-mode gates read destination-aware arithmetic: the per-step charge
+// is the destination's actual growth from its CURRENT capacities, not a
+// from-scratch copy estimate, so a budget shaped to the true ladder
+// drains exactly the prefix it admits and rejects the next row grow
+// without crossing the envelope. The off-peak high-water across the
+// rejection never exceeds the admitted drain's own destination
+// high-water: no budget-crossing allocation happens before the refusal.
+func TestDefaultPolicyRowModeGrowthGate(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	const tombRows, dataRows = 3, 9
+
+	open := func(limit engine.ChangeRangeLimit) (*ChangeHandler, *batch.Batch, error) {
+		state, src := newPartitionStateRangeMixedRows(t, mp, tombRows, dataRows)
+		state.start = types.BuildTS(1, 0)
+		ctx := engine.WithChangeRangeLimit(context.Background(), limit)
+		h, err := NewChangesHandler(
+			ctx, state, types.BuildTS(1, 0), types.BuildTS(4, 0),
+			false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		if err != nil {
+			src.Clean(mp)
+			return nil, nil, err
+		}
+		h.lastPrint = time.Now()
+		return h, src, nil
+	}
+	drain := func(h *ChangeHandler) (dataGot, tombGot int, maxLive int64, err error) {
+		for {
+			data, tomb, _, nextErr := h.Next(context.Background(), mp)
+			if nextErr != nil {
+				return dataGot, tombGot, maxLive, nextErr
+			}
+			if data == nil && tomb == nil {
+				return dataGot, tombGot, maxLive, nil
+			}
+			if data != nil {
+				dataGot += data.RowCount()
+			}
+			if tomb != nil {
+				tombGot += tomb.RowCount()
+			}
+			live := int64(0)
+			if data != nil {
+				live += int64(data.Allocated())
+			}
+			if tomb != nil {
+				live += int64(tomb.Allocated())
+			}
+			if live > maxLive {
+				maxLive = live
+			}
+			if data != nil {
+				data.Clean(mp)
+			}
+			if tomb != nil {
+				tomb.Clean(mp)
+			}
+		}
+	}
+
+	// Admitting drain inside an allocation-peak epoch: the high-water
+	// the generous budget lets through is the like-for-like reference
+	// for the rejected drain's peak — both runs walk the identical row
+	// sequence with the identical per-row growth arithmetic.
+	generous := engine.ChangeRangeLimit{MaxInMemoryRows: 1 << 20, MaxInMemoryBytes: 16 << 20}
+	h, src, err := open(generous)
+	require.NoError(t, err)
+	genEpoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, genEpoch)
+	dataGot, tombGot, _, err := drain(h)
+	admitPeak, genEnded := mp.EndResourcePeakEpoch(genEpoch)
+	require.True(t, genEnded)
+	require.NoError(t, err)
+	require.Equal(t, dataRows, dataGot)
+	require.Equal(t, tombRows, tombGot)
+	require.NoError(t, h.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	minBudget := -1
+	lo, hi := 0, 16<<20
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		tryH, trySrc, tryErr := open(engine.ChangeRangeLimit{MaxInMemoryRows: 1 << 20, MaxInMemoryBytes: mid})
+		if tryErr == nil {
+			_, _, _, tryErr = drain(tryH)
+		}
+		if tryErr != nil {
+			require.True(t, engine.IsChangeRangeCapacityError(tryErr), "got %v", tryErr)
+			if tryH != nil {
+				require.NoError(t, tryH.Close())
+			}
+			if trySrc != nil {
+				trySrc.Clean(mp)
+			}
+			require.Zero(t, mp.CurrNB())
+			require.Zero(t, mp.OnHeapCurrNB())
+			lo = mid + 1
+			continue
+		}
+		minBudget = mid
+		hi = mid - 1
+		require.NoError(t, tryH.Close())
+		trySrc.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
+	}
+	require.Greater(t, minBudget, 0)
+
+	// One byte under: the ladder resolves a row grow mid-drain. The
+	// off-peak high-water up to the rejection stays within the admitted
+	// drain's destination high-water — every byte the rejected handler
+	// ever allocated fits an envelope the admitted drain also held —
+	// and the rejection releases the in-flight destinations completely.
+	h, src, err = open(engine.ChangeRangeLimit{MaxInMemoryRows: 1 << 20, MaxInMemoryBytes: minBudget - 1})
+	require.NoError(t, err, "construction fits; a row grow crosses during the drain")
+	baseOff, baseOn := mp.CurrNB(), mp.OnHeapCurrNB()
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	dataGot, tombGot, _, nextErr := drain(h)
+	require.Error(t, nextErr)
+	require.True(t, engine.IsChangeRangeCapacityError(nextErr), "got %v", nextErr)
+	rejectPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.LessOrEqual(t, rejectPeak, admitPeak,
+		"every byte allocated before the refusal was also allocated by the admitted drain")
+	require.Less(t, dataGot+tombGot, dataRows+tombRows,
+		"the rejected row was never emitted")
+	// The drain legitimately releases baseline bytes (the retained
+	// construction buffer goes down as its rows serve); what must not
+	// happen is any byte of the rejected allocation surviving.
+	require.LessOrEqual(t, mp.CurrNB(), baseOff, "no off-heap byte of the rejected growth survives")
+	require.LessOrEqual(t, mp.OnHeapCurrNB(), baseOn, "no on-heap byte of the rejected growth survives")
+	require.NoError(t, h.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	// Exactly the ladder boundary: the identical stream drains.
+	h, src, err = open(engine.ChangeRangeLimit{MaxInMemoryRows: 1 << 20, MaxInMemoryBytes: minBudget})
+	require.NoError(t, err)
+	dataGot, tombGot, _, err = drain(h)
+	require.NoError(t, err)
+	require.Equal(t, dataRows, dataGot)
+	require.Equal(t, tombRows, tombGot)
+	require.NoError(t, h.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// A CN union into a NONEMPTY destination charges the destination's
+// actual growth from its current capacities: the pre-growth gate for a
+// later window must admit at least the delta the serve performs, and the
+// committed model tracks the settled destination exactly.
+func TestDefaultPolicyCNNonemptyDestinationGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	d1 := writeTestWideObjectToFS(t, mp, fs, 12, 24, types.BuildTS(10, 1))
+	d2 := writeTestWideObjectToFS(t, mp, fs, 12, 512, types.BuildTS(10, 2))
+
+	h := &ChangeHandler{
+		coarseMaxRow:              int(objectio.BlockMaxRows),
+		scheduler:                 tasks.NewParallelJobScheduler(2),
+		deferRangeLimitToAssembly: true,
+		quick:                     true,
+		mp:                        mp,
+		lastPrint:                 time.Now(),
+		LogThreshold:              time.Hour,
+	}
+	dataBase := &baseHandle{changesHandle: h}
+	dataBase.cnObjectHandle = NewCNObjectHandle(false, []*objectio.ObjectEntry{d1, d2}, fs, dataBase, mp)
+	h.dataHandle = dataBase
+	h.tombstoneHandle = &baseHandle{changesHandle: h}
+	h.maxInMemoryRows = 1 << 20
+	h.maxInMemoryBytes = 64 << 20
+
+	var dst, tomb *batch.Batch
+	addR1, addB1, err := h.dataHandle.prospectiveQuickCharge(context.Background(), nil, &h.dataGrowth)
+	require.NoError(t, err)
+	require.Equal(t, 12, addR1)
+	require.NoError(t, h.admitAssemblyGrowth(&dst, &tomb, addR1, addB1, mp))
+	require.NoError(t, h.dataHandle.QuickNext(context.Background(), &dst, mp))
+	h.dataGrowth.commitPending()
+	require.Equal(t, 12, dst.RowCount())
+	before := dst.Allocated()
+
+	// Second window onto the accumulated destination: the charge is the
+	// growth delta, the serve lands inside it, and the committed model
+	// covers the settled destination.
+	addR2, addB2, err := h.dataHandle.prospectiveQuickCharge(context.Background(), dst, &h.dataGrowth)
+	require.NoError(t, err)
+	require.Equal(t, 12, addR2)
+	require.NoError(t, h.admitAssemblyGrowth(&dst, &tomb, addR2, addB2, mp))
+	require.NoError(t, h.dataHandle.QuickNext(context.Background(), &dst, mp))
+	h.dataGrowth.commitPending()
+	require.Equal(t, 24, dst.RowCount())
+	delta := dst.Allocated() - before
+	require.GreaterOrEqual(t, addB2, delta,
+		"the admitted growth never under-counts the second-window union")
+	modeled := 0
+	for _, vm := range h.dataGrowth.vecs {
+		modeled += vm.dataCap + vm.areaCap + vm.bitmapCap
+	}
+	require.GreaterOrEqual(t, modeled, dst.Allocated(),
+		"the committed model never under-tracks the settled destination")
+	require.LessOrEqual(t, modeled, dst.Allocated()+96*len(dst.Vecs))
+	dst.Clean(mp)
+	require.NoError(t, h.Close())
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// Changing-width multi-window reads with retained output: the combined
+// remaining budget is enforced at the source-read boundary — the
+// window's metadata projection against the live destinations and
+// retained sources — so an over-budget window read is refused BEFORE any
+// source buffer exists. The rejection text pins the source-admission
+// arithmetic (live output plus the projected window, nothing read), the
+// handle's prefetch cache stays empty for the refused window, and the
+// release is complete. A budget one step below the admitting ladder
+// refuses at that boundary; the boundary budget drains the identical
+// stream.
+func TestDefaultPolicySourceReadAdmissionMultiWindow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	t1 := writeTestWideObjectToFS(t, mp, fs, 8, 64, types.BuildTS(9, 1))
+	t2 := writeTestWideObjectToFS(t, mp, fs, 8, 64, types.BuildTS(9, 2))
+	d1 := writeTestWideObjectToFS(t, mp, fs, 16, 32, types.BuildTS(10, 1))
+	d2 := writeTestWideObjectToFS(t, mp, fs, 16, 512, types.BuildTS(10, 2))
+	d3 := writeTestWideObjectToFS(t, mp, fs, 16, 8192, types.BuildTS(10, 3))
+
+	build := func() *ChangeHandler {
+		h := &ChangeHandler{
+			coarseMaxRow:              int(objectio.BlockMaxRows),
+			scheduler:                 tasks.NewParallelJobScheduler(2),
+			deferRangeLimitToAssembly: true,
+			quick:                     false,
+			mp:                        mp,
+			lastPrint:                 time.Now(),
+			LogThreshold:              time.Hour,
+		}
+		dataBase := &baseHandle{changesHandle: h}
+		dataBase.cnObjectHandle = NewCNObjectHandle(false, []*objectio.ObjectEntry{d1, d2, d3}, fs, dataBase, mp)
+		// Row-mode Next reads every sub-handle's NextTS; production always
+		// installs non-nil (possibly empty) handles, so the assembly must
+		// as well.
+		dataBase.aobjHandle = NewAObjectHandle(
+			context.Background(), dataBase, false,
+			types.BuildTS(1, 0), types.BuildTS(11, 0), nil, fs, mp,
+		)
+		tombBase := &baseHandle{changesHandle: h}
+		tombBase.cnObjectHandle = NewCNObjectHandle(true, []*objectio.ObjectEntry{t1, t2}, fs, tombBase, mp)
+		tombBase.aobjHandle = NewAObjectHandle(
+			context.Background(), tombBase, true,
+			types.BuildTS(1, 0), types.BuildTS(11, 0), nil, fs, mp,
+		)
+		h.dataHandle = dataBase
+		h.tombstoneHandle = tombBase
+		return h
+	}
+	// The drain merges tombstones (9, i) before data (10, i), so each
+	// Next accumulates both tombstone windows and the first two data
+	// windows into retained outputs; the third data window's source-read
+	// admission sees all of them live.
+	estRowsD3, estBytesD3, err := estimatePersistedWindow(
+		context.Background(), fs, &d3.ObjectStats, 0, 0, 0, 0, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 16, estRowsD3)
+	require.GreaterOrEqual(t, estBytesD3, 16*8192,
+		"the projection covers the wide window's decoded payload")
+	totalRows := 8 + 8 + 16 + 16 + 16
+
+	drainRows := func(h *ChangeHandler) (int, error) {
+		got := 0
+		for {
+			data, tomb, _, nextErr := h.Next(context.Background(), mp)
+			if nextErr != nil {
+				return got, nextErr
+			}
+			if data == nil && tomb == nil {
+				return got, nil
+			}
+			if data != nil {
+				got += data.RowCount()
+			}
+			if tomb != nil {
+				got += tomb.RowCount()
+			}
+			if data != nil {
+				data.Clean(mp)
+			}
+			if tomb != nil {
+				tomb.Clean(mp)
+			}
+		}
+	}
+
+	// Admitting ladder via bisection over full drains.
+	minBudget := -1
+	lo, hi := 0, 64<<20
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		tryH := build()
+		tryH.maxInMemoryRows = 1 << 20
+		tryH.maxInMemoryBytes = mid
+		got, tryErr := drainRows(tryH)
+		closeErr := tryH.Close()
+		require.NoError(t, closeErr)
+		if tryErr != nil {
+			require.True(t, engine.IsChangeRangeCapacityError(tryErr), "got %v", tryErr)
+			lo = mid + 1
+			continue
+		}
+		require.Equal(t, totalRows, got)
+		minBudget = mid
+		hi = mid - 1
+	}
+
+	// One byte under the ladder: the refused window is never read
+	// (prefetch cache stays empty), the retained outputs are released,
+	// and the error counts the live rows plus the projected window rows
+	// — the arithmetic of an admission that ran BEFORE any buffer
+	// existed.
+	h := build()
+	h.maxInMemoryRows = 1 << 20
+	h.maxInMemoryBytes = minBudget - 1
+	baseOff, baseOn := mp.CurrNB(), mp.OnHeapCurrNB()
+	got, nextErr := drainRows(h)
+	require.Error(t, nextErr)
+	require.True(t, engine.IsChangeRangeCapacityError(nextErr), "got %v", nextErr)
+	require.Less(t, got, totalRows, "the refused window's rows were never emitted")
+	require.Empty(t, h.dataHandle.cnObjectHandle.cache,
+		"the refused window was never read into the prefetch cache")
+	require.Empty(t, h.tombstoneHandle.cnObjectHandle.cache)
+	require.Equal(t, baseOff, mp.CurrNB(), "every allocation released on rejection")
+	require.Equal(t, baseOn, mp.OnHeapCurrNB())
+	t.Logf("multiwindow tight: budget=%d got=%d estD3=%d err=%v", minBudget-1, got, estBytesD3, nextErr)
+	require.NoError(t, h.Close())
+	require.Equal(t, baseOff, mp.CurrNB())
+	require.Equal(t, baseOn, mp.OnHeapCurrNB())
+
+	// The ladder boundary drains the identical stream.
+	h = build()
+	h.maxInMemoryRows = 1 << 20
+	h.maxInMemoryBytes = minBudget
+	got, nextErr = drainRows(h)
+	require.NoError(t, nextErr)
+	require.Equal(t, totalRows, got)
+	require.NoError(t, h.Close())
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// A skewed-width persisted window: one 600KB value among uniform 140KB
+// rows in a chunked object column. The window estimate must be a SOUND
+// bound for the read it fronts: the second 15-row window holds the
+// skewed value, so the projection covers the whole column area, the
+// source-read admission refuses that window BEFORE its buffers exist
+// (the read cursor never advances past row 15), and the rejected
+// drain's allocation peak stays inside the attached budget. The old
+// integer payload scaling projected ~2.2MB for the same cut and the
+// drain sailed past the budget — that is the under-charge this
+// regression pins through the real constructors.
+func TestDefaultPolicySourceReadAdmissionSkewedWindow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	widths := make([]int, 60)
+	for i := range widths {
+		widths[i] = 139810
+	}
+	widths[27] = 600000
+	obj := writeTestSkewedObjectToFS(
+		t, mp, fs, widths, types.BuildTS(10, 1), types.BuildTS(100, 0),
+	)
+	ctx := context.Background()
+
+	// The window holding the skewed row: a 2359296-byte window byte
+	// budget chunks the 60-row block into 15-row windows, and
+	// [15,30) carries the wide value. The whole column area is the
+	// only sound metadata bound for that cut.
+	estRows, estBytes, err := estimatePersistedWindow(
+		ctx, fs, &obj.ObjectStats, 0, 15, 0, 9<<20, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 15, estRows,
+		"the byte budget chunks the 60-row block into 15-row windows")
+	simPeak, retainedBound, chunked := mirrorPersistedWindowPeak(
+		t, ctx, fs, &obj.ObjectStats, 0, 15, 0, 9<<20, widths,
+	)
+	require.True(t, chunked,
+		"the skewed writer's 8.8MB column is chunk-encoded on disk")
+	require.GreaterOrEqual(t, estBytes, simPeak,
+		"the estimate never under-counts the simulated union peak of the object's real chunk layout")
+	require.LessOrEqual(t, estBytes, 3*retainedBound+128,
+		"the estimate stays inside its documented three-copies-of-retained bound")
+	require.GreaterOrEqual(t, estBytes, 8<<20,
+		"the projection covers the whole column area the cut can carry, times the chunk-union transient")
+
+	build := func(limitBytes int) *ChangeHandler {
+		h := &ChangeHandler{
+			coarseMaxRow:              int(objectio.BlockMaxRows),
+			scheduler:                 tasks.NewParallelJobScheduler(2),
+			deferRangeLimitToAssembly: true,
+			quick:                     false,
+			mp:                        mp,
+			lastPrint:                 time.Now(),
+			LogThreshold:              time.Hour,
+			maxInMemoryBytes:          limitBytes,
+		}
+		dataBase := &baseHandle{changesHandle: h}
+		dataBase.cnObjectHandle = NewCNObjectHandle(
+			false, []*objectio.ObjectEntry{obj}, fs, dataBase, mp,
+		)
+		dataBase.aobjHandle = NewAObjectHandle(
+			ctx, dataBase, false,
+			types.BuildTS(1, 0), types.BuildTS(11, 0), nil, fs, mp,
+		)
+		tombBase := &baseHandle{changesHandle: h}
+		tombBase.cnObjectHandle = NewCNObjectHandle(true, nil, fs, tombBase, mp)
+		tombBase.aobjHandle = NewAObjectHandle(
+			ctx, tombBase, true,
+			types.BuildTS(1, 0), types.BuildTS(11, 0), nil, fs, mp,
+		)
+		h.dataHandle = dataBase
+		h.tombstoneHandle = tombBase
+		return h
+	}
+	drainRows := func(h *ChangeHandler) (int, error) {
+		got := 0
+		for {
+			data, tomb, _, nextErr := h.Next(ctx, mp)
+			if nextErr != nil {
+				return got, nextErr
+			}
+			if data == nil && tomb == nil {
+				return got, nil
+			}
+			if data != nil {
+				got += data.RowCount()
+				data.Clean(mp)
+			}
+			if tomb != nil {
+				got += tomb.RowCount()
+				tomb.Clean(mp)
+			}
+		}
+	}
+
+	// Tight budget 9MiB: the FIRST window's projection already charges
+	// the sound composition (whole column area, three copies for the
+	// chunk-union peak — ~26MB here), so it is refused at the gate
+	// before its read allocates a single buffer. The column is
+	// chunk-encoded (it is larger than the 8MiB chunk target), so
+	// admitted windows slice rows without touching the legacy spill
+	// lane.
+	baseOff, baseOn := mp.CurrNB(), mp.OnHeapCurrNB()
+	h := build(9 << 20)
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	got, nextErr := drainRows(h)
+	require.Error(t, nextErr)
+	require.True(t, engine.IsChangeRangeCapacityError(nextErr), "got %v", nextErr)
+	rejectPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.Zero(t, got, "the refused first window emitted nothing")
+	require.Zero(t, h.dataHandle.cnObjectHandle.blockRowOffset,
+		"the refused window was never read: the cursor still sits at its start")
+	require.Empty(t, h.dataHandle.cnObjectHandle.cache)
+	require.LessOrEqual(t, rejectPeak, uint64(9<<20),
+		"rejection preceded the over-budget allocation: the drain peak stayed within the attached budget")
+	require.Equal(t, baseOff, mp.CurrNB(), "every allocated byte released on rejection")
+	require.Equal(t, baseOn, mp.OnHeapCurrNB())
+	require.NoError(t, h.Close())
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	// The generous budget drains the identical stream, and its
+	// allocation peak (window materializations across the chunk unions
+	// plus emitted pages) stays inside the attached budget.
+	h = build(64 << 20)
+	epoch = mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	got, nextErr = drainRows(h)
+	genPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.NoError(t, nextErr)
+	require.Equal(t, 60, got)
+	require.LessOrEqual(t, genPeak, uint64(64<<20),
+		"the generous drain's allocation peak stayed inside the attached budget")
+	require.NoError(t, h.Close())
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// The rounding-boundary case: a payload area just under an allocator
+// capacity class. Sixteen 3734-byte payloads occupy 59872 decoded
+// bytes of column area, but the read allocates the whole 65536 class;
+// an estimate that charges the decoded payload plus fixed slack
+// (60582) under-prices the read the admission must cover. The estimate
+// must equal the model recomputed from the block metadata and the
+// shared allocator arithmetic, and the through-constructor tight arm
+// refuses the read with its peak inside the attached budget.
+func TestDefaultPolicyPersistedWindowEstimateRoundingBoundary(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	widths := make([]int, 16)
+	for i := range widths {
+		widths[i] = 3734
+	}
+	obj := writeTestSkewedObjectToFS(
+		t, mp, fs, widths, types.BuildTS(10, 1), types.BuildTS(100, 0),
+	)
+	ctx := context.Background()
+
+	estRows, estBytes, err := estimatePersistedWindow(
+		ctx, fs, &obj.ObjectStats, 0, 0, 0, 0, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 16, estRows)
+	simPeak, retainedBound, chunked := mirrorPersistedWindowPeak(
+		t, ctx, fs, &obj.ObjectStats, 0, 0, 0, 0, widths,
+	)
+	require.False(t, chunked,
+		"a 60KB column stays below the chunk target and is stored flat")
+	require.Equal(t, retainedBound+128, estBytes,
+		"a flat column's estimate IS its fresh buffer set, recomputed from the metadata and the shared allocator arithmetic")
+	require.Equal(t, simPeak+128, estBytes,
+		"one-shot materialization peaks exactly at those fresh buffers")
+	require.GreaterOrEqual(t, estBytes, 66000,
+		"the projection charges the full capacity class the read allocates")
+
+	build := func(limitBytes int) *ChangeHandler {
+		h := &ChangeHandler{
+			coarseMaxRow:              int(objectio.BlockMaxRows),
+			scheduler:                 tasks.NewParallelJobScheduler(2),
+			deferRangeLimitToAssembly: true,
+			quick:                     false,
+			mp:                        mp,
+			lastPrint:                 time.Now(),
+			LogThreshold:              time.Hour,
+			maxInMemoryBytes:          limitBytes,
+		}
+		dataBase := &baseHandle{changesHandle: h}
+		dataBase.cnObjectHandle = NewCNObjectHandle(
+			false, []*objectio.ObjectEntry{obj}, fs, dataBase, mp,
+		)
+		dataBase.aobjHandle = NewAObjectHandle(
+			ctx, dataBase, false,
+			types.BuildTS(1, 0), types.BuildTS(11, 0), nil, fs, mp,
+		)
+		tombBase := &baseHandle{changesHandle: h}
+		tombBase.cnObjectHandle = NewCNObjectHandle(true, nil, fs, tombBase, mp)
+		tombBase.aobjHandle = NewAObjectHandle(
+			ctx, tombBase, true,
+			types.BuildTS(1, 0), types.BuildTS(11, 0), nil, fs, mp,
+		)
+		h.dataHandle = dataBase
+		h.tombstoneHandle = tombBase
+		return h
+	}
+	drainRows := func(h *ChangeHandler) (int, error) {
+		got := 0
+		for {
+			data, tomb, _, nextErr := h.Next(ctx, mp)
+			if nextErr != nil {
+				return got, nextErr
+			}
+			if data == nil && tomb == nil {
+				return got, nil
+			}
+			if data != nil {
+				got += data.RowCount()
+				data.Clean(mp)
+			}
+			if tomb != nil {
+				got += tomb.RowCount()
+				tomb.Clean(mp)
+			}
+		}
+	}
+
+	// The handle opens unbounded (like production construction; the
+	// bounded read lane would demand a chunked column to dodge the
+	// legacy spill factory), and the budget attaches before the drain
+	// — the same shape the multi-window regression pins. Tight: the
+	// 66KB-plus projection exceeds the 64000 budget, so the source-read
+	// admission refuses the object's whole-block window BEFORE its
+	// read: nothing lands in the prefetch cache, no row is emitted,
+	// the drain peak stays inside the budget, and the ledgers return
+	// to baseline. The old payload estimate (61158 here) admitted the
+	// read and could only reject it through the post-materialization
+	// backstop — after roughly 66.5KB more than the budget allowed.
+	baseOff, baseOn := mp.CurrNB(), mp.OnHeapCurrNB()
+	h := build(0)
+	h.maxInMemoryRows = 1 << 20
+	h.maxInMemoryBytes = 64000
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	got, nextErr := drainRows(h)
+	require.Error(t, nextErr)
+	require.True(t, engine.IsChangeRangeCapacityError(nextErr), "got %v", nextErr)
+	rejectPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.Zero(t, got, "the refused whole-block window never emitted a row")
+	require.Empty(t, h.dataHandle.cnObjectHandle.cache,
+		"the refused window was never read into the prefetch cache")
+	require.LessOrEqual(t, rejectPeak, uint64(64000),
+		"rejection preceded the over-budget allocation: the drain peak stayed within the attached budget")
+	require.Equal(t, baseOff, mp.CurrNB(), "every allocation released on rejection")
+	require.Equal(t, baseOn, mp.OnHeapCurrNB())
+	require.NoError(t, h.Close())
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	// The generous budget drains the identical stream.
+	h = build(0)
+	h.maxInMemoryRows = 1 << 20
+	h.maxInMemoryBytes = 4 << 20
+	got, nextErr = drainRows(h)
+	require.NoError(t, nextErr)
+	require.Equal(t, 16, got)
+	require.NoError(t, h.Close())
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// The AObject tail prefetch runs inside the serve that may have JUST
+// created the assembly destination: the gate snapshotted a nil
+// destination before the serve, so the source-window admission would
+// charge the stale combined set without the new destination's rows and
+// bytes. The pin published from the serve puts the fresh destination
+// into the admission's view, so the refused window is never read —
+// the read cursor stays at the window start with the target left
+// pending — the drain peak stays inside the attached budget, and the
+// shared rejection release returns the ledgers to baseline. Covered
+// for a row limit, a byte limit, and the quick lane that shares
+// AObjectHandle.next.
+func TestDefaultPolicyAObjectFirstDstBeforePrefetch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ctx := context.Background()
+
+	fillWidths := func(n, w int) []int {
+		widths := make([]int, n)
+		for i := range widths {
+			widths[i] = w
+		}
+		return widths
+	}
+	build := func(
+		t *testing.T, quick bool, rowLimit, byteLimit int,
+		obj1Widths, obj2Widths []int,
+	) (*ChangeHandler, *objectio.ObjectEntry, int) {
+		fs, err := fileservice.NewMemoryFS(
+			defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+		)
+		require.NoError(t, err)
+		// Tombstone rows commit below every data row, so the merge
+		// retains the full tombstone destination before the first
+		// data serve.
+		tObj := writeTestSkewedObjectToFS(
+			t, mp, fs, fillWidths(48, 32), types.BuildTS(9, 1), types.BuildTS(2, 0),
+		)
+		obj1 := writeTestSkewedObjectToFS(
+			t, mp, fs, obj1Widths, types.BuildTS(10, 1), types.BuildTS(10, 0),
+		)
+		obj2 := writeTestSkewedObjectToFS(
+			t, mp, fs, obj2Widths, types.BuildTS(10, 2), types.BuildTS(10, 0),
+		)
+		h := &ChangeHandler{
+			coarseMaxRow:              int(objectio.BlockMaxRows),
+			scheduler:                 tasks.NewParallelJobScheduler(2),
+			deferRangeLimitToAssembly: true,
+			quick:                     quick,
+			mp:                        mp,
+			lastPrint:                 time.Now(),
+			LogThreshold:              time.Hour,
+			maxInMemoryRows:           rowLimit,
+			maxInMemoryBytes:          byteLimit,
+		}
+		dataBase := &baseHandle{changesHandle: h}
+		dataBase.cnObjectHandle = NewCNObjectHandle(false, nil, fs, dataBase, mp)
+		dataBase.aobjHandle = NewAObjectHandle(
+			ctx, dataBase, false,
+			types.BuildTS(1, 0), types.BuildTS(11, 0),
+			[]*objectio.ObjectEntry{obj1, obj2}, fs, mp,
+		)
+		tombBase := &baseHandle{changesHandle: h}
+		tombBase.cnObjectHandle = NewCNObjectHandle(
+			true, []*objectio.ObjectEntry{tObj}, fs, tombBase, mp,
+		)
+		tombBase.aobjHandle = NewAObjectHandle(
+			ctx, tombBase, true,
+			types.BuildTS(1, 0), types.BuildTS(11, 0), nil, fs, mp,
+		)
+		h.dataHandle = dataBase
+		h.tombstoneHandle = tombBase
+		// The construction-time reads mirror the production handler
+		// build: the data aobj materializes its first window here.
+		require.NoError(t, dataBase.aobjHandle.init(ctx, quick))
+		require.NoError(t, tombBase.aobjHandle.init(ctx, quick))
+		return h, obj2, 48 + len(obj1Widths) + len(obj2Widths)
+	}
+	drainRows := func(h *ChangeHandler) (int, error) {
+		got := 0
+		for {
+			data, tomb, _, nextErr := h.Next(ctx, mp)
+			if nextErr != nil {
+				return got, nextErr
+			}
+			if data == nil && tomb == nil {
+				return got, nil
+			}
+			if data != nil {
+				got += data.RowCount()
+				data.Clean(mp)
+			}
+			if tomb != nil {
+				got += tomb.RowCount()
+				tomb.Clean(mp)
+			}
+		}
+	}
+	checkRefusal := func(
+		t *testing.T, h *ChangeHandler, obj2 *objectio.ObjectEntry,
+		got int, nextErr error, peak uint64, budget int,
+	) {
+		require.Error(t, nextErr)
+		require.True(t, engine.IsChangeRangeCapacityError(nextErr), "got %v", nextErr)
+		require.Zero(t, got, "a bounded range emits nothing before its first emission epoch")
+		require.Zero(t, h.dataHandle.aobjHandle.blockRowOffset,
+			"the window trailing the first destination was refused before any read")
+		require.Same(t, obj2, h.dataHandle.aobjHandle.pendingObject,
+			"the refused target stays pending for a later retry")
+		if budget > 0 {
+			require.LessOrEqual(t, peak, uint64(budget),
+				"rejection preceded the over-budget allocation")
+		}
+		require.NoError(t, h.Close())
+		require.Zero(t, mp.CurrNB(),
+			"the shared rejection release drains destinations and sources alike")
+		require.Zero(t, mp.OnHeapCurrNB())
+	}
+
+	// 48 retained tombstone rows; obj2's first window is 15 rows under
+	// the 63-row limit's read chunk. The destination created by obj1's
+	// serve turns 48+15 into 48+1+15=64 > 63 at the tail admission.
+	t.Run("row_limit", func(t *testing.T) {
+		h, obj2, _ := build(t, false, 63, 0, []int{32}, fillWidths(20, 32))
+		got, nextErr := drainRows(h)
+		checkRefusal(t, h, obj2, got, nextErr, 0, 0)
+	})
+
+	// Byte limit: obj2's sound window projection (the whole column
+	// area rounds one capacity class above the decoded payload) plus
+	// the fresh destination crosses 40000 at the tail admission.
+	t.Run("byte_limit", func(t *testing.T) {
+		h, obj2, _ := build(t, false, 0, 40000, []int{8000}, fillWidths(20, 8000))
+		epoch := mp.StartResourcePeakEpoch()
+		require.NotNil(t, epoch)
+		got, nextErr := drainRows(h)
+		rejectPeak, ended := mp.EndResourcePeakEpoch(epoch)
+		require.True(t, ended)
+		checkRefusal(t, h, obj2, got, nextErr, rejectPeak, 40000)
+	})
+
+	// The quick lane serves through the same AObjectHandle.next: the
+	// first data leg creates the destination and its trailing prefetch
+	// faces the same admission.
+	t.Run("quick_byte_limit", func(t *testing.T) {
+		h, obj2, _ := build(t, true, 0, 40000, []int{8000}, fillWidths(20, 8000))
+		epoch := mp.StartResourcePeakEpoch()
+		require.NotNil(t, epoch)
+		got, nextErr := drainRows(h)
+		rejectPeak, ended := mp.EndResourcePeakEpoch(epoch)
+		require.True(t, ended)
+		checkRefusal(t, h, obj2, got, nextErr, rejectPeak, 40000)
+	})
+}
+
+// The construction loop admits each replay row's growth BEFORE
+// fillIn*Batch allocates it: a budget shaped by the buffer's FINAL size
+// must refuse a row whose growth transient exceeds it — the replacement
+// buffer is allocated before the old one is freed, so the true peak is
+// previous plus replacement — and the refusal happens with the row
+// un-appended, the retained set released, and the ledgers back at their
+// baseline.
+func TestDefaultPolicyFillLoopAdmitsRowBeforeGrowth(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	open := func(limit engine.ChangeRangeLimit, widths ...int) (*ChangeHandler, *batch.Batch, error) {
+		state := NewPartitionState("", true, 42, false)
+		src := batch.NewWithSize(4)
+		src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk", "payload"})
+		src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		src.Vecs[3] = vector.NewVec(types.T_varchar.ToType())
+		blockID := types.Blockid{}
+		commitTS := types.BuildTS(2, 1)
+		for row, w := range widths {
+			rowOffset := uint32(row)
+			rowID := types.NewRowid(&blockID, rowOffset)
+			rowKey := uint64(row + 1)
+			payload := append(types.EncodeUint64(&rowKey), strings.Repeat("x", w)...)
+			require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+			require.NoError(t, vector.AppendFixed(src.Vecs[1], commitTS, false, mp))
+			require.NoError(t, vector.AppendFixed(src.Vecs[2], int64(row+1), false, mp))
+			require.NoError(t, vector.AppendBytes(src.Vecs[3], payload, false, mp))
+			state.rows.Set(&RowEntry{
+				BlockID: blockID, RowID: rowID, Offset: int64(rowOffset),
+				Time: commitTS, ID: int64(rowOffset), Batch: src,
+			})
+		}
+		src.SetRowCount(len(widths))
+		state.start = types.BuildTS(1, 0)
+		ctx := engine.WithChangeRangeLimit(context.Background(), limit)
+		h, err := NewChangesHandler(
+			ctx, state, types.BuildTS(1, 0), types.BuildTS(3, 0),
+			false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		if err != nil {
+			src.Clean(mp)
+			return nil, nil, err
+		}
+		h.lastPrint = time.Now()
+		return h, src, nil
+	}
+
+	limits := func(bytes int) engine.ChangeRangeLimit {
+		return engine.ChangeRangeLimit{MaxInMemoryRows: 1 << 20, MaxInMemoryBytes: bytes}
+	}
+
+	// The transient-crossing shape: row 1 reserves an area for 6000
+	// bytes; row 2's small append crosses into the next growth step, so
+	// the admitted transient is the previous area plus its replacement —
+	// well above the buffer's final size (a step-e sizing the old
+	// arithmetic would have admitted, and the legacy post-append check
+	// did admit). The pair {6000, 200} was probed against the
+	// allocator's growth sequence.
+	transientWidths := []int{6000, 200}
+
+	drainAll := func(h *ChangeHandler) (rows int, err error) {
+		for {
+			data, tomb, _, nextErr := h.Next(context.Background(), mp)
+			if nextErr != nil {
+				return rows, nextErr
+			}
+			if data == nil && tomb == nil {
+				return rows, nil
+			}
+			if data != nil {
+				rows += data.RowCount()
+				data.Clean(mp)
+			}
+			if tomb != nil {
+				rows += tomb.RowCount()
+				tomb.Clean(mp)
+			}
+		}
+	}
+
+	// Calibrate the admitting ladder via the production constructor.
+	generousH, generousSrc, err := open(engine.ChangeRangeLimit{}, transientWidths...)
+	require.NoError(t, err)
+	finalHandle, ok := generousH.dataHandle.inMemoryHandle.(*BatchHandle)
+	require.True(t, ok)
+	finalBytes := finalHandle.batches.Allocated()
+	generousRows, err := drainAll(generousH)
+	require.NoError(t, err)
+	require.Equal(t, len(transientWidths), generousRows)
+	require.NoError(t, generousH.Close())
+	generousSrc.Clean(mp)
+	require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+
+	// The ladder admits construction AND the full drain: the drain's
+	// emission growth on top of the retained construction buffer is
+	// every byte the envelope must once cover, so the bisection drives
+	// the complete production path, not construction alone.
+	minBudget := -1
+	lo, hi := 0, 16<<20
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		tryH, trySrc, tryErr := open(limits(mid), transientWidths...)
+		if tryErr == nil {
+			var tryRows int
+			tryRows, tryErr = drainAll(tryH)
+			if tryErr == nil {
+				require.Equal(t, len(transientWidths), tryRows)
+			}
+		}
+		if tryErr != nil {
+			require.True(t, engine.IsChangeRangeCapacityError(tryErr), "got %v", tryErr)
+			if tryH != nil {
+				require.NoError(t, tryH.Close())
+			}
+			if trySrc != nil {
+				trySrc.Clean(mp)
+			}
+			require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+			lo = mid + 1
+			continue
+		}
+		minBudget = mid
+		hi = mid - 1
+		require.NoError(t, tryH.Close())
+		trySrc.Clean(mp)
+		require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+	}
+	require.Greater(t, minBudget, finalBytes,
+		"the admitting envelope covers the growth transient, which exceeds the final buffered size")
+
+	// Shaped by the buffer's final size (the legacy arithmetic): the
+	// second row's growth transient crosses, so construction refuses
+	// with the capacity class, the row is never appended, and every
+	// already-materialized byte is released. The step-minus-epsilon
+	// budget below transfers exactly here because finalBytes is the
+	// buffer the old accounting measured.
+	refuse := finalBytes
+	if refuse >= minBudget {
+		refuse = minBudget - 1
+	}
+	h, src, err := open(limits(refuse), transientWidths...)
+	require.Error(t, err)
+	require.Nil(t, h)
+	require.True(t, engine.IsChangeRangeCapacityError(err), "got %v", err)
+	require.Nil(t, src)
+	require.Zero(t, mp.CurrNB(), "no off-heap byte survives the refusal")
+	require.Zero(t, mp.OnHeapCurrNB(), "no on-heap byte survives the refusal")
+
+	// The boundary envelope constructs and drains the identical rows.
+	h, src, err = open(limits(minBudget), transientWidths...)
+	require.NoError(t, err)
+	data, _, _, nextErr := h.Next(context.Background(), mp)
+	require.NoError(t, nextErr)
+	require.NotNil(t, data)
+	require.Equal(t, 2, data.RowCount())
+	// Insert emission without retained rowids: [pk, payload, commit-ts].
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](data.Vecs[0], 0))
+	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](data.Vecs[0], 1))
+	require.Len(t, data.Vecs[1].GetBytesAt(0), 8+6000)
+	require.Len(t, data.Vecs[1].GetBytesAt(1), 8+200)
+	data.Clean(mp)
+	require.NoError(t, h.Close())
+	src.Clean(mp)
+	require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+
+	// First-row-oversized ladder: the smallest admitting envelope for a
+	// lone wide row, then one byte less. The refusal carries the
+	// un-appended row in its accounting, and nothing is materialized.
+	soloWidths := []int{6000}
+	soloMin := -1
+	lo, hi = 0, 16<<20
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		tryH, trySrc, tryErr := open(limits(mid), soloWidths...)
+		if tryErr != nil {
+			require.True(t, engine.IsChangeRangeCapacityError(tryErr), "got %v", tryErr)
+			lo = mid + 1
+			continue
+		}
+		soloMin = mid
+		hi = mid - 1
+		require.NoError(t, tryH.Close())
+		trySrc.Clean(mp)
+		require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+	}
+	require.Greater(t, soloMin, 0)
+	h, src, err = open(limits(soloMin-1), soloWidths...)
+	require.Error(t, err)
+	require.True(t, engine.IsChangeRangeCapacityError(err), "got %v", err)
+	require.Contains(t, err.Error(), "1 rows /",
+		"the refused row itself is charged, still un-appended")
+	require.Nil(t, h)
+	require.Nil(t, src)
+	require.Zero(t, mp.CurrNB()+mp.OnHeapCurrNB())
+}
+
+// The chunk-union materialization peak rides on the source-read
+// admission: a chunk-encoded column materializes its window part by
+// part, each union allocating the grown replacement before the previous
+// buffer is freed while the part stays alive, and the mpool
+// reallocation itself holds old and new together mid-copy. A window
+// whose remaining budget was sized against the retained composition
+// alone can therefore exceed the attached bound while the parts merge —
+// the admission must charge the transient BEFORE the read, with enough
+// retained working state already live to consume the budget's slack.
+// Post-fix behavior: the estimate charges the chunk-union transient
+// (three complete copies of the retained composition for chunk-encoded
+// columns), so the cross-chunk window trailing the retained state is
+// refused at its gate — cursor pending at the window start, nothing
+// read, the drain peak inside the attached budget, and the shared
+// release returning the ledgers to baseline. The generous budget drains
+// the identical stream with its peak inside the budget. The simulator
+// mirror derives the true union peak from the object's STORED chunk
+// table — never by re-running the estimator's formula — and pins the
+// estimate between that peak and its documented three-copies bound.
+func TestDefaultPolicyChunkUnionTransientAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// 96 rows of ~166KB into one block: the 16MB column is
+	// chunk-encoded into two halves, so the second 48-row window (row
+	// limit 192 carves windows of 48) starts inside chunk one and ends
+	// in chunk two — a cross-chunk materialization with one union step.
+	widths := make([]int, 96)
+	for i := range widths {
+		widths[i] = 170000
+	}
+	obj := writeTestSkewedObjectToFS(
+		t, mp, fs, widths, types.BuildTS(10, 1), types.BuildTS(10, 0),
+	)
+	loc := obj.ObjectStats.BlockLocation(0, 8192)
+	meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+	require.NoError(t, err)
+	blockMeta := meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(0)
+	var varExt objectio.Extent
+	for seqnum := uint16(0); seqnum < blockMeta.GetMetaColumnCount(); seqnum++ {
+		cm := blockMeta.ColumnMeta(seqnum)
+		if types.T(cm.DataType()).FixedLength() <= 0 {
+			varExt = cm.Location()
+		}
+	}
+	metas := testChunkMetasForTest(t, ctx, fs, loc.Name().String(), varExt)
+	require.Len(t, metas, 2, "the 16MB column is stored as two chunks")
+	require.Equal(t, 96, metas[0][1]+metas[1][1])
+	require.Less(t, 48, metas[0][1],
+		"window [48,96) starts inside chunk one and ends in chunk two: a cross-chunk union")
+
+	// The projection of the cross-chunk window [48,96) must cover its
+	// simulated union peak from the stored chunk table, and stay inside
+	// the documented three-copies bound.
+	estRows2, estBytes2, err := estimatePersistedWindow(
+		ctx, fs, &obj.ObjectStats, 0, 48, 192, 64<<20, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 48, estRows2)
+	simPeak2, retainedBound2, chunked2 := mirrorPersistedWindowPeak(
+		t, ctx, fs, &obj.ObjectStats, 0, 48, 192, 64<<20, widths,
+	)
+	require.True(t, chunked2)
+	require.GreaterOrEqual(t, estBytes2, simPeak2,
+		"the cross-chunk window's estimate covers its simulated union peak")
+	require.LessOrEqual(t, estBytes2, 3*retainedBound2+128)
+
+	// Substantial retained working state: an in-memory data replay
+	// buffer of 24 one-megabyte rows, retained by its BatchHandle for
+	// the whole drain and always counted by the assembly's live walk.
+	// Every arm builds its own copy: a served BatchHandle's Close
+	// releases the batch it wraps.
+	blockID := types.Blockid{}
+	makeRetained := func() *batch.Batch {
+		rBat := batch.NewWithSize(3)
+		rBat.SetAttributes([]string{"pk", catalog.Row_ID, objectio.DefaultCommitTS_Attr})
+		rBat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		rBat.Vecs[1] = vector.NewVec(types.T_Rowid.ToType())
+		rBat.Vecs[2] = vector.NewVec(types.T_TS.ToType())
+		for i := 0; i < 24; i++ {
+			payload := []byte(strings.Repeat("r", 1000008))
+			rowKey := uint64(i + 1)
+			copy(payload, types.EncodeUint64(&rowKey))
+			rowOffset := uint32(i)
+			require.NoError(t, vector.AppendBytes(rBat.Vecs[0], payload, false, mp))
+			require.NoError(t, vector.AppendFixed(
+				rBat.Vecs[1], types.NewRowid(&blockID, rowOffset), false, mp))
+			require.NoError(t, vector.AppendFixed(
+				rBat.Vecs[2], types.BuildTS(2, uint32(i)), false, mp))
+		}
+		rBat.SetRowCount(24)
+		return rBat
+	}
+	rProbe := makeRetained()
+	liveR := rProbe.Allocated()
+	rProbe.Clean(mp)
+	require.Greater(t, liveR, 20<<20, "the retained working state is substantial")
+
+	// Every window of the chunked column projects the same whole-area
+	// three-copies charge, so window one and the cross-chunk window
+	// carry the identical estimate.
+	estW1Rows, estW1Bytes, err := estimatePersistedWindow(
+		ctx, fs, &obj.ObjectStats, 0, 0, 192, 64<<20, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 48, estW1Rows)
+	require.Equal(t, estW1Bytes, estBytes2,
+		"the whole-area charge makes every window of the chunked column cost the same projection")
+
+	build := func(limitRows, limitBytes int, rBat *batch.Batch) *ChangeHandler {
+		h := &ChangeHandler{
+			coarseMaxRow:              int(objectio.BlockMaxRows),
+			scheduler:                 tasks.NewParallelJobScheduler(2),
+			deferRangeLimitToAssembly: true,
+			quick:                     false,
+			mp:                        mp,
+			lastPrint:                 time.Now(),
+			LogThreshold:              time.Hour,
+			maxInMemoryRows:           limitRows,
+			maxInMemoryBytes:          limitBytes,
+		}
+		dataBase := &baseHandle{changesHandle: h}
+		dataBase.inMemoryHandle = NewRowHandle(rBat, mp, dataBase, ctx, false)
+		dataBase.cnObjectHandle = NewCNObjectHandle(false, nil, fs, dataBase, mp)
+		dataBase.aobjHandle = NewAObjectHandle(
+			ctx, dataBase, false,
+			types.BuildTS(1, 0), types.BuildTS(11, 0),
+			[]*objectio.ObjectEntry{obj}, fs, mp,
+		)
+		tombBase := &baseHandle{changesHandle: h}
+		tombBase.cnObjectHandle = NewCNObjectHandle(true, nil, fs, tombBase, mp)
+		tombBase.aobjHandle = NewAObjectHandle(
+			ctx, tombBase, true,
+			types.BuildTS(1, 0), types.BuildTS(11, 0), nil, fs, mp,
+		)
+		h.dataHandle = dataBase
+		h.tombstoneHandle = tombBase
+		return h
+	}
+	drainRows := func(h *ChangeHandler) (int, error) {
+		got := 0
+		for {
+			data, tomb, _, nextErr := h.Next(ctx, mp)
+			if nextErr != nil {
+				return got, nextErr
+			}
+			if data == nil && tomb == nil {
+				return got, nil
+			}
+			if data != nil {
+				got += data.RowCount()
+				data.Clean(mp)
+			}
+			if tomb != nil {
+				got += tomb.RowCount()
+				tomb.Clean(mp)
+			}
+		}
+	}
+
+	// Calibrate the smallest budget that admits construction WITH the
+	// complete first window prefetched (blockRowOffset advanced past
+	// it). The predicate is monotone in the budget, and each probe runs
+	// the production handle constructors, so the tight arm below pins
+	// the real gate arithmetic instead of hard-coding capacity classes.
+	// Refused probes must leave the ledgers at baseline. Pre-fix code
+	// never reaches this ladder: it under-charges the cross-chunk
+	// window and drains every row without an error.
+	baseOff, baseOn := mp.CurrNB(), mp.OnHeapCurrNB()
+	minAdmit := -1
+	lo, hi := liveR, liveR+estW1Bytes+(64<<20)
+	for lo <= hi {
+		mid := (lo + hi) / 2
+		rb := makeRetained()
+		cal := build(192, mid, rb)
+		err1 := cal.dataHandle.aobjHandle.init(ctx, false)
+		err2 := cal.tombstoneHandle.aobjHandle.init(ctx, false)
+		admit48 := err1 == nil && err2 == nil &&
+			cal.dataHandle.aobjHandle.blockRowOffset == 48
+		if admit48 {
+			minAdmit = mid
+			hi = mid - 1
+		} else {
+			for _, initErr := range []error{err1, err2} {
+				if initErr != nil {
+					require.True(t, engine.IsChangeRangeCapacityError(initErr),
+						"refusals surface in the capacity class, got %v", initErr)
+				}
+			}
+			lo = mid + 1
+		}
+		cal.Close()
+		rb.Clean(mp)
+		require.Equal(t, baseOff, mp.CurrNB())
+		require.Equal(t, baseOn, mp.OnHeapCurrNB())
+	}
+	require.GreaterOrEqual(t, minAdmit, 0,
+		"the high bound admits the complete first window by construction")
+	require.LessOrEqual(t, minAdmit, liveR+estW1Bytes,
+		"admission costs no more than the retained state plus the documented window bound")
+	tightBytes := minAdmit
+
+	// Tight arm: window one is admitted at construction (retained state
+	// plus its projection fits), row-serves hand out the first window,
+	// and the cross-chunk window trailing it is REFUSED at its
+	// admission gate: that gate sees the retained state and the first
+	// window's materialization/destination on top of the second
+	// window's (identical) projection, which exceeds the calibrated
+	// budget — nothing read for it, the cursor pending at its start,
+	// the drain peak inside the budget, and cleanup complete.
+	rTight := makeRetained()
+	h := build(192, tightBytes, rTight)
+	require.NoError(t, h.dataHandle.aobjHandle.init(ctx, false))
+	require.NoError(t, h.tombstoneHandle.aobjHandle.init(ctx, false))
+	require.Equal(t, 48, h.dataHandle.aobjHandle.blockRowOffset,
+		"window one was admitted at construction")
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	got, nextErr := drainRows(h)
+	require.Error(t, nextErr)
+	require.True(t, engine.IsChangeRangeCapacityError(nextErr), "got %v", nextErr)
+	rejectPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.LessOrEqual(t, got, 72,
+		"the refused cross-chunk window emitted no row beyond the admitted first window")
+	require.Equal(t, 48, h.dataHandle.aobjHandle.blockRowOffset,
+		"the refused window was never read: the cursor still sits at its start")
+	require.Same(t, obj, h.dataHandle.aobjHandle.pendingObject,
+		"the refused target stays pending for a later retry")
+	require.Empty(t, h.dataHandle.aobjHandle.cache)
+	require.LessOrEqual(t, rejectPeak, uint64(tightBytes),
+		"rejection preceded the over-budget allocation: the drain peak stayed within the attached budget")
+	require.Equal(t, baseOff, mp.CurrNB(), "every allocated byte released on rejection")
+	require.Equal(t, baseOn, mp.OnHeapCurrNB())
+	require.NoError(t, h.Close())
+	rTight.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	// The generous budget drains the identical stream — the 24 retained
+	// rows merge ahead of the 96 object rows by commit-ts — with the
+	// allocation peak inside the attached budget.
+	rGen := makeRetained()
+	h = build(192, 256<<20, rGen)
+	require.NoError(t, h.dataHandle.aobjHandle.init(ctx, false))
+	require.NoError(t, h.tombstoneHandle.aobjHandle.init(ctx, false))
+	epoch = mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	got, nextErr = drainRows(h)
+	genPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.NoError(t, nextErr)
+	require.Equal(t, 120, got)
+	require.LessOrEqual(t, genPeak, uint64(256<<20),
+		"the generous drain's allocation peak stayed inside the attached budget")
+	require.NoError(t, h.Close())
+	rGen.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+}
+
+// The constructor's own sort phase must be admitted BEFORE it
+// allocates: with data and tombstones present, NewChangesHandler sorts
+// both in-memory replay batches (BatchHandle.init -> sortBatch ->
+// Shuffle), and every shuffled vector's replacement backing
+// materializes while its original is still held (alloc-before-free), so
+// the construction peak is the retained working set PLUS the largest
+// single vector copy. The pre-fix constructor ran both initializers and
+// only then inspected the retained set, so a budget shaped by the
+// retained size admitted a range whose first shuffle peak crossed it.
+// Post-fix: chargeConstructionSort, placed before each initializer's
+// sort, refuses the range with the capacity class while the ledgers
+// still hold only the retained buffers, and the peak measured from
+// BEFORE the public constructor stays inside the attached budget. The
+// generous budget constructs and drains the byte-identical page stream
+// an unbounded handler produces; the quick lane sorts nothing and must
+// never pay a sort charge. Mixed data+tombstone fixtures mirror the
+// review's shape (85 int64 data rows plus one int64 tombstone, each
+// carrying a commit-ts).
+func TestDefaultPolicyConstructionSortAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ctx := context.Background()
+
+	open := func(
+		limit engine.ChangeRangeLimit, tombRows, dataRows int,
+	) (*ChangeHandler, *batch.Batch, error) {
+		state := NewPartitionState("", true, 42, false)
+		src := batch.NewWithSize(3)
+		src.SetAttributes([]string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "pk"})
+		src.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+		src.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+		src.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		blockID := types.Blockid{}
+		rowSeq := 0
+		addRow := func(pk int64, ts types.TS, deleted bool) {
+			rowOffset := uint32(rowSeq)
+			rowSeq++
+			rowID := types.NewRowid(&blockID, rowOffset)
+			require.NoError(t, vector.AppendFixed(src.Vecs[0], rowID, false, mp))
+			require.NoError(t, vector.AppendFixed(src.Vecs[1], ts, false, mp))
+			require.NoError(t, vector.AppendFixed(src.Vecs[2], pk, false, mp))
+			state.rows.Set(&RowEntry{
+				BlockID: blockID, RowID: rowID, Offset: int64(rowOffset),
+				Time: ts, ID: int64(rowOffset), Deleted: deleted, Batch: src,
+			})
+		}
+		for i := 0; i < tombRows; i++ {
+			addRow(int64(100+i), types.BuildTS(2, uint32(i)), true)
+		}
+		for i := 0; i < dataRows; i++ {
+			addRow(int64(200+i), types.BuildTS(3, uint32(i)), false)
+		}
+		src.SetRowCount(rowSeq)
+		state.start = types.BuildTS(1, 0)
+		h, err := NewChangesHandler(
+			engine.WithChangeRangeLimit(ctx, limit),
+			state, types.BuildTS(1, 0), types.BuildTS(4, 0),
+			false, objectio.BlockMaxRows, 0, mp, nil,
+		)
+		if err != nil {
+			src.Clean(mp)
+			return nil, nil, err
+		}
+		h.lastPrint = time.Now()
+		return h, src, nil
+	}
+	limits := func(bytes int) engine.ChangeRangeLimit {
+		return engine.ChangeRangeLimit{MaxInMemoryRows: 1 << 20, MaxInMemoryBytes: bytes}
+	}
+	drain := func(h *ChangeHandler) (pages []int, tombTSs, dataTSs []types.TS, rows int, err error) {
+		for {
+			var data, tomb *batch.Batch
+			data, tomb, _, err = h.Next(ctx, mp)
+			if err != nil {
+				return
+			}
+			if data == nil && tomb == nil {
+				return
+			}
+			page := 0
+			if tomb != nil {
+				rows += tomb.RowCount()
+				page += tomb.RowCount()
+				tombTSs = append(tombTSs,
+					vector.MustFixedColWithTypeCheck[types.TS](tomb.Vecs[len(tomb.Vecs)-1])...)
+				tomb.Clean(mp)
+			}
+			if data != nil {
+				rows += data.RowCount()
+				page += data.RowCount()
+				dataTSs = append(dataTSs,
+					vector.MustFixedColWithTypeCheck[types.TS](data.Vecs[len(data.Vecs)-1])...)
+				data.Clean(mp)
+			}
+			pages = append(pages, page)
+		}
+	}
+
+	// The reference probe constructs with a generous budget and records
+	// the retained working set, the largest single vector (the shuffle
+	// copy's bound), and the exact stream the handler emits.
+	probe, probeSrc, err := open(limits(64<<20), 1, 85)
+	require.NoError(t, err)
+	require.False(t, probe.quick, "mixed data+tombstones runs the sorting lane")
+	retained := 0
+	sortTemp := 0
+	for _, base := range []*baseHandle{probe.dataHandle, probe.tombstoneHandle} {
+		bh, ok := base.inMemoryHandle.(*BatchHandle)
+		require.True(t, ok)
+		require.NotNil(t, bh.batches)
+		retained += bh.batches.Allocated()
+		for _, vec := range bh.batches.Vecs {
+			sortTemp = max(sortTemp, vec.Allocated())
+		}
+	}
+	require.Positive(t, retained)
+	require.Positive(t, sortTemp)
+	t.Logf("probe: retained=%d sortTransient=%d", retained, sortTemp)
+	refPages, refTomb, refData, refRows, drainErr := drain(probe)
+	require.NoError(t, drainErr)
+	require.Equal(t, 86, refRows)
+	require.NoError(t, probe.Close())
+	// The source batch the RowEntries point at stays owned by the
+	// caller; clean it before asserting the ledgers (the
+	// AssemblyAccounting tests use the same order).
+	probeSrc.Clean(mp)
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
+
+	// Tight arm: the budget admits the retained working set but not the
+	// retained set plus the largest shuffle copy. Pre-fix code admitted
+	// this range and crossed the budget at the first shuffle; post-fix
+	// the constructor refuses BEFORE the first sort allocates, the peak
+	// measured from before the call stays inside the budget, and the
+	// construction error path returns the ledgers to baseline.
+	t.Run("tight_refuses_before_first_shuffle", func(t *testing.T) {
+		baseOff, baseOn := mp.CurrNB(), mp.OnHeapCurrNB()
+		epoch := mp.StartResourcePeakEpoch()
+		require.NotNil(t, epoch)
+		h, src, err := open(limits(retained+sortTemp-1), 1, 85)
+		require.Error(t, err)
+		require.True(t, engine.IsChangeRangeCapacityError(err), "got %v", err)
+		require.Nil(t, h)
+		require.Nil(t, src)
+		rejectPeak, ended := mp.EndResourcePeakEpoch(epoch)
+		require.True(t, ended)
+		require.LessOrEqual(t, rejectPeak, uint64(retained+sortTemp-1),
+			"the constructor refused before the sort's copy crossed the attached budget")
+		require.Equal(t, baseOff, mp.CurrNB(),
+			"the retained replay buffers are released on the constructor error path")
+		require.Equal(t, baseOn, mp.OnHeapCurrNB())
+	})
+
+	// Generous arm: the same fixture constructs and drains, emitting
+	// the probe's exact page sequence with the ledgers back at zero.
+	t.Run("generous_drains_identical_stream", func(t *testing.T) {
+		h, src, err := open(limits(64<<20), 1, 85)
+		require.NoError(t, err)
+		pages, tombTSs, dataTSs, rows, drainErr := drain(h)
+		require.NoError(t, drainErr)
+		require.Equal(t, refPages, pages)
+		require.Equal(t, refTomb, tombTSs)
+		require.Equal(t, refData, dataTSs)
+		require.Equal(t, 86, rows)
+		require.NoError(t, h.Close())
+		src.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
+	})
+
+	// Quick lane: with only the data side present the constructor sorts
+	// nothing, so the sort charge must be a no-op. Pinned directly
+	// through the production charge against a limit that cannot hold
+	// even one retained byte: quick mode accepts (documented no-op),
+	// row mode refuses in the capacity class on the very same buffer,
+	// and the genuine quick handler still drains its eight rows.
+	t.Run("quick_lane_pays_no_sort_charge", func(t *testing.T) {
+		probe, probeSrc, err := open(limits(64<<20), 0, 8)
+		require.NoError(t, err)
+		require.True(t, probe.quick)
+		savedBytes := probe.maxInMemoryBytes
+		probe.maxInMemoryBytes = 1
+		require.NoError(t,
+			probe.chargeConstructionSort(probe.dataHandle.inMemoryHandle, true),
+			"the quick lane's sort charge is a documented no-op")
+		chargeErr := probe.chargeConstructionSort(probe.dataHandle.inMemoryHandle, false)
+		require.Error(t, chargeErr,
+			"row mode charges the sort copy on the very same buffer")
+		require.True(t, engine.IsChangeRangeCapacityError(chargeErr),
+			"the row-mode sort charge refuses in the capacity class, got %v", chargeErr)
+		probe.maxInMemoryBytes = savedBytes
+		_, _, _, probeRows, drainErr := drain(probe)
+		require.NoError(t, drainErr)
+		require.Equal(t, 8, probeRows)
+		require.NoError(t, probe.Close())
+		probeSrc.Clean(mp)
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, mp.OnHeapCurrNB())
+	})
+}
+
+// A persisted TOMBSTONE window is normalized (commit-ts sorted) right
+// after materialization, and the shuffle allocates each replacement
+// while its original is still held: the window's admission must
+// therefore carry the largest single column copy on top of the
+// window's own charge. The estimator's normalizeSort term is pinned
+// analytically against a term derived from the WRITTEN widths and the
+// shared allocator capacity arithmetic (never the estimator's own
+// formula), and behaviorally: the calibrated budget sits strictly
+// between the plain and the normalization-aware estimate, so the
+// tombstone leg's first window is refused BEFORE its read while a
+// generous budget drains the sorted stream. Pre-fix code carried no
+// such term, so it admits the tight budget and the analytic pin fails.
+func TestDefaultPolicyPersistedTombstoneNormalizationCharge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	fs, err := fileservice.NewMemoryFS(
+		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
+	)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	// 60 skewed rows in one block, the skewed test's shape written
+	// ascending: 59 139810-byte payloads plus one 600008-byte payload.
+	widths := make([]int, 60)
+	for i := range widths {
+		widths[i] = 139810
+	}
+	widths[42] = 600008
+	obj := writeTestSkewedTombstoneObjectToFS(
+		t, mp, fs, widths, types.BuildTS(10, 1), types.BuildTS(10, 0),
+	)
+
+	probe := func(maxBytes int, normalizeSort bool) (int, int) {
+		rows, bytes, err := estimatePersistedWindow(
+			ctx, fs, &obj.ObjectStats, 0, 0, 240, maxBytes, normalizeSort,
+		)
+		require.NoError(t, err)
+		return rows, bytes
+	}
+
+	// Calibrate a budget strictly between the plain and the
+	// normalization-aware estimate. The byte carve shrinks the admitted
+	// window as the budget drops, so both probes are re-evaluated at
+	// each candidate; the term itself is large enough that the
+	// midpoint converges inside two iterations with megabytes of slack.
+	tightBytes := -1
+	var estPRows, estPBytes, estNBytes, term int
+	candidate := 48 << 20
+	for i := 0; i < 8 && tightBytes < 0; i++ {
+		var erows, eplain, enorm int
+		_, eplain = probe(candidate, false)
+		_, enorm = probe(candidate, true)
+		mid := eplain + (enorm-eplain)/2
+		erows, eplain = probe(mid, false)
+		_, enorm = probe(mid, true)
+		if eplain <= mid && mid < enorm {
+			tightBytes = mid
+			estPRows, estPBytes, estNBytes = erows, eplain, enorm
+		} else {
+			candidate = mid
+		}
+	}
+	require.Greater(t, tightBytes, 0,
+		"a budget strictly between the plain and the normalization-aware estimate exists")
+	require.Positive(t, estPRows)
+	require.LessOrEqual(t, estPBytes, tightBytes)
+	require.Greater(t, estNBytes, tightBytes)
+
+	// The analytic pin: normalization adds the LARGEST single column's
+	// retained charge — here the varlena column's 24-byte-per-row
+	// headers plus the whole payload area plus its null bitmap, each
+	// rounded once through the shared allocator capacity arithmetic
+	// (grownCapacity, the same helper the mpool-facing tests pin). The
+	// area is derived from the WRITTEN widths, not the estimator.
+	area := 0
+	for _, w := range widths {
+		area += w + 8
+	}
+	nullMap := func(rows int) int { return (rows + 63) / 64 * 8 }
+	charge := func(b int) int {
+		rounded, _ := grownCapacity(0, b)
+		return rounded
+	}
+	term = charge(types.VarlenaSize*estPRows) + charge(area) + charge(nullMap(estPRows))
+	require.Equal(t, term, estNBytes-estPBytes,
+		"the normalization charge is exactly the largest column's retained composition")
+
+	build := func(limitBytes int) *ChangeHandler {
+		h := &ChangeHandler{
+			coarseMaxRow:              int(objectio.BlockMaxRows),
+			scheduler:                 tasks.NewParallelJobScheduler(2),
+			deferRangeLimitToAssembly: true,
+			quick:                     false,
+			mp:                        mp,
+			lastPrint:                 time.Now(),
+			LogThreshold:              time.Hour,
+			maxInMemoryRows:           240,
+			maxInMemoryBytes:          limitBytes,
+		}
+		dataBase := &baseHandle{changesHandle: h}
+		dataBase.cnObjectHandle = NewCNObjectHandle(false, nil, fs, dataBase, mp)
+		dataBase.aobjHandle = NewAObjectHandle(
+			ctx, dataBase, false,
+			types.BuildTS(1, 0), types.BuildTS(11, 0), nil, fs, mp,
+		)
+		tombBase := &baseHandle{changesHandle: h}
+		tombBase.cnObjectHandle = NewCNObjectHandle(true, nil, fs, tombBase, mp)
+		tombBase.aobjHandle = NewAObjectHandle(
+			ctx, tombBase, true,
+			types.BuildTS(1, 0), types.BuildTS(11, 0),
+			[]*objectio.ObjectEntry{obj}, fs, mp,
+		)
+		h.dataHandle = dataBase
+		h.tombstoneHandle = tombBase
+		return h
+	}
+
+	// Tight arm: the budget admits the plain window but not the window
+	// plus its normalization copy, so the tombstone leg's first window
+	// is refused BEFORE any read — the cursor never advances, the
+	// object stays pending, the peak survives inside the budget, and
+	// the ledgers return to baseline.
+	baseOff, baseOn := mp.CurrNB(), mp.OnHeapCurrNB()
+	h := build(tightBytes)
+	require.NoError(t, h.dataHandle.aobjHandle.init(ctx, false))
+	tombInitErr := h.tombstoneHandle.aobjHandle.init(ctx, false)
+	require.Error(t, tombInitErr)
+	require.True(t, engine.IsChangeRangeCapacityError(tombInitErr),
+		"the normalization-aware admission refuses in the capacity class, got %v", tombInitErr)
+	require.Zero(t, h.tombstoneHandle.aobjHandle.blockRowOffset,
+		"the refused tombstone window was never read")
+	require.Same(t, obj, h.tombstoneHandle.aobjHandle.pendingObject,
+		"the refused tombstone object stays pending")
+	require.Empty(t, h.tombstoneHandle.aobjHandle.cache)
+	require.NoError(t, h.Close())
+	require.Equal(t, baseOff, mp.CurrNB())
+	require.Equal(t, baseOn, mp.OnHeapCurrNB())
+
+	// Generous arm: the window materializes and normalizes; the drain
+	// serves every tombstone row with its commit-ts sequence intact,
+	// the peak inside the attached budget, the ledgers at zero.
+	h = build(256 << 20)
+	require.NoError(t, h.dataHandle.aobjHandle.init(ctx, false))
+	require.NoError(t, h.tombstoneHandle.aobjHandle.init(ctx, false))
+	epoch := mp.StartResourcePeakEpoch()
+	require.NotNil(t, epoch)
+	got := 0
+	var gotTSs []types.TS
+	for {
+		data, tomb, _, nextErr := h.Next(ctx, mp)
+		require.NoError(t, nextErr)
+		if data == nil && tomb == nil {
+			break
+		}
+		if tomb != nil {
+			got += tomb.RowCount()
+			gotTSs = append(gotTSs,
+				vector.MustFixedColWithTypeCheck[types.TS](tomb.Vecs[len(tomb.Vecs)-1])...)
+			tomb.Clean(mp)
+		}
+		if data != nil {
+			got += data.RowCount()
+			data.Clean(mp)
+		}
+	}
+	genPeak, ended := mp.EndResourcePeakEpoch(epoch)
+	require.True(t, ended)
+	require.Equal(t, 60, got)
+	require.True(t, slices.IsSortedFunc(gotTSs, func(a, b types.TS) int {
+		return a.Compare(&b)
+	}), "the normalized stream is commit-ts sorted")
+	require.LessOrEqual(t, genPeak, uint64(256<<20),
+		"the generous drain's allocation peak stayed inside the attached budget")
+	require.NoError(t, h.Close())
+	require.Zero(t, mp.CurrNB())
+	require.Zero(t, mp.OnHeapCurrNB())
 }

@@ -38,6 +38,9 @@ func genWriteReqs(
 	ctx context.Context,
 	txnCommit *Transaction,
 ) ([]txn.TxnRequest, error) {
+	// Dead pk-move link rows were already pruned under the txn lock before
+	// mergeTxnWorkspaceLocked (their recorded replacement identities must
+	// be matched against pre-compaction staged row ids).
 	writes, tablesInVain := txnCommit.writes, txnCommit.tablesInVain
 	var pendingDatabaseCreates map[databaseKey]uint64
 	if txnCommit.haveDDL.Load() {

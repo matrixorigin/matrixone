@@ -267,6 +267,8 @@ mo_cdc_task  𝄀
 mo_cdc_watermark  𝄀
 mo_columns  𝄀
 mo_configurations  𝄀
+mo_data_branch_link_retention  𝄀
+mo_data_branch_update_link  𝄀
 mo_data_key  𝄀
 mo_database  𝄀
 mo_database_defaults  𝄀
@@ -319,7 +321,7 @@ mo_view_dependencies  𝄀
 mo_view_refresh
 show table_number from mo_catalog;
 ➤ Number of tables in mo_catalog[-5,64,0]  𝄀
-61
+63
 show column_number from mo_database;
 ➤ Number of columns in mo_database[-5,64,0]  𝄀
 9

@@ -270,7 +270,8 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	insert := makeBatch(memory)
 	txn.writes = []Entry{{typ: INSERT, databaseId: 7, tableId: 42, bat: insert}}
 	for _, ids := range [][]types.Rowid{{committed, spilled}, {committed, spilled, memory}} {
-		out := txn.deleteBatch(makeBatch(ids...), 7, 42)
+		out, err := txn.deleteBatch(makeBatch(ids...), 7, 42)
+		require.NoError(t, err)
 		require.Equal(t, []types.Rowid{committed}, vector.MustFixedColWithTypeCheck[types.Rowid](out.Vecs[0]))
 	}
 	require.Equal(t, []int64{0}, txn.batchSelectList[insert])

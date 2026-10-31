@@ -203,6 +203,27 @@ func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 
 type dataBranchVisibleStateRecoveryResources struct {
 	allocator *branchHashmapAllocator
+	// substitutions counts every dispatcher swap to the visible-state
+	// recovery handle observed while this apply collected its windows
+	// (r53 D156(E) amendment): a nonzero delta across one window's
+	// drain certifies that window synthetic, so provenance-consumed
+	// instants extracted at its end never bind a verdict.
+	substitutions atomic.Int64
+}
+
+// OnVisibleStateRecoverySubstitution implements the engine seam.
+func (r *dataBranchVisibleStateRecoveryResources) OnVisibleStateRecoverySubstitution() {
+	if r != nil {
+		r.substitutions.Add(1)
+	}
+}
+
+// recoverySubstitutions exposes the counter for per-window drain deltas.
+func (r *dataBranchVisibleStateRecoveryResources) recoverySubstitutions() int64 {
+	if r == nil {
+		return 0
+	}
+	return r.substitutions.Load()
 }
 
 func (r *dataBranchVisibleStateRecoveryResources) NewVisibleStateStore() (engine.VisibleStateStore, error) {
@@ -1038,6 +1059,11 @@ func diffMergeAgency(
 		copt.conflictOpt = &tree.ConflictOpt{Opt: tree.CONFLICT_ACCEPT}
 		copt.expandUpdate = true
 		copt.preservePickConflicts = true
+		// The folded-move occupant resolver needs the clause itself: the
+		// internal ACCEPT above would always route the destination victim
+		// into the preserved-conflict batch, and dependency-key filtering
+		// swallows that marker before the consumer can enforce SKIP/FAIL.
+		copt.pickUserConflictOpt = pickStmt.ConflictOpt
 		if tblStuff, err = getTableStuff(
 			ctx, ses, bh, pickStmt.SrcTable, pickStmt.DstTable,
 		); err != nil {
@@ -1141,6 +1167,137 @@ func diffMergeAgency(
 		}
 	}
 
+	// A picked OLD key whose row was moved by a pk-moving UPDATE must also
+	// admit the NEW key (and vice versa), or the change scan drops the
+	// replacement half of the move before it can be paired; the destination
+	// table's links are probed too so both-sides-moved lineage can resolve.
+	// Only links written inside the selected change interval expand the set
+	// (write_ts >= the source fork point, narrowed by BETWEEN), and keys the
+	// closure ADDS are dependency keys, not selection: depKeys lets the PICK
+	// consumer keep them distinct, so an unrelated row reusing a link
+	// endpoint is never applied under the user's original KEYS selection.
+	var depKeys map[string]struct{}
+	if pickStmt != nil && pickKeyHashmap != nil {
+		// Capture the literal selection BEFORE any closure expansion: the
+		// fold pass authorizes an inline victim delete only when the fold's
+		// new key is selected and deleted by the source; dependency keys and
+		// unselected keys leave the destination occupant to the unchanged-
+		// occupancy matrix. The map is keyed by encoded-pk string, the same
+		// form pickDepKeys uses.
+		tblStuff.pickLiteralKeys = make(map[string]struct{})
+		if err = collectHashmapEncodedKeys(pickKeyHashmap, tblStuff.pickLiteralKeys); err != nil {
+			return
+		}
+		// The closure must read links for every physical table on EITHER
+		// branch path: a move recorded on an intermediate generation still
+		// owns the lineage of rows this pick reconstructs, and links stay
+		// keyed by the table the UPDATE ran on. Each window ends at its
+		// side's hydrated snapshot so moves after the selected endpoint do
+		// not expand the set (over-inclusion would only shrink folding, but
+		// the endpoint bound keeps closure reads consistent with the
+		// diff). A table shared by both paths — a destination ancestor the
+		// source path still names — is registered once per side, so the
+		// surviving window carries the GREATEST required endpoint: these
+		// windows scope closure reads only (each side's collect bounds are
+		// computed separately from its own snapshot), and keeping just the
+		// earlier source bound would hide destination-side moves committed
+		// after the source (or BETWEEN-upper) snapshot and break
+		// both-sides-moved folds (r51 review F1).
+		tarSP, baseSP := tblStuff.resolvedSnapshots(ses)
+		tarEnd := tarSP
+		if betweenTo != nil && betweenTo.LT(&tarEnd) {
+			tarEnd = *betweenTo
+		}
+		// Every closure window carries the physical owner its links were
+		// written under (D220 (B.3)): the endpoints already resolved their
+		// routing identity, and each non-endpoint lineage node resolves by
+		// the ordered-candidate rule of the reopen walk (walking side
+		// first, opposite endpoint second; equal accounts collapse). A
+		// table shared by both paths keeps the first resolved identity —
+		// one physical table has exactly one owner. The owner probe reads
+		// each candidate's catalog at the same instant the collect walk
+		// opens that segment (r101 D222): an intermediate generation was
+		// retired from the CURRENT catalog when its replacement committed,
+		// so an unanchored probe would report no owner and re-scope the
+		// window's provenance reads to the caller despite the retained
+		// link.
+		tarIdent, baseIdent := tblStuff.endpointIdentities(ctx, ses)
+		ownerCache := make(map[uint64]branchIdentity)
+		linkWindows := make([]pkMoveLinkTableWindow, 0,
+			len(dagInfo.pathFromLCAToTar)+len(dagInfo.pathFromLCAToBase)+2)
+		seenWin := make(map[uint64]int)
+		addWindow := func(id uint64, end types.TS, ident branchIdentity) {
+			linkWindows = appendPkMoveLinkWindow(
+				linkWindows, seenWin, id, uint64(end.Physical()), ident)
+		}
+		addPathWindow := func(id uint64, end, snap types.TS, walking, opposite branchIdentity) bool {
+			owner, cached := ownerCache[id]
+			if !cached {
+				var err3 error
+				owner, err3 = resolvePkMoveWindowOwner(
+					ctx, ses, bh, dedupeBranchIdentities(walking, opposite), id, snap)
+				if err3 != nil {
+					err = err3
+					return false
+				}
+				ownerCache[id] = owner
+			}
+			addWindow(id, end, owner)
+			return true
+		}
+		for i, id := range dagInfo.pathFromLCAToTar {
+			if !addPathWindow(id, tarEnd,
+				pkMoveWindowOwnerSnapshot(dagInfo.pathFromLCAToTarTS, i, tarSP),
+				tarIdent, baseIdent) {
+				return
+			}
+		}
+		for i, id := range dagInfo.pathFromLCAToBase {
+			if !addPathWindow(id, baseSP,
+				pkMoveWindowOwnerSnapshot(dagInfo.pathFromLCAToBaseTS, i, baseSP),
+				baseIdent, tarIdent) {
+				return
+			}
+		}
+		if tblStuff.tarRel != nil {
+			addWindow(tblStuff.tarRel.GetTableID(ctx), tarEnd, tarIdent)
+		}
+		if tblStuff.baseRel != nil {
+			addWindow(tblStuff.baseRel.GetTableID(ctx), baseSP, baseIdent)
+		}
+		if len(linkWindows) != 0 {
+			var err2 error
+			// No lower bound reaches the closure: write_ts is the
+			// recording transaction's CREATE timestamp, so filtering by
+			// the LCA or BETWEEN boundary would omit straddling
+			// transactions and report their departures as complete
+			// absence (see expandPickKeysWithPkMoveLinks).
+			depKeys = make(map[string]struct{})
+			var expanded bool
+			expanded, err2 = expandPickKeysWithPkMoveLinks(
+				ctx, ses, bh, linkWindows, tblStuff, pickKeyHashmap,
+				depKeys,
+			)
+			if err2 != nil {
+				err = err2
+				return
+			}
+			if expanded {
+				// The added keys sit outside the ZoneMap segments built from
+				// the literal KEYS list, so fall back to the full change scan
+				// narrowed by pickKeyHashmap alone.
+				pkFilter = nil
+			}
+			if len(depKeys) == 0 {
+				depKeys = nil
+			}
+			// The diff's fold gate needs the selection/dependency split:
+			// only a literally picked anchor key may produce a folded
+			// key-moving update; dependency keys exist for reconstruction.
+			tblStuff.pickDepKeys = depKeys
+		}
+	}
+
 	if diffStmt == nil {
 		// The apply owner prepares stages before production and consumes each
 		// batch inline. A retry must never cancel a concurrent LCA probe.
@@ -1151,7 +1308,7 @@ func diffMergeAgency(
 				pkFilter, pickKeyHashmap, betweenFrom, betweenTo)
 		}
 		if pickStmt != nil {
-			return pickMergeDiffs(ctx, cancel, ses, bh, pickStmt, tblStuff, produce)
+			return pickMergeDiffs(ctx, cancel, ses, bh, pickStmt, tblStuff, produce, depKeys)
 		}
 		return mergeDiffs(ctx, cancel, ses, bh, tblStuff, produce)
 	}
@@ -1657,7 +1814,8 @@ func diffOnBase(
 	}
 
 	if tarHandle, baseHandle, err = constructChangeHandle(
-		ctx, ses, bh, tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
+		ctx, ses, bh, &tblStuff, &dagInfo, pkFilter, betweenFrom, betweenTo,
+		copt.expandUpdate && tblStuff.def.pkKind != fakeKind,
 	); err != nil {
 		return
 	}
@@ -2154,14 +2312,36 @@ func validateDataBranchNamedSnapshotScope(
 	)
 }
 
+// collectWindowSyntheticAtConstruct reports whether CONSTRUCTING one
+// window's change handle already swapped a range to the visible-state
+// recovery reader (r53 D156(E) certification signal (c) spans
+// construction and drain): the partition dispatcher installs that reader,
+// and notifies the observer, while NewPartitionChangesHandle splits the
+// range — before any drain-side substitution baseline exists, so the
+// swap must be recorded with the window's metadata or the end-stamped
+// stream would certify exact. The flag is the resources counter delta
+// across collect, attributed to this window because handle construction
+// is serialized per window.
+func collectWindowSyntheticAtConstruct(
+	resources *dataBranchVisibleStateRecoveryResources,
+	collect func() (engine.ChangesHandle, error),
+) (handle engine.ChangesHandle, substituted bool, err error) {
+	before := resources.recoverySubstitutions()
+	if handle, err = collect(); err != nil {
+		return nil, false, err
+	}
+	return handle, resources.recoverySubstitutions() != before, nil
+}
+
 func constructChangeHandle(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
-	tables tableStuff,
+	tables *tableStuff,
 	branchInfo *branchMetaInfo,
 	pkFilter *engine.PKFilter,
 	betweenFrom, betweenTo *types.TS,
+	preserveAllVersions bool,
 ) (
 	tarHandle []engine.ChangesHandle,
 	baseHandle []engine.ChangesHandle,
@@ -2189,7 +2369,7 @@ func constructChangeHandle(
 	}()
 
 	if tarRange, baseRange, err = decideCollectRange(
-		ctx, ses, bh, tables, branchInfo,
+		ctx, ses, bh, *tables, branchInfo,
 	); err != nil {
 		return
 	}
@@ -2249,18 +2429,32 @@ func constructChangeHandle(
 		tarHydrationIdent = tarRange.segmentIdentity(len(tarRange.rel)-1, tarIdent)
 	}
 	targetDef := tables.tarRel.GetTableDef(ctx)
-	ctx = engine.WithVisibleStateRecoveryResources(
-		ctx,
-		&dataBranchVisibleStateRecoveryResources{allocator: tables.hashmapAllocator},
-	)
+	tables.recoveryResources = &dataBranchVisibleStateRecoveryResources{
+		allocator: tables.hashmapAllocator,
+	}
+	ctx = engine.WithVisibleStateRecoveryResources(ctx, tables.recoveryResources)
 
 	// collectFn dispatches to the PK-filtered or plain CollectChanges variant.
+	// preserveAllVersions (apply-capable diffs with a real primary key) asks
+	// the collector to keep every row version in the range instead of
+	// coalescing each buffered range to the last operation per key: a
+	// pk-moving UPDATE's intermediate generation (born and deleted inside
+	// this window by later transactions) otherwise vanishes from the
+	// stream, and with it the tombstone evidence the pk-move chain walk
+	// binds cross-transaction hops to. The hashmap build's per-key
+	// reconciliation collapses versions back to the same net effect for
+	// plain replay, so diff output is unchanged; the flag only deepens
+	// the evidence, at the cost of holding every version of high-churn
+	// keys during the build.
 	collectFn := func(
 		ctx context.Context,
 		rel engine.Relation,
 		from, end types.TS,
 		mp *mpool.MPool,
 	) (engine.ChangesHandle, error) {
+		if preserveAllVersions {
+			ctx = engine.WithCollectChangesPreserveAllVersions(ctx)
+		}
 		if pkFilter != nil && pkFilter.Valid() {
 			return databranchutils.CollectChangesWithPKFilter(
 				ctx, rel, from, end, mp, pkFilter,
@@ -2293,12 +2487,18 @@ func constructChangeHandle(
 				collectCtx, startBoundary,
 			)
 		}
-		if handle, err = collectFn(
-			collectCtx,
-			tarRange.rel[i],
-			tarRange.from[i],
-			tarRange.end[i],
-			ses.proc.Mp(),
+		var tarSubstConstruct bool
+		if handle, tarSubstConstruct, err = collectWindowSyntheticAtConstruct(
+			tables.recoveryResources,
+			func() (engine.ChangesHandle, error) {
+				return collectFn(
+					collectCtx,
+					tarRange.rel[i],
+					tarRange.from[i],
+					tarRange.end[i],
+					ses.proc.Mp(),
+				)
+			},
 		); err != nil {
 			return
 		}
@@ -2317,7 +2517,7 @@ func constructChangeHandle(
 				handle = &historicalDataBranchChangesHandle{
 					inner:            handle,
 					sourceMapping:    sourceMapping,
-					tblStuff:         tables,
+					tblStuff:         *tables,
 					ses:              ses,
 					endpointRel:      tarHydrationRel,
 					endpointSnapshot: tarHydrationSnapshot,
@@ -2327,6 +2527,13 @@ func constructChangeHandle(
 				}
 			}
 			tarHandle = append(tarHandle, handle)
+			// Serving-mode certification (r53 D156(E)): an empty lower
+			// bound dispatched the end-stamping state reader, and a
+			// construction-time recovery substitution dispatched the
+			// end-stamping visible-state reader.
+			tables.tarWindowEnds = append(tables.tarWindowEnds, tarRange.end[i])
+			tables.tarWindowFromEmpty = append(tables.tarWindowFromEmpty, tarRange.from[i].IsEmpty())
+			tables.tarWindowSubstConstruct = append(tables.tarWindowSubstConstruct, tarSubstConstruct)
 		}
 	}
 
@@ -2354,12 +2561,18 @@ func constructChangeHandle(
 				collectCtx, startBoundary,
 			)
 		}
-		if handle, err = collectFn(
-			collectCtx,
-			baseRange.rel[i],
-			baseRange.from[i],
-			baseRange.end[i],
-			ses.proc.Mp(),
+		var baseSubstConstruct bool
+		if handle, baseSubstConstruct, err = collectWindowSyntheticAtConstruct(
+			tables.recoveryResources,
+			func() (engine.ChangesHandle, error) {
+				return collectFn(
+					collectCtx,
+					baseRange.rel[i],
+					baseRange.from[i],
+					baseRange.end[i],
+					ses.proc.Mp(),
+				)
+			},
 		); err != nil {
 			return
 		}
@@ -2378,7 +2591,7 @@ func constructChangeHandle(
 				handle = &historicalDataBranchChangesHandle{
 					inner:            handle,
 					sourceMapping:    sourceMapping,
-					tblStuff:         tables,
+					tblStuff:         *tables,
 					ses:              ses,
 					endpointRel:      tables.baseRel,
 					endpointSnapshot: baseSnapshot,
@@ -2388,10 +2601,59 @@ func constructChangeHandle(
 				}
 			}
 			baseHandle = append(baseHandle, handle)
+			tables.baseWindowEnds = append(tables.baseWindowEnds, baseRange.end[i])
+			tables.baseWindowFromEmpty = append(tables.baseWindowFromEmpty, baseRange.from[i].IsEmpty())
+			tables.baseWindowSubstConstruct = append(tables.baseWindowSubstConstruct, baseSubstConstruct)
 		}
 	}
 
+	// Record the per-relation provenance windows for the pk-move link
+	// consumer: links are probed for EVERY physical table whose change
+	// stream feeds a side's diff (multi-generation branches keep each
+	// generation's links under that generation's table id), and each
+	// window's collect end bounds write_ts so links written after the
+	// selected endpoint stay invisible to this diff.
+	tables.pkMoveTarWindows = pkMoveLinkWindowsFromRange(ctx, tarRange)
+	tables.pkMoveBaseWindows = pkMoveLinkWindowsFromRange(ctx, baseRange)
+
 	return
+}
+
+// pkMoveLinkWindowsFromRange projects one collected change range to the
+// (table id, window end, segment identity) triples the pk-move provenance
+// probes use: each window keeps the physical owner its segment was opened
+// under (D220 (B.1)), so a subscription-routed segment's links are read
+// from the account that wrote them. A range without routing identities
+// projects the zero identity, and its reads keep the caller context.
+func pkMoveLinkWindowsFromRange(ctx context.Context, r collectRange) []pkMoveLinkTableWindow {
+	if len(r.rel) == 0 {
+		return nil
+	}
+	windows := make([]pkMoveLinkTableWindow, 0, len(r.rel))
+	for i, rel := range r.rel {
+		if i >= len(r.end) {
+			break
+		}
+		id := rel.GetTableID(ctx)
+		if id == 0 {
+			continue
+		}
+		var startPhys uint64
+		var fromTS types.TS
+		if i < len(r.from) {
+			startPhys = uint64(r.from[i].Physical())
+			fromTS = r.from[i]
+		}
+		windows = append(windows, pkMoveLinkTableWindow{
+			tableID:   id,
+			startPhys: startPhys,
+			endPhys:   uint64(r.end[i].Physical()),
+			from:      fromTS,
+			end:       r.end[i],
+			ident:     r.segmentIdentity(i, branchIdentity{}),
+		})
+	}
+	return windows
 }
 
 func dataBranchPathTableDefs(
@@ -3122,6 +3384,20 @@ func dataBranchCollectRelationSnapshot(endpointSP, windowEnd types.TS, endpoint 
 		return endpointSP
 	}
 	return windowEnd
+}
+
+// pkMoveWindowOwnerSnapshot mirrors buildSideCollectRange's relation
+// snapshot rule for the PICK closure owner probe (r101 D222): the path's
+// endpoint segment resolves at the endpoint snapshot where it was opened,
+// an intermediate generation at the transition into its successor — the
+// source snapshot of the clone/ALTER edge — where it was still visible.
+// A missing transition entry (defensive, or i naming the endpoint)
+// degrades to the endpoint snapshot, never to a fabricated instant.
+func pkMoveWindowOwnerSnapshot(pathTS []types.TS, i int, endpointSP types.TS) types.TS {
+	if i+1 < len(pathTS) {
+		return pathTS[i+1]
+	}
+	return endpointSP
 }
 
 // getTablesCreationCommitTS resolves the creation commit timestamp for

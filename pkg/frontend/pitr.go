@@ -828,6 +828,13 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 				ctx = defines.AttachAccountId(ctx, tenantInfo.GetTenantID())
 			}()
 		}
+		// D155-B: classify the owner rows this statement deletes BEFORE
+		// the delete, inside the same pessimistic transaction, so the
+		// classification cannot race the removal.
+		var removedScopes []dataBranchRemovedOwnerScope
+		if removedScopes, err = readDroppedPitrOwnerScopes(ctx, bh, string(stmt.Name), uint64(tenantInfo.GetTenantID())); err != nil {
+			return err
+		}
 		err = bh.Exec(ctx, sql)
 		if err != nil {
 			return err
@@ -847,6 +854,11 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		}
 		if !execResultArrayHasData(erArray) {
 			// drop sysMoCatalogPitr
+			var catalogScopes []dataBranchRemovedOwnerScope
+			if catalogScopes, err = readDroppedPitrOwnerScopes(ctx, bh, SYSMOCATALOGPITR, sysAccountID); err != nil {
+				return err
+			}
+			removedScopes = append(removedScopes, catalogScopes...)
 			sql = getSqlForDropPitr(SYSMOCATALOGPITR, sysAccountID)
 			getLogger(ses.GetService()).Info("drop sys mo_catalog pitr", zap.String("sql", sql))
 			err = bh.Exec(ctx, sql)
@@ -855,6 +867,17 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 			}
 		}
 		if err = compactHistoricalAlterLineageWithBH(ctx, bh, time.Now().UTC()); err != nil {
+			return err
+		}
+		// D155-C: the final-owner gated reap rides this transaction; any
+		// error fails the DROP atomically and an identical retry redrives
+		// the whole removal (there is no commit-with-WARN class: once the
+		// owner is gone, DROP PITR IF EXISTS early-returns before any
+		// maintenance could resume).
+		if err = reapDataBranchLinksAfterOwnerRemoval(
+			ctx, bh, ses.GetService(), pkMoveGenesisRetireSinkOf(ses),
+			removedScopes, uint32(tenantInfo.GetTenantID()),
+		); err != nil {
 			return err
 		}
 	}

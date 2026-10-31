@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
@@ -644,6 +645,14 @@ func (s *service) closeService() error {
 			// dependencies.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
+			// The data-branch fencing lane pool is the last statement-capable
+			// producer: seal its admission, cancel its lanes, and join or
+			// detach them before retiring the runtimes detached lanes can
+			// still touch. Scoped to THIS CN generation (D189(B.2)): the step
+			// drains the pool keyed by this service's own UUID.
+			func() error {
+				return databranchutils.DataBranchFencingPoolDrainFor(s.cfg.UUID)
+			},
 			// Cancel and join pipeline users before retiring execution runtimes;
 			// otherwise retirement can wait for the work we have not stopped yet.
 			s.closeSiriusRuntime,
@@ -662,6 +671,16 @@ func (s *service) closeService() error {
 		}
 		localErr := closeCNServiceSteps(
 			s.stopRPCs,
+			// FINAL DRAIN BARRIER: after stopRPCs has discharged every blocking
+			// source (txn client/sender and the lock service's service-lifetime
+			// cancel), join every detached data-branch fencing lane AND every
+			// retained stage owner to full exit/close observation and verify
+			// the zero lanes/retained/charges dump before CN close completes
+			// (D189(B.2)(iii), D190(C.29'')(c)). Scoped to THIS CN generation.
+			// Success-path only: the barrier never reports an unverified zero.
+			func() error {
+				return databranchutils.DataBranchFencingDrainBarrierFor(s.cfg.UUID)
+			},
 			func() error {
 				// stop I/O pipeline
 				if runtime.ServiceRuntime(s.cfg.UUID) != nil {
@@ -881,6 +900,16 @@ func (s *service) stopFrontendSerialized() error {
 
 func (s *service) stopRPCs() error {
 	var err error
+	// D190(B.1): the lock service closes BEFORE the txn client. A detained
+	// stage transaction's deferred cleanup retries its unlock RPCs against
+	// the lock service's service-lifetime context; closing the lock service
+	// first cancels that context, so every in-flight or queued unlock fails
+	// fast instead of waiting on a transport the txn client's close would
+	// retire underneath it. The txn client then joins its operators without
+	// a lock-service-dependent tail.
+	if s.lockService != nil {
+		err = errors.Join(err, s.lockService.Close())
+	}
 	if s._txnClient != nil {
 		err = errors.Join(err, s._txnClient.Close())
 	}
@@ -892,9 +921,6 @@ func (s *service) stopRPCs() error {
 	}
 	if s._txnSender != nil {
 		err = errors.Join(err, s._txnSender.Close())
-	}
-	if s.lockService != nil {
-		err = errors.Join(err, s.lockService.Close())
 	}
 	if s.queryClient != nil {
 		err = errors.Join(err, s.queryClient.Close())

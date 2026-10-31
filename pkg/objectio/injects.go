@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -112,6 +113,32 @@ const (
 	FJ_CNCommitAfterWorkspaceDumpFailed = "fj/cn/commit_after_workspace_dump_fails"
 	FJ_CNNeedRetryError                 = "fj/cn/need_retry_error"
 
+	// FJ_CNIncrStmtRCSnapshotFailed and FJ_CNIncrStmtRCTransferFailed are
+	// test-only faults failing one RC statement boundary AFTER its
+	// workspace merge and dump succeeded: the snapshot refresh leg or the
+	// tombstone transfer leg. The boundary's rollback cut must stay
+	// tentative until both legs succeed (r30 review F2, D127).
+	FJ_CNIncrStmtRCSnapshotFailed = "fj/cn/incr_stmt_rc_snapshot_fails"
+	FJ_CNIncrStmtRCTransferFailed = "fj/cn/incr_stmt_rc_transfer_fails"
+
+	// FJ_CNIncrStmtRCTransferObjectsFailed is a test-only fault failing one
+	// RC statement boundary's tombstone transfer BETWEEN its two legs: the
+	// in-memory transfer has already completed (retained delete tombstones
+	// re-minted in place onto their committed identities, provenance carried
+	// with them) and the persistent-object transfer has not started. The
+	// boundary's rollback must preserve that completed carry's rekeys
+	// (r35 review F1, D139).
+	FJ_CNIncrStmtRCTransferObjectsFailed = "fj/cn/incr_stmt_rc_transfer_objects_fails"
+
+	// FJ_CNTransferStagedWriteFailed is a test-only fault failing one
+	// persistent-transfer round at the sinker write, AFTER the round's
+	// pk-move provenance carry has already been journaled and applied
+	// (r42-approved D142/D143 validation). It deterministically produces
+	// the "carry committed to memory and journal, durable write failed"
+	// shape that statement rollback must unwind — on windowed boundary
+	// routes and windowless AdvanceSnapshot routes alike.
+	FJ_CNTransferStagedWriteFailed = "fj/cn/transfer_staged_write_fails"
+
 	// FJ_CNReenterSnapshotOffsetOnGetTable is a test-only fault that makes
 	// Transaction.getTable reenter UpdateSnapshotWriteOffset, deterministically
 	// simulating the internal-SQL leg of the issue #25557 deadlock:
@@ -125,6 +152,24 @@ const (
 	// lock is re-acquired, so a test can deterministically mutate the
 	// workspace from another goroutine while the window is open.
 	FJ_CNDumpResolveWindowWait = "fj/cn/dump_resolve_window_wait"
+
+	// FJ_CNDataBranchReapAccountFailed is a test-only fault failing the
+	// owner-removal reap of exactly one account AFTER every earlier
+	// account's verdicts already issued inside the drop's pessimistic
+	// transaction. Armed by add_fault_point with the target account NAME
+	// (or numeric id) as sarg, it proves the D155(C) partial multi-account
+	// shape: rollback restores the owner row and every account's links and
+	// ledger rows byte-identically, and the disarmed retry completes.
+	FJ_CNDataBranchReapAccountFailed = "fj/cn/data_branch_reap_account_fails"
+
+	// FJ_CNDataBranchPkMoveLinkProbeBudget is a test-only fault that arms a
+	// small pk-move link reader budget (iarg) so BVT fixtures can drive the
+	// overflow-narrowing paths with a handful of rows instead of the
+	// million-row production cap. The sarg optionally scopes the override to
+	// one physical table id (decimal string); an empty sarg arms every
+	// table. Only the probe LIMITs consult it — the hard provider-disable
+	// cap keeps its production value.
+	FJ_CNDataBranchPkMoveLinkProbeBudget = "fj/cn/data_branch_pk_move_link_probe_budget"
 
 	// FJ_ArrowLoadRolloutWait is a test-only post-admission/pre-publication
 	// barrier. Arrow's reader triggers it after a range has been admitted and
@@ -264,6 +309,26 @@ func CNCommitAfterWorkspaceDumpFailedInjected() (string, bool) {
 	return sarg, injected
 }
 
+func CNIncrStmtRCSnapshotFailedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CNIncrStmtRCSnapshotFailed)
+	return sarg, injected
+}
+
+func CNIncrStmtRCTransferFailedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CNIncrStmtRCTransferFailed)
+	return sarg, injected
+}
+
+func CNIncrStmtRCTransferObjectsFailedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CNIncrStmtRCTransferObjectsFailed)
+	return sarg, injected
+}
+
+func CNTransferStagedWriteFailedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CNTransferStagedWriteFailed)
+	return sarg, injected
+}
+
 func LogCNNeedRetryErrorInjected(args ...string) (bool, int) {
 	iarg, sarg, injected := fault.TriggerFault(FJ_CNNeedRetryError)
 	if !injected {
@@ -365,6 +430,30 @@ func SimpleInject(key string) (rmFault func(), err error) {
 func SimpleInjected(key string) bool {
 	_, _, injected := fault.TriggerFault(key)
 	return injected
+}
+
+// CNDataBranchReapAccountFailedInjected reports whether the test-only
+// FJ_CNDataBranchReapAccountFailed kill switch is armed; the sarg selects
+// the account the owner-removal reap must fail on.
+func CNDataBranchReapAccountFailedInjected() (string, bool) {
+	_, sarg, injected := fault.TriggerFault(FJ_CNDataBranchReapAccountFailed)
+	return sarg, injected
+}
+
+// CNDataBranchPkMoveLinkProbeBudgetInjected reports the armed pk-move link
+// reader budget for tableID, or false when the fault is disarmed (or armed
+// for a different table via the sarg selector). Zero and negative iarg
+// values are treated as disarmed: a zero-row budget could never answer any
+// probe.
+func CNDataBranchPkMoveLinkProbeBudgetInjected(tableID uint64) (int64, bool) {
+	iarg, sarg, injected := fault.TriggerFault(FJ_CNDataBranchPkMoveLinkProbeBudget)
+	if !injected || iarg <= 0 {
+		return 0, false
+	}
+	if sarg != "" && sarg != strconv.FormatUint(tableID, 10) {
+		return 0, false
+	}
+	return iarg, true
 }
 
 // CNReenterSnapshotOffsetOnGetTableInjected reports whether the

@@ -73,6 +73,16 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 	if len(present) == 0 {
 		return nil, dag, nil
 	}
+	// Capture the reclaim members' catalog identities BEFORE any physical
+	// DROP work: the closure runs after that work, when mo_tables can no
+	// longer name this transaction's retirees, and the pk-move link
+	// reclaim's snapshot-grounding gate scopes its probe by (db, table)
+	// names (r23 review F2). Members dropped by earlier transactions are
+	// already unnamed there; their links survive as benign orphans.
+	names, err := c.loadBranchReclaimMemberNamesRC(dag, present)
+	if err != nil {
+		return nil, databranchutils.BranchReclaimDag{}, err
+	}
 	keys := batch.NewWithSize(1)
 	keys.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
 	for _, id := range present {
@@ -136,12 +146,21 @@ func (c *Compile) prepareBranchReclaimRC(deadTIDs []uint64, exclusiveSnapshotGat
 		); err != nil {
 			return err
 		}
+		// Retire pk-move update links for exactly the tables whose
+		// protected streams the snapshot reclaim above just released;
+		// dropped generations with live descendants keep theirs.
+		if err := deletePkMoveUpdateLinksForReclaimedSubtrees(c, dag, selected, names); err != nil {
+			return err
+		}
 		// A different admitted component may require G exclusive. Do not
 		// rescan the ALTER catalog for this member unless its own current
 		// component still contains ALTER lineage.
 		if exclusiveSnapshotGate && dag.ComponentsHaveAlterLineage(selected) {
 			removed, err := c.compactExpiredAlterDataBranchLineageRC(selected)
 			if err != nil {
+				return err
+			}
+			if err := deletePkMoveUpdateLinksForIDs(c, removed); err != nil {
 				return err
 			}
 			removeCompactedBranchRows(&dag, removed)
@@ -336,6 +355,24 @@ func (c *Compile) branchCatalogRelationIDRC(relationName string) (uint64, error)
 		return 0, err
 	}
 	return relation.GetTableID(ctx), nil
+}
+
+// loadBranchReclaimMemberNamesRC resolves the (database, table) identity
+// of every reclaim-candidate table id — the pinned component plus the
+// admitted roots — at admission, the last moment this transaction's
+// retirees and the lineage's retained protect snapshots are both visible
+// (captureBranchReclaimMemberIdentities). The pk-move link reclaim's
+// snapshot-grounding gate probes coverage against these identities; an id
+// the capture cannot name keeps its links fail-closed.
+func (c *Compile) loadBranchReclaimMemberNamesRC(
+	dag databranchutils.BranchReclaimDag, present []uint64,
+) (map[uint64]pkMoveTableIdentity, error) {
+	ids := make([]uint64, 0, len(dag.Info)+len(present))
+	for id := range dag.Info {
+		ids = append(ids, id)
+	}
+	ids = append(ids, present...)
+	return captureBranchReclaimMemberIdentities(c, ids)
 }
 
 func (c *Compile) loadBranchReclaimComponentsRC(deadTIDs []uint64, waitPolicy ...lock.WaitPolicy) (databranchutils.BranchReclaimDag, error) {

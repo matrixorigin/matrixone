@@ -601,6 +601,105 @@ select count(*) from rpl.nope {MO_TS = '9223372036854775807-0'};
 -- @session
 
 -- =====================================================================
+-- B12 (issue 28026, design D220): a publisher-side committed primary-key
+-- move applied through subscription-routed windows folds to a native
+-- UPDATE under the publisher's physical identity. The subscriber clone's
+-- ON UPDATE CASCADE child re-parents (no silent ON DELETE CASCADE loss);
+-- the RESTRICT twin aborts loudly with the destination byte-preserved;
+-- the same-account clone keeps identical semantics as a parity control.
+-- =====================================================================
+-- @session:id=1&user=tenant_a:test_account&password=111
+drop database if exists b12src;
+create database b12src;
+create table b12src.t(a int primary key, b varchar(10));
+insert into b12src.t values (1,'one'),(2,'two');
+create publication pub12 database b12src account tenant_b;
+-- @session
+-- @session:id=2&user=tenant_b:test_account&password=111
+create database b12sub from tenant_a publication pub12;
+drop database if exists b12db;
+create database b12db;
+use b12db;
+data branch create table m12p from b12sub.t;
+create table m12fk(id int primary key, pid int, foreign key(pid) references m12p(a) on delete cascade on update cascade);
+insert into m12fk values (100,2);
+data branch create table k12p from b12sub.t;
+create table k12fk(id int primary key, pid int, foreign key(pid) references k12p(a) on delete cascade on update cascade);
+insert into k12fk values (300,2);
+data branch create table r12p from b12sub.t;
+create table r12fk(id int primary key, pid int, foreign key(pid) references r12p(a));
+insert into r12fk values (200,2);
+create table n12p(a int primary key, b varchar(10));
+insert into n12p values (1,'one'),(2,'two');
+data branch create table n12s from n12p;
+create table n12fk(id int primary key, pid int, foreign key(pid) references n12p(a) on delete cascade on update cascade);
+insert into n12fk values (100,2);
+update n12s set a=3 where a=2;
+data branch merge n12s into n12p when conflict accept;
+select * from n12p order by a;
+select * from n12fk order by id;
+-- @session
+-- @session:id=1&user=tenant_a:test_account&password=111
+update b12src.t set a=3 where a=2;
+select count(*) as pub_link_rows from mo_catalog.mo_data_branch_update_link;
+-- @session
+-- @session:id=2&user=tenant_b:test_account&password=111
+data branch merge b12sub.t into b12db.m12p when conflict accept;
+select * from b12db.m12p order by a;
+select * from b12db.m12fk order by id;
+data branch pick b12sub.t into b12db.k12p keys(2) when conflict accept;
+select * from b12db.k12p order by a;
+select * from b12db.k12fk order by id;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+data branch pick b12sub.t into b12db.r12p keys(2) when conflict accept;
+select * from b12db.r12p order by a;
+select * from b12db.r12fk order by id;
+-- @session
+
+-- =====================================================================
+-- B13 (issue 28026, design r101 D222): a same-schema COPY ALTER retires
+-- the publisher's physical generation that recorded a committed pk move.
+-- The subscriber's PICK closure resolves the retired generation's owner
+-- at the historical transition snapshot, so KEYS(2) still replays the
+-- move as a native UPDATE and the ON UPDATE CASCADE child re-parents;
+-- the MERGE twin folds through buildSideCollectRange's historical owner
+-- resolution as the parity control.
+-- =====================================================================
+-- @session:id=1&user=tenant_a:test_account&password=111
+drop database if exists b13src;
+create database b13src;
+create table b13src.t(a int primary key, b varchar(10));
+insert into b13src.t values (1,'one'),(2,'two');
+create publication pub13 database b13src account tenant_b;
+-- @session
+-- @session:id=2&user=tenant_b:test_account&password=111
+create database b13sub from tenant_a publication pub13;
+drop database if exists b13db;
+create database b13db;
+use b13db;
+data branch create table m13p from b13sub.t;
+create table m13fk(id int primary key, pid int, foreign key(pid) references m13p(a) on delete cascade on update cascade);
+insert into m13fk values (100,2);
+data branch create table k13p from b13sub.t;
+create table k13fk(id int primary key, pid int, foreign key(pid) references k13p(a) on delete cascade on update cascade);
+insert into k13fk values (300,2);
+-- @session
+-- @session:id=1&user=tenant_a:test_account&password=111
+update b13src.t set a=3 where a=2;
+select count(*) as pub_link_rows from mo_catalog.mo_data_branch_update_link;
+alter table b13src.t modify column b varchar(10), algorithm=copy;
+select rel_id <> rel_logical_id as physical_replaced from mo_catalog.mo_tables where reldatabase = 'b13src' and relname = 't';
+-- @session
+-- @session:id=2&user=tenant_b:test_account&password=111
+data branch merge b13sub.t into b13db.m13p when conflict accept;
+select * from b13db.m13p order by a;
+select * from b13db.m13fk order by id;
+data branch pick b13sub.t into b13db.k13p keys(2) when conflict accept;
+select * from b13db.k13p order by a;
+select * from b13db.k13fk order by id;
+-- @session
+
+-- =====================================================================
 -- cleanup
 -- =====================================================================
 drop publication if exists puball;
@@ -619,8 +718,12 @@ drop publication if exists publi_all;
 drop publication if exists pubca;
 drop publication if exists pubrdb;
 drop publication if exists pubts;
+drop publication if exists pub12;
+drop publication if exists pub13;
 drop database if exists tsdb;
 drop database if exists tdb;
+drop database if exists b12src;
+drop database if exists b13src;
 drop database if exists scdb;
 drop database if exists rdb;
 drop database if exists hdb;
@@ -632,6 +735,10 @@ drop database if exists rcedb;
 -- @session
 -- @session:id=2&user=tenant_b:test_account&password=111
 drop database if exists sub3;
+drop database if exists b12sub;
+drop database if exists b12db;
+drop database if exists b13sub;
+drop database if exists b13db;
 drop database if exists subsc2;
 drop database if exists sub_ca;
 drop database if exists ldb;

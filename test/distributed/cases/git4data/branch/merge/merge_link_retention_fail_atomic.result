@@ -1,0 +1,172 @@
+drop account if exists efa_acc1;
+drop account if exists efa_acc2;
+create account efa_acc1 admin_name='admin' identified by '111';
+create account efa_acc2 admin_name='admin' identified by '111';
+drop pitr if exists efa_pitr;
+create pitr efa_pitr for cluster range 1 'h';
+drop database if exists branch_efa;
+create database branch_efa;
+use branch_efa;
+create table efa_p (id int primary key, v varchar(32));
+insert into efa_p values (2, 'two');
+data branch create table efa_b from efa_p;
+update efa_b set id = 3 where id = 2;
+create table efa_stash (tid bigint);
+insert into efa_stash select rel_id from mo_catalog.mo_tables where relname = 'efa_b' and reldatabase = 'branch_efa';
+drop table efa_b;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+drop database if exists branch_efa;
+create database branch_efa;
+use branch_efa;
+create table efa_p (id int primary key, v varchar(32));
+insert into efa_p values (2, 'two');
+data branch create table efa_b from efa_p;
+update efa_b set id = 3 where id = 2;
+create table efa_stash (tid bigint);
+insert into efa_stash select rel_id from mo_catalog.mo_tables where relname = 'efa_b' and reldatabase = 'branch_efa';
+drop table efa_b;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/data_branch_reap_account_fails', ':::', 'echo', 0, 'efa_acc2');
+➤ add_fault_point(fj/cn/data_branch_reap_account_fails, :::, echo, 0, efa_acc2)[-6,8,0]  𝄀
+1
+drop pitr efa_pitr;
+-- @regex("pk-move link reap of account [0-9]+: internal error: data branch fencing unavailable \(stage-failed\): data branch fencing certification check-a-lane-admission failed \(fault-framework-envelope-violation\): fault framework ENABLED \(any armed point, including a never-fired one\)", true)
+pk-move link reap of account 1: internal error: data branch fencing unavailable (stage-failed): data branch fencing certification check-a-lane-admission failed (fault-framework-envelope-violation): fault framework ENABLED (any armed point, including a never-fired one)
+select count(*) from mo_catalog.mo_pitr where pitr_name = 'efa_pitr';
+➤ count(*)[-5,64,0]  𝄀
+1
+use branch_efa;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+use branch_efa;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select remove_fault_point('fj/cn/data_branch_reap_account_fails');
+➤ remove_fault_point(fj/cn/data_branch_reap_account_fails)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+drop pitr efa_pitr;
+select count(*) from mo_catalog.mo_pitr where pitr_name = 'efa_pitr';
+➤ count(*)[-5,64,0]  𝄀
+0
+use branch_efa;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+0
+use branch_efa;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+0
+drop snapshot if exists efa_snap;
+create snapshot efa_snap for cluster;
+use branch_efa;
+create table efs_p (id int primary key, v varchar(32));
+insert into efs_p values (2, 'two');
+data branch create table efs_b from efs_p;
+update efs_b set id = 3 where id = 2;
+delete from efa_stash;
+insert into efa_stash select rel_id from mo_catalog.mo_tables where relname = 'efs_b' and reldatabase = 'branch_efa';
+drop table efs_b;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+use branch_efa;
+create table efs_p (id int primary key, v varchar(32));
+insert into efs_p values (2, 'two');
+data branch create table efs_b from efs_p;
+update efs_b set id = 3 where id = 2;
+delete from efa_stash;
+insert into efa_stash select rel_id from mo_catalog.mo_tables where relname = 'efs_b' and reldatabase = 'branch_efa';
+drop table efs_b;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/data_branch_reap_account_fails', ':::', 'echo', 0, 'efa_acc2');
+➤ add_fault_point(fj/cn/data_branch_reap_account_fails, :::, echo, 0, efa_acc2)[-6,8,0]  𝄀
+1
+drop snapshot efa_snap;
+-- @regex("pk-move link reap of account [0-9]+: internal error: data branch fencing unavailable \(stage-failed\): data branch fencing certification check-a-lane-admission failed \(fault-framework-envelope-violation\): fault framework ENABLED \(any armed point, including a never-fired one\)", true)
+pk-move link reap of account 1: internal error: data branch fencing unavailable (stage-failed): data branch fencing certification check-a-lane-admission failed (fault-framework-envelope-violation): fault framework ENABLED (any armed point, including a never-fired one)
+select count(*) from mo_catalog.mo_snapshots where sname = 'efa_snap';
+➤ count(*)[-5,64,0]  𝄀
+1
+use branch_efa;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+use branch_efa;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+1
+select remove_fault_point('fj/cn/data_branch_reap_account_fails');
+➤ remove_fault_point(fj/cn/data_branch_reap_account_fails)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+drop snapshot efa_snap;
+select count(*) from mo_catalog.mo_snapshots where sname = 'efa_snap';
+➤ count(*)[-5,64,0]  𝄀
+0
+use branch_efa;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+0
+use branch_efa;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = (select tid from efa_stash);
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database branch_efa;
+drop database branch_efa;
+drop account efa_acc1;
+drop account efa_acc2;

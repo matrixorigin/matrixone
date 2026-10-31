@@ -15,10 +15,14 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang/mock/gomock"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -2362,4 +2366,103 @@ func buildPickStreamingBatch(t *testing.T, mp *mpool.MPool, colTypes []types.Typ
 	}
 	bat.SetRowCount(len(rows))
 	return bat
+}
+
+// TestAppendPickedKeyMovingRowsSkipDependencyCascade covers the r25 pre-PR
+// review finding 1: PICK's producer is forced to CONFLICT_ACCEPT so the
+// consumer decides the user's SKIP on its own, and the old per-row old-key
+// test dropped only the move whose own old key was conflict-marked. When a
+// skipped move vacated a key another kept move lands at, the kept move's
+// authorized victim delete still fired and erased the destination row the
+// clause kept — and ON DELETE CASCADE removed its children. The skip
+// resolution now runs the shared move-dependency closure
+// (cascadeKeyMovingFoldKeep via shrinkKeyMovingFoldCascade) over the
+// initial old-key drop set before any folded move applies, skipping A's
+// move 1->2 here because B's skipped move 2->3 no longer vacates key 2.
+func TestAppendPickedKeyMovingRowsSkipDependencyCascade(t *testing.T) {
+	ctx := context.Background()
+	ses := newValidateSession(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	tblStuff := newTestBranchTableStuff(ctrl)
+	tblStuff.def.baseColNames = []string{"id", "name", "hidden"}
+
+	buildWrapped := func(t *testing.T) batchWithKind {
+		bat := batch.NewWithSize(3)
+		bat.SetAttributes([]string{"id", "name", "hidden"})
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+		// Row 0: A's move 1 -> 2, authorized to remove the destination row
+		// holding key 2 (the source displaced it). Row 1: B's move 2 -> 3,
+		// whose old key the destination itself re-touched (payload conflict
+		// -> consumer-side SKIP).
+		require.NoError(t, vector.AppendFixedList(
+			bat.Vecs[0], []int64{2, 3}, nil, ses.proc.Mp()))
+		require.NoError(t, vector.AppendBytesList(
+			bat.Vecs[1], [][]byte{[]byte("A"), []byte("B")}, nil, ses.proc.Mp()))
+		require.NoError(t, vector.AppendBytesList(
+			bat.Vecs[2], [][]byte{[]byte("ha"), []byte("hb")}, nil, ses.proc.Mp()))
+		bat.SetRowCount(2)
+		return batchWithKind{
+			kind:                diffInsert,
+			keyMovingUpdate:     true,
+			batch:               bat,
+			keyMovingOldKeys:    [][]any{{int64(1)}, {int64(2)}},
+			keyMovingVictimAuth: []bool{true, false},
+		}
+	}
+
+	skipKey, err := formatPKValuesAsString(ses, tblStuff, []any{int64(2)})
+	require.NoError(t, err)
+
+	t.Run("dependency closure skips the dependent move entirely", func(t *testing.T) {
+		var stmts []string
+		appender := sqlValuesAppender{
+			bh:        nil,
+			writeFile: func(b []byte) error { stmts = append(stmts, string(b)); return nil },
+		}
+		wrapped := buildWrapped(t)
+		defer wrapped.batch.Clean(ses.proc.Mp())
+		err := appendPickedKeyMovingRows(
+			ctx, ses, tblStuff, wrapped, &bytes.Buffer{}, appender,
+			map[string]struct{}{skipKey: {}}, nil)
+		require.NoError(t, err)
+		require.Empty(t, stmts,
+			"both moves must be skipped: the destination keeps (1,'A'),(2,'B') and the child")
+	})
+
+	t.Run("an empty skip set keeps the full apply", func(t *testing.T) {
+		var stmts []string
+		appender := sqlValuesAppender{
+			bh:        nil,
+			writeFile: func(b []byte) error { stmts = append(stmts, string(b)); return nil },
+		}
+		wrapped := buildWrapped(t)
+		defer wrapped.batch.Clean(ses.proc.Mp())
+		err := appendPickedKeyMovingRows(
+			ctx, ses, tblStuff, wrapped, &bytes.Buffer{}, appender,
+			map[string]struct{}{}, nil)
+		require.NoError(t, err)
+		require.Len(t, stmts, 3,
+			"victim delete at 2, A's update, then B's update land when nothing is skipped")
+		require.True(t, strings.HasPrefix(stmts[0], "delete from"), stmts[0])
+		require.True(t, strings.HasPrefix(stmts[1], "update "), stmts[1])
+		require.True(t, strings.HasPrefix(stmts[2], "update "), stmts[2])
+	})
+
+	t.Run("skip set naming no move's old key leaves the batch applied", func(t *testing.T) {
+		var stmts []string
+		appender := sqlValuesAppender{
+			bh:        nil,
+			writeFile: func(b []byte) error { stmts = append(stmts, string(b)); return nil },
+		}
+		wrapped := buildWrapped(t)
+		defer wrapped.batch.Clean(ses.proc.Mp())
+		err := appendPickedKeyMovingRows(
+			ctx, ses, tblStuff, wrapped, &bytes.Buffer{}, appender,
+			map[string]struct{}{"999": {}}, nil)
+		require.NoError(t, err)
+		require.Len(t, stmts, 3, "unrelated skip entries never drop folded moves")
+	})
 }

@@ -1149,7 +1149,7 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	require.NoError(t, err)
 	var pkCount int
 	txn.Lock()
-	err = txn.dumpInsertBatchLocked(context.Background(), fs, 0, &pkCount)
+	err = txn.dumpInsertBatchLocked(context.Background(), fs, 0, &pkCount, true)
 	txn.Unlock()
 	require.NoError(t, err)
 	require.Equal(t, 3, pkCount)
@@ -2303,7 +2303,7 @@ func TestIssue25557_LockedDumpInsertBatchReentrantGetTableDoesNotDeadlock(t *tes
 		defer txn.Unlock()
 		var pkCount int
 		errCh <- txn.dumpInsertBatchLocked(
-			context.Background(), fs, 0, &pkCount)
+			context.Background(), fs, 0, &pkCount, true)
 	}()
 
 	select {

@@ -741,6 +741,56 @@ func ComputeBranchReclaimDropList(dag BranchReclaimDag, deadTIDs []uint64) []str
 	return drops
 }
 
+// ComputeBranchReclaimTableIDs mirrors ComputeBranchReclaimDropList but
+// returns the reclaimable table ids themselves: the dropped roots plus every
+// ancestor whose complete descendant subtree is deleted. Per-table auxiliary
+// rows whose readers depend on the protected delta stream (for example
+// pk-move update provenance links) share the protect-snapshot lifetime and
+// must be released for exactly this set — reclaiming a row whose subtree
+// still has live descendants would strip provenance that live branch
+// diffs can still read.
+func ComputeBranchReclaimTableIDs(dag BranchReclaimDag, deadTIDs []uint64) []uint64 {
+	return branchReclaimableTableIDs(dag, deadTIDs)
+}
+
+// BranchReclaimOrphanParentIDs returns the parent table ids adjacent to a
+// retired reclaim set that carry no mo_branch_metadata row of their own. A
+// lineage's ultimate source table never appears in the metadata — only its
+// branch descendants do — so branchReclaimableTableIDs can never name it;
+// yet the source accumulates per-table auxiliary rows addressed by its own
+// table id (pk-move update provenance links, recorded on it as the
+// destination of applied moves). Once the retiring set disconnects the
+// source's last descendant row, the source's protected stream segment is
+// unreadable and those rows share the reclaim set's lifetime. A parent
+// carrying its own metadata row is covered by the reclaim set itself when
+// its subtree retires, or keeps its rows while another subtree lives. The
+// caller must still probe liveness before deleting: a parent named here
+// may anchor other, non-retiring descendant rows.
+func BranchReclaimOrphanParentIDs(dag BranchReclaimDag, retired []uint64) []uint64 {
+	seen := make(map[uint64]struct{})
+	var out []uint64
+	for _, id := range retired {
+		meta, ok := dag.Info[id]
+		if !ok {
+			continue
+		}
+		parent := meta.ParentTableID
+		if parent == 0 {
+			continue
+		}
+		if _, hasRow := dag.Info[parent]; hasRow {
+			continue
+		}
+		if _, dup := seen[parent]; dup {
+			continue
+		}
+		seen[parent] = struct{}{}
+		out = append(out, parent)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 // BuildBranchSnapshotDeleteSQL returns the DELETE statement that reclaims
 // the given snames from mo_snapshots, or the empty string if there is
 // nothing to drop. The caller is responsible for executing it as sys.

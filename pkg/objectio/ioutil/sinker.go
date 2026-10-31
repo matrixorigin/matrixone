@@ -116,6 +116,27 @@ func WithBeforePersist(hook func(context.Context, string) error) SinkerOption {
 	}
 }
 
+// WithUnpublishedNameObserver installs a hook the sync-path spill runs
+// exactly once per object, after the file sinker reserved the object's
+// name and before any byte of that object reaches storage. A producer
+// that must guarantee "no persisted object without recoverable cleanup
+// ownership" (temporary ferry spills that never join the transaction's
+// workspace file list) can therefore record durable ownership first and
+// fail the sync — with nothing persisted, and nothing to clean — when
+// that record cannot be secured. The observer also covers objects the
+// sinker persists automatically inside Write when the staged memory
+// crosses its threshold: those flow through the same sync choke point.
+// Pipeline flush (WithPipelineFlush) reaches persistence through the
+// async pool and is incompatible with this hook; pipelineSubmit rejects
+// the combination instead of persisting unobserved.
+func WithUnpublishedNameObserver(
+	fn func(ctx context.Context, name string) error,
+) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.config.unpublishedNameObserver = fn
+	}
+}
+
 type FileSinker interface {
 	Sink(context.Context, *batch.Batch) error
 	Sync(context.Context) (*objectio.ObjectStats, error)
@@ -415,6 +436,10 @@ type Sinker struct {
 		tailSizeCap         int
 		offHeap             bool
 		chunkedColumnPolicy objectio.ChunkedColumnPolicy
+		// unpublishedNameObserver runs at the sync-path persistence
+		// choke point before each object's first byte reaches storage;
+		// see WithUnpublishedNameObserver.
+		unpublishedNameObserver func(ctx context.Context, name string) error
 	}
 	fSinker struct {
 		executor FileSinker
@@ -709,6 +734,13 @@ func (sinker *Sinker) trySortInMemoryStaged(ctx context.Context) error {
 // parent context (e.g., ALTER TABLE's process context). If the parent
 // context is cancelled, all in-flight pipeline operations will be aborted.
 func (sinker *Sinker) pipelineSubmit(ctx context.Context, data []*batch.Batch) error {
+	if sinker.config.unpublishedNameObserver != nil {
+		// The async pool persists objects outside syncFileSinker, so
+		// the name-before-persist observation cannot cover them. Reject
+		// the combination instead of silently persisting unobserved.
+		return moerr.NewInternalError(ctx,
+			"sinker unpublished-name observer is unsupported with pipeline flush")
+	}
 	if sinker.pipe.result == nil {
 		pctx, cancel := context.WithCancel(ctx)
 		sinker.pipe.result = &pipelineResult{
@@ -822,6 +854,20 @@ func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) er
 	if sinker.beforePersist != nil {
 		if name := activeFileSinkerObjectName(fSinker); name != "" {
 			if err := sinker.beforePersist(ctx, name); err != nil {
+				return err
+			}
+		}
+	}
+	if obs := sinker.config.unpublishedNameObserver; obs != nil {
+		// The file sinker reserved the object's name at construction
+		// while the object reaches storage only inside Sync: this is
+		// the last point where ownership can still be secured before
+		// the first byte persists — including for objects the
+		// threshold-driven auto-spill flushes inside Write. A rejected
+		// observation aborts the sync with nothing persisted for this
+		// attempt.
+		if name := activeFileSinkerObjectName(fSinker); name != "" {
+			if err := obs(ctx, name); err != nil {
 				return err
 			}
 		}

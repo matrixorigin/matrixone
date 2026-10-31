@@ -1,0 +1,3779 @@
+drop database if exists branch_merge_fk_pk_move;
+create database branch_merge_fk_pk_move;
+use branch_merge_fk_pk_move;
+create table parent_t (id int primary key, payload varchar(32));
+create table child_t (
+id int primary key,
+parent_id int,
+constraint fk_child_parent foreign key (parent_id) references parent_t(id) on update cascade
+);
+insert into parent_t values (2, 'two');
+insert into child_t values (1, 2);
+data branch create table move_src from parent_t;
+update move_src set id = 3 where id = 2;
+data branch merge move_src into parent_t when conflict accept;
+select id, payload from parent_t order by id;
+➤ id[4,32,0]  ¦  payload[12,32,0]  𝄀
+3  ¦  two
+select id, parent_id from child_t order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  3
+data branch create table chain_src from parent_t;
+update chain_src set id = 4 where id = 3;
+update chain_src set id = 5 where id = 4;
+data branch merge chain_src into parent_t when conflict accept;
+select id, payload from parent_t order by id;
+➤ id[4,32,0]  ¦  payload[12,32,0]  𝄀
+5  ¦  two
+select id, parent_id from child_t order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  5
+data branch create table payload_src from parent_t;
+update payload_src set id = 6, payload = 'six' where id = 5;
+data branch merge payload_src into parent_t when conflict accept;
+select id, payload from parent_t order by id;
+➤ id[4,32,0]  ¦  payload[12,32,0]  𝄀
+6  ¦  six
+select id, parent_id from child_t order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  6
+data branch create table delins_src from parent_t;
+delete from delins_src where id = 6;
+insert into delins_src values (7, 'seven');
+data branch merge delins_src into parent_t when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, payload from parent_t order by id;
+➤ id[4,32,0]  ¦  payload[12,32,0]  𝄀
+6  ¦  six
+select id, parent_id from child_t order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  6
+create table rparent_t (id int primary key, payload varchar(32));
+create table rchild_t (
+id int primary key,
+parent_id int,
+constraint fk_rchild_rparent foreign key (parent_id) references rparent_t(id)
+);
+insert into rparent_t values (2, 'two');
+insert into rchild_t values (1, 2);
+data branch create table rmove_src from rparent_t;
+update rmove_src set id = 3 where id = 2;
+data branch merge rmove_src into rparent_t when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, payload from rparent_t order by id;
+➤ id[4,32,0]  ¦  payload[12,32,0]  𝄀
+2  ¦  two
+select id, parent_id from rchild_t order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  2
+create table cparent_t (k1 int, k2 int, payload varchar(32), primary key (k1, k2));
+create table cchild_t (
+id int primary key,
+fk1 int,
+fk2 int,
+constraint fk_cchild_cparent foreign key (fk1, fk2) references cparent_t(k1, k2) on update cascade
+);
+insert into cparent_t values (1, 1, 'one');
+insert into cchild_t values (1, 1, 1);
+data branch create table cmove_src from cparent_t;
+update cmove_src set k2 = 2 where k1 = 1 and k2 = 1;
+data branch merge cmove_src into cparent_t when conflict accept;
+select k1, k2, payload from cparent_t order by k1, k2;
+➤ k1[4,32,0]  ¦  k2[4,32,0]  ¦  payload[12,32,0]  𝄀
+1  ¦  2  ¦  one
+select id, fk1, fk2 from cchild_t order by id;
+➤ id[4,32,0]  ¦  fk1[4,32,0]  ¦  fk2[4,32,0]  𝄀
+1  ¦  1  ¦  2
+create table chain_p (id int primary key, v varchar(32));
+create table chain_c (
+id int primary key,
+pid int,
+constraint fk_chain foreign key (pid) references chain_p(id) on update cascade
+);
+insert into chain_p values (2, 'two');
+insert into chain_c values (1, 2);
+data branch create table chainmove_src from chain_p;
+update chainmove_src set id = 3 where id = 2;
+update chainmove_src set id = 4 where id = 3;
+insert into chainmove_src values (3, 'three-fresh');
+update chainmove_src set v = 'TWO' where id = 4;
+data branch merge chainmove_src into chain_p when conflict accept;
+select id, v from chain_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  three-fresh  𝄀
+4  ¦  TWO
+select id, pid from chain_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  4
+create table tx_p (id int primary key, v varchar(32));
+create table tx_c (
+id int primary key,
+pid int,
+constraint fk_tx foreign key (pid) references tx_p(id) on update cascade
+);
+insert into tx_p values (2, 'two');
+insert into tx_c values (1, 2);
+data branch create table tx_src from tx_p;
+begin;
+delete from tx_src where id = 2;
+insert into tx_src values (3, 'three');
+commit;
+data branch merge tx_src into tx_p when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from tx_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from tx_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table acc_p (id int primary key, v varchar(32));
+create table acc_c (
+id int primary key,
+pid int,
+constraint fk_acc foreign key (pid) references acc_p(id) on update cascade
+);
+insert into acc_p values (2, 'two');
+insert into acc_c values (1, 2);
+data branch create table acc_src from acc_p;
+update acc_src set id = 3, v = 'three' where id = 2;
+update acc_p set id = 4, v = 'four' where id = 2;
+data branch merge acc_src into acc_p when conflict accept;
+select id, v from acc_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  three
+select id, pid from acc_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table skip_p (id int primary key, v varchar(32));
+create table skip_c (
+id int primary key,
+pid int,
+constraint fk_skip foreign key (pid) references skip_p(id) on update cascade
+);
+insert into skip_p values (2, 'two');
+insert into skip_c values (1, 2);
+data branch create table skip_src from skip_p;
+update skip_src set id = 3, v = 'three' where id = 2;
+update skip_p set id = 4, v = 'four' where id = 2;
+data branch merge skip_src into skip_p when conflict skip;
+select id, v from skip_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  four
+select id, pid from skip_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  4
+create table failmove_p (id int primary key, v varchar(32));
+insert into failmove_p values (2, 'two');
+data branch create table failmove_src from failmove_p;
+update failmove_src set id = 3, v = 'three' where id = 2;
+update failmove_p set id = 4, v = 'four' where id = 2;
+data branch merge failmove_src into failmove_p;
+-- @regex("conflict: failmove_src UPDATE and failmove_p UPDATE on pk", true)
+internal error: conflict: failmove_src UPDATE and failmove_p UPDATE on pk(2)
+select id, v from failmove_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  four
+create table del_p (id int primary key, v varchar(32));
+insert into del_p values (2, 'two'), (9, 'nine');
+data branch create table del_src from del_p;
+update del_src set id = 3, v = 'three' where id = 2;
+delete from del_p where id = 2;
+data branch merge del_src into del_p when conflict accept;
+select id, v from del_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  three  𝄀
+9  ¦  nine
+create table delskip_p (id int primary key, v varchar(32));
+insert into delskip_p values (2, 'two');
+data branch create table delskip_src from delskip_p;
+update delskip_src set id = 3, v = 'three' where id = 2;
+delete from delskip_p where id = 2;
+data branch merge delskip_src into delskip_p when conflict skip;
+select id, v from delskip_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]
+create table delfail_p (id int primary key, v varchar(32));
+insert into delfail_p values (2, 'two');
+data branch create table delfail_src from delfail_p;
+update delfail_src set id = 3, v = 'three' where id = 2;
+delete from delfail_p where id = 2;
+data branch merge delfail_src into delfail_p;
+-- @regex("conflict: delfail_src UPDATE and delfail_p DELETE on pk", true)
+internal error: conflict: delfail_src UPDATE and delfail_p DELETE on pk(2)
+select id, v from delfail_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]
+create table reclaim_tb (id int primary key, v int);
+insert into reclaim_tb values (1, 1);
+data branch create table reclaim_br from reclaim_tb;
+update reclaim_br set id = 2 where id = 1;
+set @tid = (select rel_id from mo_catalog.mo_tables where relname = 'reclaim_br' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @tid;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table reclaim_br;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @tid;
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch create table reclaim_br from reclaim_tb;
+update reclaim_br set id = 7 where id = 1;
+set @tid = (select rel_id from mo_catalog.mo_tables where relname = 'reclaim_br' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @tid;
+➤ count(*)[-5,64,0]  𝄀
+1
+truncate table reclaim_br;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @tid;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table nkfail_p (id int primary key, v varchar(32));
+create table nkfail_c (
+id int primary key,
+pid int,
+constraint fk_nkfail foreign key (pid) references nkfail_p(id) on update cascade
+);
+insert into nkfail_p values (2, 'two');
+insert into nkfail_c values (1, 2);
+data branch create table nkfail_src from nkfail_p;
+insert into nkfail_p values (3, 'dst-three');
+insert into nkfail_c values (2, 3);
+update nkfail_src set id = 3, v = 'three-src' where id = 2;
+data branch merge nkfail_src into nkfail_p;
+-- @regex("conflict: nkfail_src", true)
+internal error: conflict: nkfail_src UPDATE and nkfail_p INSERT on pk(3)
+select id, v from nkfail_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two  𝄀
+3  ¦  dst-three
+select id, pid from nkfail_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3
+create table nkskip_p (id int primary key, v varchar(32));
+create table nkskip_c (
+id int primary key,
+pid int,
+constraint fk_nkskip foreign key (pid) references nkskip_p(id) on update cascade
+);
+insert into nkskip_p values (2, 'two');
+insert into nkskip_c values (1, 2);
+data branch create table nkskip_src from nkskip_p;
+insert into nkskip_p values (3, 'dst-three');
+insert into nkskip_c values (2, 3);
+update nkskip_src set id = 3, v = 'three-src' where id = 2;
+data branch merge nkskip_src into nkskip_p when conflict skip;
+select id, v from nkskip_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two  𝄀
+3  ¦  dst-three
+select id, pid from nkskip_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3
+create table nkacc_p (id int primary key, v varchar(32));
+create table nkacc_c (
+id int primary key,
+pid int,
+constraint fk_nkacc foreign key (pid) references nkacc_p(id)
+on update cascade on delete cascade
+);
+insert into nkacc_p values (2, 'two');
+insert into nkacc_c values (1, 2);
+data branch create table nkacc_src from nkacc_p;
+insert into nkacc_p values (3, 'dst-three');
+insert into nkacc_c values (2, 3);
+update nkacc_src set id = 3, v = 'three-src' where id = 2;
+data branch merge nkacc_src into nkacc_p when conflict accept;
+select id, v from nkacc_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  three-src
+select id, pid from nkacc_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table nkres_p (id int primary key, v varchar(32));
+create table nkres_c (
+id int primary key,
+pid int,
+constraint fk_nkres foreign key (pid) references nkres_p(id)
+);
+insert into nkres_p values (2, 'two');
+insert into nkres_c values (1, 2);
+data branch create table nkres_src from nkres_p;
+insert into nkres_p values (3, 'dst-three');
+insert into nkres_c values (2, 3);
+update nkres_src set id = 3, v = 'three-src' where id = 2;
+data branch merge nkres_src into nkres_p when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from nkres_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two  𝄀
+3  ¦  dst-three
+select id, pid from nkres_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3
+create table mg_p (id int primary key, v varchar(32));
+create table mg_c (
+id int primary key,
+pid int,
+constraint fk_mg foreign key (pid) references mg_p(id) on update cascade
+);
+insert into mg_p values (2, 'two');
+insert into mg_c values (1, 2);
+data branch create table mg1 from mg_p;
+update mg1 set id = 3 where id = 2;
+data branch create table mg2 from mg1;
+update mg2 set id = 4 where id = 3;
+data branch merge mg2 into mg_p when conflict accept;
+select id, v from mg_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  two
+select id, pid from mg_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  4
+create table rt_p (id int primary key, v varchar(32));
+create table rt_c (
+id int primary key,
+pid int,
+constraint fk_rt foreign key (pid) references rt_p(id) on update cascade
+);
+insert into rt_p values (2, 'two');
+insert into rt_c values (1, 2);
+data branch create table rt1 from rt_p;
+update rt1 set id = 3 where id = 2;
+data branch create table rt2 from rt1;
+update rt2 set id = 4 where id = 3;
+set @rt1 = (select rel_id from mo_catalog.mo_tables where relname = 'rt1' and reldatabase = 'branch_merge_fk_pk_move');
+set @rt2 = (select rel_id from mo_catalog.mo_tables where relname = 'rt2' and reldatabase = 'branch_merge_fk_pk_move');
+drop table rt1;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @rt1;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge rt2 into rt_p when conflict accept;
+select id, v from rt_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  two
+select id, pid from rt_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  4
+drop table rt2;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @rt1;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @rt2;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table hw_p (id int primary key, v varchar(32));
+create table hw_c (
+id int primary key,
+pid int,
+constraint fk_hw foreign key (pid) references hw_p(id) on update cascade
+);
+insert into hw_p values (2, 'two');
+update hw_p set id = 8 where id = 2;
+insert into hw_c values (1, 8);
+insert into hw_p values (2, 'two-ii');
+data branch create table hw_src from hw_p;
+delete from hw_src where id = 2;
+data branch merge hw_src into hw_p when conflict accept;
+select id, v from hw_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+8  ¦  two
+select id, pid from hw_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  8
+create table rb_p (id int primary key, v int);
+insert into rb_p values (1, 1);
+data branch create table rb_br from rb_p;
+set @rb = (select rel_id from mo_catalog.mo_tables where relname = 'rb_br' and reldatabase = 'branch_merge_fk_pk_move');
+begin;
+update rb_br set id = 2 where id = 1;
+rollback;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @rb;
+➤ count(*)[-5,64,0]  𝄀
+0
+update rb_br set id = 2 where id = 1;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @rb;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table am_p (id int primary key, v varchar(32));
+create table am_c (
+id int primary key,
+pid int,
+constraint fk_am foreign key (pid) references am_p(id) on update cascade
+);
+insert into am_p values (2, 'two');
+insert into am_c values (1, 2);
+data branch create table am_src from am_p;
+begin;
+update am_src set id = 3 where id = 2;
+delete from am_src where id = 3;
+insert into am_src values (3, 'unrelated');
+commit;
+set @am = (select rel_id from mo_catalog.mo_tables where relname = 'am_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @am;
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch merge am_src into am_p when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from am_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from am_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table ct_p (id int primary key, v varchar(32));
+create table ct_c (
+id int primary key,
+pid int,
+constraint fk_ct foreign key (pid) references ct_p(id) on update cascade
+);
+insert into ct_p values (2, 'two');
+insert into ct_c values (1, 2);
+data branch create table ct_src from ct_p;
+begin;
+update ct_src set id = 3 where id = 2;
+update ct_src set id = 4 where id = 3;
+commit;
+set @ct = (select rel_id from mo_catalog.mo_tables where relname = 'ct_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ct;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge ct_src into ct_p when conflict accept;
+select id, v from ct_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  two
+select id, pid from ct_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  4
+create table ri_p (id int primary key, v varchar(32));
+create table ri_c (
+id int primary key,
+pid int,
+constraint fk_ri foreign key (pid) references ri_p(id) on update cascade
+);
+insert into ri_p values (2, 'two');
+insert into ri_c values (1, 2);
+data branch create table ri_src from ri_p;
+delete from ri_src where id = 2;
+insert into ri_src values (2, 'unrelated');
+update ri_src set id = 3 where id = 2;
+data branch merge ri_src into ri_p when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from ri_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from ri_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table im_p (id int primary key, v varchar(32));
+create table im_c (
+id int primary key,
+pid int,
+constraint fk_im foreign key (pid) references im_p(id) on update cascade
+);
+insert into im_p values (2, 'two'), (3, 'three');
+insert into im_c values (1, 2), (2, 3);
+data branch create table im_src from im_p;
+update im_src set id = 4 where id = 3;
+update im_src set id = 3 where id = 2;
+data branch merge im_src into im_p when conflict accept;
+select id, v from im_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two  𝄀
+4  ¦  three
+select id, pid from im_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  4
+create table mt_p (id int primary key, v varchar(32));
+create table mt_c (
+id int primary key,
+pid int,
+constraint fk_mt foreign key (pid) references mt_p(id) on update cascade
+);
+insert into mt_p values (2, 'two'), (3, 'three');
+insert into mt_c values (1, 2);
+data branch create table mt_src from mt_p;
+delete from mt_src where id = 3;
+update mt_src set id = 3 where id = 2;
+data branch merge mt_src into mt_p when conflict accept;
+select id, v from mt_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from mt_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+data branch merge mt_src into mt_p when conflict accept;
+select id, v from mt_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from mt_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table fl_p (id int primary key, v varchar(32));
+create table fl_c (
+id int primary key,
+pid int,
+constraint fk_fl foreign key (pid) references fl_p(id) on update cascade
+);
+insert into fl_p values (2, 'two');
+insert into fl_c values (1, 2);
+data branch create table fl_src from fl_p;
+update fl_src set id = 3 where id = 2;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.fl_src');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.fl_src)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+data branch merge fl_src into fl_p when conflict accept;
+select id, v from fl_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from fl_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table xn_p (id int primary key, v varchar(32));
+create table xn_c (
+id int primary key,
+pid int,
+constraint fk_xn foreign key (pid) references xn_p(id) on update cascade
+);
+insert into xn_p values (2, 'two');
+insert into xn_c values (1, 2);
+data branch create table xn_src from xn_p;
+begin;
+update xn_src set id = 3 where id = 2;
+update xn_src set id = 4 where id = 3;
+commit;
+begin;
+update xn_src set id = 3 where id = 4;
+update xn_src set id = 5 where id = 3;
+commit;
+set @xnl = (select rel_id from mo_catalog.mo_tables where relname = 'xn_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @xnl;
+➤ count(*)[-5,64,0]  𝄀
+4
+data branch merge xn_src into xn_p when conflict accept;
+select id, v from xn_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+5  ¦  two
+select id, pid from xn_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  5
+create table eb_p (id int primary key, v varchar(32));
+create table eb_c (
+id int primary key,
+pid int,
+constraint fk_eb foreign key (pid) references eb_p(id) on update cascade
+);
+insert into eb_p values (2, 'two');
+insert into eb_c values (1, 2);
+data branch create table eb_src from eb_p;
+begin;
+update eb_src set v = 'pre' where id = 2;
+update eb_src set id = 3 where id = 2;
+commit;
+data branch merge eb_src into eb_p when conflict accept;
+select id, v from eb_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  pre
+select id, pid from eb_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table ee_p (id int primary key, v varchar(32));
+create table ee_c (
+id int primary key,
+pid int,
+constraint fk_ee foreign key (pid) references ee_p(id) on update cascade
+);
+insert into ee_p values (2, 'two');
+insert into ee_c values (1, 2);
+data branch create table ee_src from ee_p;
+begin;
+update ee_src set id = 3 where id = 2;
+update ee_src set v = 'post' where id = 3;
+commit;
+set @eel = (select rel_id from mo_catalog.mo_tables where relname = 'ee_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eel;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge ee_src into ee_p when conflict accept;
+select id, v from ee_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  post
+select id, pid from ee_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table em_p (id int primary key, v varchar(32));
+create table em_c (
+id int primary key,
+pid int,
+constraint fk_em foreign key (pid) references em_p(id) on update cascade
+);
+insert into em_p values (2, 'two');
+insert into em_c values (1, 2);
+data branch create table em_src from em_p;
+begin;
+update em_src set id = 3 where id = 2;
+update em_src set v = 'mid' where id = 3;
+update em_src set id = 4 where id = 3;
+commit;
+set @eml = (select rel_id from mo_catalog.mo_tables where relname = 'em_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eml;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge em_src into em_p when conflict accept;
+select id, v from em_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  mid
+select id, pid from em_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  4
+create table ea_p (id int primary key, v varchar(32));
+create table ea_c (
+id int primary key,
+pid int,
+constraint fk_ea foreign key (pid) references ea_p(id) on update cascade
+);
+insert into ea_p values (2, 'two');
+insert into ea_c values (1, 2);
+data branch create table ea_src from ea_p;
+begin;
+update ea_src set id = 3 where id = 2;
+delete from ea_src where id = 3;
+insert into ea_src values (3, 'impostor');
+commit;
+set @eal = (select rel_id from mo_catalog.mo_tables where relname = 'ea_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eal;
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch merge ea_src into ea_p when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from ea_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from ea_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table ec_p (id int primary key, v varchar(32));
+create table ec_c (
+id int primary key,
+pid int,
+constraint fk_ec foreign key (pid) references ec_p(id) on update cascade
+);
+create table ec_fill (id int primary key);
+insert into ec_p values (2, 'two');
+insert into ec_c values (1, 2);
+data branch create table ec_src from ec_p;
+begin;
+update ec_src set id = 3 where id = 2;
+insert into ec_fill values (1);
+insert into ec_fill values (2);
+insert into ec_fill values (3);
+insert into ec_fill values (4);
+insert into ec_fill values (5);
+insert into ec_fill values (6);
+insert into ec_fill values (7);
+insert into ec_fill values (8);
+insert into ec_fill values (9);
+insert into ec_fill values (10);
+insert into ec_fill values (11);
+insert into ec_fill values (12);
+insert into ec_fill values (13);
+insert into ec_fill values (14);
+insert into ec_fill values (15);
+insert into ec_fill values (16);
+insert into ec_fill values (17);
+insert into ec_fill values (18);
+insert into ec_fill values (19);
+insert into ec_fill values (20);
+insert into ec_fill values (21);
+insert into ec_fill values (22);
+insert into ec_fill values (23);
+insert into ec_fill values (24);
+insert into ec_fill values (25);
+insert into ec_fill values (26);
+insert into ec_fill values (27);
+insert into ec_fill values (28);
+insert into ec_src values (99, 'tail');
+commit;
+set @ecl = (select rel_id from mo_catalog.mo_tables where relname = 'ec_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ecl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge ec_src into ec_p when conflict accept;
+select id, v from ec_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two  𝄀
+99  ¦  tail
+select id, pid from ec_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table er_p (id int primary key, v varchar(16));
+create table er_c (
+id int primary key,
+pid int,
+constraint fk_er foreign key (pid) references er_p(id) on update cascade
+);
+insert into er_p values (1, 'A'), (2, 'B'), (3, 'C');
+insert into er_c values (11, 1), (12, 2);
+data branch create table er_src from er_p;
+delete from er_p where id = 3;
+update er_p set id = 5 where id = 1;
+update er_p set id = 3 where id = 2;
+delete from er_src where id = 3;
+update er_src set id = 3, v = 'A2' where id = 1;
+update er_src set id = 4, v = 'B2' where id = 2;
+data branch merge er_src into er_p when conflict accept;
+select id, v from er_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  A2  𝄀
+4  ¦  B2
+select id, pid from er_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+11  ¦  3  𝄀
+12  ¦  4
+create table es_p (id int primary key, v varchar(9024));
+create table es_c (
+id int primary key,
+pid int,
+constraint fk_es foreign key (pid) references es_p(id) on update cascade
+);
+insert into es_p select result, repeat('a', 9000) from generate_series(1, 48) g;
+insert into es_c values (1, 1), (48, 48);
+data branch create table es_src from es_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.es_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.es_src)[-6,8,0]  𝄀
+1
+update es_src set id = id + 1000;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+data branch merge es_src into es_p when conflict accept;
+select min(id), max(id), count(*) from es_p;
+➤ min(id)[4,32,0]  ¦  max(id)[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1001  ¦  1048  ¦  48
+select count(*) from es_c where pid between 1001 and 1048;
+➤ count(*)[-5,64,0]  𝄀
+2
+set @esl = (select rel_id from mo_catalog.mo_tables where relname = 'es_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esl;
+➤ count(*)[-5,64,0]  𝄀
+48
+create table esf_p (id int primary key, v varchar(9024));
+create table esf_c (
+id int primary key,
+pid int,
+constraint fk_esf foreign key (pid) references esf_p(id) on update cascade
+);
+insert into esf_p select result, repeat('b', 9000) from generate_series(1, 64) g;
+insert into esf_c values (1, 1), (64, 64);
+data branch create table esf_src from esf_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.esf_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.esf_src)[-6,8,0]  𝄀
+1
+update esf_src set id = id + 1000;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+data branch merge esf_src into esf_p when conflict accept;
+select min(id), max(id), count(*) from esf_p;
+➤ min(id)[4,32,0]  ¦  max(id)[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1001  ¦  1064  ¦  64
+select count(*) from esf_c where pid between 1001 and 1064;
+➤ count(*)[-5,64,0]  𝄀
+2
+set @esfl = (select rel_id from mo_catalog.mo_tables where relname = 'esf_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esfl;
+➤ count(*)[-5,64,0]  𝄀
+64
+create table esr_p (id int primary key, v varchar(9024));
+create table esr_c (
+id int primary key,
+pid int,
+constraint fk_esr foreign key (pid) references esr_p(id) on update restrict
+);
+insert into esr_p select result, repeat('c', 9000) from generate_series(1, 8) g;
+insert into esr_c values (1, 1), (8, 8);
+data branch create table esr_src from esr_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.esr_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.esr_src)[-6,8,0]  𝄀
+1
+update esr_src set id = id + 100;
+set @esrl = (select rel_id from mo_catalog.mo_tables where relname = 'esr_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esrl;
+➤ count(*)[-5,64,0]  𝄀
+8
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+data branch merge esr_src into esr_p when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, length(v) from esr_p order by id;
+➤ id[4,32,0]  ¦  length(v)[-5,64,0]  𝄀
+1  ¦  9000  𝄀
+2  ¦  9000  𝄀
+3  ¦  9000  𝄀
+4  ¦  9000  𝄀
+5  ¦  9000  𝄀
+6  ¦  9000  𝄀
+7  ¦  9000  𝄀
+8  ¦  9000
+select id, pid from esr_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  1  𝄀
+8  ¦  8
+create table esd_p (id int primary key, v varchar(9024));
+create table esd_c (
+id int primary key,
+pid int,
+constraint fk_esd foreign key (pid) references esd_p(id) on update cascade
+);
+insert into esd_p select result, repeat('d', 9000) from generate_series(1, 8) g;
+insert into esd_c values (1, 1), (8, 8), (77, 2);
+data branch create table esd_src from esd_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.esd_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.esd_src)[-6,8,0]  𝄀
+1
+begin;
+update esd_src set id = 1000, v = repeat('m', 9000) where id = 2;
+delete from esd_src where id = 1000;
+insert into esd_src values (1000, repeat('z', 9000));
+commit;
+set @esdl = (select rel_id from mo_catalog.mo_tables where relname = 'esd_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esdl;
+➤ count(*)[-5,64,0]  𝄀
+0
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+data branch merge esd_src into esd_p when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select count(*) from esd_p;
+➤ count(*)[-5,64,0]  𝄀
+8
+select id, length(v) from esd_p where id = 2;
+➤ id[4,32,0]  ¦  length(v)[-5,64,0]  𝄀
+2  ¦  9000
+select id, pid from esd_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  1  𝄀
+8  ¦  8  𝄀
+77  ¦  2
+create table esh_p (id int primary key, v varchar(9024));
+create table esh_c (
+id int primary key,
+pid int,
+constraint fk_esh foreign key (pid) references esh_p(id) on update cascade
+);
+insert into esh_p select result, repeat('h', 9000) from generate_series(1, 8) g;
+insert into esh_c values (77, 2);
+data branch create table esh_src from esh_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.esh_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.esh_src)[-6,8,0]  𝄀
+1
+begin;
+update esh_src set id = 1000, v = repeat('m', 9000) where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update esh_src set v = repeat('n', 9000) where id = 1000;
+commit;
+set @eshl = (select rel_id from mo_catalog.mo_tables where relname = 'esh_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eshl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge esh_src into esh_p when conflict accept;
+select id, substr(v, 1, 1) from esh_p where id = 1000;
+➤ id[4,32,0]  ¦  substr(v, 1, 1)[12,1,0]  𝄀
+1000  ¦  n
+select id, pid from esh_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+77  ¦  1000
+create table esa_p (id int primary key, v varchar(9024));
+create table esa_c (
+id int primary key,
+pid int,
+constraint fk_esa foreign key (pid) references esa_p(id) on update cascade
+);
+insert into esa_p select result, repeat('a', 9000) from generate_series(1, 8) g;
+insert into esa_c values (77, 2);
+data branch create table esa_src from esa_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.esa_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.esa_src)[-6,8,0]  𝄀
+1
+begin;
+update esa_src set id = 1000, v = repeat('m', 9000) where id = 2;
+update esa_src set v = repeat('n', 9000) where id = 1000;
+commit;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+set @esal = (select rel_id from mo_catalog.mo_tables where relname = 'esa_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esal;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge esa_src into esa_p when conflict accept;
+select id, substr(v, 1, 1) from esa_p where id = 1000;
+➤ id[4,32,0]  ¦  substr(v, 1, 1)[12,1,0]  𝄀
+1000  ¦  n
+select id, pid from esa_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+77  ¦  1000
+create table esl_p (id int primary key, v varchar(9024));
+create table esl_c (
+id int primary key,
+pid int,
+constraint fk_esl foreign key (pid) references esl_p(id) on update cascade
+);
+insert into esl_p select result, repeat('l', 9000) from generate_series(1, 8) g;
+insert into esl_c values (77, 2);
+data branch create table esl_src from esl_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.esl_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.esl_src)[-6,8,0]  𝄀
+1
+begin;
+update esl_src set id = 1000, v = repeat('m', 9000) where id = 2;
+update esl_src set id = 1001, v = repeat('n', 9000) where id = 1000;
+commit;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+set @esll = (select rel_id from mo_catalog.mo_tables where relname = 'esl_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esll;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge esl_src into esl_p when conflict accept;
+select count(*) from esl_p;
+➤ count(*)[-5,64,0]  𝄀
+8
+select id, length(v) from esl_p where id = 2;
+➤ id[4,32,0]  ¦  length(v)[-5,64,0]
+select id, length(v) from esl_p where id = 1001;
+➤ id[4,32,0]  ¦  length(v)[-5,64,0]  𝄀
+1001  ¦  9000
+select id, pid from esl_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+77  ¦  1001
+create table emc_p (id int primary key, v varchar(9024));
+create table emc_c (
+id int primary key,
+pid int,
+constraint fk_emc foreign key (pid) references emc_p(id) on update cascade
+);
+insert into emc_p select result, repeat('l', 9000) from generate_series(1, 8) g;
+insert into emc_c values (77, 2);
+data branch create table emc_src from emc_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.emc_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.emc_src)[-6,8,0]  𝄀
+1
+begin;
+update emc_src set id = 1000, v = repeat('m', 9000) where id = 2;
+update emc_src set id = 1001, v = repeat('n', 9000) where id = 1000;
+insert into emc_src values (1000, repeat('z', 9000));
+commit;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+set @emcl = (select rel_id from mo_catalog.mo_tables where relname = 'emc_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @emcl;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge emc_src into emc_p when conflict accept;
+select count(*) from emc_p;
+➤ count(*)[-5,64,0]  𝄀
+9
+select id, substr(v, 1, 1) from emc_p where id in (2, 1000, 1001) order by id;
+➤ id[4,32,0]  ¦  substr(v, 1, 1)[12,1,0]  𝄀
+1000  ¦  z  𝄀
+1001  ¦  n
+select id, pid from emc_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+77  ¦  1001
+create table esp_p (id int primary key, v varchar(32));
+create table esp_c (
+id int primary key,
+pid int,
+constraint fk_esp foreign key (pid) references esp_p(id) on update cascade
+);
+insert into esp_p values (2, 'two');
+insert into esp_c values (1, 2);
+create table esp_filler (id int primary key, b int);
+insert into esp_filler values (1, 1);
+data branch create table esp_src from esp_p;
+begin;
+update esp_src set id = 3, v = 'two' where id = 2;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/workspace_force_flush',':::','echo',0,'');
+➤ add_fault_point(fj/cn/workspace_force_flush, :::, echo, 0, )[-6,8,0]  𝄀
+1
+update esp_filler set b = 9 where id = 1;
+select remove_fault_point('fj/cn/workspace_force_flush');
+➤ remove_fault_point(fj/cn/workspace_force_flush)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+delete from esp_src where id = 3;
+insert into esp_src values (3, 'impostor');
+commit;
+set @espl = (select rel_id from mo_catalog.mo_tables where relname = 'esp_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @espl;
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch merge esp_src into esp_p when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from esp_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from esp_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table esk_p (id int primary key, v varchar(32));
+insert into esk_p values (1, 'a'), (2, 'b');
+data branch create table esk_src from esk_p;
+update esk_p set id = 3, v = 'A-dst' where id = 1;
+update esk_p set id = 4, v = 'B-dst' where id = 2;
+update esk_src set id = 3, v = 'A-src' where id = 1;
+update esk_src set id = 4, v = 'B-src' where id = 2;
+data branch merge esk_src into esk_p when conflict accept;
+select id, v from esk_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  A-src  𝄀
+4  ¦  B-src
+create table esx_p (id int primary key, v varchar(32));
+insert into esx_p values (1, 'a'), (2, 'b'), (6, 'six');
+data branch create table esx_src from esx_p;
+update esx_p set id = 3, v = 'A-dst' where id = 1;
+update esx_src set id = 3, v = 'A-src' where id = 1;
+update esx_src set id = 4, v = 'B-src' where id = 2;
+update esx_src set id = 7, v = 'X-src' where id = 6;
+data branch merge esx_src into esx_p when conflict accept;
+select id, v from esx_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  A-src  𝄀
+4  ¦  B-src  𝄀
+7  ¦  X-src
+create table ecm_p (id int primary key, v varchar(32));
+create table ecm_c (
+id int primary key,
+pid int,
+constraint fk_ecm foreign key (pid) references ecm_p(id) on update cascade
+);
+insert into ecm_p values (2, 'two');
+insert into ecm_c values (1, 2);
+data branch create table ecm_src from ecm_p;
+begin;
+update ecm_src set v = 'edited' where id = 2;
+insert into ecm_src values (101, 'pad');
+insert into ecm_src values (102, 'pad');
+insert into ecm_src values (103, 'pad');
+insert into ecm_src values (104, 'pad');
+insert into ecm_src values (105, 'pad');
+insert into ecm_src values (106, 'pad');
+insert into ecm_src values (107, 'pad');
+insert into ecm_src values (108, 'pad');
+insert into ecm_src values (109, 'pad');
+insert into ecm_src values (110, 'pad');
+insert into ecm_src values (111, 'pad');
+insert into ecm_src values (112, 'pad');
+insert into ecm_src values (113, 'pad');
+insert into ecm_src values (114, 'pad');
+insert into ecm_src values (115, 'pad');
+insert into ecm_src values (116, 'pad');
+insert into ecm_src values (117, 'pad');
+insert into ecm_src values (118, 'pad');
+insert into ecm_src values (119, 'pad');
+insert into ecm_src values (120, 'pad');
+insert into ecm_src values (121, 'pad');
+insert into ecm_src values (122, 'pad');
+insert into ecm_src values (123, 'pad');
+insert into ecm_src values (124, 'pad');
+insert into ecm_src values (125, 'pad');
+insert into ecm_src values (126, 'pad');
+insert into ecm_src values (127, 'pad');
+insert into ecm_src values (128, 'pad');
+insert into ecm_src values (129, 'pad');
+insert into ecm_src values (130, 'pad');
+insert into ecm_src values (131, 'pad');
+insert into ecm_src values (132, 'pad');
+insert into ecm_src values (133, 'pad');
+update ecm_src set id = 3 where id = 2;
+commit;
+set @ecml = (select rel_id from mo_catalog.mo_tables where relname = 'ecm_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ecml;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ecml and hex(old_row_id) like '000000000000000000000000000000FF%';
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch merge ecm_src into ecm_p when conflict accept;
+select count(*) from ecm_p;
+➤ count(*)[-5,64,0]  𝄀
+34
+select id, v from ecm_p where id in (2, 3);
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  edited
+select id, pid from ecm_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table erb_p (id int primary key, v varchar(32));
+create table erb_c (
+id int primary key,
+pid int,
+constraint fk_erb foreign key (pid) references erb_p(id) on update cascade
+);
+insert into erb_p values (2, 'two'), (8, 'eight'), (9, 'nine');
+insert into erb_c values (1, 2);
+data branch create table erb_src from erb_p;
+alter table erb_src add unique key uq_erb(v);
+begin;
+update erb_src set id = 3 where id = 2;
+update erb_src set v = 'edited' where id = 3;
+update erb_src set v = 'nine' where id in (3, 8);
+-- @regex("Duplicate entry", true)
+Duplicate entry 'nine' for key 'v'
+update erb_src set v = 'final' where id = 3;
+commit;
+set @erbl = (select rel_id from mo_catalog.mo_tables where relname = 'erb_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @erbl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge erb_src into erb_p when conflict accept;
+select id, v from erb_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  final  𝄀
+8  ¦  eight  𝄀
+9  ¦  nine
+select id, pid from erb_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table ev_p (id int primary key, v varchar(9024));
+create table ev_c (
+id int primary key,
+pid int,
+constraint fk_ev foreign key (pid) references ev_p(id) on update cascade
+);
+insert into ev_p values (2, repeat('a', 9000)), (3, repeat('b', 9000));
+insert into ev_c values (1, 2), (2, 3);
+data branch create table ev_src from ev_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.ev_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.ev_src)[-6,8,0]  𝄀
+1
+begin;
+update ev_src set id = 4 where id = 3;
+update ev_src set id = 3 where id = 2;
+commit;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+set @evl = (select rel_id from mo_catalog.mo_tables where relname = 'ev_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @evl;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge ev_src into ev_p when conflict accept;
+select id, substr(v, 1, 1) from ev_p order by id;
+➤ id[4,32,0]  ¦  substr(v, 1, 1)[12,1,0]  𝄀
+3  ¦  a  𝄀
+4  ¦  b
+select id, pid from ev_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  4
+create table esv_p (id int primary key, v varchar(32));
+create table esv_c (
+id int primary key,
+pid int,
+constraint fk_esv foreign key (pid) references esv_p(id) on update cascade
+);
+insert into esv_p values (2, 'two');
+insert into esv_c values (1, 2);
+data branch create table esv_br from esv_p;
+update esv_br set id = 3 where id = 2;
+data branch merge esv_br into esv_p when conflict accept;
+set @esvp = (select rel_id from mo_catalog.mo_tables where relname = 'esv_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esvp;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop snapshot if exists esv_sp;
+create snapshot esv_sp for table branch_merge_fk_pk_move esv_p;
+drop table esv_br;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esvp;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop snapshot esv_sp;
+data branch create table esv_b2 from esv_p;
+drop table esv_b2;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esvp;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table ew_p (id int primary key, v varchar(32));
+create table ew_c (
+id int primary key,
+pid int,
+constraint fk_ew foreign key (pid) references ew_p(id) on update cascade
+);
+insert into ew_p values (2, 'A0'), (3, 'B0');
+insert into ew_c values (1, 2), (2, 3);
+data branch create table ew_src from ew_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.ew_src');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.ew_src)[-6,8,0]  𝄀
+1
+begin;
+update ew_src set v = 'B1' where id = 3;
+update ew_src set id = 4 where id = 3;
+update ew_src set id = 3 where id = 2;
+commit;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+set @ewl = (select rel_id from mo_catalog.mo_tables where relname = 'ew_src' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ewl;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge ew_src into ew_p when conflict accept;
+select id, v from ew_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  A0  𝄀
+4  ¦  B1
+select id, pid from ew_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  4
+create table eh31_p (id int primary key, v varchar(32));
+create table eh31_c (
+id int primary key,
+pid int,
+constraint fk_eh31 foreign key (pid) references eh31_p(id) on update cascade
+);
+insert into eh31_p values (1, 'p1');
+insert into eh31_c values (1, 1);
+data branch create table eh31_s from eh31_p;
+update eh31_s set id = 2 where id = 1;
+update eh31_s set id = 3 where id = 2;
+update eh31_s set id = 4 where id = 3;
+update eh31_s set id = 5 where id = 4;
+update eh31_s set id = 6 where id = 5;
+update eh31_s set id = 7 where id = 6;
+update eh31_s set id = 8 where id = 7;
+update eh31_s set id = 9 where id = 8;
+update eh31_s set id = 10 where id = 9;
+update eh31_s set id = 11 where id = 10;
+update eh31_s set id = 12 where id = 11;
+update eh31_s set id = 13 where id = 12;
+update eh31_s set id = 14 where id = 13;
+update eh31_s set id = 15 where id = 14;
+update eh31_s set id = 16 where id = 15;
+update eh31_s set id = 17 where id = 16;
+update eh31_s set id = 18 where id = 17;
+update eh31_s set id = 19 where id = 18;
+update eh31_s set id = 20 where id = 19;
+update eh31_s set id = 21 where id = 20;
+update eh31_s set id = 22 where id = 21;
+update eh31_s set id = 23 where id = 22;
+update eh31_s set id = 24 where id = 23;
+update eh31_s set id = 25 where id = 24;
+update eh31_s set id = 26 where id = 25;
+update eh31_s set id = 27 where id = 26;
+update eh31_s set id = 28 where id = 27;
+update eh31_s set id = 29 where id = 28;
+update eh31_s set id = 30 where id = 29;
+update eh31_s set id = 31 where id = 30;
+update eh31_s set id = 32 where id = 31;
+set @eh31l = (select rel_id from mo_catalog.mo_tables where relname = 'eh31_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eh31l;
+➤ count(*)[-5,64,0]  𝄀
+31
+data branch merge eh31_s into eh31_p when conflict accept;
+select id, v from eh31_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+32  ¦  p1
+select id, pid from eh31_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  32
+create table eh32_p (id int primary key, v varchar(32));
+create table eh32_c (
+id int primary key,
+pid int,
+constraint fk_eh32 foreign key (pid) references eh32_p(id) on update cascade
+);
+insert into eh32_p values (1, 'p1');
+insert into eh32_c values (1, 1);
+data branch create table eh32_s from eh32_p;
+update eh32_s set id = 2 where id = 1;
+update eh32_s set id = 3 where id = 2;
+update eh32_s set id = 4 where id = 3;
+update eh32_s set id = 5 where id = 4;
+update eh32_s set id = 6 where id = 5;
+update eh32_s set id = 7 where id = 6;
+update eh32_s set id = 8 where id = 7;
+update eh32_s set id = 9 where id = 8;
+update eh32_s set id = 10 where id = 9;
+update eh32_s set id = 11 where id = 10;
+update eh32_s set id = 12 where id = 11;
+update eh32_s set id = 13 where id = 12;
+update eh32_s set id = 14 where id = 13;
+update eh32_s set id = 15 where id = 14;
+update eh32_s set id = 16 where id = 15;
+update eh32_s set id = 17 where id = 16;
+update eh32_s set id = 18 where id = 17;
+update eh32_s set id = 19 where id = 18;
+update eh32_s set id = 20 where id = 19;
+update eh32_s set id = 21 where id = 20;
+update eh32_s set id = 22 where id = 21;
+update eh32_s set id = 23 where id = 22;
+update eh32_s set id = 24 where id = 23;
+update eh32_s set id = 25 where id = 24;
+update eh32_s set id = 26 where id = 25;
+update eh32_s set id = 27 where id = 26;
+update eh32_s set id = 28 where id = 27;
+update eh32_s set id = 29 where id = 28;
+update eh32_s set id = 30 where id = 29;
+update eh32_s set id = 31 where id = 30;
+update eh32_s set id = 32 where id = 31;
+update eh32_s set id = 33 where id = 32;
+set @eh32l = (select rel_id from mo_catalog.mo_tables where relname = 'eh32_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eh32l;
+➤ count(*)[-5,64,0]  𝄀
+32
+data branch merge eh32_s into eh32_p when conflict accept;
+select id, v from eh32_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+33  ¦  p1
+select id, pid from eh32_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  33
+create table eh33_p (id int primary key, v varchar(32));
+create table eh33_c (
+id int primary key,
+pid int,
+constraint fk_eh33 foreign key (pid) references eh33_p(id) on update cascade on delete cascade
+);
+insert into eh33_p values (1, 'p1');
+insert into eh33_c values (1, 1);
+data branch create table eh33_s from eh33_p;
+update eh33_s set id = 2 where id = 1;
+update eh33_s set id = 3 where id = 2;
+update eh33_s set id = 4 where id = 3;
+update eh33_s set id = 5 where id = 4;
+update eh33_s set id = 6 where id = 5;
+update eh33_s set id = 7 where id = 6;
+update eh33_s set id = 8 where id = 7;
+update eh33_s set id = 9 where id = 8;
+update eh33_s set id = 10 where id = 9;
+update eh33_s set id = 11 where id = 10;
+update eh33_s set id = 12 where id = 11;
+update eh33_s set id = 13 where id = 12;
+update eh33_s set id = 14 where id = 13;
+update eh33_s set id = 15 where id = 14;
+update eh33_s set id = 16 where id = 15;
+update eh33_s set id = 17 where id = 16;
+update eh33_s set id = 18 where id = 17;
+update eh33_s set id = 19 where id = 18;
+update eh33_s set id = 20 where id = 19;
+update eh33_s set id = 21 where id = 20;
+update eh33_s set id = 22 where id = 21;
+update eh33_s set id = 23 where id = 22;
+update eh33_s set id = 24 where id = 23;
+update eh33_s set id = 25 where id = 24;
+update eh33_s set id = 26 where id = 25;
+update eh33_s set id = 27 where id = 26;
+update eh33_s set id = 28 where id = 27;
+update eh33_s set id = 29 where id = 28;
+update eh33_s set id = 30 where id = 29;
+update eh33_s set id = 31 where id = 30;
+update eh33_s set id = 32 where id = 31;
+update eh33_s set id = 33 where id = 32;
+update eh33_s set id = 34 where id = 33;
+set @eh33l = (select rel_id from mo_catalog.mo_tables where relname = 'eh33_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eh33l;
+➤ count(*)[-5,64,0]  𝄀
+33
+data branch merge eh33_s into eh33_p when conflict accept;
+-- @regex("could not be resolved completely", true)
+internal error: data branch cannot apply 1 tombstone row(s): their recorded primary-key update provenance could not be resolved completely (evidence budget, chain hop limit, or ambiguous stream evidence); the apply is aborted so declared ON UPDATE actions are never replaced by destructive deletes
+select id, v from eh33_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+1  ¦  p1
+select id, pid from eh33_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  1
+create table esn_p (id int primary key, v varchar(32));
+create table esn_c (
+id int primary key,
+pid int,
+constraint fk_esn foreign key (pid) references esn_p(id) on update set null
+);
+insert into esn_p values (2, 'two');
+insert into esn_c values (1, 2);
+data branch create table esn_s from esn_p;
+update esn_s set id = 3 where id = 2;
+data branch merge esn_s into esn_p when conflict accept;
+select id, v from esn_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from esn_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  null
+create table ecyc_p (id int primary key, v varchar(32));
+create table ecyc_c (
+id int primary key,
+pid int,
+constraint fk_ecyc foreign key (pid) references ecyc_p(id) on update cascade on delete cascade
+);
+insert into ecyc_p values (2, 'two'), (3, 'three');
+insert into ecyc_c values (1, 2), (2, 3);
+data branch create table ecyc_s from ecyc_p;
+update ecyc_s set id = 4 where id = 2;
+update ecyc_s set id = 2 where id = 3;
+update ecyc_s set id = 3 where id = 4;
+set @ecycl = (select rel_id from mo_catalog.mo_tables where relname = 'ecyc_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ecycl;
+➤ count(*)[-5,64,0]  𝄀
+3
+data branch merge ecyc_s into ecyc_p when conflict accept;
+-- @regex("key rotation cycle", true)
+internal error: data branch cannot apply 2 primary-key update(s) whose landed keys participate in a key rotation cycle: a cycle cannot be replayed as native UPDATEs, and replaying it as DELETE+INSERT would silently detach dependents onto the wrong lineage; the apply is aborted statement-atomically so declared ON UPDATE actions are never silently lost. Rework the source branch so the lineage does not rotate keys (delete and re-insert the rows instead of updating their keys) and retry
+select id, v from ecyc_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two  𝄀
+3  ¦  three
+select id, pid from ecyc_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3
+create table eso_p (id int primary key, v varchar(32));
+create table eso_c (
+id int primary key,
+pid int,
+constraint fk_eso foreign key (pid) references eso_p(id) on update cascade
+);
+insert into eso_p values (99, 'stay');
+insert into eso_c values (1, 99);
+data branch create table eso_s from eso_p;
+insert into eso_s values (2, 'gone');
+update eso_s set id = 3 where id = 2;
+delete from eso_s where id = 3;
+set @esol = (select rel_id from mo_catalog.mo_tables where relname = 'eso_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esol;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge eso_s into eso_p when conflict accept;
+select id, v from eso_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+99  ¦  stay
+select id, pid from eso_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  99
+create table ere_p (id int primary key, v varchar(32));
+create table ere_c (
+id int primary key,
+pid int,
+constraint fk_ere foreign key (pid) references ere_p(id) on update cascade on delete cascade
+);
+insert into ere_p values (2, 'two');
+insert into ere_c values (1, 2);
+data branch create table ere_s from ere_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.ere_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.ere_s)[-6,8,0]  𝄀
+1
+begin;
+update ere_s set id = 3 where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update ere_s set v = 'e1' where id = 3;
+update ere_s set v = 'e2' where id = 3;
+commit;
+set @erel = (select rel_id from mo_catalog.mo_tables where relname = 'ere_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @erel;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge ere_s into ere_p when conflict accept;
+select id, v from ere_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  e2
+select id, pid from ere_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table ews_p (id int primary key, v varchar(32));
+create table ews_c (
+id int primary key,
+pid int,
+constraint fk_ews foreign key (pid) references ews_p(id) on update cascade
+);
+insert into ews_p values (2, 'two');
+insert into ews_c values (1, 2);
+create table ews_filler (id int primary key, b int);
+insert into ews_filler values (1, 1);
+data branch create table ews_s from ews_p;
+begin;
+update ews_s set id = 3 where id = 2;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/workspace_force_flush',':::','echo',0,'');
+➤ add_fault_point(fj/cn/workspace_force_flush, :::, echo, 0, )[-6,8,0]  𝄀
+1
+update ews_filler set b = 9 where id = 1;
+select remove_fault_point('fj/cn/workspace_force_flush');
+➤ remove_fault_point(fj/cn/workspace_force_flush)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update ews_s set id = 4 where id = 3;
+commit;
+set @ewsl = (select rel_id from mo_catalog.mo_tables where relname = 'ews_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ewsl;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge ews_s into ews_p when conflict accept;
+select id, v from ews_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  two
+select id, pid from ews_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  4
+create table ero_p (id int primary key, v varchar(32));
+create table ero_c (
+id int primary key,
+pid int,
+constraint fk_ero foreign key (pid) references ero_p(id) on update cascade
+);
+insert into ero_p values (2, 'two');
+insert into ero_c values (1, 2);
+data branch create table ero_s from ero_p;
+update ero_s set id = 3 where id = 2;
+update ero_s set id = 2, v = 'two-b' where id = 3;
+set @erol = (select rel_id from mo_catalog.mo_tables where relname = 'ero_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @erol;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge ero_s into ero_p when conflict accept;
+select id, v from ero_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two-b
+select id, pid from ero_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table eru_p (id int primary key, v varchar(32));
+create table eru_c (
+id int primary key,
+pid int,
+constraint fk_eru foreign key (pid) references eru_p(id) on update cascade
+);
+insert into eru_p values (2, 'two');
+insert into eru_c values (1, 2);
+data branch create table eru_s from eru_p;
+update eru_s set id = 3 where id = 2;
+update eru_s set id = 2 where id = 3;
+set @erul = (select rel_id from mo_catalog.mo_tables where relname = 'eru_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @erul;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge eru_s into eru_p when conflict accept;
+select id, v from eru_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from eru_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table eef_p (id int primary key, v varchar(32));
+create table eef_c (
+id int primary key,
+pid int,
+constraint fk_eef foreign key (pid) references eef_p(id)
+on update cascade on delete cascade
+);
+insert into eef_p values (2, 'two');
+insert into eef_c values (1, 2);
+create table eef_f (id int primary key, b int);
+insert into eef_f values (1, 1);
+data branch create table eef_s from eef_p;
+begin;
+update eef_s set v = 'edited' where id = 2;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/workspace_force_flush',':::','echo',0,'');
+➤ add_fault_point(fj/cn/workspace_force_flush, :::, echo, 0, )[-6,8,0]  𝄀
+1
+update eef_f set b = 9 where id = 1;
+select remove_fault_point('fj/cn/workspace_force_flush');
+➤ remove_fault_point(fj/cn/workspace_force_flush)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update eef_s set id = 3 where id = 2;
+commit;
+set @eefl = (select rel_id from mo_catalog.mo_tables where relname = 'eef_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eefl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge eef_s into eef_p when conflict accept;
+select id, v from eef_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  edited
+select id, pid from eef_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table ehc_p (id int primary key, v varchar(32));
+create table ehc_c (
+id int primary key,
+pid int,
+constraint fk_ehc foreign key (pid) references ehc_p(id) on update cascade
+);
+insert into ehc_p values (2, 'two');
+insert into ehc_c values (1, 2);
+data branch create table ehc_s from ehc_p;
+begin;
+update ehc_s set id = 3 where id = 2;
+update ehc_s set id = 2, v = 'two-b' where id = 3;
+commit;
+set @ehcl = (select rel_id from mo_catalog.mo_tables where relname = 'ehc_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ehcl;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge ehc_s into ehc_p when conflict accept;
+select id, v from ehc_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two-b
+select id, pid from ehc_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table ehu_p (id int primary key, v varchar(32));
+create table ehu_c (
+id int primary key,
+pid int,
+constraint fk_ehu foreign key (pid) references ehu_p(id) on update cascade
+);
+insert into ehu_p values (2, 'two');
+insert into ehu_c values (1, 2);
+data branch create table ehu_s from ehu_p;
+begin;
+update ehu_s set id = 3 where id = 2;
+update ehu_s set id = 2 where id = 3;
+commit;
+set @ehul = (select rel_id from mo_catalog.mo_tables where relname = 'ehu_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ehul;
+➤ count(*)[-5,64,0]  𝄀
+2
+data branch merge ehu_s into ehu_p when conflict accept;
+select id, v from ehu_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from ehu_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table etn_p (id int primary key, v varchar(32));
+insert into etn_p values (2, 'two');
+data branch create table etn_s from etn_p;
+update etn_s set id = 3 where id = 2;
+delete from etn_s where id = 3;
+set @etnl = (select rel_id from mo_catalog.mo_tables where relname = 'etn_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etnl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etn_s into etn_p when conflict accept;
+select id, v from etn_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]
+create table etc_p (id int primary key, v varchar(32));
+create table etc_c (
+id int primary key,
+pid int,
+constraint fk_etc foreign key (pid) references etc_p(id)
+on update cascade on delete cascade
+);
+insert into etc_p values (2, 'two');
+insert into etc_c values (1, 2);
+data branch create table etc_s from etc_p;
+update etc_s set id = 3 where id = 2;
+delete from etc_s where id = 3;
+set @etcl = (select rel_id from mo_catalog.mo_tables where relname = 'etc_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etcl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etc_s into etc_p when conflict accept;
+select id, v from etc_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]
+select id, pid from etc_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]
+create table etr_p (id int primary key, v varchar(32));
+create table etr_c (
+id int primary key,
+pid int,
+constraint fk_etr foreign key (pid) references etr_p(id) on update cascade
+);
+insert into etr_p values (2, 'two');
+insert into etr_c values (1, 2);
+data branch create table etr_s from etr_p;
+update etr_s set id = 3 where id = 2;
+delete from etr_s where id = 3;
+set @etrl = (select rel_id from mo_catalog.mo_tables where relname = 'etr_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etrl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etr_s into etr_p when conflict accept;
+-- @regex("a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from etr_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from etr_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table edv_p (id int primary key, v varchar(32));
+create table edv_c (
+id int primary key,
+pid int,
+constraint fk_edv foreign key (pid) references edv_p(id)
+on update cascade on delete cascade
+);
+insert into edv_p values (2, 'two');
+insert into edv_c values (1, 2);
+create table edv_f (id int primary key, b int);
+insert into edv_f values (1, 1);
+data branch create table edv_s from edv_p;
+begin;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.edv_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.edv_s)[-6,8,0]  𝄀
+1
+update edv_s set v = 'edited' where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+delete from edv_s where id = 2;
+insert into edv_s values (2, 'intruder');
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/workspace_force_flush',':::','echo',0,'');
+➤ add_fault_point(fj/cn/workspace_force_flush, :::, echo, 0, )[-6,8,0]  𝄀
+1
+update edv_f set b = 9 where id = 1;
+select remove_fault_point('fj/cn/workspace_force_flush');
+➤ remove_fault_point(fj/cn/workspace_force_flush)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update edv_s set id = 3 where id = 2;
+commit;
+set @edvl = (select rel_id from mo_catalog.mo_tables where relname = 'edv_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @edvl;
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch merge edv_s into edv_p when conflict accept;
+select id, v from edv_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  intruder
+select id, pid from edv_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]
+create table edr_p (id int primary key, v varchar(32));
+create table edr_c (
+id int primary key,
+pid int,
+constraint fk_edr foreign key (pid) references edr_p(id) on update cascade
+);
+insert into edr_p values (2, 'two');
+insert into edr_c values (1, 2);
+create table edr_f (id int primary key, b int);
+insert into edr_f values (1, 1);
+data branch create table edr_s from edr_p;
+begin;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.edr_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.edr_s)[-6,8,0]  𝄀
+1
+update edr_s set v = 'edited' where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+delete from edr_s where id = 2;
+insert into edr_s values (2, 'intruder');
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/workspace_force_flush',':::','echo',0,'');
+➤ add_fault_point(fj/cn/workspace_force_flush, :::, echo, 0, )[-6,8,0]  𝄀
+1
+update edr_f set b = 9 where id = 1;
+select remove_fault_point('fj/cn/workspace_force_flush');
+➤ remove_fault_point(fj/cn/workspace_force_flush)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update edr_s set id = 3 where id = 2;
+commit;
+set @edrl = (select rel_id from mo_catalog.mo_tables where relname = 'edr_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @edrl;
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch merge edr_s into edr_p when conflict accept;
+-- @regex("a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from edr_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from edr_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table ewt_p (id int primary key, v varchar(32));
+create table ewt_c (
+id int primary key,
+pid int,
+constraint fk_ewt foreign key (pid) references ewt_p(id)
+on update cascade on delete cascade
+);
+insert into ewt_p values (2, 'two');
+insert into ewt_c values (1, 2);
+data branch create table ewt_s from ewt_p;
+begin;
+update ewt_s set id = 3 where id = 2;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.ewt_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.ewt_s)[-6,8,0]  𝄀
+1
+update ewt_s set v = 'edited' where id = 3;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+commit;
+set @ewtl = (select rel_id from mo_catalog.mo_tables where relname = 'ewt_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @ewtl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge ewt_s into ewt_p when conflict accept;
+select id, v from ewt_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  edited
+select id, pid from ewt_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table esw_p (id int primary key, v varchar(32));
+create table esw_c (
+id int primary key,
+pid int,
+constraint fk_esw foreign key (pid) references esw_p(id)
+on update cascade on delete cascade
+);
+insert into esw_p values (2, 'two');
+insert into esw_c values (1, 2);
+data branch create table esw_s from esw_p;
+begin;
+update esw_s set v = 'edited1' where id = 2;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.esw_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.esw_s)[-6,8,0]  𝄀
+1
+update esw_s set v = 'edited2' where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update esw_s set id = 3 where id = 2;
+commit;
+set @eswl = (select rel_id from mo_catalog.mo_tables where relname = 'esw_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eswl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge esw_s into esw_p when conflict accept;
+select id, v from esw_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  edited2
+select id, pid from esw_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table esz_p (id int primary key, v varchar(32));
+create table esz_c (
+id int primary key,
+pid int,
+constraint fk_esz foreign key (pid) references esz_p(id)
+on update cascade on delete cascade
+);
+insert into esz_p values (2, 'two');
+insert into esz_c values (1, 2);
+data branch create table esz_s from esz_p;
+begin;
+update esz_s set v = 'edited1' where id = 2;
+update esz_s set v = 'edited2' where id = 2;
+delete from esz_s where id = 2;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/workspace_force_flush',':::','echo',0,'');
+➤ add_fault_point(fj/cn/workspace_force_flush, :::, echo, 0, )[-6,8,0]  𝄀
+1
+insert into esz_s values (2, 'intruder');
+select remove_fault_point('fj/cn/workspace_force_flush');
+➤ remove_fault_point(fj/cn/workspace_force_flush)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update esz_s set id = 3 where id = 2;
+commit;
+set @eszl = (select rel_id from mo_catalog.mo_tables where relname = 'esz_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @eszl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge esz_s into esz_p when conflict accept;
+select id, v from esz_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  intruder
+select id, pid from esz_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]
+create table eszr_p (id int primary key, v varchar(32));
+create table eszr_c (
+id int primary key,
+pid int,
+constraint fk_eszr foreign key (pid) references eszr_p(id)
+on update cascade on delete restrict
+);
+insert into eszr_p values (2, 'two');
+insert into eszr_c values (1, 2);
+data branch create table eszr_s from eszr_p;
+begin;
+update eszr_s set v = 'edited1' where id = 2;
+update eszr_s set v = 'edited2' where id = 2;
+delete from eszr_s where id = 2;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/workspace_force_flush',':::','echo',0,'');
+➤ add_fault_point(fj/cn/workspace_force_flush, :::, echo, 0, )[-6,8,0]  𝄀
+1
+insert into eszr_s values (2, 'intruder');
+select remove_fault_point('fj/cn/workspace_force_flush');
+➤ remove_fault_point(fj/cn/workspace_force_flush)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update eszr_s set id = 3 where id = 2;
+commit;
+data branch merge eszr_s into eszr_p when conflict accept;
+-- @regex("Cannot delete or update a parent row: a foreign key constraint fails", true)
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from eszr_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from eszr_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table esy_p (id int primary key, v varchar(32));
+insert into esy_p values (2, 'two');
+drop snapshot if exists esy_s1;
+create snapshot esy_s1 for table branch_merge_fk_pk_move esy_p;
+update esy_p set id = 3 where id = 2;
+drop snapshot if exists esy_s2;
+create snapshot esy_s2 for table branch_merge_fk_pk_move esy_p;
+set @esyl = (select rel_id from mo_catalog.mo_tables where relname = 'esy_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esyl;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table esy_p;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esyl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch create table esy_b1 from esy_p{snapshot="esy_s1"};
+create table esy_c (
+id int primary key,
+pid int,
+constraint fk_esy foreign key (pid) references esy_b1(id)
+on update cascade on delete cascade
+);
+insert into esy_c values (1, 2);
+data branch create table esy_b2 from esy_p{snapshot="esy_s2"};
+data branch merge esy_b2 into esy_b1 when conflict accept;
+select id, v from esy_b1 order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from esy_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table esyx_p (id int primary key, v varchar(32));
+insert into esyx_p values (2, 'two');
+drop snapshot if exists esyx_s1;
+create snapshot esyx_s1 for table branch_merge_fk_pk_move esyx_p;
+update esyx_p set id = 3 where id = 2;
+drop snapshot if exists esyx_s2;
+create snapshot esyx_s2 for table branch_merge_fk_pk_move esyx_p;
+set @esyxl = (select rel_id from mo_catalog.mo_tables where relname = 'esyx_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esyxl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch create table esyx_b1 from esyx_p{snapshot="esyx_s1"};
+create table esyx_c (
+id int primary key,
+pid int,
+constraint fk_esyx foreign key (pid) references esyx_b1(id)
+on update cascade on delete cascade
+);
+insert into esyx_c values (1, 2);
+data branch create table esyx_b2 from esyx_p{snapshot="esyx_s2"};
+data branch merge esyx_b2 into esyx_b1 when conflict accept;
+select id, v from esyx_b1 order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from esyx_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table esyr_p (id int primary key, v varchar(32));
+insert into esyr_p values (2, 'two');
+drop snapshot if exists esyr_s1;
+create snapshot esyr_s1 for table branch_merge_fk_pk_move esyr_p;
+update esyr_p set id = 3 where id = 2;
+drop snapshot if exists esyr_s2;
+create snapshot esyr_s2 for table branch_merge_fk_pk_move esyr_p;
+set @esyrl = (select rel_id from mo_catalog.mo_tables where relname = 'esyr_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esyrl;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table esyr_p;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esyrl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch create table esyr_b1 from esyr_p{snapshot="esyr_s1"};
+create table esyr_c (
+id int primary key,
+pid int,
+constraint fk_esyr foreign key (pid) references esyr_b1(id)
+on update cascade on delete restrict
+);
+insert into esyr_c values (1, 2);
+data branch create table esyr_b2 from esyr_p{snapshot="esyr_s2"};
+data branch merge esyr_b2 into esyr_b1 when conflict accept;
+select id, v from esyr_b1 order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from esyr_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table esy2_p (id int primary key, v varchar(32));
+insert into esy2_p values (2, 'two');
+update esy2_p set id = 3 where id = 2;
+set @esy2l = (select rel_id from mo_catalog.mo_tables where relname = 'esy2_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esy2l;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table esy2_p;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esy2l;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table esy3_p (id int primary key, v varchar(32));
+insert into esy3_p values (2, 'two');
+update esy3_p set id = 3 where id = 2;
+drop snapshot if exists esy3_s;
+create snapshot esy3_s for table branch_merge_fk_pk_move esy3_p;
+set @esy3l = (select rel_id from mo_catalog.mo_tables where relname = 'esy3_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esy3l;
+➤ count(*)[-5,64,0]  𝄀
+1
+truncate table esy3_p;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @esy3l;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table esqm_p (id int primary key, v varchar(32));
+insert into esqm_p values (2, 'two'), (9, 'nine');
+data branch create table esqm_src from esqm_p;
+update esqm_src set id = 3, v = 'three' where id = 2;
+delete from esqm_p where id = 2;
+data branch merge esqm_src into esqm_p when conflict accept;
+select id, v from esqm_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  three  𝄀
+9  ¦  nine
+create table esqms_p (id int primary key, v varchar(32));
+insert into esqms_p values (2, 'two'), (9, 'nine');
+data branch create table esqms_src from esqms_p;
+update esqms_src set id = 3, v = 'three' where id = 2;
+delete from esqms_p where id = 2;
+data branch merge esqms_src into esqms_p when conflict skip;
+select id, v from esqms_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+9  ¦  nine
+create table esqmf_p (id int primary key, v varchar(32));
+insert into esqmf_p values (2, 'two'), (9, 'nine');
+data branch create table esqmf_src from esqmf_p;
+update esqmf_src set id = 3, v = 'three' where id = 2;
+delete from esqmf_p where id = 2;
+data branch merge esqmf_src into esqmf_p when conflict fail;
+-- @regex("esqmf_src UPDATE and esqmf_p DELETE", true)
+internal error: conflict: esqmf_src UPDATE and esqmf_p DELETE on pk(2)
+select id, v from esqmf_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+9  ¦  nine
+create table etja_p (id int primary key, v varchar(32));
+insert into etja_p values (2, 'two');
+data branch create table etja_src from etja_p;
+update etja_src set id = 3, v = 'three' where id = 2;
+delete from etja_p where id = 2;
+insert into etja_p values (3, 'destination');
+data branch merge etja_src into etja_p when conflict accept;
+select id, v from etja_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  three
+create table etjs_p (id int primary key, v varchar(32));
+insert into etjs_p values (2, 'two');
+data branch create table etjs_src from etjs_p;
+update etjs_src set id = 3, v = 'three' where id = 2;
+delete from etjs_p where id = 2;
+insert into etjs_p values (3, 'destination');
+data branch merge etjs_src into etjs_p when conflict skip;
+select id, v from etjs_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  destination
+create table etjf_p (id int primary key, v varchar(32));
+insert into etjf_p values (2, 'two');
+data branch create table etjf_src from etjf_p;
+update etjf_src set id = 3, v = 'three' where id = 2;
+delete from etjf_p where id = 2;
+insert into etjf_p values (3, 'destination');
+data branch merge etjf_src into etjf_p when conflict fail;
+-- @regex("etjf_src UPDATE and etjf_p DELETE", true)
+internal error: conflict: etjf_src UPDATE and etjf_p DELETE on pk(2)
+select id, v from etjf_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  destination
+create table etjms_p (id int primary key, v varchar(32));
+create table etjms_c (
+id int primary key,
+pid int,
+constraint fk_etjms foreign key (pid) references etjms_p(id)
+on update cascade on delete cascade
+);
+insert into etjms_p values (11, 'a'), (12, 'b'), (13, 'c');
+insert into etjms_c values (1, 11), (2, 12), (3, 13);
+data branch create table etjms_src from etjms_p;
+begin;
+update etjms_src set id = id + 100 where id in (11, 12, 13);
+delete from etjms_src where id = 112;
+commit;
+data branch merge etjms_src into etjms_p when conflict accept;
+select id, v from etjms_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+111  ¦  a  𝄀
+113  ¦  c
+select id, pid from etjms_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  111  𝄀
+3  ¦  113
+create table etj2a_p (id int primary key, v varchar(32));
+create table etj2a_c (
+id int primary key,
+pid int,
+constraint fk_etj2a foreign key (pid) references etj2a_p(id)
+on update cascade on delete cascade
+);
+insert into etj2a_p values (2, 'two');
+insert into etj2a_c values (1, 2);
+data branch create table etj2a_src from etj2a_p;
+update etj2a_src set v = 'v1' where id = 2;
+update etj2a_src set id = 3, v = 'a-lane' where id = 2;
+data branch merge etj2a_src into etj2a_p when conflict accept;
+select id, v from etj2a_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  a-lane
+select id, pid from etj2a_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table etj2b_p (id int primary key, v varchar(32));
+create table etj2b_c (
+id int primary key,
+pid int,
+constraint fk_etj2b foreign key (pid) references etj2b_p(id)
+on update cascade on delete cascade
+);
+insert into etj2b_p values (2, 'two');
+insert into etj2b_c values (1, 2);
+data branch create table etj2b_src from etj2b_p;
+begin;
+delete from etj2b_src where id = 2;
+insert into etj2b_src values (2, 'unrelated');
+commit;
+update etj2b_src set id = 3, v = 'b-lane' where id = 2;
+data branch merge etj2b_src into etj2b_p when conflict accept;
+select id, v from etj2b_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  b-lane
+select id, pid from etj2b_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create table etj2d_p (id int primary key, v varchar(32));
+create table etj2d_c (
+id int primary key,
+pid int,
+constraint fk_etj2d foreign key (pid) references etj2d_p(id)
+on update cascade on delete cascade
+);
+insert into etj2d_p values (2, 'two');
+insert into etj2d_c values (1, 2);
+data branch create table etj2d_src from etj2d_p;
+begin;
+delete from etj2d_src where id = 2;
+insert into etj2d_src values (2, 'other');
+commit;
+data branch merge etj2d_src into etj2d_p when conflict accept;
+select id, v from etj2d_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  other
+select id, pid from etj2d_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+create table etkf1_p (id int primary key, v varchar(32));
+create table etkf1_c (
+id int primary key,
+pid int,
+constraint fk_etkf1 foreign key (pid) references etkf1_p(id)
+on update cascade on delete cascade
+);
+insert into etkf1_p values (1, 'A'), (2, 'B');
+insert into etkf1_c values (100, 2);
+data branch create table etkf1_src from etkf1_p;
+update etkf1_src set id = 3 where id = 2;
+update etkf1_src set id = 2 where id = 1;
+delete from etkf1_p where id = 1;
+data branch merge etkf1_src into etkf1_p when conflict accept;
+select id, v from etkf1_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  A  𝄀
+3  ¦  B
+select id, pid from etkf1_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  3
+create table etkf2_p (id int primary key, v varchar(32));
+create table etkf2_c (
+id int primary key,
+pid int,
+constraint fk_etkf2 foreign key (pid) references etkf2_p(id)
+on update cascade on delete cascade
+);
+insert into etkf2_p values (2, 'two');
+insert into etkf2_c values (1, 2);
+data branch create table etkf2_b from etkf2_p;
+update etkf2_b set id = 3 where id = 2;
+set @etkf2b = (select rel_id from mo_catalog.mo_tables where relname = 'etkf2_b' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2b;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop snapshot if exists etkf2_snap;
+create snapshot etkf2_snap for table branch_merge_fk_pk_move etkf2_b;
+drop table etkf2_b;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2b;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch create table etkf2_h from etkf2_b{snapshot="etkf2_snap"};
+data branch merge etkf2_h into etkf2_p when conflict accept;
+select id, v from etkf2_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from etkf2_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+drop snapshot etkf2_snap;
+create table etkf3_t (id int primary key, payload bigint);
+insert into etkf3_t select result, result from generate_series(1, 300000) g;
+begin;
+update etkf3_t set payload = payload + 1;
+delete from etkf3_t where id <= 90;
+update etkf3_t set payload = payload + 1 where id between 91 and 180;
+commit;
+select count(*) from etkf3_t;
+➤ count(*)[-5,64,0]  𝄀
+299910
+select sum(payload) from etkf3_t;
+➤ sum(payload)[3,38,0]  𝄀
+45000445905
+create table etkf4_p (id int primary key, v varchar(32));
+create table etkf4_c (
+id int primary key,
+pid int,
+constraint fk_etkf4 foreign key (pid) references etkf4_p(id)
+on update cascade on delete cascade
+);
+insert into etkf4_p values (1, 'A'), (2, 'B');
+insert into etkf4_c values (100, 2);
+data branch create table etkf4_src from etkf4_p;
+update etkf4_src set id = 3 where id = 2;
+update etkf4_src set id = 2 where id = 1;
+insert into etkf4_p values (3, 'C');
+data branch merge etkf4_src into etkf4_p when conflict skip;
+select id, v from etkf4_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+1  ¦  A  𝄀
+2  ¦  B  𝄀
+3  ¦  C
+select id, pid from etkf4_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  2
+create table etkf2r_p (id int primary key, v varchar(32));
+create table etkf2r_c (
+id int primary key,
+pid int,
+constraint fk_etkf2r foreign key (pid) references etkf2r_p(id)
+on update cascade on delete cascade
+);
+insert into etkf2r_p values (2, 'two');
+insert into etkf2r_c values (1, 2);
+data branch create table etkf2r_b from etkf2r_p;
+update etkf2r_b set id = 3 where id = 2;
+set @etkf2rb = (select rel_id from mo_catalog.mo_tables where relname = 'etkf2r_b' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2rb;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop snapshot if exists etkf2r_snap;
+create snapshot etkf2r_snap for table branch_merge_fk_pk_move etkf2r_b;
+alter table etkf2r_b rename to etkf2r_b2;
+drop table etkf2r_b2;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2rb;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch create table etkf2r_h from etkf2r_b{snapshot="etkf2r_snap"};
+data branch merge etkf2r_h into etkf2r_p when conflict accept;
+select id, v from etkf2r_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from etkf2r_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+drop snapshot etkf2r_snap;
+create table etkf5_p (id int primary key, v varchar(32));
+create table etkf5_c (
+id int primary key,
+pid int,
+constraint fk_etkf5 foreign key (pid) references etkf5_p(id)
+on update cascade on delete cascade
+);
+insert into etkf5_p values (1, 'A'), (2, 'B');
+insert into etkf5_c values (100, 2);
+data branch create table etkf5_src from etkf5_p;
+update etkf5_src set id = 3 where id = 2;
+update etkf5_src set id = 2 where id = 1;
+update etkf5_p set v = 'B2' where id = 2;
+data branch merge etkf5_src into etkf5_p when conflict skip;
+select id, v from etkf5_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+1  ¦  A  𝄀
+2  ¦  B2
+select id, pid from etkf5_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  2
+create table etkf6_p (id int primary key, v varchar(32));
+create table etkf6_c (
+id int primary key,
+pid int,
+constraint fk_etkf6 foreign key (pid) references etkf6_p(id)
+on update cascade on delete cascade
+);
+insert into etkf6_p values (1, 'a'), (2, 'b');
+insert into etkf6_c values (100, 2);
+create table etkf6_f (id int primary key, b int);
+insert into etkf6_f values (1, 1);
+data branch create table etkf6_s from etkf6_p;
+begin;
+update etkf6_s set v = 'a2' where id = 1;
+update etkf6_s set v = 'b2' where id = 2;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/workspace_force_flush',':::','echo',0,'');
+➤ add_fault_point(fj/cn/workspace_force_flush, :::, echo, 0, )[-6,8,0]  𝄀
+1
+update etkf6_f set b = 9 where id = 1;
+select remove_fault_point('fj/cn/workspace_force_flush');
+➤ remove_fault_point(fj/cn/workspace_force_flush)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+delete from etkf6_s where id = 1;
+update etkf6_f set b = 10 where id = 1;
+update etkf6_s set id = 3 where id = 2;
+commit;
+set @etkf6l = (select rel_id from mo_catalog.mo_tables where relname = 'etkf6_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf6l;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etkf6_s into etkf6_p when conflict accept;
+select id, v from etkf6_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  b2
+select id, pid from etkf6_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  3
+set session transaction isolation level read committed;
+create table etkf7_p (id int primary key, v varchar(32));
+create table etkf7_c (
+id int primary key,
+pid int,
+constraint fk_etkf7 foreign key (pid) references etkf7_p(id)
+on update cascade
+);
+insert into etkf7_p values (2, 'two');
+insert into etkf7_c values (100, 2);
+data branch create table etkf7_s from etkf7_p;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf7_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf7_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into etkf7_s values (900, 'pad');
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf7_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf7_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+delete from etkf7_s where id = 900;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf7_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf7_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+begin;
+update etkf7_s set id = 3 where id = 2;
+select mo_ctl('dn','inspect','merge trigger -t branch_merge_fk_pk_move.etkf7_s --kind l0 --l0-oneshot') regexp 'trigger l0 merge for table [0-9]+-etkf7_s, oneshot: true' as l0_triggered;
+➤ l0_triggered[-6,8,0]  𝄀
+1
+select count(*) as merged_objects from metadata_scan('branch_merge_fk_pk_move.etkf7_s', 'id') having count(*) = 1;
+➤ merged_objects[-5,64,0]  𝄀
+1
+select count(*) as advance_snapshot from etkf7_p;
+➤ advance_snapshot[-5,64,0]  𝄀
+1
+select id, v from etkf7_s;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+commit;
+set @etkf7l = (select rel_id from mo_catalog.mo_tables where relname = 'etkf7_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf7l;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etkf7_s into etkf7_p when conflict accept;
+select id, v from etkf7_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from etkf7_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  3
+create table etkf7r_p (id int primary key, v varchar(32));
+create table etkf7r_c (
+id int primary key,
+pid int,
+constraint fk_etkf7r foreign key (pid) references etkf7r_p(id)
+on update cascade
+);
+insert into etkf7r_p values (2, 'two');
+insert into etkf7r_c values (100, 2);
+data branch create table etkf7r_s from etkf7r_p;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf7r_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf7r_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into etkf7r_s values (900, 'pad');
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf7r_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf7r_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+delete from etkf7r_s where id = 900;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf7r_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf7r_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+begin;
+update etkf7r_s set id = 3 where id = 2;
+select mo_ctl('dn','inspect','merge trigger -t branch_merge_fk_pk_move.etkf7r_s --kind l0 --l0-oneshot') regexp 'trigger l0 merge for table [0-9]+-etkf7r_s, oneshot: true' as l0_triggered;
+➤ l0_triggered[-6,8,0]  𝄀
+1
+select count(*) as merged_objects_r from metadata_scan('branch_merge_fk_pk_move.etkf7r_s', 'id') having count(*) = 1;
+➤ merged_objects_r[-5,64,0]  𝄀
+1
+select count(*) as advance_snapshot_r from etkf7r_p;
+➤ advance_snapshot_r[-5,64,0]  𝄀
+1
+rollback;
+set @etkf7rl = (select rel_id from mo_catalog.mo_tables where relname = 'etkf7r_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf7rl;
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, v from etkf7r_s order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, v from etkf7r_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from etkf7r_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  2
+update etkf7r_s set id = 4 where id = 2;
+data branch merge etkf7r_s into etkf7r_p when conflict accept;
+select id, v from etkf7r_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  two
+select id, pid from etkf7r_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  4
+set session transaction isolation level repeatable read;
+create table etkf8_p (a int, b int, v varchar(32), primary key (a, b));
+create table etkf8_c (
+id int primary key,
+pa int,
+pb int,
+constraint fk_etkf8 foreign key (pa, pb) references etkf8_p(a, b)
+on update cascade
+);
+insert into etkf8_p values (1, 1, 'one');
+insert into etkf8_c values (100, 1, 1);
+data branch create table etkf8_s from etkf8_p;
+begin;
+update etkf8_s set v = 'one2' where a = 1 and b = 1;
+update etkf8_s set a = 2, b = 2 where a = 1 and b = 1;
+commit;
+set @etkf8l = (select rel_id from mo_catalog.mo_tables where relname = 'etkf8_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf8l;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etkf8_s into etkf8_p when conflict accept;
+select a, b, v from etkf8_p order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  2  ¦  one2
+select id, pa, pb from etkf8_c order by id;
+➤ id[4,32,0]  ¦  pa[4,32,0]  ¦  pb[4,32,0]  𝄀
+100  ¦  2  ¦  2
+create table etkf8s_p (a int, b int, v varchar(32), primary key (a, b));
+create table etkf8s_c (
+id int primary key,
+pa int,
+pb int,
+constraint fk_etkf8s foreign key (pa, pb) references etkf8s_p(a, b)
+on update cascade
+);
+create table etkf8s_f (id int primary key, b int);
+insert into etkf8s_p values (1, 1, 'one');
+insert into etkf8s_c values (100, 1, 1);
+insert into etkf8s_f values (1, 1);
+data branch create table etkf8s_s from etkf8s_p;
+begin;
+update etkf8s_s set v = 'one2' where a = 1 and b = 1;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/workspace_force_flush',':::','echo',0,'');
+➤ add_fault_point(fj/cn/workspace_force_flush, :::, echo, 0, )[-6,8,0]  𝄀
+1
+update etkf8s_f set b = 9 where id = 1;
+select remove_fault_point('fj/cn/workspace_force_flush');
+➤ remove_fault_point(fj/cn/workspace_force_flush)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update etkf8s_s set a = 2, b = 2 where a = 1 and b = 1;
+commit;
+set @etkf8sl = (select rel_id from mo_catalog.mo_tables where relname = 'etkf8s_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf8sl;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etkf8s_s into etkf8s_p when conflict accept;
+select a, b, v from etkf8s_p order by a;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  2  ¦  one2
+select id, pa, pb from etkf8s_c order by id;
+➤ id[4,32,0]  ¦  pa[4,32,0]  ¦  pb[4,32,0]  𝄀
+100  ¦  2  ¦  2
+set session transaction isolation level read committed;
+create table etkf9_p (id int primary key, v varchar(32));
+create table etkf9_c (
+id int primary key,
+pid int,
+constraint fk_etkf9 foreign key (pid) references etkf9_p(id)
+on update cascade
+);
+insert into etkf9_p values (2, 'two');
+insert into etkf9_c values (100, 2);
+data branch create table etkf9_s from etkf9_p;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf9_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf9_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into etkf9_s values (900, 'pad');
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf9_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf9_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+delete from etkf9_s where id = 900;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf9_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf9_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+begin;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.etkf9_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.etkf9_s)[-6,8,0]  𝄀
+1
+update etkf9_s set id = 3 where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+select mo_ctl('dn','inspect','merge trigger -t branch_merge_fk_pk_move.etkf9_s --kind l0 --l0-oneshot') regexp 'trigger l0 merge for table [0-9]+-etkf9_s, oneshot: true' as l0_triggered;
+➤ l0_triggered[-6,8,0]  𝄀
+1
+select count(*) as merged_objects_9 from metadata_scan('branch_merge_fk_pk_move.etkf9_s', 'id') having count(*) = 1;
+➤ merged_objects_9[-5,64,0]  𝄀
+1
+select count(*) as advance_snapshot_9 from etkf9_p;
+➤ advance_snapshot_9[-5,64,0]  𝄀
+1
+commit;
+set @etkf9l = (select rel_id from mo_catalog.mo_tables where relname = 'etkf9_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf9l;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etkf9_s into etkf9_p when conflict accept;
+select id, v from etkf9_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from etkf9_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  3
+create table etkf9r_p (id int primary key, v varchar(32));
+create table etkf9r_c (
+id int primary key,
+pid int,
+constraint fk_etkf9r foreign key (pid) references etkf9r_p(id)
+on update cascade
+);
+insert into etkf9r_p values (2, 'two');
+insert into etkf9r_c values (100, 2);
+data branch create table etkf9r_s from etkf9r_p;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf9r_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf9r_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into etkf9r_s values (900, 'pad');
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf9r_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf9r_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+delete from etkf9r_s where id = 900;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf9r_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf9r_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+begin;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.etkf9r_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.etkf9r_s)[-6,8,0]  𝄀
+1
+update etkf9r_s set id = 3 where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+select mo_ctl('dn','inspect','merge trigger -t branch_merge_fk_pk_move.etkf9r_s --kind l0 --l0-oneshot') regexp 'trigger l0 merge for table [0-9]+-etkf9r_s, oneshot: true' as l0_triggered;
+➤ l0_triggered[-6,8,0]  𝄀
+1
+select count(*) as merged_objects_9r from metadata_scan('branch_merge_fk_pk_move.etkf9r_s', 'id') having count(*) = 1;
+➤ merged_objects_9r[-5,64,0]  𝄀
+1
+select count(*) as advance_snapshot_9r from etkf9r_p;
+➤ advance_snapshot_9r[-5,64,0]  𝄀
+1
+rollback;
+set @etkf9rl = (select rel_id from mo_catalog.mo_tables where relname = 'etkf9r_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf9rl;
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, v from etkf9r_s order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, v from etkf9r_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from etkf9r_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  2
+update etkf9r_s set id = 4 where id = 2;
+data branch merge etkf9r_s into etkf9r_p when conflict accept;
+select id, v from etkf9r_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  two
+select id, pid from etkf9r_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  4
+set session transaction isolation level repeatable read;
+set session transaction isolation level read committed;
+create table etkf10_p (id int primary key, v varchar(32));
+create table etkf10_c (
+id int primary key,
+pid int,
+constraint fk_etkf10 foreign key (pid) references etkf10_p(id)
+on update cascade
+);
+insert into etkf10_p values (2, 'two');
+insert into etkf10_c values (100, 2);
+data branch create table etkf10_s from etkf10_p;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf10_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf10_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into etkf10_s values (900, 'pad');
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf10_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf10_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+delete from etkf10_s where id = 900;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf10_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf10_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+begin;
+update etkf10_s set v = 'two2' where id = 2;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.etkf10_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.etkf10_s)[-6,8,0]  𝄀
+1
+update etkf10_s set v = 'two3' where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+select mo_ctl('dn','inspect','merge trigger -t branch_merge_fk_pk_move.etkf10_s --kind l0 --l0-oneshot') regexp 'trigger l0 merge for table [0-9]+-etkf10_s, oneshot: true' as l0_triggered;
+➤ l0_triggered[-6,8,0]  𝄀
+1
+select count(*) as merged_objects_10 from metadata_scan('branch_merge_fk_pk_move.etkf10_s', 'id') having count(*) = 1;
+➤ merged_objects_10[-5,64,0]  𝄀
+1
+select count(*) as advance_snapshot_10 from etkf10_p;
+➤ advance_snapshot_10[-5,64,0]  𝄀
+1
+update etkf10_s set id = 3 where id = 2;
+commit;
+set @etkf10l = (select rel_id from mo_catalog.mo_tables where relname = 'etkf10_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf10l;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etkf10_s into etkf10_p when conflict accept;
+select id, v from etkf10_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two3
+select id, pid from etkf10_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  3
+set session transaction isolation level read committed;
+create table etkf11_p (id int primary key, v varchar(32));
+create table etkf11_c (
+id int primary key,
+pid int,
+constraint fk_etkf11 foreign key (pid) references etkf11_p(id)
+on update cascade
+);
+insert into etkf11_p values (2, 'two');
+insert into etkf11_c values (100, 2);
+data branch create table etkf11_s from etkf11_p;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf11_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf11_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into etkf11_s values (900, 'pad');
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf11_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf11_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+delete from etkf11_s where id = 900;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf11_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf11_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+begin;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.etkf11_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.etkf11_s)[-6,8,0]  𝄀
+1
+update etkf11_s set id = 3 where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+select mo_ctl('dn','inspect','merge trigger -t branch_merge_fk_pk_move.etkf11_s --kind l0 --l0-oneshot') regexp 'trigger l0 merge for table [0-9]+-etkf11_s, oneshot: true' as l0_triggered;
+➤ l0_triggered[-6,8,0]  𝄀
+1
+select count(*) as merged_objects_8 from metadata_scan('branch_merge_fk_pk_move.etkf11_s', 'id') having count(*) = 1;
+➤ merged_objects_8[-5,64,0]  𝄀
+1
+select count(*) as advance_snapshot_8 from etkf11_p;
+➤ advance_snapshot_8[-5,64,0]  𝄀
+1
+select id, v from etkf11_s;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+commit;
+set @etkf11l = (select rel_id from mo_catalog.mo_tables where relname = 'etkf11_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf11l;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etkf11_s into etkf11_p when conflict accept;
+select id, v from etkf11_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from etkf11_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  3
+create table etkf11r_p (id int primary key, v varchar(32));
+create table etkf11r_c (
+id int primary key,
+pid int,
+constraint fk_etkf11r foreign key (pid) references etkf11r_p(id)
+on update cascade
+);
+insert into etkf11r_p values (2, 'two');
+insert into etkf11r_c values (100, 2);
+data branch create table etkf11r_s from etkf11r_p;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf11r_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf11r_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into etkf11r_s values (900, 'pad');
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf11r_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf11r_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+delete from etkf11r_s where id = 900;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf11r_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf11r_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+begin;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.etkf11r_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.etkf11r_s)[-6,8,0]  𝄀
+1
+update etkf11r_s set id = 3 where id = 2;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+select mo_ctl('dn','inspect','merge trigger -t branch_merge_fk_pk_move.etkf11r_s --kind l0 --l0-oneshot') regexp 'trigger l0 merge for table [0-9]+-etkf11r_s, oneshot: true' as l0_triggered;
+➤ l0_triggered[-6,8,0]  𝄀
+1
+select count(*) as merged_objects_8r from metadata_scan('branch_merge_fk_pk_move.etkf11r_s', 'id') having count(*) = 1;
+➤ merged_objects_8r[-5,64,0]  𝄀
+1
+select count(*) as advance_snapshot_8r from etkf11r_p;
+➤ advance_snapshot_8r[-5,64,0]  𝄀
+1
+rollback;
+set @etkf11rl = (select rel_id from mo_catalog.mo_tables where relname = 'etkf11r_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf11rl;
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, v from etkf11r_s order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, v from etkf11r_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from etkf11r_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  2
+update etkf11r_s set id = 4 where id = 2;
+data branch merge etkf11r_s into etkf11r_p when conflict accept;
+select id, v from etkf11r_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+4  ¦  two
+select id, pid from etkf11r_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  4
+set session transaction isolation level read committed;
+create table etkf12_p (id int primary key, v varchar(32));
+create table etkf12_c (
+id int primary key,
+pid int,
+constraint fk_etkf12 foreign key (pid) references etkf12_p(id)
+on update cascade
+);
+insert into etkf12_p values (2, 'two'), (3, 'three'), (4, 'four'), (5, 'five');
+insert into etkf12_c values (100, 2), (200, 3), (300, 4), (400, 5);
+data branch create table etkf12_s from etkf12_p;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf12_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf12_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+insert into etkf12_s values (900, 'pad');
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf12_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf12_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+delete from etkf12_s where id = 900;
+select mo_ctl('dn','flush','branch_merge_fk_pk_move.etkf12_s');
+➤ mo_ctl(dn, flush, branch_merge_fk_pk_move.etkf12_s)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+begin;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.etkf12_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.etkf12_s)[-6,8,0]  𝄀
+1
+update etkf12_s set id = 12 where id = 2;
+update etkf12_s set id = 13 where id = 3;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+select mo_ctl('dn','inspect','merge trigger -t branch_merge_fk_pk_move.etkf12_s --kind l0 --l0-oneshot') regexp 'trigger l0 merge for table [0-9]+-etkf12_s, oneshot: true' as l0_triggered;
+➤ l0_triggered[-6,8,0]  𝄀
+1
+select count(*) as merged_objects_12a from metadata_scan('branch_merge_fk_pk_move.etkf12_s', 'id') having count(*) = 1;
+➤ merged_objects_12a[-5,64,0]  𝄀
+1
+select count(*) as advance_snapshot_12a from etkf12_p;
+➤ advance_snapshot_12a[-5,64,0]  𝄀
+4
+insert into etkf12_s values (12, 'dupe');
+Duplicate entry '12' for key 'id'
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/flush_small_objs',':::','echo',40,'branch_merge_fk_pk_move.etkf12_s');
+➤ add_fault_point(fj/cn/flush_small_objs, :::, echo, 40, branch_merge_fk_pk_move.etkf12_s)[-6,8,0]  𝄀
+1
+update etkf12_s set id = 14 where id = 4;
+update etkf12_s set id = 15 where id = 5;
+select remove_fault_point('fj/cn/flush_small_objs');
+➤ remove_fault_point(fj/cn/flush_small_objs)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+select mo_ctl('dn','inspect','merge trigger -t branch_merge_fk_pk_move.etkf12_s --kind l0 --l0-oneshot') regexp 'trigger l0 merge for table [0-9]+-etkf12_s, oneshot: true' as l0_triggered;
+➤ l0_triggered[-6,8,0]  𝄀
+1
+select count(*) as merged_objects_12b from metadata_scan('branch_merge_fk_pk_move.etkf12_s', 'id') having count(*) = 1;
+➤ merged_objects_12b[-5,64,0]  𝄀
+1
+select count(*) as advance_snapshot_12b from etkf12_p;
+➤ advance_snapshot_12b[-5,64,0]  𝄀
+4
+select id, v from etkf12_s order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+12  ¦  two  𝄀
+13  ¦  three  𝄀
+14  ¦  four  𝄀
+15  ¦  five
+commit;
+set @etkf12l = (select rel_id from mo_catalog.mo_tables where relname = 'etkf12_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf12l;
+➤ count(*)[-5,64,0]  𝄀
+4
+data branch merge etkf12_s into etkf12_p when conflict accept;
+select id, v from etkf12_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+12  ¦  two  𝄀
+13  ¦  three  𝄀
+14  ¦  four  𝄀
+15  ¦  five
+select id, pid from etkf12_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+100  ¦  12  𝄀
+200  ¦  13  𝄀
+300  ¦  14  𝄀
+400  ¦  15
+set session transaction isolation level repeatable read;
+create table etkf2o_p (id int primary key, v varchar(32));
+create table etkf2o_c (
+id int primary key,
+pid int,
+constraint fk_etkf2o foreign key (pid) references etkf2o_p(id)
+on update cascade on delete cascade
+);
+insert into etkf2o_p values (2, 'two');
+insert into etkf2o_c values (1, 2);
+data branch create table etkf2o_b from etkf2o_p;
+update etkf2o_b set id = 3 where id = 2;
+set @etkf2ob = (select rel_id from mo_catalog.mo_tables where relname = 'etkf2o_b' and reldatabase = 'branch_merge_fk_pk_move');
+drop snapshot if exists etkf2o_snap;
+create snapshot etkf2o_snap for table branch_merge_fk_pk_move etkf2o_b;
+drop table etkf2o_b;
+data branch create table etkf2o_h from etkf2o_b{snapshot="etkf2o_snap"};
+drop snapshot etkf2o_snap;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2ob;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf2ob;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etkf2o_h into etkf2o_p when conflict accept;
+select id, v from etkf2o_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from etkf2o_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+drop table etkf2o_h;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2ob;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf2ob;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table etkf2or_p (id int primary key, v varchar(32));
+create table etkf2or_c (
+id int primary key,
+pid int,
+constraint fk_etkf2or foreign key (pid) references etkf2or_p(id)
+);
+insert into etkf2or_p values (2, 'two');
+insert into etkf2or_c values (1, 2);
+data branch create table etkf2or_b from etkf2or_p;
+update etkf2or_b set id = 3 where id = 2;
+set @etkf2orb = (select rel_id from mo_catalog.mo_tables where relname = 'etkf2or_b' and reldatabase = 'branch_merge_fk_pk_move');
+drop snapshot if exists etkf2or_snap;
+create snapshot etkf2or_snap for table branch_merge_fk_pk_move etkf2or_b;
+drop table etkf2or_b;
+data branch create table etkf2or_h from etkf2or_b{snapshot="etkf2or_snap"};
+drop snapshot etkf2or_snap;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2orb;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge etkf2or_h into etkf2or_p when conflict accept;
+Cannot delete or update a parent row: a foreign key constraint fails
+select id, v from etkf2or_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  two
+select id, pid from etkf2or_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  2
+drop table etkf2or_h;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2orb;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf2orb;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table etkf2oc_p (id int primary key, v varchar(32));
+create table etkf2oc_c (
+id int primary key,
+pid int,
+constraint fk_etkf2oc foreign key (pid) references etkf2oc_p(id)
+on update cascade on delete cascade
+);
+insert into etkf2oc_p values (2, 'two');
+insert into etkf2oc_c values (1, 2);
+data branch create table etkf2oc_b from etkf2oc_p;
+update etkf2oc_b set id = 3 where id = 2;
+set @etkf2ocb = (select rel_id from mo_catalog.mo_tables where relname = 'etkf2oc_b' and reldatabase = 'branch_merge_fk_pk_move');
+drop snapshot if exists etkf2oc_snap;
+create snapshot etkf2oc_snap for cluster;
+drop table etkf2oc_b;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2ocb;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf2ocb;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop snapshot etkf2oc_snap;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2ocb;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf2ocb;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table etkf2oa_p (id int primary key, v varchar(32));
+create table etkf2oa_c (
+id int primary key,
+pid int,
+constraint fk_etkf2oa foreign key (pid) references etkf2oa_p(id)
+on update cascade on delete cascade
+);
+insert into etkf2oa_p values (2, 'two');
+insert into etkf2oa_c values (1, 2);
+data branch create table etkf2oa_b from etkf2oa_p;
+update etkf2oa_b set id = 3 where id = 2;
+set @etkf2oab = (select rel_id from mo_catalog.mo_tables where relname = 'etkf2oa_b' and reldatabase = 'branch_merge_fk_pk_move');
+drop snapshot if exists etkf2oa_snap;
+create snapshot etkf2oa_snap for account sys;
+drop table etkf2oa_b;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2oab;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf2oab;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop snapshot etkf2oa_snap;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf2oab;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf2oab;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table etkf3o_p (id int primary key, v varchar(32));
+create table etkf3o_c (
+id int primary key,
+pid int,
+constraint fk_etkf3o foreign key (pid) references etkf3o_p(id)
+on update cascade on delete cascade
+);
+insert into etkf3o_p values (2, 'two');
+insert into etkf3o_c values (1, 2);
+data branch create table etkf3o_b from etkf3o_p;
+data branch create table etkf3o_x from etkf3o_p;
+update etkf3o_b set id = 3 where id = 2;
+set @etkf3op = (select rel_id from mo_catalog.mo_tables where relname = 'etkf3o_p' and reldatabase = 'branch_merge_fk_pk_move');
+set @etkf3ob = (select rel_id from mo_catalog.mo_tables where relname = 'etkf3o_b' and reldatabase = 'branch_merge_fk_pk_move');
+set @etkf3ox = (select rel_id from mo_catalog.mo_tables where relname = 'etkf3o_x' and reldatabase = 'branch_merge_fk_pk_move');
+data branch merge etkf3o_b into etkf3o_p when conflict accept;
+select id, v from etkf3o_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from etkf3o_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+create snapshot etkf3o_snap for database branch_merge_fk_pk_move;
+drop table etkf3o_b;
+drop table etkf3o_x;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf3op;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf3op;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf3ob;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf3ox;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table etkf3o_n (id int primary key);
+drop snapshot if exists etkf3o_noise;
+create snapshot etkf3o_noise for table branch_merge_fk_pk_move etkf3o_n;
+drop snapshot etkf3o_noise;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf3op;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf3op;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf3ob;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf3ox;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch create table etkf3o_h from etkf3o_x{snapshot="etkf3o_snap"};
+data branch merge etkf3o_h into etkf3o_p when conflict accept;
+select id, v from etkf3o_p order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  two
+select id, pid from etkf3o_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+1  ¦  3
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf3op;
+➤ count(*)[-5,64,0]  𝄀
+1
+drop table etkf3o_h;
+drop snapshot etkf3o_snap;
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @etkf3op;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf3op;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf3ob;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_data_branch_link_retention where table_id = @etkf3ox;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop snapshot if exists etkf2_snap;
+drop snapshot if exists etkf2r_snap;
+drop snapshot if exists esy_s1;
+drop snapshot if exists esy_s2;
+drop snapshot if exists esyx_s1;
+drop snapshot if exists esyx_s2;
+drop snapshot if exists esyr_s1;
+drop snapshot if exists esyr_s2;
+drop snapshot if exists esy3_s;
+create table dlp_p (id int primary key, v varchar(16));
+create table dlp_c (id int primary key, pid int,
+constraint fk_dlp foreign key (pid) references dlp_p(id) on update cascade on delete cascade);
+insert into dlp_p values (1,'B'),(2,'A');
+insert into dlp_c values (10,1),(20,2);
+data branch create table dlp_src from dlp_p;
+begin;
+delete from dlp_src where id=1;
+update dlp_src set id=1 where id=2;
+commit;
+update dlp_src set id=3 where id=1;
+data branch merge dlp_src into dlp_p when conflict accept;
+select id, v from dlp_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  A
+select id, pid from dlp_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+20  ¦  3
+create table dlp_np (id int primary key, v varchar(16));
+create table dlp_nc (id int primary key, pid int,
+constraint fk_dlpn foreign key (pid) references dlp_np(id) on update cascade on delete cascade);
+insert into dlp_np values (1,'B'),(2,'A');
+insert into dlp_nc values (10,1),(20,2);
+begin;
+delete from dlp_np where id=1;
+update dlp_np set id=1 where id=2;
+commit;
+update dlp_np set id=3 where id=1;
+select id, v from dlp_np order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  A
+select id, pid from dlp_nc order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+20  ¦  3
+create table dlpm_p (id int primary key, v varchar(16));
+create table dlpm_c (id int primary key, pid int,
+constraint fk_dlpm foreign key (pid) references dlpm_p(id) on update cascade on delete cascade);
+insert into dlpm_p values (1,'B'),(2,'A');
+insert into dlpm_c values (10,1),(20,2);
+data branch create table dlpm_src from dlpm_p;
+begin;
+delete from dlpm_src where id=2;
+update dlpm_src set id=2 where id=1;
+commit;
+update dlpm_src set id=3 where id=2;
+data branch merge dlpm_src into dlpm_p when conflict accept;
+select id, v from dlpm_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  B
+select id, pid from dlpm_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+10  ¦  3
+create table clp_p (id int primary key, v varchar(16));
+create table clp_c (id int primary key, pid int,
+constraint fk_clp foreign key (pid) references clp_p(id) on update cascade on delete cascade);
+insert into clp_p values (1,'B'),(2,'A');
+insert into clp_c values (10,1),(20,2);
+data branch create table clp_src from clp_p;
+begin;
+delete from clp_src where id=1;
+update clp_src set id=4 where id=2;
+update clp_src set id=1 where id=4;
+commit;
+update clp_src set id=3 where id=1;
+data branch merge clp_src into clp_p when conflict accept;
+select id, v from clp_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  A
+select id, pid from clp_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+20  ¦  3
+create table clnp_p (id int primary key, v varchar(16));
+create table clnp_c (id int primary key, pid int,
+constraint fk_clnp foreign key (pid) references clnp_p(id) on update cascade on delete cascade);
+insert into clnp_p values (1,'B'),(2,'A');
+insert into clnp_c values (10,1),(20,2);
+begin;
+delete from clnp_p where id=1;
+update clnp_p set id=4 where id=2;
+update clnp_p set id=1 where id=4;
+commit;
+update clnp_p set id=3 where id=1;
+select id, v from clnp_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  A
+select id, pid from clnp_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+20  ¦  3
+create table clmp_p (id int primary key, v varchar(16));
+create table clmp_c (id int primary key, pid int,
+constraint fk_clmp foreign key (pid) references clmp_p(id) on update cascade on delete cascade);
+insert into clmp_p values (1,'B'),(2,'A');
+insert into clmp_c values (10,1),(20,2);
+data branch create table clmp_src from clmp_p;
+begin;
+delete from clmp_src where id=2;
+update clmp_src set id=4 where id=1;
+update clmp_src set id=2 where id=4;
+commit;
+update clmp_src set id=3 where id=2;
+data branch merge clmp_src into clmp_p when conflict accept;
+select id, v from clmp_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  B
+select id, pid from clmp_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+10  ¦  3
+create table ctp_p (id int primary key, v varchar(16));
+create table ctp_c (id int primary key, pid int,
+constraint fk_ctp foreign key (pid) references ctp_p(id) on update cascade on delete cascade);
+insert into ctp_p values (1,'B'),(2,'A'),(5,'C');
+insert into ctp_c values (10,1),(20,2),(30,5);
+data branch create table ctp_src from ctp_p;
+begin;
+delete from ctp_src where id=1;
+update ctp_src set id=4 where id=2;
+update ctp_src set id=1 where id=4;
+update ctp_src set id=4 where id=5;
+update ctp_src set id=6 where id=4;
+commit;
+update ctp_src set id=3 where id=1;
+data branch merge ctp_src into ctp_p when conflict accept;
+select id, v from ctp_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  A  𝄀
+6  ¦  C
+select id, pid from ctp_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+20  ¦  3  𝄀
+30  ¦  6
+create table ctnp_p (id int primary key, v varchar(16));
+create table ctnp_c (id int primary key, pid int,
+constraint fk_ctnp foreign key (pid) references ctnp_p(id) on update cascade on delete cascade);
+insert into ctnp_p values (1,'B'),(2,'A'),(5,'C');
+insert into ctnp_c values (10,1),(20,2),(30,5);
+begin;
+delete from ctnp_p where id=1;
+update ctnp_p set id=4 where id=2;
+update ctnp_p set id=1 where id=4;
+update ctnp_p set id=4 where id=5;
+update ctnp_p set id=6 where id=4;
+commit;
+update ctnp_p set id=3 where id=1;
+select id, v from ctnp_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  A  𝄀
+6  ¦  C
+select id, pid from ctnp_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+20  ¦  3  𝄀
+30  ¦  6
+create table mta_p (id int primary key, v varchar(16));
+create table mta_c (id int primary key, pid int,
+constraint fk_mta foreign key (pid) references mta_p(id) on update cascade on delete cascade);
+insert into mta_p values (1,'A'),(3,'B');
+insert into mta_c values (10,1),(30,3);
+data branch create table mta_s from mta_p;
+update mta_s set id=2 where id=1;
+begin;
+delete from mta_s where id=2;
+update mta_s set id=2 where id=3;
+commit;
+data branch merge mta_s into mta_p when conflict accept;
+select id, v from mta_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+2  ¦  B
+select id, pid from mta_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+30  ¦  2
+create table hpo_p (id int primary key, v varchar(16));
+insert into hpo_p values (1,'seed');
+data branch create table hpo_s from hpo_p;
+begin;
+update hpo_s set id=2 where id=1;
+update hpo_s set id=3 where id=2;
+update hpo_s set id=4 where id=3;
+update hpo_s set id=5 where id=4;
+update hpo_s set id=6 where id=5;
+update hpo_s set id=7 where id=6;
+update hpo_s set id=8 where id=7;
+update hpo_s set id=9 where id=8;
+update hpo_s set id=10 where id=9;
+update hpo_s set id=11 where id=10;
+update hpo_s set id=12 where id=11;
+update hpo_s set id=13 where id=12;
+update hpo_s set id=14 where id=13;
+update hpo_s set id=15 where id=14;
+update hpo_s set id=16 where id=15;
+update hpo_s set id=17 where id=16;
+update hpo_s set id=18 where id=17;
+update hpo_s set id=19 where id=18;
+update hpo_s set id=20 where id=19;
+update hpo_s set id=21 where id=20;
+update hpo_s set id=22 where id=21;
+update hpo_s set id=23 where id=22;
+update hpo_s set id=24 where id=23;
+update hpo_s set id=25 where id=24;
+update hpo_s set id=26 where id=25;
+update hpo_s set id=27 where id=26;
+update hpo_s set id=28 where id=27;
+update hpo_s set id=29 where id=28;
+update hpo_s set id=30 where id=29;
+update hpo_s set id=31 where id=30;
+update hpo_s set id=32 where id=31;
+update hpo_s set id=33 where id=32;
+update hpo_s set id=34 where id=33;
+update hpo_s set id=35 where id=34;
+update hpo_s set id=36 where id=35;
+update hpo_s set id=37 where id=36;
+update hpo_s set id=38 where id=37;
+update hpo_s set id=39 where id=38;
+update hpo_s set id=40 where id=39;
+update hpo_s set id=41 where id=40;
+commit;
+data branch create table hpo_d from hpo_s;
+create table hpo_c (id int primary key, pid int,
+constraint fk_hpo foreign key (pid) references hpo_d(id) on update cascade);
+insert into hpo_c values (900,41);
+update hpo_s set v='edited' where id=41;
+update hpo_s set id=42 where id=41;
+data branch merge hpo_s into hpo_d when conflict accept;
+select id, v from hpo_d order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+42  ¦  edited
+select id, pid from hpo_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  42
+create table xr1_p (id int primary key, v varchar(16));
+create table xr1_c (id int primary key, pid int,
+constraint fk_xr1 foreign key (pid) references xr1_p(id) on update cascade);
+insert into xr1_p values (1,'orig');
+insert into xr1_c values (900,1);
+data branch create table xr1_s from xr1_p;
+update xr1_s set id=3 where id=1;
+begin;
+delete from xr1_s where id=3;
+insert into xr1_s values (3,'reborn');
+commit;
+data branch merge xr1_s into xr1_p when conflict accept;
+select id, v from xr1_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  reborn
+select id, pid from xr1_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  3
+create table xr2_p (id int primary key, v varchar(16));
+create table xr2_c (id int primary key, pid int,
+constraint fk_xr2 foreign key (pid) references xr2_p(id) on update cascade);
+insert into xr2_p values (1,'orig');
+insert into xr2_c values (900,1);
+data branch create table xr2_s from xr2_p;
+update xr2_s set id=3 where id=1;
+update xr2_s set v='edited' where id=3;
+data branch merge xr2_s into xr2_p when conflict accept;
+select id, v from xr2_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  edited
+select id, pid from xr2_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  3
+create table casc_t (id int primary key, pid int, v varchar(32),
+constraint fk_casc_self foreign key (pid) references casc_t(id) on delete cascade
+);
+insert into casc_t values (3, null, 'three'), (2, null, 'two');
+data branch create table casc_src from casc_t;
+update casc_t set pid = 3 where id = 2;
+delete from casc_src where id = 3;
+update casc_src set id = 3 where id = 2;
+data branch merge casc_src into casc_t when conflict accept;
+-- @regex("cannot apply the accepted row", true)
+internal error: data branch key-moving update cannot apply the accepted row: expected exactly one destination row at key (2), found 0
+select id, pid, v from casc_t order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  ¦  v[12,32,0]  𝄀
+2  ¦  3  ¦  two  𝄀
+3  ¦  null  ¦  three
+create table sn_t (id int primary key, pid int, v varchar(32),
+constraint fk_sn_self foreign key (pid) references sn_t(id) on delete set null
+);
+insert into sn_t values (3, null, 'three'), (2, null, 'two');
+data branch create table sn_src from sn_t;
+update sn_t set pid = 3 where id = 2;
+delete from sn_src where id = 3;
+update sn_src set id = 3 where id = 2;
+data branch merge sn_src into sn_t when conflict accept;
+select id, pid, v from sn_t order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  ¦  v[12,32,0]  𝄀
+3  ¦  null  ¦  two
+drop database branch_merge_fk_pk_move;
+set session transaction isolation level read committed;

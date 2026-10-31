@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -3011,7 +3012,9 @@ func (c *Compile) runSqlWithSystemTenant(sql string) error {
 // Called synchronously by the plain `DROP TABLE` path. It reports whether the
 // dropped table participates in branch lineage and acquires the DAG lock before
 // flipping table_deleted=true for the affected tid (design §9.2 / §10).
-func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error) {
+func (c *Compile) reclaimBranchProtectSnapshots(
+	deadTIDs []uint64, names map[uint64]pkMoveTableIdentity,
+) (bool, error) {
 	if len(deadTIDs) == 0 {
 		return false, nil
 	}
@@ -3103,16 +3106,69 @@ func (c *Compile) reclaimBranchProtectSnapshots(deadTIDs []uint64) (bool, error)
 		sql := databranchutils.BuildBranchSnapshotDeleteSQL(snames)
 		return c.runSqlWithSystemTenant(sql)
 	}
-	return true, databranchutils.MarkAndReclaimBranchSnapshotsCore(
-		deadTIDs, loadDAG, markDeleted, execDelete,
-	)
+	// Capture the DAG the core loads: it flips table_deleted on the dead
+	// roots in memory before computing the reclaim set, and the pk-move
+	// link reclaim below must release exactly the tables whose protected
+	// streams just became unreadable.
+	var captured databranchutils.BranchReclaimDag
+	capturedOK := false
+	capturedNames := map[uint64]pkMoveTableIdentity{}
+	wrappedLoad := func() (databranchutils.BranchReclaimDag, error) {
+		dag, err := loadDAG()
+		if err == nil {
+			captured, capturedOK = dag, true
+			// Capture member identities NOW: the core below flips
+			// table_deleted and deletes the lineage's protect snapshots
+			// inside this transaction, so by link-reclaim time neither
+			// mo_tables nor the `__mo_branch_*` rows can name the
+			// retiring members any more (r23 review F2). Capture failure
+			// degrades to the caller's names only, keeping members'
+			// links fail-closed instead of failing the drop.
+			ids := make([]uint64, 0, len(dag.Info)+len(deadTIDs))
+			for id := range dag.Info {
+				ids = append(ids, id)
+			}
+			ids = append(ids, deadTIDs...)
+			if extra, nerr := captureBranchReclaimMemberIdentities(c, ids); nerr == nil {
+				capturedNames = extra
+			} else {
+				logutil.Warn(
+					"DataBranch-PkMoveLink-MemberIdentityCaptureFailed",
+					zap.Error(nerr),
+				)
+			}
+		}
+		return dag, err
+	}
+	if err := databranchutils.MarkAndReclaimBranchSnapshotsCore(
+		deadTIDs, wrappedLoad, markDeleted, execDelete,
+	); err != nil {
+		return true, err
+	}
+	if capturedOK {
+		// The drop plan's names are authoritative for its own roots; the
+		// catalog capture supplies everything else (same-transaction
+		// retirees still visible to it, earlier retirees named by their
+		// children's retained protect snapshots).
+		for id, identity := range names {
+			capturedNames[id] = identity
+		}
+		if err := deletePkMoveUpdateLinksForReclaimedSubtrees(
+			c, captured, deadTIDs, capturedNames,
+		); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
 }
 
 // reclaimAndCompactBranchProtectSnapshots completes the branch part of a
 // physical-table removal. Replacement paths publish their new lineage edge
 // first, then use this same lifecycle transition as an ordinary DROP.
-func (c *Compile) reclaimAndCompactBranchProtectSnapshots(deadTIDs []uint64) error {
-	branchParticipates, err := c.reclaimBranchProtectSnapshots(deadTIDs)
+func (c *Compile) reclaimAndCompactBranchProtectSnapshots(
+	deadTIDs []uint64, names map[uint64]pkMoveTableIdentity,
+) error {
+	branchParticipates, err := c.reclaimBranchProtectSnapshots(deadTIDs, names)
 	if err != nil || !branchParticipates {
 		return err
 	}
@@ -4461,7 +4517,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		); err != nil {
 			return err
 		}
-		if err = c.reclaimAndCompactBranchProtectSnapshots([]uint64{oldID}); err != nil {
+		if err = c.reclaimAndCompactBranchProtectSnapshots(
+			[]uint64{oldID},
+			map[uint64]pkMoveTableIdentity{oldID: {db: db, tbl: table, logicalID: oldLogicalId}},
+		); err != nil {
 			return err
 		}
 	}
@@ -4839,6 +4898,797 @@ func (s *Scope) dropTable(c *Compile) (retErr error) {
 			c, plan2.DeepCopyDropTable(entry), &lifecycleAdmitted,
 			lifecycleAdmitted, nil, nil, admitPersistent, temporaryRetire, reclaimPersistent, false,
 		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteDataBranchUpdateLinks removes the pk-move update provenance links a
+// table accumulated in this account's mo_catalog.mo_data_branch_update_link.
+// Callers must honour the branch-lineage lifetime: a table whose branch
+// subtree still has live descendants keeps its protected delta stream, and
+// live branch diffs can still fold moves recorded on it, so its links are
+// reclaimed only when the protect-snapshot flow retires the whole subtree
+// (see deletePkMoveUpdateLinksForReclaimedSubtrees). A missing catalog
+// table (pre-upgrade tenants) is tolerated.
+func deleteDataBranchUpdateLinks(c *Compile, accountID uint32, tblID uint64) error {
+	if tblID+1 == 0 {
+		// MaxUint64 overflows the exclusive upper bound; such ids are
+		// not allocated in practice, so failing closed is harmless.
+		return nil
+	}
+	// The delete rides the link_id primary-key prefix as a half-open range
+	// [tblID, tblID+1): all of a table's links share the big-endian table id
+	// at the head of link_id. Riding the primary key is mandatory because
+	// links are recorded through a raw relation write that maintains no
+	// secondary indexes. The catalog table must therefore never declare one
+	// (an empty index mis-answers both probes and deletes routed through it).
+	stmt := fmt.Sprintf(
+		"delete from mo_catalog.%s where %s >= x'%016x' and %s < x'%016x'",
+		catalog.MO_DATA_BRANCH_UPDATE_LINK,
+		catalog.DataBranchUpdateLinkColLinkID, tblID,
+		catalog.DataBranchUpdateLinkColLinkID, tblID+1,
+	)
+	err := c.runSqlWithAccountId(stmt, int32(accountID))
+	if err != nil && moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return nil
+	}
+	return err
+}
+
+// tableHasBranchLineage probes whether tid participates in
+// mo_catalog.mo_branch_metadata at all, as a branch row of its own or as
+// the parent some child row references. DROP TABLE holds the exclusive
+// table lock, so a concurrent branch publication cannot flip the answer
+// before the protect-snapshot flow re-checks under its own metadata lock.
+func tableHasBranchLineage(c *Compile, tid uint64) (bool, error) {
+	res, err := c.runSqlWithResultAndOptions(
+		fmt.Sprintf(
+			"select 1 from %s.%s where table_id = %d or p_table_id = %d limit 1",
+			catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, tid, tid,
+		),
+		int32(catalog.System_Account),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+	has := false
+	res.ReadRows(func(n int, _ []*vector.Vector) bool {
+		if n > 0 {
+			has = true
+		}
+		return true
+	})
+	return has, nil
+}
+
+// pkMoveTableIdentity is a branch reclaim member's catalog (database,
+// table) name pair, captured while the names are still resolvable — the
+// RC drop admission resolves them before any physical DROP work, the
+// plain drop flow carries the plan's names. Scope matching of a member's
+// links against live user snapshots runs against this identity; a member
+// whose identity was never resolvable (dropped by an earlier transaction)
+// keeps its links rather than risking a snapshot-grounded reclaim.
+type pkMoveTableIdentity struct {
+	db  string
+	tbl string
+	// logicalID is the member's durable rel_logical_id (0 unresolved);
+	// coverage matches snapshot/PITR obj ids against it because owners
+	// record the logical identity, not the physical incarnation.
+	logicalID uint64
+}
+
+// captureBranchReclaimMemberIdentities resolves the (database, table)
+// identity of every reclaim-candidate table id while the catalog rows
+// that can still name them are visible. Members retired by THIS
+// transaction are named by mo_tables; members retired earlier are named
+// by any still-retained `__mo_branch_*` protect snapshot of one of their
+// lineage children — the row's obj_id is the child's source table id and
+// its scope columns record that source's identity (see
+// createBranchProtectSnapshot). A newly-retired ancestor always has one
+// such child: its subtree stayed unreclaimed exactly because a not yet
+// retired descendant kept its protect snapshot, so the full in-DAG
+// member set resolves here and the snapshot-grounding gate never has to
+// guess (r23 review F2). Ids still unnamed keep their links fail-closed.
+func captureBranchReclaimMemberIdentities(
+	c *Compile, ids []uint64,
+) (map[uint64]pkMoveTableIdentity, error) {
+	names := make(map[uint64]pkMoveTableIdentity, len(ids))
+	if len(ids) == 0 {
+		return names, nil
+	}
+	sorted := slices.Clone(ids)
+	slices.Sort(sorted)
+	const nameBatch = 256
+	// Pass 1: same-transaction retirees still present in mo_tables.
+	for start := 0; start < len(sorted); start += nameBatch {
+		end := min(start+nameBatch, len(sorted))
+		res, err := c.runSqlWithResult(fmt.Sprintf(
+			"select rel_id, reldatabase, relname, coalesce(nullif(rel_logical_id,0),rel_id) from %s.%s where rel_id in (%s)",
+			catalog.MO_CATALOG, catalog.MO_TABLES, branchReclaimIDList(sorted[start:end]),
+		), int32(catalog.System_Account))
+		if err != nil {
+			return nil, err
+		}
+		var readErr error
+		res.ReadRows(func(n int, cols []*vector.Vector) bool {
+			if len(cols) != 4 || cols[0].GetType().Oid != types.T_uint64 {
+				readErr = moerr.NewInternalError(c.proc.Ctx, "invalid branch reclaim member names")
+				return false
+			}
+			relIDs := vector.MustFixedColNoTypeCheck[uint64](cols[0])
+			for i := 0; i < n; i++ {
+				identity := pkMoveTableIdentity{
+					db:  cols[1].GetStringAt(i),
+					tbl: cols[2].GetStringAt(i),
+				}
+				if logical, castErr := pkMoveRetentionIDCell(cols[3], i); castErr == nil {
+					identity.logicalID = logical
+				}
+				names[relIDs[i]] = identity
+			}
+			return true
+		})
+		res.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	// Pass 2: earlier retirees, named by a child's retained protect
+	// snapshot. All children of one member record the same identity for
+	// it, so the first row an id carries wins.
+	missing := make([]uint64, 0, len(sorted))
+	for _, id := range sorted {
+		if _, ok := names[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	for start := 0; start < len(missing); start += nameBatch {
+		end := min(start+nameBatch, len(missing))
+		res, err := c.runSqlWithResult(fmt.Sprintf(
+			"select obj_id, database_name, table_name from %s.%s where kind = '%s' and obj_id in (%s)",
+			catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+			databranchutils.BranchSnapshotKind, branchReclaimIDList(missing[start:end]),
+		), int32(catalog.System_Account))
+		if err != nil {
+			return nil, err
+		}
+		var readErr error
+		res.ReadRows(func(n int, cols []*vector.Vector) bool {
+			if len(cols) != 3 || cols[0].GetType().Oid != types.T_uint64 {
+				readErr = moerr.NewInternalError(c.proc.Ctx, "invalid branch reclaim member snapshot names")
+				return false
+			}
+			objIDs := vector.MustFixedColNoTypeCheck[uint64](cols[0])
+			for i := 0; i < n; i++ {
+				if _, ok := names[objIDs[i]]; !ok {
+					names[objIDs[i]] = pkMoveTableIdentity{
+						db:  cols[1].GetStringAt(i),
+						tbl: cols[2].GetStringAt(i),
+					}
+				}
+			}
+			return true
+		})
+		res.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	return names, nil
+}
+
+// deletePkMoveUpdateLinksForReclaimedSubtrees reclaims the pk-move update
+// provenance links of exactly the tables the protect-snapshot flow just
+// retired: the dropped roots plus the ancestors whose complete descendant
+// subtree is now deleted (databranchutils.ComputeBranchReclaimTableIDs).
+// Anything else stays: a dropped intermediate generation with live branch
+// descendants keeps its protected stream, and the diff/apply paths still
+// resolve pk moves recorded on it. The catalog is per account, so the
+// delete rides under the session account; globally-unique table ids make a
+// delete a harmless no-op for rows the account never recorded.
+//
+// A RETAINED USER SNAPSHOT whose scope covers a retiring member can still
+// ground a historical DATA BRANCH over it (DATA BRANCH CREATE ... FROM
+// t{snapshot="..."} instantiates a descendant whose diffs span links
+// recorded on the member), exactly like the row-less parents below:
+// reclaiming such a member's links degrades those future diffs to
+// delete+insert replay, reintroducing the very failure the link catalog
+// exists to remove (r23 review F2). Each retiring member is therefore
+// gated by the same snapshot-grounding check the orphan-parent pass uses,
+// probing by the caller-supplied identity. An unresolvable identity or a
+// probe failure keeps the member's links (logged, benign orphanage)
+// rather than failing the drop or silently dropping protected history.
+// Every KEEP verdict also persists the member's identity into the
+// retention ledger the owner-removal reap scans (D154-B), and every
+// delete retires the ledger row together with the links (ownership
+// transfer).
+func deletePkMoveUpdateLinksForReclaimedSubtrees(
+	c *Compile,
+	dag databranchutils.BranchReclaimDag,
+	roots []uint64,
+	names map[uint64]pkMoveTableIdentity,
+) error {
+	ids := databranchutils.ComputeBranchReclaimTableIDs(dag, roots)
+	if len(ids) == 0 {
+		return nil
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		identity, ok := names[id]
+		if !ok {
+			// The member's names were no longer resolvable when the
+			// reclaim admission captured identities (an earlier
+			// transaction retired the relation row). The retention
+			// ledger is the one record a later owner-removal reap can
+			// trust (D154-B): a stored identity revives scope matching
+			// here; any other miss keeps the links and records the
+			// residue so the member is never invisible again.
+			ldb, ltbl, llogical, found, lerr := lookupPkMoveLinkRetention(c, accountID, id)
+			switch {
+			case lerr != nil:
+				logutil.Warn(
+					"DataBranch-PkMoveLink-MemberRetentionLedgerProbeFailed",
+					zap.Uint64("table-id", id),
+					zap.Error(lerr),
+				)
+				continue
+			case found && ldb != "" && ltbl != "":
+				identity = pkMoveTableIdentity{db: ldb, tbl: ltbl, logicalID: llogical}
+			case found:
+				// Empty-name residue already on file: keep, no write.
+				logutil.Warn(
+					"DataBranch-PkMoveLink-MemberIdentityUnresolved",
+					zap.Uint64("table-id", id),
+				)
+				continue
+			default:
+				logutil.Warn(
+					"DataBranch-PkMoveLink-MemberIdentityUnresolved",
+					zap.Uint64("table-id", id),
+				)
+				insertPkMoveLinkRetention(c, accountID, id, 0, "", "")
+				continue
+			}
+		}
+		grounded, snapErr := branchSnapshotCoversTable(c, accountID, id, identity.logicalID, identity.db, identity.tbl)
+		if snapErr != nil {
+			logutil.Warn(
+				"DataBranch-PkMoveLink-MemberSnapshotProbeFailed",
+				zap.Uint64("table-id", id),
+				zap.Error(snapErr),
+			)
+			insertPkMoveLinkRetention(c, accountID, id, identity.logicalID, identity.db, identity.tbl)
+			continue
+		}
+		if grounded {
+			insertPkMoveLinkRetention(c, accountID, id, identity.logicalID, identity.db, identity.tbl)
+			continue
+		}
+		if err = deletePkMoveLinkAndRetention(c, accountID, id); err != nil {
+			return err
+		}
+	}
+
+	// A lineage's ultimate source table holds no metadata row, so the
+	// computation above never names it; yet applied moves record links
+	// under its table id (see BranchReclaimOrphanParentIDs). When the
+	// retiring set disconnects the source's last descendant row, the
+	// source's links retire here too — but only after the liveness probe
+	// confirms no LIVE descendant survives anywhere in its lineage graph,
+	// including behind deleted intermediate generations. Probe failures
+	// keep the links (logged, benign orphanage) rather than aborting the
+	// drop. A successfully probed LINK-FREE parent ends here: with nothing
+	// to retain, a grounded KEEP verdict would mint the permanent
+	// empty-name O1 residue row D154-D keeps forever (plus one WARN per
+	// reap cycle) for a table that never carried provenance — the
+	// ordinary create/branch/drop/drop sequence would otherwise
+	// accumulate one durable ledger row per run (r51 review F2). Presence
+	// probe errors stay conservative and fall through to the KEEP paths.
+	for _, parentID := range databranchutils.BranchReclaimOrphanParentIDs(dag, ids) {
+		if has, perr := pkMoveLinkPresenceProbe(c, accountID, parentID); perr == nil && !has {
+			continue
+		}
+		hasLive, probeErr := branchHasLiveLineageDescendant(c, parentID)
+		if probeErr != nil {
+			logutil.Warn(
+				"DataBranch-PkMoveLink-ParentProbeFailed",
+				zap.Uint64("table-id", parentID),
+				zap.Error(probeErr),
+			)
+			insertPkMoveLinkRetention(c, accountID, parentID, 0, "", "")
+			continue
+		}
+		if hasLive {
+			continue
+		}
+		pdb, ptbl, plogical, grounded, snapErr := branchHasSnapshotGroundedLineage(c, accountID, parentID)
+		if snapErr != nil {
+			logutil.Warn(
+				"DataBranch-PkMoveLink-SnapshotProbeFailed",
+				zap.Uint64("table-id", parentID),
+				zap.Error(snapErr),
+			)
+			insertPkMoveLinkRetention(c, accountID, parentID, plogical, pdb, ptbl)
+			continue
+		}
+		if grounded {
+			if pdb == "" && ptbl == "" {
+				// True residue (D154-D O1 class): neither mo_tables nor
+				// the retention ledger names this row-less parent, so the
+				// O1 residue row is the only record a later owner-removal
+				// reap can see; that reap preserves it with a WARN and
+				// never auto-deletes it.
+				logutil.Warn(
+					"DataBranch-PkMoveLink-ParentIdentityUnresolved",
+					zap.Uint64("table-id", parentID),
+				)
+			}
+			insertPkMoveLinkRetention(c, accountID, parentID, plogical, pdb, ptbl)
+			continue
+		}
+		if err = deletePkMoveLinkAndRetention(c, accountID, parentID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// pkMoveSnapshotRow is the compile-local alias of the shared snapshot
+// coverage row: the predicate lives in databranchutils so the frontend
+// owner-removal reap evaluates the identical rule without depending on the
+// compile package. For table-level rows ObjId is the physical table id
+// recorded at snapshot creation, so it survives a later RENAME of the
+// table (renames keep the relation id); cluster/account rows carry the
+// owning account id and database rows the database id, neither of which
+// this check consults. Rows with kind='branch' are filtered by the
+// caller's query: branch-protect snapshots retire with the branch
+// metadata rows the descendant probe already covers.
+type pkMoveSnapshotRow = databranchutils.PkMoveSnapshotRow
+
+// pkMoveSnapshotCoversTable reports whether any ACCOUNT-LOCAL row can
+// ground a historical DATA BRANCH over (tableID, dbName, tableName):
+// cluster- and account-level snapshots freeze the whole account's image,
+// database- and table-level ones the named scope. A table-level row also
+// grounds by its recorded physical table id: a snapshot created before a
+// rename still names the old scope, and matching by name alone would
+// discard the coverage the snapshot actually retains (r24 review F2). The
+// sys-owned halves (cluster and cross-tenant account snapshot rows live in
+// SYS's own catalog, mo_pitr rows exclusively so) are evaluated by
+// branchSnapshotCoversTable on top of this local predicate.
+func pkMoveSnapshotCoversTable(rows []pkMoveSnapshotRow, tableID, logicalID uint64, dbName, tableName string) bool {
+	return databranchutils.PkMoveLocalSnapshotCoversTable(rows, tableID, logicalID, dbName, tableName)
+}
+
+// branchHasSnapshotGroundedLineage reports whether any LIVE user snapshot
+// of the owning account could still ground a historical DATA BRANCH over
+// tableID. DATA BRANCH CREATE ... FROM t{snapshot="..."} instantiates a
+// new lineage descendant from a retained snapshot; that descendant's
+// diffs may span link-bearing history of tableID recorded AFTER the
+// snapshot (the source table kept evolving), so reclaiming the links
+// while one covering snapshot survives would silently degrade those
+// future diffs to delete+insert replay. The snapshot catalog is per
+// account and a session resolves only its own account's catalog, so the
+// probe runs under the owning account. All failures keep the links
+// (fail ALIVE), including the name-resolution failure of a table whose
+// mo_tables row is already gone.
+//
+// The resolved identity travels back to the caller so KEEP verdicts can
+// carry it into the retention ledger (D154-B/D): an empty pair means the
+// identity was unresolvable and the caller writes the O1 residue row the
+// owner-removal reap never auto-deletes.
+func branchHasSnapshotGroundedLineage(
+	c *Compile, accountID uint32, tableID uint64,
+) (dbName, tblName string, logicalID uint64, grounded bool, err error) {
+	res, err := c.runSqlWithResultAndOptions(
+		fmt.Sprintf(
+			"select reldatabase, relname, coalesce(nullif(rel_logical_id,0),rel_id) from %s.%s where rel_id = %d",
+			catalog.MO_CATALOG, catalog.MO_TABLES, tableID,
+		),
+		int32(accountID),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return "", "", 0, true, err
+	}
+	res.ReadRows(func(n int, cols []*vector.Vector) bool {
+		if n > 0 {
+			dbName = string(cols[0].GetBytesAt(0))
+			tblName = string(cols[1].GetBytesAt(0))
+			if logical, castErr := pkMoveRetentionIDCell(cols[2], 0); castErr == nil {
+				logicalID = logical
+			}
+		}
+		return true
+	})
+	res.Close()
+	if dbName == "" || tblName == "" {
+		// The relation row is gone. The retention ledger may still carry
+		// the identity the lineage-referenced drop captured (D154-B):
+		// with it, coverage stays decidable and an uncovered verdict can
+		// finally retire the links. Without it — including the empty-name
+		// residue rows a legacy keep verdict wrote — scope matching is
+		// impossible, so keep the links.
+		ldb, ltbl, llogical, found, lerr := lookupPkMoveLinkRetention(c, accountID, tableID)
+		if lerr != nil {
+			return "", "", 0, true, lerr
+		}
+		if !found || ldb == "" || ltbl == "" {
+			return "", "", 0, true, nil
+		}
+		dbName, tblName = ldb, ltbl
+		logicalID = llogical
+	}
+	grounded, err = branchSnapshotCoversTable(c, accountID, tableID, logicalID, dbName, tblName)
+	return dbName, tblName, logicalID, grounded, err
+}
+
+// branchSnapshotCoversTable reports whether any LIVE retained owner still
+// grounds a historical DATA BRANCH over (tableID, dbName, tableName) under
+// the ONE shared coverage predicate (D152), evaluated over three disjoint
+// row sources:
+//
+//  1. Account-local snapshots (the tenant's own mo_snapshots rows):
+//     cluster/account rows ground every table of the account,
+//     database/table rows the named scope or the recorded physical table
+//     id (pre-rename rows keep grounding the renamed table).
+//  2. Sys-owned snapshots (D155-A): SYS creates cluster snapshots and
+//     account snapshots targeting other tenants in SYS's own mo_snapshots,
+//     where an account-local probe cannot see them — yet cluster
+//     snapshots retain every tenant's history and an unchanged-incarnation
+//     timestamp clone stays admissible, so missing this half would retire
+//     a tenant's links while a legitimate clone source still exists.
+//     Cluster rows ground every account; account-level rows ground their
+//     recorded target account (obj_id match, with the recorded
+//     account_name as a lazily-resolved fallback). Database/table rows
+//     resolve inside their creator's own namespace and are owner-local by
+//     construction, so the sys half never attributes them.
+//  3. Active mo_pitr rows (pitr_status = 1), which live only in the SYS
+//     catalog: cluster rows ground every account; account rows ground
+//     their recorded target; database/table rows ground the owning
+//     account's named scope, table rows additionally by recorded physical
+//     obj id.
+//
+// Callers that already carry the table's exact identity — the drop flow's
+// plan names, or the retention ledger's captured pair — probe coverage
+// directly: by reclaim time the relation row is usually retired already,
+// so resolving the name from mo_tables would always fail closed and
+// silently keep every dropped table's links (a retention leak). The
+// physical table id travels alongside the names so table-level owners
+// created before a rename still ground the table (r24 review F2). Probe
+// errors keep the links (fail ALIVE) in all three halves; a missing
+// catalog on a pre-upgrade image simply contributes no rows.
+func branchSnapshotCoversTable(
+	c *Compile, accountID uint32, tableID, logicalID uint64, dbName, tableName string,
+) (bool, error) {
+	// Half 1: the tenant's own snapshot catalog. A missing catalog
+	// (pre-upgrade tenants) reads as EMPTY: the sys and pitr halves below
+	// can still ground the table. Every other error fails ALIVE.
+	var rows []pkMoveSnapshotRow
+	res, err := c.runSqlWithResultAndOptions(
+		fmt.Sprintf(
+			"select level, database_name, table_name, obj_id from %s.%s where kind != 'branch'",
+			catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+		),
+		int32(accountID),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return true, err
+		}
+	} else {
+		res.ReadRows(func(n int, cols []*vector.Vector) bool {
+			for i := 0; i < n; i++ {
+				row := pkMoveSnapshotRow{
+					Level:        string(cols[0].GetBytesAt(i)),
+					DatabaseName: string(cols[1].GetBytesAt(i)),
+					TableName:    string(cols[2].GetBytesAt(i)),
+				}
+				if !cols[3].IsNull(uint64(i)) {
+					// obj_id is BIGINT UNSIGNED; an unexpected vector shape
+					// leaves ObjId zero, which never matches a table id and
+					// thereby fails closed onto name matching alone.
+					switch cols[3].GetType().Oid {
+					case types.T_uint64:
+						row.ObjId = vector.MustFixedColNoTypeCheck[uint64](cols[3])[i]
+					case types.T_int64:
+						row.ObjId = uint64(vector.MustFixedColNoTypeCheck[int64](cols[3])[i])
+					}
+				}
+				rows = append(rows, row)
+			}
+			return true
+		})
+		res.Close()
+	}
+	if pkMoveSnapshotCoversTable(rows, tableID, logicalID, dbName, tableName) {
+		return true, nil
+	}
+
+	// Half 2: sys-owned snapshots (D155-A). SYS's own rows already ground
+	// sys via half 1, so the second catalog read is skipped for the system
+	// account — and for it alone, because mo_snapshots is per account.
+	var sysRows []databranchutils.PkMoveSnapshotRow
+	if accountID != catalog.System_Account {
+		res, err = c.runSqlWithResultAndOptions(
+			fmt.Sprintf(
+				"select level, account_name, database_name, table_name, obj_id from %s.%s where kind != 'branch'",
+				catalog.MO_CATALOG, catalog.MO_SNAPSHOTS,
+			),
+			int32(catalog.System_Account),
+			executor.StatementOption{}.WithDisableLog(),
+		)
+		if err != nil {
+			// Same fall-through contract as half 1: a missing catalog
+			// reads as empty, anything else fails ALIVE.
+			if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				return true, err
+			}
+		} else {
+			res.ReadRows(func(n int, cols []*vector.Vector) bool {
+				for i := 0; i < n; i++ {
+					row := databranchutils.PkMoveSnapshotRow{
+						Level: string(cols[0].GetBytesAt(i)),
+					}
+					if !cols[1].IsNull(uint64(i)) {
+						row.AccountName = string(cols[1].GetBytesAt(i))
+					}
+					if !cols[2].IsNull(uint64(i)) {
+						row.DatabaseName = string(cols[2].GetBytesAt(i))
+					}
+					if !cols[3].IsNull(uint64(i)) {
+						row.TableName = string(cols[3].GetBytesAt(i))
+					}
+					if !cols[4].IsNull(uint64(i)) {
+						switch cols[4].GetType().Oid {
+						case types.T_uint64:
+							row.ObjId = vector.MustFixedColNoTypeCheck[uint64](cols[4])[i]
+						case types.T_int64:
+							row.ObjId = uint64(vector.MustFixedColNoTypeCheck[int64](cols[4])[i])
+						}
+					}
+					sysRows = append(sysRows, row)
+				}
+				return true
+			})
+			res.Close()
+		}
+	}
+
+	// Half 3: active mo_pitr rows; that catalog lives only under SYS.
+	var pitrRows []databranchutils.PkMovePitrRow
+	res, err = c.runSqlWithResultAndOptions(
+		fmt.Sprintf(
+			"select level, account_id, account_name, database_name, table_name, obj_id from %s.%s where %s = 1",
+			catalog.MO_CATALOG, catalog.MO_PITR, catalog.MO_PITR_STATUS,
+		),
+		int32(catalog.System_Account),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		// Same fall-through contract as the snapshot halves: a missing
+		// mo_pitr reads as empty and must NOT mask sys-snapshot coverage.
+		if !moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+			return true, err
+		}
+	} else {
+		res.ReadRows(func(n int, cols []*vector.Vector) bool {
+			for i := 0; i < n; i++ {
+				row := databranchutils.PkMovePitrRow{
+					Level: string(cols[0].GetBytesAt(i)),
+				}
+				if !cols[1].IsNull(uint64(i)) {
+					switch cols[1].GetType().Oid {
+					case types.T_uint64:
+						row.AccountId = vector.MustFixedColNoTypeCheck[uint64](cols[1])[i]
+					case types.T_int64:
+						row.AccountId = uint64(vector.MustFixedColNoTypeCheck[int64](cols[1])[i])
+					}
+				}
+				if !cols[2].IsNull(uint64(i)) {
+					row.AccountName = string(cols[2].GetBytesAt(i))
+				}
+				if !cols[3].IsNull(uint64(i)) {
+					row.DatabaseName = string(cols[3].GetBytesAt(i))
+				}
+				if !cols[4].IsNull(uint64(i)) {
+					row.TableName = string(cols[4].GetBytesAt(i))
+				}
+				if !cols[5].IsNull(uint64(i)) {
+					switch cols[5].GetType().Oid {
+					case types.T_uint64:
+						row.ObjId = vector.MustFixedColNoTypeCheck[uint64](cols[5])[i]
+					case types.T_int64:
+						row.ObjId = uint64(vector.MustFixedColNoTypeCheck[int64](cols[5])[i])
+					}
+				}
+				pitrRows = append(pitrRows, row)
+			}
+			return true
+		})
+		res.Close()
+	}
+
+	// The account-name fallback matches nothing in the common id-keyed
+	// case; resolve mo_account lazily, at most once for both halves. A
+	// lookup failure degrades to id-only matching — the obj_id recorded at
+	// creation is the invariant and the name match a robustness extra — it
+	// never decides keep versus drop by itself.
+	accountName := ""
+	if databranchutils.PkMoveSysSnapshotNeedsAccountName(sysRows, accountID) ||
+		databranchutils.PkMovePitrNeedsAccountName(pitrRows, accountID) {
+		if name, nameErr := pkMoveLookupAccountName(c, accountID); nameErr == nil {
+			accountName = name
+		}
+	}
+	if databranchutils.PkMoveSysSnapshotCoversTable(sysRows, accountID, accountName) {
+		return true, nil
+	}
+	return databranchutils.PkMovePitrCoversTable(pitrRows, accountID, accountName, tableID, logicalID, dbName, tableName), nil
+}
+
+// pkMoveLookupAccountName resolves a tenant's account_name for the lazy
+// name-fallback half of the sys-owned owner predicates. mo_account lives
+// only in the SYS catalog, so the lookup always runs attached there; the
+// caller swallows the error and degrades to id-only matching.
+func pkMoveLookupAccountName(c *Compile, accountID uint32) (string, error) {
+	res, err := c.runSqlWithResultAndOptions(
+		fmt.Sprintf(
+			"select account_name from mo_catalog.mo_account where account_id = %d",
+			accountID,
+		),
+		int32(catalog.System_Account),
+		executor.StatementOption{}.WithDisableLog(),
+	)
+	if err != nil {
+		return "", err
+	}
+	defer res.Close()
+	name := ""
+	res.ReadRows(func(n int, cols []*vector.Vector) bool {
+		if n > 0 {
+			name = string(cols[0].GetBytesAt(0))
+		}
+		return true
+	})
+	return name, nil
+}
+
+// branchHasLiveLineageDescendant probes whether tableID still has any LIVE
+// descendant in the branch/alter lineage graph, following p_table_id edges
+// through deleted intermediate generations: a dropped intermediate branch
+// keeps naming its live children, and the lineage parent's provenance links
+// must survive while any transitive descendant does (diffs and merges
+// through a retained descendant still resolve moves recorded on the
+// parent). The query runs under the dropping transaction, so rows this
+// transaction just flipped to deleted are already unseen as live; rows it
+// has not retired — live sibling branches, other databases' clones —
+// correctly keep the parent's links. The walk is row-bounded and fails
+// ALIVE: reclaim is permanent, so fan-out pathologies keep the links.
+func branchHasLiveLineageDescendant(c *Compile, tableID uint64) (bool, error) {
+	const maxVisited = 512
+	visited := map[uint64]struct{}{tableID: {}}
+	queue := []uint64{tableID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		res, err := c.runSqlWithResultAndOptions(
+			fmt.Sprintf(
+				"select table_id, table_deleted from %s.%s where p_table_id = %d",
+				catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, id,
+			),
+			int32(catalog.System_Account),
+			executor.StatementOption{}.WithDisableLog(),
+		)
+		if err != nil {
+			return false, err
+		}
+		type childRow struct {
+			id      uint64
+			deleted bool
+		}
+		var children []childRow
+		res.ReadRows(func(n int, cols []*vector.Vector) bool {
+			ids := vector.MustFixedColNoTypeCheck[uint64](cols[0])
+			deleted := vector.MustFixedColNoTypeCheck[bool](cols[1])
+			for i := 0; i < n; i++ {
+				children = append(children, childRow{id: ids[i], deleted: deleted[i]})
+			}
+			return true
+		})
+		res.Close()
+		for _, child := range children {
+			if !child.deleted {
+				return true, nil
+			}
+			if _, seen := visited[child.id]; seen {
+				continue
+			}
+			visited[child.id] = struct{}{}
+			queue = append(queue, child.id)
+			if len(visited) >= maxVisited {
+				// Pathological fan-out: fail ALIVE; the links stay and the
+				// next retirement re-evaluates them.
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// reclaimUnbranchedDropPkMoveLinks retires the pk-move update links of a
+// dropped table no branch metadata names. No metadata row survives, but
+// live user snapshots can still ground a historical DATA BRANCH over the
+// table (DATA BRANCH CREATE ... FROM t{snapshot="..."}): a descendant
+// instantiated later from one of those snapshots diffs history recorded
+// under this table id, so reclaiming the links now would silently
+// degrade those future diffs to delete+insert replay — the same
+// grounding the orphan-parent flow honors. Probe failures keep the
+// links (benign orphanage, as there) rather than failing the drop.
+// Keep verdicts additionally record the retained identity into the
+// retention ledger the owner-removal reap scans (D154-B).
+func reclaimUnbranchedDropPkMoveLinks(c *Compile, accountID uint32, tblID, droppedLogicalID uint64, dbName, tblName string) error {
+	// The drop flow carries the plan's database and table names; by this
+	// point the relation row is usually retired already, so a name probe
+	// against mo_tables would always fail closed and degenerate the gate
+	// into keeping every table's links. Use the caller's identity when
+	// present and fall back to the by-id probe only when it is absent. The
+	// member's durable rel_logical_id travels likewise: the drop flow
+	// captured it from the relation's TableDef before retirement, because
+	// owner catalogs key table-level rows by logical identity.
+	logicalID := droppedLogicalID
+	var grounded bool
+	var snapErr error
+	if dbName == "" || tblName == "" {
+		// The plan names are absent; the by-id probe resolves the identity
+		// from mo_tables or the retention ledger and hands it back so the
+		// KEEP writes below carry it (D154-B/D).
+		var resolvedLogical uint64
+		dbName, tblName, resolvedLogical, grounded, snapErr = branchHasSnapshotGroundedLineage(c, accountID, tblID)
+		if logicalID == 0 {
+			logicalID = resolvedLogical
+		}
+	} else {
+		grounded, snapErr = branchSnapshotCoversTable(c, accountID, tblID, logicalID, dbName, tblName)
+	}
+	if snapErr != nil {
+		logutil.Warn(
+			"DataBranch-PkMoveLink-DropSnapshotProbeFailed",
+			zap.Uint64("table-id", tblID),
+			zap.Error(snapErr),
+		)
+		insertPkMoveLinkRetention(c, accountID, tblID, logicalID, dbName, tblName)
+		return nil
+	}
+	if grounded {
+		insertPkMoveLinkRetention(c, accountID, tblID, logicalID, dbName, tblName)
+		return nil
+	}
+	return deletePkMoveLinkAndRetention(c, accountID, tblID)
+}
+
+// deletePkMoveUpdateLinksForIDs reclaims links for a caller-computed set of
+// physical table ids whose streams just became unreadable (for example
+// compacted ALTER generations); each retired id's retention-ledger row dies
+// with its links (ownership transfer).
+func deletePkMoveUpdateLinksForIDs(c *Compile, ids []uint64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err = deletePkMoveLinkAndRetention(c, accountID, id); err != nil {
 			return err
 		}
 	}
@@ -5253,6 +6103,46 @@ func (s *Scope) dropTableSingleResolved(
 		}
 	}
 
+	// Reclaim this account's recorded pk-move update links for the dropped
+	// table. The link catalog lives per account, so the delete runs under
+	// the dropping account rather than the system tenant; tenants created
+	// before the catalog existed simply have nothing to reclaim. A table
+	// participating in branch lineage defers to the protect-snapshot flow
+	// below instead: while any branch descendant stays live, the dropped
+	// table's protected delta stream remains readable and branch diffs can
+	// still fold the pk moves recorded on it, so its links retire together
+	// with that stream (deletePkMoveUpdateLinksForReclaimedSubtrees).
+	// The funnels below key on the plan's table id while droppedLogicalID
+	// names the relation actually dropped; non-RC paths let the two
+	// diverge, so the durable identity travels only when they agree (0
+	// keeps the legacy coverage lane otherwise).
+	funnelLogicalID := droppedLogicalID
+	if tblID != droppedRelationID {
+		funnelLogicalID = 0
+	}
+	participates, lerr := tableHasBranchLineage(c, tblID)
+	if lerr != nil {
+		return lerr
+	}
+	if !participates {
+		if err = reclaimUnbranchedDropPkMoveLinks(c, accountID, tblID, funnelLogicalID, dbName, tblName); err != nil {
+			return err
+		}
+	} else {
+		// D154-B: a lineage-referenced drop defers this table's reclaim to
+		// the protect-snapshot flow, whose coverage decision may run long
+		// after mo_tables lost the name. Capture the plan identity into the
+		// retention ledger now, but only for a table that actually carries
+		// links — the gated probe keeps the ledger bounded. A probe failure
+		// writes too: a false miss would strand the one record later reaps
+		// can trust, while a false extra row is bounded residue the same
+		// reaps retire. The write never fails the drop
+		// (insertPkMoveLinkRetention is fail-ALIVE by construction).
+		if has, perr := pkMoveLinkPresenceProbe(c, accountID, tblID); perr != nil || has {
+			insertPkMoveLinkRetention(c, accountID, tblID, funnelLogicalID, dbName, tblName)
+		}
+	}
+
 	// Branch Protect Snapshot reclaim: lock the complete metadata DAG before
 	// flipping table_deleted=true for this tid, then check whether any subtree
 	// has become fully deleted and release the corresponding
@@ -5264,7 +6154,10 @@ func (s *Scope) dropTableSingleResolved(
 			return err
 		}
 	} else if !c.skipDataBranchReclaim {
-		if err = c.reclaimAndCompactBranchProtectSnapshots([]uint64{tblID}); err != nil {
+		if err = c.reclaimAndCompactBranchProtectSnapshots(
+			[]uint64{tblID},
+			map[uint64]pkMoveTableIdentity{tblID: {db: dbName, tbl: tblName, logicalID: funnelLogicalID}},
+		); err != nil {
 			logutil.Error("reclaim branch protect snapshots failed",
 				zap.Uint64("tblID", tblID),
 				zap.Error(err),

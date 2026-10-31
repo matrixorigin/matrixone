@@ -4011,6 +4011,16 @@ func TestDoDropPitrCompactsHistoricalAlterLineage(t *testing.T) {
 	otherSQL := fmt.Sprintf(getPitrFormat+" where pitr_name != '%s';", SYSMOCATALOGPITR)
 	bh.sql2result[otherSQL] = newMrsForPitrRecord(nil)
 	bh.sql2result[getSqlForDropPitr(SYSMOCATALOGPITR, sysAccountID)] = nil
+	// D155-B: the pre-DELETE owner-scope classification reads (empty here).
+	ownerScopeSQL := func(name string, account uint64) string {
+		return fmt.Sprintf(
+			"select level, ifnull(account_id, 0), ifnull(account_name, ''), ifnull(obj_id, 0) "+
+				"from mo_catalog.mo_pitr where pitr_name = '%s' and create_account = %d",
+			name, account,
+		)
+	}
+	bh.sql2result[ownerScopeSQL("pitr01", uint64(sysAccountID))] = newMrsForPitrRecord(nil)
+	bh.sql2result[ownerScopeSQL(SYSMOCATALOGPITR, uint64(sysAccountID))] = newMrsForPitrRecord(nil)
 
 	require.NoError(t, doDropPitr(ctx, ses, stmt))
 	require.Contains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())

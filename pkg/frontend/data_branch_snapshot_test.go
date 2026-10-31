@@ -302,6 +302,9 @@ func TestDoDropSnapshotRollsBackCompactionFailure(t *testing.T) {
 	bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{0, 0}})
 	kindSQL := "select kind from mo_catalog.mo_snapshots where sname = 'snapshot_test' order by snapshot_id limit 1"
 	bh.sql2result[kindSQL] = newMrsForPasswordOfUser([][]interface{}{{"user"}})
+	// D155-B: the pre-DELETE owner-scope classification read (empty here).
+	ownerScopeSQL := "select level, ifnull(account_name, ''), ifnull(obj_id, 0) from mo_catalog.mo_snapshots where sname = 'snapshot_test' order by snapshot_id"
+	bh.sql2result[ownerScopeSQL] = newMrsForPasswordOfUser([][]interface{}{})
 	userDeleteSQL := getSqlForDropSnapshot("snapshot_test")
 	branchDeleteSQL := "delete from mo_catalog.mo_snapshots where kind = 'branch' and sname in ('__mo_branch_2')"
 	wantErr := errors.New("branch snapshot delete failed")
