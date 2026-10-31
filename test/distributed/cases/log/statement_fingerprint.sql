@@ -1,0 +1,74 @@
+-- prepare
+drop account if exists bvt_statement_fingerprint;
+create account if not exists `bvt_statement_fingerprint` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+
+-- Keep a dedicated writer session alive while the system-account observer
+-- checks only this run's rows through its current mo_sessions identity.
+-- @session:id=1&user=bvt_statement_fingerprint:admin:accountadmin&password=123456
+set session disable_agg_statement = on;
+select 37;
+set @fp_first = 11;
+set @fp_second = 12;
+set @fp_replacement = 13;
+prepare fp_stmt from select ? + 0;
+execute fp_stmt using @fp_first;
+execute fp_stmt using @fp_second;
+deallocate prepare fp_stmt;
+prepare fp_stmt from select ? * 2;
+execute fp_stmt using @fp_replacement;
+deallocate prepare fp_stmt;
+execute fp_stmt using @fp_missing;
+-- @session
+
+-- Wait for exactly the identifiable rows from the still-live writer session.
+-- The failed EXECUTE must have its own failed row with an empty fingerprint;
+-- it cannot satisfy the absence assertion by simply not being published.
+-- @wait_expect(1,60)
+select count(*) = 5
+       and sum(case when lower(s.statement) like 'select 37%'
+                    and s.status = 'Success'
+                    and s.statement_fingerprint = 'd66b567588a2961eafdfdf588de707dc67dfb3b0bc7598fb94430ab0404de08a'
+                    and s.aggr_count = 0 then 1 else 0 end) = 1
+       and sum(case when lower(s.statement) like 'execute fp_stmt using @fp_first%'
+                    and s.status = 'Success'
+                    and s.statement_fingerprint = '05513085fe7fd114153fa4a5831e9a63d5e169b95782ce38320d3f8af9088096'
+                    and s.aggr_count = 0 then 1 else 0 end) = 1
+       and sum(case when lower(s.statement) like 'execute fp_stmt using @fp_second%'
+                    and s.status = 'Success'
+                    and s.statement_fingerprint = '05513085fe7fd114153fa4a5831e9a63d5e169b95782ce38320d3f8af9088096'
+                    and s.aggr_count = 0 then 1 else 0 end) = 1
+       and sum(case when lower(s.statement) like 'execute fp_stmt using @fp_replacement%'
+                    and s.status = 'Success'
+                    and s.statement_fingerprint = '869f8219e1a66dde05b8d18adb8e18ec5a22e90ac6f55e667ba0f886ed8327d4'
+                    and s.aggr_count = 0 then 1 else 0 end) = 1
+       and sum(case when lower(s.statement) like 'execute fp_stmt using @fp_missing%'
+                    and s.status = 'Failed'
+                    and s.error <> ''
+                    and s.statement_fingerprint = ''
+                    and s.aggr_count = 0 then 1 else 0 end) = 1
+       as statement_fingerprint_telemetry_ok
+from system.statement_info s
+join mo_catalog.mo_sessions live
+  on live.session_id = s.session_id and live.account = s.account
+where live.account = 'bvt_statement_fingerprint'
+  and (lower(s.statement) like 'select 37%'
+       or lower(s.statement) like 'execute fp_stmt using @fp_first%'
+       or lower(s.statement) like 'execute fp_stmt using @fp_second%'
+       or lower(s.statement) like 'execute fp_stmt using @fp_replacement%'
+       or lower(s.statement) like 'execute fp_stmt using @fp_missing%');
+
+select s.statement, s.statement_fingerprint, s.status, s.aggr_count
+from system.statement_info s
+join mo_catalog.mo_sessions live
+  on live.session_id = s.session_id and live.account = s.account
+where live.account = 'bvt_statement_fingerprint'
+  and (lower(s.statement) like 'select 37%'
+       or lower(s.statement) like 'execute fp_stmt using @fp_first%'
+       or lower(s.statement) like 'execute fp_stmt using @fp_second%'
+       or lower(s.statement) like 'execute fp_stmt using @fp_replacement%'
+       or lower(s.statement) like 'execute fp_stmt using @fp_missing%')
+order by lower(s.statement), s.status, s.statement_fingerprint;
+
+-- cleanup
+drop account if exists bvt_statement_fingerprint;
+select count(*) = 0 from mo_catalog.mo_account where account_name = 'bvt_statement_fingerprint';
