@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
@@ -1524,12 +1525,56 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 					"remote NOWAIT and SKIP LOCKED lock operators are not supported")
 			}
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTargetWithPolicy(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetNoWait(), target.GetSkipLocked())
+			// Round-10 finding 2 (D-1 per-target representation): the wire
+			// rebuild installs each occurrence's OWN presence with the
+			// target it adds — an unmarked same-table occurrence never
+			// inherits a marked occurrence's presence. Rev 24, round 11:
+			// the shipped value is the occurrence's ALREADY-RESOLVED
+			// effective activation for the stamped attempt, so the rebuild
+			// installs it with ZERO raw H — an engaging historical
+			// occurrence never carries the marked fields, its rebuilt lock
+			// stays on today's lock-only behavior, and the post-rebuild
+			// resolve against the remote SnapshotTS folds to the shipped
+			// activation (zero H never engages).
+			lockArg.AddLockTargetWithOccurrence(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetNoWait(), target.GetSkipLocked(), target.GetLockingRead(), timestamp.Timestamp{})
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
 				lockArg.LockTableWithMode(target.TableId, target.Mode, target.ChangeDef)
 			}
+		}
+		// D-8 layer 1 / D-5 (rev 14): rebuild this attempt's marking
+		// frontier from the additive wire fields so a remote lock op
+		// revalidates against exactly the frontier this execution reads at.
+		// Below-gate/legacy fragments carry no populated fields and leave
+		// the reconstructed operator inert by representation. Rev 24,
+		// round 11: the shipped per-target value is the occurrence's
+		// ALREADY-RESOLVED effective activation (an engaging historical
+		// occurrence never receives the marked fields in that execution),
+		// and the wire installs no raw H, so resolving against the remote
+		// execution's own SnapshotTS folds to the shipped activation; a
+		// transaction-less reconstruction degrades to the same result.
+		markFrontier := timestamp.Timestamp{}
+		frontierSeen := false
+		for _, target := range t.Targets {
+			if target.GetLockingRead() {
+				if phys := target.GetCurrentReadFrontierPhysical(); phys != 0 {
+					markFrontier = timestamp.Timestamp{
+						PhysicalTime: phys,
+						LogicalTime:  target.GetCurrentReadFrontierLogical(),
+					}
+					frontierSeen = true
+				}
+			}
+		}
+		if frontierSeen {
+			execSnapshotTS := timestamp.Timestamp{}
+			if ctx != nil && ctx.scope != nil && ctx.scope.Proc != nil {
+				if txnOp := ctx.scope.Proc.GetTxnOperator(); txnOp != nil {
+					execSnapshotTS = txnOp.Txn().SnapshotTS
+				}
+			}
+			lockArg.SetLockingReadCurrentFrontier(markFrontier, execSnapshotTS)
 		}
 		op = lockArg
 	case vm.PreInsertUnique:

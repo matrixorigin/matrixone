@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -706,6 +707,14 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Seal before cancellation: a late terminal RPC must not leak diagnostics.
 		warnings.discard()
 		c.fatalLog(retryTimes, err)
+		// A locking-read retry token is valid ONLY when it strictly advances
+		// past what the EXECUTING attempt already read: the chain floor AND
+		// the failed attempt's published frontier (design D-5, spin-free
+		// retry; rev-18 review round 4 finding 3). A missing, malformed or
+		// non-progressing token terminates the statement through the
+		// canRetry=false path instead of re-driving an identical or
+		// regressing marked read against the same frontier.
+		err = c.validateLockingReadRetryProgress(runC, err)
 		if !c.canRetry(err) {
 			// runOnce may return after a local or coordinator branch fails while a
 			// remote branch is still unwinding. Quiesce every producer before the
@@ -744,6 +753,19 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
 		c.onLoadUniqueIndexPromotionRetry(defChanged)
+		// The accepted locking-read retry sets this chain's new floor (D-5):
+		// the next attempt waits for the applied pipeline at or beyond it
+		// before its first carrier binds, and no later token may regress.
+		if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryLockingRead) {
+			if phys, logical, ok := moerr.GetTxnNeedRetryLockingReadFrontier(err); ok {
+				front := timestamp.Timestamp{
+					PhysicalTime: phys, LogicalTime: logical,
+				}
+				if front.Greater(c.execReadRetryFloor) {
+					c.execReadRetryFloor = front
+				}
+			}
+		}
 
 		retryTransitionStart := time.Now()
 		coordinatorPhaseStart = retryTransitionStart
@@ -1012,6 +1034,11 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	runC.resultSink = c.resultSink
 	runC.executionGeneration = c.executionGeneration
 	runC.createNamePinsAdmitted = c.createNamePinsAdmitted
+	// The rebuilt compile inherits the execution chain's retry floor (D-5):
+	// a definition rebuild is a retry of the SAME statement — its next
+	// attempt must not re-enter behind the validated floor even though it
+	// gets a fresh attempt token and fresh execution-read state.
+	runC.execReadRetryFloor = c.execReadRetryFloor
 	c.copyAllocationAccountLifecycleTo(runC)
 	runC.SetQuerySchedulingIntent(c.querySchedulingIntent)
 	runC.SetSchedulingTraceRecorder(c.schedulingTrace)

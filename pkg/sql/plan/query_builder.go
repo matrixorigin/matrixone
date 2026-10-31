@@ -4792,10 +4792,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			subCtx.groupingSetOrderHiddenCount = hiddenResultLen
 			subCtx.preserveOrderSemanticKeys = true
 		}
+		// Nested-block provenance (rev 14, R14-F2): grouping/UNION arms stay
+		// explicit-nested; the view inheritance must not leak into arms — and
+		// an arm's own FOR UPDATE re-enters through bindSelect's lock parsing.
 		savedIsForUpdate := builder.isForUpdate
 		// Keep isRoot's binding semantics, but do not publish a branch's
 		// temporary headings as extra visible Query outputs.
 		savedHeadings := builder.qry.Headings
+		savedViewInheritLocking := builder.viewInheritLocking
+		builder.viewInheritLocking = false
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
 		} else {
@@ -4803,6 +4808,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 		builder.qry.Headings = savedHeadings
 		builder.isForUpdate = savedIsForUpdate
+		builder.viewInheritLocking = savedViewInheritLocking
 		if err != nil {
 			return 0, err
 		}
@@ -5760,9 +5766,16 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 		defer builder.compCtx.SetSnapshot(oldSnapshot)
 		// A nested CTE must not inherit FOR UPDATE. Restore both binding
 		// domains before leaving this phase, including catalog panics.
+		// The view-inheritance state clears with it (rev 14): the CTE body
+		// stays explicit-nested by representation.
 		savedIsForUpdate := builder.isForUpdate
+		savedViewInheritLocking := builder.viewInheritLocking
 		builder.isForUpdate = false
-		defer func() { builder.isForUpdate = savedIsForUpdate }()
+		builder.viewInheritLocking = false
+		defer func() {
+			builder.isForUpdate = savedIsForUpdate
+			builder.viewInheritLocking = savedViewInheritLocking
+		}()
 		nodeID, err = builder.bindSelect(s, subCtx, false)
 	}()
 	if err != nil {
@@ -6411,6 +6424,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	selectLockNoWait := false
 	selectLockSkipLocked := false
 	if effectiveSelectLockInfo != nil {
+		// A lock clause written in this block IS this block's own locking
+		// state: reset any view-inheritance provenance so a lock inside a
+		// view body marks its own outer scope (rev 14), never inheriting
+		// further out. A block without its own lock clause does not touch
+		// the inheritance state, so transparent view bodies keep it.
+		builder.viewInheritLocking = false
 		switch effectiveSelectLockInfo.LockType {
 		case tree.SelectLockForUpdate:
 			builder.isForUpdate = true
@@ -12942,10 +12961,24 @@ func (builder *QueryBuilder) bindView(
 	// state. Otherwise the view body could emit its own LOCK_OP (e.g. above an
 	// ORDER BY/LIMIT inside the view) on top of the outer LOCK_OP, locking
 	// rows that fall outside the final result set.
+	// The R5-F1 carve-out (rev 13/14) still marks the view body's scans as
+	// OuterLocking through a separate inheritance flag (viewInheritLocking):
+	// collectLockTargets locks view-expanded scans, so their reads must ride
+	// the same per-execution current read; LOCK_OP suppression above stays
+	// bound to isForUpdate exactly as base behavior.
 	savedIsForUpdate := builder.isForUpdate
+	savedViewInheritLocking := builder.viewInheritLocking
 	builder.isForUpdate = false
+	// Transparent view chaining (v2 -> v1 -> table under FOR UPDATE) must
+	// preserve inherited provenance across every view expansion: the first
+	// expansion converts isForUpdate into viewInheritLocking, and deeper
+	// expansions keep it instead of dropping it back to explicit-nested
+	// scans (review: locking reads through nested views kept the stale
+	// snapshot).
+	builder.viewInheritLocking = savedIsForUpdate || savedViewInheritLocking
 	defer func() {
 		builder.isForUpdate = savedIsForUpdate
+		builder.viewInheritLocking = savedViewInheritLocking
 	}()
 	previousWarningContext := builder.compCtx.GetContext()
 	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
@@ -13358,6 +13391,46 @@ func isPlaceholderTableName(schema, table string) bool {
 	return len(table) == 0 || len(schema) == 0 && table == "dual"
 }
 
+// SnapshotHasExplicitTS reports whether a scan's explicit snapshot clause
+// carries a usable read timestamp. The zero timestamp means "no snapshot
+// clause reached this scan" and never engages the historical cohort (the
+// same zero check compile applies, compile.go getCompileTableScanDataSourceTxn).
+func SnapshotHasExplicitTS(snapshot *Snapshot) bool {
+	return snapshot != nil && snapshot.TS != nil &&
+		!(snapshot.TS.GetLogicalTime() == 0 && snapshot.TS.GetPhysicalTime() == 0)
+}
+
+// lockingReadScanRole captures the scan occurrence's read-view provenance at
+// the construction point (design D-1; rev 14's explicit representation,
+// R14-F2): the role is taken from the binder's live per-block locking state,
+// before any lowering can move the scan, and every constructed scan is
+// explicit — an outer locking block emits OuterLocking (or the explicit-
+// snapshot presence value), everything else emits NestedBlockExplicit, so
+// the zero value can only be a mark lost through rewriting and the compile
+// closure check declines the whole statement. Nested-block entries
+// (baseBindSubquery, derived tables, CTE bodies, grouping/UNION arms) clear
+// isForUpdate AND the view-inheritance state, so their scans stay
+// explicit-nested and read the transaction snapshot; a FOR UPDATE written
+// inside a nested block re-enters through bindSelect's lock parsing and
+// marks only that block's own outer scope. Transparent view-body expansion
+// (the R5-F1 carve-out) sets viewInheritLocking instead of leaking
+// isForUpdate, so view-body scans are marked OuterLocking while LOCK_OP
+// suppression stays bound to isForUpdate. An explicit snapshot on a locked
+// block stores the presence provenance value only: pairing it with
+// scan_snapshot resolves the effective role per execution at compile
+// admission, never at bind time. (rev 15, R15-F1: the capability-gated
+// below-gate branch is removed with the gate — a single-version cluster
+// always builds the explicit representation.)
+func (builder *QueryBuilder) lockingReadScanRole(snapshot *Snapshot) plan.ScanReadRole {
+	if !builder.isForUpdate && !builder.viewInheritLocking {
+		return plan.ScanReadRole_ScanNestedBlockExplicit
+	}
+	if SnapshotHasExplicitTS(snapshot) {
+		return plan.ScanReadRole_ScanOuterLockingWithExplicitSnapshot
+	}
+	return plan.ScanReadRole_ScanOuterLocking
+}
+
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, tableInput *tableFunctionInput) (nodeID int32, sqlDatabase string, err error) {
 	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
 	if bindErr != nil {
@@ -13370,10 +13443,17 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Nested SELECT must not inherit FOR UPDATE: the outer collectLockTargets
 		// recurses into all TABLE_SCAN nodes (including ones inside derived tables),
 		// so the derived subplan itself should be built without lock injection.
+		// A derived table is a genuine nested query block: clear the
+		// view-inheritance provenance with the lock state so scans inside it
+		// bind explicit-nested instead of current-reading on leaked
+		// provenance (rev 14 review finding).
 		savedIsForUpdate := builder.isForUpdate
+		savedViewInheritLocking := builder.viewInheritLocking
 		builder.isForUpdate = false
+		builder.viewInheritLocking = false
 		nodeID, err = builder.bindSelect(tbl, subCtx, false)
 		builder.isForUpdate = savedIsForUpdate
+		builder.viewInheritLocking = savedViewInheritLocking
 		if err != nil {
 			return 0, "", err
 		}
@@ -13900,6 +13980,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			return 0, "", moerr.NewInvalidInput(builder.GetContext(), "FOR ICEBERG requires an Iceberg external table")
 		}
 
+		scanRole := plan.ScanReadRole_ScanNestedBlock
+		if nodeType == plan.Node_TABLE_SCAN {
+			scanRole = builder.lockingReadScanRole(snapshot)
+		}
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:     nodeType,
 			Stats:        nil,
@@ -13908,6 +13992,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			ExternScan:   externScan,
 			BindingTags:  []int32{builder.genNewBindTag()},
 			ScanSnapshot: snapshot,
+			ScanReadRole: scanRole,
 		}, ctx)
 
 		node := builder.qry.Nodes[nodeID]
@@ -13956,10 +14041,16 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if derivedSelect != nil && len(targets) > 0 {
 			subCtx := NewBindContext(builder, ctx)
 			subCtx.numericProjectionTypes = targets
+			// Genuine nested block: save/clear/restore both the lock state
+			// and the view-inheritance provenance (idem the derived-SELECT
+			// site above).
 			savedIsForUpdate := builder.isForUpdate
+			savedViewInheritLocking := builder.viewInheritLocking
 			builder.isForUpdate = false
+			builder.viewInheritLocking = false
 			nodeID, err = builder.bindSelect(derivedSelect, subCtx, false)
 			builder.isForUpdate = savedIsForUpdate
+			builder.viewInheritLocking = savedViewInheritLocking
 			if err != nil {
 				return 0, "", err
 			}
@@ -15324,6 +15415,44 @@ func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindCon
 					PrimaryColTyp:      pkTyp,
 					Block:              true,
 					RefreshTsIdxInBat:  -1,
+				}
+				// D-8 layer 1 (rev 14): bind-time presence of a locking
+				// current-read occurrence, derived from the same construction
+				// roles the compile re-resolves per execution. Presence never
+				// changes after bind, so the summary, the closure walk and
+				// lock-time revalidation can all read it from the plan alone.
+				// rev-18 coherence fix: presence derives from the CAPTURED role
+				// alone, never from a second live capability poll. Roles are
+				// assigned by the same one-shot binding decision
+				// (lockingReadScanRole), and only an above-gate bind can capture
+				// an OuterLocking role - below-gate plans keep the legacy zero
+				// role and stay byte-identical. A capability drop between scan
+				// construction and target collection can no longer split them:
+				// presence and role always agree, so the Run validator's
+				// rejection (or the plan's uniform legacy shape) covers every
+				// node, never a mixed execution.
+				switch node.GetScanReadRole() {
+				case plan.ScanReadRole_ScanOuterLocking,
+					plan.ScanReadRole_ScanOuterLockingWithExplicitSnapshot:
+					lockTarget.LockingRead = true
+				}
+				// Rev 24 (pre-PR review round 11): a locked
+				// explicit-snapshot occurrence stores its raw bind-time H
+				// BESIDE the presence — D-1's stored provenance
+				// `OuterLockingWithExplicitSnapshot(H)` — so the lock
+				// operator can resolve the occurrence's EFFECTIVE
+				// activation per execution against the executing
+				// SnapshotTS, the same engagement comparison compile's
+				// scan admission uses. The raw TS is stored provenance
+				// only; the per-execution engagement status is never
+				// serialized. Ordinary occurrences and explicit-role
+				// occurrences without a real TS store zero (never engage,
+				// current read as today).
+				if node.GetScanReadRole() == plan.ScanReadRole_ScanOuterLockingWithExplicitSnapshot {
+					if snap := node.GetScanSnapshot(); SnapshotHasExplicitTS(snap) {
+						lockTarget.ExplicitSnapshotPhysical = snap.TS.GetPhysicalTime()
+						lockTarget.ExplicitSnapshotLogical = snap.TS.GetLogicalTime()
+					}
 				}
 
 				if tableDef.Partition != nil && len(tableDef.Partition.PartitionDefs) > 0 {

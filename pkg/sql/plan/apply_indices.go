@@ -1596,9 +1596,14 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 		IndexScanInfo: plan.IndexScanInfo{
 			IsIndexScan: true, IndexName: idxDef.IndexName, BelongToTable: node.ObjRef.ObjName,
 			Parts: slices.Clone(idxDef.Parts), IsUnique: idxDef.Unique, IndexTableName: idxDef.IndexTableName,
+			ParentTableId: int64(node.TableDef.TblId),
 		},
 		BindingTags:  []int32{idxTag},
 		ScanSnapshot: node.ScanSnapshot,
+		// Provenance propagation (rev 14, R14-F2/R13-F3): the fabricated
+		// index scan of a locked occurrence carries the source occurrence's
+		// role so it can never look like a vanished mark.
+		ScanReadRole: node.ScanReadRole,
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
 	forceScanNodeStatsTP(idxNodeID, builder)
@@ -1699,10 +1704,17 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 		IndexScanInfo: plan.IndexScanInfo{
 			IsIndexScan: true, IndexName: idxDef.IndexName, BelongToTable: node.ObjRef.ObjName,
 			Parts: slices.Clone(idxDef.Parts), IsUnique: idxDef.Unique, IndexTableName: idxDef.IndexTableName,
+			// Typed-provenance preservation (R13-F3; pre-PR review round 4):
+			// like every sibling fabrication site, the hinted covering scan
+			// carries its owning locked base table's ID so compile's covered-
+			// index admission (D-10.2) admits it THROUGH the parent's marked
+			// lock target — a zero-role index source is a vanished mark.
+			ParentTableId: int64(node.TableDef.TblId),
 		},
 		FilterList:   newFilters,
 		BindingTags:  []int32{idxTag},
 		ScanSnapshot: node.ScanSnapshot,
+		ScanReadRole: node.ScanReadRole,
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxNodeID, node.NodeId)
 	forceScanNodeStatsTP(idxNodeID, builder)
@@ -4246,6 +4258,7 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		IsIndexScan:    true,
 		IndexName:      idxDef.IndexName,
 		BelongToTable:  node.ObjRef.ObjName,
+		ParentTableId:  int64(node.TableDef.TblId),
 		Parts:          slices.Clone(idxDef.Parts),
 		IsUnique:       idxDef.Unique,
 		IndexTableName: idxDef.IndexTableName,
@@ -4262,6 +4275,8 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		Offset:        node.Offset,
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
+		// Provenance propagation (rev 14, R14-F2/R13-F3).
+		ScanReadRole: node.ScanReadRole,
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
 
@@ -4318,6 +4333,7 @@ func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *pla
 		IsIndexScan:    true,
 		IndexName:      idxDef.IndexName,
 		BelongToTable:  node.ObjRef.ObjName,
+		ParentTableId:  int64(node.TableDef.TblId),
 		Parts:          slices.Clone(idxDef.Parts),
 		IsUnique:       idxDef.Unique,
 		IndexTableName: idxDef.IndexTableName,
@@ -4334,6 +4350,8 @@ func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *pla
 		Offset:        node.Offset,
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
+		// Provenance propagation (rev 14, R14-F2/R13-F3).
+		ScanReadRole: node.ScanReadRole,
 	}, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
 
@@ -4626,6 +4644,7 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 		IsIndexScan:    true,
 		IndexName:      idxDef.IndexName,
 		BelongToTable:  node.ObjRef.ObjName,
+		ParentTableId:  int64(node.TableDef.TblId),
 		Parts:          slices.Clone(idxDef.Parts),
 		IsUnique:       idxDef.Unique,
 		IndexTableName: idxDef.IndexTableName,
@@ -4640,6 +4659,8 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 		FilterList:    []*plan.Expr{idxFilter},
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
+		// Provenance propagation (rev 14, R14-F2/R13-F3).
+		ScanReadRole: node.ScanReadRole,
 	}
 	idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[node.NodeId])
 	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
@@ -4920,6 +4941,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			IsIndexScan:    true,
 			IndexName:      idxDef.IndexName,
 			BelongToTable:  leftChild.ObjRef.ObjName,
+			ParentTableId:  int64(leftChild.TableDef.TblId),
 			Parts:          slices.Clone(idxDef.Parts),
 			IsUnique:       idxDef.Unique,
 			IndexTableName: idxDef.IndexTableName,
@@ -4933,7 +4955,9 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
 			BindingTags:   []int32{idxTag},
 			ScanSnapshot:  leftChild.ScanSnapshot,
-			ViewPath:      append([]*plan.ViewStep(nil), leftChild.ViewPath...),
+			// Provenance propagation (rev 14, R14-F2/R13-F3).
+			ScanReadRole: leftChild.ScanReadRole,
+			ViewPath:     append([]*plan.ViewStep(nil), leftChild.ViewPath...),
 		}
 		if hasRuntimeFilter {
 			idxTableNode.RuntimeFilterProbeList =

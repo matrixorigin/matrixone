@@ -1188,6 +1188,20 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 	if err != nil {
 		return err
 	}
+	// An admitted marked scan owns an EXCLUSIVE relation handle bound to
+	// this attempt's carrier from source initialization (design D-3(b),
+	// R13-2; pre-PR review P1). Discovery — ranges and the aggregate
+	// optimizations derived from them — must enumerate at the SAME frontier
+	// F the readers read at: engine.Database caches the transaction's
+	// canonical relation per name regardless of the operator passed in, so
+	// reopening here silently re-baselines the block list onto the session
+	// snapshot while the readers use F, and rows persisted inside the RR
+	// window (peer commits) stay undiscoverable. Consuming the bound handle
+	// side-steps the shared cache instead of rebinding it.
+	if !s.IsRemote && s.DataSource != nil && s.DataSource.Rel != nil &&
+		c.executionReadScanAdmitted(s.DataSource.node) {
+		rel = s.DataSource.Rel
+	}
 
 	if s.NodeInfo.CNCNT == 1 {
 		rsp := &engine.RangesShuffleParam{

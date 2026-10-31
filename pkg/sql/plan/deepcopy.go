@@ -265,6 +265,18 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		HasPartitionCol:      target.HasPartitionCol,
 		NoWait:               target.NoWait,
 		SkipLocked:           target.SkipLocked,
+		// Bind-time locking-read presence is an immutable property of the
+		// collected LockTarget (design D-8 layer 1): deep copies through
+		// FillValuesOfParamsInPlan (utils.go) and compileDependentKernel must
+		// preserve it so presence-derived capability validation, closure
+		// checks, index-parent admission and LockOp marking survive the copy.
+		LockingRead: target.LockingRead,
+		// Rev 24 (pre-PR review round 11): the occurrence's raw bind-time
+		// explicit-snapshot provenance H travels with the presence — deep
+		// copies preserve it so the copy's lock marks resolve the same
+		// per-execution engagement.
+		ExplicitSnapshotPhysical: target.ExplicitSnapshotPhysical,
+		ExplicitSnapshotLogical:  target.ExplicitSnapshotLogical,
 	}
 }
 
@@ -373,29 +385,32 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		TimeWindowPartitionColPos: slices.Clone(node.TimeWindowPartitionColPos),
 		FuzzyBuildSide:            node.FuzzyBuildSide,
 
-		DeleteCtx:                  DeepCopyDeleteCtx(node.DeleteCtx),
-		TblFuncExprList:            DeepCopyExprList(node.TblFuncExprList),
-		ClusterTable:               DeepCopyClusterTable(node.GetClusterTable()),
-		InsertCtx:                  DeepCopyInsertCtx(node.InsertCtx),
-		NotCacheable:               node.NotCacheable,
-		SourceStep:                 slices.Clone(node.SourceStep),
-		PreInsertCtx:               DeepCopyPreInsertCtx(node.PreInsertCtx),
-		PreInsertUkCtx:             DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
-		PreInsertSkCtx:             DeepCopyPreInsertUkCtx(node.PreInsertSkCtx),
-		LockTargets:                make([]*plan.LockTarget, len(node.LockTargets)),
-		AnalyzeInfo:                DeepCopyAnalyzeInfo(node.AnalyzeInfo),
-		IsEnd:                      node.IsEnd,
-		RecursiveSink:              node.RecursiveSink,
-		ExternScan:                 deepCopyExternScan(node.ExternScan),
-		SampleFunc:                 DeepCopySampleFuncSpec(node.SampleFunc),
-		OnUpdateExprs:              DeepCopyExprList(node.OnUpdateExprs),
-		DedupColName:               node.DedupColName,
-		DedupColTypes:              slices.Clone(node.DedupColTypes),
-		DedupKeyExprs:              DeepCopyExprList(node.DedupKeyExprs),
-		UpdateCtxList:              DeepCopyUpdateCtxList(node.UpdateCtxList),
-		DedupJoinCtx:               DeepCopyDedupJoinCtx(node.DedupJoinCtx),
-		IndexReaderParam:           DeepCopyIndexReaderParam(node.IndexReaderParam),
-		ScanSnapshot:               DeepCopySnapshot(node.ScanSnapshot),
+		DeleteCtx:        DeepCopyDeleteCtx(node.DeleteCtx),
+		TblFuncExprList:  DeepCopyExprList(node.TblFuncExprList),
+		ClusterTable:     DeepCopyClusterTable(node.GetClusterTable()),
+		InsertCtx:        DeepCopyInsertCtx(node.InsertCtx),
+		NotCacheable:     node.NotCacheable,
+		SourceStep:       slices.Clone(node.SourceStep),
+		PreInsertCtx:     DeepCopyPreInsertCtx(node.PreInsertCtx),
+		PreInsertUkCtx:   DeepCopyPreInsertUkCtx(node.PreInsertUkCtx),
+		PreInsertSkCtx:   DeepCopyPreInsertUkCtx(node.PreInsertSkCtx),
+		LockTargets:      make([]*plan.LockTarget, len(node.LockTargets)),
+		AnalyzeInfo:      DeepCopyAnalyzeInfo(node.AnalyzeInfo),
+		IsEnd:            node.IsEnd,
+		RecursiveSink:    node.RecursiveSink,
+		ExternScan:       deepCopyExternScan(node.ExternScan),
+		SampleFunc:       DeepCopySampleFuncSpec(node.SampleFunc),
+		OnUpdateExprs:    DeepCopyExprList(node.OnUpdateExprs),
+		DedupColName:     node.DedupColName,
+		DedupColTypes:    slices.Clone(node.DedupColTypes),
+		DedupKeyExprs:    DeepCopyExprList(node.DedupKeyExprs),
+		UpdateCtxList:    DeepCopyUpdateCtxList(node.UpdateCtxList),
+		DedupJoinCtx:     DeepCopyDedupJoinCtx(node.DedupJoinCtx),
+		IndexReaderParam: DeepCopyIndexReaderParam(node.IndexReaderParam),
+		ScanSnapshot:     DeepCopySnapshot(node.ScanSnapshot),
+		// Provenance is retained through every copy (rev 14, R14-F2/R13-F3):
+		// a copy that dropped the scan role would look like a vanished mark.
+		ScanReadRole:               node.ScanReadRole,
 		IndexSearchScan:            DeepCopyIndexSearchScan(node.IndexSearchScan),
 		ViewPath:                   DeepCopyViewPath(node.ViewPath),
 		RankOption:                 DeepCopyRankOption(node.RankOption),
@@ -451,6 +466,12 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		Parts:          slices.Clone(node.IndexScanInfo.Parts),
 		IsUnique:       node.IndexScanInfo.IsUnique,
 		IndexTableName: node.IndexScanInfo.IndexTableName,
+		// The additive locking current-read admission link (design D-10.2,
+		// R13-F3): a fabricated covered/forced index surface admits THROUGH
+		// its owning locked base table, so the parent identity must survive
+		// every deep copy exactly like the scan-role representation
+		// (pre-PR review round 2's copy corpus member).
+		ParentTableId: node.IndexScanInfo.ParentTableId,
 	}
 
 	if node.WinSpecList != nil {

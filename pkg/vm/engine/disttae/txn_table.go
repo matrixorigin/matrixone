@@ -985,7 +985,11 @@ func (tbl *txnTable) collectTombstones(
 
 		//tombstone.SortInMemory()
 		//collect committed persisted tombstones from partition state.
-		snapshot := types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)
+		// An execution-read clone resolves its read view through the
+		// operator accessor (design D-3), so the carrier's current read at F
+		// collects committed tombstones visible at F; the ordinary resolved
+		// operator still sees exactly the transaction snapshot.
+		snapshot := types.TimestampToTS(tbl.db.op.SnapshotTS())
 		err = state.CollectTombstoneObjects(snapshot,
 			func(stats *objectio.ObjectStats) {
 				tombstone.AppendFiles(*stats)
@@ -2860,6 +2864,15 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (ps *logtailreplay.P
 	//2:table id is too old for snapshot read,pls ref to issue:https://github.com/matrixorigin/matrixone/issues/17012
 
 	// To get a partition state for snapshot read, we need to consume the history checkpoints.
+	// The recovery anchor is the relation operator's effective read point:
+	// an execution-read relation carries the locking execution's frontier F
+	// (ApplyExecutionReadTS resolves SnapshotTS() to F while Txn().SnapshotTS
+	// stays S, design D-2/D-3), and a scan admitted at F must recover the
+	// committed state that covers F — an S-anchored recovery (or the cached
+	// S-serving historical partition it can return) would silently read the
+	// history below the frontier and miss every commit in (S, F]. Ordinary
+	// relations keep today's behavior: without the carrier, SnapshotTS()
+	// IS the transaction snapshot.
 	var (
 		logger = logutil.Info
 		msg    string
@@ -2867,7 +2880,7 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (ps *logtailreplay.P
 	ps, err = tbl.getTxn().engine.getOrCreateSnapPartBy(
 		ctx,
 		tbl,
-		types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+		types.TimestampToTS(tbl.db.op.SnapshotTS()))
 
 	start, end = types.MaxTs(), types.MinTs()
 	if ps != nil {
@@ -3602,6 +3615,58 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 
 func (tbl *txnTable) Reset(op client.TxnOperator) error {
 	return moerr.NewInternalErrorNoCtx("cannot reset a shared relation; use an exclusive relation handle")
+}
+
+// cloneForExecutionRead builds a FRESH txnTable identical to tbl except that
+// its database carries the execution-read operator (design rev-12 D-3
+// relation-read surface): every readTS pin resolves F through the carrier
+// (tbl.db.op.SnapshotTS() at the discovery, admission, reader-construction
+// and committed-tombstone sites, and the datasource pin at
+// local_disttae_datasource.go:83) while workspace, txn metadata and lock
+// identity still delegate to the wrapped SESSION operator — so the marked
+// relation sees the transaction's own writes, deletedBlocks and flushed
+// tombstones through the SAME workspace exactly as an ordinary parent
+// reader, takes the parent's workspace locks around lazy mutation, and
+// never mutates the parent's operator or interning caches: the fresh table
+// is not stored into any workspace cache and dies with the handle.
+func (tbl *txnTable) cloneForExecutionRead(op client.TxnOperator) *txnTable {
+	db := *tbl.db
+	db.op = op
+	fresh := &txnTable{
+		accountId:       tbl.accountId,
+		tableId:         tbl.tableId,
+		version:         tbl.version,
+		tableName:       tbl.tableName,
+		db:              &db,
+		defs:            tbl.defs,
+		tableDef:        tbl.tableDef,
+		seqnums:         tbl.seqnums,
+		typs:            tbl.typs,
+		primaryIdx:      tbl.primaryIdx,
+		primarySeqnum:   tbl.primarySeqnum,
+		clusterByIdx:    tbl.clusterByIdx,
+		viewdef:         tbl.viewdef,
+		comment:         tbl.comment,
+		partitioned:     tbl.partitioned,
+		partition:       tbl.partition,
+		relKind:         tbl.relKind,
+		createSql:       tbl.createSql,
+		constraint:      tbl.constraint,
+		extraInfo:       tbl.extraInfo,
+		logicalId:       tbl.logicalId,
+		lastTS:          tbl.lastTS,
+		remoteWorkspace: tbl.remoteWorkspace,
+		createdInTxn:    tbl.createdInTxn,
+		eng:             tbl.eng,
+		fake:            tbl.fake,
+	}
+	if p := tbl.proc.Load(); p != nil {
+		fresh.proc.Store(p)
+	}
+	if tbl.enableLogFilterExpr.Load() {
+		fresh.enableLogFilterExpr.Store(true)
+	}
+	return fresh
 }
 
 func (tbl *txnTable) getUncommittedRows(

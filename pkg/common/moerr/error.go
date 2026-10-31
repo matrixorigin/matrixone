@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	moerrpb "github.com/matrixorigin/matrixone/pkg/pb/moerr"
@@ -442,6 +444,15 @@ const (
 	// truncation: " to the message), which the BVT result files reflect.
 	ErrCastWidthExceeded uint16 = 20907
 
+	// ErrTxnNeedRetryLockingRead is the internal retry driver for admitted
+	// locking current-read executions under snapshot isolation (design rev 14,
+	// D-5). performLock surfaces it with the frontier timestamp the next
+	// attempt must wait for; the compile retry loop accepts it only for marked
+	// locking statements and never advances the transaction snapshot. The
+	// message embeds the required frontier as "{physical logical}" so a single
+	// round-trip accessor can recover it from the serialized message.
+	ErrTxnNeedRetryLockingRead uint16 = 20908
+
 	// Group 10: skip list
 	ErrKeyAlreadyExists uint16 = 21001
 	ErrArenaFull        uint16 = 21002
@@ -514,6 +525,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrOutOfRange:                  {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "data out of range: data type %s, %s"},
 	ErrDataTruncated:               {ER_DATA_TOO_LONG, []string{"22001"}, "data truncated: data type %s, %s"},
 	ErrCastWidthExceeded:           {ER_DATA_TOO_LONG, []string{"22001"}, "%s"},
+	ErrTxnNeedRetryLockingRead:     {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in locking read at %s"},
 	ErrInvalidArg:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid argument %s, bad value %s"},
 	ErrTruncatedWrongValueForField: {ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, []string{MySQLDefaultSqlState}, "truncated type %s value %s for column %s, %d"},
 	ErrTooBigPrecision:             {ER_TOO_BIG_PRECISION, []string{"42000", "S1009"}, "Too-big precision %d specified for '%-.192s'. Maximum is %d."},
@@ -1786,6 +1798,40 @@ func NewTxnNeedRetry(ctx context.Context) *Error {
 
 func NewTxnNeedRetryWithDefChanged(ctx context.Context) *Error {
 	return newError(ctx, ErrTxnNeedRetryWithDefChanged)
+}
+
+// NewTxnNeedRetryLockingRead carries the frontier (physical + logical HLC
+// components) a marked locking current-read execution must wait for before its
+// next attempt binds carriers. Only performLock constructs it (D-5: single
+// surface, max frontier aggregation); only the compile retry loop consumes it.
+func NewTxnNeedRetryLockingRead(ctx context.Context, physical int64, logical uint32) *Error {
+	return newError(ctx, ErrTxnNeedRetryLockingRead, fmt.Sprintf("{%d %d}", physical, logical))
+}
+
+// GetTxnNeedRetryLockingReadFrontier parses the frontier embedded by
+// NewTxnNeedRetryLockingRead back to its raw HLC components. ok is false for
+// nil, any other error, or a message that lost the token; callers that receive
+// ok=false must not re-drive a locking-read retry off it.
+func GetTxnNeedRetryLockingReadFrontier(err error) (physical int64, logical uint32, ok bool) {
+	if !IsMoErrCode(err, ErrTxnNeedRetryLockingRead) {
+		return 0, 0, false
+	}
+	msg := err.Error()
+	open := strings.LastIndexByte(msg, '{')
+	close := strings.LastIndexByte(msg, '}')
+	if open < 0 || close <= open+1 {
+		return 0, 0, false
+	}
+	fields := strings.Fields(msg[open+1 : close])
+	if len(fields) != 2 {
+		return 0, 0, false
+	}
+	phys, err1 := strconv.ParseInt(fields[0], 10, 64)
+	log, err2 := strconv.ParseUint(fields[1], 10, 32)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return phys, uint32(log), true
 }
 
 func NewDeadLockDetected(ctx context.Context) *Error {

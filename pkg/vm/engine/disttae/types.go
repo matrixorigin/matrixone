@@ -1473,6 +1473,19 @@ type txnTable struct {
 	createdInTxn    bool
 	eng             engine.Engine
 
+	// execReadTombstoneMask (design D-4's stage-1 ordinary-local transfer
+	// mask, rev 14 R14-F1) is the read-scoped tombstone input of an
+	// execution-read clone: this transaction's OWN deletes whose original
+	// rowids reference an object that died inside the window
+	// [session snapshot, F], transferred by primary key to the
+	// alive-generation rowids so a delete-carrying marked read never
+	// resurrects its own rows through a compaction inside the window. Set
+	// only on a carrier clone at BindExecutionReadOp — one mask per
+	// execution attempt, cursorless, never persisted, never on the commit
+	// path, and consumed only by sources reading at exactly the mask's
+	// frontier. Nil (zero cost) for every unmarked reader.
+	execReadTombstoneMask *ExecutionReadTombstoneMask
+
 	fake bool
 }
 

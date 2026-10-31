@@ -226,6 +226,10 @@ message IndexScanInfo {
   repeated string parts = 4;
   bool is_unique = 5;
   string index_table_name = 6;
+  // Owning base table of a fabricated index-scan occurrence (rev 14 stage-1,
+  // R14-F2/R13-F3): executes the index's admission through the locked base
+  // table. Additive; unset decodes as no provenance linkage.
+  int64 parent_table_id = 7;
 }
 
 enum AggregateConfigType {
@@ -1034,6 +1038,35 @@ message IndexSearchScan {
   uint64 max_nprobe = 24;
 }
 
+// ScanReadRole records the locking-read provenance of a scan occurrence,
+// captured at bind time from the statement's locking clause (presence
+// provenance; the effective role is resolved per execution at compile
+// admission, never serialized forward).
+enum ScanReadRole {
+  // Unset: no provenance recorded. Construction (rev 14, R14-F2) never
+  // emits this value for the scan of a completed plan — a zero role
+  // surviving optimization is a lost mark and the execution-read closure
+  // check declines the whole statement. Legacy/below-gate decode reads it
+  // exactly as the legacy nested-block semantics.
+  ScanNestedBlock = 0;
+  // The scan was constructed while the outer locking block was active: a
+  // locked occurrence eligible for the per-execution current read.
+  ScanOuterLocking = 1;
+  // The scan was constructed in the outer locking block whose table source
+  // carries an explicit snapshot clause. Presence provenance only: pairing
+  // with the node's scan_snapshot resolves the effective role per execution.
+  ScanOuterLockingWithExplicitSnapshot = 2;
+  // The scan was constructed in a nested block of a locking statement
+  // (subqueries, CTE bodies, grouping/UNION arms, nested blocks inside view
+  // bodies) and reads the transaction snapshot. Intentionally nested by
+  // representation, so a vanished mark (zero) is distinguishable.
+  ScanNestedBlockExplicit = 3;
+  // The covered-plan mutation of the fulltext2 locking path sets this
+  // explicitly instead of stripping to zero: the single enumerated allowlist
+  // whose scans stay on today's (stage-1: declined) behavior.
+  ScanCoveredPlanStrip = 4;
+}
+
 message Node {
   enum NodeType {
     UNKNOWN = 0;
@@ -1381,6 +1414,16 @@ message Node {
   // MARK only: a proven Boolean existence consumer with total, pure predicates.
   // Permits Boolean membership lowering; the generated IS TRUE consumer stays.
   bool mark_existence_only = 96;
+
+  // Locking-read current-read provenance of this scan occurrence, captured
+  // at bind time (ScanReadRole). Additive field; see the enum: rev 14
+  // narrows the zero value to "unset" for above-gate plans (a lost mark is
+  // declined by the execution-read closure check; legacy decode unchanged).
+  // Field 97: upstream main claimed Node field 96 (mark_existence_only)
+  // while this change sat on its branch, so this additive field moved to the
+  // next free number; nothing persisted field 96 as scan_read_role.
+  ScanReadRole scan_read_role = 97;
+
 }
 
 message SnapshotExtraInfo {
@@ -1621,6 +1664,20 @@ message LockTarget {
   // the SQL error outcome; SkipLocked targets also use nonblocking acquisition.
   bool no_wait = 18;
   bool skip_locked = 19;
+  // Bind-time presence of a locking-current-read occurrence of this table in
+  // the statement (rev 14 stage-1, D-8 layer 1). Derives from the scan
+  // occurrence roles at bind; per-execution admission re-resolves effective
+  // roles. Additive: legacy plans decode false and run today's semantics.
+  bool locking_read = 20;
+  // Raw bind-time provenance of the occurrence's explicit snapshot TS (rev 24:
+  // D-1's stored presence value `OuterLockingWithExplicitSnapshot(H)`, pre-PR
+  // review round 11). The per-execution EFFECTIVE engagement status stays
+  // per-execution state resolved where the marking frontier is stamped and is
+  // never serialized; an occurrence whose stored H is nonzero and older than
+  // the executing SnapshotTS engages the historical cohort for that execution
+  // and is exempt from marked revalidation. Additive; defaults decode zero.
+  int64 explicit_snapshot_physical = 21;
+  uint32 explicit_snapshot_logical = 22;
 }
 
 message PreInsertUkCtx {
