@@ -17,6 +17,7 @@ package mysql
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -868,4 +869,99 @@ func TestPutScannerOversizedClearsBuffers(t *testing.T) {
 	if s.strBuilder.Len() != 0 {
 		t.Fatalf("oversized scanner strBuilder should be zeroed on PutScanner")
 	}
+}
+
+func TestExecutableCommentScanner(t *testing.T) {
+	t.Run("complete ignored span and opaque body", func(t *testing.T) {
+		const comment = "/*!999999999 ?; 'garbage\n */"
+		s := NewScanner(dialect.MYSQL, " \n"+comment+" ?")
+		defer PutScanner(s)
+		token, value := s.ScanWithComments()
+		if token != COMMENT || value != comment {
+			t.Fatalf("comment = (%d,%q)", token, value)
+		}
+		if s.CommentFlag || s.TakeExecutableCommentEnd() != 0 {
+			t.Fatal("ignored comment created executable state")
+		}
+		if token, value = s.Scan(); token != VALUE_ARG || value != ":v1" {
+			t.Fatalf("following bind = (%d,%q)", token, value)
+		}
+		if s.Line != 2 {
+			t.Fatalf("line = %d, want 2", s.Line)
+		}
+	})
+	t.Run("token separation and ordinary controls", func(t *testing.T) {
+		s := NewScanner(dialect.MYSQL, "alpha/*!99999 ignored */beta /* plain */ /*+ hint */")
+		defer PutScanner(s)
+		for _, want := range []struct {
+			token int
+			value string
+		}{{ID, "alpha"}, {COMMENT, "/*!99999 ignored */"}, {ID, "beta"}, {COMMENT, "/* plain */"}, {COMMENT, "/*+ hint */"}, {0, ""}} {
+			token, value := s.ScanWithComments()
+			if token != want.token || value != want.value {
+				t.Fatalf("token = (%d,%q), want (%d,%q)", token, value, want.token, want.value)
+			}
+		}
+	})
+	t.Run("first terminator wins without nesting", func(t *testing.T) {
+		for _, body := range []string{"'", "/* inner"} {
+			t.Run(body, func(t *testing.T) {
+				s := NewScanner(dialect.MYSQL, "/*!99999 "+body+" */ ?")
+				defer PutScanner(s)
+				token, value := s.Scan()
+				if token != VALUE_ARG || value != ":v1" {
+					t.Fatalf("body %q: token = (%d,%q)", body, token, value)
+				}
+			})
+		}
+	})
+	t.Run("entry state and previous terminator survive", func(t *testing.T) {
+		s := NewScanner(dialect.MYSQL, "")
+		defer PutScanner(s)
+		for _, inComment := range []bool{false, true} {
+			s.setSql("/*!99999 ignored */")
+			s.CommentFlag = inComment
+			s.executableCommentEnd = 42
+			token, value := s.ScanWithComments()
+			if token != COMMENT || value != "/*!99999 ignored */" || s.CommentFlag != inComment || s.TakeExecutableCommentEnd() != 42 {
+				t.Fatalf("ignored comment changed entry state: %+v", s)
+			}
+		}
+	})
+	t.Run("error and deterministic reuse", func(t *testing.T) {
+		s := NewScanner(dialect.MYSQL, " \n/*!99999 incomplete")
+		defer PutScanner(s)
+		token, value := s.Scan()
+		if token != LEX_ERROR || value != "/*!99999 incomplete" {
+			t.Fatalf("error span = (%d,%q)", token, value)
+		}
+		s.setSql("/*!80030 ? */")
+		if token, value = s.Scan(); token != VALUE_ARG || value != ":v1" {
+			t.Fatalf("reuse bind = (%d,%q)", token, value)
+		}
+		s.setSql("select 1")
+		if token, _ = s.Scan(); token != SELECT || s.CommentFlag {
+			t.Fatal("reuse retained comment state")
+		}
+	})
+	t.Run("budget abort and deterministic reuse", func(t *testing.T) {
+		s := NewScanner(dialect.MYSQL, "/*!"+strings.Repeat("9", 1024)+" */")
+		defer PutScanner(s)
+		s.parseControl = &parseControl{ctx: t.Context(), limits: ParseLimits{Work: 32}}
+		func() {
+			defer func() {
+				failure := recover()
+				abort, ok := failure.(parseAbort)
+				if !ok || abort.err != ErrParseLimit {
+					t.Fatalf("budget failure = %v", failure)
+				}
+			}()
+			s.Scan()
+			t.Fatal("numeric scan bypassed work budget")
+		}()
+		s.setSql("/*!80030 ? */")
+		if token, value := s.Scan(); token != VALUE_ARG || value != ":v1" {
+			t.Fatalf("reuse after abort = (%d,%q)", token, value)
+		}
+	})
 }

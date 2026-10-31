@@ -31,6 +31,15 @@ func TestGetUnixSocketAddress(t *testing.T) {
 	assert.Equal(t, f.UnixSocketAddress, f.GetUnixSocketAddress())
 }
 
+func TestFrontendServerVersionPrefixDefaults(t *testing.T) {
+	var defaults FrontendParameters
+	defaults.SetDefaultValues()
+	require.Equal(t, "8.0.30-MatrixOne-v", defaults.ServerVersionPrefix)
+	explicit := FrontendParameters{ServerVersionPrefix: "custom-version-"}
+	explicit.SetDefaultValues()
+	require.Equal(t, "custom-version-", explicit.ServerVersionPrefix)
+}
+
 func TestFrontendProcessLimitationSizeDefaultsToAutomatic(t *testing.T) {
 	var defaults FrontendParameters
 	defaults.SetDefaultValues()
