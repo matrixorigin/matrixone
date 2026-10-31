@@ -159,3 +159,8 @@ non-UCA VARCHAR IN additionally admits a checked literal vector through its
 byte-hash evaluation contract; SQL equality identity and physical index-key
 compatibility remain separate proofs. Dynamic or encoded vector provenance
 cannot bypass the common fixed-input check.
+
+Literal LIKE-to-equality rewrites refresh their former LIKE frequency before
+filter sorting only in linear, single-scan statements with proved stable filter
+evaluation. Multi-step or branched plans retain the historical estimate because
+repricing another branch can change observable error evaluation order.

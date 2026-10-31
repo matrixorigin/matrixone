@@ -2258,6 +2258,7 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 		stats = w.GetStats()
 	}
 	var prefixes []*plan.Expr
+	var equalities []*plan.Expr
 	for i, expr := range node.FilterList {
 		fn := expr.GetF()
 		if fn == nil || fn.Func.ObjName != "like" || len(fn.Args) != 2 || fn.Args[0].GetCol() == nil {
@@ -2283,6 +2284,7 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 			if !escaped {
 				fn.Func.ObjName = function.EqualFunctionName
 				fn.Func.Obj = function.EqualFunctionEncodedID
+				equalities = append(equalities, expr)
 			}
 			continue
 		}
@@ -2317,7 +2319,36 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 	}
 	node.FilterList = append(node.FilterList, prefixes...)
 	node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(prefixes)...)
+	if len(equalities) > 0 && builder.canRefreshLiteralLikeSelectivity(nodeID) && regularIndexFiltersHaveStableEvaluation(node, equalities...) {
+		for _, expr := range equalities {
+			// LIKE's cached 20% estimate no longer describes this equality.
+			// Refresh before filter sorting, without an observable zero estimate.
+			expr.Selectivity = estimateEqualitySelectivity(expr, builder, stats)
+		}
+	}
+}
 
+// New estimates may change which independent branch is executed first. Keep
+// their historical behavior; a linear single-scan query has no such branch.
+func (builder *QueryBuilder) canRefreshLiteralLikeSelectivity(scanID int32) bool {
+	if len(builder.qry.Steps) != 1 || builder.qry.Correlation != nil {
+		return false
+	}
+	for nodeID := builder.qry.Steps[0]; ; {
+		node := builder.qry.Nodes[nodeID]
+		if nodeID == scanID {
+			return node.NodeType == plan.Node_TABLE_SCAN && len(node.Children) == 0
+		}
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_AGG, plan.Node_SORT:
+		default:
+			return false
+		}
+		if len(node.Children) != 1 {
+			return false
+		}
+		nodeID = node.Children[0]
+	}
 }
 
 func (builder *QueryBuilder) forceJoinOnOneCN(nodeID int32, force bool) {

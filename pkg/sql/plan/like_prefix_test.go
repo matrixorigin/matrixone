@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
@@ -631,8 +632,44 @@ func TestLikePrefixBackfillAlternativesUseBothCosts(t *testing.T) {
 			matches := ctx.matchRangeBackfills(index)
 			require.NotEmpty(t, matches[0])
 			require.NotEmpty(t, matches[1])
-			require.True(t, ctx.rangeAlternativesSafe())
+			require.True(t, regularIndexFiltersHaveStableEvaluation(node))
 			originalFilters := node.FilterList
+			throwing, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "regexp_replace", []*planpb.Expr{
+				DeepCopyExpr(prefix.GetF().Args[0]), makePlan2StringConstExprWithType("["), makePlan2StringConstExprWithType("y"),
+			})
+			require.NoError(t, err)
+			unsafe, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{throwing, makePlan2StringConstExprWithType("x")})
+			require.NoError(t, err)
+			node.FilterList = append(slices.Clone(originalFilters), unsafe)
+			checkHistorical := func(scenario string) {
+				t.Helper()
+				unsafeCtx := builder.newEncodedRegularIndexCostContext(node, refs)
+				require.NotEmpty(t, unsafeCtx.matchRangeBackfills(index)[1], scenario+": both candidates reach the safety gate")
+				require.False(t, regularIndexFiltersHaveStableEvaluation(node), scenario)
+				selected := builder.applyIndicesForFiltersRegularIndex(scanID, node, refs, map[[2]int32]*planpb.Expr{})
+				if prefixFirst {
+					require.NotEqual(t, scanID, selected, scenario+": retain historical prefix access")
+					indexScan := builder.qry.Nodes[builder.qry.Nodes[selected].Children[1]]
+					require.Equal(t, "prefix_in_range", indexScan.FilterList[0].GetF().Func.ObjName, scenario)
+				} else {
+					require.Equal(t, scanID, selected, scenario+": rejected historical IN cannot expose the alternate prefix")
+				}
+			}
+			checkHistorical("throwing residual")
+			node.FilterList = slices.Clone(originalFilters)
+			ordinaryPosition := 1
+			if !prefixFirst {
+				ordinaryPosition = 0
+			}
+			unsafeIN := DeepCopyExpr(originalFilters[ordinaryPosition])
+			badBound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "regexp_replace", []*planpb.Expr{
+				makePlan2StringConstExprWithType("x"), makePlan2StringConstExprWithType("["), makePlan2StringConstExprWithType("y"),
+			})
+			require.NoError(t, err)
+			unsafeIN.GetF().Args[1].GetList().List[0] = badBound
+			node.FilterList[ordinaryPosition] = unsafeIN
+			checkHistorical("throwing IN bound")
+			node.FilterList = originalFilters
 			prefixPosition := 0
 			if !prefixFirst {
 				prefixPosition = 1
@@ -657,7 +694,7 @@ func TestLikePrefixBackfillAlternativesUseBothCosts(t *testing.T) {
 				node.FilterList = []*planpb.Expr{lower, upper, DeepCopyExpr(ordinaryFilter), prefixFilter, DeepCopyExpr(prefixFilter)}
 			}
 			pairedCtx := builder.newEncodedRegularIndexCostContext(node, refs)
-			require.True(t, pairedCtx.rangeAlternativesSafe())
+			require.True(t, regularIndexFiltersHaveStableEvaluation(node))
 			paired := pairedCtx.matchRangeBackfills(index)
 			if prefixFirst {
 				require.Equal(t, [2][]int32{{0}, {1, 2}}, paired)
@@ -710,7 +747,7 @@ func TestRangeAlternativeLiteralStringINTotality(t *testing.T) {
 	proc := newPlanTestProcess(t)
 	mock := NewMockOptimizer(true, proc)
 	builder := NewQueryBuilder(planpb.Query_SELECT, &mock.ctxt, false, true)
-	ctx := &encodedRegularIndexCostContext{builder: builder, node: &planpb.Node{BindingTags: []int32{7}}}
+	node := &planpb.Node{BindingTags: []int32{7}}
 	makeExpr := func(charset uint8) *planpb.Expr {
 		typ := types.NewWithCharset(types.T_varchar, 40, 0, charset)
 		values := vector.NewVec(typ)
@@ -727,7 +764,7 @@ func TestRangeAlternativeLiteralStringINTotality(t *testing.T) {
 		return expr
 	}
 	for _, charset := range []uint8{types.CharsetLegacy, types.CharsetBinary, types.CharsetUTF8MB4Bin, types.CharsetUTF8} {
-		require.True(t, ctx.literalStringINIsTotal(makeExpr(charset)), "charset %d", charset)
+		require.True(t, literalStringINIsTotal(makeExpr(charset), node), "charset %d", charset)
 	}
 	for _, tc := range []struct {
 		name   string
@@ -770,7 +807,7 @@ func TestRangeAlternativeLiteralStringINTotality(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := makeExpr(types.CharsetUTF8)
 			tc.mutate(e)
-			require.False(t, ctx.literalStringINIsTotal(e))
+			require.False(t, literalStringINIsTotal(e, node))
 			if tc.name == "serialized key" || tc.name == "decimal provenance" || tc.name == "expression source" || tc.name == "prepared source" {
 				// Even the older legacy-domain proof must not bypass the
 				// common provenance barrier, including nested predicates.
@@ -782,12 +819,66 @@ func TestRangeAlternativeLiteralStringINTotality(t *testing.T) {
 				require.NoError(t, err)
 				nested.GetF().Func.Obj = overload.GetEncodedOverloadID()
 				require.True(t, isTruncationSafePredicateExpr(nested))
-				ctx.filterFacts = make([]encodedIndexFilterFact, 1)
 				for _, predicate := range []*planpb.Expr{legacy, nested} {
-					ctx.node.FilterList = []*planpb.Expr{predicate}
-					require.False(t, ctx.rangeAlternativesSafe())
+					node.FilterList = []*planpb.Expr{predicate}
+					require.False(t, regularIndexFiltersHaveStableEvaluation(node))
 				}
 			}
+		})
+	}
+}
+
+func TestLikeLiteralEqualitySelectivity(t *testing.T) {
+	for _, tc := range []struct {
+		name, pattern, function string
+		joined, unsafe, folded  bool
+		selectivity             float64
+	}{
+		{name: "literal", pattern: "abc1", function: "=", selectivity: 0.00001},
+		{name: "escaped literal", pattern: `abc\_`, function: "like", selectivity: 0.2},
+		{name: "prefix", pattern: "abc%", function: "prefix_eq", selectivity: regularIndexUnknownRangeSel},
+		{name: "joined scan", pattern: "abc1", function: "=", joined: true, selectivity: 0.2},
+		{name: "throwing residual", pattern: "abc1", function: "=", unsafe: true, selectivity: 0.2},
+		{name: "folded provenance", pattern: "abc1", function: "like", folded: true, selectivity: 0.2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, scanID, _, _ := newEncodedIndexCostTestCase(t, []string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, nil,
+				&planpb.Stats{TableCnt: 100_000, Outcnt: 20_000, Cost: 100_000}, nil, false)
+			node := builder.qry.Nodes[scanID]
+			builder.tag2Table[node.BindingTags[0]] = node.TableDef
+			wrapper := builder.compCtx.(*encodedIndexCostTestContext).statsCache.Get(encodedIndexCostUnitTableID)
+			stats := wrapper.GetStats()
+			stats.TableCnt = 100_000
+			stats.NdvMap["category"] = 100_000
+			col := &planpb.Expr{Typ: node.TableDef.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: node.BindingTags[0], ColPos: 2, Name: "category"}}}
+			right := makePlan2StringConstExprWithType(tc.pattern)
+			if tc.folded {
+				right.GetLit().Src = makePlan2StringConstExprWithType(tc.pattern)
+			}
+			overload, err := function.GetFunctionByName(builder.GetContext(), "like", []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()})
+			require.NoError(t, err)
+			expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Selectivity: 0.2, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "like", Obj: overload.GetEncodedOverloadID()}, Args: []*planpb.Expr{col, right},
+			}}}
+			node.FilterList = []*planpb.Expr{expr}
+			if tc.unsafe {
+				bad, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "regexp_replace", []*planpb.Expr{DeepCopyExpr(col), makePlan2StringConstExprWithType("["), makePlan2StringConstExprWithType("y")})
+				require.NoError(t, err)
+				residual, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{bad, makePlan2StringConstExprWithType("x")})
+				require.NoError(t, err)
+				node.FilterList = append(node.FilterList, residual)
+			}
+			root := scanID
+			if tc.joined {
+				other := int32(len(builder.qry.Nodes))
+				builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{NodeType: planpb.Node_VALUE_SCAN})
+				root = int32(len(builder.qry.Nodes))
+				builder.qry.Nodes = append(builder.qry.Nodes, &planpb.Node{NodeType: planpb.Node_JOIN, Children: []int32{scanID, other}})
+			}
+			builder.qry.Steps = []int32{root}
+			builder.optimizeLikeExpr(root)
+			require.Equal(t, tc.function, node.FilterList[0].GetF().Func.ObjName)
+			require.InDelta(t, tc.selectivity, node.FilterList[0].Selectivity, 1e-12)
 		})
 	}
 }

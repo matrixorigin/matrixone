@@ -95,6 +95,18 @@ func TestLikePrefixIndex(t *testing.T) {
 		require.Contains(t, explain(equalityQuery), "Index Table Scan")
 		require.Contains(t, explain(query), "Index Table Scan")
 		require.NotContains(t, explain("select count(*) from t where name like 'a%'"), "Index Table Scan", "a measured broad prefix must keep the scan")
+		// Cross one storage block so automatic non-covering access can save reads.
+		// Keep this in the existing fixture; tiny tables cannot prove that choice.
+		exec("create table prefix_backfill(id int primary key,name varchar(40),amount int,payload int,key ix(name,amount))")
+		exec("insert into prefix_backfill select result,concat(if(result%100=0,'abc','zzz'),result),result,result from generate_series(1,10000)g")
+		exec("analyze table prefix_backfill(name,amount) fullscan")
+		prefixQuery := "select sum(id+payload) from prefix_backfill where name like 'abc%' and amount=100"
+		prefixPlan := explain(prefixQuery)
+		require.Contains(t, prefixPlan, "Join Type: INDEX")
+		require.Contains(t, prefixPlan, "prefix_in_range(")
+		var prefixSum int64
+		require.NoError(t, conn.QueryRowContext(ctx, prefixQuery).Scan(&prefixSum))
+		require.Equal(t, int64(200), prefixSum)
 		// Original issue scale and inclusive 30% threshold, collected through SQL.
 		exec("create table issue_rows(id int primary key,name varchar(20),key ix(name))")
 		exec("insert into issue_rows select result,case result%10 when 0 then 'apple' when 1 then 'apply' when 2 then 'apricot' when 3 then 'banana' when 4 then 'band' when 5 then 'bank' when 6 then 'zebra' when 7 then 'zoo' when 8 then 'orange' else 'pear' end from generate_series(0,499) g")
