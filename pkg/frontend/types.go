@@ -355,8 +355,14 @@ type PrepareStmt struct {
 	// Percentile configuration is fixed by a value during compilation. Cache
 	// this static trait with the conservative generation rather than walking
 	// the plan on every EXECUTE.
-	percentileParamPlan        *plan.Plan
-	hasPercentileParams        bool
+	percentileParamPlan *plan.Plan
+	hasPercentileParams bool
+	// Ewm decay/policy positions carry the same per-EXECUTE configuration
+	// contract as the percentile parameters (constructEwmConfig at compile):
+	// markers, user variables and per-execution real-time expressions all
+	// flag the statement so the configuration is rebuilt on every EXECUTE.
+	ewmParamPlan               *plan.Plan
+	hasEwmParams               bool
 	directResultParamPositions []int32
 	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
 	// integer contract (LIMIT/OFFSET and LAG/LEAD offsets). It is installed
@@ -896,6 +902,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.percentileParamPlan = nil
+	prepareStmt.ewmParamPlan = nil
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil
 }
