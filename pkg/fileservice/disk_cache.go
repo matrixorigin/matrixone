@@ -36,6 +36,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -53,10 +54,12 @@ type DiskCache struct {
 		nextReadGeneration uint64
 	}
 
-	cache        *fifocache.Cache[string, struct{}]
+	cache        diskCacheIndex
 	capacityFunc fscache.CapacityFunc
 	dirEntries   bool
-	directoryMu  sync.RWMutex
+	// held counts the holds on entry directories.
+	held        dirHolds
+	directoryMu sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
 	diskFullEviction atomic.Bool
@@ -74,6 +77,9 @@ type DiskCache struct {
 	// phase barriers. Production instances leave them nil.
 	beforeLoadDirectoryCleanup func(path string)
 	beforeCacheTempFileCreate  func()
+	// beforeIndexLoadedDirs is a test-only phase barrier before the entry directories found
+	// by the load are indexed.
+	beforeIndexLoadedDirs func()
 	// beforeFilePublication is a test-only phase barrier. Production instances
 	// leave it nil, so the publication hot path pays only one predictable branch.
 	beforeFilePublication func()
@@ -87,6 +93,7 @@ type DiskCache struct {
 type diskCachePathUpdate struct {
 	_               byte
 	evictionPending bool
+	evictionSize    int64
 }
 
 // readGenerations contains only the current generation while at least one Read
@@ -128,11 +135,29 @@ func newDiskCacheWithMetricScope(
 }
 
 type diskCacheOptions struct {
-	// dirEntries makes directories named with cacheDirSuffix cache entries (IndexFileCache).
+	// dirEntries makes directories named with cacheDirSuffix cache entries
+	// (IndexFileCache), evicted least recently used first, never while held, and whose
+	// capacity does not follow GlobalDiskCacheSizeHint.
 	dirEntries bool
-	// sizeHintShare scales GlobalDiskCacheSizeHint for this cache; 0 means the whole hint.
-	sizeHintShare float64
 }
+
+// diskCacheIndex accounts for the entries of a DiskCache and evicts them: a
+// fifocache.Cache, or an lrucache.Cache for an IndexFileCache.
+type diskCacheIndex interface {
+	Set(ctx context.Context, key string, value struct{}, size int64) (inserted bool, rejected bool)
+	Get(ctx context.Context, key string) (struct{}, bool)
+	Contains(key string) bool
+	Delete(ctx context.Context, key string)
+	Replace(ctx context.Context, key string, value struct{}, size int64) bool
+	Evict(ctx context.Context, done chan int64, capacityCut int64)
+	ForceEvictWithWait(ctx context.Context, n int64) int64
+	Used() int64
+}
+
+var (
+	_ diskCacheIndex = (*fifocache.Cache[string, struct{}])(nil)
+	_ diskCacheIndex = (*lrucache.Cache[string, struct{}])(nil)
+)
 
 func newDiskCache(
 	ctx context.Context,
@@ -162,17 +187,13 @@ func newDiskCache(
 
 	capacityFunc := func() int64 {
 		// read from global size hint
-		if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
-			if opts.sizeHintShare > 0 {
-				return int64(float64(n) * opts.sizeHintShare)
-			}
+		if n := GlobalDiskCacheSizeHint.Load(); n > 0 && !opts.dirEntries {
 			return n
 		}
 		// fallback
 		return capacity()
 	}
 
-	var cache *fifocache.Cache[string, struct{}]
 	ret = &DiskCache{
 		path:               path,
 		cacheDataAllocator: cacheDataAllocator,
@@ -182,46 +203,45 @@ func newDiskCache(
 		capacityFunc: capacityFunc,
 		dirEntries:   opts.dirEntries,
 	}
-	cache = fifocache.NewWithPrepareEvict(
 
-		capacityFunc,
-
-		func(key string) uint64 {
-			return maphash.String(seed, key)
-		},
-
-		func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) { // postSet
-			inuseBytes.Add(float64(size))
-			capacityBytes.Set(float64(capacityFunc()))
-		},
-
-		nil,
-		func(path string, _ struct{}, _ int64, _ uint64) func() {
-			doneUpdate, ok := ret.startEviction(path)
-			if !ok {
-				return nil
-			}
-			return func() {
-				defer func() {
-					if err := doneUpdate(); err != nil {
-						logutil.Error("finish disk cache eviction",
-							zap.Any("error", err),
-						)
-					}
-				}()
-				if err := ret.removeEvictedFile(path); err != nil {
-					logutil.Error("delete disk cache file",
+	keyShard := func(key string) uint64 {
+		return maphash.String(seed, key)
+	}
+	postSet := func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) {
+		inuseBytes.Add(float64(size))
+		capacityBytes.Set(float64(capacityFunc()))
+	}
+	prepareEvict := func(path string, _ struct{}, size int64, _ uint64) func() {
+		doneUpdate, ok := ret.startEviction(path, size)
+		if !ok {
+			return nil
+		}
+		return func() {
+			defer func() {
+				if err := doneUpdate(); err != nil {
+					logutil.Error("finish disk cache eviction",
 						zap.Any("error", err),
 					)
 				}
+			}()
+			if err := ret.removeEvictedFile(path, size); err != nil {
+				logutil.Error("delete disk cache file",
+					zap.Any("error", err),
+				)
 			}
-		},
-		func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) {
-			inuseBytes.Add(float64(-size))
-			capacityBytes.Set(float64(capacityFunc()))
-		},
-	)
-	ret.cache = cache
+		}
+	}
+	postEvict := func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) {
+		inuseBytes.Add(float64(-size))
+		capacityBytes.Set(float64(capacityFunc()))
+	}
+	if opts.dirEntries {
+		lru := lrucache.NewWithPrepareEvict(capacityFunc, keyShard, postSet, nil, prepareEvict, postEvict)
+		lru.SetEvictable(func(path string) bool { return !ret.dirHeld(path) })
+		ret.cache = lru
+	} else {
+		ret.cache = fifocache.NewWithPrepareEvict(capacityFunc, keyShard, postSet, nil, prepareEvict, postEvict)
+	}
 	ret.updatingPaths.Cond = sync.NewCond(new(sync.Mutex))
 	ret.updatingPaths.m = make(map[string]*diskCachePathUpdate)
 	ret.updatingPaths.readGenerations = make(map[string]diskCachePathReadGeneration)
@@ -261,6 +281,11 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 	}
 	works := make(chan Info)
 
+	var (
+		dirsMu sync.Mutex
+		dirs   []loadedDir
+	)
+
 	numWorkers := runtime.NumCPU()
 	wg := new(sync.WaitGroup)
 	for i := 0; i < numWorkers; i++ {
@@ -280,7 +305,13 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 						if err != nil {
 							continue // ignore
 						}
-						d.cache.Set(ctx, work.Path, struct{}{}, size)
+						info, err := work.Entry.Info()
+						if err != nil {
+							continue // ignore
+						}
+						dirsMu.Lock()
+						dirs = append(dirs, loadedDir{path: work.Path, size: size, lastUse: info.ModTime()})
+						dirsMu.Unlock()
 						continue
 					}
 					info, err := work.Entry.Info()
@@ -371,6 +402,9 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 
 	close(works)
 	wg.Wait()
+	if len(dirs) > 0 {
+		d.indexLoadedDirs(ctx, dirs)
+	}
 
 	logutil.Info("disk cache info loaded",
 		zap.Any("all files", numFiles),
@@ -697,6 +731,7 @@ func (d *DiskCache) removeEmptyDirectory(path string) {
 }
 
 type diskCacheFilesystemStat struct {
+	totalBytes     uint64
 	availableBytes uint64
 	totalInodes    uint64
 	freeInodes     uint64
@@ -735,12 +770,15 @@ func (d *DiskCache) evictForDiskFull(ctx context.Context, err error) {
 	d.cache.ForceEvictWithWait(ctx, n)
 }
 
-func (d *DiskCache) filesystemExhausted(wantBytes int64) bool {
-	statFilesystem := statDiskCacheFilesystem
+func (d *DiskCache) statFS() (diskCacheFilesystemStat, bool) {
 	if d.statFilesystem != nil {
-		statFilesystem = d.statFilesystem
+		return d.statFilesystem(d.path)
 	}
-	stat, ok := statFilesystem(d.path)
+	return statDiskCacheFilesystem(d.path)
+}
+
+func (d *DiskCache) filesystemExhausted(wantBytes int64) bool {
+	stat, ok := d.statFS()
 	if !ok {
 		// Unknown: keep evicting, as before ENOSPC was distinguished.
 		return true
@@ -1248,11 +1286,12 @@ func (d *DiskCache) tryStartUpdateWithCleanup(
 // startEviction either owns the path cleanup or transfers that responsibility
 // to the current path owner. Both decisions happen while holding the same lock,
 // so eviction cannot be lost between observing and releasing a generation.
-func (d *DiskCache) startEviction(path string) (done func() error, ok bool) {
+func (d *DiskCache) startEviction(path string, size int64) (done func() error, ok bool) {
 	d.updatingPaths.L.Lock()
 	d.invalidatePathReadsLocked(path)
 	if update := d.updatingPaths.m[path]; update != nil {
 		update.evictionPending = true
+		update.evictionSize = size
 		d.updatingPaths.L.Unlock()
 		return nil, false
 	}
@@ -1296,15 +1335,19 @@ func (d *DiskCache) finishPathUpdate(path string, update *diskCachePathUpdate) (
 			return err
 		}
 		update.evictionPending = false
+		size := update.evictionSize
 		d.updatingPaths.L.Unlock()
 
-		err = errors.Join(err, d.removeEvictedFile(path))
+		err = errors.Join(err, d.removeEvictedFile(path, size))
 	}
 }
 
-func (d *DiskCache) removeEvictedFile(path string) error {
+func (d *DiskCache) removeEvictedFile(path string, size int64) error {
 	if d.cache.Contains(path) {
 		return nil
+	}
+	if d.dirEntries && strings.HasSuffix(path, cacheDirSuffix) {
+		return d.removeEvictedDir(path, size)
 	}
 	if err := d.removeCachePath(path); err != nil {
 		if os.IsNotExist(err) {

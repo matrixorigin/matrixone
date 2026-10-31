@@ -20,9 +20,12 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
+	"hash/crc32"
 	"io"
 	"math/rand"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,7 +58,7 @@ func md5Hex(b []byte) string {
 }
 
 func testRef(data []byte) Ref {
-	return Ref{DB: "db", Table: "idx", IndexID: "idx:1:0", Tag: 0, Size: int64(len(data)), Checksum: md5Hex(data)}
+	return Ref{DB: "db", Table: "idx", IndexID: "idx:1:0", Tag: 0, Size: int64(len(data)), Checksum: Checksum(data)}
 }
 
 func chunksOf(data []byte, first int64) map[int64][]byte {
@@ -94,7 +97,9 @@ func TestAssembler(t *testing.T) {
 	}
 	require.NoError(t, a.add(6, []byte("outside")))
 	require.NoError(t, a.add(11, []byte("outside")))
-	require.NoError(t, a.finish())
+	crc, err := a.finish()
+	require.NoError(t, err)
+	require.Equal(t, crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli)), crc, "chunks added out of order")
 	got, err := io.ReadAll(io.NewSectionReader(f, 0, ref.Size))
 	require.NoError(t, err)
 	require.Equal(t, data, got)
@@ -110,15 +115,18 @@ func TestAssembler(t *testing.T) {
 	a, _ = newAsm()
 	require.NoError(t, a.add(7, chunks[7]))
 	require.NoError(t, a.add(10, chunks[10]))
-	require.ErrorContains(t, a.finish(), "missing chunk 8")
+	_, err = a.finish()
+	require.ErrorContains(t, err, "missing chunk 8")
 
-	empty := Ref{DB: "db", Table: "t", IndexID: "e", Size: 0, Checksum: md5Hex(nil)}
+	empty := Ref{DB: "db", Table: "t", IndexID: "e", Size: 0, Checksum: Checksum(nil)}
 	f, err = os.CreateTemp(t.TempDir(), "asm")
 	require.NoError(t, err)
 	defer f.Close()
 	a, err = newAssembler(f, &empty)
 	require.NoError(t, err)
-	require.NoError(t, a.finish())
+	crc, err = a.finish()
+	require.NoError(t, err)
+	require.Equal(t, empty.Checksum, formatCRC(crc))
 
 	exact := randomBytes(2*ChunkSize, 2)
 	exactRef := testRef(exact)
@@ -131,10 +139,28 @@ func TestAssembler(t *testing.T) {
 	require.ErrorContains(t, a.add(1, exact[ChunkSize:2*ChunkSize-1]), "chunk 1 has 65535 bytes")
 	require.NoError(t, a.add(1, exact[ChunkSize:]))
 	require.NoError(t, a.add(0, exact[:ChunkSize]))
-	require.NoError(t, a.finish())
+	crc, err = a.finish()
+	require.NoError(t, err)
+	require.Equal(t, exactRef.Checksum, formatCRC(crc))
 	got, err = io.ReadAll(io.NewSectionReader(f, 0, exactRef.Size))
 	require.NoError(t, err)
 	require.Equal(t, exact, got)
+}
+
+func TestCRCCombine(t *testing.T) {
+	table := crc32.MakeTable(crc32.Castagnoli)
+	r := rand.New(rand.NewSource(31))
+	for _, n := range []int{0, 1, 7, 64, 1000, 3*ChunkSize + 17} {
+		b := randomBytes(n, int64(n))
+		for range 5 {
+			cut := 0
+			if n > 0 {
+				cut = r.Intn(n + 1)
+			}
+			got := crcCombine(crc32.Checksum(b[:cut], table), crc32.Checksum(b[cut:], table), int64(n-cut))
+			require.Equal(t, crc32.Checksum(b, table), got, "n=%d cut=%d", n, cut)
+		}
+	}
 }
 
 func TestManifestAndNames(t *testing.T) {
@@ -236,7 +262,10 @@ func (r *fakeReader) SetOrderBy([]*plan.OrderBySpec)       {}
 func (r *fakeReader) GetOrderBy() []*plan.OrderBySpec      { return nil }
 func (r *fakeReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (r *fakeReader) SetFilterZM(objectio.ZoneMap)         {}
-func (r *fakeReader) Read(_ context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch) (bool, error) {
+func (r *fakeReader) Read(_ context.Context, cols []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch) (bool, error) {
+	if !slices.Contains(cols, catalog.CPrimaryKeyColName) {
+		return false, moerr.NewInternalErrorNoCtx("the primary key filter needs the primary key column read")
+	}
 	if r.pos >= len(r.rows) {
 		return true, nil
 	}
@@ -270,7 +299,13 @@ func storageTableDef() *plan.TableDef {
 		{Name: catalog.IndexStorage_TblCol_Tag, Typ: plan.Type{Id: int32(types.T_int64)}},
 		{Name: catalog.CPrimaryKeyColName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
 	}
-	def := &plan.TableDef{Name: "idx", Cols: cols, Name2ColIndex: make(map[string]int32)}
+	def := &plan.TableDef{
+		Name: "idx", Cols: cols, Name2ColIndex: make(map[string]int32),
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Names:       []string{catalog.IndexStorage_TblCol_Index_Id, catalog.IndexStorage_TblCol_Chunk_Id},
+		},
+	}
 	for i, c := range cols {
 		def.Name2ColIndex[c.Name] = int32(i)
 	}
@@ -366,11 +401,10 @@ func TestOpenRebuildsThenHitsCache(t *testing.T) {
 	require.NoError(t, f.Close())
 	require.Equal(t, int32(1), tbl.scans.Load())
 
-	filter := <-tbl.filters
-	fn := filter.GetF()
+	fn := (<-tbl.filters).GetF()
 	require.Equal(t, "prefix_between", fn.Func.ObjName)
-	require.Equal(t, string(serialKey(ref.IndexID, 0)), fn.Args[1].GetLit().GetSval())
-	require.Equal(t, string(serialKey(ref.IndexID, 5)), fn.Args[2].GetLit().GetSval())
+	require.Equal(t, serialKey(ref.IndexID, 0), fn.Args[1].GetFold().GetData())
+	require.Equal(t, serialKey(ref.IndexID, 5), fn.Args[2].GetFold().GetData())
 
 	f, err = Open(ctx, env, ref)
 	require.NoError(t, err)
@@ -519,9 +553,33 @@ func TestOpenRebuildsCorruptedCacheEntry(t *testing.T) {
 	resetVerified()
 	f, err = Open(ctx, env, ref)
 	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	require.Equal(t, int32(1), tbl.scans.Load(), "without the check on startup: length check only")
+
+	cache.SetCheckOnStartup(true)
+	f, err = Open(ctx, env, ref)
+	require.NoError(t, err)
 	require.Equal(t, data, readFile(t, f), "the first full check after start detects the corruption and rebuilds")
 	require.NoError(t, f.Close())
 	require.Equal(t, int32(2), tbl.scans.Load())
+}
+
+// A file recorded with a hex MD5, as written before CRC32-C, is rebuilt and checked against it.
+func TestOpenVerifiesLegacyMD5(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	data := randomBytes(2*ChunkSize+3, 33)
+	ref := testRef(data)
+	ref.Checksum = md5Hex(data)
+	tbl := &fakeTable{tableID: 34, rows: func() []chunkRow { return fileRows(ref, data, 35) }}
+	env := newEnv(t, ctrl, tbl, newCache(t, t.TempDir()))
+	f, err := Open(context.Background(), env, ref)
+	require.NoError(t, err)
+	require.Equal(t, data, readFile(t, f))
+	require.NoError(t, f.Close())
+
+	ref.Checksum = md5Hex(data[1:])
+	_, err = Open(context.Background(), env, ref)
+	require.ErrorContains(t, err, "checksum mismatch")
 }
 
 func TestOpenWithoutCache(t *testing.T) {
@@ -579,6 +637,7 @@ func TestFDPathSurvivesEviction(t *testing.T) {
 	f, err := Open(context.Background(), env, ref)
 	require.NoError(t, err)
 	defer f.Close()
+	f.Keep()()
 	require.NoError(t, env.Cache.Delete(context.Background(), entryName(18, &ref)))
 	_, err = env.Cache.Open(context.Background(), entryName(18, &ref), dataFile)
 	require.Error(t, err, "the cache entry is gone")
@@ -620,7 +679,7 @@ func TestWriteCachesUnderNameAndCleansUp(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(len(data)), size)
-	require.Equal(t, md5Hex(data), sum)
+	require.Equal(t, Checksum(data), sum)
 	_, err = LookupSource(token, []byte("txn-1"))
 	require.Error(t, err, "the source is unregistered after Write")
 
@@ -739,12 +798,16 @@ func TestWriteFallsBackWhenCacheStagingFails(t *testing.T) {
 	cache := newCache(t, dir)
 	tbl := &fakeTable{tableID: 21, rows: func() []chunkRow { return nil }}
 	env := newEnv(t, ctrl, tbl, cache)
+	env.TempDir = t.TempDir()
 	data := randomBytes(2*ChunkSize+9, 21)
 	failCacheStaging(t, dir, 5)
 
 	ref := Ref{DB: "db", Table: "idx", IndexID: "idx:3:0"}
 	var got []byte
 	size, sum, err := Write(context.Background(), env, ref, &onceReader{src: bytes.NewReader(data)}, func(sql string) error {
+		left, err := os.ReadDir(env.TempDir)
+		require.NoError(t, err)
+		require.Empty(t, left, "the private staging file has no name a crash could leave behind")
 		token := sql[strings.Index(sql, "('")+2 : strings.Index(sql, "',")]
 		src, err := LookupSource(token, []byte("txn-1"))
 		require.NoError(t, err)
@@ -758,7 +821,7 @@ func TestWriteFallsBackWhenCacheStagingFails(t *testing.T) {
 	})
 	require.NoError(t, err, "a full cache disk does not fail the write")
 	require.Equal(t, int64(len(data)), size)
-	require.Equal(t, md5Hex(data), sum)
+	require.Equal(t, Checksum(data), sum)
 	require.Equal(t, data, got, "bytes staged before the failure are kept")
 	ref.Size, ref.Checksum = size, sum
 	_, err = cache.Open(context.Background(), entryName(21, &ref), dataFile)
@@ -774,3 +837,54 @@ func TestWriteFallsBackWhenCacheStagingFails(t *testing.T) {
 type iotestErrReader struct{ err error }
 
 func (r iotestErrReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestOpenWithoutCacheRebuildsInTempDir(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	data := randomBytes(2*ChunkSize+5, 9)
+	ref := testRef(data)
+	tbl := &fakeTable{tableID: 12, rows: func() []chunkRow { return fileRows(ref, data, 2) }}
+	env := newEnv(t, ctrl, tbl, nil)
+	env.TempDir = t.TempDir()
+
+	f, err := Open(context.Background(), env, ref)
+	require.NoError(t, err)
+	defer f.Close()
+	require.Equal(t, data, readFile(t, f))
+	require.Equal(t, env.TempDir, filepath.Dir(f.File().Name()))
+}
+
+// An entry found invalid while another reader holds it is replaced by the rebuilt file, so
+// later opens hit the cache again.
+func TestOpenReplacesInvalidHeldEntry(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	data := randomBytes(3*ChunkSize+11, 15)
+	ref := testRef(data)
+	tbl := &fakeTable{tableID: 16, rows: func() []chunkRow { return fileRows(ref, data, 6) }}
+	cache := newCache(t, t.TempDir())
+	env := newEnv(t, ctrl, tbl, cache)
+	ctx := context.Background()
+
+	held, err := Open(ctx, env, ref)
+	require.NoError(t, err)
+	release := held.Keep()
+	defer release()
+	require.NoError(t, held.Close())
+
+	files, err := cache.Open(ctx, entryName(16, &ref), dataFile)
+	require.NoError(t, err)
+	path := files[0].Name()
+	files[0].Close()
+	require.NoError(t, os.Truncate(path, 10))
+
+	f, err := Open(ctx, env, ref)
+	require.NoError(t, err)
+	require.Equal(t, data, readFile(t, f))
+	require.NoError(t, f.Close())
+	require.Equal(t, int32(2), tbl.scans.Load(), "the invalid entry is rebuilt")
+
+	f, err = Open(ctx, env, ref)
+	require.NoError(t, err)
+	require.Equal(t, data, readFile(t, f))
+	require.NoError(t, f.Close())
+	require.Equal(t, int32(2), tbl.scans.Load(), "the rebuilt file replaced the invalid entry")
+}

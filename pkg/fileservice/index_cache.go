@@ -21,18 +21,26 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/lrucache"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 const (
@@ -44,9 +52,22 @@ const (
 var cacheDirTrashSeq atomic.Uint64
 
 const (
-	// DefaultIndexFileDiskShare is the default share of the disk cache capacity given to
-	// the index-file cache: none until an index reads through it.
-	DefaultIndexFileDiskShare = 0.0
+	// DefaultIndexFileDiskCapacity is the default capacity of the index-file cache.
+	DefaultIndexFileDiskCapacity = 8 << 30
+
+	// DefaultIndexFileIdleTTL is how long an index-file cache entry with no holds stays
+	// after its last use.
+	DefaultIndexFileIdleTTL = time.Hour
+
+	maxIndexFileGCInterval = 10 * time.Minute
+
+	// indexFileLowFree and indexFileTargetFree are shares of the cache filesystem's size:
+	// below the first, collection removes entries with no holds, least recently used first,
+	// until free space reaches the second, and runs every indexFilePressureGCInterval
+	// until it does.
+	indexFileLowFree            = 0.10
+	indexFileTargetFree         = 0.15
+	indexFilePressureGCInterval = 30 * time.Second
 
 	IndexFileRebuildCacheRead      = "read"
 	IndexFileRebuildCacheNone      = "none"
@@ -74,10 +95,16 @@ func ParseIndexFileRebuildCache(s string) (Policy, error) {
 
 // IndexFileCache keeps whole index files on local disk. An entry is a directory of named
 // files that is published, evicted and deleted as a unit. Capacity, eviction, per-path
-// coordination and reuse after restart are those of DiskCache.
+// coordination and reuse after restart are those of DiskCache. An entry with no holds
+// whose last use, its publication or the release of its last hold, is older than the
+// idle TTL is deleted.
 type IndexFileCache struct {
-	disk          *DiskCache
-	rebuildPolicy Policy
+	disk           *DiskCache
+	rebuildPolicy  Policy
+	checkOnStartup atomic.Bool
+	idleTTL        time.Duration
+	stopGC         context.CancelFunc
+	gcDone         chan struct{}
 }
 
 // IndexCacheFile is one file of an entry written by IndexFileCache.Put. Its content
@@ -98,7 +125,7 @@ func NewIndexFileCache(
 	name string,
 	rebuildPolicy Policy,
 ) (*IndexFileCache, error) {
-	return newIndexFileCache(ctx, path, capacity, name, "", 0, rebuildPolicy)
+	return newIndexFileCache(ctx, path, capacity, name, "", rebuildPolicy, 0)
 }
 
 func newIndexFileCache(
@@ -107,15 +134,271 @@ func newIndexFileCache(
 	capacity fscache.CapacityFunc,
 	name string,
 	metricScope string,
-	sizeHintShare float64,
 	rebuildPolicy Policy,
+	idleTTL time.Duration,
 ) (*IndexFileCache, error) {
 	disk, err := newDiskCache(ctx, path, capacity, nil, true, nil, name, metricScope,
-		diskCacheOptions{dirEntries: true, sizeHintShare: sizeHintShare})
+		diskCacheOptions{dirEntries: true})
 	if err != nil {
 		return nil, err
 	}
-	return &IndexFileCache{disk: disk, rebuildPolicy: rebuildPolicy}, nil
+	c := &IndexFileCache{disk: disk, rebuildPolicy: rebuildPolicy, idleTTL: idleTTL}
+	interval := maxIndexFileGCInterval
+	if idleTTL > 0 {
+		interval = min(max(idleTTL/4, time.Second), maxIndexFileGCInterval)
+	}
+	c.startGC(interval)
+	return c, nil
+}
+
+// indexFileCacheSettings are the settings of an index-file cache, taken from the
+// configuration of the CN that creates it.
+type indexFileCacheSettings struct {
+	path           string
+	capacity       int64
+	rebuildPolicy  Policy
+	idleTTL        time.Duration
+	checkOnStartup bool
+}
+
+type sharedIndexFileCache struct {
+	cache    *IndexFileCache
+	settings indexFileCacheSettings
+	refs     int
+}
+
+// sharedIndexFileCaches holds one index-file cache per directory in the process, shared
+// by the CNs configured with that directory. The first CN to use a directory creates its
+// cache with its settings; the last to stop closes it.
+var sharedIndexFileCaches struct {
+	mu sync.Mutex
+	m  map[string]*sharedIndexFileCache
+}
+
+// acquireIndexFileCache returns the cache of settings.path, creating it with settings if
+// the process has none. diskPath is the table-data disk cache directory of the CN.
+func acquireIndexFileCache(
+	ctx context.Context,
+	diskPath string,
+	settings indexFileCacheSettings,
+	name string,
+	metricScope string,
+) (*IndexFileCache, error) {
+	if err := checkIndexFileDiskPath(diskPath, settings.path); err != nil {
+		return nil, err
+	}
+	key, err := filepath.Abs(settings.path)
+	if err != nil {
+		return nil, err
+	}
+	p := &sharedIndexFileCaches
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e := p.m[key]; e != nil {
+		if settings != e.settings {
+			logutil.Warn("index file cache: directory already in use in this process; its first settings are kept",
+				zap.String("path", key),
+				zap.Int64("capacity", e.settings.capacity),
+				zap.Duration("idle-ttl", e.settings.idleTTL),
+				zap.Bool("check-on-startup", e.settings.checkOnStartup),
+				zap.Int64("ignored-capacity", settings.capacity),
+			)
+		}
+		e.refs++
+		return e.cache, nil
+	}
+	c, err := newIndexFileCache(ctx, settings.path, fscache.ConstCapacity(settings.capacity),
+		name, metricScope, settings.rebuildPolicy, settings.idleTTL)
+	if err != nil {
+		return nil, err
+	}
+	c.SetCheckOnStartup(settings.checkOnStartup)
+	if p.m == nil {
+		p.m = make(map[string]*sharedIndexFileCache)
+	}
+	p.m[key] = &sharedIndexFileCache{cache: c, settings: settings, refs: 1}
+	logutil.Info("fileservice: index file cache initialized",
+		zap.String("path", key),
+		zap.Int64("capacity", settings.capacity),
+		zap.Duration("idle-ttl", settings.idleTTL),
+		zap.Bool("check-on-startup", settings.checkOnStartup),
+	)
+	return c, nil
+}
+
+// releaseIndexFileCache releases a reference from acquireIndexFileCache and closes the
+// cache with the last one.
+func releaseIndexFileCache(ctx context.Context, c *IndexFileCache) {
+	p := &sharedIndexFileCaches
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, e := range p.m {
+		if e.cache != c {
+			continue
+		}
+		if e.refs--; e.refs == 0 {
+			delete(p.m, key)
+			c.Close(ctx)
+		}
+		return
+	}
+}
+
+// startGC collects entries every interval until Close: those idle past the idle TTL, and
+// while the filesystem is short of free space those with no holds, every
+// indexFilePressureGCInterval until it is not.
+func (c *IndexFileCache) startGC(interval time.Duration) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c.stopGC, c.gcDone = cancel, make(chan struct{})
+	go func() {
+		defer close(c.gcDone)
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		stuck := false
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+			if c.idleTTL > 0 {
+				if n, err := c.collectIdle(ctx, time.Now()); err != nil && ctx.Err() == nil {
+					logutil.Warn("index file cache: collect idle entries", zap.String("path", c.disk.path), zap.Error(err))
+				} else if n > 0 {
+					logutil.Info("index file cache: collected idle entries", zap.String("path", c.disk.path), zap.Int("entries", n))
+				}
+			}
+			short, err := c.relieveDiskPressure(ctx)
+			if err != nil && ctx.Err() == nil {
+				logutil.Warn("index file cache: free disk space", zap.String("path", c.disk.path), zap.Error(err))
+			}
+			if short && !stuck {
+				logutil.Warn("index file cache: filesystem still short of free space; the remaining entries are in use",
+					zap.String("path", c.disk.path))
+			}
+			stuck = short
+			next := interval
+			if short {
+				next = min(interval, indexFilePressureGCInterval)
+			}
+			timer.Reset(next)
+		}
+	}()
+}
+
+// relieveDiskPressure removes entries with no holds, least recently used first, while the
+// cache filesystem's free space is below indexFileLowFree of its size, until it reaches
+// indexFileTargetFree. It reports whether free space is still below the target.
+func (c *IndexFileCache) relieveDiskPressure(ctx context.Context) (short bool, err error) {
+	stat, ok := c.disk.statFS()
+	if !ok || stat.totalBytes == 0 {
+		return false, nil
+	}
+	low := uint64(float64(stat.totalBytes) * indexFileLowFree)
+	target := uint64(float64(stat.totalBytes) * indexFileTargetFree)
+	if stat.availableBytes >= low {
+		return false, nil
+	}
+	paths, err := c.entryDirs()
+	if err != nil {
+		return true, err
+	}
+	type entry struct {
+		path string
+		used time.Time
+		size uint64
+	}
+	entries := make([]entry, 0, len(paths))
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, entry{path: path, used: info.ModTime(), size: uint64(entrySize(path))})
+	}
+	slices.SortFunc(entries, func(a, b entry) int { return a.used.Compare(b.used) })
+	need := target - stat.availableBytes
+	var freed uint64
+	n := 0
+	for _, e := range entries {
+		if freed >= need {
+			break
+		}
+		removed, err := c.disk.removeIdleDir(ctx, e.path, anyLastUse)
+		if err != nil {
+			return true, err
+		}
+		if removed {
+			freed += e.size
+			n++
+		}
+	}
+	if n > 0 {
+		logutil.Warn("index file cache: removed entries for free disk space",
+			zap.String("path", c.disk.path), zap.Int("entries", n), zap.Uint64("bytes", freed),
+			zap.Uint64("available", stat.availableBytes), zap.Uint64("total", stat.totalBytes))
+	}
+	return freed < need, nil
+}
+
+func entrySize(path string) int64 {
+	files, err := os.ReadDir(path)
+	if err != nil {
+		return 0
+	}
+	var n int64
+	for _, f := range files {
+		if info, err := f.Info(); err == nil {
+			n += info.Size()
+		}
+	}
+	return n
+}
+
+// collectIdle deletes the entries with no holds last used before now minus the idle TTL,
+// and returns how many it deleted.
+func (c *IndexFileCache) collectIdle(ctx context.Context, now time.Time) (int, error) {
+	before := now.Add(-c.idleTTL)
+	paths, err := c.entryDirs()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, path := range paths {
+		removed, err := c.disk.removeIdleDir(ctx, path, before)
+		if err != nil {
+			return n, err
+		}
+		if removed {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// entryDirs returns the entry directories in the cache.
+func (c *IndexFileCache) entryDirs() ([]string, error) {
+	var paths []string
+	err := filepath.WalkDir(c.disk.path, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		switch name := d.Name(); {
+		case strings.HasSuffix(name, cacheDirSuffix):
+			paths = append(paths, path)
+			return fs.SkipDir
+		case strings.HasSuffix(name, cacheDirTempSuffix), strings.HasSuffix(name, cacheDirTrashSuffix):
+			return fs.SkipDir
+		}
+		return nil
+	})
+	return paths, err
 }
 
 // Path returns the cache directory.
@@ -126,6 +409,17 @@ func (c *IndexFileCache) Path() string {
 // RebuildPolicy is the cache policy for reading chunk rows when an entry is rebuilt.
 func (c *IndexFileCache) RebuildPolicy() Policy {
 	return c.rebuildPolicy
+}
+
+// CheckOnStartup reports whether each cached file's full checksum is checked on its first
+// open since the process started.
+func (c *IndexFileCache) CheckOnStartup() bool {
+	return c.checkOnStartup.Load()
+}
+
+// SetCheckOnStartup sets CheckOnStartup.
+func (c *IndexFileCache) SetCheckOnStartup(on bool) {
+	c.checkOnStartup.Store(on)
 }
 
 // IndexFileCacheProvider is a file service that owns an index-file cache.
@@ -150,6 +444,10 @@ func GetIndexFileCache(fs FileService) *IndexFileCache {
 
 // Close stops the cache. Entries stay on disk.
 func (c *IndexFileCache) Close(ctx context.Context) {
+	if c.stopGC != nil {
+		c.stopGC()
+		<-c.gcDone
+	}
 	c.disk.Close(ctx)
 }
 
@@ -204,7 +502,20 @@ func (c *IndexFileCache) Open(ctx context.Context, name string, files ...string)
 	return c.disk.openDir(ctx, name, diskPath, files)
 }
 
-// Delete removes entry name.
+// Hold keeps entry name on disk until release is called: evicting or collecting the
+// entry is deferred until its last hold is released. Take the hold before Open. release
+// must be called once.
+func (c *IndexFileCache) Hold(name string) (release func(), err error) {
+	diskPath, err := c.disk.pathForDir(name)
+	if err != nil {
+		return nil, err
+	}
+	c.disk.holdDir(diskPath)
+	var once sync.Once
+	return func() { once.Do(func() { c.disk.releaseDir(diskPath) }) }, nil
+}
+
+// Delete removes entry name at once, held or not; files already open stay readable.
 func (c *IndexFileCache) Delete(ctx context.Context, name string) error {
 	diskPath, err := c.disk.pathForDir(name)
 	if err != nil {
@@ -220,6 +531,145 @@ func (c *IndexFileCache) Delete(ctx context.Context, name string) error {
 	}
 	c.disk.cache.Delete(ctx, diskPath)
 	return nil
+}
+
+type dirHolds struct {
+	mu sync.Mutex
+	m  map[string]int
+}
+
+// loadedDir is an entry directory found when the cache loads.
+type loadedDir struct {
+	path    string
+	size    int64
+	lastUse time.Time
+}
+
+// indexLoadedDirs indexes the entry directories found when the cache loads behind every
+// entry published or opened meanwhile, in their order of last use, skipping those removed
+// meanwhile.
+func (d *DiskCache) indexLoadedDirs(ctx context.Context, dirs []loadedDir) {
+	lru := d.cache.(*lrucache.Cache[string, struct{}])
+	slices.SortFunc(dirs, func(a, b loadedDir) int { return b.lastUse.Compare(a.lastUse) })
+	if d.beforeIndexLoadedDirs != nil {
+		d.beforeIndexLoadedDirs()
+	}
+	for _, e := range dirs {
+		done := d.startUpdate(e.path)
+		if _, err := os.Stat(e.path); err == nil {
+			lru.SetOldest(ctx, e.path, struct{}{}, e.size)
+		}
+		done()
+	}
+}
+
+// dirHeld reports whether entry directory path has a hold.
+func (d *DiskCache) dirHeld(path string) bool {
+	d.held.mu.Lock()
+	defer d.held.mu.Unlock()
+	return d.held.m[path] > 0
+}
+
+func (d *DiskCache) holdDir(path string) {
+	d.held.mu.Lock()
+	defer d.held.mu.Unlock()
+	if d.held.m == nil {
+		d.held.m = make(map[string]int)
+	}
+	d.held.m[path]++
+}
+
+// releaseDir drops a hold; the release of the last one is the entry's last use.
+func (d *DiskCache) releaseDir(path string) {
+	d.held.mu.Lock()
+	d.held.m[path]--
+	if d.held.m[path] > 0 {
+		d.held.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	_ = os.Chtimes(path, now, now)
+	delete(d.held.m, path)
+	d.held.mu.Unlock()
+	_, _ = d.cache.Get(context.Background(), path)
+}
+
+// removeEvictedDir removes an evicted entry directory, or puts it back in the cache with
+// size when it has a hold.
+func (d *DiskCache) removeEvictedDir(path string, size int64) error {
+	d.held.mu.Lock()
+	if d.held.m[path] > 0 {
+		d.held.mu.Unlock()
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		d.cache.Set(context.Background(), path, struct{}{}, size)
+		return nil
+	}
+	trash, err := trashCacheDir(path)
+	d.held.mu.Unlock()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	metric.FSDiskCacheEvictCounter.Add(1)
+	return os.RemoveAll(trash)
+}
+
+// removeIdleDir removes an entry directory that has no holds and was last used before
+// before.
+func (d *DiskCache) removeIdleDir(ctx context.Context, path string, before time.Time) (bool, error) {
+	d.held.mu.Lock()
+	idle, err := d.idleDirLocked(path, before)
+	d.held.mu.Unlock()
+	if !idle {
+		return false, err
+	}
+	done, err := d.startUpdateContext(ctx, path)
+	if err != nil {
+		return false, err
+	}
+	defer done()
+	d.held.mu.Lock()
+	if idle, err = d.idleDirLocked(path, before); !idle {
+		d.held.mu.Unlock()
+		return false, err
+	}
+	trash, err := trashCacheDir(path)
+	d.held.mu.Unlock()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	d.cache.Delete(ctx, path)
+	return true, os.RemoveAll(trash)
+}
+
+// anyLastUse is a cutoff later than any entry's last use, even one recorded before the
+// clock was set back.
+var anyLastUse = time.Unix(1<<62, 0)
+
+// idleDirLocked reports whether an entry directory has no holds and was last used before
+// before. The caller holds d.held.mu.
+func (d *DiskCache) idleDirLocked(path string, before time.Time) (bool, error) {
+	if d.held.m[path] > 0 {
+		return false, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return info.ModTime().Before(before), nil
 }
 
 func (d *DiskCache) pathForDir(name string) (string, error) {
@@ -358,7 +808,8 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 	}
 	tmpOwned = false
 
-	if !d.cache.Replace(ctx, diskPath, struct{}{}, size) {
+	// a republished entry is the most recently used before its new size is accounted
+	if _, ok := d.cache.Get(ctx, diskPath); !ok || !d.cache.Replace(ctx, diskPath, struct{}{}, size) {
 		d.cache.Set(ctx, diskPath, struct{}{}, size)
 	}
 	if !d.cache.Contains(diskPath) {
@@ -570,9 +1021,14 @@ func (d *DiskCache) removeCachePath(path string) error {
 
 // removeCacheDir renames the entry out of its name in one step, then removes it.
 func removeCacheDir(path string) error {
-	trash := fmt.Sprintf("%s.%d-%d%s", path, os.Getpid(), cacheDirTrashSeq.Add(1), cacheDirTrashSuffix)
-	if err := os.Rename(path, trash); err != nil {
+	trash, err := trashCacheDir(path)
+	if err != nil {
 		return err
 	}
 	return os.RemoveAll(trash)
+}
+
+func trashCacheDir(path string) (string, error) {
+	trash := fmt.Sprintf("%s.%d-%d%s", path, os.Getpid(), cacheDirTrashSeq.Add(1), cacheDirTrashSuffix)
+	return trash, os.Rename(path, trash)
 }

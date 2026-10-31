@@ -19,9 +19,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -67,8 +69,10 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	// ISCPTaskExecutorFactory; resolve it by this CN's UUID. spillDir="" (no LOCAL
 	// attached / executor not found) falls back to the OS temp dir, unchanged behavior.
 	var spillDir string
+	files := &indexfile.Files{Engine: c.cnEngine}
 	if exec, ok := GetExecutorRuntime(c.cnUUID); ok {
 		spillDir = fulltext2.LocalSpillDir(ctx, exec.rootFS)
+		files.Cache = fileservice.GetIndexFileCache(exec.rootFS)
 	}
 	tb, err := fulltext2.NewTailBuilder(w.pkType, w.capacity, w.postingCap, spillDir, tokenize, bopts...)
 	if err != nil {
@@ -106,15 +110,15 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 							return err
 						}
 						// The frames are already on disk (TailBuilder spilled them into packed spool
-						// files): persist their bytes, batched at maxInsertTuples rows per
-						// statement ACROSS frames — so a burst of tiny frames costs ~totalChunks/maxInsertTuples
-						// RunSql round-trips in this one txn, not one INSERT per frame. chunk_ids stay
-						// contiguous in frame order, so recency is unchanged.
+						// files): persist their bytes. Frames of one chunk are batched at
+						// maxInsertTuples rows per statement ACROSS frames; each larger frame is
+						// written as one index file. chunk_ids stay contiguous in frame order, so
+						// recency is unchanged.
 						// The frames' rows record the version this flush applied, written in
 						// THIS transaction alongside the bytes they describe -- so an index's
 						// recorded coverage can never disagree with what it actually stores,
 						// which a watermark read from elsewhere cannot promise.
-						chunkID, err := tb.PersistFinished(sqlproc, w.cfg, startChunk, r.GetToTS().Physical())
+						chunkID, err := tb.PersistFinished(sqlproc, w.cfg, files, startChunk, r.GetToTS().Physical())
 						if err != nil {
 							return err
 						}

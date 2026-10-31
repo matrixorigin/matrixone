@@ -29,13 +29,17 @@ func statDiskCacheFilesystem(path string) (diskCacheFilesystemStat, bool) {
 	}
 	blockSize := uint64(stat.Bsize)
 	availableBlocks := uint64(stat.Bavail)
-	availableBytes := uint64(math.MaxUint64)
-	if availableBlocks <= math.MaxUint64/blockSize {
-		availableBytes = availableBlocks * blockSize
-	}
 	return diskCacheFilesystemStat{
-		availableBytes: availableBytes,
+		totalBytes:     blocksToBytes(uint64(stat.Blocks), blockSize),
+		availableBytes: blocksToBytes(availableBlocks, blockSize),
 		totalInodes:    uint64(stat.Files),
 		freeInodes:     uint64(stat.Ffree),
 	}, true
+}
+
+func blocksToBytes(blocks, blockSize uint64) uint64 {
+	if blocks > math.MaxUint64/blockSize {
+		return math.MaxUint64
+	}
+	return blocks * blockSize
 }

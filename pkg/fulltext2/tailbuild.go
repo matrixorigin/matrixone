@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -276,9 +278,12 @@ func (t *TailBuilder) Finish() ([]TailSegment, error) {
 	return t.frames, nil
 }
 
-// PersistFinished consumes only this builder's sealed spool frames. Finish must
-// run first; Cleanup remains with the outer owner until commit/rollback returns.
-func (t *TailBuilder) PersistFinished(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkID, buildTS int64) (int64, error) {
+// PersistFinished writes this builder's sealed spool frames, each as one index file from its
+// starting chunk, and their metadata rows, in sqlproc's transaction. files supplies the storage
+// engine and index-file cache when sqlproc has no process; frames that fit in one chunk are not
+// cached and their chunk rows are inserted together, maxInsertTuples rows per statement. Finish
+// must run first; Cleanup remains with the outer owner until commit/rollback returns.
+func (t *TailBuilder) PersistFinished(sqlproc *sqlexec.SqlProcess, cfg TableConfig, files *indexfile.Files, startChunkID, buildTS int64) (int64, error) {
 	if t.curFile != nil || t.cur != nil || len(t.delBatch) != 0 {
 		return startChunkID, moerr.NewInternalErrorNoCtx("tail builder must finish before persistence")
 	}
@@ -286,7 +291,12 @@ func (t *TailBuilder) PersistFinished(sqlproc *sqlexec.SqlProcess, cfg TableConf
 	metadata := tailFrameMetaSqls(sqlproc, cfg, startChunkID, t.frames, buildTS)
 	err := sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
 		stmt := sqlproc.StatementOption()
-		writer, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, cfg.DbName, cfg.IndexTable, maxInsertTuples)
+		run := func(sql string) error {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
+			return err
+		}
+		small, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, cfg.DbName, cfg.IndexTable, maxInsertTuples)
 		if err != nil {
 			return err
 		}
@@ -305,24 +315,32 @@ func (t *TailBuilder) PersistFinished(sqlproc *sqlexec.SqlProcess, cfg TableConf
 					}
 					fp = nil
 				}
-				fp, err = os.Open(f.Path)
-				if err != nil {
+				if fp, err = os.Open(f.Path); err != nil {
 					return err
 				}
 				path = f.Path
 			}
-			next, err = writer.WriteRange(fp, f.Offset, int64(f.FrameLen), vectorindex.CdcTailId, next, int(vectorindex.Tag_CdcEvents))
+			if smallTailFrame(int64(f.FrameLen)) {
+				if next, err = small.WriteRange(fp, f.Offset, int64(f.FrameLen), vectorindex.CdcTailId, next, int(vectorindex.Tag_CdcEvents)); err != nil {
+					return err
+				}
+				continue
+			}
+			ref := tailRef(cfg, next, int64(f.FrameLen), vectorindex.CdcChunkSetChecksum([]uint32{f.Checksum}))
+			size, _, err := writeIndexFile(sqlproc, files, exec.Txn(), ref, io.NewSectionReader(fp, f.Offset, int64(f.FrameLen)), t.dir, run)
 			if err != nil {
 				return err
 			}
+			if size != int64(f.FrameLen) {
+				return moerr.NewInternalErrorNoCtxf("fulltext2 tail frame at chunk %d: wrote %d bytes, want %d", next, size, f.FrameLen)
+			}
+			next += FrameChunkCount(f.FrameLen)
 		}
-		if err := writer.Flush(); err != nil {
+		if err := small.Flush(); err != nil {
 			return err
 		}
 		for _, sql := range metadata {
-			res, err := exec.Exec(sql, stmt)
-			res.Close()
-			if err != nil {
+			if err := run(sql); err != nil {
 				return err
 			}
 		}
