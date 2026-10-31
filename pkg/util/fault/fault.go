@@ -39,6 +39,7 @@ const (
 	REMOVE
 	TRIGGER
 	LIST
+	TRIGGER_SCOPED
 )
 
 const (
@@ -88,6 +89,31 @@ type faultEntry struct {
 	removed  bool
 	mutex    sync.Mutex
 	scope    Domain
+
+	// selectors is the TRIGGER_SCOPED payload: the installed selector points
+	// are matched and the target's trigger count is consumed in this one
+	// faultMap operation.
+	selectors []Selector
+}
+
+// Selector restricts one scoped trigger: the target fires only when the named
+// selector point currently stores the accepted value. A selector whose point
+// is not installed does not restrict the trigger.
+type Selector struct {
+	name     string
+	matchInt bool
+	iarg     int64
+	sarg     string
+}
+
+// IntSelector requires the named point's int argument to equal value.
+func IntSelector(name string, value int64) Selector {
+	return Selector{name: name, matchInt: true, iarg: value}
+}
+
+// StringSelector requires the named point's string argument to equal value.
+func StringSelector(name string, value string) Selector {
+	return Selector{name: name, sarg: value}
 }
 
 type faultMap struct {
@@ -139,13 +165,14 @@ func (fm *faultMap) run() {
 			}
 		case TRIGGER:
 			var out *faultEntry
-			if v, ok := fm.faultPoints[e.name]; ok {
-				count := v.cnt.Add(1)
-				if count >= int64(v.start) && count <= int64(v.end) && (count-int64(v.start))%int64(v.skip) == 0 {
-					if v.prob == 1 || rand.Float64() < v.prob {
-						out = v
-					}
-				}
+			if v, ok := fm.faultPoints[e.name]; ok && v.consume() {
+				out = v
+			}
+			fm.chOut <- out
+		case TRIGGER_SCOPED:
+			var out *faultEntry
+			if v, ok := fm.faultPoints[e.name]; ok && fm.selectorsMatch(e.selectors) && v.consume() {
+				out = v
 			}
 			fm.chOut <- out
 		case LOOKUP:
@@ -205,6 +232,37 @@ func (e *faultEntry) do() (int64, string) {
 		return e.iarg, e.sarg
 	}
 	return 0, ""
+}
+
+// consume takes the entry's next trigger count and reports whether the
+// configured frequency window and probability admit it. Call only from the
+// faultMap goroutine.
+func (e *faultEntry) consume() bool {
+	count := e.cnt.Add(1)
+	if count < int64(e.start) || count > int64(e.end) || (count-int64(e.start))%int64(e.skip) != 0 {
+		return false
+	}
+	return e.prob == 1 || rand.Float64() < e.prob
+}
+
+// selectorsMatch reports whether every installed selector point stores the
+// accepted value. An uninstalled selector point does not restrict the
+// trigger. Call only from the faultMap goroutine.
+func (fm *faultMap) selectorsMatch(selectors []Selector) bool {
+	for _, sel := range selectors {
+		s, installed := fm.faultPoints[sel.name]
+		if !installed {
+			continue
+		}
+		if sel.matchInt {
+			if s.iarg != sel.iarg {
+				return false
+			}
+		} else if s.sarg != sel.sarg {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *faultEntry) registerWaiter() chan struct{} {
@@ -404,6 +462,40 @@ func triggerFaultInDomain(ctx context.Context, domain Domain, name string, useCt
 	} else {
 		iret, sret = out.do()
 	}
+	return
+}
+
+// TriggerFaultScoped triggers name atomically with selector matching: the
+// installed selector points are matched and the target's trigger count is
+// consumed in one faultMap operation. A call already in flight while the
+// selectors and the target are installed can therefore neither consume the
+// target's trigger count nor run its action unless the final selectors
+// match. An uninstalled selector point does not restrict the trigger, so
+// without any installed selector this behaves exactly like TriggerFault.
+// Selector points are read as configuration only; their own actions never
+// run.
+func TriggerFaultScoped(name string, selectors ...Selector) (iret int64, sret string, exist bool) {
+	fm := enabled[DomainDefault].Load()
+	if fm == nil {
+		return
+	}
+	var msg faultEntry
+	msg.cmd = TRIGGER_SCOPED
+	msg.name = name
+	msg.selectors = selectors
+
+	select {
+	case fm.chIn <- &msg:
+	case <-fm.closeCh:
+		return
+	}
+	out := <-fm.chOut
+
+	if out == nil {
+		return
+	}
+	exist = true
+	iret, sret = out.do()
 	return
 }
 
