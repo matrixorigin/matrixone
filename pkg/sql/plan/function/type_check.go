@@ -1254,9 +1254,14 @@ func setSafeDecimalWidthAndScaleFromSource(t *types.Type, source []types.Type) b
 			continue
 		}
 
-		if source[i].IsIntOrUint() {
+		if source[i].IsIntOrUint() || source[i].Oid == types.T_bool {
 			hasDecimalOrInteger = true
-			if integralWidth := integerIntegralWidth(source[i].Oid); integralWidth > maxIntegralWidth {
+			// TRUE/FALSE occupy exactly one integral digit as 0/1.
+			integralWidth := int32(1)
+			if source[i].IsIntOrUint() {
+				integralWidth = integerIntegralWidth(source[i].Oid)
+			}
+			if integralWidth > maxIntegralWidth {
 				maxIntegralWidth = integralWidth
 			}
 		}
@@ -1402,6 +1407,14 @@ func initFixed1() {
 		{types.T_bool, types.T_uint16, types.T_uint16, types.T_uint16},
 		{types.T_bool, types.T_uint32, types.T_uint32, types.T_uint32},
 		{types.T_bool, types.T_uint64, types.T_uint64, types.T_uint64},
+		// MySQL treats TRUE/FALSE as 1/0 next to a DECIMAL; bind exactly like
+		// the INT8/INT64 rows so the BOOL operand joins the decimal domain.
+		{types.T_bool, types.T_decimal64, types.T_decimal128, types.T_decimal128},
+		{types.T_bool, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_bool, types.T_decimal256, types.T_decimal256, types.T_decimal256},
+		{types.T_decimal64, types.T_bool, types.T_decimal128, types.T_decimal128},
+		{types.T_decimal128, types.T_bool, types.T_decimal128, types.T_decimal128},
+		{types.T_decimal256, types.T_bool, types.T_decimal256, types.T_decimal256},
 		{types.T_bool, types.T_char, types.T_bool, types.T_bool},
 		{types.T_bool, types.T_varchar, types.T_bool, types.T_bool},
 		{types.T_bool, types.T_binary, types.T_bool, types.T_bool},
@@ -2180,6 +2193,15 @@ func initFixed2() {
 		{types.T_bool, types.T_uint16, types.T_uint16, types.T_uint16},
 		{types.T_bool, types.T_uint32, types.T_uint32, types.T_uint32},
 		{types.T_bool, types.T_uint64, types.T_uint64, types.T_uint64},
+		// MySQL treats TRUE/FALSE as 1/0 next to a DECIMAL. Bind only the
+		// pairs this table already binds for integer operands: the DECIMAL256
+		// dividend direction is not bound for INT64 either, so BOOL keeps the
+		// same contract instead of binding wider than an integer.
+		{types.T_bool, types.T_decimal64, types.T_decimal128, types.T_decimal128},
+		{types.T_bool, types.T_decimal128, types.T_decimal128, types.T_decimal128},
+		{types.T_decimal64, types.T_bool, types.T_decimal128, types.T_decimal128},
+		{types.T_decimal128, types.T_bool, types.T_decimal128, types.T_decimal128},
+		{types.T_decimal256, types.T_bool, types.T_decimal256, types.T_decimal256},
 		{types.T_int8, types.T_any, types.T_float64, types.T_float64},
 		{types.T_int8, types.T_bool, types.T_int8, types.T_int8},
 		{types.T_int8, types.T_int8, types.T_float64, types.T_float64},

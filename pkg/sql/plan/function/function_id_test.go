@@ -878,7 +878,14 @@ var predefinedFunids = map[int]int{
 	UNSIGNED_DECIMAL_ADMISSION_STRICT: 621,
 	UNSIGNED_DECIMAL_ADMISSION_IGNORE: 622,
 	MO_INDEX_SUB_PART:                 623,
-	FUNCTION_END_NUMBER:               624,
+	// Exponentially weighted window statistics (issue #29945); renumbered
+	// above main's 605..623 allocation during the PR rebase.
+	EWM_MEAN:            624,
+	EWM_VAR:             625,
+	EWM_STD:             626,
+	EWM_COV:             627,
+	EWM_CORR:            628,
+	FUNCTION_END_NUMBER: 629,
 }
 
 func Test_funids(t *testing.T) {

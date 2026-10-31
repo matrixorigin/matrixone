@@ -517,6 +517,82 @@ var supportedWindowInNewFramework = []FuncNew{
 			},
 		},
 	},
+
+	// EWM_MEAN window function -- exponentially weighted mean.
+	{
+		functionId: EWM_MEAN,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    ewmMeanFamilyTypeCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType:    ewmWindowReturnType,
+				aggName:    "ewmmean",
+			},
+		},
+	},
+	// EWM_VAR window function -- exponentially weighted variance.
+	{
+		functionId: EWM_VAR,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    ewmMeanFamilyTypeCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType:    ewmWindowReturnType,
+				aggName:    "ewmvar",
+			},
+		},
+	},
+	// EWM_STD window function -- exponentially weighted standard deviation.
+	{
+		functionId: EWM_STD,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    ewmMeanFamilyTypeCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType:    ewmWindowReturnType,
+				aggName:    "ewmstd",
+			},
+		},
+	},
+	// EWM_COV window function -- exponentially weighted covariance.
+	{
+		functionId: EWM_COV,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    ewmCovFamilyTypeCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType:    ewmWindowReturnType,
+				aggName:    "ewmcov",
+			},
+		},
+	},
+	// EWM_CORR window function -- exponentially weighted correlation.
+	{
+		functionId: EWM_CORR,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    ewmCovFamilyTypeCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType:    ewmWindowReturnType,
+				aggName:    "ewmcorr",
+			},
+		},
+	},
 }
 
 // checkIndicatorValueArgs shapes the (x, n) arguments of the ten period
@@ -552,6 +628,127 @@ func checkIndicatorStreakArgs(overloads []overload, inputs []types.Type) checkRe
 // bind-time invalid-argument error.
 func IsLocalRankValueDomain(t *types.Type) bool {
 	return t.IsNumericOrTemporal()
+}
+
+// ewmWindowReturnType: every ewm statistic emits float64 (§4).
+func ewmWindowReturnType(_ []types.Type) types.Type {
+	return types.T_float64.ToType()
+}
+
+// ewmMeanFamilyTypeCheck enforces the §4 signature table for
+// ewmMean/ewmVar/ewmStd: arg1 the sample (numeric, cast to float64), arg2
+// the decay (numeric alpha or the 'halflife' string tag with h at arg3),
+// then up to three constant policies (adjust, ignoreNA, minPeriods).
+// Arity: 2..5 with a numeric decay, 3..6 with the tag. Prepared markers
+// (T_any) pass through; semantic values are validated by the binder
+// (literals) and at the per-execution configuration boundary.
+func ewmMeanFamilyTypeCheck(overloads []overload, inputs []types.Type) checkResult {
+	return ewmTypeCheck(inputs, 1)
+}
+
+// ewmCovFamilyTypeCheck enforces the §4 signature table for
+// ewmCov/ewmCorr: arg1 x, arg2 y (numeric, cast to float64), decay at
+// arg3. Arity: 3..6 with a numeric decay, 4..7 with the tag.
+func ewmCovFamilyTypeCheck(overloads []overload, inputs []types.Type) checkResult {
+	return ewmTypeCheck(inputs, 2)
+}
+
+// ewmNumericArgDomain classifies the numeric domains an ewm argument may
+// carry through the bind-established arg cast to float64 (§4): every
+// alpha, sample and tag-form half-life domain shares one classification,
+// with decimal256 included (§8 limitation 3 — if the shared cast path
+// rejects decimal256 anywhere, escalate, do not narrow silently).
+func ewmNumericArgDomain(oid types.T) bool {
+	switch oid {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64, types.T_decimal64,
+		types.T_decimal128, types.T_decimal256:
+		return true
+	}
+	return false
+}
+
+func ewmTypeCheck(inputs []types.Type, valueArgs int) checkResult {
+	if len(inputs) <= valueArgs {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	finalTypes := append([]types.Type(nil), inputs...)
+	needCast := false
+	// value arguments: numeric samples, lowered to float64 (§4 cast rule).
+	// A domainless NULL sample binds as the T_any literal and receives
+	// the same float64 NULL transport, so the NULL-policy rows of §5/§6
+	// publish instead of failing the dispatch's sample-transport check.
+	for i := 0; i < valueArgs; i++ {
+		if inputs[i].Oid == types.T_any {
+			finalTypes[i] = types.T_float64.ToType()
+			needCast = true
+			continue
+		}
+		if !ewmNumericArgDomain(inputs[i].Oid) {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		finalTypes[i] = types.T_float64.ToType()
+		needCast = true
+	}
+	// decay position: numeric alpha, the 'halflife' tag, or a prepare-time
+	// marker (T_text/T_any) whose resolved kind — alpha, tag, or the
+	// policies behind it — is validated at every execution boundary
+	// (§4; §9 Invariant 12)
+	hAfter := 0
+	switch inputs[valueArgs].Oid {
+	case types.T_any:
+	case types.T_text:
+		// placeholder may stand alone; a numeric or marker position right
+		// behind it is the tag-form half-life (the same shared numeric
+		// classification as the literal tag form), everything else defers
+		// to the per-execution boundary
+		if len(inputs) > valueArgs+1 {
+			h := inputs[valueArgs+1].Oid
+			if h == types.T_text || ewmNumericArgDomain(h) {
+				hAfter = 1
+			}
+		}
+	case types.T_varchar, types.T_char:
+		hAfter = 1
+		if len(inputs) <= valueArgs+1 {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		h := inputs[valueArgs+1].Oid
+		if h != types.T_any && h != types.T_text && !ewmNumericArgDomain(h) {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	default:
+		// numeric alpha decay shares the same classification
+		if !ewmNumericArgDomain(inputs[valueArgs].Oid) {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+	// policy positions: adjust/ignoreNA boolean, minPeriods integer
+	firstPolicy := valueArgs + 1 + hAfter
+	lastPolicy := firstPolicy + 2
+	if len(inputs) > lastPolicy+1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	for i := firstPolicy; i < len(inputs); i++ {
+		switch inputs[i].Oid {
+		case types.T_any, types.T_text: // prepare-time markers resolve at execution
+		case types.T_bool, types.T_int8:
+			// adjust / ignoreNA
+		case types.T_int16, types.T_int32, types.T_int64,
+			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+			types.T_float32, types.T_float64, types.T_decimal64,
+			types.T_decimal128, types.T_decimal256:
+			// permit an integer-valued constant expression to flow; the
+			// per-execution boundary enforces the resolved kinds' values
+		default:
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+	if needCast {
+		return newCheckResultWithCast(0, finalTypes)
+	}
+	return newCheckResultWithSuccess(0)
 }
 
 // checkValueWindowDomain gives domainless NULL the same concrete transport

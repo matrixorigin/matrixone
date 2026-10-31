@@ -15,6 +15,8 @@
 package hashbuild
 
 import (
+	"unicode/utf8"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -123,8 +125,13 @@ func expressionTreePeakWithSelection(
 		}
 		output = max(paramPeak, typePeak)
 		return output, output, nil
+	case *plan.Expr_T:
+		// The target type passed to CAST is one constant NULL vector. It
+		// carries no string payload and is not materialized once per row.
+		output, err = expressionFixedWidthPeak(1, 1)
+		return output, output, err
 	case *plan.Expr_Lit, *plan.Expr_V, *plan.Expr_Raw, *plan.Expr_Vec,
-		*plan.Expr_Fold, *plan.Expr_T:
+		*plan.Expr_Fold:
 		// Leaf executors may materialize their declared output below.
 	default:
 		return 0, 0, process.ErrExecutionResourceInvalid
@@ -174,7 +181,19 @@ func expressionResultPeak(expr *plan.Expr, rows uint64) (uint64, error) {
 	if !ok || fn.F == nil || fn.F.Func == nil {
 		return expressionTypePeak(expr.Typ, rows)
 	}
-	fid, _ := function.DecodeOverloadID(fn.F.Func.Obj)
+	fid, overload := function.DecodeOverloadID(fn.F.Func.Obj)
+	if fid == function.CAST && overload >= 0 && overload <= 3 &&
+		types.T(expr.Typ.Id) == types.T_varchar && len(fn.F.Args) == 2 {
+		source := fn.F.Args[0]
+		if source != nil && source.GetCol() != nil && source.Typ.Width > 0 &&
+			(types.T(source.Typ.Id) == types.T_char || types.T(source.Typ.Id) == types.T_varchar) {
+			// These string-to-VARCHAR casts copy, trim or truncate; they do
+			// not expand the input. Only trust a bounded column, not an
+			// arbitrary expression's inferred width. SQL widths count UTF-8
+			// characters, so reserve up to four bytes per character.
+			return expressionVarlenaWidthPeak(uint64(source.Typ.Width)*utf8.UTFMax, rows)
+		}
+	}
 	if fid != function.SERIAL && fid != function.SERIAL_FULL {
 		return expressionTypePeak(expr.Typ, rows)
 	}

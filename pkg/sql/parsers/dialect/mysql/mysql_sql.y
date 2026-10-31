@@ -680,6 +680,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK MRANK CUMRANK TMRANK
 %token <str> SMA WMA TRIMA EMA WILDER KAMA DEMA TEMA T3 MMAXDRAWDOWN CUMPOSITIVESTREAK
+%token <str> EWM_MEAN EWM_VAR EWM_STD EWM_COV EWM_CORR
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> JSON_ARRAYAGG JSON_OBJECTAGG
 %token <str> GET_FORMAT
@@ -14278,6 +14279,56 @@ function_call_aggregate:
             WithinGroup: $5 != nil,
         }
     }
+|   EWM_MEAN '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_VAR '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_STD '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_COV '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_CORR '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
 |   BIT_AND '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
@@ -17221,6 +17272,11 @@ not_keyword:
 |   BITMAP_COUNT
 |   PERCENTILE_CONT
 |   PERCENTILE_DISC
+|   EWM_MEAN
+|   EWM_VAR
+|   EWM_STD
+|   EWM_COV
+|   EWM_CORR
 
 value_window_null_treatment_opt:
     {

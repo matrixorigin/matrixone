@@ -355,8 +355,14 @@ type PrepareStmt struct {
 	// Percentile configuration is fixed by a value during compilation. Cache
 	// this static trait with the conservative generation rather than walking
 	// the plan on every EXECUTE.
-	percentileParamPlan        *plan.Plan
-	hasPercentileParams        bool
+	percentileParamPlan *plan.Plan
+	hasPercentileParams bool
+	// Ewm decay/policy positions carry the same per-EXECUTE configuration
+	// contract as the percentile parameters (constructEwmConfig at compile):
+	// markers, user variables and per-execution real-time expressions all
+	// flag the statement so the configuration is rebuilt on every EXECUTE.
+	ewmParamPlan               *plan.Plan
+	hasEwmParams               bool
 	directResultParamPositions []int32
 	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
 	// integer contract (LIMIT/OFFSET and LAG/LEAD offsets). It is installed
@@ -918,6 +924,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.percentileParamPlan = nil
+	prepareStmt.ewmParamPlan = nil
 	prepareStmt.remapDb = nil
 	prepareStmt.getFromSendLongData = nil
 }
@@ -1958,10 +1965,12 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 			return err
 		}
 	}
-	// These values shape bound defaults, constant-folded expressions, LOAD validation or planned index scan options.
+	// These values shape bound defaults, constant-folded expressions, LOAD validation, planned index scan options,
+	// or the join/aggregate/sort spill thresholds baked into Node.SpillMem at plan-build time.
 	// Compare converted values so equivalent SET spellings retain warm plans.
 	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn" ||
-		name == "fulltext2_search_df_cutoff" || name == "fulltext2_threads_search" || name == "fulltext_bloom_filter_pushdown"
+		name == "fulltext2_search_df_cutoff" || name == "fulltext2_threads_search" || name == "fulltext_bloom_filter_pushdown" ||
+		name == "join_spill_mem" || name == "agg_spill_mem" || name == "sort_spill_mem"
 	var oldPlanDependency interface{}
 	if planDependencyVariable {
 		oldValue, getErr := ses.GetSessionSysVar(name)

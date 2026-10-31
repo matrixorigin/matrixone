@@ -7407,31 +7407,21 @@ func getTaskKeysCount(
 	keys map[taskservice.CDCTaskKey]struct{},
 	ifExists bool,
 ) (cnt int64, err error) {
-	var (
-		rows *sql.Rows
-	)
-
 	querySQL := cdc.CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
-	if rows, err = tx.QueryContext(ctx, querySQL); err != nil {
-		return
-	}
-	defer rows.Close()
-
-	if rows.Err() != nil {
-		return 0, rows.Err()
-	}
-
-	for rows.Next() {
+	cnt, err = taskservice.ForeachQueriedRow(ctx, tx, querySQL, func(_ context.Context, rows *sql.Rows) (bool, error) {
 		var taskId string
-		if err = rows.Scan(&taskId); err != nil {
-			return
+		if err := rows.Scan(&taskId); err != nil {
+			return false, err
 		}
 		key := taskservice.CDCTaskKey{
 			AccountId: accountId,
 			TaskId:    taskId,
 		}
 		keys[key] = struct{}{}
-		cnt++
+		return true, nil
+	})
+	if err != nil {
+		return cnt, err
 	}
 
 	if cnt == 0 && taskName != "" && !ifExists {

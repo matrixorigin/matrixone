@@ -357,9 +357,9 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 	// remains retry-owned, while every target/watermark fence used by the
 	// replacement observes the new token.
 	previousRun := tk.LastRun
-	nowTime := nextDaemonClaimTime(previousRun, time.Now())
-	tk.LastRun = nowTime
-	tk.LastHeartbeat = nowTime
+	wallNow := time.Now()
+	tk.LastRun = nextDaemonClaimTime(previousRun, wallNow)
+	tk.LastHeartbeat = wallNow
 	updated, err := t.runner.service.UpdateDaemonTask(
 		handleCtx,
 		[]task.DaemonTask{tk},
@@ -524,9 +524,9 @@ func (t *restartTask) Handle(ctx context.Context) error {
 	// target work. The request status remains durable retry ownership until the
 	// replacement reports ready.
 	previousRun := tk.LastRun
-	nowTime := nextDaemonClaimTime(previousRun, time.Now())
-	tk.LastRun = nowTime
-	tk.LastHeartbeat = nowTime
+	wallNow := time.Now()
+	tk.LastRun = nextDaemonClaimTime(previousRun, wallNow)
+	tk.LastHeartbeat = wallNow
 	updated, err := t.runner.service.UpdateDaemonTask(
 		handleCtx,
 		[]task.DaemonTask{tk},
@@ -1589,35 +1589,32 @@ func (r *taskRunner) startDaemonTask(ctx context.Context, dt *daemonTask, restar
 
 	t := dt.taskSnapshot()
 	expectedStatus := t.TaskStatus
+	expectedRunner, expectedLastRun := t.TaskRunner, t.LastRun
 	if restartClaim {
 		expectedStatus = task.TaskStatus_RestartRequested
 	}
 	t.TaskRunner = r.runnerID
 	t.TaskStatus = task.TaskStatus_Running
-	nowTime := time.Now()
-	// LastRun is the durable claim generation used to fence stale daemon
-	// owners. Keep it strictly monotonic even if this runner's wall clock moved
-	// backwards. MO timestamps preserve microseconds in sys_daemon_task.
-	nowTime = nextDaemonClaimTime(t.LastRun, nowTime)
-	t.UpdateAt = nowTime
-	t.LastRun = nowTime
-
-	// Update the last heartbeat if the daemon task is started successfully.
-	// The new value is used to prevent other runners to start this task at
-	// the same time.
-	t.LastHeartbeat = nowTime
+	wallNow := time.Now()
+	// LastRun is a logical claim generation and may be ahead of the wall clock.
+	// Lease timestamps and expiry checks must use wall time independently.
+	t.LastRun = nextDaemonClaimTime(t.LastRun, wallNow)
+	t.UpdateAt = wallNow
+	t.LastHeartbeat = wallNow
 
 	// Clear the error message of the task when start it. And if it fails to
 	// start, new error message will be set again.
 	t.Details = cloneDaemonTaskDetails(t.Details)
 	t.Details.Error = ""
 
-	// Claim only the state that was observed by the dispatcher, with a stale or
-	// null heartbeat. The status fence prevents an old start snapshot from
-	// overwriting a concurrent pause, cancel, or restart request.
+	// Claim only the state and generation observed by the dispatcher, with a
+	// stale or null heartbeat. A queued snapshot cannot overwrite a claim whose
+	// runner or last_run changed, even if its heartbeat later becomes stale.
 	conditions := []Condition{
 		WithTaskStatusCond(expectedStatus),
-		WithLastHeartbeat(LE, nowTime.UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
+		WithTaskRunnerCond(EQ, expectedRunner),
+		WithLastRun(expectedLastRun),
+		WithLastHeartbeat(LE, wallNow.UnixNano()-r.options.heartbeatTimeout.Nanoseconds()),
 	}
 	c, err := r.service.UpdateDaemonTask(ctx, []task.DaemonTask{t}, conditions...)
 	if err != nil {

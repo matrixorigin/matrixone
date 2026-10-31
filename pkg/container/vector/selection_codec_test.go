@@ -181,6 +181,57 @@ func TestSelectedRowsCodecFixedWidthWriterFastPathMatchesWire(t *testing.T) {
 	require.Equal(t, 1, fast.fastCalls)
 }
 
+func TestSelectedRowsCodecUniformMetadata(t *testing.T) {
+	for _, kind := range []struct {
+		name  string
+		seen  bool
+		value PrepareParamKind
+	}{
+		{"unobserved", false, PrepareParamNone},
+		{"none", true, PrepareParamNone},
+		{"decimal", true, PrepareParamDecimal},
+	} {
+		t.Run(kind.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewVec(types.T_int64.ToType())
+			defer func() { source.Free(mp); require.Zero(t, mp.CurrNB()) }()
+			require.NoError(t, AppendFixedList(source, []int64{7, 8, 9, 10}, nil, mp))
+			source.resetPrepareParamKind()
+			if kind.seen {
+				source.SetPrepareParamKind(kind.value)
+			}
+			for _, rows := range [][]int32{{}, {0, 2, 3}, {3, 0, 3, 1}} {
+				func() {
+					selected := NewVec(types.T_int64.ToType())
+					defer selected.Free(mp)
+					require.NoError(t, selected.UnionInt32(source, rows, mp))
+					selected.resetPrepareParamKind()
+					if kind.seen {
+						selected.SetPrepareParamKind(kind.value)
+					}
+					flags := make([]uint8, len(rows))
+					for i := range flags {
+						flags[i] = 1
+					}
+					var got, want bytes.Buffer
+					require.NoError(t, source.MarshalSelectedRowsTo(&got, rows))
+					_, err := selected.MarshalSelectedFlagsTo(&want, flags)
+					require.NoError(t, err)
+					require.Equal(t, want.Bytes(), got.Bytes())
+				}()
+			}
+			require.Error(t, source.MarshalSelectedRowsTo(io.Discard, []int32{-1}))
+			require.Error(t, source.MarshalSelectedRowsTo(io.Discard, []int32{4}))
+			var encoded bytes.Buffer
+			require.NoError(t, source.MarshalSelectedRowsTo(&encoded, []int32{3, 0}))
+			for cut := 0; cut < encoded.Len(); cut++ {
+				require.Error(t, source.MarshalSelectedRowsTo(
+					&failSelectedRowsWriter{remaining: cut}, []int32{3, 0}), "cut=%d", cut)
+			}
+		})
+	}
+}
+
 func TestSelectedRowsCodecFixedWidthEmptyAndAllNull(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_int64.ToType())

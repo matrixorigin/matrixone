@@ -69,6 +69,13 @@ type container struct {
 	fullPartition            int
 	fullPartitionResultIndex int
 
+	// ewmAggs carries the EWM window-statistics dispatch state, one entry
+	// per window slot: the decoded per-execution configuration, the
+	// staged partition row view, the per-partition accounts and the
+	// generation's absolute publication cursor. Freed at every ownership
+	// boundary beside the running aggregate state (§9 lifecycle).
+	ewmAggs []*ewmAggState
+
 	desc      []bool
 	nullsLast []bool
 	orderVecs []colexec.ExprEvalVector
@@ -205,6 +212,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr.freeRunningAgg()
 	ctr.freeFullPartitionResults(proc.Mp())
 	ctr.freeIndicatorState(proc.Mp())
+	ctr.freeEwmState()
 	if ctr.hasAccountedBufferedData() {
 		// AppendWithCopy and Dup preserve a source vector's allocation
 		// selection. Release inherited backing at the prepared-statement
@@ -229,6 +237,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.freeRunningAgg()
 	ctr.freeFullPartitionResults(proc.Mp())
 	ctr.freeIndicatorState(proc.Mp())
+	ctr.freeEwmState()
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
@@ -313,6 +322,24 @@ func (ctr *container) freeFullPartitionResults(mp *mpool.MPool) {
 	ctr.fullPartitionNextRow = 0
 	ctr.fullPartition = 0
 	ctr.fullPartitionResultIndex = 0
+}
+
+func (ctr *container) freeEwmState() {
+	// The staged row views borrow the vectors' own backing; the
+	// statement-budget charges admitting them (rows, keys, span
+	// directory and the worst-case per-group scratch) are released
+	// here, mirroring the sort path's metadata teardown.
+	for i, st := range ctr.ewmAggs {
+		if st != nil {
+			ctr.allocation.ReleaseMetadata(st.charge)
+			st.eval = nil
+			st.rows = nil
+			st.spans = nil
+			st.charge = 0
+			ctr.ewmAggs[i] = nil
+		}
+	}
+	ctr.ewmAggs = nil
 }
 
 func (ctr *container) freeExes() {

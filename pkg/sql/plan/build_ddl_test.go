@@ -757,7 +757,11 @@ func TestBuildDropTemporaryTableOnlyTargetsTemporaryTable(t *testing.T) {
 
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	_, err = BuildPlan(ctx, stmt, false)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
+	// Contract (meow-31451): DROP TEMPORARY TABLE against an existing
+	// permanent-only table is a missing-object DROP and must surface MySQL
+	// 1051/42S02 "Unknown table", not the 1146 query/DML lookup error. The
+	// permanent table must still not be targeted.
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropNonExistsTable))
 
 	ctx.tables["nation"].IsTemporary = true
 	p, err := BuildPlan(ctx, stmt, false)
