@@ -7588,10 +7588,10 @@ func TestRangeBackfillDetectsPairedRangeOnIndexColumn(t *testing.T) {
 
 	node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
 	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
-	require.ElementsMatch(t, []int32{0, 1}, costCtx.matchRangeBackfill(idxDef))
+	require.ElementsMatch(t, []int32{0, 1}, costCtx.matchRangeBackfills(idxDef)[0])
 	prefixIndex := *idxDef
 	prefixIndex.IndexAlgoParams = `{"prefix_lengths":"price:3"}`
-	require.Empty(t, costCtx.matchRangeBackfill(&prefixIndex))
+	require.Empty(t, costCtx.matchRangeBackfills(&prefixIndex)[0])
 }
 
 func TestRangeBackfillSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
@@ -7710,7 +7710,7 @@ func TestRangeBackfillSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 
 			node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
 			costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
-			require.ElementsMatch(t, tt.wantFilters, costCtx.matchRangeBackfill(tt.idxDef))
+			require.ElementsMatch(t, tt.wantFilters, costCtx.matchRangeBackfills(tt.idxDef)[0])
 		})
 	}
 }
@@ -7761,7 +7761,7 @@ func TestRangeBackfillUsesCompleteRangeIndexAlternative(t *testing.T) {
 
 			costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
 			for i, index := range tt.indexes {
-				filterIdx := costCtx.matchRangeBackfill(index)
+				filterIdx := costCtx.matchRangeBackfills(index)[0]
 				if i == tt.wantIdx {
 					require.Equal(t, []int32{0}, filterIdx)
 				} else {
@@ -7954,7 +7954,7 @@ func TestRangeBackfillSkipsDeclaredPrefixIndexes(t *testing.T) {
 				node.FilterList = []*planpb.Expr{filter.expr}
 				node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
 				costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
-				require.Empty(t, costCtx.matchRangeBackfill(idxDef))
+				require.Empty(t, costCtx.matchRangeBackfills(idxDef)[0])
 			})
 		}
 	}
@@ -7962,8 +7962,8 @@ func TestRangeBackfillSkipsDeclaredPrefixIndexes(t *testing.T) {
 	complete := &planpb.IndexDef{IndexName: "idx_name_full", Parts: []string{"name", catalog.CreateAlias("id")}}
 	node.FilterList = []*planpb.Expr{makeStringInFilterExpr(bindTag, 1, "abcdx", "abcex")}
 	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
-	require.Empty(t, costCtx.matchRangeBackfill(prefixNonUnique))
-	require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(complete))
+	require.Empty(t, costCtx.matchRangeBackfills(prefixNonUnique)[0])
+	require.Equal(t, []int32{0}, costCtx.matchRangeBackfills(complete)[0])
 }
 
 func TestMakeIndexLookupPartExprDoesNotFailOpen(t *testing.T) {
@@ -9278,7 +9278,7 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 
 		t.Run("serialized composite falls back", func(t *testing.T) {
 			costCtx := builder.newEncodedRegularIndexCostContext(makeNode(filters), nil)
-			require.Empty(t, costCtx.matchRangeBackfill(idxDef))
+			require.Empty(t, costCtx.matchRangeBackfills(idxDef)[0])
 		})
 
 		directUniqueIdxDef := &planpb.IndexDef{
@@ -9288,12 +9288,12 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 
 		t.Run("direct unique single bound remains eligible", func(t *testing.T) {
 			costCtx := builder.newEncodedRegularIndexCostContext(makeNode(filters[:1]), nil)
-			require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(directUniqueIdxDef))
+			require.Equal(t, []int32{0}, costCtx.matchRangeBackfills(directUniqueIdxDef)[0])
 		})
 
 		t.Run("direct unique paired bounds remain eligible", func(t *testing.T) {
 			costCtx := builder.newEncodedRegularIndexCostContext(makeNode(filters), nil)
-			require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfill(directUniqueIdxDef))
+			require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfills(directUniqueIdxDef)[0])
 		})
 
 		for _, tc := range []struct {
@@ -9316,9 +9316,9 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 				costCtx := builder.newEncodedRegularIndexCostContext(makeNode(filters), nil)
 				for i, index := range tc.indexes {
 					if i == tc.wantIdx {
-						require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfill(index))
+						require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfills(index)[0])
 					} else {
-						require.Empty(t, costCtx.matchRangeBackfill(index))
+						require.Empty(t, costCtx.matchRangeBackfills(index)[0])
 					}
 				}
 			})
@@ -9331,16 +9331,16 @@ func TestIndexRangeSerializationNormalizesDecimalBounds(t *testing.T) {
 			}
 
 			costCtx := builder.newEncodedRegularIndexCostContext(makeNode(mixedBounds), nil)
-			require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfill(directUniqueIdxDef))
-			require.Empty(t, costCtx.matchRangeBackfill(idxDef))
+			require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfills(directUniqueIdxDef)[0])
+			require.Empty(t, costCtx.matchRangeBackfills(idxDef)[0])
 		})
 
 		t.Run("direct unique bypasses serialized operator restriction", func(t *testing.T) {
 			filter := makeDecimalRangeFilterExpr(t, bindTag, 1, ">", "10.25", columnType, columnType)
 
 			costCtx := builder.newEncodedRegularIndexCostContext(makeNode([]*planpb.Expr{filter}), nil)
-			require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(directUniqueIdxDef))
-			require.Empty(t, costCtx.matchRangeBackfill(idxDef))
+			require.Equal(t, []int32{0}, costCtx.matchRangeBackfills(directUniqueIdxDef)[0])
+			require.Empty(t, costCtx.matchRangeBackfills(idxDef)[0])
 		})
 	})
 }
@@ -9387,8 +9387,8 @@ func TestRangeBackfillMatchesPairedRangesOnMultipleColumns(t *testing.T) {
 	}
 
 	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
-	require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfill(idxQuantity))
-	require.Equal(t, []int32{2, 3}, costCtx.matchRangeBackfill(idxPrice))
+	require.Equal(t, []int32{0, 1}, costCtx.matchRangeBackfills(idxQuantity)[0])
+	require.Equal(t, []int32{2, 3}, costCtx.matchRangeBackfills(idxPrice)[0])
 }
 
 func TestRangeBackfillMatchesSingleAndPairedRangesOnMultipleColumns(t *testing.T) {
@@ -9432,8 +9432,8 @@ func TestRangeBackfillMatchesSingleAndPairedRangesOnMultipleColumns(t *testing.T
 	}
 
 	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
-	require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(idxPrice))
-	require.Equal(t, []int32{1, 2}, costCtx.matchRangeBackfill(idxQuantity))
+	require.Equal(t, []int32{0}, costCtx.matchRangeBackfills(idxPrice)[0])
+	require.Equal(t, []int32{1, 2}, costCtx.matchRangeBackfills(idxQuantity)[0])
 }
 
 func makeEqFilterExpr(colPos int32) *planpb.Expr {

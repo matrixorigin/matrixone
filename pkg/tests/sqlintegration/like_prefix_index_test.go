@@ -71,6 +71,14 @@ func TestLikePrefixIndex(t *testing.T) {
 		exec("create table residual_rows(id int primary key,name varchar(40),amount int,other int,payload varchar(40),key ix(name,amount))")
 		exec("insert into residual_rows values(1,'rare',7,7,'p'),(2,'z2',1,2,'p'),(3,'z3',3,3,'p'),(4,'z4',4,5,'p'),(5,'z5',6,6,'p')")
 		exec("analyze table residual_rows(name,amount) fullscan")
+		for _, table := range []string{"candidate_errors", "residual_errors"} {
+			exec("create table " + table + "(id int primary key,name varchar(40),payload varchar(30),key ix(name))")
+			exec("insert into " + table + " values(1,'zzz','p'),(2,'xy','p')")
+			if table == "residual_errors" {
+				exec("insert into " + table + " values(3,'abc9','p')")
+			}
+			exec("analyze table " + table + "(name) fullscan")
+		}
 		exec("create table error_rows(name varchar(40),amount varchar(40),payload varchar(40),key ix(name,amount))")
 		for _, name := range []string{"abc\x00x", "\x80"} {
 			_, err := conn.ExecContext(ctx, "insert into error_rows values(?,'a','p')", name)
@@ -113,7 +121,7 @@ func TestLikePrefixIndex(t *testing.T) {
 		for _, phase := range []string{"memory", "persisted"} {
 			t.Run(phase, func(t *testing.T) {
 				if phase == "persisted" {
-					for _, table := range []string{"t", "t_unique", "residual_rows", "error_rows"} {
+					for _, table := range []string{"t", "t_unique", "residual_rows", "error_rows", "candidate_errors", "residual_errors"} {
 						exec("select mo_ctl('dn','flush','like_prefix_index." + table + "')")
 						indexes := func() []string {
 							rows, err := conn.QueryContext(ctx, "select distinct index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='like_prefix_index' and relname=?) and index_table_name is not null", table)
@@ -159,6 +167,41 @@ func TestLikePrefixIndex(t *testing.T) {
 						}
 					})
 				}
+				t.Run("prefix with selective IN backfill", func(t *testing.T) {
+					for _, predicate := range []string{"name like 'abc%' and name in ('abc','abcd')", "name in ('abc','abcd') and name like 'abc%'"} {
+						q := "select id+length(payload)-7 from t ignore index(ix_multi) where " + predicate + " order by id"
+						plan := explain(q)
+						require.Contains(t, plan, "Join Type: INDEX")
+						require.Contains(t, plan, "prefix_in(", "the driving lookup must be IN, not the broad prefix")
+						require.Equal(t, []int64{0, 1}, ids(q))
+					}
+					require.Equal(t, []int64{0, 1}, ids("select id+length(payload)-7 from t ignore index(ix,ix_multi) where concat(name,'') like 'abc%' and name in ('abc','abcd') order by id"))
+				})
+				t.Run("alternative preserves error domains", func(t *testing.T) {
+					check := func(query string, wantError bool) {
+						t.Helper()
+						rows, err := conn.QueryContext(ctx, query)
+						if rows != nil {
+							defer rows.Close()
+						}
+						if err == nil {
+							require.False(t, rows.Next(), query)
+							err = rows.Err()
+						}
+						if wantError {
+							require.ErrorContains(t, err, "invalid regexp", query)
+						} else {
+							require.NoError(t, err, query)
+						}
+					}
+					for _, hint := range []string{"", " force index(ix)", " ignore index(ix)"} {
+						check("select payload from candidate_errors"+hint+" where name like 'abc%' and name in (regexp_replace('x','[','y'),'abc1')", false)
+						// FORCE already has a different evaluation domain at the baseline;
+						// preserve each hint's historical outcome rather than equating them.
+						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('zzz','xy') and payload=regexp_replace('x','[','y')", !strings.Contains(hint, "force"))
+					}
+				})
+
 				for _, tc := range []struct {
 					pattern string
 					want    []int64
@@ -220,6 +263,22 @@ func TestLikePrefixIndex(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, got)
 		}
+
+		t.Run("prepared prefix and IN reuse", func(t *testing.T) {
+			statement, err := conn.PrepareContext(ctx, "select id+length(payload)-7 from t ignore index(ix_multi) where name like 'abc%' and name in (?,?) order by id")
+			require.NoError(t, err)
+			defer statement.Close()
+			for _, tc := range []struct {
+				left, right any
+				want        []int64
+			}{
+				{"abc", "abcd", []int64{0, 1}}, {"abc", "abd", []int64{0}}, {nil, "abcd", []int64{1}}, {"zzz", "中文", []int64{}},
+			} {
+				got, err := readPreparedContractIDs(statement.QueryContext(ctx, tc.left, tc.right))
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got)
+			}
+		})
 
 		exec("begin")
 		exec("update t set name='abcd_new' where id=4")

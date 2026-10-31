@@ -2457,6 +2457,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	best := regularIndexAccessCandidate{indexPos: -1, work: math.Inf(1)}
 	fallback := regularIndexAccessCandidate{indexPos: -1}
 	sawScorable := false
+	rangeAlternativesChecked, rangeAlternativesSafe := false, false
 	consider := func(candidate regularIndexAccessCandidate) {
 		idxDef := indexes[candidate.indexPos]
 		work, skip, valid := costCtx.score(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape)
@@ -2538,7 +2539,25 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		if preferSortedScan || functionalIndexColumn(node.TableDef, idxDef) != nil {
 			continue
 		}
-		if filterIdx := costCtx.matchRangeBackfill(idxDef); len(filterIdx) > 0 {
+		matches := costCtx.matchRangeBackfills(idxDef)
+		if len(matches[1]) > 0 {
+			// Decoding a literal IN vector is proportional to query size. Prove
+			// evaluation safety only when needed, once for this scan's indexes.
+			if !rangeAlternativesChecked {
+				rangeAlternativesSafe = costCtx.rangeAlternativesSafe()
+				rangeAlternativesChecked = true
+			}
+			if !rangeAlternativesSafe {
+				matches[1] = nil
+			} else if costCtx.filterFacts[matches[0][0]].logicalPrefix {
+				// Give ordinary access the tie, while either class can win on cost.
+				matches[0], matches[1] = matches[1], matches[0]
+			}
+		}
+		for _, filterIdx := range matches {
+			if len(filterIdx) == 0 {
+				continue
+			}
 			filterType := NonEqualIndexCondition
 			if len(filterIdx) == 2 {
 				filterType = RangeIndexCondition
@@ -3704,28 +3723,35 @@ func (ctx *encodedRegularIndexCostContext) matchPointBackfill(idxDef *IndexDef) 
 	return filterIdx
 }
 
-func (ctx *encodedRegularIndexCostContext) matchRangeBackfill(idxDef *IndexDef) []int32 {
+// matchRangeBackfills retains the historical first match and, if available,
+// one match of the other class (ordinary range versus logical prefix).
+// Same-class order and range-pair construction remain unchanged.
+func (ctx *encodedRegularIndexCostContext) matchRangeBackfills(idxDef *IndexDef) (matches [2][]int32) {
 	if idxDef == nil || ctx.node == nil || ctx.node.TableDef == nil {
-		return nil
+		return matches
 	}
 	if regularIndexHasDeclaredPrefix(idxDef) {
-		return nil
+		return matches
 	}
 	numKeyParts := len(idxDef.Parts)
 	if !idxDef.Unique {
 		numKeyParts--
 	}
 	if numKeyParts < 1 || (idxDef.Unique && numKeyParts != 1) {
-		return nil
+		return matches
 	}
 	leadingColPos, ok := ctx.node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
 	if !ok || leadingColPos < 0 || int(leadingColPos) >= len(ctx.node.TableDef.Cols) {
-		return nil
+		return matches
 	}
 	for _, currentFilterPos := range ctx.rangeFilters[leadingColPos] {
+		if len(matches[0]) > 0 && ctx.filterFacts[matches[0][0]].logicalPrefix == ctx.filterFacts[currentFilterPos].logicalPrefix {
+			continue
+		}
 		currentFilterIdx := int(currentFilterPos)
 		filter := ctx.node.FilterList[currentFilterIdx]
 		fn := filter.GetF()
+		var filterIdx []int32
 		if rangeCol, _ := classifyRangeBound(fn); rangeCol != nil {
 			lowerIdx := ctx.lowerFilters[leadingColPos]
 			upperIdx := ctx.upperFilters[leadingColPos]
@@ -3742,18 +3768,114 @@ func (ctx *encodedRegularIndexCostContext) matchRangeBackfill(idxDef *IndexDef) 
 				) {
 					continue
 				}
-				return []int32{lowerIdx, upperIdx}
+				filterIdx = []int32{lowerIdx, upperIdx}
 			}
 		}
-		if !ctx.builder.regularIndexRangeFunctionsUsable(idxDef, ctx.node.TableDef, fn, nil, false) {
-			continue
+		if len(filterIdx) == 0 {
+			if !ctx.builder.regularIndexRangeFunctionsUsable(idxDef, ctx.node.TableDef, fn, nil, false) {
+				continue
+			}
+			if ctx.filterFacts[currentFilterIdx].logicalPrefix && !ctx.prefixStatsUsable(currentFilterPos) {
+				continue
+			}
+			filterIdx = []int32{int32(currentFilterIdx)}
 		}
-		if ctx.filterFacts[currentFilterIdx].logicalPrefix && !ctx.prefixStatsUsable(currentFilterPos) {
-			continue
+		if len(matches[0]) == 0 {
+			matches[0] = filterIdx
+		} else {
+			matches[1] = filterIdx
+			return matches
 		}
-		return []int32{int32(currentFilterIdx)}
 	}
-	return nil
+	return matches
+}
+
+// A different driving predicate can expose or suppress evaluation on rows.
+// Reuse the existing totality contract; fixed byte prefixes have their own proof.
+func (ctx *encodedRegularIndexCostContext) rangeAlternativesSafe() bool {
+	for i, filter := range ctx.node.FilterList {
+		if !regularIndexFixedInputs(filter) || !ctx.filterFacts[i].logicalPrefix && !ctx.literalStringINIsTotal(filter) && !isTruncationSafePredicateExpr(filter) {
+			return false
+		}
+	}
+	return true
+}
+
+// Native non-UCA VARCHAR IN uses a byte-key hash lookup, independently of
+// SQL equality's identity-domain proof. Admit only its checked literal-vector
+// shape here; physical index key compatibility remains the matcher's concern.
+func (ctx *encodedRegularIndexCostContext) literalStringINIsTotal(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if types.T(expr.Typ.Id) != types.T_bool || fn == nil || fn.Func == nil || fn.Func.ObjName != "in" || len(fn.Args) != 2 {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+	if id != function.IN || !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
+		return false
+	}
+	for i := range 2 {
+		argType, ok := overload.GetArgumentType(i)
+		if !ok || argType != types.T_varchar {
+			return false
+		}
+	}
+	left, right := fn.Args[0], fn.Args[1]
+	if left == nil || right == nil || left.GetCol() == nil || left.GetCol().RelPos != ctx.node.BindingTags[0] ||
+		types.T(left.Typ.Id) != types.T_varchar || left.Typ.Charset > math.MaxUint8 || left.Typ.CollationVersion > math.MaxUint8 {
+		return false
+	}
+	_, domainOK := prefixStringDomain(left.Typ)
+	leftType, err := types.TypeFromPlan(left.Typ)
+	if !domainOK || err != nil || plan.RequireLegacyCollations(left.Typ) != nil {
+		return false
+	}
+	payload := right.GetVec()
+	if payload == nil || payload.StringSource != uint32(types.StringSourceLiteral) || payload.IsSerialized || payload.DecimalLiteralRequiresV82 {
+		return false
+	}
+	vec, length, valid := decodeLiteralVec(payload)
+	return valid && length > 0 && literalVecMatchesType(vec.GetType(), left.Typ) &&
+		vec.GetType().Charset == leftType.Charset && vec.GetType().CollationVersion == leftType.CollationVersion
+}
+
+// Unlike aggregate truncation, changing lookup candidates may introduce the
+// first resolution of a parameter/variable. Preserve its historical plan,
+// including dynamic values hidden in lists or folded-literal provenance.
+func regularIndexFixedInputs(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch value := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return value.Col != nil
+	case *plan.Expr_Vec:
+		return value.Vec != nil && value.Vec.StringSource == uint32(types.StringSourceLiteral) &&
+			!value.Vec.IsSerialized && !value.Vec.DecimalLiteralRequiresV82
+	case *plan.Expr_Lit:
+		return value.Lit != nil && value.Lit.Src == nil
+	case *plan.Expr_F:
+		if value.F == nil {
+			return false
+		}
+		for _, arg := range value.F.Args {
+			if !regularIndexFixedInputs(arg) {
+				return false
+			}
+		}
+		return true
+	case *plan.Expr_List:
+		if value.List == nil {
+			return false
+		}
+		for _, item := range value.List.List {
+			if !regularIndexFixedInputs(item) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (ctx *encodedRegularIndexCostContext) resetScratch() {
