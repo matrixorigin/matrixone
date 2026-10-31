@@ -253,12 +253,25 @@ func TestInstallLazyBranchLifecycle(t *testing.T) {
 	_, _, err = installSequentialBranchStarter(a, func(int) error { return nil }, nil)
 	require.ErrorContains(t, err, "completion barrier")
 
-	u := unionall.NewArgument()
+	u := unionall.NewArgument().WithSequentialBranches(2)
 	defer u.Release()
 	clear, deferFirst, err = installSequentialBranchStarter(u, func(int) error { return nil }, nil)
 	require.NoError(t, err)
 	require.False(t, deferFirst, "原 UNION ALL 仍立即启动第一分支")
 	clear()
+
+	// Parallel UNION ALL inputs and flattened unions add pass-through markers.
+	// Only the sequential union owns activation of this scope's pre-scopes.
+	marker := unionall.NewArgument()
+	defer marker.Release()
+	_, _, err = installSequentialBranchStarter(marker, nil, nil)
+	require.ErrorContains(t, err, "no branch starter")
+	marker.AppendChild(u)
+	clear, deferFirst, err = installSequentialBranchStarter(marker, func(int) error { return nil }, nil)
+	require.NoError(t, err)
+	require.False(t, deferFirst)
+	clear()
+	marker.Children = nil
 
 	_, _, err = installSequentialBranchStarter(colexec.NewMockOperator(), nil, nil)
 	require.ErrorContains(t, err, "no branch starter")

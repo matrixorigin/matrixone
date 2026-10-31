@@ -483,20 +483,63 @@ func TestFlowControlMetadataMethods(t *testing.T) {
 			types.T_varchar.ToType(), []byte("ordinary"), 2, proc.Mp())
 		require.NoError(t, err)
 		defer value.Free(proc.Mp())
-		selection := make([]bool, value.Length())
-		for i := range selection {
-			selection[i] = true
-		}
+		materialized := vector.NewVec(*value.GetType())
+		defer materialized.Free(proc.Mp())
+		require.NoError(t, materialized.UnionBatch(value, 0, value.Length(), nil, proc.Mp()))
+		require.False(t, value.HasPrepareParamKind())
+		require.True(t, materialized.HasPrepareParamKind(), "materialization observes ordinary None")
 
-		for _, fid := range []int32{function.IFF, function.CASE, function.COALESCE} {
-			expr := &FunctionExpressionExecutor{resultType: types.T_varchar.ToType()}
-			expr.fid = fid
-			expr.observeFlowControlPrepareParamKind(value, nil, selection)
-			require.Nil(t, expr.flowControlStringDomains)
-			require.Nil(t, expr.flowControlKinds)
-			require.True(t, expr.flowControlKindSeen)
-			require.Equal(t, vector.PrepareParamNone, expr.flowControlKind)
+		for _, input := range []*vector.Vector{value, materialized} {
+			for _, fid := range []int32{function.IFF, function.CASE, function.COALESCE} {
+				for _, tc := range []struct {
+					name      string
+					selection []bool
+					seen      bool
+				}{
+					{"selected", []bool{false, true}, true},
+					{"inactive", []bool{false, false}, false},
+					{"empty", nil, false},
+					{"beyond flat length", []bool{false, false, true}, input.IsConst()},
+				} {
+					t.Run(fmt.Sprintf("const=%t/fid=%d/%s", input.IsConst(), fid, tc.name), func(t *testing.T) {
+						expr := &FunctionExpressionExecutor{resultType: types.T_varchar.ToType()}
+						expr.fid = fid
+						expr.observeFlowControlPrepareParamKind(input, nil, tc.selection)
+						require.Nil(t, expr.flowControlStringDomains)
+						require.Nil(t, expr.flowControlStringSources)
+						require.Nil(t, expr.flowControlKinds)
+						require.Equal(t, tc.seen, expr.flowControlKindSeen)
+						require.Equal(t, vector.PrepareParamNone, expr.flowControlKind)
+					})
+				}
+			}
 		}
+	})
+
+	t.Run("OrdinarySelectionOverwritesNullArmSource", func(t *testing.T) {
+		checkExpressionStorageAfterCleanup(t, proc)
+		typ := types.T_varchar.ToType()
+		prior := vector.NewVec(typ)
+		defer prior.Free(proc.Mp())
+		ordinary := vector.NewVec(typ)
+		defer ordinary.Free(proc.Mp())
+		result := vector.NewVec(typ)
+		defer result.Free(proc.Mp())
+		for _, value := range []*vector.Vector{prior, ordinary, result} {
+			require.NoError(t, vector.AppendBytesList(value, [][]byte{[]byte("a"), []byte("b")}, nil, proc.Mp()))
+		}
+		prior.SetNull(0)
+		ordinary.SetPrepareParamKind(vector.PrepareParamNone)
+		require.NoError(t, prior.SetStringSource(types.StringSourceSQLPrepare))
+		expr := &FunctionExpressionExecutor{resultType: typ}
+		expr.fid = function.COALESCE
+		expr.observeFlowControlPrepareParamKind(prior, nil, []bool{true, true})
+		expr.observeFlowControlPrepareParamKind(ordinary, nil, []bool{true, false})
+		require.NoError(t, expr.applyFlowControlPrepareParamKinds(result, 2, proc.Mp()))
+		require.Equal(t, types.StringSourceExpression, result.GetStringSourceAt(0))
+		require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(0))
+		require.Equal(t, types.StringSourceSQLPrepare, result.GetStringSourceAt(1))
+		require.Equal(t, types.RuntimeStringInherit, result.GetRuntimeStringDomainAt(1))
 	})
 
 	t.Run("UsesSourceDomainBeforeImplicitCast", func(t *testing.T) {
@@ -3124,6 +3167,37 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		}
 	}
 
+	t.Run("case null else selection and reuse", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(4, types.T_bool.ToType(), proc.Mp(), false, []bool{true, false, true, false}),
+			testutil.NewVector(4, types.T_varchar.ToType(), proc.Mp(), false, []string{"42", "bad", "bad", "bad"}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+		expr := bindTestFunction(t, proc, "case", column(0, types.T_bool.ToType()),
+			castToInt64(column(1, types.T_varchar.ToType())), typedNull(types.T_int64.ToType()))
+		executor, err := NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+
+		result, err := executor.Eval(proc, []*batch.Batch{input}, []bool{true, true, false, false})
+		require.NoError(t, err)
+		require.False(t, result.IsNull(0))
+		require.Equal(t, int64(42), vector.MustFixedColWithTypeCheck[int64](result)[0])
+		require.True(t, result.IsNull(1))
+
+		result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, true, false, true})
+		require.NoError(t, err)
+		require.True(t, result.IsNull(1))
+		require.True(t, result.IsNull(3))
+		result, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, false, false})
+		require.NoError(t, err)
+		for row := 0; row < 4; row++ {
+			require.True(t, result.IsNull(uint64(row)))
+		}
+		_, err = executor.Eval(proc, []*batch.Batch{input}, []bool{false, false, true, false})
+		require.Error(t, err)
+	})
+
 	t.Run("if skips unresolved variable leaf across reuse", func(t *testing.T) {
 		checkExpressionStorageAfterCleanup(t, proc)
 		previousResolver := proc.GetResolveVariableFunc()
@@ -3868,6 +3942,39 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 				[]string{"10", "bad", "12"},
 				[]int64{10, 7, 12},
 			)
+		})
+	}
+}
+
+func BenchmarkObserveFlowControlPrepareParamKind(b *testing.B) {
+	for _, observed := range []bool{false, true} {
+		b.Run(fmt.Sprintf("observedNone=%t", observed), func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
+			const rows = 8192
+			typ := types.T_int64.ToType()
+			input := vector.NewVec(typ)
+			b.Cleanup(func() { input.Free(mp) })
+			require.NoError(b, vector.AppendFixedList(input, make([]int64, rows), nil, mp))
+			value := input
+			if observed {
+				value = vector.NewVec(typ)
+				b.Cleanup(func() { value.Free(mp) })
+				require.NoError(b, value.UnionBatch(input, 0, rows, nil, mp))
+			}
+			require.Equal(b, observed, value.HasPrepareParamKind())
+			selection := make([]bool, rows)
+			for row := range selection {
+				selection[row] = true
+			}
+			expr := &FunctionExpressionExecutor{resultType: typ}
+			expr.fid = function.CASE
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				expr.resetFlowControlPrepareParamKind()
+				expr.observeFlowControlPrepareParamKind(value, nil, selection)
+			}
 		})
 	}
 }

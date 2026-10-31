@@ -421,6 +421,37 @@ func TestJoinRewritesPreserveDiagnosticInputs(t *testing.T) {
 	}
 }
 
+func TestAssociativeLawDoesNotReuseHashOnPKProof(t *testing.T) {
+	for _, rule := range []int{1, 2} {
+		t.Run(fmt.Sprintf("rule%d", rule), func(t *testing.T) {
+			builder := newOuterJoinAssociativityBuilder(t, true, false)
+			inner, outer := builder.qry.Nodes[3], builder.qry.Nodes[4]
+			inner.JoinType = planpb.Node_INNER
+			builder.qry.Nodes[1].TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+			if rule == 1 {
+				outer.Children, inner.Children = []int32{0, 3}, []int32{1, 2}
+				outer.OnList = []*planpb.Expr{associativityEqExpr(1, 3)}
+				inner.OnList = []*planpb.Expr{associativityEqExpr(2, 3)}
+				builder.qry.Nodes[1].Stats.Outcnt = 10
+			} else {
+				builder.qry.Nodes[2].Stats.Selectivity = 0.1
+			}
+			determineHashOnPK(4, builder)
+			require.True(t, outer.Stats.HashmapStats.HashOnPK, "the original equality has a valid proof")
+			children := append([]int32(nil), outer.Children...)
+			var root int32
+			if rule == 1 {
+				root = builder.applyAssociativeLawRule1(4)
+			} else {
+				root = builder.applyAssociativeLawRule2(4)
+			}
+			require.Equal(t, int32(4), root, "the candidate pair has no connecting equality")
+			require.Equal(t, children, outer.Children)
+			require.True(t, outer.Stats.HashmapStats.HashOnPK, "rejected trial restores the original proof")
+		})
+	}
+}
+
 func addStatementDiagnosticToJoin(t *testing.T, builder *QueryBuilder, id int32) {
 	t.Helper()
 	condition := builder.qry.Nodes[id].OnList[0]
