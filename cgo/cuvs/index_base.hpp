@@ -378,8 +378,9 @@ inline void fill_all_sentinel(NeighborT* neighbors, float* distances,
 }
 
 // Post-process a search result's distances in place:
-//   - InnerProduct: flip the sign. cuvs returns inner-product distances negated
-//     (so smaller is "closer"); we flip back so callers see the true IP.
+//   - InnerProduct: flip the sign. cuvs returns the inner product (larger is
+//     closer); negating it gives MO's inner_product distance, -dot (smaller is
+//     closer). See docs/sql/vector-distance-functions.md.
 //   - quantized L2 (dequant_factor != 1): rescale the quantized-domain distance
 //     back to the base (f32) scale, so a 1-byte (int8/uint8) main index merges
 //     on the same scale as the base-typed CDC overflow brute force. The factor
