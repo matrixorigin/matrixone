@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -1440,20 +1441,25 @@ func Test_BuiltIn_MoShowVisibleBinArrayMetadata(t *testing.T) {
 }
 
 func Test_BuiltIn_MoShowVisibleBinEnumAndSetPayload(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range []struct {
-		oid  types.T
-		want string
+		oid              types.T
+		definition, want string
+		wantNull         bool
 	}{
-		{types.T_enum, `enum('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
-		{types.T_uint64, `set('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`},
+		{types.T_enum, `UP,Down word,O'Brien,Back\slash,Back\'quote`, `enum('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`, false},
+		{types.T_uint64, `UP,Down word,O'Brien,Back\slash,Back\'quote`, `set('UP','Down word','O''Brien','Back\\slash','Back\\''quote')`, false},
+		{types.T_uint64, "", "", true},
+		{types.T_uint64, ",", "set('')", false},
+		{types.T_enum, "", "enum('')", false},
 	} {
 		encoded, err := types.Encode(&types.Type{Oid: tc.oid})
 		require.NoError(t, err)
 		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(encoded)}, nil),
-			NewFunctionTestInput(types.T_varchar.ToType(), []string{`UP,Down word,O'Brien,Back\slash,Back\'quote`}, nil),
-		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil), builtInMoShowVisibleBinEnum)
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.definition}, nil),
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{tc.wantNull}), builtInMoShowVisibleBinEnum)
 		succeed, info := testCase.RunAndFree()
 		require.True(t, succeed, info)
 	}
@@ -1689,7 +1695,7 @@ func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
 
 func TestPadAndInsertSizingMatchesRuntimePaths(t *testing.T) {
 	invalid := string([]byte{0xff})
-	size, null := padResultByteLength(invalid, 1, invalid, int64(types.MaxBlobLen))
+	size, null := padResultByteLengthWithCharacterWidth(invalid, 1, invalid, int64(types.MaxBlobLen), utf8.UTFMax)
 	require.False(t, null)
 	require.Equal(t, 1, size, "the exact-source path preserves invalid UTF-8 bytes")
 

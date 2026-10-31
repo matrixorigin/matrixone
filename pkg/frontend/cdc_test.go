@@ -1122,14 +1122,13 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 		// Capability probes intentionally return an empty result set. Keep the
 		// row-bearing fixture strict for all other queries, while allowing this
 		// zero-row probe to exercise the production empty-result path.
-		return &testIER{rows: rows, sqlIdx: idx}
+		return &testIER{rows: rows}
 	} else {
 		panic("must have data")
 	}
 
 	return &testIER{
 		rows:      rows,
-		sqlIdx:    idx,
 		rowValues: rowValues,
 	}
 }
@@ -1138,7 +1137,6 @@ var _ ie.InternalExecResult = new(testIER)
 
 type testIER struct {
 	rows      *sql.Rows
-	sqlIdx    int
 	rowValues []any
 }
 
@@ -1380,6 +1378,21 @@ const (
 	mSqlIdx49
 	mSqlIdx50
 )
+
+func TestCDCCreateTaskDetailsPreserveIdentity(t *testing.T) {
+	opts := &CDCCreateTaskOptions{
+		TaskId: "task-id", TaskName: "task-name",
+		UserInfo: &CDCUserInfo{AccountId: 42, AccountName: "tenant", UserName: "user"},
+	}
+	details, err := opts.BuildTaskDetails()
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), details.AccountID)
+	require.Equal(t, "tenant", details.Account)
+	require.Equal(t, "user", details.Username)
+	require.Equal(t, "task-id", details.GetCreateCdc().TaskId)
+	require.Equal(t, "task-name", details.GetCreateCdc().TaskName)
+	require.Equal(t, []*task.Account{{Id: 42, Name: "tenant"}}, details.GetCreateCdc().Accounts)
+}
 
 func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 	legacy := (&CDCCreateTaskOptions{TaskId: "legacy"}).BuildTaskMetadata()
@@ -6284,8 +6297,8 @@ func TestIsValidFrequency(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.freq, func(t *testing.T) {
-			if got := isValidFrequency(tt.freq); got != tt.valid {
-				t.Errorf("isValidFrequency(%q) = %v, want %v", tt.freq, got, tt.valid)
+			if got := cdc.IsValidFrequency(tt.freq); got != tt.valid {
+				t.Errorf("cdc.IsValidFrequency(%q) = %v, want %v", tt.freq, got, tt.valid)
 			}
 		})
 	}
@@ -6312,8 +6325,8 @@ func TestTransformIntoHours(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			if got := transformIntoHours(tt.input); got != tt.want {
-				t.Errorf("transformIntoHours(%q) = %d, want %d", tt.input, got, tt.want)
+			if got := cdc.FrequencyHours(tt.input); got != tt.want {
+				t.Errorf("cdc.FrequencyHours(%q) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
 	}

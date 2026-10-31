@@ -278,6 +278,8 @@ func TestTemporalConversionHelpers(t *testing.T) {
 		{input: "+14:00", want: time.FixedZone("+14:00", 14*60*60)},
 		{input: "-13:59", want: time.FixedZone("-13:59", -(13*60+59)*60)},
 		{input: "+05:30", want: time.FixedZone("+05:30", (5*60+30)*60)},
+		{input: "-00:30", want: time.FixedZone("-00:30", -30*60)},
+		{input: "+00:+30", want: time.FixedZone("+00:+30", 30*60)},
 	} {
 		got := convertTimezone(tc.input)
 		require.NotNil(t, got)
@@ -285,7 +287,7 @@ func TestTemporalConversionHelpers(t *testing.T) {
 		_, wantOffset := time.Now().In(tc.want).Zone()
 		require.Equal(t, wantOffset, gotOffset)
 	}
-	for _, input := range []string{"+14:01", "-14:00", "+05:60", "bad"} {
+	for _, input := range []string{"+14:01", "-14:00", "+05:60", "+00:00:00", "+00::00", "+00:", "bad"} {
 		require.Nil(t, convertTimezone(input), input)
 	}
 
@@ -516,15 +518,13 @@ func TestAddFaultPoint(t *testing.T) {
 	}
 }
 
-func initCeilTestCase() []tcTemp {
-	rfs := []float64{1, -1, -2, math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 1,
-		0, 2, 5, 9, 17, 33, 65, math.MaxInt64, math.MaxFloat64, 0}
+func initRoundingTestCases(rfs []float64, names [3]string) []tcTemp {
 	fs := []float64{math.SmallestNonzeroFloat64, -1.2, -2.3, math.MinInt64 + 1, math.MinInt64 + 2, -100.2, -1.3, 0.9, 0,
 		1.5, 4.4, 8.5, 16.32, 32.345, 64.09, math.MaxInt64, math.MaxFloat64, 0}
 	bs := make([]bool, len(fs))
 	return []tcTemp{
 		{
-			info: "test ceil",
+			info: names[0],
 			typ:  types.T_uint64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_uint64.ToType(),
@@ -536,7 +536,7 @@ func initCeilTestCase() []tcTemp {
 				[]bool{false, false, false, false, false, false, false}),
 		},
 		{
-			info: "test ceil",
+			info: names[1],
 			typ:  types.T_int64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
@@ -548,7 +548,7 @@ func initCeilTestCase() []tcTemp {
 				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
-			info: "test ceil",
+			info: names[2],
 			typ:  types.T_float64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
@@ -563,7 +563,8 @@ func initCeilTestCase() []tcTemp {
 }
 
 func TestCeil(t *testing.T) {
-	testCases := initCeilTestCase()
+	testCases := initRoundingTestCases([]float64{1, -1, -2, math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 1,
+		0, 2, 5, 9, 17, 33, 65, math.MaxInt64, math.MaxFloat64, 0}, [3]string{"test ceil", "test ceil", "test ceil"})
 
 	// do the test work.
 	proc := newMemoryFunctionTestProcess(t)
@@ -624,54 +625,9 @@ func TestCeilFloorDecimal128Int64Boundaries(t *testing.T) {
 	}
 }
 
-func initFloorTestCase() []tcTemp {
-	rfs := []float64{0, -2, -3, math.MinInt64 + 1, math.MinInt64 + 2, -101, -2, 0,
-		0, 1, 4, 8, 16, 32, 64, math.MaxInt64, math.MaxFloat64, 0}
-	fs := []float64{math.SmallestNonzeroFloat64, -1.2, -2.3, math.MinInt64 + 1, math.MinInt64 + 2, -100.2, -1.3, 0.9, 0,
-		1.5, 4.4, 8.5, 16.32, 32.345, 64.09, math.MaxInt64, math.MaxFloat64, 0}
-	bs := make([]bool, len(fs))
-	return []tcTemp{
-		{
-			info: "test floor uint64",
-			typ:  types.T_uint64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_uint64.ToType(),
-					[]uint64{1, 4, 8, 16, 32, math.MaxUint64, 0},
-					[]bool{false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{1, 4, 8, 16, 32, math.MaxUint64, 0},
-				[]bool{false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test floor int64",
-			typ:  types.T_int64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 0, 1, 4, 8, 16, 32, 64, math.MaxInt64, 0},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 0, 1, 4, 8, 16, 32, 64, math.MaxInt64, 0},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test floor floa64",
-			typ:  types.T_float64,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_float64.ToType(),
-					fs,
-					bs),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				rfs,
-				bs),
-		},
-	}
-}
-
 func TestFloor(t *testing.T) {
-	testCases := initFloorTestCase()
+	testCases := initRoundingTestCases([]float64{0, -2, -3, math.MinInt64 + 1, math.MinInt64 + 2, -101, -2, 0,
+		0, 1, 4, 8, 16, 32, 64, math.MaxInt64, math.MaxFloat64, 0}, [3]string{"test floor uint64", "test floor int64", "test floor floa64"})
 
 	// do the test work.
 	proc := newMemoryFunctionTestProcess(t)
@@ -981,125 +937,54 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
-func initTimestampAddTestCase() []tcTemp {
-	d1, _ := types.ParseDateCast("2024-12-20")
-	r1, _ := types.ParseDateCast("2024-12-25") // +5 days
-	d2, _ := types.ParseDatetime("2024-12-20 10:30:45", 6)
-	r2, _ := types.ParseDatetime("2024-12-25 10:30:45", 6) // +5 days
-	d3, _ := types.ParseTimestamp(time.Local, "2024-12-20 10:30:45", 6)
-	r3, _ := types.ParseTimestamp(time.Local, "2024-12-25 10:30:45", 6) // +5 days
+func initTimestampAddTestCase(t *testing.T) []tcTemp {
+	t.Helper()
+	d1, err := types.ParseDateCast("2024-12-20")
+	require.NoError(t, err)
+	r1, err := types.ParseDateCast("2024-12-25")
+	require.NoError(t, err)
+	d2, err := types.ParseDatetime("2024-12-20 10:30:45", 6)
+	require.NoError(t, err)
+	r2, err := types.ParseDatetime("2024-12-25 10:30:45", 6)
+	require.NoError(t, err)
+	d3, err := types.ParseTimestamp(time.Local, "2024-12-20 10:30:45", 6)
+	require.NoError(t, err)
+	r3, err := types.ParseTimestamp(time.Local, "2024-12-25 10:30:45", 6)
+	require.NoError(t, err)
 
-	return []tcTemp{
-		{
-			info: "test TimestampAdd - DATE with DAY",
-			typ:  types.T_date,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_date.ToType(),
-					[]types.Date{d1},
-					[]bool{false}),
-			},
-			// MySQL behavior: DATE input + date unit → DATE output
-			// TimestampAddDate uses SetType to change vector type to DATE for date units
-			expect: NewFunctionTestResult(types.T_date.ToType(), false,
-				[]types.Date{r1},
-				[]bool{false}),
-		},
-		{
-			info: "test TimestampAdd - DATETIME with DAY",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d2},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
-				[]types.Datetime{r2},
-				[]bool{false}),
-		},
-		{
-			info: "test TimestampAdd - TIMESTAMP with DAY",
-			typ:  types.T_timestamp,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_timestamp.ToType(),
-					[]types.Timestamp{d3},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
-				[]types.Timestamp{r3},
-				[]bool{false}),
-		},
-		{
-			info: "test TimestampAdd - VARCHAR with DAY",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"2024-12-20 10:30:45"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"2024-12-25 10:30:45"},
-				[]bool{false}),
-		},
-		// Note: DATE with HOUR (time unit) returns DATETIME type at runtime via TempSetType
-		// This test case is skipped because the test framework cannot handle dynamic type changes
-		// The functionality is tested in TestAddIntervalMicrosecond in datetime_test.go
-		{
-			info: "test TimestampAdd - DATE input is NULL",
-			typ:  types.T_date,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_date.ToType(),
-					[]types.Date{d1},
-					[]bool{true}),
-			},
-			// MySQL behavior: DATE input + date unit → DATE output
-			// TimestampAddDate uses SetType to change vector type to DATE for date units
-			expect: NewFunctionTestResult(types.T_date.ToType(), false,
-				[]types.Date{types.Date(0)},
-				[]bool{true}),
-		},
-		{
-			info: "test TimestampAdd - interval is NULL",
-			typ:  types.T_date,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_date.ToType(),
-					[]types.Date{d1},
-					[]bool{false}),
-			},
-			// MySQL behavior: DATE input + date unit → DATE output
-			// TimestampAddDate uses SetType to change vector type to DATE for date units
-			expect: NewFunctionTestResult(types.T_date.ToType(), false,
-				[]types.Date{types.Date(0)},
-				[]bool{true}),
-		},
+	cases := []struct {
+		info                              string
+		typ                               types.T
+		value, want                       any
+		intervalNull, valueNull, wantNull bool
+	}{
+		{"test TimestampAdd - DATE with DAY", types.T_date, []types.Date{d1}, []types.Date{r1}, false, false, false},
+		{"test TimestampAdd - DATETIME with DAY", types.T_datetime, []types.Datetime{d2}, []types.Datetime{r2}, false, false, false},
+		{"test TimestampAdd - TIMESTAMP with DAY", types.T_timestamp, []types.Timestamp{d3}, []types.Timestamp{r3}, false, false, false},
+		{"test TimestampAdd - VARCHAR with DAY", types.T_varchar, []string{"2024-12-20 10:30:45"}, []string{"2024-12-25 10:30:45"}, false, false, false},
+		{"test TimestampAdd - DATE input is NULL", types.T_date, []types.Date{d1}, []types.Date{0}, false, true, true},
+		{"test TimestampAdd - interval is NULL", types.T_date, []types.Date{d1}, []types.Date{0}, true, false, true},
 	}
+	// DATE plus a time unit changes the result type dynamically; it is covered
+	// by TestAddIntervalMicrosecond in datetime_test.go.
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		result = append(result, tcTemp{
+			info: tc.info,
+			typ:  tc.typ,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{5}, []bool{tc.intervalNull}),
+				NewFunctionTestInput(tc.typ.ToType(), tc.value, []bool{tc.valueNull}),
+			},
+			expect: NewFunctionTestResult(tc.typ.ToType(), false, tc.want, []bool{tc.wantNull}),
+		})
+	}
+	return result
 }
 
 func TestTimestampAdd(t *testing.T) {
-	testCases := initTimestampAddTestCase()
+	testCases := initTimestampAddTestCase(t)
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
@@ -2202,9 +2087,9 @@ func TestTimestampAddMySQLCompatibility(t *testing.T) {
 	})
 }
 
-func initDateAddTestCase() []tcTemp {
+func initDateArithmeticTestCase(resultDate, stringCaseInfo string) []tcTemp {
 	d1, _ := types.ParseDatetime("2022-01-01", 6)
-	r1, _ := types.ParseDatetime("2022-01-02", 6)
+	r1, _ := types.ParseDatetime(resultDate, 6)
 	return []tcTemp{
 		{
 			info: "test DateAdd",
@@ -2243,7 +2128,7 @@ func initDateAddTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
-			info: "test DateStringAdd",
+			info: stringCaseInfo,
 			typ:  types.T_varchar,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
@@ -2257,7 +2142,7 @@ func initDateAddTestCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"2022-01-02"},
+				[]string{resultDate},
 				[]bool{false}),
 		},
 	}
@@ -2283,10 +2168,11 @@ func TestDoTimeIntervalRejectsMySQLRangeOverflow(t *testing.T) {
 }
 
 func TestDateAdd(t *testing.T) {
-	testCases := initDateAddTestCase()
+	testCases := initDateArithmeticTestCase("2022-01-02", "test DateStringAdd")
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -2299,6 +2185,8 @@ func TestDateAdd(t *testing.T) {
 		case types.T_varchar:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DateStringAdd)
+		default:
+			t.Fatalf("unsupported date arithmetic test type: %v", tc.typ)
 		}
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -2632,224 +2520,39 @@ func initConvertTzTestCase() []tcTemp {
 	r4 := "9999-12-31 22:00:00"
 	d5, _ := types.ParseDatetime("9999-12-31 10:00:00", 6)
 	r5 := "9999-12-31 18:00:00"
-	return []tcTemp{
-		{ // select convert_tz('2023-01-01 00:00:00', '+08:21', '-02:32');
-			info: "test ConvertTz correct1",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+08:21"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"-02:32"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r1},
-				[]bool{false}),
-		},
-		{ // select convert_tz('2022-01-01 00:00:00', 'Asia/Shanghai', '+00:00');
-			info: "test ConvertTz correct2",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d2},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Asia/Shanghai"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+00:00"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r2},
-				[]bool{false}),
-		},
-		{ // select convert_tz('2022-01-01 00:00:00', 'Europe/London', 'Asia/Shanghai');
-			info: "test ConvertTz correct3",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d2},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Asia/Shanghai"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Europe/London"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r2},
-				[]bool{false}),
-		},
-		{ // select convert_tz('9999-12-31 23:00:00', '-02:00', '+11:00');
-			info: "test ConvertTz out of range1",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d3},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"-02:00"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+11:00"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r3},
-				[]bool{false}),
-		},
-		{ // select convert_tz('9999-12-31 22:00:00', 'Europe/London', 'Asia/Shanghai');
-			info: "test ConvertTz out of range2",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d4},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Europe/London"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Asia/Shanghai"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r4},
-				[]bool{false}),
-		},
-		{ // select convert_tz('9999-12-31 10:00:00', 'Europe/London', 'Asia/Shanghai');
-			info: "test ConvertTz not out of range",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Europe/London"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Asia/Shanghai"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{r5},
-				[]bool{false}),
-		},
-		{
-			info: "test ConvertTz err1",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"ABC"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"GMT"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
-		},
-		{
-			info: "test ConvertTz err2",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+00:00"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"ABC"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
-		},
-		{
-			info: "test ConvertTz err3",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+00:00:00"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+08:00"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
-		},
-		{
-			info: "test ConvertTz err4",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+00:ws"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+08:00"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
-		},
-		{
-			info: "test ConvertTz err5",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+00:00"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"+18:00"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
-		},
-		{
-			info: "test ConvertTz when tz is empty",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d3},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{""},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{""},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
-		},
+	cases := []struct {
+		info           string
+		value          types.Datetime
+		from, to, want string
+		wantNull       bool
+	}{
+		{"test ConvertTz correct1", d1, "+08:21", "-02:32", r1, false},
+		{"test ConvertTz correct2", d2, "Asia/Shanghai", "+00:00", r2, false},
+		{"test ConvertTz correct3", d2, "Asia/Shanghai", "Europe/London", r2, false},
+		{"test ConvertTz out of range1", d3, "-02:00", "+11:00", r3, false},
+		{"test ConvertTz out of range2", d4, "Europe/London", "Asia/Shanghai", r4, false},
+		{"test ConvertTz not out of range", d5, "Europe/London", "Asia/Shanghai", r5, false},
+		{"test ConvertTz err1", d1, "ABC", "GMT", "", true},
+		{"test ConvertTz err2", d1, "+00:00", "ABC", "", true},
+		{"test ConvertTz err3", d1, "+00:00:00", "+08:00", "", true},
+		{"test ConvertTz err4", d1, "+00:ws", "+08:00", "", true},
+		{"test ConvertTz err5", d1, "+00:00", "+18:00", "", true},
+		{"test ConvertTz when tz is empty", d3, "", "", "", true},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		result = append(result, tcTemp{
+			info: tc.info,
+			typ:  types.T_datetime,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{tc.value}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.from}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.to}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{tc.wantNull}),
+		})
+	}
+	return result
 }
 
 func TestConvertTz(t *testing.T) {
@@ -3714,72 +3417,12 @@ func TestDateFormatZeroDatetimeMatchesMySQL(t *testing.T) {
 	}
 }
 
-func initDateSubTestCase() []tcTemp {
-	d1, _ := types.ParseDatetime("2022-01-01", 6)
-	r1, _ := types.ParseDatetime("2021-12-31", 6)
-	return []tcTemp{
-		{
-			info: "test DateAdd",
-			typ:  types.T_date,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_date.ToType(),
-					[]types.Date{d1.ToDate()},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{int64(types.Day)},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_date.ToType(), false,
-				[]types.Date{r1.ToDate()},
-				[]bool{false}),
-		},
-		{
-			info: "test DatetimeAdd",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{int64(types.Day)},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
-				[]types.Datetime{r1},
-				[]bool{false}),
-		},
-		{
-			info: "test DateStringSub",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"2022-01-01"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{int64(types.Day)},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"2021-12-31"},
-				[]bool{false}),
-		},
-	}
-}
-
 func TestDateSub(t *testing.T) {
-	testCases := initDateSubTestCase()
+	testCases := initDateArithmeticTestCase("2021-12-31", "test DateStringSub")
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -3792,6 +3435,8 @@ func TestDateSub(t *testing.T) {
 		case types.T_varchar:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DateStringSub)
+		default:
+			t.Fatalf("unsupported date arithmetic test type: %v", tc.typ)
 		}
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -4007,83 +3652,31 @@ func TestField(t *testing.T) {
 }
 
 func initFormat2Or3TestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.123456"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"4"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12,332.1235"}, []bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.1"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"4"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12,332.1000"}, []bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12,332"}, []bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-.12334.2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-0.12"}, []bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.123456"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"4"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ar_SA"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12332.1235"}, []bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.1"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"4"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ar_SA"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12332.1000"}, []bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ar_SA"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12332"}, []bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-.12334.2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ar_SA"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-0.12"}, []bool{false}),
-		},
+	cases := []struct{ value, precision, locale, want string }{
+		{"12332.123456", "4", "", "12,332.1235"},
+		{"12332.1", "4", "", "12,332.1000"},
+		{"12332.2", "0", "", "12,332"},
+		{"-.12334.2", "2", "", "-0.12"},
+		{"12332.123456", "4", "ar_SA", "12332.1235"},
+		{"12332.1", "4", "ar_SA", "12332.1000"},
+		{"12332.2", "0", "ar_SA", "12332"},
+		{"-.12334.2", "2", "ar_SA", "-0.12"},
+	}
+	tests := make([]tcTemp, 0, len(cases)+2)
+	for _, c := range cases {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{c.value}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{c.precision}, []bool{false}),
+		}
+		arity := "2"
+		if c.locale != "" {
+			inputs = append(inputs, NewFunctionTestInput(types.T_varchar.ToType(), []string{c.locale}, []bool{false}))
+			arity = "3"
+		}
+		tests = append(tests, tcTemp{info: arity, typ: types.T_varchar, inputs: inputs,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{c.want}, []bool{false})})
+	}
+	return append(tests, []tcTemp{
 		{
 			info: "2",
 			typ:  types.T_varchar,
@@ -4117,7 +3710,7 @@ func initFormat2Or3TestCase() []tcTemp {
 				[]string{"12,34,56,789.12", "-12,34,56,789.12", "12,34,56,789.12", "1.234,56"},
 				[]bool{false, false, false, false}),
 		},
-	}
+	}...)
 }
 
 func TestFormat2Or3(t *testing.T) {
@@ -4134,6 +3727,8 @@ func TestFormat2Or3(t *testing.T) {
 		case "3":
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, FormatWith3Args)
+		default:
+			t.Fatalf("unexpected FORMAT argument count %q", tc.info)
 		}
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -4619,87 +4214,43 @@ func TestFromUnixTimeReturnType(t *testing.T) {
 }
 
 func initStrCmpTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "basic",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"apple", "apple", "apple", "apple"},
-					[]bool{false, false, false, false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"apple", "orange", "banana", "app"},
-					[]bool{false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{0, -1, -1, 1},
-				[]bool{false, false, false, false}),
-		},
+	cases := []struct {
+		info                  string
+		leftType, rightType   types.T
+		left, right           []string
+		leftNulls, rightNulls []bool
+		want                  []int8
+		outputNulls           []bool
+	}{
 
-		{
-			info: "null handling",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a", "", "a", ""},
-					[]bool{false, false, false, true}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a", "a", "", ""},
-					[]bool{false, true, false, true}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{0, 0, 1, 0},
-				[]bool{false, true, false, true}),
-		},
-
-		{
-			info: "edge cases",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"", "a", "a ", "a", "A"},
-					[]bool{false, false, false, false, false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"", "a", "a", "a ", "a"},
-					[]bool{false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{0, 0, 1, -1, -1},
-				[]bool{false, false, false, false, false}),
-		},
-
-		{
-			info: "different types",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a", "b", "c"},
-					[]bool{false, false, false}),
-				NewFunctionTestInput(types.T_binary.ToType(),
-					[]string{"A", "b", "d"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{1, 0, -1},
-				[]bool{false, false, false}),
-		},
-
-		{
-			info: "char padding",
-			typ:  types.T_char,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_char.ToType(),
-					[]string{"a", "a ", "a  "},
-					[]bool{false, false, false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a", "a", "a"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{0, 1, 1},
-				[]bool{false, false, false}),
-		},
+		{info: "basic", leftType: types.T_varchar, rightType: types.T_varchar,
+			left: []string{"apple", "apple", "apple", "apple"}, right: []string{"apple", "orange", "banana", "app"},
+			leftNulls: []bool{false, false, false, false}, rightNulls: []bool{false, false, false, false},
+			want: []int8{0, -1, -1, 1}, outputNulls: []bool{false, false, false, false}},
+		{info: "null handling", leftType: types.T_varchar, rightType: types.T_varchar,
+			left: []string{"a", "", "a", ""}, right: []string{"a", "a", "", ""},
+			leftNulls: []bool{false, false, false, true}, rightNulls: []bool{false, true, false, true},
+			want: []int8{0, 0, 1, 0}, outputNulls: []bool{false, true, false, true}},
+		{info: "edge cases", leftType: types.T_varchar, rightType: types.T_varchar,
+			left: []string{"", "a", "a ", "a", "A"}, right: []string{"", "a", "a", "a ", "a"},
+			leftNulls: []bool{false, false, false, false, false}, rightNulls: []bool{false, false, false, false, false},
+			want: []int8{0, 0, 1, -1, -1}, outputNulls: []bool{false, false, false, false, false}},
+		{info: "different types", leftType: types.T_varchar, rightType: types.T_binary,
+			left: []string{"a", "b", "c"}, right: []string{"A", "b", "d"},
+			leftNulls: []bool{false, false, false}, rightNulls: []bool{false, false, false},
+			want: []int8{1, 0, -1}, outputNulls: []bool{false, false, false}},
+		{info: "char padding", leftType: types.T_char, rightType: types.T_varchar,
+			left: []string{"a", "a ", "a  "}, right: []string{"a", "a", "a"},
+			leftNulls: []bool{false, false, false}, rightNulls: []bool{false, false, false},
+			want: []int8{0, 1, 1}, outputNulls: []bool{false, false, false}},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
+		result = append(result, tcTemp{info: c.info, typ: c.leftType,
+			inputs: []FunctionTestInput{NewFunctionTestInput(c.leftType.ToType(), c.left, c.leftNulls), NewFunctionTestInput(c.rightType.ToType(), c.right, c.rightNulls)},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false, c.want, c.outputNulls)})
+	}
+	return result
 }
 
 func TestStrCmp(t *testing.T) {
@@ -4733,195 +4284,41 @@ func TestStrCmpInt32ResultWrapper(t *testing.T) {
 }
 
 func initSubStrTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"efghijklmn"},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_blob,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_blob.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{7},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_blob.ToType(), false,
-				[]string{"ghijklmn"},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_text,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_text.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{11},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_text.ToType(), false,
-				[]string{"klmn"},
-				[]bool{false}),
-		},
-
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{16},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{6},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"efghij"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{6},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-8},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{6},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-9},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-4},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{4},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"klmn"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-14},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{14},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"abcdefghijklmn"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-14},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{10},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"abcdefghij"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-12},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{2},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"cd"},
-				[]bool{false}),
-		},
+	cases := []struct {
+		info             string
+		typ              types.T
+		value, want      string
+		position, length int64
+	}{
+		{"2", types.T_varchar, "abcdefghijklmn", "efghijklmn", 5, 0},
+		{"2", types.T_blob, "abcdefghijklmn", "ghijklmn", 7, 0},
+		{"2", types.T_text, "abcdefghijklmn", "klmn", 11, 0},
+		{"2", types.T_varchar, "abcdefghijklmn", "", 16, 0},
+		{"3", types.T_varchar, "abcdefghijklmn", "efghij", 5, 6},
+		{"3", types.T_varchar, "abcdefghijklmn", "", 6, -8},
+		{"3", types.T_varchar, "abcdefghijklmn", "", 6, -9},
+		{"3", types.T_varchar, "abcdefghijklmn", "klmn", -4, 4},
+		{"3", types.T_varchar, "abcdefghijklmn", "abcdefghijklmn", -14, 14},
+		{"3", types.T_varchar, "abcdefghijklmn", "abcdefghij", -14, 10},
+		{"3", types.T_varchar, "abcdefghijklmn", "cd", -12, 2},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(tc.typ.ToType(), []string{tc.value}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.position}, []bool{false}),
+		}
+		if tc.info == "3" {
+			inputs = append(inputs, NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.length}, []bool{false}))
+		}
+		result = append(result, tcTemp{
+			info:   tc.info,
+			typ:    tc.typ,
+			inputs: inputs,
+			expect: NewFunctionTestResult(tc.typ.ToType(), false, []string{tc.want}, []bool{false}),
+		})
+	}
+	return result
 }
 
 func TestSubStr(t *testing.T) {
@@ -4945,206 +4342,37 @@ func TestSubStr(t *testing.T) {
 }
 
 func initSubStrIndexTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"www.mysql.com"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{0},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"www.mysql.com"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"www"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"www.mysql.com"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{2},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"www.mysql"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"www.mysql.com"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{3},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"www.mysql.com"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"www.mysql.com"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-3},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"www.mysql.com"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"www.mysql.com"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-2},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"mysql.com"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"www.mysql.com"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-1},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"com"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"xyz"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abc"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{223372036854775808},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"xyz"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"aaa.bbb.ccc.ddd.eee"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{9223372036854775807},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"aaa.bbb.ccc.ddd.eee"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"aaa.bbb.ccc.ddd.eee"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-9223372036854775808},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"aaa.bbb.ccc.ddd.eee"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"aaa.bbb.ccc.ddd.eee"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"."},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{int64(922337203685477580)},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"aaa.bbb.ccc.ddd.eee"},
-				[]bool{false}),
-		},
+	cases := []struct {
+		value, delimiter string
+		count            int64
+		want             string
+	}{
+		{"www.mysql.com", ".", 0, ""},
+		{"www.mysql.com", ".", 1, "www"},
+		{"www.mysql.com", ".", 2, "www.mysql"},
+		{"www.mysql.com", ".", 3, "www.mysql.com"},
+		{"www.mysql.com", ".", -3, "www.mysql.com"},
+		{"www.mysql.com", ".", -2, "mysql.com"},
+		{"www.mysql.com", ".", -1, "com"},
+		{"xyz", "abc", 223372036854775808, "xyz"},
+		{"aaa.bbb.ccc.ddd.eee", ".", 9223372036854775807, "aaa.bbb.ccc.ddd.eee"},
+		{"aaa.bbb.ccc.ddd.eee", ".", -9223372036854775808, "aaa.bbb.ccc.ddd.eee"},
+		{"aaa.bbb.ccc.ddd.eee", ".", int64(922337203685477580), "aaa.bbb.ccc.ddd.eee"},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		result = append(result, tcTemp{
+			info: "3",
+			typ:  types.T_varchar,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, []bool{false}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.delimiter}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.count}, []bool{false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}),
+		})
+	}
+	return result
 }
 
 func TestSubStrIndex(t *testing.T) {
@@ -5158,6 +4386,41 @@ func TestSubStrIndex(t *testing.T) {
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestSubStrIndexOverlappingDelimiters(t *testing.T) {
+	for _, tc := range []struct {
+		value, delimiter string
+		count            int64
+		want             string
+	}{
+		{"aaaaa", "aa", 1, ""},
+		{"aaaaa", "aa", 2, "aa"},
+		{"aaaaa", "aa", -1, "a"},
+		{"aaaaa", "aa", -2, "aaa"},
+		{"ababa", "aba", -1, "ba"},
+		{"aaaaa", "aa", math.MinInt64, "aaaaa"},
+		{"aaaaa", "aa", math.MaxInt64, "aaaaa"},
+	} {
+		got, err := subStrIndex(tc.value, tc.delimiter, tc.count)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got, "value=%q delimiter=%q count=%d", tc.value, tc.delimiter, tc.count)
+	}
+}
+
+func TestSubStrIndexNullAndSelectedRows(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"aaaaa", "aaaaa", "x.y", "m.n"}, []bool{false, false, true, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"aa", "aa", ".", "."}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -2, 1, 1}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "aaa", "", ""}, []bool{false, false, true, true}),
+		SubStrIndex[int64]).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
+	ok, info := fc.RunAndFree()
+	require.True(t, ok, info)
 }
 
 func initTimeDiffInTimeTestCase() []tcTemp {
@@ -5386,135 +4649,52 @@ func TestTimeDiffString(t *testing.T) {
 
 // TIMESTAMPDIFF
 
-func initTimestampDiffTestCase() []tcTemp {
-	// FIXME: Migrating the testcases as it was from the original functions code. May refactor it later. Original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/multi/timestampdiff_test.go#L35
+func initTimestampDiffTestCase(t *testing.T) []tcTemp {
+	t.Helper()
 	cases := []struct {
-		name   string
-		inputs []string
-		want   int64
+		name, start, end, unit string
+		want                   int64
 	}{
-		{
-			name:   "TEST01",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "microsecond"},
-			want:   2660588000000,
-		},
-		{
-			name:   "TEST02",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "second"},
-			want:   2660588,
-		},
-		{
-			name:   "TEST03",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "minute"},
-			want:   44343,
-		},
-		{
-			name:   "TEST04",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "hour"},
-			want:   739,
-		},
-		{
-			name:   "TEST05",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "day"},
-			want:   30,
-		},
-		{
-			name:   "TEST06",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-08 12:15:12", "week"},
-			want:   5,
-		},
-		{
-			name:   "TEST07",
-			inputs: []string{"2017-11-01 12:15:12", "2018-01-01 12:15:12", "month"},
-			want:   2,
-		},
-		{
-			name:   "TEST08",
-			inputs: []string{"2017-01-01 12:15:12", "2018-01-01 12:15:12", "quarter"},
-			want:   4,
-		},
-		{
-			name:   "TEST09",
-			inputs: []string{"2017-01-01 12:15:12", "2018-01-01 12:15:12", "year"},
-			want:   1,
-		},
-		{
-			name:   "TEST10",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "microsecond"},
-			want:   -2660588000000,
-		},
-		{
-			name:   "TEST11",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "second"},
-			want:   -2660588,
-		},
-		{
-			name:   "TEST12",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "minute"},
-
-			want: -44343,
-		},
-		{
-			name:   "TEST13",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "hour"},
-
-			want: -739,
-		},
-		{
-			name:   "TEST14",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "day"},
-
-			want: -30,
-		},
-		{
-			name:   "TEST15",
-			inputs: []string{"2018-01-08 12:15:12", "2017-12-01 12:15:12", "week"},
-			want:   -5,
-		},
-		{
-			name:   "TEST16",
-			inputs: []string{"2018-01-01 12:15:12", "2017-11-01 12:15:12", "month"},
-			want:   -2,
-		},
-		{
-			name:   "TEST17",
-			inputs: []string{"2018-01-01 12:15:12", "2017-01-01 12:15:12", "quarter"},
-			want:   -4,
-		},
-		{
-			name:   "TEST18",
-			inputs: []string{"2018-01-01 12:15:12", "2017-01-01 12:15:12", "year"},
-			want:   -1,
-		},
+		{"TEST01", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "microsecond", 2660588000000},
+		{"TEST02", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "second", 2660588},
+		{"TEST03", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "minute", 44343},
+		{"TEST04", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "hour", 739},
+		{"TEST05", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "day", 30},
+		{"TEST06", "2017-12-01 12:15:12", "2018-01-08 12:15:12", "week", 5},
+		{"TEST07", "2017-11-01 12:15:12", "2018-01-01 12:15:12", "month", 2},
+		{"TEST08", "2017-01-01 12:15:12", "2018-01-01 12:15:12", "quarter", 4},
+		{"TEST09", "2017-01-01 12:15:12", "2018-01-01 12:15:12", "year", 1},
+		{"TEST10", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "microsecond", -2660588000000},
+		{"TEST11", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "second", -2660588},
+		{"TEST12", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "minute", -44343},
+		{"TEST13", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "hour", -739},
+		{"TEST14", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "day", -30},
+		{"TEST15", "2018-01-08 12:15:12", "2017-12-01 12:15:12", "week", -5},
+		{"TEST16", "2018-01-01 12:15:12", "2017-11-01 12:15:12", "month", -2},
+		{"TEST17", "2018-01-01 12:15:12", "2017-01-01 12:15:12", "quarter", -4},
+		{"TEST18", "2018-01-01 12:15:12", "2017-01-01 12:15:12", "year", -1},
 	}
-
-	var testInputs = make([]tcTemp, 0, len(cases))
-	for _, c := range cases {
-
-		i1 := c.inputs[2]
-		i2, _ := types.ParseDatetime(c.inputs[0], 6)
-		i3, _ := types.ParseDatetime(c.inputs[1], 6)
-
-		o := c.want
-
-		testInputs = append(testInputs, tcTemp{
-
-			info: "test TimestampDiff " + c.name,
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		start, err := types.ParseDatetime(tc.start, 6)
+		require.NoError(t, err, tc.name)
+		end, err := types.ParseDatetime(tc.end, 6)
+		require.NoError(t, err, tc.name)
+		result = append(result, tcTemp{
+			info: "test TimestampDiff " + tc.name,
 			inputs: []FunctionTestInput{
-				// Create a input entry <String, Datetime1, Datetime2>
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{i1}, []bool{}),
-				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{i2}, []bool{}),
-				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{i3}, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.unit}, []bool{}),
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{start}, []bool{}),
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{end}, []bool{}),
 			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{o}, []bool{}),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.want}, []bool{}),
 		})
 	}
-
-	return testInputs
+	return result
 }
 
 func TestTimestampDiff(t *testing.T) {
-	testCases := initTimestampDiffTestCase()
+	testCases := initTimestampDiffTestCase(t)
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
@@ -5526,9 +4706,7 @@ func TestTimestampDiff(t *testing.T) {
 
 // StartsWith
 
-func initStartsWithTestCase() []tcTemp {
-	// FIXME: Migrating the testcases as it was from the original functions code. May refactor it later. Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/startswith_test.go#L28
-	var charVecBase = []string{"-123", "123", "+123", "8", ""}
+func initAffixTestCase(info string, charVecBase []string) []tcTemp {
 	var charVecBase2 = []string{"-", "+", "1", ""}
 	var nsp1, nsp2 []uint64
 	var origVecs = make([]FunctionTestInput, 2)
@@ -5546,7 +4724,7 @@ func initStartsWithTestCase() []tcTemp {
 		}
 	}
 
-	makeFunctionTestInputEndsWith := func(values []string, nsp []uint64) FunctionTestInput {
+	makeAffixTestInput := func(values []string, nsp []uint64) FunctionTestInput {
 		totalCount := len(values)
 		strs := make([]string, totalCount)
 		nulls := make([]bool, totalCount)
@@ -5560,12 +4738,12 @@ func initStartsWithTestCase() []tcTemp {
 		return NewFunctionTestInput(types.T_varchar.ToType(), strs, nulls)
 	}
 
-	origVecs[0] = makeFunctionTestInputEndsWith(inputVec, nsp1)
-	origVecs[1] = makeFunctionTestInputEndsWith(inputVec2, nsp2)
+	origVecs[0] = makeAffixTestInput(inputVec, nsp1)
+	origVecs[1] = makeAffixTestInput(inputVec2, nsp2)
 
 	return []tcTemp{
 		{
-			info: "test StartsWith",
+			info: info,
 			inputs: []FunctionTestInput{
 				origVecs[0],
 				origVecs[1],
@@ -5578,7 +4756,7 @@ func initStartsWithTestCase() []tcTemp {
 }
 
 func TestStartsWith(t *testing.T) {
-	testCases := initStartsWithTestCase()
+	testCases := initAffixTestCase("test StartsWith", []string{"-123", "123", "+123", "8", ""})
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
@@ -5591,59 +4769,8 @@ func TestStartsWith(t *testing.T) {
 
 // EndsWith
 
-func initEndsWithTestCase() []tcTemp {
-	// FIXME: Migrating the testcases as it was from the original functions code. May refactor it later. Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/endswith_test.go#L29
-	var charVecBase = []string{"123-", "321", "123+", "8", ""}
-	var charVecBase2 = []string{"-", "+", "1", ""}
-	var nsp1, nsp2 []uint64
-	var origVecs = make([]FunctionTestInput, 2)
-	n1, n2 := len(charVecBase), len(charVecBase2)
-	inputVec := make([]string, n1*n2)
-	inputVec2 := make([]string, len(inputVec))
-	for i := 0; i < len(inputVec); i++ {
-		inputVec[i] = charVecBase[i/n2]
-		inputVec2[i] = charVecBase2[i%n2]
-		if (i / n2) == (n1 - 1) {
-			nsp1 = append(nsp1, uint64(i))
-		}
-		if (i % n2) == (n2 - 1) {
-			nsp2 = append(nsp2, uint64(i))
-		}
-	}
-
-	makeFunctionTestInputEndsWith := func(values []string, nsp []uint64) FunctionTestInput {
-		totalCount := len(values)
-		strs := make([]string, totalCount)
-		nulls := make([]bool, totalCount)
-		for i := 0; i < totalCount; i++ {
-			strs[i] = values[i]
-		}
-		for i := 0; i < len(nsp); i++ {
-			idx := nsp[i]
-			nulls[idx] = true
-		}
-		return NewFunctionTestInput(types.T_varchar.ToType(), strs, nulls)
-	}
-
-	origVecs[0] = makeFunctionTestInputEndsWith(inputVec, nsp1)
-	origVecs[1] = makeFunctionTestInputEndsWith(inputVec2, nsp2)
-
-	return []tcTemp{
-		{
-			info: "test EndsWith",
-			inputs: []FunctionTestInput{
-				origVecs[0],
-				origVecs[1],
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, false, true, false, false, true, true, false, true, false, true, false, false, false, true, false, false, false, true},
-				[]bool{false, false, false, true, false, false, false, true, false, false, false, true, false, false, false, true, true, true, true, true}),
-		},
-	}
-}
-
 func TestEndsWith(t *testing.T) {
-	testCases := initEndsWithTestCase()
+	testCases := initAffixTestCase("test EndsWith", []string{"123-", "321", "123+", "8", ""})
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
@@ -5657,76 +4784,20 @@ func TestEndsWith(t *testing.T) {
 // FindInSet
 
 func initFindInSetTestCase() []tcTemp {
-
-	return []tcTemp{
-		{
-			info: "test findinset",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{
-					"abc",
-					"xyz",
-					"z",
-					"abc", //TODO: Ignoring the scalar checks. Please fix. Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/findinset_test.go#L67
-					"abc",
-					"abc",
-					"",
-					"abc",
-				},
-					[]bool{
-						false,
-						false,
-						false,
-						false,
-						false,
-						false,
-						true,
-						false,
-					}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{
-					"abc,def",
-					"dec,xyz,abc",
-					"a,e,c,z",
-					"abc,def",
-					"abc,def",
-					"abc,def",
-					"abc",
-					"",
-				},
-					[]bool{
-						false,
-						false,
-						false,
-						false,
-						false,
-						false,
-						false,
-						true,
-					}),
-			},
-			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{
-					1,
-					2,
-					4,
-					1,
-					1,
-					1,
-					0,
-					0,
-				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					true,
-					true,
-				},
-			),
+	return []tcTemp{{
+		info: "test findinset",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"abc", "xyz", "z", "abc", "abc", "abc", "", "abc"},
+				[]bool{false, false, false, false, false, false, true, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"abc,def", "dec,xyz,abc", "a,e,c,z", "abc,def", "abc,def", "abc,def", "abc", ""},
+				[]bool{false, false, false, false, false, false, false, true}),
 		},
-	}
+		expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{1, 2, 4, 1, 1, 1, 0, 0},
+			[]bool{false, false, false, false, false, false, true, true}),
+	}}
 }
 
 func TestFindInSet(t *testing.T) {
@@ -5738,6 +4809,31 @@ func TestFindInSet(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, FindInSet)
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestFindInSetConstantInputs(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	typ := types.T_varchar.ToType()
+	for _, tc := range []struct {
+		name         string
+		needle, list FunctionTestInput
+		want         []uint64
+		nulls        []bool
+	}{
+		{"constant needle", NewFunctionTestConstInput(typ, []string{"abc"}, nil), NewFunctionTestInput(typ, []string{"abc,x", "x,abc", "x"}, nil), []uint64{1, 2, 0}, nil},
+		{"constant list", NewFunctionTestInput(typ, []string{"a", "b", "c"}, nil), NewFunctionTestConstInput(typ, []string{"a,b,a"}, nil), []uint64{1, 2, 0}, nil},
+		{"both constant", NewFunctionTestConstInput(typ, []string{"b"}, nil), NewFunctionTestConstInput(typ, []string{"a,b"}, nil), []uint64{2, 2}, nil},
+		{"null constant", NewFunctionTestConstInput(typ, []string{""}, []bool{true}), NewFunctionTestInput(typ, []string{"a", ""}, nil), []uint64{0, 0}, []bool{true, true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.needle, tc.list},
+				NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, tc.nulls), FindInSet)
+			fc.fnLength = len(tc.want)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -5792,6 +4888,30 @@ func TestFindInSetEmptyStringListInt32ResultWrapper(t *testing.T) {
 	)
 	succeed, info := caseData.RunAndFree()
 	require.True(t, succeed, info)
+}
+
+func TestFindInSetListBoundaries(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", "", "", "a", "b", "A", "x,y", "\xff", "a"}, []bool{false, false, false, false, false, false, false, false, false, true}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", ",", "a,", ",a", "a,a", "a,,b", "a,A", "x,y", "\x00,\xff", "a"}, nil),
+	}
+	nulls := []bool{false, false, false, false, false, false, false, false, false, true}
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		want any
+	}{
+		{"uint64", types.T_uint64.ToType(), []uint64{0, 1, 2, 1, 1, 3, 2, 0, 2, 0}},
+		{"int32", types.T_int32.ToType(), []int32{0, 1, 2, 1, 1, 3, 2, 0, 2, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(tc.typ, false, tc.want, nulls), FindInSet)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestFindInSetSetDefinition(t *testing.T) {
@@ -5849,17 +4969,6 @@ func initInstrTestCase() []tcTemp {
 			substrs: []string{"", "", "a", "b", "c"},
 			wants:   []int64{1, 1, 1, 2, 3},
 		},
-		//TODO: @m-schen. Please fix these. Original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/instr_test.go#L43
-		//{
-		//	strs:    []string{"abc", "abc", "abc", "abc", "abc"},
-		//	substrs: []string{"bc"},
-		//	wants:   []int64{2, 2, 2, 2, 2},
-		//},
-		//{
-		//	strs:    []string{"abc"},
-		//	substrs: []string{"bc", "b", "abc", "a", "dca"},
-		//	wants:   []int64{2, 2, 1, 1, 0},
-		//},
 	}
 
 	var testInputs = make([]tcTemp, 0, len(cases))
@@ -5892,6 +5001,31 @@ func TestInstr(t *testing.T) {
 	}
 }
 
+func TestInstrConstantArguments(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	varchar := types.T_varchar.ToType()
+	cases := []struct {
+		name        string
+		left, right FunctionTestInput
+		want        []int64
+		nulls       []bool
+	}{
+		{"constant needle", NewFunctionTestInput(varchar, []string{"abc", "abc", "abc", "abc", "abc"}, nil), NewFunctionTestConstInput(varchar, []string{"bc"}, nil), []int64{2, 2, 2, 2, 2}, nil},
+		{"constant haystack", NewFunctionTestConstInput(varchar, []string{"abc"}, nil), NewFunctionTestInput(varchar, []string{"bc", "b", "abc", "a", "dca"}, nil), []int64{2, 2, 1, 1, 0}, nil},
+		{"null needle", NewFunctionTestInput(varchar, []string{"abc", "abc", "abc", "abc", "abc"}, nil), NewFunctionTestConstInput(varchar, []string{""}, []bool{true}), []int64{0, 0, 0, 0, 0}, []bool{true, true, true, true, true}},
+		{"null haystack", NewFunctionTestConstInput(varchar, []string{""}, []bool{true}), NewFunctionTestInput(varchar, []string{"bc", "b", "abc", "a", "dca"}, nil), []int64{0, 0, 0, 0, 0}, []bool{true, true, true, true, true}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{c.left, c.right}, NewFunctionTestResult(types.T_int64.ToType(), false, c.want, c.nulls), Instr)
+			fc.fnLength = len(c.want)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 // Left
 func initLeftTestCase() []tcTemp {
 	cases := []struct {
@@ -5899,168 +5033,40 @@ func initLeftTestCase() []tcTemp {
 		len  int64
 		want string
 	}{
-		{
-			"abcde",
-			3,
-			"abc",
-		},
-		{
-			"abcde",
-			0,
-			"",
-		},
-		{
-			"abcde",
-			-1,
-			"",
-		},
-		{
-			"abcde",
-			100,
-			"abcde",
-		},
-		{
-			"foobarbar",
-			5,
-			"fooba",
-		},
+		{"abcde", 3, "abc"},
+		{"abcde", 0, ""},
+		{"abcde", -1, ""},
+		{"abcde", 100, "abcde"},
+		{"foobarbar", 5, "fooba"},
 
 		// TestLeft1
-		{
-			"是都方式快递费",
-			3,
-			"是都方",
-		},
-		{
-			"ｱｲｳｴｵ",
-			3,
-			"ｱｲｳ",
-		},
-		{
-			"ｱｲｳｴｵ ",
-			3,
-			"ｱｲｳ",
-		},
-		{
-			"ｱｲｳｴｵ  ",
-			3,
-			"ｱｲｳ",
-		},
-		{
-			"ｱｲｳｴｵ   ",
-			3,
-			"ｱｲｳ",
-		},
-		{
-			"あいうえお",
-			3,
-			"あいう",
-		},
-		{
-			"あいうえお ",
-			3,
-			"あいう",
-		},
-		{
-			"あいうえお  ",
-			3,
-			"あいう",
-		},
-		{
-			"あいうえお   ",
-			3,
-			"あいう",
-		},
-		{
-			"龔龖龗龞龡",
-			3,
-			"龔龖龗",
-		},
-		{
-			"龔龖龗龞龡 ",
-			3,
-			"龔龖龗",
-		},
-		{
-			"龔龖龗龞龡  ",
-			3,
-			"龔龖龗",
-		},
-		{
-			"龔龖龗龞龡   ",
-			3,
-			"龔龖龗",
-		},
-		{
-			"2017-06-15    ",
-			8,
-			"2017-06-",
-		},
-		{
-			"2019-06-25    ",
-			8,
-			"2019-06-",
-		},
-		{
-			"    2019-06-25  ",
-			8,
-			"    2019",
-		},
-		{
-			"   2019-06-25   ",
-			8,
-			"   2019-",
-		},
-		{
-			"    2012-10-12   ",
-			8,
-			"    2012",
-		},
-		{
-			"   2004-04-24.   ",
-			8,
-			"   2004-",
-		},
-		{
-			"   2008-12-04.  ",
-			8,
-			"   2008-",
-		},
-		{
-			"    2012-03-23.   ",
-			8,
-			"    2012",
-		},
-		{
-			"    2013-04-30  ",
-			8,
-			"    2013",
-		},
-		{
-			"  1994-10-04  ",
-			8,
-			"  1994-1",
-		},
-		{
-			"   2018-06-04  ",
-			8,
-			"   2018-",
-		},
-		{
-			" 2012-10-12  ",
-			8,
-			" 2012-10",
-		},
-		{
-			"1241241^&@%#^*^!@#&*(!&    ",
-			12,
-			"1241241^&@%#",
-		},
-		{
-			" 123 ",
-			2,
-			" 1",
-		},
+		{"是都方式快递费", 3, "是都方"},
+		{"ｱｲｳｴｵ", 3, "ｱｲｳ"},
+		{"ｱｲｳｴｵ ", 3, "ｱｲｳ"},
+		{"ｱｲｳｴｵ  ", 3, "ｱｲｳ"},
+		{"ｱｲｳｴｵ   ", 3, "ｱｲｳ"},
+		{"あいうえお", 3, "あいう"},
+		{"あいうえお ", 3, "あいう"},
+		{"あいうえお  ", 3, "あいう"},
+		{"あいうえお   ", 3, "あいう"},
+		{"龔龖龗龞龡", 3, "龔龖龗"},
+		{"龔龖龗龞龡 ", 3, "龔龖龗"},
+		{"龔龖龗龞龡  ", 3, "龔龖龗"},
+		{"龔龖龗龞龡   ", 3, "龔龖龗"},
+		{"2017-06-15    ", 8, "2017-06-"},
+		{"2019-06-25    ", 8, "2019-06-"},
+		{"    2019-06-25  ", 8, "    2019"},
+		{"   2019-06-25   ", 8, "   2019-"},
+		{"    2012-10-12   ", 8, "    2012"},
+		{"   2004-04-24.   ", 8, "   2004-"},
+		{"   2008-12-04.  ", 8, "   2008-"},
+		{"    2012-03-23.   ", 8, "    2012"},
+		{"    2013-04-30  ", 8, "    2013"},
+		{"  1994-10-04  ", 8, "  1994-1"},
+		{"   2018-06-04  ", 8, "   2018-"},
+		{" 2012-10-12  ", 8, " 2012-10"},
+		{"1241241^&@%#^*^!@#&*(!&    ", 12, "1241241^&@%#"},
+		{" 123 ", 2, " 1"},
 	}
 
 	var testInputs = make([]tcTemp, 0, len(cases))
@@ -6095,6 +5101,18 @@ func TestLeft(t *testing.T) {
 }
 
 // Right
+func TestLeftNullArguments(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "abc", "abc"}, []bool{true, false, false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, []bool{false, true, false}),
+	}
+	expected := NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "", "ab"}, []bool{true, true, false})
+	tc := NewFunctionTestCase(proc, inputs, expected, Left)
+	ok, info := tc.RunAndFree()
+	require.True(t, ok, info)
+}
+
 func initRightTestCase() []tcTemp {
 	cases := []struct {
 		s    string
@@ -6432,6 +5450,35 @@ func initTruncateTestCase() []tcTemp {
 	return testInputs
 }
 
+func TestUnsignedFloorAndTruncateDigits(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   executeLogicOfOverload
+	}{
+		{"floor", FloorUInt64},
+		{"truncate", TruncateUint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newMemoryFunctionTestProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			for _, c := range []struct {
+				digits int64
+				want   uint64
+			}{
+				{math.MinInt64, 0}, {-20, 0}, {-19, 10000000000000000000},
+				{-1, 18446744073709551610}, {0, math.MaxUint64}, {1, math.MaxUint64},
+			} {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{math.MaxUint64}, nil),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{c.digits}, nil),
+				}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{c.want}, nil), tc.fn)
+				ok, info := fc.RunAndFree()
+				require.True(t, ok, "digits %d: %s", c.digits, info)
+			}
+		})
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	testCases := initTruncateTestCase()
 
@@ -6600,167 +5647,134 @@ func TestSqrt(t *testing.T) {
 
 // L2 Distance
 func initStDistanceTestCase() []tcTemp {
-	return []tcTemp{
+	cases := []struct {
+		info                          string
+		left, right                   []string
+		want                          []float64
+		leftNull, rightNull, wantNull []bool
+	}{
 		{
-			info: "test st_distance point to point",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)", "POINT(-1 -1)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(3 4)", "POINT(2 3)"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{5, 5},
-				[]bool{false, false}),
+			info:      "test st_distance point to point",
+			left:      []string{"POINT(0 0)", "POINT(-1 -1)"},
+			right:     []string{"POINT(3 4)", "POINT(2 3)"},
+			want:      []float64{5, 5},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
-			info: "test st_distance point to linestring",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 1)", "POINT(3 0)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{1, 1},
-				[]bool{false, false}),
+			info:      "test st_distance point to linestring",
+			left:      []string{"POINT(1 1)", "POINT(3 0)"},
+			right:     []string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+			want:      []float64{1, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
-			info: "test st_distance linestring to point",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 0)", "POINT(3 0)"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			info:      "test st_distance linestring to point",
+			left:      []string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+			right:     []string{"POINT(1 0)", "POINT(3 0)"},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
 			info: "test st_distance point to polygon",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 1)", "POINT(3 1)", "POINT(0 1)"},
-					[]bool{false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false, false}),
+			left: []string{"POINT(1 1)", "POINT(3 1)", "POINT(0 1)"},
+			right: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1, 0},
-				[]bool{false, false, false}),
+			want:      []float64{0, 1, 0},
+			leftNull:  []bool{false, false, false},
+			rightNull: []bool{false, false, false},
+			wantNull:  []bool{false, false, false},
 		},
 		{
 			info: "test st_distance polygon to point",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 1)", "POINT(3 1)"},
-					[]bool{false, false}),
+			left: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			right:     []string{"POINT(1 1)", "POINT(3 1)"},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
-			info: "test st_distance linestring to linestring",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(1 -1,1 1)", "LINESTRING(0 1,2 1)"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			info:      "test st_distance linestring to linestring",
+			left:      []string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+			right:     []string{"LINESTRING(1 -1,1 1)", "LINESTRING(0 1,2 1)"},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
 			info: "test st_distance linestring to polygon",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false}),
+			left: []string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
+			right: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
 			info: "test st_distance polygon to linestring",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
-					[]bool{false, false}),
+			left: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			right:     []string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
 			info: "test st_distance polygon to polygon",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
-						"POLYGON((3 0,5 0,5 2,3 2,3 0))",
-					},
-					[]bool{false, false}),
+			left: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			right: []string{
+				"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+				"POLYGON((3 0,5 0,5 2,3 2,3 0))",
+			},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
-			info: "test st_distance null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(3 4)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0},
-				[]bool{true}),
+			info:      "test st_distance null",
+			left:      []string{"POINT(0 0)"},
+			right:     []string{"POINT(3 4)"},
+			want:      []float64{0},
+			leftNull:  []bool{true},
+			rightNull: []bool{false},
+			wantNull:  []bool{true},
 		},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		result = append(result, tcTemp{
+			info: tc.info,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), tc.left, tc.leftNull),
+				NewFunctionTestInput(types.T_geometry.ToType(), tc.right, tc.rightNull),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false, tc.want, tc.wantNull),
+		})
+	}
+	return result
 }
 
 func TestStMeasuresGeodetic(t *testing.T) {
@@ -8410,71 +7424,49 @@ func TestStDistanceWithMultiGeometries(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
-func initStContainsTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test st_contains basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(1 1)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(1 0)",
-						"POINT(0 0)",
-						"LINESTRING(0.5 0,1.5 0)",
-						"LINESTRING(0 0,3 0)",
-						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
-						"POINT(1 1)",
-						"POINT(0 1)",
-						"LINESTRING(0.5 0.5,1.5 1.5)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POINT(1 1)",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, false, false, true, false, true, false, false, true, false, true, false, true, true, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test st_contains null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POLYGON((0 0,10 0,10 10,0 10,0 0))"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(5 5)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false},
-				[]bool{true}),
-		},
+type spatialPredicateFixture struct {
+	left, right string
+	want        bool
+}
+
+func spatialPredicateFixtures(name string, rows []spatialPredicateFixture, nullLeft, nullRight string) []tcTemp {
+	left := make([]string, len(rows))
+	right := make([]string, len(rows))
+	want := make([]bool, len(rows))
+	for i, row := range rows {
+		left[i], right[i], want[i] = row.left, row.right, row.want
 	}
+	return []tcTemp{
+		{info: name + " basic", inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), left, make([]bool, len(rows))),
+			NewFunctionTestInput(types.T_geometry.ToType(), right, make([]bool, len(rows))),
+		}, expect: NewFunctionTestResult(types.T_bool.ToType(), false, want, make([]bool, len(rows)))},
+		{info: name + " null", inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{nullLeft}, []bool{true}),
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{nullRight}, []bool{false}),
+		}, expect: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true})},
+	}
+}
+
+func initStContainsTestCase() []tcTemp {
+	return spatialPredicateFixtures("test st_contains", []spatialPredicateFixture{
+		{"POINT(0 0)", "POINT(0 0)", true},
+		{"POINT(0 0)", "POINT(1 1)", false},
+		{"POINT(0 0)", "LINESTRING(0 0,2 0)", false},
+		{"POINT(0 0)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"LINESTRING(0 0,2 0)", "POINT(1 0)", true},
+		{"LINESTRING(0 0,2 0)", "POINT(0 0)", false},
+		{"LINESTRING(0 0,2 0)", "LINESTRING(0.5 0,1.5 0)", true},
+		{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,3 0)", false},
+		{"LINESTRING(0 0,2 0)", "POLYGON((0 0,1 0,1 1,0 1,0 0))", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POINT(1 1)", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POINT(0 1)", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "LINESTRING(0.5 0.5,1.5 1.5)", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "LINESTRING(0 0,2 0)", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((0 0,1 0,1 1,0 1,0 0))", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))", "SRID=4326;POINT(1 1)", true},
+	}, "POLYGON((0 0,10 0,10 10,0 10,0 0))", "POINT(5 5)")
 }
 
 func TestStContains(t *testing.T) {
@@ -8660,70 +7652,24 @@ func TestStContainsWithGeometryCollections(t *testing.T) {
 }
 
 func initStWithinTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test st_within basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(1 1)",
-						"POINT(1 0)",
-						"POINT(0 0)",
-						"POINT(1 1)",
-						"POINT(0 1)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0.5 0,1.5 0)",
-						"LINESTRING(0 0,3 0)",
-						"LINESTRING(0.5 0.5,1.5 1.5)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
-						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
-						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POINT(1 1)",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, false, true, false, false, true, false, true, false, false, false, true, true, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test st_within null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(5 5)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POLYGON((0 0,10 0,10 10,0 10,0 0))"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false},
-				[]bool{true}),
-		},
-	}
+	return spatialPredicateFixtures("test st_within", []spatialPredicateFixture{
+		{"POINT(0 0)", "POINT(0 0)", true},
+		{"POINT(1 1)", "POINT(0 0)", false},
+		{"POINT(1 0)", "LINESTRING(0 0,2 0)", true},
+		{"POINT(0 0)", "LINESTRING(0 0,2 0)", false},
+		{"POINT(1 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"POINT(0 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"LINESTRING(0 0,2 0)", "POINT(0 0)", false},
+		{"LINESTRING(0.5 0,1.5 0)", "LINESTRING(0 0,2 0)", true},
+		{"LINESTRING(0 0,3 0)", "LINESTRING(0 0,2 0)", false},
+		{"LINESTRING(0.5 0.5,1.5 1.5)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"LINESTRING(0 0,2 0)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"POLYGON((0 0,1 0,1 1,0 1,0 0))", "POINT(0 0)", false},
+		{"POLYGON((0 0,1 0,1 1,0 1,0 0))", "LINESTRING(0 0,2 0)", false},
+		{"POLYGON((0 0,1 0,1 1,0 1,0 0))", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"SRID=4326;POINT(1 1)", "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+	}, "POINT(5 5)", "POLYGON((0 0,10 0,10 10,0 10,0 0))")
 }
 
 func TestStWithin(t *testing.T) {
@@ -8909,70 +7855,24 @@ func TestStWithinWithGeometryCollections(t *testing.T) {
 }
 
 func initStIntersectsTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test st_intersects basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(1 1)",
-						"POINT(1 1)",
-						"POINT(1 1)",
-						"LINESTRING(0 0,2 2)",
-						"POINT(0 1)",
-						"LINESTRING(-1 1,3 1)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;LINESTRING(0 0,2 2)",
-						"MULTIPOINT((0 0),(1 1))",
-						"POINT(2 2)",
-						"MULTIPOINT((0 1),(3 3))",
-						"MULTILINESTRING((0 0,2 0),(3 1,5 1))",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
-						"LINESTRING(4 1,6 1)",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(1 1)",
-						"POINT(2 2)",
-						"LINESTRING(0 0,2 2)",
-						"LINESTRING(0 2,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((2 1,4 1,4 3,2 3,2 1))",
-						"POLYGON((3 3,5 3,5 5,3 5,3 3))",
-						"SRID=4326;POINT(1 1)",
-						"POINT(1 1)",
-						"MULTIPOINT((0 0),(1 1))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(1 -1,1 1)",
-						"POINT(4 1)",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
-						"MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, true, true, true, true, false, true, true, false, true, true, true, true, false},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test st_intersects null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 1)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 1)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false},
-				[]bool{true}),
-		},
-	}
+	return spatialPredicateFixtures("test st_intersects", []spatialPredicateFixture{
+		{"POINT(1 1)", "POINT(1 1)", true},
+		{"POINT(1 1)", "POINT(2 2)", false},
+		{"POINT(1 1)", "LINESTRING(0 0,2 2)", true},
+		{"LINESTRING(0 0,2 2)", "LINESTRING(0 2,2 0)", true},
+		{"POINT(0 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"LINESTRING(-1 1,3 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((2 1,4 1,4 3,2 3,2 1))", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((3 3,5 3,5 5,3 5,3 3))", false},
+		{"SRID=4326;LINESTRING(0 0,2 2)", "SRID=4326;POINT(1 1)", true},
+		{"MULTIPOINT((0 0),(1 1))", "POINT(1 1)", true},
+		{"POINT(2 2)", "MULTIPOINT((0 0),(1 1))", false},
+		{"MULTIPOINT((0 1),(3 3))", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"MULTILINESTRING((0 0,2 0),(3 1,5 1))", "LINESTRING(1 -1,1 1)", true},
+		{"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))", "POINT(4 1)", true},
+		{"LINESTRING(4 1,6 1)", "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))", true},
+		{"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))", "MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))", false},
+	}, "POINT(1 1)", "POINT(1 1)")
 }
 
 func TestStIntersects(t *testing.T) {
@@ -9124,64 +8024,21 @@ func TestStIntersectsRejectExcessiveGeometryCollectionDepth(t *testing.T) {
 }
 
 func initStDisjointTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test st_disjoint basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(1 1)",
-						"POINT(1 1)",
-						"POINT(0 1)",
-						"LINESTRING(0 0,2 2)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;LINESTRING(0 0,2 2)",
-						"MULTIPOINT((0 0),(1 1))",
-						"POINT(2 2)",
-						"MULTIPOINT((0 1),(3 3))",
-						"MULTILINESTRING((0 0,2 0),(3 1,5 1))",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
-						"LINESTRING(4 1,6 1)",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(2 2)",
-						"POINT(1 1)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(0 2,2 0)",
-						"POLYGON((3 3,5 3,5 5,3 5,3 3))",
-						"SRID=4326;POINT(1 1)",
-						"POINT(1 1)",
-						"MULTIPOINT((0 0),(1 1))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(1 -1,1 1)",
-						"POINT(4 1)",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))",
-						"MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, false, false, true, false, false, true, false, false, false, false, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test st_disjoint null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 1)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(2 2)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false},
-				[]bool{true}),
-		},
-	}
+	return spatialPredicateFixtures("test st_disjoint", []spatialPredicateFixture{
+		{"POINT(1 1)", "POINT(2 2)", true},
+		{"POINT(1 1)", "POINT(1 1)", false},
+		{"POINT(0 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"LINESTRING(0 0,2 2)", "LINESTRING(0 2,2 0)", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((3 3,5 3,5 5,3 5,3 3))", true},
+		{"SRID=4326;LINESTRING(0 0,2 2)", "SRID=4326;POINT(1 1)", false},
+		{"MULTIPOINT((0 0),(1 1))", "POINT(1 1)", false},
+		{"POINT(2 2)", "MULTIPOINT((0 0),(1 1))", true},
+		{"MULTIPOINT((0 1),(3 3))", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"MULTILINESTRING((0 0,2 0),(3 1,5 1))", "LINESTRING(1 -1,1 1)", false},
+		{"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))", "POINT(4 1)", false},
+		{"LINESTRING(4 1,6 1)", "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((3 0,5 0,5 2,3 2,3 0)))", false},
+		{"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))", "MULTILINESTRING((2.5 3,3.5 3),(2.5 -1,3.5 -1))", true},
+	}, "POINT(1 1)", "POINT(2 2)")
 }
 
 func TestStDisjoint(t *testing.T) {
@@ -9312,70 +8169,24 @@ func TestStDisjointWithGeometryCollections(t *testing.T) {
 }
 
 func initStTouchesTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test st_touches basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"POINT(1 0)",
-						"POINT(0 1)",
-						"POINT(1 1)",
-						"LINESTRING(0 0,2 0)",
-						"POINT(0 0)",
-						"SRID=4326;POINT(0 1)",
-						"LINESTRING(-1 0,3 0)",
-						"LINESTRING(-1 1,3 1)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 2)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(1 1)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(2 0)",
-						"LINESTRING(0 0,1 1,0 0)",
-						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(2 2,3 2)",
-						"LINESTRING(2 0,2 2)",
-						"LINESTRING(0 2,2 0)",
-						"POLYGON((2 0,4 0,4 2,2 2,2 0))",
-						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false, false, true, false, true, false, true, false, true, true, false, true, true, false, true, false},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test st_touches null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(0 0,2 0)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false},
-				[]bool{true}),
-		},
-	}
+	return spatialPredicateFixtures("test st_touches", []spatialPredicateFixture{
+		{"POINT(0 0)", "POINT(0 0)", false},
+		{"POINT(0 0)", "POINT(1 1)", false},
+		{"POINT(0 0)", "LINESTRING(0 0,2 0)", true},
+		{"POINT(1 0)", "LINESTRING(0 0,2 0)", false},
+		{"POINT(0 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"POINT(1 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"LINESTRING(0 0,2 0)", "POINT(2 0)", true},
+		{"POINT(0 0)", "LINESTRING(0 0,1 1,0 0)", false},
+		{"SRID=4326;POINT(0 1)", "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"LINESTRING(-1 0,3 0)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"LINESTRING(-1 1,3 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "LINESTRING(2 2,3 2)", true},
+		{"LINESTRING(0 0,2 0)", "LINESTRING(2 0,2 2)", true},
+		{"LINESTRING(0 0,2 2)", "LINESTRING(0 2,2 0)", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((2 0,4 0,4 2,2 2,2 0))", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((1 0,3 0,3 2,1 2,1 0))", false},
+	}, "POINT(0 0)", "LINESTRING(0 0,2 0)")
 }
 
 func TestStTouches(t *testing.T) {
@@ -9560,84 +8371,31 @@ func TestStTouchesWithPolygonHolePolygons(t *testing.T) {
 }
 
 func initStCrossesTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test st_crosses basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(1 1)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POINT(1 1)",
-						"POINT(1 0)",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 2)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(-1 1,3 1)",
-						"LINESTRING(0.5 1,1.5 1)",
-						"LINESTRING(-1 0,3 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;LINESTRING(-1 1,3 1)",
-						"MULTIPOINT((1 0),(3 0))",
-						"LINESTRING(0 0,2 0)",
-						"MULTILINESTRING((0 0,2 2),(3 0,4 0))",
-						"MULTILINESTRING((0 0,2 0),(3 0,4 0))",
-						"LINESTRING(-1 1,3 1)",
-						"MULTILINESTRING((-1 1,3 1),(5 3,6 3))",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
-						"SRID=4326;MULTILINESTRING((0 0,2 2),(3 0,4 0))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(1 1)",
-						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
-						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 2,2 0)",
-						"LINESTRING(2 0,2 2)",
-						"LINESTRING(1 0,3 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(-1 1,3 1)",
-						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(0 0,2 0)",
-						"MULTIPOINT((1 0),(3 0))",
-						"MULTILINESTRING((0 2,2 0),(5 0,6 0))",
-						"LINESTRING(1 0,3 0)",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
-						"LINESTRING(-1 1,3 1)",
-						"SRID=4326;MULTILINESTRING((0 2,2 0),(5 0,6 0))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false, false, false, false, false, false, false, true, false, false, true, false, false, true, true, true, true, true, false, true, true, true, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test st_crosses null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(0 0,2 0)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false},
-				[]bool{true}),
-		},
-	}
+	return spatialPredicateFixtures("test st_crosses", []spatialPredicateFixture{
+		{"POINT(0 0)", "POINT(0 0)", false},
+		{"POINT(1 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POINT(1 1)", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((1 0,3 0,3 2,1 2,1 0))", false},
+		{"SRID=4326;POINT(1 1)", "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"POINT(1 0)", "LINESTRING(0 0,2 0)", false},
+		{"POINT(0 0)", "LINESTRING(0 0,2 0)", false},
+		{"LINESTRING(0 0,2 2)", "LINESTRING(0 2,2 0)", true},
+		{"LINESTRING(0 0,2 0)", "LINESTRING(2 0,2 2)", false},
+		{"LINESTRING(0 0,2 0)", "LINESTRING(1 0,3 0)", false},
+		{"LINESTRING(-1 1,3 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"LINESTRING(0.5 1,1.5 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"LINESTRING(-1 0,3 0)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "LINESTRING(-1 1,3 1)", true},
+		{"SRID=4326;LINESTRING(-1 1,3 1)", "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"MULTIPOINT((1 0),(3 0))", "LINESTRING(0 0,2 0)", true},
+		{"LINESTRING(0 0,2 0)", "MULTIPOINT((1 0),(3 0))", true},
+		{"MULTILINESTRING((0 0,2 2),(3 0,4 0))", "MULTILINESTRING((0 2,2 0),(5 0,6 0))", true},
+		{"MULTILINESTRING((0 0,2 0),(3 0,4 0))", "LINESTRING(1 0,3 0)", false},
+		{"LINESTRING(-1 1,3 1)", "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))", true},
+		{"MULTILINESTRING((-1 1,3 1),(5 3,6 3))", "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))", true},
+		{"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))", "LINESTRING(-1 1,3 1)", true},
+		{"SRID=4326;MULTILINESTRING((0 0,2 2),(3 0,4 0))", "SRID=4326;MULTILINESTRING((0 2,2 0),(5 0,6 0))", true},
+	}, "POINT(0 0)", "LINESTRING(0 0,2 0)")
 }
 
 func TestStCrosses(t *testing.T) {
@@ -9724,80 +8482,29 @@ func TestStCrossesWithPolygonHoleLines(t *testing.T) {
 }
 
 func initStOverlapsTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test st_overlaps basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(1 1)",
-						"POINT(1 1)",
-						"POINT(1 1)",
-						"LINESTRING(0 0,3 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(-1 1,3 1)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(0 0,3 0)",
-						"LINESTRING(0 0,3 0)",
-						"LINESTRING(0 0,4 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 2)",
-						"LINESTRING(0 0,2 0,3 1)",
-						"LINESTRING(3 0,0 0)",
-						"SRID=4326;LINESTRING(0 0,3 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,4 0,4 4,0 4,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POINT(1 1)",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(1 1)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(1 1)",
-						"POINT(1 1)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"LINESTRING(-1 1,3 1)",
-						"LINESTRING(1 0,4 0)",
-						"LINESTRING(0 0,3 0)",
-						"LINESTRING(1 0,3 0)",
-						"LINESTRING(2 0,4 0)",
-						"LINESTRING(0 2,2 0)",
-						"LINESTRING(1 0,3 0,4 -1)",
-						"LINESTRING(1 0,4 0)",
-						"SRID=4326;LINESTRING(1 0,4 0)",
-						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
-						"POLYGON((2 0,4 0,4 2,2 2,2 0))",
-						"POLYGON((1 1,3 1,3 3,1 3,1 1))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POLYGON((1 0,3 0,3 2,1 2,1 0))",
-						"SRID=4326;POINT(1 1)",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false, false, false, false, false, false, false, true, false, false, false, false, true, true, true, true, false, false, false, true, false},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test st_overlaps null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(0 0,3 0)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(1 0,4 0)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false},
-				[]bool{true}),
-		},
-	}
+	return spatialPredicateFixtures("test st_overlaps", []spatialPredicateFixture{
+		{"POINT(1 1)", "POINT(1 1)", false},
+		{"POINT(1 1)", "LINESTRING(0 0,2 0)", false},
+		{"POINT(1 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"LINESTRING(0 0,3 0)", "POINT(1 1)", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POINT(1 1)", false},
+		{"LINESTRING(-1 1,3 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "LINESTRING(-1 1,3 1)", false},
+		{"LINESTRING(0 0,3 0)", "LINESTRING(1 0,4 0)", true},
+		{"LINESTRING(0 0,3 0)", "LINESTRING(0 0,3 0)", false},
+		{"LINESTRING(0 0,4 0)", "LINESTRING(1 0,3 0)", false},
+		{"LINESTRING(0 0,2 0)", "LINESTRING(2 0,4 0)", false},
+		{"LINESTRING(0 0,2 2)", "LINESTRING(0 2,2 0)", false},
+		{"LINESTRING(0 0,2 0,3 1)", "LINESTRING(1 0,3 0,4 -1)", true},
+		{"LINESTRING(3 0,0 0)", "LINESTRING(1 0,4 0)", true},
+		{"SRID=4326;LINESTRING(0 0,3 0)", "SRID=4326;LINESTRING(1 0,4 0)", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((1 0,3 0,3 2,1 2,1 0))", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((2 0,4 0,4 2,2 2,2 0))", false},
+		{"POLYGON((0 0,4 0,4 4,0 4,0 0))", "POLYGON((1 1,3 1,3 3,1 3,1 1))", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))", "SRID=4326;POLYGON((1 0,3 0,3 2,1 2,1 0))", true},
+		{"SRID=4326;POINT(1 1)", "SRID=4326;POINT(1 1)", false},
+	}, "LINESTRING(0 0,3 0)", "LINESTRING(1 0,4 0)")
 }
 
 func TestStOverlaps(t *testing.T) {
@@ -9942,86 +8649,32 @@ func TestStOverlapsWithPolygonHolePolygons(t *testing.T) {
 }
 
 func initStEqualsTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test st_equals basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"MULTIPOINT((0 0),(1 1))",
-						"MULTIPOINT((0 0),(1 1))",
-						"POINT(0 0)",
-						"MULTILINESTRING((0 0,2 0))",
-						"MULTILINESTRING((0 0,2 0),(3 0,4 0))",
-						"LINESTRING(0 0,2 0)",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;MULTIPOINT((0 0),(1 1))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(1 1)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(2 0,0 0)",
-						"LINESTRING(0 0,1 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((2 0,2 2,0 2,0 0,2 0))",
-						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
-						"SRID=4326;POLYGON((2 0,2 2,0 2,0 0,2 0))",
-						"MULTIPOINT((1 1),(0 0))",
-						"MULTIPOINT((0 0),(2 2))",
-						"MULTIPOINT((0 0))",
-						"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
-						"MULTILINESTRING((0 0,2 0),(3 1,4 1))",
-						"MULTILINESTRING((0 0,2 0))",
-						"MULTIPOLYGON(((4 0,6 0,6 2,4 2,4 0)),((0 0,2 0,2 2,0 2,0 0)))",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 1,6 1,6 3,4 3,4 1)))",
-						"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))",
-						"SRID=4326;MULTIPOINT((1 1),(0 0))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, false, false, false, true, true, true, false, false, false, true, false, true, true, false, false, true, false, false, true, false, false, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test st_equals null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false},
-				[]bool{true}),
-		},
-	}
+	return spatialPredicateFixtures("test st_equals", []spatialPredicateFixture{
+		{"POINT(0 0)", "POINT(0 0)", true},
+		{"POINT(0 0)", "POINT(1 1)", false},
+		{"POINT(0 0)", "LINESTRING(0 0,2 0)", false},
+		{"POINT(0 0)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"LINESTRING(0 0,2 0)", "POINT(0 0)", false},
+		{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)", true},
+		{"LINESTRING(0 0,2 0)", "LINESTRING(2 0,0 0)", true},
+		{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,1 0,2 0)", true},
+		{"LINESTRING(0 0,2 0)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POINT(0 0)", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "LINESTRING(0 0,2 0)", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((2 0,2 2,0 2,0 0,2 0))", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((1 0,3 0,3 2,1 2,1 0))", false},
+		{"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))", "SRID=4326;POLYGON((2 0,2 2,0 2,0 0,2 0))", true},
+		{"MULTIPOINT((0 0),(1 1))", "MULTIPOINT((1 1),(0 0))", true},
+		{"MULTIPOINT((0 0),(1 1))", "MULTIPOINT((0 0),(2 2))", false},
+		{"POINT(0 0)", "MULTIPOINT((0 0))", false},
+		{"MULTILINESTRING((0 0,2 0))", "MULTILINESTRING((0 0,1 0),(1 0,2 0))", true},
+		{"MULTILINESTRING((0 0,2 0),(3 0,4 0))", "MULTILINESTRING((0 0,2 0),(3 1,4 1))", false},
+		{"LINESTRING(0 0,2 0)", "MULTILINESTRING((0 0,2 0))", false},
+		{"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))", "MULTIPOLYGON(((4 0,6 0,6 2,4 2,4 0)),((0 0,2 0,2 2,0 2,0 0)))", true},
+		{"MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 0,6 0,6 2,4 2,4 0)))", "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)),((4 1,6 1,6 3,4 3,4 1)))", false},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "MULTIPOLYGON(((0 0,2 0,2 2,0 2,0 0)))", false},
+		{"SRID=4326;MULTIPOINT((0 0),(1 1))", "SRID=4326;MULTIPOINT((1 1),(0 0))", true},
+	}, "POINT(0 0)", "POINT(0 0)")
 }
 
 func TestStEquals(t *testing.T) {
@@ -10359,66 +9012,22 @@ func TestStCoversWithGeometryCollections(t *testing.T) {
 }
 
 func initStCoveredByTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test st_coveredby basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(1 1)",
-						"POINT(2 0)",
-						"POINT(0 1)",
-						"POINT(3 3)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(0.5 0,1.5 0)",
-						"LINESTRING(0 0,2 0)",
-						"LINESTRING(-1 1,1 1)",
-						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
-						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
-						"POLYGON((0 0,1 0,1 1,0 1,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POINT(0 1)",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POINT(0 0)",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POINT(0 0)",
-						"LINESTRING(0 0,2 0)",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, true, true, false, false, true, true, false, false, false, true, true, true},
-				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
-		},
-		{
-			info: "test st_coveredby null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false},
-				[]bool{true}),
-		},
-	}
+	return spatialPredicateFixtures("test st_coveredby", []spatialPredicateFixture{
+		{"POINT(0 0)", "POINT(0 0)", true},
+		{"POINT(1 1)", "POINT(0 0)", false},
+		{"POINT(2 0)", "LINESTRING(0 0,2 0)", true},
+		{"POINT(0 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"POINT(3 3)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"LINESTRING(0 0,2 0)", "POINT(0 0)", false},
+		{"LINESTRING(0.5 0,1.5 0)", "LINESTRING(0 0,2 0)", true},
+		{"LINESTRING(0 0,2 0)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"LINESTRING(-1 1,1 1)", "POLYGON((0 0,2 0,2 2,0 2,0 0))", false},
+		{"POLYGON((0 0,1 0,1 1,0 1,0 0))", "POINT(0 0)", false},
+		{"POLYGON((0 0,1 0,1 1,0 1,0 0))", "LINESTRING(0 0,2 0)", false},
+		{"POLYGON((0 0,1 0,1 1,0 1,0 0))", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"POLYGON((0 0,2 0,2 2,0 2,0 0))", "POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+		{"SRID=4326;POINT(0 1)", "SRID=4326;POLYGON((0 0,2 0,2 2,0 2,0 0))", true},
+	}, "POINT(0 0)", "POINT(0 0)")
 }
 
 func TestStCoveredBy(t *testing.T) {
@@ -11232,64 +9841,52 @@ func initExtractTestCase() []tcTemp {
 		return ds
 	}
 
+	dateValues := MakeDates("2020-01-01", "2021-02-03", "2024-03-04", "")
+
 	return []tcTemp{
 		{
 			info: "test extractFromDate year",
 			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year", "year", "year", "year"}, []bool{false, false, false, false}),
-				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_date.ToType(), dateValues, []bool{false, false, false, true}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{2020, 2021, 2024, 1},
 				[]bool{false, false, false, true}),
-			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
-			// XXX why?  This seems to be wrong.  ExtractFromDate "" should error out,
-			// but if it does not, we tested the result is 1 in prev check.
-			// it should not be null.
-			// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 		},
 		{
 			info: "test extractFromDate month",
 			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"month", "month", "month", "month"}, []bool{false, false, false, false}),
-				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_date.ToType(), dateValues, []bool{false, false, false, true}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{1, 2, 3, 1},
 				[]bool{false, false, false, true}),
-			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
-			// XXX same as above.
-			// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 		},
 		{
 			info: "test extractFromDate day",
 			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"day", "day", "day", "day"}, []bool{}),
-				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_date.ToType(), dateValues, []bool{false, false, false, true}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{1, 3, 4, 1},
 				[]bool{false, false, false, true}),
-			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
-			// XXX Same
-			// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 		},
 		{
 			info: "test extractFromDate year_month",
 			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year_month", "year_month", "year_month", "year_month"}, []bool{}),
-				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_date.ToType(), dateValues, []bool{false, false, false, true}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{202001, 202102, 202403, 101},
 				[]bool{false, false, false, true}),
-			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
-			// XXX same
-			// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 		},
 		{
 			info: "test extractFromDateTime year",
@@ -11316,6 +9913,8 @@ func TestExtract(t *testing.T) {
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, ExtractFromDate)
 		case types.T_datetime:
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, ExtractFromDatetime)
+		default:
+			t.Fatalf("unexpected EXTRACT input type %v", tc.typ)
 		}
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -11514,61 +10113,6 @@ func initReplaceTestCase() []tcTemp {
 
 			expect: []string{"123"},
 		},
-		//FIXME: Didn't implement the ReplaceWithArrays. Hence multi string case fails.
-
-		//{
-		//	info: "Multi string case1",
-		//	input: [][]string{
-		//		[]string{"firststring", "secondstring"},
-		//		[]string{"st"},
-		//		[]string{"re"},
-		//	},
-		//
-		//	expect: []string{"firrerering", "secondrering"},
-		//},
-		//{
-		//	info: "Multi string case2",
-		//	input: [][]string{
-		//		[]string{"Oneinput"},
-		//		[]string{"n"},
-		//		[]string{"e", "b"},
-		//	},
-		//
-		//	expect: []string{"Oeeieput", "Obeibput"},
-		//},
-		//
-		//{
-		//	info: "Multi string case3",
-		//	input: [][]string{
-		//		[]string{"aaabbb"},
-		//		[]string{"a", "b"},
-		//		[]string{"n"},
-		//	},
-		//
-		//	expect: []string{"nnnbbb", "aaannn"},
-		//},
-		//
-		//{
-		//	info: "Multi string case4",
-		//	input: [][]string{
-		//		[]string{"Matrix", "Origin"},
-		//		[]string{"a", "i"},
-		//		[]string{"b", "d"},
-		//	},
-		//
-		//	expect: []string{"Mbtrix", "Ordgdn"},
-		//},
-		//
-		//{
-		//	info: "Scalar case1",
-		//	input: [][]string{
-		//		[]string{"cool"},
-		//		[]string{"o"},
-		//		[]string{"a"},
-		//	},
-		//
-		//	expect: []string{"caal"},
-		//},
 	}
 
 	var testInputs = make([]tcTemp, 0, len(cases))
@@ -11591,250 +10135,39 @@ func initReplaceTestCase() []tcTemp {
 
 // INSERT
 func initInsertTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test insert basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello World"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{7},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"MySQL"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"Hello MySQL"},
-				[]bool{false}),
-		},
-		{
-			info: "test insert negative length replaces to end",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Quadratic"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{3},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"What"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"QuWhat"},
-				[]bool{false}),
-		},
-		{
-			info: "test insert at beginning",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"World"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello "},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"Hello "},
-				[]bool{false}),
-		},
-		{
-			info: "test insert at end",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{6},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-				// result is hello, according to MySQL behavior
-				// if pos is NOT in the range of string, return original string.
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"World"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"Hello"},
-				[]bool{false}),
-		},
-		{
-			info: "test insert with zero length (insert without remove)",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello World"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{7},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{0},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"MySQL "},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"Hello MySQL World"},
-				[]bool{false}),
-		},
-		{
-			info: "test insert with invalid position (pos <= 0)",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello World"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{0},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"MySQL"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"Hello World"},
-				[]bool{false}),
-		},
-		{
-			info: "test insert with position > string length",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{10},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"MySQL"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"Hello"},
-				[]bool{false}),
-		},
-		{
-			info: "test insert with NULL",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello World"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{7},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"MySQL"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
-		},
-		{
-			info: "test insert with negative length",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello World"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{7},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"MySQL "},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"Hello MySQL "},
-				[]bool{false}),
-		},
-		{
-			info: "test insert with length exceeding string",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{2},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{100},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"MySQL"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"HMySQL"},
-				[]bool{false}),
-		},
-		{
-			info: "test insert with max int64 length exceeding string",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abc"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{2},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{math.MaxInt64},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"X"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"aX"},
-				[]bool{false}),
-		},
-		{
-			info: "test insert with max int64 length exceeding multibyte string",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"你好世界"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{3},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{math.MaxInt64},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"MO"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"你好MO"},
-				[]bool{false}),
-		},
+	cases := []struct {
+		info, value, replacement, want string
+		position, length               int64
+		nulls                          [5]bool // value, position, length, replacement, result
+	}{
+		{"test insert basic", "Hello World", "MySQL", "Hello MySQL", 7, 5, [5]bool{}},
+		{"test insert negative length replaces to end", "Quadratic", "What", "QuWhat", 3, -1, [5]bool{}},
+		{"test insert at beginning", "World", "Hello ", "Hello ", 1, 5, [5]bool{}},
+		// Positions outside the string return the original value.
+		{"test insert at end", "Hello", "World", "Hello", 6, 1, [5]bool{}},
+		{"test insert with zero length (insert without remove)", "Hello World", "MySQL ", "Hello MySQL World", 7, 0, [5]bool{}},
+		{"test insert with invalid position (pos <= 0)", "Hello World", "MySQL", "Hello World", 0, 5, [5]bool{}},
+		{"test insert with position > string length", "Hello", "MySQL", "Hello", 10, 5, [5]bool{}},
+		{"test insert with NULL", "Hello World", "MySQL", "", 7, 5, [5]bool{false, true, false, false, true}},
+		{"test insert with negative length", "Hello World", "MySQL ", "Hello MySQL ", 7, -1, [5]bool{}},
+		{"test insert with length exceeding string", "Hello", "MySQL", "HMySQL", 2, 100, [5]bool{}},
+		{"test insert with max int64 length exceeding string", "abc", "X", "aX", 2, math.MaxInt64, [5]bool{}},
+		{"test insert with max int64 length exceeding multibyte string", "你好世界", "MO", "你好MO", 3, math.MaxInt64, [5]bool{}},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		result = append(result, tcTemp{
+			info: tc.info,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, []bool{tc.nulls[0]}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.position}, []bool{tc.nulls[1]}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.length}, []bool{tc.nulls[2]}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.replacement}, []bool{tc.nulls[3]}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{tc.nulls[4]}),
+		})
+	}
+	return result
 }
 
 func TestInsert(t *testing.T) {
@@ -11856,6 +10189,39 @@ func TestReplace(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Replace)
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestReplaceVectorAndConstantInputs(t *testing.T) {
+	cases := []struct {
+		name                                      string
+		value, needle, replacement, want          []string
+		valueConst, needleConst, replacementConst bool
+	}{
+		{"constant needle and replacement", []string{"firststring", "secondstring"}, []string{"st"}, []string{"re"}, []string{"firrerering", "secondrering"}, false, true, true},
+		{"constant needle", []string{"Oneinput"}, []string{"n"}, []string{"e", "b"}, []string{"Oeeieput", "Obeibput"}, true, true, false},
+		{"constant replacement", []string{"aaabbb"}, []string{"a", "b"}, []string{"n"}, []string{"nnnbbb", "aaannn"}, true, false, true},
+		{"per-row arguments", []string{"Matrix", "Origin"}, []string{"a", "i"}, []string{"b", "d"}, []string{"Mbtrix", "Ordgdn"}, false, false, false},
+		{"single row", []string{"cool"}, []string{"o"}, []string{"a"}, []string{"caal"}, false, false, false},
+	}
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.T_varchar.ToType()
+			value := NewFunctionTestInput(typ, tc.value, nil)
+			value.isConst = tc.valueConst
+			needle := NewFunctionTestInput(typ, tc.needle, nil)
+			replacement := NewFunctionTestInput(typ, tc.replacement, nil)
+			needle.isConst = tc.needleConst
+			replacement.isConst = tc.replacementConst
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{value, needle, replacement},
+				NewFunctionTestResult(typ, false, tc.want, nil), Replace)
+			fc.fnLength = len(tc.want)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -12040,113 +10406,110 @@ func Test_castBinaryArrayToInt(t *testing.T) {
 	}
 }
 
-func initTimeFormatTestCase() []tcTemp {
-	t1, _ := types.ParseTime("15:30:45", 6)
-	t2, _ := types.ParseTime("00:00:00", 6)
-	t3, _ := types.ParseTime("23:59:59.123456", 6)
-	t4, _ := types.ParseTime("12:34:56.789012", 6)
-	t5, _ := types.ParseTime("123:45:06", 6)
-	t6, _ := types.ParseTime("-123:45:06", 6)
+func initTimeFormatTestCase(t *testing.T) []tcTemp {
+	t.Helper()
+	parse := func(value string) types.Time {
+		parsed, err := types.ParseTime(value, 6)
+		require.NoError(t, err)
+		return parsed
+	}
+	t1 := parse("15:30:45")
+	t2 := parse("00:00:00")
+	t3 := parse("23:59:59.123456")
+	t4 := parse("12:34:56.789012")
+	t5 := parse("123:45:06")
+	t6 := parse("-123:45:06")
 
+	cases := []struct {
+		info                            string
+		values                          []types.Time
+		format, want                    []string
+		valueNull, formatNull, wantNull []bool
+	}{
+		{
+			info:       "test time_format - %H:%i:%s",
+			values:     []types.Time{t1, t2, t3},
+			format:     []string{"%H:%i:%s"},
+			want:       []string{"15:30:45", "00:00:00", "23:59:59"},
+			valueNull:  []bool{false, false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false, false},
+		},
+		{
+			info:       "test time_format - %T",
+			values:     []types.Time{t1, t5, t6},
+			format:     []string{"%T"},
+			want:       []string{"15:30:45", "123:45:06", "-123:45:06"},
+			valueNull:  []bool{false, false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false, false},
+		},
+		{
+			info:       "test time_format - negative time prefixes complete result",
+			values:     []types.Time{t6},
+			format:     []string{"elapsed=%H:%i:%s"},
+			want:       []string{"-elapsed=123:45:06"},
+			valueNull:  []bool{false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false},
+		},
+		{
+			info:       "test time_format - empty format returns null",
+			values:     []types.Time{t1, t6},
+			format:     []string{""},
+			want:       []string{"", ""},
+			valueNull:  []bool{false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{true, true},
+		},
+		{
+			info:       "test time_format - %h:%i:%s %p",
+			values:     []types.Time{t1, t2, t4},
+			format:     []string{"%h:%i:%s %p"},
+			want:       []string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
+			valueNull:  []bool{false, false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false, false},
+		},
+		{
+			info:       "test time_format - %r",
+			values:     []types.Time{t1, t2, t4},
+			format:     []string{"%r"},
+			want:       []string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
+			valueNull:  []bool{false, false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false, false},
+		},
+		{
+			info:       "test time_format - %H:%i:%s.%f",
+			values:     []types.Time{t3, t4},
+			format:     []string{"%H:%i:%s.%f"},
+			want:       []string{"23:59:59.123456", "12:34:56.789012"},
+			valueNull:  []bool{false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false},
+		},
+		{
+			info:       "test time_format - null",
+			values:     []types.Time{t1},
+			format:     []string{"%H:%i:%s"},
+			want:       []string{""},
+			valueNull:  []bool{true},
+			formatNull: []bool{false},
+			wantNull:   []bool{true},
+		},
+	}
 	testCases := make([]tcTemp, 0, 18)
-	testCases = append(testCases,
-		tcTemp{
-			info: "test time_format - %H:%i:%s",
+	for _, tc := range cases {
+		testCases = append(testCases, tcTemp{
+			info: tc.info,
 			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t2, t3},
-					[]bool{false, false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%H:%i:%s"}, []bool{false}),
+				NewFunctionTestInput(types.T_time.ToType(), tc.values, tc.valueNull),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), tc.format, tc.formatNull),
 			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"15:30:45", "00:00:00", "23:59:59"},
-				[]bool{false, false, false}),
-		},
-		tcTemp{
-			info: "test time_format - %T",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t5, t6},
-					[]bool{false, false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%T"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"15:30:45", "123:45:06", "-123:45:06"},
-				[]bool{false, false, false}),
-		},
-		tcTemp{
-			info: "test time_format - negative time prefixes complete result",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t6},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"elapsed=%H:%i:%s"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"-elapsed=123:45:06"},
-				[]bool{false}),
-		},
-		tcTemp{
-			info: "test time_format - empty format returns null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t6},
-					[]bool{false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"", ""},
-				[]bool{true, true}),
-		},
-		tcTemp{
-			info: "test time_format - %h:%i:%s %p",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t2, t4},
-					[]bool{false, false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%h:%i:%s %p"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
-				[]bool{false, false, false}),
-		},
-		tcTemp{
-			info: "test time_format - %r",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t2, t4},
-					[]bool{false, false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%r"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
-				[]bool{false, false, false}),
-		},
-		tcTemp{
-			info: "test time_format - %H:%i:%s.%f",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t3, t4},
-					[]bool{false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%H:%i:%s.%f"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"23:59:59.123456", "12:34:56.789012"},
-				[]bool{false, false}),
-		},
-		tcTemp{
-			info: "test time_format - null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1},
-					[]bool{true}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%H:%i:%s"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
-		},
-	)
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, tc.wantNull),
+		})
+	}
 	for _, tc := range []struct {
 		format   string
 		positive string
@@ -12177,7 +10540,7 @@ func initTimeFormatTestCase() []tcTemp {
 }
 
 func TestTimeFormat(t *testing.T) {
-	testCases := initTimeFormatTestCase()
+	testCases := initTimeFormatTestCase(t)
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
@@ -13113,7 +11476,6 @@ func TestDateAddWithNullInterval(t *testing.T) {
 		name         string
 		dateStr      string
 		intervalType types.IntervalType
-		funcName     string
 		testFunc     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
 		resultType   types.T
 	}{
@@ -13121,7 +11483,6 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			name:         "DateStringAdd with NULL SECOND",
 			dateStr:      "1997-12-31 23:59:59",
 			intervalType: types.Second,
-			funcName:     "DateStringAdd",
 			testFunc:     DateStringAdd,
 			resultType:   types.T_varchar,
 		},
@@ -13129,7 +11490,6 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			name:         "DateStringAdd with NULL MINUTE_SECOND",
 			dateStr:      "1997-12-31 23:59:59",
 			intervalType: types.Minute_Second,
-			funcName:     "DateStringAdd",
 			testFunc:     DateStringAdd,
 			resultType:   types.T_varchar,
 		},
@@ -13137,7 +11497,6 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			name:         "DatetimeAdd with NULL SECOND",
 			dateStr:      "1997-12-31 23:59:59",
 			intervalType: types.Second,
-			funcName:     "DatetimeAdd",
 			testFunc:     DatetimeAdd,
 			resultType:   types.T_datetime,
 		},
@@ -13145,11 +11504,8 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			name:         "DateAdd with NULL SECOND",
 			dateStr:      "1997-12-31",
 			intervalType: types.Second,
-			funcName:     "DateAdd",
-			testFunc: func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return DateAdd(ivecs, result, proc, length, selectList)
-			},
-			resultType: types.T_date,
+			testFunc:     DateAdd,
+			resultType:   types.T_date,
 		},
 	}
 
@@ -13163,10 +11519,12 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			if tc.resultType == types.T_varchar {
 				ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.dateStr), 1, proc.Mp())
 			} else if tc.resultType == types.T_datetime {
-				dt, _ := types.ParseDatetime(tc.dateStr, 6)
+				dt, parseErr := types.ParseDatetime(tc.dateStr, 6)
+				require.NoError(t, parseErr)
 				ivecs[0], err = vector.NewConstFixed(types.T_datetime.ToType(), dt, 1, proc.Mp())
 			} else {
-				d, _ := types.ParseDateCast(tc.dateStr)
+				d, parseErr := types.ParseDateCast(tc.dateStr)
+				require.NoError(t, parseErr)
 				ivecs[0], err = vector.NewConstFixed(types.T_date.ToType(), d, 1, proc.Mp())
 			}
 			require.NoError(t, err)

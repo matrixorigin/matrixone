@@ -789,13 +789,12 @@ func TestLocalScanPlannerPrunesManifestByDatePartitionTransforms(t *testing.T) {
 	cases := []struct {
 		name         string
 		transform    string
-		literalPart  int32
 		olderPart    int32
 		selectedPart int32
 	}{
-		{name: "year", transform: "year", literalPart: 54, olderPart: 53, selectedPart: 54},
-		{name: "month", transform: "month", literalPart: 648, olderPart: 647, selectedPart: 648},
-		{name: "day", transform: "day", literalPart: int32(literalDays), olderPart: int32(literalDays - 1), selectedPart: int32(literalDays)},
+		{name: "year", transform: "year", olderPart: 53, selectedPart: 54},
+		{name: "month", transform: "month", olderPart: 647, selectedPart: 648},
+		{name: "day", transform: "day", olderPart: int32(literalDays - 1), selectedPart: int32(literalDays)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

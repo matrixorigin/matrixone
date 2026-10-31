@@ -21,7 +21,6 @@ import (
 	"math"
 
 	"github.com/RoaringBitmap/roaring/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -29,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sort"
@@ -212,35 +210,9 @@ func convertObjectToBatch(
 	localFS fileservice.FileService,
 	mp *mpool.MPool,
 ) (*containers.Batch, error) {
-	// Step 1: Read object meta from objectContent bytes
-	metaExtent := stats.Extent()
-	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
-		return nil, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
-	}
-	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
-
-	// Check if meta needs decompression (same as ReadExtent does)
-	var decompressedMetaBytes []byte
-	var decompressedMetaBuf fscache.Data
-	if metaExtent.Alg() == compress.None {
-		decompressedMetaBytes = metaBytes
-	} else {
-		// Allocate buffer for decompressed data
-		allocator := fileservice.DefaultCacheDataAllocator()
-		decompressedMetaBuf = allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
-		bs, err := compress.Decompress(metaBytes, decompressedMetaBuf.Bytes(), compress.Lz4)
-		if err != nil {
-			if decompressedMetaBuf != nil {
-				decompressedMetaBuf.Release()
-			}
-			return nil, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
-		}
-		decompressedMetaBytes = decompressedMetaBuf.Bytes()[:len(bs)]
-		// Clone the data to ensure meta doesn't hold reference to buffer
-		decompressedMetaBytes = append([]byte(nil), decompressedMetaBytes...)
-		if decompressedMetaBuf != nil {
-			decompressedMetaBuf.Release()
-		}
+	decompressedMetaBytes, err := readObjectMetadataBytes(ctx, objectContent, stats)
+	if err != nil {
+		return nil, err
 	}
 
 	meta := objectio.MustObjectMeta(decompressedMetaBytes)
@@ -251,25 +223,8 @@ func convertObjectToBatch(
 		return containers.NewBatch(), nil
 	}
 
-	// Step 2: Get column information from first block meta
-	firstBlkMeta := dataMeta.GetBlockMeta(0)
-	maxSeqnum := firstBlkMeta.GetMaxSeqnum()
-
-	// Step 3: Prepare columns and types
-	// For appendable objects, we need to include commit TS column
-	cols := make([]uint16, 0, maxSeqnum+3)
-	typs := make([]types.Type, 0, maxSeqnum+3)
-
-	// Add data columns
-	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
-		colMeta := firstBlkMeta.ColumnMeta(seqnum)
-		if colMeta.DataType() == 0 {
-			continue // Skip invalid columns
-		}
-		cols = append(cols, seqnum)
-		typ := types.T(colMeta.DataType()).ToType()
-		typs = append(typs, typ)
-	}
+	// Reserve space for the commit and abort columns of appendable objects.
+	cols, typs, maxSeqnum := publicationObjectColumns(dataMeta.GetBlockMeta(0), 3)
 
 	// Add commit TS column for appendable objects
 	cols = append(cols, objectio.SEQNUM_COMMITTS)

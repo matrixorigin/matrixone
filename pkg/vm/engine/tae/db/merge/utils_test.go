@@ -15,47 +15,10 @@
 package merge
 
 import (
-	"math"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/stretchr/testify/require"
 )
-
-func TestRemoveOversize(t *testing.T) {
-	o1 := newSortedTestObjectEntry(t, 0, 0, 1)
-	o2 := newSortedTestObjectEntry(t, 0, 0, 2)
-	o3 := newSortedTestObjectEntry(t, 0, 0, 4)
-	o5 := newSortedTestObjectEntry(t, 0, 0, math.MaxInt32)
-
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o1, o2}))
-	require.ElementsMatch(t, []*catalog.ObjectEntry{o1, o2}, removeOversize([]*catalog.ObjectEntry{o5, o1, o2}))
-	require.ElementsMatch(t, nil, removeOversize([]*catalog.ObjectEntry{o1, o3}))
-
-	os := []*catalog.ObjectEntry{}
-	sizes := []uint32{}
-	for i := 0; i < 100; i++ {
-		sizes = append(sizes, uint32(i+1000))
-	}
-	sizes[0] = 1
-	sizes[1] = 10
-	sizes[2] = 100
-	for i := 0; i < 100; i++ {
-		os = append(os, newSortedTestObjectEntry(t, 0, 0, sizes[i]))
-	}
-	require.ElementsMatch(t, []*catalog.ObjectEntry{os[0], os[1]}, removeOversize(os))
-}
-
-func BenchmarkRemoveOversize(b *testing.B) {
-	o1 := newSortedTestObjectEntry(b, 0, 50, math.MaxInt32)
-	o2 := newSortedTestObjectEntry(b, 51, 100, 1)
-	o3 := newSortedTestObjectEntry(b, 49, 52, 2)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		removeOversize([]*catalog.ObjectEntry{o1, o2, o3})
-	}
-}
 
 func TestMergeSettings(t *testing.T) {
 	settings := DefaultMergeSettings.Clone()

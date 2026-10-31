@@ -561,8 +561,7 @@ func TestPrefixIn(t *testing.T) {
 	spec := InKind(encodes, function.PREFIX_IN)
 
 	pkIter := &primaryKeyIter{
-		primaryIndex: pkTree,
-		iter:         pkTree.Iter(),
+		iter: pkTree.Iter(),
 	}
 
 	spec.Move(pkIter)
@@ -678,7 +677,7 @@ func TestPrefixBetweenOpenBounds(t *testing.T) {
 	}
 	for _, test := range tests {
 		spec := BetweenKind([]byte("aa"), []byte("ab"), test.kind)
-		iter := &primaryKeyIter{primaryIndex: pkTree, iter: pkTree.Iter()}
+		iter := &primaryKeyIter{iter: pkTree.Iter()}
 		var got []string
 		for spec.Move(iter) {
 			got = append(got, string(iter.iter.Item().Bytes))
@@ -690,7 +689,7 @@ func TestPrefixBetweenOpenBounds(t *testing.T) {
 	for _, kind := range []int{5, 7} {
 		t.Run(fmt.Sprintf("empty lower prefix kind %d", kind), func(t *testing.T) {
 			spec := BetweenKind(nil, []byte("ab"), kind)
-			iter := &primaryKeyIter{primaryIndex: pkTree, iter: pkTree.Iter()}
+			iter := &primaryKeyIter{iter: pkTree.Iter()}
 			require.False(t, spec.Move(iter))
 			iter.iter.Release()
 		})
@@ -707,8 +706,7 @@ func TestPrefixBetweenStopsAtDeletedEntryPastUpperBound(t *testing.T) {
 
 			spec := BetweenKind([]byte("aa"), []byte("ab"), 4)
 			iter := &primaryKeyIter{
-				primaryIndex: pkTree,
-				iter:         pkTree.Iter(),
+				iter: pkTree.Iter(),
 			}
 			iter.specHint.isDelIter = iterDeleted
 			require.True(t, spec.Move(iter))

@@ -272,7 +272,6 @@ func TestGetLockHolderReacquiresLockTableAfterBindChanged(t *testing.T) {
 			}
 			staleRemote := newRemoteLockTable(
 				l2.serviceID,
-				time.Second,
 				oldBind,
 				client,
 				func(bind pb.LockTable) {
@@ -375,7 +374,6 @@ func TestGetLockHolderRemoteDoesNotBlockAllocatorEpochPurge(t *testing.T) {
 			}
 			remote := newRemoteLockTable(
 				l.serviceID,
-				time.Second,
 				bind,
 				client,
 				l.handleBindChanged,

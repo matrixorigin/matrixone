@@ -28,6 +28,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergwrite "github.com/matrixorigin/matrixone/pkg/iceberg/write"
 )
 
 const (
@@ -98,13 +99,13 @@ func deleteParquetScratchBytes(fields int) int64 {
 	// destination writer. Bounded row groups cap their lifetime; reserve a
 	// conservative per-column allowance for that opaque state. A future writer
 	// exposing allocator hooks could replace this estimate with exact charging.
-	return saturatingDeleteAdd(2<<20, saturatingDeleteMul(int64(fields), 1<<20))
+	return api.SaturatingNonnegativeAdd(2<<20, api.SaturatingMemoryMul(int64(fields), 1<<20))
 }
 
 func retainedDeleteFileMetadataBytes(fields int) int64 {
 	// Bounds are capped at 4 KiB and DataFile metadata is defensively cloned by
 	// planning/commit handoffs. Keep the reservation until the coordinator ends.
-	return saturatingDeleteAdd(32<<10, saturatingDeleteMul(int64(fields), 16<<10))
+	return api.SaturatingNonnegativeAdd(32<<10, api.SaturatingMemoryMul(int64(fields), 16<<10))
 }
 
 func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDeleteWriteRequest) (api.DataFile, error) {
@@ -114,7 +115,7 @@ func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDel
 	if strings.TrimSpace(req.FilePath) == "" {
 		return api.DataFile{}, api.NewError(api.ErrConfigInvalid, "Iceberg position delete writer requires file path", nil)
 	}
-	rowCopyBytes := saturatingDeleteMul(int64(len(req.Rows)), 64)
+	rowCopyBytes := api.SaturatingMemoryMul(int64(len(req.Rows)), 64)
 	if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, rowCopyBytes); err != nil {
 		return api.DataFile{}, err
 	}
@@ -151,7 +152,7 @@ func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDel
 			return api.DataFile{}, err
 		}
 		end := min(start+deleteWriteBatchRows, len(rows))
-		workingBytes := saturatingDeleteMul(int64(end-start), 256)
+		workingBytes := api.SaturatingMemoryMul(int64(end-start), 256)
 		if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, workingBytes); err != nil {
 			return api.DataFile{}, err
 		}
@@ -243,8 +244,8 @@ func WriteEqualityDeleteFile(ctx context.Context, dst io.Writer, req EqualityDel
 			return api.DataFile{}, err
 		}
 		end := min(start+deleteWriteBatchRows, len(req.Rows))
-		perRowBytes := saturatingDeleteAdd(128, saturatingDeleteMul(int64(len(fields)), 96))
-		workingBytes := saturatingDeleteMul(int64(end-start), perRowBytes)
+		perRowBytes := api.SaturatingNonnegativeAdd(128, api.SaturatingMemoryMul(int64(len(fields)), 96))
+		workingBytes := api.SaturatingMemoryMul(int64(end-start), perRowBytes)
 		if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, workingBytes); err != nil {
 			return api.DataFile{}, err
 		}
@@ -499,7 +500,7 @@ func deleteDataFile(path string, content api.DataFileContent, rows, size int64, 
 		Content:          content,
 		FilePath:         path,
 		FileFormat:       "parquet",
-		Partition:        cloneAnyMap(partition),
+		Partition:        api.CloneNonEmptyMap(partition),
 		RecordCount:      rows,
 		FileSizeInBytes:  size,
 		SpecID:           specID,
@@ -509,10 +510,10 @@ func deleteDataFile(path string, content api.DataFileContent, rows, size int64, 
 	}
 	if metrics != nil {
 		file.ValueCounts = metrics.valueCounts(rows)
-		file.NullValueCounts = cloneInt64Map(metrics.nullCounts)
-		file.NaNValueCounts = cloneInt64Map(metrics.nanCounts)
-		file.LowerBounds = cloneBytesMap(metrics.lowerBounds)
-		file.UpperBounds = cloneBytesMap(metrics.upperBounds)
+		file.NullValueCounts = api.CloneNonEmptyMap(metrics.nullCounts)
+		file.NaNValueCounts = api.CloneNonEmptyMap(metrics.nanCounts)
+		file.LowerBounds = api.CloneMetricBounds(metrics.lowerBounds)
+		file.UpperBounds = api.CloneMetricBounds(metrics.upperBounds)
 	}
 	return file
 }
@@ -544,14 +545,15 @@ func newDeleteMetrics(fields []api.SchemaField) *deleteMetrics {
 }
 
 func (m *deleteMetrics) observeNull(fieldID int) {
-	m.nullCounts[fieldID] = saturatingDeleteAdd(m.nullCounts[fieldID], 1)
+	m.nullCounts[fieldID] = api.SaturatingNonnegativeAdd(m.nullCounts[fieldID], 1)
 }
 
 func (m *deleteMetrics) observe(ctx context.Context, fieldID int, value any) {
 	field, ok := m.fields[fieldID]
-	if !ok || isDeleteNaN(value) {
-		if isDeleteNaN(value) {
-			m.nanCounts[fieldID] = saturatingDeleteAdd(m.nanCounts[fieldID], 1)
+	isNaN := icebergwrite.IsMetricNaN(value)
+	if !ok || isNaN {
+		if isNaN {
+			m.nanCounts[fieldID] = api.SaturatingNonnegativeAdd(m.nanCounts[fieldID], 1)
 		}
 		return
 	}
@@ -573,12 +575,12 @@ func (m *deleteMetrics) observe(ctx context.Context, fieldID int, value any) {
 		return
 	}
 	current, hasCurrent := m.compare[fieldID]
-	if !hasCurrent || compareDeleteMetricValue(cmp, current) < 0 {
+	if !hasCurrent || icebergwrite.CompareMetricValues(cmp, current) < 0 {
 		m.compare[fieldID] = cmp
 		m.lowerBounds[fieldID] = encoded
 	}
 	upper := m.upperBounds[fieldID]
-	if len(upper) == 0 || compareDeleteMetricValue(cmp, decodeDeleteMetricValue(field.Type, upper)) > 0 {
+	if len(upper) == 0 || icebergwrite.CompareMetricValues(cmp, decodeDeleteMetricValue(field.Type, upper)) > 0 {
 		m.upperBounds[fieldID] = append([]byte(nil), encoded...)
 	}
 }
@@ -631,69 +633,11 @@ func encodeDeleteBound(ctx context.Context, typ api.IcebergType, value any) ([]b
 }
 
 func decodeDeleteMetricValue(typ api.IcebergType, data []byte) any {
-	switch typ.Kind {
-	case api.TypeBoolean:
-		return len(data) > 0 && data[0] != 0
-	case api.TypeInt, api.TypeDate:
-		return int64(int32(binary.LittleEndian.Uint32(data)))
-	case api.TypeLong, api.TypeTimestamp, api.TypeTimestampTZ:
-		return int64(binary.LittleEndian.Uint64(data))
-	case api.TypeFloat:
-		return float64(math.Float32frombits(binary.LittleEndian.Uint32(data)))
-	case api.TypeDouble:
-		return math.Float64frombits(binary.LittleEndian.Uint64(data))
-	case api.TypeString:
-		return string(data)
-	default:
+	// Delete bounds do not currently support decimal values.
+	if typ.Kind == api.TypeDecimal {
 		return nil
 	}
-}
-
-func compareDeleteMetricValue(left, right any) int {
-	switch l := left.(type) {
-	case bool:
-		r := right.(bool)
-		if l == r {
-			return 0
-		}
-		if !l {
-			return -1
-		}
-		return 1
-	case int64:
-		r := right.(int64)
-		if l < r {
-			return -1
-		}
-		if l > r {
-			return 1
-		}
-		return 0
-	case float64:
-		r := right.(float64)
-		if l < r {
-			return -1
-		}
-		if l > r {
-			return 1
-		}
-		return 0
-	case string:
-		return strings.Compare(l, right.(string))
-	default:
-		return 0
-	}
-}
-
-func isDeleteNaN(value any) bool {
-	switch v := value.(type) {
-	case float32:
-		return math.IsNaN(float64(v))
-	case float64:
-		return math.IsNaN(v)
-	default:
-		return false
-	}
+	return icebergwrite.DecodeMetricValue(typ, data)
 }
 
 type deleteCountingWriter struct {
@@ -703,7 +647,7 @@ type deleteCountingWriter struct {
 
 func (w *deleteCountingWriter) Write(data []byte) (int, error) {
 	n, err := w.writer.Write(data)
-	w.n = saturatingDeleteAdd(w.n, int64(n))
+	w.n = api.SaturatingNonnegativeAdd(w.n, int64(n))
 	return n, err
 }
 
@@ -762,54 +706,4 @@ func (b *deleteObjectBuffer) Release() {
 	b.data = nil
 	releaseDeleteWriterMemory(b.budget, b.reserved)
 	b.reserved = 0
-}
-
-func saturatingDeleteAdd(left, right int64) int64 {
-	if left < 0 || right < 0 || left > math.MaxInt64-right {
-		return math.MaxInt64
-	}
-	return left + right
-}
-
-func saturatingDeleteMul(left, right int64) int64 {
-	if left <= 0 || right <= 0 {
-		return 0
-	}
-	if left > math.MaxInt64/right {
-		return math.MaxInt64
-	}
-	return left * right
-}
-
-func cloneAnyMap(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func cloneInt64Map(in map[int]int64) map[int]int64 {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int]int64, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func cloneBytesMap(in map[int][]byte) map[int][]byte {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int][]byte, len(in))
-	for key, value := range in {
-		out[key] = append([]byte(nil), value...)
-	}
-	return out
 }

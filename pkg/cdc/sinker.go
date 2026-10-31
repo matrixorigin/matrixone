@@ -110,10 +110,6 @@ func (s *consoleSinker) Sink(ctx context.Context, data *DecoderOutput) {
 		if data.insertAtmBatch != nil && data.insertAtmBatch.Rows.Len() > 0 {
 			wantedColCnt := len(data.insertAtmBatch.Batches[0].Vecs) - 2
 			row := make([]any, wantedColCnt)
-			wantedColIndice := make([]int, wantedColCnt)
-			for i := 0; i < wantedColCnt; i++ {
-				wantedColIndice[i] = i
-			}
 
 			iter := data.insertAtmBatch.GetRowIterator()
 			for iter.Next() {

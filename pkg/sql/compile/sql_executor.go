@@ -549,9 +549,6 @@ func (exec *txnExecutor) Exec(
 	proc.SetIncrStatementDisabled(exec.opts.DisableIncrStatement())
 	proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
 
-	if exec.opts.ResolveVariableFunc() != nil {
-		proc.SetResolveVariableFunc(exec.opts.ResolveVariableFunc())
-	}
 	if process.HasSystemCTELimits(exec.ctx) {
 		proc.SetResolveVariableFunc(process.SystemCTEResolver(exec.opts.ResolveVariableFunc()))
 	}

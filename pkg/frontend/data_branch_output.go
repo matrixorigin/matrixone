@@ -2708,24 +2708,6 @@ func joinQuotedColumnNames(names []string) string {
 	return strings.Join(quotedColumnNames(names), ",")
 }
 
-func writeDeleteRowValues(
-	ses *Session,
-	tblStuff tableStuff,
-	row []any,
-	buf *bytes.Buffer,
-) error {
-	return writeDeleteRowValuesWithColIdxes(ses, tblStuff, row, tblStuff.def.pkColIdxes, buf, false)
-}
-
-func writeDeleteRowValuesAsTuple(
-	ses *Session,
-	tblStuff tableStuff,
-	row []any,
-	buf *bytes.Buffer,
-) error {
-	return writeDeleteRowValuesWithColIdxes(ses, tblStuff, row, tblStuff.def.pkColIdxes, buf, true)
-}
-
 func writeDeleteRowValuesWithColIdxes(
 	ses *Session,
 	tblStuff tableStuff,

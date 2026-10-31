@@ -418,22 +418,7 @@ func (a *MinioSDK) Exists(
 	error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-
-	_, err := a.statObject(
-		ctx,
-		key,
-	)
-	if err != nil {
-		if a.is404(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	return true, nil
+	return objectExists(ctx, key, a.statObject, a.is404)
 }
 
 func (a *MinioSDK) Write(
@@ -509,25 +494,6 @@ func (a *MinioSDK) Read(
 		}
 	}()
 
-	if max == nil {
-		// read to end
-		r, err := a.getObject(
-			ctx,
-			key,
-			min,
-			nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		// eager read to expose file not found error
-		_, err = r.Read(nil)
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
-	}
-
 	r, err = a.getObject(
 		ctx,
 		key,
@@ -542,6 +508,9 @@ func (a *MinioSDK) Read(
 	if err != nil {
 		return nil, err
 	}
+	if max == nil {
+		return r, nil
+	}
 	return &readCloser{
 		r:         io.LimitReader(r, int64(*max-*min)),
 		closeFunc: r.Close,
@@ -555,22 +524,7 @@ func (a *MinioSDK) Delete(
 	err error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	if len(keys) == 0 {
-		return nil
-	}
-	if len(keys) == 1 {
-		return a.deleteSingle(ctx, keys[0])
-	}
-
-	if _, err := a.deleteObjects(ctx, keys...); err != nil {
-		return err
-	}
-
-	return nil
+	return deleteObjectKeys(ctx, keys, 0, a.deleteSingle, a.deleteObjects)
 }
 
 func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {

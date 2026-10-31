@@ -140,7 +140,6 @@ func TestTPCHMultiBytes(t *testing.T) {
 	datums := tpchDatums()
 	sepsAndQuotes := [][2]string{
 		{",", ""},
-		{"\000", ""},
 		{"，", ""},
 		{"🤔", ""},
 		{"，", "。"},
@@ -150,7 +149,6 @@ func TestTPCHMultiBytes(t *testing.T) {
 		{"，", "'"},
 		{"，", `"`},
 		{"🤔", `''`},
-		{"🤔", `"'`},
 		{"🤔", `"'`},
 		{"🤔", "🌚"}, // this two emoji have same prefix bytes
 		{"##", "#-"},
@@ -186,10 +184,7 @@ func TestTPCHMultiBytes(t *testing.T) {
 
 		reader := NewStringReader(inputStr)
 		parser, err := NewCSVParser(&cfg, reader, int64(ReadBlockSize), false)
-		if fmt.Sprint(err) == "invalid input: invalid field delimiter" {
-			continue
-		}
-		require.NoError(t, err)
+		require.NoError(t, err, "separator %q, quote %q", SepAndQuote[0], SepAndQuote[1])
 
 		for i, expectedParserPos := range allExpectedParserPos {
 			row, err := parser.Read(nil)
@@ -203,6 +198,13 @@ func TestTPCHMultiBytes(t *testing.T) {
 		}
 
 	}
+}
+
+func TestRejectNULFieldDelimiter(t *testing.T) {
+	cfg := CSVConfig{FieldsTerminatedBy: "\000"}
+	parser, err := NewCSVParser(&cfg, strings.NewReader(""), int64(ReadBlockSize), false)
+	require.Nil(t, parser)
+	require.EqualError(t, err, "invalid input: invalid field delimiter")
 }
 
 func TestLinesTerminatedBy(t *testing.T) {

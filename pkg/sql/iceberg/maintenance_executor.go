@@ -218,7 +218,7 @@ func (r NativeExpireSnapshotsProcedureRunner) RunMaintenance(ctx context.Context
 	if err != nil {
 		return maintenance.Result{}, err
 	}
-	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+	catalogReq, err := api.ResolveCatalogRequestPrefix(ctx, client, api.CatalogRequest{
 		Catalog:           req.Catalog,
 		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
 	})
@@ -242,7 +242,7 @@ func (r NativeExpireSnapshotsProcedureRunner) RunMaintenance(ctx context.Context
 		ResidencyPolicies:      mergeMaintenanceResidencyPolicies(r.ResidencyPolicies, req.ResidencyPolicies),
 		ResidencyPolicyLister:  r.ResidencyPolicyLister,
 		RequireResidencyPolicy: r.RequireResidencyPolicy,
-		Principal:              firstNonEmpty(req.ExternalPrincipal, "matrixone-maintenance"),
+		Principal:              api.FirstNonBlankPreserveWhitespace(req.ExternalPrincipal, "matrixone-maintenance"),
 	})
 	if err != nil {
 		return maintenance.Result{}, err
@@ -300,7 +300,7 @@ func (r NativeRewriteManifestsProcedureRunner) RunMaintenance(ctx context.Contex
 	if err != nil {
 		return maintenance.Result{}, err
 	}
-	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+	catalogReq, err := api.ResolveCatalogRequestPrefix(ctx, client, api.CatalogRequest{
 		Catalog:           req.Catalog,
 		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
 	})
@@ -324,7 +324,7 @@ func (r NativeRewriteManifestsProcedureRunner) RunMaintenance(ctx context.Contex
 		ResidencyPolicies:      mergeMaintenanceResidencyPolicies(r.ResidencyPolicies, req.ResidencyPolicies),
 		ResidencyPolicyLister:  r.ResidencyPolicyLister,
 		RequireResidencyPolicy: r.RequireResidencyPolicy,
-		Principal:              firstNonEmpty(req.ExternalPrincipal, "matrixone-maintenance"),
+		Principal:              api.FirstNonBlankPreserveWhitespace(req.ExternalPrincipal, "matrixone-maintenance"),
 	})
 	if err != nil {
 		return maintenance.Result{}, err
@@ -389,7 +389,7 @@ func (r NativeRewriteDataFilesProcedureRunner) RunMaintenance(ctx context.Contex
 	if err != nil {
 		return maintenance.Result{}, err
 	}
-	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+	catalogReq, err := api.ResolveCatalogRequestPrefix(ctx, client, api.CatalogRequest{
 		Catalog:           req.Catalog,
 		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
 	})
@@ -413,7 +413,7 @@ func (r NativeRewriteDataFilesProcedureRunner) RunMaintenance(ctx context.Contex
 		ResidencyPolicies:      mergeMaintenanceResidencyPolicies(r.ResidencyPolicies, req.ResidencyPolicies),
 		ResidencyPolicyLister:  r.ResidencyPolicyLister,
 		RequireResidencyPolicy: r.RequireResidencyPolicy,
-		Principal:              firstNonEmpty(req.ExternalPrincipal, "matrixone-maintenance"),
+		Principal:              api.FirstNonBlankPreserveWhitespace(req.ExternalPrincipal, "matrixone-maintenance"),
 	})
 	if err != nil {
 		return maintenance.Result{}, err

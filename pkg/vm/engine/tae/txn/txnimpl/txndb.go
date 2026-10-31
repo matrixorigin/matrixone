@@ -39,7 +39,6 @@ type txnDB struct {
 	entry       *catalog.DBEntry
 	createEntry txnif.TxnEntry
 	dropEntry   txnif.TxnEntry
-	ddlCSN      uint32
 	idx         int
 }
 
@@ -615,7 +614,6 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 			panic(err)
 		}
 		cmdMgr.AddCmd(cmd)
-		db.ddlCSN = csn
 	}
 	tables := make([]*txnTable, len(db.tables))
 	for _, table := range db.tables {
@@ -633,7 +631,6 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 			panic(err)
 		}
 		cmdMgr.AddCmd(cmd)
-		db.ddlCSN = csn
 	}
 	return
 }

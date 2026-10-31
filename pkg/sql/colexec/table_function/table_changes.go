@@ -160,7 +160,7 @@ func (s *tableChangesState) start(
 		return err
 	}
 	s.tableDef = s.relation.CopyTableDef(relationCtx)
-	if err := validateRuntimeTableChangesSource(s.tableDef); err != nil {
+	if err := catalog.ValidateTableChangesSource(nil, s.tableDef); err != nil {
 		return err
 	}
 	if err := validateTableChangesSchemaWindow(
@@ -358,65 +358,6 @@ func (s *tableChangesState) closeHandle() error {
 	err := s.handle.Close()
 	s.handle = nil
 	return err
-}
-
-func validateRuntimeTableChangesSource(tableDef *plan.TableDef) error {
-	if tableDef == nil {
-		return moerr.NewInvalidInputNoCtx("table_changes source table does not exist")
-	}
-	if tableDef.IsTemporary {
-		return moerr.NewNotSupportedNoCtx("table_changes does not support temporary tables")
-	}
-	if err := validateRuntimeTableChangesColumnNames(tableDef); err != nil {
-		return err
-	}
-	switch tableDef.TableType {
-	case catalog.SystemOrdinaryRel, catalog.SystemClusterRel:
-	default:
-		return moerr.NewNotSupportedNoCtxf(
-			"table_changes does not support table type %q",
-			tableDef.TableType,
-		)
-	}
-	if tableDef.Partition != nil {
-		return moerr.NewNotSupportedNoCtx("table_changes does not support partitioned tables")
-	}
-	if tableDef.Pkey == nil ||
-		len(tableDef.Pkey.Names) == 0 ||
-		tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return moerr.NewNotSupportedNoCtx("table_changes requires an explicit primary key")
-	}
-	if tableDef.TableType == catalog.SystemClusterRel &&
-		!containsTableChangesKey(tableDef.Pkey.Names, "account_id") {
-		return moerr.NewNotSupportedNoCtx(
-			"table_changes requires cluster table primary keys to include account_id",
-		)
-	}
-	return nil
-}
-
-func validateRuntimeTableChangesColumnNames(tableDef *plan.TableDef) error {
-	for _, col := range tableDef.Cols {
-		if col == nil {
-			continue
-		}
-		if catalog.IsTableChangesMetadataColumn(col.Name) {
-			return moerr.NewInvalidInputNoCtxf(
-				"table_changes source column %q conflicts with reserved metadata column",
-				col.Name,
-			)
-		}
-	}
-	return nil
-}
-
-func containsTableChangesKey(names []string, target string) bool {
-	for _, name := range names {
-		if strings.EqualFold(name, target) {
-			return true
-		}
-	}
-	return false
 }
 
 func requiredTableChangesString(

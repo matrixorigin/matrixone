@@ -53,7 +53,7 @@ var getPubSubscribedInfos = func(txn executor.TxnExecutor) (subscribedInfos map[
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(0))
 	if err != nil {
-		getLogger(txn.Txn().TxnOptions().CN).Error("pubSubscribedInfos error", zap.Error(err))
+		versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("pubSubscribedInfos error", zap.Error(err))
 		return
 	}
 	defer res.Close()

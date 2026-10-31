@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"io"
 	"iter"
 	"runtime"
@@ -28,6 +29,53 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
+
+// objectExists keeps the context and provider-specific not-found handling shared
+// by object stores whose stat result is irrelevant to existence.
+func objectExists[T any](
+	ctx context.Context, key string,
+	stat func(context.Context, string) (T, error), isNotFound func(error) bool,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	_, err := stat(ctx, key)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// deleteObjectKeys preserves single-object and provider-specific batch paths.
+// A zero batch limit leaves batching to the provider.
+func deleteObjectKeys[T any](
+	ctx context.Context, keys []string, batchLimit int,
+	deleteSingle func(context.Context, string) error,
+	deleteBatch func(context.Context, ...string) (T, error),
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if len(keys) == 1 {
+		return deleteSingle(ctx, keys[0])
+	}
+	if batchLimit <= 0 {
+		batchLimit = len(keys)
+	}
+	for start := 0; start < len(keys); start += batchLimit {
+		end := min(start+batchLimit, len(keys))
+		if _, err := deleteBatch(ctx, keys[start:end]...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 const smallObjectThreshold = 64 * (1 << 20)
 const (
@@ -100,6 +148,162 @@ func releaseParallelUploadBufferBudget(bytes int64) {
 	getParallelUploadBufferBudget().semaphore.Release(bytes)
 }
 
+// parallelUploadPart owns the budget reserved for its buffer until released.
+type parallelUploadPart struct {
+	buf    []byte
+	n      int
+	tokens int64
+}
+
+func releaseParallelUploadPart(part *parallelUploadPart) {
+	if part == nil {
+		return
+	}
+	releaseParallelUploadBufferBudget(part.tokens)
+}
+
+func readParallelUploadPart(ctx context.Context, r io.Reader, partSize int64) (*parallelUploadPart, error) {
+	tokens, err := acquireParallelUploadBufferBudget(ctx, partSize)
+	if err != nil {
+		return nil, err
+	}
+	raw := make([]byte, partSize)
+	n, err := io.ReadFull(r, raw)
+	switch {
+	case errors.Is(err, io.EOF):
+		releaseParallelUploadBufferBudget(tokens)
+		return nil, io.EOF
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return &parallelUploadPart{buf: raw, n: n, tokens: tokens}, io.EOF
+	case err != nil:
+		releaseParallelUploadBufferBudget(tokens)
+		return nil, err
+	default:
+		return &parallelUploadPart{buf: raw, n: n, tokens: tokens}, nil
+	}
+}
+
+// uploadParallelParts owns each part until its upload finishes or is rejected.
+func uploadParallelParts[T any](ctx context.Context, cancel context.CancelFunc, r io.Reader, options ParallelMultipartOption, firstPart *parallelUploadPart, upload func(context.Context, int32, *parallelUploadPart) (T, error)) ([]T, error) {
+	type partJob struct {
+		num  int32
+		part *parallelUploadPart
+	}
+
+	var (
+		partNum   int32
+		parts     []T
+		partsLock sync.Mutex
+		wg        sync.WaitGroup
+		errOnce   sync.Once
+		firstErr  error
+	)
+
+	setErr := func(e error) {
+		if e == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = e
+			cancel()
+		})
+	}
+
+	uploadSlots := make(chan struct{}, options.Concurrency)
+	startPartUpload := func(job partJob) bool {
+		select {
+		case uploadSlots <- struct{}{}:
+		case <-ctx.Done():
+			releaseParallelUploadPart(job.part)
+			setErr(ctx.Err())
+			return false
+		}
+		select {
+		case getParallelUploadSemaphore() <- struct{}{}:
+		case <-ctx.Done():
+			<-uploadSlots
+			releaseParallelUploadPart(job.part)
+			setErr(ctx.Err())
+			return false
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				<-getParallelUploadSemaphore()
+				<-uploadSlots
+			}()
+			if options.beforePartUpload != nil {
+				options.beforePartUpload()
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				setErr(ctxErr)
+				releaseParallelUploadPart(job.part)
+				return
+			}
+			result, uploadErr := upload(ctx, job.num, job.part)
+			if uploadErr != nil {
+				setErr(uploadErr)
+				releaseParallelUploadPart(job.part)
+				return
+			}
+			releaseParallelUploadPart(job.part)
+			partsLock.Lock()
+			parts = append(parts, result)
+			partsLock.Unlock()
+		}()
+		return true
+	}
+
+	sendJob := func(part *parallelUploadPart) bool {
+		partNum++
+		if partNum > maxMultipartParts {
+			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
+			releaseParallelUploadPart(part)
+			return false
+		}
+		job := partJob{
+			num:  partNum,
+			part: part,
+		}
+		return startPartUpload(job)
+	}
+
+	if sendJob(firstPart) {
+		for {
+			part, readErr := readParallelUploadPart(ctx, r, options.PartSize)
+			if errors.Is(readErr, io.EOF) && part == nil {
+				break
+			}
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				setErr(readErr)
+				releaseParallelUploadPart(part)
+				break
+			}
+			if part == nil || part.n == 0 {
+				releaseParallelUploadPart(part)
+				break
+			}
+			if !sendJob(part) {
+				break
+			}
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+		}
+	}
+
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	if len(parts) != int(partNum) {
+		return nil, moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
+	}
+	return parts, nil
+}
+
 func normalizeParallelOption(opt *ParallelMultipartOption) ParallelMultipartOption {
 	res := ParallelMultipartOption{}
 	if opt != nil {
@@ -121,6 +325,35 @@ func normalizeParallelOption(opt *ParallelMultipartOption) ParallelMultipartOpti
 		res.Concurrency = 1
 	}
 	return res
+}
+
+// readObjectRange applies the object storage half-open byte range to a seekable reader.
+// The caller retains responsibility for closing source, including on error.
+func readObjectRange(source io.ReadSeeker, key string, min, max *int64) (io.Reader, error) {
+	var reader io.Reader
+	reader = source
+
+	if min != nil {
+		pos, err := source.Seek(*min, io.SeekStart)
+		if err != nil {
+			return nil, err
+		}
+		if pos != *min {
+			return nil, moerr.NewEmptyRangeNoCtx(key)
+		}
+	}
+
+	if max != nil {
+		limit := *max
+		if min != nil {
+			limit -= *min
+		}
+		if limit <= 0 {
+			return nil, moerr.NewEmptyRangeNoCtx(key)
+		}
+		reader = io.LimitReader(reader, limit)
+	}
+	return reader, nil
 }
 
 type ObjectStorage interface {

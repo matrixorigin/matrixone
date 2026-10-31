@@ -23,7 +23,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -2071,33 +2070,6 @@ func (e *defaultExprExpander) copyExpandedExpr(expr *plan.Expr) (*plan.Expr, err
 	return DeepCopyExpr(expr), nil
 }
 
-// expandDefaultExprsInProjection expands only the projection entries listed
-// in defaultPositions.  The resolver maps physical table-column positions to
-// the expressions currently supplying those columns (explicit values or
-// other defaults).
-func expandDefaultExprsInProjection(
-	ctx context.Context,
-	projection []*plan.Expr,
-	defaultPositions []int32,
-	columnExprs map[int32]*plan.Expr,
-) error {
-	expander := newDefaultExprExpander(ctx, func(colIdx int32) (*plan.Expr, bool) {
-		expr, ok := columnExprs[colIdx]
-		return expr, ok
-	})
-	for _, pos := range defaultPositions {
-		if pos < 0 || int(pos) >= len(projection) || projection[pos] == nil {
-			continue
-		}
-		expr, err := expander.expandExpr(projection[pos])
-		if err != nil {
-			return err
-		}
-		projection[pos] = expr
-	}
-	return nil
-}
-
 func expandDefaultExprWithColumnExprs(
 	ctx context.Context,
 	expr *plan.Expr,
@@ -3162,20 +3134,4 @@ func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef)
 		agg.Func.ObjName = "starcount"
 		agg.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 	}
-}
-
-// equalFoldKey produces the same equivalence classes used by strings.EqualFold
-// so callers can detect duplicates without pairwise comparisons.
-func equalFoldKey(value string) string {
-	var folded strings.Builder
-	for _, r := range value {
-		min := r
-		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
-			if next < min {
-				min = next
-			}
-		}
-		folded.WriteRune(min)
-	}
-	return folded.String()
 }

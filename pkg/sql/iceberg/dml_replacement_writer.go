@@ -62,7 +62,7 @@ func WriteDMLReplacementDataFiles(ctx context.Context, req DMLReplacementDataFil
 	if err != nil {
 		return nil, err
 	}
-	statementKey := firstNonEmpty(req.Base.StatementID, req.Base.IdempotencyKey)
+	statementKey := api.FirstNonBlankPreserveWhitespace(req.Base.StatementID, req.Base.IdempotencyKey)
 	if statementKey == "" {
 		return nil, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML replacement writer requires statement id or idempotency key", map[string]string{
 			"table": req.Base.Table,
@@ -108,7 +108,7 @@ func WriteDMLReplacementDataFiles(ctx context.Context, req DMLReplacementDataFil
 }
 
 func dmlReplacementDataDir(operation, statementKey string, snapshotID int64) string {
-	return joinDMLObjectPath("data", "mo-dml", operation, "stmt-"+api.PathHash(statementKey), "replacement", "snap-"+strconv.FormatInt(snapshotID, 10))
+	return api.JoinObjectPath("data", "mo-dml", operation, "stmt-"+api.PathHash(statementKey), "replacement", "snap-"+strconv.FormatInt(snapshotID, 10))
 }
 
 type bufferedDataFileOutputFactory struct {
@@ -152,7 +152,7 @@ func retainedDMLDataFileMetadataBytesForSchema(schema api.Schema, spec api.Parti
 	columns := int64(len(schema.Fields))
 	partitions := int64(len(spec.Fields))
 	return saturatingDMLAdd(retainedDMLDataFileMetadataBytes,
-		saturatingDMLAdd(saturatingDMLMul(columns, perColumn), saturatingDMLMul(partitions, 1024)))
+		saturatingDMLAdd(api.SaturatingMemoryMul(columns, perColumn), api.SaturatingMemoryMul(partitions, 1024)))
 }
 
 type bufferedDataFileObject struct {
