@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r39-2026-10-31`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r40-2026-10-31`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -833,3 +833,29 @@ is introduced; official latest remains 134 and upgrade is full-cluster shutdown.
 The opt-in development scope and permanent artifact admission limit are unchanged.
 Independent Architecture and SQL/Planner approval of r39 remains pending; this
 maintenance does not assert independent approval or broaden production scope.
+
+
+## r40: follow the official release-boundary consolidation (2026-10-31)
+
+The governing proposal is `python-udf-current-stage-r40-2026-10-31`.
+Main 3f484ec428b2fdaeda333c82b8d562fdb5dbe71a (#31488) explicitly revises
+[the catalog upgrade contract](20261028-catalog-upgrade-407.md): 4.0.7 is the
+pending target for released 4.1/4.2 sources, and unreleased main identities
+4.0.18/19 are removed. This supersedes r39's assumption that a main-merged
+catalog must already be frozen. Follow that authoritative release boundary,
+append the same nine routine entries after the 27 existing tenant entries in
+4.0.7 (14 cluster entries, offset 50), and keep the existing bounded walker,
+transaction, recovery and CDC owners. Remove development-history successor
+routes and tests. Published 4.0.6 effects remain unchanged.
+
+Real login controls seed the UDF table definitions from pinned v4.1.0 and
+v4.2.6 commits, preserving their SQL function through migration and replay.
+No historical-server binary run, new Python gate, production isolation or
+resource/performance scope is claimed. Independent Architecture and SQL/Planner
+approval of r40 remains pending; this maintenance does not grant it.
+
+The consolidated index transition recognizes a valid final descriptor index
+as completion of its predecessor. Re-entering the migration therefore does not
+recreate and drop the retired index; the shared validator checks both the full
+index definition and physical catalog state. Released-shape replay checks require
+zero repeated schema DDL.

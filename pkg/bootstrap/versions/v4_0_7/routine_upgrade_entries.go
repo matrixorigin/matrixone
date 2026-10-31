@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_20
+package v4_0_7
 
 import (
 	"fmt"
@@ -23,7 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-var tenantUpgEntries = []versions.UpgradeEntry{
+// routineUpgEntries extend the pending release migration after the existing
+// UDF argument-type repair. They use the same bounded tenant-step owner.
+var routineUpgEntries = []versions.UpgradeEntry{
 	addPythonRevisionHeadColumn("active_revision", "bigint unsigned not null default 0"),
 	addPythonRevisionHeadColumn("namespace_version", "bigint unsigned not null default 0"),
 	addPythonSignatureColumn("canonical_input_descriptor", fmt.Sprintf("varchar(%d) not null default ''", types.MaxStringSize), "arg_types"),
@@ -75,9 +77,7 @@ func addPythonSignatureIndex() versions.UpgradeEntry {
 		UpgType:   versions.ADD_INDEX,
 		UpgSql:    "create unique index name_db_arg_types_descriptor on mo_catalog.mo_user_defined_function(name, db, arg_types, canonical_input_descriptor)",
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			return versions.CheckIndexDefinition(
-				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db_arg_types_descriptor",
-			)
+			return checkCatalogIndex(txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db_arg_types_descriptor", true, "name", "db", "arg_types", "canonical_input_descriptor")
 		},
 	}
 }

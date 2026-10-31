@@ -69,9 +69,6 @@ func (s *service) MaybeUpgradeTenant(
 				if err != nil {
 					return err
 				}
-				if err := s.checkRetiredCatalogSource(version); err != nil {
-					return err
-				}
 				// Check the persisted account version, not the serving CN's version.
 				currentCN := s.getFinalVersionHandle().Metadata()
 				if currentCN.Version == version {
@@ -125,9 +122,6 @@ func (s *service) MaybeUpgradeTenant(
 				// upgrade in current goroutine immediately
 				version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
 				if err != nil {
-					return err
-				}
-				if err := s.checkRetiredCatalogSource(version); err != nil {
 					return err
 				}
 				if versions.Compare(version, currentCN.Version) > 0 {
@@ -245,9 +239,6 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 					cursorUpgradeID, cursor = 0, 0
 					return nil
 				}
-				if err := s.checkRetiredCatalogSource(upgrade.FromVersion); err != nil {
-					return err
-				}
 				if cursorUpgradeID != upgrade.ID {
 					cursorUpgradeID, cursor = upgrade.ID, 0
 				}
@@ -265,12 +256,6 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 				taskID, tenants, createVersions, hasDeletedTenantTasks, err := versions.GetUpgradeTenantTasks(upgrade.ID, cursor, txn)
 				if err != nil {
 					return err
-				}
-				// Check the entire locked batch before any handler or task update.
-				for _, source := range createVersions {
-					if err := s.checkRetiredCatalogSource(source); err != nil {
-						return err
-					}
 				}
 
 				s.logger.Debug("load upgrade tenants",
