@@ -556,9 +556,19 @@ func (l *Lexer) asofJoinPhraseAhead() bool {
 // `WITH ADMIN OPTION` rather than an identifier use such as a CTE named
 // admin (`WITH admin AS (...)`).
 func (l *Lexer) adminOptionAhead() bool {
-	lookahead := Scanner{}
-	lookahead.setSql(l.scanner.buf[l.scanner.Pos:])
-	lookahead.setSQLMode(l.sqlMode)
+	// Peek from the LIVE scanner's lexical state. A freshly built Scanner{}
+	// drops the executable-comment context (CommentFlag and the comment end
+	// position), so inside `/*!80000 admin */ option` the peek would read the
+	// closing '*' instead of skipping '*/' to OPTION, and the clause would
+	// degenerate into a bare identifier. Copying the live scanner value is the
+	// same peek mechanism the other phrase lookaheads in this file use; the
+	// copy also detaches the MySQL special-comment sub-scanner so the peek can
+	// never move shared state, and a peek never commits the live scanner.
+	lookahead := *l.scanner
+	if lookahead.MysqlSpecialComment != nil {
+		sub := *lookahead.MysqlSpecialComment
+		lookahead.MysqlSpecialComment = &sub
+	}
 
 	next, _ := lookahead.Scan()
 	return next == OPTION

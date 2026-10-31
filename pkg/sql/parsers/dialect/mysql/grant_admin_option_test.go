@@ -163,3 +163,76 @@ func TestShowGrantsParsesForUsersGrantedViaAdminOption(t *testing.T) {
 		require.NoError(t, err, sql)
 	}
 }
+
+// TestGrantAdminOptionExecutableCommentBoundary pins the lexical contract
+// found by review 5724357226: the contextual ADMIN promotion must look
+// ahead through the live scanner's executable-comment state, so
+// `with /*!80000 admin */ option` parses like the legacy
+// `with grant option` boundary. The peek must neither over-promote (the
+// identifier stays an identifier when OPTION does not follow) nor change
+// authorization shapes: the ADMIN clause stays role-grant-only and the
+// proxy grant shape still rejects it through the same comment boundary.
+// The historical privilege-level probe shapes were not boundary controls
+// (they failed at the privilege-level token before the clause) and remain
+// out of scope here.
+func TestGrantAdminOptionExecutableCommentBoundary(t *testing.T) {
+	t.Run("role grant admin option across an executable comment", func(t *testing.T) {
+		const sql = "grant r to u with /*!80000 admin */ option"
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		grant, ok := stmt.(*tree.Grant)
+		require.True(t, ok, sql)
+		require.Equal(t, tree.GrantTypeRole, grant.Typ, sql)
+		require.True(t, grant.GrantRole.GrantOption, sql)
+		require.Len(t, grant.GrantRole.Roles, 1, sql)
+		require.Len(t, grant.GrantRole.Users, 1, sql)
+		formatted := tree.String(stmt, dialect.MYSQL)
+		require.Contains(t, formatted, "with grant option", sql)
+		reparsed, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.True(t, reparsed.(*tree.Grant).GrantRole.GrantOption, formatted)
+	})
+
+	t.Run("legacy grant option across the same boundary", func(t *testing.T) {
+		const sql = "grant r1 to u1 with /*!80000 grant */ option"
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		grant, ok := stmt.(*tree.Grant)
+		require.True(t, ok, sql)
+		require.Equal(t, tree.GrantTypeRole, grant.Typ, sql)
+		require.True(t, grant.GrantRole.GrantOption, sql)
+		formatted := tree.String(stmt, dialect.MYSQL)
+		require.Contains(t, formatted, "with grant option", sql)
+		reparsed, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.True(t, reparsed.(*tree.Grant).GrantRole.GrantOption, formatted)
+	})
+
+	t.Run("comment boundary keeps admin a plain identifier outside the clause", func(t *testing.T) {
+		// A valid CTE with the same executive-comment boundary before AS:
+		// the promotion must not fire when the next real token is not
+		// OPTION, so `admin` stays the CTE identifier and the statement
+		// parses. A wrongly promoted ADMIN token would be a syntax error
+		// here, which is what makes this a real no-over-promotion guard.
+		const sql = "with /*!80000 admin */ as (select 1 as x) select x from admin"
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		formatted := tree.String(stmt, dialect.MYSQL)
+		require.Contains(t, formatted, "admin", sql)
+		_, err = ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, sql)
+	})
+
+	t.Run("proxy shape with admin comment is still rejected", func(t *testing.T) {
+		_, err := ParseOne(context.Background(), "grant proxy on u1 to u2 with /*!80000 admin */ option", 1)
+		require.Error(t, err)
+	})
+
+	t.Run("public entry recovers after a failed statement", func(t *testing.T) {
+		_, err := ParseOne(context.Background(), "grant r to u with /*!80000 admin */ nonsense", 1)
+		require.Error(t, err)
+		stmt, err := ParseOne(context.Background(), "grant r to u with /*!80000 admin */ option", 1)
+		require.NoError(t, err)
+		require.True(t, stmt.(*tree.Grant).GrantRole.GrantOption)
+	})
+}
