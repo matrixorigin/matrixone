@@ -25,33 +25,52 @@ import (
 )
 
 func TestForeachQueriedRow(t *testing.T) {
-	for _, failCallback := range []bool{false, true} {
-		t.Run(map[bool]string{false: "count selected rows", true: "callback error closes rows"}[failCallback], func(t *testing.T) {
+	readErr := errors.New("read failed")
+	callbackErr := errors.New("callback failed")
+	for _, tc := range []struct {
+		name        string
+		values      []string
+		rowError    int
+		callbackErr bool
+		wantCount   int64
+		wantErr     error
+	}{
+		{name: "empty", rowError: -1},
+		{name: "count accepted rows", values: []string{"accepted", "skipped"}, rowError: -1, wantCount: 1},
+		{name: "first row read error", values: []string{"accepted"}, rowError: 0, wantErr: readErr},
+		{name: "later row read error", values: []string{"accepted", "skipped"}, rowError: 1, wantCount: 1, wantErr: readErr},
+		{name: "callback error", values: []string{"accepted", "skipped"}, rowError: -1, callbackErr: true, wantCount: 1, wantErr: callbackErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 			require.NoError(t, err)
 			defer db.Close()
-			mock.ExpectQuery("SELECT n").WillReturnRows(sqlmock.NewRows([]string{"n"}).AddRow(1).AddRow(2).AddRow(3)).RowsWillBeClosed()
-			injected := errors.New("callback failed")
-			count, err := ForeachQueriedRow(context.Background(), db, "SELECT n", func(_ context.Context, rows *sql.Rows) (bool, error) {
-				var n int
-				if err := rows.Scan(&n); err != nil {
+			rows := sqlmock.NewRows([]string{"value"})
+			for _, value := range tc.values {
+				rows.AddRow(value)
+			}
+			if tc.rowError >= 0 {
+				rows.RowError(tc.rowError, readErr)
+			}
+			mock.ExpectQuery("SELECT value").WillReturnRows(rows).RowsWillBeClosed()
+			count, err := ForeachQueriedRow(context.Background(), db, "SELECT value", func(_ context.Context, row *sql.Rows) (bool, error) {
+				var value string
+				if err := row.Scan(&value); err != nil {
 					return false, err
 				}
-				if failCallback && n == 2 {
-					return false, injected
+				if tc.callbackErr && value == "skipped" {
+					return false, callbackErr
 				}
-				return n%2 == 1, nil
+				return value == "accepted", nil
 			})
-			if failCallback {
-				require.ErrorIs(t, err, injected)
-				require.EqualValues(t, 1, count)
-			} else {
-				require.NoError(t, err)
-				require.EqualValues(t, 2, count)
-			}
+			require.ErrorIs(t, err, tc.wantErr)
+			require.Equal(t, tc.wantCount, count)
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}
+}
+
+func TestForeachQueriedRowQueryError(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.NoError(t, err)
 	defer db.Close()
@@ -63,21 +82,5 @@ func TestForeachQueriedRow(t *testing.T) {
 	})
 	require.ErrorIs(t, err, injected)
 	require.Zero(t, count)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestForeachQueriedRowReportsIterationError(t *testing.T) {
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	require.NoError(t, err)
-	defer db.Close()
-	injected := errors.New("row stream failed")
-	rows := sqlmock.NewRows([]string{"n"}).AddRow(1).AddRow(2).RowError(1, injected)
-	mock.ExpectQuery("SELECT n").WillReturnRows(rows).RowsWillBeClosed()
-	count, err := ForeachQueriedRow(context.Background(), db, "SELECT n", func(_ context.Context, rows *sql.Rows) (bool, error) {
-		var n int
-		return true, rows.Scan(&n)
-	})
-	require.ErrorIs(t, err, injected)
-	require.EqualValues(t, 1, count)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

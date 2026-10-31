@@ -153,6 +153,8 @@ var (
 		"task_status=?, " +
 		"update_at=?, " +
 		"end_at=? where task_id=?"
+	requestDaemonTaskStatus = "update sys_daemon_task set task_status=? where task_id=? and account_id=? and task_status=? and (task_runner=? or (task_runner is null and ?='')) and last_run <=> ?"
+	updateCDCDaemonStatus   = "update sys_daemon_task set task_status=? where task_id=?"
 
 	heartbeatDaemonTask = "update sys_daemon_task set last_heartbeat=? where task_id=? and task_runner=? and last_run=?"
 	validateDaemonTask  = "select 1 from sys_daemon_task where task_id=? and task_runner=? and task_status in (?,?) and last_run <=> ? limit 1"
@@ -1788,6 +1790,27 @@ func (m *mysqlTaskStorage) RunUpdateDaemonTaskStatus(
 	return int(affected), nil
 }
 
+func (m *mysqlTaskStorage) RequestDaemonTaskStatus(
+	ctx context.Context, observed task.DaemonTask, status task.TaskStatus,
+) (int, error) {
+	if taskFrameworkDisabled() {
+		return 0, nil
+	}
+	return m.runRequestDaemonTaskStatus(ctx, m.db, observed, status)
+}
+
+func (m *mysqlTaskStorage) runRequestDaemonTaskStatus(
+	ctx context.Context, db SqlExecutor, observed task.DaemonTask, status task.TaskStatus,
+) (int, error) {
+	result, err := db.ExecContext(ctx, requestDaemonTaskStatus,
+		status, observed.ID, observed.AccountID, observed.TaskStatus, observed.TaskRunner, observed.TaskRunner, nullTime(observed.LastRun))
+	if err != nil {
+		return 0, err
+	}
+	affected, err := result.RowsAffected()
+	return int(affected), err
+}
+
 func (m *mysqlTaskStorage) DeleteDaemonTask(ctx context.Context, condition ...Condition) (int, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
@@ -2015,14 +2038,8 @@ func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, c
 		return 0, err
 	}
 	defer func() {
-		if err != nil {
-			if e := tx.Rollback(); e != nil {
-				err = errors.Join(e, err)
-			}
-		} else {
-			if e := tx.Commit(); e != nil {
-				err = errors.Join(e, err)
-			}
+		if e := tx.Rollback(); e != nil && !errors.Is(e, sql.ErrTxDone) && err != nil {
+			err = errors.Join(err, e)
 		}
 	}()
 
@@ -2044,8 +2061,10 @@ func (m *mysqlTaskStorage) AddCDCTask(ctx context.Context, dt task.DaemonTask, c
 		err = moerr.NewInternalError(ctx, "add cdc task status failed.")
 		return 0, err
 	}
-	n = daemonTaskRowsAffected
-	return
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return daemonTaskRowsAffected, nil
 }
 
 func (m *mysqlTaskStorage) UpdateCDCTask(
@@ -2058,7 +2077,7 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		SqlExecutor,
 	) (int, error),
 	condition ...Condition,
-) (int, error) {
+) (n int, err error) {
 	if taskFrameworkDisabled() || taskCollector == nil {
 		return 0, nil
 	}
@@ -2068,14 +2087,8 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 		return 0, err
 	}
 	defer func() {
-		if err != nil {
-			if e := tx.Rollback(); e != nil {
-				err = errors.Join(e, err)
-			}
-		} else {
-			if e := tx.Commit(); e != nil {
-				err = errors.Join(e, err)
-			}
+		if e := tx.Rollback(); e != nil && !errors.Is(e, sql.ErrTxDone) && err != nil {
+			err = errors.Join(err, e)
 		}
 	}()
 
@@ -2090,6 +2103,9 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 	}
 
 	if len(taskKeyMap) == 0 {
+		if err = tx.Commit(); err != nil {
+			return 0, err
+		}
 		return 0, nil
 	}
 
@@ -2157,26 +2173,32 @@ func (m *mysqlTaskStorage) UpdateCDCTask(
 					)
 				}
 			}
-			dTask.TaskStatus = targetStatus
 			updateTasks = append(updateTasks, dTask)
 		}
 	}
 
 	//step5: update daemon task status
-	if len(updateTasks) > 0 {
-		affectedTaskRow, err = m.RunUpdateDaemonTask(ctx, updateTasks, tx)
+	for _, observed := range updateTasks {
+		// CDC account post-processing occurs after the account transaction has
+		// committed, so an ownership change must not introduce a new conflict.
+		// Preserve the existing status-write semantics without restoring a stale
+		// runner, heartbeat, or other fields from the earlier snapshot.
+		result, err := tx.ExecContext(ctx, updateCDCDaemonStatus, targetStatus, observed.ID)
 		if err != nil {
 			return 0, err
 		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		affectedTaskRow = int(rows)
 		affectedCdcRow += affectedTaskRow
 	}
 
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
 	return affectedCdcRow, nil
-}
-
-func buildDaemonTaskWhereClause(c *conditions) string {
-	clause, _ := buildDaemonTaskWhereClauseWithArgs(c)
-	return clause
 }
 
 func buildDaemonTaskWhereClauseWithArgs(c *conditions) (string, []any) {
@@ -2187,8 +2209,11 @@ func buildDaemonTaskWhereClauseWithArgs(c *conditions) (string, []any) {
 		if cond, ok := (*c)[cond]; ok {
 			clauseBuilder.WriteString(" AND ")
 			clauseBuilder.WriteString(cond.sql())
-			if claim, ok := cond.(*lastRunCond); ok {
-				args = append(args, nullTime(claim.value))
+			switch value := cond.(type) {
+			case *lastRunCond:
+				args = append(args, nullTime(value.value))
+			case *accountCond:
+				args = append(args, value.account)
 			}
 		}
 	}

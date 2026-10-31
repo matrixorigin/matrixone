@@ -35,6 +35,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/json"
 )
 
+func TestRequestDaemonTaskStatusSQL(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		runner  string
+		lastRun time.Time
+		matched int64
+	}{
+		{name: "current claim", runner: "owner'quoted", lastRun: time.Date(2026, 8, 1, 12, 0, 0, 123456000, time.UTC), matched: 1},
+		{name: "unassigned null claim", matched: 1},
+		{name: "superseded", runner: "owner", matched: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			storage, mock := newMockStorage(t)
+			observed := newDaemonTaskForTest(42, task.TaskStatus_Running, tc.runner)
+			observed.AccountID = 17
+			observed.LastRun = tc.lastRun
+			mock.ExpectExec(requestDaemonTaskStatus).
+				WithArgs(task.TaskStatus_PauseRequested, observed.ID, observed.AccountID, observed.TaskStatus, tc.runner, tc.runner, nullTime(tc.lastRun)).
+				WillReturnResult(sqlmock.NewResult(0, tc.matched))
+			n, err := storage.RequestDaemonTaskStatus(context.Background(), observed, task.TaskStatus_PauseRequested)
+			require.NoError(t, err)
+			require.Equal(t, int(tc.matched), n)
+			mock.ExpectClose()
+			require.NoError(t, storage.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 func TestDaemonTaskErrorSQLPreservesLease(t *testing.T) {
 	for _, release := range []bool{false, true} {
 		for _, outcome := range []string{"matched", "superseded", "exec-error", "result-error", "null-claim"} {
@@ -100,6 +129,60 @@ func TestLastRunConditionPrecision(t *testing.T) {
 	require.Equal(t, []any{value}, bound)
 	_, bound = buildDaemonTaskWhereClauseWithArgs(newConditions(WithLastRun(time.Time{})))
 	require.Equal(t, []any{nil}, bound)
+}
+
+func TestDaemonAccountConditionBindings(t *testing.T) {
+	lastRun := time.Date(2026, 9, 5, 8, 0, 0, 123456000, time.UTC)
+	for _, account := range []string{"sys", "", "tenant'quoted", `tenant\path`} {
+		for _, op := range []Op{EQ, GT, GE, LT, LE} {
+			for range 10 {
+				clause, args := buildDaemonTaskWhereClauseWithArgs(newConditions(WithAccount(op, account), WithLastRun(lastRun)))
+				accountClause := "account" + OpName[op] + "?"
+				require.Contains(t, clause, accountClause)
+				require.Contains(t, clause, "last_run <=> ?")
+				if strings.Index(clause, accountClause) < strings.Index(clause, "last_run <=> ?") {
+					require.Equal(t, []any{account, lastRun}, args)
+				} else {
+					require.Equal(t, []any{lastRun, account}, args)
+				}
+			}
+		}
+	}
+	clause, args := buildDaemonTaskWhereClauseWithArgs(newConditions(WithAccount(EQ, "sys"), WithLastRun(time.Time{})))
+	require.Contains(t, clause, "last_run <=> ?")
+	require.Contains(t, args, nil)
+	require.Contains(t, args, "sys")
+}
+
+func TestDaemonAccountConditionStorageCalls(t *testing.T) {
+	storage, mock := newMockStorage(t)
+	ctx := context.Background()
+	condition := WithAccount(EQ, "tenant")
+	where := " AND account=?"
+	mock.ExpectQuery(selectDaemonTask + where + " order by task_id").WithArgs("tenant").WillReturnRows(sqlmock.NewRows(daemonHeads))
+	rows, err := storage.RunQueryDaemonTask(ctx, storage.db, condition)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	d := newDaemonTaskForTest(1, task.TaskStatus_Running, "runner")
+	mock.ExpectExec(updateDaemonTask+where).WithArgs(
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "tenant",
+	).WillReturnResult(sqlmock.NewResult(0, 1))
+	n, err := storage.RunUpdateDaemonTask(ctx, []task.DaemonTask{d}, storage.db, condition)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	mock.ExpectExec(updateDaemonTaskStatus+where).WithArgs(task.TaskStatus_Paused, d.UpdateAt, nil, d.ID, "tenant").WillReturnResult(sqlmock.NewResult(0, 1))
+	n, err = storage.RunUpdateDaemonTaskStatus(ctx, d.ID, task.TaskStatus_Paused, d.UpdateAt, time.Time{}, storage.db, condition)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	mock.ExpectExec(deleteDaemonTask + where).WithArgs("tenant").WillReturnResult(sqlmock.NewResult(0, 1))
+	n, err = storage.RunDeleteDaemonTask(ctx, storage.db, condition)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	mock.ExpectClose()
+	require.NoError(t, storage.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestBuildWhereClause(t *testing.T) {
@@ -603,19 +686,8 @@ func TestAddCdcTask(t *testing.T) {
 		newDaemonTaskRows(t, dt),
 	)
 
-	mock.ExpectExec(updateDaemonTask).WithArgs(
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
-		sqlmock.AnyArg(),
+	mock.ExpectExec(updateCDCDaemonStatus).WithArgs(
+		task.TaskStatus_Canceled, uint64(0),
 	).WillReturnResult(sqlmock.NewResult(0, 1))
 
 	callback2 := func(ctx context.Context, ts task.TaskStatus, keyMap map[CDCTaskKey]struct{}, se SqlExecutor) (int, error) {
@@ -626,6 +698,7 @@ func TestAddCdcTask(t *testing.T) {
 		return 1, nil
 	}
 
+	mock.ExpectCommit()
 	affected, err = storage.UpdateCDCTask(
 		context.Background(),
 		task.TaskStatus_Canceled,
@@ -1726,10 +1799,11 @@ func TestBuildLimitAndOrderByClause(t *testing.T) {
 	require.Equal(t, "", buildLimitClause(c))
 	require.Equal(t, " order by task_id", buildOrderByClause(c))
 
-	clause := buildDaemonTaskWhereClause(newConditions(
+	clause, args := buildDaemonTaskWhereClauseWithArgs(newConditions(
 		WithTaskExecutorCond(EQ, task.TaskCode_InitCdc),
 	))
 	require.Contains(t, clause, "task_metadata_executor=7")
+	require.Empty(t, args)
 }
 
 func TestRunAddDaemonTaskBranches(t *testing.T) {
@@ -1838,6 +1912,7 @@ func TestUpdateDaemonTaskBranchesInSqlMock(t *testing.T) {
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
 	})
+
 }
 
 func TestRunUpdateDaemonTaskBranches(t *testing.T) {
@@ -2186,6 +2261,20 @@ func TestAddCDCTaskBranchesInSqlMock(t *testing.T) {
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
 	})
+	t.Run("callback panic rolls back", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectRollback()
+		require.PanicsWithValue(t, "callback panic", func() {
+			_, _ = storage.AddCDCTask(ctx, d, func(context.Context, SqlExecutor) (int, error) {
+				panic("callback panic")
+			})
+		})
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 }
 
 func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
@@ -2214,13 +2303,15 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 
 	t.Run("collector rollback join error", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
+		collectorErr := errors.New("collector failed")
+		rollbackErr := errors.New("rollback failed")
 		mock.ExpectBegin()
-		mock.ExpectRollback().WillReturnError(errors.New("rollback failed"))
+		mock.ExpectRollback().WillReturnError(rollbackErr)
 		_, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
-			return 0, errors.New("collector failed")
+			return 0, collectorErr
 		})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "collector failed")
+		require.ErrorIs(t, err, collectorErr)
+		require.ErrorIs(t, err, rollbackErr)
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
 	})
@@ -2236,6 +2327,33 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 		require.Equal(t, 0, n)
 		mock.ExpectClose()
 		require.NoError(t, storage.Close())
+	})
+
+	t.Run("commit failure is returned", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
+			return 0, nil
+		})
+		require.ErrorContains(t, err, "commit failed")
+		require.Zero(t, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+	})
+
+	t.Run("collector panic rolls back", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectBegin()
+		mock.ExpectRollback()
+		require.PanicsWithValue(t, "collector panic", func() {
+			_, _ = storage.UpdateCDCTask(ctx, task.TaskStatus_Canceled, func(context.Context, task.TaskStatus, map[CDCTaskKey]struct{}, SqlExecutor) (int, error) {
+				panic("collector panic")
+			})
+		})
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("query daemon task error", func(t *testing.T) {
@@ -2307,7 +2425,7 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 
 		mock.ExpectBegin()
 		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
-		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(updateCDCDaemonStatus).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
 			keyMap[CDCTaskKey{
@@ -2322,6 +2440,67 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 		require.NoError(t, storage.Close())
 	})
 
+	t.Run("transition commit failure returns zero", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		d := base
+		d.ID = 1
+		d.TaskStatus = task.TaskStatus_Running
+		mock.ExpectBegin()
+		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
+		mock.ExpectExec(updateCDCDaemonStatus).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit().WillReturnError(errors.New("commit failed"))
+		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keys map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+			keys[CDCTaskKey{AccountId: uint64(catalog.System_Account), TaskId: d.Metadata.ID}] = struct{}{}
+			return 1, nil
+		})
+		require.ErrorContains(t, err, "commit failed")
+		require.Zero(t, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	for _, failAt := range []string{"exec", "rows affected"} {
+		t.Run("later status "+failAt+" failure rolls back", func(t *testing.T) {
+			storage, mock := newMockStorage(t)
+			first := newCdcInfo(t)
+			first.TaskStatus = task.TaskStatus_Running
+			second := newCdcInfo(t)
+			second.ID = 2
+			second.Metadata.ID = "taskID-2"
+			second.TaskStatus = task.TaskStatus_Running
+			second.Details.Details.(*task.Details_CreateCdc).CreateCdc.TaskId = "taskID-2"
+			details, err := second.Details.Marshal()
+			require.NoError(t, err)
+			rows := newDaemonTaskRows(t, first)
+			rows.AddRow(second.ID, second.Metadata.ID, second.Metadata.Executor, second.Metadata.Context,
+				json.MustMarshal(second.Metadata.Options), catalog.System_Account, "sys", second.TaskType,
+				second.TaskRunner, second.TaskStatus, second.LastHeartbeat, second.CreateAt, second.UpdateAt,
+				second.EndAt, second.LastRun, details)
+			writeErr := errors.New("status update failed")
+			mock.ExpectBegin()
+			mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(rows)
+			mock.ExpectExec(updateCDCDaemonStatus).WillReturnResult(sqlmock.NewResult(0, 1))
+			last := mock.ExpectExec(updateCDCDaemonStatus)
+			if failAt == "exec" {
+				last.WillReturnError(writeErr)
+			} else {
+				last.WillReturnResult(sqlmock.NewErrorResult(writeErr))
+			}
+			mock.ExpectRollback()
+			n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keys map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
+				keys[CDCTaskKey{AccountId: uint64(catalog.System_Account), TaskId: first.Metadata.ID}] = struct{}{}
+				keys[CDCTaskKey{AccountId: uint64(catalog.System_Account), TaskId: second.Metadata.ID}] = struct{}{}
+				return 2, nil
+			})
+			require.ErrorIs(t, err, writeErr)
+			require.Zero(t, n)
+			mock.ExpectClose()
+			require.NoError(t, storage.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+
 	t.Run("pause while resume is being admitted", func(t *testing.T) {
 		storage, mock := newMockStorage(t)
 		d := base
@@ -2330,7 +2509,7 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 
 		mock.ExpectBegin()
 		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
-		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(updateCDCDaemonStatus).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_PauseRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
 			keyMap[CDCTaskKey{
@@ -2353,7 +2532,7 @@ func TestUpdateCDCTaskBranchesInSqlMock(t *testing.T) {
 
 		mock.ExpectBegin()
 		mock.ExpectQuery(selectDaemonTask + " order by task_id").WillReturnRows(newDaemonTaskRows(t, d))
-		mock.ExpectExec(updateDaemonTask).WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(updateCDCDaemonStatus).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		n, err := storage.UpdateCDCTask(ctx, task.TaskStatus_ResumeRequested, func(_ context.Context, _ task.TaskStatus, keyMap map[CDCTaskKey]struct{}, _ SqlExecutor) (int, error) {
 			keyMap[CDCTaskKey{
