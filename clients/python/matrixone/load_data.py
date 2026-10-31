@@ -18,6 +18,7 @@ MatrixOne Load Data Manager - Provides high-level LOAD DATA operations
 
 from typing import Optional, List, Dict, Union
 from enum import Enum
+import re
 
 from ._sql_literals import sql_identifier, sql_string_token
 from ._utils import stage_file_uri
@@ -62,6 +63,48 @@ class BaseLoadDataManager:
     def __init__(self, client):
         """Initialize base load data manager"""
         self.client = client
+
+    _CSV_ALIASES = {
+        'format': 'read_csv',
+        'fields_terminated_by': 'sep',
+        'fields_enclosed_by': 'quotechar',
+        'fields_optionally_enclosed': 'quoting',
+        'fields_escaped_by': 'escapechar',
+        'ignore_lines': 'skiprows',
+        'columns': 'names',
+        'character_set': 'encoding',
+        'file_path': 'filepath_or_buffer',
+        'table_name_or_model': 'table',
+    }
+    _JSON_ALIASES = {
+        'format': 'read_json',
+        'jsondata': 'orient',
+        'file_path': 'filepath_or_buffer',
+        'table_name_or_model': 'table',
+    }
+    _PARQUET_ALIASES = {'format': 'read_parquet', 'file_path': 'filepath_or_buffer', 'table_name_or_model': 'table'}
+
+    @staticmethod
+    def _reject_wrapper_options(kwargs, aliases):
+        for name, alternative in aliases.items():
+            if name in kwargs:
+                raise ValueError(f"{name} is controlled by {alternative}; use {alternative} or from_file directly")
+
+    @staticmethod
+    def _validate_set_clause(assignments):
+        # The loader can name columns but cannot introduce LOAD row variables.
+        identifier = r"(?:[A-Za-z_][A-Za-z0-9_]*|`(?:``|[^`])+`)"
+        literal = r"(?:'(?:''|[^'\\])*'|\"(?:\"\"|[^\"\\])*\"|[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))"
+        pattern = re.compile(r"\s*NULLIF\s*\(\s*(" + identifier + r")\s*,\s*" + literal + r"\s*\)\s*", re.I)
+        if not isinstance(assignments, dict):
+            raise ValueError('set_clause must map columns to NULLIF(column, literal)')
+        for column, expression in assignments.items():
+            match = pattern.fullmatch(expression) if isinstance(expression, str) else None
+            source = match.group(1) if match else ''
+            if source.startswith('`'):
+                source = source[1:-1].replace('``', '`')
+            if not match or not isinstance(column, str) or source.casefold() != column.casefold():
+                raise ValueError('SET supports only NULLIF(target_column, literal); row variables are not supported')
 
     def _build_load_data_sql(
         self,
@@ -186,10 +229,10 @@ class BaseLoadDataManager:
             parts.append('IGNORE %d LINES' % ignore_lines)
         if columns is not None:
             parts.append('(' + ', '.join(sql_identifier(c) for c in columns) + ')')
-        if set_clause:
-            if not isinstance(set_clause, dict) or any(not isinstance(v, str) or not v for v in set_clause.values()):
-                raise ValueError('set_clause must map column names to SQL expressions')
-            parts.append('SET ' + ', '.join(sql_identifier(k) + '=' + v for k, v in set_clause.items()))
+        if set_clause is not None:
+            self._validate_set_clause(set_clause)
+            if set_clause:
+                parts.append('SET ' + ', '.join(sql_identifier(k) + '=' + v for k, v in set_clause.items()))
         if parallel:
             parts.append("PARALLEL 'true'")
         return ' '.join(parts)
@@ -358,7 +401,7 @@ class LoadDataManager(BaseLoadDataManager):
             '/path/to/data.csv',
             User,
             columns=['name', 'email', 'age'],
-            set_clause={'created_at': 'NOW()', 'status': "'active'"}
+            set_clause={'status': "NULLIF(status, 'null')"}
         )
 
         # ========================================
@@ -480,7 +523,7 @@ class LoadDataManager(BaseLoadDataManager):
             encoding (str, optional): Character encoding (pandas: encoding)
             parallel (bool): Enable parallel loading. Default: False
             compression (str or CompressionFormat, optional): Compression format
-            set_clause (dict, optional): Column transformations
+            set_clause (dict, optional): NULLIF(target_column, literal) assignments; row variables are unsupported
             inline (bool): If True, treat filepath_or_buffer as inline data. Default: False
 
         Returns:
@@ -511,6 +554,7 @@ class LoadDataManager(BaseLoadDataManager):
             # With ORM model
             client.load_data.read_csv('data.csv', table=User, skiprows=1)
         """
+        self._reject_wrapper_options(kwargs, self._CSV_ALIASES)
         # Handle inline data
         if inline:
             if encoding is not None or parallel or compression is not None or set_clause is not None:
@@ -578,7 +622,7 @@ class LoadDataManager(BaseLoadDataManager):
             encoding (str, optional): Character encoding
             parallel (bool): Enable parallel loading
             compression (str or CompressionFormat, optional): Compression format
-            set_clause (dict, optional): Column transformations
+            set_clause (dict, optional): NULLIF(target_column, literal) assignments; row variables are unsupported
 
         Returns:
             ResultSet: Load results
@@ -709,6 +753,7 @@ class LoadDataManager(BaseLoadDataManager):
             json_data = '{"id":1,"name":"Alice"}\\n{"id":2,"name":"Bob"}\\n'
             client.load_data.read_json(json_data, table='users', inline=True)
         """
+        self._reject_wrapper_options(kwargs, self._JSON_ALIASES)
         if lines is not True:
             raise ValueError('Native JSON loading requires lines=True (JSON Lines)')
         # Handle inline data
@@ -824,6 +869,7 @@ class LoadDataManager(BaseLoadDataManager):
             # With ORM model
             client.load_data.read_parquet('data.parquet', table=User)
         """
+        self._reject_wrapper_options(kwargs, self._PARQUET_ALIASES)
         return self.from_file(
             file_path=filepath_or_buffer, table_name_or_model=table, format=LoadDataFormat.PARQUET.value, **kwargs
         )
@@ -1022,7 +1068,7 @@ class LoadDataManager(BaseLoadDataManager):
                 - CompressionFormat.TAR_GZ or 'tar.gz': Tar+Gzip
                 - CompressionFormat.TAR_BZ2 or 'tar.bz2': Tar+Bzip2
 
-            set_clause (dict, optional): Column transformations.
+            set_clause (dict, optional): NULLIF(target_column, literal) assignments; row variables are unsupported.
                 Dictionary of column transformations, e.g.:
                 {'col1': 'NULLIF(col1, "null")', 'col2': 'NULLIF(col2, 1)'}
 
@@ -1312,7 +1358,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
                 '/path/to/data.csv',
                 User,
                 columns=['name', 'email', 'age'],
-                set_clause={'created_at': 'NOW()'}
+                set_clause={'status': "NULLIF(status, 'null')"}
             )
 
             # Load JSON Lines format asynchronously
@@ -1413,6 +1459,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_csv (pandas-style)"""
+        self._reject_wrapper_options(kwargs, self._CSV_ALIASES)
         # Handle inline data
         if inline:
             if encoding is not None or parallel or compression is not None or set_clause is not None:
@@ -1456,6 +1503,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
         **kwargs,
     ):
         """Async version of read_json (pandas-style)"""
+        self._reject_wrapper_options(kwargs, self._JSON_ALIASES)
         if lines is not True:
             raise ValueError('Native JSON loading requires lines=True (JSON Lines)')
         # Handle inline data
@@ -1478,6 +1526,7 @@ class AsyncLoadDataManager(BaseLoadDataManager):
 
     async def read_parquet(self, filepath_or_buffer: str, table: Union[str, type], **kwargs):
         """Async version of read_parquet (pandas-style)"""
+        self._reject_wrapper_options(kwargs, self._PARQUET_ALIASES)
         return await self.from_file(
             file_path=filepath_or_buffer, table_name_or_model=table, format=LoadDataFormat.PARQUET.value, **kwargs
         )

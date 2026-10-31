@@ -212,16 +212,21 @@ async def test_stage_and_pitr_observed_state(client, async_client, kind, server)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
-async def test_local_file_requires_opt_in_and_loads_exact_bytes(client, async_client, server, tmp_path, kind):
+async def test_local_file_authority_and_explicit_opt_out(client, async_client, server, tmp_path, kind):
     table = name('local_')
     path = tmp_path / 'rows.csv'
     path.write_text('1,alpha\n2,beta\n')
     client.execute(f'CREATE TABLE {table}(id INT PRIMARY KEY,label VARCHAR(20))')
-    disabled = client if kind == 'sync' else async_client
+    default = client if kind == 'sync' else async_client
+    disabled = Client(sql_log_mode='off') if kind == 'sync' else AsyncClient(sql_log_mode='off')
     enabled = Client(sql_log_mode='off') if kind == 'sync' else AsyncClient(sql_log_mode='off')
     try:
-        with pytest.raises(ValueError, match='local_infile=True'):
+        await resolve(disabled.connect(**server, local_infile=False))
+        with pytest.raises(ValueError, match='LOCAL INFILE is disabled'):
             await resolve(disabled.load_data.from_local_file(str(path), table))
+        await resolve(default.load_data.from_local_file(str(path), table))
+        assert client.execute(f'SELECT * FROM {table} ORDER BY id').rows == [(1, 'alpha'), (2, 'beta')]
+        client.execute(f'DELETE FROM {table}')
         await resolve(enabled.connect(**server, local_infile=True))
         await resolve(enabled.load_data.from_local_file(str(path), table))
         assert client.execute(f'SELECT * FROM {table} ORDER BY id').rows == [(1, 'alpha'), (2, 'beta')]
@@ -230,6 +235,7 @@ async def test_local_file_requires_opt_in_and_loads_exact_bytes(client, async_cl
         assert (await resolve(enabled.execute('SELECT 42'))).scalar() == 42
         assert enabled._engine.pool.checkedout() == 0
     finally:
+        await resolve(disabled.disconnect())
         await resolve(enabled.disconnect())
         client.execute('DROP TABLE ' + table)
 

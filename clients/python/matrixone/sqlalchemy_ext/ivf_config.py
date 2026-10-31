@@ -120,7 +120,9 @@ class IVFConfig:
                 result = _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'experimental_ivf_index'")
                 ivf_setting = result.fetchone()
                 if ivf_setting:
-                    status["ivf_enabled"] = ivf_setting[1] == "1"
+                    from .hnsw_config import _decode_boolean_setting
+
+                    status["ivf_enabled"] = _decode_boolean_setting(ivf_setting[1])
 
                 # Get probe limit setting
                 result = _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'probe_limit'")

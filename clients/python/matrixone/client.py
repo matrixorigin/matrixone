@@ -1353,8 +1353,10 @@ class Client(BaseMatrixOneClient):
         start_time = time.time()
 
         try:
-            # Check if this is a SQLAlchemy statement
-            if not isinstance(sql_or_stmt, str):
+            non_transactional = is_non_transactional_statement(sql_or_stmt)
+            typed_statement = not isinstance(sql_or_stmt, str)
+            # Keep typed statements on their SQLAlchemy execution path.
+            if typed_statement and not non_transactional:
                 # SQLAlchemy statement - delegate to session for consistent behavior
                 with self.session() as session:
                     # Suppress Session-level logging; Client logs below
@@ -1389,18 +1391,17 @@ class Client(BaseMatrixOneClient):
                         )
                         return result_set
 
-            # String SQL - original implementation
-            mode_sensitive = not _driver_bound and params is not None and '\\' in sql_or_stmt
+            # Route standalone DDL on the same checkout used for execution.
+            mode_sensitive = not typed_statement and not _driver_bound and params is not None and '\\' in sql_or_stmt
             final_sql = (
                 sql_or_stmt
-                if _driver_bound
+                if _driver_bound or typed_statement
                 else None if mode_sensitive else self._substitute_parameters(sql_or_stmt, params)
             )
 
-            # MERGE/PICK require autocommit outside explicit sessions. Change
+            # Standalone DDL and MERGE/PICK require autocommit. Change
             # only this checkout, restoring its baseline before pool reuse.
             # Ordinary SQL retains the engine.begin() transaction path.
-            non_transactional = is_non_transactional_statement(sql_or_stmt)
             pool_wait()
             with self._engine.connect() if non_transactional else self._engine.begin() as conn:
                 restore_autocommit = False
@@ -1424,7 +1425,9 @@ class Client(BaseMatrixOneClient):
                         conn.exec_driver_sql("SET autocommit = 1")
                     # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
                     # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-                    if hasattr(conn, 'exec_driver_sql'):
+                    if typed_statement:
+                        result = conn.execute(sql_or_stmt, params or {})
+                    elif hasattr(conn, 'exec_driver_sql'):
                         # Escape % to %% for pymysql's format string handling in exec_driver_sql
                         escaped_sql = final_sql if _driver_bound else final_sql.replace('%', '%%')
                         if _driver_bound:
@@ -1461,6 +1464,7 @@ class Client(BaseMatrixOneClient):
                                 raise
 
                 execution_time = time.time() - start_time
+                sql_display = sql_or_stmt if not typed_statement else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
                 if result.returns_rows:
                     # SELECT query
@@ -1468,12 +1472,12 @@ class Client(BaseMatrixOneClient):
 
                     result_set = buffer_result(ResultSet, result)
                     rows = result_set.rows
-                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode)
+                    self.logger.log_query(sql_display, execution_time, len(rows), success=True, log_mode=log_mode)
                     return result_set
                 else:
                     # INSERT/UPDATE/DELETE query
                     result_set = ResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True, log_mode=log_mode)
+                    self.logger.log_query(sql_display, execution_time, result.rowcount, success=True, log_mode=log_mode)
                     return result_set
 
         except Exception as e:

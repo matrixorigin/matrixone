@@ -171,7 +171,9 @@ class TestFulltextAdvancedOperators(unittest.TestCase):
         )
         sql = expr.compile()
 
-        expected = "MATCH(`title`, `content`, `tags`) AGAINST('+programming tutorial ~legacy -deprecated' IN BOOLEAN MODE)"
+        expected = (
+            "MATCH(`title`, `content`, `tags`) AGAINST('+programming tutorial ~legacy -deprecated' IN BOOLEAN MODE)"
+        )
         self.assertEqual(sql, expected)
 
     def test_group_with_weights(self):
@@ -617,6 +619,24 @@ class TestBM25AlgorithmSupport(unittest.TestCase):
 
 class TestComplexBooleanModeQueries(unittest.TestCase):
     """Test complex boolean mode operators - offline SQL generation tests"""
+
+    def test_raw_query_and_structured_terms(self):
+        from matrixone.sqlalchemy_ext.fulltext_search import FulltextSearchBuilder as SearchBuilder
+
+        builder = SearchBuilder(Mock()).table('articles').columns(['content'])
+        self.assertIn(
+            "AGAINST('machine learning' IN natural language mode)", builder.query('machine learning')._build_sql()
+        )
+        self.assertIn("AGAINST($sdk$C:\\path$sdk$ IN natural language mode)", builder.query(r'C:\path')._build_sql())
+        self.assertIn("AGAINST('O''Reilly' IN natural language mode)", builder.query("O'Reilly")._build_sql())
+        builder.with_mode(FulltextSearchMode.BOOLEAN).query('+machine -java').add_term('python', required=True)
+        self.assertIn("AGAINST('+machine -java +python' IN BOOLEAN MODE)", builder._build_sql())
+        builder.query('reset')
+        self.assertIn("AGAINST('reset' IN BOOLEAN MODE)", builder._build_sql())
+        for invalid in ('bad\x00term', r'bad\$term', ''):
+            with self.assertRaises(ValueError):
+                builder.query(invalid)
+            self.assertIn("AGAINST('reset' IN BOOLEAN MODE)", builder._build_sql())
 
     def test_wildcard_suffix_generation(self):
         """Test wildcard suffix (*) in boolean queries - SQL should contain wildcard"""
