@@ -989,8 +989,7 @@ func TestPostEvictPanicDoesNotBlockDone(t *testing.T) {
 	}
 }
 
-// Long scans should compete through the cache policy instead of preventing
-// every admission after a fixed reader position.
+// Admitted scan entries must not displace a frequently reused working set.
 func TestCacheScanRetainsReusedWorkingSet(t *testing.T) {
 	ctx := t.Context()
 	cache := New[int, int](fscache.ConstCapacity(10), ShardInt[int], nil, nil, nil)

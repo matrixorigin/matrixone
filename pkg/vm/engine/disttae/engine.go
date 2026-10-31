@@ -1333,6 +1333,7 @@ func (e *Engine) BuildBlockReaders(
 			ts,
 			expr,
 			ds,
+			readutil.GetThresholdForReader(newNum),
 			readerHint,
 		)
 		if err != nil {
