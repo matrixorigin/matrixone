@@ -132,7 +132,7 @@ func TestEveryFailableBuiltinResetsAndRecords(t *testing.T) {
 		{"mo.llm_connect", si.moLlmConnect}, {"mo.llm_chat", si.moLlmChat},
 	} {
 		// a stale duplicate-key code from an earlier statement
-		si.lastErr = lastFailure{code: 1062, sqlstate: "23000", set: true}
+		si.lastErr = lastFailure{code: 1062, sqlstate: "23000"}
 
 		v, err := c.fn(nil, starlark.NewBuiltin(c.name, c.fn), notAString, nil)
 		require.NoError(t, err, "%s must not abort the script", c.name)

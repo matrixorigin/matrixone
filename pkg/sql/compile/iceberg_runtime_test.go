@@ -26,6 +26,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIcebergDeleteTaskPrefersTaskMetadata(t *testing.T) {
+	tasks := []api.DeleteFileTask{
+		{DeleteSchemaID: 3, SequenceNumber: 7, DataFile: api.DataFile{DeleteSchemaID: 4, SequenceNumber: 8}},
+		{DataFile: api.DataFile{DeleteSchemaID: 4, SequenceNumber: 8}},
+		{DeleteSchemaID: -1, SequenceNumber: -2, DataFile: api.DataFile{DeleteSchemaID: 4, SequenceNumber: 8}},
+		{},
+	}
+	got := icebergDeleteTasksToPipeline(tasks)
+	require.Len(t, got, 4)
+	for i, want := range []struct {
+		schema   int32
+		sequence int64
+	}{{3, 7}, {4, 8}, {-1, -2}, {0, 0}} {
+		require.Equal(t, want.schema, got[i].DeleteSchemaId)
+		require.Equal(t, want.sequence, got[i].SequenceNumber)
+	}
+}
+
 func TestIcebergScanPlanToRuntime(t *testing.T) {
 	ctx := context.Background()
 	runtime, err := icebergScanPlanToRuntime(ctx, &api.IcebergScanPlan{

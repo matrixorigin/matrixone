@@ -299,8 +299,7 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 		if execCtx.ses != nil {
 			lowerCaseTableNames = parserLowerCaseTableNames(execCtx.ses)
 		}
-		databaseKey := tree.NewCStr(db, lowerCaseTableNames).Compare()
-		if dst, ok := execCtx.remapDb[databaseKey]; ok {
+		if dst, ok := lookupRemappedDatabase(execCtx.remapDb, db, lowerCaseTableNames); ok {
 			return dst
 		}
 	}
@@ -629,7 +628,10 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 	}); err != nil {
 		return err
 	}
-	return plan2.MigrateLegacyHexTableDef(tcc.GetProcess(), tableDef)
+	if err := plan2.MigrateLegacyFloatStringTableDef(tcc, tableDef); err != nil {
+		return err
+	}
+	return plan2.MigrateLegacyCatalogTableDef(ctx, tcc.GetProcess(), tableDef)
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot *plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
@@ -1178,9 +1180,48 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 // assigned. The value itself may be represented as text for protocol and
 // compatibility reasons (notably DECIMAL), so planner numeric binding must
 // not infer a narrower type from a sibling literal.
+// systemVariableDeclaredType returns the registry-declared engine type for
+// integer system variables. MySQL's Item_func_get_system_var::resolve_type
+// maps the unsigned integer SHOW_* families (SHOW_LONG, SHOW_INT, SHOW_
+// HA_ROWS, SHOW_LONGLONG; sql/item_func.cc@9fc8d600:6992-6997) to an
+// unsigned LONGLONG column, and only the SHOW_SIGNED_* families render
+// signed. The pinned primary declarations (sql/sys_vars.cc@9fc8d600) define
+// the family — for example Sys_max_connections :2970 and Sys_net_wait_timeout
+// :5327 as Sys_var_ulong — all ten reported variables in unsigned families.
+// The registry declaration carries the same fact: an integer variable whose
+// declared domain admits no negative value (minimum >= 0 and no -1 sentinel)
+// renders unsigned; a declaration permitting negatives such as
+// optimizer_trace_offset (minimum -2147483647, default -1) renders signed.
+// Signedness derives from the declaration alone, never from the current
+// value. Every other class (string, bool, enum, set, double, locale) and
+// every unknown name keeps the historical empty resolution and therefore
+// the legacy TEXT result envelope unchanged.
+func systemVariableDeclaredType(name string) plan2.Type {
+	def, ok := gSysVarsDefs[strings.ToLower(name)]
+	if !ok {
+		return plan2.Type{}
+	}
+	var engineType types.T
+	switch svType := def.Type.(type) {
+	case SystemVariableIntType:
+		engineType = types.T_uint64
+		if svType.minimum < 0 || svType.maybeMinusOne {
+			engineType = types.T_int64
+		}
+	case SystemVariableUintType:
+		engineType = types.T_uint64
+	default:
+		return plan2.Type{}
+	}
+	return plan2.Type{
+		Id:      int32(engineType),
+		Charset: uint32(types.CharsetType(engineType)),
+	}
+}
+
 func (tcc *TxnCompilerContext) ResolveVariableType(varName string, isSystemVar, isGlobalVar bool) (plan2.Type, error) {
 	if isSystemVar {
-		return plan2.Type{}, nil
+		return systemVariableDeclaredType(varName), nil
 	}
 	if tcc.execCtx != nil {
 		if value, declaredType, hasDeclaredType, ok := resolveStoredProcedureVariableWithType(

@@ -173,6 +173,7 @@ drop table if exists t1;
 -- @case
 -- @desc:test for case_when expression with mixed decimal scales
 -- @label:bvt
+-- @metacmp(true)
 SELECT
   7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul,
   CASE WHEN 'USD' = 'RMB'
@@ -183,6 +184,7 @@ SELECT
 -- @case
 -- @desc:test for case_when expression with then branch decimal cast
 -- @label:bvt
+-- @metacmp(true)
 SELECT
   CASE WHEN 'USD' = 'USD'
        THEN CAST(-58140.00 AS DECIMAL(23,2))
@@ -192,6 +194,7 @@ SELECT
 -- @case
 -- @desc:test for iff expression with mixed decimal scales
 -- @label:bvt
+-- @metacmp(true)
 SELECT
   IFF('USD' = 'USD',
       CAST(-58140.00 AS DECIMAL(23,2)),
@@ -226,11 +229,14 @@ SELECT
 -- @case
 -- @desc:test for coalesce over decimal branches with different scales aligns scale/width
 -- @label:bvt
+-- @metacmp(true)
 SELECT 7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul;
+-- @metacmp(true)
 SELECT COALESCE(
   CAST(NULL AS DECIMAL(23,2)),
   7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 ) AS coalesce_decimal_scale;
+-- @metacmp(true)
 SELECT COALESCE(
   CAST(1.23 AS DECIMAL(23,2)),
   7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
@@ -544,4 +550,18 @@ insert into t_case_nullable_condition values (1, null), (2, 0), (3, 2.5);
 select id, case when cond then 'true' else 'false' end as condition_result
 from t_case_nullable_condition
 order by id;
+
+-- Fixed-width CASE with NULL ELSE preserves NULL conditions and THEN values.
+insert into t_case_nullable_condition values (4, 1);
+select id, case when cond then case when id = 4 then null else id end else null end as case_value
+from t_case_nullable_condition order by id;
+
+-- Invalid casts in unselected THEN branches must not be evaluated.
+select id, case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
+from t_case_nullable_condition where id < 4 order by id;
+show warnings;
+-- A selected invalid SELECT cast returns zero and a warning, not an error.
+select case when cond then cast(case when id = 3 then '7' else 'bad' end as decimal(18,2)) else null end as case_value
+from t_case_nullable_condition where id = 4;
+show warnings;
 drop table t_case_nullable_condition;

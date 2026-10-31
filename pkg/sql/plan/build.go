@@ -26,8 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -95,6 +97,9 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	// The physical ROLLUP selector is needed while binding the query block.
+	// createQuery parses the same setting again for the optimizer passes.
+	builder.parseOptimizeHints()
 
 	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
@@ -248,9 +253,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 	// modernInsertFkCheckEnabled / appendForeignConstrantPlan), and INSERT IGNORE
 	// drops the offending rows (see buildInsertIgnoreFkFilter). Only self-referencing
 	// FKs still need a post-execution DetectSql, generated here for all of them.
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, stmt.With, nil, "insert")
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
 	if err != nil {
 		return nil, err
+	}
+	if len(tblInfo.tableDefs) != 1 {
+		return nil, moerr.NewInvalidInput(ctx.GetContext(), "INSERT requires one physical target table")
 	}
 	if len(tblInfo.tableDefs) == 1 && len(tblInfo.tableDefs[0].Fkeys) > 0 {
 		// The in-plan child checks and self-reference DetectSqls depend on the
@@ -507,7 +515,8 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 	}
 	builder.returningRequested = stmt.HasReturning()
 
-	rootId, err := builder.bindUpdate(stmt, bindCtx)
+	dmlCtx := NewDMLContext()
+	rootId, err := builder.bindUpdate(stmt, bindCtx, dmlCtx)
 	if err != nil {
 		route, reason, routedErr := classifyUpdatePlannerError(err)
 		switch route {
@@ -554,12 +563,8 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 		return nil, err
 	}
 	if enabled && query.HasForeignKeyAction {
-		tblInfo, resolveErr := getUpdateTableInfo(ctx, stmt)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		for i, tableDef := range tblInfo.tableDefs {
-			if len(tblInfo.updateKeys[i]) == 0 {
+		for i, tableDef := range dmlCtx.tableDefs {
+			if len(dmlCtx.updateCol2Expr[i]) == 0 {
 				continue
 			}
 			selfFkeys := make([]*plan.ForeignKeyDef, 0, len(tableDef.Fkeys))
@@ -573,7 +578,7 @@ func bindAndOptimizeUpdateQuery(ctx CompilerContext, stmt *tree.Update, isPrepar
 			}
 			sqls, genErr := genSqlsForCheckFKSelfRefer(
 				ctx.GetContext(),
-				tblInfo.objRef[i].SchemaName,
+				dmlCtx.objRefs[i].SchemaName,
 				tableDef.Name,
 				tableDef.Cols,
 				selfFkeys,
@@ -884,12 +889,16 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
 	case *tree.CallStmt:
-		if isIcebergBuiltinCall(stmt) {
+		if sqliceberg.IsBuiltinProcedure(stmt) {
 			return buildIcebergBuiltinCall(stmt, ctx)
 		}
 		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	case *tree.Do, *tree.Declare:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
+	case *tree.ExplainFor:
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "EXPLAIN FOR CONNECTION")
+	case *tree.CreateExtension, *tree.LoadExtension:
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "extension statements are not supported in MatrixOne")
 	case *tree.ValuesStatement:
 		return buildValues(stmt, ctx, isPrepareStmt)
 	case *tree.LockTableStmt:
@@ -993,6 +1002,11 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			return nil
 		}
 		columns := make([]*ColDef, len(lastNode.ProjectList))
+		var integerValues []function.IntegerLogicalPrecision
+		if query.IntegerPrecision != nil {
+			integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+		}
+
 		// Only BOOLEAN wire metadata consumes expression kind. Keep all other
 		// result types on the existing origin/key path.
 		var kinds *resultColumnKinds
@@ -1002,6 +1016,16 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				Typ:  expr.Typ,
 			}
 
+			if graph := query.IntegerPrecision; graph != nil && idx < len(graph.Outputs) {
+				out := graph.Outputs[idx]
+				if out.Node != 0 && graph.Nodes[out.Node-1].Arithmetic {
+					p := integerValues[out.Node-1]
+					oid := types.T(expr.Typ.Id)
+					if p.Known && (oid == types.T_int64 || oid == types.T_uint64) && p.Unsigned == oid.IsUnsignedInt() {
+						columns[idx].IntegerResultPresentation = &plan.IntegerResultPresentation{DisplayLength: uint32(p.DisplayLength())}
+					}
+				}
+			}
 			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
 				if col := exprCol.Col; col != nil {
 					columns[idx].TblName = col.TblName

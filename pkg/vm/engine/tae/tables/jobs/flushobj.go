@@ -37,8 +37,6 @@ type flushObjTask struct {
 	data      *containers.Batch
 	meta      *catalog.ObjectEntry
 	fs        fileservice.FileService
-	name      objectio.ObjectName
-	blocks    []objectio.BlockObject
 	schemaVer uint32
 	seqnums   []uint16
 	stat      objectio.ObjectStats
@@ -106,7 +104,6 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	waitT := time.Since(task.createAt)
 	seg := task.meta.ID().Segment()
 	name := objectio.BuildObjectName(seg, 0)
-	task.name = name
 	cnBatch := containers.ToCNBatch(data)
 	arena := objectio.GetArena(objectio.ArenaSmall)
 	defer func() {
@@ -154,7 +151,7 @@ func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	data = nil
 	copyT := time.Since(inst)
 	inst = time.Now()
-	task.blocks, _, err = writer.Sync(ctx)
+	_, _, err = writer.Sync(ctx)
 	if err != nil {
 		return err
 	}

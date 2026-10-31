@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/constraints"
 )
 
 func TestStringToFloatDefaultCompatibilityUsesNumericPrefix(t *testing.T) {
@@ -1166,6 +1167,69 @@ func Test_CastToDecimal256(t *testing.T) {
 			tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
 			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, tc.info, info)
+		})
+	}
+}
+
+func TestDecimalIntegerCastAcrossPhysicalWidths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typesAndValues := []struct {
+		name  string
+		typ   types.Type
+		parse func(string) any
+	}{
+		{"decimal64", types.New(types.T_decimal64, 18, 2), func(s string) any {
+			v, err := types.ParseDecimal64(s, 18, 2)
+			require.NoError(t, err)
+			return []types.Decimal64{v, v}
+		}},
+		{"decimal128", types.New(types.T_decimal128, 38, 2), func(s string) any {
+			v, err := types.ParseDecimal128(s, 38, 2)
+			require.NoError(t, err)
+			return []types.Decimal128{v, v}
+		}},
+		{"decimal256", types.New(types.T_decimal256, 65, 2), func(s string) any {
+			v, err := types.ParseDecimal256(s, 65, 2)
+			require.NoError(t, err)
+			return []types.Decimal256{v, v}
+		}},
+	}
+	for _, src := range typesAndValues {
+		t.Run(src.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, input string
+				target      types.Type
+				values      any
+				wantErr     bool
+			}{
+				{"signed and null", "42.00", types.T_int8.ToType(), []int8{42, 0}, false},
+				{"unsigned and null", "42.00", types.T_uint8.ToType(), []uint8{42, 0}, false},
+				{"signed fractional", "42.75", types.T_int8.ToType(), []int8{43, 0}, false},
+				{"unsigned fractional", "42.75", types.T_uint8.ToType(), []uint8{42, 0}, false},
+				{"bit fractional and null", "42.75", types.New(types.T_bit, 64, 0), []uint64{42, 0}, false},
+				{"negative bit", "-1.00", types.New(types.T_bit, 64, 0), []uint64{}, true},
+				{"bit overflow", "16.00", types.New(types.T_bit, 4, 0), []uint64{}, true},
+				{"signed overflow", "300.00", types.T_int8.ToType(), []int8{}, true},
+				{"negative unsigned", "-1.00", types.T_uint8.ToType(), []uint8{}, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					inputs := []FunctionTestInput{
+						NewFunctionTestInput(src.typ, src.parse(tc.input), []bool{false, true}),
+						NewFunctionTestInput(tc.target, tc.values, nil),
+					}
+					want := NewFunctionTestResult(tc.target, tc.wantErr, tc.values, []bool{false, true})
+					fc := NewFunctionTestCase(proc, inputs, want, NewCast)
+					defer fc.Free()
+					if tc.wantErr {
+						_, err := fc.DebugRun()
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+						return
+					}
+					ok, info := fc.Run()
+					require.True(t, ok, info)
+				})
+			}
 		})
 	}
 }
@@ -4101,7 +4165,7 @@ func TestDecimalToFloatRangeCheckUsesFullPrecision(t *testing.T) {
 	defer f32Res.Free()
 	require.NoError(t, f32Res.PreExtendAndReset(1))
 	f32Res.GetResultVector().SetType(floatTyp)
-	err = decimal128ToFloat[float32](
+	err = decimalToFloat(
 		ctx,
 		vector.GenerateFunctionFixedTypeParameter[types.Decimal128](d128Vec),
 		f32Res, 1, 32)
@@ -5072,10 +5136,7 @@ func TestParseStringToFloat(t *testing.T) {
 			{name: "hex", input: "0x10", want: 16},
 			{name: "binary", input: "0b1010", want: 10},
 			{name: "octal", input: "0o17", want: 15},
-			{name: "nan", input: "NaN", want: math.NaN()},
-			{name: "inf", input: "Inf", want: math.Inf(1)},
 			{name: "signed hex with unicode whitespace", input: "\u00a0-0x10\u00a0", want: -16},
-			{name: "signed nan with unicode whitespace", input: "\u00a0+NaN\u00a0", want: math.NaN()},
 		}
 
 		for _, tt := range testCases {
@@ -5094,7 +5155,7 @@ func TestParseStringToFloat(t *testing.T) {
 	})
 
 	t.Run("malformed_extensions_error_in_both_modes", func(t *testing.T) {
-		for _, input := range []string{"0x", "0x10foo", "NaNfoo"} {
+		for _, input := range []string{"0x", "0x10foo"} {
 			for _, mode := range []SQLCompatibilityMode{SQLCompatibilityMySQL, SQLCompatibilityMatrixOne} {
 				t.Run(input+"_"+fmt.Sprint(mode), func(t *testing.T) {
 					_, err := parseStringToFloat(input, mode)
@@ -5425,4 +5486,42 @@ func TestCastArrayDimensionMismatch(t *testing.T) {
 		ok, info := tc.RunAndFree()
 		require.True(t, ok, info)
 	})
+}
+
+func TestCastApproximateToTextMySQL(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{1e20, -1e20, 1e-7, 1e-14, 1e-16, 1e15, 0}, []bool{false, false, false, false, false, false, true}),
+		NewFunctionTestInput(types.T_float32.ToType(), []float32{1e20, -1e20, 1e-7, 1e-14, 1e-16, 1e15, 0}, []bool{false, false, false, false, false, false, true}),
+	} {
+		tc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil)},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1e20", "-1e20", "0.0000001", "0.00000000000001", "1e-16", "1e15", ""}, []bool{false, false, false, false, false, false, true}), NewCast)
+		succeed, info := tc.RunAndFree()
+		require.True(t, succeed, info)
+	}
+}
+
+func strToSigned[T constraints.Signed](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	return strToSignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
+}
+
+func strToUnsigned[T constraints.Unsigned](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	return strToUnsignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
+}
+
+func strToFloat[T constraints.Float](
+	ctx context.Context,
+	mode SQLCompatibilityMode,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList) error {
+	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length, selectList)
 }

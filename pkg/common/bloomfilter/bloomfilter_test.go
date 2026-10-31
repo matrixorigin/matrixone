@@ -372,3 +372,20 @@ func TestMarshalUnmarshal(t *testing.T) {
 
 	require.Equal(t, allFound1, allFound2, "original and unmarshaled filters should behave the same")
 }
+
+func TestComputeMemAndHashCountBoundaries(t *testing.T) {
+	for _, tt := range []struct {
+		rows  int64
+		seeds int
+	}{
+		{rows: -1, seeds: 1}, {rows: 0, seeds: 1}, {rows: 1_000_000, seeds: 1},
+		{rows: 1_000_001, seeds: 2}, {rows: 10_000_000, seeds: 2},
+		{rows: 10_000_001, seeds: 3}, {rows: 10_000_000_000, seeds: 3},
+	} {
+		t.Run(fmt.Sprint(tt.rows), func(t *testing.T) {
+			_, seeds := computeMemAndHashCount(tt.rows, 0.01)
+			require.Equal(t, tt.seeds, seeds)
+		})
+	}
+	require.PanicsWithValue(t, "unsupport rowCount", func() { computeMemAndHashCount(10_000_000_001, 0.01) })
+}

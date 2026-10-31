@@ -123,16 +123,14 @@ func Test_initExport(t *testing.T) {
 	type args struct {
 		enableTracer bool
 		config       *tracerProviderConfig
-		needRecover  bool
 		shutdownCtx  context.Context
 	}
 	cancledCtx, cancle := context.WithCancel(context.Background())
 	cancle()
 	ch := make(chan string, 10)
 	tests := []struct {
-		name  string
-		args  args
-		empty bool
+		name string
+		args args
 	}{
 		{
 			name: "disable",
@@ -141,7 +139,6 @@ func Test_initExport(t *testing.T) {
 				config:       &tracerProviderConfig{enable: false},
 				shutdownCtx:  nil,
 			},
-			empty: true,
 		},
 		{
 			name: "enable",
@@ -153,7 +150,6 @@ func Test_initExport(t *testing.T) {
 				},
 				shutdownCtx: context.Background(),
 			},
-			empty: false,
 		},
 		{
 			name: "enable_with_canceled_ctx",
@@ -165,7 +161,6 @@ func Test_initExport(t *testing.T) {
 				},
 				shutdownCtx: cancledCtx,
 			},
-			empty: false,
 		},
 	}
 	for _, tt := range tests {
@@ -177,15 +172,6 @@ func Test_initExport(t *testing.T) {
 			))
 			t.Cleanup(func() { SetTracerProvider(originalProvider) })
 
-			if tt.args.needRecover {
-				defer func() {
-					if err := recover(); err != nil {
-						t.Logf("pass with panic.")
-						return
-					}
-					panic("not catch panic")
-				}()
-			}
 			initExporter(context.TODO(), tt.args.config)
 			require.Equal(t, "motrace.NoopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(GetGlobalBatchProcessor()).Type()))
 			require.Equal(t, Shutdown(tt.args.shutdownCtx), nil)

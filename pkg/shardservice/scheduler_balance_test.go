@@ -54,6 +54,26 @@ var (
 	}
 )
 
+func withBalanceOrder(tables []uint64) balanceOption {
+	return func(s *balanceScheduler) {
+		s.option.orderFunc = func(
+			r *rt,
+			apply func(*table) (bool, error),
+		) error {
+			for _, id := range tables {
+				ok, err := apply(r.tables[id])
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return nil
+				}
+			}
+			return nil
+		}
+	}
+}
+
 func TestScheduleBalance(t *testing.T) {
 	cases := []struct {
 		name                  string

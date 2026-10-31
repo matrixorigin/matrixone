@@ -33,6 +33,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+// filterCloneDatabaseRoutines keeps independent routine families and omits
+// families whose direct or transitive dependencies cannot exist in the target.
+// SQL routines whose bodies cannot be inspected are omitted when the source
+// has an omitted relation. Supported non-SQL UDFs are opaque but cloneable and
+// are preserved after validateCloneUserDefinedFunctions rejects imported
+// package bodies. UDF overloads are one family here: call sites do not carry
+// enough resolved type information for this metadata pass to distinguish
+// overloads safely.
+func filterCloneDatabaseRoutines(
+	ctx context.Context,
+	source cloneDatabaseSource,
+	lowerCaseTableNames int64,
+) ([]userDefinedFunctionDefinition, []storedProcedureDefinition, error) {
+	omissions, err := collectCloneDatabaseOmissionSet(ctx, source, lowerCaseTableNames)
+	if err != nil {
+		return nil, nil, err
+	}
+	applyCloneDatabaseOmissionSet(&source, omissions, lowerCaseTableNames)
+	return source.userDefinedFuncs, source.storedProcedures, nil
+}
+
 func TestCollectCloneDatabaseSourceReusesFKDefinitions(t *testing.T) {
 	for _, ts := range []int64{0, 42} {
 		t.Run(fmt.Sprint(ts), func(t *testing.T) {
@@ -164,8 +185,10 @@ func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
 		Tenant: &plan.SnapshotTenant{TenantID: 7},
 	}
 	querySQL := "select name, args, lang, body, sql_mode from mo_catalog.mo_stored_procedure {MO_TS = 42} where db = 'source_db' order by name"
+	modeSQL := "select attname from mo_catalog.mo_columns {MO_TS = 42} where account_id = 7 and att_database = 'mo_catalog' and att_relname = 'mo_stored_procedure' and attname = 'sql_mode' limit 2"
 	base := &backgroundExecTest{}
 	base.init()
+	base.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 	base.sql2result[querySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
 		{"p_answer", "[]", "sql", "begin select 42; end", "PIPES_AS_CONCAT"},
 	})
@@ -186,12 +209,27 @@ func TestGetStoredProcedureInfosUsesSnapshotAndTenant(t *testing.T) {
 	t.Run("catalog query failure is propagated", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 		wantErr := errors.New("stored procedure query failed")
 		bh.sql2err[querySQL] = wantErr
 
 		procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, procedures)
+	})
+	t.Run("legacy snapshot has no sql_mode", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases(nil)
+		legacySQL := strings.Replace(querySQL, "sql_mode", "'PIPES_AS_CONCAT'", 1)
+		bh.sql2result[legacySQL] = newStoredProcedureMetadataResultSet([][]interface{}{
+			{"p_answer", "[]", "sql", "begin select 42; end", "PIPES_AS_CONCAT"},
+		})
+		procedures, err := getStoredProcedureInfos(context.Background(), bh, snapshot, dbName)
+		require.NoError(t, err)
+		require.Len(t, procedures, 1)
+		require.Equal(t, "PIPES_AS_CONCAT", procedures[0].sqlMode)
+		require.Equal(t, []string{modeSQL, legacySQL}, bh.executedSQLs)
 	})
 }
 
@@ -202,8 +240,10 @@ func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
 		Tenant: &plan.SnapshotTenant{TenantID: 7},
 	}
 	querySQL := "select name, args, retType, body, language, sql_mode from mo_catalog.mo_user_defined_function {MO_TS = 42} where db = 'source_db' order by name"
+	modeSQL := "select attname from mo_catalog.mo_columns {MO_TS = 42} where account_id = 7 and att_database = 'mo_catalog' and att_relname = 'mo_user_defined_function' and attname = 'sql_mode' limit 2"
 	base := &backgroundExecTest{}
 	base.init()
+	base.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 	base.sql2result[querySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
 		{"f_answer", `[{"name":"arg","type":"int"}]`, "int", "select 42", "sql", "PIPES_AS_CONCAT"},
 	})
@@ -226,12 +266,36 @@ func TestGetUserDefinedFunctionInfosUsesSnapshotAndTenant(t *testing.T) {
 	t.Run("catalog query failure is propagated", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases([][]interface{}{{"sql_mode"}})
 		wantErr := errors.New("user defined function query failed")
 		bh.sql2err[querySQL] = wantErr
 
 		functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
 		require.ErrorIs(t, err, wantErr)
 		require.Nil(t, functions)
+	})
+	t.Run("legacy snapshot has no sql_mode", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[modeSQL] = newMrsForSqlForShowDatabases(nil)
+		legacySQL := strings.Replace(querySQL, "sql_mode", "'PIPES_AS_CONCAT'", 1)
+		bh.sql2result[legacySQL] = newUserDefinedFunctionMetadataResultSet([][]interface{}{
+			{"f_answer", `[{"name":"arg","type":"int"}]`, "int", "select 42", "sql", "PIPES_AS_CONCAT"},
+		})
+		functions, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+		require.NoError(t, err)
+		require.Len(t, functions, 1)
+		require.Equal(t, "PIPES_AS_CONCAT", functions[0].sqlMode)
+		require.Equal(t, []string{modeSQL, legacySQL}, bh.executedSQLs)
+	})
+	t.Run("metadata error prevents routine query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("historical column lookup failed")
+		bh.sql2err[modeSQL] = wantErr
+		_, err := getUserDefinedFunctionInfos(context.Background(), bh, snapshot, dbName)
+		require.ErrorIs(t, err, wantErr)
+		require.Equal(t, []string{modeSQL}, bh.executedSQLs)
 	})
 }
 
@@ -747,6 +811,13 @@ func TestCollectCloneRoutineReferencesScopesCTEs(t *testing.T) {
 		wantFunctions     []string
 		wantUninspectable bool
 	}{
+		{name: "INSERT physical target shadows source CTE", body: "begin with t as (select 1 n) insert into t select n from t; end", isProcedure: true, wantTables: []string{"t"}},
+		{name: "INSERT different source CTE", body: "begin with q as (select 1 n) insert into t select n from q; end", isProcedure: true, wantTables: []string{"t"}},
+		{name: "INSERT keeps conservative unused CTE dependencies", body: "begin with t as (select n from source_db.read_src) insert into t values(1); end", isProcedure: true, wantTables: []string{"t", "read_src"}},
+		{name: "INSERT keeps physical read source", body: "begin with t as (select n from source_db.read_src) insert into t select n from t; end", isProcedure: true, wantTables: []string{"t", "read_src"}},
+		{name: "multi INSERT physical target shadows CTE", body: "begin with t as (select 1 n) insert all into t(n) values(n) select n from t; end", isProcedure: true, wantTables: []string{"t"}},
+		{name: "multi INSERT keeps conservative unused CTE dependencies", body: "begin with t as (select n from source_db.read_src) insert all into t(n) values(n) select 1 n; end", isProcedure: true, wantTables: []string{"t", "read_src"}},
+
 		{
 			name: "cte shadows external table",
 			body: "with ext_t as (select 1 as n) select n from ext_t",

@@ -26,6 +26,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testMergeNotifier struct{}
+
+func (*testMergeNotifier) OnCreateTableCommit(MergeTable)     {}
+func (*testMergeNotifier) OnCreateNonAppendObject(MergeTable) {}
+
+func TestCatalogMergeNotifierCanBeCleared(t *testing.T) {
+	catalog := MockCatalog(nil)
+	require.Nil(t, catalog.getMergeNotifier())
+
+	notifier := &testMergeNotifier{}
+	catalog.SetMergeNotifier(notifier)
+	require.Same(t, notifier, catalog.getMergeNotifier())
+
+	require.NotPanics(t, func() {
+		catalog.SetMergeNotifier(nil)
+	})
+	require.Nil(t, catalog.getMergeNotifier())
+}
+
 func newTestObjectStats(t testing.TB,
 	v1, v2 int32, size, row uint32, lv int8, segid *types.Segmentid, num uint16,
 ) *objectio.ObjectStats {

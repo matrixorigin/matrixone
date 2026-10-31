@@ -130,8 +130,8 @@ func TestDecimal256IntervalPreservesFractionalSeconds(t *testing.T) {
 		args, err := resetIntervalFunctionArgs(ctx, makeIntervalExpr(
 			makeWideDecimalIntervalExpr(t, value), "SECOND"))
 		require.NoError(t, err)
-		require.Equal(t, int64(1250000), extractInt64FromExpr(args[0]))
-		require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+		require.Equal(t, int64(1250000), extractInt64FromExpr(t, args[0]))
+		require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(t, args[1]))
 		require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
 	})
 }
@@ -173,7 +173,7 @@ func TestDecimal256IntervalUnarySignPreservesFractionalSeconds(t *testing.T) {
 			name: "nested float cast uses float rounding",
 			sql: "select date_add(cast('2026-01-01 00:00:00' as datetime(6)), " +
 				"interval cast(cast(1.005e0 as decimal(10,2)) as decimal(40,2)) second)",
-			want: 1000000,
+			want: 1010000,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -186,7 +186,7 @@ func TestDecimal256IntervalUnarySignPreservesFractionalSeconds(t *testing.T) {
 			require.Len(t, fn.Args, 3, root.ProjectList[0].String())
 			require.Equal(t, tc.want, foldedIntervalInt64(t, fn.Args[1]),
 				root.ProjectList[0].String())
-			require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(fn.Args[2]),
+			require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(t, fn.Args[2]),
 				root.ProjectList[0].String())
 		})
 	}
@@ -213,8 +213,8 @@ func TestDecimalIntervalUsesCastTargetScale(t *testing.T) {
 	args, err := resetIntervalFunctionArgs(context.Background(), makeIntervalExpr(
 		makeWideDecimalCastIntervalExpr(t, "1.255", 10, 2), "SECOND"))
 	require.NoError(t, err)
-	require.Equal(t, int64(1260000), extractInt64FromExpr(args[0]))
-	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+	require.Equal(t, int64(1260000), extractInt64FromExpr(t, args[0]))
+	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(t, args[1]))
 }
 
 func TestDecimal256IntervalHandlesFloatAndNestedCasts(t *testing.T) {
@@ -222,16 +222,16 @@ func TestDecimal256IntervalHandlesFloatAndNestedCasts(t *testing.T) {
 	floatCast := makeDecimalIntervalCastExpr(t, makeFloat64Const(1.25), 40, 2)
 	args, err := resetIntervalFunctionArgs(ctx, makeIntervalExpr(floatCast, "SECOND"))
 	require.NoError(t, err)
-	require.Equal(t, int64(1250000), extractInt64FromExpr(args[0]))
-	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+	require.Equal(t, int64(1250000), extractInt64FromExpr(t, args[0]))
+	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(t, args[1]))
 	require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
 
 	inner := makeWideDecimalCastIntervalExpr(t, "1.25", 40, 2)
 	nested := makeDecimalIntervalCastExpr(t, inner, 40, 4)
 	args, err = resetIntervalFunctionArgs(ctx, makeIntervalExpr(nested, "SECOND"))
 	require.NoError(t, err)
-	require.Equal(t, int64(1250000), extractInt64FromExpr(args[0]))
-	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+	require.Equal(t, int64(1250000), extractInt64FromExpr(t, args[0]))
+	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(t, args[1]))
 	require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
 
 	for _, tc := range []struct {
@@ -240,8 +240,8 @@ func TestDecimal256IntervalHandlesFloatAndNestedCasts(t *testing.T) {
 		width int32
 		want  int64
 	}{
-		{name: "decimal64 follows float conversion", id: types.T_decimal64, width: 10, want: 1000000},
-		{name: "decimal128 follows float conversion", id: types.T_decimal128, width: 30, want: 1000000},
+		{name: "decimal64 follows float conversion", id: types.T_decimal64, width: 10, want: 1010000},
+		{name: "decimal128 follows float conversion", id: types.T_decimal128, width: 30, want: 1010000},
 		{name: "decimal256 keeps direct float conversion", id: types.T_decimal256, width: 40, want: 1010000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,8 +250,8 @@ func TestDecimal256IntervalHandlesFloatAndNestedCasts(t *testing.T) {
 			outer := makeDecimalIntervalCastExpr(t, inner, 40, 2)
 			args, err := resetIntervalFunctionArgs(ctx, makeIntervalExpr(outer, "SECOND"))
 			require.NoError(t, err)
-			require.Equal(t, tc.want, extractInt64FromExpr(args[0]))
-			require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+			require.Equal(t, tc.want, extractInt64FromExpr(t, args[0]))
+			require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(t, args[1]))
 		})
 	}
 }
@@ -286,7 +286,7 @@ func TestNarrowNormalizedDecimalIntervalPreservesProtocolMarker(t *testing.T) {
 		intervalArgs, intervalErr := resetIntervalFunctionArgs(context.Background(),
 			makeIntervalExpr(direct, "SECOND"))
 		require.NoError(t, intervalErr)
-		require.Equal(t, int64(1250000), extractInt64FromExpr(intervalArgs[0]))
+		require.Equal(t, int64(1250000), extractInt64FromExpr(t, intervalArgs[0]))
 		require.True(t, intervalArgs[0].GetLit().GetDecimalLiteralRequiresV82())
 	}
 
@@ -303,7 +303,7 @@ func TestNarrowNormalizedDecimalIntervalPreservesProtocolMarker(t *testing.T) {
 		window, windowErr := resetWindowIntervalExpr(context.Background(), proc,
 			makeIntervalExpr(direct, "SECOND"))
 		require.NoError(t, windowErr)
-		require.Equal(t, int64(1250000), extractInt64FromExpr(window.GetList().List[0]))
+		require.Equal(t, int64(1250000), extractInt64FromExpr(t, window.GetList().List[0]))
 		require.True(t, window.GetList().List[0].GetLit().GetDecimalLiteralRequiresV82())
 	}
 }
@@ -317,8 +317,8 @@ func TestDecimal256IntervalMatchesExplicitDecimalCastToken(t *testing.T) {
 	cast := makeExplicitDecimalIntervalCastExpr(t, makeStringConst("0b10"), 40, 2)
 	args, err := resetIntervalFunctionArgs(ctx, makeIntervalExpr(cast, "SECOND"))
 	require.NoError(t, err)
-	require.Equal(t, int64(2000000), extractInt64FromExpr(args[0]))
-	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+	require.Equal(t, int64(2000000), extractInt64FromExpr(t, args[0]))
+	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(t, args[1]))
 	require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
 }
 
@@ -343,8 +343,8 @@ func TestDecimal256IntervalCoversDecimalCastCarriers(t *testing.T) {
 				outer := makeDecimalIntervalCastExpr(t, inner, 40, 2)
 				args, err := resetIntervalFunctionArgs(context.Background(), makeIntervalExpr(outer, "SECOND"))
 				require.NoError(t, err)
-				require.Equal(t, int64(1260000), extractInt64FromExpr(args[0]))
-				require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+				require.Equal(t, int64(1260000), extractInt64FromExpr(t, args[0]))
+				require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(t, args[1]))
 				require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
 			})
 		}
@@ -479,7 +479,7 @@ func TestDecimal256IntervalGuardsAndProtocolPaths(t *testing.T) {
 
 	for _, source := range []*plan.Expr{unmarked, marked} {
 		value := makeDecimalIntervalValueExpr(source, 7)
-		require.Equal(t, int64(7), extractInt64FromExpr(value))
+		require.Equal(t, int64(7), extractInt64FromExpr(t, value))
 		require.Equal(t, source.GetLit().GetDecimalLiteralRequiresV82(),
 			value.GetLit().GetDecimalLiteralRequiresV82())
 	}

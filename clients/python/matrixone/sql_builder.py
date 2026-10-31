@@ -19,6 +19,10 @@ This module provides a centralized SQL building system that eliminates
 code duplication across different interfaces (ORM, Vector Search, Pinecone, etc.).
 """
 
+from ._query_compilation import conjoin_conditions
+from ._sql_literals import sql_string_token, sql_identifier, substitute_parameters
+
+from collections.abc import Mapping, Set
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -107,15 +111,18 @@ class MatrixOneSQLBuilder:
     ) -> "MatrixOneSQLBuilder":
         """Add vector distance calculation to SELECT"""
         vector_str = "[" + ",".join(map(str, query_vector)) + "]"
-        distance_expr = f"{distance_func.value}({vector_column}, '{vector_str}') as {alias}"
+        token = sql_string_token(vector_str, context='Vector')
+        distance_expr = f"{distance_func.value}({vector_column}, {token}) as {alias}"
         self._select_columns.append(distance_expr)
         return self
 
     # INSERT methods
     def insert_into(self, table_name: str) -> "MatrixOneSQLBuilder":
-        """Start INSERT operation"""
+        """Start a new INSERT operation with no pending rows."""
         self._query_type = "INSERT"
         self._from_table = table_name
+        self._insert_columns = []
+        self._insert_values = []
         return self
 
     def values(self, **kwargs) -> "MatrixOneSQLBuilder":
@@ -127,30 +134,44 @@ class MatrixOneSQLBuilder:
         if self._query_type != "INSERT":
             raise ValueError("values() can only be used with INSERT operations")
 
-        if not self._insert_columns:
+        if not self._insert_columns and not self._insert_values:
             self._insert_columns = list(kwargs.keys())
 
-        unexpected = sorted(set(kwargs) - set(self._insert_columns))
-        if unexpected:
-            raise ValueError(f"unexpected INSERT columns: {', '.join(unexpected)}")
+        from .base_client import insert_row_values
 
-        values_row = []
-        for col in self._insert_columns:
-            if col in kwargs:
-                values_row.append(kwargs[col])
-            else:
-                values_row.append(None)
+        values_row = insert_row_values(kwargs, self._insert_columns)
 
         self._insert_values.append(values_row)
         return self
 
     def insert_values(self, columns: List[str], values: List[List[Any]]) -> "MatrixOneSQLBuilder":
-        """Add multiple rows of values for INSERT"""
+        """Append rows using the established column order.
+
+        Rows must be sequences with one value per column. A mismatched column
+        list or invalid row is rejected without changing pending rows.
+        """
         if self._query_type != "INSERT":
             raise ValueError("insert_values() can only be used with INSERT operations")
 
-        self._insert_columns = columns
-        self._insert_values = values
+        if isinstance(columns, (Mapping, Set, str, bytes, bytearray)):
+            raise TypeError("INSERT columns must be an ordered sequence of names")
+        columns_copy = list(columns)
+        if (self._insert_columns or self._insert_values) and columns_copy != self._insert_columns:
+            raise ValueError("INSERT columns must match the established column order")
+
+        rows = []
+        for row in values:
+            if isinstance(row, Mapping):
+                raise TypeError("insert_values() rows must be positional, not mappings")
+            if isinstance(row, (Set, str, bytes, bytearray)):
+                raise TypeError("INSERT rows must be ordered sequences of values")
+            row_copy = list(row)
+            if len(row_copy) != len(columns_copy):
+                raise ValueError("INSERT row length must match the number of columns")
+            rows.append(row_copy)
+
+        self._insert_columns = columns_copy
+        self._insert_values.extend(rows)
         return self
 
     # UPDATE methods
@@ -205,6 +226,16 @@ class MatrixOneSQLBuilder:
         self._where_conditions.append(condition)
         self._where_params.extend(params)
         return self
+
+    def _add_where_conditions(self, conditions, params):
+        conditions = list(conditions) if conditions is not None else []
+        params = list(params) if params is not None else []
+        if params and not conditions:
+            raise ValueError('where_params requires where_conditions')
+        if conditions:
+            self._where_conditions.extend(conditions)
+        if params:
+            self._where_params.extend(params)
 
     def where_eq(self, column: str, value: Any) -> "MatrixOneSQLBuilder":
         """Add WHERE column = value, or IS NULL for None."""
@@ -353,9 +384,9 @@ class MatrixOneSQLBuilder:
         return self
 
     # CTE (Common Table Expression) methods
-    def with_cte(self, name: str, sql: str, *params: Any) -> "MatrixOneSQLBuilder":
+    def with_cte(self, name: str, sql: str, *params: Any, recursive: bool = False) -> "MatrixOneSQLBuilder":
         """Add CTE (Common Table Expression)"""
-        self._ctes.append({"name": name, "sql": sql, "params": list(params)})
+        self._ctes.append({"name": name, "sql": sql, "params": list(params), "recursive": recursive})
         return self
 
     # Vector query specific methods
@@ -390,11 +421,7 @@ class MatrixOneSQLBuilder:
         self.from_table(table_name)
 
         # Add WHERE conditions if provided
-        if where_conditions:
-            for condition in where_conditions:
-                self._where_conditions.append(condition)
-            if where_params:
-                self._where_params.extend(where_params)
+        self._add_where_conditions(where_conditions, where_params)
 
         # Add ORDER BY distance and LIMIT
         self.order_by_distance().limit(limit)
@@ -422,9 +449,10 @@ class MatrixOneSQLBuilder:
         if self._ctes:
             with_parts = []
             for cte in self._ctes:
-                with_parts.append(f"{cte['name']} AS ({cte['sql']})")
+                with_parts.append(f"{sql_identifier(cte['name'])} AS ({cte['sql']})")
                 all_params.extend(cte["params"])
-            sql_parts.append("WITH " + ", ".join(with_parts))
+            prefix = "WITH RECURSIVE " if any(cte.get("recursive", False) for cte in self._ctes) else "WITH "
+            sql_parts.append(prefix + ", ".join(with_parts))
 
         # Build SELECT clause
         if self._select_columns:
@@ -437,7 +465,7 @@ class MatrixOneSQLBuilder:
         if self._from_table:
             from_clause = f"FROM {self._from_table}"
             if self._from_snapshot:
-                from_clause += f"{{snapshot = '{self._from_snapshot}'}}"
+                from_clause += f"{{snapshot = {sql_string_token(self._from_snapshot, context='Snapshot')}}}"
             sql_parts.append(from_clause)
 
         # Build JOIN clauses
@@ -446,7 +474,7 @@ class MatrixOneSQLBuilder:
 
         # Build WHERE clause
         if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
+            where_clause = "WHERE " + conjoin_conditions(self._where_conditions)
             sql_parts.append(where_clause)
             all_params.extend(self._where_params)
 
@@ -457,7 +485,7 @@ class MatrixOneSQLBuilder:
 
         # Build HAVING clause
         if self._having_conditions:
-            having_clause = "HAVING " + " AND ".join(self._having_conditions)
+            having_clause = "HAVING " + conjoin_conditions(self._having_conditions)
             sql_parts.append(having_clause)
             all_params.extend(self._having_params)
 
@@ -544,7 +572,7 @@ class MatrixOneSQLBuilder:
         where_clause = ""
         params = self._update_set_values.copy()
         if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
+            where_clause = "WHERE " + conjoin_conditions(self._where_conditions)
             params.extend(self._where_params)
 
         sql = f"UPDATE {self._from_table} SET {set_clause} {where_clause}"
@@ -560,7 +588,7 @@ class MatrixOneSQLBuilder:
         where_clause = ""
         params = []
         if self._where_conditions:
-            where_clause = "WHERE " + " AND ".join(self._where_conditions)
+            where_clause = "WHERE " + conjoin_conditions(self._where_conditions)
             params.extend(self._where_params)
 
         sql = f"DELETE FROM {self._from_table} {where_clause}"
@@ -572,24 +600,19 @@ class MatrixOneSQLBuilder:
 
     def build_with_parameter_substitution(self) -> str:
         """
-        Build SQL with direct parameter substitution for MatrixOne compatibility.
+        Render complete SQL using executable ``?`` markers and typed literals.
 
-        MatrixOne doesn't support parameterized queries in all contexts,
-        so this method substitutes parameters directly into the SQL string.
+        Quoted/comment markers remain unchanged; missing or extra values raise
+        ValueError. Builder placeholders remain qmark-only, preserving raw SQL
+        modulo expressions. Rendered values are SQL-mode independent; callers
+        still own mode-sensitive raw SQL fragments. No server probe is made.
+
+        Convenience helpers reject where_params without actual conditions,
+        including empty iterators, even when returning parameterized SQL.
         """
         sql, params = self.build()
 
-        # Replace parameters directly in SQL for MatrixOne compatibility
-        if params:
-            for param in params:
-                if isinstance(param, str):
-                    # Escape single quotes in string parameters
-                    escaped_param = param.replace("'", "''")
-                    sql = sql.replace("?", f"'{escaped_param}'", 1)
-                else:
-                    sql = sql.replace("?", str(param), 1)
-
-        return sql
+        return substitute_parameters(sql, params, qmark_only=True)
 
     # Utility methods
     def clone(self) -> "MatrixOneSQLBuilder":
@@ -644,7 +667,7 @@ def build_vector_similarity_query(
         limit: Maximum number of results
         select_columns: Columns to select (None for all)
         where_conditions: Additional WHERE conditions
-        where_params: Parameters for WHERE conditions
+        where_params: Filter values; nonempty values require conditions
         use_parameter_substitution: Whether to substitute parameters directly
 
     Returns:
@@ -685,7 +708,7 @@ def build_select_query(
         table_name: Name of the table to query
         select_columns: Columns to select (None for all)
         where_conditions: WHERE conditions
-        where_params: Parameters for WHERE conditions
+        where_params: Filter values; nonempty values require conditions
         order_by: ORDER BY columns
         limit: LIMIT count
         use_parameter_substitution: Whether to substitute parameters directly
@@ -703,11 +726,7 @@ def build_select_query(
 
     builder.from_table(table_name)
 
-    if where_conditions:
-        for condition in where_conditions:
-            builder._where_conditions.append(condition)
-        if where_params:
-            builder._where_params.extend(where_params)
+    builder._add_where_conditions(where_conditions, where_params)
 
     if order_by:
         builder.order_by(*order_by)
@@ -771,7 +790,7 @@ def build_update_query(
         table_name: Name of the table
         set_values: Dictionary of column=value pairs to update
         where_conditions: WHERE conditions
-        where_params: Parameters for WHERE conditions
+        where_params: Filter values; nonempty values require conditions
         use_parameter_substitution: Whether to substitute parameters directly
         order_by: ORDER BY expressions
         limit: Maximum number of affected rows (zero affects no rows)
@@ -787,11 +806,7 @@ def build_update_query(
     if limit is not None:
         builder.limit(limit)
 
-    if where_conditions:
-        for condition in where_conditions:
-            builder._where_conditions.append(condition)
-        if where_params:
-            builder._where_params.extend(where_params)
+    builder._add_where_conditions(where_conditions, where_params)
 
     if use_parameter_substitution:
         return builder.build_with_parameter_substitution()
@@ -814,7 +829,7 @@ def build_delete_query(
 
         table_name: Name of the table
         where_conditions: WHERE conditions
-        where_params: Parameters for WHERE conditions
+        where_params: Filter values; nonempty values require conditions
         use_parameter_substitution: Whether to substitute parameters directly
         order_by: ORDER BY expressions
         limit: Maximum number of affected rows (zero affects no rows)
@@ -830,11 +845,7 @@ def build_delete_query(
     if limit is not None:
         builder.limit(limit)
 
-    if where_conditions:
-        for condition in where_conditions:
-            builder._where_conditions.append(condition)
-        if where_params:
-            builder._where_params.extend(where_params)
+    builder._add_where_conditions(where_conditions, where_params)
 
     if use_parameter_substitution:
         return builder.build_with_parameter_substitution()

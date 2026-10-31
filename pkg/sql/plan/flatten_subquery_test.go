@@ -430,8 +430,8 @@ func TestCorrelatedLimitIsPartitionedByCorrelationKey(t *testing.T) {
 	assertReachablePlanHasNoCorrelatedExpr(t, query)
 }
 
-func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
-	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
+func TestCorrelatedLimitKeepsNonPartitionableRelation(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `
 		SELECT n1.N_NATIONKEY,
 		       (SELECT n2.N_NATIONKEY
 		          FROM NATION n2
@@ -439,7 +439,9 @@ func TestCorrelatedLimitRejectsNonPartitionablePredicate(t *testing.T) {
 		         ORDER BY n2.N_NATIONKEY DESC
 		         LIMIT 1)
 		  FROM NATION n1`)
-	require.ErrorContains(t, err, "correlated LIMIT with non-equality predicates")
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
 }
 
 func TestCorrelatedLimitRejectsProjectedCorrelatedOrdering(t *testing.T) {
@@ -1848,6 +1850,8 @@ func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
 			}
 		}
 		require.NotNil(t, mark)
+		require.True(t, mark.MarkExistenceOnly)
+		require.True(t, DeepCopyNode(mark).MarkExistenceOnly)
 		require.Len(t, mark.OnList, 1)
 		equality := mark.OnList[0].GetF()
 		require.NotNil(t, equality)
@@ -3083,4 +3087,57 @@ func TestCorrelatedCaseLimitKeepsConstantOwnership(t *testing.T) {
 	}
 	require.True(t, partitioned)
 	assertReachablePlanHasNoCorrelatedExpr(t, query)
+}
+
+func TestExistenceMarkProducerProof(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+		want             bool
+	}{
+		{"exists", "exists(select 1 from region r where r.r_regionkey=n.n_regionkey)", true},
+		{"not exists", "not exists(select 1 from region r where r.r_regionkey=n.n_regionkey)", true},
+		{"build-only volatile filter", "exists(select 1 from region r where r.r_regionkey=n.n_regionkey and rand()>0)", true},
+		{"volatile correlation", "exists(select 1 from region r where r.r_regionkey=n.n_regionkey+rand())", false},
+		{"scalar existence consumer", "(select distinct n.n_nationkey from region r where r.r_regionkey=n.n_regionkey)", true},
+		{"fallible key", "exists(select 1 from region r where r.r_regionkey=cast(n.n_comment as int))", false},
+		{"in", "n.n_regionkey in(select r.r_regionkey from region r where r.r_comment=n.n_comment)", false},
+		{"not in", "n.n_regionkey not in(select r.r_regionkey from region r where r.r_comment=n.n_comment)", false},
+		{"any", "n.n_regionkey=any(select r.r_regionkey from region r where r.r_comment=n.n_comment)", false},
+		{"all", "n.n_regionkey=all(select r.r_regionkey from region r where r.r_comment=n.n_comment)", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, "select "+tc.expression+" from nation n")
+			require.NoError(t, err)
+			marks := 0
+			buildHasRand := false
+			hasRand := func(expr *plan.Expr) bool {
+				found := false
+				_ = plan.VisitExprTree(expr, func(e *plan.Expr) error {
+					if f := e.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "rand" {
+						found = true
+					}
+					return nil
+				})
+				return found
+			}
+			for _, node := range p.GetQuery().Nodes {
+				for _, filter := range node.FilterList {
+					buildHasRand = buildHasRand || hasRand(filter)
+				}
+				if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+					marks++
+					require.Equal(t, tc.want, node.MarkExistenceOnly)
+					if tc.name == "build-only volatile filter" {
+						for _, predicate := range node.OnList {
+							require.False(t, hasRand(predicate))
+						}
+					}
+				}
+			}
+			if tc.name == "build-only volatile filter" {
+				require.True(t, buildHasRand, "RAND is evaluated in the unchanged input filter, not a join key")
+			}
+			require.Positive(t, marks)
+		})
+	}
 }

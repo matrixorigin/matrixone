@@ -453,6 +453,80 @@ func abortPreparedCursorQueryResult(execCtx *ExecCtx, cause error) error {
 	return errors.Join(cause, abortErr)
 }
 
+// abortPreparedCursorAttemptStaging discards the staged saved-result blocks
+// of one failed cursor generation before the compiler's retry transition
+// replays the statement. Unlike the terminal abortPreparedCursorQueryResult
+// it preserves the session's authorized statement plan: the plan is
+// installed once before the pipeline starts and internal retries do not
+// re-send it, while the retried generation's publication re-serializes the
+// Plan/Tables provenance consumed by result_scan privilege checks (#30359
+// review). On success the saver slot is cleared, so statement lifecycle
+// cleanup never aborts the same attempt twice; on a cleanup failure the
+// slot keeps its owner, because the retry transition surfaces the error
+// and abandons the replay — no retried generation stages into this saver
+// — while terminal statement cleanup (ExecCtx.Close) re-attempts the
+// deletion of the surviving files through it (#30359 review).
+func abortPreparedCursorAttemptStaging(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.cursorResultSaver == nil {
+		return nil
+	}
+	saver := execCtx.cursorResultSaver
+	var err error
+	if result, ok := saver.(*QueryResult); ok {
+		err = result.AbortAttempt(execCtx)
+	} else {
+		err = saver.Abort(execCtx)
+	}
+	if err != nil {
+		// Cleanup failed: keep the saver slot as the owner of the
+		// surviving staged files for terminal cleanup, and report the
+		// failure so the retry is abandoned instead of rebuilding over
+		// them.
+		return err
+	}
+	execCtx.cursorResultSaver = nil
+	return nil
+}
+
+// abortPerformAttemptSavedResult discards the blocks a failed PERFORM
+// generation persisted through the session-level saved-result writer and
+// resets the per-attempt accounting before the compiler's retry transition
+// replays the statement. PERFORM saves every result batch (resp_client
+// saveResultBatch) yet never marks the statement published (writeClientBatch
+// returns before the publication mark), so a retried generation would
+// otherwise append its blocks behind the failed generation's stale ones and
+// double-count the row accounting baked into the final meta (#30359
+// review). Statement-lifetime metadata survives the abort, mirroring
+// abortPreparedCursorAttemptStaging: the session's authorized plan (ses.p)
+// and the column schema (ses.rs) are installed once before Run and internal
+// retries never re-send them, while the retried generation's publication
+// re-serializes the plan for result_scan consumers. The armed hook runs
+// only after the failed generation's running SQL has quiesced, so no
+// pipeline can still write to the discarded set.
+func abortPerformAttemptSavedResult(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.ses == nil {
+		return nil
+	}
+	ses, ok := execCtx.ses.(*Session)
+	if !ok || ses == nil {
+		return nil
+	}
+	// Nothing was retained (a failure before the first persisted batch, or
+	// save_query_result off): the retried generation starts from the same
+	// empty state and no cleanup is needed.
+	if ses.blockIdx == 0 && ses.savedRowCount == 0 && ses.queryRowCount == 0 &&
+		ses.curResultSize == 0 {
+		return nil
+	}
+	// PERFORM writes through the session-level defResultSaver instead of a
+	// per-statement StagedBinaryWriter, so stage the session's current
+	// counters onto a temporary QueryResult the established AbortAttempt
+	// machinery can release.
+	result := &QueryResult{}
+	result.captureStage(ses)
+	return result.AbortAttempt(execCtx)
+}
+
 func trySaveQueryResult(ctx context.Context, ses *Session, mrs *MysqlResultSet) (err error) {
 	if canSaveQueryResult(ctx, ses) {
 		var data *batch.Batch
@@ -750,6 +824,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	var blocks []objectio.BlockObject
 	var files []resultFileInfo
 
+	// MODUMP honors the output-file suffix the same way EXPORT does:
+	// .jsonl/.jsonline/.ndjson produce JSON Lines and .parquet produces
+	// Parquet; unsuffixed and other names keep the legacy CSV bytes (#30570).
+	if err = validateExportFormat(ctx, eParam); err != nil {
+		return err
+	}
+
 	//step1: open file handler
 	if columnDefs, err = openResultMeta(ctx, ses, eParam.QueryId); err != nil {
 		return err
@@ -801,7 +882,9 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	exportParam.DefaultBufSize = getPu(exportParam.service).SV.ExportDataDefaultFlushSize
 	exportParam.FileService = getPu(exportParam.service).FileService
 	exportParam.Ctx = ctx
-	exportParam.ctx, exportParam.cancel = context.WithCancel(ctx)
+	exportParam.ctx = ctx
+	exportParam.init()
+	dumpExecCtx := &ExecCtx{reqCtx: ctx, ses: ses}
 	defer func() { err = exportParam.finish(err) }()
 
 	initExportFileParam(exportParam, mrs)
@@ -838,6 +921,16 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 			defer release()
 			tmpBatch = bat
 
+			if exportParam.getExportFormat() != "csv" {
+				//step2.fmt: feed the decoded batch into the EXPORT format
+				//machinery (JSON Lines / Parquet writers) instead of the
+				//per-row CSV converter.
+				if err = exportParam.Write(dumpExecCtx, nil, tmpBatch); err != nil {
+					return err
+				}
+				continue
+			}
+
 			//step2.1: converts it into the csv string
 			//step2.2: writes the csv string into the outfile
 			n := tmpBatch.RowCount()
@@ -864,6 +957,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		}
 	}
 
+	if exportParam.getExportFormat() != "csv" {
+		// Finalize the JSON Lines / Parquet writers: flush pending buffered
+		// rows and close the writer before finish() reports success.
+		if err = exportAllDataFromBatches(exportParam); err != nil {
+			return err
+		}
+	}
 	return err
 }
 
@@ -1090,7 +1190,24 @@ func (result *QueryResult) captureStage(ses *Session) {
 	result.stagedTenant = ses.GetTenantInfo().GetTenant()
 }
 
+// Abort releases the staged blocks and bookkeeping of a query result that
+// will not be published. It is the terminal form: the statement is over, so
+// the session's statement plan and per-result accounting are cleared as well.
 func (result *QueryResult) Abort(execCtx *ExecCtx) error {
+	return result.abortStaged(execCtx, false)
+}
+
+// AbortAttempt releases only the staged blocks and per-attempt accounting of
+// one failed generation of a statement the compiler is about to retry. The
+// session's authorized statement plan survives: computation_wrapper installs
+// it once before Run and the internal retry does not re-install it, while
+// the retried generation's publication re-serializes the plan and its
+// Plan/Tables provenance for result_scan privilege checks (#30359 review).
+func (result *QueryResult) AbortAttempt(execCtx *ExecCtx) error {
+	return result.abortStaged(execCtx, true)
+}
+
+func (result *QueryResult) abortStaged(execCtx *ExecCtx, preservePlan bool) error {
 	if result.published || result.aborted {
 		return nil
 	}
@@ -1110,16 +1227,26 @@ func (result *QueryResult) Abort(execCtx *ExecCtx) error {
 	defer cancel()
 	cleanupCtx = perfcounter.AttachS3RequestKey(cleanupCtx, result.counter())
 	err := fs.Delete(cleanupCtx, paths...)
+	if err != nil {
+		// Deletion failed: leave the staged bookkeeping and the aborted
+		// flag untouched so the session counters and this result still
+		// describe the surviving files for terminal cleanup, which
+		// re-runs this abort over the same path set (#30359 review). The
+		// file services tolerate missing paths on delete, so re-deleting
+		// any already-removed prefix is safe.
+		result.publishAccounting(execCtx.reqCtx)
+		return err
+	}
 	ses.ResetBlockIdx()
-	ses.p = nil
+	if !preservePlan {
+		ses.p = nil
+	}
 	ses.curResultSize = 0
 	ses.savedRowCount = 0
 	ses.queryRowCount = 0
-	if err == nil {
-		result.aborted = true
-	}
+	result.aborted = true
 	result.publishAccounting(execCtx.reqCtx)
-	return err
+	return nil
 }
 
 func (result *QueryResult) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {

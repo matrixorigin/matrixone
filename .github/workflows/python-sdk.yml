@@ -3,7 +3,7 @@ name: Python SDK
 on:
   workflow_call:
   push:
-    branches: [main, develop]
+    branches: [develop]
     paths:
       - 'clients/python/**'
       - '.github/workflows/python-sdk.yml'
@@ -29,11 +29,15 @@ jobs:
       fail-fast: false
       matrix:
         python: ['3.10', '3.12']
-        sqlalchemy: ['>=1.4,<1.5', '>=2.0,<2.1', '>=2.1,<3']
+        sqlalchemy: ['>=1.4.54,<1.5', '>=2.0,<2.1', '>=2.1,<3']
         exclude:
           - python: '3.10'
             sqlalchemy: '>=2.1,<3'
         include:
+          - python: '3.10'
+            sqlalchemy: '==1.4.54'
+          - python: '3.12'
+            sqlalchemy: '==2.0.43'
           # SQLAlchemy 2.1 requires Python >=3.11.
           - python: '3.11'
             sqlalchemy: '>=2.1,<3'
@@ -68,19 +72,30 @@ jobs:
           SQLALCHEMY_RANGE: ${{ matrix.sqlalchemy }}
         run: |
           python -m pip install -e '.[test]' "SQLAlchemy[asyncio]${SQLALCHEMY_RANGE}" pytest-asyncio pytest-subtests
+      - name: Assert exact supported SQLAlchemy floor
+        if: ${{ matrix.sqlalchemy == '==1.4.54' }}
+        run: python -c "import sqlalchemy; assert sqlalchemy.__version__ == '1.4.54', sqlalchemy.__version__"
+      - name: Pin and verify the async driver regression tuple
+        if: ${{ matrix.sqlalchemy == '==2.0.43' }}
+        run: |
+          python -m pip install 'PyMySQL==1.2.3' 'aiomysql==0.3.2'
+          python - <<'PYDRIVERS'
+          from importlib.metadata import version
+          assert version('SQLAlchemy') == '2.0.43'
+          assert version('PyMySQL') == '1.2.3'
+          assert version('aiomysql') == '0.3.2'
+          PYDRIVERS
       - name: Check fatal Python errors
         if: ${{ matrix.python == '3.12' && matrix.sqlalchemy == '>=2.0,<2.1' }}
         run: |
           python -m pip install 'flake8>=4.0'
           python -m flake8 matrixone --select=E9,F63,F7,F82 --show-source --statistics
-      - name: Run SDK offline suite
+      - name: Run required offline contracts without skips
+        run: python scripts/run_contracts.py --output offline-contracts
+      - name: Run existing analytics offline checks
         run: |
-          if test -d tests/analytics; then
-            python -m pip install -e '.[analytics]' duckdb pandas polars 'moto[server]' boto3
-            python -m pytest tests/offline tests/analytics -o addopts='' -q --tb=short --junitxml=offline.xml
-          else
-            python -m pytest tests/offline -o addopts='' -q --tb=short --junitxml=offline.xml
-          fi
+          python -m pip install -e '.[analytics]' duckdb pandas polars 'moto[server]' boto3
+          python -m pytest tests/analytics -o addopts='' -q --tb=short --junitxml=analytics-offline.xml
       - name: Build and validate distributions
         run: |
           python -m pip install build twine
@@ -91,13 +106,68 @@ jobs:
         with:
           name: python-sdk-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
           path: |
-            clients/python/offline.xml
+            clients/python/offline-contracts/
+            clients/python/analytics-offline.xml
             clients/python/dist/*
+
+  core-import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        include:
+          - python: '3.8'
+            sqlalchemy: '==1.4.54'
+          - python: '3.9'
+            sqlalchemy: '>=2.0,<2.1'
+    defaults:
+      run:
+        working-directory: clients/python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          allow-unsafe-pr-checkout: ${{ github.event_name == 'pull_request_target' }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install core and runtime test dependencies without Arrow
+        env:
+          SQLALCHEMY_RANGE: ${{ matrix.sqlalchemy }}
+        run: python -m pip install '.[core-test]' "SQLAlchemy[asyncio]${SQLALCHEMY_RANGE}"
+      - name: Import installed core without optional analytics dependencies
+        working-directory: /tmp
+        run: |
+          python - <<'PYCORE'
+          import importlib.util
+          import importlib.metadata
+          from matrixone import Client, AsyncClient, __version__
+          assert importlib.util.find_spec('pyarrow') is None
+          assert __version__ == importlib.metadata.version('matrixone-python-sdk')
+          for client in (Client(), AsyncClient()):
+              sql, params = client.query('t').filter_by(v=None)._build_sql()
+              assert 'v IS NULL' in sql and params == []
+          PYCORE
+      - name: Exercise core runtime, result identity and async ownership
+        run: |
+          python -m pytest -o addopts='' -q \
+            tests/offline/contracts/test_mapped_query_identity.py \
+            tests/offline/contracts/test_pool_settings.py \
+            tests/offline/contracts/test_capabilities.py \
+            tests/offline/contracts/test_telemetry_outcomes.py \
+            tests/analytics/test_async_workers.py
 
   online:
     if: github.event_name == 'workflow_dispatch' && inputs.online
     runs-on: [self-hosted, matrixone-sdk-test]
-    environment: matrixone-sdk-integration
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        server: ['4.2.5', 'current-source']
+    environment: matrixone-sdk-${{ matrix.server }}
     defaults:
       run:
         working-directory: clients/python
@@ -112,7 +182,13 @@ jobs:
       MO_USER: ${{ vars.MATRIXONE_USER }}
       MO_PASSWORD: ${{ secrets.MATRIXONE_PASSWORD }}
       MO_DATABASE: ${{ vars.MATRIXONE_DATABASE }}
+      MO_SDK_EXPECT_VERSION: ${{ vars.MO_SDK_EXPECT_VERSION }}
+      MO_SDK_EXPECT_REVISION: ${{ vars.MO_SDK_EXPECT_REVISION }}
+      MO_SDK_EXPORT_DIR: ${{ vars.MO_SDK_EXPORT_DIR }}
+      MO_SDK_EXPORT_LOCAL_DIR: ${{ vars.MO_SDK_EXPORT_LOCAL_DIR }}
+      MO_SDK_DISPOSABLE_SERVER: ${{ vars.MO_SDK_DISPOSABLE_SERVER }}
       MO_ANALYTICS_ONLINE: '1'
+      MO_EXPECT_STAGE_LITERAL_SUPPORT: ${{ matrix.server == 'current-source' && '1' || '0' }}
       MO_SDK_ONLINE: '1'
       MO_SECOND_CN_PORT: ${{ vars.MO_SECOND_CN_PORT }}
       MO_ANALYTICS_S3_ENDPOINT: ${{ vars.MO_ANALYTICS_S3_ENDPOINT }}
@@ -124,23 +200,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Validate deliberately configured deployment
+      - name: Validate extended-suite database configuration
         run: |
-          test -n "$MATRIXONE_HOST"
-          test -n "$MATRIXONE_PORT"
-          test -n "$MATRIXONE_USER"
-          test -n "$MATRIXONE_PASSWORD"
-          test -n "$MATRIXONE_DATABASE"
+          : "${MATRIXONE_DATABASE:?Configure MATRIXONE_DATABASE in the selected SDK environment}"
       - name: Install SDK and integration dependencies
         run: python -m pip install -e '.[test]' 'SQLAlchemy[asyncio]>=2,<3' pytest-asyncio duckdb pandas polars 'moto[server]' boto3
-      - name: Run online tests and expose all failures
+      - name: Run required server contracts with identity and zero-skip checks
+        env:
+          SDK_SERVER_TARGET: ${{ matrix.server }}
+        run: python scripts/run_contracts.py --server "$SDK_SERVER_TARGET" --output online-contracts
+      - name: Run existing extended integration suite
         run: |
-          if test -d tests/analytics; then
-            python -m pip install -e '.[analytics]'
-            python -m pytest tests/online tests/analytics -o addopts='' -q --tb=short --junitxml=online.xml
-          else
-            python -m pytest tests/online -o addopts='' -q --tb=short --junitxml=online.xml
-          fi
+          python -m pip install -e '.[analytics]'
+          python -m pytest tests/online tests/analytics --ignore=tests/online/test_sdk_quality_contracts.py --ignore=tests/online/test_sdk_manager_contracts.py --ignore=tests/online/test_sdk_search_contracts.py --ignore=tests/online/test_sdk_wave2_contracts.py -o addopts='' -q --tb=short --junitxml=online-extended.xml
       - name: Report actual integration coverage
         if: always()
         run: |
@@ -148,20 +220,23 @@ jobs:
           import os
           import pathlib
           import xml.etree.ElementTree as ET
-          path = pathlib.Path('online.xml')
-          if path.exists():
-              suites = ET.parse(path).getroot().iter('testsuite')
+          for filename in ('online-contracts/junit.xml', 'online-extended.xml'):
+              path = pathlib.Path(filename)
+              if not path.exists():
+                  continue
               counts = {k: 0 for k in ('tests', 'failures', 'errors', 'skipped')}
-              for suite in suites:
+              for suite in ET.parse(path).getroot().iter('testsuite'):
                   for key in counts:
                       counts[key] += int(suite.get(key, 0))
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as report:
-                  report.write('SDK integration counts: ' + str(counts) + '\n')
+                  report.write(filename + ': ' + str(counts) + '\n')
                   if counts['skipped']:
-                      report.write('Skipped cases were not validated; this is not a complete online matrix.\n')
+                      report.write('Skipped cases were not validated.\n')
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: python-sdk-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-online
-          path: clients/python/online.xml
+          name: python-sdk-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-online-${{ matrix.server }}
+          path: |
+            clients/python/online-contracts/
+            clients/python/online-extended.xml

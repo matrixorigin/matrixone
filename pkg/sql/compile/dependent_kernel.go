@@ -451,7 +451,7 @@ func (c *Compile) compileDependentJoin(n *plan.Node, children []*plan.Node) (dep
 	}
 	if !needsPairEvaluation {
 		if n.JoinType == plan.Node_MARK {
-			if canUseHashMarkJoinWithInputs(n, children[0], children[1]) {
+			if canUseHashMarkJoinWithInputs(n, children[0], children[1]) || canUseHashExistenceJoinWithInputs(n, children[0], children[1]) {
 				return c.compileDependentHashJoin(n, children)
 			}
 		} else if c.broadcastJoinUsesHash(n) {
@@ -545,7 +545,7 @@ func (c *Compile) compileDependentHashJoin(n *plan.Node, children []*plan.Node) 
 		} else {
 			var hashJoin *hashjoin.HashJoin
 			if n.JoinType == plan.Node_MARK {
-				hashJoin = constructBroadcastHashMarkJoin(n, children[0], inputTypes[0], inputTypes[1], proc)
+				hashJoin = constructBroadcastHashMarkJoin(n, children[0], children[1], inputTypes[0], inputTypes[1], proc)
 			} else {
 				hashJoin = constructHashJoin(n, children[0], inputTypes[0], inputTypes[1], proc)
 			}

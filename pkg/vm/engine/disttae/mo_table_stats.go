@@ -119,6 +119,24 @@ const (
                   	table_id in (%v)
 			  	order by table_id asc;`
 
+	// Keep the live catalog as the driving relation: statistics for dropped
+	// tables are removed asynchronously. Truncate each table's size before
+	// summing, as SHOW ACCOUNTS did in Go. Integer SUM is exact; the modulo
+	// preserves uint64 addition even when an account's total overflows.
+	getAccountTableSizesSQL = `
+				select
+					m.account_id,
+					cast(sum(cast(floor(coalesce(json_extract_float64(s.table_stats, '$.table_size'), 0))
+						as unsigned)) %% 18446744073709551616 as unsigned),
+					count(*)
+				from %s.%s as m
+				left join %s.%s as s
+					on m.account_id = s.account_id
+					and m.reldatabase_id = s.database_id
+					and m.rel_id = s.table_id
+				where m.account_id in (%s)
+				group by m.account_id;`
+
 	getDeleteFromStatsSQL = `
 				delete from
 				    %s.%s
@@ -433,13 +451,6 @@ func initMoTableStatsConfig(
 			eng.dynamicCtx.conf.CorrectionDuration = defaultGamaCycleDur
 		}
 
-		eng.dynamicCtx.objIdsPool = sync.Pool{
-			New: func() interface{} {
-				objIds := make([]types.Objectid, 0)
-				return &objIds
-			},
-		}
-
 		eng.dynamicCtx.tblQueue = make(chan tablePair, options.DefaultBlockMaxRows*2)
 
 		eng.dynamicCtx.cleanDeletesQueue = make(chan struct{})
@@ -674,8 +685,7 @@ type dynamicCtx struct {
 	updateForgottenQueue chan struct{}
 	insertNewTableQueue  chan struct{}
 
-	de         *Engine
-	objIdsPool sync.Pool
+	de *Engine
 
 	tableStock struct {
 		tbls []tablePair
@@ -1030,26 +1040,6 @@ func intsJoin(items []uint64, delimiter string) (string, func()) {
 	}
 }
 
-func joinAccountDatabase(accIds []uint64, dbIds []uint64) (string, func()) {
-	bb := builderPool.Get().(*builder)
-	for i := range accIds {
-		bb.writeString("(account_id = ")
-		bb.writeString(strconv.FormatUint(accIds[i], 10))
-		bb.writeString(" AND database_id = ")
-		bb.writeString(strconv.FormatUint(dbIds[i], 10))
-		bb.writeString(")")
-
-		if i < len(accIds)-1 {
-			bb.writeString(" OR ")
-		}
-	}
-
-	return bb.string(), func() {
-		bb.reset()
-		builderPool.Put(bb)
-	}
-}
-
 func constructInStmt(
 	tblIds []uint64,
 	by string,
@@ -1065,31 +1055,6 @@ func constructInStmt(
 	}
 
 	bb.writeString(")")
-
-	return bb.string(), func() {
-		bb.reset()
-		builderPool.Put(bb)
-	}
-}
-
-func joinAccountDatabaseTable(
-	accIds []uint64, dbIds []uint64, tblIds []uint64,
-) (string, func()) {
-
-	bb := builderPool.Get().(*builder)
-	for i := range accIds {
-		bb.writeString("(account_id = ")
-		bb.writeString(strconv.FormatUint(accIds[i], 10))
-		bb.writeString(" AND database_id = ")
-		bb.writeString(strconv.FormatUint(dbIds[i], 10))
-		bb.writeString(" AND table_id = ")
-		bb.writeString(strconv.FormatUint(tblIds[i], 10))
-		bb.writeString(")")
-
-		if i < len(accIds)-1 {
-			bb.writeString(" OR ")
-		}
-	}
 
 	return bb.string(), func() {
 		bb.reset()
@@ -1366,6 +1331,102 @@ func (d *dynamicCtx) QueryTableStatsByAccounts(
 	return statsVals, retAcc, ok, err
 }
 
+// QueryAccountTableSizes returns one size per account with live catalog tables.
+// Accounts without tables are absent, so callers can retain their TN fallback.
+// The normal path never materializes table IDs or per-table statistics in Go.
+func (d *dynamicCtx) QueryAccountTableSizes(
+	ctx context.Context, accs []uint64, forceUpdate bool,
+) (sizes map[uint64]uint64, ok bool, err error) {
+	if err = ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(accs) == 0 {
+		return nil, false, nil
+	}
+	d.RLock()
+	useOld := d.conf.StatsUsingOldImpl
+	forceUpdate = forceUpdate || d.conf.ForceUpdate
+	d.RUnlock()
+	if useOld {
+		return nil, false, nil
+	}
+
+	now := time.Now()
+	var tableCount int
+	defer func() {
+		logutil.Info(logHeader,
+			zap.String("action", "query.account.table.sizes"),
+			zap.Int("account-count", len(accs)),
+			zap.Int("table-count", tableCount),
+			zap.Bool("force-update", forceUpdate),
+			zap.Duration("takes", time.Since(now)),
+			zap.Bool("ok", ok),
+			zap.Error(err))
+	}()
+
+	accStr, release := intsJoin(accs, ",")
+	defer release()
+	if forceUpdate {
+		var tableAccounts []uint64
+		resolve := func() ([]uint64, []uint64, []uint64, error) {
+			sql := fmt.Sprintf(accumulateIdsByAccSQL, catalog.MO_CATALOG, catalog.MO_TABLES, accStr)
+			ret := d.executeSQL(ctx, sql, "query table sizes by account")
+			if err := ret.Error(); err != nil {
+				return nil, nil, nil, err
+			}
+			accounts, databases, tables, err := decodeIdsFromMOTablesSqlRet(ctx, ret)
+			tableAccounts = accounts
+			return accounts, databases, tables, err
+		}
+		var vals [][]any
+		// Reuse the admitted policy, including when configuration changes
+		// while the catalog query is executing.
+		vals, ok, tableCount, err = d.queryTableStatsWithPolicy(
+			ctx, []int{TableStatsTableSize}, resolve, true, false)
+		if err != nil || !ok {
+			return nil, ok, err
+		}
+		sizes = make(map[uint64]uint64)
+		for i, account := range tableAccounts {
+			sizes[account] += uint64(vals[0][i].(float64))
+		}
+		return sizes, true, nil
+	}
+
+	defer func() {
+		v2.MoTableSizeRowsNormalDurationHistogram.Observe(time.Since(now).Seconds())
+		v2.MoTableSizeRowsNormalCountingHistogram.Observe(float64(tableCount))
+	}()
+	sql := fmt.Sprintf(getAccountTableSizesSQL,
+		catalog.MO_CATALOG, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, accStr)
+	ret := d.executeSQL(ctx, sql, "query account table sizes")
+	if err = ret.Error(); err != nil {
+		return nil, false, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	sizes = make(map[uint64]uint64, ret.RowCount())
+	for i := range ret.RowCount() {
+		if err = ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		var account, size, count uint64
+		if account, err = ret.GetUint64(ctx, i, 0); err != nil {
+			return nil, false, err
+		}
+		if size, err = ret.GetUint64(ctx, i, 1); err != nil {
+			return nil, false, err
+		}
+		if count, err = ret.GetUint64(ctx, i, 2); err != nil {
+			return nil, false, err
+		}
+		sizes[account] = size
+		tableCount += int(count)
+	}
+	return sizes, true, nil
+}
+
 func (d *dynamicCtx) QueryTableStatsByDatabase(
 	ctx context.Context,
 	wantedStatsIdxes []int,
@@ -1468,7 +1529,16 @@ func (d *dynamicCtx) queryTableStats(
 	if useOld {
 		return
 	}
+	return d.queryTableStatsWithPolicy(ctx, wantedStatsIdxes, resolve, forceUpdate, resetUpdateTime)
+}
 
+// queryTableStatsWithPolicy executes a query whose owner policy was already
+// captured at admission. In particular, metadata resolution must not cause a
+// second policy read to reinterpret in-flight work.
+func (d *dynamicCtx) queryTableStatsWithPolicy(
+	ctx context.Context, wantedStatsIdxes []int,
+	resolve function.MoTableStatsResolver, forceUpdate, resetUpdateTime bool,
+) (statsVals [][]any, ok bool, tableCount int, err error) {
 	accs, dbs, tbls, err := resolve()
 	if err != nil {
 		return nil, true, 0, err

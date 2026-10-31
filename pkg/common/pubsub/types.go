@@ -72,7 +72,7 @@ func (pubInfo *PubInfo) InSubAccounts(accountName string) bool {
 		return true
 	}
 
-	for _, name := range strings.Split(pubInfo.SubAccountsStr, Sep) {
+	for name := range strings.SplitSeq(pubInfo.SubAccountsStr, Sep) {
 		if name == accountName {
 			return true
 		}

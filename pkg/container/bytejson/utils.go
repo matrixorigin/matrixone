@@ -17,6 +17,7 @@ package bytejson
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"math"
@@ -32,25 +33,34 @@ import (
 )
 
 func ParseFromString(s string) (ret ByteJson, err error) {
+	return ParseFromStringWithContext(defaultParseContext, s)
+}
+
+// ParseFromStringWithContext parses JSON using the caller's error reporting context.
+func ParseFromStringWithContext(ctx context.Context, s string) (ret ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtx("json text is empty")
+		err = moerr.NewInvalidInput(parseErrorContext(ctx), "json text is empty")
 		return
 	}
 	data := util.UnsafeStringToBytes(s)
-	ret, err = ParseFromByteSlice(data)
+	ret, err = parseFromByteSliceWithContext(ctx, data)
 	return
 }
 
 func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
+	return parseFromByteSliceWithContext(defaultParseContext, s)
+}
+
+func parseFromByteSliceWithContext(ctx context.Context, s []byte) (bj ByteJson, err error) {
 	if len(s) == 0 {
-		err = moerr.NewInvalidInputNoCtx("json text is empty")
+		err = moerr.NewInvalidInput(parseErrorContext(ctx), "json text is empty")
 		return
 	}
 	if !json.Valid(s) {
-		err = moerr.NewInvalidInputNoCtxf("json text %s", string(s))
+		err = moerr.NewInvalidInputf(parseErrorContext(ctx), "json text %s", string(s))
 		return
 	}
-	err = bj.UnmarshalJSON(s)
+	err = bj.unmarshalJSONWithContext(ctx, s)
 	return
 }
 
@@ -77,8 +87,12 @@ func addString(buf []byte, in string) []byte {
 }
 
 func checkFloat64(n float64) error {
+	return checkFloat64WithContext(defaultParseContext, n)
+}
+
+func checkFloat64WithContext(ctx context.Context, n float64) error {
 	if math.IsInf(n, 0) || math.IsNaN(n) {
-		return moerr.NewInvalidInputNoCtxf("json float64 %f", n)
+		return moerr.NewInvalidInputf(parseErrorContext(ctx), "json float64 %f", n)
 	}
 	return nil
 }
@@ -731,4 +745,19 @@ func (p Path) TerminalKey() (string, bool) {
 		}
 	}
 	return key, found
+}
+
+// defaultParseContext is a private token for the context-free entry points.
+// It keeps their successful path free of global context lookups. Resolve it
+// before constructing an error; never pass it across a package boundary.
+var defaultParseContext context.Context = &struct{ context.Context }{context.Background()}
+
+// parseErrorContext resolves the default only on failure. Context-free callers
+// retain their reporting policy without a global context lookup on successful
+// scalar parsing or arithmetic; explicit probe contexts pass through unchanged.
+func parseErrorContext(ctx context.Context) context.Context {
+	if ctx == nil || ctx == defaultParseContext {
+		return moerr.Context()
+	}
+	return ctx
 }

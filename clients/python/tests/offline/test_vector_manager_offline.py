@@ -133,6 +133,7 @@ class TestVectorSQLGeneration(unittest.TestCase):
         # Mock return value
         mock_result = Mock()
         mock_result.__iter__ = Mock(return_value=iter([]))
+        mock_result.keys.return_value = []
         self.mock_client.execute.return_value = mock_result
         self.mock_session.execute.return_value = mock_result
 
@@ -282,6 +283,7 @@ class TestAsyncVectorSQLGeneration:
         # Mock async execute
         mock_result = Mock()
         mock_result.__iter__ = Mock(return_value=iter([]))
+        mock_result.keys.return_value = []
         self.mock_async_client.execute = AsyncMock(return_value=mock_result)
 
         await self.async_client_manager.similarity_search(table_name, vector_column, query_vector)
@@ -314,6 +316,7 @@ class TestVectorSQLConsistency(unittest.TestCase):
 
         mock_result = Mock()
         mock_result.__iter__ = Mock(return_value=iter([]))
+        mock_result.keys.return_value = []
         sync_client.execute.return_value = mock_result
         sync_session.execute.return_value = mock_result
 

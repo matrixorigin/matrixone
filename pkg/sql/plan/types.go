@@ -381,7 +381,20 @@ type ViewData struct {
 	RequiredProtocolVersion *int64 `json:"required_protocol_version,omitempty"`
 }
 
+// updateTargetScope borrows the existing target-side binding while UPDATE FROM
+// temporarily joins its separate read sources. It is local to one bindUpdate call.
+type updateTargetScope struct {
+	join    *tree.JoinTableExpr
+	context *BindContext
+}
+
 type QueryBuilder struct {
+	updateTargetScope *updateTargetScope
+
+	// DELETE owns these generated scan identities. Optimizer consumers must
+	// revalidate the binding and table after join rewrites.
+	deleteIndexScanTables map[int32]deleteIndexScan
+	integerPrecision      *integerPrecisionBuilder
 	correlationRouteNodes map[int32]bool
 	dependentRelations    map[int32]bool
 	preparedBindingProof  *bool
@@ -475,6 +488,10 @@ type QueryBuilder struct {
 	// carries the final physical decision after shuffle planning.
 	distinctKeyShuffleCols map[*plan.Node]int32
 
+	// base-table joins built by the fulltext rewrite whose driving search an outer score
+	// sort may bound like the implicit LIMIT, keyed by join node id.
+	fulltextBoundableJoins map[int32]fulltextBoundableJoin
+
 	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
 	// paired with the fulltext node producing each score. applyIndices recurses children
 	// first, so those scans already exist when the PROJECT above the join is visited -- but
@@ -509,12 +526,22 @@ type QueryBuilder struct {
 	// window, PREPARE) reads the same decision.
 	boolSumAvgCompat      bool
 	noUnsignedSubtraction bool
+	// matrixOneNativeMode is the statement's D11 MatrixOneNativeMode
+	// decision, resolved once by the same single resolver the BindContext and
+	// DDL expression carriers use. It is stored as the native-mode flag by
+	// itself (false by zero value) so literal QueryBuilder constructions -
+	// the stats re-planner - keep the MySQL-compatible default; GetContext
+	// attaches the resulting boolean-contracts scalar so builder-scoped DML
+	// assignment casts and projected rewrites bind with the statement's
+	// actual mode instead of the absent-scalar default.
+	matrixOneNativeMode   bool
 	divPrecisionIncrement int32
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
 	skipStats             bool
 	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	isODKU                bool             // INSERT ... ON DUPLICATE KEY UPDATE: retain action provenance
 	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// Ordinary LOAD validates real primary keys while retaining the bulk-write plan.
@@ -710,6 +737,9 @@ type OptimizerHints struct {
 	printShuffle               int
 	skipDedup                  int
 	outerAntiPlanning          int
+	// rollupSort: 1 forces the sort rollup path, 2 forces the legacy hash/
+	// grouping-set path, and 0 selects using the ROLLUP cost model.
+	rollupSort int
 }
 
 type CTERef struct {
@@ -860,8 +890,13 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
-	existentialBlock     uint64
-	subqueryNestingDepth uint32
+	// The grouping/window rewrite owns this exact generated source. Neither
+	// field is inherited by NewBindContext: genuine SQL boundaries stay real.
+	integerPrecisionGeneratedSource     *tree.Select
+	integerPrecisionTransparentBoundary bool
+	integerPrecision                    *integerPrecisionBuilder
+	existentialBlock                    uint64
+	subqueryNestingDepth                uint32
 
 	binder Binder
 
@@ -890,6 +925,29 @@ type BindContext struct {
 	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
 	// for row-preserving View ORDER BY boundaries.
 	mysqlSpecialRawProjectPositions map[int32]int32
+	// mysqlSpecialGroupStorageSlots maps a visible GROUP BY slot whose group
+	// expression is an ENUM/SET display call to a hidden storage-identity group
+	// slot appended beside it. Grouping on (display, storage) gives the group
+	// key MySQL's ordinal/bitmask identity for declarations whose zero sentinel
+	// and a valid member display identically as text (an empty label member),
+	// and boolean-truth consumers above the GROUP BY read the hidden slot so
+	// stored truth, never display text, decides the outcome. Planner-local only.
+	mysqlSpecialGroupStorageSlots map[int32]int32
+
+	// mysqlConditionalBooleanContracts resolves the statement's compatibility
+	// scalar from the session flag (MatrixOneNativeMode) once per root context:
+	// true binds IF/CASE conditions and every boolean context with the MySQL
+	// storage-truth / in-domain JSON conditional semantics; false keeps the
+	// exact pre-contract behavior (D11 two-carrier design, one scalar carried
+	// on BindContext for the SELECT path and attached to contexts from
+	// ddlExpressionContext for the standalone DDL binders). Children inherit
+	// it; the hidden grouping sibling exists only when it is true.
+	// mysqlConditionalBooleanContractsValid marks that a root context (or a
+	// context with a resolved ancestor) resolved the session's decision - an
+	// unsettled value never gates behavior, because the default session is
+	// MySQL-compatible.
+	mysqlConditionalBooleanContracts      bool
+	mysqlConditionalBooleanContractsValid bool
 
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
@@ -918,6 +976,9 @@ type BindContext struct {
 	hasSingleRow              bool
 	isGroupingSet             bool
 	groupingFuncAllowed       bool
+	// sortRollup is set only for the single-query-block ROLLUP fast path. The
+	// normal grouping-set rewrite remains available for all other forms.
+	sortRollup bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -1092,14 +1153,16 @@ type BindContext struct {
 // source expression's nullability.
 func (bc *BindContext) groupOutputType(groupPos int32) Type {
 	typ := bc.groups[groupPos].Typ
-	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
+	if bc.sortRollup ||
+		(groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos]) {
 		typ.NotNullable = false
 	}
 	return typ
 }
 
-func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32) Type {
-	if groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos] {
+func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32, sortRollup bool) Type {
+	if sortRollup ||
+		(groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos]) {
 		typ.NotNullable = false
 	}
 	return typ

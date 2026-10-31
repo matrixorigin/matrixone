@@ -72,6 +72,220 @@ func BenchmarkInt64HashMapFindBatchLarge(b *testing.B) {
 	}
 }
 
+// Keep scale-dependent throughput checks in benchmarks. Each timed operation
+// plans a batch against the same immutable table, so growth and fixture setup
+// do not obscure the cost of existing/missing/skewed probes.
+func BenchmarkInt64HashMapPlanInsert(b *testing.B) {
+	const batchSize = 256
+	for _, cardinality := range []int{16, 1 << 15, 1 << 20, 1 << 22} {
+		for _, distribution := range []string{"hits", "mixed", "misses", "skew", "window", "clustered", "shuffled"} {
+			b.Run(fmt.Sprintf("groups=%d/%s", cardinality, distribution), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				var ht Int64HashMap
+				if err := ht.Init(mp); err != nil {
+					b.Fatal(err)
+				}
+				b.Cleanup(func() {
+					ht.Free()
+					if mp.CurrNB() != 0 {
+						b.Fatalf("retained hash memory: %d", mp.CurrNB())
+					}
+				})
+				keys := make([]uint64, cardinality)
+				hashes := make([]uint64, cardinality)
+				values := make([]uint64, cardinality)
+				for i := range keys {
+					keys[i] = uint64(i + 1)
+					hashes[i] = Int64HashWithFixedSeed(keys[i])
+				}
+				if err := ht.InsertBatch(len(keys), hashes, toUnsafePointer(&keys[0]), values); err != nil {
+					b.Fatal(err)
+				}
+				inputSize := max(batchSize*16, cardinality)
+				if distribution == "window" {
+					inputSize = batchSize * 16
+				}
+				input, inputHashes := make([]uint64, inputSize), make([]uint64, inputSize)
+				random := rand.New(rand.NewSource(42))
+				for i := range input {
+					input[i] = keys[random.Intn(cardinality)]
+					if distribution == "misses" || distribution == "mixed" && i%5 == 0 {
+						input[i] = uint64(cardinality + i + 1)
+					}
+					if (distribution == "clustered" || distribution == "shuffled") && i%8 != 0 {
+						input[i] = input[i-i%8]
+					}
+					if distribution == "skew" && i%10 != 0 {
+						input[i] = 1
+					}
+				}
+				if distribution == "shuffled" {
+					random.Shuffle(len(input), func(i, j int) { input[i], input[j] = input[j], input[i] })
+				}
+				for i, key := range input {
+					inputHashes[i] = Int64HashWithFixedSeed(key)
+				}
+				var result, slots [batchSize]uint64
+				var inserted [batchSize]uint8
+				b.ReportAllocs()
+				b.SetBytes(batchSize * 8)
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					offset := i * batchSize % inputSize
+					_, _, complete, err := ht.PlanInsertBatch(
+						batchSize, uint64(cardinality), nil, inputHashes[offset:offset+batchSize],
+						nil, result[:], slots[:], inserted[:], false, true)
+					if err != nil || !complete {
+						b.Fatalf("incomplete preview: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkStringHashMapPlanInsert(b *testing.B) {
+	const batchSize = 256
+	for _, cardinality := range []int{16, 1 << 15, 1 << 20, 1 << 22} {
+		for _, distribution := range []string{"hits", "mixed", "misses", "skew", "window", "clustered", "shuffled"} {
+			b.Run(fmt.Sprintf("groups=%d/%s", cardinality, distribution), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				var ht StringHashMap
+				if err := ht.Init(mp); err != nil {
+					b.Fatal(err)
+				}
+				b.Cleanup(func() {
+					ht.Free()
+					if mp.CurrNB() != 0 {
+						b.Fatalf("retained hash memory: %d", mp.CurrNB())
+					}
+				})
+				keys := make([]uint64, cardinality)
+
+				for i := range keys {
+					keys[i] = uint64(i + 1)
+				}
+				if err := ht.ResizeOnDemand(uint64(cardinality)); err != nil {
+					b.Fatal(err)
+				}
+				for i, key := range keys {
+					state := [3]uint64{Int64HashWithFixedSeed(key), key, key ^ m1}
+					cell := ht.findCell(&state)
+					cell.HashState, cell.Mapped = state, uint64(i+1)
+				}
+				ht.elemCnt = uint64(cardinality)
+				inputSize := max(batchSize*16, cardinality)
+				if distribution == "window" {
+					inputSize = batchSize * 16
+				}
+				input, inputHashes := make([]uint64, inputSize), make([][3]uint64, inputSize)
+				random := rand.New(rand.NewSource(42))
+				for i := range input {
+					input[i] = keys[random.Intn(cardinality)]
+					if distribution == "misses" || distribution == "mixed" && i%5 == 0 {
+						input[i] = uint64(cardinality + i + 1)
+					}
+					if (distribution == "clustered" || distribution == "shuffled") && i%8 != 0 {
+						input[i] = input[i-i%8]
+					}
+					if distribution == "skew" && i%10 != 0 {
+						input[i] = 1
+					}
+				}
+				if distribution == "shuffled" {
+					random.Shuffle(len(input), func(i, j int) { input[i], input[j] = input[j], input[i] })
+				}
+				for i, key := range input {
+					inputHashes[i] = [3]uint64{Int64HashWithFixedSeed(key), key, key ^ m1}
+				}
+				var result, slots [batchSize]uint64
+				var inserted [batchSize]uint8
+				b.ReportAllocs()
+				b.SetBytes(batchSize * 8)
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					offset := i * batchSize % inputSize
+					_, _, complete, err := ht.PlanInsertStringBatch(
+						uint64(cardinality), nil, inputHashes[offset:offset+batchSize],
+						result[:], slots[:], inserted[:], false)
+					if err != nil || !complete {
+						b.Fatalf("incomplete preview: %v", err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestBatchInsertPlansPreserveSequentialIdentity(t *testing.T) {
+	for _, test := range []struct {
+		rows    int
+		reserve uint64
+	}{
+		{rows: 0}, {rows: 1}, {rows: 256}, {rows: 256, reserve: maxIntCellCntPerBlock},
+	} {
+		rows := test.rows
+		t.Run(fmt.Sprintf("rows=%d/reserve=%d", rows, test.reserve), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			var ht Int64HashMap
+			require.NoError(t, ht.Init(mp))
+			t.Cleanup(func() {
+				ht.Free()
+				require.Zero(t, mp.CurrNB())
+			})
+			// Collide at the end to exercise wraparound, segment addressing
+			// and tentative-slot conflicts without filling a large table.
+			require.NoError(t, ht.ResizeWithPlan(ht.PlanResize(test.reserve)))
+			hashFor := func(key int) uint64 {
+				return ht.cellCntMask - 5 + uint64(key)*ht.cellCnt
+			}
+			const existing = 17
+			initial := make([]uint64, existing)
+			initialValues := make([]uint64, existing)
+			model := make(map[uint64]uint64)
+			for i := range initial {
+				initial[i] = hashFor(i)
+				model[initial[i]] = uint64(i + 1)
+			}
+			require.NoError(t, ht.InsertBatch(existing, initial, nil, initialValues))
+			hashes, values, slots := make([]uint64, rows), make([]uint64, rows), make([]uint64, rows)
+			flags, expectedFlags := make([]uint8, rows), make([]uint8, rows)
+			zValues, expectedValues := make([]int64, rows), make([]uint64, rows)
+			for i := range hashes {
+				key := i / 3
+				if i%4 == 0 {
+					key = i % existing
+				}
+				hashes[i] = hashFor(key)
+				if i%11 == 0 {
+					continue
+				}
+				zValues[i] = 1
+				id, found := model[hashes[i]]
+				if !found {
+					id = uint64(len(model) + 1)
+					model[hashes[i]] = id
+					expectedFlags[i] = 1
+				}
+				expectedValues[i] = id
+			}
+			added, version, complete, err := ht.PlanInsertBatch(
+				rows, existing, zValues, hashes, nil, values, slots, flags, true, true)
+			require.NoError(t, err)
+			require.True(t, complete)
+			require.Equal(t, uint64(existing), ht.Cardinality(), "preview must remain immutable")
+			require.Equal(t, uint64(len(model)-existing), added)
+			require.Equal(t, expectedValues, values)
+			require.Equal(t, expectedFlags, flags)
+			require.NoError(t, ht.CommitInsertBatchPlan(version, existing, hashes, values, slots, flags))
+			require.Equal(t, uint64(len(model)), ht.Cardinality())
+			clear(values)
+			require.NoError(t, ht.FindPrehashedBatch(zValues, hashes, values, true))
+			require.Equal(t, expectedValues, values)
+		})
+	}
+}
+
 var data = [][]byte{
 	[]byte(""),
 	[]byte("a"),
@@ -212,6 +426,30 @@ func TestHashFn(t *testing.T) {
 				golden[i][0], golden[i][1], golden[i][2])
 
 		}
+	}
+}
+
+func TestInt64HashMapFindBatchSegmentLayouts(t *testing.T) {
+	for _, blockBits := range []uint8{4, 3} {
+		t.Run(fmt.Sprintf("block-bits-%d", blockBits), func(t *testing.T) {
+			// The same collision chain crosses the mask boundary in one block
+			// and a physical block boundary in the segmented layout. Tiny Go-
+			// owned cells exercise lookup without allocating native 4 MiB blocks.
+			var cells [16]Int64HashMapCell
+			cells[15] = Int64HashMapCell{Key: 15, Mapped: 1}
+			cells[0] = Int64HashMapCell{Key: 31, Mapped: 2}
+			cells[1] = Int64HashMapCell{Key: 47, Mapped: 3}
+			before := cells
+			ht := Int64HashMap{blockCellCntBits: blockBits, cellCntMask: 15, cellCnt: 16, elemCnt: 3}
+			for start := 0; start < len(cells); start += 1 << blockBits {
+				ht.cells = append(ht.cells, cells[start:start+(1<<blockBits)])
+			}
+			hashes := []uint64{15, 31, 47, 63, 15, 0}
+			got := make([]uint64, len(hashes))
+			ht.FindBatch(len(hashes), hashes, nil, got)
+			require.Equal(t, []uint64{1, 2, 3, 0, 1, 0}, got)
+			require.Equal(t, before, cells, "shared build-side lookup must be read-only")
+		})
 	}
 }
 

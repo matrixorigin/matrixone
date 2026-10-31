@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -25,6 +26,8 @@ import (
 
 func TestUnionFixedSelection(t *testing.T) {
 	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_date, types.T_datetime,
+		types.T_time, types.T_timestamp, types.T_decimal64,
 		types.T_TS, types.T_decimal128, types.T_uuid, types.T_Blockid, types.T_Rowid, types.T_decimal256} {
 		for _, index32 := range []bool{false, true} {
 			for _, nullable := range []bool{false, true} {
@@ -42,6 +45,13 @@ func TestUnionFixedSelection(t *testing.T) {
 						for column := range width {
 							expected[row][column] = byte(row*32 + column + 1)
 						}
+						// Include signed zero and NaN payloads: selection copies
+						// physical bits, without numeric conversion.
+						if oid == types.T_float32 {
+							binary.LittleEndian.PutUint32(expected[row], []uint32{0x80000000, 0x7fc01234, 0xff800000, 0xffffffff}[row])
+						} else if oid == types.T_float64 {
+							binary.LittleEndian.PutUint64(expected[row], []uint64{0x8000000000000000, 0x7ff8000000001234, 0xfff0000000000000, 0xffffffffffffffff}[row])
+						}
 						copy(src.data[row*width:(row+1)*width], expected[row])
 					}
 					src.GetGrouping().Add(2)
@@ -56,12 +66,13 @@ func TestUnionFixedSelection(t *testing.T) {
 						dst.CleanOnlyData()
 						// Preserve an existing prefix, then select from a borrowed
 						// source with repetitions, a tail row and reverse order.
-						require.NoError(t, dst.UnionOne(src, 0, mp))
 						if index32 {
+							require.NoError(t, dst.UnionInt32(src, []int32{0}, mp))
 							require.NoError(t, dst.UnionInt32(view, nil, mp))
 							require.Equal(t, 1, dst.Length())
 							require.NoError(t, dst.UnionInt32(view, []int32{2, 1, 1, 0}, mp))
 						} else {
+							require.NoError(t, dst.Union(src, []int64{0}, mp))
 							require.NoError(t, dst.Union(view, nil, mp))
 							require.Equal(t, 1, dst.Length())
 							require.NoError(t, dst.Union(view, []int64{2, 1, 1, 0}, mp))

@@ -338,7 +338,7 @@ if grep -Fq 'mocl_kernel64.fatbin /mocl_kernel64.fatbin' "$gpu_dockerfile" &&
    grep -Fq 'stage-runtime-libs.sh' "$gpu_dev_dockerfile" &&
    grep -Fq 'test_stage_runtime_libs.py' "$native_workflow" &&
    [ "$(grep -Fxc '      - "optools/images/gpu/**"' \
-       "$native_workflow")" -eq 2 ]; then
+       "$native_workflow")" -eq 1 ]; then
     pass "GPU runtime images package the sidecar through the Pixi-only contract"
 else
     fail "GPU runtime images package the sidecar through the Pixi-only contract"
@@ -450,11 +450,11 @@ if [ "$(grep -c '^[[:space:]]*make cgo$' "$sca_workflow")" -eq 1 ] &&
    ! grep -q '^[[:space:]]*make thirdparties$' "$ut_runner" &&
    ! grep -q '^[[:space:]]*make thirdparties$' "$ut_helpers" &&
    [ "$(grep -Fxc '      - ".github/workflows/sca-go-module-cache.yaml"' \
-       "$native_workflow")" -eq 2 ] &&
+       "$native_workflow")" -eq 1 ] &&
    [ "$(grep -Fxc '      - "optools/run_ut.sh"' \
-       "$native_workflow")" -eq 2 ] &&
+       "$native_workflow")" -eq 1 ] &&
    [ "$(grep -Fxc '      - "optools/ut_tools.bash"' \
-       "$native_workflow")" -eq 2 ]; then
+       "$native_workflow")" -eq 1 ]; then
     pass "repository CI consumers request and select one complete native generation"
 else
     fail "repository CI consumers request and select one complete native generation"

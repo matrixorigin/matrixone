@@ -148,10 +148,9 @@ show variables like 'wait_timeout';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
 wait_timeout  ¦  86400
 set wait_timeout = 86401;
-invalid input: wait_timeout must be <= 86400
 show variables like 'wait_timeout';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
-wait_timeout  ¦  86400
+wait_timeout  ¦  86401
 set wait_timeout = 10;
 drop table if exists t;
 create table t(
@@ -245,7 +244,7 @@ column_key  ¦  varchar(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 extra  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 privileges  ¦  varchar(31)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_comment  ¦  varchar(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-generation_expression  ¦  varchar(500)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+generation_expression  ¦  varchar(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 srs_id  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦  
 select table_name, column_name from columns where table_schema = 'mo_catalog' and column_name != '__mo_index_idx_col' and column_name != '__mo_index_pri_col' order by table_name, column_name limit 5;
 ➤ table_name[12,256,0]  ¦  column_name[12,256,0]  𝄀

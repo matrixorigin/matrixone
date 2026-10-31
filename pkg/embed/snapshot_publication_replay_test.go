@@ -36,6 +36,7 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 		defer cancel()
 		_, err := admin.ExecContext(ctx, "create account pub_replay_sub admin_name 'admin' identified by '111'")
 		require.NoError(t, err)
+		cancel()
 		defer func() { _, err := admin.Exec("drop account pub_replay_sub"); require.NoError(t, err) }()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -53,9 +54,7 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 			{name: "quoted_comment", comment: "owner's copy"},
 			{name: "backslash_comment", comment: `owner's C:\new\table\`},
 			{name: "external_fk", comment: "live publication", externalFK: true},
-			{name: "quoted_publication", publication: "review-pub"},
-			{name: "quoted_database", database: "review-db"},
-			{name: "quoted_table", table: "review-items", explicitTables: true},
+			{name: "quoted_database_and_publication", database: "review-db", publication: "review-pub"},
 			{name: "quoted_identifiers", database: "review-db", publication: "review-pub", table: "review-items", explicitTables: true},
 			{name: "empty_accounts", comment: "owner's empty authorization", emptyAccounts: true},
 			{name: "empty_quoted_tables", database: "review-empty-db", publication: "review-empty-pub", table: "review-items", explicitTables: true, emptyAccounts: true},
@@ -64,7 +63,9 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 			{name: "case_sensitive_noncollision", table: "PublishedT", explicitTables: true, caseSensitive: true},
 			{name: "case_sensitive_collision", table: "PublishedT", explicitTables: true, caseSensitive: true, caseCollision: true},
 		} {
-			t.Run(tc.name, func(t *testing.T) {
+			if !t.Run(tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+				defer cancel()
 				if tc.caseSensitive {
 					for _, pool := range []*sql.DB{admin, subscriber} {
 						var savedMode int64
@@ -278,7 +279,10 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 					require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from granted_sub."+table).Scan(&rows))
 					require.Equal(t, 1, rows)
 				}
-			})
+			}) {
+				// A failed scenario may leave shared catalog state behind.
+				return
+			}
 		}
 	})
 }
@@ -295,6 +299,7 @@ func TestSnapshotEmptyPublicationTablesRestore(t *testing.T) {
 			require.NoError(t, err, query)
 		}
 		exec("create account empty_tables_sub admin_name 'admin' identified by '111'")
+		cancel()
 		defer func() { _, err := admin.Exec("drop account empty_tables_sub"); require.NoError(t, err) }()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -302,7 +307,9 @@ func TestSnapshotEmptyPublicationTablesRestore(t *testing.T) {
 		require.NoError(t, err)
 		defer sub.Close()
 		for _, accounts := range []string{"all", "named", "empty"} {
-			t.Run(accounts, func(t *testing.T) {
+			if !t.Run(accounts, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
 				exec := func(query string) {
 					t.Helper()
 					_, err := admin.ExecContext(ctx, query)
@@ -375,7 +382,10 @@ func TestSnapshotEmptyPublicationTablesRestore(t *testing.T) {
 						require.ErrorContains(t, err, "published-t")
 					}
 				}
-			})
+			}) {
+				// A failed scenario may leave shared catalog state behind.
+				return
+			}
 		}
 	})
 }
@@ -393,6 +403,7 @@ func TestSnapshotPublicationSkipsExternalTables(t *testing.T) {
 		}
 		mustExec("create account external_pub_owner admin_name 'admin' identified by '111'")
 		mustExec("create account external_pub_sub admin_name 'admin' identified by '111'")
+		cancel()
 		defer func() {
 			for _, account := range []string{"external_pub_sub", "external_pub_owner"} {
 				_, err := admin.Exec("drop account " + account)
@@ -424,7 +435,9 @@ func TestSnapshotPublicationSkipsExternalTables(t *testing.T) {
 			{name: "unservable_all_tables", selection: "*", want: "*", unservableView: true},
 			{name: "unservable_explicit", selection: "base_t,v_ft", want: "base_t", unservableView: true},
 		} {
-			t.Run(tc.name, func(t *testing.T) {
+			if !t.Run(tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+				defer cancel()
 				exec := func(query string) {
 					t.Helper()
 					_, err := owner.ExecContext(ctx, query)
@@ -508,7 +521,10 @@ func TestSnapshotPublicationSkipsExternalTables(t *testing.T) {
 						}
 					}
 				}
-			})
+			}) {
+				// A failed scenario may leave shared catalog state behind.
+				return
+			}
 		}
 	})
 }

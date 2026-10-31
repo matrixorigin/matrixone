@@ -3724,7 +3724,13 @@ var (
 			output: "explain (analyze) select * from t",
 		}, {
 			input:  "explain format = 'tree' for connection 10",
-			output: "explain format = tree for connection 10",
+			output: "explain format = 'tree' for connection 10",
+		}, {
+			input:  "explain for connection 10",
+			output: "explain for connection 10",
+		}, {
+			input:  "describe for connection 328",
+			output: "explain for connection 328",
 		}, {
 			input:  "explain db.a",
 			output: "show columns from db.a",
@@ -3863,6 +3869,12 @@ var (
 		}, {
 			input:  "create fulltext2 index idx on A (a) max_index_capacity 500000 max_postings_capacity 8000000",
 			output: "create fulltext2 index idx on a (a) MAX_INDEX_CAPACITY 500000 MAX_POSTINGS_CAPACITY 8000000 ",
+		}, {
+			input:  "create fulltext2 index idx on A (a) with parser gojieba token_filter = 'stop'",
+			output: "create fulltext2 index idx on a (a) with parser gojieba TOKEN_FILTER = 'stop' ",
+		}, {
+			input:  "create fulltext2 index idx on A (a) with parser gojieba token_filter 'stop,synonym'",
+			output: "create fulltext2 index idx on a (a) with parser gojieba TOKEN_FILTER = 'stop,synonym' ",
 		}, {
 			input:  "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
 			output: "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
@@ -7340,5 +7352,29 @@ func TestAlterAddParenthesizedColumns(t *testing.T) {
 			require.Equal(t, tree.ColumnPositionNone, add.Position.Typ)
 		}
 		stmt.Free()
+	}
+}
+
+func TestExtensionAndLoadStatementMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		sql, name, query string
+		output           tree.OutputType
+		location         tree.ExecLocation
+	}{
+		{"load some_ext", "Load Extension", tree.QueryTypeOth, tree.OUTPUT_UNDEFINED, tree.EXEC_IN_FRONTEND},
+		{"create extension pg as myext file '/missing.so'", "Create Extension", tree.QueryTypeDDL, tree.OUTPUT_UNDEFINED, tree.EXEC_IN_FRONTEND},
+		{"select 1", "Select", tree.QueryTypeDQL, tree.OUTPUT_RESULT_ROW, tree.EXEC_IN_ENGINE},
+		{"create database metadata_control", "Create Database", tree.QueryTypeDDL, tree.OUTPUT_STATUS, tree.EXEC_IN_ENGINE},
+		{"load data infile '/missing.csv' into table t", "Load", tree.QueryTypeDML, tree.OUTPUT_STATUS, tree.EXEC_IN_ENGINE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, tc.name, stmt.GetStatementType())
+			require.Equal(t, tc.query, stmt.GetQueryType())
+			require.Equal(t, tc.output, stmt.StmtKind().OutputType())
+			require.Equal(t, tc.location, stmt.StmtKind().ExecLocation())
+		})
 	}
 }

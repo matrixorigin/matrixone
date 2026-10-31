@@ -1,0 +1,28 @@
+-- issue 31510: wait_timeout accepts the MySQL documented non-Windows range (1..31536000)
+set @sav_wt_global = @@global.wait_timeout;
+set @sav_wt_session = @@wait_timeout;
+set wait_timeout = 86401;
+select @@wait_timeout;
+set wait_timeout = 1209600;
+select @@wait_timeout;
+set wait_timeout = 31536000;
+select @@wait_timeout;
+set wait_timeout = 31536001;
+select @@wait_timeout;
+set wait_timeout = -1;
+select @@wait_timeout;
+set wait_timeout = 'abc';
+select @@wait_timeout;
+select 1;
+set wait_timeout = 1209600;
+select @@wait_timeout;
+set global wait_timeout = 1209600;
+select @@global.wait_timeout;
+select @@wait_timeout;
+set global wait_timeout = default;
+select @@global.wait_timeout;
+select @@wait_timeout;
+set global wait_timeout = @sav_wt_global;
+select @sav_wt_global = @@global.wait_timeout;
+set wait_timeout = @sav_wt_session;
+select @@wait_timeout = @sav_wt_session;

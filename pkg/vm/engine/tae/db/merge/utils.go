@@ -15,49 +15,16 @@
 package merge
 
 import (
-	"cmp"
 	"iter"
-	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
 	constMaxMemCap = 12 * common.Const1GBytes // max original memory for an object
 )
-
-func removeOversize(objs []*catalog.ObjectEntry) []*catalog.ObjectEntry {
-	if len(objs) < 2 {
-		return objs
-	}
-	slices.SortFunc(objs, func(a, b *catalog.ObjectEntry) int {
-		return cmp.Compare(a.OriginSize(), b.OriginSize())
-	})
-
-	accSize := int(objs[0].OriginSize()) + int(objs[1].OriginSize())
-	i := 2
-	for i < len(objs) {
-		size := int(objs[i].OriginSize())
-		if size > accSize {
-			break
-		}
-		accSize += size
-		i++
-	}
-	for j := i; j < len(objs); j++ {
-		objs[j] = nil
-	}
-	if i == 2 {
-		if objs[1].OriginSize() < 3*objs[0].OriginSize() || len(objs) > 20 /* do not let the first 2 objects block more merging tasks */ {
-			return objs[:2]
-		}
-		return nil
-	}
-	return objs[:i]
-}
 
 func resourceAvailable(
 	estMem int64,
@@ -69,16 +36,6 @@ func resourceAvailable(
 		mem = constMaxMemCap
 	}
 	return estMem <= 2*mem/3
-}
-
-func IterEntryAsStats(objs []*catalog.ObjectEntry) iter.Seq[*objectio.ObjectStats] {
-	return func(yield func(*objectio.ObjectStats) bool) {
-		for _, obj := range objs {
-			if !yield(obj.GetObjectStats()) {
-				return
-			}
-		}
-	}
 }
 
 func IterStats(objs []*objectio.ObjectStats) iter.Seq[*objectio.ObjectStats] {

@@ -1,0 +1,362 @@
+-- Defect B (#30359): DATA BRANCH MERGE copies sequence-generated keys
+-- without advancing the destination sequence. A later default INSERT must
+-- not collide. Covers unit and non-unit increments, an already-ahead
+-- (no-op) counter, descending direction, deletes (never advance), explicit
+-- keys above the branch counter, and the NO CYCLE range-guard abort.
+drop database if exists seq_merge_src;
+drop database if exists seq_merge_br;
+create database seq_merge_src;
+use seq_merge_src;
+create sequence s as bigint increment by 1 start with 1 no cycle;
+create table t (id bigint primary key default nextval('s'), v int);
+insert into t(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into t(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.t into seq_merge_src.t;
+use seq_merge_src;
+select id, v from t order by id;
+select last_seq_num, is_called from s;
+insert into t(v) values (30);
+select id, v from t order by id;
+select last_seq_num, is_called from s;
+drop database seq_merge_br;
+
+-- Non-unit increment with an explicit key beyond the branch counter.
+create sequence s3 as bigint increment by 3 start with 7 no cycle;
+create table t3 (id bigint primary key default nextval('s3'), v int);
+insert into t3(v) values (70);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into t3(v) values (71);
+insert into t3(id, v) values (16, 72);
+use seq_merge_src;
+data branch merge seq_merge_br.t3 into seq_merge_src.t3;
+use seq_merge_src;
+select id, v from t3 order by id;
+select last_seq_num, is_called from s3;
+insert into t3(v) values (73);
+select id, v from t3 order by id;
+drop database seq_merge_br;
+
+-- Branch deletes never advance the destination counter.
+create sequence s2 as bigint increment by 1 start with 1 no cycle;
+create table t2 (id bigint primary key default nextval('s2'), v int);
+insert into t2(v) values (1), (2), (3);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+delete from t2 where id >= 2;
+use seq_merge_src;
+data branch merge seq_merge_br.t2 into seq_merge_src.t2;
+use seq_merge_src;
+select id, v from t2 order by id;
+select last_seq_num, is_called from s2;
+insert into t2(v) values (4);
+select id, v from t2 order by id;
+drop database seq_merge_br;
+
+-- Descending destination reconciles to the low watermark.
+create sequence sd as bigint increment by -1 start with 10 minvalue 1 maxvalue 10 no cycle;
+create table td (id bigint primary key default nextval('sd'), v int);
+insert into td(v) values (100);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into td(v) values (90), (80);
+use seq_merge_src;
+data branch merge seq_merge_br.td into seq_merge_src.td;
+use seq_merge_src;
+select id, v from td order by id;
+select last_seq_num, is_called from sd;
+insert into td(v) values (70);
+select id, v from td order by id;
+drop database seq_merge_br;
+
+-- NO CYCLE range guard: a watermark at the edge fails the merge
+-- failure-atomically; rows stay unapplied and the counter unchanged.
+create sequence sm as bigint increment by 1 start with 1 maxvalue 4 no cycle;
+create table tm (id bigint primary key default nextval('sm'), v int);
+insert into tm(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+insert into seq_merge_br.tm(id, v) values (2, 20), (3, 30), (4, 40);
+use seq_merge_src;
+-- @regex("Reached maximum value of sequence sm", true)
+data branch merge seq_merge_br.tm into seq_merge_src.tm;
+use seq_merge_src;
+select id, v from tm order by id;
+select last_seq_num, is_called from sm;
+-- The aborted merge applied no rows: the next default INSERT succeeds past
+-- the last committed value (a gap, never a reuse).
+insert into tm(v) values (101);
+select id, v from tm order by id;
+select last_seq_num, is_called from sm;
+drop database seq_merge_br;
+
+-- An already-ahead destination counter is a genuine no-op (monotonicity);
+-- a merge retry shape must not regress it.
+create sequence sa as bigint increment by 1 start with 1 no cycle;
+create table ta (id bigint primary key default nextval('sa'), v int);
+insert into ta(v) values (1);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into ta(v) values (2);
+use seq_merge_src;
+select setval('sa', 50);
+data branch merge seq_merge_br.ta into seq_merge_src.ta;
+select id, v from ta order by id;
+select last_seq_num, is_called from sa;
+insert into ta(v) values (60);
+select id, v from ta order by id;
+drop database seq_merge_br;
+
+-- v12-review F1: a same-named ordinary table wearing the seven sequence
+-- columns is never touched by reconciliation. Replacing the destination
+-- sequence with such a table fails the merge atomically: no row applied,
+-- sentinel row untouched; a repaired merge then reconciles normally.
+drop database if exists ms_ord_src;
+drop database if exists ms_ord_br;
+create database ms_ord_src;
+use ms_ord_src;
+create sequence s as bigint increment by 1 start with 1 no cycle;
+create table t (id bigint primary key default nextval('s'), v int);
+insert into t(v) values (10);
+data branch create database ms_ord_br from ms_ord_src;
+use ms_ord_br;
+insert into t(v) values (20);
+use ms_ord_src;
+drop sequence s;
+create table s (last_seq_num bigint, min_value bigint, max_value bigint, start_value bigint, increment_value bigint, cycle boolean, is_called boolean);
+insert into s values (111, 1, 1000, 1, 1, false, true);
+-- @regex("sequence", true)
+data branch merge ms_ord_br.t into ms_ord_src.t;
+select id, v from t order by id;
+select * from s;
+drop table s;
+create sequence s as bigint increment by 1 start with 1 no cycle;
+data branch merge ms_ord_br.t into ms_ord_src.t;
+use ms_ord_src;
+select id, v from t order by id;
+select last_seq_num, is_called from s;
+insert into t(v) values (30);
+select id, v from t order by id;
+drop database ms_ord_br;
+drop database ms_ord_src;
+
+-- v12-review F9: identifiers keep their resolved spelling through the
+-- reconcile path; normalization follows the effective
+-- lower_case_table_names. The distributed BVT environment folds names
+-- (lctn=1), so this block pins spelled-name reproducibility through the
+-- fold; distinct S/s sequences under case-sensitive mode are covered on
+-- the dedicated lctn=0 cluster and by the deterministic unit tests.
+drop database if exists ms_case_src;
+drop database if exists ms_case_br;
+create database ms_case_src;
+use ms_case_src;
+-- F9 identity normalization: the sequence is created with mixed-case
+-- spelling; under lower_case_table_names=1 the catalog folds it to 'mixs'
+-- (base-compatible contract: sequence function arguments name the catalog
+-- spelling — probed base===final, /tmp/mo-30359/probe-g9-case.log). The
+-- watermark tracker and the reconcile unit must normalize to that same
+-- folded identity, so a branch whose catalog carries the identical folded
+-- name reconciles instead of dangling as a distinct spelling.
+create sequence MixS as bigint increment by 1 start with 1 no cycle;
+create table tc (id bigint primary key default nextval('mixs'), v int);
+insert into tc(v) values (10);
+data branch create database ms_case_br from ms_case_src;
+use ms_case_br;
+insert into tc(v) values (20);
+use ms_case_src;
+data branch merge ms_case_br.tc into ms_case_src.tc;
+select id, v from tc order by id;
+select last_seq_num, is_called from MixS;
+insert into tc(v) values (30);
+select id, v from tc order by id;
+drop database ms_case_br;
+drop database ms_case_src;
+
+-- #30359 review (planner assignment-cast family): the catalog default of a
+-- VARCHAR-family column arrives behind cast_strict and a MEDIUMINT column
+-- behind the planner's assignment-cast pick, while a BIGINT column rides
+-- plain cast. The whole family must unwrap to the single-argument nextval
+-- shape for merge tracking; recognizing only plain cast would silently
+-- leave these sequences behind and duplicate the next generated key.
+drop database if exists ms_cast_src;
+drop database if exists ms_cast_br;
+create database ms_cast_src;
+use ms_cast_src;
+create sequence sv as bigint increment by 1 start with 1 no cycle;
+create table tv (id varchar(32) primary key default nextval('sv'), v int);
+insert into tv(v) values (10);
+data branch create database ms_cast_br from ms_cast_src;
+use ms_cast_br;
+insert into tv(v) values (20);
+use ms_cast_src;
+data branch merge ms_cast_br.tv into ms_cast_src.tv;
+select id, v from tv order by id;
+select last_seq_num, is_called from sv;
+insert into tv(v) values (30);
+select id, v from tv order by id;
+select last_seq_num, is_called from sv;
+drop database ms_cast_br;
+
+create sequence sm as bigint increment by 1 start with 1 no cycle;
+create table tm (id mediumint primary key default nextval('sm'), v int);
+insert into tm(v) values (10);
+data branch create database ms_cast_br from ms_cast_src;
+use ms_cast_br;
+insert into tm(v) values (20);
+use ms_cast_src;
+data branch merge ms_cast_br.tm into ms_cast_src.tm;
+select id, v from tm order by id;
+select last_seq_num, is_called from sm;
+insert into tm(v) values (30);
+select id, v from tm order by id;
+select last_seq_num, is_called from sm;
+drop database ms_cast_br;
+drop database ms_cast_src;
+
+-- pre-PR review (watermark numeric domain): a BIGINT UNSIGNED sequence
+-- whose merged keys cross the signed 64-bit boundary, captured through a
+-- VARCHAR(32) default column. String values must be compared in the
+-- SEQUENCE's numeric domain: an int64-order compare ranks
+-- 9223372036854775808 below 9223372036854775807 and would reconcile only to
+-- the lower key, duplicating the next generated value.
+drop database if exists ms_u64_src;
+drop database if exists ms_u64_br;
+create database ms_u64_src;
+use ms_u64_src;
+create sequence su as bigint unsigned increment by 1 start with 9223372036854775806 no cycle;
+create table tu (id varchar(32) primary key default nextval('su'), v int);
+insert into tu(v) values (10);
+data branch create database ms_u64_br from ms_u64_src;
+use ms_u64_br;
+insert into tu(v) values (20);
+insert into tu(v) values (30);
+use ms_u64_src;
+data branch merge ms_u64_br.tu into ms_u64_src.tu;
+select id, v from tu order by id;
+select last_seq_num, is_called from su;
+insert into tu(v) values (40);
+select id, v from tu order by id;
+select last_seq_num, is_called from su;
+drop database ms_u64_br;
+drop database ms_u64_src;
+
+-- pre-PR review (watermark numeric domain): mixed-sign merged keys
+-- captured through one VARCHAR default column feeding an UNSIGNED
+-- sequence. The explicit negative key must order ONLY the signed arm:
+-- folding every value into the int64 domain reads -1's bits as the
+-- largest unsigned value and would reconcile the sequence to
+-- 18446744073709551615, leaving the next default INSERT to exhaust
+-- ("Reached maximum value of sequence smu"). The correct reconcile is
+-- the unsigned max 18446744073709551614; the negative key is foreign to
+-- the unsigned domain and is ignored by the reconcile decision.
+drop database if exists ms_mixed_src;
+drop database if exists ms_mixed_br;
+create database ms_mixed_src;
+use ms_mixed_src;
+create sequence smu as bigint unsigned increment by 1 start with 18446744073709551613 no cycle;
+create table tmix (id varchar(32) primary key default nextval('smu'), v int);
+insert into tmix(v) values (10);
+data branch create database ms_mixed_br from ms_mixed_src;
+use ms_mixed_br;
+insert into tmix(v) values (20);
+insert into tmix(id, v) values ('-1', 21);
+use ms_mixed_src;
+data branch merge ms_mixed_br.tmix into ms_mixed_src.tmix;
+select id, v from tmix order by id;
+select last_seq_num, is_called from smu;
+insert into tmix(v) values (30);
+select id, v from tmix order by id;
+select last_seq_num, is_called from smu;
+drop database ms_mixed_br;
+drop database ms_mixed_src;
+
+-- pre-PR review (#30359, watermark storage-domain width): a merged key
+-- outside the sequence's storage domain. The BIGINT primary key can
+-- hold the explicit 70000, but the SMALLINT UNSIGNED sequence's domain
+-- is [0, 65535], so 70000 is foreign to it: a width-blind watermark
+-- folds 70000 into the reconcile decision and the merge fails with a
+-- data-out-of-range error against the sequence's uint16 storage type
+-- (observed on the pre-revision build: ERROR 1690 "data out of range:
+-- data type uint16, value '70000'"). The correct reconcile advances
+-- only across the merged key its domain can represent (60001), so the
+-- merge succeeds and the next default INSERT allocates 60002.
+drop database if exists ms_smallu_src;
+drop database if exists ms_smallu_br;
+create database ms_smallu_src;
+use ms_smallu_src;
+create sequence ssu as smallint unsigned increment by 1 start with 60000 no cycle;
+create table tsu (id bigint primary key default nextval('ssu'), v int);
+insert into tsu(v) values (10);
+data branch create database ms_smallu_br from ms_smallu_src;
+use ms_smallu_br;
+insert into tsu(v) values (20);
+insert into tsu(id, v) values (70000, 21);
+use ms_smallu_src;
+data branch merge ms_smallu_br.tsu into ms_smallu_src.tsu;
+select id, v from tsu order by id;
+select last_seq_num, is_called from ssu;
+insert into tsu(v) values (30);
+select id, v from tsu order by id;
+select last_seq_num, is_called from ssu;
+drop database ms_smallu_br;
+drop database ms_smallu_src;
+
+-- post-PR review (#30359, typed decimal capture): a DECIMAL(p,s) primary
+-- key with a nextval default stores each issued key unscaled as key*10^s.
+-- On the pre-revision build the merge advanced none of these sequences
+-- (the watermark stayed 1) and the first post-merge default INSERT failed
+-- with ERROR 1062 "Duplicate entry '2'" / "'2.00'"; a BIGINT control
+-- column passed. Integral decimal keys now normalize by the column scale,
+-- so the reconcile advances each owner sequence to 2 and the next default
+-- INSERT allocates 3 instead of colliding.
+use seq_merge_src;
+create sequence sdec18 as bigint increment by 1 start with 1 no cycle;
+create table tdec18 (id decimal(18,0) primary key default nextval('sdec18'), v int);
+insert into tdec18(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec18(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec18 into seq_merge_src.tdec18;
+select id, v from tdec18 order by id;
+select last_seq_num, is_called from sdec18;
+insert into tdec18(v) values (30);
+select id, v from tdec18 order by id;
+select last_seq_num, is_called from sdec18;
+drop database seq_merge_br;
+
+-- Same defect at scale 2: the merged key is stored and rendered as 2.00.
+create sequence sdec18s2 as bigint increment by 1 start with 1 no cycle;
+create table tdec18s2 (id decimal(18,2) primary key default nextval('sdec18s2'), v int);
+insert into tdec18s2(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec18s2(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec18s2 into seq_merge_src.tdec18s2;
+select id, v from tdec18s2 order by id;
+select last_seq_num, is_called from sdec18s2;
+insert into tdec18s2(v) values (30);
+select id, v from tdec18s2 order by id;
+select last_seq_num, is_called from sdec18s2;
+drop database seq_merge_br;
+
+-- Same defect in the decimal128 range: DECIMAL(38,0) keys.
+create sequence sdec38 as bigint increment by 1 start with 1 no cycle;
+create table tdec38 (id decimal(38,0) primary key default nextval('sdec38'), v int);
+insert into tdec38(v) values (10);
+data branch create database seq_merge_br from seq_merge_src;
+use seq_merge_br;
+insert into tdec38(v) values (20);
+use seq_merge_src;
+data branch merge seq_merge_br.tdec38 into seq_merge_src.tdec38;
+select id, v from tdec38 order by id;
+select last_seq_num, is_called from sdec38;
+insert into tdec38(v) values (30);
+select id, v from tdec38 order by id;
+select last_seq_num, is_called from sdec38;
+drop database seq_merge_br;
+
+drop database seq_merge_src;

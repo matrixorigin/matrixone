@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -91,90 +92,132 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local)
-	err := s.exec.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			txn.Use(catalog.MO_CATALOG)
+	// Release the planning transaction and account lock before the paged
+	// 4.0.7 walk, then recheck the committed account version before caching it.
+	for {
+		pendingV407 := false
+		err := s.exec.ExecTxn(
+			ctx,
+			func(txn executor.TxnExecutor) error {
+				txn.Use(catalog.MO_CATALOG)
 
-			version, err := versions.GetTenantVersion(tenantID, txn)
-			if err != nil {
-				return err
-			}
-
-			// tenant create at current cn, can work correctly
-			currentCN := s.getFinalVersionHandle().Metadata()
-			if versions.Compare(currentCN.Version, version) < 0 {
-				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
-				return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
-					version, currentCN.Version)
-			}
-
-			latestVersion, err := versions.GetLatestVersion(txn)
-			if err != nil {
-				return err
-			}
-			if latestVersion.Version != currentCN.Version {
-				// A newer CN may still be recovering the retained target. Let
-				// the caller retry after its cluster route has been created.
-				return moerr.NewInvalidStateNoCtxf(
-					"tenant upgrade requires current cn version %s to match cluster latest version %s",
-					currentCN.Version, latestVersion.Version)
-			}
-			if currentCN.Version == version {
-				if latestVersion.VersionOffset != currentCN.VersionOffset {
-					return nil
-				}
-				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, false)
+				version, err := versions.GetTenantVersion(tenantID, txn)
 				if err != nil {
 					return err
 				}
-				if len(upgrades) == 0 {
-					return nil
-				}
-			}
 
-			for {
-				// upgrade completed
-				if s.upgrade.finalVersionCompleted.Load() {
-					break
+				// tenant create at current cn, can work correctly
+				currentCN := s.getFinalVersionHandle().Metadata()
+				if versions.Compare(currentCN.Version, version) < 0 {
+					// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
+					return moerr.NewInvalidInputNoCtxf("tenant version %s is greater than current cn version %s",
+						version, currentCN.Version)
 				}
 
-				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, true)
+				latestVersion, err := versions.GetLatestVersion(txn)
 				if err != nil {
 					return err
 				}
-				// latest cluster is already upgrade completed
-				if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant ||
-					upgrades[len(upgrades)-1].State == versions.StateReady {
-					break
+				if latestVersion.Version != currentCN.Version {
+					// A newer CN may still be recovering the retained target. Let
+					// the caller retry after its cluster route has been created.
+					return moerr.NewInvalidStateNoCtxf(
+						"tenant upgrade requires current cn version %s to match cluster latest version %s",
+						currentCN.Version, latestVersion.Version)
 				}
-
-				time.Sleep(time.Second)
-			}
-
-			// upgrade in current goroutine immediately
-			version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
-			if err != nil {
-				return err
-			}
-			from := version
-			for _, v := range s.handles {
-				if versions.Compare(v.Metadata().Version, from) >= 0 &&
-					v.Metadata().CanDirectUpgrade(from) {
-					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
+				if currentCN.Version == version {
+					if s.getFinalVersionHandle() == v4_0_7.Handler {
+						if latestVersion.VersionOffset != currentCN.VersionOffset {
+							return moerr.NewInvalidStateNoCtx("4.0.7 offset-only upgrades are not supported")
+						}
+						return nil
+					}
+					if latestVersion.VersionOffset != currentCN.VersionOffset {
+						return nil
+					}
+					upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, false)
+					if err != nil {
 						return err
 					}
-					if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
+					if len(upgrades) == 0 {
+						return nil
+					}
+				}
+
+				for {
+					// upgrade completed
+					if s.upgrade.finalVersionCompleted.Load() {
+						break
+					}
+
+					upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, true)
+					if err != nil {
 						return err
 					}
-					from = v.Metadata().Version
+					if len(upgrades) == 0 {
+						return moerr.NewInvalidStateNoCtx("tenant upgrade route is unavailable")
+					}
+					// latest cluster is already upgrade completed
+					if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant ||
+						upgrades[len(upgrades)-1].State == versions.StateReady {
+						break
+					}
+
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(time.Second):
+					}
 				}
-			}
-			return nil
-		},
-		opts)
-	if err != nil {
-		return moerr.AttachCause(ctx, err)
+
+				// upgrade in current goroutine immediately
+				version, err = versions.GetTenantCreateVersionForUpdate(tenantID, txn)
+				if err != nil {
+					return err
+				}
+				from := version
+				for _, v := range s.handles {
+					if versions.Compare(v.Metadata().Version, from) >= 0 &&
+						v.Metadata().CanDirectUpgrade(from) {
+						if v == v4_0_7.Handler {
+							if versions.Compare(from, v.Metadata().Version) < 0 {
+								pendingV407 = true
+								break // Release the planning transaction/account lock before paging.
+							}
+							// The frozen consolidated terminal has no in-txn re-fire;
+							// skip it so forward handles beyond 4.0.7 still run for
+							// tenants already at 4.0.7.
+							continue
+						}
+						if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
+							return err
+						}
+						if err := versions.UpgradeTenantVersion(tenantID, v.Metadata().Version, txn); err != nil {
+							return err
+						}
+						from = v.Metadata().Version
+					}
+				}
+				// A manual upgrade reports success only with the account at the
+				// cluster's final version. The re-planned loop below still takes
+				// over after a committed paged 4.0.7 stage, so only a non-pending
+				// shortfall is terminal here instead of being cached as success.
+				if !pendingV407 && from != currentCN.Version {
+					return moerr.NewInvalidInputNoCtxf("cannot upgrade tenant version %s to current cn version %s",
+						from, currentCN.Version)
+				}
+				return nil
+			},
+			opts)
+		if err != nil {
+			return moerr.AttachCause(ctx, err)
+		}
+		if !pendingV407 {
+			break
+		}
+		if _, err := s.upgradeV407TenantOnDemand(ctx, tenantID); err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	s.mu.tenants[tenantID] = true

@@ -25,6 +25,7 @@ import (
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -42,6 +43,10 @@ func TestIssue29852ForwardCreateNeighborSchedules(t *testing.T) {
 		require.NoError(t, err)
 		cn1, err := cluster.GetCNService(1)
 		require.NoError(t, err)
+		observer, ok := cn0.RawService().(cnservice.Service)
+		require.True(t, ok)
+		writer, ok := cn1.RawService().(cnservice.Service)
+		require.True(t, ok)
 		db0, err := sql.Open("mysql", issue27487DSN(cn0.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db0.Close()
@@ -51,14 +56,20 @@ func TestIssue29852ForwardCreateNeighborSchedules(t *testing.T) {
 		var registryID, tablesID uint64
 		require.NoError(t, db0.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
 		require.NoError(t, db0.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_tables'").Scan(&tablesID))
+		cancel()
 		for _, pending := range []bool{true, false} {
-			t.Run(fmt.Sprintf("pending_parent_%t", pending), func(t *testing.T) {
+			if !t.Run(fmt.Sprintf("pending_parent_%t", pending), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
 				database := fmt.Sprintf("issue29852_neighbor_%t", pending)
 				execSQLRequire(t, ctx, db0, "create database "+database)
 				defer func() {
 					cleanupCtx, stop := context.WithTimeout(context.Background(), 20*time.Second)
 					defer stop()
-					_, _ = db0.ExecContext(cleanupCtx, "drop database if exists "+database)
+					_, err := db0.ExecContext(cleanupCtx, "drop database if exists "+database)
+					if err != nil {
+						t.Errorf("drop database %s: %v", database, err)
+					}
 				}()
 				execSQLRequire(t, ctx, db0, "create table "+database+".guard(id int)")
 				holder, err := db0.BeginTx(ctx, nil)
@@ -130,14 +141,26 @@ func TestIssue29852ForwardCreateNeighborSchedules(t *testing.T) {
 				err = <-done
 				finished = true
 				require.NoError(t, err)
+				// The remote autocommit does not order CN0's next snapshot.
+				// Wait for CN1's committed frontier before observing the child.
+				frontier := writer.GetTxnClient().GetLatestCommitTS()
+				require.False(t, frontier.IsEmpty())
+				waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+				snapshot, err := observer.GetTxnClient().WaitLogTailAppliedAt(waitCtx, frontier)
+				waitCancel()
+				t.Logf("CN1 committed frontier=%s, CN0 snapshot=%s, wait error=%v", frontier.DebugString(), snapshot.DebugString(), err)
+				require.NoError(t, err)
+				require.True(t, frontier.Less(snapshot))
 				var name, ddl string
 				require.NoError(t, db0.QueryRowContext(ctx, "show create table "+database+".child").Scan(&name, &ddl))
 				t.Logf("child definition after both CREATEs committed: %s", ddl)
 				_, err = db0.ExecContext(ctx, "set foreign_key_checks=1")
 				require.NoError(t, err)
 				_, err = db0.ExecContext(ctx, "insert into "+database+".child values(1,999)")
-				require.Error(t, err, "both tables exist; pending FK must be materialized and reject invalid insert")
-			})
+				require.ErrorContains(t, err, "foreign key constraint fails", "both tables exist; pending FK must be materialized and reject invalid insert")
+			}) {
+				return // The shared fixture may contain state from the failed scenario.
+			}
 		}
 	})
 }
@@ -554,9 +577,18 @@ func TestTruncatePreservesMaterializedForeignKeyIdentity(t *testing.T) {
 			"select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database),
 			"query failed: selected referenced key after recreation")
 		require.Equal(t, "z", selected, "recreation must preserve the declared selected key")
-		requireSQLRejection(t, ctx, db, "drop index z on "+database+".parent") // engine FK protection must agree with the catalog key
-		require.NoErrorf(t, boundedExec(t, ctx, db, "drop index a on "+database+".parent"),
-			"new compatible key was not selected by the existing FK")
+		// The equivalent-key transition (issue #30342) allows dropping the
+		// recorded key when another covering key survives: the FK rebinds to
+		// the surviving key in the same transaction instead of rejecting, so
+		// identity is proven by the catalog tracking the recorded key and by
+		// the rebind, not by an unconditional rejection.
+		require.NoErrorf(t, boundedExec(t, ctx, db, "drop index z on "+database+".parent"),
+			"exec failed: drop recorded key with a compatible survivor")
+		require.NoErrorf(t, boundedQueryRow(t, ctx, db, &selected,
+			"select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database),
+			"query failed: selected referenced key after rebind")
+		require.Equal(t, "a", selected, "rebind must move the binding to the surviving compatible key")
+		requireSQLRejection(t, ctx, db, "drop index a on "+database+".parent") // the last covering key stays protected
 		requireSQLRejection(t, ctx, db, "insert into "+database+".child values(1,999)")
 		require.NoErrorf(t, boundedExec(t, ctx, db, "insert into "+database+".child values(1,7)"),
 			"exec failed: reinsert child")

@@ -131,8 +131,9 @@ var (
 
 	// defaultWaitTimeoutMin default: 1 second
 	defaultWaitTimeoutMin int64 = 1
-	// defaultWaitTimeoutMax default: 24 hours (in seconds)
-	defaultWaitTimeoutMax int64 = 24 * 60 * 60
+	// defaultWaitTimeoutMax default: 1 year (31536000 seconds), matching the
+	// MySQL documented non-Windows wait_timeout ceiling.
+	defaultWaitTimeoutMax int64 = 365 * 24 * 60 * 60
 
 	// defaultInteractiveTimeoutMin default: 1 second
 	defaultInteractiveTimeoutMin int64 = 1
@@ -200,8 +201,15 @@ var (
 
 	defaultMaxLogMessageSize = 16 << 10
 
-	// largestEntryLimit is the max size for reading file to csv buf
-	LargestEntryLimit = 10 * 1024 * 1024
+	// LargestEntryLimit is the default max weight of one CSV record read by
+	// the LOAD DATA / external-table parser (see csvparser CSVConfig
+	// MaxRecordSize, which can override it per parser): raw field content
+	// bytes plus one per framed field, so separator-only rows cannot grow
+	// field indexes without limit. The 64MiB default matches MySQL 8.0's
+	// default max_allowed_packet so multi-MiB MEDIUMTEXT/LONGTEXT rows that
+	// are legal to INSERT also load from CSV. CN toml `largest-entry-limit`
+	// overrides it server-wide.
+	LargestEntryLimit = 64 * 1024 * 1024
 
 	CNPrimaryCheck atomic.Bool
 

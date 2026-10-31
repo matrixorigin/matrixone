@@ -1471,7 +1471,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 			projList1 = append(projList1, nil)
 			projList2 = append(projList2, nil)
 		} else {
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), false)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), false)
 			if err != nil {
 				return 0, nil, nil, err
 			}

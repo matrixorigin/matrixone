@@ -89,7 +89,6 @@ type s3WriterDelegate struct {
 	segmentMap    map[string]int32
 
 	action             actionType
-	isRemote           bool
 	rejectZeroTemporal bool
 
 	updateCtxs     []*MultiUpdateCtx
@@ -148,7 +147,6 @@ func newS3Writer(
 		insertBlockRowCount: make([]uint64, tableCount),
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
-		isRemote:            update.IsRemote,
 		rejectZeroTemporal:  update.RejectZeroTemporal,
 		addAffectedRows:     update.addAffectedRowsFunc,
 		takeAffectedRows:    update.takeS3AffectedRowsFunc,
@@ -698,12 +696,15 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 			owned, writeErr := process.MeasureFilesystemWait(analyzer, func() (bool, error) {
 				return s3Writer.WriteOwned(writeCtx, bats[i])
 			})
+			// Ownership may transfer even when the subsequent spill fails.
+			if owned {
+				bats[i] = nil
+			}
 			if writeErr != nil {
 				err = writeErr
 				return
 			}
 			if owned {
-				bats[i] = nil
 				continue
 			}
 			// WriteOwned returned false: data was already copied inside

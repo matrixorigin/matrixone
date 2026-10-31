@@ -37,7 +37,7 @@ import (
 
 // insertIntoFullTextIndexTableFormat is the populate-SQL template,
 // lifted verbatim from pkg/sql/compile/util.go:113.
-const insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
+const insertIntoFullTextIndexTableFormat = "INSERT INTO %s SELECT f.* FROM %s AS %s CROSS APPLY fulltext_index_tokenize(%s, %s, %s) AS f;"
 
 // Compile-time interface check.
 var _ compileplugin.Hooks = Hooks{}
@@ -174,20 +174,20 @@ func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {
 // (genInsertIndexTableSqlForFullTextIndex).
 func genInsertSQL(originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string) ([]string, error) {
 	const srcAlias = "src"
-	pkColName := srcAlias + "." + originalTableDef.Pkey.PkeyColName
+	pkColName := sqlquote.QualifiedIdent(srcAlias, originalTableDef.Pkey.PkeyColName)
 	tblname := indexDef.IndexTableName
 
 	parts := make([]string, 0, len(indexDef.Parts))
 	for _, p := range indexDef.Parts {
-		parts = append(parts, srcAlias+"."+p)
+		parts = append(parts, sqlquote.QualifiedIdent(srcAlias, p))
 	}
 	concat := strings.Join(parts, ",")
 
 	sql := fmt.Sprintf(insertIntoFullTextIndexTableFormat,
-		qryDatabase, tblname,
-		qryDatabase, originalTableDef.Name,
-		srcAlias,
-		indexDef.IndexAlgoParams,
+		sqlquote.QualifiedIdent(qryDatabase, tblname),
+		sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name),
+		sqlquote.Ident(srcAlias),
+		sqlquote.String(indexDef.IndexAlgoParams),
 		pkColName,
 		concat)
 

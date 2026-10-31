@@ -1695,10 +1695,14 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.percentileParamPlan = executionPlan
 		prepareStmt.hasPercentileParams = plan2.PreparedPlanHasPercentileParams(executionPlan)
 	}
+	if prepareStmt.ewmParamPlan != executionPlan {
+		prepareStmt.ewmParamPlan = executionPlan
+		prepareStmt.hasEwmParams = plan2.PreparedPlanHasEwmParams(executionPlan)
+	}
 	cwft.paramVals = nil
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
 		if prepareStmt.params.Length() != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 		paramCount := prepareStmt.params.Length()
 		if err = prepareStmt.params.SetStringSource(types.StringSourceCOMStmt); err != nil {
@@ -1787,7 +1791,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	} else if execPlan != nil && len(execPlan.Args) > 0 {
 		if len(execPlan.Args) != numParams {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 		showPublicationPatternPositions := []int32(nil)
 		if show, ok := prepareStmt.PrepareStmt.(*tree.ShowPublications); ok && show.Like != nil {
@@ -1818,7 +1822,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 	} else {
 		if numParams > 0 {
-			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
+			return nil, nil, nil, originSQL, false, moerr.NewWrongArguments(reqCtx, "EXECUTE")
 		}
 	}
 	if err = plan2.ValidatePreparedWindowParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
@@ -1843,6 +1847,9 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
+		// Update only after the full protocol payload and typed bindings are
+		// admitted. The effective domain also owns the specialization/packet key.
+		prepareStmt.rememberIntegerArithmeticBindings(preparePlan.Plan, cwft.paramBindings, cwft.paramVals)
 		bindingKey := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
 		key := preparedFieldBindingKey(bindingKey, fieldTypes)
 		var proof func(*plan.Expr) bool
@@ -1907,7 +1914,7 @@ func initExecuteStmtParamWithResolverInSession(
 			key = preparedFieldBindingKey(bindingKey, fieldTypes)
 			runtimePlanApplied = true
 			cwft.preparedJoinDiagnosticFree = bound.DiagnosticFree
-			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams
+			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams && !prepareStmt.hasEwmParams
 			switch prepareStmt.PrepareStmt.(type) {
 			case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				cacheable = false
@@ -2802,6 +2809,14 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 		// compile would reuse an earlier EXECUTE value for the same parameter type.
 		return false
 	}
+	if plan2.PreparedPlanHasEwmParams(p) {
+		// The ewm decay/policy positions are evaluated while the window
+		// arguments' configuration bytes are constructed — execution-
+		// dependent forms (markers, user variables, real-time expressions)
+		// all resolve there per EXECUTE; a reused compile would freeze an
+		// earlier execution's evaluation for the same parameter types.
+		return false
+	}
 	query := p.GetQuery()
 	if query == nil {
 		return true
@@ -3020,9 +3035,6 @@ func buildPlanForCompileRetry(
 	planningContext := originalContext
 	if planningContext == nil {
 		planningContext = ctx
-	}
-	if ctx.Value(defines.HnswSnapshotFallbackKey{}) == true {
-		planningContext = context.WithValue(planningContext, defines.HnswSnapshotFallbackKey{}, true)
 	}
 	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
 	defer compilerContext.SetContext(originalContext)

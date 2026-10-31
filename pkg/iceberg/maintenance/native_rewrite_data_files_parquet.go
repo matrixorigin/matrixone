@@ -133,7 +133,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) buildDeleteFilters(ctx context.C
 	if len(candidates) == 0 {
 		return nil, memoryUsed, nil
 	}
-	specFieldCounts := rewriteDataFilesSpecFieldCounts(req.Metadata)
+	specFieldCounts := req.Metadata.PartitionSpecFieldCounts()
 	facade := c.Metadata
 	if facade == nil {
 		facade = metadata.NativeFacade{}
@@ -296,17 +296,6 @@ func rewriteDataFilesCompactionCandidates(groups []RewriteDataFileGroup) map[str
 				out[path] = candidate.File
 			}
 		}
-	}
-	return out
-}
-
-func rewriteDataFilesSpecFieldCounts(meta *api.TableMetadata) map[int]int {
-	if meta == nil {
-		return nil
-	}
-	out := make(map[int]int, len(meta.PartitionSpecs))
-	for _, spec := range meta.PartitionSpecs {
-		out[spec.SpecID] = len(spec.Fields)
 	}
 	return out
 }
@@ -554,7 +543,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 		Content:          api.DataFileContentData,
 		FilePath:         location,
 		FileFormat:       "parquet",
-		Partition:        cloneRewriteDataFilesPartition(group.Candidates[0].File.Partition),
+		Partition:        api.CloneNonEmptyMap(group.Candidates[0].File.Partition),
 		RecordCount:      totalRows,
 		FileSizeInBytes:  int64(output.Len()),
 		SpecID:           group.PartitionSpecID,
@@ -693,7 +682,7 @@ func addRewriteMemory(left, right uint64) (uint64, bool) {
 func (c ParquetConcatRewriteDataFilesCompactor) outputLocation(req RewriteDataFilesCompactRequest, group RewriteDataFileGroup, groupIndex int) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(c.OutputPrefix), "/")
 	if base == "" && req.Metadata != nil && strings.TrimSpace(req.Metadata.Location) != "" {
-		base = joinObjectPath(req.Metadata.Location, "data")
+		base = api.JoinObjectPath(req.Metadata.Location, "data")
 	}
 	if base == "" {
 		base = objectDir(req.Snapshot.ManifestList)
@@ -703,9 +692,9 @@ func (c ParquetConcatRewriteDataFilesCompactor) outputLocation(req RewriteDataFi
 			"snapshot_id": strconv.FormatInt(req.Snapshot.SnapshotID, 10),
 		})
 	}
-	rewriteID := "rw-" + api.PathHash(firstNonEmptyString(req.IdempotencyKey, req.JobID, strconv.FormatInt(req.Snapshot.SnapshotID, 10)))
+	rewriteID := "rw-" + api.PathHash(api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID, strconv.FormatInt(req.Snapshot.SnapshotID, 10)))
 	fileName := "group-" + strconv.Itoa(groupIndex+1) + "-" + api.PathHash(group.PartitionKey) + ".parquet"
-	return joinObjectPath(base, "mo-rewrite-data-files", rewriteID, fileName), nil
+	return api.JoinObjectPath(base, "mo-rewrite-data-files", rewriteID, fileName), nil
 }
 
 func rewriteDataFilesWriterSchema(meta *api.TableMetadata, fallback *parquet.Schema) (*parquet.Schema, error) {
@@ -728,7 +717,7 @@ func rewriteDataFilesWriterSchema(meta *api.TableMetadata, fallback *parquet.Sch
 		if err != nil {
 			return nil, err
 		}
-		return parquet.NewSchema(firstNonEmptyString(fallback.Name(), "iceberg"), node), nil
+		return parquet.NewSchema(api.FirstNonBlankPreserveWhitespace(fallback.Name(), "iceberg"), node), nil
 	}
 	return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor requires a current schema or fallback parquet schema", nil)
 }
@@ -927,17 +916,6 @@ func (p *rewriteDataFilesProjection) project(rows, output []parquet.Row) error {
 	return nil
 }
 
-func cloneRewriteDataFilesPartition(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
 var _ RewriteDataFilesCompactor = ParquetConcatRewriteDataFilesCompactor{}
 
 func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx context.Context, deleteFile api.DataFile, affected []string, memoryUsed *int64, memoryLimit int64) (map[string]map[int64]struct{}, error) {
@@ -976,13 +954,13 @@ func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx 
 			"file": api.RedactPath(deletePath),
 		}, err)
 	}
-	filePathCol, ok := rewriteDataFilesColumnIndexByName(file, "file_path", "file")
+	filePathCol, ok := metadata.ParquetColumnIndexByName(file, "file_path", "file")
 	if !ok {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg position delete file is missing file_path column", map[string]string{
 			"delete_file": api.RedactPath(deletePath),
 		})
 	}
-	posCol, ok := rewriteDataFilesColumnIndexByName(file, "pos", "position", "row_position")
+	posCol, ok := metadata.ParquetColumnIndexByName(file, "pos", "position", "row_position")
 	if !ok {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg position delete file is missing pos column", map[string]string{
 			"delete_file": api.RedactPath(deletePath),
@@ -1219,22 +1197,6 @@ func rewriteDataFilesColumnIndexByFieldID(file *parquet.File) (map[int]int, erro
 		out[fieldID] = leaf.ColumnIndex
 	}
 	return out, nil
-}
-
-func rewriteDataFilesColumnIndexByName(file *parquet.File, names ...string) (int, bool) {
-	if file == nil || file.Root() == nil {
-		return 0, false
-	}
-	wanted := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		wanted[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
-	}
-	for _, col := range file.Root().Columns() {
-		if _, ok := wanted[strings.ToLower(strings.TrimSpace(col.Name()))]; ok {
-			return int(col.Index()), true
-		}
-	}
-	return 0, false
 }
 
 func rewriteDataFilesRowDeleted(row parquet.Row, columnByID map[int]int, filters []rewriteDataFilesEqualityDeleteFilter) (bool, error) {

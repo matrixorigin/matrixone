@@ -121,7 +121,6 @@ type faultMap struct {
 	chIn        chan *faultEntry
 	chOut       chan *faultEntry
 	closeCh     chan struct{}
-	domain      Domain
 }
 
 var enabled [DomainMax]atomic.Pointer[faultMap]
@@ -352,7 +351,6 @@ func startFaultMap(domain Domain) bool {
 	fm.chIn = make(chan *faultEntry)
 	fm.chOut = make(chan *faultEntry)
 	fm.closeCh = make(chan struct{})
-	fm.domain = domain
 	go fm.run()
 	if !enabled[domain].CompareAndSwap(nil, fm) {
 		var msg faultEntry

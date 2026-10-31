@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -58,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -347,6 +349,11 @@ func inferViewColumns(
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
 	}
 	cols := make([]*plan.ColDef, len(projectList))
+	var integerValues []function.IntegerLogicalPrecision
+	if query.IntegerPrecision != nil {
+		integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+	}
+
 	for idx, expr := range projectList {
 		name := query.Headings[idx]
 		originName := ""
@@ -368,6 +375,10 @@ func inferViewColumns(
 		if idx < len(outputColumnProvenance) {
 			narrowed := decimalDivSchemaType(*typ, outputColumnProvenance[idx])
 			typ = &narrowed
+		}
+		if g := query.IntegerPrecision; g != nil && idx < len(g.Outputs) {
+			adjusted := integerSchemaType(*typ, g, g.Outputs[idx], true, integerValues)
+			typ = &adjusted
 		}
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
@@ -1612,6 +1623,11 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 	if len(targetColumns) < targetOnlyCount+len(originalColumns) {
 		return moerr.NewInternalError(ctx, "prepared CTAS source columns are missing from target")
 	}
+	g := p.GetDdl().Query.IntegerPrecision
+	var integerValues []function.IntegerLogicalPrecision
+	if g != nil {
+		integerValues = evaluateIntegerPrecision(g)
+	}
 	for i, source := range runtimeColumns {
 		if source == nil || originalColumns[i] == nil ||
 			!strings.EqualFold(source.Name, originalColumns[i].Name) {
@@ -1636,6 +1652,9 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 				"prepared CTAS inferred column %q has a type-dependent default", target.Name)
 		}
 		target.Typ = ctasTemporalSchemaType(source.Typ)
+		if g != nil && i < len(g.Outputs) {
+			target.Typ = integerSchemaType(target.Typ, g, g.Outputs[i], false, integerValues)
+		}
 	}
 	return nil
 }
@@ -1681,6 +1700,11 @@ func genAsSelectCols(
 	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
+	var integerValues []function.IntegerLogicalPrecision
+	if query.IntegerPrecision != nil {
+		integerValues = evaluateIntegerPrecision(query.IntegerPrecision)
+	}
+
 	for i, expr := range rootNode.ProjectList {
 		typ := expr.Typ
 		provenance := outputColumnProvenance[i]
@@ -1689,8 +1713,19 @@ func genAsSelectCols(
 				typ = provenance.Source.Metadata.Typ
 				typ.NotNullable = expr.Typ.NotNullable
 			}
+		} else {
+			// Numeric attribute masks carry only on the direct single-source
+			// channel. Any other output (computed expression, set-operation
+			// result, aggregate, literal) is a semantic boundary: a UNION's
+			// packet-only retained UNSIGNED bit must not persist into the CTAS
+			// target, which would reject negative assignments.
+			typ.NumericAttributes = 0
 		}
 		typ = ctasTemporalSchemaType(decimalDivSchemaType(typ, provenance))
+		if g := query.IntegerPrecision; g != nil && i < len(g.Outputs) {
+			typ = integerSchemaType(typ, g, g.Outputs[i], false, integerValues)
+		}
+
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
@@ -1712,7 +1747,7 @@ func genAsSelectCols(
 					defaultDef.NullAbility = nullAbility
 					if defaultDef.Expr == nil && defaultDef.OriginString != "" {
 						defaultDef, err = buildCTASDefaultFromOrigin(
-							ctx, typ, nullAbility, defaultDef.OriginString)
+							ctx, typ, nullAbility, defaultDef.OriginString, "inherited default")
 						if err != nil {
 							return nil, nil, 0, err
 						}
@@ -1936,11 +1971,11 @@ func buildCTASDefaultForView(ctx CompilerContext, typ plan.Type, nullAbility boo
 		return defaultDef, nil
 	}
 
-	return buildCTASDefaultFromOrigin(ctx, typ, false, originString)
+	return buildCTASDefaultFromOrigin(ctx, typ, false, originString, "view default")
 }
 
 func buildCTASDefaultFromOrigin(
-	ctx CompilerContext, typ plan.Type, nullAbility bool, originString string,
+	ctx CompilerContext, typ plan.Type, nullAbility bool, originString string, colNameOrigin string,
 	columns ...*ColDef,
 ) (*plan.Default, error) {
 	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, "select "+originString, 1)
@@ -1962,6 +1997,11 @@ func buildCTASDefaultFromOrigin(
 	if len(columns) > 0 {
 		binder = NewDefaultBinderWithColumns(bindCtx, typ, columns)
 	}
+	// Attributed DECIMAL CTAS-inherited defaults bind target-free, the same
+	// predicate as the CREATE/ALTER DEFAULT owner.
+	if isAttributedDecimalPlanType(typ) {
+		binder.baseBinder.suppressDefaultValueBindType = true
+	}
 	defaultExpr, err := binder.bindPersistedExpr(selectClause.Exprs[0].Expr, 0, false)
 	if err != nil {
 		return nil, err
@@ -1977,8 +2017,14 @@ func buildCTASDefaultFromOrigin(
 			return nil, err
 		}
 	}
-	defaultExpr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), defaultExpr, typ)
+	srcExpr := defaultExpr
+	defaultExpr, err = makePlan2AssignmentCastExprForColumn(ctx.GetContext(), defaultExpr, typ, colNameOrigin)
 	if err != nil {
+		return nil, err
+	}
+	// Attributed DECIMAL strict constant validation: a reparsed constant
+	// negative default must validate identically to the original authoring.
+	if err = validateUnsignedDecimalStrictConstantDefault(ctx.GetContext(), ctx.GetProcess(), typ, srcExpr, colNameOrigin); err != nil {
 		return nil, err
 	}
 	defaultExpr, err = ConstantFold(
@@ -2018,7 +2064,7 @@ func finalizeCTASDefaults(ctx CompilerContext, cols []*ColDef) error {
 			continue
 		}
 		bound, err := buildCTASDefaultFromOrigin(ctx, col.Typ,
-			col.Default.NullAbility, col.Default.OriginString, cols...)
+			col.Default.NullAbility, col.Default.OriginString, col.Name, cols...)
 		if err != nil {
 			return err
 		}
@@ -2304,6 +2350,89 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 	return nil
 }
 
+// alterSequenceOptionSQL formats one sequence option node without its
+// surrounding whitespace so the synthesized parts can be joined canonically.
+func alterSequenceOptionSQL(node tree.NodeFormatter) string {
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	node.Format(fmtCtx)
+	return strings.TrimSpace(fmtCtx.String())
+}
+
+// AlterSequenceCreateSQLForCatalog renders the canonical CREATE SEQUENCE an
+// ALTER leaves behind (#30679): rel_createsql and SHOW CREATE must never hold
+// the raw ALTER text, and the stored statement must stay replayable. The
+// ALTER text can only be canonicalized from the clauses the statement itself
+// carries at plan time; options it does not name keep their stored values,
+// which only execution can see.
+func AlterSequenceCreateSQLForCatalog(stmt *tree.AlterSequence, database, tableName string) string {
+	var parts []string
+	if stmt.Type != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.Type))
+	}
+	if stmt.IncrementBy != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.IncrementBy))
+	}
+	if stmt.MinValue != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.MinValue))
+	}
+	if stmt.MaxValue != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.MaxValue))
+	}
+	if stmt.StartWith != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.StartWith))
+	}
+	if stmt.Cycle != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.Cycle))
+	}
+	nameCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	nameCtx.WriteString("create sequence if not exists ")
+	nameCtx.WriteIdentifier(tree.Identifier(database))
+	nameCtx.WriteByte('.')
+	nameCtx.WriteIdentifier(tree.Identifier(tableName))
+	createSQL := nameCtx.String()
+	if len(parts) > 0 {
+		createSQL += " " + strings.Join(parts, " ")
+	}
+	return createSQL
+}
+
+// AlterSequenceEffectiveDefinition carries the validated effective
+// definition of an ALTER SEQUENCE exactly as execution persists it (#30679;
+// v12-review F2): type, increment, bounds, effective start and cycle. The
+// catalog text synthesized from it is complete — replaying it recreates a
+// sequence with exactly this definition. Numeric clauses are formatted in
+// the type's numeric domain by the caller, identical to the persisted row.
+type AlterSequenceEffectiveDefinition struct {
+	TypeSQL   string // canonical type keyword(s), e.g. "bigint", "int unsigned"
+	Increment int64
+	MinValue  string
+	MaxValue  string
+	Start     string
+	Cycle     bool
+}
+
+// AlterSequenceEffectiveCreateSQL renders the canonical complete CREATE
+// SEQUENCE of one validated effective ALTER definition for rel_createsql
+// and SHOW CREATE consumers: every clause is present with its effective
+// value, not only the clauses the ALTER statement named.
+func AlterSequenceEffectiveCreateSQL(database, tableName string, def AlterSequenceEffectiveDefinition) string {
+	nameCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	nameCtx.WriteString("create sequence if not exists ")
+	nameCtx.WriteIdentifier(tree.Identifier(database))
+	nameCtx.WriteByte('.')
+	nameCtx.WriteIdentifier(tree.Identifier(tableName))
+	var sb strings.Builder
+	sb.WriteString(nameCtx.String())
+	fmt.Fprintf(&sb, " as %s increment by %d minvalue %s maxvalue %s start with %s",
+		def.TypeSQL, def.Increment, def.MinValue, def.MaxValue, def.Start)
+	if def.Cycle {
+		sb.WriteString(" cycle")
+	} else {
+		sb.WriteString(" no cycle")
+	}
+	return sb.String()
+}
+
 func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, as *plan.AlterSequence) error {
 	// Sequence table got 1 row and 7 col
 	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
@@ -2387,8 +2516,10 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 			Value: catalog.SystemSequenceRel,
 		},
 		{
+			// #30679: never persist the raw ALTER text; rel_createsql must
+			// replay as a CREATE SEQUENCE after a successful ALTER.
 			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: ctx.GetRootSql(),
+			Value: AlterSequenceCreateSQLForCatalog(stmt, as.GetDatabase(), as.TableDef.GetName()),
 		},
 	}
 
@@ -3455,7 +3586,7 @@ func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.Tab
 		if compareName == "" {
 			compareName = name
 		}
-		key := equalFoldKey(compareName)
+		key := commonutil.EqualFoldKey(compareName)
 		if _, exists := columnNames[key]; exists {
 			return moerr.NewErrDupFieldName(ctx, name)
 		}
@@ -5947,6 +6078,37 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 	return indexDef, nil
 }
 
+// referencingFkNames resolves a bounded, deterministic (constraint, child
+// table) pair for the dedicated user errors on an FK-referenced parent: the
+// first non-self child in TableDef.RefChildTbls, resolved by id, and the first
+// foreign key on it whose ForeignTbl matches the parent id. It reads the same
+// metadata the rejection gates rely on (HasFkSelfReferOnly guarantees a
+// non-self child exists whenever this is called), so the lookup is bounded to
+// one resolve that the gate already depended on. A resolve error is propagated
+// and never swallowed; an unresolved child or metadata without a matching FK
+// yields empty names — the caller still fails closed with the typed error.
+func referencingFkNames(ctx CompilerContext, parentTableDef *TableDef) (constraint string, childTable string, err error) {
+	for _, childID := range parentTableDef.RefChildTbls {
+		if childID == 0 || childID == parentTableDef.TblId {
+			continue
+		}
+		_, childDef, resolveErr := ctx.ResolveById(childID, nil)
+		if resolveErr != nil {
+			return "", "", resolveErr
+		}
+		if childDef == nil {
+			return "", "", nil
+		}
+		for _, fk := range childDef.Fkeys {
+			if fk.ForeignTbl == parentTableDef.TblId {
+				return fk.Name, childDef.Name, nil
+			}
+		}
+		return "", "", nil
+	}
+	return "", "", nil
+}
+
 func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, error) {
 	truncateTable := &plan.TruncateTable{}
 
@@ -5997,7 +6159,11 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		if len(tableDef.RefChildTbls) > 0 {
 			// if all children tables are self reference, we can drop the table
 			if !HasFkSelfReferOnly(tableDef) {
-				return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not truncate table '%v' referenced by some foreign key constraint", truncateTable.Table)
+				constraint, _, err := referencingFkNames(ctx, tableDef)
+				if err != nil {
+					return nil, err
+				}
+				return nil, moerr.NewTruncateIllegalFk(ctx.GetContext(), constraint)
 			}
 		}
 
@@ -6147,7 +6313,7 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	// non-temporary result means that the requested temporary table is absent.
 	if tableDef == nil || (temporary && !tableDef.IsTemporary) {
 		if !dropTable.IfExists {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			return nil, moerr.NewErrDropNonExistsTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 		return dropTable, nil
 	}
@@ -6165,7 +6331,11 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	if enabled && len(tableDef.RefChildTbls) > 0 {
 		// if all children tables are self reference, we can drop the table
 		if !HasFkSelfReferOnly(tableDef) {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "can not drop table '%v' referenced by some foreign key constraint", dropTable.Table)
+			constraint, childTable, err := referencingFkNames(ctx, tableDef)
+			if err != nil {
+				return nil, err
+			}
+			return nil, moerr.NewFkCannotDropParent(ctx.GetContext(), dropTable.Table, constraint, childTable)
 		}
 	}
 
@@ -6610,20 +6780,150 @@ func rejectMongoDBExternalTableOnUpdate(ctx context.Context, stmt *tree.CreateTa
 	return nil
 }
 
-// checkDropReferencedKeyForeignKeyDependency rejects removal of the exact
-// PRIMARY/UNIQUE key selected by a live child FK. ForeignKeyDef instances
-// written before ReferencedIndexName existed cannot prove which of several
-// compatible keys was historically selected, so every compatible key is
-// protected rather than guessing from today's index set and risking a stale
-// catalog binding.
-func checkDropReferencedKeyForeignKeyDependency(
+// foreignKeyBoundIndexRebind is one child foreign key whose recorded
+// parent-key index is being dropped and whose binding must move to another
+// surviving key.
+type foreignKeyBoundIndexRebind struct {
+	childDatabase  string
+	childTable     string
+	constraintName string
+	newIndexName   string
+}
+
+// foreignKeyReferencedIndexCovered reports whether the parent currently has a
+// real PRIMARY/UNIQUE key under the given name that covers the foreign key's
+// referenced columns. A bare name match proves nothing: a table without a
+// declared primary key still carries a fake physical primary, and a dropped
+// index's name can be recreated on unrelated columns.
+func foreignKeyReferencedIndexCovered(parentTableDef *TableDef, name string, referredColumns []string) bool {
+	if parentTableDef == nil || name == "" || len(referredColumns) == 0 {
+		return false
+	}
+	if name == "PRIMARY" {
+		return parentTableDef.Pkey != nil &&
+			parentTableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName &&
+			foreignKeyReferencedColumnsMatch(parentTableDef.Pkey.Names, referredColumns)
+	}
+	for _, index := range parentTableDef.Indexes {
+		if index.IndexName == name && index.Unique &&
+			foreignKeyReferencedColumnsMatch(index.Parts, referredColumns) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveForeignKeyBoundIndexDrops applies MySQL 8.0's equivalent-key
+// transition: dropping the PRIMARY/UNIQUE key recorded by a child foreign key
+// is allowed when another key covering the same columns survives the
+// statement, and every affected binding moves to that key, which persists
+// through GetSqlForUpdateFkReferencedIndex in the same DDL transaction.
+// Legacy foreign keys written before ReferencedIndexName existed cannot prove
+// which of several compatible keys was historically selected, so they keep the
+// original protection: the drop is rejected instead of guessed. When no
+// covering key survives, the original 1553 rejection is returned.
+// parentTableDef provides the authoritative columns, children, and primary
+// key; droppedIndexName/droppedColumns describe the key being dropped and
+// survivingDef must already exclude every key the statement removes.
+// droppedEligible reports whether the dropped key is itself an eligible
+// PRIMARY/UNIQUE candidate; legacy bindings are only protected against
+// eligible drops, mirroring the baseline executor-side checker.
+func resolveForeignKeyBoundIndexDrops(
 	ctx CompilerContext,
 	parentTableDef *TableDef,
-	indexName string,
+	droppedIndexName string,
+	droppedColumns []string,
+	droppedEligible bool,
+	survivingDef *TableDef,
 	ignoredSelfForeignKeys map[string]struct{},
-) error {
-	return CheckDropReferencedKeyForeignKeyDependency(ctx.GetContext(), parentTableDef, indexName, ignoredSelfForeignKeys,
-		func(id uint64) (*plan.TableDef, error) { _, def, err := ctx.ResolveById(id, nil); return def, err })
+) ([]foreignKeyBoundIndexRebind, error) {
+	if len(droppedColumns) == 0 || len(parentTableDef.RefChildTbls) == 0 {
+		return nil, nil
+	}
+	rebinds := make([]foreignKeyBoundIndexRebind, 0)
+	for _, childTableID := range parentTableDef.RefChildTbls {
+		selfReference := childTableID == 0 || childTableID == parentTableDef.TblId
+		childTableDef := parentTableDef
+		childDatabase := parentTableDef.DbName
+		childTable := parentTableDef.Name
+		if !selfReference {
+			childObjRef, resolved, resolveErr := ctx.ResolveById(childTableID, nil)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if resolved == nil {
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(),
+					"The reference foreign key table %d does not exist", childTableID)
+			}
+			childTableDef = resolved
+			childDatabase = childObjRef.SchemaName
+			childTable = childObjRef.ObjName
+		}
+
+		for _, fk := range childTableDef.Fkeys {
+			if fk.ForeignTbl != parentTableDef.TblId && !(selfReference && fk.ForeignTbl == 0) {
+				continue
+			}
+			if selfReference {
+				if _, ignored := ignoredSelfForeignKeys[fk.Name]; ignored {
+					continue
+				}
+			}
+
+			referredColumns := make([]string, len(fk.ForeignCols))
+			for i, columnID := range fk.ForeignCols {
+				column := FindColumnByColId(parentTableDef.Cols, columnID)
+				if column == nil {
+					return nil, moerr.NewInternalErrorf(ctx.GetContext(),
+						"foreign key %s references missing column id %d", fk.Name, columnID)
+				}
+				referredColumns[i] = column.Name
+			}
+
+			if fk.ReferencedIndexName == "" {
+				// Legacy metadata: protect every compatible eligible key rather
+				// than guessing which one was historically selected. Ordinary
+				// secondary indexes can never back a foreign key, so dropping
+				// them keeps the baseline behavior of an unrestricted drop.
+				if droppedEligible && foreignKeyReferencedColumnsMatch(droppedColumns, referredColumns) {
+					return nil, moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), droppedIndexName)
+				}
+				continue
+			}
+			if fk.ReferencedIndexName != droppedIndexName {
+				if !foreignKeyReferencedIndexCovered(parentTableDef, fk.ReferencedIndexName, referredColumns) {
+					// The recorded binding names a key this parent no longer
+					// has: catalog binding updates applied by an earlier
+					// rebind may not be visible in this resolved child yet.
+					// Restore the bound-key invariant instead of silently
+					// skipping, or the last covering key could be dropped.
+					selected, matched := selectForeignKeyReferencedIndex(survivingDef, referredColumns)
+					if !matched {
+						return nil, moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), droppedIndexName)
+					}
+					rebinds = append(rebinds, foreignKeyBoundIndexRebind{
+						childDatabase:  childDatabase,
+						childTable:     childTable,
+						constraintName: fk.Name,
+						newIndexName:   selected,
+					})
+				}
+				continue
+			}
+
+			selected, matched := selectForeignKeyReferencedIndex(survivingDef, referredColumns)
+			if !matched {
+				return nil, moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), droppedIndexName)
+			}
+			rebinds = append(rebinds, foreignKeyBoundIndexRebind{
+				childDatabase:  childDatabase,
+				childTable:     childTable,
+				constraintName: fk.Name,
+				newIndexName:   selected,
+			})
+		}
+	}
+	return rebinds, nil
 }
 
 // CheckDropReferencedKeyForeignKeyDependency protects the selected key using
@@ -6747,10 +7047,37 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 			// An empty index name represents the no-op path for DROP INDEX IF EXISTS.
 			dropIndex.IndexName = ""
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", requestedIndexName)
+			return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), requestedIndexName)
 		}
-	} else if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, dropIndex.IndexName, nil); err != nil {
-		return nil, err
+	} else {
+		// MySQL equivalent-key transition: when the dropped key is recorded by
+		// a child foreign key but another key covering the same columns
+		// remains, the drop is allowed and the binding moves there. Route such
+		// drops through ALTER so the rebind SQL travels in the same DDL
+		// transaction, exactly as functional-index drops do below.
+		survivingDef := DeepCopyTableDef(tableDef, true)
+		survivingDef.Indexes = RemoveIf(survivingDef.Indexes, func(indexDef *plan.IndexDef) bool {
+			return indexDef.IndexName == resolvedIndexName
+		})
+		var droppedColumns []string
+		droppedEligible := false
+		for _, indexDef := range tableDef.Indexes {
+			if indexDef.IndexName == resolvedIndexName {
+				droppedColumns = indexDef.Parts
+				droppedEligible = indexDef.Unique
+				break
+			}
+		}
+		rebinds, resolveErr := resolveForeignKeyBoundIndexDrops(
+			ctx, tableDef, resolvedIndexName, droppedColumns, droppedEligible, survivingDef, nil)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if len(rebinds) > 0 {
+			return buildAlterTable(&tree.AlterTable{Table: stmt.TableName, Options: tree.AlterTableOptions{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropIndex, Name: tree.Identifier(resolvedIndexName)},
+			}}, ctx)
+		}
 	}
 
 	return &Plan{
@@ -7061,6 +7388,16 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	var detectSqls []string
 	var updateSqls []string
 	var renameFkSqls []string
+	// Keys dropped by this statement that a child foreign key may still record
+	// as its referenced index. They are resolved after the whole statement has
+	// been processed so that same-statement key additions count as survivors,
+	// matching MySQL's final-key-set binding transition.
+	type droppedForeignKeyKey struct {
+		indexName string
+		columns   []string
+		eligible  bool
+	}
+	var droppedForeignKeyKeys []droppedForeignKeyKey
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	// Planning must consume ALTER actions in statement order without mutating
@@ -7111,8 +7448,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
 				if found {
 					constraintName = resolvedName
-					if err := checkDropReferencedKeyForeignKeyDependency(ctx, currentTableDef, constraintName, nil); err != nil {
-						return nil, err
+					for _, indexDef := range currentTableDef.Indexes {
+						if indexDef.IndexName == constraintName {
+							droppedForeignKeyKeys = append(droppedForeignKeyKeys, droppedForeignKeyKey{
+								indexName: constraintName,
+								columns:   indexDef.Parts,
+								eligible:  indexDef.Unique,
+							})
+							break
+						}
 					}
 					name_not_found = false
 				}
@@ -7733,6 +8077,54 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		}
 	}
 
+	for _, dropped := range droppedForeignKeyKeys {
+		rebinds, dropErr := resolveForeignKeyBoundIndexDrops(
+			ctx, currentTableDef, dropped.indexName, dropped.columns, dropped.eligible, currentTableDef, nil)
+		if dropErr != nil {
+			return nil, dropErr
+		}
+		for _, rebind := range rebinds {
+			sql := GetSqlForUpdateFkReferencedIndex(
+				rebind.childDatabase, rebind.childTable,
+				rebind.constraintName, rebind.newIndexName)
+			if !slices.Contains(updateSqls, sql) {
+				updateSqls = append(updateSqls, sql)
+			}
+			// A self-referencing child persists its durable ForeignKeyDef
+			// through this statement's COPY: rewrite the copy's binding too,
+			// so the catalog update and the stored def commit together with
+			// the same surviving key (review 5691776262).
+			if alterTable.CopyTableDef != nil &&
+				rebind.childDatabase == alterTable.TableDef.DbName &&
+				rebind.childTable == alterTable.TableDef.Name {
+				for _, fk := range alterTable.CopyTableDef.Fkeys {
+					if fk.Name == rebind.constraintName {
+						fk.ReferencedIndexName = rebind.newIndexName
+					}
+				}
+			}
+			// The AddFk action of this same statement is the durable payload
+			// the executor materializes into the stored constraints: with no
+			// CopyTableDef (INPLACE) it would otherwise keep the removed key
+			// while the catalog rebinds, and on COPY it feeds the
+			// replacement's added-FK collection alike. Propagate the final
+			// binding into every matching same-statement action so the
+			// persisted def and the catalog commit with the same survivor
+			// (review 5699738215).
+			for _, action := range alterTable.Actions {
+				addFk := action.GetAddFk()
+				if addFk == nil || addFk.Fkey == nil {
+					continue
+				}
+				if addFk.DbName == rebind.childDatabase &&
+					addFk.TableName == rebind.childTable &&
+					addFk.Fkey.Name == rebind.constraintName {
+					addFk.Fkey.ReferencedIndexName = rebind.newIndexName
+				}
+			}
+		}
+	}
+
 	if alterTable.CopyTableDef != nil {
 		alterTable.Actions = append(alterTable.Actions, &plan.AlterTable_Action{
 			Action: &plan.AlterTable_Action_AlterReplaceDef{
@@ -8085,6 +8477,32 @@ func ForeignKeyReferencedIndexMatches(parent *plan.TableDef, columns []uint64, n
 	}
 	_, matched := selectForeignKeyReferencedIndex(parent, names, name)
 	return matched
+}
+
+// HealedForeignKeyReferencedIndex validates an explicitly retained binding and
+// repairs a stale one: the equivalent-key transition moves the catalog binding
+// while a child's stored ForeignKeyDef keeps the removed key name until the
+// table is re-materialized. When the recorded name is gone but another
+// covering PRIMARY/UNIQUE key survives, the survivor's name is returned with
+// changed=true so callers heal the persisted binding instead of failing the
+// table recreation.
+func HealedForeignKeyReferencedIndex(parent *plan.TableDef, columns []uint64, name string) (string, bool, bool) {
+	if parent == nil || name == "" || len(columns) == 0 {
+		return name, false, false
+	}
+	names := make([]string, len(columns))
+	for i, id := range columns {
+		col := FindColumnByColId(parent.Cols, id)
+		if col == nil {
+			return name, false, false
+		}
+		names[i] = col.Name
+	}
+	if _, matched := selectForeignKeyReferencedIndex(parent, names, name); matched {
+		return name, false, true
+	}
+	healed, matched := selectForeignKeyReferencedIndex(parent, names)
+	return healed, name != healed && matched, matched
 }
 
 func foreignKeyReferencedColumnsMatch(keyColumns, referredColumns []string) bool {

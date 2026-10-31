@@ -95,7 +95,7 @@ class TestVectorIndexOffline:
         # Test SQL generation
         sql = index._create_index_sql("test_table")
         expected_parts = [
-            "CREATE INDEX idx_sql_test USING ivfflat ON test_table(embedding)",
+            "CREATE INDEX `idx_sql_test` USING ivfflat ON `test_table`(`embedding`)",
             "lists = 256",
             "op_type 'vector_l2_ops'",
         ]

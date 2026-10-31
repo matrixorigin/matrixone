@@ -507,27 +507,6 @@ func collectCloneRoutineReferences(
 	return references, cloneRoutineDependenciesInspected, nil
 }
 
-// filterCloneDatabaseRoutines keeps independent routine families and omits
-// families whose direct or transitive dependencies cannot exist in the target.
-// SQL routines whose bodies cannot be inspected are omitted when the source
-// has an omitted relation. Supported non-SQL UDFs are opaque but cloneable and
-// are preserved after validateCloneUserDefinedFunctions rejects imported
-// package bodies. UDF overloads are one family here: call sites do not carry
-// enough resolved type information for this metadata pass to distinguish
-// overloads safely.
-func filterCloneDatabaseRoutines(
-	ctx context.Context,
-	source cloneDatabaseSource,
-	lowerCaseTableNames int64,
-) ([]userDefinedFunctionDefinition, []storedProcedureDefinition, error) {
-	omissions, err := collectCloneDatabaseOmissionSet(ctx, source, lowerCaseTableNames)
-	if err != nil {
-		return nil, nil, err
-	}
-	applyCloneDatabaseOmissionSet(&source, omissions, lowerCaseTableNames)
-	return source.userDefinedFuncs, source.storedProcedures, nil
-}
-
 func collectCloneDatabaseSource(
 	ctx context.Context,
 	ses *Session,
@@ -709,7 +688,7 @@ func getUserDefinedFunctionInfos(
 	rows, err := getDatabaseRoutineMetadataRows(
 		ctx, bh, snapshot, dbName,
 		"mo_catalog.mo_user_defined_function",
-		"name, args, retType, body, language, sql_mode",
+		"name, args, retType, body, language",
 		0, 1, 2, 3, 4, 5,
 	)
 	if err != nil {
@@ -745,7 +724,7 @@ func getStoredProcedureInfos(
 	rows, err := getDatabaseRoutineMetadataRows(
 		ctx, bh, snapshot, dbName,
 		"mo_catalog.mo_stored_procedure",
-		"name, args, lang, body, sql_mode",
+		"name, args, lang, body",
 		0, 1, 2, 3, 4,
 	)
 	if err != nil {
@@ -776,15 +755,27 @@ func getDatabaseRoutineMetadataRows(
 	colIndices ...uint64,
 ) ([][]string, error) {
 	queryCtx := ctx
-	sql := fmt.Sprintf("select %s from %s", columns, catalogTable)
+	sourceSnapshot := ""
 	if snapshot != nil {
 		if snapshot.TS != nil {
-			sql += fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
+			sourceSnapshot = fmt.Sprintf(" {MO_TS = %d}", snapshot.TS.PhysicalTime)
 		}
 		if snapshot.Tenant != nil {
 			queryCtx = defines.AttachAccountId(queryCtx, snapshot.Tenant.TenantID)
 		}
 	}
+	mode := "sql_mode"
+	if sourceSnapshot != "" {
+		account, err := defines.GetAccountId(queryCtx)
+		if err != nil {
+			return nil, err
+		}
+		mode, err = historicalRoutineSQLModeExpression(queryCtx, bh, strings.TrimPrefix(catalogTable, "mo_catalog."), sourceSnapshot, account)
+		if err != nil {
+			return nil, err
+		}
+	}
+	sql := fmt.Sprintf("select %s, %s from %s%s", columns, mode, catalogTable, sourceSnapshot)
 	sql += fmt.Sprintf(" where db = %s order by name", quoteSQLStringLiteral(dbName))
 	return getStringColsList(queryCtx, bh, sql, colIndices...)
 }

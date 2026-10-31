@@ -319,7 +319,7 @@ func (p *compiledIncludePred) test(v any, isNull bool) bool {
 		return false // NULL vs value ⇒ UNKNOWN ⇒ excluded
 	}
 	if p.isStr {
-		b := includeBytes(v)
+		b := asBytes(v)
 		// CHAR compares with MO's semantics (trailing ASCII spaces trimmed from both operands, then
 		// bytes.Compare -- matching func_compare.go / operator_between.go so the pushed predicate
 		// agrees with the base table); varchar is byte-exact. Prefix is byte HasPrefix for both.
@@ -418,18 +418,6 @@ func (p *compiledIncludePred) test(v any, isNull bool) bool {
 		return false // prefix is a string-only op; the planner never emits it on an int column
 	}
 	return false
-}
-
-// includeBytes coerces a stored varchar/char INCLUDE value to bytes (decodePk yields []byte).
-func includeBytes(v any) []byte {
-	switch x := v.(type) {
-	case []byte:
-		return x
-	case string:
-		return []byte(x)
-	default:
-		return nil
-	}
 }
 
 // includeInt64 normalizes a stored integer INCLUDE value (any int/uint width, as decodePk

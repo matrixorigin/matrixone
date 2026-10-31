@@ -53,6 +53,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -499,6 +500,11 @@ type sequentialBranchLifecycle interface {
 func installSequentialBranchStarter(root vm.Operator, start, wait func(int) error) (func(), bool, error) {
 	var target sequentialBranchStarter
 	err := vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		// Parallel inputs and flattened unions retain pass-through UNION ALL
+		// markers for projection/analysis. They do not own pre-scope activation.
+		if u, ok := op.(*unionall.UnionAll); ok && u.SequentialBranches <= 1 {
+			return nil
+		}
 		candidate, ok := op.(sequentialBranchStarter)
 		if !ok {
 			return nil

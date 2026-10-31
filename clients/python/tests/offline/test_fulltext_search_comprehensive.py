@@ -95,11 +95,11 @@ class TestFulltextIndex(unittest.TestCase):
 
     def test_fulltext_index_creation(self):
         """Test creating a FulltextIndex instance"""
-        index = FulltextIndex("ftidx_test", ["title", "content"], FulltextAlgorithmType.BM25)
+        index = FulltextIndex("ftidx_test", ["title", "content"], FulltextAlgorithmType.TF_IDF)
 
         assert index.name == "ftidx_test"
         assert index.get_columns() == ["title", "content"]
-        assert index.algorithm == FulltextAlgorithmType.BM25
+        assert index.algorithm == FulltextAlgorithmType.TF_IDF
 
     def test_fulltext_index_single_column(self):
         """Test creating FulltextIndex with single column"""
@@ -114,12 +114,12 @@ class TestFulltextIndex(unittest.TestCase):
         index = FulltextIndex("ftidx_test", ["title", "content"])
         sql = index._create_index_sql("documents")
 
-        expected_sql = "CREATE FULLTEXT INDEX ftidx_test ON documents (title, content)"
+        expected_sql = "CREATE FULLTEXT INDEX `ftidx_test` ON `documents` (`title`, `content`)"
         assert sql == expected_sql
 
     def test_fulltext_index_str(self):
         """Test FulltextIndex string representation"""
-        index = FulltextIndex("ftidx_test", ["title", "content"], FulltextAlgorithmType.BM25)
+        index = FulltextIndex("ftidx_test", ["title", "content"], FulltextAlgorithmType.TF_IDF)
 
         str_repr = str(index)
         assert "ftidx_test" in str_repr
@@ -128,14 +128,14 @@ class TestFulltextIndex(unittest.TestCase):
 
     def test_fulltext_index_repr(self):
         """Test FulltextIndex representation"""
-        index = FulltextIndex("ftidx_test", ["title", "content"], FulltextAlgorithmType.BM25)
+        index = FulltextIndex("ftidx_test", ["title", "content"], FulltextAlgorithmType.TF_IDF)
 
         repr_str = repr(index)
         assert "ftidx_test" in repr_str
 
     def test_fulltext_index_multiple_columns(self):
         """Test FulltextIndex with multiple columns"""
-        index = FulltextIndex("ftidx_test", ["title", "content", "summary"], FulltextAlgorithmType.BM25)
+        index = FulltextIndex("ftidx_test", ["title", "content", "summary"], FulltextAlgorithmType.TF_IDF)
 
         assert index.name == "ftidx_test"
         assert index.get_columns() == ["title", "content", "summary"]
@@ -149,7 +149,7 @@ class TestFulltextAdvancedOperators(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").encourage("tutorial")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python tutorial' IN BOOLEAN MODE)"
+        expected = "MATCH(`title`, `content`) AGAINST('+python tutorial' IN BOOLEAN MODE)"
         self.assertEqual(sql, expected)
 
     def test_discourage_operator(self):
@@ -157,7 +157,7 @@ class TestFulltextAdvancedOperators(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").discourage("legacy")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python ~legacy' IN BOOLEAN MODE)"
+        expected = "MATCH(`title`, `content`) AGAINST('+python ~legacy' IN BOOLEAN MODE)"
         self.assertEqual(sql, expected)
 
     def test_complex_boolean_with_all_operators(self):
@@ -171,12 +171,16 @@ class TestFulltextAdvancedOperators(unittest.TestCase):
         )
         sql = expr.compile()
 
-        expected = "MATCH(title, content, tags) AGAINST('+programming tutorial ~legacy -deprecated' IN BOOLEAN MODE)"
+        expected = (
+            "MATCH(`title`, `content`, `tags`) AGAINST('+programming tutorial ~legacy -deprecated' IN BOOLEAN MODE)"
+        )
         self.assertEqual(sql, expected)
 
     def test_group_with_weights(self):
         """Test group with weight operators."""
-        expr = boolean_match("title", "content").must("main").must(group().high("important").medium("normal").low("minor"))
+        expr = (
+            boolean_match("title", "content").must("main").must(group().high("important").medium("normal").low("minor"))
+        )
         sql = expr.compile()
 
         # Should contain weight operators within groups
@@ -201,7 +205,7 @@ class TestFulltextComplexScenarios(unittest.TestCase):
 
         result = filter_obj.compile()
         # Check that all required elements are present
-        self.assertIn("MATCH(title, content, tags) AGAINST(", result)
+        self.assertIn("MATCH(`title`, `content`, `tags`) AGAINST(", result)
         self.assertIn("IN BOOLEAN MODE)", result)
         self.assertIn("+programming", result)
         self.assertIn("+(python java javascript)", result)
@@ -220,7 +224,7 @@ class TestFulltextComplexScenarios(unittest.TestCase):
 
         result = filter_obj.compile()
         # Check that all required elements are present
-        self.assertIn("MATCH(name, description) AGAINST(", result)
+        self.assertIn("MATCH(`name`, `description`) AGAINST(", result)
         self.assertIn("IN BOOLEAN MODE)", result)
         self.assertIn("+laptop", result)
         self.assertIn("(>gaming portable <budget)", result)
@@ -231,7 +235,7 @@ class TestFulltextComplexScenarios(unittest.TestCase):
         # Test case: Basic boolean with score
         expr = boolean_match("body", "title").must("fast").encourage("red").label("score")
         sql = expr.compile()
-        self.assertIn("MATCH(body, title)", sql)
+        self.assertIn("MATCH(`body`, `title`)", sql)
         self.assertIn("+fast", sql)
         self.assertIn("red", sql)
         self.assertIn("AS score", sql)
@@ -394,13 +398,13 @@ class TestFulltextEdgeCases(unittest.TestCase):
     def test_single_column(self):
         """Test single column search."""
         filter_obj = boolean_match("title").must("python")
-        expected = "MATCH(title) AGAINST('+python' IN BOOLEAN MODE)"
+        expected = "MATCH(`title`) AGAINST('+python' IN BOOLEAN MODE)"
         self.assertEqual(filter_obj.compile(), expected)
 
     def test_many_columns(self):
         """Test many columns search."""
         filter_obj = boolean_match("title", "content", "tags", "description").must("python")
-        expected = "MATCH(title, content, tags, description) AGAINST('+python' IN BOOLEAN MODE)"
+        expected = "MATCH(`title`, `content`, `tags`, `description`) AGAINST('+python' IN BOOLEAN MODE)"
         self.assertEqual(filter_obj.compile(), expected)
 
     def test_empty_group_building(self):
@@ -416,7 +420,7 @@ class TestFulltextEdgeCases(unittest.TestCase):
 
         result = filter_obj.compile()
         # Should default to basic AGAINST syntax
-        self.assertEqual(result, "MATCH(title, content) AGAINST('test')")
+        self.assertEqual(result, "MATCH(`title`, `content`) AGAINST('test')")
 
 
 class TestFulltextLabel(unittest.TestCase):
@@ -427,7 +431,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label("score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS score"
+        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS score"
         self.assertEqual(sql, expected)
 
     def test_basic_natural_label(self):
@@ -435,7 +439,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = natural_match("title", "content", query="machine learning").label("relevance")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('machine learning') AS relevance"
+        expected = "MATCH(`title`, `content`) AGAINST('machine learning') AS relevance"
         self.assertEqual(sql, expected)
 
     def test_phrase_search_label(self):
@@ -443,7 +447,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must('"machine learning"').label("phrase_score")
         sql = expr.compile()
 
-        expected = 'MATCH(title, content) AGAINST(\'+"machine learning"\' IN BOOLEAN MODE) AS phrase_score'
+        expected = 'MATCH(`title`, `content`) AGAINST(\'+"machine learning"\' IN BOOLEAN MODE) AS phrase_score'
         self.assertEqual(sql, expected)
 
     def test_wildcard_search_label(self):
@@ -451,7 +455,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python*").label("wildcard_score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python*' IN BOOLEAN MODE) AS wildcard_score"
+        expected = "MATCH(`title`, `content`) AGAINST('+python*' IN BOOLEAN MODE) AS wildcard_score"
         self.assertEqual(sql, expected)
 
     def test_multiple_labels(self):
@@ -462,8 +466,8 @@ class TestFulltextLabel(unittest.TestCase):
         sql1 = expr1.compile()
         sql2 = expr2.compile()
 
-        expected1 = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS python_score"
-        expected2 = "MATCH(title, content) AGAINST('+java' IN BOOLEAN MODE) AS java_score"
+        expected1 = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS python_score"
+        expected2 = "MATCH(`title`, `content`) AGAINST('+java' IN BOOLEAN MODE) AS java_score"
 
         self.assertEqual(sql1, expected1)
         self.assertEqual(sql2, expected2)
@@ -473,7 +477,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("C++").label("cpp_score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+C++' IN BOOLEAN MODE) AS cpp_score"
+        expected = "MATCH(`title`, `content`) AGAINST('+C++' IN BOOLEAN MODE) AS cpp_score"
         self.assertEqual(sql, expected)
 
     def test_unicode_label(self):
@@ -481,7 +485,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = natural_match("title", "content", query="机器学习").label("ml_score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('机器学习') AS ml_score"
+        expected = "MATCH(`title`, `content`) AGAINST('机器学习') AS ml_score"
         self.assertEqual(sql, expected)
 
     def test_numeric_label(self):
@@ -489,7 +493,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label("score_123")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS score_123"
+        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS score_123"
         self.assertEqual(sql, expected)
 
     def test_underscore_label(self):
@@ -497,7 +501,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label("python_relevance_score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS python_relevance_score"
+        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS python_relevance_score"
         self.assertEqual(sql, expected)
 
     def test_long_label(self):
@@ -506,7 +510,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label(long_label)
         sql = expr.compile()
 
-        expected = f"MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS {long_label}"
+        expected = f"MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS {long_label}"
         self.assertEqual(sql, expected)
 
     def test_label_with_spaces(self):
@@ -514,7 +518,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label("python score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS python score"
+        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS python score"
         self.assertEqual(sql, expected)
 
 
@@ -528,7 +532,7 @@ class TestFulltextParserSupport(unittest.TestCase):
         index = FulltextIndex("ftidx_json", ["json_data"], parser=FulltextParserType.JSON)
         sql = index._create_index_sql("products")
 
-        expected_sql = "CREATE FULLTEXT INDEX ftidx_json ON products (json_data) WITH PARSER json"
+        expected_sql = "CREATE FULLTEXT INDEX `ftidx_json` ON `products` (`json_data`) WITH PARSER json"
         self.assertEqual(sql, expected_sql)
 
     def test_fulltext_index_with_ngram_parser(self):
@@ -538,7 +542,9 @@ class TestFulltextParserSupport(unittest.TestCase):
         index = FulltextIndex("ftidx_ngram", ["title", "content"], parser=FulltextParserType.NGRAM)
         sql = index._create_index_sql("chinese_articles")
 
-        expected_sql = "CREATE FULLTEXT INDEX ftidx_ngram ON chinese_articles (title, content) WITH PARSER ngram"
+        expected_sql = (
+            "CREATE FULLTEXT INDEX `ftidx_ngram` ON `chinese_articles` (`title`, `content`) WITH PARSER ngram"
+        )
         self.assertEqual(sql, expected_sql)
 
     def test_fulltext_index_multiple_columns_with_parser(self):
@@ -548,7 +554,7 @@ class TestFulltextParserSupport(unittest.TestCase):
         index = FulltextIndex("ftidx_multi_json", ["json1", "json2"], parser=FulltextParserType.JSON)
         sql = index._create_index_sql("src")
 
-        expected_sql = "CREATE FULLTEXT INDEX ftidx_multi_json ON src (json1, json2) WITH PARSER json"
+        expected_sql = "CREATE FULLTEXT INDEX `ftidx_multi_json` ON `src` (`json1`, `json2`) WITH PARSER json"
         self.assertEqual(sql, expected_sql)
 
     def test_fulltext_index_without_parser(self):
@@ -556,7 +562,7 @@ class TestFulltextParserSupport(unittest.TestCase):
         index = FulltextIndex("ftidx_default", ["title", "content"])
         sql = index._create_index_sql("articles")
 
-        expected_sql = "CREATE FULLTEXT INDEX ftidx_default ON articles (title, content)"
+        expected_sql = "CREATE FULLTEXT INDEX `ftidx_default` ON `articles` (`title`, `content`)"
         self.assertEqual(sql, expected_sql)
         self.assertNotIn("WITH PARSER", sql)
 
@@ -590,12 +596,9 @@ class TestBM25AlgorithmSupport(unittest.TestCase):
         self.assertEqual(FulltextAlgorithmType.TF_IDF, "TF-IDF")
 
     def test_fulltext_index_with_bm25(self):
-        """Test FulltextIndex with BM25 algorithm"""
-        index = FulltextIndex("ftidx_bm25", ["title", "content"], algorithm=FulltextAlgorithmType.BM25)
-
-        self.assertEqual(index.algorithm, FulltextAlgorithmType.BM25)
-        self.assertEqual(index.name, "ftidx_bm25")
-        self.assertEqual(index.get_columns(), ["title", "content"])
+        """A query ranking request must not silently become inert index metadata."""
+        with self.assertRaisesRegex(ValueError, 'Index DDL cannot configure ranking'):
+            FulltextIndex("ftidx_bm25", ["title", "content"], algorithm=FulltextAlgorithmType.BM25)
 
     def test_fulltext_index_with_tfidf(self):
         """Test FulltextIndex with TF-IDF algorithm (default)"""
@@ -604,19 +607,36 @@ class TestBM25AlgorithmSupport(unittest.TestCase):
         self.assertEqual(index.algorithm, FulltextAlgorithmType.TF_IDF)
 
     def test_algorithm_sql_generation(self):
-        """Test that algorithm doesn't affect SQL generation (it's a runtime config)"""
-        index_bm25 = FulltextIndex("ftidx_test", ["content"], algorithm=FulltextAlgorithmType.BM25)
-        index_tfidf = FulltextIndex("ftidx_test", ["content"], algorithm=FulltextAlgorithmType.TF_IDF)
+        """BM25 remains supported on the query execution owner."""
+        from matrixone.sqlalchemy_ext.fulltext_search import FulltextSearchBuilder as SearchBuilder
 
-        sql_bm25 = index_bm25._create_index_sql("articles")
-        sql_tfidf = index_tfidf._create_index_sql("articles")
-
-        # SQL should be same, algorithm is a config setting not part of DDL
-        self.assertEqual(sql_bm25, sql_tfidf)
+        client = Mock()
+        builder = SearchBuilder(client).table('articles').columns(['content']).query('hello').with_algorithm('BM25')
+        with patch('matrixone._scoped_query.execute_fulltext', return_value='rows') as execute:
+            self.assertEqual(builder.execute(), 'rows')
+            self.assertEqual(execute.call_args.args[2], 'BM25')
 
 
 class TestComplexBooleanModeQueries(unittest.TestCase):
     """Test complex boolean mode operators - offline SQL generation tests"""
+
+    def test_raw_query_and_structured_terms(self):
+        from matrixone.sqlalchemy_ext.fulltext_search import FulltextSearchBuilder as SearchBuilder
+
+        builder = SearchBuilder(Mock()).table('articles').columns(['content'])
+        self.assertIn(
+            "AGAINST('machine learning' IN natural language mode)", builder.query('machine learning')._build_sql()
+        )
+        self.assertIn("AGAINST($sdk$C:\\path$sdk$ IN natural language mode)", builder.query(r'C:\path')._build_sql())
+        self.assertIn("AGAINST('O''Reilly' IN natural language mode)", builder.query("O'Reilly")._build_sql())
+        builder.with_mode(FulltextSearchMode.BOOLEAN).query('+machine -java').add_term('python', required=True)
+        self.assertIn("AGAINST('+machine -java +python' IN BOOLEAN MODE)", builder._build_sql())
+        builder.query('reset')
+        self.assertIn("AGAINST('reset' IN BOOLEAN MODE)", builder._build_sql())
+        for invalid in ('bad\x00term', r'bad\$term', ''):
+            with self.assertRaises(ValueError):
+                builder.query(invalid)
+            self.assertIn("AGAINST('reset' IN BOOLEAN MODE)", builder._build_sql())
 
     def test_wildcard_suffix_generation(self):
         """Test wildcard suffix (*) in boolean queries - SQL should contain wildcard"""
@@ -632,11 +652,11 @@ class TestComplexBooleanModeQueries(unittest.TestCase):
         """Test phrase search (quoted strings) in SQL generation"""
         # Testing the SQL format for phrase search
         # Actual phrase syntax is tested in online tests
-        expr = boolean_match("title", "content").must("is not red")
+        expr = boolean_match("title", "content").phrase("is not red")
         sql = expr.compile()
 
-        # Should use + operator for multi-word must
-        self.assertIn("+is not red", sql)
+        # Multiword phrase uses the explicit phrase API
+        self.assertIn('"is not red"', sql)
         self.assertIn("IN BOOLEAN MODE", sql)
 
     def test_complex_boolean_combination(self):
@@ -685,7 +705,7 @@ class TestNullAndEdgeCases(unittest.TestCase):
         sql = expr.compile()
 
         self.assertIn("机器学习", sql)
-        self.assertIn("MATCH(title, content)", sql)
+        self.assertIn("MATCH(`title`, `content`)", sql)
 
     def test_very_long_search_query(self):
         """Test very long search queries"""
@@ -694,7 +714,7 @@ class TestNullAndEdgeCases(unittest.TestCase):
         sql = expr.compile()
 
         self.assertIn(long_query, sql)
-        self.assertIn("MATCH(content)", sql)
+        self.assertIn("MATCH(`content`)", sql)
 
 
 class TestIndexCreationVariations(unittest.TestCase):
@@ -705,7 +725,7 @@ class TestIndexCreationVariations(unittest.TestCase):
         index = FulltextIndex("ftidx_single", "content")
         sql = index._create_index_sql("articles")
 
-        expected = "CREATE FULLTEXT INDEX ftidx_single ON articles (content)"
+        expected = "CREATE FULLTEXT INDEX `ftidx_single` ON `articles` (`content`)"
         self.assertEqual(sql, expected)
 
     def test_three_column_index(self):
@@ -713,7 +733,7 @@ class TestIndexCreationVariations(unittest.TestCase):
         index = FulltextIndex("ftidx_three", ["title", "summary", "content"])
         sql = index._create_index_sql("articles")
 
-        expected = "CREATE FULLTEXT INDEX ftidx_three ON articles (title, summary, content)"
+        expected = "CREATE FULLTEXT INDEX `ftidx_three` ON `articles` (`title`, `summary`, `content`)"
         self.assertEqual(sql, expected)
 
     def test_index_with_all_options(self):
@@ -721,14 +741,14 @@ class TestIndexCreationVariations(unittest.TestCase):
         from matrixone.sqlalchemy_ext import FulltextParserType
 
         index = FulltextIndex(
-            "ftidx_full", ["json1", "json2"], algorithm=FulltextAlgorithmType.BM25, parser=FulltextParserType.JSON
+            "ftidx_full", ["json1", "json2"], algorithm=FulltextAlgorithmType.TF_IDF, parser=FulltextParserType.JSON
         )
         sql = index._create_index_sql("src")
 
-        expected = "CREATE FULLTEXT INDEX ftidx_full ON src (json1, json2) WITH PARSER json"
+        expected = "CREATE FULLTEXT INDEX `ftidx_full` ON `src` (`json1`, `json2`) WITH PARSER json"
         self.assertEqual(sql, expected)
-        # Algorithm is stored but not in DDL
-        self.assertEqual(index.algorithm, FulltextAlgorithmType.BM25)
+        # Default compatibility argument does not configure query ranking
+        self.assertEqual(index.algorithm, FulltextAlgorithmType.TF_IDF)
 
     def test_index_name_with_special_chars(self):
         """Test index names with underscores and numbers"""
@@ -773,7 +793,7 @@ class TestSearchBuilderCombinations(unittest.TestCase):
         expr = natural_match("title", "content", query="machine learning tutorial")
         sql = expr.compile()
 
-        self.assertIn("MATCH(title, content)", sql)
+        self.assertIn("MATCH(`title`, `content`)", sql)
         self.assertIn("AGAINST('machine learning tutorial')", sql)
         # Natural language mode can omit the explicit mode clause or include it
         # Depends on implementation - let's just check it's valid
@@ -787,9 +807,32 @@ class TestSearchBuilderCombinations(unittest.TestCase):
         sql2 = expr2.compile()
 
         # Should preserve the order specified
-        self.assertIn("title, content, summary", sql1)
-        self.assertIn("summary, content, title", sql2)
+        self.assertIn("`title`, `content`, `summary`", sql1)
+        self.assertIn("`summary`, `content`, `title`", sql2)
 
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@pytest.mark.parametrize('method', ['must', 'must_not', 'encourage', 'discourage'])
+def test_structured_fulltext_terms_validate_before_mutating_builder(method):
+    builder = FulltextQueryBuilder().must('existing')
+    before = builder.build()
+    with pytest.raises(ValueError, match='literal fulltext term'):
+        getattr(builder, method)('valid', 'bad (group)')
+    assert builder.build() == before
+
+
+@pytest.mark.parametrize('phrase', ['unclosed"phrase', 'path\\name', '\x00'])
+def test_fulltext_phrase_delimiters_are_rejected_before_rendering(phrase):
+    builder = FulltextQueryBuilder()
+    with pytest.raises(ValueError, match='phrases cannot'):
+        builder.phrase(phrase)
+    assert builder.build() == ''
+
+
+def test_fulltext_filter_accepts_multiple_checked_phrases():
+    expression = boolean_match('title').phrase('machine learning', 'C++')
+    sql = expression.compile()
+    assert '"machine learning" "C++"' in sql

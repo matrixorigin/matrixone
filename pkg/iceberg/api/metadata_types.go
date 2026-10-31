@@ -54,6 +54,18 @@ func (m *TableMetadata) CurrentSchema() (Schema, bool) {
 	return Schema{}, false
 }
 
+// PartitionSpecFieldCounts returns the number of fields in each partition spec.
+func (m *TableMetadata) PartitionSpecFieldCounts() map[int]int {
+	if m == nil {
+		return nil
+	}
+	out := make(map[int]int, len(m.PartitionSpecs))
+	for _, spec := range m.PartitionSpecs {
+		out[spec.SpecID] = len(spec.Fields)
+	}
+	return out
+}
+
 func (m *TableMetadata) DefaultSpec() (PartitionSpec, bool) {
 	for _, spec := range m.PartitionSpecs {
 		if spec.SpecID == m.DefaultSpecID {

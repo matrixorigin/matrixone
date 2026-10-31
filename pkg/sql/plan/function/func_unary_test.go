@@ -440,96 +440,46 @@ func TestOrdUsesRowStringDomain(t *testing.T) {
 
 // QUOTE
 func initQuoteTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test quote basic string",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello", "World", "Test"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'Hello'", "'World'", "'Test'"},
-				[]bool{false, false, false}),
-		},
-		{
-			info: "test quote with single quote",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Don't", "It's", "O'Brien"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'Don\\'t'", "'It\\'s'", "'O\\'Brien'"},
-				[]bool{false, false, false}),
-		},
-		{
-			info: "test quote with backslash",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"C:\\path", "test\\file"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'C:\\\\path'", "'test\\\\file'"},
-				[]bool{false, false}),
-		},
-		{
-			info: "test quote with control characters",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"line1\nline2", "tab\ttest", "null\x00byte"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'line1\nline2'", "'tab\ttest'", "'null\\0byte'"},
-				[]bool{false, false, false}),
-		},
-		{
-			info: "test quote empty string",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{""},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"''"},
-				[]bool{false}),
-		},
-		{
-			info: "test quote with NULL",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"test"},
-					[]bool{true}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"NULL"},
-				[]bool{false}),
-		},
-		{
-			info: "test quote with carriage return",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"line1\rline2"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'line1\rline2'"},
-				[]bool{false}),
-		},
-		{
-			info: "test quote with Ctrl+Z",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"test\x1aend"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'test\\Zend'"},
-				[]bool{false}),
-		},
+	cases := []struct {
+		info        string
+		values      []string
+		inputNulls  []bool
+		want        []string
+		outputNulls []bool
+	}{
+
+		{info: "test quote basic string",
+			values: []string{"Hello", "World", "Test"}, inputNulls: []bool{false, false, false},
+			want: []string{"'Hello'", "'World'", "'Test'"}, outputNulls: []bool{false, false, false}},
+		{info: "test quote with single quote",
+			values: []string{"Don't", "It's", "O'Brien"}, inputNulls: []bool{false, false, false},
+			want: []string{"'Don\\'t'", "'It\\'s'", "'O\\'Brien'"}, outputNulls: []bool{false, false, false}},
+		{info: "test quote with backslash",
+			values: []string{"C:\\path", "test\\file"}, inputNulls: []bool{false, false},
+			want: []string{"'C:\\\\path'", "'test\\\\file'"}, outputNulls: []bool{false, false}},
+		{info: "test quote with control characters",
+			values: []string{"line1\nline2", "tab\ttest", "null\x00byte"}, inputNulls: []bool{false, false, false},
+			want: []string{"'line1\nline2'", "'tab\ttest'", "'null\\0byte'"}, outputNulls: []bool{false, false, false}},
+		{info: "test quote empty string",
+			values: []string{""}, inputNulls: []bool{false},
+			want: []string{"''"}, outputNulls: []bool{false}},
+		{info: "test quote with NULL",
+			values: []string{"test"}, inputNulls: []bool{true},
+			want: []string{"NULL"}, outputNulls: []bool{false}},
+		{info: "test quote with carriage return",
+			values: []string{"line1\rline2"}, inputNulls: []bool{false},
+			want: []string{"'line1\rline2'"}, outputNulls: []bool{false}},
+		{info: "test quote with Ctrl+Z",
+			values: []string{"test\x1aend"}, inputNulls: []bool{false},
+			want: []string{"'test\\Zend'"}, outputNulls: []bool{false}},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
+		result = append(result, tcTemp{info: c.info,
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), c.values, c.inputNulls)},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, c.want, c.outputNulls)})
+	}
+	return result
 }
 
 func TestQuote(t *testing.T) {
@@ -653,118 +603,81 @@ func TestSoundexBinaryInputPreservesBinaryResultDomain(t *testing.T) {
 func initSoundexTestCase() []tcTemp {
 	lateGrowthInput := strings.Repeat("BEB", 4096) + strings.Repeat("BC", 64)
 	lateGrowthWant := "B2" + strings.Repeat("12", 63)
-	return []tcTemp{
+	cases := []struct {
+		info         string
+		values, want []string
+		nulls        []bool
+	}{
 		{
-			info: "test soundex basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello", "World", "Test"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"H400", "W643", "T230"},
-				[]bool{false, false, false}),
+			info:   "test soundex basic",
+			values: []string{"Hello", "World", "Test"},
+			want:   []string{"H400", "W643", "T230"},
+			nulls:  []bool{false, false, false},
 		},
 		{
-			info: "test soundex with vowels",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"AEIOU", "aeiou"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"A000", "A000"},
-				[]bool{false, false}),
+			info:   "test soundex with vowels",
+			values: []string{"AEIOU", "aeiou"},
+			want:   []string{"A000", "A000"},
+			nulls:  []bool{false, false},
 		},
 		{
-			info: "test soundex with non-alphabetic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello123", "Test!@#", "123ABC", "123!", "123!ABC"},
-					[]bool{false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"H400", "T230", "A120", "", "A120"},
-				[]bool{false, false, false, false, false}),
+			info:   "test soundex with non-alphabetic",
+			values: []string{"Hello123", "Test!@#", "123ABC", "123!", "123!ABC"},
+			want:   []string{"H400", "T230", "A120", "", "A120"},
+			nulls:  []bool{false, false, false, false, false},
 		},
 		{
-			info: "test soundex empty string",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{""},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{false}),
+			info:   "test soundex empty string",
+			values: []string{""},
+			want:   []string{""},
+			nulls:  []bool{false},
 		},
 		{
-			info: "test soundex with NULL",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello"},
-					[]bool{true}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
+			info:   "test soundex with NULL",
+			values: []string{"Hello"},
+			want:   []string{""},
+			nulls:  []bool{true},
 		},
 		{
-			info: "test soundex with mixed NULL and non-NULL rows",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Pfister", "ignored", "Ashcraft"},
-					[]bool{false, true, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"P236", "", "A2613"},
-				[]bool{false, true, false}),
+			info:   "test soundex with mixed NULL and non-NULL rows",
+			values: []string{"Pfister", "ignored", "Ashcraft"},
+			want:   []string{"P236", "", "A2613"},
+			nulls:  []bool{false, true, false},
 		},
 		{
-			info: "test soundex first-letter and discarded-letter duplicate suppression",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"LLL", "RRR", "MMM", "BEB", "BHB", "BWB", "B-B"},
-					[]bool{false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"L000", "R000", "M000", "B000", "B000", "B000", "B000"},
-				[]bool{false, false, false, false, false, false, false}),
+			info:   "test soundex first-letter and discarded-letter duplicate suppression",
+			values: []string{"LLL", "RRR", "MMM", "BEB", "BHB", "BWB", "B-B"},
+			want:   []string{"L000", "R000", "M000", "B000", "B000", "B000", "B000"},
+			nulls:  []bool{false, false, false, false, false, false, false},
 		},
 		{
-			info: "test soundex with H and W",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello", "World", "What"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"H400", "W643", "W300"},
-				[]bool{false, false, false}),
+			info:   "test soundex with H and W",
+			values: []string{"Hello", "World", "What"},
+			want:   []string{"H400", "W643", "W300"},
+			nulls:  []bool{false, false, false},
 		},
 		{
-			info: "test soundex short strings",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"A", "AB", "ABC"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"A000", "A100", "A120"},
-				[]bool{false, false, false}),
+			info:   "test soundex short strings",
+			values: []string{"A", "AB", "ABC"},
+			want:   []string{"A000", "A100", "A120"},
+			nulls:  []bool{false, false, false},
 		},
 		{
-			info: "test MySQL original Soundex and variable-length results",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Ashcraft", "Pfister", "Tymczak", "Quadratically", "pfister", "BDFJLMPR", "BDFJLMPRB", lateGrowthInput},
-					[]bool{false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"A2613", "P236", "T520", "Q36324", "P236", "B3124516", "B31245161", lateGrowthWant},
-				[]bool{false, false, false, false, false, false, false, false}),
+			info:   "test MySQL original Soundex and variable-length results",
+			values: []string{"Ashcraft", "Pfister", "Tymczak", "Quadratically", "pfister", "BDFJLMPR", "BDFJLMPRB", lateGrowthInput},
+			want:   []string{"A2613", "P236", "T520", "Q36324", "P236", "B3124516", "B31245161", lateGrowthWant},
+			nulls:  []bool{false, false, false, false, false, false, false, false},
 		},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		result = append(result, tcTemp{
+			info:   tc.info,
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls)},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, tc.nulls),
+		})
+	}
+	return result
 }
 
 func TestSoundex(t *testing.T) {
@@ -4209,6 +4122,23 @@ func initJsonUnquoteTestCase() []tcTemp {
 
 func TestJsonUnquote(t *testing.T) {
 	testCases := initJsonUnquoteTestCase()
+	documents := []string{"123", "true", "null", `[1,"two"]`, `{"a":"b"}`}
+	jsonInputs := make([]string, len(documents))
+	for i, document := range documents {
+		bj, err := types.ParseStringToByteJson(document)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		jsonInputs[i] = string(encoded)
+	}
+	testCases = append(testCases, tcTemp{
+		info: "native JSON scalar and composite text",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), jsonInputs, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"123", "true", "null", `[1, "two"]`, `{"a": "b"}`}, nil),
+	})
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
@@ -4369,6 +4299,7 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 
 func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 	values := []string{
+		"",
 		"plain",
 		"a\"b",
 		"\"leading",
@@ -4377,6 +4308,9 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 		"\"",
 		"\"\"",
 		"\"你好\"",
+		"slashes\\and\nlines",
+		strings.Repeat("a", types.VarlenaInlineSize),
+		strings.Repeat("a", types.VarlenaInlineSize+1),
 	}
 	inputs := make([]string, len(values))
 	for i, value := range values {
@@ -4403,16 +4337,70 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 		require.NoError(t, err)
 		jsonInputs[i] = string(encoded)
 	}
-	jsonTC := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_json.ToType(), jsonInputs,
-				make([]bool, len(jsonInputs))),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, values,
-			make([]bool, len(values))),
-		JsonUnquote)
-	s, info = jsonTC.RunAndFree()
-	require.True(t, s, info)
+	for _, scenario := range []struct {
+		name     string
+		constant bool
+		masked   bool
+		valueRow int
+	}{
+		{name: "flat"},
+		{name: "flat NULL and masked rows", masked: true},
+		{name: "constant inline", constant: true, valueRow: 5},
+		{name: "constant area", constant: true, valueRow: len(values) - 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			input, wanted := jsonInputs, values
+			inputNulls := make([]bool, len(input))
+			wantedNulls := make([]bool, len(wanted))
+			var selected *FunctionSelectList
+			if scenario.masked {
+				inputNulls[1], wantedNulls[1], wantedNulls[2] = true, true, true
+				selected = &FunctionSelectList{AnyNull: true, SelectList: make([]bool, len(input))}
+				for row := range selected.SelectList {
+					selected.SelectList[row] = row != 2
+				}
+			}
+			inputCase := NewFunctionTestInput(types.T_json.ToType(), input, inputNulls)
+			if scenario.constant {
+				input = []string{jsonInputs[scenario.valueRow]}
+				wanted = []string{values[scenario.valueRow], values[scenario.valueRow]}
+				wantedNulls = nil
+				inputCase = NewFunctionTestConstInput(types.T_json.ToType(), input, nil)
+			}
+			jsonTC := NewFunctionTestCase(proc, []FunctionTestInput{inputCase},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, wantedNulls), JsonUnquote).
+				WithSelectList(selected)
+			defer jsonTC.Free()
+			jsonTC.fnLength = len(wanted)
+			source := jsonTC.parameters[0]
+			source.SetLength(len(wanted))
+			s, info := jsonTC.Run()
+			require.True(t, s, info)
+			assertOwnedResult := func() {
+				result := vector.GenerateFunctionStrParameter(jsonTC.GetResultVectorDirectly())
+				for row, want := range wanted {
+					got, isNull := result.GetStrValue(uint64(row))
+					wantNull := len(wantedNulls) > 0 && wantedNulls[row]
+					require.Equal(t, wantNull, isNull, "row %d", row)
+					if !wantNull {
+						require.Equal(t, want, string(got), "row %d aliases input", row)
+					}
+				}
+			}
+			// Overwrite both inline and area-backed input before releasing it.
+			// The repeated-constant append must also own its first payload copy.
+			for row := range input {
+				stored := source.GetBytesAt(row)
+				for i := range stored {
+					stored[i] = '?'
+				}
+			}
+			assertOwnedResult()
+			source.Free(proc.Mp())
+			jsonTC.parameters[0] = nil
+			assertOwnedResult()
+		})
+	}
 }
 
 func TestLoadFile(t *testing.T) {
@@ -7316,70 +7304,43 @@ func TestLength(t *testing.T) {
 // LengthUTF8
 
 func initLengthUTF8TestCase() []tcTemp {
+	values := []string{
+		"abc",
+		"",
+		"   ",
+		"中国123",
+		"abc😄",
+		"中国中国中国中国中国中国中国中国中国中国1234",
+		"中国中国中国中国中国中国中国中国中国中国1234😄ggg!",
+		"你好",
+		"français",
+		"にほんご",
+		"Español",
+		"123456",
+		"андрей",
+		"\\",
+		string(rune(0x0c)),
+		string('"'),
+		string('\a'),
+		string('\b'),
+		string('\t'),
+		string('\n'),
+		string('\r'),
+		string(rune(0x10)),
+		"你好",
+		"再见",
+		"今天",
+		"日期时间",
+		"明天",
+		"\n\t\r\b" + string(rune(0)) + "\\_\\%\\",
+	}
+	nulls := make([]bool, len(values))
 	return []tcTemp{
 		{
 			info: "test lengthutf8",
 			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{
-					"abc",
-					"",
-					"   ",
-					"中国123",
-					"abc😄",
-					"中国中国中国中国中国中国中国中国中国中国1234",
-					"中国中国中国中国中国中国中国中国中国中国1234😄ggg!",
-					"你好",
-					"français",
-					"にほんご",
-					"Español",
-					"123456",
-					"андрей",
-					"\\",
-					string(rune(0x0c)),
-					string('"'),
-					string('\a'),
-					string('\b'),
-					string('\t'),
-					string('\n'),
-					string('\r'),
-					string(rune(0x10)),
-					"你好",
-					"再见",
-					"今天",
-					"日期时间",
-					"明天",
-					"\n\t\r\b" + string(rune(0)) + "\\_\\%\\",
-				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-				})},
+				values,
+				nulls)},
 			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
 				[]uint64{
 					3,
@@ -7411,36 +7372,7 @@ func initLengthUTF8TestCase() []tcTemp {
 					2,
 					10,
 				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-				}),
+				nulls),
 		},
 	}
 }
@@ -7523,369 +7455,111 @@ func TestLtrim(t *testing.T) {
 // Rtrim
 
 func initRtrimTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test rtrim",
-			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{
-					"barbar   ",
-					"MySQL",
-					"a",
-					"  20.06 ",
-					"  right  ",
-					"你好  ",
-					"2017-06-15   ",
-					"2017-06-15        ",
-
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ ",
-					"ｱｲｳｴｵ  ",
-					"ｱｲｳｴｵ   ",
-					"ｱｲｳｴｵ ",
-					"ｱｲｳｴｵ    ",
-					"ｱｲｳｴｵ      ",
-					"あいうえお",
-					"あいうえお ",
-					"あいうえお  ",
-					"あいうえお   ",
-					"あいうえお",
-					"あいうえお ",
-					"あいうえお   ",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡 ",
-					"龔龖龗龞龡  ",
-					"龔龖龗龞龡   ",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡 ",
-					"龔龖龗龞龡   ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ ",
-					"ｱｲｳｴｵ  ",
-					"ｱｲｳｴｵ   ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ  ",
-					"ｱｲｳｴｵ    ",
-					"あいうえお",
-					"あいうえお ",
-					"あいうえお  ",
-					"あいうえお   ",
-					"あいうえお",
-					"あいうえお  ",
-					"あいうえお     ",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡 ",
-					"龔龖龗龞龡  ",
-					"龔龖龗龞龡   ",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡 ",
-					"龔龖龗龞龡  ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ ",
-					"ｱｲｳｴｵ  ",
-					"ｱｲｳｴｵ   ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ ",
-					"ｱｲｳｴｵ  ",
-					"あいうえお",
-					"あいうえお ",
-					"あいうえお  ",
-					"あいうえお   ",
-					"あいうえお",
-					"あいうえお  ",
-					"あいうえお    ",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡 ",
-					"龔龖龗龞龡  ",
-					"龔龖龗龞龡   ",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡  ",
-					"龔龖龗龞龡      ",
-					"2017-06-15    ",
-					"2019-06-25    ",
-					"    2019-06-25  ",
-					"   2019-06-25   ",
-					"    2012-10-12   ",
-					"   2004-04-24.   ",
-					"   2008-12-04.  ",
-					"    2012-03-23.   ",
-					"    2013-04-30  ",
-					"  1994-10-04  ",
-					"   2018-06-04  ",
-					" 2012-10-12  ",
-					"1241241^&@%#^*^!@#&*(!&    ",
-					" 123 ",
-				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-				})},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{
-					"barbar",
-					"MySQL",
-					"a",
-					"  20.06",
-					"  right",
-					"你好",
-					"2017-06-15",
-					"2017-06-15",
-
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"ｱｲｳｴｵ",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"あいうえお",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"龔龖龗龞龡",
-					"2017-06-15",
-					"2019-06-25",
-					"    2019-06-25",
-					"   2019-06-25",
-					"    2012-10-12",
-					"   2004-04-24.",
-					"   2008-12-04.",
-					"    2012-03-23.",
-					"    2013-04-30",
-					"  1994-10-04",
-					"   2018-06-04",
-					" 2012-10-12",
-					"1241241^&@%#^*^!@#&*(!&",
-					" 123",
-				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-				}),
-		},
+	cases := []struct{ input, want string }{
+		{"barbar   ", "barbar"},
+		{"MySQL", "MySQL"},
+		{"a", "a"},
+		{"  20.06 ", "  20.06"},
+		{"  right  ", "  right"},
+		{"你好  ", "你好"},
+		{"2017-06-15   ", "2017-06-15"},
+		{"2017-06-15        ", "2017-06-15"},
+		{"ｱｲｳｴｵ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ  ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ   ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ    ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ      ", "ｱｲｳｴｵ"},
+		{"あいうえお", "あいうえお"},
+		{"あいうえお ", "あいうえお"},
+		{"あいうえお  ", "あいうえお"},
+		{"あいうえお   ", "あいうえお"},
+		{"あいうえお", "あいうえお"},
+		{"あいうえお ", "あいうえお"},
+		{"あいうえお   ", "あいうえお"},
+		{"龔龖龗龞龡", "龔龖龗龞龡"},
+		{"龔龖龗龞龡 ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡  ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡   ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡", "龔龖龗龞龡"},
+		{"龔龖龗龞龡 ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡   ", "龔龖龗龞龡"},
+		{"ｱｲｳｴｵ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ  ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ   ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ  ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ    ", "ｱｲｳｴｵ"},
+		{"あいうえお", "あいうえお"},
+		{"あいうえお ", "あいうえお"},
+		{"あいうえお  ", "あいうえお"},
+		{"あいうえお   ", "あいうえお"},
+		{"あいうえお", "あいうえお"},
+		{"あいうえお  ", "あいうえお"},
+		{"あいうえお     ", "あいうえお"},
+		{"龔龖龗龞龡", "龔龖龗龞龡"},
+		{"龔龖龗龞龡 ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡  ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡   ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡", "龔龖龗龞龡"},
+		{"龔龖龗龞龡 ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡  ", "龔龖龗龞龡"},
+		{"ｱｲｳｴｵ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ  ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ   ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ ", "ｱｲｳｴｵ"},
+		{"ｱｲｳｴｵ  ", "ｱｲｳｴｵ"},
+		{"あいうえお", "あいうえお"},
+		{"あいうえお ", "あいうえお"},
+		{"あいうえお  ", "あいうえお"},
+		{"あいうえお   ", "あいうえお"},
+		{"あいうえお", "あいうえお"},
+		{"あいうえお  ", "あいうえお"},
+		{"あいうえお    ", "あいうえお"},
+		{"龔龖龗龞龡", "龔龖龗龞龡"},
+		{"龔龖龗龞龡 ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡  ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡   ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡", "龔龖龗龞龡"},
+		{"龔龖龗龞龡  ", "龔龖龗龞龡"},
+		{"龔龖龗龞龡      ", "龔龖龗龞龡"},
+		{"2017-06-15    ", "2017-06-15"},
+		{"2019-06-25    ", "2019-06-25"},
+		{"    2019-06-25  ", "    2019-06-25"},
+		{"   2019-06-25   ", "   2019-06-25"},
+		{"    2012-10-12   ", "    2012-10-12"},
+		{"   2004-04-24.   ", "   2004-04-24."},
+		{"   2008-12-04.  ", "   2008-12-04."},
+		{"    2012-03-23.   ", "    2012-03-23."},
+		{"    2013-04-30  ", "    2013-04-30"},
+		{"  1994-10-04  ", "  1994-10-04"},
+		{"   2018-06-04  ", "   2018-06-04"},
+		{" 2012-10-12  ", " 2012-10-12"},
+		{"1241241^&@%#^*^!@#&*(!&    ", "1241241^&@%#^*^!@#&*(!&"},
+		{" 123 ", " 123"},
 	}
+	values := make([]string, len(cases))
+	expected := make([]string, len(cases))
+	for i, c := range cases {
+		values[i], expected[i] = c.input, c.want
+	}
+	nulls := make([]bool, len(cases))
+	return []tcTemp{{
+		info:   "test rtrim",
+		inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), values, nulls)},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, expected, nulls),
+	}}
 }
 
 func TestRtrim(t *testing.T) {
 	testCases := initRtrimTestCase()
 
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Rtrim)
 		s, info := fcTC.RunAndFree()
@@ -7893,92 +7567,70 @@ func TestRtrim(t *testing.T) {
 	}
 }
 
+func TestRtrimNullAndWhitespace(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	nulls := []bool{false, true, false, false, false, false}
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"", "ignored  ", "   ", "x \t ", "x\u00a0 ", " x  "}, nulls)},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"", "", "", "x \t", "x\u00a0", " x"}, nulls), Rtrim)
+	ok, info := tc.RunAndFree()
+	require.True(t, ok, info)
+}
+
 // Reverse
 
 func initReverseTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			//TODO: How to handle ScalarNulls. Original code: https://github.com/m-schen/matrixone/blob/6715c45c2f6e2b15808b10a21fafc17d03a8ae0b/pkg/sql/plan/function/builtin/unary/reverse_test.go#L75
-			info: "test reverse",
-			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{
-					"abc",
-					"abcd",
-					"hello",
-					"ｱｲｳｴｵ",
-					"あいうえお",
-					"龔龖龗龞龡",
-					"你好",
-					"再 见",
-					"bcd",
-					"def",
-					"xyz",
-					"1a1",
-					"2012",
-					"@($)@($#)_@(#",
-					"2023-04-24",
-					"10:03:23.021412",
-					"sdfad  ",
-				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-				})},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{
-					"cba",
-					"dcba",
-					"olleh",
-					"ｵｴｳｲｱ",
-					"おえういあ",
-					"龡龞龗龖龔",
-					"好你",
-					"见 再",
-					"dcb",
-					"fed",
-					"zyx",
-					"1a1",
-					"2102",
-					"#(@_)#$(@)$(@",
-					"42-40-3202",
-					"214120.32:30:01",
-					"  dafds",
-				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-				}),
-		},
+	cases := []struct{ input, want string }{
+		{"abc", "cba"},
+		{"abcd", "dcba"},
+		{"hello", "olleh"},
+		{"ｱｲｳｴｵ", "ｵｴｳｲｱ"},
+		{"あいうえお", "おえういあ"},
+		{"龔龖龗龞龡", "龡龞龗龖龔"},
+		{"你好", "好你"},
+		{"再 见", "见 再"},
+		{"bcd", "dcb"},
+		{"def", "fed"},
+		{"xyz", "zyx"},
+		{"1a1", "1a1"},
+		{"2012", "2102"},
+		{"@($)@($#)_@(#", "#(@_)#$(@)$(@"},
+		{"2023-04-24", "42-40-3202"},
+		{"10:03:23.021412", "214120.32:30:01"},
+		{"sdfad  ", "  dafds"},
+	}
+	inputs := make([]string, len(cases))
+	expected := make([]string, len(cases))
+	for i, c := range cases {
+		inputs[i], expected[i] = c.input, c.want
+	}
+	return []tcTemp{{info: "test reverse",
+		inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), inputs, make([]bool, len(cases)))},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, expected, make([]bool, len(cases)))}}
+}
+
+func TestReverseConstantAndNull(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	for _, c := range []struct {
+		name   string
+		isNull bool
+		want   []string
+		nulls  []bool
+	}{
+		{"constant", false, []string{"好你", "好你", "好你"}, nil},
+		{"constant null", true, []string{"", "", ""}, []bool{true, true, true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"你好"}, []bool{c.isNull})},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, c.want, c.nulls), Reverse)
+			fc.fnLength = len(c.want)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -10047,6 +9699,42 @@ func TestUserLevelLockConnectionIDFromProbeTxnID(t *testing.T) {
 		"every probe attempt needs its own ID so delayed cleanup cannot affect a later attempt")
 	require.True(t, bytes.HasPrefix(txnID,
 		userLevelLockProbeTxnIDPrefix("owner-1", 1001, "probe_lock", "is_free")))
+}
+
+func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
+	name, err := validateUserLevelLockName(name)
+	if err != nil {
+		return 0, err
+	}
+	timeoutSeconds, err := userLevelLockTimeoutSeconds(timeout)
+	if err != nil {
+		return 0, err
+	}
+	return getUserLevelLockValidated(name, timeoutSeconds, proc)
+}
+
+func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, error) {
+	name, err := validateUserLevelLockName(name)
+	if err != nil {
+		return 0, false, err
+	}
+	return releaseUserLevelLockValidated(name, proc)
+}
+
+func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
+	name, err := validateUserLevelLockName(name)
+	if err != nil {
+		return 0, err
+	}
+	return isUserLevelLockFreeValidated(name, proc)
+}
+
+func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, error) {
+	name, err := validateUserLevelLockName(name)
+	if err != nil {
+		return 0, false, err
+	}
+	return isUserLevelLockUsedValidated(name, proc)
 }
 
 func TestUserLevelLockFunctions(t *testing.T) {

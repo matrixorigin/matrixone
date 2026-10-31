@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 const (
@@ -185,6 +186,13 @@ func (block *MemBlock) Adjust() {
 	}
 }
 
+// loadLocalFrameProgress belongs to the single LOCAL upload reader, including
+// its drain phase. It outlives a socket interrupt and contains no payload data.
+type loadLocalFrameProgress struct {
+	headerBytes, payloadBytes, payloadLength int
+	decoded, interrupted                     bool
+}
+
 type Conn struct {
 	id                    uint64
 	conn                  net.Conn
@@ -224,12 +232,30 @@ type Conn struct {
 	loadLocalReadTimeout time.Duration
 	// loadLocalWriteTimeout is the timeout for writing data to client during LOAD DATA LOCAL operations
 	loadLocalWriteTimeout time.Duration
-	allocator             *BufferAllocator
-	ses                   atomic.Pointer[holder[*Session]]
-	closeFunc             sync.Once
-	service               string
-	outputCounter         atomic.Pointer[perfcounter.CounterSet]
-	responseOutputWait    atomic.Pointer[responseOutputWaitTracker]
+	// loadLocalIOInterrupt records a cancellation watcher interrupt so a
+	// load-local read started after the interrupt re-arms an already-expired
+	// deadline instead of covering it with a fresh long one; only the upload
+	// owner clears it, after the watcher is joined, before draining or
+	// reusing the socket.
+	loadLocalIOInterrupt atomic.Bool
+	// Only the upload owner reads/writes frame progress. The watcher changes
+	// socket deadlines, never framing. An interrupted read keeps its exact
+	// prefix until the owner discards the remainder or retires the connection.
+	loadLocalFrame       loadLocalFrameProgress
+	loadLocalFrameBroken atomic.Bool
+	// loadLocalMu serializes deadline installs with InterruptLoadLocalIO and
+	// ClearLoadLocalIOInterrupt: a deadline is chosen and armed atomically
+	// w.r.t. the cancellation watcher, so an interrupt landing inside the
+	// old check-then-arm window can never be overwritten again (it either is
+	// already visible when the deadline is chosen, or it expires the armed
+	// deadline right after). The network read itself never runs under it.
+	loadLocalMu        sync.Mutex
+	allocator          *BufferAllocator
+	ses                atomic.Pointer[holder[*Session]]
+	closeFunc          sync.Once
+	service            string
+	outputCounter      atomic.Pointer[perfcounter.CounterSet]
+	responseOutputWait atomic.Pointer[responseOutputWaitTracker]
 }
 
 type responseOutputWaitTracker struct {
@@ -461,67 +487,154 @@ func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 	return nil
 }
 
-// ReadLoadLocalPacket just for processLoadLocal, reuse memory, and not merge 16MB packets
-func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
-	var packetLength int
+// ReadLoadLocalPacket just for processLoadLocal, reuse memory, and not merge 16MB packets.
+// Reads under the session timeout only: a pending cancellation interrupt still
+// caps the actual network reads, and no absolute deadline applies.
+func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
+	return c.ReadLoadLocalPacketWithTimeout(c.loadLocalReadTimeout, time.Time{})
+}
+
+// ReadLoadLocalPacketWithTimeout reads one client upload packet with an
+// explicit per-read timeout. processLoadLocal's post-cancellation drain uses
+// it to bound each silent read independently of the session setting; a nonzero
+// deadline additionally caps every single network read of this packet at that
+// absolute point, so one stalling header or payload cannot outlive the drain.
+func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline time.Time) (_ []byte, err error) {
+	if c.loadLocalFrameBroken.Load() {
+		return nil, moerr.NewInvalidInputNoCtx("unfinished LOCAL frame requires discard or disconnect")
+	}
+	f := &c.loadLocalFrame
 	defer func() {
 		if rErr := recover(); rErr != nil {
-			_, ok := rErr.(*moerr.Error)
-			if !ok {
-				err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
-			} else {
-				err = errors.Join(err, rErr.(error))
-			}
+			err = errors.Join(err, moerr.ConvertPanicError(context.Background(), rErr))
 		}
 		if err != nil {
+			// Counts include n>0 together with an error. Only our own deadline
+			// interrupt is resumable; EOF, ordinary timeout and invalid framing
+			// remain terminal even if some bytes were delivered.
+			var netErr net.Error
+			f.interrupted = c.loadLocalIOInterrupt.Load() && errors.As(err, &netErr) && netErr.Timeout()
+			if f.headerBytes+f.payloadBytes > 0 {
+				c.loadLocalFrameBroken.Store(true)
+			}
 			c.FreeLoadLocal()
 		}
 	}()
-	err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, c.loadLocalReadTimeout)
+	f.headerBytes, err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, timeout, deadline)
 	if err != nil {
-		return
+		return nil, err
 	}
-	packetLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
-	sequenceId := c.header[3]
-	c.sequenceId = sequenceId + 1
-	if err = c.CheckAllowedPacketSize(packetLength); err != nil {
-		return
+	f.payloadLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+	c.sequenceId = c.header[3] + 1
+	f.decoded = true
+	if err = c.CheckAllowedPacketSize(f.payloadLength); err != nil {
+		return nil, err
 	}
-
-	if c.loadLocalBuf.data == nil {
-		c.loadLocalBuf.data, err = c.allocator.Alloc(packetLength)
-		if err != nil {
-			return
-		}
-	} else if len(c.loadLocalBuf.data) < packetLength {
+	if len(c.loadLocalBuf.data) < f.payloadLength {
 		c.loadLocalBuf.freeBuffUnsafe(c.allocator)
-		c.loadLocalBuf.data, err = c.allocator.Alloc(packetLength)
+		c.loadLocalBuf.data, err = c.allocator.Alloc(f.payloadLength)
 		if err != nil {
-			return
+			return nil, err
 		}
 	}
-
-	err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, c.loadLocalReadTimeout)
+	// Test barrier: the upload owns a complete header but no payload yet.
+	_, _, _ = fault.TriggerFault("load-local-packet-header")
+	f.payloadBytes, err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, f.payloadLength, timeout, deadline)
 	if err != nil {
-		return
+		return nil, err
 	}
-	return c.loadLocalBuf.data[:packetLength], err
+	payload := c.loadLocalBuf.data[:f.payloadLength]
+	*f = loadLocalFrameProgress{}
+	return payload, nil
 }
 
-// ReadNBytesIntoBufWithTimeout reads specified bytes from the network with a timeout.
-// This is used for LOAD DATA LOCAL operations.
-func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Duration) error {
+// DiscardLoadLocalPacket completes an interrupted frame before reading another
+// header. It never exposes payload to SQL and allocates at most 32 KiB of
+// reusable scratch, irrespective of a client's declared packet size. The byte
+// budget and absolute deadline include the interrupted frame's remainder.
+func (c *Conn) DiscardLoadLocalPacket(timeout time.Duration, deadline time.Time, budget int64) (discarded int64, eof bool, err error) {
+	f := &c.loadLocalFrame
+	if c.loadLocalFrameBroken.Load() && !f.interrupted {
+		return 0, false, moerr.NewInvalidInputNoCtx("LOCAL packet framing is broken")
+	}
+	// Keep packet I/O and allocation panics inside the existing frontend
+	// recovery boundary, then invalidate framing just as for returned errors.
+	err, _ = ExecuteFuncWithRecover(func() error {
+		if f.headerBytes < HeaderLengthOfTheProtocol {
+			var n int
+			n, err = c.ReadNBytesIntoBufWithTimeout(c.header[f.headerBytes:], HeaderLengthOfTheProtocol-f.headerBytes, timeout, deadline)
+			f.headerBytes += n
+			if err != nil {
+				return err
+			}
+		}
+		if !f.decoded {
+			f.payloadLength = int(uint32(c.header[0]) | uint32(c.header[1])<<8 | uint32(c.header[2])<<16)
+			c.sequenceId = c.header[3] + 1
+			f.decoded = true
+			if err = c.CheckAllowedPacketSize(f.payloadLength); err != nil {
+				return err
+			}
+		}
+		remaining := f.payloadLength - f.payloadBytes
+		if int64(remaining) > budget {
+			return moerr.NewInvalidInputNoCtx("LOCAL upload exceeds drain byte budget")
+		}
+		if remaining > 0 && len(c.loadLocalBuf.data) == 0 {
+			c.loadLocalBuf.data, err = c.allocator.Alloc(min(remaining, 32*1024))
+			if err != nil {
+				return err
+			}
+		}
+		for remaining > 0 {
+			var n int
+			n, err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, min(remaining, len(c.loadLocalBuf.data)), timeout, deadline)
+			f.payloadBytes += n
+			discarded += int64(n)
+			remaining -= n
+			if err != nil {
+				return err
+			}
+		}
+		eof = f.payloadLength == 0
+		*f = loadLocalFrameProgress{}
+		c.loadLocalFrameBroken.Store(false) // a complete frame, not an interrupt clear, proves this boundary
+		return nil
+	})
+	if err != nil {
+		c.loadLocalFrameBroken.Store(true)
+		f.interrupted = false
+	}
+	return
+}
+
+// ReadNBytesIntoBufWithTimeout reads n bytes from the network into buf with a
+// timeout. This is used for LOAD DATA LOCAL packet framing, so it also reports
+// how many bytes were consumed before a failure: a caller that loses bytes
+// mid-frame no longer sits on a packet boundary. Bytes and error can arrive in
+// the SAME underlying read (the io.Reader/net.Conn contract allows n > 0 with
+// err != nil — e.g. bytes copied out before a deadline fires), so the count is
+// credited before the error is checked; dropping those bytes would pretend the
+// frame was never entered.
+func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Duration, deadline time.Time) (int, error) {
 	var err error
 	var read int
 	var readLength int
 	for readLength < n {
-		read, err = c.ReadFromConnWithTimeout(buf[readLength:n], timeout)
-		if err != nil {
-			return err
-		}
+		read, err = c.ReadFromConnWithTimeout(buf[readLength:n], timeout, deadline)
 		readLength += read
+		if err != nil {
+			return readLength, err
+		}
 	}
-	return err
+	return readLength, nil
+}
+
+// LoadLocalFramingBroken reports an unfinished or invalid LOCAL frame. Only
+// a successful discard from recorded progress can restore its packet boundary;
+// clearing I/O deadlines alone cannot do so.
+func (c *Conn) LoadLocalFramingBroken() bool {
+	return c.loadLocalFrameBroken.Load()
 }
 
 func (c *Conn) FreeLoadLocal() {
@@ -755,16 +868,41 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 
 // ReadFromConnWithTimeout reads from the network with a specific timeout.
 // This is used for LOAD DATA LOCAL operations where we need timeout detection.
-func (c *Conn) ReadFromConnWithTimeout(buf []byte, timeout time.Duration) (int, error) {
+// A nonzero deadline additionally caps this network read at that absolute
+// point (including a partial header or payload read), so one stalling packet
+// cannot outlive a bounded drain; a pending cancellation interrupt wins over
+// both and unblocks the read right away instead of being covered again.
+func (c *Conn) ReadFromConnWithTimeout(buf []byte, timeout time.Duration, deadline time.Time) (int, error) {
 	var err error
 	if timeout > 0 {
-		err = c.conn.SetReadDeadline(time.Now().Add(timeout))
+		// The flag check and the deadline install are one critical section
+		// with the cancellation watcher (and the owner clear): an interrupt
+		// landing between them can no longer be overwritten by this install —
+		// either the flag is already visible when the deadline is chosen, or
+		// the watcher expires the armed deadline right after the lock, and
+		// this read unblocks instead of hanging to the session timeout.
+		c.loadLocalMu.Lock()
+		readDeadline := time.Now().Add(timeout)
+		if !deadline.IsZero() && deadline.Before(readDeadline) {
+			readDeadline = deadline
+		}
+		if c.loadLocalIOInterrupt.Load() {
+			// The watcher expired this connection before the read installed its
+			// own deadline; re-arm an already-expired deadline so the read
+			// still fails fast, then the upload owner decides between drain
+			// and connection retirement.
+			readDeadline = time.Now()
+		}
+		err = c.conn.SetReadDeadline(readDeadline)
+		c.loadLocalMu.Unlock()
 		if err != nil {
 			return 0, err
 		}
 		// Clear the deadline after reading
 		defer func() {
+			c.loadLocalMu.Lock()
 			_ = c.conn.SetReadDeadline(time.Time{})
+			c.loadLocalMu.Unlock()
 		}()
 	}
 	return c.conn.Read(buf)
@@ -1059,6 +1197,41 @@ func (c *Conn) Disconnect() error {
 		return c.conn.Close()
 	}
 	return nil
+}
+
+// InterruptLoadLocalIO unblocks any in-flight LOAD LOCAL network read or write
+// by expiring both deadlines, without closing the connection. The interrupt
+// flag outlives the expired deadline: a load-local read started after the
+// interrupt re-arms an already-expired deadline instead of installing a fresh
+// long one, so a cancellation that lands between two reads is not lost. The
+// upload owner checks cancellation afterwards and decides between draining the
+// finite remainder and disconnecting.
+func (c *Conn) InterruptLoadLocalIO() {
+	c.loadLocalMu.Lock()
+	defer c.loadLocalMu.Unlock()
+	c.loadLocalIOInterrupt.Store(true)
+	if c.conn == nil {
+		return
+	}
+	now := time.Now()
+	_ = c.conn.SetReadDeadline(now)
+	_ = c.conn.SetWriteDeadline(now)
+}
+
+// ClearLoadLocalIOInterrupt lifts the interrupt flag so the connection can be
+// drained (or later reused for the next command), and removes any deadlines
+// left by InterruptLoadLocalIO. Every timed load-local read already reinstalls
+// its own deadline. Only the upload owner may call this, after the
+// cancellation watcher has been joined.
+func (c *Conn) ClearLoadLocalIOInterrupt() {
+	c.loadLocalMu.Lock()
+	defer c.loadLocalMu.Unlock()
+	c.loadLocalIOInterrupt.Store(false)
+	if c.conn == nil {
+		return
+	}
+	_ = c.conn.SetReadDeadline(time.Time{})
+	_ = c.conn.SetWriteDeadline(time.Time{})
 }
 
 // Reset does not release fix buffer but release dynamical buffer
