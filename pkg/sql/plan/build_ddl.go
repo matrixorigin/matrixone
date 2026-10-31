@@ -2350,6 +2350,89 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 	return nil
 }
 
+// alterSequenceOptionSQL formats one sequence option node without its
+// surrounding whitespace so the synthesized parts can be joined canonically.
+func alterSequenceOptionSQL(node tree.NodeFormatter) string {
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	node.Format(fmtCtx)
+	return strings.TrimSpace(fmtCtx.String())
+}
+
+// AlterSequenceCreateSQLForCatalog renders the canonical CREATE SEQUENCE an
+// ALTER leaves behind (#30679): rel_createsql and SHOW CREATE must never hold
+// the raw ALTER text, and the stored statement must stay replayable. The
+// ALTER text can only be canonicalized from the clauses the statement itself
+// carries at plan time; options it does not name keep their stored values,
+// which only execution can see.
+func AlterSequenceCreateSQLForCatalog(stmt *tree.AlterSequence, database, tableName string) string {
+	var parts []string
+	if stmt.Type != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.Type))
+	}
+	if stmt.IncrementBy != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.IncrementBy))
+	}
+	if stmt.MinValue != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.MinValue))
+	}
+	if stmt.MaxValue != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.MaxValue))
+	}
+	if stmt.StartWith != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.StartWith))
+	}
+	if stmt.Cycle != nil {
+		parts = append(parts, alterSequenceOptionSQL(stmt.Cycle))
+	}
+	nameCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	nameCtx.WriteString("create sequence if not exists ")
+	nameCtx.WriteIdentifier(tree.Identifier(database))
+	nameCtx.WriteByte('.')
+	nameCtx.WriteIdentifier(tree.Identifier(tableName))
+	createSQL := nameCtx.String()
+	if len(parts) > 0 {
+		createSQL += " " + strings.Join(parts, " ")
+	}
+	return createSQL
+}
+
+// AlterSequenceEffectiveDefinition carries the validated effective
+// definition of an ALTER SEQUENCE exactly as execution persists it (#30679;
+// v12-review F2): type, increment, bounds, effective start and cycle. The
+// catalog text synthesized from it is complete — replaying it recreates a
+// sequence with exactly this definition. Numeric clauses are formatted in
+// the type's numeric domain by the caller, identical to the persisted row.
+type AlterSequenceEffectiveDefinition struct {
+	TypeSQL   string // canonical type keyword(s), e.g. "bigint", "int unsigned"
+	Increment int64
+	MinValue  string
+	MaxValue  string
+	Start     string
+	Cycle     bool
+}
+
+// AlterSequenceEffectiveCreateSQL renders the canonical complete CREATE
+// SEQUENCE of one validated effective ALTER definition for rel_createsql
+// and SHOW CREATE consumers: every clause is present with its effective
+// value, not only the clauses the ALTER statement named.
+func AlterSequenceEffectiveCreateSQL(database, tableName string, def AlterSequenceEffectiveDefinition) string {
+	nameCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteIdentifier())
+	nameCtx.WriteString("create sequence if not exists ")
+	nameCtx.WriteIdentifier(tree.Identifier(database))
+	nameCtx.WriteByte('.')
+	nameCtx.WriteIdentifier(tree.Identifier(tableName))
+	var sb strings.Builder
+	sb.WriteString(nameCtx.String())
+	fmt.Fprintf(&sb, " as %s increment by %d minvalue %s maxvalue %s start with %s",
+		def.TypeSQL, def.Increment, def.MinValue, def.MaxValue, def.Start)
+	if def.Cycle {
+		sb.WriteString(" cycle")
+	} else {
+		sb.WriteString(" no cycle")
+	}
+	return sb.String()
+}
+
 func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, as *plan.AlterSequence) error {
 	// Sequence table got 1 row and 7 col
 	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
@@ -2433,8 +2516,10 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 			Value: catalog.SystemSequenceRel,
 		},
 		{
+			// #30679: never persist the raw ALTER text; rel_createsql must
+			// replay as a CREATE SEQUENCE after a successful ALTER.
 			Key:   catalog.SystemRelAttr_CreateSQL,
-			Value: ctx.GetRootSql(),
+			Value: AlterSequenceCreateSQLForCatalog(stmt, as.GetDatabase(), as.TableDef.GetName()),
 		},
 	}
 
@@ -6228,7 +6313,7 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 	// non-temporary result means that the requested temporary table is absent.
 	if tableDef == nil || (temporary && !tableDef.IsTemporary) {
 		if !dropTable.IfExists {
-			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
+			return nil, moerr.NewErrDropNonExistsTable(ctx.GetContext(), dropTable.Database, dropTable.Table)
 		}
 		return dropTable, nil
 	}
@@ -6962,7 +7047,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 			// An empty index name represents the no-op path for DROP INDEX IF EXISTS.
 			dropIndex.IndexName = ""
 		} else {
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", requestedIndexName)
+			return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), requestedIndexName)
 		}
 	} else {
 		// MySQL equivalent-key transition: when the dropped key is recorded by

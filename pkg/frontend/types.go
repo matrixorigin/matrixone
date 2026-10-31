@@ -452,6 +452,28 @@ func (cursor *preparedStmtCursor) close() {
 	cursor.owner = nil
 }
 
+// resetAttempt discards the row set one failed statement generation
+// retained while preserving the statement-lifetime cursor state: the frozen
+// result metadata installed exactly once per EXECUTE before the pipeline
+// started (setPreparedCursorColumns) plus the retention limits and owner.
+// The compiler retries a cursor execute internally without repeating that
+// installation, so Columns must survive the retry transition; the retried
+// generation decodes and appends against them. The session byte reservation
+// of the discarded generation returns to the shared budget (#30359 review).
+func (cursor *preparedStmtCursor) resetAttempt() {
+	if cursor == nil {
+		return
+	}
+	if cursor.owner != nil && cursor.bytes > 0 {
+		cursor.owner.releasePreparedCursorBytes(cursor.bytes)
+	}
+	if cursor.result != nil {
+		cursor.result.Data = nil
+	}
+	cursor.offset = 0
+	cursor.bytes = 0
+}
+
 func (prepareStmt *PrepareStmt) closeCursor() {
 	if prepareStmt == nil {
 		return
@@ -1943,10 +1965,12 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 			return err
 		}
 	}
-	// These values shape bound defaults, constant-folded expressions, LOAD validation or planned index scan options.
+	// These values shape bound defaults, constant-folded expressions, LOAD validation, planned index scan options,
+	// or the join/aggregate/sort spill thresholds baked into Node.SpillMem at plan-build time.
 	// Compare converted values so equivalent SET spellings retain warm plans.
 	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn" ||
-		name == "fulltext2_search_df_cutoff" || name == "fulltext2_threads_search" || name == "fulltext_bloom_filter_pushdown"
+		name == "fulltext2_search_df_cutoff" || name == "fulltext2_threads_search" || name == "fulltext_bloom_filter_pushdown" ||
+		name == "join_spill_mem" || name == "agg_spill_mem" || name == "sort_spill_mem"
 	var oldPlanDependency interface{}
 	if planDependencyVariable {
 		oldValue, getErr := ses.GetSessionSysVar(name)

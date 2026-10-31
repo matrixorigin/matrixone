@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -41,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -54,6 +57,143 @@ func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
 	fs, err := fileservice.NewLocalETLFS(fsName, dir)
 	assert.Nil(t, err)
 	return fs
+}
+
+// queryResultDeleteFailFS wraps the test FileService with a switchable
+// Delete failure, used to prove attempt-cleanup error propagation and
+// ownership retention under a failed deletion (#30359 review).
+type queryResultDeleteFailFS struct {
+	fileservice.FileService
+	failDelete atomic.Bool
+}
+
+func (fs *queryResultDeleteFailFS) Delete(ctx context.Context, paths ...string) error {
+	if fs.failDelete.Load() {
+		return moerr.NewInternalError(ctx, "injected query-result delete failure")
+	}
+	return fs.FileService.Delete(ctx, paths...)
+}
+
+// A deletion failure inside the attempt-output discard must surface from
+// the callback instead of being hidden, the failed cleanup must keep its
+// ownership (cursorResultSaver and the staged bookkeeping) so terminal
+// statement cleanup can still reach the surviving files, and no replay is
+// rebuilt over them (proven at the compiler level by
+// TestCompileRunRetryDiscardOutputErrorPreventsReplay) (#30359 review).
+func TestRetryDiscardOutputRetainsSaverOnCleanupFailure(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ses := newTestSession(t, ctrl)
+			ses.proc.Base.SessionInfo.Account = sysAccountName
+			ses.proc.Base.SessionInfo.Role = moAdminRoleName
+			_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
+			defer ses.Close()
+
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        sysAccountName,
+				User:          rootName,
+				DefaultRole:   moAdminRoleName,
+				TenantID:      sysAccountID,
+				UserID:        rootID,
+				DefaultRoleID: moAdminRoleID,
+			})
+
+			proc := testutil.NewProcess(t)
+			pu := getPu("")
+			injectFS := &queryResultDeleteFailFS{FileService: pu.FileService}
+			pu.FileService = injectFS
+			defer func() { pu.FileService = injectFS.FileService }()
+			proc.Base.FileService = pu.FileService
+			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+			ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+				reqCtx: context.TODO(),
+				proc:   proc,
+				ses:    ses,
+			}
+			execCtx := ses.GetTxnCompileCtx().execCtx
+
+			ses.rs = &plan.ResultColDef{ResultCols: []*plan.ColDef{
+				{Name: "a", Typ: plan.Type{Id: int32(types.T_int8)}},
+			}}
+			testUUID := uuid.NullUUID{}.UUID
+			ses.tStmt = &motrace.StatementInfo{StatementID: testUUID}
+
+			ctx := context.Background()
+			asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a from orders", 1)
+			require.NoError(t, err)
+			ses.ast = asts[0]
+			ses.p = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{Name: "orders"}},
+			}}}}
+
+			// The failed generation stages two result blocks through the
+			// production cursor staging path.
+			typs := []types.Type{types.T_int8.ToType()}
+			crs := &perfcounter.CounterSet{}
+			// Stage does not take ownership of the batches: retain them
+			// and clean them with their allocating pool (file convention).
+			first := newBatch(typs, 2, proc)
+			defer first.Clean(proc.Mp())
+			second := newBatch(typs, 3, proc)
+			defer second.Clean(proc.Mp())
+			require.NoError(t, stagePreparedCursorQueryResult(execCtx, crs, first))
+			require.NoError(t, stagePreparedCursorQueryResult(execCtx, crs, second))
+			saver, ok := execCtx.cursorResultSaver.(*QueryResult)
+			require.True(t, ok, "production installs the real QueryResult saver")
+			blockPath1 := catalog.BuildQueryResultPath(sysAccountName, testUUID.String(), 1)
+			blockPath2 := catalog.BuildQueryResultPath(sysAccountName, testUUID.String(), 2)
+			_, err = pu.FileService.StatFile(ctx, blockPath1)
+			require.NoError(t, err, "the first staged block exists before the retry transition")
+			_, err = pu.FileService.StatFile(ctx, blockPath2)
+			require.NoError(t, err, "the second staged block exists before the retry transition")
+			require.Equal(t, 2, ses.blockIdx)
+			require.Equal(t, uint64(5), ses.savedRowCount)
+			stagedSize := ses.curResultSize
+			require.NotZero(t, stagedSize)
+
+			// The injected deletion failure must surface from the discard
+			// callback instead of being hidden behind the retry.
+			injectFS.failDelete.Store(true)
+			err = discardPreparedCursorRetryOutput(execCtx)
+			require.Error(t, err, "the discard callback reports the attempt-cleanup failure")
+			require.Contains(t, err.Error(), "injected query-result delete failure")
+
+			// The failed cleanup keeps its ownership: the saver slot stays
+			// armed so terminal cleanup can still reach the surviving
+			// files, and the staged bookkeeping still describes them.
+			slotSaver, ok := execCtx.cursorResultSaver.(*QueryResult)
+			require.True(t, ok, "the failed cleanup keeps the saver owner of the surviving staged files")
+			require.Same(t, saver, slotSaver)
+			require.False(t, saver.aborted, "a failed deletion never claims the abort completed")
+			require.Equal(t, 2, ses.blockIdx, "staged bookkeeping survives a failed deletion")
+			require.Equal(t, uint64(5), ses.savedRowCount)
+			require.Equal(t, uint64(5), ses.queryRowCount)
+			require.Equal(t, stagedSize, ses.curResultSize)
+			_, statErr := pu.FileService.StatFile(ctx, blockPath1)
+			require.NoError(t, statErr, "no premature cleanup runs on a failed deletion")
+			_, statErr = pu.FileService.StatFile(ctx, blockPath2)
+			require.NoError(t, statErr)
+
+			// No replay follows a cleanup failure; at statement teardown
+			// the retained owner lets terminal cleanup re-attempt and
+			// complete the deletion of the surviving files.
+			injectFS.failDelete.Store(false)
+			execCtx.Close()
+			require.Nil(t, execCtx.cursorResultSaver,
+				"terminal cleanup consumes the retained owner")
+			_, statErr = pu.FileService.StatFile(ctx, blockPath1)
+			require.Error(t, statErr, "terminal cleanup deletes the surviving staged blocks")
+			_, statErr = pu.FileService.StatFile(ctx, blockPath2)
+			require.Error(t, statErr)
+			require.True(t, saver.aborted)
+			require.Zero(t, ses.blockIdx)
+			require.Zero(t, ses.savedRowCount)
+			require.Zero(t, ses.queryRowCount)
+			require.Zero(t, ses.curResultSize)
+		})
 }
 
 func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
@@ -660,6 +800,274 @@ func TestGetQueryResultMetaKeepsOriginCase(t *testing.T) {
 				assert.Equal(t, "AbC", retCols[0].Name)
 				assert.Equal(t, "DeF", retCols[1].Name)
 			}
+		})
+}
+
+// Retry-staging abort oracle (#30359 review): a failed cursor generation
+// aborts only its own staged saved-result blocks. The session's authorized
+// statement plan is statement-lifetime state — computation_wrapper installs
+// it once before Run and internal retries never re-send it — so the attempt
+// abort must preserve it: the retried generation's publication re-serializes
+// the plan and its Plan/Tables provenance, and the result_scan privilege
+// consumer (checkPrivilege -> authenticateCanExecuteStatementAndPlan) reads
+// that provenance from the saved meta. The terminal Abort keeps clearing
+// the plan.
+func TestCursorRetryAbortAttemptPreservesPlanForPublication(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ses := newTestSession(t, ctrl)
+			ses.proc.Base.SessionInfo.Account = sysAccountName
+			ses.proc.Base.SessionInfo.Role = moAdminRoleName
+			_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
+			defer ses.Close()
+
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        sysAccountName,
+				User:          rootName,
+				DefaultRole:   moAdminRoleName,
+				TenantID:      sysAccountID,
+				UserID:        rootID,
+				DefaultRoleID: moAdminRoleID,
+			})
+
+			proc := testutil.NewProcess(t)
+			proc.Base.FileService = getPu("").FileService
+			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+			ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+				reqCtx: context.TODO(),
+				proc:   proc,
+				ses:    ses,
+			}
+			execCtx := ses.GetTxnCompileCtx().execCtx
+
+			ses.rs = &plan.ResultColDef{ResultCols: []*plan.ColDef{
+				{Name: "a", Typ: plan.Type{Id: int32(types.T_int8)}},
+			}}
+			testUUID := uuid.NullUUID{}.UUID
+			ses.tStmt = &motrace.StatementInfo{StatementID: testUUID}
+
+			ctx := context.Background()
+			asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a from orders", 1)
+			require.NoError(t, err)
+			ses.ast = asts[0]
+			ses.p = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{Name: "orders"}},
+			}}}}
+			authorizedPlan := ses.p
+			wantPlan, err := ses.p.Marshal()
+			require.NoError(t, err)
+			require.NotEmpty(t, wantPlan)
+
+			// The failed generation stages one result block through the
+			// production cursor staging path.
+			typs := []types.Type{types.T_int8.ToType()}
+			crs := &perfcounter.CounterSet{}
+			// Stage does not take ownership of the batch: retain it and
+			// clean it with its allocating pool (file convention).
+			stagedBlock := newBatch(typs, 2, proc)
+			defer stagedBlock.Clean(proc.Mp())
+			require.NoError(t, stagePreparedCursorQueryResult(execCtx, crs, stagedBlock))
+			saver, ok := execCtx.cursorResultSaver.(*QueryResult)
+			require.True(t, ok, "production installs the real QueryResult saver")
+			blockPath := catalog.BuildQueryResultPath(sysAccountName, testUUID.String(), 1)
+			_, err = getPu("").FileService.StatFile(ctx, blockPath)
+			require.NoError(t, err, "the staged block exists before the retry transition")
+
+			// The compiler's retry transition discards only the attempt's
+			// staging: the staged block is deleted and the accounting
+			// resets, while the authorized plan and its table provenance
+			// survive for the retried generation's publication.
+			require.NoError(t, discardPreparedCursorRetryOutput(execCtx))
+			require.Nil(t, execCtx.cursorResultSaver)
+			require.True(t, saver.aborted)
+			_, err = getPu("").FileService.StatFile(ctx, blockPath)
+			require.Error(t, err, "the failed generation's staged block is deleted")
+			require.Same(t, authorizedPlan, ses.p,
+				"internal retries never re-send the plan, so the abort must preserve it")
+			gotPlan, err := ses.p.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, wantPlan, gotPlan)
+			require.Equal(t, "orders", getTablesFromPlan(ses.p))
+
+			// The retried generation stages and the statement publishes:
+			// the saved meta keeps the plan and table provenance.
+			stagedRetryBlock := newBatch(typs, 2, proc)
+			defer stagedRetryBlock.Clean(proc.Mp())
+			require.NoError(t, stagePreparedCursorQueryResult(execCtx, crs, stagedRetryBlock))
+			require.NoError(t, stagePreparedCursorQueryResult(execCtx, crs, nil))
+			require.NoError(t, saveMeta(ctx, ses))
+			reader, err := ioutil.NewFileReader(getPu("").FileService,
+				catalog.BuildQueryResultMetaPath(sysAccountName, testUUID.String()))
+			require.NoError(t, err)
+			metas, closeCB, err := reader.LoadAllColumns(ctx,
+				[]uint16{catalog.PLAN_IDX, catalog.TABLES_IDX}, ses.GetMemPool())
+			require.NoError(t, err)
+			defer func() {
+				if closeCB != nil {
+					closeCB()
+				}
+			}()
+			savedPlan := metas[0].Vecs[0].UnsafeGetStringAt(0)
+			require.NotEmpty(t, savedPlan, "publication serializes the preserved plan")
+			require.Equal(t, "orders", metas[0].Vecs[1].GetStringAt(0))
+			restored := &plan.Plan{}
+			require.NoError(t, restored.Unmarshal([]byte(savedPlan)))
+			require.Equal(t, "orders", getTablesFromPlan(restored))
+
+			// The privilege consumer enforces against the restored
+			// provenance saved by the retried generation's publication.
+			_, err = checkPrivilege("", []string{testUUID.String()}, ctx, ses)
+			require.NoError(t, err)
+
+			// The terminal abort keeps clearing the plan: statement-final
+			// semantics are unchanged.
+			fresh := &QueryResult{}
+			require.NoError(t, fresh.Abort(execCtx))
+			require.Nil(t, ses.p)
+		})
+}
+
+// PERFORM saved-result attempt abort (#30359 review, tier-2 statement
+// retry): a failed PERFORM generation persists its batches through the
+// session-level defResultSaver (resp_client.saveResultBatch) without
+// marking the statement published, so its blocks and row accounting would
+// blend into the retried generation's final saved result — stale rows in
+// the data files and inflated SaveRowCount/QueryRowCount in the meta. The
+// transition-time abort must delete exactly the failed generation's blocks
+// and reset the counters while preserving statement metadata (the column
+// schema ses.rs and the authorized statement plan ses.p, both installed
+// once before Run and never re-sent by an internal retry). The final
+// saved result then holds exactly the retried generation's contents.
+func TestRetryDiscardOutputAbortsPerformSavedResult(t *testing.T) {
+	ioutil.RunPipelineTest(
+		func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			ses := newTestSession(t, ctrl)
+			ses.proc.Base.SessionInfo.Account = sysAccountName
+			ses.proc.Base.SessionInfo.Role = moAdminRoleName
+			_ = ses.SetSessionSysVar(context.TODO(), "save_query_result", int8(1))
+			defer ses.Close()
+
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        sysAccountName,
+				User:          rootName,
+				DefaultRole:   moAdminRoleName,
+				TenantID:      sysAccountID,
+				UserID:        rootID,
+				DefaultRoleID: moAdminRoleID,
+			})
+
+			proc := testutil.NewProcess(t)
+			proc.Base.FileService = getPu("").FileService
+			proc.Base.SessionInfo = process.SessionInfo{Account: sysAccountName}
+			ses.GetTxnCompileCtx().execCtx = &ExecCtx{
+				reqCtx: context.TODO(),
+				proc:   proc,
+				ses:    ses,
+				stmt:   &tree.Select{IsPerform: true},
+			}
+			execCtx := ses.GetTxnCompileCtx().execCtx
+
+			ses.rs = &plan.ResultColDef{ResultCols: []*plan.ColDef{
+				{Name: "a", Typ: plan.Type{Id: int32(types.T_int8)}},
+			}}
+			testUUID := uuid.NullUUID{}.UUID
+			ses.tStmt = &motrace.StatementInfo{StatementID: testUUID}
+
+			ctx := context.Background()
+			asts, err := parsers.Parse(ctx, dialect.MYSQL, "perform select a from orders", 1)
+			require.NoError(t, err)
+			ses.ast = asts[0]
+			ses.p = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{
+				{NodeType: plan.Node_TABLE_SCAN, TableDef: &plan.TableDef{Name: "orders"}},
+			}}}}
+			authorizedPlan := ses.p
+			statementResultSet := ses.rs
+
+			// The failed generation persists two rows through the
+			// production saved-result writer (the receiver MysqlResp.binWr
+			// holds): block on disk, accounting on the session.
+			typs := []types.Type{types.T_int8.ToType()}
+			crs := &perfcounter.CounterSet{}
+			failedBlock := newBatch(typs, 2, proc)
+			defer failedBlock.Clean(proc.Mp())
+			require.NoError(t, defResultSaver.Write(execCtx, crs, failedBlock))
+			blockPath := catalog.BuildQueryResultPath(sysAccountName, testUUID.String(), 1)
+			_, err = getPu("").FileService.StatFile(ctx, blockPath)
+			require.NoError(t, err, "the failed generation's saved block exists before the retry transition")
+			require.Equal(t, uint64(2), ses.savedRowCount)
+			require.Equal(t, uint64(2), ses.queryRowCount)
+			require.NotZero(t, ses.curResultSize)
+			require.Positive(t, ses.blockIdx)
+
+			// The armed transition-time discard aborts exactly that attempt
+			// state: the block is deleted and the accounting resets, while
+			// statement metadata survives for the retried generation.
+			require.NoError(t, abortPerformAttemptSavedResult(execCtx))
+			_, err = getPu("").FileService.StatFile(ctx, blockPath)
+			require.Error(t, err, "the failed generation's block is deleted")
+			require.Zero(t, ses.blockIdx)
+			require.Zero(t, ses.savedRowCount)
+			require.Zero(t, ses.queryRowCount)
+			require.Zero(t, ses.curResultSize)
+			require.Same(t, authorizedPlan, ses.p,
+				"internal retries never re-send the plan, so the abort must preserve it")
+			require.Same(t, statementResultSet, ses.rs,
+				"the column schema is installed once before Run and survives the abort")
+
+			// A discard is a safe no-op when the failed generation
+			// retained nothing (failure before the first persisted batch).
+			require.NoError(t, abortPerformAttemptSavedResult(execCtx))
+			require.Same(t, authorizedPlan, ses.p)
+
+			// The retried generation persists three rows and the statement
+			// finalizes: the saved result holds exactly the retried
+			// generation's contents — one block of three rows and meta
+			// counts that never saw the failed generation.
+			retriedBlock := newBatch(typs, 3, proc)
+			defer retriedBlock.Clean(proc.Mp())
+			require.NoError(t, defResultSaver.Write(execCtx, crs, retriedBlock))
+			require.NoError(t, defResultSaver.Write(execCtx, crs, nil),
+				"finalization writes the meta from the retried generation's counters")
+			_, err = getPu("").FileService.StatFile(ctx,
+				catalog.BuildQueryResultPath(sysAccountName, testUUID.String(), 2))
+			require.Error(t, err, "no stale extra block blends into the saved result")
+
+			metaReader, err := ioutil.NewFileReader(getPu("").FileService,
+				catalog.BuildQueryResultMetaPath(sysAccountName, testUUID.String()))
+			require.NoError(t, err)
+			metas, closeMeta, err := metaReader.LoadAllColumns(ctx,
+				[]uint16{catalog.SAVED_ROW_COUNT_IDX, catalog.QUERY_ROW_COUNT_IDX}, ses.GetMemPool())
+			require.NoError(t, err)
+			defer func() {
+				if closeMeta != nil {
+					closeMeta()
+				}
+			}()
+			require.Equal(t, uint64(3),
+				vector.MustFixedColWithTypeCheck[uint64](metas[0].Vecs[0])[0],
+				"SaveRowCount counts exactly the retried generation")
+			require.Equal(t, uint64(3),
+				vector.MustFixedColWithTypeCheck[uint64](metas[0].Vecs[1])[0],
+				"QueryRowCount counts exactly the retried generation")
+
+			dataReader, err := ioutil.NewFileReader(getPu("").FileService, blockPath)
+			require.NoError(t, err)
+			data, closeData, err := dataReader.LoadAllColumns(ctx, []uint16{0}, ses.GetMemPool())
+			require.NoError(t, err)
+			defer func() {
+				if closeData != nil {
+					closeData()
+				}
+			}()
+			require.Equal(t, []int8{0, 1, 2},
+				vector.MustFixedColWithTypeCheck[int8](data[0].Vecs[0]),
+				"the saved block holds exactly the retried generation's rows")
 		})
 }
 

@@ -291,6 +291,11 @@ type tableStuff struct {
 	retPool *retBatchList
 
 	bufPool *sync.Pool
+
+	// seqWatermarks is the merge-scoped sequence watermark accumulator
+	// (design §4 B), created by mergeDiffs before production and reconciled
+	// after the final flush. Nil for every other apply path.
+	seqWatermarks *sequenceWatermarkTracker
 }
 
 // resolvedSnapshots returns the effective per-side snapshot timestamps:

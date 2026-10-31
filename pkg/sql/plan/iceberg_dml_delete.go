@@ -720,7 +720,7 @@ func buildIcebergUpdateReplacementProjects(ctx context.Context, query *plan.Quer
 		if astExpr, ok := updates[strings.ToLower(col.Name)]; ok {
 			var expr *plan.Expr
 			if _, isDefault := astExpr.(*tree.DefaultVal); isDefault {
-				expr, err = getDefaultExprForAssignment(ctx, col, builder.compCtx.GetProcess(), stmt.Ignore)
+				expr, err = getDefaultExprForAssignment(ctx, col, tableDef.DbName, builder.compCtx.GetProcess(), stmt.Ignore)
 			} else {
 				expr, err = binder.BindExpr(astExpr, 0, true)
 			}

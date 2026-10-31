@@ -702,31 +702,31 @@ DROP TABLE IF EXISTS decimal02;
 CREATE TABLE decimal02(a DECIMAL(10,11));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a')) at line 1 column 39 near "));";
 DROP TABLE decimal02;
-no such table decimal.decimal02
+Unknown table 'decimal.decimal02'
 DROP TABLE IF EXISTS decimal03;
 CREATE TABLE decimal03(a DECIMAL(1.1,11));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near "1.1,11));";
 DROP TABLE decimal03;
-no such table decimal.decimal03
+Unknown table 'decimal.decimal03'
 DROP TABLE IF EXISTS decimal04;
 CREATE TABLE decimal04(a DECIMAL(11,-1));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near "-1));";
 DROP TABLE decimal04;
-no such table decimal.decimal04
+Unknown table 'decimal.decimal04'
 DROP TABLE IF EXISTS decimal05;
 CREATE TABLE decimal05(a DECIMAL(20,-1));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near "-1));";
 CREATE TABLE decimal05(b DECIMAL(-2,23));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 34 near "-2,23));";
 DROP TABLE decimal05;
-no such table decimal.decimal05
+Unknown table 'decimal.decimal05'
 DROP TABLE IF EXISTS decimal06;
 CREATE TABLE decimal06(a DECIMAL(66,10));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 65. at line 1 column 39 near "));";
 CREATE TABLE decimal06(b DECIMAL(67,39));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 65. at line 1 column 39 near "));";
 DROP TABLE decimal06;
-no such table decimal.decimal06
+Unknown table 'decimal.decimal06'
 DROP TABLE IF EXISTS decimal07;
 CREATE TABLE decimal07(a int PRIMARY KEY, b DECIMAL(38));
 INSERT INTO decimal07 VALUES(1, 3728193.3902);

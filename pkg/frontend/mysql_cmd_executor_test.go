@@ -6816,6 +6816,246 @@ func TestCapturePreparedCursorBatchErrorReleasesSessionBudget(t *testing.T) {
 	stmt.closeCursor()
 }
 
+// Retry-discard oracle (#30359 review N1): a cursor EXECUTE retains its
+// rows without publishing them, so a failed generation's captured prefix,
+// byte reservation and staged saved-result blocks survive the statement
+// retry unless the armed hook releases them. The cursor's frozen column
+// metadata is statement-lifetime state: production installs it exactly once
+// per EXECUTE before the pipeline starts (result_row_stmt.go
+// setPreparedCursorColumns) and the compiler's internal retry never repeats
+// the installation, so the discard must preserve it while releasing the
+// attempt's rows and reservation. After the discard the retried generation
+// re-captures into the kept cursor shell and decodes exactly its own rows,
+// and an empty retried generation keeps the metadata the EXECUTE response
+// guard requires. The hook arms only for cursor executes, and the
+// front-end helper tolerates empty state.
+func TestRetryDiscardOutputReleasesFailedCursorGeneration(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	failed := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 2)
+	defer failed.Clean(mp)
+	retried := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 3)
+	defer retried.Clean(mp)
+	setInt64 := func(bat *batch.Batch, vals ...int64) {
+		col := vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])
+		for i, v := range vals {
+			col[i] = v
+		}
+	}
+	setInt64(failed, 7, 8)
+	setInt64(retried, 11, 12, 13)
+
+	ses := &Session{}
+	ses.proc = testutil.NewProc(t)
+	stmt := &PrepareStmt{cursor: &preparedStmtCursor{}}
+	saver := &preparedCursorResultStager{}
+	execCtx := &ExecCtx{
+		reqCtx:            context.Background(),
+		ses:               ses,
+		prepareStmt:       stmt,
+		input:             &UserInput{isCursorExecute: true},
+		cursorResultSaver: saver,
+	}
+
+	// GetOutputCallback arms the retry discard exactly for cursor executes.
+	_ = ses.GetOutputCallback(execCtx)
+	hook := ses.proc.Base.SessionInfo.RetryDiscardOutput
+	require.NotNil(t, hook, "a cursor EXECUTE must arm the retry discard hook")
+	// A non-cursor statement never arms it (the per-statement SessionInfo
+	// rebuild clears any previous arming; emulate the reset here).
+	ses.proc.Base.SessionInfo.RetryDiscardOutput = nil
+	_ = ses.GetOutputCallback(&ExecCtx{
+		reqCtx: context.Background(), ses: ses,
+		prepareStmt: stmt,
+		input:       &UserInput{},
+	})
+	require.Nil(t, ses.proc.Base.SessionInfo.RetryDiscardOutput,
+		"non-cursor statements leave the discard hook unarmed")
+	callback := ses.GetOutputCallback(execCtx)
+
+	// The single per-EXECUTE metadata install of production
+	// (setPreparedCursorColumns); the capture decodes rows against it and
+	// the retry below never repeats the install.
+	(&MysqlResp{}).setPreparedCursorColumns(execCtx, []any{&MysqlColumn{}})
+
+	// The failed generation captures its prefix and stages saved results.
+	require.NoError(t, callback(failed, nil))
+	require.Equal(t, uint64(2), stmt.cursor.result.GetRowCount())
+	require.NotZero(t, stmt.cursor.bytes)
+	require.Equal(t, stmt.cursor.bytes, ses.preparedCursorBytes.Load())
+	require.Equal(t, 1, saver.nonNilBatches)
+
+	// Transition-time discard: the attempt's rows, its session byte
+	// reservation and the staged result blocks are released, while the
+	// frozen metadata, retention limits and owner of the
+	// statement-lifetime cursor shell survive for the retried generation.
+	require.NoError(t, ses.proc.Base.SessionInfo.RetryDiscardOutput())
+	require.NotNil(t, stmt.cursor.result,
+		"internal retries never re-install cursor metadata, so the shell must survive")
+	require.Len(t, stmt.cursor.result.Columns, 1)
+	require.Zero(t, stmt.cursor.result.GetRowCount())
+	require.Zero(t, stmt.cursor.offset)
+	require.Zero(t, stmt.cursor.bytes)
+	require.Zero(t, ses.preparedCursorBytes.Load(),
+		"the failed generation's byte reservation returns to the session budget")
+	require.Equal(t, 1, saver.aborted)
+	require.Nil(t, execCtx.cursorResultSaver)
+	require.Same(t, ses, stmt.cursor.owner)
+	require.True(t, stmt.cursor.maxBytesSet)
+
+	// The retried generation re-captures with NO second metadata install:
+	// the retained set is exactly the retried result decoded against the
+	// preserved frozen columns — no stale prefix, no rows lost.
+	require.NoError(t, callback(retried, nil))
+	require.Equal(t, uint64(3), stmt.cursor.result.GetRowCount())
+	require.Equal(t, [][]interface{}{{int64(11)}, {int64(12)}, {int64(13)}},
+		stmt.cursor.result.Data)
+	require.Equal(t, stmt.cursor.bytes, ses.preparedCursorBytes.Load())
+	stmt.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+
+	// An empty retried generation appends no batches: the preserved frozen
+	// metadata still satisfies the EXECUTE response guard
+	// (respStreamResultRow errors 'prepared cursor result metadata is
+	// missing' when the result or its columns are gone), so the wire
+	// terminator can be emitted and COM_STMT_FETCH owns LAST_ROW_SENT.
+	empty := &PrepareStmt{cursor: &preparedStmtCursor{}}
+	emptyCtx := &ExecCtx{
+		reqCtx: context.Background(), ses: ses,
+		prepareStmt: empty,
+		input:       &UserInput{isCursorExecute: true},
+	}
+	ses.proc.Base.SessionInfo.RetryDiscardOutput = nil
+	emptyCallback := ses.GetOutputCallback(emptyCtx)
+	require.NotNil(t, ses.proc.Base.SessionInfo.RetryDiscardOutput)
+	(&MysqlResp{}).setPreparedCursorColumns(emptyCtx, []any{&MysqlColumn{}})
+	require.NoError(t, emptyCallback(failed, nil))
+	require.NoError(t, ses.proc.Base.SessionInfo.RetryDiscardOutput())
+	require.NotNil(t, empty.cursor.result)
+	require.Len(t, empty.cursor.result.Columns, 1,
+		"an empty retried generation keeps the columns the EXECUTE response guard needs")
+	require.Zero(t, empty.cursor.result.GetRowCount())
+	empty.closeCursor()
+	require.Zero(t, ses.preparedCursorBytes.Load())
+
+	// The helper is safe on empty contexts and empty exec contexts.
+	require.NotPanics(t, func() { discardPreparedCursorRetryOutput(nil) })
+	require.NotPanics(t, func() { discardPreparedCursorRetryOutput(&ExecCtx{}) })
+}
+
+// cursorFetchWriter records exactly what executeStmtFetch writes to the
+// wire: each delivered row and every EOF/OK status.
+type cursorFetchWriter struct {
+	testMysqlWriter
+	fetched  [][]interface{}
+	statuses []uint16
+}
+
+func (w *cursorFetchWriter) WriteResultSetRow(mrs *MysqlResultSet, cnt uint64) error {
+	for i := uint64(0); i < cnt; i++ {
+		row := make([]interface{}, len(mrs.Data[i]))
+		copy(row, mrs.Data[i])
+		w.fetched = append(w.fetched, row)
+	}
+	return nil
+}
+
+func (w *cursorFetchWriter) WriteEOFOrOK(_, status uint16) error {
+	w.statuses = append(w.statuses, status)
+	return nil
+}
+
+// Retry-discard oracle continued (#30359 review N1): drive a cursor EXECUTE
+// through a failed generation, the retry transition's discard and the
+// retried generation's captures, then serve COM_STMT_FETCH through the
+// production executeStmtFetch. The delivered rows are exactly the retried
+// generation's rows — the failed generation's prefix is neither replayed
+// nor duplicated — and the preserved frozen metadata keeps decoding and the
+// wire statuses correct without any re-installation.
+func TestRetryDiscardOutputPreservesMetadataAcrossRetryFetch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	failed := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 2)
+	defer failed.Clean(mp)
+	retried := allocTestBatch(mp, []string{"v"}, []types.Type{types.T_int64.ToType()}, 3)
+	defer retried.Clean(mp)
+	failedCol := vector.MustFixedColNoTypeCheck[int64](failed.Vecs[0])
+	failedCol[0], failedCol[1] = 7, 8
+	retriedCol := vector.MustFixedColNoTypeCheck[int64](retried.Vecs[0])
+	retriedCol[0], retriedCol[1], retriedCol[2] = 11, 12, 13
+	want := [][]interface{}{{int64(11)}, {int64(12)}, {int64(13)}, {int64(11)}, {int64(12)}, {int64(13)}}
+
+	writer := &cursorFetchWriter{}
+	ctx := context.Background()
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	ses.proc = testutil.NewProc(t)
+	stmt := &PrepareStmt{
+		Name:   getPrepareStmtName(453),
+		cursor: &preparedStmtCursor{},
+	}
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+	execCtx := &ExecCtx{
+		reqCtx:      ctx,
+		ses:         ses,
+		prepareStmt: stmt,
+		input:       &UserInput{isCursorExecute: true},
+	}
+
+	callback := ses.GetOutputCallback(execCtx)
+	hook := ses.proc.Base.SessionInfo.RetryDiscardOutput
+	require.NotNil(t, hook)
+	// The one per-EXECUTE metadata install; nothing below re-installs it.
+	(&MysqlResp{}).setPreparedCursorColumns(execCtx, []any{&MysqlColumn{}})
+
+	// The failed generation retains two rows, then the retry transition
+	// discards the attempt while keeping the frozen metadata.
+	require.NoError(t, callback(failed, nil))
+	require.NoError(t, hook())
+	require.NotNil(t, stmt.cursor.result)
+	require.Len(t, stmt.cursor.result.Columns, 1)
+	require.Zero(t, stmt.cursor.result.GetRowCount())
+
+	// The retried generation (two batches) re-captures into the kept shell.
+	require.NoError(t, callback(retried, nil))
+	require.NoError(t, callback(retried, nil))
+	require.Equal(t, want, stmt.cursor.result.Data)
+
+	fetch := func(rows uint32) {
+		data := make([]byte, 8)
+		binary.LittleEndian.PutUint32(data[0:4], 453)
+		binary.LittleEndian.PutUint32(data[4:8], rows)
+		resp, err := executeStmtFetch(ctx, ses, data)
+		require.NoError(t, err)
+		require.Nil(t, resp)
+	}
+
+	// First page: exactly the retried generation's first four rows; the
+	// cursor stays open with CURSOR_EXISTS.
+	fetch(4)
+	require.Equal(t, want[:4], writer.fetched)
+	require.NotNil(t, stmt.cursor)
+	require.Equal(t, uint64(4), stmt.cursor.offset)
+	require.Len(t, writer.statuses, 1)
+	require.NotZero(t, writer.statuses[0]&uint16(SERVER_STATUS_CURSOR_EXISTS))
+	require.Zero(t, writer.statuses[0]&uint16(SERVER_STATUS_LAST_ROW_SENT))
+
+	// Final page: the retried generation's remaining two rows, then the
+	// fetch terminates the cursor with LAST_ROW_SENT and returns the byte
+	// reservation to the session budget.
+	fetch(4)
+	require.Equal(t, want, writer.fetched)
+	require.Len(t, writer.statuses, 2)
+	require.NotZero(t, writer.statuses[1]&uint16(SERVER_STATUS_LAST_ROW_SENT))
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
 func TestPreparedCursorSessionBudgetCoversMultipleCursors(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
