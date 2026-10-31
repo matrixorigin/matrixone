@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -27,10 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -542,4 +545,310 @@ func TestRemoteExpressionDestinationUnknownEvidence(t *testing.T) {
 			require.Equal(t, expectedReleases, client.releases)
 		})
 	}
+}
+
+func TestRoutinePayloadPreservesExistingRemoteFeatureGuards(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	c.proc.SetStmtProfile(&process.StmtProfile{})
+	c.proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	c.proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
+	c.proc.SetResolveVariableFunc(nil)
+	require.True(t, c.proc.DivisionByZeroWarningsEnabled())
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{RoutineCall: &planpb.RoutineCall{}}}}
+	loadFK, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "_load_fk_ignore_check", []*planpb.Expr{
+		{Typ: types.T_bool.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 6}}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, function.EncodeOverloadID(602, 0), loadFK.GetF().Func.Obj)
+	viewDefinition, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "mo_view_definition", []*planpb.Expr{
+		{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 7}}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, function.EncodeOverloadID(603, 0), viewDefinition.GetF().Func.Obj)
+	calendar := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TO_CALENDAR_INTERVAL, 0)}}}}
+	division, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "div", []*planpb.Expr{
+		{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		plan2.MakePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	stringType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	stringType.CollationVersion = 1
+	least, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "least", []*planpb.Expr{
+		{Typ: stringType.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+		{Typ: stringType.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}},
+	})
+	require.NoError(t, err)
+	tableCollation, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "internal_table_collation", []*planpb.Expr{
+		{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: ""}}}},
+	})
+	require.NoError(t, err)
+	decimalDiv := decimalDivisionProtocolExpr(types.T_uint64)
+	decimalDiv.Typ = planpb.Type{Id: int32(types.T_uint64), Width: 7, Scale: 0}
+	decimalDiv.GetF().Func.Obj = function.EncodeOverloadID(function.INTEGER_DIV, function.DecimalIntegerDivUnsignedOverload)
+	timestamp, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "timestamp", []*planpb.Expr{{Typ: types.T_datetime.ToTypeWithScale(3).PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 3}}}})
+	require.NoError(t, err)
+	dynamicTime := &planpb.Expr{Typ: types.T_time.ToTypeWithScale(6).PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.ADDTIME, 2)},
+		Args: []*planpb.Expr{{Typ: types.T_datetime.ToTypeWithScale(6).PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 4}}}, plan2.MakePlan2StringConstExprWithType("02:00:00.000001")},
+	}}}
+	fractionalSecond := &planpb.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TIMESTAMPADD_SECOND_INTERVAL, 5)},
+		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 18, Scale: 7}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 5}}}},
+	}}}
+	incompleteTemporal, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "week", []*planpb.Expr{
+		{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 6}}},
+		plan2.MakePlan2Int64ConstExprWithType(3),
+	})
+	require.NoError(t, err)
+	p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr, calendar, division, least, tableCollation, decimalDiv, timestamp, dynamicTime, fractionalSecond, loadFK, viewDefinition, incompleteTemporal}}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(p)
+	require.NoError(t, err)
+	require.True(t, features.IncompleteTemporalStrings)
+	require.True(t, features.LoadFKIgnoreCheck)
+	require.True(t, features.ViewMetadataFunctions)
+	require.True(t, features.TimestampDatetimeResultContracts)
+	require.True(t, features.DynamicTimeResultContracts)
+	require.True(t, features.TimestampAddSecondIntervals)
+	require.True(t, features.DecimalIntegerDivisionSemantics)
+	require.True(t, features.CalendarIntervalNormalization)
+	require.True(t, features.ScalarDivision)
+	require.True(t, features.LeastGreatestCollationSemantics)
+	require.True(t, features.TableCollationFunction)
+	require.Equal(t, defines.MORPCVersion130, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion130, executionRemoteExpressionProtocolVersion(c.proc, features))
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	client.version = defines.MORPCVersion130
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "incomplete temporal")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+
+	// The existing execution stream must negotiate the complete encoded contract.
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = p.InstructionList[0].ProjectList
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	var required int64
+	wire, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion130, required)
+	decoded, err := decodeScope(wire, c.proc, true, nil)
+	require.NoError(t, err)
+	decoded.release()
+	// A routine-only payload does not introduce a stream feature floor.
+	op.ProjectList = []*planpb.Expr{expr}
+	required = 0
+	_, err = encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+	require.NoError(t, err)
+	require.Zero(t, required)
+	routineOnly := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+	routineFeatures, err := planpb.RequiredRemoteExpressionFeatures(routineOnly)
+	require.NoError(t, err)
+	beforeCalls := client.calls
+	require.Zero(t, remoteExpressionProtocolVersion(routineFeatures))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, routineOnly, routineFeatures))
+	require.Equal(t, beforeCalls, client.calls)
+
+	// Capability does not transfer the coordinator's dependent-program owner.
+	dependent := &planpb.Expr{Typ: decimalDiv.Typ, Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{
+		ProgramId: 1, Inputs: []*planpb.Expr{expr, decimalDiv},
+	}}}
+	op.ProjectList = []*planpb.Expr{dependent}
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "coordinator execution owner")
+	data, err := (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{dependent}}}}).Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, "coordinator execution owner")
+
+	// Existing feature guards admit the payload at their published floors.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
+	decoded, err = decodeScope(wire, c.proc, true, nil)
+	require.NoError(t, err)
+	decoded.release()
+	client.version = defines.MORPCVersion132
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+	// The official VIEWS contract remains independent of routine metadata.
+	viewOnly := &pipeline.Pipeline{Node: p.Node, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{viewDefinition}}}}
+	viewFeatures, err := planpb.RequiredRemoteExpressionFeatures(viewOnly)
+	require.NoError(t, err)
+	require.True(t, viewFeatures.Any())
+	require.True(t, viewFeatures.ViewMetadataFunctions)
+	require.Equal(t, defines.MORPCVersion126, remoteExpressionProtocolVersion(viewFeatures))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, viewOnly, viewFeatures))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, viewOnly))
+	op.ProjectList = viewOnly.InstructionList[0].ProjectList
+	required = 0
+	viewWire, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion126, required)
+	decoded, err = decodeScope(viewWire, c.proc, true, nil)
+	require.NoError(t, err)
+	decoded.release()
+	client.version = defines.MORPCVersion125
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, viewOnly, viewFeatures), "version 126")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, viewOnly), "view metadata remote execution requires")
+	_, err = decodeScope(viewWire, c.proc, true, nil)
+	require.ErrorContains(t, err, "view metadata remote execution requires")
+	loadOnly := &pipeline.Pipeline{Node: p.Node, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{loadFK}}}}
+	loadFeatures, err := planpb.RequiredRemoteExpressionFeatures(loadOnly)
+	require.NoError(t, err)
+	require.True(t, loadFeatures.LoadFKIgnoreCheck)
+	require.Equal(t, defines.MORPCVersion125, remoteExpressionProtocolVersion(loadFeatures))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, loadOnly, loadFeatures))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, loadOnly))
+	op.ProjectList = loadOnly.InstructionList[0].ProjectList
+	required = 0
+	loadWire, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion125, required)
+	decoded, err = decodeScope(loadWire, c.proc, true, nil)
+	require.NoError(t, err)
+	decoded.release()
+	client.version = defines.MORPCVersion124
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, loadOnly, loadFeatures), "version 125")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, loadOnly), "foreign-key filtering requires")
+	_, err = decodeScope(loadWire, c.proc, true, nil)
+	require.ErrorContains(t, err, "foreign-key filtering requires")
+	fractionalOnly := &pipeline.Pipeline{Node: p.Node, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{fractionalSecond}}}}
+	fractionalFeatures, err := planpb.RequiredRemoteExpressionFeatures(fractionalOnly)
+	require.NoError(t, err)
+	require.True(t, fractionalFeatures.TimestampAddSecondIntervals)
+	require.Equal(t, defines.MORPCVersion124, remoteExpressionProtocolVersion(fractionalFeatures))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, fractionalOnly, fractionalFeatures))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, fractionalOnly))
+	op.ProjectList = fractionalOnly.InstructionList[0].ProjectList
+	required = 0
+	fractionalWire, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion124, required)
+	decoded, err = decodeScope(fractionalWire, c.proc, true, nil)
+	require.NoError(t, err)
+	decoded.release()
+	client.version = defines.MORPCVersion123
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, fractionalOnly, fractionalFeatures), "version 124")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, fractionalOnly), "fractional TIMESTAMPADD SECOND requires")
+	_, err = decodeScope(fractionalWire, c.proc, true, nil)
+	require.ErrorContains(t, err, "fractional TIMESTAMPADD SECOND requires")
+	client.version = defines.MORPCVersion124
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
+	temporalOnly := &pipeline.Pipeline{Node: p.Node, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{timestamp, dynamicTime}}}}
+	temporalFeatures, err := planpb.RequiredRemoteExpressionFeatures(temporalOnly)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion122, remoteExpressionProtocolVersion(temporalFeatures))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, temporalOnly, temporalFeatures))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, temporalOnly))
+	op.ProjectList = temporalOnly.InstructionList[0].ProjectList
+	required = 0
+	_, err = encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion122, required)
+
+	divOnly := &pipeline.Pipeline{Node: p.Node, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{decimalDiv}}}}
+	divFeatures, err := planpb.RequiredRemoteExpressionFeatures(divOnly)
+	require.NoError(t, err)
+	require.True(t, divFeatures.DecimalIntegerDivisionSemantics)
+	require.Equal(t, defines.MORPCVersion121, remoteExpressionProtocolVersion(divFeatures))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, divOnly, divFeatures))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, divOnly))
+	require.Equal(t, client.calls, client.releases)
+}
+
+func TestRoutinePayloadInsideIndexSearchScan(t *testing.T) {
+	for _, field := range []string{"query_payload", "algo_expr"} {
+		t.Run(field, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			call := &planpb.RoutineCall{FunctionRef: &planpb.FunctionRef{FunctionId: 7, Revision: 3}, Language: "python"}
+			expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{RoutineCall: call}}}
+			scan := &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`)}
+			if field == "query_payload" {
+				scan.QueryPayload = expr
+			} else {
+				scan.AlgoExprs = []*planpb.Expr{expr}
+				scan.AlgoExprNames = []string{"first_round_limit"}
+			}
+			cloned := plan2.DeepCopyNode(&planpb.Node{NodeType: planpb.Node_INDEX_SEARCH_SCAN, IndexSearchScan: scan})
+			require.True(t, proto.Equal(scan, cloned.IndexSearchScan))
+			var clonedExpr *planpb.Expr
+			if field == "query_payload" {
+				clonedExpr = cloned.IndexSearchScan.QueryPayload
+			} else {
+				clonedExpr = cloned.IndexSearchScan.AlgoExprs[0]
+			}
+			require.NotSame(t, call, clonedExpr.GetF().RoutineCall)
+			require.NotSame(t, call.FunctionRef, clonedExpr.GetF().RoutineCall.FunctionRef)
+			p := &pipeline.Pipeline{
+				Node:       &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"},
+				DataSource: &pipeline.Source{Node: cloned},
+			}
+			data, err := p.Marshal()
+			require.NoError(t, err)
+			var received pipeline.Pipeline
+			require.NoError(t, received.Unmarshal(data))
+			require.True(t, proto.Equal(scan, received.DataSource.Node.IndexSearchScan))
+			features, err := planpb.RequiredRemoteExpressionFeatures(&received)
+			require.NoError(t, err)
+			require.Zero(t, remoteExpressionProtocolVersion(features))
+			beforeCalls := client.calls
+			require.NoError(t, validateRemoteExpressionDestination(c.proc, &received, features))
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &received))
+			require.Equal(t, beforeCalls, client.calls)
+
+			require.Equal(t, client.calls, client.releases)
+		})
+	}
+}
+
+// The shared stream retains the unrelated published feature floors.
+func TestRoutinePayloadPreservesUpstreamProtocolFloors(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
+	client.version = defines.MORPCVersion132
+	g := group.NewArgument()
+	t.Cleanup(g.Release)
+	g.NeedEval, g.Aggs = true, quantileExactWeightedPipelineAggs(t)
+	op := projection.NewArgument()
+	t.Cleanup(op.Release)
+	op.ProjectList = []*planpb.Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{RoutineCall: &planpb.RoutineCall{
+		FunctionRef: &planpb.FunctionRef{FunctionId: 7, Revision: 3}, Language: "python",
+	}}}}}
+	floatExpr := floatConversionProtocolExpr(function.CAST, types.T_varchar, types.T_float64)
+	op.ProjectList = append(op.ProjectList, floatExpr)
+	leaf := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: g}
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: leaf.NodeInfo, RootOp: op, PreScopes: []*Scope{leaf}}
+	var required int64
+	wire, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion132, required)
+	var received pipeline.Pipeline
+	require.NoError(t, received.Unmarshal(wire))
+	require.True(t, pipelineContainsQuantileExactWeighted(&received))
+	features, err := planpb.RequiredRemoteExpressionFeatures(&received)
+	require.NoError(t, err)
+	require.True(t, features.FloatConversionSemantics)
+	client.version = defines.MORPCVersion132
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, &received, features))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
+	require.True(t, supportsRemoteQuantileExactWeighted(c.proc.GetService()))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &received))
+	// Removing the routine does not alter existing float/weighted feature floors.
+	op.ProjectList = []*planpb.Expr{floatExpr}
+	required = 0
+	wire, err = encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion132, required)
+	received = pipeline.Pipeline{}
+	require.NoError(t, received.Unmarshal(wire))
+	features, err = planpb.RequiredRemoteExpressionFeatures(&received)
+	require.NoError(t, err)
+	require.True(t, features.FloatConversionSemantics)
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, &received, features))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &received))
+	require.Equal(t, client.calls, client.releases)
 }

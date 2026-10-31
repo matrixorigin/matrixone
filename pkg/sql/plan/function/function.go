@@ -350,11 +350,10 @@ func init() {
 // overloadID, whether the guarded fold of a metadata-only binding probe
 // may evaluate it for a constant tree: the overload's function belongs to
 // the curated provenPureValueFunctions set, the internal-machinery class
-// bit never qualifies (plain or combined with other class flags -
-// python_user_defined_function is INTERNAL|STRICT and carries no volatile
-// flag, so the rejection must test the bit through testFlag, never compare
-// the whole word, or the caller's guarded fold would execute it right into
-// UdfService.Run), and the resolved overload carries neither the volatile
+// bit never qualifies (plain or combined with other class flags, such as
+// mo_is_legacy_temporary_table's INTERNAL|STRICT). The rejection must test
+// the bit through testFlag, never compare the whole word. The resolved
+// overload must also carry neither the volatile
 // (CannotFold) nor the real-time-related flag. Membership is the purity
 // proof: absence of the excluded flags establishes nothing - llm_chat
 // carries none of them and its executor still performs an HTTP request -
@@ -444,7 +443,7 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 		}
 		return true
 	case *plan.Expr_F:
-		if e.F == nil || e.F.Func == nil {
+		if e.F == nil || e.F.Func == nil || e.F.RoutineCall != nil {
 			return false
 		}
 		fid, _ := DecodeOverloadID(e.F.Func.GetObj())

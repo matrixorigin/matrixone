@@ -5521,7 +5521,10 @@ func TestRemoteStatementSendErrorPreservesCauseWithoutMaskingInvariant(t *testin
 func TestDedupDiagnosticExpressionsRemoteRoundTrip(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
-	exprs := []*planpb.Expr{{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 3}}}}
+	exprs := []*planpb.Expr{
+		{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 3}}},
+		{Expr: &planpb.Expr_F{F: &planpb.Function{RoutineCall: &planpb.RoutineCall{}}}},
+	}
 	diagnosticExprs := func(op vm.Operator) []*planpb.Expr {
 		switch arg := op.(type) {
 		case *dedupjoin.DedupJoin:

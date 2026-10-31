@@ -1,0 +1,41 @@
+drop database if exists udf_python_temporal_bvt;
+create database udf_python_temporal_bvt;
+use udf_python_temporal_bvt;
+create function python_bvt_date (x date) returns date language python as 'def python_bvt_date(ctx, x): return x' handler 'python_bvt_date';
+create function python_bvt_datetime (x datetime(6)) returns datetime(6) language python as 'def python_bvt_datetime(ctx, x): return x' handler 'python_bvt_datetime';
+create function python_bvt_timestamp (x timestamp(6)) returns timestamp(6) language python as 'def python_bvt_timestamp(ctx, x): return x' handler 'python_bvt_timestamp';
+create function python_bvt_time (x time(6)) returns time(6) language python as 'def python_bvt_time(ctx, x): return x' handler 'python_bvt_time';
+create table temporal_values (
+id int,
+date_v date,
+datetime_v datetime(6),
+timestamp_v timestamp(6),
+time_v time(6)
+);
+insert into temporal_values values
+(1, '2024-02-29', '2024-02-29 23:59:59.123456', '2024-02-29 23:59:59.123456', '-838:59:59'),
+(2, '2024-03-01', '2024-03-01 00:00:00.000000', '2024-03-01 00:00:00.000000', '838:59:59'),
+(3, null, null, null, null);
+select id, python_bvt_date(date_v) as date_v,
+python_bvt_datetime(datetime_v) as datetime_v,
+python_bvt_timestamp(timestamp_v) as timestamp_v,
+python_bvt_time(time_v) as time_v
+from temporal_values order by id;
+➤ id[4,32,0]  ¦  date_v[91,10,0]  ¦  datetime_v[93,26,0]  ¦  timestamp_v[93,26,0]  ¦  time_v[92,17,0]  𝄀
+1  ¦  2024-02-29  ¦  2024-02-29 23:59:59.123456000  ¦  2024-02-29 23:59:59.123456000  ¦  -838:59:59  𝄀
+2  ¦  2024-03-01  ¦  2024-03-01 00:00:00  ¦  2024-03-01 00:00:00  ¦  838:59:59  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
+set @udf_python_saved_sql_mode = @@sql_mode;
+set session sql_mode = '';
+select python_bvt_date(cast('0000-00-00' as date)) as zero_date,
+python_bvt_datetime(cast('0000-00-00 00:00:00' as datetime(6))) as zero_datetime,
+python_bvt_timestamp(cast('0000-00-00 00:00:00' as timestamp(6))) as zero_timestamp;
+➤ zero_date[91,10,0]  ¦  zero_datetime[93,26,0]  ¦  zero_timestamp[93,26,0]  𝄀
+0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+set session sql_mode = @udf_python_saved_sql_mode;
+drop function python_bvt_date(date);
+drop function python_bvt_datetime(datetime(6));
+drop function python_bvt_timestamp(timestamp(6));
+drop function python_bvt_time(time(6));
+drop table temporal_values;
+drop database udf_python_temporal_bvt;

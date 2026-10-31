@@ -1,0 +1,43 @@
+drop database if exists udf_python_namespace_bvt;
+create database udf_python_namespace_bvt;
+use udf_python_namespace_bvt;
+create table namespace_values(x smallint);
+insert into namespace_values values (1),(2);
+create function overload(x bigint) returns bigint language python as 'def overload(ctx,x): return x + 100' handler 'overload';
+select overload(x) as result from namespace_values order by x;
+prepare namespace_plan from 'select overload(x) as result from namespace_values order by x';
+execute namespace_plan;
+-- @session:id=1
+use udf_python_namespace_bvt;
+create function overload(x smallint) returns bigint language python as 'def overload(ctx,x): return x + 200' handler 'overload';
+-- @session
+execute namespace_plan;
+select overload(x) as result from namespace_values order by x;
+-- @session:id=1
+use udf_python_namespace_bvt;
+create or replace function overload(x smallint) returns bigint language python as 'def overload(ctx,x): return x + 300' handler 'overload';
+-- @session
+execute namespace_plan;
+select overload(x) as result from namespace_values order by x;
+-- @session:id=1
+use udf_python_namespace_bvt;
+drop function overload(smallint);
+-- @session
+execute namespace_plan;
+select overload(x) as result from namespace_values order by x;
+-- @session:id=1
+use udf_python_namespace_bvt;
+create function overload(x smallint) returns bigint language python as 'def overload(ctx,x): return x + 400' handler 'overload';
+-- @session
+execute namespace_plan;
+select overload(x) as result from namespace_values order by x;
+deallocate prepare namespace_plan;
+-- Exact input descriptors, including scale, select the identity removed by DROP.
+create function exact_decimal(x decimal(18,2)) returns int language python as 'def exact_decimal(ctx,x): return 2' handler 'exact_decimal';
+create function exact_decimal(x decimal(18,6)) returns int language python as 'def exact_decimal(ctx,x): return 6' handler 'exact_decimal';
+drop function exact_decimal(decimal(18,2));
+select count(*) as remaining_heads from mo_catalog.mo_user_defined_function where db = 'udf_python_namespace_bvt' and name = 'exact_decimal';
+select count(*) as remaining_revisions from mo_catalog.mo_function_revisions r join mo_catalog.mo_user_defined_function f on r.function_id = f.function_id where f.db = 'udf_python_namespace_bvt' and f.name = 'exact_decimal';
+select exact_decimal(cast(1.23 as decimal(18,6))) as surviving_overload;
+drop function exact_decimal(decimal(18,6));
+drop database udf_python_namespace_bvt;

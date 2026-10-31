@@ -1645,3 +1645,25 @@ func TestEmptyDomainTypeReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestExternalRoutineTypeRejectsUnrepresentableDecimalAttributes(t *testing.T) {
+	for _, suffix := range []string{"", " unsigned", " zerofill"} {
+		t.Run(suffix, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), "create function f(x decimal(8,2)"+suffix+") returns decimal(8,2)"+suffix+" language python as 'def f(ctx, x): return x' handler 'f'", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			cf := stmt.(*tree.CreateFunction)
+			for _, ref := range []tree.ResolvableTypeReference{cf.Args[0].(*tree.FunctionArgDecl).Type, cf.ReturnType.Type} {
+				typ, err := GetFunctionTypeFromAst(ref)
+				if suffix == "" {
+					require.NoError(t, err)
+					require.Equal(t, types.T_decimal64, typ.Oid)
+					require.Equal(t, int32(8), typ.Width)
+					require.Equal(t, int32(2), typ.Scale)
+				} else {
+					require.ErrorContains(t, err, "attributed DECIMAL")
+				}
+			}
+		})
+	}
+}

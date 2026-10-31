@@ -206,6 +206,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkRenameTable(p)
 	case *ResultColDef:
 		return true, v.walkResultColDef(p)
+	case *RoutineCall:
+		return true, v.walkRoutineCall(p)
 	case *RowsetData:
 		return true, v.walkRowsetData(p)
 	case *RowsetExpr:
@@ -947,6 +949,9 @@ func (v *legacyCollationVisitor) walkFunction(p *Function) error {
 			return err
 		}
 	}
+	if err := v.walkRoutineCall(p.RoutineCall); err != nil {
+		return err
+	}
 	return nil
 }
 func (v *legacyCollationVisitor) walkGeneratedCol(p *GeneratedCol) error {
@@ -1463,6 +1468,20 @@ func (v *legacyCollationVisitor) walkResultColDef(p *ResultColDef) error {
 		if err := v.walkColDef(item0); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkRoutineCall(p *RoutineCall) error {
+	if p == nil {
+		return nil
+	}
+	for _, item0 := range p.ArgumentTypes {
+		if err := v.walkType(item0); err != nil {
+			return err
+		}
+	}
+	if err := v.walkType(&p.ReturnType); err != nil {
+		return err
 	}
 	return nil
 }
