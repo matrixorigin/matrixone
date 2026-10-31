@@ -8017,6 +8017,9 @@ func (c *Compile) compileOrder(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileWin(node *plan.Node, ss []*Scope) []*Scope {
+	if dop := c.parallelPartitionWindow(node, ss); dop > 1 {
+		return c.compileParallelPartitionWindow(node, ss[0], dop)
+	}
 	partitionTopN := len(ss) == 1
 	if partitionTopN {
 		upstreamOp := ss[0].RootOp
