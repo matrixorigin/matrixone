@@ -1388,3 +1388,54 @@ async def test_mode_sensitive_pick_retains_execution_connection_and_autocommit(a
         owner.__aexit__.assert_awaited_once()
     else:
         owner.__exit__.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    'sql',
+    [
+        'ALTER TABLE t ADD COLUMN n INT',
+        '/* trace */ ALTER /*x*/ TABLE t ADD COLUMN n INT',
+        'TRUNCATE TABLE t',
+        'TRUNCATE t',
+        'TRUNCATE `quoted-table`',
+    ],
+)
+def test_table_ddl_classification(sql):
+    from sqlalchemy import text
+    from sqlalchemy.schema import DDL
+
+    assert is_non_transactional_statement(sql)
+    assert is_non_transactional_statement(text(sql))
+    assert is_non_transactional_statement(DDL(sql))
+
+
+def test_typed_ddl_retains_sqlalchemy_execution_and_restores_autocommit():
+    from sqlalchemy import text
+
+    engine, _, connection, _ = _sync_engine()
+    commands = []
+    connection.exec_driver_sql.side_effect = _result(commands)
+    result = Mock(returns_rows=False, rowcount=0)
+    connection.execute.return_value = result
+    client = Client()
+    client._engine = engine
+    stmt = text('ALTER TABLE t ADD COLUMN n INT DEFAULT :value')
+    client.execute(stmt, {'value': 7})
+    connection.execute.assert_called_once_with(stmt, {'value': 7})
+    assert commands == ['SELECT @@autocommit', 'SET autocommit = 1', 'SET autocommit = 0']
+
+
+@pytest.mark.asyncio
+async def test_async_typed_ddl_keeps_binding_and_restores_autocommit():
+    from sqlalchemy import text
+
+    engine, _, connection, _ = _async_engine()
+    commands = []
+    connection.exec_driver_sql = AsyncMock(side_effect=_async_result(commands))
+    connection.execute = AsyncMock(return_value=Mock(returns_rows=False, rowcount=0))
+    client = AsyncClient()
+    client._engine = engine
+    stmt = text('ALTER TABLE t ADD COLUMN n INT DEFAULT :value')
+    await client._execute(stmt, {'value': 7})
+    connection.execute.assert_awaited_once_with(stmt, {'value': 7})
+    assert commands == ['SELECT @@autocommit', 'SET autocommit = 1', 'SET autocommit = 0']

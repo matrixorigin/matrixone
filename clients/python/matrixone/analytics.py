@@ -185,8 +185,12 @@ def _arrow():
         raise ImportError('Arrow analytics requires Python >=3.9; core SDK remains available on Python 3.8')
     try:
         import pyarrow as pa
+    except ModuleNotFoundError as exc:
+        if exc.name == 'pyarrow':
+            raise ImportError("Install matrixone-python-sdk[analytics] to use Arrow analytics") from exc
+        raise ImportError(f"Arrow analytics dependency import failed; check incompatible dependencies: {exc}") from exc
     except ImportError as exc:
-        raise ImportError("Install matrixone-python-sdk[analytics] to use Arrow analytics") from exc
+        raise ImportError(f"Arrow analytics dependency import failed; check incompatible dependencies: {exc}") from exc
     return pa
 
 

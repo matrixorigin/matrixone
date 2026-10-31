@@ -232,3 +232,47 @@ def test_update_marker_looking_literals_and_expressions_preserve_assignments(fac
     sql, params = client.query('item').update(label='x = ?', id=Item.id + 1)._build_current_sql()
     assert 'label = ?' in sql and 'id = item.id + 1' in sql
     assert params == ['x = ?']
+
+
+@pytest.mark.parametrize('factory', [Client, AsyncClient])
+def test_column_only_join_requires_all_sources_and_preserves_identity(factory):
+    remote_base = declarative_base()
+
+    class Remote(remote_base):
+        __tablename__ = 'remote_item'
+        __table_args__ = {'schema': 'remote_db', 'extend_existing': True}
+        id = Column(Integer, primary_key=True)
+        label = Column(String(20))
+
+    client = factory()
+    query = client.query(Item.id, Remote.label)
+    with pytest.raises(ValueError, match='explicit JOIN'):
+        query._build_sql()
+    query.join(Remote, Item.id == Remote.id)
+    sql, _ = query._build_sql()
+    assert 'FROM item INNER JOIN remote_db.remote_item' in sql
+    assert 'remote_db.remote_item.label' in sql
+    assert query._build_sql()[0] == sql
+
+    peer = aliased(Item, name='peer')
+    query = client.query(Item.id, peer.id.label('peer_id')).join(peer, peer.id == Item.id + 1)
+    sql, _ = query._build_sql()
+    assert 'JOIN item AS peer' in sql and 'peer.id AS peer_id' in sql
+
+
+@pytest.mark.asyncio
+async def test_column_only_shorthand_works_through_all_session_entrypoints():
+    from matrixone.client import Session as ClientSession
+    from matrixone.session import Session, AsyncSession
+
+    sync, asynchronous = Client(), AsyncClient()
+    sessions = [ClientSession(client=sync), Session(client=sync), AsyncSession(client=asynchronous)]
+    try:
+        peer = aliased(Item, name='peer_session')
+        for owner in [sync, asynchronous, *sessions]:
+            query = owner.query(Item.id, peer.id).join(peer, peer.id == Item.id + 1)
+            assert 'JOIN item AS peer_session' in query._build_sql()[0]
+    finally:
+        sessions[0].close()
+        sessions[1].close()
+        await sessions[2].close()

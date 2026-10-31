@@ -8,12 +8,13 @@ import inspect
 import os
 import uuid
 from pathlib import Path
+from decimal import Decimal
 
 import pytest
 import sqlalchemy as sa
 
 from matrixone import Client, SnapshotLevel
-from matrixone.exceptions import BranchError, CloneError, PubSubError, SnapshotError
+from matrixone.exceptions import BranchError, CloneError, PubSubError, QueryError, SnapshotError
 from .test_sdk_quality_contracts import server, client, async_client  # noqa: F401
 
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='explicit isolated target required')
@@ -110,6 +111,14 @@ async def test_load_preserves_format_options(client, async_client, kind):
         return result
 
     try:
+        path = source('.csv', b'1|alpha|0;2|beta|0;')
+        await resolve(c.load_data.read_csv(path, table, sep='|', lines_terminated_by=';'))
+        assert await rows() == [(1, 'alpha', 0), (2, 'beta', 0)]
+        with pytest.raises(ValueError, match='sep'):
+            await resolve(c.load_data.read_csv(path, table, fields_terminated_by='|'))
+        with pytest.raises(ValueError, match='NULLIF'):
+            await resolve(c.load_data.read_csv(path, table, set_clause={'flag': '1'}))
+        assert await rows() == []
         path = source('.payload', gzip.compress(b'1,alpha,0\n2,beta,0\n'))
         await resolve(c.load_data.from_file(path, table, compression='gzip'))
         assert await rows() == [(1, 'alpha', 0), (2, 'beta', 0)]
@@ -216,3 +225,127 @@ async def test_session_clone_commit_rollback_and_reuse(client, async_client, kin
     finally:
         client.execute('DROP TABLE IF EXISTS ' + target)
         client.execute('DROP TABLE ' + source)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+@pytest.mark.parametrize('scope', ['database', 'table'])
+async def test_snapshot_restore_rolls_back_real_data(client, async_client, kind, scope):
+    from matrixone.exceptions import RestoreError
+
+    c = client if kind == 'sync' else async_client
+    db, snap = name('restore_db_'), name('restore_sp_')
+    client.execute('CREATE DATABASE ' + db)
+    try:
+        client.execute(f'CREATE TABLE {db}.t(id INT PRIMARY KEY, amount DECIMAL(20,6))')
+        client.execute(f'INSERT INTO {db}.t VALUES (1, 1.250000)')
+        client.execute(f'CREATE VIEW {db}.v AS SELECT id, amount FROM {db}.t')
+        target = db if scope == 'database' else db + '.t'
+        client.execute(f'CREATE SNAPSHOT {snap} FOR {scope.upper()} {target}')
+        client.execute(f'INSERT INTO {db}.t VALUES (2, 2.500000)')
+        method = c.restore.restore_database if scope == 'database' else c.restore.restore_table
+        args = (snap, 'sys', db) if scope == 'database' else (snap, 'sys', db, 't')
+        with pytest.raises(RestoreError):
+            await resolve(method(name('missing_'), *args[1:]))
+        assert client.execute(f'SELECT id FROM {db}.t ORDER BY id').rows == [(1,), (2,)]
+        assert await resolve(method(*args))
+        assert client.execute(f'SELECT id, amount FROM {db}.v ORDER BY id').rows == [(1, Decimal('1.250000'))]
+        assert (await resolve(c.execute('SELECT 42'))).scalar() == 42
+    finally:
+        client.execute('DROP SNAPSHOT IF EXISTS ' + snap)
+        client.execute('DROP DATABASE IF EXISTS ' + db)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_fulltext_embedded_backtick_column(client, async_client, kind):
+    from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+
+    c = client if kind == 'sync' else async_client
+    table = name('ft_ident_')
+    client.execute(f'CREATE TABLE {table}(id BIGINT PRIMARY KEY, `tick``col` TEXT)')
+    try:
+        client.execute(f"INSERT INTO {table} VALUES (1, 'alpha beta'), (2, 'gamma')")
+        client.execute(f'CREATE FULLTEXT INDEX ft_idx ON {table} (`tick``col`)')
+        predicate = boolean_match('tick`col').must('alpha').compile()
+        assert (await resolve(c.execute(f'SELECT id FROM {table} WHERE {predicate}'))).rows == [(1,)]
+        assert client.execute(f'SELECT id, `tick``col` FROM {table} ORDER BY id').rows == [
+            (1, 'alpha beta'),
+            (2, 'gamma'),
+        ]
+    finally:
+        client.execute('DROP TABLE IF EXISTS ' + table)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_branch_lineage_ddl_uses_client_autocommit(client, async_client, kind):
+    c = client if kind == 'sync' else async_client
+    source, branch, ordinary = name('ddl_src_'), name('ddl_branch_'), name('ddl_plain_')
+    try:
+        client.execute(f'CREATE TABLE {source}(id INT PRIMARY KEY)')
+        client.execute(f'INSERT INTO {source} VALUES (1), (2)')
+        client.execute(f'CREATE TABLE {ordinary}(id INT PRIMARY KEY)')
+        await resolve(c.branch.create(branch, source))
+        with pytest.raises(QueryError):
+            if kind == 'sync':
+                with c.session() as session:
+                    session.execute(f'ALTER TABLE {branch} ADD COLUMN extra INT DEFAULT 9')
+            else:
+                async with c.session() as session:
+                    await session.execute(f'ALTER TABLE {branch} ADD COLUMN extra INT DEFAULT 9')
+        assert client.execute(f'SELECT id FROM {branch} ORDER BY id').rows == [(1,), (2,)]
+        await resolve(c.execute(f'ALTER TABLE {branch} ADD COLUMN extra INT DEFAULT 9'))
+        assert client.execute(f'SELECT id,extra FROM {branch} ORDER BY id').rows == [(1, 9), (2, 9)]
+        await resolve(c.execute(f'ALTER TABLE {ordinary} ADD COLUMN extra INT DEFAULT 9'))
+        await resolve(c.execute(f'TRUNCATE TABLE {branch}'))
+        assert client.execute(f'SELECT id FROM {branch}').rows == []
+        assert client.execute(f'SELECT id FROM {source} ORDER BY id').rows == [(1,), (2,)]
+        assert (await resolve(c.execute('SELECT 42'))).scalar() == 42
+        pool = c._engine.pool if kind == 'sync' else c._engine.sync_engine.pool
+        assert pool.checkedout() == 0
+    finally:
+        for table in (branch, ordinary, source):
+            client.execute('DROP TABLE IF EXISTS ' + table)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_column_projection_join_keeps_mapped_sources(client, async_client, kind):
+    from sqlalchemy import Column, Integer, String
+    from sqlalchemy.orm import aliased, declarative_base
+
+    c = client if kind == 'sync' else async_client
+    other_db, fact, dim = name('join_db_'), name('fact_'), name('dim_')
+    client.execute('CREATE DATABASE ' + other_db)
+    try:
+        client.execute(f'CREATE TABLE {fact}(id INT PRIMARY KEY)')
+        client.execute(f'CREATE TABLE {other_db}.{dim}(id INT PRIMARY KEY,label VARCHAR(20))')
+        client.execute(f'CREATE TABLE {dim}(id INT PRIMARY KEY,label VARCHAR(20))')
+        client.execute(f'INSERT INTO {fact} VALUES (17),(18)')
+        client.execute(f"INSERT INTO {other_db}.{dim} VALUES (17,'remote')")
+        client.execute(f"INSERT INTO {dim} VALUES (17,'local')")
+        base = declarative_base()
+        Fact = type('Fact', (base,), {'__tablename__': fact, 'id': Column(Integer, primary_key=True)})
+        Dim = type(
+            'Dim',
+            (base,),
+            {
+                '__tablename__': dim,
+                '__table_args__': {'schema': other_db},
+                'id': Column(Integer, primary_key=True),
+                'label': Column(String(20)),
+            },
+        )
+        query = c.query(Fact.id, Dim.label)
+        with pytest.raises(ValueError, match='JOIN'):
+            query.to_sql()
+        rows = await resolve(query.join(Dim, Fact.id == Dim.id).all())
+        assert [tuple(row) for row in rows] == [(17, 'remote')]
+        peer = aliased(Fact, name='peer')
+        rows = await resolve(c.query(Fact.id, peer.id.label('peer_id')).join(peer, peer.id == Fact.id + 1).all())
+        assert [tuple(row) for row in rows] == [(17, 18)]
+    finally:
+        client.execute('DROP TABLE IF EXISTS ' + fact)
+        client.execute('DROP TABLE IF EXISTS ' + dim)
+        client.execute('DROP DATABASE IF EXISTS ' + other_db)
