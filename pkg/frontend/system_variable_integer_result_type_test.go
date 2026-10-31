@@ -164,7 +164,7 @@ func TestIntegerSystemVariablePreparedWireMetadata(t *testing.T) {
 func TestNonIntegerSystemVariablePreparedWireMetadataUnchanged(t *testing.T) {
 	textEnvelope := prepareColumnForQuery(t, "select cast('a' as text) as v").typ
 	for _, name := range []string{
-		"version",     // string class
+		"version",      // string class
 		"autocommit",   // bool class
 		"sql_mode",     // set class
 		"tx_isolation", // enum class
