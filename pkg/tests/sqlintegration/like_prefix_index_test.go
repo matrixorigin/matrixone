@@ -207,10 +207,10 @@ func TestLikePrefixIndex(t *testing.T) {
 						}
 					}
 					for _, hint := range []string{"", " force index(ix)", " ignore index(ix)"} {
-						check("select payload from candidate_errors"+hint+" where name like 'abc%' and name in (regexp_replace('x','[','y'),'abc1')", false)
-						// FORCE already has a different evaluation domain at the baseline;
-						// preserve each hint's historical outcome rather than equating them.
-						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('zzz','xy') and payload=regexp_replace('x','[','y')", !strings.Contains(hint, "force"))
+						check("select payload from candidate_errors"+hint+" where name like 'abc%' and name in (regexp_replace('x','[','y'),'abc1')", !strings.Contains(hint, "ignore"))
+						// Preserve the baseline error domain for each hint: an ordinary
+						// IN lookup can avoid a throwing residual on excluded rows.
+						check("select payload from residual_errors"+hint+" where name like 'abc%' and name in ('zzz','xy') and payload=regexp_replace('x','[','y')", strings.Contains(hint, "ignore"))
 					}
 				})
 
@@ -250,7 +250,11 @@ func TestLikePrefixIndex(t *testing.T) {
 						for _, hint := range []string{" force index(ix)", " ignore index(ix)"} {
 							q := "select " + projection + " from error_rows" + hint + " where " + predicate
 							if strings.Contains(hint, "force") {
-								require.Contains(t, explain(q), "Index Table Scan")
+								if strings.HasPrefix(predicate, "name=") {
+									require.Contains(t, explain(q), "Index Table Scan")
+								} else {
+									require.NotContains(t, explain(q), "Index Table Scan", "throwing residual excludes new prefix access")
+								}
 							}
 							var count int64
 							require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&count), q)
