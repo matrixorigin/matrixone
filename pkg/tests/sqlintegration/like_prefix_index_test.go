@@ -104,22 +104,6 @@ func TestLikePrefixIndex(t *testing.T) {
 		prefixPlan := explain(prefixQuery)
 		require.Contains(t, prefixPlan, "Join Type: INDEX")
 		require.Contains(t, prefixPlan, "prefix_in_range(")
-		// Reuse the analyzed fixture for covering access: the redundant broad
-		// range must not suppress the narrow prefix, in either predicate order.
-		for _, predicate := range []string{
-			"name like 'abc%'",
-			"name like 'abc%' and name >= 'a'",
-			"name >= 'a' and name like 'abc%'",
-		} {
-			q := "select count(*) from prefix_backfill where " + predicate
-			coveringPlan := explain(q)
-			require.Contains(t, coveringPlan, "Index Table Scan")
-			require.NotContains(t, coveringPlan, "Join Type: INDEX")
-			require.Contains(t, coveringPlan, "prefix_in_range(")
-			var count int64
-			require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&count))
-			require.EqualValues(t, 100, count)
-		}
 		var prefixSum int64
 		require.NoError(t, conn.QueryRowContext(ctx, prefixQuery).Scan(&prefixSum))
 		require.Equal(t, int64(200), prefixSum)
@@ -149,7 +133,7 @@ func TestLikePrefixIndex(t *testing.T) {
 		for _, phase := range []string{"memory", "persisted"} {
 			t.Run(phase, func(t *testing.T) {
 				if phase == "persisted" {
-					for _, table := range []string{"t", "t_unique", "residual_rows", "error_rows", "candidate_errors", "residual_errors"} {
+					for _, table := range []string{"t", "t_unique", "residual_rows", "error_rows", "candidate_errors", "residual_errors", "prefix_backfill"} {
 						exec("select mo_ctl('dn','flush','like_prefix_index." + table + "')")
 						indexes := func() []string {
 							rows, err := conn.QueryContext(ctx, "select distinct index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='like_prefix_index' and relname=?) and index_table_name is not null", table)
@@ -171,7 +155,24 @@ func TestLikePrefixIndex(t *testing.T) {
 						}
 					}
 					exec("analyze table t(name) fullscan")
+					exec("analyze table prefix_backfill(name,amount) fullscan")
 					require.Contains(t, explain(query), "Index Table Scan")
+				}
+				// Reuse the analyzed fixture for covering access: the redundant broad
+				// range must not suppress the narrow prefix, in either predicate order.
+				for _, predicate := range []string{
+					"name like 'abc%'",
+					"name like 'abc%' and name >= 'a'",
+					"name >= 'a' and name like 'abc%'",
+				} {
+					q := "select count(*) from prefix_backfill where " + predicate
+					coveringPlan := explain(q)
+					require.Contains(t, coveringPlan, "Index Table Scan")
+					require.NotContains(t, coveringPlan, "Join Type: INDEX")
+					require.Contains(t, coveringPlan, "prefix_in_range(")
+					var count int64
+					require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&count))
+					require.EqualValues(t, 100, count)
 				}
 				nulQuery := "select id from t where name like 'ab\\0%' order by id"
 				require.Contains(t, explain(nulQuery), "Index Table Scan")
