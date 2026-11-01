@@ -3115,6 +3115,10 @@ func (tbl *txnTable) PKPersistedBetween(
 	// At most 64 objects can reach metadata/BF I/O, including deleted objects.
 	for _, obj := range objects {
 		if err := checkObject(obj); err != nil {
+			if !checkTombstone && pkCheckObsoleteObjectMissing(obj, to, err) {
+				reason = "data_history_unavailable"
+				return true, moerr.NewTxnNeedRetry(ctx)
+			}
 			reason = "data_object_check_error"
 			return true, err
 		}
@@ -3227,6 +3231,12 @@ func (tbl *txnTable) PKPersistedBetween(
 			if err != nil {
 				releasePKCheckSemaphore()
 				reason = "data_block_read_error"
+				if !checkTombstone {
+					obj, ok := p.GetObject(*objectio.ShortName(&blk.BlockID))
+					if ok && pkCheckObsoleteObjectMissing(obj, to, err) {
+						return true, moerr.NewTxnNeedRetry(ctx)
+					}
+				}
 				return true, err
 			}
 			if !usable || matched {
@@ -3407,6 +3417,15 @@ func tombstonePKExistsInRange(
 	return false, "", nil
 }
 
+// A missing source already obsolete at the caller's snapshot is unavailable
+// history, not proof of no conflict. Missing currently visible data stays fatal.
+func pkCheckObsoleteObjectMissing(obj objectio.ObjectEntry, to types.TS, err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrFileNotFound) &&
+		!obj.DeleteTime.IsEmpty() && obj.DeleteTime.LE(&to)
+}
+
+// PrimaryKeysMayBeUpserted returns ErrTxnNeedRetry for unavailable history. The
+// generated-ID caller must refresh its allocation before retrying that signal.
 func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	ctx context.Context,
 	from types.TS,
@@ -3414,6 +3433,9 @@ func (tbl *txnTable) PrimaryKeysMayBeUpserted(
 	batch *batch.Batch,
 	pkIndex int32,
 ) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	keysVector := batch.GetVector(pkIndex)
 	return tbl.primaryKeysMayBeChanged(ctx, from, to, keysVector, false, false)
 }
@@ -3562,6 +3584,10 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
 
+	if !requireSubscribed && from.GE(&to) {
+		return false, nil
+	}
+
 	var snap *logtailreplay.PartitionState
 	if requireSubscribed {
 		var ready bool
@@ -3590,6 +3616,23 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 			return false, err
 		}
 		snap = part.Snapshot()
+	}
+
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	historyStart, _ := snap.GetDuration()
+	if from.LT(&historyStart) {
+		created, err := tbl.isCreatedInTxn(ctx)
+		if err != nil {
+			return false, err
+		}
+		if !created {
+			if !requireSubscribed {
+				return true, moerr.NewTxnNeedRetry(ctx)
+			}
+			return true, nil
+		}
 	}
 
 	var packer *types.Packer
