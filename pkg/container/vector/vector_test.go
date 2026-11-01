@@ -5394,26 +5394,40 @@ func TestPrepareParamKindReordersWithoutSidecarAllocation(t *testing.T) {
 
 func TestConstSetFunctionCopiesSelectedPrepareParamKind(t *testing.T) {
 	mp := mpool.MustNewZero()
+	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 	source := NewVec(types.T_text.ToType())
+	t.Cleanup(func() { source.Free(mp) })
 	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
 	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
 	require.NoError(t, source.SetPrepareParamKindsWithMP(
 		[]PrepareParamKind{PrepareParamInteger, PrepareParamFloat}, mp))
 	destination := NewVec(types.T_text.ToType())
+	t.Cleanup(func() { destination.Free(mp) })
 	set := GetConstSetFunction(types.T_text.ToType(), mp)
 	require.NoError(t, set(destination, source, 1, 3))
 	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(0))
 	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(2))
 
 	nullSource := NewVec(types.T_text.ToType())
+	t.Cleanup(func() { nullSource.Free(mp) })
 	require.NoError(t, AppendBytes(nullSource, nil, true, mp))
 	require.NoError(t, set(destination, nullSource, 0, 2))
 	require.False(t, destination.HasPrepareParamKind())
 
-	destination.Free(mp)
-	nullSource.Free(mp)
-	source.Free(mp)
-	require.Zero(t, mp.CurrNB())
+	source.GetGrouping().Add(1)
+	source.SetIsBinaryString(true)
+	require.NoError(t, source.SetStringSource(types.StringSourceSQLPrepare))
+	require.NoError(t, set(destination, source, 1, 3))
+	require.True(t, destination.HasGrouping())
+	require.True(t, destination.GetIsBinaryString())
+	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, destination.GetStringSource())
+	require.NoError(t, set(destination, source, 1, 0))
+	require.Zero(t, destination.Length())
+	require.False(t, destination.HasPrepareParamKind())
+	require.False(t, destination.HasGrouping())
+	require.False(t, destination.GetIsBinaryString())
+	require.Equal(t, types.StringSourceExpression, destination.GetStringSource())
 }
 
 func TestPrepareParamKindCheckpointRollbackRetainsSidecarOwnership(t *testing.T) {
