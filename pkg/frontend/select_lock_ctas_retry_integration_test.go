@@ -35,6 +35,7 @@ import (
 )
 
 func TestSelectLockCTASRetry(t *testing.T) {
+	t.Cleanup(frontend.InstallNativeSelectLockFailureExecForTest())
 	runNativeViewSchemaCluster(t, func(cn embed.ServiceOperator, svc cnservice.Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -131,5 +132,130 @@ func TestSelectLockCTASRetry(t *testing.T) {
 				exec("revoke update on table " + database + ".b from select_lock_retry_role")
 			})
 		}
+		// Reuse this cluster and its two one-row tables to exercise the actual
+		// batch admission/transaction owner; the pure catalog fixture cannot
+		// mint a real snapshot capability.
+		t.Run("admitted multi-target authorization", func(t *testing.T) {
+			exec("alter view " + database + ".v as select a.id from " + database + ".a join " + database + ".b on a.id=b.id")
+			exec("grant update on table " + database + ".b to select_lock_retry_role")
+			statement, err := mysql.ParseOne(readerCtx, "select id from v for update", 1)
+			require.NoError(t, err)
+			defer statement.Free()
+			withNativeViewSchemaRead(t, readerCtx, cn, svc, database, reader, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
+				p, err := plan.BuildPlan(compiler, statement, false)
+				require.NoError(t, err)
+				require.Len(t, p.GetQuery().SelectLockReferences, 2)
+				checked, ok, err := frontend.AuthorizeNativeSelectLockBatchForTest(readerCtx, compiler, p.GetQuery())
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, 2, checked, "both targets must use the admitted batch, not fallback")
+			})
+			for _, scenario := range []string{"boundary error and commit failure", "target error and rollback failure", "denial and commit failure", "begin failure"} {
+				t.Run(scenario, func(t *testing.T) {
+					withNativeViewSchemaRead(t, readerCtx, cn, svc, database, reader, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
+						p, err := plan.BuildPlan(compiler, statement, false)
+						require.NoError(t, err)
+						frontend.AssertNativeSelectLockFinalizationForTest(t, readerCtx, compiler, p.GetQuery(), scenario)
+					})
+				})
+			}
+			for _, change := range []string{"generation", "principal", "minimum", "cancel"} {
+				t.Run(change, func(t *testing.T) {
+					withNativeViewSchemaRead(t, readerCtx, cn, svc, database, reader, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
+						p, err := plan.BuildPlan(compiler, statement, false)
+						require.NoError(t, err)
+						reads, ok, err := frontend.AuthorizeNativeSelectLockBoundaryForTest(readerCtx, compiler, p.GetQuery(), change)
+						if change == "generation" {
+							require.NoError(t, err)
+							require.True(t, ok)
+							require.Equal(t, int64(3), reads, "remaining target must resume with an independent catalog read")
+						} else {
+							require.Error(t, err)
+							require.False(t, ok)
+							require.Equal(t, int64(2), reads, "invalid context must fail before consuming the second target")
+							if change == "cancel" {
+								require.ErrorIs(t, err, context.Canceled)
+							} else {
+								require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+							}
+						}
+					})
+				})
+			}
+		})
+
+		t.Run("secondary roles and mixed fallback", func(t *testing.T) {
+			exec("create role select_lock_retry_secondary")
+			defer exec("drop role select_lock_retry_secondary")
+			exec("grant select_lock_retry_secondary to select_lock_retry_reader")
+			exec("revoke update on table " + database + ".b from select_lock_retry_role")
+			defer exec("grant update on table " + database + ".b to select_lock_retry_role")
+			exec("grant update on table " + database + ".b to select_lock_retry_secondary")
+			public := openNativeViewSchemaSQL(t, ctx, cn, "sys#select_lock_retry_reader#select_lock_retry_role:test123", database)
+			public.SetMaxOpenConns(1)
+			for _, all := range []bool{false, true, false} {
+				mode := "none"
+				if all {
+					mode = "all"
+				}
+				_, err := public.ExecContext(ctx, "set secondary role "+mode)
+				require.NoError(t, err)
+				var id int
+				err = public.QueryRowContext(ctx, "select id from v for update").Scan(&id)
+				// doSwitchRole intentionally accepts secondary-role syntax as a
+				// no-op. ALL must not activate the secondary role's grant.
+				require.ErrorContains(t, err, "privilege")
+				noLocks(t)
+				// Also preserve the existing internal compatibility flag. SQL
+				// cannot set it (TestDoSwitchRoleIgnoresSecondaryRole).
+				tenant := reader.Copy()
+				tenant.SetUseSecondaryRole(all)
+				withNativeViewSchemaRead(t, readerCtx, cn, svc, database, tenant, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
+					statement, err := mysql.ParseOne(readerCtx, "select id from v for update", 1)
+					require.NoError(t, err)
+					defer statement.Free()
+					p, err := plan.BuildPlan(compiler, statement, false)
+					require.NoError(t, err)
+					checked, ok, err := frontend.AuthorizeNativeSelectLockBatchForTest(readerCtx, compiler, p.GetQuery())
+					require.NoError(t, err)
+					require.Equal(t, all, ok)
+					if all {
+						require.Equal(t, 2, checked)
+					} else {
+						require.Equal(t, 1, checked)
+					}
+				})
+			}
+			// Two view targets plus a bare sibling: secondary roles authorize
+			// all targets, but the mixed query must retain independent reads.
+			tenant := reader.Copy()
+			tenant.SetUseSecondaryRole(true)
+			withNativeViewSchemaRead(t, readerCtx, cn, svc, database, tenant, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
+				statement, err := mysql.ParseOne(readerCtx, "select v.id from v join a on v.id=a.id for update", 1)
+				require.NoError(t, err)
+				defer statement.Free()
+				p, err := plan.BuildPlan(compiler, statement, false)
+				require.NoError(t, err)
+				require.Len(t, p.GetQuery().SelectLockReferences, 3)
+				require.NotEmpty(t, p.GetQuery().SelectLockReferences[0].ViewPath)
+				frontend.AssertNativeSelectLockMixedFallbackForTest(t, readerCtx, compiler, p.GetQuery())
+			})
+			// Make the unprivileged object specifically the bare sibling.
+			exec("alter view " + database + ".v as select id from " + database + ".a")
+			_, err := public.ExecContext(ctx, "set secondary role none")
+			require.NoError(t, err)
+			var id int
+			err = public.QueryRowContext(ctx, "select v.id from v join b on v.id=b.id for update").Scan(&id)
+			require.ErrorContains(t, err, "privilege")
+			noLocks(t)
+			_, err = public.ExecContext(ctx, "set secondary role all")
+			require.NoError(t, err)
+			err = public.QueryRowContext(ctx, "select v.id from v join b on v.id=b.id for update").Scan(&id)
+			require.ErrorContains(t, err, "privilege")
+			exec("grant update on table " + database + ".b to select_lock_retry_role")
+			require.NoError(t, public.QueryRowContext(ctx, "select v.id from v join b on v.id=b.id for update").Scan(&id))
+			require.Equal(t, 1, id)
+		})
+
 	})
 }

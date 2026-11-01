@@ -19,13 +19,21 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
+	goruntime "runtime"
+	"strings"
 	"sync/atomic"
+	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -191,4 +199,275 @@ func NativeViewSchemaRoleAuthorizerForTest(compiler *TxnCompilerContext) ViewSch
 		}
 		return nil
 	}
+}
+
+// Exercise the real batch admission and transaction owner using the fixture's
+// engine. Warm membership in this epoch, then count targets consumed together.
+func AuthorizeNativeSelectLockBatchForTest(ctx context.Context, compiler *TxnCompilerContext, q *plan.Query) (int, bool, error) {
+	ses := compiler.GetSession().(*Session)
+	ctx, epoch := beginAuthorizationEpoch(ctx, ses, &ExecCtx{})
+	defer epoch.end()
+	tips, err := selectLockPrivilegeTips(q)
+	if err != nil {
+		return 0, false, err
+	}
+	batch := &selectLockAuthorizationBatch{}
+	for _, tip := range tips {
+		batch.items = append(batch.items, privilegeItem{privilegeTyp: PrivilegeTypeSelect, selectLock: true,
+			objType: objectTypeTable, dbName: tip.databaseName, tableName: tip.tableName,
+			objectRef: tip.objectRef, viewPath: tip.viewPath,
+			isClusterTable: tip.isClusterTable, clusterTableOperation: clusterTableSelect})
+	}
+	priv := &privilege{objType: objectTypeTable, entries: []privilegeEntry{{privilegeEntryTyp: privilegeEntryTypeCompound,
+		compound: &compoundEntry{items: batch.items[:1]}}}}
+	if ok, _, err := determineUserHasPrivilegeSet(ctx, ses, priv); err != nil || !ok {
+		return 0, ok, err
+	}
+	ok, _, err := determineUserHasPrivilegeSetWithSelectLockBatch(ctx, ses, priv, batch)
+	return batch.checked, ok, err
+}
+
+// Pause the real second-target boundary, then change one reuse precondition.
+// The existing frontend fault point supplies the barrier; production has no
+// test hook. The count distinguishes legacy resumption from skipping a target.
+func AuthorizeNativeSelectLockBoundaryForTest(ctx context.Context, compiler *TxnCompilerContext, q *plan.Query, change string) (int64, bool, error) {
+	ses := compiler.GetSession().(*Session)
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	runCtx, epoch := beginAuthorizationEpoch(runCtx, ses, &ExecCtx{})
+	defer epoch.end()
+	if ok, _, err := authenticateSelectLockReferences(runCtx, ses, q); err != nil || !ok {
+		return 0, ok, err
+	}
+	if fault.EnableDomain(fault.DomainFrontend) {
+		defer fault.DisableDomain(fault.DomainFrontend)
+	}
+	const target = "authorization_before_grant_read"
+	for _, point := range []struct{ name, frequency, action string }{
+		{target, "2:2::", "wait"},
+		{"select_lock_batch_waiters", ":::", "getwaiters"},
+		{"select_lock_batch_notify", ":::", "notifyall"},
+		{"select_lock_batch_count", ":::", "getcount"},
+	} {
+		if err := fault.AddFaultPointInDomain(ctx, fault.DomainFrontend, point.name, point.frequency, point.action, 0, target, false); err != nil {
+			return 0, false, err
+		}
+		defer fault.RemoveFaultPointFromDomain(ctx, fault.DomainFrontend, point.name)
+	}
+	type result struct {
+		ok  bool
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		ok, _, err := authenticateSelectLockReferences(runCtx, ses, q)
+		done <- result{ok, err}
+	}()
+	// Removing the barrier and joining the worker also runs on a failed setup
+	// or cancelled parent, before the session/epoch fixture can be released.
+	joined := false
+	defer func() {
+		cancel()
+		fault.RemoveFaultPointFromDomain(ctx, fault.DomainFrontend, target)
+		if !joined {
+			<-done
+		}
+	}()
+	for {
+		n, _, _ := fault.TriggerFaultInDomain(fault.DomainFrontend, "select_lock_batch_waiters")
+		if n == 1 {
+			break
+		}
+		select {
+		case r := <-done:
+			joined = true
+			return 0, r.ok, moerr.NewInternalErrorf(ctx, "batch did not reach boundary: %v", r.err)
+		case <-ctx.Done():
+			return 0, false, ctx.Err()
+		default:
+			goruntime.Gosched()
+		}
+	}
+	oldRole := ses.GetTenantInfo().GetDefaultRoleID()
+	defer ses.GetTenantInfo().SetDefaultRoleID(oldRole)
+	switch change {
+	case "generation":
+		ses.GetPrivilegeCache().invalidate()
+	case "principal":
+		ses.GetTenantInfo().SetDefaultRoleID(oldRole + 1)
+	case "minimum":
+		ses.updateLastCommitTS(timestamp.Timestamp{PhysicalTime: math.MaxInt64})
+	case "cancel":
+		cancel()
+	}
+	fault.TriggerFaultInDomain(fault.DomainFrontend, "select_lock_batch_notify")
+	r := <-done
+	joined = true
+	count, _, _ := fault.TriggerFaultInDomain(fault.DomainFrontend, "select_lock_batch_count")
+	return count, r.ok, r.err
+}
+
+type nativeSelectLockFailureKey struct{}
+
+// Install before starting the owned cluster; restore only after cluster cleanup.
+// Requests without the private test context always use the original factory.
+func InstallNativeSelectLockFailureExecForTest() func() {
+	original := NewBackgroundExec
+	NewBackgroundExec = func(ctx context.Context, upstream FeSession, options ...*BackgroundExecOption) BackgroundExec {
+		bh := original(ctx, upstream, options...)
+		if injected, _ := ctx.Value(nativeSelectLockFailureKey{}).(*nativeSelectLockFailureExec); injected != nil {
+			injected.BackgroundExec = bh
+			injected.created++
+			return injected
+		}
+		return bh
+	}
+	return func() { NewBackgroundExec = original }
+}
+
+type nativeSelectLockFailureExec struct {
+	BackgroundExec
+	session                                   *Session
+	epoch                                     *authorizationEpoch
+	scenario, first, second                   string
+	result                                    ExecResult
+	commands                                  map[string]int
+	created, closed, metadata                 int
+	beginErr, workErr, commitErr, rollbackErr error
+}
+
+func (f *nativeSelectLockFailureExec) Exec(ctx context.Context, sql string) error {
+	f.commands[sql]++
+	if f.scenario == "record" {
+		return f.BackgroundExec.Exec(ctx, sql)
+	}
+	switch sql {
+	case "begin;":
+		if err := f.BackgroundExec.Exec(ctx, sql); err != nil {
+			return err
+		}
+		if f.scenario == "begin failure" {
+			f.session.GetPrivilegeCache().invalidate()
+			return f.beginErr // includes a partially created transaction
+		}
+		return nil
+	case "commit;":
+		f.session.GetPrivilegeCache().invalidate()
+		return f.commitErr
+	case "rollback;":
+		if err := f.BackgroundExec.Exec(ctx, sql); err != nil {
+			return err
+		}
+		if f.scenario == "target error and rollback failure" {
+			return f.rollbackErr
+		}
+		return nil
+	}
+	f.result = &MysqlResultSet{}
+	if strings.HasPrefix(sql, "select viewdef, owner") {
+		f.metadata++
+		mrs := &MysqlResultSet{}
+		mrs.AddColumn(&MysqlColumn{})
+		mrs.AddColumn(&MysqlColumn{})
+		mrs.AddRow([]interface{}{`{"security_type":"INVOKER"}`, int64(f.session.GetTenantInfo().GetDefaultRoleID())})
+		f.result = mrs
+	} else if strings.Contains(sql, "mo_role_privs") {
+		first := strings.Contains(sql, "'"+f.first+"'")
+		second := strings.Contains(sql, "'"+f.second+"'")
+		if second && f.scenario == "target error and rollback failure" {
+			f.session.GetPrivilegeCache().invalidate()
+			return f.workErr
+		}
+		if second && f.scenario == "denial and commit failure" {
+			return nil
+		}
+		if first || second || strings.Contains(sql, "'v'") {
+			f.result = newMrsForWithGrantOptionPrivilege([][]interface{}{{PrivilegeTypeUpdate, true}})
+			if first && f.scenario == "boundary error and commit failure" {
+				f.epoch.mu.Lock()
+				f.epoch.err = f.workErr
+				f.epoch.mu.Unlock()
+			}
+		}
+	}
+	return nil
+}
+
+func (f *nativeSelectLockFailureExec) ClearExecResultSet() {
+	if f.scenario == "record" {
+		f.BackgroundExec.ClearExecResultSet()
+	}
+}
+func (f *nativeSelectLockFailureExec) GetExecResultSet() []interface{} {
+	if f.scenario == "record" {
+		return f.BackgroundExec.GetExecResultSet()
+	}
+	return []interface{}{f.result}
+}
+func (f *nativeSelectLockFailureExec) Close() {
+	f.closed++
+	f.BackgroundExec.Close()
+}
+
+func AssertNativeSelectLockFinalizationForTest(t *testing.T, ctx context.Context, compiler *TxnCompilerContext, q *plan.Query, scenario string) {
+	t.Helper()
+	ses := compiler.GetSession().(*Session)
+	ctx, epoch := beginAuthorizationEpoch(ctx, ses, &ExecCtx{})
+	defer epoch.end()
+	ok, _, err := authenticateSelectLockReferences(ctx, ses, q)
+	require.NoError(t, err)
+	require.True(t, ok)
+	valid, cached := ses.GetPrivilegeCache().getActiveRoleGrant(ses.GetTenantInfo().GetUserID(), ses.GetTenantInfo().GetDefaultRoleID())
+	require.True(t, valid && cached)
+	f := &nativeSelectLockFailureExec{session: ses, epoch: epoch, scenario: scenario,
+		first: q.SelectLockReferences[0].ObjectRef.ObjName, second: q.SelectLockReferences[1].ObjectRef.ObjName,
+		commands: map[string]int{}, beginErr: moerr.NewTxnNeedRetryNoCtx(), workErr: moerr.NewTxnNeedRetryNoCtx(),
+		commitErr: moerr.NewTxnNeedRetryNoCtx(), rollbackErr: moerr.NewInternalErrorNoCtx("injected rollback failure")}
+	ok, _, err = authenticateSelectLockReferences(context.WithValue(ctx, nativeSelectLockFailureKey{}, f), ses, q)
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Equal(t, 1, f.created)
+	require.Equal(t, 1, f.closed)
+	require.Equal(t, 1, f.commands["begin;"])
+	require.Equal(t, 1, f.commands["rollback;"])
+	require.Nil(t, f.BackgroundExec.(*backExec).backSes, "real background session must be closed")
+	require.Nil(t, ses.GetPrivilegeCache().activeRoleGrant.Load(), "failure must not publish membership into the invalidated generation")
+	switch scenario {
+	case "begin failure":
+		require.ErrorIs(t, err, f.beginErr)
+		require.Zero(t, f.commands["commit;"])
+	case "target error and rollback failure":
+		require.ErrorIs(t, err, f.workErr)
+		require.ErrorIs(t, err, f.rollbackErr)
+		require.Zero(t, f.commands["commit;"])
+		require.Equal(t, 2, f.metadata, "must reach the second target in the batch")
+	default:
+		require.ErrorIs(t, err, f.commitErr)
+		require.NotErrorIs(t, err, f.workErr, "prefix commit error takes precedence over the next boundary error")
+		require.Equal(t, 1, f.commands["commit;"])
+		if scenario == "boundary error and commit failure" {
+			require.Equal(t, 1, f.metadata)
+		} else {
+			require.Equal(t, 2, f.metadata)
+		}
+	}
+}
+
+func AssertNativeSelectLockMixedFallbackForTest(t *testing.T, ctx context.Context, compiler *TxnCompilerContext, q *plan.Query) {
+	t.Helper()
+	ses := compiler.GetSession().(*Session)
+	ctx, epoch := beginAuthorizationEpoch(ctx, ses, &ExecCtx{})
+	defer epoch.end()
+	ok, _, err := authenticateSelectLockReferences(ctx, ses, q)
+	require.NoError(t, err)
+	require.True(t, ok)
+	f := &nativeSelectLockFailureExec{scenario: "record", commands: map[string]int{}}
+	ok, _, err = authenticateSelectLockReferences(context.WithValue(ctx, nativeSelectLockFailureKey{}, f), ses, q)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, f.created, 2, "the two view targets must use independent transactions in a mixed query")
+	require.Equal(t, f.created, f.closed)
+	require.Equal(t, f.created, f.commands["begin;"])
+	require.Equal(t, f.created, f.commands["commit;"])
+	require.Zero(t, f.commands["rollback;"])
 }

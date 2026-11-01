@@ -5677,6 +5677,7 @@ func resolveViewChainPrivilegeContext(
 	enableCache bool,
 	selectLock bool,
 	lockRoles *btree.Set[int64],
+	definerRoles ...*selectLockDefinerRoles,
 ) (viewPrivilegePrincipal, bool, bool, error) {
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -5743,7 +5744,13 @@ func resolveViewChainPrivilegeContext(
 				// the complete role namespace, even when numeric IDs collide.
 				lockRoles.Clear()
 				lockRoles.Insert(principal.roleID)
-				if err := expandRoleSetWithInheritedRoles(defines.AttachAccountId(ctx, principal.accountID), bh, lockRoles); err != nil {
+				definerCtx := defines.AttachAccountId(ctx, principal.accountID)
+				if len(definerRoles) > 0 {
+					err = definerRoles[0].load(definerCtx, bh, principal, lockRoles)
+				} else {
+					err = expandRoleSetWithInheritedRoles(definerCtx, bh, lockRoles)
+				}
+				if err != nil {
 					return principal, false, false, err
 				}
 			}
@@ -7953,12 +7960,12 @@ func verifySelectLockPrivilegeForRoles(ctx context.Context, bh BackgroundExec, s
 	return false, nil
 }
 
-func determineSelectLockViewPrivilege(ctx context.Context, bh BackgroundExec, ses *Session, roles *btree.Set[int64], item privilegeItem) (bool, error) {
+func determineSelectLockViewPrivilege(ctx context.Context, bh BackgroundExec, ses *Session, roles *btree.Set[int64], item privilegeItem, definerRoles ...*selectLockDefinerRoles) (bool, error) {
 	if !verifyLightPrivilege(ses, item.dbName, false, item.isClusterTable, clusterTableSelect) {
 		return false, nil
 	}
 	principal, allowed, _, err := resolveViewChainPrivilegeContext(ctx, bh, ses, nil,
-		int64(ses.GetTenantInfo().GetDefaultRoleID()), PrivilegeTypeSelect, item.viewPath, false, true, roles)
+		int64(ses.GetTenantInfo().GetDefaultRoleID()), PrivilegeTypeSelect, item.viewPath, false, true, roles, definerRoles...)
 	if err != nil || !allowed {
 		return false, err
 	}
@@ -7969,6 +7976,64 @@ func determineSelectLockViewPrivilege(ctx context.Context, bh BackgroundExec, se
 	return verifySelectLockPrivilegeForRoles(defines.AttachAccountId(ctx, principal.accountID), bh, ses, roles, objectTypeTable, db, item.tableName)
 }
 
+// selectLockDefinerRoles retains just the last definer closure in one admitted
+// authorization transaction. Account-local role IDs never cross namespaces.
+// Grants and view metadata are deliberately not memoized.
+type selectLockDefinerRoles struct {
+	principal viewPrivilegePrincipal
+	roles     *btree.Set[int64]
+}
+
+func (m *selectLockDefinerRoles) load(ctx context.Context, bh BackgroundExec, principal viewPrivilegePrincipal, roles *btree.Set[int64]) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.roles != nil && m.principal == principal {
+		for _, role := range m.roles.Keys() {
+			roles.Insert(role)
+		}
+		return nil
+	}
+	if err := expandRoleSetWithInheritedRoles(ctx, bh, roles); err != nil {
+		return err
+	}
+	m.principal, m.roles = principal, roles.Copy()
+	return nil
+}
+
+// Only a multi-view invocation can share work. checked records successful
+// targets so an eligibility change resumes the legacy loop at the next target.
+type selectLockAuthorizationBatch struct {
+	items   []privilegeItem
+	checked int
+}
+
+func (b *selectLockAuthorizationBatch) check(ctx context.Context, bh BackgroundExec, ses *Session, callerRoles *btree.Set[int64], beforeNext func() (bool, error)) (bool, error) {
+	var definerRoles selectLockDefinerRoles
+	for i, item := range b.items {
+		if i > 0 {
+			eligible, err := beforeNext()
+			if err != nil {
+				return false, err
+			}
+			if !eligible {
+				return true, nil // commit this prefix, then resume independent reads
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		// DEFINER resolution replaces its input. Keep the caller closure intact
+		// even when the next target has the same base table or numeric role ID.
+		ok, err := determineSelectLockViewPrivilege(ctx, bh, ses, callerRoles.Copy(), item, &definerRoles)
+		if err != nil || !ok {
+			return ok, err
+		}
+		b.checked++
+	}
+	return true, nil
+}
+
 func authenticateSelectLockReferences(ctx context.Context, ses *Session, q *plan.Query) (bool, statistic.StatsArray, error) {
 	var stats statistic.StatsArray
 	stats.Reset()
@@ -7976,22 +8041,35 @@ func authenticateSelectLockReferences(ctx context.Context, ses *Session, q *plan
 	if err != nil {
 		return false, stats, err
 	}
+	items := make([]privilegeItem, 0, len(tips))
+	allViews := len(tips) > 1
 	for _, tip := range tips {
-		// Each target has its own alternative and effective role/view principal.
-		// A grant on a sibling target cannot authorize this lock.
+		items = append(items, privilegeItem{
+			privilegeTyp: PrivilegeTypeSelect, selectLock: true, objType: objectTypeTable,
+			dbName: tip.databaseName, tableName: tip.tableName,
+			objectRef: tip.objectRef, viewPath: tip.viewPath,
+			isClusterTable: tip.isClusterTable, clusterTableOperation: clusterTableSelect,
+		})
+		allViews = allViews && len(tip.viewPath) > 0
+	}
+	for i := 0; i < len(items); i++ {
+		// Never use a generic multi-item compound: different targets can be
+		// authorized by different roles and privilege alternatives.
 		priv := &privilege{objType: objectTypeTable, entries: []privilegeEntry{{
 			privilegeEntryTyp: privilegeEntryTypeCompound,
-			compound: &compoundEntry{items: []privilegeItem{{
-				privilegeTyp: PrivilegeTypeSelect, selectLock: true, objType: objectTypeTable,
-				dbName: tip.databaseName, tableName: tip.tableName,
-				objectRef: tip.objectRef, viewPath: tip.viewPath,
-				isClusterTable: tip.isClusterTable, clusterTableOperation: clusterTableSelect,
-			}}},
+			compound:          &compoundEntry{items: items[i : i+1]},
 		}}}
-		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+		var batch *selectLockAuthorizationBatch
+		if i == 0 && allViews {
+			batch = &selectLockAuthorizationBatch{items: items}
+		}
+		ok, delta, err := determineUserHasPrivilegeSetWithSelectLockBatch(ctx, ses, priv, batch)
 		stats.Add(&delta)
 		if err != nil || !ok {
 			return ok, stats, err
+		}
+		if batch != nil && batch.checked > 0 {
+			i += batch.checked - 1
 		}
 	}
 	return true, stats, nil
@@ -8436,7 +8514,11 @@ func orderedRoleIDsForPrivilegeCheck(ses *Session, roleIds *btree.Set[int64], pr
 
 // determineUserHasPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
-func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (ret bool, stats statistic.StatsArray, err error) {
+func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (bool, statistic.StatsArray, error) {
+	return determineUserHasPrivilegeSetWithSelectLockBatch(ctx, ses, priv, nil)
+}
+
+func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *Session, priv *privilege, batch *selectLockAuthorizationBatch) (ret bool, stats statistic.StatsArray, err error) {
 	var erArray []ExecResult
 	var yes bool
 	var roleB int64
@@ -8500,7 +8582,16 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	if err != nil {
 		return false, stats, err
 	}
+	// Batch reuse requires an admitted statement snapshot and an already proved
+	// membership generation. Cold/disabled/unpinned cases keep independent reads.
+	epoch := authorizationEpochFor(ctx, ses)
+	batchGeneration := cache.getActiveRoleGrantGeneration()
+	batchEligible := batch != nil && enableCache && cache != nil &&
+		cache.catalogVersion != (disttae.PrivilegeCacheVersion{}) && roleGrantCached &&
+		(!roleGrantNeedsCheck || roleGrantValid) && epoch != nil &&
+		backgroundExecOption.authorizationSnapshot != nil
 	_, _, _ = fault.TriggerFaultInDomainWithContext(ctx, fault.DomainFrontend, "authorization_before_grant_read")
+	batchEligible = batchEligible && cache.getActiveRoleGrantGeneration() == batchGeneration
 	bh := ses.GetBackgroundExec(ctx, backgroundExecOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
@@ -8602,6 +8693,59 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		if item.selectLock && len(item.viewPath) > 0 {
 			if err = expandRoleSetWithInheritedRoles(ctx, bh, roleSetOfKthIteration); err != nil {
 				return false, stats, err
+			}
+			if batchEligible && cache.getActiveRoleGrantGeneration() == batchGeneration {
+				if _, _, err = statementCatalogVersion(ctx, ses, sessionCatalogEngine(ses)); err != nil {
+					return false, stats, err
+				}
+				// A boundary failure belongs to the next target. Finish the prior
+				// successful read before returning it, matching independent reads.
+				beforeNext := func() (bool, error) {
+					if err := ses.refreshPrivilegeCache(ctx); err != nil {
+						return false, err
+					}
+					enabled, boundaryErr := privilegeCacheIsEnabled(ctx, ses)
+					if boundaryErr != nil {
+						return false, boundaryErr
+					}
+					opts, boundaryErr := authorizationReadOption(ctx, ses, &BackgroundExecOption{})
+					if boundaryErr != nil {
+						return false, boundaryErr
+					}
+					eligible := enabled && ses.GetPrivilegeCache() == cache &&
+						authorizationEpochFor(ctx, ses) == epoch &&
+						opts.authorizationSnapshot == backgroundExecOption.authorizationSnapshot &&
+						cache.catalogVersion != (disttae.PrivilegeCacheVersion{}) &&
+						cache.getActiveRoleGrantGeneration() == batchGeneration
+					if roleGrantNeedsCheck {
+						valid, cached := cache.getActiveRoleGrant(tenant.GetUserID(), tenant.GetDefaultRoleID())
+						eligible = eligible && valid && cached
+					}
+					if !eligible {
+						return false, nil
+					}
+					_, _, _ = fault.TriggerFaultInDomainWithContext(ctx, fault.DomainFrontend, "authorization_before_grant_read")
+					if _, _, err := statementCatalogVersion(ctx, ses, sessionCatalogEngine(ses)); err != nil {
+						return false, err
+					}
+					return cache.getActiveRoleGrantGeneration() == batchGeneration, ctx.Err()
+				}
+				// Separate a boundary error from target work so cleanup retains
+				// the legacy commit-before-next-target error precedence.
+				var boundaryErr error
+				ret, err = batch.check(ctx, bh, ses, roleSetOfKthIteration, func() (bool, error) {
+					eligible, e := beforeNext()
+					boundaryErr = e
+					return eligible, e
+				})
+				if boundaryErr != nil {
+					err = finishTxn(ctx, bh, nil)
+					txnFinished = true
+					if err == nil {
+						err = boundaryErr
+					}
+				}
+				return ret, stats, err
 			}
 			ret, err = determineSelectLockViewPrivilege(ctx, bh, ses, roleSetOfKthIteration, item)
 			return ret, stats, err
