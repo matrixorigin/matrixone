@@ -565,23 +565,6 @@ func preparedJSONFloatScalarWithLimit(
 	return result, false, nil
 }
 
-func preparedJSONString(value bytejson.ByteJson) ([]byte, error) {
-	switch value.Type {
-	case bytejson.TpCodeString:
-		return value.GetString(), nil
-	case bytejson.TpCodeLiteral:
-		switch value.Data[0] {
-		case bytejson.LiteralNull:
-			return []byte("null"), nil
-		case bytejson.LiteralTrue:
-			return []byte("true"), nil
-		case bytejson.LiteralFalse:
-			return []byte("false"), nil
-		}
-	}
-	return value.MarshalJSON()
-}
-
 func otherCompareOperatorSupports(typ1, typ2 types.Type) bool {
 	if isDatetimeTimestampComparison(typ1, typ2) {
 		return true
