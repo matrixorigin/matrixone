@@ -157,6 +157,17 @@ func TestLoadAutoIncrementManualConflict(t *testing.T) {
 			require.NoError(t, err, q)
 		}
 		exec(0, "create database auto_increment_manual_conflict")
+		// INSERT ALL sends generated values through a remote PreInsert. A new
+		// target can still have an empty partition on that CN; keep its first range.
+		exec(0, "create table auto_increment_manual_conflict.fresh(id bigint auto_increment primary key,v int)")
+		exec(0, "create table auto_increment_manual_conflict.source(v int)")
+		exec(0, "insert into auto_increment_manual_conflict.source values(1),(2),(3)")
+		exec(0, "insert all into auto_increment_manual_conflict.fresh(v) select v from auto_increment_manual_conflict.source")
+		var first, last, distinctIDs uint64
+		require.NoError(t, conns[0].QueryRowContext(ctx, "select min(id),max(id),count(distinct id) from auto_increment_manual_conflict.fresh").Scan(&first, &last, &distinctIDs))
+		require.Equal(t, uint64(1), first)
+		require.Equal(t, uint64(3), last)
+		require.Equal(t, uint64(3), distinctIDs)
 		exec(0, "create table auto_increment_manual_conflict.t(id bigint auto_increment primary key,v int)")
 		exec(0, "insert into auto_increment_manual_conflict.t(v) values(1)") // CN 0 retains ID 2.
 		exec(1, "insert into auto_increment_manual_conflict.t values(2,2)")

@@ -3622,16 +3622,16 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 		return false, err
 	}
 	historyStart, _ := snap.GetDuration()
-	if from.LT(&historyStart) {
+	// Only generated-ID probes recover their allocation window. Ordinary
+	// modification probes retain their existing row/object checks. An empty
+	// partition's MaxTs start is a sentinel, not a history-GC lower bound.
+	if !requireSubscribed && !snap.IsEmpty() && from.LT(&historyStart) {
 		created, err := tbl.isCreatedInTxn(ctx)
 		if err != nil {
 			return false, err
 		}
 		if !created {
-			if !requireSubscribed {
-				return true, moerr.NewTxnNeedRetry(ctx)
-			}
-			return true, nil
+			return true, moerr.NewTxnNeedRetry(ctx)
 		}
 	}
 

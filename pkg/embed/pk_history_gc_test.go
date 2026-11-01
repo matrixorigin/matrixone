@@ -32,6 +32,10 @@ import (
 )
 
 func TestAutoIncrementAfterHistoryGC(t *testing.T) {
+	// The accelerated GC settings require a private cluster. Release canonical
+	// fixtures retained by earlier tests before acquiring its admission lease.
+	require.NoError(t, CloseBaseClusterTests())
+	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c, err := NewCluster(WithTesting(), WithTestAdmissionContext(t.Context()), WithCNCount(2), WithPreStart(func(svc ServiceOperator) {
 		adjustBasicClusterService(svc)
 		if svc.ServiceType() != metadata.ServiceType_TN {

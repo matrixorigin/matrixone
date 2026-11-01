@@ -113,7 +113,12 @@ func TestPersistedPKCheckUnavailableHistoryWindow(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
 	changed, err = tbl.PrimaryKeysMayBeModified(ctx, types.BuildTS(10, 0), types.BuildTS(50, 0), keys, 0, -1)
 	require.NoError(t, err)
+	require.False(t, changed, "ordinary modification probes still exclude an absent key")
+	require.NoError(t, vector.SetFixedAtWithTypeCheck(keys.Vecs[0], 0, int64(7)))
+	changed, err = tbl.PrimaryKeysMayBeModified(ctx, types.BuildTS(10, 0), types.BuildTS(50, 0), keys, 0, -1)
+	require.NoError(t, err)
 	require.True(t, changed)
+	require.NoError(t, vector.SetFixedAtWithTypeCheck(keys.Vecs[0], 0, int64(99)))
 	changed, err = tbl.PrimaryKeysMayBeUpserted(ctx, types.BuildTS(10, 0), types.BuildTS(10, 0), keys, 0)
 	require.NoError(t, err)
 	require.False(t, changed)
@@ -126,4 +131,20 @@ func TestPersistedPKCheckUnavailableHistoryWindow(t *testing.T) {
 	changed, err = tbl.PrimaryKeysMayBeUpserted(ctx, types.BuildTS(10, 0), types.BuildTS(50, 0), keys, 0)
 	require.NoError(t, err)
 	require.False(t, changed, "transaction-created table has no remote history")
+}
+
+func TestAutoIncrementPKCheckEmptyPartition(t *testing.T) {
+	tbl, eng := newPrimaryKeyCheckTableForTest(t)
+	ctx := tbl.proc.Load().Ctx
+	keys := makeBatchForTest(tbl.proc.Load().Mp(), 7)
+	defer keys.Clean(tbl.proc.Load().Mp())
+	part := eng.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId)
+	state, done := part.MutateState()
+	// A CN that has not subscribed to a new table has no checkpoint history.
+	// MaxTs is the empty-state sentinel, not evidence of reclaimed history.
+	state.UpdateDuration(types.MaxTs(), types.MaxTs())
+	done()
+	changed, err := tbl.PrimaryKeysMayBeUpserted(ctx, types.BuildTS(10, 0), types.BuildTS(50, 0), keys, 0)
+	require.NoError(t, err)
+	require.False(t, changed, "an empty partition must not discard the first reserved range")
 }
