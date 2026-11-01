@@ -63,9 +63,9 @@ func TestJSONBooleanBetweenOverloadIdentity(t *testing.T) {
 	_, err = GetFunctionByName(context.Background(), "between",
 		[]types.Type{jsonTyp, types.T_varchar.ToType(), types.T_varchar.ToType()})
 	require.Error(t, err, "JSON BETWEEN with SQL string bounds keeps the ordering rejection")
-	_, err = GetFunctionByName(context.Background(), "between",
-		[]types.Type{jsonTyp, types.T_int64.ToType(), types.T_int64.ToType()})
-	require.NoError(t, err, "JSON BETWEEN with integer bounds keeps the numeric cast domain")
+	// The mixed JSON/numeric triple belongs to the JSON/numeric range domain
+	// introduced with the #31121 review round 3; its identity is pinned by
+	// TestJSONNumericBetweenOverloadIdentity in json_numeric_between_comparison_test.go.
 }
 
 // betweenJSONBooleanCase is one executor contract case: the expression column

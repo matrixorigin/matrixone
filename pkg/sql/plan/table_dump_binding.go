@@ -315,9 +315,10 @@ func tableDumpJSONScalarSemanticExpr(expr *planpb.Expr) bool {
 				tableDumpJSONBinaryCoercedComparisonOperand(fn.Args[1])
 		case function.BETWEEN:
 			if len(fn.Args) == 3 && fn.Args[0] != nil {
-				// The #31121 review's range form: a mixed JSON/BOOL BETWEEN
-				// binds without the historical implicit CAST legs today, so
-				// an archived BETWEEN from that era needs the candidate too.
+				// The #31121 review's range form: a mixed JSON scalar BETWEEN
+				// (BOOL or numeric peer) binds without the historical implicit
+				// CAST legs today, so an archived BETWEEN from that era needs
+				// the candidate too.
 				for _, other := range []*planpb.Expr{fn.Args[1], fn.Args[2]} {
 					if other == nil {
 						continue

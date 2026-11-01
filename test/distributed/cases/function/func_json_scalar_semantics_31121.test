@@ -423,6 +423,40 @@ create table btw40 (id int primary key, d json, lo bool, hi json);
 insert into btw40 values (1,'3',false,cast('"true"' as json)),(2,'"true"',false,cast('"true"' as json)),(3,'true',null,null);
 select id from btw40 where d between lo and hi order by id;
 select id from btw40 where d not between lo and hi order by id;
+-- BETWEEN keeps the comparison domain of its lowered legs across the mixed
+-- JSON/numeric range too (the #31121 review round 3 fix): the JSON literal
+-- null row is a value ranking below every numeric bound, so the plain and
+-- negated forms answer from the same domain and can no longer disagree on a
+-- non-null row, and a JSON string or boolean never parses as the bounds'
+-- numeric text.
+drop table if exists btw41;
+create table btw41 (id int primary key, d json);
+insert into btw41 values (1,'null'),(2,'3'),(3,'"str"'),(4,'true'),(5,'-1'),(6,'0.5'),(7,'"3"'),(8,null),(9,'{"a":1}');
+select id, d between 0 and 3 as inside, d not between 0 and 3 as outside,
+       not(d between 0 and 3) as outsidelit from btw41 order by id;
+select id from btw41 where d between 0 and 3 order by id;
+select id from btw41 where d not between 0 and 3 order by id;
+select id from btw41 where not(d between 0 and 3) order by id;
+-- an inverted numeric range selects no non-null row and both negated forms
+-- agree on the complete row set
+select id from btw41 where d between 3 and 0 order by id;
+select id from btw41 where d not between 3 and 0 order by id;
+drop table if exists btw42;
+create table btw42 (id int primary key, n bigint, d json, lo json, hi bigint);
+insert into btw42 values (1,3,'3','null',5),(2,1,'"str"','1',5),(3,4,'true','null',5),(4,2,'null','1',null),(5,3,'0.5','0.5',5);
+-- reversed orientation: the numeric expression column keeps the JSON bound
+-- leg in the JSON domain and the pure numeric leg numeric, including the
+-- JSON literal null lower bound that ranks below the numeric rows
+select id, n between lo and hi as inside, n not between lo and hi as outside,
+       not(n between lo and hi) as outsidelit from btw42 order by id;
+select id from btw42 where n between lo and hi order by id;
+select id from btw42 where n not between lo and hi order by id;
+-- a JSON expression between a JSON lower bound and a numeric upper bound
+-- keeps each leg in its own domain: JSON/JSON legs rank by the trusted byte
+-- ordering and the JSON/numeric leg ranks the numeric peer
+select id, d between lo and hi as mj_inside, d not between lo and hi as mj_outside from btw42 order by id;
+drop table if exists btw42;
+drop table if exists btw41;
 drop table if exists btw40;
 drop table if exists btw39;
 drop table if exists btw38;

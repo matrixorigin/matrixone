@@ -751,8 +751,9 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 					goto END0
 				}
 			case "between":
-				// A mixed JSON/BOOL BETWEEN keeps its per-domain ranking, so
-				// a serialized master-index range cannot answer either leg.
+				// A mixed JSON scalar BETWEEN (BOOL or numeric peer) keeps its
+				// per-domain ranking, so a serialized master-index range
+				// cannot answer either leg.
 				if isMixedJSONScalarBetweenArgs(fn.Args) {
 					goto END0
 				}
@@ -2834,7 +2835,7 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 
 	case "in", "between":
 		if fn.Func.ObjName == "between" && isMixedJSONScalarBetweenArgs(fn.Args) {
-			// A mixed JSON/BOOL BETWEEN stays a typed residual: the serialized
+			// A mixed JSON scalar BETWEEN stays a typed residual: the serialized
 			// index key domain cannot reproduce the per leg scalar ranking.
 			return UnsupportedIndexCondition, nil
 		}

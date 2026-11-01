@@ -94,15 +94,18 @@ func legacyJSONScalarCheck(id int32, overloads []overload, inputs []types.Type, 
 		}
 		return current, false
 	case BETWEEN:
-		if len(inputs) != 3 || !isMixedJSONBooleanBetweenInputs(inputs) {
+		if len(inputs) != 3 ||
+			(!isMixedJSONBooleanBetweenInputs(inputs) && !isMixedJSONNumericBetweenInputs(inputs)) {
 			return current, false
 		}
 		// The predecessor lowered neither form: plain BETWEEN kept the same
 		// cast-based admission as the ordering tail, inserting an implicit
 		// CAST of the JSON operand, while NOT BETWEEN was lowered to < OR >
-		// at the binder. A persisted CHECK from either source must therefore
-		// rebind through the historical tail, with the cast legs the cast-era
-		// bind authored.
+		// at the binder. That covers the mixed JSON/BOOL triples and the
+		// mixed JSON/numeric triples (whose cast folds parsed a JSON string
+		// as numeric text and collapsed a JSON literal null into SQL NULL).
+		// A persisted CHECK from either source must therefore rebind through
+		// the historical tail, with the cast legs the cast-era bind authored.
 		return betweenLegacyCheckTail(overloads, inputs), true
 	case COALESCE:
 		legacy, ok := legacyCoalesceJSONCastCheck(overloads, inputs, current)

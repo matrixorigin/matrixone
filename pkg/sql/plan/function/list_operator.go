@@ -376,10 +376,38 @@ func isMixedJSONBooleanBetweenInputs(inputs []types.Type) bool {
 	return hasJSON && hasBool
 }
 
-// betweenTypeCheck admits the mixed JSON/BOOL scalar comparison domain
-// directly; every other shape keeps the historical cast-based check.
+// isMixedJSONNumericBetweenInputs identifies a BETWEEN whose expression and
+// bound operands all live in the JSON/numeric scalar comparison domain (the
+// same peer set IsJSONNumericComparison admits). Exactly like the JSON/BOOL
+// form above, `x BETWEEN lo AND hi` is `lo <= x AND x <= hi`, and the lowered
+// NOT BETWEEN form (x < lo OR x > hi) already binds each of those legs in the
+// JSON ranking domain. The historical check instead folded the JSON operand
+// through the comparison cast rule, so a JSON literal null became SQL NULL
+// (and a JSON string was parsed as numeric text) in the positive range while
+// the negated range ranked both by category: the two forms could disagree on
+// the same non-null row. An all-JSON or all-numeric triple stays in its own
+// historical domain.
+func isMixedJSONNumericBetweenInputs(inputs []types.Type) bool {
+	hasJSON, hasNumeric := false, false
+	for _, input := range inputs {
+		switch {
+		case input.Oid == types.T_json:
+			hasJSON = true
+		case isJSONComparisonNumericType(input.Oid):
+			hasNumeric = true
+		default:
+			return false
+		}
+	}
+	return hasJSON && hasNumeric
+}
+
+// betweenTypeCheck admits the mixed JSON scalar comparison domains — JSON/BOOL
+// and JSON/numeric — directly; every other shape keeps the historical
+// cast-based check.
 func betweenTypeCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) == 3 && isMixedJSONBooleanBetweenInputs(inputs) {
+	if len(inputs) == 3 && (isMixedJSONBooleanBetweenInputs(inputs) ||
+		isMixedJSONNumericBetweenInputs(inputs)) {
 		return newCheckResultWithSuccess(0)
 	}
 	return betweenLegacyCheckTail(overloads, inputs)
