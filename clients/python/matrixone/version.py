@@ -210,6 +210,9 @@ class VersionManager:
 
             True if compatible, False otherwise
         """
+        if operator not in (">=", ">", "<=", "<", "==", "!="):
+            raise ValueError(f"Unsupported operator: {operator}")
+
         if current_version is None:
             current_version = self._current_backend_version
 
