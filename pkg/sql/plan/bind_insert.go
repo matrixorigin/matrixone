@@ -6121,7 +6121,7 @@ func (builder *QueryBuilder) buildValueScan(
 					valueExprs[colIdx][rowIdx] = row.Expr
 				}
 			}
-			nodeID, err := builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs)
+			nodeID, err := builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs, valueScanTableDef.Cols)
 			return nodeID, effectiveColNames, err
 		}
 	}
@@ -6221,9 +6221,22 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 	bindCtx *BindContext,
 	colNames []string,
 	valueExprs [][]*plan.Expr,
+	targetCols []*plan.ColDef,
 ) (int32, error) {
 	if len(valueExprs) == 0 || len(valueExprs[0]) == 0 {
 		return 0, moerr.NewInternalError(builder.GetContext(), "value expressions are empty")
+	}
+
+	// A bare NULL has no vector type of its own. Give it the target column's
+	// type before it reaches a projected or rowset branch of the UNION ALL.
+	typedValue := func(colIdx int, expr *plan.Expr) *plan.Expr {
+		if expr.Typ.Id != int32(types.T_any) || expr.GetLit() == nil || !expr.GetLit().Isnull {
+			return expr
+		}
+		typed := DeepCopyExpr(expr)
+		typed.Typ = targetCols[colIdx].Typ
+		typed.Typ.NotNullable = false
+		return typed
 	}
 
 	rowCount := len(valueExprs[0])
@@ -6261,7 +6274,7 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		projectList := make([]*plan.Expr, projectWidth)
 		for colIdx := range colNames {
 			var err error
-			dummyID, projectList[colIdx], err = builder.flattenSubqueries(dummyID, valueExprs[colIdx][rowIdx], rowCtx)
+			dummyID, projectList[colIdx], err = builder.flattenSubqueries(dummyID, typedValue(colIdx, valueExprs[colIdx][rowIdx]), rowCtx)
 			if err != nil {
 				return 0, err
 			}
@@ -6298,12 +6311,12 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		for colIdx := range colNames {
 			rowsetData.Cols[colIdx] = &plan.ColData{}
 			for _, rowIdx := range literalRows {
-				rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: valueExprs[colIdx][rowIdx]})
+				rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: typedValue(colIdx, valueExprs[colIdx][rowIdx])})
 			}
 			valueScanTableDef.Cols[colIdx] = &plan.ColDef{
 				ColId: 0,
 				Name:  fmt.Sprintf("column_%d", colIdx),
-				Typ:   valueExprs[colIdx][literalRows[0]].Typ,
+				Typ:   targetCols[colIdx].Typ,
 			}
 		}
 		if carryOrdinal {
