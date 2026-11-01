@@ -78,7 +78,7 @@ func TestMaintainInformationSchemaViewsRetriesFailedReplacement(t *testing.T) {
 			require.Equal(t, 3, accountLookups)
 			require.Contains(t, sql, "account_id >= 11")
 			return executor.Result{}, nil
-		case sql == sysview.InformationSchemaViewsDDL:
+		case sql == strings.Replace(sysview.InformationSchemaViewsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
 			executed = append(executed, sql)
 			if failReplacement {
 				failReplacement = false
@@ -86,9 +86,6 @@ func TestMaintainInformationSchemaViewsRetriesFailedReplacement(t *testing.T) {
 			}
 			viewDefinition = sysview.InformationSchemaViewsDDL
 			successfulReplacements++
-			return executor.Result{}, nil
-		case strings.HasPrefix(sql, "DROP VIEW IF EXISTS information_schema.VIEWS"):
-			executed = append(executed, sql)
 			return executor.Result{}, nil
 		default:
 			return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
@@ -107,7 +104,7 @@ func TestMaintainInformationSchemaViewsRetriesFailedReplacement(t *testing.T) {
 	require.Equal(t, int32(accountID+1),
 		service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
 	require.Equal(t, 1, successfulReplacements)
-	require.Equal(t, 4, len(executed), "the failed attempt and the committed retry each issue DROP and CREATE")
+	require.Equal(t, 2, len(executed), "the failed attempt and the committed retry each issue one replacement")
 
 	// The persisted definition is now the idempotence marker. A subsequent
 	// pass first observes an empty page, then a wrapped scan rediscovers the
@@ -116,7 +113,7 @@ func TestMaintainInformationSchemaViewsRetriesFailedReplacement(t *testing.T) {
 	require.Zero(t, service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
 	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
 	require.Equal(t, 1, successfulReplacements)
-	require.Equal(t, 4, len(executed))
+	require.Equal(t, 2, len(executed))
 }
 
 func TestMaintainInformationSchemaViewsDoesNotSwallowReplacementNotSupported(t *testing.T) {
@@ -213,7 +210,7 @@ func TestMaintainInformationSchemaViewsCancellationRollsBackStagedReplacement(t 
 	installTransactionalInformationSchemaViewsCheck(t, state, accountID)
 
 	ctx, cancel := context.WithCancel(t.Context())
-	state.cancelAfterDrop = cancel
+	state.cancelAfterReplacement = cancel
 	service := newTransactionalInformationSchemaViewsMaintenanceTestService(t, state)
 	err := service.maintainInformationSchemaViews(ctx)
 	require.ErrorIs(t, err, context.Canceled)
@@ -343,7 +340,7 @@ func TestMaintainInformationSchemaViewsWaitsForProtocol(t *testing.T) {
 		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 			accountLookups++
 			return buildInformationSchemaViewsMaintenanceAccountRows(accountID), nil
-		case sql == sysview.InformationSchemaViewsDDL:
+		case sql == strings.Replace(sysview.InformationSchemaViewsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
 			replacements++
 			return executor.Result{}, nil
 		default:
@@ -467,7 +464,7 @@ func TestMaintainInformationSchemaViewsSkipsAccountDroppedDuringScan(t *testing.
 		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 			require.Contains(t, sql, "account_id >= 0")
 			return buildInformationSchemaViewsMaintenanceAccountRows(droppedAccountID, survivingAccountID), nil
-		case sql == sysview.InformationSchemaViewsDDL:
+		case sql == strings.Replace(sysview.InformationSchemaViewsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
 			replacements++
 			return executor.Result{}, nil
 		case strings.HasPrefix(sql, "DROP VIEW IF EXISTS information_schema.VIEWS"):
@@ -523,7 +520,7 @@ func TestMaintainInformationSchemaViewsFindsLateAccountAfterWrap(t *testing.T) {
 			default:
 				return executor.Result{}, fmt.Errorf("unexpected account lookup %d", accountLookups)
 			}
-		case sql == sysview.InformationSchemaViewsDDL:
+		case sql == strings.Replace(sysview.InformationSchemaViewsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
 			replacements++
 			definitions[30] = sysview.InformationSchemaViewsDDL
 			return executor.Result{}, nil
@@ -601,18 +598,18 @@ func installTransactionalInformationSchemaViewsCheck(
 }
 
 type transactionalInformationSchemaViewsState struct {
-	definition        string
-	replacementErr    error
-	commitErr         error
-	accountIDs        []int32
-	protocolResponses []string
-	protocolCalls     atomic.Int32
-	replacementCalls  atomic.Int32
-	protocolEntered   chan struct{}
-	protocolRelease   chan struct{}
-	protocolOnce      sync.Once
-	execTxnCalls      atomic.Int32
-	cancelAfterDrop   context.CancelFunc
+	definition             string
+	replacementErr         error
+	commitErr              error
+	accountIDs             []int32
+	protocolResponses      []string
+	protocolCalls          atomic.Int32
+	replacementCalls       atomic.Int32
+	protocolEntered        chan struct{}
+	protocolRelease        chan struct{}
+	protocolOnce           sync.Once
+	execTxnCalls           atomic.Int32
+	cancelAfterReplacement context.CancelFunc
 }
 
 type transactionalInformationSchemaViewsExecutor struct {
@@ -718,15 +715,7 @@ func (txn *transactionalInformationSchemaViewsTxn) Exec(
 			accountIDs = []int32{10}
 		}
 		return buildInformationSchemaViewsMaintenanceAccountRows(accountIDs...), nil
-	case strings.HasPrefix(sql, "DROP VIEW IF EXISTS information_schema.VIEWS"):
-		txn.definition = ""
-		if txn.state.cancelAfterDrop != nil {
-			cancel := txn.state.cancelAfterDrop
-			txn.state.cancelAfterDrop = nil
-			cancel()
-		}
-		return executor.Result{}, nil
-	case sql == sysview.InformationSchemaViewsDDL:
+	case sql == strings.Replace(sysview.InformationSchemaViewsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1):
 		txn.state.replacementCalls.Add(1)
 		if txn.state.replacementErr != nil {
 			err := txn.state.replacementErr
@@ -734,6 +723,11 @@ func (txn *transactionalInformationSchemaViewsTxn) Exec(
 			return executor.Result{}, err
 		}
 		txn.definition = sysview.InformationSchemaViewsDDL
+		if txn.state.cancelAfterReplacement != nil {
+			cancel := txn.state.cancelAfterReplacement
+			txn.state.cancelAfterReplacement = nil
+			cancel()
+		}
 		return executor.Result{}, nil
 	default:
 		return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)

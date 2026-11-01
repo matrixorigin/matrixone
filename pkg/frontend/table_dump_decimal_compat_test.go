@@ -45,6 +45,8 @@ func TestTableDumpHistoricalDecimalBoundPayload(t *testing.T) {
 	}{
 		{"legacy_decimal_dump_63a964a82f.json", "", 10},
 		{"legacy_decimal_mixed_range_63a964a82f.json", "between_", 6},
+		// Authored by the unmodified d5d1c5c8cc planner before integer batch widening.
+		{"integer_bindings_d5d1c5c8cc.json", "integer_", 2},
 	} {
 		data, err := os.ReadFile(filepath.Join("..", "sql", "plan", "testdata", input.file))
 		require.NoError(t, err)
@@ -75,14 +77,20 @@ func TestTableDumpHistoricalDecimalBoundPayload(t *testing.T) {
 				require.Equal(t, "between", expr.GetF().GetFunc().GetObjName(), "the genuine old writer must retain BETWEEN, not its comparison fallback")
 			}
 			targetBefore := proto.Clone(target)
-			sourceHash, err := tableSchemaHash(&source)
-			require.NoError(t, err)
-			targetHash, err := tableSchemaHash(target)
-			require.NoError(t, err)
-			require.Equal(t, sourceHash, targetHash)
+			// Functional index DDL reconstruction needs an engine resolver;
+			// this fixture exercises its bound-expression archive instead.
+			if name != "integer_functional_index" {
+				sourceHash, err := tableSchemaHash(&source)
+				require.NoError(t, err)
+				targetHash, err := tableSchemaHash(target)
+				require.NoError(t, err)
+				require.Equal(t, sourceHash, targetHash)
+			}
 			sensitive, err := sqlplan.AnalyzeTableDumpBindings(compiler, &source, &source)
 			require.NoError(t, err, "DUMP must accept the unchanged old catalog")
-			require.True(t, sensitive, "base MONTHNAME default genuinely requires a bound archive")
+			if name != "integer_functional_index" {
+				require.True(t, sensitive, "base MONTHNAME default genuinely requires a bound archive")
+			}
 			payload, digest, err := tableDumpBoundExpressions(&source)
 			require.NoError(t, err)
 			require.NotEmpty(t, fixture.Payload)

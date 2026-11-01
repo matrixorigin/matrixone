@@ -1,3 +1,5 @@
+from unittest.mock import call
+
 # Copyright 2021 - 2022 Matrix Origin
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -287,7 +289,10 @@ class TestUnifiedTransaction(unittest.TestCase):
         tx_clone.clone_database("target_db", "source_db")
 
         # Verify that the transaction's execute was called
-        mock_tx.execute.assert_called_once_with("CREATE DATABASE target_db CLONE source_db")
+        self.assertEqual(
+            mock_tx.execute.call_args_list,
+            [call('CREATE DATABASE target_db CLONE source_db'), call('SHOW CREATE DATABASE target_db')],
+        )
 
     def test_mixed_operations_pattern(self):
         """Test mixed SQLAlchemy and MatrixOne operations pattern"""

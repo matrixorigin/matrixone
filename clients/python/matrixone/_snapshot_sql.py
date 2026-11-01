@@ -9,7 +9,7 @@ must use native SQL with explicit snapshot hints; no partial query is dispatched
 import re
 from typing import List, NamedTuple
 
-from ._sql_literals import sql_literal
+from ._sql_literals import sql_string_token
 
 
 class _Token(NamedTuple):
@@ -89,7 +89,7 @@ def _tokens(sql):
         raise ValueError('Unbalanced SQL parentheses')
 
 
-def rewrite_snapshot(sql, snapshot):
+def rewrite_snapshot(sql, snapshot, *, snapshot_token=None):
     if not isinstance(sql, str) or not isinstance(snapshot, str) or not snapshot:
         raise ValueError('Snapshot queries require SQL text and a nonempty snapshot name')
     tokens = list(_tokens(sql))
@@ -141,7 +141,10 @@ def rewrite_snapshot(sql, snapshot):
             if not (suffix.kind == 'word' and suffix.text.upper() in _BOUNDARIES) and suffix.text != ';':
                 raise ValueError('Unsupported snapshot table-source suffix')
         inserts.append(end)
-    hint = '{snapshot = ' + sql_literal(snapshot) + '}'
+    # Raw SQL owns its literal token; typed SQL may supply a compiler-owned bind.
+    # Validate the original name in both paths before accepting that token.
+    literal_token = sql_string_token(snapshot, context='Snapshot')
+    hint = '{snapshot = ' + (literal_token if snapshot_token is None else snapshot_token) + '}'
     parts: List[str] = []
     previous = 0
     for end in inserts:

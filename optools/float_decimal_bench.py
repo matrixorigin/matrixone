@@ -128,6 +128,8 @@ def main():
     mode.add_argument('--pilot', type=Path, help='write a frozen workload plan; baseline only')
     mode.add_argument('--plan', type=Path, help='run a previously frozen plan')
     ap.add_argument('--output', type=Path, required=True)
+    ap.add_argument('--shortest-path', choices=('numeric', 'formatted'), default='numeric',
+                    help='source classification only; use formatted for the baseline binary')
     args = ap.parse_args()
     if not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', args.database):
         ap.error('database must be a simple lowercase identifier')
@@ -139,7 +141,7 @@ def main():
         plan = load_plan(args.plan) if args.plan else {}
     except (OSError, ValueError) as exc:
         ap.error(str(exc))
-    report = {'protocol': {'warmups': WARMUPS, 'samples': SAMPLES, 'timeout_s': TIMEOUT}, 'cohorts': []}
+    report = {'protocol': {'warmups': WARMUPS, 'samples': SAMPLES, 'timeout_s': TIMEOUT, 'shortest_path': args.shortest_path}, 'cohorts': []}
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     def save():
@@ -159,7 +161,7 @@ def main():
             typ, scan, insert = statements(name, width, scale)
             paths = []
             for value in values:
-                path = 'formatting fallback'
+                path = f'{args.shortest_path} shortest fallback'
                 if width > 16 and value.is_integer():
                     path = 'exact integral'
                 elif scale <= 19:
@@ -167,7 +169,7 @@ def main():
                     if 0.25 <= z < 2 ** 52 and abs((z - int(z)) - 0.5) > z * 2 ** -50:
                         path = 'existing fast path'
                     elif z < 0.25:
-                        path = 'small scaled value (formatting fallback)'
+                        path = f'small scaled value ({args.shortest_path} shortest fallback)'
                 paths.append(path)
             entry = {'name': name, 'type': typ, 'scan_sql': scan, 'insert_sql': insert,
                      'current_source_paths': paths, 'pilot': []}

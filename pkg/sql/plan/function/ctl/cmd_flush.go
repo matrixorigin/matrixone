@@ -18,6 +18,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,8 +38,8 @@ func handleFlush() handleFunc {
 		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			// parameter should be "DbName.TableName[.AccountId]" or "TableId"
 			parameters := strings.Split(parameter, ".")
-			if len(parameters) == 0 || len(parameters) > 3 {
-				return nil, moerr.NewInternalErrorNoCtx("handleFlush: expected \"TableId\" or \"DbName.TableName[.AccountId]\" ")
+			if len(parameters) > 3 {
+				return nil, invalidFlushTarget(parameter)
 			}
 			txnOp := proc.GetTxnOperator()
 			if txnOp == nil {
@@ -48,7 +49,7 @@ func handleFlush() handleFunc {
 			if len(parameters) == 1 {
 				tblId, err := strconv.ParseUint(parameters[0], 10, 64)
 				if err != nil {
-					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: table id parse fail")
+					return nil, invalidFlushTarget(parameter)
 				}
 				payload, err := types.Encode(&cmd_util.FlushTable{TableID: tblId})
 				if err != nil {
@@ -58,16 +59,27 @@ func handleFlush() handleFunc {
 			}
 
 			ctx := proc.Ctx
+			if parameters[0] == "" || parameters[1] == "" {
+				return nil, invalidFlushTarget(parameter)
+			}
 			if len(parameters) == 3 {
 				accId, err := strconv.ParseUint(parameters[2], 0, 32)
 				if err != nil {
-					return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: invalid account id")
+					return nil, invalidFlushTarget(parameter)
 				}
 				ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(accId))
 			}
 
 			database, err := proc.GetSessionInfo().StorageEngine.Database(ctx, parameters[0], txnOp)
 			if err != nil {
+				// The storage engine reports a database missing from this
+				// transaction's snapshot as the internal OkExpectedEOB sentinel
+				// (disttae Engine.Database). Translate it to the typed
+				// unknown-database error the way the DDL paths do, so the
+				// errno-0 sentinel never leaks to SQL clients.
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					return nil, moerr.NewBadDB(ctx, parameters[0])
+				}
 				return nil, err
 			}
 			rel, err := database.Relation(ctx, parameters[1], nil)
@@ -85,4 +97,34 @@ func handleFlush() handleFunc {
 			protoc.MustUnmarshal(&resp, data)
 			return resp, nil
 		})
+}
+
+// quotedFlushEchoLimit bounds how many bytes of the malformed target are
+// echoed back in the error message; long garbage must not grow the reporting
+// prefix without limit.
+const quotedFlushEchoLimit = 64
+
+// invalidFlushTarget reports a malformed flush target as bounded invalid input
+// naming the accepted target shapes, mirroring the reader handler's usage
+// hint. The echoed target is cut to a fixed byte budget with an explicit
+// truncation mark, so the message stays bounded for any input; short targets
+// keep the exact full echo.
+func invalidFlushTarget(parameter string) error {
+	return moerr.NewInvalidInputNoCtxf(
+		"invalid flush ctl parameter %q, expect \"TableId\" or \"DbName.TableName[.AccountId]\", e.g. 2725 or db1.t1",
+		truncateFlushEcho(parameter))
+}
+
+// truncateFlushEcho cuts the echo to the byte budget, backing up to a rune
+// boundary so the quoted prefix stays one printable token; the mark records
+// the cut.
+func truncateFlushEcho(parameter string) string {
+	if len(parameter) <= quotedFlushEchoLimit {
+		return parameter
+	}
+	prefix := parameter[:quotedFlushEchoLimit]
+	for len(prefix) > 0 && !utf8.ValidString(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	return prefix + "..."
 }

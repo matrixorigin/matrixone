@@ -224,11 +224,6 @@ func freeWorkerJoinMsg(msg *WorkerJoinMsg, proc *process.Process) {
 	}
 }
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
 	state   int
 	lastPos int
@@ -254,7 +249,10 @@ type container struct {
 	finalizeActionIdx     int
 	finalizeActionActive  bool
 	finalizeLogicalAffect uint64
+	finalizeAnyChanged    bool
+	finalizeBeforeVecs    []*vector.Vector
 	finalizeCurrentVecs   []*vector.Vector
+	odkuSummary           process.ODKUResultSummary
 
 	batches       []*batch.Batch
 	batchRowCount int64
@@ -280,7 +278,7 @@ type container struct {
 	stableSources         []*vector.Vector
 	stableDests           []*vector.Vector
 
-	evecs []evalVector
+	evecs []colexec.ExpressionExecutor
 	vecs  []*vector.Vector
 
 	mp        *message.JoinMap
@@ -345,15 +343,20 @@ type DedupJoin struct {
 	// UpdateExpressions evaluates one ordered action against its current row
 	// image. A nil result requests ExecYield without publishing that action.
 	// Results remain borrowed until the next invocation or operator cleanup.
-	UpdateExpressions        func(*process.Process, *batch.Batch, *batch.Batch) ([]*vector.Vector, error)
-	HasODKUAffectedRows      bool
-	AffectedRowsResultPos    int32
-	PhysicalChangedResultPos int32
-	UpdateCheckColIdxList    []int32
-	CountFoundRows           bool
-	EmitActionRows           bool
-	ActionFinalResultPos     int32
-	ForeignKeyChecks         []ODKUForeignKeyCheck
+	UpdateExpressions             func(*process.Process, *batch.Batch, *batch.Batch) ([]*vector.Vector, error)
+	HasODKUAffectedRows           bool
+	AffectedRowsResultPos         int32
+	PhysicalChangedResultPos      int32
+	UpdateCheckColIdxList         []int32
+	CountFoundRows                bool
+	EmitActionRows                bool
+	ActionFinalResultPos          int32
+	ForeignKeyChecks              []ODKUForeignKeyCheck
+	ODKUResultTracking            bool
+	ODKUTargetAutoIncrementCol    int32
+	ODKUGeneratedCol              int32
+	ODKUOrdinalCol                int32
+	ODKUGeneratedAutoIncrementCol int32
 
 	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
 	// arrays. For each i, when probe hits a build bucket the probe-side column
@@ -517,6 +520,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	ctr.cleanEvalVectors()
 	ctr.roundStatusPublished = false
+	ctr.odkuSummary = process.ODKUResultSummary{}
 	ctr.state = Build
 	ctr.updateSuspended = false
 	ctr.lastPos = 0
@@ -539,6 +543,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
+	ctr.odkuSummary = process.ODKUResultSummary{}
 }
 
 func (ctr *container) cleanExprExecutor() {
@@ -566,6 +571,7 @@ func (ctr *container) cleanStableUpdateVecs(proc *process.Process) {
 	ctr.foreignKeyBeforeVecs = nil
 	ctr.foreignKeyEligibility = nil
 	ctr.probeCurrentVecs = nil
+	ctr.finalizeBeforeVecs = nil
 	ctr.finalizeCurrentVecs = nil
 }
 
@@ -648,6 +654,8 @@ func (ctr *container) resetActionReplayCursors() {
 	ctr.finalizeActionIdx = 0
 	ctr.finalizeActionActive = false
 	ctr.finalizeLogicalAffect = 0
+	ctr.finalizeAnyChanged = false
+	ctr.finalizeBeforeVecs = nil
 	ctr.finalizeCurrentVecs = nil
 }
 
@@ -662,10 +670,9 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+		if ctr.evecs[i] != nil {
+			ctr.evecs[i].Free()
 		}
-		ctr.evecs[i].vec = nil
 	}
 	ctr.evecs = nil
 	ctr.vecs = nil

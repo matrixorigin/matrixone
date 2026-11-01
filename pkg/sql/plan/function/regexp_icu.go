@@ -2701,30 +2701,7 @@ func (rs *regexpSet) regexp2ReplaceWithTemplate(
 				matcher, str, regexpReplacementLiteral(template), startByte,
 				occurrence, subjectIsBinary, pureMatchType, maxBytes, deadline)
 		}
-		size, err := regexpAddReplacementSize(0, indices[0], maxBytes)
-		if err != nil {
-			return "", err
-		}
-		size, err = regexpAddTemplateSize(size, str, indices, template, maxBytes)
-		if err != nil {
-			return "", err
-		}
-		size, err = regexpAddReplacementSize(size, len(str)-indices[1], maxBytes)
-		if err != nil {
-			return "", err
-		}
-		var result strings.Builder
-		result.Grow(int(size))
-		if err := regexpWriteReplacementString(&result, str[:indices[0]], maxBytes); err != nil {
-			return "", err
-		}
-		if err := regexpWriteTemplate(&result, str, indices, template, maxBytes); err != nil {
-			return "", err
-		}
-		if err := regexpWriteReplacementString(&result, str[indices[1]:], maxBytes); err != nil {
-			return "", err
-		}
-		return result.String(), nil
+		return regexpReplaceSingleTemplate(str, indices, template, maxBytes)
 	}
 
 	upperBound, bounded := regexpReplaceOutputUpperBound(len(str), len(replacement))

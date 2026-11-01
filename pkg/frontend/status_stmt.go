@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -77,6 +78,21 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan()),
 			}
 			freezeResultMetadata(execCtx.runner)
+			// PERFORM persists every result batch through the saved-result
+			// writer without marking the statement published (resp_client
+			// writeClientBatch returns before the publication mark), so a
+			// tier-2 statement retry stays eligible after rows were
+			// retained. Arm the transition-time discard so the failed
+			// generation's blocks and accounting are dropped after
+			// quiescence and before the replay — the same attempt-output
+			// lifecycle the prepared-cursor arms (design §4 D; #30359
+			// review). The per-statement SessionInfo rebuild clears the
+			// hook at the next statement boundary.
+			if ses.proc != nil && ses.proc.Base != nil {
+				ses.proc.Base.SessionInfo.RetryDiscardOutput = func() error {
+					return abortPerformAttemptSavedResult(execCtx)
+				}
+			}
 			runBegin := time.Now()
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
@@ -282,6 +298,8 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err != nil { // executor success, but processLoadLocal goroutine failed
 				return
 			}
+			// Test barrier after all LOAD work, before transaction finalization.
+			_, _, _ = fault.TriggerFault("load-local-before-finalize")
 		}
 
 		// only log if run time is longer than 1s
@@ -432,9 +450,19 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		localFileName := ""
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
-			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
-			if res.lastInsertId != 0 {
-				ses.SetLastInsertID(res.lastInsertId)
+			isODKU := len(st.OnDuplicateUpdate) > 0 &&
+				!(len(st.OnDuplicateUpdate) == 1 && st.OnDuplicateUpdate[0] == nil)
+			if isODKU && execCtx.cw != nil && execCtx.cw.Plan().GetQuery().HasODKUResultTracking() {
+				lastInsertID, generated := execCtx.proc.GetODKUProtocolIDForSource(st.IsValuesSource())
+				res.lastInsertId = lastInsertID
+				if generated {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
+			} else {
+				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+				if res.lastInsertId != 0 {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
 			}
 		case *tree.Replace:
 			// REPLACE uses the same PRE_INSERT auto-increment pipeline as INSERT,
@@ -490,6 +518,10 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			err = doDropProcedureWithDB(execCtx.reqCtx, ses, execCtx.stmt)
 
 		case *tree.Load:
+			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+			if res.lastInsertId != 0 {
+				ses.SetLastInsertID(res.lastInsertId)
+			}
 			if st.Local && execCtx.isIssue3482 {
 				isIssue3482 = true
 				localFileName = st.Param.Filepath

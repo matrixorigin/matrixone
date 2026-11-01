@@ -7463,6 +7463,30 @@ var supportedArrayOperations = []FuncNew{
 					return SummationArray[float64]
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return SummationNarrowArray[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return SummationNarrowArray[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return SummationNarrowArray[int8] },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_uint8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return SummationNarrowArray[uint8] },
+			},
 		},
 	},
 
@@ -7494,6 +7518,30 @@ var supportedArrayOperations = []FuncNew{
 					return L1NormArray[float64]
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1NormNarrowArray[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1NormNarrowArray[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1NormNarrowArray[int8] },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_uint8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L1NormNarrowArray[uint8] },
+			},
 		},
 	},
 
@@ -7524,6 +7572,30 @@ var supportedArrayOperations = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return L2NormArray[float64]
 				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_bf16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2NormNarrowArray[types.BF16] },
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_array_float16},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2NormNarrowArray[types.Float16] },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_int8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2NormNarrowArray[int8] },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_uint8},
+				retType:    func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:      func() executeLogicOfOverload { return L2NormNarrowArray[uint8] },
 			},
 		},
 	},
@@ -8082,6 +8154,55 @@ var supportedArrayOperations = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return SubVectorWith3Args[float64]
 				},
+			},
+			// narrow vectors are sliced as they are, so the result keeps their type
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_bf16, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_array_bf16.ToType() },
+				newOp:      func() executeLogicOfOverload { return SubVectorWith2Args[types.BF16] },
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_float16, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_array_float16.ToType() },
+				newOp:      func() executeLogicOfOverload { return SubVectorWith2Args[types.Float16] },
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_array_int8, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_array_int8.ToType() },
+				newOp:      func() executeLogicOfOverload { return SubVectorWith2Args[int8] },
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_array_uint8, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_array_uint8.ToType() },
+				newOp:      func() executeLogicOfOverload { return SubVectorWith2Args[uint8] },
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_array_bf16, types.T_int64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_array_bf16.ToType() },
+				newOp:      func() executeLogicOfOverload { return SubVectorWith3Args[types.BF16] },
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_array_float16, types.T_int64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_array_float16.ToType() },
+				newOp:      func() executeLogicOfOverload { return SubVectorWith3Args[types.Float16] },
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_array_int8, types.T_int64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_array_int8.ToType() },
+				newOp:      func() executeLogicOfOverload { return SubVectorWith3Args[int8] },
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_array_uint8, types.T_int64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_array_uint8.ToType() },
+				newOp:      func() executeLogicOfOverload { return SubVectorWith3Args[uint8] },
 			},
 		},
 	},
@@ -15070,6 +15191,32 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_index_sub_part`
+	{
+		functionId: MO_INDEX_SUB_PART,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			// Retained prefix length of one index part from
+			// mo_catalog.mo_indexes.algo_params; SQL NULL without a
+			// retained prefix.
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalIndexSubPart
+				},
+			},
+		},
+	},
+
 	// function `internal_char_length`
 	{
 		functionId: INTERNAL_CHAR_LENGTH,
@@ -15083,6 +15230,20 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				executionStable: true,
 				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalCharLength
+				},
+			},
+			// Declared ENUM/SET labels derive the label-aware character
+			// metadata of information_schema.COLUMNS.
+			{
+				overloadId:      1,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -15106,6 +15267,20 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				executionStable: true,
 				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalCharSize
+				},
+			},
+			// Declared ENUM/SET labels derive the label-aware octet metadata
+			// of information_schema.COLUMNS.
+			{
+				overloadId:      1,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -15198,6 +15373,20 @@ var supportedOthersBuiltIns = []FuncNew{
 					return builtInInternalNumericPrecision
 				},
 			},
+			// Declared ENUM/SET labels suppress SET's bitmap backing-store
+			// numeric identity.
+			{
+				overloadId:      1,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalNumericPrecision
+				},
+			},
 		},
 	},
 
@@ -15214,6 +15403,20 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				executionStable: true,
 				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalNumericScale
+				},
+			},
+			// Declared ENUM/SET labels suppress SET's bitmap backing-store
+			// numeric identity.
+			{
+				overloadId:      1,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},

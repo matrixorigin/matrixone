@@ -185,3 +185,94 @@ func checkedAdd(left, right uint64) (uint64, bool) {
 	}
 	return left + right, true
 }
+
+// CacheBatch replaces a retained CTE cache slot while preserving memory accounting.
+// A nil selectedRows disables filtering; a non-nil empty slice retains no rows.
+func (a *Accountant) CacheBatch(proc *process.Process, analyzer process.Analyzer, freeBats *[]*batch.Batch, index int, src *batch.Batch, selectedRows []int64) (*batch.Batch, error) {
+	var cached *batch.Batch
+	if index < len(*freeBats) {
+		cached = (*freeBats)[index]
+	}
+	replacement, err := a.BeginReplacement(proc.Ctx, cached, src)
+	if err != nil {
+		return nil, err
+	}
+
+	if index == len(*freeBats) {
+		appBat, err := src.Dup(proc.Mp())
+		if err != nil {
+			replacement.Rollback()
+			return nil, err
+		}
+		if selectedRows != nil {
+			appBat.Shrink(selectedRows, false)
+		}
+		if err = replacement.Commit(appBat); err != nil {
+			appBat.Clean(proc.Mp())
+			replacement.Discard()
+			return nil, err
+		}
+		analyzer.Alloc(int64(appBat.Size()))
+		*freeBats = append(*freeBats, appBat)
+		return appBat, nil
+	}
+
+	if !src.Last() && sameBatchSchema(cached, src) {
+		cached.CleanOnlyData()
+		appBat, err := cached.AppendWithCopy(proc.Ctx, proc.Mp(), src)
+		if err != nil {
+			cached.Clean(proc.Mp())
+			(*freeBats)[index] = nil
+			replacement.Discard()
+			return nil, err
+		}
+		appBat.Recursive = src.Recursive
+		appBat.ShuffleIDX = src.ShuffleIDX
+		appBat.Attrs = append(appBat.Attrs[:0], src.Attrs...)
+		appBat.SetRowCount(src.RowCount())
+		if selectedRows != nil {
+			appBat.Shrink(selectedRows, false)
+		}
+		if err = replacement.Commit(appBat); err != nil {
+			appBat.Clean(proc.Mp())
+			(*freeBats)[index] = nil
+			replacement.Discard()
+			return nil, err
+		}
+		return appBat, nil
+	}
+
+	// A reused slot may have a different schema after Reset.
+	appBat, err := src.Dup(proc.Mp())
+	if err != nil {
+		replacement.Rollback()
+		return nil, err
+	}
+	if selectedRows != nil {
+		appBat.Shrink(selectedRows, false)
+	}
+	if err = replacement.Commit(appBat); err != nil {
+		appBat.Clean(proc.Mp())
+		replacement.Rollback()
+		return nil, err
+	}
+	analyzer.Alloc(int64(appBat.Size()))
+	if cached != nil {
+		cached.Clean(proc.Mp())
+	}
+	(*freeBats)[index] = appBat
+	return appBat, nil
+}
+
+func sameBatchSchema(left, right *batch.Batch) bool {
+	if left == nil || right == nil || len(left.Vecs) != len(right.Vecs) {
+		return false
+	}
+	for i := range left.Vecs {
+		if left.Vecs[i] == nil || right.Vecs[i] == nil ||
+			!left.Vecs[i].GetType().Eq(*right.Vecs[i].GetType()) {
+			return false
+		}
+	}
+	return true
+}

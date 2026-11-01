@@ -133,7 +133,12 @@ func (t Time) NumericString(scale int32) string {
 //	"-11:11:11.1235"		"-11:11:11.124"
 //	"-11:11:11.9995"      		"-11:11:12.000"
 func ParseTime(s string, scale int32) (Time, error) {
-	return parseTime(s, scale, nil, nil)
+	return ParseTimeWithContext(defaultParseContext, s, scale)
+}
+
+// ParseTimeWithContext parses with the caller's error reporting context.
+func ParseTimeWithContext(ctx context.Context, s string, scale int32) (Time, error) {
+	return parseTimeWithContext(ctx, s, scale, nil, nil)
 }
 
 // TruncateTemporalFractionForParse discards excess digits only from a complete
@@ -165,6 +170,10 @@ func TruncateTemporalFractionForParse(s string, scale int32) string {
 // MatrixOne's internal representation. The public ParseTime error remains a
 // *moerr.Error so existing callers retain its classification contract.
 func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Time, error) {
+	return parseTimeWithContext(defaultParseContext, s, scale, outOfRangeNegative, outOfRange)
+}
+
+func parseTimeWithContext(ctx context.Context, s string, scale int32, outOfRangeNegative, outOfRange *bool) (Time, error) {
 	s = strings.TrimSpace(s)
 
 	// separate into date&time and msec parts without allocating a []string
@@ -172,7 +181,7 @@ func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Tim
 	timeString := s
 	if dotIdx := strings.IndexByte(s, '.'); dotIdx >= 0 {
 		if dotIdx == 0 || dotIdx == len(s)-1 {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 		}
 		timeString = s[:dotIdx]
 		msecPart = s[dotIdx+1:]
@@ -185,9 +194,9 @@ func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Tim
 	if isDateType(timeString) {
 		// The date type format must be "yyyy-mm-dd hh:mm:ss" and
 		// it can be handled like Datetime
-		dt, err := ParseDatetime(s, scale)
+		dt, err := ParseDatetimeWithContext(ctx, s, scale)
 		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 		}
 		return dt.ToTime(scale), nil
 	} else {
@@ -205,7 +214,7 @@ func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Tim
 			var err error
 			day, err = strconv.ParseUint(timeString[:spIdx], 10, 64)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 			timeString = timeString[spIdx+1:]
 		}
@@ -221,30 +230,30 @@ func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Tim
 		// case 1: s/ss/mss/mmss/hmmss/hhmmss/...hhhmmss
 		l := len(timeString)
 		if l > 14 {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 		}
 		if l <= 2 {
 			if sec, err = strconv.ParseUint(timeString, 10, 8); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 		} else if l <= 4 {
 			minuLen := l - 2
 			if minute, err = strconv.ParseUint(timeString[:minuLen], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 			if sec, err = strconv.ParseUint(timeString[minuLen:], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 		} else {
 			hourLen := l - 4
 			if hour, err = strconv.ParseUint(timeString[:hourLen], 10, 64); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 			if minute, err = strconv.ParseUint(timeString[hourLen:hourLen+2], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 			if sec, err = strconv.ParseUint(timeString[hourLen+2:], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 		}
 	} else {
@@ -252,39 +261,39 @@ func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Tim
 		if c2 <= c1 {
 			// case 2: h:mm or hh:mm
 			if hour, err = strconv.ParseUint(timeString[:c1], 10, 64); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 			if minute, err = strconv.ParseUint(timeString[c1+1:], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 			sec = 0
 		} else {
 			// make sure there's no third colon
 			if strings.IndexByte(timeString[c2+1:], ':') >= 0 {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 			// case 3: h:mm:ss or hh:mm:ss
 			if hour, err = strconv.ParseUint(timeString[:c1], 10, 64); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 			if minute, err = strconv.ParseUint(timeString[c1+1:c2], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 			if sec, err = strconv.ParseUint(timeString[c2+1:], 10, 8); err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 			}
 		}
 	}
 
 	if minute > maxMinuteInHour || sec > maxSecondInMinute {
-		return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 	}
 
 	// handle msec part
 	if msecPart != "" {
-		msec, carry, err = getMsec(msecPart, scale)
+		msec, carry, err = getMsecWithContext(ctx, msecPart, scale)
 		if err != nil {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+			return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 		}
 	}
 	if carry != 0 {
@@ -306,7 +315,7 @@ func parseTime(s string, scale int32, outOfRangeNegative, outOfRange *bool) (Tim
 		if outOfRange != nil {
 			*outOfRange = true
 		}
-		return -1, moerr.NewInvalidInputNoCtxf("invalid time value %s", s)
+		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid time value %s", s)
 	}
 
 	return TimeFromClock(isNegative, hour+day*24, uint8(minute), uint8(sec), msec), nil

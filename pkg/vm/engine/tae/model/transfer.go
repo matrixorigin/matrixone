@@ -79,7 +79,8 @@ func (table *TransferTable[T]) Len() int {
 }
 
 func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) {
-	table.RLock()
+	table.Lock()
+	defer table.Unlock()
 	for _, page := range table.pages {
 		opt := page.Item().TTL()
 		if opt == clearMemory {
@@ -89,10 +90,7 @@ func (table *TransferTable[T]) prepareTTL() (mem, disk []*common.PinnedItem[T]) 
 		}
 	}
 	disk = append(disk, table.deletedPages...)
-	table.RUnlock()
-	table.Lock()
-	defer table.Unlock()
-	table.deletedPages = make([]*common.PinnedItem[T], 0)
+	table.deletedPages = nil
 	return
 }
 
@@ -103,7 +101,10 @@ func (table *TransferTable[T]) executeTTL(mem, disk []*common.PinnedItem[T]) {
 
 	table.Lock()
 	for _, pinned := range disk {
-		delete(table.pages, *pinned.Item().ID())
+		id := *pinned.Item().ID()
+		if table.pages[id] == pinned {
+			delete(table.pages, id)
+		}
 	}
 	table.Unlock()
 	for _, pinned := range disk {
@@ -152,9 +153,15 @@ func (table *TransferTable[T]) DeletePage(id *common.ID) (deleted bool) {
 
 func (table *TransferTable[T]) Close() {
 	table.Lock()
-	defer table.Unlock()
-	for _, item := range table.pages {
+	pages := table.pages
+	deletedPages := table.deletedPages
+	table.pages = make(map[common.ID]*common.PinnedItem[T])
+	table.deletedPages = nil
+	table.Unlock()
+	for _, item := range pages {
 		item.Close()
 	}
-	table.pages = make(map[common.ID]*common.PinnedItem[T])
+	for _, item := range deletedPages {
+		item.Close()
+	}
 }

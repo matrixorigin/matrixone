@@ -126,7 +126,6 @@ func NewMessageCodec(
 	options ...CodecOption,
 ) Codec {
 	bc := &baseCodec{
-		sid:            sid,
 		logger:         getLogger(sid).Named("morpc"),
 		messageFactory: messageFactory,
 		maxBodySize:    defaultMaxBodyMessageSize,
@@ -168,7 +167,6 @@ func (c *messageCodec) AddHeaderCodec(hc HeaderCodec) {
 
 type baseCodec struct {
 	decodeParent    func() context.Context
-	sid             string
 	logger          *log.MOLogger
 	allocator       malloc.Allocator
 	checksumEnabled bool

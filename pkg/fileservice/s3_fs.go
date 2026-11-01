@@ -47,10 +47,11 @@ type S3FS struct {
 	rawStorage ObjectStorage
 	keyPrefix  string
 
-	memCache    *MemCache
-	diskCache   *DiskCache
-	remoteCache *RemoteCache
-	asyncUpdate bool
+	memCache       *MemCache
+	diskCache      *DiskCache
+	indexFileCache *IndexFileCache
+	remoteCache    *RemoteCache
+	asyncUpdate    bool
 
 	perfCounterSets []*perfcounter.CounterSet
 
@@ -324,6 +325,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	s.remoteCache = caches.remote
 	s.memCache = caches.memory
 	s.diskCache = caches.disk
+	s.indexFileCache = caches.index
 	if s.memCache != nil {
 		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
 	}
@@ -1647,8 +1649,13 @@ func (*S3FS) ETLCompatible() {}
 
 var _ CachingFileService = new(S3FS)
 
+// IndexFileCache returns the index-file cache, or nil.
+func (s *S3FS) IndexFileCache() *IndexFileCache {
+	return s.indexFileCache
+}
+
 func (s *S3FS) Close(ctx context.Context) {
-	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache}
+	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache, index: s.indexFileCache}
 	if s.decodedReads != nil {
 		s.decodedReads.close(func() { caches.close(ctx) })
 	} else {

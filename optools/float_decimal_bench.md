@@ -17,10 +17,11 @@ one of the three bounded row counts. Existing output files are refused. Set
 `MYSQL_PWD` for credentials (default test credentials are dump/111).
 
 Build comparison binaries with identical toolchain, compiler/native inputs and
-build flags. For the #31133 follow-up, A is current main and C disables only the
-conservative fast path added by #31279. C retains shortest-decimal rounding and
-the exact integral Decimal128 path; it is not a historical parent binary. Use
-C–A–A–C order and run the pilot on C.
+build flags. For the #31133 follow-up, A is the pre-optimization source using
+formatted shortest values and B uses numeric shortest coefficients. Both retain #31279's conservative fast path and
+the exact integral Decimal128 path. Run the pilot only on A, then measure in
+A–B–B–A order. Pass `--shortest-path formatted` for A and `numeric` for B; this
+labels source classification and does not change any SQL or timed operation.
 
 For future A/B patches, a Go `-overlay` that replaces only
 `pkg/container/types/decimal.go` with its baseline contents allows building A
@@ -31,7 +32,7 @@ Use the baseline comparison binary alone for the pilot:
 
 ```sh
 python3 optools/float_decimal_bench.py --port 26433 \
-  --pilot "$TMPDIR/decimal-plan.json" --output "$TMPDIR/decimal-pilot.json"
+  --shortest-path formatted --pilot "$TMPDIR/decimal-plan.json" --output "$TMPDIR/decimal-pilot.json"
 ```
 
 For each cohort, the pilot selects the smallest of 1M, 4M and 16M rows whose
@@ -65,8 +66,11 @@ samples are recorded. No performance threshold belongs in UT/BVT.
 Compare medians, min/max and quartiles, inspect both instances for drift and
 retain failures. Scalar/vector wins alone do not establish query wins. Scan and
 write costs can hide conversion improvements; report unresolved differences and
-remaining formatting cost. Current code retains formatting for tiny values,
-ties, near ties, large scaled values and fractional scale >19.
+remaining conversion cost. Current code computes a numeric shortest
+coefficient/exponent for tiny values,
+ties, near ties, large scaled values and fractional scale >19. It avoids
+formatting and digit parsing in the shared successful conversion path; existing
+error diagnostics and explicit-cast retries can still format text.
 
 For an in-process comparison, run `BenchmarkFloatDecimalConversions` in the
 types package and `BenchmarkFloatDecimalVectors` in the function package, using
@@ -75,7 +79,8 @@ both sources. The vector benchmark reports ns/row and includes result reset;
 NULL is a separate control, and every output is rational-oracle checked outside
 timing. Keep service measurements separate from Go build/test/benchmark jobs.
 
-`current_source_paths` classifies inputs against the current conservative guard;
-it is not runtime instrumentation. C disables that guard, so its nonintegral
-values all use formatting. Stored bit checks and recorded EXPLAIN complement
-this source-level classification.
+`current_source_paths` classifies inputs against the unchanged conservative
+guard and the selected `--shortest-path`; it is not runtime instrumentation or
+verification of which binary is running. Record binary/source fingerprints
+separately. Stored bit checks and recorded EXPLAIN complement this source
+classification.

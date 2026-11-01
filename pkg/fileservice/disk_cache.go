@@ -55,6 +55,7 @@ type DiskCache struct {
 
 	cache        *fifocache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
+	dirEntries   bool
 	directoryMu  sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
@@ -76,6 +77,8 @@ type DiskCache struct {
 	// beforeFilePublication is a test-only phase barrier. Production instances
 	// leave it nil, so the publication hot path pays only one predictable branch.
 	beforeFilePublication func()
+	// beforeCacheDirFileOpen is a test-only hook between the files of one entry open.
+	beforeCacheDirFileOpen func()
 }
 
 // Keep this type non-zero-sized: pointers to distinct zero-sized allocations
@@ -121,6 +124,27 @@ func newDiskCacheWithMetricScope(
 	name string,
 	metricScope string,
 ) (ret *DiskCache, err error) {
+	return newDiskCache(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, metricScope, diskCacheOptions{})
+}
+
+type diskCacheOptions struct {
+	// dirEntries makes directories named with cacheDirSuffix cache entries (IndexFileCache).
+	dirEntries bool
+	// sizeHintShare scales GlobalDiskCacheSizeHint for this cache; 0 means the whole hint.
+	sizeHintShare float64
+}
+
+func newDiskCache(
+	ctx context.Context,
+	path string,
+	capacity fscache.CapacityFunc,
+	perfCounterSets []*perfcounter.CounterSet,
+	asyncLoad bool,
+	cacheDataAllocator CacheDataAllocator,
+	name string,
+	metricScope string,
+	opts diskCacheOptions,
+) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
 	if err != nil {
@@ -139,6 +163,9 @@ func newDiskCacheWithMetricScope(
 	capacityFunc := func() int64 {
 		// read from global size hint
 		if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
+			if opts.sizeHintShare > 0 {
+				return int64(float64(n) * opts.sizeHintShare)
+			}
 			return n
 		}
 		// fallback
@@ -153,6 +180,7 @@ func newDiskCacheWithMetricScope(
 		fileSync:           func(file *os.File) error { return file.Sync() },
 
 		capacityFunc: capacityFunc,
+		dirEntries:   opts.dirEntries,
 	}
 	cache = fifocache.NewWithPrepareEvict(
 
@@ -229,6 +257,7 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 	type Info struct {
 		Path  string
 		Entry os.DirEntry
+		Dir   bool
 	}
 	works := make(chan Info)
 
@@ -245,6 +274,14 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 				case work, ok := <-works:
 					if !ok {
 						return
+					}
+					if work.Dir {
+						size, err := cacheDirSize(work.Path)
+						if err != nil {
+							continue // ignore
+						}
+						d.cache.Set(ctx, work.Path, struct{}{}, size)
+						continue
 					}
 					info, err := work.Entry.Info()
 					if err != nil {
@@ -269,9 +306,33 @@ func (d *DiskCache) loadCache(ctx context.Context) {
 		}
 
 		if entry.IsDir() {
-			if path != d.path {
-				d.removeEmptyDirectory(path)
+			if path == d.path {
+				return nil
 			}
+			switch name := entry.Name(); {
+			case !d.dirEntries:
+			case strings.HasSuffix(name, cacheDirTrashSuffix):
+				_ = os.RemoveAll(path)
+				numDeleted++
+				return fs.SkipDir
+			case strings.HasSuffix(name, cacheDirTempSuffix):
+				numTempFiles++
+				info, err := entry.Info()
+				if err == nil && time.Since(info.ModTime()) > time.Hour*8 {
+					_ = os.RemoveAll(path)
+					numDeleted++
+				}
+				return fs.SkipDir
+			case strings.HasSuffix(name, cacheDirSuffix):
+				numCacheFiles++
+				select {
+				case works <- Info{Path: path, Entry: entry, Dir: true}:
+				case <-ctx.Done():
+					return fs.SkipAll
+				}
+				return fs.SkipDir
+			}
+			d.removeEmptyDirectory(path)
 			return nil
 
 		} else {
@@ -1245,7 +1306,7 @@ func (d *DiskCache) removeEvictedFile(path string) error {
 	if d.cache.Contains(path) {
 		return nil
 	}
-	if err := os.Remove(path); err != nil {
+	if err := d.removeCachePath(path); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
@@ -1259,7 +1320,7 @@ func (d *DiskCache) removeUnindexedFile(path string) error {
 	if d.cache.Contains(path) {
 		return nil
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := d.removeCachePath(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil

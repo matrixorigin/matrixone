@@ -74,7 +74,7 @@ def test_create_table_real_lazy_connection_failure_redacted(secret, code):
 @pytest.mark.parametrize('phase', ['table', 'regular', 'fulltext', 'vector'])
 def test_create_table_real_sql_failure_redacted(secret, phase):
     engine = create_engine('sqlite://')
-    statements, returned = [], []
+    statements, returned, rolled_back = [], [], []
 
     @event.listens_for(engine, 'before_cursor_execute')
     def fail_sql(conn, cursor, statement, parameters, context, executemany):
@@ -83,6 +83,7 @@ def test_create_table_real_sql_failure_redacted(secret, phase):
             raise RuntimeError('driver echoed ' + secret)
 
     event.listen(engine, 'checkin', lambda *args: returned.append(True))
+    event.listen(engine, 'rollback', lambda *args: rolled_back.append(True))
     client = Client(logger=Mock())
     client._engine = engine
     client._connection_params = {'password': secret}
@@ -94,11 +95,18 @@ def test_create_table_real_sql_failure_redacted(secret, phase):
             assert_redacted(raised.value, secret)
             assert '***' in str(client.logger.log_error.call_args)
         else:
-            # Index creation has always been best-effort; retain that policy.
-            assert client.create_table(model) is client
+            # A missing declared index is a failed operation, even after the
+            # table DDL was acknowledged. Preserve that partial outcome.
+            with pytest.raises(QueryError) as raised:
+                client.create_table(model)
+            assert_redacted(raised.value, secret)
+            assert raised.value.statement_acknowledged is True
+            assert getattr(raised.value, 'table_created', None) is None
+            assert rolled_back
+            assert raised.value.phase == 'ddl_index'
+            assert isinstance(raised.value.orig, RuntimeError)
             assert any('INDEX' in sql.upper() for sql in statements)
             assert inspect(engine).has_table(model.__tablename__)
-            assert '***' in str(client.logger.warning.call_args)
         assert returned, 'the real SQLAlchemy context must return its connection'
         assert secret not in str(client.logger.mock_calls)
     finally:

@@ -40,7 +40,7 @@ func (c *RESTClient) NewRemoteSigner(req api.CatalogRequest, config map[string]s
 	return restRemoteSigner{
 		client:  c,
 		req:     req,
-		config:  cloneStringMap(config),
+		config:  api.CloneNonEmptyMap(config),
 		nowFunc: time.Now,
 	}
 }
@@ -104,7 +104,7 @@ func (s restRemoteSigner) now() time.Time {
 
 func remoteSignerURL(config map[string]string, allowPlainHTTP bool) (string, error) {
 	cfg := normalizeStringMap(config)
-	rawBase := firstNonEmpty(cfg["s3.signer.uri"], cfg["uri"])
+	rawBase := api.FirstNonEmptyTrimmed(cfg["s3.signer.uri"], cfg["uri"])
 	if rawBase == "" {
 		return "", api.NewError(api.ErrRemoteSigningDenied, "Iceberg remote signing config requires signer URI", nil)
 	}
@@ -121,7 +121,7 @@ func remoteSignerURL(config map[string]string, allowPlainHTTP bool) (string, err
 	default:
 		return "", api.NewError(api.ErrConfigInvalid, "Iceberg remote signing URI must use https", map[string]string{"uri": rawBase})
 	}
-	endpoint := strings.TrimSpace(firstNonEmpty(cfg["s3.signer.endpoint"], defaultS3SignerEndpoint))
+	endpoint := strings.TrimSpace(api.FirstNonEmptyTrimmed(cfg["s3.signer.endpoint"], defaultS3SignerEndpoint))
 	if endpoint == "" {
 		endpoint = defaultS3SignerEndpoint
 	}

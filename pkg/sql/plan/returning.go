@@ -460,5 +460,8 @@ func (builder *QueryBuilder) appendReturningProjection(exprs tree.SelectExprs, b
 	builder.qry.HasReturning = true
 	builder.qry.ReturningStep = builder.appendStep(projectID)
 	builder.qry.Headings = append(builder.qry.Headings, returnCtx.headings...)
+	if builder.integerPrecision != nil {
+		builder.captureIntegerPrecisionOutputs(returnCtx)
+	}
 	return nil
 }

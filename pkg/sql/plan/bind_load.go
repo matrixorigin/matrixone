@@ -16,7 +16,6 @@ package plan
 
 import (
 	"encoding/json"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,6 +23,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// prepareLoadScan applies prescan and serializes the final scan parameters.
+func prepareLoadScan(param *tree.ExternParam, noCompress bool, ctx CompilerContext, tableDef *plan.TableDef) (int64, error) {
+	var offset int64
+	var err error
+	// A pattern that survived checkFileExist matched more than one file, so the
+	// load fans out whole files and never splits one by byte offset.  The
+	// prescan exists only to seed that split: it would stamp one file's header
+	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
+	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
+	if param.Tail.IgnoredLines > 0 && param.Parallel && noCompress &&
+		!param.Local && !LoadFilepathHasGlob(param) {
+		offset, err = IgnoredLines(param, ctx)
+		if err != nil {
+			return 0, err
+		}
+		param.FileStartOff = offset
+	}
+	param.ArrowMatchByPosition = param.Format == tree.ARROW &&
+		param.Tail != nil && len(param.Tail.ColumnList) > 0
+	applyLoadParallelAdmission(param, offset, ctx.GetProcess().GetService())
+
+	param.Tail.ColumnList = nil
+	param.Tail.Assignments = nil
+	if param.ScanType != tree.INLINE {
+		json_byte, err := json.Marshal(param)
+		if err != nil {
+			return 0, err
+		}
+		tableDef.Createsql = string(json_byte)
+	}
+	return offset, nil
+}
 
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
 	// LOAD never carries INSERT's duplicate-key ignore policy. Reset the
@@ -98,7 +130,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err != nil {
 		return -1, nil, err
 	}
-	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
+	if err := validateLoadSetAssignments(stmt.Param, ctx, dmlCtx.tableDefs[0]); err != nil {
 		return -1, nil, err
 	}
 	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
@@ -131,10 +163,10 @@ func (builder *QueryBuilder) bindExternalScan(
 				switch realCol := col.(type) {
 				case *tree.UnresolvedName:
 					colName := realCol.ColName()
-					if _, ok := tableDef.Name2ColIndex[colName]; !ok {
+					tbColIdx, ok := tableDef.Name2ColIndex[colName]
+					if !ok || tableDef.Cols[tbColIdx].Hidden {
 						return -1, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 					}
-					tbColIdx := tableDef.Name2ColIndex[colName]
 					if tableDef.Cols[tbColIdx].GeneratedCol != nil {
 						return -1, nil, moerr.NewInvalidInputf(ctx.GetContext(),
 							"the value specified for generated column '%s' in table '%s' is not allowed",
@@ -172,6 +204,11 @@ func (builder *QueryBuilder) bindExternalScan(
 	)
 
 	if len(tbColToDataCol) == 0 {
+		// Without a column list the file fields map to the writable columns in
+		// order. The external reader emits one vector per non-hidden scan
+		// column, so a stored generated column left in the scan table would
+		// take an output slot and shift every later field (#31737).
+		dropLoadScanGeneratedColumns(tableDef)
 		idx := 0
 		for _, col := range tableDef.Cols {
 			if !col.Hidden && col.GeneratedCol == nil {
@@ -211,52 +248,12 @@ func (builder *QueryBuilder) bindExternalScan(
 	}
 
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
-	var offset int64 = 0
-	// A pattern that survived checkFileExist matched more than one file, so the
-	// load fans out whole files and never splits one by byte offset.  The
-	// prescan exists only to seed that split: it would stamp one file's header
-	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
-	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
-	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress &&
-		!stmt.Param.Local && !LoadFilepathHasGlob(stmt.Param) {
-		offset, err = IgnoredLines(stmt.Param, ctx)
-		if err != nil {
-			return -1, nil, err
-		}
-		stmt.Param.FileStartOff = offset
-	}
-	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
-		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset, ctx.GetProcess().GetService())
-
-	stmt.Param.Tail.ColumnList = nil
-	stmt.Param.Tail.Assignments = nil
-	if stmt.Param.ScanType != tree.INLINE {
-		json_byte, err := json.Marshal(stmt.Param)
-		if err != nil {
-			return -1, nil, err
-		}
-		tableDef.Createsql = string(json_byte)
+	offset, err := prepareLoadScan(stmt.Param, noCompress, ctx, tableDef)
+	if err != nil {
+		return -1, nil, err
 	}
 
-	terminated := tree.DefaultFieldsTerminated
-	enclosedBy := []byte(tree.DefaultFieldsEnclosedBy)
-	escapedBy := []byte{0}
-	if stmt.Param.Tail.Fields != nil {
-		if stmt.Param.Tail.Fields.EnclosedBy != nil {
-			if stmt.Param.Tail.Fields.EnclosedBy.Value != 0 {
-				enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.EscapedBy != nil {
-			if stmt.Param.Tail.Fields.EscapedBy.Value != 0 {
-				escapedBy = []byte{stmt.Param.Tail.Fields.EscapedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.Terminated != nil {
-			terminated = stmt.Param.Tail.Fields.Terminated.Value
-		}
-	}
+	terminated, enclosedBy, escapedBy := loadFieldDelimiters(stmt.Param.Tail.Fields)
 
 	externalScanNode := &plan.Node{
 		NodeType: plan.Node_EXTERNAL_SCAN,
@@ -280,6 +277,26 @@ func (builder *QueryBuilder) bindExternalScan(
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
 
 	return lastNodeId, insertColToExpr, nil
+}
+
+// dropLoadScanGeneratedColumns removes generated columns from the LOAD scan
+// table copy. Their values are computed by the insert pipeline from the
+// target table definition, never read from the file.
+func dropLoadScanGeneratedColumns(tableDef *plan.TableDef) {
+	cols := make([]*ColDef, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.GeneratedCol == nil {
+			cols = append(cols, col)
+		}
+	}
+	if len(cols) == len(tableDef.Cols) {
+		return
+	}
+	tableDef.Cols = cols
+	tableDef.Name2ColIndex = make(map[string]int32, len(cols))
+	for i, col := range cols {
+		tableDef.Name2ColIndex[col.Name] = int32(i)
+	}
 }
 
 // LOAD IGNORE/REPLACE conflict resolution is separate from ordinary LOAD's
@@ -342,10 +359,14 @@ func (builder *QueryBuilder) applyLoadAssignmentCasts(
 	for _, col := range tableDef.Cols {
 		expr, ok := insertColToExpr[col.Name]
 		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
-			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
+			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ) &&
+			!isAttributedDecimalPlanType(col.Typ)) {
 			continue
 		}
-		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)
+		// Attributed DECIMAL staged text takes the same admission -> assignment
+		// composition as DML; loadAssignmentIgnore keeps its LOCAL/IGNORE
+		// mapping on the statement-policy axis.
+		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore, col.Name)
 		if err != nil {
 			return err
 		}

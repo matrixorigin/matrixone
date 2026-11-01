@@ -362,8 +362,8 @@ drop table if exists cast04;
 create table cast04(col1 char(10), col2 char(10), col3 char(10)) as select * from cast03;
 select * from cast04;
 ➤ col1[1,10,0]  ¦  col2[1,10,0]  ¦  col3[1,10,0]  𝄀
-321424  ¦  213412.23  ¦  -100.313  𝄀
--1241  ¦  2314321  ¦  0  𝄀
+321424  ¦  213412  ¦  -100.313  𝄀
+-1241  ¦  2314320  ¦  0  𝄀
 0  ¦  0  ¦  0
 drop table cast03;
 drop table cast04;
@@ -410,7 +410,7 @@ no such table test.time02
 select * from time02;
 SQL parser error: table "time02" does not exist
 drop table time02;
-no such table test.time02
+Unknown table 'test.time02'
 drop table if exists time03;
 create table time03 (col2 decimal(38, 0), col4 decimal) as select col2, col3, col4 from time01;
 show create table time03;
@@ -715,7 +715,7 @@ drop table string10;
 drop table string11;
 drop table if exists string12;
 drop table string12;
-no such table test.string12
+Unknown table 'test.string12'
 create table string12 (col1 varchar(100) not null, col2 date not null);
 insert into string12 values ('   Deepak Sharma', '2014-12-01'  ), ('   Ankana Jana', '2018-08-17'),('  Shreya Ghosh', '2020-09-10');
 select * from string12;
@@ -1472,13 +1472,13 @@ SQL parser error: table "table07" does not exist
 create table table11 (col20 decimal, col30 char, col40 varchar) as select col100 from table07;
 SQL parser error: table "table07" does not exist
 drop table table07;
-no such table test.table07
+Unknown table 'test.table07'
 drop table table08;
-no such table test.table08
+Unknown table 'test.table08'
 drop table table09;
-no such table test.table09
+Unknown table 'test.table09'
 drop table table12;
-no such table test.table12
+Unknown table 'test.table12'
 drop table if exists abnormal01;
 create table abnormal01 (col1 int default null );
 insert into abnormal01 values (1), (null);
@@ -2066,7 +2066,7 @@ select * from t2;
 No database selected
 drop table t1;
 drop table t2;
-no such table db7.t2
+Unknown table 'db7.t2'
 drop role role_r1;
 drop user role_u1;
 drop database db7;

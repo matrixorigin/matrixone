@@ -165,5 +165,39 @@ deallocate prepare direct_float;
 deallocate prepare explicit_float;
 deallocate prepare literal_float;
 deallocate prepare literal_explicit_float;
+create table decimal_src(id int, d double);
+insert into decimal_src values(1,1.005e0),(2,0.12345678901234568e0),(3,null);
+create table decimal_dst(id int, d64 decimal(10,2), d128 decimal(38,20));
+insert into decimal_dst select id,d,d from decimal_src;
+select * from decimal_dst order by id;
+➤ id[4,32,0]  ¦  d64[3,10,2]  ¦  d128[3,38,20]  𝄀
+1  ¦  1.01  ¦  1.00500000000000000000  𝄀
+2  ¦  0.12  ¦  0.12345678901234568000  𝄀
+3  ¦  null  ¦  null
+select id,cast(d as decimal(38,20)),cast(d as decimal(38,38)) from decimal_src where id>=2 order by id;
+➤ id[4,32,0]  ¦  cast(d as decimal(38, 20))[3,38,20]  ¦  cast(d as decimal(38, 38))[3,38,38]  𝄀
+2  ¦  0.12345678901234568000  ¦  0.12345678901234568000000000000000000000  𝄀
+3  ¦  null  ¦  null
+set sql_mode='STRICT_TRANS_TABLES';
+insert into decimal_src values(4,999.995e0);
+create table decimal_narrow(d decimal(5,2));
+insert into decimal_narrow select d from decimal_src where id in (1,4) order by id;
+invalid input: Can't convert Float64 To Decimal64: 999.995000(5,2)
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  20301  ¦  invalid input: Can't convert Float64 To Decimal64: 999.995000(5,2)
+select count(*) from decimal_narrow;
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare decimal_float from 'select cast(? as decimal(10,2)),cast(? as decimal(38,20))';
+set @decimal_float_value=1.005e0;
+execute decimal_float using @decimal_float_value,@decimal_float_value;
+➤ cast(? as decimal(10, 2))[3,10,2]  ¦  cast(? as decimal(38, 20))[3,38,20]  𝄀
+1.01  ¦  1.00500000000000000000
+set @decimal_float_value=1.0049999999999997e0;
+execute decimal_float using @decimal_float_value,@decimal_float_value;
+➤ cast(? as decimal(10, 2))[3,10,2]  ¦  cast(? as decimal(38, 20))[3,38,20]  𝄀
+1.00  ¦  1.00499999999999970000
+deallocate prepare decimal_float;
 set sql_mode=@saved_float_cast_mode;
 drop database float_cast_mysql;

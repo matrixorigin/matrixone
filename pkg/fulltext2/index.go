@@ -17,10 +17,14 @@ package fulltext2
 import (
 	"fmt"
 	"iter"
+	"math"
 	"sort"
 	"strconv"
+	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -50,6 +54,20 @@ type Index struct {
 	// derive it is local and discarded (it was O(live docs) of Go heap — the dominant
 	// load-time floor). Mirrors bm25's ComputeLiveness []Membership.
 	liveOrd [][]bool
+
+	// threadsSearch is the degree of parallelism for the multi-segment top-k search
+	// (SearchBoolean), resolved from the fulltext2_threads_search session variable and
+	// baked here once at Load (single-threaded), so it is read-only during the
+	// concurrent search and never races. 0 means use GOMAXPROCS (vectorindex.GetConcurrency).
+	// It is a perf-only hint: any value yields identical results.
+	threadsSearch int
+
+	// tokenFilters is the token_filter analyzer chain (currently "stop"), baked here
+	// once at Load from the index's TableConfig. It is applied ONLY on the BM25
+	// bag-of-words query path (SearchBagOfWords/StreamBagOfWords) so the query strips
+	// the SAME tokens the build/CDC paths stripped; NL/boolean are rejected at plan
+	// time for a token_filter index. Empty ⇒ no filtering. Read-only during search.
+	tokenFilters []tokenfilter.TokenFilter
 }
 
 type docLoc struct {
@@ -356,24 +374,67 @@ func (idx *Index) SearchText(query []byte, tok tokenizer.Tokenizer, algo ScoreAl
 // per-term document frequency) so a boolean query scores every segment on the SAME
 // scale. Without it each segment used its LOCAL N/df, so appending a CDC tail shifted
 // a doc's score and could drop a globally-top-k doc at the merge. df is summed across
-// segments (like bm25's gdf) and memoized per query; it is built fresh per query and
-// used sequentially across segments, so the cache needs no lock.
+// segments (like bm25's gdf) and memoized per query; it is built fresh per query. The
+// parallel multi-segment search shares one gs across worker goroutines, so the df caches
+// are guarded by mu (below) and minScore is atomic.
 type globalStats struct {
 	n         int64
 	avgDocLen float64
 	idx       *Index
-	dfCache   map[string]int
+	// mu guards dfCache/phraseDfCache. The serial search path never contends; the
+	// parallel multi-segment search (SearchBoolean with threadsSearch) shares ONE gs
+	// across worker goroutines, so every cache read/write is taken under mu. Each df/
+	// phraseDf is still computed at most once (the lock is held across the compute).
+	mu      sync.Mutex
+	dfCache map[string]int
 	// phraseDfCache memoizes only the corpus-global phrase COUNT per phrase (an int),
 	// never the per-segment hit slices — see phraseDf. Retaining the slices would defeat
 	// the no-LIMIT streaming O(one segment) bound: a low-selectivity phrase over many
 	// capacity-sized segments would hold O(global matching corpus) before the first
 	// segment could finish emitting.
 	phraseDfCache map[string]int
+	// minScore is the shared global minimum competitive score (BM25 k-th-best floor),
+	// as float32 bits, seeded -Inf. Each segment's WAND raises it to its local k-th best
+	// (raise); every segment reads it (floor) as an extra pruning floor so a strong
+	// segment lets weaker ones skip globally-uncompetitive docs. It is a results-neutral
+	// pruning hint — the block-skip against it is STRICT, so no doc that could tie the
+	// global k-th is ever dropped and the merged top-k is identical with or without it
+	// (and across worker counts). Atomic because the parallel search shares one gs.
+	minScore atomic.Uint32
 }
 
 func (idx *Index) newGlobalStats() *globalStats {
-	return &globalStats{n: idx.globalN, avgDocLen: idx.globalAvgDocLen, idx: idx,
+	gs := &globalStats{n: idx.globalN, avgDocLen: idx.globalAvgDocLen, idx: idx,
 		dfCache: make(map[string]int), phraseDfCache: make(map[string]int)}
+	gs.minScore.Store(math.Float32bits(float32(math.Inf(-1))))
+	return gs
+}
+
+// floor returns the shared global minimum competitive score, or -Inf when gs is nil
+// (a direct single-segment query) or no segment heap has filled yet.
+func (gs *globalStats) floor() float32 {
+	if gs == nil {
+		return float32(math.Inf(-1))
+	}
+	return math.Float32frombits(gs.minScore.Load())
+}
+
+// raise publishes a segment's local k-th-best score to the shared floor, keeping the
+// running maximum. Concurrency-safe (CAS loop); a no-op when gs is nil or v does not
+// exceed the current floor.
+func (gs *globalStats) raise(v float32) {
+	if gs == nil {
+		return
+	}
+	for {
+		old := gs.minScore.Load()
+		if v <= math.Float32frombits(old) {
+			return
+		}
+		if gs.minScore.CompareAndSwap(old, math.Float32bits(v)) {
+			return
+		}
+	}
 }
 
 // phraseHits returns seg's matchPhrase hits WITHOUT retaining them across segments: the
@@ -394,6 +455,8 @@ func (gs *globalStats) phraseHits(seg *Segment, slots []phraseSlot) []docTf {
 // block at a time while fully-live segments use raw df directly; the result is memoized so the
 // scan is paid once per query term.
 func (gs *globalStats) df(term string) int {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
 	if d, ok := gs.dfCache[term]; ok {
 		return d
 	}
@@ -434,6 +497,8 @@ func (gs *globalStats) idfFor(seg *Segment, term string, pl *termPostings) float
 // are counted (mirrors the live term df above and streamPhrase's pass 1), so a dirty tail does
 // not inflate the phrase idf relative to the compacted corpus.
 func (gs *globalStats) phraseDf(slots []phraseSlot) int {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
 	key := slotsKey(slots)
 	if d, ok := gs.phraseDfCache[key]; ok {
 		return d
@@ -468,6 +533,89 @@ func (gs *globalStats) avgdl(seg *Segment) float64 {
 	return gs.avgDocLen
 }
 
+// wandPrepass computes the segment visit order and, when active, per-segment query
+// score ceilings for the WAND pre-pass. With the pre-pass off, the query not a pure
+// disjunction of terms, or a single segment, it returns the natural index order and a
+// nil ceiling slice (no reordering, no whole-segment skip — behaviour unchanged). On a
+// disjunctive (bag-of-words) query with the pre-pass on, it computes each segment's
+// ceiling (queryCeilingWAND, dict lookups only) and orders segments by ceiling
+// descending so the strongest segment raises the shared floor first; the returned
+// ceilings then drive the whole-segment skip in the search loop. Reordering never
+// changes results (the merge is order-independent) and the skip is strict, so the
+// top-k is identical with the pre-pass on or off.
+// ceilPrepassMinSegPerWorker is the segments-per-worker threshold at or above which the
+// ceiling pass fans out instead of running serially. The ceiling pass is nseg dict
+// lookups (no posting walk), so serially it is a small fraction of the search it orders
+// and skips — and at a few segments per worker, goroutine-launch overhead costs more
+// than the lookups save. A segment sweep (wiki_en_3f, 12 cores) showed the serial pass
+// only became a measurable tax at 8 segments per worker (96 segments), so that is the
+// crossover; below it serial wins.
+const ceilPrepassMinSegPerWorker = 8
+
+// fanOut runs fn(si) for every si in order on at most workers goroutines and
+// re-raises the first worker panic on the calling goroutine after all workers end.
+func fanOut(order []int, workers int, fn func(si int)) {
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var once sync.Once
+	var panicked any
+	for _, si := range order {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(si int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					once.Do(func() { panicked = r })
+				}
+			}()
+			fn(si)
+		}(si)
+	}
+	wg.Wait()
+	if panicked != nil {
+		panic(panicked)
+	}
+}
+
+func (idx *Index) wandPrepass(q BoolQuery, algo ScoreAlgo, gs *globalStats, workers int) (order []int, ceil []float32) {
+	nseg := len(idx.segments)
+	order = make([]int, nseg)
+	for i := range order {
+		order[i] = i
+	}
+	clauses, ok := disjunctiveTerms(q)
+	// The pre-pass is unconditional (like the shared floor — no toggle), but only pays off
+	// when an earlier segment's floor is established before a later one is searched:
+	// serial (workers==1), or a multi-wave fan-out (nseg > workers) where later segments
+	// wait on the semaphore. It applies only to the disjunctive (BM25 bag-of-words) shape.
+	// Otherwise — a single parallel wave (nseg <= workers, the common post-MERGE steady
+	// state of ~cores segments, where every segment starts together with floor=-Inf so no
+	// whole-segment skip can fire), a non-disjunctive query, or a lone segment — it is a
+	// no-op (natural order, nil ceilings) and the always-on block-level floor does the work.
+	if !ok || nseg <= 1 || (workers > 1 && nseg <= workers) {
+		return order, nil
+	}
+	ceil = make([]float32, nseg)
+	computeCeil := func(si int) {
+		seg := idx.segments[si]
+		ceil[si] = seg.queryCeilingWAND(clauses, algo, gs, gs.avgdl(seg))
+	}
+	// Serial unless there are enough segments per worker to amortize goroutine overhead;
+	// then fan out over the same worker budget as the search. Each worker writes ONLY its
+	// own ceil[si]; gs.df is mutex-guarded and segment lookups are read-only.
+	if workers <= 1 || nseg < ceilPrepassMinSegPerWorker*workers {
+		for si := range idx.segments {
+			computeCeil(si)
+		}
+	} else {
+		fanOut(order, workers, computeCeil)
+	}
+	sort.SliceStable(order, func(a, b int) bool { return ceil[order[a]] > ceil[order[b]] })
+	return order, ceil
+}
+
 // SearchBoolean runs a parsed boolean-mode query across the index and returns the
 // global top-k (score desc; equal scores are order-unspecified). Each segment is scored on the
 // GLOBAL corpus stats (globalStats), and its walk admits only the LIVE copy of a pk
@@ -475,18 +623,114 @@ func (gs *globalStats) avgdl(seg *Segment) float64 {
 // the global scale — the merge below is then the exact global top-k even across a
 // base + CDC tail. All clause types (term, prefix, phrase, and the disjunctive WAND
 // path) score on global stats — a phrase clause uses the cross-segment phrase df.
+// highDFKept returns clauses with ranked high-df terms removed: a single-term clause whose
+// global df/N reaches cutoff is dropped. It returns the input UNCHANGED when the cutoff is
+// off (<=0 or >1), when there is at most one clause, when nothing crosses the cutoff, or
+// when no kept clause can match (every kept term has df 0 — never empty the query). Only
+// atomic terms are considered; phrase/prefix/group clauses are always kept. gs.df memoizes
+// the df lookups, so the later idf pass reuses them. A dropped term matches nearly every
+// doc with idf≈0, so removing it cannot displace a top-k doc that matches any surviving
+// term; a doc matching only dropped terms scored ≈0 and was never competitive.
+func (idx *Index) highDFKept(clauses []clause, gs *globalStats, cutoff float64) []clause {
+	if cutoff <= 0 || cutoff > 1 || gs.n <= 0 || len(clauses) <= 1 {
+		return clauses
+	}
+	thresh := cutoff * float64(gs.n)
+	kept := make([]clause, 0, len(clauses))
+	matchable := 0
+	for _, c := range clauses {
+		if c.kind != clauseTerm {
+			kept = append(kept, c)
+			matchable++
+			continue
+		}
+		df := gs.df(c.terms[0])
+		if float64(df) >= thresh {
+			continue
+		}
+		kept = append(kept, c)
+		if df > 0 {
+			matchable++
+		}
+	}
+	if matchable == 0 || len(kept) == len(clauses) {
+		return clauses
+	}
+	return kept
+}
+
 func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter *prefilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}
 	gs := idx.newGlobalStats()
-	matched := make(map[any]Result)
-	for si, seg := range idx.segments {
+	// Ranked bag-of-words high-df cutoff (fulltext2_search_df_cutoff, carried on the query):
+	// drop pure-disjunction SHOULD terms whose global df reaches the cutoff before the WAND
+	// search. No-op (q.dfCutoff==0) for every non-bag-of-words shape.
+	if clauses, ok := disjunctiveTerms(q); ok {
+		q.should = idx.highDFKept(clauses, gs, q.dfCutoff)
+	}
+	nseg := len(idx.segments)
+	// Each segment is a fully independent top-k search (own dense ord space, own WAND
+	// threshold, own per-segment heap), so the segment loop fans out across
+	// threadsSearch workers. The shared state is gs: its df caches are mutex-guarded,
+	// and its minScore floor is an atomic results-neutral pruning hint (a segment's WAND
+	// skips docs that cannot beat the best segment's k-th score). Each worker writes ONLY
+	// its own perSeg[si] slot (no shared result map during the walk). The merge below runs
+	// serially in segment order, so the winning live copy per pk is chosen exactly as the
+	// serial walk did -- parallelism is a perf hint that yields an identical top-k.
+	perSeg := make([][]Result, nseg)
+	errs := make([]error, nseg)
+	workers := int(vectorindex.GetConcurrency(int64(idx.threadsSearch)))
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > nseg {
+		workers = nseg
+	}
+	// Keep the DENSE full-boolean evaluator serial. The bounded per-segment searches —
+	// WAND (O(k) heap) and conjunctive (O(unique terms · BlockSize + k)) — parallelize
+	// safely, but searchBooleanFull allocates O(segment doc count) score/hit scratch per
+	// segment, so fanning it out would hold workers × O(N) live at once (not the
+	// documented O(segments × k)). Only the bag-of-words/ranked path, the one this feature
+	// targets, needs the parallelism; the dense path runs one segment at a time.
+	if _, conj := conjunctiveTerms(q); !conj {
+		if _, disj := disjunctiveTerms(q); !disj {
+			workers = 1
+		}
+	}
+	// order is the segment visit order; ceil[si] (when non-nil) is seg si's query-score
+	// ceiling. With the WAND pre-pass on a disjunctive (bag-of-words) query, segments are
+	// visited highest-ceiling first so the shared floor climbs fastest, and a segment
+	// whose ceiling is below the floor is skipped whole (its docs cannot enter the top-k).
+	order, ceil := idx.wandPrepass(q, algo, gs, workers)
+	searchSeg := func(si int) {
+		if ceil != nil && ceil[si] < gs.floor() {
+			return // whole-segment skip: ceiling below the global floor → no top-k doc here
+		}
+		seg := idx.segments[si]
 		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
 		res, err := seg.SearchBoolean(q, algo, k, allow, gs)
 		if err != nil {
-			return nil, err
+			errs[si] = err
+			return
 		}
+		perSeg[si] = res
+	}
+	if workers <= 1 || nseg <= 1 {
+		for _, si := range order {
+			searchSeg(si)
+		}
+	} else {
+		fanOut(order, workers, searchSeg)
+	}
+	for _, e := range errs {
+		if e != nil {
+			return nil, e
+		}
+	}
+	matched := make(map[any]Result)
+	for _, res := range perSeg {
 		for _, r := range res {
 			matched[normalizeKey(r.Pk)] = r // liveness inside the walk → one live copy per pk
 		}

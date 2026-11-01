@@ -214,7 +214,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		v2.CreatePubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -470,7 +470,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		dbType          string
 		sql             string
 	)
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -772,7 +772,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		v2.DropPubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -818,7 +818,7 @@ var invalidatePublicationViewMetadata = func(
 }
 
 func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcprSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -890,7 +890,7 @@ func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcp
 }
 
 func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.ResumeCcprSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -960,7 +960,7 @@ func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.Resum
 }
 
 func doPauseCcprSubscription(ctx context.Context, ses *Session, pcs *tree.PauseCcprSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -2930,11 +2930,16 @@ func batchInsertMoSubs(
 	values := make([]string, 0, len(accIds))
 	// sub_account_id, sub_account_name, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status
 	valuesFormat := "(%d, '%s', %d, '%s', '%s', '%s', '%s', now(), '%s', %d)"
+	escapedAccount := sanitizeSQLInput(pubAccountName)
+	escapedName := sanitizeSQLInput(pubName)
+	escapedDB := sanitizeSQLInput(pubDbName)
+	escapedTables := sanitizeSQLInput(pubTables)
+	escapedComment := sanitizeSQLInput(pubComment)
 	for _, accId := range accIds {
 		values = append(values, fmt.Sprintf(valuesFormat,
 			accId, sanitizeSQLInput(accIdInfoMap[accId].Name),
-			pubAccountId, sanitizeSQLInput(pubAccountName),
-			sanitizeSQLInput(pubName), sanitizeSQLInput(pubDbName), sanitizeSQLInput(pubTables), sanitizeSQLInput(pubComment),
+			pubAccountId, escapedAccount,
+			escapedName, escapedDB, escapedTables, escapedComment,
 			pubsub.SubStatusNormal,
 		))
 	}
@@ -3577,8 +3582,18 @@ func checkUpstreamPublicationCoverage(
 	return nil
 }
 
+func subscriptionSyncLevel(cs *tree.CreateSubscription) string {
+	if !cs.IsDatabase {
+		return "table"
+	}
+	if cs.DbName == "" {
+		return "account"
+	}
+	return "database"
+}
+
 func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -3658,17 +3673,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		encryptedUri = fmt.Sprintf("mysql://#%s:%s@%s:%d", user, encodedPassword, host, port)
 	}
 
-	// Determine sync_level
-	var syncLevel string
-	if cs.IsDatabase {
-		if string(cs.DbName) == "" {
-			syncLevel = "account"
-		} else {
-			syncLevel = "database"
-		}
-	} else {
-		syncLevel = "table"
-	}
+	syncLevel := subscriptionSyncLevel(cs)
 
 	// Validate level and corresponding names
 	if syncLevel == "account" {
@@ -4104,7 +4109,9 @@ func getUpstreamIndexTables(ctx context.Context, executor publication.SQLExecuto
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream index tables: %v", err)
 	}
-	defer cancel()
+	if cancel != nil {
+		defer cancel()
+	}
 	defer result.Close()
 
 	// QueryMoIndexesSQL returns: table_id, name, algo_table_type, index_table_name

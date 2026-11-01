@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -263,7 +264,7 @@ func TestFullTextBooleanDeduplicatesExactLeaves(t *testing.T) {
 				root := booleanFullTextRewrite(t, builder, projectID)
 				requireBooleanFullTextCompleteStreams(t, builder.qry, root, tc.want)
 				normalized := booleanFullTextScoreProject(t, builder, root)
-				require.Len(t, normalized.ProjectList, len(scan.TableDef.Cols)+tc.want)
+				require.Len(t, normalized.ProjectList, len(scan.TableDef.Cols)+2*tc.want)
 				for _, expr := range builder.qry.Nodes[projectID].ProjectList {
 					require.NotNil(t, expr.GetCol())
 					require.Equal(t, normalized.BindingTags[0], expr.GetCol().RelPos)
@@ -390,7 +391,8 @@ func TestFullTextBooleanNumericTruthAndThreeValuedLogic(t *testing.T) {
 			raw := batch.NewWithSize(1)
 			raw.Vecs[0] = vector.NewVec(types.T_float32.ToType())
 			defer raw.Clean(proc.Mp())
-			// Cross the four score states with all three scalar truth states.
+			// Cross the four index states (returned with a positive, negative and zero
+			// score, not returned) with all three scalar truth states.
 			for sibling := 0; sibling < 3; sibling++ {
 				for state, score := range []float32{2, -2, 0, 0} {
 					require.NoError(t, vector.AppendFixed(raw.Vecs[0], score, state == 3, proc.Mp()))
@@ -412,11 +414,16 @@ func TestFullTextBooleanNumericTruthAndThreeValuedLogic(t *testing.T) {
 				require.False(t, scores.IsNull(uint64(row)))
 				require.Equal(t, []float32{2, -2, 0, 0}[row%4], vector.GetFixedAtWithTypeCheck[float32](scores, row))
 			}
-			input := batch.NewWithSize(2)
-			// This vector belongs to the normalizer, so input cleanup must not free it.
+			foundPos := scorePos + 1
+			foundCol := normalized.ProjectList[foundPos]
+			require.Equal(t, streamScore, foundCol.GetCol(), "the found slot is the raw stream score")
+			require.False(t, foundCol.Typ.NotNullable)
+			input := batch.NewWithSize(3)
+			// These vectors belong to the normalizer and raw, so input cleanup must not free them.
 			input.Vecs[0] = scores
 			input.Vecs[1] = vector.NewVec(types.T_bool.ToType())
 			defer input.Vecs[1].Free(proc.Mp())
+			input.Vecs[2] = raw.Vecs[0]
 			for row := 0; row < 12; row++ {
 				require.NoError(t, vector.AppendFixed(input.Vecs[1], row/4 == 0, row/4 == 2, proc.Mp()))
 			}
@@ -424,6 +431,7 @@ func TestFullTextBooleanNumericTruthAndThreeValuedLogic(t *testing.T) {
 			bound := replaceColumnsForExpr(DeepCopyExpr(rewritten), map[[2]int32]*planpb.Expr{
 				{normalized.BindingTags[0], scorePos}: {Typ: planpb.Type{Id: int32(types.T_float32)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
 				{normalized.BindingTags[0], flagPos}:  {Typ: flag.Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+				{normalized.BindingTags[0], foundPos}: {Typ: foundCol.Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}},
 			})
 			executor, err := colexec.NewExpressionExecutor(proc, bound)
 			require.NoError(t, err)
@@ -431,7 +439,8 @@ func TestFullTextBooleanNumericTruthAndThreeValuedLogic(t *testing.T) {
 			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 			require.NoError(t, err)
 			for row := 0; row < 12; row++ {
-				matched, sibling, unknown := row%4 < 2, row/4 == 0, row/4 == 2
+				// A row the index returned matches whatever its score, zero included.
+				matched, sibling, unknown := row%4 < 3, row/4 == 0, row/4 == 2
 				want, wantNull := matched, false
 				switch predicate {
 				case "or":
@@ -585,7 +594,11 @@ func TestFullTextBooleanConsumerBindingsAndOuterJoinBoundary(t *testing.T) {
 			case "outer join":
 				require.Equal(t, planpb.Node_LEFT, n.JoinType)
 				require.Equal(t, int32(types.T_bool), n.OnList[1].Typ.Id, "bare ON consumer gets numeric truth coercion")
-				consumers = []*planpb.Expr{n.OnList[1].GetF().Args[0], builder.qry.Nodes[projectID].ProjectList[0]}
+				// A bare MATCH in ON is whether the index returned the row.
+				require.Equal(t, "isnotnull", n.OnList[1].GetF().Func.ObjName)
+				found := n.OnList[1].GetF().Args[0].GetCol()
+				require.Equal(t, [2]int32{normalized.BindingTags[0], scorePos + 1}, [2]int32{found.RelPos, found.ColPos})
+				consumers = []*planpb.Expr{builder.qry.Nodes[projectID].ProjectList[0]}
 				// A user-join missing child must remain NULL above this boundary.
 				require.False(t, exprCallsFunc(builder.qry.Nodes[projectID].ProjectList[0], "coalesce"))
 				require.True(t, planHasReachableNodeType(builder.qry, n.Children[1], planpb.Node_PROJECT))
@@ -662,17 +675,20 @@ func TestFullTextBooleanPublicConsumersAndLegacyControls(t *testing.T) {
 			name, sql string
 			streams   int
 			preserve  bool
+			// scores counts the leaves whose score, not only whether the index returned
+			// the row, is consumed.
+			scores int
 		}{
-			{"dedup projected and ordered score", "select id, match(title, body) against('hello') sc from ft where match(title, body) against('hello') or base_id='b1' order by sc desc, id limit 2 offset 1", 1, true},
-			{"independent terms and bare sibling", "select id from ft where (match(title, body) against('hello') or base_id='b1') and match(title, body) against('world')", 2, true},
-			{"distinct served projected scores", "select id, match(title, body) against('hello'), match(title, body) against('world') from ft where match(title, body) against('hello') or match(title, body) against('world')", 2, true},
-			{"zero comparison and scalar NULL", "select id from ft where match(title, body) against('hello')=0 or base_id is null", 1, true},
-			{"aggregate score and HAVING", "select base_id, max(match(title, body) against('hello')) sc from ft where match(title, body) against('hello') or base_id='b1' group by base_id having sc >= 0", 1, true},
-			{"window score order and partition", "select id, row_number() over(partition by base_id order by match(title, body) against('hello') desc) rn from ft where match(title, body) against('hello') or base_id='b1'", 1, true},
-			{"inner join child", "select f.id, match(f.title, f.body) against('hello') from ft f join base b on f.base_id=b.id where match(f.title, f.body) against('hello') or f.base_id='b1'", 1, true},
-			{"outer join nullable child", "select b.id, d.sc from base b left join (select id, match(title, body) against('hello') sc from ft where match(title, body) against('hello') or base_id='b1') d on b.id=d.id", 1, true},
-			{"positive driver control", "select id from ft where match(title, body) against('hello')", 1, false},
-			{"projection only control", "select id, match(title, body) against('hello') from ft", 1, false},
+			{"dedup projected and ordered score", "select id, match(title, body) against('hello') sc from ft where match(title, body) against('hello') or base_id='b1' order by sc desc, id limit 2 offset 1", 1, true, 1},
+			{"independent terms and bare sibling", "select id from ft where (match(title, body) against('hello') or base_id='b1') and match(title, body) against('world')", 2, true, 0},
+			{"distinct served projected scores", "select id, match(title, body) against('hello'), match(title, body) against('world') from ft where match(title, body) against('hello') or match(title, body) against('world')", 2, true, 2},
+			{"zero comparison and scalar NULL", "select id from ft where match(title, body) against('hello')=0 or base_id is null", 1, true, 1},
+			{"aggregate score and HAVING", "select base_id, max(match(title, body) against('hello')) sc from ft where match(title, body) against('hello') or base_id='b1' group by base_id having sc >= 0", 1, true, 1},
+			{"window score order and partition", "select id, row_number() over(partition by base_id order by match(title, body) against('hello') desc) rn from ft where match(title, body) against('hello') or base_id='b1'", 1, true, 1},
+			{"inner join child", "select f.id, match(f.title, f.body) against('hello') from ft f join base b on f.base_id=b.id where match(f.title, f.body) against('hello') or f.base_id='b1'", 1, true, 1},
+			{"outer join nullable child", "select b.id, d.sc from base b left join (select id, match(title, body) against('hello') sc from ft where match(title, body) against('hello') or base_id='b1') d on b.id=d.id", 1, true, 1},
+			{"positive driver control", "select id from ft where match(title, body) against('hello')", 1, false, 0},
+			{"projection only control", "select id, match(title, body) against('hello') from ft", 1, false, 0},
 		} {
 			t.Run(tc.name+map[bool]string{false: "/classic", true: "/fulltext2"}[ft2], func(t *testing.T) {
 				query := buildBooleanFullTextPublicPlan(t, tc.sql, ft2, false)
@@ -702,11 +718,7 @@ func TestFullTextBooleanPublicConsumersAndLegacyControls(t *testing.T) {
 					}
 				}
 				require.Equal(t, tc.streams, attachments)
-				if tc.preserve {
-					require.Equal(t, tc.streams, normalization, "exactly one retained normalized score slot per leaf")
-				} else {
-					require.Zero(t, normalization, "Boolean preservation must not migrate legacy behavior")
-				}
+				require.Equal(t, tc.scores, normalization, "exactly one retained normalized score slot per scored leaf")
 			})
 		}
 	}
@@ -872,6 +884,143 @@ func TestFullTextBooleanForcedJoinHintsDoNotSkipComposition(t *testing.T) {
 					query := buildBooleanFullTextPublicPlan(t, sql, ft2, false)
 					requireBooleanFullTextCompleteStreams(t, query, query.Steps[0], 1)
 				})
+			}
+		}
+	}
+}
+
+// A MATCH used as a Boolean is whether the index returned the row, whatever its score;
+// compared or projected it is the score (#31411).
+func TestFullTextBooleanMatchTruthIsFound(t *testing.T) {
+	for _, ft2 := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, sql     string
+			found, scored bool
+		}{
+			{"or", "select id from ft where match(title, body) against('hello') or base_id='b1'", true, false},
+			{"not", "select id from ft where not match(title, body) against('hello')", true, false},
+			{"and inside or", "select id from ft where (match(title, body) against('hello') and base_id='b2') or base_id='b1'", true, false},
+			{"case when", "select id, case when match(title, body) against('hello') then 1 else 0 end from ft where match(title, body) against('hello')", true, false},
+			{"if", "select id, if(match(title, body) against('hello'), 'y', 'n') from ft where match(title, body) against('hello')", true, false},
+			{"if under or", "select id, if(match(title, body) against('hello'), 'y', 'n') from ft where match(title, body) against('hello') or base_id='b1'", true, false},
+			{"if in aggregate under or", "select base_id, count(if(match(title, body) against('hello'), 1, null)) from ft where match(title, body) against('hello') or base_id='b1' group by base_id", true, false},
+			{"xor", "select id from ft where match(title, body) against('hello') xor base_id='b1'", true, false},
+			{"bang", "select id from ft where !match(title, body) against('hello')", true, false},
+			{"comparison", "select id from ft where match(title, body) against('hello') > 0 or base_id='b1'", false, true},
+			{"projected score", "select id, match(title, body) against('hello') from ft where not match(title, body) against('hello')", true, true},
+		} {
+			t.Run(tc.name+map[bool]string{false: "/classic", true: "/fulltext2"}[ft2], func(t *testing.T) {
+				query := buildBooleanFullTextPublicPlan(t, tc.sql, ft2, false)
+				var exprs []*planpb.Expr
+				for _, n := range booleanFullTextNodes(query, query.Steps[0]) {
+					exprs = append(exprs, n.FilterList...)
+					exprs = append(exprs, n.ProjectList...)
+					exprs = append(exprs, n.AggList...)
+				}
+				found, castScore := 0, 0
+				for _, expr := range exprs {
+					found += countExprFunctionCalls([]*planpb.Expr{expr}, "isnotnull")
+					castScore += countBoolCastOfFloat(expr)
+					requireIfConditionsFound(t, expr)
+				}
+				require.Equal(t, tc.found, found > 0, "found test")
+				require.Zero(t, castScore, "a score is never used as a truth value")
+				if tc.scored {
+					scored := false
+					for _, n := range booleanFullTextNodes(query, query.Steps[0]) {
+						for _, expr := range n.ProjectList {
+							scored = scored || exprCallsFunc(expr, "coalesce") || exprCallsFunc(expr, ">")
+						}
+						for _, expr := range n.FilterList {
+							scored = scored || exprCallsFunc(expr, ">")
+						}
+					}
+					require.True(t, scored)
+				}
+			})
+		}
+	}
+}
+
+// requireIfConditionsFound requires every IF condition in expr to be a found test.
+func requireIfConditionsFound(t *testing.T, expr *planpb.Expr) {
+	fn := expr.GetF()
+	if fn == nil {
+		return
+	}
+	if fn.Func.ObjName == "if" {
+		cond := fn.Args[0].GetF()
+		require.NotNil(t, cond)
+		require.Equal(t, "isnotnull", cond.Func.ObjName)
+	}
+	for _, arg := range fn.Args {
+		requireIfConditionsFound(t, arg)
+	}
+}
+
+func countBoolCastOfFloat(expr *planpb.Expr) int {
+	fn := expr.GetF()
+	if fn == nil {
+		return 0
+	}
+	n := 0
+	if fn.Func.ObjName == "cast" && len(fn.Args) == 2 && fn.Args[1].Typ.Id == int32(types.T_bool) && fn.Args[0].Typ.Id == int32(types.T_float32) {
+		n++
+	}
+	for _, arg := range fn.Args {
+		n += countBoolCastOfFloat(arg)
+	}
+	return n
+}
+
+// A BOOL value of MATCH, an explicit CAST included, is whether the index returned the row;
+// a cast through a numeric type converts the score.
+func TestFullTextBooleanExplicitCastIsFound(t *testing.T) {
+	for _, ft2 := range []bool{false, true} {
+		for _, sql := range []string{
+			"select id, cast(match(title, body) against('hello') as bool), cast(cast(match(title, body) against('hello') as double) as bool) from ft where match(title, body) against('hello')",
+			"select id, cast(match(title, body) against('hello') as bool), cast(cast(match(title, body) against('hello') as double) as bool) from ft where match(title, body) against('hello') or base_id='b1'",
+		} {
+			query := buildBooleanFullTextPublicPlan(t, sql, ft2, false)
+			projected := query.Nodes[query.Steps[0]].ProjectList
+			require.Len(t, projected, 3, sql)
+			require.Equal(t, 1, countExprFunctionCalls(projected[1:2], "isnotnull"), sql)
+			require.Zero(t, countExprFunctionCalls(projected[2:], "isnotnull"), sql)
+		}
+	}
+}
+
+func TestFullTextBooleanProjectedScoreAsBoolIsScore(t *testing.T) {
+	planFuncCalls := func(query *planpb.Query, name string) int {
+		count := 0
+		var visit func(int32)
+		visit = func(id int32) {
+			node := query.Nodes[id]
+			count += countExprFunctionCalls(node.FilterList, name)
+			count += countExprFunctionCalls(node.ProjectList, name)
+			for _, child := range node.Children {
+				visit(child)
+			}
+		}
+		visit(query.Steps[0])
+		return count
+	}
+	const inner = "select id, match(title, body) against('hello') sc from ft where match(title, body) against('hello')"
+	for _, ft2 := range []bool{false, true} {
+		for _, where := range []string{"%s", "%s or id < 0", "%s or id", "not %s", "if(%s, true, false)", "case when %s then true else false end"} {
+			composed := inner + " or base_id = 'b1'"
+			for _, from := range []string{inner, composed,
+				inner + " union all " + composed, composed + " union " + inner,
+				inner + " intersect " + composed, composed + " except " + inner,
+				"select id, match(title, body) against('hello') sc from ft where match(title, body) against('hello') group by id, sc",
+			} {
+				sql := fmt.Sprintf("select id from (%s) d where %s", from, fmt.Sprintf(where, "sc"))
+				control := fmt.Sprintf("select id from (%s) d where %s", from, fmt.Sprintf(where, "sc <> 0"))
+				query := buildBooleanFullTextPublicPlan(t, sql, ft2, false)
+				expected := buildBooleanFullTextPublicPlan(t, control, ft2, false)
+				require.Equal(t, planFuncCalls(expected, "isnotnull"), planFuncCalls(query, "isnotnull"), sql)
+				require.Equal(t, planFuncCalls(expected, "<>"), planFuncCalls(query, "<>"), sql)
+				require.Positive(t, planFuncCalls(query, "<>"), sql)
 			}
 		}
 	}

@@ -234,6 +234,9 @@ func generate(input string) ([]byte, error) {
 		if cyclic[name] {
 			fmt.Fprintln(&b, "if v.visited(p) { return nil }")
 		}
+		if name == "Query" {
+			fmt.Fprintln(&b, "if err := p.ValidateIntegerPrecision(); err != nil { return err }")
+		}
 		if name == "TableDef" {
 			fmt.Fprintln(&b, "if err := requireLegacyTable(p); err != nil { return err }")
 		}

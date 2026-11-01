@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
@@ -218,6 +219,11 @@ func IsWholeColonClock(s string) bool {
 //	"1999-09-09 11:11"              "1999-09-09 11:11:00.000"
 //	"1999-09-09 11:11:"             "1999-09-09 11:11:00.000"
 func ParseDatetime(s string, scale int32) (Datetime, error) {
+	return ParseDatetimeWithContext(defaultParseContext, s, scale)
+}
+
+// ParseDatetimeWithContext parses with the caller's error reporting context.
+func ParseDatetimeWithContext(ctx context.Context, s string, scale int32) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if isZeroDatetimeString(s) {
 		return ZeroDatetime, nil
@@ -229,10 +235,10 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 		dtSepIdx = strings.IndexAny(s, " T")
 	}
 	if len(s) < 14 && dtSepIdx < 0 {
-		if d, err := ParseDateCast(s); err == nil {
+		if d, err := ParseDateCastWithContext(ctx, s); err == nil {
 			return d.ToDatetime(), nil
 		}
-		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 	}
 	var year int32
 	var month, day, hour, minute, second uint8
@@ -251,53 +257,53 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			var num int64
 			num, err = strconv.ParseInt(s[0:4], 10, 32)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			year = int32(num)
 			unum, err = strconv.ParseUint(s[5:7], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			month = uint8(unum)
 			unum, err = strconv.ParseUint(s[8:10], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			day = uint8(unum)
 			unum, err = strconv.ParseUint(s[11:13], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			hour = uint8(unum)
 			unum, err = strconv.ParseUint(s[14:16], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			minute = uint8(unum)
 			unum, err = strconv.ParseUint(s[17:19], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			second = uint8(unum)
 			if len(s) == 19 {
 				// nothing
 			} else if s[19] == '.' {
-				msec, carry, err = getMsec(s[20:], scale)
+				msec, carry, err = getMsecWithContext(ctx, s[20:], scale)
 				if err != nil {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 				}
 			} else {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 		} else {
 			// Share the DATE grammar for short years and separated calendar
 			// fields. Adding a clock must not change the date's interpretation.
 			if dtSepIdx == len(s)-1 {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
-			date, dateErr := ParseDateCast(s[:dtSepIdx])
+			date, dateErr := ParseDateCastWithContext(ctx, s[:dtSepIdx])
 			if dateErr != nil || date == ZeroDate {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			year, month, day, _ = date.Calendar(true)
 			timeStr := s[dtSepIdx+1:]
@@ -310,14 +316,14 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 			c1 := strings.IndexByte(hmsStr, ':')
 			if c1 < 0 {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			c2 := c1 + 1 + strings.IndexByte(hmsStr[c1+1:], ':')
 			var secStr string
 			if c2 <= c1 {
 				// only h:mm — treat seconds as "00"
 				if len(hmsStr)-c1-1 == 0 {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 				}
 				secStr = "00"
 			} else {
@@ -328,7 +334,7 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 			unum, err = strconv.ParseUint(hmsStr[:c1], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			hour = uint8(unum)
 			end := c2
@@ -337,27 +343,27 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 			}
 			unum, err = strconv.ParseUint(hmsStr[c1+1:end], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			minute = uint8(unum)
 			unum, err = strconv.ParseUint(secStr, 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			second = uint8(unum)
 			if dotIdx >= 0 {
 				if dotIdx == len(timeStr)-1 {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 				}
-				msec, carry, err = getMsec(timeStr[dotIdx+1:], scale)
+				msec, carry, err = getMsecWithContext(ctx, timeStr[dotIdx+1:], scale)
 				if err != nil {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 				}
 			}
 		}
 	} else {
 		if !isAllDigit(s[:14]) {
-			return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+			return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 		}
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 		month = (s[4]-'0')*10 + (s[5] - '0')
@@ -368,22 +374,22 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 		if len(s) > 14 {
 			if len(s) > 15 && s[14] == '.' {
 				msecStr := s[15:]
-				msec, carry, err = getMsec(msecStr, scale)
+				msec, carry, err = getMsecWithContext(ctx, msecStr, scale)
 				if err != nil {
-					return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 				}
 			} else {
-				return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 		}
 	}
 	if !ValidDate(year, month, day) || !ValidTimeInDay(hour, minute, second) {
-		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 	}
 	result := DatetimeFromClock(year, month, day, hour, minute, second+uint8(carry), msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
 	if !ValidDate(y, m, d) {
-		return -1, moerr.NewInvalidInputNoCtxf("invalid datetime value %s", s)
+		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 	}
 	return result, nil
 }

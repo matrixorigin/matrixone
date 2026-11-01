@@ -540,29 +540,7 @@ func TestGetMinMaxValueByFloat64_Decimal(t *testing.T) {
 	})
 }
 
-// calculateConcurrency is a helper function that mirrors the concurrency calculation logic
-// in NewGlobalStats. This allows us to test the logic independently.
-func calculateConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurrency, updateWorkerConcurrency int) {
-	executorConcurrency = gomaxprocs
-	if updateWorkerFactor > 0 {
-		executorConcurrency = executorConcurrency * updateWorkerFactor
-	}
-	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
-	if executorConcurrency < MinExecutorConcurrency {
-		executorConcurrency = MinExecutorConcurrency
-	}
-	if executorConcurrency > MaxExecutorConcurrency {
-		executorConcurrency = MaxExecutorConcurrency
-	}
-	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
-	updateWorkerConcurrency = executorConcurrency / WorkerConcurrencyRatio
-	if updateWorkerConcurrency < MinWorkerConcurrency {
-		updateWorkerConcurrency = MinWorkerConcurrency
-	}
-	return executorConcurrency, updateWorkerConcurrency
-}
-
-// TestCalculateConcurrency tests the concurrency calculation logic with various scenarios
+// TestCalculateConcurrency checks the production pool sizing across boundary cases.
 func TestCalculateConcurrency(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -721,7 +699,7 @@ func TestCalculateConcurrency(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			executor, worker := calculateConcurrency(tt.gomaxprocs, tt.updateWorkerFactor)
+			executor, worker := globalStatsConcurrency(tt.gomaxprocs, tt.updateWorkerFactor)
 
 			assert.Equal(t, tt.expectedExecutor, executor,
 				"executor concurrency mismatch for %s: expected %d, got %d", tt.description, tt.expectedExecutor, executor)
@@ -739,8 +717,8 @@ func TestCalculateConcurrency(t *testing.T) {
 	}
 }
 
-// TestGlobalStatsConcurrency_ActualCreation tests that GlobalStats actually creates
-// the correct number of goroutines by checking the concurrentExecutor's concurrency
+// TestGlobalStatsConcurrency_ActualCreation checks the executor pool size and
+// the worker sizing used by GlobalStats.
 func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -815,7 +793,7 @@ func TestGlobalStatsConcurrency_ActualCreation(t *testing.T) {
 				"executor concurrency should be <= MaxExecutorConcurrency")
 
 			// Verify worker concurrency matches expected calculation
-			_, expectedWorker := calculateConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
+			_, expectedWorker := globalStatsConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
 			assert.Equal(t, tc.expectedWorker, expectedWorker,
 				"worker concurrency calculation should match")
 
@@ -1008,7 +986,7 @@ func TestGlobalStatsConcurrency_EdgeCases(t *testing.T) {
 				"%s: executor should be <= MaxExecutorConcurrency, got %d", tt.description, executorConcurrency)
 
 			// Verify it matches expected calculation
-			expectedExecutor, expectedWorker := calculateConcurrency(tt.setGOMAXPROCS, tt.updateWorkerFactor)
+			expectedExecutor, expectedWorker := globalStatsConcurrency(tt.setGOMAXPROCS, tt.updateWorkerFactor)
 			assert.Equal(t, expectedExecutor, executorConcurrency,
 				"%s: executor concurrency mismatch", tt.description)
 
@@ -1132,7 +1110,7 @@ func TestGlobalStatsConcurrency_ReductionVerification(t *testing.T) {
 			require.NotNil(t, gs)
 
 			executorConcurrency := gs.concurrentExecutor.GetConcurrency()
-			_, workerConcurrency := calculateConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
+			_, workerConcurrency := globalStatsConcurrency(tc.setGOMAXPROCS, tc.updateWorkerFactor)
 			actualTotal := executorConcurrency + workerConcurrency
 
 			assert.Equal(t, tc.newTotal, actualTotal,

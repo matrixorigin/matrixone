@@ -66,7 +66,6 @@ func newTxnTableWithItem(
 		tableDef:      item.TableDef,
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
-		clusterByIdx:  item.ClusterByIdx,
 		relKind:       item.Kind,
 		viewdef:       item.ViewDef,
 		comment:       item.Comment,

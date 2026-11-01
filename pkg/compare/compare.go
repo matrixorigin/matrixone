@@ -174,18 +174,14 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 		}
 		return newCompare(types.GenericAscCompare[types.MoYear], genericCopy[types.MoYear], nullsLast)
 	case types.T_json:
-		if sqlOrder {
-			return &jsonCompare{
-				desc:        desc,
-				nullsLast:   nullsLast,
-				vs:          make([]*vector.Vector, 2),
-				isConstNull: make([]bool, 2),
-			}
-		}
-		return &strCompare{
+		// JSON equality/identity follows MySQL JSON value semantics, never raw
+		// bytes: 1, 1.0 and 1e0 are one value, and members/elements compare by
+		// their own typed semantics. This is the same comparator ORDER BY uses,
+		// so grouping/splitting consumers (window PARTITION BY feeds, transfer
+		// identity checks) agree with the SQL = operator and GROUP BY.
+		return &jsonCompare{
 			desc:        desc,
 			nullsLast:   nullsLast,
-			typ:         typ,
 			vs:          make([]*vector.Vector, 2),
 			isConstNull: make([]bool, 2),
 		}

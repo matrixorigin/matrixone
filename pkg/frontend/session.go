@@ -365,6 +365,14 @@ type Session struct {
 	statsCache         *plan2.StatsCache
 	statsCacheVersions map[uint64]optimizerStatsCacheTag
 	seqCurValues       map[uint64]string
+	// seqObligations tracks issued values of transaction-local sequence
+	// generations (created inside explicit-transaction CLONE/snapshot
+	// restore) so statement rewinds cannot re-issue them and the pre-commit
+	// stamp can persist a safe counter position. Session-owned and shared
+	// into each statement's process via CopySeqToProc; deliberately outside
+	// the statement-level sequence snapshot/restore machinery. Consumed by
+	// the pre-commit stamp and discarded on transaction rollback.
+	seqObligations *process.SequenceObligationSet
 
 	/*
 		CORNER CASE:
@@ -1249,6 +1257,13 @@ func (ses *Session) SetSeqLastValue(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	*ses.seqLastValue = proc.GetSessionInfo().SeqLastValue[0]
+	// Statement-success publication point (J2): a SETVAL/restart boundary
+	// staged during this statement is made permanent exactly here, on the
+	// single statement-success funnel, so a later same-statement failure
+	// could never have cleared the obligation of the boundary it rewound.
+	// A failed statement never reaches this funnel; the statement-rollback
+	// path restores staged removals instead.
+	ses.seqObligations.ApplyStaged()
 }
 
 func (ses *Session) DeleteSeqValues(proc *process.Process) {
@@ -1280,6 +1295,35 @@ func (ses *Session) CopySeqToProc(proc *process.Process) {
 		proc.GetSessionInfo().SeqCurValues[k] = v
 	}
 	proc.GetSessionInfo().SeqLastValue[0] = *ses.seqLastValue
+	// Share the session-owned obligation store with the statement process.
+	// Pointer fields are re-seeded per statement because the process is
+	// rebuilt wholesale for each execution.
+	proc.GetSessionInfo().SeqObligations = ses.seqObligations
+}
+
+// getSequenceObligationSet exposes the session-owned store to the terminal
+// transaction hooks (pre-commit stamp, rollback cleanup).
+func (ses *Session) getSequenceObligationSet() *process.SequenceObligationSet {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.seqObligations
+}
+
+// restoreStagedSequenceObligations returns staged boundary removals to
+// enforcement after the statement that staged them failed and its workspace
+// writes were rewound.
+func (ses *Session) restoreStagedSequenceObligations() {
+	if set := ses.getSequenceObligationSet(); set != nil {
+		set.RestoreStaged()
+	}
+}
+
+// clearSequenceObligations discards the transaction's issued-value records
+// after a terminal rollback outcome.
+func (ses *Session) clearSequenceObligations() {
+	if set := ses.getSequenceObligationSet(); set != nil {
+		set.Clear()
+	}
 }
 
 func (ses *Session) InheritSequenceData(other *Session) {
@@ -2029,6 +2073,9 @@ func NewSession(
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
 	ses.seqLastValue = new(string)
+	// The obligation store outlives single statements: it is bounded by the
+	// owning transaction and cleaned at every terminal transaction outcome.
+	ses.seqObligations = process.NewSequenceObligationSet()
 
 	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
@@ -2279,6 +2326,7 @@ func (ses *Session) Close() {
 	ses.planCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
+	ses.seqObligations = nil
 	if ses.sqlHelper != nil {
 		ses.sqlHelper.ses = nil
 		ses.sqlHelper = nil
@@ -2491,6 +2539,18 @@ func (ses *Session) invalidateCachedPlans(prepared bool) {
 		for _, statement := range ses.prepareStmts {
 			statement.needsRebuild = true
 		}
+	}
+}
+
+// markPreparedPlansForRollupAlgorithmChange marks prepared plan generations
+// stale without closing their handles. The session variable is read while
+// building the physical rollup plan, so EXECUTE must rebuild the plan after
+// the value changes.
+func (ses *Session) markPreparedPlansForRollupAlgorithmChange() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.needsRebuild = true
 	}
 }
 
@@ -2712,6 +2772,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 		be.backSes.cloneSnapshotUsesBackgroundTxn = opts[0].cloneSnapshotUsesBackgroundTxn
 		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
 		be.backSes.authorizationSnapshot = opts[0].authorizationSnapshot
+		be.internalExecution = opts[0].internalExecution
 	}
 	return be
 }
@@ -2780,6 +2841,21 @@ func (ses *Session) GetShowStmtType() ShowStatementType {
 func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perfcounter.CounterSet) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute &&
+		ses.proc != nil && ses.proc.Base != nil {
+		// The cursor branch below retains output batches for COM_STMT_FETCH
+		// instead of publishing them to the wire, so the statement remains
+		// eligible for a tier-2 retry after rows were captured. Replay
+		// without a discard would append the retried result behind the
+		// failed generation's stale rows (#30359 review): arm the
+		// transition-time discard that releases the stale row set, its byte
+		// reservation and any staged saved-result blocks. The per-statement
+		// SessionInfo rebuild (mysql_cmd_executor.go) reseats or clears the
+		// hook at the next statement boundary.
+		ses.proc.Base.SessionInfo.RetryDiscardOutput = func() error {
+			return discardPreparedCursorRetryOutput(execCtx)
+		}
+	}
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
 		if execCtx != nil && execCtx.resultMetadata != nil && bat != nil && bat.RowCount() > 0 {
 			if err := execCtx.resultMetadata.publish(); err != nil {

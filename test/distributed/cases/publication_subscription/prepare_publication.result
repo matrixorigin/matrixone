@@ -23,7 +23,7 @@ set @pub_filter = 'no_matching_publication%';
 execute pub_pattern using @pub_filter;
 ➤ publication[12,-1,0]  ¦  database[12,-1,0]  ¦  tables[-1,21845,0]  ¦  sub_account[-1,21845,0]  ¦  subscribed_accounts[-1,21845,0]  ¦  create_time[93,19,0]  ¦  update_time[93,19,0]  ¦  comments[-1,21845,0]
 execute pub_pattern;
-invalid input: Incorrect arguments to EXECUTE
+Incorrect arguments to EXECUTE
 set @pub_filter = 42;
 execute pub_pattern using @pub_filter;
 invalid input: SHOW PUBLICATIONS LIKE parameter must be a non-NULL string

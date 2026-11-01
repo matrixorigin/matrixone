@@ -138,6 +138,44 @@ set enable_remap_hint = 0;
 select column_name from information_schema.columns where table_schema = 'db1' and table_name = 't_columns' order by ordinal_position;
 -- @session
 
+-- #31674: accepted rule text must survive hint injection on new connections.
+show rules on role test_rule_role_columns;
+-- @session:id=23&user=sys:test_rule_user_columns:test_rule_role_columns&password=123456
+set names utf8mb4;
+select * from db1.t_columns order by id;
+-- @session
+
+alter role test_rule_role_columns add rule "select id, amount from db1.t_columns where tenant = 1 /* harmless */" on table db1.t_columns;
+show rules on role test_rule_role_columns;
+-- @session:id=24&user=sys:test_rule_user_columns:test_rule_role_columns&password=123456
+set names utf8mb4;
+select * from db1.t_columns order by id;
+prepare rule_stmt from 'select * from db1.t_columns order by id';
+execute rule_stmt;
+deallocate prepare rule_stmt;
+-- @session
+
+alter role test_rule_role_columns add rule "select id, amount from db1.t_columns where tenant = 1 and '*/' = '*/'" on table db1.t_columns;
+show rules on role test_rule_role_columns;
+-- @session:id=25&user=sys:test_rule_user_columns:test_rule_role_columns&password=123456
+set names utf8mb4;
+select * from db1.t_columns order by id;
+-- @session
+
+-- Rejected multi-statement replacement must leave the installed rule intact.
+alter role test_rule_role_columns add rule "select id, amount from db1.t_columns; select * from db1.t_columns" on table db1.t_columns;
+show rules on role test_rule_role_columns;
+-- @session:id=26&user=sys:test_rule_user_columns:test_rule_role_columns&password=123456
+set names utf8mb4;
+select * from db1.t_columns order by id;
+-- @session
+alter role test_rule_role_columns add rule "select id, amount from db1.t_columns where tenant = 1" on table db1.t_columns;
+show rules on role test_rule_role_columns;
+-- @session:id=27&user=sys:test_rule_user_columns:test_rule_role_columns&password=123456
+set names utf8mb4;
+select * from db1.t_columns order by id;
+-- @session
+
 -- 11. Table renames are rejected while role rewrite metadata exists
 alter table db1.t1 rename to db1.t1_renamed;
 rename table db1.t1 to db1.t1_renamed;

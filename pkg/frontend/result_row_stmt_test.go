@@ -420,3 +420,40 @@ func BenchmarkGetSelectColumns(b *testing.B) {
 		}
 	})
 }
+
+func TestODKUCommitFailureDoesNotPublishSessionOrOK(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}, responses: make([]*Response, 0, 1)}
+	resper := NewMysqlResp(writer)
+	ses.respr = resper
+	ses.SetLastInsertID(700)
+	proc := ses.GetProc()
+	proc.RecordODKUGenerated(0, 17)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	ses.txnHandler.storage = eng
+	txnOp := newTestTxnOp()
+	txnOp.meta = txn.TxnMeta{ID: []byte{1, 2, 3, 4}, Status: txn.TxnStatus_Active}
+	txnOp.commitErr = fmt.Errorf("ODKU commit failed")
+	txnOp.wp.readonly = false
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	ses.txnHandler.shareTxn = false
+	stmt := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{&tree.UpdateExpr{}}}
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, proc: proc, stmt: stmt,
+		cw:     &TxnComputationWrapper{stmt: stmt, plan: autoIncrPreInsertPlan(1)},
+		runner: &performTestRunner{result: &util.RunResult{AffectRows: 1}},
+		resper: resper, txnOpt: FeTxnOption{autoCommit: true}}
+	// Exercise the real statement runner and transaction finalizer. The caller
+	// publishes status only after both return success; pipeline success alone
+	// must leave the old session baseline and writer untouched.
+	require.NoError(t, executeStatusStmt(ses, execCtx))
+	require.Empty(t, writer.responses)
+	require.Equal(t, uint64(700), ses.GetLastInsertID())
+	require.ErrorContains(t, finishTxnFunc(ses, nil, execCtx), "ODKU commit failed")
+	require.Empty(t, writer.responses)
+	require.Equal(t, uint64(700), ses.GetLastInsertID())
+}

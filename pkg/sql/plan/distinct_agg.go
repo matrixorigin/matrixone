@@ -61,6 +61,12 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 	}
 
 	if node.NodeType == plan.Node_AGG {
+		// Pair deduplication on complete grouping keys cannot implement
+		// DISTINCT at every ROLLUP prefix, and hash pairs destroy input order.
+		// Keep all arities on the prefix executor's independent DISTINCT states.
+		if IsSortRollupOption(node.ExtraOptions) {
+			return normalizeUnrewrittenDistinctAggArguments(builder.GetContext(), node)
+		}
 		if shuffleArg := tupleDistinctShuffleArgument(node, builder); shuffleArg >= 0 {
 			return builder.optimizeTupleCountDistinct(node, shuffleArg)
 		}
@@ -189,6 +195,13 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 }
 
 func canOptimizeDistinctAgg(node *plan.Node) bool {
+	// Deduplicating (complete grouping keys, argument) is not sufficient for
+	// ROLLUP: the same argument can occur in different detail groups but must
+	// be counted only once in their common subtotal. Keep the DISTINCT bit so
+	// the streaming operator owns independent distinct state at every prefix.
+	if IsSortRollupOption(node.ExtraOptions) {
+		return false
+	}
 	for _, flag := range node.GroupingFlag {
 		if !flag {
 			return false

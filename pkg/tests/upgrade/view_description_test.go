@@ -24,8 +24,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_10"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_14"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -571,7 +569,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 	})
 }
 
-// Fail after the real DROP, while leaving transaction ownership to ExecTxn.
+// Fail after the real replacement, while leaving transaction ownership to ExecTxn.
 // This proves rollback/retry against storage, unlike an in-memory SQL recorder.
 type failedViewColumnsUpgradeTxn struct {
 	executor.TxnExecutor
@@ -579,13 +577,15 @@ type failedViewColumnsUpgradeTxn struct {
 }
 
 func (txn failedViewColumnsUpgradeTxn) Exec(sql string, opts executor.StatementOption) (executor.Result, error) {
-	if sql == sysview.InformationSchemaColumnsV100DDL() {
+	result, err := txn.TxnExecutor.Exec(sql, opts)
+	if err == nil && sql == strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) {
+		result.Close()
 		return executor.Result{}, txn.failure
 	}
-	return txn.TxnExecutor.Exec(sql, opts)
+	return result, err
 }
 
-func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecutor executor.SQLExecutor, tenantID uint32) {
+func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecutor executor.SQLExecutor, tenantID uint32, legacyDDL string) {
 	t.Helper()
 	// Run the tenant-upgrade transaction as the sys account, mirroring the production
 	// driver (service.MaybeUpgradeTenant scopes the txn to System_Account and targets
@@ -606,71 +606,24 @@ func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecut
 		require.True(t, exists, "failed migration must not leave COLUMNS missing")
 		return ddl
 	}
-	require.Equal(t, sysview.InformationSchemaColumnsV58DDL(), definition())
+	require.Equal(t, legacyDDL, definition())
+	entry := versions.InformationSchemaColumnsUpgradeEntry()
 	injected := errors.New("injected COLUMNS creation failure")
 	err := sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		return v4_0_10.Handler.HandleTenantUpgrade(ctx, int32(tenantID), failedViewColumnsUpgradeTxn{txn, injected})
+		return entry.Upgrade(failedViewColumnsUpgradeTxn{txn, injected}, tenantID)
 	}, opts)
 	require.ErrorIs(t, err, injected)
-	require.Equal(t, sysview.InformationSchemaColumnsV58DDL(), definition(), "DROP must roll back with CREATE")
+	require.Equal(t, legacyDDL, definition(), "the replacement must roll back on failure")
 	for i := 0; i < 2; i++ {
 		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 			if i == 1 {
 				// Exact readiness must bypass DDL when the handler is replayed.
 				txn = failedViewColumnsUpgradeTxn{txn, injected}
 			}
-			return v4_0_10.Handler.HandleTenantUpgrade(ctx, int32(tenantID), txn)
+			return entry.Upgrade(txn, tenantID)
 		}, opts))
-		require.Equal(t, sysview.InformationSchemaColumnsV100DDL(), definition())
+		require.Equal(t, strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), definition())
 	}
-}
-
-// Verify the follow-up native-Unicode refresh against a real tenant
-// transaction. This is intentionally separate from the historical 4.0.10
-// repair above: an already-4.0.13 tenant must take the 4.0.14 route.
-type failedNativeViewColumnsUpgradeTxn struct {
-	executor.TxnExecutor
-	failure error
-}
-
-func (txn failedNativeViewColumnsUpgradeTxn) Exec(sql string, opts executor.StatementOption) (executor.Result, error) {
-	if sql == sysview.InformationSchemaColumnsDDL {
-		return executor.Result{}, txn.failure
-	}
-	return txn.TxnExecutor.Exec(sql, opts)
-}
-
-func testNativeViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecutor executor.SQLExecutor, tenantID uint32) {
-	t.Helper()
-	opts := executor.Options{}.WithDatabase(catalog.MO_CATALOG).
-		WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()
-	definition := func() string {
-		t.Helper()
-		var exists bool
-		var ddl string
-		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-			var err error
-			exists, ddl, err = versions.CheckViewDefinition(txn, tenantID, "information_schema", "columns")
-			return err
-		}, opts))
-		require.True(t, exists, "failed migration must not leave COLUMNS missing")
-		return ddl
-	}
-	require.Equal(t, sysview.InformationSchemaColumnsV100DDL(), definition())
-	injected := errors.New("injected native COLUMNS creation failure")
-	err := sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		return v4_0_14.Handler.HandleTenantUpgrade(ctx, int32(tenantID), failedNativeViewColumnsUpgradeTxn{txn, injected})
-	}, opts)
-	require.ErrorIs(t, err, injected)
-	require.Equal(t, sysview.InformationSchemaColumnsV100DDL(), definition(), "DROP must roll back with CREATE")
-	require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		return v4_0_14.Handler.HandleTenantUpgrade(ctx, int32(tenantID), txn)
-	}, opts))
-	require.Equal(t, sysview.InformationSchemaColumnsDDL, definition())
-	require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		return v4_0_14.Handler.HandleTenantUpgrade(ctx, int32(tenantID), txn)
-	}, opts))
-	require.Equal(t, sysview.InformationSchemaColumnsDDL, definition(), "a completed refresh must be idempotent")
 }
 
 func TestViewDescriptionSubscription(t *testing.T) {
@@ -798,12 +751,32 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		publisherView := readCharsets(sys, "view_description_pub", "charset_v")
 		require.Equal(t, publisherTable, publisherView)
 		legacySubscriptionView := readCharsets(subscriber, "subscribed", "charset_v")
-		require.Equal(t, publisherView, legacySubscriptionView)
+		require.Len(t, legacySubscriptionView, len(publisherView),
+			"pre-refresh the subscriber must still project the same ordered column list")
+		for i, c := range legacySubscriptionView {
+			require.Equal(t, publisherView[i].name, c.name)
+			if c.name != "raw" {
+				require.Equal(t, publisherView[i], c,
+					"non-binary column %q must match the publisher in every persisted COLUMNS generation", c.name)
+				continue
+			}
+			// raw is the varbinary column (selector 2 of
+			// internal_column_character_set). Until the subscriber's persisted
+			// COLUMNS text is rebuilt by the V109/V118 MODIFY_VIEW refresh, the
+			// historical selector projection renders 'binary'; the current
+			// projection renders NULL (read as "" here, NullString). Both are
+			// valid pre-refresh states; charset/collation must stay consistent.
+			require.True(t, c.charset == "binary" || c.charset == "",
+				"raw charset %q is neither the historical 'binary' projection nor the refreshed NULL", c.charset)
+			require.Equal(t, c.charset, c.collation,
+				"raw charset/collation must stay consistent in every projection")
+		}
 		require.Equal(t, "utf8mb4", publisherTable[0].charset)
 		require.Equal(t, "utf8mb4_general_ci", publisherTable[0].collation)
-		require.Equal(t, "binary", publisherTable[3].charset)
+		require.Equal(t, "", publisherTable[3].charset, "binary-family columns render NULL charset in information_schema (#31160)")
+		require.Equal(t, "", publisherTable[3].collation, "binary-family columns render NULL collation in information_schema (#31160)")
 
-		testViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID)
+		testViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID, sysview.InformationSchemaColumnsV58DDL())
 		checkHistoricalColumnsWidth := func() {
 			t.Helper()
 			var historicalWidth int
@@ -812,14 +785,21 @@ func TestViewDescriptionSubscription(t *testing.T) {
 					"where table_schema='subscribed' and table_name='v' and column_name='x'").Scan(&historicalWidth))
 			require.Equal(t, 7, historicalWidth, "an old system template must not resurrect creation-time View columns")
 		}
-		// V100 has the on-demand View-column migration but still uses the
-		// historical selector projection. Verify a cross-tenant snapshot is
-		// adapted before the native V109 refresh is applied.
+		// Both published and intermediate legacy definitions converge directly to
+		// the final view, including rollback and repeated execution.
 		checkHistoricalColumnsWidth()
-		testNativeViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID)
+		require.NoError(t, replaceColumns(ctx, sysview.InformationSchemaColumnsV100DDL()))
+		testViewColumnsUpgradeRollback(t, ctx, sqlExecutor, tenantID, sysview.InformationSchemaColumnsV100DDL())
 		require.Equal(t, publisherTable, readCharsets(subscriber, "subscribed", "charset_src"))
-		require.Equal(t, publisherView, readCharsets(subscriber, "subscribed", "charset_v"))
-		require.Equal(t, legacySubscriptionView, readCharsets(subscriber, "subscribed", "charset_v"))
+		refreshedSubscriptionView := readCharsets(subscriber, "subscribed", "charset_v")
+		require.Equal(t, publisherView, refreshedSubscriptionView,
+			"the V109/V118 refresh must converge the subscription projection to the publisher's NULL charset/collation (#31160)")
+		for i, c := range legacySubscriptionView {
+			if c.name == "raw" && c.charset == "binary" {
+				require.NotEqual(t, c, refreshedSubscriptionView[i],
+					"a column that still carried the historical 'binary' projection must be rewritten by the native refresh")
+			}
+		}
 		checkHistoricalColumnsWidth()
 
 		// The snapshot belongs to the subscriber, but the View's source database

@@ -959,8 +959,9 @@ func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
 					holder, err := conn0.BeginTx(ctx, nil)
 					require.NoError(t, err)
 					defer holder.Rollback()
+					// Use a mixed COPY: pure scalar ADD now owns only G S.
 					_, err = holder.ExecContext(ctx,
-						"alter table "+database+".t1 algorithm=copy, add column extra int")
+						"alter table "+database+".t1 algorithm=copy, modify column v bigint, add column extra int")
 					require.NoError(t, err, "the explicit COPY ALTER must complete while retaining publication admission")
 
 					waitingAtGate := make(chan struct{}, 1)
@@ -1055,7 +1056,7 @@ func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
 			firstDone := make(chan error, 1)
 			go func() {
 				_, firstErr := conn1.ExecContext(firstCtx,
-					"alter table "+database+".t1 algorithm=copy, add column extra int")
+					"alter table "+database+".t1 algorithm=copy, modify column v bigint, add column extra int")
 				firstDone <- firstErr
 			}()
 			select {

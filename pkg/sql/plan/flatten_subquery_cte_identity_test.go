@@ -60,7 +60,7 @@ func TestCorrelatedAggregateForwardsInlineCTEIdentity(t *testing.T) {
 	}
 }
 
-func TestCorrelatedAggregateCTEIdentityRejectsUnprovenSources(t *testing.T) {
+func TestCorrelatedAggregateWithoutCTEIdentityUsesCompleteRelation(t *testing.T) {
 	for _, tc := range []struct{ name, source string }{
 		{"duplicate native identity", `SELECT N_NATIONKEY,N_REGIONKEY FROM NATION UNION ALL SELECT N_NATIONKEY,N_REGIONKEY FROM NATION`},
 		{"volatile source filter", `SELECT N_NATIONKEY,N_REGIONKEY FROM NATION WHERE rand()>0`},
@@ -71,10 +71,12 @@ func TestCorrelatedAggregateCTEIdentityRejectsUnprovenSources(t *testing.T) {
 		{"pagination", `SELECT N_NATIONKEY,N_REGIONKEY FROM NATION LIMIT 2`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 				`WITH q AS (`+tc.source+`) SELECT b.N_NATIONKEY,
      (SELECT MAX(x.N_REGIONKEY) FROM NATION x WHERE x.N_NATIONKEY<=b.N_NATIONKEY) FROM q b`)
-			require.ErrorContains(t, err, "cannot be safely decorrelated")
+			require.NoError(t, err)
+			require.NotNil(t, p.GetQuery().Correlation)
+			require.NoError(t, p.GetQuery().ValidateCorrelation())
 		})
 	}
 }

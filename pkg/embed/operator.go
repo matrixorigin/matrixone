@@ -45,6 +45,7 @@ import (
 
 type operator struct {
 	sync.RWMutex
+	startup startControl
 
 	sid         string
 	cfg         ServiceConfig
@@ -133,6 +134,8 @@ func (op *operator) RawService() interface{} {
 }
 
 func (op *operator) Close() error {
+	op.startup.stop()
+	defer op.startup.stopped()
 	op.Lock()
 	defer op.Unlock()
 
@@ -195,9 +198,19 @@ func (op *operator) needsCleanupLocked() bool {
 		op.reset.rt != nil
 }
 
-func (op *operator) Start() error {
+func (op *operator) Start() error { return op.StartContext(context.Background()) }
+
+func (op *operator) StartContext(parent context.Context) (err error) {
+	startCtx, err := op.startup.begin(parent)
+	if err != nil {
+		return err
+	}
+	defer func() { op.startup.finish(startCtx, err) }()
 	op.Lock()
 	defer op.Unlock()
+	if err = startCtx.Err(); err != nil {
+		return err
+	}
 
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
@@ -238,7 +251,7 @@ func (op *operator) Start() error {
 	}
 
 	fs, err := op.cfg.createFileService(
-		context.Background(),
+		startCtx,
 		op.serviceType,
 		op.sid,
 	)
@@ -370,7 +383,7 @@ func (op *operator) startCNServiceLocked(
 	}
 	s, err := cnservice.NewService(
 		&c,
-		context.Background(),
+		op.startup.context(),
 		fs,
 		op.reset.gossipNode,
 		func(owner cnservice.Service) { op.reset.svc = owner },
@@ -390,6 +403,9 @@ func (op *operator) startConstructedServiceLocked(s service) error {
 	// goroutines. Transfer ownership before calling it so rollback can always
 	// reach Close.
 	op.reset.svc = s
+	if starter, ok := s.(interface{ StartContext(context.Context) error }); ok {
+		return starter.StartContext(op.startup.context())
+	}
 	return s.Start()
 }
 
@@ -520,7 +536,7 @@ func (op *operator) waitHAKeeperRunningLocked(
 	client logservice.CNHAKeeperClient,
 ) error {
 	ctx, cancel := context.WithTimeoutCause(
-		context.TODO(),
+		op.startup.context(),
 		op.hakeeperRunningTimeout(),
 		moerr.CauseWaitHAKeeperRunningLocked,
 	)
@@ -560,7 +576,7 @@ func (op *operator) hakeeperRunningTimeout() time.Duration {
 
 func (op *operator) waitAnyShardReadyLocked(client logservice.CNHAKeeperClient) error {
 	ctx, cancel := context.WithTimeoutCause(
-		context.TODO(),
+		op.startup.context(),
 		op.anyShardReadyTimeout(),
 		moerr.CauseWaitAnyShardReadyLocked,
 	)
@@ -627,7 +643,7 @@ func waitStartupRetry(ctx context.Context, interval time.Duration) error {
 }
 
 func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
+	ctx, cancel := context.WithTimeoutCause(op.startup.context(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
 	defer cancel()
 	return waitHAKeeperClient(ctx, func(ctx context.Context) (logservice.CNHAKeeperClient, error) {
 		client, err := logservice.NewCNHAKeeperClient(
@@ -653,16 +669,19 @@ func waitHAKeeperClient(ctx context.Context, create func(context.Context) (logse
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
+			return nil, moerr.AttachCause(ctx, ctx.Err())
 		default:
 			attempt, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWaitHAKeeperReadyLocked)
 			client, err := create(attempt)
 			cancel()
 			if err == nil {
+				if ctx.Err() != nil {
+					return nil, errors.Join(moerr.AttachCause(ctx, ctx.Err()), client.Close())
+				}
 				return client, nil
 			}
 			if err := waitStartupRetry(ctx, time.Second); err != nil {
-				return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
+				return nil, err
 			}
 		}
 	}

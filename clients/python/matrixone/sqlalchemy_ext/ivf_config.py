@@ -58,9 +58,10 @@ class IVFConfig:
 
             True if successful, False otherwise
         """
+        from ..connection_hooks import configure_pool_settings
+
         try:
-            with self.engine.begin() as conn:
-                _exec_sql_safe(conn, "SET experimental_ivf_index = 1")
+            configure_pool_settings(self.engine, experimental_ivf_index=1)
             return True
         except Exception:
             return False
@@ -73,9 +74,10 @@ class IVFConfig:
 
             True if successful, False otherwise
         """
+        from ..connection_hooks import configure_pool_settings
+
         try:
-            with self.engine.begin() as conn:
-                _exec_sql_safe(conn, "SET experimental_ivf_index = 0")
+            configure_pool_settings(self.engine, experimental_ivf_index=0)
             return True
         except Exception:
             return False
@@ -92,9 +94,12 @@ class IVFConfig:
 
             True if successful, False otherwise
         """
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError('probe limit must be a positive integer')
+        from ..connection_hooks import configure_pool_settings
+
         try:
-            with self.engine.begin() as conn:
-                _exec_sql_safe(conn, f"SET probe_limit = {limit}")
+            configure_pool_settings(self.engine, probe_limit=limit)
             return True
         except Exception:
             return False
@@ -115,7 +120,9 @@ class IVFConfig:
                 result = _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'experimental_ivf_index'")
                 ivf_setting = result.fetchone()
                 if ivf_setting:
-                    status["ivf_enabled"] = ivf_setting[1] == "1"
+                    from .hnsw_config import _decode_boolean_setting
+
+                    status["ivf_enabled"] = _decode_boolean_setting(ivf_setting[1])
 
                 # Get probe limit setting
                 result = _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'probe_limit'")
@@ -141,19 +148,22 @@ class IVFConfig:
 
             True if all operations successful, False otherwise
         """
-        success = True
+        from ..connection_hooks import configure_pool_settings
 
-        # Enable/disable IVF
-        if enabled:
-            success &= self.enable_ivf_indexing()
-        else:
-            success &= self.disable_ivf_indexing()
-
-        # Set probe limit if specified
+        if not isinstance(enabled, bool):
+            raise TypeError('enabled must be a boolean')
+        if probe_limit is not None and (
+            isinstance(probe_limit, bool) or not isinstance(probe_limit, int) or probe_limit <= 0
+        ):
+            raise ValueError('probe limit must be a positive integer')
+        settings = {'experimental_ivf_index': int(enabled)}
         if probe_limit is not None:
-            success &= self.set_probe_limit(probe_limit)
-
-        return success
+            settings['probe_limit'] = probe_limit
+        try:
+            configure_pool_settings(self.engine, **settings)
+            return True
+        except Exception:
+            return False
 
     def is_ivf_supported(self) -> bool:
         """

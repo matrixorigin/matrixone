@@ -2999,7 +2999,7 @@ func TestRetiredTableCacheCannotQueueAllocation(t *testing.T) {
 	c := &tableCache{}
 	c.mu.cols = map[string]*columnCache{"auto": col}
 	c.retire()
-	col.preAllocate(context.Background(), 1, 2, nil)
+	col.preAllocate(context.Background(), 1, 2, nil, false)
 	require.Zero(t, allocator.asyncCalls.Load())
 }
 
@@ -3012,7 +3012,7 @@ func TestPreAllocateClearsStateWhenEnqueueFails(t *testing.T) {
 		allocator: allocator,
 		committed: true,
 	}
-	col.preAllocate(context.Background(), 1, 2, nil)
+	col.preAllocate(context.Background(), 1, 2, nil, false)
 	col.Lock()
 	allocating := col.allocating
 	col.Unlock()

@@ -346,13 +346,20 @@ func MustVectorToCachedWithMpool(toVec *vector.Vector, data fscache.Data, mp *mp
 // is bound only for the duration of this call, while its FileService cache
 // lease is held by the caller.
 func CopyCachedVectorRows(toVec *vector.Vector, data fscache.Data, sels []int64, mp *mpool.MPool) error {
-	return copyCachedVector(toVec, data, sels, false, mp)
+	return copyCachedVector(toVec, data, sels, false, false, mp)
 }
 
 // CopyCachedVectorAll materializes a complete cache-backed Vector into toVec
 // without exposing a writable alias to the cached representation.
 func CopyCachedVectorAll(toVec *vector.Vector, data fscache.Data, mp *mpool.MPool) error {
-	return copyCachedVector(toVec, data, nil, true, mp)
+	return copyCachedVector(toVec, data, nil, true, false, mp)
+}
+
+// CopyCachedVectorAllReadonly materializes into an empty destination while the
+// cache entry is pinned. A non-empty varlen area is a private allocation with a
+// retained read-only owner, never an alias to the sealed cache representation.
+func CopyCachedVectorAllReadonly(toVec *vector.Vector, data fscache.Data, mp *mpool.MPool) error {
+	return copyCachedVector(toVec, data, nil, true, true, mp)
 }
 
 // MaterializeCachedVectorWindow copies one row window from a cache-backed
@@ -433,6 +440,7 @@ func copyCachedVector(
 	data fscache.Data,
 	sels []int64,
 	allRows bool,
+	readonlyArea bool,
 	mp *mpool.MPool,
 ) error {
 	if toVec == nil {
@@ -440,6 +448,9 @@ func copyCachedVector(
 	}
 	if mp == nil {
 		return moerr.NewInvalidInputNoCtx("nil mpool for object column materialization")
+	}
+	if readonlyArea && toVec.Length() != 0 {
+		return moerr.NewInvalidInputNoCtx("readonly object column destination is not empty")
 	}
 	var source vector.Vector
 	if err := bindCachedVectorForScope(&source, data); err != nil {
@@ -458,6 +469,17 @@ func copyCachedVector(
 		)
 	}
 	if allRows {
+		if readonlyArea && source.GetType().IsVarlen() && len(source.GetArea()) > 0 {
+			// The destination is empty and the source is independently pinned
+			// cache storage. Retire scratch from its old owned generation before
+			// admitting a fresh private copy; unused capacity must not consume
+			// the next block's budget. Inline-only and fixed columns keep reuse.
+			data := vector.DetachVectorData(toVec)
+			area := vector.DetachVectorArea(toVec)
+			data.Free(mp)
+			area.Free(mp)
+			return toVec.CopyWithReadonlyArea(&source, mp)
+		}
 		return toVec.UnionBatch(&source, 0, source.Length(), nil, mp)
 	}
 	for _, sel := range sels {

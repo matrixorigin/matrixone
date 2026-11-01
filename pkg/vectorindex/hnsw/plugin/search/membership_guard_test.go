@@ -134,4 +134,13 @@ func TestNewReaderMembership(t *testing.T) {
 	s, err = newSearcher(proc, spec, r)
 	require.NoError(t, err)
 	require.True(t, s.iterative)
+	require.Zero(t, s.exactThreshold)
+
+	// the exact threshold scan option reaches the search
+	spec = membershipSpec()
+	spec.AlgoOptions, err = hnswplan.EncodeScanOptions(hnswplan.ScanOptions{PrefilterExactThreshold: 100000})
+	require.NoError(t, err)
+	s, err = newSearcher(proc, spec, r)
+	require.NoError(t, err)
+	require.Equal(t, uint64(100000), s.exactThreshold)
 }

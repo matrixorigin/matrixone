@@ -825,12 +825,12 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 	checkStrLen := func(s string, binaryLiteral bool) ([]byte, error) {
 		destLen := int(typ.Width)
-		// CHAR/VARCHAR width is enforced at runtime by the assignment cast
-		// (cast_assign), which honors sql_mode, the trailing-space exemption and
-		// the INSERT IGNORE downgrade. Excluding them here avoids a plan-time
-		// hard rejection that would ignore sql_mode.
+		// CHAR/VARCHAR/TEXT/BLOB width is enforced at runtime by the assignment
+		// cast (cast_assign), which honors sql_mode, the trailing-space exemption
+		// and the INSERT IGNORE downgrade, and measures BLOB in bytes. Excluding
+		// them here avoids a plan-time hard rejection that would ignore sql_mode.
 		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
-			typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
+			typ.Oid != types.T_text && typ.Oid != types.T_blob && typ.Oid != types.T_datalink &&
 			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArrayRelate()
 		if checkWidth {
 			srcLen := utf8.RuneCountInString(s)
@@ -883,7 +883,7 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		return
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
-		s := numVal.String()
+		s := insertLiteralText(numVal)
 		if val, err = checkStrLen(s, false); err != nil {
 			canInsert = false
 		}
@@ -916,12 +916,27 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 	return
 }
 
+// Integer spelling carries logical precision, but assignment converts the
+// numeric value to text. Keep that spelling on the AST for metadata consumers.
+func insertLiteralText(numVal *tree.NumVal) string {
+	switch numVal.ValType {
+	case tree.P_int64:
+		value, _ := numVal.Int64()
+		return strconv.FormatInt(value, 10)
+	case tree.P_uint64:
+		value, _ := numVal.Uint64()
+		return strconv.FormatUint(value, 10)
+	default:
+		return numVal.String()
+	}
+}
+
 func SetInsertValueJSON(proc *process.Process, numVal *tree.NumVal) (canInsert bool, val []byte, err error) {
 	canInsert = true
 	switch numVal.ValType {
 	default:
 		var json bytejson.ByteJson
-		originStr := numVal.String()
+		originStr := insertLiteralText(numVal)
 		json, err = types.ParseStringToByteJson(originStr)
 		if err != nil {
 			return false, nil, err

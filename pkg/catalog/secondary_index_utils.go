@@ -140,6 +140,11 @@ const (
 	// Recorded only when POSITION_FREE=TRUE; absence ⇒ positional (phrase-capable).
 	IndexAlgoParamPositionFree = "position_free"
 
+	// IndexAlgoParamTokenFilter (fulltext2): the comma-separated token_filter analyzer
+	// chain (currently only "stop"), applied symmetrically at build/CDC/query so a
+	// dropped token (stopword) never breaks a query for it. Recorded only when set.
+	IndexAlgoParamTokenFilter = "token_filter"
+
 	// IndexAlgoParamPrefixLengths is the legacy, delimiter-separated encoding.
 	// It remains readable for metadata written by older versions.
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
@@ -330,6 +335,12 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 	// position-free instead of silently reverting to the phrase-capable positional one.
 	if val, ok := result[IndexAlgoParamPositionFree]; ok && val == "true" {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamPositionFree, val)
+	}
+
+	// token_filter is recorded only when set. Render the quoted form so a SHOW CREATE /
+	// checkpoint-restore DDL re-parses it (grammar: token_filter = '<list>').
+	if val, ok := result[IndexAlgoParamTokenFilter]; ok && val != "" {
+		res += fmt.Sprintf(" %s = '%s' ", IndexAlgoParamTokenFilter, val)
 	}
 
 	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {

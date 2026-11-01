@@ -460,26 +460,23 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 				return
 			}
 			fs := task.rt.Fs
-			// for io task, dispatch by round robin, scope can be nil
-			task.rt.Scheduler.ScheduleScopedFn(
-				&tasks.Context{},
-				tasks.IOTask, nil,
-				func() error {
-					// TODO: variable as timeout
-					ctx, cancel := context.WithTimeoutCause(
-						context.Background(),
-						2*time.Minute,
-						moerr.CausePrepareRollback2,
-					)
-
-					defer cancel()
-					for _, obj := range task.commitEntry.CreatedObjs {
-						stat := objectio.ObjectStats(obj)
-						_ = fs.Delete(ctx, stat.ObjectName().String())
+			cleanup := func() error {
+				ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Minute, moerr.CausePrepareRollback2)
+				defer cancel()
+				for _, obj := range task.commitEntry.CreatedObjs {
+					stat := objectio.ObjectStats(obj)
+					name := stat.ObjectName().String()
+					if deleteErr := fs.Delete(ctx, name); deleteErr != nil && !moerr.IsMoErrCode(deleteErr, moerr.ErrFileNotFound) {
+						logutil.Warnf("[MergeObjects] delete failed task output %s: %v", name, deleteErr)
 					}
-					return nil
-				},
-			)
+				}
+				return nil
+			}
+			// For IO tasks, dispatch by round robin; scope can be nil.
+			if _, scheduleErr := task.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, nil, cleanup); scheduleErr != nil {
+				logutil.Warnf("[MergeObjects] schedule failed task output cleanup: %v", scheduleErr)
+				_ = cleanup()
+			}
 		}
 	}()
 	begin := time.Now()

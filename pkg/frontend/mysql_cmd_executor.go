@@ -1181,6 +1181,36 @@ func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch
 	return nil
 }
 
+// discardPreparedCursorRetryOutput releases everything a failed statement
+// generation retained for a prepared cursor before the compiler's retry
+// transition replays the statement: the captured row set (its session byte
+// reservation returns via preparedStmtCursor.resetAttempt) and any staged
+// saved-result blocks. The rows never reached the wire, so discarding them
+// loses nothing delivered. Statement-lifetime state the retry cannot
+// re-create survives the discard: the cursor shell and its frozen column
+// metadata (production installs it exactly once per EXECUTE before the
+// pipeline starts and internal retries do not repeat the installation) and
+// the session's authorized statement plan (installed once before Run; the
+// retried generation's publication re-serializes its Plan/Tables
+// provenance — abortPreparedCursorAttemptStaging keeps it). The retried
+// generation captures a fresh, complete row set into the kept cursor shell
+// (#30359 review). The hook is invoked by Compile.prepareRetryTransition
+// only after the failed generation's running SQL has quiesced, so no
+// pipeline can still append to the discarded set.
+func discardPreparedCursorRetryOutput(execCtx *ExecCtx) error {
+	if execCtx == nil {
+		return nil
+	}
+	if execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil {
+		execCtx.prepareStmt.cursor.resetAttempt()
+	}
+	// Attempt-cleanup failures are reported, not hidden (#30359 review):
+	// the retry transition surfaces the error and abandons the replay, and
+	// the failed staging cleanup keeps its owner (cursorResultSaver) so
+	// terminal statement cleanup can still reach the surviving files.
+	return abortPreparedCursorAttemptStaging(execCtx)
+}
+
 func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	defer RecordStatementTxnID(ctx, ses)
 
@@ -3420,7 +3450,7 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 
 	bh := ses.GetBackgroundExec(
 		execCtx.reqCtx,
-		&BackgroundExecOption{forcePessimisticRC: true},
+		&BackgroundExecOption{forcePessimisticRC: true, internalExecution: true},
 	)
 	defer bh.Close()
 
@@ -3451,7 +3481,7 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 
 	bh := ses.GetBackgroundExec(
 		execCtx.reqCtx,
-		&BackgroundExecOption{forcePessimisticRC: true},
+		&BackgroundExecOption{forcePessimisticRC: true, internalExecution: true},
 	)
 	defer bh.Close()
 
@@ -3658,7 +3688,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 	// Object lifecycle locks are part of GRANT's correctness contract. Force the
 	// private transaction into the same pessimistic RC protocol as DROP even on
 	// optimistic deployments; LockOp intentionally skips optimistic txns.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3676,7 +3706,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 // handleRevokePrivilege revokes the privilege from the user or role
 func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -5361,10 +5391,47 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	return readTime, writeTime, err
 }
 
-// An upload either reaches the protocol EOF or retires its connection. Retrying
-// reads or draining an unlimited client stream after failure cannot establish a
-// bounded, reusable command boundary. Only the upload owner frees its buffer;
-// the cancellation watcher interrupts I/O and is joined before owner cleanup.
+// Bounds for the post-cancellation upload drain. A single read timeout does not
+// bound the drain: a trickling or endless client stream is retired by the total
+// wait and byte budgets instead. The total wait is installed as an absolute
+// deadline on every network read (not just between packets), so one stalling
+// header or payload cannot outlive it. Package variables, not constants, so
+// lifecycle tests can shrink the budgets without long sleeps.
+var (
+	// loadLocalDrainReadTimeout bounds one silent read while draining, so a
+	// stalled client cannot pin the statement goroutine after failure.
+	loadLocalDrainReadTimeout = time.Second
+	// loadLocalDrainMaxWait bounds the whole drain, however many packets arrive.
+	loadLocalDrainMaxWait = 30 * time.Second
+	// loadLocalDrainMaxBytes bounds the payload volume drained from cancel on.
+	loadLocalDrainMaxBytes int64 = 256 * 1024 * 1024
+)
+
+// loadLocalDrainCapable is the narrow slice of the protocol the upload owner
+// needs to interrupt in-flight network I/O and run the post-cancellation
+// drain. *Conn implements it, and *MysqlProtocolImpl proxies the same contract
+// to its *Conn so real sessions drain instead of disconnecting (#30640); any
+// other MysqlRrWr keeps the legacy behaviour of retiring the connection
+// immediately on cancellation.
+type loadLocalDrainCapable interface {
+	InterruptLoadLocalIO()
+	ClearLoadLocalIOInterrupt()
+	DiscardLoadLocalPacket(time.Duration, time.Time, int64) (discarded int64, eof bool, err error)
+}
+
+// The production protocol behind ses.GetResponser().MysqlRrWr() must satisfy
+// the drain contract: without these proxies the owner falls back to Disconnect
+// and a finite client upload loses its connection instead of receiving the
+// statement error. Fail here, at build time, on any future refactor.
+var _ loadLocalDrainCapable = &MysqlProtocolImpl{}
+
+// An upload either reaches the protocol EOF or retires its connection. Any
+// error or cancellation interrupts the in-flight network I/O, then a bounded
+// drain still gives a finite client stream the chance to reach its protocol
+// EOF: the statement error can then reach the client and the connection stays
+// usable. An unlimited stream is retired by the drain budgets. Only the upload
+// owner frees its buffer; the cancellation watcher interrupts I/O and is
+// joined before owner cleanup.
 func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, reader *io.PipeReader) (err error) {
 	mysqlRwer := ses.GetResponser().MysqlRrWr()
 	defer func() {
@@ -5389,16 +5456,38 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		select {
 		case <-ctx.Done():
 			_ = reader.CloseWithError(ctx.Err())
-			disconnect()
+			if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+				// Interrupt the in-flight network I/O without closing the
+				// socket; the owner below decides between drain and retire.
+				drainer.InterruptLoadLocalIO()
+			} else {
+				disconnect()
+			}
 		case <-quitC:
 		}
 	}()
+	// joinWatcher makes the one-shot cancellation watcher quiescent before the
+	// owner touches socket deadlines for drain or reuse. The watcher itself
+	// never reads the client and never waits on the upload pipe (its two calls
+	// are non-blocking socket/pipe operations), so joining it is bounded; after
+	// the join it can never again expire a deadline on this connection.
+	watcherJoined := false
+	joinWatcher := func() {
+		if !watcherJoined {
+			watcherJoined = true
+			close(quitC)
+			<-watcherDone
+		}
+	}
 	var reachedEOF bool
 	defer func() {
-		close(quitC)
-		<-watcherDone
+		joinWatcher()
 		if !reachedEOF {
 			disconnect()
+		} else if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+			// A late cancellation may have poked I/O deadlines on a connection
+			// that stays alive for the next command.
+			drainer.ClearLoadLocalIOInterrupt()
 		}
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -5408,6 +5497,16 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 	if err != nil {
 		return
 	}
+	// The client has accepted the upload; a later cancellation or failure
+	// drains its finite remainder before the command boundary is answered —
+	// including an interrupted frame whose exact progress was preserved. A
+	// fatal framing/transport error still requires connection retirement.
+	requestAccepted := true
+	// drainOnExit requests the bounded post-failure drain below for an ordinary
+	// (non-cancellation) error, so the SQL error — not 2013 — answers the
+	// command on a connection that stays usable, exactly as after a
+	// cancellation drain.
+	drainOnExit := false
 
 	// handleNetworkTimeout checks if the error is a network timeout and disconnects the client
 	handleNetworkTimeout := func(err error) error {
@@ -5452,7 +5551,22 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 
 	for {
 		if err = checkLockTableBinds(); err != nil {
-			return
+			if ctx.Err() == nil {
+				// Ordinary statement-side error (e.g. lock table bind
+				// changed, which is exactly the #30640 2013 flavor): a
+				// drain-capable protocol resyncs the finite client stream
+				// at its upload EOF below, so this error reaches the
+				// client on a reusable connection. A legacy protocol keeps
+				// retiring the connection immediately.
+				if _, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+					drainOnExit = true
+					break
+				}
+				return
+			}
+			// Cancellation interrupted the upload (see the watcher): fall
+			// through to the bounded drain below.
+			break
 		}
 		readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer)
 		if err != nil {
@@ -5461,12 +5575,27 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 				err = nil
 				break
 			}
+			if ctx.Err() == nil {
+				if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
+					return timeoutErr
+				}
 
-			if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
-				return timeoutErr
+				// Ordinary upload-side error (e.g. the parser retired the
+				// pipe after rejecting the stream — the over-budget record
+				// flavor of #30640): the same command-boundary contract as
+				// the bind-change case above applies — resync the finite
+				// client stream at its upload EOF so this error, not 2013,
+				// answers the command on a reusable connection. A legacy
+				// protocol keeps retiring the connection immediately.
+				if _, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+					drainOnExit = true
+					break
+				}
+				return err
 			}
-
-			return err
+			// Cancellation interrupted the upload (see the watcher): fall
+			// through to the bounded drain below.
+			break
 		}
 
 		updateTimeStats(readTime, writeTime)
@@ -5480,10 +5609,69 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		epoch += 1
 	}
 
+	// The statement side retired this upload while a finite client may still be
+	// sending. Resync the protocol at the upload EOF so the original statement
+	// error and the next command can still use this connection; a stream that
+	// never terminates within the drain budgets keeps the legacy behaviour of
+	// retiring the connection (see the cleanup defer above).
+	if !reachedEOF && requestAccepted && (ctx.Err() != nil || drainOnExit) {
+		if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+			// Join the cancellation watcher BEFORE lifting its interrupt: a
+			// watcher's InterruptLoadLocalIO landing after the clear used to
+			// expire the drain's deadline mid-arm and disconnect a finite
+			// client (the renewed #30640 2013). After the join nothing can
+			// touch this connection's deadlines again but the drain itself.
+			joinWatcher()
+			drainer.ClearLoadLocalIOInterrupt()
+			reachedEOF = drainLoadLocalUpload(ses, execCtx, drainer)
+		}
+	}
+
 	if execCtx.isIssue3482 {
 		ses.Infof(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s\n", param.Filepath, time.Since(start))
 	}
 	return
+}
+
+// drainLoadLocalUpload discards client upload packets after cancellation until
+// the upload's protocol EOF, so a finite client still receives its statement
+// error on a connection that stays usable. The drain is bounded three ways: a
+// single silent read outlasts loadLocalDrainReadTimeout, total drain time
+// outlasts loadLocalDrainMaxWait, and drained payload exceeds
+// loadLocalDrainMaxBytes. True means the protocol EOF was reached; false means
+// the caller must retire the connection because the stream did not terminate
+// within its budgets. The empty upload packet is the protocol EOF marker (see
+// readThenWrite).
+func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrainCapable) bool {
+	deadline := time.Now().Add(loadLocalDrainMaxWait)
+	var drainedBytes int64
+	for {
+		// The absolute deadline is installed on every network read of this
+		// packet, so a trickled header or payload cannot outlive the drain's
+		// total budget one byte at a time.
+		discarded, eof, err := drainer.DiscardLoadLocalPacket(loadLocalDrainReadTimeout, deadline, loadLocalDrainMaxBytes-drainedBytes)
+		ses.CountPayload(int(discarded))
+		if err == nil && eof {
+			return true
+		}
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				ses.Errorf(execCtx.reqCtx, "load local upload cancelled: client stalled during drain, retiring connection")
+			} else {
+				ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drain read failed, retiring connection: %v", err)
+			}
+			return false
+		}
+		drainedBytes += discarded
+		switch {
+		case drainedBytes > loadLocalDrainMaxBytes:
+			ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drained %d bytes over budget %d, retiring connection", drainedBytes, loadLocalDrainMaxBytes)
+			return false
+		case time.Now().After(deadline):
+			ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drain outlasted %s, retiring connection", loadLocalDrainMaxWait)
+			return false
+		}
+	}
 }
 
 func makeCompactTxnInfo(op TxnOperator) string {
@@ -5585,6 +5773,16 @@ func executeStmtWithTxn(ses FeSession,
 		wasDisabled := execCtx.proc.IncrStatementDisabled()
 		execCtx.proc.SetIncrStatementDisabled(true)
 		defer execCtx.proc.SetIncrStatementDisabled(wasDisabled)
+
+		// Derived statements on a shared-transaction background executor
+		// (e.g. nested procedure bodies) skip executeStmtWithWorkspace, so
+		// the READ ONLY admission runs here before dispatch instead. The gate
+		// evaluates the originating user session and the temporary bindings
+		// live at this moment; origin-less maintenance executions stay
+		// exempt inside it.
+		if err = enforceReadOnlyTxnAccessMode(ses, execCtx, execCtx.stmt, ses.GetDatabaseName()); err != nil {
+			return err
+		}
 
 		err = dispatchStmt(ses, statsArr, execCtx)
 		recordSessionDDL(ses, execCtx, err)
@@ -5712,6 +5910,15 @@ func executeStmtWithWorkspace(ses FeSession,
 		return moerr.NewInternalError(execCtx.reqCtx, "savepoint has not been implemented yet. please rollback the transaction.")
 	}
 
+	// Reject writes in a READ ONLY transaction (MySQL ERROR 1792). This runs
+	// before TxnHandler.Create so a DDL statement inside an explicit read-only
+	// transaction is rejected before its implicit commit, and the rejection
+	// leaves the transaction fully usable for reads.
+	if err = enforceReadOnlyTxnAccessMode(
+		ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+		return err
+	}
+
 	//in session migration, the txn forced to be autocommit.
 	//then the txn can be committed.
 	if execCtx.inMigration {
@@ -5751,6 +5958,16 @@ func executeStmtWithWorkspace(ses FeSession,
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
 		return err
+	}
+	if execCtx.deferReadOnlyOwnership {
+		// The pre-Create admission deferred an unqualified multi-source
+		// UPDATE verdict (READ ONLY path without an active transaction):
+		// re-run the gate now that a catalog transaction is attached.
+		execCtx.deferReadOnlyOwnership = false
+		if err = enforceReadOnlyTxnAccessMode(
+			ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+			return err
+		}
 	}
 	if backSes, ok := ses.(*backSession); ok {
 		if hook := backSes.processHook; hook != nil {
@@ -6245,6 +6462,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		TimeZone:               ses.GetTimeZone(),
 		StorageEngine:          pu.StorageEngine,
 		LastInsertID:           ses.GetLastInsertID(),
+		LastInsertIDSet:        true,
 		SqlHelper:              ses.GetSqlHelper(),
 		CompilerContext:        ses.txnCompileCtx,
 		Buf:                    ses.GetBuffer(),
@@ -6532,6 +6750,18 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// packet, so clear it before executing each statement while leaving the
 		// session-visible LAST_INSERT_ID state in LastInsertID untouched.
 		proc.SetStatementLastInsertID(0)
+		// A COM_QUERY may contain multiple statements.  The previous statement
+		// can have published a generated ODKU value to the session after the
+		// process was initialized, so reseed the expression-visible process
+		// value before planning this statement.
+		lastInsertID := ses.GetLastInsertID()
+		proc.SetLastInsertID(lastInsertID)
+		// Retry restoration uses the session snapshot carried by SessionInfo. Keep
+		// that attempt baseline aligned when COM_QUERY reuses the process across
+		// statements.
+		proc.Base.SessionInfo.LastInsertID = lastInsertID
+		proc.Base.SessionInfo.LastInsertIDSet = true
+		proc.ResetODKUResult()
 		if isTopLevelClientStatement(ses, execCtx, currentInput) {
 			execCtx.captureDiagnosticCountsSnapshot(ses)
 		}
@@ -6564,6 +6794,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// completion and must not commit the new transaction opened by BEGIN.
 		_, replacementBegin := stmt.(*tree.BeginTransaction)
 		replacementBegin = replacementBegin && isTopLevelClientStatement(ses, execCtx, currentInput) && !ses.GetIsInternal()
+		if execCtx.implicitCommitBefore {
+			// A writing implicit-commit statement (TRUNCATE, RENAME) would
+			// commit an active READ ONLY transaction below and then execute in
+			// a fresh write-capable transaction. MySQL instead rejects the
+			// statement with ERROR 1792 and keeps the transaction alive for
+			// reads, so gate before the implicit commit happens.
+			execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
+			execCtx.txnOpt.activeTxnAtStartKnown = true
+			if err = enforceReadOnlyTxnAccessMode(ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				return err
+			}
+		}
 		if execCtx.implicitCommitBefore || replacementBegin {
 			beforeCommit := ses.getLastCommitTS()
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {
@@ -7240,8 +7483,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// consumed; COM_STMT_CLOSE is the explicit cleanup/reprepare escape hatch.
 		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
+			// A valid COM_STMT_CLOSE is response-free even when the handle was
+			// already closed. Drivers do not read a reply to this command.
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
-			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
+			return nil, nil
 		}
 		preStmt.closeCursor()
 		preStmt.resetBinaryParamState()
@@ -7255,10 +7500,12 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// COM_STMT_CLOSE never changes ROW_COUNT(), including deallocation errors.
 		err = doComQuery(ses, execCtx, &UserInput{sql: sql})
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err)
+			// The SQL cleanup path retains its own error bookkeeping. Sending its
+			// error to a binary client would desynchronize the next command.
+			ses.Error(execCtx.reqCtx, "failed to close binary prepared statement", zap.Error(err))
 		}
 		restoreRowCount(ses, ses.GetProc(), savedRowCount)
-		return resp, nil
+		return nil, nil
 
 	case COM_STMT_RESET:
 		//Payload of COM_STMT_RESET

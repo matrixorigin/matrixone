@@ -10,15 +10,61 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
+FULL_SELECTION = [
+    'tests/online/test_sdk_quality_contracts.py',
+    'tests/online/test_sdk_manager_contracts.py',
+    'tests/online/test_sdk_search_contracts.py',
+    'tests/online/test_sdk_wave2_contracts.py',
+    'tests/online/test_sdk_release_contracts.py',
+]
+CORE_SELECTION = [
+    'tests/online/test_sdk_quality_contracts.py::test_public_query_contracts',
+    'tests/online/test_sdk_quality_contracts.py::test_async_public_contracts_and_pre_ping',
+    'tests/online/test_sdk_quality_contracts.py::test_type_metadata_and_values',
+    'tests/online/test_sdk_quality_contracts.py::test_capabilities_are_observations',
+    'tests/online/test_sdk_quality_contracts.py::test_decimal_binding_preserves_exact_mutation_scope',
+    'tests/online/test_sdk_search_contracts.py::test_vector_metric_filters_and_live_schema',
+    'tests/online/test_sdk_release_contracts.py::test_cached_snapshot_select_public_owners',
+    'tests/online/test_sdk_release_contracts.py::test_external_cache_warmed_before_adoption',
+    'tests/online/test_sdk_release_contracts.py::test_admin_name_and_password_roundtrip',
+    'tests/online/test_sdk_release_contracts.py::test_native_metadata_boolean_matches_structured',
+    'tests/online/test_sdk_release_contracts.py::test_fulltext_zero_limit_native_results',
+    'tests/online/test_sdk_release_contracts.py::test_clone_verified_success_rolls_back_with_later_error',
+    'tests/online/test_sdk_release_contracts.py::test_clone_existing_target_is_noop',
+    'tests/online/test_sdk_release_contracts.py::test_clone_snapshot_convenience_single_connection_pool',
+    'tests/online/test_sdk_release_contracts.py::test_query_failure_retains_source_and_pool_reuse',
+    'tests/online/test_sdk_release_contracts.py::test_stage_comment_native_outcome_is_preserved',
+]
+
+
+def release_target(value):
+    if value == 'current-source' or re.fullmatch(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', value):
+        return value
+    raise argparse.ArgumentTypeError('Expected an exact release (for example 4.1.6) or current-source')
+
+
+def validate_server_identity(version, revision, expected_version, expected_revision=None):
+    """Compare actual release identities exactly; source banners need a revision."""
+    if re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', expected_version):
+        match = re.search(r'(?:^|-)MatrixOne-v([0-9]+\.[0-9]+\.[0-9]+)(?:$|[-+])', version)
+        if match is None or match[1] != expected_version:
+            raise ValueError('Observed MatrixOne release differs from the selected target')
+    elif not expected_revision or expected_version not in version:
+        raise ValueError('Source identity requires the expected banner and git revision')
+    if expected_revision and not revision.startswith(expected_revision):
+        raise ValueError('Observed MatrixOne git revision differs from the selected target')
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--server', choices=('4.2.5', 'current-source'))
+    parser.add_argument('--server', type=release_target)
+    parser.add_argument('--suite', choices=('full', 'core'), default='full')
     parser.add_argument('--output', default='contract-results')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -31,24 +77,24 @@ def main():
             'MO_USER',
             'MO_PASSWORD',
             'MO_SDK_EXPECT_VERSION',
-            'MO_SDK_EXPORT_DIR',
-            'MO_SDK_EXPORT_LOCAL_DIR',
         ]
+        if args.suite == 'full':
+            required.extend(('MO_SDK_EXPORT_DIR', 'MO_SDK_EXPORT_LOCAL_DIR'))
+            if os.environ.get('MO_SDK_DISPOSABLE_SERVER') != '1':
+                parser.error('Full server contracts require MO_SDK_DISPOSABLE_SERVER=1 and exclusive tenant access')
         if args.server == 'current-source':
             required.append('MO_SDK_EXPECT_REVISION')
         missing = [name for name in required if not os.environ.get(name)]
         if missing:
             parser.error('Required target configuration: ' + ', '.join(missing))
-        if args.server == '4.2.5' and os.environ['MO_SDK_EXPECT_VERSION'] != '4.2.5':
-            parser.error('The release job must assert version 4.2.5')
+        if args.server != 'current-source' and os.environ['MO_SDK_EXPECT_VERSION'] != args.server:
+            parser.error('The release job must assert the exact selected version')
         os.environ['MO_SDK_ONLINE'] = '1'
-        selection = [
-            'tests/online/test_sdk_quality_contracts.py',
-            'tests/online/test_sdk_manager_contracts.py',
-            'tests/online/test_sdk_search_contracts.py',
-            'tests/online/test_sdk_wave2_contracts.py',
-        ]
+        os.environ['MO_SDK_TARGET'] = args.server
+        selection = FULL_SELECTION if args.suite == 'full' else CORE_SELECTION
     else:
+        if args.suite != 'full':
+            parser.error('--suite core requires an explicit server target')
         selection = ['tests/offline']
     versions = {}
     for package in ('matrixone-python-sdk', 'SQLAlchemy', 'PyMySQL', 'aiomysql', 'pytest', 'pyarrow'):
@@ -64,6 +110,8 @@ def main():
         *selection,
         '-o',
         'addopts=',
+        '-o',
+        'junit_family=legacy',
         '-q',
         '--tb=short',
         '--junitxml=' + str(output / 'junit.xml'),
@@ -92,6 +140,7 @@ def main():
         dependencies=versions,
         selection=selection,
         server=args.server,
+        suite=args.suite,
         expected_version=os.environ.get('MO_SDK_EXPECT_VERSION'),
         expected_revision=os.environ.get('MO_SDK_EXPECT_REVISION'),
         command=command,
@@ -108,8 +157,14 @@ def main():
         record['observed_server'] = {
             item.attrib['name']: item.attrib['value']
             for item in ET.parse(path).getroot().iter('property')
-            if item.attrib.get('name', '').startswith('matrixone.')
+            if item.attrib.get('name') in ('matrixone.version', 'matrixone.revision')
         }
+        record['feature_outcomes'] = [
+            dict(case=case.attrib.get('name'), feature=item.attrib['name'], outcome=item.attrib['value'])
+            for case in cases
+            for item in case.iter('property')
+            if item.attrib.get('name', '').startswith('matrixone.feature.')
+        ]
         valid = counts['tests'] > 0 and not any(counts[name] for name in ('failure', 'error', 'skipped'))
     else:
         valid = False

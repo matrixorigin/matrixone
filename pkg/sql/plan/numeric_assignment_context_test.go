@@ -877,12 +877,12 @@ func TestStoreNumericTableProjectionTargetsKeepsConflictAmbiguous(t *testing.T) 
 	targets := make(map[string][]planpb.Type)
 	ambiguous := make(map[string][]bool)
 
-	storeNumericTableProjectionTargets(targets, ambiguous, "c", []planpb.Type{decimal72})
-	storeNumericTableProjectionTargets(targets, ambiguous, "c", []planpb.Type{uint32Type})
+	storeNumericTableProjectionTargetsWithMerge(targets, ambiguous, "c", []planpb.Type{decimal72}, false)
+	storeNumericTableProjectionTargetsWithMerge(targets, ambiguous, "c", []planpb.Type{uint32Type}, false)
 	require.Equal(t, planpb.Type{}, targets["c"][0])
 	require.True(t, ambiguous["c"][0])
 
-	storeNumericTableProjectionTargets(targets, ambiguous, "c", []planpb.Type{uint32Type})
+	storeNumericTableProjectionTargetsWithMerge(targets, ambiguous, "c", []planpb.Type{uint32Type}, false)
 	require.Equal(t, planpb.Type{}, targets["c"][0])
 	require.True(t, ambiguous["c"][0])
 }

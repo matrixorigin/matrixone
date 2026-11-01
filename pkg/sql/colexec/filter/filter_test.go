@@ -1129,12 +1129,23 @@ func TestConstantTranspose(t *testing.T) {
 	target := &plan.Expr{Typ: colExpr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
 	wideParam := plan2.DeepCopyExpr(param)
 	wideParam.Typ.Id = int32(types.T_int64)
-	for _, peer := range []*plan.Expr{makeConstExpr(42), makeAddExpr(makeConstExpr(40), makeConstExpr(2)), bind(t, "cast", wideParam, target)} {
+	for _, peer := range []*plan.Expr{makeConstExpr(42), bind(t, "cast", makeAddExpr(makeConstExpr(40), makeConstExpr(2)), target), bind(t, "cast", wideParam, target)} {
 		input := bind(t, "<=", peer, colExpr)
 		result, err := plan2.ConstantTranspose(input, proc)
 		require.NoError(t, err)
 		require.Equal(t, bind(t, ">=", colExpr, peer), result, "peer domain must stay executable")
 	}
+	t.Run("widened_arithmetic_keeps_column_cast", func(t *testing.T) {
+		peer := makeAddExpr(makeConstExpr(40), makeConstExpr(2))
+		require.Equal(t, int32(types.T_int64), peer.Typ.Id)
+		input := bind(t, "<=", peer, colExpr)
+		require.Equal(t, "cast", input.GetF().Args[1].GetF().Func.ObjName)
+		before := plan2.DeepCopyExpr(input)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Same(t, input, result, "a widened comparison has no bare column to transpose")
+		require.Equal(t, before, input)
+	})
 
 	// Equality direction must preserve typed NULL and executable parameter/cast domains.
 	nullPeer := makeConstExpr(0)

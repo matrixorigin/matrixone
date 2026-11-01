@@ -18,12 +18,13 @@ MatrixOne Snapshot Management
 Unified snapshot management supporting sync/async and client/session executors.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import List, Optional, Union
 
-from .exceptions import ConnectionError, SnapshotError
+from .exceptions import ConnectionError, SnapshotError, SnapshotNotFound
 from .version import requires_version
+from ._sql_literals import identifier_parts, sql_object_name
 
 
 class SnapshotLevel(Enum):
@@ -142,6 +143,7 @@ class BaseSnapshotManager:
         else:
             level_enum = level
 
+        name = sql_object_name(name)
         # Build CREATE SNAPSHOT SQL using correct MatrixOne syntax
         if level_enum == SnapshotLevel.CLUSTER:
             return f"CREATE SNAPSHOT {name} FOR CLUSTER"
@@ -150,18 +152,19 @@ class BaseSnapshotManager:
         elif level_enum == SnapshotLevel.DATABASE:
             if not database:
                 raise SnapshotError("Database name required for database level snapshot")
-            return f"CREATE SNAPSHOT {name} FOR DATABASE {database}"
+            return f"CREATE SNAPSHOT {name} FOR DATABASE {sql_object_name(database)}"
         elif level_enum == SnapshotLevel.TABLE:
             if not database or not table:
                 raise SnapshotError("Database and table names required for table level snapshot")
-            return f"CREATE SNAPSHOT {name} FOR TABLE {database} {table}"
+            return f"CREATE SNAPSHOT {name} FOR TABLE {sql_object_name(database)} {sql_object_name(table)}"
         else:
             raise SnapshotError(f"Unsupported snapshot level: {level_enum}")
 
     def _parse_snapshot_row(self, row) -> Snapshot:
         """Parse a snapshot row from database query result"""
         # Convert timestamp to datetime
-        timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
+        seconds, nanoseconds = divmod(int(row[1]), 1_000_000_000)
+        timestamp = datetime.fromtimestamp(seconds, timezone.utc) + timedelta(microseconds=nanoseconds // 1000)
 
         # Convert level string to enum
         level_str = row[2]
@@ -182,10 +185,7 @@ class BaseSnapshotManager:
 
 
 def _snapshot_lookup_name(name):
-    if len(name) >= 2 and name[0] in ('`', '"') and name[-1] == name[0]:
-        quote = name[0]
-        return name[1:-1].replace(quote * 2, quote)
-    return name
+    return identifier_parts(name)[0]
 
 
 class SnapshotManager(BaseSnapshotManager):
@@ -315,7 +315,11 @@ class SnapshotManager(BaseSnapshotManager):
         try:
             return self.get(name)
         except Exception as e:
-            raise SnapshotError(f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
+            raise SnapshotError(
+                f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}",
+                phase='metadata_readback',
+                statement_acknowledged=True,
+            ) from e
 
     def list(self) -> List[Snapshot]:
         """
@@ -367,14 +371,14 @@ class SnapshotManager(BaseSnapshotManager):
 
             row = result.fetchone()
             if not row:
-                raise SnapshotError(f"Snapshot '{name}' not found")
+                raise SnapshotNotFound(f"Snapshot '{name}' not found")
 
             return self._parse_snapshot_row(row)
 
+        except SnapshotNotFound:
+            raise
         except Exception as e:
-            if "not found" in str(e):
-                raise e
-            raise SnapshotError(f"Failed to get snapshot: {e}")
+            raise SnapshotError(f"Failed to get snapshot: {e}") from e
 
     def delete(self, name: str) -> None:
         """
@@ -387,7 +391,7 @@ class SnapshotManager(BaseSnapshotManager):
             raise ConnectionError("Not connected to database")
 
         try:
-            self._get_executor().execute(f"DROP SNAPSHOT {name}")
+            self._get_executor().execute(f"DROP SNAPSHOT {sql_object_name(name)}")
         except Exception as e:
             raise SnapshotError(f"Failed to delete snapshot: {e}") from e
 
@@ -404,7 +408,7 @@ class SnapshotManager(BaseSnapshotManager):
         try:
             self.get(name)
             return True
-        except SnapshotError:
+        except SnapshotNotFound:
             return False
 
 
@@ -456,7 +460,11 @@ class AsyncSnapshotManager(BaseSnapshotManager):
         try:
             return await self.get(name)
         except Exception as e:
-            raise SnapshotError(f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
+            raise SnapshotError(
+                f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}",
+                phase='metadata_readback',
+                statement_acknowledged=True,
+            ) from e
 
     async def list(self) -> List[Snapshot]:
         """
@@ -508,14 +516,14 @@ class AsyncSnapshotManager(BaseSnapshotManager):
 
             row = result.fetchone()
             if not row:
-                raise SnapshotError(f"Snapshot '{name}' not found")
+                raise SnapshotNotFound(f"Snapshot '{name}' not found")
 
             return self._parse_snapshot_row(row)
 
+        except SnapshotNotFound:
+            raise
         except Exception as e:
-            if "not found" in str(e):
-                raise e
-            raise SnapshotError(f"Failed to get snapshot: {e}")
+            raise SnapshotError(f"Failed to get snapshot: {e}") from e
 
     async def delete(self, name: str) -> None:
         """
@@ -528,7 +536,7 @@ class AsyncSnapshotManager(BaseSnapshotManager):
             raise ConnectionError("Not connected to database")
 
         try:
-            await self._get_executor().execute(f"DROP SNAPSHOT {name}")
+            await self._get_executor().execute(f"DROP SNAPSHOT {sql_object_name(name)}")
         except Exception as e:
             raise SnapshotError(f"Failed to delete snapshot: {e}") from e
 
@@ -545,5 +553,5 @@ class AsyncSnapshotManager(BaseSnapshotManager):
         try:
             await self.get(name)
             return True
-        except SnapshotError:
+        except SnapshotNotFound:
             return False

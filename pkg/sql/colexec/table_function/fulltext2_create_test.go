@@ -30,8 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +42,7 @@ import (
 func ft2CreateCfg(t *testing.T, parser string, positionFree bool) string {
 	t.Helper()
 	b, err := sonic.Marshal(fulltext2.TableConfig{
+		ThreadsBuild: 1,
 		DbName:       "db",
 		IndexTable:   "__idx",
 		Parser:       parser,
@@ -215,7 +218,8 @@ func TestFulltext2CreatePartialNullKeepsInclude(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	cfg, err := sonic.Marshal(fulltext2.TableConfig{
-		DbName: "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram,
+		ThreadsBuild: 1,
+		DbName:       "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram,
 		IncludeTypes: []int32{int32(types.T_varchar)},
 	})
 	require.NoError(t, err)
@@ -573,7 +577,7 @@ func TestFulltext2CreateSealAndEnd(t *testing.T) {
 				require.NotContains(t, sql, "load_file")
 				files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
 				require.NoError(t, err)
-				require.Len(t, files, 1, "owned spill exists through synchronous execution")
+				require.Empty(t, files, "the spill is unlinked while its handle serves the insert")
 				if opts.HasParams() {
 					vec, err := opts.Params(mp)
 					require.NoError(t, err)
@@ -585,7 +589,7 @@ func TestFulltext2CreateSealAndEnd(t *testing.T) {
 			})
 
 			// capacity=1 seals one real spill without additional data or services.
-			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", MetadataTable: "__meta", Parser: fulltext2.ParserNgram, Capacity: 1})
+			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", MetadataTable: "__meta", Parser: fulltext2.ParserNgram, Capacity: 1, ThreadsBuild: 1})
 			require.NoError(t, err)
 			st := &fulltext2CreateState{}
 			tf, vecs := ft2CreateArgVecs(t, mp, string(cfg), 1, "hello world")
@@ -617,4 +621,172 @@ func TestFulltext2CreateSealAndEnd(t *testing.T) {
 			require.Equal(t, "accountadmin", proc.GetSessionInfo().Role)
 		})
 	}
+}
+
+// ft2PipelineHarness drives the create TVF with threads_build through the pipelined build
+// and records the metadata inserts the build writes.
+type ft2PipelineHarness struct {
+	t        *testing.T
+	mp       *mpool.MPool
+	proc     *process.Process
+	dir      string
+	metaSQLs []string
+	writeErr error
+}
+
+func newFT2PipelineHarness(t *testing.T, writeErr error) *ft2PipelineHarness {
+	h := &ft2PipelineHarness{t: t, mp: mpool.MustNewZero(), dir: t.TempDir(), writeErr: writeErr}
+	h.proc = testutil.NewProcessWithOwnedMPool(t, "", h.mp)
+	h.proc.Base.FileService = nil
+	t.Setenv("TMPDIR", h.dir)
+	prev := fulltext2_runSql
+	t.Cleanup(func() { fulltext2_runSql = prev })
+	fulltext2_runSql = func(*sqlexec.SqlProcess, string) (executor.Result, error) { return executor.Result{}, nil }
+	mockIndexTxn(t, h.proc, func(sql string, opts executor.StatementOption) (executor.Result, error) {
+		if opts.HasParams() {
+			return executor.Result{}, h.writeErr
+		}
+		if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "INSERT ") {
+			return executor.Result{}, nil
+		}
+		h.metaSQLs = append(h.metaSQLs, sql)
+		return executor.Result{}, nil
+	})
+	return h
+}
+
+func (h *ft2PipelineHarness) feed(st *fulltext2CreateState, threads int64, rows int) error {
+	cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", MetadataTable: "__meta",
+		Parser: fulltext2.ParserNgram, Capacity: 2, ThreadsBuild: threads})
+	require.NoError(h.t, err)
+	for i := 0; i < rows; i++ {
+		tf, vecs := ft2CreateArgVecs(h.t, h.mp, string(cfg), int64(i+1), "hello world row")
+		err := st.start(tf, h.proc, 0, nil)
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *ft2PipelineHarness) spillFiles() []string {
+	files, err := filepath.Glob(filepath.Join(h.dir, "ft2build*"))
+	require.NoError(h.t, err)
+	return files
+}
+
+func TestFulltext2CreatePipelinedBuild(t *testing.T) {
+	h := newFT2PipelineHarness(t, nil)
+	st := &fulltext2CreateState{}
+	require.NoError(t, h.feed(st, 4, 10))
+	require.Equal(t, 4, st.threads)
+	require.NotNil(t, st.pipe)
+	require.Nil(t, st.cur)
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	require.NoError(t, st.end(tf, h.proc))
+	require.Nil(t, st.pipe)
+	require.Equal(t, 5, st.segIdx)
+	require.True(t, st.basesCleared)
+	require.Len(t, h.metaSQLs, 5)
+	for i, sql := range h.metaSQLs {
+		require.Contains(t, sql, fulltext2.SubIndexId(st.uid, i))
+	}
+	require.Empty(t, h.spillFiles())
+	st.reset(tf, h.proc)
+	st.free(tf, h.proc, false, nil)
+}
+
+func TestFulltext2CreatePipelinedBuildWriteError(t *testing.T) {
+	boom := errors.New("chunk write failed")
+	h := newFT2PipelineHarness(t, boom)
+	st := &fulltext2CreateState{}
+	err := h.feed(st, 4, 10)
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	if err == nil {
+		err = st.end(tf, h.proc)
+	}
+	require.ErrorIs(t, err, boom)
+	st.free(tf, h.proc, true, err)
+	require.Nil(t, st.pipe)
+	require.Empty(t, h.spillFiles())
+}
+
+func TestFulltext2CreatePipelinedBuildAbortBeforeEnd(t *testing.T) {
+	h := newFT2PipelineHarness(t, nil)
+	st := &fulltext2CreateState{}
+	require.NoError(t, h.feed(st, 4, 9))
+	require.NotNil(t, st.pipe)
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	st.reset(tf, h.proc)
+	require.Nil(t, st.pipe)
+	st.free(tf, h.proc, true, nil)
+	require.Empty(t, h.spillFiles())
+}
+
+func TestFulltext2CreateThreadsBuildResolution(t *testing.T) {
+	h := newFT2PipelineHarness(t, nil)
+	serial := &fulltext2CreateState{}
+	require.NoError(t, h.feed(serial, 1, 1))
+	require.Equal(t, 1, serial.threads)
+	require.Nil(t, serial.pipe)
+	require.NotNil(t, serial.cur)
+
+	auto := &fulltext2CreateState{}
+	require.NoError(t, h.feed(auto, 0, 1))
+	require.Equal(t, int(vectorindex.GetConcurrencyForBuild(0)), auto.threads)
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	serial.free(tf, h.proc, false, nil)
+	auto.free(tf, h.proc, false, nil)
+
+	require.Equal(t, 1, fulltext2BuildMaxFinishing(1))
+	require.Equal(t, 1, fulltext2BuildMaxFinishing(3))
+	require.Equal(t, 2, fulltext2BuildMaxFinishing(8))
+}
+
+func TestFulltext2CreatePipelinedRerunContinuesSegmentIds(t *testing.T) {
+	h := newFT2PipelineHarness(t, nil)
+	st := &fulltext2CreateState{}
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	require.NoError(t, h.feed(st, 4, 6))
+	require.NoError(t, st.end(tf, h.proc))
+	require.Equal(t, 3, st.segIdx)
+	st.reset(tf, h.proc)
+
+	require.NoError(t, h.feed(st, 4, 6))
+	require.NoError(t, st.end(tf, h.proc))
+	require.Equal(t, 6, st.segIdx)
+	require.Len(t, h.metaSQLs, 6)
+	for i, sql := range h.metaSQLs {
+		require.Contains(t, sql, "'"+fulltext2.SubIndexId(st.uid, i)+"'")
+	}
+	st.free(tf, h.proc, false, nil)
+	require.Empty(t, h.spillFiles())
 }

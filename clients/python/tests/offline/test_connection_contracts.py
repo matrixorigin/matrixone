@@ -150,7 +150,10 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
         'charset': 'utf8mb4',
         'ssl_mode': 'disabled',
     }
-    factory = Mock(return_value=MagicMock())
+    import sqlalchemy as sa
+
+    engine = sa.create_engine('mysql+pymysql://unused@localhost/db')
+    factory = Mock(return_value=engine)
     monkeypatch.setattr(module, 'create_engine', factory)
     client._create_engine()
     assert factory.call_args.kwargs['connect_args'] == {
@@ -158,6 +161,7 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
         'read_timeout': 7,
         'write_timeout': 7,
         'local_infile': False,
+        'client_flag': 128,
         'charset': 'utf8mb4',
         'ssl_disabled': True,
     }
@@ -176,10 +180,15 @@ def test_async_driver_receives_connect_timeout(monkeypatch):
         'connect_timeout': 13,
         'charset': 'utf8mb4',
     }
-    factory = Mock()
+    factory = Mock(wraps=module.create_async_engine)
     monkeypatch.setattr(module, 'create_async_engine', factory)
-    client._create_async_engine()
-    assert factory.call_args.kwargs['connect_args']['connect_timeout'] == 13
+    engine = client._create_async_engine()
+    try:
+        assert factory.call_args.kwargs['connect_args']['connect_timeout'] == 13
+    finally:
+        import asyncio
+
+        asyncio.run(engine.dispose())
 
 
 def test_failed_disconnect_does_not_leave_connected_state():

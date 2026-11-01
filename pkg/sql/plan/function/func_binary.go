@@ -377,7 +377,8 @@ var ScaleTable = [...]uint64{
 	10000000000000000000, // 1 followed by 19 zeros, maxUint64 number has 20 digits, so the max scale is 1 followed by 19 zeroes
 }
 
-func floorUint64(x uint64, digits int64) uint64 {
+// truncateUnsignedDigits serves FLOOR and TRUNCATE for nonnegative integers.
+func truncateUnsignedDigits(x uint64, digits int64) uint64 {
 	switch {
 	case digits >= 0:
 		return x
@@ -391,7 +392,7 @@ func floorUint64(x uint64, digits int64) uint64 {
 }
 
 func FloorUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("floor", ivecs, result, proc, length, floorUint64, selectList)
+	return generalMathMulti("floor", ivecs, result, proc, length, truncateUnsignedDigits, selectList)
 }
 
 func floorInt64(x int64, digits int64) int64 {
@@ -601,53 +602,78 @@ func RoundInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return generalMathMulti("round", ivecs, result, proc, length, roundInt64, selectList)
 }
 
-func roundFloat64(x float64, digits int64) float64 {
+type mathMultiFunE[T mathMultiT] func(T, int64) (T, error)
+
+// generalMathMultiWithError mirrors generalMathMulti for callbacks that can
+// fail per element (ROUND of a finite DOUBLE whose rounded result is not
+// representable, issue 31154). Errors flow through the regular op error
+// channel: rows are evaluated in order and the first failing row aborts the
+// statement with a stable SQL error; the op framework owns result cleanup
+// on the error path (op*WithErrorCheck in baseTemplate.go).
+func generalMathMultiWithError[T mathMultiT](funcName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int,
+	cb mathMultiFunE[T], selectList *FunctionSelectList) (err error) {
+	digits := int64(0)
+	if len(ivecs) > 1 {
+		if ivecs[1].IsConstNull() || !ivecs[1].IsConst() {
+			if funcName != "round" && funcName != "truncate" {
+				return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
+			}
+			return opBinaryFixedFixedToFixedWithErrorCheck[T, int64, T](ivecs, result, proc, length, cb, selectList)
+		}
+		if ivecs[1].GetType().Oid != types.T_int64 {
+			return moerr.NewInvalidArg(proc.Ctx, fmt.Sprintf("the second argument of the %s", funcName), "not const")
+		}
+		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
+	}
+
+	return opUnaryFixedToFixedWithErrorCheck[T, T](ivecs, result, proc, length, func(x T) (T, error) {
+		return cb(x, digits)
+	}, selectList)
+}
+
+func roundFloat64(x float64, digits int64) (float64, error) {
 	if digits == 0 {
 		x = math.RoundToEven(x)
 	} else if digits >= 308 { // the range of float64
-	} else if digits <= -308 {
+	} else if digits <= -309 {
+		// |x| < 0.17977e309, so any scale coarser than -308 rounds to zero.
 		x = 0
+	} else if digits < 0 {
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return x, nil
+		}
+		if v, ok := scaleFloat64BySmallNegativeDigitsFast(x, -digits, false); ok {
+			return v, nil
+		}
+		// Round in the double domain and delegate near-boundary decisions to
+		// the exact decimal path: math.Pow(10,k) deviates by a few ULP at
+		// large k, which moved the quotient across the boundary at extreme
+		// magnitudes (1e308 at -307/-308, issue 31154).
+		return scaleFloat64ByNegativeDecimalDigits(x, -digits, digits, "round", false)
 	} else {
-		var abs_digits uint64
-		if digits < 0 {
-			abs_digits = uint64(-digits)
-		} else {
-			abs_digits = uint64(digits)
-		}
-		var tmp = math.Pow(10.0, float64(abs_digits))
+		var tmp = math.Pow(10.0, float64(digits))
 
-		if digits > 0 {
-			var value_mul_tmp = x * tmp
-			x = math.RoundToEven(value_mul_tmp) / tmp
-		} else {
-			var value_div_tmp = x / tmp
-			x = math.RoundToEven(value_div_tmp) * tmp
+		var value_mul_tmp = x * tmp
+		if math.IsInf(value_mul_tmp, 0) {
+			// The scaled product overflowed the finite DOUBLE range. That
+			// only happens when every exact decimal digit of x sits strictly
+			// above position 10^-digits, so rounding at that position is the
+			// identity: return x itself instead of +/-Inf (issue 31154).
+			return x, nil
 		}
+		x = math.RoundToEven(value_mul_tmp) / tmp
 	}
-	return x
+	return x, nil
 }
 
 func RoundFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("round", ivecs, result, proc, length, roundFloat64, selectList)
+	return generalMathMultiWithError("round", ivecs, result, proc, length, roundFloat64, selectList)
 }
 
 // TRUNCATE function implementations
 // TRUNCATE truncates a number to D decimal places without rounding
-func truncateUint64(x uint64, digits int64) uint64 {
-	switch {
-	case digits >= 0:
-		return x
-	case digits > -MaxUint64digits:
-		scale := ScaleTable[-digits]
-		x = x / scale * scale // truncate without rounding
-	case digits <= -MaxUint64digits:
-		x = 0
-	}
-	return x
-}
-
 func TruncateUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("truncate", ivecs, result, proc, length, truncateUint64, selectList)
+	return generalMathMulti("truncate", ivecs, result, proc, length, truncateUnsignedDigits, selectList)
 }
 
 func truncateInt64(x int64, digits int64) int64 {
@@ -668,37 +694,302 @@ func TruncateInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	return generalMathMulti("truncate", ivecs, result, proc, length, truncateInt64, selectList)
 }
 
-func truncateFloat64(x float64, digits int64) float64 {
+func truncateFloat64(x float64, digits int64) (float64, error) {
 	if digits == 0 {
 		x = math.Trunc(x)
 	} else if digits >= 308 { // the range of float64
 		// No truncation needed
-	} else if digits <= -308 {
+	} else if digits <= -309 {
+		// |x| < 0.17977e309, so any scale coarser than -308 truncates to zero.
 		x = 0
-	} else {
-		var abs_digits uint64
-		if digits < 0 {
-			abs_digits = uint64(-digits)
-		} else {
-			abs_digits = uint64(digits)
+	} else if digits < 0 {
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return x, nil
 		}
-		var tmp = math.Pow(10.0, float64(abs_digits))
+		if v, ok := scaleFloat64BySmallNegativeDigitsFast(x, -digits, true); ok {
+			return v, nil
+		}
+		// Truncate in the double domain and delegate near-boundary decisions
+		// to the exact decimal path: math.Pow(10,k) deviates by a few ULP at
+		// large k, which moved the quotient across the boundary at extreme
+		// magnitudes (1e308 at -307/-308, issue 31154).
+		return scaleFloat64ByNegativeDecimalDigits(x, -digits, digits, "truncate", true)
+	} else {
+		var tmp = math.Pow(10.0, float64(digits))
 
-		if digits > 0 {
-			// Truncate to D decimal places: multiply, truncate, divide
-			var value_mul_tmp = x * tmp
-			x = math.Trunc(value_mul_tmp) / tmp
-		} else {
-			// Truncate to -D digits before decimal point
-			var value_div_tmp = x / tmp
-			x = math.Trunc(value_div_tmp) * tmp
+		// Truncate to D decimal places: multiply, truncate, divide
+		var value_mul_tmp = x * tmp
+		if math.IsInf(value_mul_tmp, 0) {
+			// The scaled product overflowed the finite DOUBLE range. That
+			// only happens when every exact decimal digit of x sits strictly
+			// above position 10^-digits, so truncating at that position is
+			// the identity: return x itself instead of +/-Inf (issue 31154).
+			return x, nil
+		}
+		x = math.Trunc(value_mul_tmp) / tmp
+	}
+	return x, nil
+}
+
+// pow10ExactTable holds the exact decimal powers 10^0..10^308 for the
+// extreme negative scales of ROUND and TRUNCATE on float64 inputs
+// (see scaleFloat64ByNegativeDecimalDigits). Entries are read-only.
+var pow10ExactTable = func() (table [309]*big.Int) {
+	table[0] = big.NewInt(1)
+	for i := 1; i < len(table); i++ {
+		table[i] = new(big.Int).Mul(table[i-1], big.NewInt(10))
+	}
+	return table
+}()
+
+// pow10NearestFloatTable maps k to fl(10^k), the float64 nearest to 10^k, for
+// the double-domain lane of ROUND/TRUNCATE(x, -k) (issue 31154, PR review
+// 5668724880). strconv.ParseFloat is correctly rounded, so entry k is the same
+// double the pre-fix baseline used when scaling down by math.Pow(10, k).
+var pow10NearestFloatTable = func() (table [309]float64) {
+	for k := range table {
+		s := "1e" + strconv.Itoa(k)
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil { // unreachable for k in [0,308]
+			panic(fmt.Sprintf("pow10NearestFloatTable: %v", err))
+		}
+		table[k] = v
+	}
+	return table
+}()
+
+// scaleFloat64BySmallNegativeDigitsFast computes ROUND/TRUNCATE(x, -k) for
+// the common small scales with plain float64 arithmetic. It applies only
+// when k <= 15 (so 10^k is exactly representable in float64) and
+// |x| <= 2^52*10^k (so the scaled quotient's rounding boundary digit is
+// fully inside the float64 significand and the final product cannot
+// overflow); within this domain the result is identical to the exact decimal
+// computation. It returns ok=false outside the domain, where the caller
+// falls back to the exact decimal path (issue 31154).
+func scaleFloat64BySmallNegativeDigitsFast(x float64, k int64, truncate bool) (v float64, ok bool) {
+	if k > 15 {
+		return 0, false
+	}
+	scale := float64(ScaleTable[k])
+	if math.Abs(x) > 4503599627370496.0*scale { // 2^52 * 10^k
+		return 0, false
+	}
+	if truncate {
+		v = math.Trunc(x/scale) * scale
+	} else {
+		v = math.RoundToEven(x/scale) * scale
+	}
+	if math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
+}
+
+// scaleFloat64ByNegativeDecimalDigits returns x rounded (ties to even) or
+// truncated (towards zero) to an integer multiple of 10^k. The quotient
+// q = x/fl(10^k) in the double domain reproduces the reference baseline
+// exactly for on-grid magnitudes (TRUNCATE(1e24, -24) == 1e24, TRUNCATE(1e20,
+// -1) == 1e20, PR review 5668724880). Quotients within a few ULP of a rounding
+// decision boundary first check whether the input already is an adjacent grid
+// multiple rescaled (TRUNCATE(1.5e24, -23) == 1.5e24, PR review 5670921927)
+// and are delegated to the exact decimal domain otherwise, so extreme scales
+// like 1e308 at -307/-308 stay on the correct side of the boundary instead of
+// following the few-ULP deviation of math.Pow(10,k) (issue 31154). k must be
+// within [1,308] and x must be finite.
+//
+// Rounding can push the product out of the finite DOUBLE range (for example
+// ROUND(1.8e308, -308) requires 2e308): like the other overflow-checked math
+// functions, that receives ER_DATA_OUT_OF_RANGE instead of a silent +/-Inf
+// (issue 31154). An Inf product here is only provisional: near the finite
+// limit the quotient's last-ULP rounding can turn a representable rescale
+// into Inf, so the exact decimal result arbitrates before the error is
+// raised (PR review 5670921927). Truncation never amplifies the input and
+// cannot overflow.
+func scaleFloat64ByNegativeDecimalDigits(x float64, k int64, digits int64, funcName string, truncate bool) (float64, error) {
+	scale := pow10NearestFloatTable[k]
+	q := x / scale
+	if q == math.Trunc(q) {
+		// Quotient exactly on a grid multiple: no rounding decision to make.
+		// This is the baseline identity lane for on-grid magnitudes. Only when
+		// the double product would differ from x could x be the exact-decimal
+		// representation instead: e.g. fl(1.7e24) == RN(17·10^23) divides by
+		// fl(10^23) into exactly 17, and finishing with n*fl(10^k) would remap
+		// the input to the 1-ULP-away lattice value (17*fl(10^23) ==
+		// 1.6999999999999998e24), which the window snap never restores (sweep
+		// counterexample m=17, k=23: x -> RN rep -> lattice rep). Recognize
+		// the exact-decimal representation first so these grid values are
+		// fixed points as well (PR review 5673058412).
+		if q*scale != x && isExactDecimalGridFloat(x, q, k) {
+			return x, nil
+		}
+		return finishFloat64NegativeDecimalVerified(x, k, q, scale, digits, funcName, truncate)
+	}
+	if truncate {
+		if nearRoundingBoundary(q, truncate) {
+			// When an adjacent grid multiple rescales back to x bitwise, the
+			// input already sits on the intended grid value at this scale: for
+			// example TRUNCATE(1.5e24,-23) has quotient 15.000000000000002, but
+			// 15*fl(10^23) == fl(1.5e24) exactly. Preserve the input instead of
+			// deciding from the ULP-noisy quotient, which would drop to the
+			// neighboring multiple and also break repeated truncation
+			// (PR review 5670921927). The exact fallback emits the float64
+			// nearest to an exact decimal grid multiple (fl(1.4e26) for
+			// 14·10^25), which can differ by one ULP from the double-domain
+			// lattice value n*fl(10^k) (14*fl(10^25) == 1.4000000000000002e26);
+			// recognizing only the lattice form lets one application drop the
+			// fallback's own output by another full grid step (1.4e26 -> 1.3e26
+			// at -25, any sign, const or dynamic digits). Recognize both
+			// representations so grid values stay fixed points of repeated
+			// TRUNCATE (PR review 5673058412).
+			if math.Floor(q)*scale == x || math.Ceil(q)*scale == x ||
+				isExactDecimalGridFloat(x, q, k) {
+				return x, nil
+			}
+			return scaleFloat64ByNegativeDecimalDigitsExact(x, k, digits, funcName, truncate)
+		}
+	} else {
+		// For ROUND a value that already equals a decimal grid multiple is its
+		// own correctly rounded result. Such inputs produce a quotient a few
+		// ULP off an adjacent integer (never near the half-integer decision
+		// point), so probe the same grid representations before the boundary
+		// delegate; otherwise the float-domain lane would remap fl(N·10^k) to
+		// the lattice value N*fl(10^k) and could shift the fallback's own
+		// output on a second ROUND (PR review 5673058412).
+		if nearRoundingBoundary(q, true) {
+			if math.Floor(q)*scale == x || math.Ceil(q)*scale == x ||
+				isExactDecimalGridFloat(x, q, k) {
+				return x, nil
+			}
+		}
+		if nearRoundingBoundary(q, truncate) {
+			return scaleFloat64ByNegativeDecimalDigitsExact(x, k, digits, funcName, truncate)
 		}
 	}
-	return x
+	var n float64
+	if truncate {
+		n = math.Trunc(q)
+	} else {
+		n = math.RoundToEven(q)
+	}
+	return finishFloat64NegativeDecimalVerified(x, k, n, scale, digits, funcName, truncate)
+}
+
+// isExactDecimalGridFloat reports whether x is the float64 nearest to an exact
+// decimal grid multiple adjacent to the quotient q, i.e. x equals the
+// correctly rounded RN(floor(q)·10^k) or RN(ceil(q)·10^k). This is exactly the
+// representation the exact delegate emits (its exact decimal product converts
+// back with big.Float), and it can differ by one ULP from the double-domain
+// lattice value n*fl(10^k) (14*10^25 == fl(1.4e26) while 14*fl(10^25) ==
+// 1.4000000000000002e26). Recognizing the delegate's representation keeps grid
+// values a fixed point of repeated ROUND/TRUNCATE at unchanged digits
+// (PR review 5673058412).
+func isExactDecimalGridFloat(x float64, q float64, k int64) bool {
+	// Larger quotients are integral doubles handled by the on-grid lane; the
+	// int64 conversion below must stay exact.
+	if math.Abs(q) > 4503599627370496.0 { // 1 << 52
+		return false
+	}
+	prod := new(big.Int).Mul(big.NewInt(int64(math.Floor(q))), pow10ExactTable[k])
+	if v, _ := new(big.Float).SetInt(prod).Float64(); v == x {
+		return true
+	}
+	prod.Mul(big.NewInt(int64(math.Ceil(q))), pow10ExactTable[k])
+	v, _ := new(big.Float).SetInt(prod).Float64()
+	return v == x
+}
+
+// finishFloat64NegativeDecimalVerified rescales the decided multiple, but
+// when the double product overflows it consults the exact decimal result
+// instead of concluding out-of-range: near the finite DOUBLE limit the
+// quotient's last-ULP rounding can make n*scale overflow even though the true
+// decimal rescale is representable (PR review 5670921927:
+// ROUND/TRUNCATE(±math.MaxFloat64,-200) must return the input, not
+// ER_DATA_OUT_OF_RANGE; true overflow such as ROUND(1.9e308,-308) -> 2e308
+// still fails through the exact path).
+func finishFloat64NegativeDecimalVerified(x float64, k int64, n, scale float64, digits int64, funcName string, truncate bool) (float64, error) {
+	result := n * scale
+	if math.IsInf(result, 0) {
+		return scaleFloat64ByNegativeDecimalDigitsExact(x, k, digits, funcName, truncate)
+	}
+	return result, nil
+}
+
+// finishFloat64NegativeDecimal multiplies the decided multiple back by the
+// scale. A rounding result that escapes the finite DOUBLE range becomes
+// ER_DATA_OUT_OF_RANGE instead of +/-Inf (issue 31154).
+func finishFloat64NegativeDecimal(n, scale float64, funcName string, x float64, digits int64) (float64, error) {
+	result := n * scale
+	if math.IsInf(result, 0) {
+		// Return the overflow through the regular op error channel so the
+		// client receives a stable ER_DATA_OUT_OF_RANGE (1690) without a
+		// panic stack that embeds build-machine source paths (issue 31154).
+		return 0, moerr.NewOutOfRangeNoCtxf(
+			"float64", "DOUBLE value is out of range in '%s(%v,%v)'", funcName, x, digits)
+	}
+	return result, nil
+}
+
+// nearRoundingBoundary reports whether the double quotient q sits within a
+// few ULP of the digit that decides ROUND/TRUNCATE at a negative scale:
+// fl(10^k) carries up to 1/2 ULP and the division up to 1/2 ULP of error,
+// so inside this window the double quotient may sit on the wrong side of the
+// exact decimal boundary and the decision must be delegated to the exact
+// path. The window is deliberately ~4x wider than the computed error bound;
+// hitting it only costs one exact-decimal evaluation for that row.
+func nearRoundingBoundary(q float64, truncate bool) bool {
+	const guardUlp = 8.0
+	ulp := math.Abs(math.Nextafter(q, math.Inf(1)) - q)
+	window := guardUlp * ulp
+	a := math.Abs(q)
+	f := a - math.Floor(a)
+	if truncate {
+		// Truncation decisions flip only across an integer.
+		return f < window || 1-f < window
+	}
+	// Round decisions flip across the .5 halfway point between integers.
+	return math.Abs(f-0.5) < window
+}
+
+// scaleFloat64ByNegativeDecimalDigitsExact computes ROUND/TRUNCATE(x, -k) on
+// the exact decimal value of x so that the boundary digit is preserved at any
+// magnitude; the exact decimal product is then converted to the nearest
+// float64. It is the boundary delegate of scaleFloat64ByNegativeDecimalDigits
+// (issue 31154); callers reach it only near rounding boundaries or through
+// the small-scale fast path fallback. Errors follow the same out-of-range
+// contract as the double lane. k must be within [1,308] and x must be finite.
+func scaleFloat64ByNegativeDecimalDigitsExact(x float64, k int64, digits int64, funcName string, truncate bool) (float64, error) {
+	scale := pow10ExactTable[k]
+	quotient := new(big.Rat).Quo(new(big.Rat).SetFloat64(x), new(big.Rat).SetInt(scale))
+	var multiple *big.Int
+	if truncate {
+		// Rational division truncated towards zero.
+		multiple = new(big.Int).Quo(quotient.Num(), quotient.Denom())
+	} else {
+		multiple = roundHalfEvenRat(quotient)
+	}
+	product := new(big.Int).Mul(multiple, scale)
+	result, _ := new(big.Float).SetInt(product).Float64()
+	return finishFloat64NegativeDecimal(result, 1, funcName, x, digits)
+}
+
+// roundHalfEvenRat rounds a rational number to the nearest integer, with
+// ties resolved to the even neighbor, matching the ties-to-even rule of
+// math.RoundToEven used by the digits == 0 path.
+func roundHalfEvenRat(q *big.Rat) *big.Int {
+	n, d := q.Num(), q.Denom()
+	multiple, remainder := new(big.Int).QuoRem(n, d, new(big.Int))
+	twice := new(big.Int).Lsh(new(big.Int).Abs(remainder), 1)
+	cmp := twice.Cmp(d)
+	if cmp > 0 || (cmp == 0 && multiple.Bit(0) == 1) {
+		// More than halfway, or exactly halfway with an odd neighbor: round
+		// away from zero.
+		multiple.Add(multiple, big.NewInt(int64(n.Sign())))
+	}
+	return multiple
 }
 
 func TruncateFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("truncate", ivecs, result, proc, length, truncateFloat64, selectList)
+	return generalMathMultiWithError("truncate", ivecs, result, proc, length, truncateFloat64, selectList)
 }
 
 func truncateDecimal64(x types.Decimal64, digits int64, scale int32, isConst bool) types.Decimal64 {
@@ -1298,7 +1589,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			}
 			continue
 		}
-		sp, err = concatStringValue(ivecs[0].GetType().Oid, sp)
+		sp, err = concatStringValue(proc.Ctx, ivecs[0].GetType().Oid, sp)
 		if err != nil {
 			return err
 		}
@@ -1310,7 +1601,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			if null {
 				continue
 			}
-			v, err = concatStringValue(ivecs[j].GetType().Oid, v)
+			v, err = concatStringValue(proc.Ctx, ivecs[j].GetType().Oid, v)
 			if err != nil {
 				return err
 			}
@@ -1481,42 +1772,31 @@ func convertTimezone(tz string) *time.Location {
 	if tz == "" {
 		return nil
 	}
-
-	loc, err := time.LoadLocation(tz)
-	if err != nil && tz[0] != '+' && tz[0] != '-' {
-		return nil
-	}
-	// convert from timezone offset to location
-	if tz[0] == '+' || tz[0] == '-' {
-		parts := strings.Split(tz, ":")
-		if len(parts) != 2 {
-			return nil
-		}
-		hours, err := strconv.Atoi(parts[0])
+	if tz[0] != '+' && tz[0] != '-' {
+		loc, err := time.LoadLocation(tz)
 		if err != nil {
 			return nil
-		} else if hours < -13 || hours > 14 { // timezone should be in [-13:59, +14:00]
-			return nil
 		}
-		minutes, err := strconv.Atoi(parts[1])
-		if err != nil || minutes < 0 || minutes > 59 {
-			return nil
-		}
-		if (hours == 14 && minutes != 0) || (hours == -13 && minutes > 59) || hours < -13 {
-			return nil
-		}
-		if tz[0] == '-' {
-			minutes = -minutes
-		}
-		if tz[0] == '-' && hours == -14 {
-			return nil
-		}
-
-		offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
-		loc = time.FixedZone("GMT", int(offset.Seconds()))
+		return loc
 	}
 
-	return loc
+	hourPart, minutePart, found := strings.Cut(tz, ":")
+	if !found || strings.Contains(minutePart, ":") {
+		return nil
+	}
+	hours, err := strconv.Atoi(hourPart)
+	if err != nil || hours < -13 || hours > 14 {
+		return nil
+	}
+	minutes, err := strconv.Atoi(minutePart)
+	if err != nil || minutes < 0 || minutes > 59 || (hours == 14 && minutes != 0) {
+		return nil
+	}
+	if tz[0] == '-' {
+		minutes = -minutes
+	}
+	offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+	return time.FixedZone("GMT", int(offset.Seconds()))
 }
 
 // Arithmetic consumers distinguish invalid input from a valid computation
@@ -3763,7 +4043,7 @@ func parseBaseIntegerPrefix(n []byte, fromBase int64) (int64, uint64, bool, erro
 	// to scan the suffix or allocate a string: the first non-digit terminates
 	// the prefix, and the bounded accumulator can decide overflow in one pass.
 	pos := 0
-	for pos < len(n) && isConvWhitespace(n[pos]) {
+	for pos < len(n) && isMySQLNumericWhitespace(n[pos]) {
 		pos++
 	}
 
@@ -3845,15 +4125,6 @@ func convDigitValue(ch byte) (uint8, bool) {
 		return ch - 'a' + 10, true
 	default:
 		return 0, false
-	}
-}
-
-func isConvWhitespace(ch byte) bool {
-	switch ch {
-	case ' ', '\t', '\n', '\v', '\f', '\r':
-		return true
-	default:
-		return false
 	}
 }
 
@@ -4249,9 +4520,44 @@ func appendTimeIntervalOverflowWarning(proc *process.Process) {
 	}
 }
 
+// timeArithmeticResult computes the ADDTIME/SUBTIME TIME-domain result and
+// clamps values beyond the MySQL TIME boundary to +-MySQLTimeMax, matching the
+// CAST-to-TIME path instead of discarding the computed duration as NULL.
+// The returned bool reports that clamping happened.
 func timeArithmeticResult(first, second types.Time, subtract bool) (types.Time, bool) {
-	result, overflow, _ := doTimeInterval(first, int64(second), types.MicroSecond, subtract)
-	return result, overflow
+	delta := int64(second)
+	if subtract {
+		if delta == math.MinInt64 {
+			// first - MinInt64 == first + 2^63 is never negative, so move the
+			// subtraction once into uint64 space where the exact result
+			// cannot overflow again. Only first within
+			// [MinInt64, MinInt64+MySQLTimeMax] stays inside the TIME range;
+			// the 2^63 offset is the exact unsigned form of -MinInt64.
+			sum64 := uint64(int64(first)) + (uint64(1) << 63)
+			if sum64 <= uint64(types.MySQLTimeMax) {
+				return types.Time(sum64), false
+			}
+			return types.MySQLTimeMax, true
+		}
+		delta = -delta
+	}
+	sum, ok := safeTimestampWindowSum(int64(first), delta)
+	if !ok {
+		// An int64 overflow needs same-sign operands, so the direction of the
+		// out-of-range result stays unambiguous.
+		if int64(first) < 0 || delta < 0 {
+			return -types.MySQLTimeMax, true
+		}
+		return types.MySQLTimeMax, true
+	}
+	value := types.Time(sum)
+	if value >= -types.MySQLTimeMax && value <= types.MySQLTimeMax {
+		return value, false
+	}
+	if value < 0 {
+		return -types.MySQLTimeMax, true
+	}
+	return types.MySQLTimeMax, true
 }
 
 // Both operands may use the wider internal duration domain; only the final
@@ -4316,13 +4622,9 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			outputScale = scale
 		}
 		if kind == temporalStringTime {
-			resultTime, overflow := timeArithmeticResult(time1, time2, false)
-			if overflow {
+			resultTime, clamped := timeArithmeticResult(time1, time2, false)
+			if clamped {
 				appendTimeIntervalOverflowWarning(proc)
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
 			}
 			if err := appendStringTimeResult(rs, resultTime, outputScale); err != nil {
 				return err
@@ -4573,13 +4875,9 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			outputScale = scale
 		}
 		if kind == temporalStringTime {
-			resultTime, overflow := timeArithmeticResult(time1, time2, true)
-			if overflow {
+			resultTime, clamped := timeArithmeticResult(time1, time2, true)
+			if clamped {
 				appendTimeIntervalOverflowWarning(proc)
-				if err := rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
 			}
 			if err := appendStringTimeResult(rs, resultTime, outputScale); err != nil {
 				return err
@@ -4677,7 +4975,14 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			fmt = functionUtil.QuickBytesToStr(fmtBytes)
 			null2 = null
 		}
-		if null1 || null2 || len(fmt) == 0 || (stringsInput != nil && len(value) == 0) {
+		if null1 || null2 || len(fmt) == 0 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else if stringsInput != nil && len(value) == 0 {
+			if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+				appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
+			}
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -4693,9 +4998,10 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				} else {
 					d, err = types.ParseDatetime(text, 6)
 					if err != nil {
-						// Keep the normal string-to-datetime expression cast policy:
-						// malformed values are NULL without statement diagnostics.
 						if isTemporalLexicalConversionError(err) {
+							if !ivecs[0].GetIsBin() && isTemporalTextSource(ivecs[0].GetType().Oid) {
+								appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect datetime value", "", value)
+							}
 							if err = rs.AppendBytes(nil, true); err != nil {
 								return err
 							}
@@ -5856,7 +6162,7 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 
 // Elt: ELT(N, str1, str2, str3, ...) - Returns str1 if N = 1, str2 if N = 2, and so on.
 // Returns NULL if N is less than 1, greater than the number of strings, or NULL.
-func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// Rest arguments are strings
@@ -5869,7 +6175,7 @@ func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process
 		return rs.AppendBytes(nil, true)
 	}
 	appendValue := func(row uint64, idx uint64) error {
-		str, null, err := getJSONStringConsumerValue(strParams[idx], row)
+		str, null, err := getJSONStringConsumerValue(proc.Ctx, strParams[idx], row)
 		if err != nil {
 			return err
 		}
@@ -6907,27 +7213,6 @@ func FloatUnixTimeParts(v float64) (sec int64, nsec int64, ok bool) {
 	return sec, microseconds * 1_000, true
 }
 
-func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
-	if v.Sign() {
-		if v.B64_127 != ^uint64(0) || v.B128_191 != ^uint64(0) || v.B192_255 != ^uint64(0) {
-			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-		}
-		if v.B0_63 < 0x8000000000000000 {
-			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-		}
-		negated := v.Minus()
-		return -int64(negated.B0_63), nil
-	}
-
-	if v.B64_127 != 0 || v.B128_191 != 0 || v.B192_255 != 0 {
-		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-	}
-	if v.B0_63 > 0x7FFFFFFFFFFFFFFF {
-		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-	}
-	return int64(v.B0_63), nil
-}
-
 func decimal256Pow10ForUnix(n int32) (types.Decimal256, error) {
 	if n < 0 {
 		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("negative decimal power: %d", n)
@@ -6960,7 +7245,7 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 	if err != nil {
 		return 0, 0, false, nil
 	}
-	sec, err = decimal256ToInt64ForUnix(whole)
+	sec, err = decimal256ToInt64(whole)
 	if err != nil {
 		return 0, 0, false, nil
 	}
@@ -7016,7 +7301,7 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 	if err != nil {
 		return 0, 0, false, err
 	}
-	microseconds, err := decimal256ToInt64ForUnix(frac)
+	microseconds, err := decimal256ToInt64(frac)
 	if err != nil {
 		return 0, 0, false, err
 	}
@@ -7447,38 +7732,41 @@ func substringBounds(total int, start, length int64, withLength bool) (left, rig
 }
 
 func subStrIndex(str, delim string, count int64) (string, error) {
-	// if the length of delim is 0, return empty string
-	if len(delim) == 0 {
+	if len(delim) == 0 || count == 0 {
 		return "", nil
 	}
-	// if the count is 0, return empty string
-	if count == 0 {
-		return "", nil
-	}
-
-	partions := strings.Split(str, delim)
-	start, end := int64(0), int64(len(partions))
-
 	if count > 0 {
-		//is count is positive, reset the end position
-		if count < end {
-			end = count
-		}
-	} else {
-		count = -count
-
-		// -count overflows max int64, return the whole string.
-		if count < 0 {
-			return str, nil
-		}
-
-		//if count is negative, reset the start postion
-		if count < end {
-			start = end - count
+		offset := 0
+		for remaining := count; ; remaining-- {
+			i := strings.Index(str[offset:], delim)
+			if i < 0 {
+				return str, nil
+			}
+			offset += i
+			if remaining == 1 {
+				return str[:offset], nil
+			}
+			offset += len(delim)
 		}
 	}
-	subPartions := partions[start:end]
-	return strings.Join(subPartions, delim), nil
+	if count == math.MinInt64 {
+		return str, nil
+	}
+	// Count from the left before selecting a suffix. Searching backwards
+	// directly would choose different occurrences for overlapping delimiters.
+	occurrences := int64(strings.Count(str, delim))
+	wanted := -count
+	if wanted > occurrences {
+		return str, nil
+	}
+	offset := 0
+	for remaining := occurrences - wanted; ; remaining-- {
+		i := strings.Index(str[offset:], delim)
+		offset += i + len(delim)
+		if remaining == 0 {
+			return str[offset:], nil
+		}
+	}
 }
 
 func getCount[T number](typ types.Type, val T) int64 {
@@ -8377,12 +8665,16 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 		if strlist == "" {
 			return toResult(0)
 		}
-		for j, s := range strings.Split(strlist, ",") {
-			if s == str {
-				return toResult(uint64(j + 1))
+		for position := uint64(1); ; position++ {
+			member, rest, more := strings.Cut(strlist, ",")
+			if member == str {
+				return toResult(position)
 			}
+			if !more {
+				return toResult(0)
+			}
+			strlist = rest
 		}
-		return toResult(0)
 	}
 
 	return opBinaryStrStrToFixed[Tr](ivecs, result, proc, length, findInStrList, nil)
@@ -10377,11 +10669,10 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	//
 	// Precision: the result is materialized as []float32 (metric.PairwiseDistance* is
 	// float32-out by construction), which is the domain the scalar path answers in for float32
-	// elements. The two are NOT bit-identical for Metric_L2Distance: this path resolves
-	// L2DistanceSq[float32], which accumulates the square in float32, while the scalar
-	// moarray.L2Distance accumulates in float64 (l2DistanceF64, #29083). Measured at dim 768,
-	// 313 of 2000 random pairs differ, by at most 1.2e-07 relative -- one float32 ULP, the
-	// rounding this domain already carries. For float64 the resolver
+	// elements. The two are not guaranteed bit-identical for Metric_L2Distance: this path
+	// resolves L2DistanceSq[float32] and takes the root, while the scalar moarray.L2Distance
+	// calls metric.L2Distance[T]; both sum in float32, in an order that can differ, so a
+	// result can differ by one float32 ULP, the rounding this domain already carries. For float64 the resolver
 	// wraps the kernel in a float64->float32 cast: `l1_distance(vecf64_col, '[16777217]')`
 	// against [0] answers 16777216 where the scalar path answers 16777217. Distinct
 	// distances can collapse and reorder an ORDER BY, so float64 stays on the scalar path.
@@ -10772,16 +11063,16 @@ func StFrechetDistanceGeodetic32(ivecs []*vector.Vector, result vector.FunctionR
 }
 
 func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteFrechetDistancePlanar)
 }
 
 func stFrechetDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteFrechetDistanceBySRID)
 }
 
-func stFrechetDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
+func stDiscreteDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
 	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
 	if err != nil {
 		return err
@@ -10834,28 +11125,13 @@ func StHausdorffDistanceGeodetic32(ivecs []*vector.Vector, result vector.Functio
 }
 
 func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteHausdorffDistancePlanar)
 }
 
 func stHausdorffDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteHausdorffDistanceBySRID)
-}
-
-func stHausdorffDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
-	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
-	if err != nil {
-		return err
-	}
-	if emptyBatch {
-		return nil
-	}
-	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
-		d, err := distanceFn(v1, v2, srid)
-		return T(d), err
-	}, selectList)
 }
 
 // StHausdorffDistanceWithUnit is the geographic ST_HausdorffDistance overload
