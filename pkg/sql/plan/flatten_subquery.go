@@ -1631,12 +1631,13 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	markNotNullable := outerPred != nil && outerPred.Typ.NotNullable
 
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_JOIN,
-		Children:    []int32{left, right},
-		BindingTags: []int32{markTag},
-		JoinType:    plan.Node_MARK,
-		OnList:      joinPreds,
-		SpillMem:    builder.joinSpillMem,
+		NodeType:          plan.Node_JOIN,
+		Children:          []int32{left, right},
+		BindingTags:       []int32{markTag},
+		JoinType:          plan.Node_MARK,
+		MarkExistenceOnly: keepRawExistential,
+		OnList:            joinPreds,
+		SpillMem:          builder.joinSpillMem,
 	}, ctx)
 
 	markExpr = &plan.Expr{

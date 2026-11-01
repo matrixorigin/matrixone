@@ -207,7 +207,7 @@ func (d Dispatcher) Dispatch(ctx context.Context, req Request) (Result, error) {
 	job.Version++
 	result, err := runner.RunMaintenance(ctx, req)
 	if err != nil {
-		_ = d.transition(ctx, job, StatusFailed, errorCategory(err), result)
+		_ = d.transition(ctx, job, StatusFailed, api.ErrorCategory(err), result)
 		return Result{}, err
 	}
 	status := StatusCommitted
@@ -216,7 +216,7 @@ func (d Dispatcher) Dispatch(ctx context.Context, req Request) (Result, error) {
 		if d.Verifier != nil {
 			verified, ok, verifyErr := d.Verifier.VerifyMaintenance(ctx, req, result)
 			if verifyErr != nil {
-				_ = d.transition(ctx, job, StatusUnknown, errorCategory(verifyErr), result)
+				_ = d.transition(ctx, job, StatusUnknown, api.ErrorCategory(verifyErr), result)
 				return Result{}, verifyErr
 			}
 			if ok {
@@ -247,17 +247,6 @@ func (d Dispatcher) transition(ctx context.Context, job model.MaintenanceJob, st
 		result.RemovedFileCount,
 		job.Version,
 	)
-}
-
-func errorCategory(err error) string {
-	if err == nil {
-		return ""
-	}
-	var icebergErr *api.IcebergError
-	if stderrors.As(err, &icebergErr) && icebergErr.Code != "" {
-		return string(icebergErr.Code)
-	}
-	return string(api.ErrInternal)
 }
 
 func NewJob(req Request, now time.Time) model.MaintenanceJob {

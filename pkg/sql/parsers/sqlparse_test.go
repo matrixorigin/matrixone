@@ -214,6 +214,16 @@ func TestSplitSqlByStatementExecutableCommentTerminator(t *testing.T) {
 		want    []string
 	}{
 		{
+			name: "future body contributes no statement boundaries",
+			sql:  "select 1; /*!99999 select 2; select 3 */; select 4",
+			want: []string{"select 1", "/*!99999 select 2; select 3 */", "select 4"},
+		},
+		{
+			name: "future body before matching multi-statement comment",
+			sql:  "/*!99999 select 0; */ /*!80030 select 1; select 2 */; select 3",
+			want: []string{"/*!99999 select 0; */ /*!80030 select 1 */", "/*! select 2 */", "select 3"},
+		},
+		{
 			name: "multiple statements inside versioned comment",
 			sql:  "/*!50000 select 1; select 2 */",
 			want: []string{"/*!50000 select 1 */", "/*! select 2 */"},

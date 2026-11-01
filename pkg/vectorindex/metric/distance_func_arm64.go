@@ -313,6 +313,8 @@ func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
 
+// InnerProduct returns the inner-product distance, -Σ pᵢqᵢ: smaller is nearer, so the sign is
+// negative by design. See docs/sql/vector-distance-functions.md.
 func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 	if pf32, ok := any(p).([]float32); ok {
 		res, err := InnerProductFloat32(pf32, any(q).([]float32))

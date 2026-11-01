@@ -211,4 +211,30 @@ truncate table t_like;
 select count(*) from t_like;
 ➤ count(*)[-5,64,0]  𝄀
 0
+create table ewm (id bigint primary key, f float, b bf16, h float16, e float8, q float4, k float, kb bf16);
+insert into ewm values (1,1,1,1,1,1,1,1),(2,2,2,2,2,2,2,2),(3,3,3,3,3,3,4,4),(4,4,4,4,4,4,8,8);
+select id, ewmmean(f,0.5,false) over (order by id) f, ewmmean(b,0.5,false) over (order by id) b, ewmmean(h,0.5,false) over (order by id) h, ewmmean(e,0.5,false) over (order by id) e, ewmmean(q,0.5,false) over (order by id) q from ewm order by id;
+➤ id[-5,64,0]  ¦  f[8,53,31]  ¦  b[8,53,31]  ¦  h[8,53,31]  ¦  e[8,53,31]  ¦  q[8,53,31]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+2  ¦  1.5  ¦  1.5  ¦  1.5  ¦  1.5  ¦  1.5  𝄀
+3  ¦  2.25  ¦  2.25  ¦  2.25  ¦  2.25  ¦  2.25  𝄀
+4  ¦  3.125  ¦  3.125  ¦  3.125  ¦  3.125  ¦  3.125
+select id, ewmmean(f, cast(0.5 as bf16), false) over (order by id) alpha_bf16, ewmmean(f, 0.5, false, false, cast(2 as float8)) over (order by id) min_periods_float8 from ewm order by id;
+➤ id[-5,64,0]  ¦  alpha_bf16[8,53,31]  ¦  min_periods_float8[8,53,31]  𝄀
+1  ¦  1.0  ¦  null  𝄀
+2  ¦  1.5  ¦  1.5  𝄀
+3  ¦  2.25  ¦  2.25  𝄀
+4  ¦  3.125  ¦  3.125
+select id, ewmmean(f,'halflife',2,true) over (order by k) key_float, ewmmean(f,'halflife',2,true) over (order by kb) key_bf16, ewmmean(f,'halflife',cast(2 as float4),true) over (order by kb) halflife_float4 from ewm order by id;
+➤ id[-5,64,0]  ¦  key_float[8,53,31]  ¦  key_bf16[8,53,31]  ¦  halflife_float4[8,53,31]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+2  ¦  1.585786437626905  ¦  1.585786437626905  ¦  1.585786437626905  𝄀
+3  ¦  2.34876071694909  ¦  2.34876071694909  ¦  2.34876071694909  𝄀
+4  ¦  3.4771278285941087  ¦  3.4771278285941087  ¦  3.4771278285941087
+select id, ewmvar(b,0.5) over (order by id) var_b, ewmcov(b,h,0.5) over (order by id) cov_bh, ewmcorr(e,q,0.5) over (order by id) corr_eq from ewm order by id;
+➤ id[-5,64,0]  ¦  var_b[8,53,31]  ¦  cov_bh[8,53,31]  ¦  corr_eq[8,53,31]  𝄀
+1  ¦  0.0  ¦  0.0  ¦  null  𝄀
+2  ¦  0.2222222222222222  ¦  0.2222222222222222  ¦  1.0  𝄀
+3  ¦  0.5306122448979591  ¦  0.5306122448979591  ¦  1.0  𝄀
+4  ¦  0.8622222222222221  ¦  0.8622222222222221  ¦  1.0000000000000002
 drop database lowprec_ddl_dml;

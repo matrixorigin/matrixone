@@ -949,16 +949,25 @@ const (
 	MO_INDEX_SUB_PART = 623
 
 	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
-	VECTOR_MATMUL = 624
+	VECTOR_MATMUL = 629
 
 	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
-	VECBLOCK_JSON = 625
+	VECBLOCK_JSON = 630
 
 	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
-	VECBLOCK_BINARY = 626
+	VECBLOCK_BINARY = 631
+
+	// Exponentially weighted window statistics (issue #29945). Renumbered
+	// from 605..609 when main's #31017/#31020/#31000/#31739 claimed 605..623;
+	// every reference is by name, so renumbering is safe.
+	EWM_MEAN = 624
+	EWM_VAR  = 625
+	EWM_STD  = 626
+	EWM_COV  = 627
+	EWM_CORR = 628
 
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 627
+	FUNCTION_END_NUMBER = 632
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1070,6 +1079,11 @@ var functionIdRegister = map[string]int32{
 	"any_value":                    ANY_VALUE,
 	"median":                       MEDIAN,
 	"approx_percentile":            APPROX_PERCENTILE,
+	"ewmmean":                      EWM_MEAN,
+	"ewmvar":                       EWM_VAR,
+	"ewmstd":                       EWM_STD,
+	"ewmcov":                       EWM_COV,
+	"ewmcorr":                      EWM_CORR,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
 	"mo_view_definition":           MO_VIEW_DEFINITION,
 	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,

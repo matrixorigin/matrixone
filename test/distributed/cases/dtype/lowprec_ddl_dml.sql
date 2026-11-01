@@ -96,4 +96,12 @@ select count(*) from t_as2;
 truncate table t_like;
 select count(*) from t_like;
 
+-- ewm window statistics: samples, decay, policy and event-time keys as for FLOAT
+create table ewm (id bigint primary key, f float, b bf16, h float16, e float8, q float4, k float, kb bf16);
+insert into ewm values (1,1,1,1,1,1,1,1),(2,2,2,2,2,2,2,2),(3,3,3,3,3,3,4,4),(4,4,4,4,4,4,8,8);
+select id, ewmmean(f,0.5,false) over (order by id) f, ewmmean(b,0.5,false) over (order by id) b, ewmmean(h,0.5,false) over (order by id) h, ewmmean(e,0.5,false) over (order by id) e, ewmmean(q,0.5,false) over (order by id) q from ewm order by id;
+select id, ewmmean(f, cast(0.5 as bf16), false) over (order by id) alpha_bf16, ewmmean(f, 0.5, false, false, cast(2 as float8)) over (order by id) min_periods_float8 from ewm order by id;
+select id, ewmmean(f,'halflife',2,true) over (order by k) key_float, ewmmean(f,'halflife',2,true) over (order by kb) key_bf16, ewmmean(f,'halflife',cast(2 as float4),true) over (order by kb) halflife_float4 from ewm order by id;
+select id, ewmvar(b,0.5) over (order by id) var_b, ewmcov(b,h,0.5) over (order by id) cov_bh, ewmcorr(e,q,0.5) over (order by id) corr_eq from ewm order by id;
+
 drop database lowprec_ddl_dml;

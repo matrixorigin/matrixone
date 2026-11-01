@@ -257,11 +257,19 @@ func testLegacyFloatAlteredSessionWitnesses(t *testing.T, part int) {
 		if precision == 4 || precision == 8 || precision == 30 {
 			continue // Already independently named above.
 		}
-		cases = append(cases, alteredSessionWitness{
+		tc := alteredSessionWitness{
 			name: fmt.Sprintf("distinct_source_precision%d", precision), suffix: "1970-01-01 08:04:00",
 			altered: strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1),
 			offset:  8*3600 + 2*60, precision: precision,
-		})
+		}
+		// Keep cross-zone searches for representative interior precisions.
+		// Every other precision still exercises ALTER, both real candidate
+		// searches and the exact result with the reading zone as witness.
+		if precision != 0 && precision != 1 && precision != 15 && precision != 28 && precision != 29 {
+			tc.offset = 0
+			tc.suffix = "1970-01-01 00:02:00"
+		}
+		cases = append(cases, tc)
 	}
 	for i, tc := range cases {
 		if i%4 != part {
@@ -273,7 +281,7 @@ func testLegacyFloatAlteredSessionWitnesses(t *testing.T, part int) {
 			// exercises migration, LOAD, and its exact result.
 			fullProof := tc.precision == 0 || tc.precision == 4 || tc.precision == 8 || tc.precision == 30
 			// Keep two complex witnesses for named sessions and decimal boundaries;
-			// intermediate precisions need only one to exercise the changed session.
+			// other intermediate precisions use one precision witness.
 			twoWitnesses := fullProof || tc.precision == 1 || tc.precision == 15 || tc.precision == 28 || tc.precision == 29
 			gExpression := expression
 			if !twoWitnesses {

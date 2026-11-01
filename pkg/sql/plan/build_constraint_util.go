@@ -709,7 +709,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				materializeOrder = append(materializeOrder, int32(colIdx))
 			}
 		} else {
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -822,7 +822,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
-						defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+						defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 						if err != nil {
 							return false, nil, nil, err
 						}
@@ -1065,6 +1065,29 @@ func useSqlModeAssignmentCast(targetType Type) bool {
 
 func isMediumIntPlanType(targetType Type) bool {
 	return (targetType.Id == int32(types.T_int32) || targetType.Id == int32(types.T_uint32)) && targetType.Width == 24
+}
+
+// assignmentCastFamilyNames enumerates the planner-owned assignment-cast
+// wrapper names emitted by makePlan2AssignmentCastExpr /
+// forceAssignmentCastExprWithName (make.go) around catalog default
+// expressions and assignment targets: the plain "cast" plus the strict,
+// sql-mode and ignore variants chosen by assignmentCastFunctionName.
+var assignmentCastFamilyNames = [4]string{"cast", "cast_strict", "cast_assign", "cast_ignore"}
+
+// IsAssignmentCastFamilyName reports whether name is one of the planner's
+// assignment-cast wrapper names. Consumers that must see through a
+// planner-owned wrapper to the wrapped value (generated-column replay,
+// sequence-default classification in DATA BRANCH MERGE reconciliation)
+// share this boundary so a new variant is recognized everywhere at once.
+// Deliberate subsets (e.g. build_util.go's non-plain assignment set) keep
+// their own enumerations.
+func IsAssignmentCastFamilyName(name string) bool {
+	for _, family := range assignmentCastFamilyNames {
+		if name == family {
+			return true
+		}
+	}
+	return false
 }
 
 // useIgnoreConversionAssignmentCast identifies conversions whose lexical
@@ -2213,7 +2236,7 @@ func buildValueScan(
 		}
 		var defExpr *Expr
 		if isAllDefault {
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return nil, err
 			}
@@ -2285,7 +2308,7 @@ func buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
-					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
 						return nil, err
 					}
@@ -2366,7 +2389,7 @@ func buildValueScan(
 			col := tableDef.Cols[colIdx]
 			colTyp := makeTypeByPlan2Type(col.Typ)
 			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return nil, err
 			}

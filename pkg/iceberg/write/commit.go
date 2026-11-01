@@ -73,7 +73,7 @@ func (AppendBuilder) BuildAppend(ctx context.Context, req api.AppendRequest) (*a
 			},
 		})
 	}
-	summary := cloneStringMap(req.Summary)
+	summary := api.CloneNonEmptyMap(req.Summary)
 	if summary == nil {
 		summary = make(map[string]string)
 	}
@@ -91,7 +91,7 @@ func (AppendBuilder) BuildAppend(ctx context.Context, req api.AppendRequest) (*a
 	}
 	summary["added-data-files"] = strconv.Itoa(len(dataFiles))
 	summary["added-records"] = strconv.FormatInt(totalRecords(dataFiles), 10)
-	updates = append(updates, api.CommitUpdate{Type: "set-snapshot-summary", Payload: cloneStringMap(summary)})
+	updates = append(updates, api.CommitUpdate{Type: "set-snapshot-summary", Payload: api.CloneNonEmptyMap(summary)})
 	return &api.CommitAttempt{
 		Requirements:   requirements,
 		Updates:        updates,
@@ -283,13 +283,13 @@ func appendMetricsReport(req api.AppendRequest, attempt *api.CommitAttempt, resu
 	if attempt != nil {
 		rows = totalRecords(attempt.DataFiles)
 		files = len(attempt.DataFiles)
-		summary = cloneStringMap(attempt.Summary)
+		summary = api.CloneNonEmptyMap(attempt.Summary)
 	}
 	return api.MetricsReportRequest{
 		CatalogRequest:       req.CatalogRequest,
 		Namespace:            append(api.Namespace(nil), req.Namespace...),
 		Table:                req.Table,
-		Ref:                  firstNonEmpty(req.TargetRef, "main"),
+		Ref:                  api.FirstNonEmptyTrimmed(req.TargetRef, "main"),
 		SnapshotID:           result.SnapshotID,
 		QueryID:              req.SourceQueryID,
 		StatementID:          req.StatementID,
@@ -358,10 +358,10 @@ func (w AppendWorkflow) RecordOrphanPaths(ctx context.Context, req api.AppendReq
 		candidates = append(candidates, OrphanCandidate{
 			AccountID:         req.Catalog.AccountID,
 			CatalogID:         req.Catalog.CatalogID,
-			JobID:             firstNonEmpty(req.PublishAuditHint.JobID, req.StatementID, req.IdempotencyKey),
+			JobID:             api.FirstNonEmptyTrimmed(req.PublishAuditHint.JobID, req.StatementID, req.IdempotencyKey),
 			Namespace:         strings.Join(req.Namespace, "."),
 			TableName:         req.Table,
-			TableLocationHash: api.PathHash(firstNonEmpty(req.TableLocation, req.Table)),
+			TableLocationHash: api.PathHash(api.FirstNonEmptyTrimmed(req.TableLocation, req.Table)),
 			FilePath:          path,
 			FilePathHash:      api.PathHash(path),
 			FilePathRedacted:  api.RedactPath(path),
@@ -403,11 +403,11 @@ func commitRequest(req api.AppendRequest, attempt *api.CommitAttempt) api.Commit
 		CatalogRequest: req.CatalogRequest,
 		Namespace:      req.Namespace,
 		Table:          req.Table,
-		TargetRef:      firstNonEmpty(attempt.TargetRef, req.TargetRef, "main"),
+		TargetRef:      api.FirstNonEmptyTrimmed(attempt.TargetRef, req.TargetRef, "main"),
 		Requirements:   append([]api.CommitRequirement(nil), attempt.Requirements...),
 		Updates:        append([]api.CommitUpdate(nil), attempt.Updates...),
-		IdempotencyKey: firstNonEmpty(attempt.IdempotencyKey, req.IdempotencyKey),
-		Summary:        cloneStringMap(attempt.Summary),
+		IdempotencyKey: api.FirstNonEmptyTrimmed(attempt.IdempotencyKey, req.IdempotencyKey),
+		Summary:        api.CloneNonEmptyMap(attempt.Summary),
 	}
 }
 
@@ -428,14 +428,14 @@ func publishAudit(req api.AppendRequest, attempt *api.CommitAttempt, result api.
 		fileCount = len(attempt.DataFiles)
 	}
 	return PublishAudit{
-		JobID:                firstNonEmpty(hint.JobID, req.StatementID, req.IdempotencyKey),
+		JobID:                api.FirstNonEmptyTrimmed(hint.JobID, req.StatementID, req.IdempotencyKey),
 		AccountID:            req.Catalog.AccountID,
 		TargetCatalogID:      req.Catalog.CatalogID,
 		TargetNamespace:      strings.Join(req.Namespace, "."),
 		TargetTable:          req.Table,
 		SourceDB:             hint.SourceDB,
 		SourceTable:          hint.SourceTable,
-		SourceBatch:          firstNonEmpty(hint.SourceBatch, req.SourceBatch),
+		SourceBatch:          api.FirstNonEmptyTrimmed(hint.SourceBatch, req.SourceBatch),
 		WatermarkStart:       hint.WatermarkStart,
 		WatermarkEnd:         hint.WatermarkEnd,
 		BusinessWindow:       hint.BusinessWindow,
@@ -472,18 +472,24 @@ func cloneDataFiles(in []api.DataFile) []api.DataFile {
 	if len(in) == 0 {
 		return nil
 	}
-	out := append([]api.DataFile(nil), in...)
-	for i := range out {
-		out[i].Partition = cloneAnyMap(in[i].Partition)
-		out[i].PartitionFieldIDs = cloneStringIntMap(in[i].PartitionFieldIDs)
-		out[i].ColumnSizes = cloneInt64Map(in[i].ColumnSizes)
-		out[i].ValueCounts = cloneInt64Map(in[i].ValueCounts)
-		out[i].NullValueCounts = cloneInt64Map(in[i].NullValueCounts)
-		out[i].NaNValueCounts = cloneInt64Map(in[i].NaNValueCounts)
-		out[i].LowerBounds = cloneBytesMap(in[i].LowerBounds)
-		out[i].UpperBounds = cloneBytesMap(in[i].UpperBounds)
-		out[i].SplitOffsets = append([]int64(nil), in[i].SplitOffsets...)
+	out := make([]api.DataFile, len(in))
+	for i := range in {
+		out[i] = cloneDataFile(in[i])
 	}
+	return out
+}
+
+func cloneDataFile(in api.DataFile) api.DataFile {
+	out := in
+	out.Partition = api.CloneNonEmptyMap(in.Partition)
+	out.PartitionFieldIDs = api.CloneNonEmptyMap(in.PartitionFieldIDs)
+	out.ColumnSizes = api.CloneNonEmptyMap(in.ColumnSizes)
+	out.ValueCounts = api.CloneNonEmptyMap(in.ValueCounts)
+	out.NullValueCounts = api.CloneNonEmptyMap(in.NullValueCounts)
+	out.NaNValueCounts = api.CloneNonEmptyMap(in.NaNValueCounts)
+	out.LowerBounds = api.CloneMetricBounds(in.LowerBounds)
+	out.UpperBounds = api.CloneMetricBounds(in.UpperBounds)
+	out.SplitOffsets = append([]int64(nil), in.SplitOffsets...)
 	return out
 }
 
@@ -493,77 +499,8 @@ func clonePartitionSpecs(in []api.PartitionSpec) []api.PartitionSpec {
 	}
 	out := make([]api.PartitionSpec, len(in))
 	for i := range in {
-		out[i] = clonePartitionSpec(in[i])
+		out[i] = in[i]
+		out[i].Fields = append([]api.PartitionField(nil), in[i].Fields...)
 	}
 	return out
-}
-
-func clonePartitionSpec(in api.PartitionSpec) api.PartitionSpec {
-	out := in
-	out.Fields = append([]api.PartitionField(nil), in.Fields...)
-	return out
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func cloneStringIntMap(in map[string]int) map[string]int {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]int, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func cloneAnyMap(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func cloneInt64Map(in map[int]int64) map[int]int64 {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int]int64, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func cloneBytesMap(in map[int][]byte) map[int][]byte {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int][]byte, len(in))
-	for k, v := range in {
-		out[k] = append([]byte(nil), v...)
-	}
-	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }

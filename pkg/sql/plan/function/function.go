@@ -116,6 +116,32 @@ func GetFunctionIsWinIndicatorFunById(fid int32) bool {
 	return false
 }
 
+// GetFunctionIsWinEwmFunByName reports whether the name is one of the
+// ewmMean/ewmVar/ewmStd/ewmCov/ewmCorr window statistics: the window
+// operator's EWM dispatch, the binder validations, the cache-exclusion
+// detection and explain printing all key on this single registry fact.
+func GetFunctionIsWinEwmFunByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	return fid == EWM_MEAN || fid == EWM_VAR || fid == EWM_STD ||
+		fid == EWM_COV || fid == EWM_CORR
+}
+
+// EwmFunctionIdByName resolves an ewm name to its function id.
+func EwmFunctionIdByName(name string) (int32, bool) {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return 0, false
+	}
+	if fid == EWM_MEAN || fid == EWM_VAR || fid == EWM_STD ||
+		fid == EWM_COV || fid == EWM_CORR {
+		return fid, true
+	}
+	return 0, false
+}
+
 // GetFunctionIgnoresWindowFrameByName reports whether a window function
 // operates on partition-relative row positions instead of the current frame.
 func GetFunctionIgnoresWindowFrameByName(name string) bool {
@@ -1038,6 +1064,13 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 			}
 		}
 		return true
+	// The exponentially weighted statistics synthesize NULL from non-NULL
+	// arguments: the §5 C-gate (minPeriods publication gate), the
+	// zero-variance correlation rule and the unseen-account rule publish
+	// NULL regardless of the argument nullabilities, so their window
+	// outputs declare nullability independently of their inputs.
+	case EWM_MEAN, EWM_VAR, EWM_STD, EWM_COV, EWM_CORR:
+		return false
 	// These STRICT functions can synthesize NULL from non-NULL arguments.
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).

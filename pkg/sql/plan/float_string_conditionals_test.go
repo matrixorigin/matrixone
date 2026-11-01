@@ -101,7 +101,7 @@ func TestLegacyFloatStringConditionals(t *testing.T) {
 			builder := NewQueryBuilder(planpb.Query_SELECT, compiler, false, true)
 			var expr *planpb.Expr
 			if strings.HasPrefix(tc.name, "default") {
-				expr, err = getDefaultExprForAssignment(compiler.GetContext(), execution.Cols[1], compiler.GetProcess(), false)
+				expr, err = getDefaultExprForAssignment(compiler.GetContext(), execution.Cols[1], execution.DbName, compiler.GetProcess(), false)
 			} else {
 				expr, err = builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(execution.Cols[1].GeneratedCol.Expr), false)
 			}

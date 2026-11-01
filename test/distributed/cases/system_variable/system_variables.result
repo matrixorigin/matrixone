@@ -148,10 +148,9 @@ show variables like 'wait_timeout';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
 wait_timeout  ¦  86400
 set wait_timeout = 86401;
-invalid input: wait_timeout must be <= 86400
 show variables like 'wait_timeout';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
-wait_timeout  ¦  86400
+wait_timeout  ¦  86401
 set wait_timeout = 10;
 drop table if exists t;
 create table t(

@@ -422,6 +422,21 @@ func mergeDiffs(
 		}
 	}()
 
+	// Merge-scoped sequence watermarks (design §4 B): resolved from the
+	// destination's defaults once, accumulated from typed apply rows, and
+	// reconciled after the final flush below. Identity keying follows the
+	// session's lower_case_table_names, the same case semantics the engine
+	// applies when resolving the sequence names the defaults pin.
+	seqLctn := int64(1)
+	if v, sysErr := ses.GetSessionSysVar("lower_case_table_names"); sysErr == nil && v != nil {
+		if n, ok := v.(int64); ok {
+			seqLctn = n
+		}
+	}
+	if tblStuff.seqWatermarks, err = newSequenceWatermarkTracker(ctx, tblStuff, seqLctn); err != nil {
+		return err
+	}
+
 	// Successful delivery transfers the batch; emitBatch releases failures.
 	if err = produce(func(wrapped batchWithKind) (bool, error) {
 		if err := ctx.Err(); err != nil {
@@ -435,7 +450,12 @@ func mergeDiffs(
 	}); err != nil {
 		return err
 	}
-	return appender.flushAll()
+	if err = appender.flushAll(); err != nil {
+		return err
+	}
+	// Watermarks are final only after the last flush succeeded; advancing
+	// before then could consume range for rows the merge never applied.
+	return reconcileMergeSequenceWatermarks(ctx, ses, bh, tblStuff.seqWatermarks)
 }
 
 // resolveProjectedIdxes resolves the user-specified COLUMNS list to the
@@ -1971,6 +1991,25 @@ func appendDataBranchApplyRowAsSQLValues(
 		return nil
 	}
 
+	// Track sequence-generated values of every row this merge actually
+	// applies: insert values, staged-update values, and direct applies.
+	// Deletes never advance a sequence.
+	if tracker := tblStuff.seqWatermarks; tracker != nil {
+		switch kind {
+		case diffDelete:
+		case diffUpdate:
+			if appender.batchInfo != nil {
+				tracker.capture(tblStuff, row, appender.batchInfo.updateValueIdxes)
+			}
+		default:
+			insertIdxes := tblStuff.def.writableIdxes
+			if len(tblStuff.def.tarOnlyIdxes) > 0 {
+				insertIdxes = tblStuff.def.commonWritableIdxes
+			}
+			tracker.capture(tblStuff, row, insertIdxes)
+		}
+	}
+
 	return appender.appendRow(kind, tmpValsBuffer.Bytes())
 }
 
@@ -2706,24 +2745,6 @@ func quotedColumnNames(names []string) []string {
 
 func joinQuotedColumnNames(names []string) string {
 	return strings.Join(quotedColumnNames(names), ",")
-}
-
-func writeDeleteRowValues(
-	ses *Session,
-	tblStuff tableStuff,
-	row []any,
-	buf *bytes.Buffer,
-) error {
-	return writeDeleteRowValuesWithColIdxes(ses, tblStuff, row, tblStuff.def.pkColIdxes, buf, false)
-}
-
-func writeDeleteRowValuesAsTuple(
-	ses *Session,
-	tblStuff tableStuff,
-	row []any,
-	buf *bytes.Buffer,
-) error {
-	return writeDeleteRowValuesWithColIdxes(ses, tblStuff, row, tblStuff.def.pkColIdxes, buf, true)
 }
 
 func writeDeleteRowValuesWithColIdxes(

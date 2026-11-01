@@ -627,16 +627,13 @@ func getChunkWithRetry(
 	return nil, moerr.NewInternalErrorf(ctx, "failed to get chunk %d after %d retries: %v", chunkIndex, maxRetries, lastErr)
 }
 
-// extractSortKeyFromObject extracts sortkey seqnum from object metadata
-func extractSortKeyFromObject(
-	ctx context.Context,
-	objectContent []byte,
-	stats *objectio.ObjectStats,
-) (uint16, error) {
+// readObjectMetadataBytes reads the metadata extent, retaining uncompressed
+// bytes and copying compressed bytes before releasing the cache buffer.
+func readObjectMetadataBytes(ctx context.Context, objectContent []byte, stats *objectio.ObjectStats) ([]byte, error) {
 	// Read object meta from objectContent bytes
 	metaExtent := stats.Extent()
 	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
-		return 0, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
+		return nil, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
 	}
 	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
 
@@ -654,7 +651,7 @@ func extractSortKeyFromObject(
 			if decompressedBuf != nil {
 				decompressedBuf.Release()
 			}
-			return 0, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
 		}
 		decompressedMetaBytes = decompressedBuf.Bytes()[:len(bs)]
 		// Clone the data to ensure meta doesn't hold reference to buffer
@@ -664,12 +661,43 @@ func extractSortKeyFromObject(
 		}
 	}
 
+	return decompressedMetaBytes, nil
+}
+
+// extractSortKeyFromObject extracts sortkey seqnum from object metadata
+func extractSortKeyFromObject(
+	ctx context.Context,
+	objectContent []byte,
+	stats *objectio.ObjectStats,
+) (uint16, error) {
+	decompressedMetaBytes, err := readObjectMetadataBytes(ctx, objectContent, stats)
+	if err != nil {
+		return 0, err
+	}
+
 	meta := objectio.MustObjectMeta(decompressedMetaBytes)
 	dataMeta := meta.MustGetMeta(objectio.SchemaData)
 
 	// Get sortkey seqnum from block header
 	sortKeySeqnum := dataMeta.BlockHeader().SortKey()
 	return sortKeySeqnum, nil
+}
+
+// publicationObjectColumns reads the data columns common to both object paths.
+// reserved also accounts for the extra commit/abort columns on appendable objects.
+func publicationObjectColumns(block objectio.BlockObject, reserved uint16) ([]uint16, []types.Type, uint16) {
+	maxSeqnum := block.GetMaxSeqnum()
+	cols := make([]uint16, 0, maxSeqnum+reserved)
+	typs := make([]types.Type, 0, maxSeqnum+reserved)
+	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
+		colMeta := block.ColumnMeta(seqnum)
+		if colMeta.DataType() == 0 {
+			continue
+		}
+		cols = append(cols, seqnum)
+		typs = append(typs, types.T(colMeta.DataType()).ToType())
+	}
+	return cols, typs, maxSeqnum
 }
 
 // rewriteNonAppendableTombstoneWithSinker reads tombstone blocks one by one,
@@ -686,33 +714,9 @@ func rewriteNonAppendableTombstoneWithSinker(
 	txnID []byte,
 	cleanupOwner *CCPRObjectCleanupOwner,
 ) ([]objectio.ObjectStats, error) {
-	// Step 1: Parse object metadata
-	metaExtent := stats.Extent()
-	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
-		return nil, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
-	}
-	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
-
-	// Decompress meta if needed
-	var decompressedMetaBytes []byte
-	var decompressedMetaBuf fscache.Data
-	if metaExtent.Alg() == compress.None {
-		decompressedMetaBytes = metaBytes
-	} else {
-		allocator := fileservice.DefaultCacheDataAllocator()
-		decompressedMetaBuf = allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
-		bs, err := compress.Decompress(metaBytes, decompressedMetaBuf.Bytes(), compress.Lz4)
-		if err != nil {
-			if decompressedMetaBuf != nil {
-				decompressedMetaBuf.Release()
-			}
-			return nil, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
-		}
-		decompressedMetaBytes = decompressedMetaBuf.Bytes()[:len(bs)]
-		decompressedMetaBytes = append([]byte(nil), decompressedMetaBytes...)
-		if decompressedMetaBuf != nil {
-			decompressedMetaBuf.Release()
-		}
+	decompressedMetaBytes, err := readObjectMetadataBytes(ctx, objectContent, stats)
+	if err != nil {
+		return nil, err
 	}
 
 	meta := objectio.MustObjectMeta(decompressedMetaBytes)
@@ -722,22 +726,8 @@ func rewriteNonAppendableTombstoneWithSinker(
 		return nil, nil
 	}
 
-	// Step 2: Get column information from first block meta
-	firstBlkMeta := dataMeta.GetBlockMeta(0)
-	maxSeqnum := firstBlkMeta.GetMaxSeqnum()
-
-	// Prepare columns and types (excluding commit TS for non-appendable)
-	cols := make([]uint16, 0, maxSeqnum+1)
-	typs := make([]types.Type, 0, maxSeqnum+1)
-	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
-		colMeta := firstBlkMeta.ColumnMeta(seqnum)
-		if colMeta.DataType() == 0 {
-			continue
-		}
-		cols = append(cols, seqnum)
-		typ := types.T(colMeta.DataType()).ToType()
-		typs = append(typs, typ)
-	}
+	// Non-appendable tombstones contain only their data columns.
+	cols, typs, maxSeqnum := publicationObjectColumns(dataMeta.GetBlockMeta(0), 1)
 
 	// Get PK type from second column (TombstoneAttr_PK_Idx = 1)
 	pkType := typs[objectio.TombstoneAttr_PK_Idx]

@@ -690,7 +690,7 @@ func (ctr *container) processBatchResident(bat *batch.Batch, start int, proc *pr
 
 func (ctr *container) processBatch(limit uint64, bat *batch.Batch, start int, proc *process.Process) error {
 	rowCount := bat.RowCount()
-	processCount := rowsToFill(limit, len(ctr.sels), rowCount-start)
+	processCount := colexec.TopRowsToFill(limit, len(ctr.sels), rowCount-start)
 
 	if processCount > 0 {
 		if processCount > math.MaxInt-len(ctr.sels) {
@@ -892,7 +892,7 @@ func (ctr *container) processBatchSpillFrom(limit uint64, bat *batch.Batch, star
 	var err error
 
 	rowCount := bat.RowCount()
-	processCount := rowsToFill(limit, len(ctr.sels), rowCount-start)
+	processCount := colexec.TopRowsToFill(limit, len(ctr.sels), rowCount-start)
 
 	if processCount > 0 {
 		record, err = ctr.spillBatch(bat, proc, analyzer)
@@ -1015,17 +1015,6 @@ func spillOutputRowBytes(bat *batch.Batch, columnCount, row int) (uint64, error)
 		total += rowBytes
 	}
 	return total, nil
-}
-
-func rowsToFill(limit uint64, currentRows int, batchRows int) int {
-	if uint64(currentRows) >= limit {
-		return 0
-	}
-	remaining := limit - uint64(currentRows)
-	if remaining >= uint64(batchRows) {
-		return batchRows
-	}
-	return int(remaining)
 }
 
 func (ctr *container) eval(limit uint64, n int, proc *process.Process, result *vm.CallResult) (bool, error) {

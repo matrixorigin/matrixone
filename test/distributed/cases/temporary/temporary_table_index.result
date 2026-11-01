@@ -285,7 +285,7 @@ id int,
 name varchar(50)
 );
 drop index idx_nonexistent on temp_no_idx;  -- 应该失败
-internal error: not found index: idx_nonexistent
+Can't DROP 'idx_nonexistent'; check that column/key exists
 drop table temp_no_idx;
 use temp_index;
 CREATE TEMPORARY TABLE temp_ft_basic (

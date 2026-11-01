@@ -32,12 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// crossingFakeDB is a stateful in-memory catalog for the frozen-4.0.7
-// crossing fixtures. The route of the integrated binary is keyed by the new
-// final row (4.0.19, 2); older retained routes (4.0.6/4.0.7 sources) live
-// under their own keys. Any read of an intermediate mo_version marker is a
-// hard error: the v36 persistence model proves such a row can never exist,
-// so the production flow must never look for one.
+// crossingFakeDB models published-source route creation and restart admission.
 type crossingFakeDB struct {
 	executor.SQLExecutor
 	t *testing.T
@@ -60,7 +55,7 @@ type crossingFakeDB struct {
 	strict       bool
 }
 
-const crossingFinalDDLKey = "'4.0.19'"
+const crossingFinalDDLKey = "'4.0.7'"
 
 func crossingVersion(metadata versions.Version) versions.Version {
 	return metadata
@@ -107,13 +102,10 @@ func (db *crossingFakeDB) exec(sql string) (executor.Result, error) {
 	case sql == versions.LatestVersionSQL:
 		v := db.latest
 		if db.finalExists {
-			v = versions.Version{Version: "4.0.19", VersionOffset: 2, State: db.finalState}
+			v = versions.Version{Version: "4.0.7", VersionOffset: 41, State: db.finalState}
 		}
 		return recoveryVersionResult(db.t, v), nil
 	case strings.HasPrefix(sql, "select state from mo_version"):
-		if strings.Contains(sql, "'4.0.7'") {
-			return executor.Result{}, fmt.Errorf("intermediate mo_version marker must never be read: %s", sql)
-		}
 		if strings.Contains(sql, crossingFinalDDLKey) {
 			if !db.finalExists {
 				return executor.Result{}, nil
@@ -278,14 +270,9 @@ func newCrossingService(t *testing.T, db *crossingFakeDB) *service {
 
 func crossingFinalSteps() []versions.VersionUpgrade {
 	v407 := v4_0_7.Handler.Metadata()
-	return []versions.VersionUpgrade{
-		{ID: 10, FromVersion: "4.0.6", ToVersion: "4.0.7", FinalVersion: "4.0.19", FinalVersionOffset: 2,
-			State: versions.StateCreated, UpgradeOrder: 0, UpgradeCluster: v407.UpgradeCluster, UpgradeTenant: v407.UpgradeTenant, TotalTenant: 0, ReadyTenant: 0},
-		{ID: 11, FromVersion: "4.0.7", ToVersion: "4.0.18", FinalVersion: "4.0.19", FinalVersionOffset: 2,
-			State: versions.StateCreated, UpgradeOrder: 1, UpgradeCluster: versions.No, UpgradeTenant: versions.Yes, TotalTenant: 0, ReadyTenant: 0},
-		{ID: 12, FromVersion: "4.0.18", ToVersion: "4.0.19", FinalVersion: "4.0.19", FinalVersionOffset: 2,
-			State: versions.StateCreated, UpgradeOrder: 2, UpgradeCluster: versions.No, UpgradeTenant: versions.Yes, TotalTenant: 0, ReadyTenant: 0},
-	}
+	return []versions.VersionUpgrade{{ID: 10, FromVersion: "4.0.6", ToVersion: v407.Version,
+		FinalVersion: v407.Version, FinalVersionOffset: v407.VersionOffset, State: versions.StateCreated,
+		UpgradeCluster: v407.UpgradeCluster, UpgradeTenant: v407.UpgradeTenant}}
 }
 
 func requireCrossingTerminalLegacyTask(t *testing.T, err error, account, taskID, state string) {
@@ -336,6 +323,9 @@ func TestCrossingLegacyCDCGateMatrix(t *testing.T) {
 					db.latest = src.latest
 					db.latestReady = src.latest.Version
 					db.retainedStep = src.retained
+					if src.latest.Version == "4.0.7" {
+						db.finalExists, db.finalSteps = true, src.retained
+					}
 					db.strict = taskState != ""
 					if taskState != "" {
 						db.cdcTasks = [][]string{{"10001", "task-uuid", "old-task", taskState}}
@@ -352,13 +342,13 @@ func TestCrossingLegacyCDCGateMatrix(t *testing.T) {
 					switch src.name {
 					case "ready-4.0.5":
 						require.Equal(t, 1, db.cdcReads, "the creation preflight runs once on an eligible source")
-						requireCrossingRouteShape(t, db.finalSteps, [][2]string{{"4.0.5", "4.0.6"}, {"4.0.6", "4.0.7"}, {"4.0.7", "4.0.18"}, {"4.0.18", "4.0.19"}})
+						requireCrossingRouteShape(t, db.finalSteps, [][2]string{{"4.0.5", "4.0.6"}, {"4.0.6", "4.0.7"}})
 					case "ready-4.0.6":
 						require.Equal(t, 1, db.cdcReads, "the creation preflight runs once on an eligible source")
-						requireCrossingRouteShape(t, db.finalSteps, [][2]string{{"4.0.6", "4.0.7"}, {"4.0.7", "4.0.18"}, {"4.0.18", "4.0.19"}})
+						requireCrossingRouteShape(t, db.finalSteps, [][2]string{{"4.0.6", "4.0.7"}})
 					case "interrupted-4.0.7":
-						require.Equal(t, 2, db.cdcReads, "the crossing preflight and the frozen-4.0.7 resume admission each read the legacy gate once")
-						require.False(t, db.finalExists, "an interrupted 4.0.7 is retained, not re-routed")
+						require.Equal(t, 1, db.cdcReads, "the current-target recovery checks CDC admission once")
+						require.Len(t, db.finalSteps, 1, "an interrupted route is retained, not recreated")
 						require.Empty(t, db.mutations(), "recovery validation is read-only")
 					}
 				})
@@ -373,66 +363,26 @@ func requireCrossingRouteShape(t *testing.T, steps []versions.VersionUpgrade, wa
 	for i, pair := range want {
 		require.Equal(t, pair[0], steps[i].FromVersion)
 		require.Equal(t, pair[1], steps[i].ToVersion)
-		require.Equal(t, "4.0.19", steps[i].FinalVersion)
-		require.Equal(t, uint32(2), steps[i].FinalVersionOffset)
+		require.Equal(t, "4.0.7", steps[i].FinalVersion)
+		require.Equal(t, v4_0_7.Handler.Metadata().VersionOffset, steps[i].FinalVersionOffset)
 		require.Equal(t, versions.StateCreated, steps[i].State)
 		require.Equal(t, int32(i), steps[i].UpgradeOrder)
 	}
 }
 
-// (vi) REAL-ROUTE interruption, mid-crossing: the persisted shape the
-// integrated binary writes for a 4.0.6 -> 4.0.19 route (final row
-// 4.0.19/2 Created, steps [4.0.6 -> 4.0.7, 4.0.7 -> 4.0.18, 4.0.18 ->
-// 4.0.19] under key (4.0.19, 2), no intermediate mo_version marker)
-// interrupted BEFORE the 4.0.7 step completes. The restart must terminally
-// reject a seeded legacy task before any catalog mutation and must never
-// look for a 4.0.7 marker.
+// An interrupted 4.0.6 -> 4.0.7 route rejects legacy tasks before mutation.
 func TestCrossingRestartMidCrossingRejectsLegacyTask(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		db := newCrossingFakeDB(t)
 		db.finalExists = true
 		db.finalSteps = crossingFinalSteps()
 		db.cdcTasks = [][]string{{"10001", "task-uuid", "old-task", "paused"}}
-		db.latest = versions.Version{Version: "4.0.19", VersionOffset: 2, State: versions.StateCreated}
+		db.latest = versions.Version{Version: "4.0.7", VersionOffset: 41, State: versions.StateCreated}
 		s := newCrossingService(t, db)
 		err := s.doCheckUpgrade(t.Context())
 		requireCrossingTerminalLegacyTask(t, err, "10001", "task-uuid", "paused")
 		require.Equal(t, 1, db.cdcReads)
 		require.Empty(t, db.mutations(), "rejection must be pre-mutation: %v", db.mutations())
-	})
-}
-
-// (vi) REAL-ROUTE interruption, post-crossing: the same persisted shape with
-// the 4.0.7 step Ready, the 4.0.7 -> 4.0.18 step's tenant work committed
-// (TotalTenant == ReadyTenant) and the trailing 4.0.18 -> 4.0.19 leg not yet
-// started, so the crossing step's state flip and the final flip are not yet
-// written. The restart must skip the preflight entirely, resume the
-// in-flight route, and complete with the post-crossing task intact.
-func TestCrossingRestartPostCrossingSkipsPreflightAndCompletes(t *testing.T) {
-	runtime.RunTest("", func(runtime.Runtime) {
-		db := newCrossingFakeDB(t)
-		db.finalExists = true
-		db.finalSteps = crossingFinalSteps()
-		db.finalSteps[0].State = versions.StateReady
-		db.finalSteps[1].State = versions.StateUpgradingTenant
-		db.finalSteps[1].TotalTenant, db.finalSteps[1].ReadyTenant = 1, 1
-		db.cdcTasks = [][]string{{"10001", "task-uuid", "new-task", "running"}}
-		db.cdcForbidden = true
-		db.latest = versions.Version{Version: "4.0.19", VersionOffset: 2, State: versions.StateCreated}
-		db.strict = false
-		s := newCrossingService(t, db)
-		require.NoError(t, s.doCheckUpgrade(t.Context()))
-		completed, err := s.newUpgradePass(t.Context())()
-		require.NoError(t, err)
-		require.True(t, completed)
-		require.Equal(t, 0, db.cdcReads, "post-crossing restarts issue no mo_cdc_task read")
-		require.Equal(t, versions.StateReady, db.finalSteps[1].State)
-		require.Equal(t, versions.StateReady, db.finalState)
-		require.Equal(t, 0, db.cdcWrites)
-		mutations := db.mutations()
-		for _, sql := range mutations {
-			require.NotContains(t, sql, "mo_cdc_task", "task rows are never rewritten")
-		}
 	})
 }
 
@@ -479,6 +429,9 @@ func TestCrossingRecheckArm(t *testing.T) {
 						db.finalExists = true
 						db.finalState = versions.StateCreated
 						db.finalSteps = tc.prepare(crossingFinalSteps())
+						if !tc.wantReject {
+							db.finalState = versions.StateReady
+						}
 					}
 				}
 				s := newCrossingService(t, db)
@@ -488,48 +441,12 @@ func TestCrossingRecheckArm(t *testing.T) {
 					require.Equal(t, 1, db.cdcReads)
 				} else {
 					require.NoError(t, err)
-					require.False(t, completed)
+					require.False(t, completed, "the retained-target pass yields after rechecking the current target")
+					require.True(t, s.upgrade.finalVersionCompleted.Load())
 					require.Equal(t, 0, db.cdcReads, "post-crossing recheck skips the preflight")
 				}
 				require.Empty(t, db.mutations(), "the recheck arm performs no catalog mutation: %v", db.mutations())
 			})
 		})
 	}
-}
-
-// (vi) task-survival positive control and frozen-chain supported source: a
-// catalog READY at 4.0.7/41 holding one valid post-crossing task takes its
-// byte-exact supported path — the single direct 4.0.7 -> 4.0.19 step — with
-// no preflight at creation or at the mid-route restart, and the task row
-// survives to READY 4.0.19.
-func TestCrossingTaskSurvivalSupportedDirectRoute(t *testing.T) {
-	runtime.RunTest("", func(runtime.Runtime) {
-		db := newCrossingFakeDB(t)
-		db.latest = versions.Version{Version: "4.0.7", VersionOffset: v4_0_7.Handler.Metadata().VersionOffset, State: versions.StateReady}
-		db.latestReady = "4.0.7"
-		db.cdcTasks = [][]string{{"10001", "task-uuid", "new-task", "running"}}
-		db.cdcForbidden = true
-		db.strict = false
-		s := newCrossingService(t, db)
-
-		// Route creation: the supported source skips both frozen guards and
-		// the CDC preflight and forms exactly the direct step.
-		require.NoError(t, s.doCheckUpgrade(t.Context()))
-		require.Equal(t, 0, db.cdcReads)
-		requireCrossingRouteShape(t, db.finalSteps, [][2]string{{"4.0.7", "4.0.19"}})
-
-		// Restart with the route in flight: tenant work committed, step and
-		// final flips pending. The resume performs no preflight read and
-		// completes with the task row intact.
-		db.finalSteps[0].State = versions.StateUpgradingTenant
-		db.finalSteps[0].TotalTenant, db.finalSteps[0].ReadyTenant = 1, 1
-		require.NoError(t, s.doCheckUpgrade(t.Context()))
-		completed, err := s.newUpgradePass(t.Context())()
-		require.NoError(t, err)
-		require.True(t, completed)
-		require.Equal(t, 0, db.cdcReads)
-		require.Equal(t, versions.StateReady, db.finalSteps[0].State)
-		require.Equal(t, versions.StateReady, db.finalState)
-		require.Equal(t, 0, db.cdcWrites)
-	})
 }
