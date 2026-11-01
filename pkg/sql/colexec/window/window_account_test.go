@@ -207,9 +207,9 @@ func TestWindowBufferedInputAccountAdmission(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 			child := colexec.NewMockOperator()
 			spec := makeWindowSpec()
-			spec.GetW().Name = "row_number"
-			spec.GetW().WindowFunc = newFunExpr("row_number")
-			arg := &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)}}
+			spec.GetW().Name = "count"
+			spec.GetW().WindowFunc = newFunExpr("starcount")
+			arg := &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, nil, nil)}}
 			arg.AppendChild(child)
 			t.Cleanup(func() {
 				arg.Free(proc, false, nil)
@@ -309,7 +309,7 @@ func TestWindowBufferedInputAccountAdmission(t *testing.T) {
 						require.NotNil(t, result.Batch)
 						require.Equal(t, 8, result.Batch.RowCount())
 						for row := range 8 {
-							require.Equal(t, uint64(row+1), vector.GetFixedAtNoTypeCheck[uint64](result.Batch.Vecs[width], row))
+							require.Equal(t, int64(8), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[width], row))
 						}
 						if account != nil {
 							retained := 0

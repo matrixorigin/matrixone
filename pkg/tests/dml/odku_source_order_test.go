@@ -119,6 +119,32 @@ func TestODKUSequentialSourceOrder(t *testing.T) {
 			}
 		})
 
+		for _, tc := range []struct{ name, tail, want string }{
+			{"select_ascending", "order by seq asc", "2"},
+			{"select_descending", "order by seq desc", "1"},
+			{"select_limit", "order by seq asc limit 1", "1"},
+			{"select_empty", "where seq<0 order by seq asc", "0"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				execSQLDB(t, ctx, db, "create table select_target(id int primary key,u1 int,u2 int,payload int,unique(u1),unique(u2))")
+				defer execSQLDB(t, ctx, db, "drop table select_target")
+				execSQLDB(t, ctx, db, "create table select_source(seq int,id int,u1 int,u2 int,payload int)")
+				defer execSQLDB(t, ctx, db, "drop table select_source")
+				execSQLDB(t, ctx, db, "insert into select_target values(1,10,100,0),(4,40,400,0),(5,50,500,0)")
+				execSQLDB(t, ctx, db, "insert into select_source values(1,2,10,200,1),(2,3,30,100,2)")
+				execSQLDB(t, ctx, db, "insert into select_target select id,u1,u2,payload from select_source "+tc.tail+" on duplicate key update payload=values(payload)")
+				require.Equal(t, [][]string{{"1", "10", "100", tc.want}, {"4", "40", "400", "0"}, {"5", "50", "500", "0"}}, queryStringRows(t, ctx, db, "select id,u1,u2,payload from select_target order by id"))
+			})
+		}
+		t.Run("ordinary_row_number_and_replace", func(t *testing.T) {
+			require.Equal(t, [][]string{{"8193", "8193", "1", "8193", "33566721"}}, queryStringRows(t, ctx, db, "select count(*),count(distinct rn),min(rn),max(rn),sum(rn) from (select row_number() over() as rn from generate_series(1,8193) g) s"))
+			execSQLDB(t, ctx, db, "create table replace_control(id int primary key,u int unique,payload int)")
+			defer execSQLDB(t, ctx, db, "drop table replace_control")
+			execSQLDB(t, ctx, db, "insert into replace_control values(1,10,0),(2,20,0)")
+			execSQLDB(t, ctx, db, "replace into replace_control values(3,10,1),(4,30,2)")
+			require.Equal(t, [][]string{{"2", "20", "0"}, {"3", "10", "1"}, {"4", "30", "2"}}, queryStringRows(t, ctx, db, "select id,u,payload from replace_control order by id"))
+		})
+
 		t.Run("cross_batch", func(t *testing.T) {
 			execSQLDB(t, ctx, db, "create table cross_batch(id int primary key,u1 int,u2 int,payload int,unique(u1),unique(u2))")
 			execSQLDB(t, ctx, db, "insert into cross_batch values (1,10,100,0),(4,40,400,0),(5,50,500,0)")

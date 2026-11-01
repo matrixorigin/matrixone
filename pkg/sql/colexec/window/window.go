@@ -84,9 +84,11 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
-	// A prior unaccounted execution may retain input and expression capacity.
-	// Retire that generation before admitting copies under the new account.
-	if window.ctr.allocation.Account != nil && window.ctr.bat != nil {
+	window.ctr.cleanOutput(proc.Mp())
+	window.ctr.resetRowNumber()
+	// Retire reusable materialized input before entering a streaming generation
+	// or admitting copies under an account, including unaccounted reuse.
+	if window.ctr.bat != nil && (window.ctr.allocation.Account != nil || window.canStreamRowNumber()) {
 		window.Free(proc, false, nil)
 	}
 
@@ -130,6 +132,7 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	}
 
 	ctr.runtimeFrames = runtimeFrames
+	ctr.streamRowNumber = window.canStreamRowNumber()
 	return nil
 }
 
@@ -353,6 +356,13 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 	// next Call begins, release its borrowed input windows and owned result
 	// vector before reusing any operator state.
 	ctr.cleanOutput(proc.Mp())
+	if ctr.streamRowNumber {
+		result, err := window.callRowNumber(proc)
+		if err != nil {
+			ctr.resetRowNumber()
+		}
+		return result, err
+	}
 
 	for {
 		if err, canceled := vm.CancelCheck(proc); canceled {
