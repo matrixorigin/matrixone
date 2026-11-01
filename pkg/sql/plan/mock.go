@@ -2067,7 +2067,16 @@ func (m *MockCompilerContext) GetUserName() string {
 	return "root"
 }
 
+// This fixture stores catalog objects without a session alias layer.
+func (m *MockCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	return m.resolve(dbName, tableName, snapshot)
+}
+
 func (m *MockCompilerContext) Resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	return m.resolve(dbName, tableName, snapshot)
+}
+
+func (m *MockCompilerContext) resolve(dbName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	name := strings.ToLower(tableName)
 	qualifiedName := mockQualifiedTableName(dbName, name)
 	table := m.tablesByQualifiedName[qualifiedName]

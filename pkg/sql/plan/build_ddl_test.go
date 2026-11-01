@@ -174,6 +174,101 @@ func (c *autoIncrementOffsetCompilerContext) ResolveVariable(
 	return c.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
 }
 
+// Give the two resolution contracts different identities: using ordinary
+// Resolve anywhere in standalone RENAME must select the wrong namespace.
+type renameNamespaceCompilerContext struct {
+	*MockCompilerContext
+	temporary map[string]*TableDef
+	failName  string
+	failure   error
+}
+
+func (c *renameNamespaceCompilerContext) Resolve(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	if def := c.temporary[name]; def != nil {
+		return &ObjectRef{SchemaName: db, ObjName: def.Name, Obj: int64(def.TblId)}, DeepCopyTableDef(def, true), nil
+	}
+	return c.MockCompilerContext.Resolve(db, name, snapshot)
+}
+
+func (c *renameNamespaceCompilerContext) ResolveWithoutTemporaryAlias(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	if name == c.failName {
+		return nil, nil, c.failure
+	}
+	return c.MockCompilerContext.ResolveWithoutTemporaryAlias(db, name, snapshot)
+}
+
+func TestBuildRenameTableIgnoresTemporaryAliases(t *testing.T) {
+	lookupErr := fmt.Errorf("catalog unavailable")
+	for _, tc := range []struct {
+		name, pairs          string
+		permanent, temporary []string
+		wantIDs              []uint64
+		wantErr              uint16
+		failName             string
+	}{
+		{name: "source shadow", pairs: "rn_src to rn_dst", permanent: []string{"rn_src"}, temporary: []string{"rn_src"}, wantIDs: []uint64{11}},
+		{name: "temporary-only source", pairs: "rn_src to rn_dst", temporary: []string{"rn_src"}, wantErr: moerr.ErrNoSuchTable},
+		{name: "temporary-only destination", pairs: "rn_src to rn_dst", permanent: []string{"rn_src"}, temporary: []string{"rn_dst"}, wantIDs: []uint64{11}},
+		{name: "occupied destination shadow", pairs: "rn_src to rn_dst", permanent: []string{"rn_src", "rn_dst"}, temporary: []string{"rn_dst"}, wantErr: moerr.ErrTableAlreadyExists},
+		{name: "chain with intermediate shadow", pairs: "rn_src to rn_mid, rn_mid to rn_dst", permanent: []string{"rn_src"}, temporary: []string{"rn_src", "rn_mid"}, wantIDs: []uint64{11, 11}},
+		{name: "swap reuses removed name", pairs: "rn_src to rn_mid, rn_dst to rn_src, rn_mid to rn_dst", permanent: []string{"rn_src", "rn_dst"}, temporary: []string{"rn_mid"}, wantIDs: []uint64{11, 12, 11}},
+		{name: "duplicate source", pairs: "rn_src to rn_mid, rn_src to rn_dst", permanent: []string{"rn_src"}, temporary: []string{"rn_src"}, wantErr: moerr.ErrNoSuchTable},
+		{name: "source error", pairs: "rn_src to rn_dst", failName: "rn_src"},
+		{name: "destination error", pairs: "rn_src to rn_dst", permanent: []string{"rn_src"}, failName: "rn_dst"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &renameNamespaceCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), temporary: make(map[string]*TableDef), failName: tc.failName, failure: lookupErr}
+			for i, name := range tc.permanent {
+				def := DeepCopyTableDef(ctx.tables["nation"], true)
+				def.Name, def.TblId = name, uint64(11+i)
+				ctx.tables[name] = def
+				ctx.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name, Obj: int64(def.TblId)}
+			}
+			for _, name := range tc.temporary {
+				ctx.temporary[name] = &TableDef{Name: "physical_" + name, TblId: 99, IsTemporary: true, Cols: []*ColDef{{Name: "temp_column"}}}
+				_, def, err := ctx.Resolve("tpch", name, nil)
+				require.NoError(t, err)
+				require.Equal(t, uint64(99), def.TblId)
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "rename table "+tc.pairs, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			if tc.failName != "" {
+				require.ErrorIs(t, err, lookupErr)
+			} else if tc.wantErr != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.wantErr), "%v", err)
+			} else {
+				require.NoError(t, err)
+				renamed := p.GetDdl().GetRenameTable().GetAlterTables()
+				require.Len(t, renamed, len(tc.wantIDs))
+				for i, id := range tc.wantIDs {
+					require.Equal(t, id, renamed[i].TableDef.TblId)
+					require.False(t, renamed[i].TableDef.IsTemporary)
+					require.Equal(t, "n_nationkey", renamed[i].TableDef.Cols[0].Name)
+				}
+			}
+			for _, name := range tc.permanent {
+				require.Equal(t, name, ctx.tables[name].Name, "planning must not change catalog definitions")
+			}
+		})
+	}
+}
+
+func TestViewBindingContextsRejectDDLResolution(t *testing.T) {
+	base := NewMockCompilerContext(false, newPlanTestProcess(t))
+	for _, ctx := range []CompilerContext{
+		&viewSchemaCompiler{CompilerContext: base, ctx: base.GetContext()},
+		&viewDescriptionDependencyContext{CompilerContext: base},
+		&viewDependencyCaptureContext{CompilerContext: base},
+	} {
+		obj, def, err := ctx.ResolveWithoutTemporaryAlias("tpch", "nation", nil)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%T: %v", ctx, err)
+		require.Nil(t, obj)
+		require.Nil(t, def)
+	}
+}
+
 func TestBuildRenameTableUsesPriorDestinationAsNextSource(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		t.Context(),

@@ -743,6 +743,14 @@ func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	return tcc.resolve(dbName, tableName, snapshot, true)
+}
+
+func (tcc *TxnCompilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	return tcc.resolve(dbName, tableName, snapshot, false)
+}
+
+func (tcc *TxnCompilerContext) resolve(dbName string, tableName string, snapshot *plan2.Snapshot, resolveTemporaryAlias bool) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
 		end := time.Since(start).Seconds()
@@ -792,7 +800,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		useSessionTemporary = false
 	}
 	isTmpTable := false
-	if useSessionTemporary {
+	if useSessionTemporary && resolveTemporaryAlias {
 		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
 		if temporary {
 			tableName, isTmpTable = realName, true
