@@ -783,6 +783,31 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// DATE and TIME need a DATETIME result to retain both domains in a set
+// operation. NULL branches have already been removed from source.
+func setOperationDateTimeCommonType(source []types.Type) (types.Type, bool) {
+	hasDate, hasTime := false, false
+	var scale int32
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_date:
+			hasDate = true
+		case types.T_time:
+			hasTime = true
+		case types.T_datetime, types.T_timestamp:
+		default:
+			return types.Type{}, false
+		}
+		if typ.Scale > scale {
+			scale = typ.Scale
+		}
+	}
+	if !hasDate || !hasTime {
+		return types.Type{}, false
+	}
+	return types.New(types.T_datetime, scale, scale), true
+}
+
 // Fixed-width binary branches must share one padded representation before a
 // set operation compares or materializes their rows. A nonpositive width
 // denotes an unspecified bound, so it must remain unbounded rather than
@@ -4899,7 +4924,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			var targetArgType types.Type
 			pureBinaryType, pureFixedBinary := setOperationPureBinaryCommonType(tmpArgsType)
 			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
-			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
+			if temporalType, ok := setOperationDateTimeCommonType(tmpArgsType); ok {
+				targetArgType = temporalType
+			} else if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
 				targetArgType = pureCharType
 			} else if pureFixedBinary {
 				targetArgType = pureBinaryType
