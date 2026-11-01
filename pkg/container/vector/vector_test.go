@@ -7281,6 +7281,7 @@ func BenchmarkConstSetSelection(b *testing.B) {
 	for _, shape := range []string{"flat", "flat_null", "constant", "constant_null", "borrowed_null", "text", "zero"} {
 		b.Run(shape, func(b *testing.B) {
 			mp := mpool.MustNewZero()
+			b.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(b, mp.CurrNB()) })
 			typ := types.T_int64.ToType()
 			if shape == "text" {
 				typ = types.T_text.ToType()
@@ -7300,7 +7301,7 @@ func BenchmarkConstSetSelection(b *testing.B) {
 				err = AppendFixedList(source, []int64{7, 8}, nil, mp)
 			}
 			require.NoError(b, err)
-			defer source.Free(mp)
+			b.Cleanup(func() { source.Free(mp) })
 			if shape == "flat_null" {
 				source.GetNulls().Add(1)
 			}
@@ -7308,11 +7309,11 @@ func BenchmarkConstSetSelection(b *testing.B) {
 				validity := []byte{1}
 				lease, err := NewRefCountedBufferLease(validity, 1, nil)
 				require.NoError(b, err)
+				b.Cleanup(lease.Release)
 				require.NoError(b, source.GetNulls().InstallBorrowedValidity(validity, 0, 2, 1, lease))
-				lease.Release()
 			}
 			destination := NewConstNull(typ, 0, mp)
-			defer destination.Free(mp)
+			b.Cleanup(func() { destination.Free(mp) })
 			set := GetConstSetFunction(typ, mp)
 			length := 1
 			if shape == "zero" {
