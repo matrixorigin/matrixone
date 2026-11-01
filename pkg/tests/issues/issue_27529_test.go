@@ -258,10 +258,13 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			`select json_extract('18446744073709551615', '$') = ?`)
 		require.NoError(t, err)
 		defer stmt.Close()
-		require.Error(t, db.QueryRowContext(ctx,
-			`select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed)`).Scan(new(bool)))
-		require.Error(t, stmt.QueryRowContext(ctx, int64(9223372036854775807)).Scan(new(bool)),
-			"prepared BIGINT must retain the direct JSON-to-BIGINT overflow error")
+		require.NoError(t, db.QueryRowContext(ctx,
+			`select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed)`).Scan(&direct))
+		require.False(t, direct)
+		require.NoError(t, stmt.QueryRowContext(ctx, int64(9223372036854775807)).Scan(&prepared))
+		require.False(t, prepared, "prepared BIGINT must compare the wider JSON value without narrowing")
+		require.ErrorContains(t, db.QueryRowContext(ctx,
+			`select cast(json_extract('18446744073709551615', '$') as signed)`).Scan(new(int64)), "JSON -> BIGINT")
 
 		for _, query := range []string{
 			`select json_extract(json_object('v', json_object('nested', true)), '$.v') = ?`,
@@ -317,42 +320,47 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_signed")
 		execSQLRequire(t, ctx, db,
 			"set @issue_27529_signed = cast(9223372036854775807 as signed)")
-		_, err = db.ExecContext(ctx, "execute issue_27529_signed using @issue_27529_signed")
-		require.Error(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"execute issue_27529_signed using @issue_27529_signed").Scan(&prepared))
+		require.False(t, prepared)
 
 		execSQLRequire(t, ctx, db,
 			`prepare issue_27529_tinyint from "select json_extract('128', '$') = ?"`)
 		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_tinyint")
-		directTinyintErr := db.QueryRowContext(ctx,
-			`select json_extract('128', '$') = cast(1 as tinyint)`).Scan(new(bool))
-		require.Error(t, directTinyintErr)
+		require.NoError(t, db.QueryRowContext(ctx,
+			`select json_extract('128', '$') = cast(1 as tinyint)`).Scan(&direct))
+		require.False(t, direct)
 		execSQLRequire(t, ctx, db, "set @issue_27529_narrow = cast(1 as tinyint)")
-		_, err = db.ExecContext(ctx, "execute issue_27529_tinyint using @issue_27529_narrow")
-		require.EqualError(t, err, directTinyintErr.Error(),
-			"SQL EXECUTE must preserve the direct TINYINT overflow behavior")
+		require.NoError(t, db.QueryRowContext(ctx,
+			"execute issue_27529_tinyint using @issue_27529_narrow").Scan(&prepared))
+		require.False(t, prepared)
+		require.ErrorContains(t, db.QueryRowContext(ctx,
+			`select cast(json_extract('128', '$') as tinyint)`).Scan(new(int64)), "JSON -> TINYINT")
 
-		// Rebinding a reused EXECUTE statement must replace, not retain, the
-		// previous assignment type in both directions.
+		// Rebinding a reused EXECUTE across integer widths must not narrow
+		// the JSON row in either direction.
 		execSQLRequire(t, ctx, db, "set @issue_27529_narrow = cast(1 as signed)")
 		var narrowEqual bool
 		require.NoError(t, db.QueryRowContext(
 			ctx, "execute issue_27529_tinyint using @issue_27529_narrow").Scan(&narrowEqual))
 		require.False(t, narrowEqual)
 		execSQLRequire(t, ctx, db, "set @issue_27529_narrow = cast(1 as tinyint)")
-		_, err = db.ExecContext(ctx, "execute issue_27529_tinyint using @issue_27529_narrow")
-		require.EqualError(t, err, directTinyintErr.Error(),
-			"a later TINYINT execution must not reuse BIGINT metadata")
+		require.NoError(t, db.QueryRowContext(ctx,
+			"execute issue_27529_tinyint using @issue_27529_narrow").Scan(&narrowEqual))
+		require.False(t, narrowEqual)
 
 		execSQLRequire(t, ctx, db,
 			`prepare issue_27529_utinyint from "select json_extract('256', '$') = ?"`)
 		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue_27529_utinyint")
-		directUnsignedTinyintErr := db.QueryRowContext(ctx,
-			`select json_extract('256', '$') = cast(1 as tinyint unsigned)`).Scan(new(bool))
-		require.Error(t, directUnsignedTinyintErr)
+		require.NoError(t, db.QueryRowContext(ctx,
+			`select json_extract('256', '$') = cast(1 as tinyint unsigned)`).Scan(&direct))
+		require.False(t, direct)
 		execSQLRequire(t, ctx, db, "set @issue_27529_unsigned = cast(1 as tinyint unsigned)")
-		_, err = db.ExecContext(ctx, "execute issue_27529_utinyint using @issue_27529_unsigned")
-		require.EqualError(t, err, directUnsignedTinyintErr.Error(),
-			"SQL EXECUTE must preserve the direct TINYINT UNSIGNED overflow behavior")
+		require.NoError(t, db.QueryRowContext(ctx,
+			"execute issue_27529_utinyint using @issue_27529_unsigned").Scan(&prepared))
+		require.False(t, prepared)
+		require.ErrorContains(t, db.QueryRowContext(ctx,
+			`select cast(json_extract('256', '$') as tinyint unsigned)`).Scan(new(uint64)), "JSON -> TINYINT UNSIGNED")
 
 		var exactDecimalCast int64
 		require.NoError(t, db.QueryRowContext(ctx, `select cast(
