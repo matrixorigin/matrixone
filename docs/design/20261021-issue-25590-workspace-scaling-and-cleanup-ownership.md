@@ -3,135 +3,43 @@
 - Owning issue: [matrixorigin/matrixone#25590](https://github.com/matrixorigin/matrixone/issues/25590)
   ([Bug] AI-WALK (Txn workspace): repeated mutations degrade super-linearly in long transactions)
 - Implementation series: pull request [#30988](https://github.com/matrixorigin/matrixone/pull/30988)
-  from branch `agent/issue-25590-6d5e84a3`, 55 changed paths, built on main
+  from branch `agent/issue-25590-6d5e84a3`, 73 changed paths, built on main
   `be663676872` after the r12 post-merge rebase recorded below; the design-review
   rounds and the 2026-10-23 implementation-review series ran against the original
   parent `83222fa8371007c7969d3aeca3ab8ced90695f4c`, which main absorbed before the
   rebase.
-- Document version: **r17** (2026-10-27): the round-52 response. The
-  round-51 removal revision r16 was returned REQUEST_CHANGES by the
-  independent round-52 design review with one P2 (the Revision r16
-  section carries the supersession marker and the full finding): the
-  adoption barrier r16 preserved behind the run's batch-flow drain does
-  not exist on disable-stream-reuse streams — a supported same-build
-  configuration with no negotiated flow — so a clean run settled
-  transferred with NO adoption proof; the coordinator's delayed intake
-  then either refused names the fragment had already released (orphaning
-  them, one physical file per retry, escaping the I4 aggregate) or raced
-  their deletion (the corruption direction). r17 makes the accounting
-  run-scoped and universal: every pipeline run whose scopes admit
-  adoption carves outgoing sequences, receives the client's existing
+- Document version: **r17** (2026-10-27): the run-scoped batch-accounting
+  response to the round-52 design review's one P2 — the adoption barrier r16
+  preserved behind the negotiated batch flow does not exist on the supported
+  disable-stream-reuse streams, so a clean run could settle transferred
+  before the recording intake adopted; every pipeline run whose scopes
+  admit adoption now carves outgoing sequences, receives the client's
   post-adoption acks, and drains before any transfer, in both stream
-  modes; the reuse knob keeps governing only stream pooling and
-  negotiated FIN/FIN_ACK teardown, and fresh-stream pacing (no window
-  without a request) is preserved exactly. r16's removal content stands
-  unchanged. The earlier history below is preserved; the Revision r17
-  section records the finding, its verification, the ordering contract
-  (delayed intake, refusal, cancellation), the rejected alternatives,
-  the validation additions and the round-52 checkpoint record. The
-  independent round-53 re-review of this exact r17 state (document
-  sha256 f2a2d2d0d68c41fd10e889a6357f75f22028c7213bffef6eb31d1fe4b2e18611
-  at review time) returned PASS with one non-blocking P3 (residual
-  wording); the two P3 wording fixes were folded in before
-  implementation with no invariant, scope, test or change-map
-  difference — the operative content of r17 stands exactly as approved.
-  The independent review of head d87fefaabd found the
-  capability-advertisement subsystem this design had grown across r9-r15 in
-  violation of the repository's shutdown-only upgrade contract
-  (.agents/skills/mo-dev/references/upgrade-compatibility.md: in-cluster
-  peers always run one binary; no per-feature `MORPCVersion` constant, no
-  `MORPCLatestVersion` bump for a feature, no peer-capability gate, and no
-  legacy fallback for an older peer; mixed-version operation can return
-  only as a project-level decision deliberately recorded under that
-  contract's own bump condition). No such decision or policy-owner exception
-  was ever recorded through rounds 9-50: the historical r15 PASS approved a
-  behavior policy for a below-adoption class, never the project-wide
-  reintroduction that condition requires. r16 therefore removes the entire
-  subsystem — the `coordinator_protocol_version` advertisement, the
-  adoption-build version line and its constants, both peer-version
-  refusals, the persistence-scopes protocol confirmation, and the
-  non-retaining intake fork — and re-anchors the remote-persistence
-  contract on the same-version plane the policy guarantees. The
-  r6/r22/r23/r24/r49 same-version decisions (adoption-before-ack through
-  the shared reservation surface, producer-provenance admission, one
-  terminal settlement, owner-scoped segment retirement) are preserved
-  unchanged, exactly as the review's remedy requires. The earlier versioning
-  history below is preserved; the Revision r16 section records the finding,
-  the verification, the removals, the supersessions and the validation
-  plan. Revision r13 (the round-45
-  review's design response) was returned REQUEST_CHANGES with two P2 findings;
-  r14 (its booked-token revision) was returned REQUEST_CHANGES with two P2
-  blockers — the admitted-run tail is still workload-dependent and unbounded
-  (the relay reassembly decodes arbitrarily large batches, so no transported
-  bound exists), and the token plus the first object's per-name reservation
-  double-charge the boundary (a one-object run with one free unit fails
-  permanently, contradicting the recorded unchanged free-capacity claim) —
-  plus a P3 (the planned public case named no admission-control fixture).
-  All three findings were verified against the tree: both capacity-keyed
-  ladders are unenforceable as finite bounds, so r15 takes the reviewers'
-  offered alternative in its enforceable form, the FAIL-CLOSED COMPATIBILITY
-  POLICY: a persistence-producing scope is NEVER dispatched to a below-
-  adoption receiver — the enforced finite bound on admitted legacy tails is
-  ZERO, the refusal is keyed on the confirmed receiver capability (definite
-  not-supported error before sendPipeline, mirroring the existing D3'
-  refusal of the opposite direction), the token machinery is dropped
-  (dissolving the double charge), the saturating-obligation fixture is no
-  longer required on the public plane (the refusal is state-independent,
-  and the public mixed-version case reuses the capability family's existing
-  receiver pins alone), I4/§5.5 return to the pure sum-of-per-engine-limits
-  aggregate under sustained stalled drain, and received batches keep the
-  round-44 fail-open retention as the received-objects backstop with an
-  empty in-tree feed. The r11 P3' commit-readback cell for PERSISTENCE-
-  PRODUCING scopes on below-adoption fragments is superseded by the
-  symmetric capability-refusal contract, recorded with its justification in
-  the Revision r15 section; mixed read legs are unaffected. r15's own
-  closing record is superseded by r16 — the round-51 policy finding
-  removed the capability machinery it guarded — so r16 became the
-  operative revision; its re-review returned REQUEST_CHANGES with one P2
-  (round 52: the barrier was still conditional on the negotiated stream
-  protocol, and the supported disable-stream-reuse mode carries no
-  negotiated flow), so r17 is the operative revision under re-review at
-  its own closing record. Revision
-  r1 was the round-17 design-gate
-  artifact; r2 revised §5.1, §5.3, §5.5, §6, §7, §8, §9 and the §10 review record to
-  resolve the round-18 pre-PR review's two blocking findings (B6/B7 in §10): capacity
-  must be reserved per persisted OBJECT rather than per dump, and every recorded
-  object a rollback can hand to the queue — direct-S3 records and successfully
-  dumped objects alike — must enter the bound at creation. r3 revised §2, §4, §5.3,
-  §5.4, §5.5, §6, §7, §9 and the §10 review record to resolve the round-19 pre-PR
-  review's two blocking findings (B8/B9 in §10): the dirty-object compaction must
-  complete all fallible preparation and admission BEFORE any original metadata
-  retires — with worker failures propagated instead of panicked into the ants
-  pool — and the direct-S3 insert writer must reserve capacity BEFORE its objects
-  persist and hand its unrecorded persisted names to a cleanup owner on unwind.
-  r4 revises §4 (§4.5), §5.3, §5.5, §6, §7, §9 and the §10 review record to resolve
-  the round-20 pre-PR review's four findings (F1–F4 in §10): the compaction pass
-  must publish its replacement records ATOMICALLY across every replacement (an
-  earlier fully-staged record retracts with a failed pass, so nothing survives
-  underneath the failed admission's statement boundary to be duplicated by the
-  retry); every multi_update S3 producer (insert sinkers, temporary table writers,
-  tombstone writers) binds the reservation surface and its teardown hands
-  unrecorded names to the cleanup ownership; a record's batch copy completes BEFORE
-  its admission commits name membership or converts reservations; and the failed
-  pass releases the staged re-publication batches its staging loop allocated.
-  The exact reviewed revision identity is the sha256 of this complete file, recorded
-  in the round-20 handler review record and to be linked by the implementation PR.
-  r5 revises §1 (I2/I4 wording, new I5), §2, §5.3, §5.5, §5.6, §7, §9 and the §10
-  review record to resolve the round-21 pre-PR review's four findings (G1–G4 in §10):
-  publication-in-flight names are classified only at consumer-quiesced boundaries —
-  a producer teardown that races ahead of its recording consumer may never move the
-  name to the deletion queue inside the recording statement, and every boundary's
-  handoff rechecks recorded membership; the capacity classification of recorded names
-  follows the commit's TERMINAL outcome (no release at prepare); the standalone
-  DELETE tombstone producer joins the reservation and ownership-protocol surface;
-  and every workspace a remote run constructs outside the coordinator's session
-  receives exactly one terminal settlement at the run's end — and the
-  coordinator's transport intake ADOPTS every relayed object name through the
-  same admission reservation the writers use BEFORE the fragment's settlement
-  can release anything, with every refusal failing the WHOLE run so refusal
-  can never grow a backlog some engine does not release itself.
-  `rN` changes require re-review of the affected decisions before implementation
-  review resumes.
+  modes, while stream reuse keeps governing only stream pooling and
+  negotiated FIN/FIN_ACK teardown. The revision ladder, with every
+  finding, decision and supersession recorded in its Revision section
+  below (r1–r5 in the §10 rounds-17–22 records): r1 — the round-17
+  design-gate artifact; r2–r6 — the pre-PR review escalations (the
+  per-object capacity ledger, producer closure, compaction atomicity,
+  boundary classification, commit-terminal capacity, intake adoption
+  and the two-engine bound); r7–r12 — producer provenance,
+  borrowed-object preservation and mode-authenticated admission, the
+  refusal-capability ladder, the public validation matrix (D4''), the
+  delivered old-fragment failure contract, and the post-merge
+  renumbering; r13–r15 — the legacy-intake binding ladder, entirely
+  superseded by r16 (round 51), which removes the
+  capability-advertisement subsystem under the repository's
+  shutdown-only upgrade contract
+  (.agents/skills/mo-dev/references/upgrade-compatibility.md) and
+  records its removals with their supersessions. The operative design
+  approval is **PASS at r17** by the round-53 independent design
+  re-review of 2026-10-27 (artifact pre-pr-review-1793069602436.json;
+  reviewed content sha256
+  f2a2d2d0d68c41fd10e889a6357f75f22028c7213bffef6eb31d1fe4b2e18611,
+  with the re-review's single non-blocking P3 folded in as two wording
+  fixes and no invariant, scope, test or change-map difference).
+  `rN` changes require re-review of the affected decisions before
+  implementation review resumes.
 - Status: **Approved** — r1 by the distinct design-first review of 2026-10-21; r2 by
   the round-18 re-review of the §5.3 decisions; r3 by the round-19 re-review of the
   §5.3/§4 producer-ordering decisions; r4 by the round-20 re-review of the
@@ -149,26 +57,32 @@
   recorded post-merge conflict resolution under that PASS, independently covered
   together with the implementation by the six complete-worktree reviews of
   2026-10-23, the sixth approving with no blocking findings (§10 closing record).
-  Implementation PR: #30988. r13 (round 45) — a decision-changing revision on the
-  round-44 receive-side retention policy opened by the round-45 implementation
-  review of 2026-10-25 — was returned REQUEST_CHANGES with two P2 findings, and
-  its booked-token successor r14 was returned REQUEST_CHANGES with two P2
-  blockers plus a P3 (all verified against the tree: no capacity-keyed gate
-  can deliver a finite tail bound or avoid double-charging the boundary, and
-  the public-fixture mechanism was unspecified). r15 — the fail-closed
-  compatibility policy that refuses persistence-producing dispatch to
-  below-adoption receivers outright — was approved at its own closing §10
-  record after the three-round re-review ladder, and is superseded by r16
-  (round 51): the repository's shutdown-only upgrade contract forbids the
-  advertisement/refusal machinery itself, and no policy-owner exception
-  ever authorized the mixed-version mode it defends. The round-52
-  re-review confirmed the removal direction and returned r16
-  REQUEST_CHANGES with one P2: on the supported disable-stream-reuse
-  streams the adoption barrier carried no drain, so a clean run could
-  transfer before the recording intake adopted. r17 is the operative
-  revision, resubmitted for independent design re-review at its own
-  closing §10 record; no implementation repair may run ahead of that
-  re-review.
+  Implementation PR: #30988. The r11 PASS stayed the
+  recorded implementation-plane approval through the 2026-10-23 review
+  series; the r16/r17 removal and re-scoping chain was re-reviewed on
+  the deviation rule, and the operative design approval is the
+  round-53 PASS at r17 (identity recorded in the Revision r17
+  section's closing record). The implementation follow-ups of rounds
+  54–60 are recorded in §10 as decision records inside the approved
+  set.
+- Delivery maintenance (2026-10-30, the delivery-review P2 at the
+  round-45 r15 record): this document previously accumulated the
+  per-round execution chronicle — CI run and job identities, local
+  reproduction and /tmp log narratives, per-head red/green execution
+  records and review-attestation notes — which the repository's
+  review contract (.agents/skills/mo-self-review/SKILL.md,
+  delivery-artifact rules) excludes from tracked delivery. That
+  chronicle is removed from this file and the complete pre-maintenance
+  document is archived byte-identical outside the tracked repository
+  with the loop controller (snapshot of this file at head `921be87c93`,
+  sha256
+  5276bf5f6da64802189ac7cfbd3b38830816d3752212a3fc69dd122c9e165e70);
+  per-round CI evidence remains available through GitHub's run
+  artifacts for those runs. The operative design text (§1–§9), every
+  revision's findings, decisions and supersessions, and the compact
+  approval trace of this header and §10 are retained. This
+  maintenance records no design decision: no invariant, boundary,
+  policy or validation requirement of the approved design changes.
 
 ### Revision r6 (round-22 pre-PR review, findings H1/H2)
 
@@ -1442,16 +1356,15 @@ released, with nothing refused in between.
   queue-mutex transfer window and the triple's lock order) plus the engine
   race suite — zero reports.
 - **CI spine.** `go test ./pkg/vm/engine/disttae/` (full package),
+- **CI spine.** `go test ./pkg/vm/engine/disttae/` (full package),
   `./pkg/vm/engine/test/` (issue suite + RC sweep),
   `./pkg/objectio/ioutil/`, `./pkg/sql/colexec` (S3 sweep),
   `./pkg/sql/colexec/insert/` (operator seam, r3), both race suites,
-  gofmt/vet — the round-by-round recorded battery ran all of these green at
-  the current revision (latest full run, round 19: full package 1,260
-  tests / 0 failures — r18's 1,258 plus the two r19 white-box regressions —
-  flake sweep 264/264 — 22 queue/admission tests × 12 counts including all
-  four r19 regressions — WB 48/48, engine 9/9, insert package ok, RC 16/16,
-  dump sweep 7/7, both race suites zero reports); the original issue's
-  30k-statement CPU profile remains the issue-side human confirmation flow,
+  gofmt/vet — the maintained standard is all of these green at the
+  reviewed revision (the per-round execution evidence is archived
+  outside the tree — header, delivery maintenance); the original
+  issue's 30k-statement CPU profile remains the issue-side human
+  confirmation flow,
   superseded for CI by the deterministic tests above.
 
 ## 8. Drawbacks and open decisions
@@ -1998,8 +1911,7 @@ executable-evidence spine.
 The round-23 pre-PR review of the r6 implementation returned REQUEST_CHANGES
 with three findings. All three were first re-verified against the code, then
 executed as red probes on the r6/r22 tree (all five probes RED with their
-exact finding messages, /tmp/r23_red_probes.log), then fixed under this
-revision.
+exact finding messages), then fixed under this revision.
 
 F1 (P1) - Distinguish ownership metadata from ordinary query results. The r22
 intake recognized relayed metadata purely from its five-column shape, a
@@ -2076,19 +1988,11 @@ fragments still settled transferred and released their local owners.
 
 ### Validation (round 23)
 
-- Red probes on the r6/r22 tree (all RED at their finding asserts,
-  /tmp/r23_red_probes.log): ordinary five-column rows adopted; multi-object
-  insert tail truncated to one; the delete rows' flush-key string adopted
-  instead of the tombstone name; undecodable metadata acknowledged with no
-  liability; no recognizer covering the standalone insert/delete formats.
-- Green on the fixed tree: the three classifier unit tests, the compile
-  registry test, and the two composed disttae regressions (logs
-  /tmp/r23_relay_test.log, /tmp/r23_producer_tests*.log,
-  /tmp/r23_new_tests*.log); gofmt/vet clean across the five touched
-  packages; the r5-r22 regression ring and the full disttae package run in
-  the round's battery (see the handler record for the exact commands and
-  counts).
-
+The maintained coverage: the three recognizer-classifier unit tests,
+the compile-package registry test, and the two composed disttae
+regressions, together with the r6/r16 rows of §7. The round's
+executed red-probe and green-run evidence is archived outside the tree
+(header, delivery maintenance).
 ## 10 design review record - round 23 (r7)
 
 Reviewer: this handler's recorded design re-review per the repository
@@ -2305,7 +2209,6 @@ reviewer's PASS on r8.
 
 [r16 supersedes this revision's D3'/D3'' mechanisms — the refusal keying and the capability advertisement are removed under the shutdown-only upgrade contract; D1' (the scoped clone exemption) stands unchanged. See the Revision r16 section.]
 
-
 The round-24 pre-PR review rejected design r8 at the design gate with three
 findings. All three were re-verified against the current tree before this
 revision; none is stale, and where a finding contradicted r8 the
@@ -2476,11 +2379,9 @@ backward-compatible default direction. r9 is submitted for independent
 design review; this handler does not self-approve the design gate, and
 implementation proceeds only after the reviewer's PASS on r9.
 
-
 ## Revision r10 (round 26): the public and mixed-version validation matrix (D4'')
 
 [r16 supersedes the mixed-direction legs of this matrix and the public legs built on `mo_ctl` advertisement pins; the same-version P1 public leg survives as the multi-CN remote-persistence case. See the Revision r16 section.]
-
 
 The round-26 pre-PR review rejected design r9 at the design gate with one
 finding (P2): complete the public and mixed-version validation matrix. The
@@ -2723,11 +2624,9 @@ discriminator. r10 is submitted for independent design review; this
 handler does not self-approve the design gate, and implementation
 proceeds only after the reviewer's PASS on r10.
 
-
 ## Revision r11 (round 27): real old-fragment binaries and the default-policy failure contract
 
 [r16 supersedes this revision's V_adopt/adoption-line decisions; the round-27 PASS remains the recorded independent approval of the same-version content r16 keeps. See the Revision r16 section.]
-
 
 The round-27 pre-PR review rejected design r10 at the design gate with two
 P2 findings. Both were verified against the tree and the document before
@@ -2942,7 +2841,6 @@ PASS on r11.
 ## Revision r12 (post-merge conflict resolution): V_adopt renumbering to MORPCVersion130 and ownership weaves
 
 [r16 deletes the V_adopt class this record renumbered; the record stands as post-merge conflict history. See the Revision r16 section.]
-
 
 The implementation branch rebased onto `be6636768` (2026-10-23 main),
 which allocated MORPC versions 114-129 to other capabilities since the
@@ -3167,35 +3065,20 @@ writer and the insert operator were re-checked and construct fresh per
 execution or per spill, so the persistent insert sinkers were the only
 stale-hook surface.
 
-Proof (commands run with the repository CGo wrapper
-`.agents/skills/mo-dev/scripts/mo-cgo-test` on this tree):
-
-- New focused regressions, red on parent `604f6e4551`, green after the
-  fix - `go test -run TestMultiUpdatePrepareReuse
-  ./pkg/sql/colexec/multi_update/`: pre-fix exit 1 with the review's
-  exact shape (the second execution's spill consulted the stale first
-  workspace's hook, second-owner calls=0; an owner-less reuse kept the
-  stale hook), post-fix exit 0.
-- Engine-level settlement through real workspaces and the real ledger -
-  `TestIssue25590ReusedWriterReservationsSettleUnderReboundWorkspace`
-  reconstructs the reviewer's probe on one shared engine: transaction 1
-  spills, its commit settles its own unrecorded object to the cleanup
-  queue, the drain deletes it; transaction 2 rebinds the SAME writer and
-  spills - the reservation rides the current workspace's
-  `unpublishedDumpReservations` (nothing on the finalized one), its
-  commit hands the object to the queue, and the ledger closes at
-  queued=0, live=0, inFlight=0 with both objects drained physically.
-  This is the unit the pre-fix stale hook stranded.
-- The refusal still gates through the rebound hook: a saturated
-  CURRENT workspace refuses the reused sinker's Sync before anything
-  persists (the saturated-round case inside the same multi_update
-  regression), and an owner-less reuse restores the fresh-construction
-  unhooked shape while the finalized workspace's hook consults
-  nothing further.
-- Packages touched: `./pkg/objectio/ioutil/`, `./pkg/sql/colexec/multi_update/`,
-  `./pkg/sql/colexec/insert/` all green with the new tests included
-  (`ok` each, exit 0), and `go vet` over the changed package closure
-  exits 0.
+Covered by the focused regressions (executed red/green and package
+evidence archived outside the tree — header, delivery maintenance):
+`TestMultiUpdatePrepareReuse` (the reuse branch rebinds the persistent
+sinkers to the CURRENT statement's workspace at Prepare; an owner-less
+reuse ends unhooked, never on a stale first-transaction hook; a
+saturated CURRENT workspace refuses the reused sinker's Sync before
+anything persists) and
+`TestIssue25590ReusedWriterReservationsSettleUnderReboundWorkspace`
+(engine level: transaction 1 spills and settles through the queue;
+transaction 2 rebinds the SAME writer, its reservation rides the
+current workspace, and both objects drain physically with the ledger
+closing at queued=0, live=0, inFlight=0), with the touched packages —
+`pkg/objectio/ioutil/`, `pkg/sql/colexec/multi_update/`,
+`pkg/sql/colexec/insert/` — green with the new tests and vet clean.
 
 Decision: round 35 is recorded as an implementation defect of the
 r11-approved admission binding, repaired inside the unchanged decision
@@ -3230,7 +3113,7 @@ policy change. The rebase onto `2b94111625` retains capability 130 (main is 129)
 and replays all five original commits without patch changes.
 ## 10 design review record - round 37 (implementation follow-up): settled names retire from the transaction's recorded set, and the drain retires one pass
 
-The 2026-10-24 review against head `184ae95675` accepted the round-35/36
+The 2026-10-24 review accepted the round-35/36
 repairs and blocked on two scaling defects the ledger's own accounting
 exposes, with reproduced measurements:
 
@@ -3295,45 +3178,24 @@ The repairs:
   retire-by-NAME removal, so two overlapping invocations (Close's
   detached final tail racing a still-running worker) stay idempotent.
 
-Proof (commands run with the repository CGo wrapper
-`.agents/skills/mo-dev/scripts/mo-cgo-test` on this tree):
-
-- Red on parent `184ae95675`, green after the fix, same tests:
-  `TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement` — extended,
-  as the review requested, over the production dump/compaction/GC loop
-  with the admission bound pinned at 2 — failed pre-fix at round 0 ("the
-  settle that ends the file's ownership must retire BOTH the deleted
-  original's ledger membership and the transaction's recorded-name
-  copy", round entered with 1 recorded) and passes post-fix: each round
-  settles the original (live=0) and the recorded set returns to empty —
-  the copy never carries history.
-  `TestIssue25590DrainRetirementCostStaysLinear` — the production
-  once-drain on a 120,000-name queue with the storage delete made a
-  cost-isolated no-op so the bytes are the queue-side mechanics your own
-  benchmark isolated — failed pre-fix with
-  `measured 133659648 bytes` against the regression's 48 MiB linear
-  budget (exit 1) and passes post-fix at
-  `measured 27772432 bytes` — 4.8x below the pre-fix count on the same
-  input — with the queue empty afterward and the membership index
-  accepting the same names again on re-delivery.
-- Behavior pins that pass on BOTH trees (the fixed retirement must not
-  change the contract): `TestIssue25590DrainRetiresEachBatchInOnePass`
-  (five independent batches, one poisoned — exactly its 1,000 names stay
-  queued in queue order, the retried pass re-attempts only the retained
-  batch) and `TestIssue25590DrainKeepsConcurrentArrivals` (200 names
-  enqueued while the drain parks between batches survive the pass's
-  retirement untouched).
-- Related behavior re-run green with the change: the drain/queue family
-  (`FailedBatchRetainsWhileLaterBatchesCollect`, `ExhaustedLadder…`,
-  `RejectedSchedule…`, `QueueMembershipDeduplicatesAtScale`, the
-  Close-budget tests), the compaction suites that record and settle
-  originals, and the recorded-set boundary tests (`RecordedBeforeBoundary…`,
-  `UnrecordedRetainedNameDrainsAtBoundary`) — the classification skips
-  keep exactly their recorded-member protection.
-- `go vet` over the changed package exits 0; `gofmt -l` clean; the
-  focused regressions including the recorded-set and compaction families
-  pass under `-race` (the new guard is exercised by the GC worker settle
-  against transaction-side readers).
+Covered by the focused regressions (executed red/green and family
+evidence archived outside the tree — header, delivery maintenance):
+`TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement` extended
+over the production dump/compaction/GC loop with the admission bound
+pinned at 2 — every round's settle retires BOTH the deleted original's
+ledger membership and the transaction's recorded-name copy, so the
+copy never carries history;
+`TestIssue25590DrainRetirementCostStaysLinear` — the production
+once-drain on a 120,000-name queue against the regression's 48 MiB
+linear budget (the single in-place compaction replaces the per-batch
+rebuild under the queue mutex);
+`TestIssue25590DrainRetiresEachBatchInOnePass` and
+`TestIssue25590DrainKeepsConcurrentArrivals` — the per-batch
+independence and concurrent-arrival survival pins that pass unchanged;
+plus the drain/queue family, the compaction suites that record and
+settle originals, the recorded-set boundary tests, and the focused
+regressions under `-race` (the new guard is exercised by the GC worker
+settle against transaction-side readers).
 
 Decision: round 37 is recorded as an implementation correction of two
 bookkeeping representations inside the approved r11/r12 decision set —
@@ -3344,7 +3206,7 @@ altered, so the deviation rule opens no design re-review.
 
 ## 10 design review record - round 38 (implementation follow-up): the queue settle retires the recording transaction's recorded-name copy too
 
-The 2026-10-24 review against head `a28099178d` accepted the round-37
+The 2026-10-24 review accepted the round-37
 repairs and blocked on one remaining incompleteness of the recorded-name
 lifetime the round-37 settle introduced: the retire it added ran ONLY in
 the gcFiles pool worker, so every ownership path that moves a RECORDED
@@ -3400,44 +3262,21 @@ member's skip protection while the file still exists.
   producer event on the settled name is bookable again (the queue's
   tolerated no-op delete retires its cleanup).
 
-Proof (commands run with the repository CGo wrapper
-`.agents/skills/mo-dev/scripts/mo-cgo-test` on this tree):
-
-- Red on parent `a28099178d`, green after the fix, same tests, both new
-  regressions dedicated to the reviewer's shape:
-  `TestIssue25590RollbackHandoffRetiresRecordedNamesAtQueueSettle`
-  drives the production record → statement-rollback → queue-handoff →
-  drain loop on one OPEN transaction with a standing prior recorded
-  write and a pinned admission bound of 2 — pre-fix it failed in round
-  0 with the recorded set holding the rolled-back statement's name next
-  to the live prior member while the queue was already empty and the
-  file already deleted; post-fix each round returns the recorded set to
-  exactly the live prior member, the late-handoff probes keep skipping
-  the member while the file exists (adoption books no in-flight unit,
-  the retain funnels take it nowhere), and a fresh producer event on
-  the just-settled name re-enters the orphan machinery and drains
-  through the tolerated no-op delete.
-  `TestIssue25590PoolHandoffTailRetiresRecordedNamesAtQueueSettle`
-  pins the second handoff class: a released GC pool refuses the gcFiles
-  submission, the whole unsent batch tail — a name the transaction
-  still records — queues with the retire registered, and the drain's
-  settle retires that member with the same rule while the prior
-  recorded member stays untouched. It failed pre-fix on the same
-  recorded-set assertion and passes post-fix.
-- Related behavior re-run green with the change: the full disttae
-  `TestIssue25590|TestGCFiles` family — including the r37 drain
-  siblings (`DrainRetirementCostStaysLinear` with its 48 MiB linear
-  budget, `DrainRetiresEachBatchInOnePass`, `DrainKeepsConcurrentArrivals`),
-  the recorded-set boundary tests (`RecordedBeforeBoundaryKeepsObjectOutofQueue`,
-  `UnrecordedRetainedNameDrainsAtBoundary`, the r33/r34 recorded-set
-  assertions), the compaction suites, the rollback-recycle regression
-  and the Close-budget tests — the linear drain budget is untouched by
-  the registry pops (one nil-map lookup per retired name, one lazily
-  allocated per-owner map only when a queued recorded name exists).
-- `go vet` over the changed closure exits 0; `gofmt -l` clean; the
-  focused regressions including the r38 pair pass under `-race` (the
-  drain's retire exercises the recorded-name guard from the drain
-  worker against transaction-side merges under the transaction lock).
+Covered by the focused regressions (executed red/green and family
+evidence archived outside the tree — header, delivery maintenance):
+`TestIssue25590RollbackHandoffRetiresRecordedNamesAtQueueSettle` (the
+production record → statement-rollback → queue-handoff → drain loop on
+one OPEN transaction with a standing prior recorded write and bound 2 —
+each round's settle returns the recorded set to the live prior member,
+late-handoff probes keep the skip while the file exists, and a fresh
+producer event on the settled name drains through the tolerated no-op
+delete) and `TestIssue25590PoolHandoffTailRetiresRecordedNamesAtQueue-
+Settle` (the released-pool tail's unsent batch — the submit-failure
+tail of the round-13 lossless handoff — settles with the retire
+registered while the prior member stays untouched), with the r37 drain
+siblings, the recorded-set boundary tests, the compaction suites and
+the Close-budget tests re-run green and the focused pair under
+`-race`.
 
 Decision: round 38 is recorded as an implementation correction that
 completes the round-37 settle contract on the queue's own settle path —
@@ -3454,7 +3293,6 @@ design re-review.
 ## 10 design review record - round 39 (implementation follow-up): intake-build V_adopt renumbers to MORPCVersion131 after main shipped 130
 
 [Superseded with its class by r16 (round 51): the renumbered adoption build does not merge. Kept as history.]
-
 
 Context. Main advanced from the PR's original base `2b94111625` to
 `ac13078b98` and the PR became CONFLICTING. The single git-level conflict
@@ -3499,27 +3337,15 @@ positions, and the per-request settle's below leg follows the same
 translation (129 → 130) while the advertisement walker pairs the fresh
 131 against main's 130.
 
-Validation (repository CGo wrapper; disk capacity was first repaired by
-clearing a 180 GB stale go-build cache on the validation host — the
-first compile-family attempt died on `no space left on device` before
-any test ran):
-
-- The compile-package admission family (every `TestIssue25590` root in
-  `pkg/sql/compile`, including the r11 threshold/advertisement/receiver/
-  settle/run-case-contract tests and the r29 remote dispatch transport
-  family) exits 0 on the renumbered tree.
-- The full disttae `TestIssue25590|TestGCFiles` family exits 0 — the
-  disttae implementation differs from the reviewed round-38 tree only by
-  main's deleted dead-comment blocks.
-- `go vet` over `./pkg/sql/compile/...` and `./pkg/vm/engine/disttae/...`
-  (with the repository CGo include paths the wrapper exports) exits 0;
-  `gofmt -l` is clean over every changed file.
-- No synchronization-bearing change exists in this round (a constant
-  renumber plus test/literal pins), so the race evidence of rounds 35-38
-  remains valid for the untouched synchronization surfaces.
-- The multi-CN D4''/forward-compat BVT legs remain for CI; their expected
-  outcomes were re-derived from the same production format strings the
-  unit family pins, and only the two printed version numbers changed.
+Validation: the renumbered tree re-ran the compile-package admission
+family (the r11 threshold/advertisement/receiver/settle/run-contract
+tests plus the r29 transport family) and the disttae
+`TestIssue25590|TestGCFiles` family green, with vet over the changed
+closure and gofmt clean (executed evidence archived outside the tree
+— header, delivery maintenance); no synchronization-bearing change
+exists in this renumber, so the preceding rounds' race evidence
+remained valid, and the multi-CN D4''/forward-compat BVT legs were
+re-evaluated by CI on the pushed head.
 
 Decision: round 39 is an implementation-level reassignment of the
 intake-build identifier under r12's own recorded renumbering rule, not
@@ -3528,8 +3354,7 @@ re-review, and the renumbered head is covered by the re-run unit
 families above plus the pending review of the new head.
 ## 10 design review record - round 40 (implementation follow-up): a terminal transaction detaches its queued recorded-owner entries
 
-The 2026-10-24 review against head `967e0ace23` (the reviewer's merge of
-main onto `9ab37e4fa9`, byte-identical on every PR-owned file) accepted
+The 2026-10-24 review accepted
 the round-38 registry's settle design and blocked on its TERMINAL
 lifetime: nothing but a successful drain delete ever popped a
 `recordedOwners` entry. A transaction that terminated while a storage
@@ -3604,7 +3429,7 @@ altered, so the deviation rule opens no design re-review.
 
 ## 10 design review record - round 41 (implementation follow-up): the accepted GC worker settle state is independently owned
 
-The 2026-10-25 review against head `9f0c4e2ce7` accepted the round-40
+The 2026-10-25 review accepted the round-40
 terminal detach and blocked on the last transaction-lifetime owner in
 the cleanup path: the settle callback that gcFiles installs on
 ACCEPTED pool jobs. The round-37 settle step captured the whole
@@ -3661,9 +3486,7 @@ pre-settle window (the recorded member keeps the name's lifecycle, the
 file stays, the ledger stays live), completes the transaction through
 the production `FinalizeCommit`, drops the probe's own reference and
 requires the weak reference to die across bounded full-GC cycles while
-the worker stays parked (red on the parent tree: the weak pointer
-survives 24 GC cycles through the accepted callback; green after the
-fix), then releases the stall and requires the recovered worker alone
+the worker stays parked (red on the parent tree, green after the fix), then releases the stall and requires the recovered worker alone
 to delete the file and close the queue, the registry and the ledger
 empty. The probe's operator records no expectation returning the
 transaction, so the gomock controller's permanent roots cannot mask
@@ -3683,7 +3506,6 @@ design re-review.
 ## 10 design review record - round 42 (merge follow-up): intake-build V_adopt renumbers to MORPCVersion132 after main shipped 131
 
 [The renumber record is superseded by r16's removal of the class. Kept as merge history.]
-
 
 Context. Main advanced from the PR's merge-followed base `dae02bbaaa`
 to `9a7e12a933` (14 commits) and the PR became CONFLICTING again in
@@ -3731,34 +3553,15 @@ in both the threshold and refusal positions, the per-request
 settle's below leg follows the same translation, and the
 advertisement walker pairs the fresh 132 against main's 131.
 
-Validation (repository CGo wrapper `mo-cgo-test`; unchanged-input
-evidence reuse per the validation-evidence contract):
-
-- The compile-package admission family - every `TestIssue25590` root
-  in `pkg/sql/compile`: the r11 threshold/refusal/advertisement/
-  receiver/settle/run-case-contract tests plus the r29 admission
-  matrix, fail-closed metadata modes, receive-loops, the admission
-  registry and the r31 transfer test (12 roots, 40 run entries
-  including subtests, enumerated from a `-v` run) - exits 0 on the
-  merged tree (`ok`, exit 0).
-- `go vet` over `./pkg/defines/` and `./pkg/sql/compile/` (with the
-  repository CGo include paths) exits 0; `gofmt -l` is clean over
-  every changed file. No synchronization-bearing change exists in
-  this round (a constant renumber plus test/literal pins), so the
-  race evidence of rounds 35-41 remains valid; the `-race` evidence
-  is reused unchanged.
-- The merge changes no line in `pkg/vm/engine/disttae`,
-  `pkg/sql/colexec/multi_update`, `pkg/sql/colexec/insert`,
-  `pkg/sql/colexec/deletion`, `pkg/objectio/ioutil` or
-  `pkg/vm/engine/test` (verified by `git diff a90f71ed77 -- <pkg>`:
-  empty for each), so the round-41 green families - the full disttae
-  `TestIssue25590|TestGCFiles` family, the focused `-race` set and
-  the external `pkg/vm/engine/test` engine-level suite on the exact
-  same content - remain valid evidence for the merged tree.
-- The multi-CN D4''/forward-compat BVT legs remain for CI; their
-  expected outcomes were re-derived from the same production format
-  strings the unit family pins, and only the two printed version
-  numbers changed.
+Validation: the merged tree re-ran the compile-package admission
+family green and vet/gofmt over the changed define and compile closure
+(executed evidence archived outside the tree — header, delivery
+maintenance); the merge changed no line in `pkg/vm/engine/disttae`,
+`pkg/sql/colexec/multi_update`, `pkg/sql/colexec/insert`,
+`pkg/sql/colexec/deletion`, `pkg/objectio/ioutil` or
+`pkg/vm/engine/test`, so the round-41 green families remained valid
+evidence for the merged tree, and the multi-CN D4''/forward-compat
+BVT legs were re-evaluated by CI on the pushed head.
 
 Decision: round 42 is an implementation-level reassignment of the
 intake-build identifier under r12's own recorded renumbering rule (as
@@ -3769,10 +3572,8 @@ the new head.
 
 ## 10 design review record - round 43 (CI regression follow-up): the round-41 recovery oracle observes the completed unlink, not the recorded attempt
 
-Pull-request CI run 40176540982 attempt 3 (UT on Ubuntu/x86, head
-89e6c5810a, UT_PARALLEL=8) is the first attempt whose pre-build lanes
-survived the tracked #27066/#28411 checkout failures, so the full UT
-suite ran on this head for the first time. Exactly one case failed:
+The first full-UT CI lane of the round-42 head failed exactly one
+case:
 `TestIssue25590AcceptedGCWorkerStallDoesNotRetainCompletedTransaction`
 at `txn_issue25590_r41_test.go:280` through `issue25590RequireGone`
 (`txn_issue25590_test.go:1679`), stat'ing the stalled object's file
@@ -3802,17 +3603,13 @@ pinned terminal assertion; the failFS wrapper, `deleteCallCount` and
 `deletedSnapshot` semantics are unchanged. No production line
 changes.
 
-Proof. A forced barrier-to-unlink delay (a temporary 500 ms sleep in
-the wrapper between the recording and the underlying unlink) makes
-the pre-fix oracle fail deterministically with the CI job's exact
-trace (same case, same r41 assertion line, same helper, `expecting
-file not found, got %v, <nil>` - exit 1), and the corrected oracle
-passes 3/3 under the same forced window (exit 0). On the final tree:
-the focused case is green under `-race -count=20` (exit 0), the full
-`pkg/vm/engine/disttae` package - the lane CI failed - is green
-(exit 0, 61.7s), `go vet` over the package and `gofmt -l` are clean.
-The BVT legs and the remaining CI lanes are re-evaluated by the fresh
-run of the pushed head.
+Proof. The pre-fix oracle fails deterministically under a forced
+barrier-to-unlink window (same case, same assertion line, same
+helper), and the corrected oracle passes under the same window; the
+executed reruns, the `-race` replay and the `pkg/vm/engine/disttae`
+package rerun are archived outside the tree (header, delivery
+maintenance). The BVT legs and the remaining CI lanes are re-evaluated
+by the fresh run of the pushed head.
 
 Decision: round 43 is an implementation-level correction of the
 round-41 regression's own observation point (which event grounds the
@@ -3826,10 +3623,7 @@ covered by the re-run unit families above plus CI.
 
 [Superseded by r16 (round 51): the confirm-for-producer-scopes extension, the protocol-keyed intake fork and the retention split are removed under the shutdown-only upgrade contract. The finding's same-version residue is covered by the fragment's failure-side terminal — a same-build fragment always settles its own refused runs (Revision r16).]
 
-
-Context. The local reviewer's round-44 review (PR #30988, head
-`0bd06b03f6e4b643a72f7f1e01a7e32f9ceb876c`, 2026-10-25 14:57:51Z)
-requested changes with one P2 finding at `pkg/vm/engine/disttae/`
+Context. The local reviewer's round-44 review requested changes with one P2 finding at `pkg/vm/engine/disttae/`
 `txn.go:3595` (`AdoptRemoteTransferredObjectNames`'s reservation
 refusal): during a rolling upgrade an OLD fragment persists an object
 and relays valid metadata to a NEW coordinator whose
@@ -3953,7 +3747,6 @@ is opened and the implementation proceeds under this record.
 
 [r16 note (round 51): the entire ladder's premise class is removed under the shutdown-only upgrade contract, together with the machinery this revision proposed; see the Revision r16 section. The r13/r14/r15 search records stand as audit history.]
 
-
 [SUPERSEDED BY r14 — this revision was returned REQUEST_CHANGES by the
 round-45 independent design re-review (two P2 findings verified against
 the tree: the non-booking probe's unenforced bounds, and the false
@@ -3979,8 +3772,8 @@ deletion preserves it indefinitely, so retained metadata and undeleted
 objects grow with the number of failed attempts — exactly what I4's
 round-6/H2 clause forbids. The finding was verified against the tree
 with an executed reproduction before this revision (design-stage probe
-`pkg/vm/engine/disttae/txn_issue25590_r45_sustained_bound_probe_test.go`,
-worktree, uncommitted; `/tmp/issue25590-r45/` logs): with `limit=1`, one
+`pkg/vm/engine/disttae/txn_issue25590_r45_sustained_bound_probe_test.go`; design-stage
+execution, logs archived externally): with `limit=1`, one
 parked reservation and every delete shot failing, 32 capable-fragment
 intakes left the recording population at exactly the parked unit (the
 control passes on the current head), while 32 legacy-fragment attempts
@@ -4147,7 +3940,7 @@ txn.go` (`reserveUnpublishedPendingObject`'s one-queue-mutex admission
 gate and `adoptRemoteTransferredObjectNames`'s r44 refusal retain),
 `pkg/vm/engine/disttae/engine.go` (the ledger snapshot helpers) and
 the reproduction probe's executed observation (control green, legacy
-growth red on the current head, `/tmp/issue25590-r45/`).
+growth red on the then-current head; logs archived externally).
 Reproduction: `TestIssue25590R45LegacyIntakeSustainedBoundProbe`
 (disttae plane, worktree-only) — limit 1, parked reservation, failing
 delete shots, 32 capable attempts leave total=1 (passes), 32 legacy
@@ -4182,7 +3975,6 @@ resolved by Revision r14 and its closing record below.]
 ## Revision r14 (round 45 continued): booked admission tokens for legacy runs, the decided empty-producer contract, and explicit overshoot accounting
 
 [r16 note (round 51): the ladder's premise class is removed under the shutdown-only upgrade contract; see the Revision r16 section.]
-
 
 [SUPERSEDED BY r15 — this revision was returned REQUEST_CHANGES by the
 second round-45 design re-review: its P2 blockers found the admitted
@@ -4368,9 +4160,9 @@ readback, and the positive-control flip — the exact shapes the planned
 public case reuses).
 Reproduction: the executed evidence is reused unchanged (valid
 inputs, valid mode, terminal result preserved — no rerun needed):
-`TestIssue25590R45LegacyIntakeSustainedBoundProbe` at HEAD f75ccdfbe3
-(exit 1, control total=1, legacy leg queued=32 live=0 inFlight=1,
-log `/tmp/issue25590-r45/probe_disttae.log`), plus the design-level
+`TestIssue25590R45LegacyIntakeSustainedBoundProbe` (control total=1,
+legacy leg queued=32 live=0 inFlight=1; exit 1 recorded, logs archived
+externally), plus the design-level
 source verification of both re-review findings recorded above.
 Cheapest validation plan: the §7 r14 row's delivered set, with the
 public mixed-version case planned in the capability family's own
@@ -4406,7 +4198,6 @@ receiver at all.]
 ## Revision r15 (round 45, third design round): the fail-closed compatibility policy — zero admitted legacy obligations
 
 [SUPERSEDED BY r16 (round 51) — the capability machinery this policy built (advertisement, refusals, confirm extension) violates the repository's shutdown-only upgrade contract and does not merge; no policy-owner exception was ever recorded. The three-round ladder above stands as the audit of that search, and its findings do not bind r16's same-version plane. See the Revision r16 section.]
-
 
 Context. The second round-45 design re-review returned r14
 REQUEST_CHANGES with three findings, all verified against the tree
@@ -4565,13 +4356,12 @@ disttae/txn.go` (`PinUnpublishedPendingAdmissionLimitForTest` at the
 cited line, the one-queue-mutex bound check, the r44 whole-tail
 retain, the capacity-check-less fail-open membership), and the
 parent build 9a7e12a933's multi_update terminal flush paths.
-Reproduction: the executed evidence is reused unchanged (no rerun,
-valid inputs/mode/terminal result): the disttae-plane sustained
-probe at HEAD f75ccdfbe3682ec5f804d5449ad1bd22f6b292d1 (exit 1,
-control total=1, legacy leg queued=32 live=0 inFlight=1, log
-`/tmp/issue25590-r45/probe_disttae.log`) — the finding that opened
-the round — plus this turn's source verification of the three
-re-review findings recorded above.
+Reproduction: the executed evidence is reused unchanged (valid
+inputs/mode/terminal result): the disttae-plane sustained probe's
+recorded observation — control total=1, legacy leg queued=32 live=0
+inFlight=1, the finding that opened the round (exit 1 recorded,
+logs archived externally) — plus the round's source verification of
+the three re-review findings recorded above.
 Cheapest validation plan: the §7 r15 row's delivered set (same-plane
 static gates for the changed closure at the implementation turn;
 fresh CI on the eventual pushed head).
@@ -4610,217 +4400,44 @@ implementation proceeds under the approved r15 design with this
 document as its record.
 
 IMPLEMENTATION RECORD (round-45 repair, under the approved r15): the
-r15 dispatch refusal is delivered at `pkg/sql/compile/
+r15 dispatch refusal was delivered at `pkg/sql/compile/
 remote_object_admission.go::refuseRemoteWriteToNonRetainingFragment`
 (classification by `scopeRemoteObjectAdmission`; threshold by
-`fragmentRetainsRefusedIntakeObjects`; the definite not-supported
-error mirroring D3') hooked in `pkg/sql/compile/remoterunClient.go`
-inside `remoteRun` after the round-44 confirm and before
-`sendPipeline`, with the same-version plane untouched to the byte.
-Validation delivered per the §7 r15 row: the compile-plane family
-`pkg/sql/compile/remote_dispatch_refusal_r15_test.go` (classification
-matrix; dispatch integration with zero pipeline bytes; the
-32+8-attempt sustained zero-admission companion; the capable-receiver
-positive control with the required payload send), the full
-`TestIssue25590*` families of `pkg/sql/compile` and
-`pkg/vm/engine/disttae` re-run green on the fixed head, and the public
-case `test/distributed/cases/dml/update/
-update_remote_fragment_capability_receiver_refusal.sql` in the D4''
-harness (receiver-CN pins pinned through the documented multi-uuid
-`mo_ctl SetProtocolVersion` form with the coordinator excluded by
-identity and a query-addressed TN excluded through the dn-service
-mark/recapture pair - never positionally; the refused mass leg
-asserting the exact error text with sentinel preservation,
-statement-only rollback, COMMIT and fresh-session readback; the
-positive control restoring every receiver with the receive-log
-`inject_send_pipeline` marker REQUIRED on that leg). ONE
-implementation-round finding, recorded rather than hidden: the §7 row's
-public EMPTY-INPUT REFUSAL variant is empirically unconstructible at
-the SQL plane on this build — three recorded constructions (a
-point-statistics predicate, a recorded-stats/spent-table ghost, and a
-computed-value predicate) all classify below the producer threshold,
-because every runtime-emptiness the planner can statistically see
+`fragmentRetainsRefusedIntakeObjects`; the definite not-supported error
+mirroring D3'), hooked into `remoterunClient.go`'s `remoteRun` after
+the round-44 confirm and before `sendPipeline`, with the same-version
+plane untouched to the byte. The §7 r15 row's delivered coverage: the
+compile-plane refusal matrix and dispatch integration with zero
+pipeline bytes, the 32+8-attempt sustained zero-admission companion,
+the capable-receiver positive control, the refused-scopes legs that
+carry no rows at all (the empty-input PRODUCER-MODE boundary), the
+public case in the D4'' harness, and the disttae and compile
+`TestIssue25590` families re-run green. One implementation-round
+finding, recorded rather than hidden: the §7 row's public EMPTY-INPUT
+REFUSAL variant was empirically unconstructible at the SQL plane on
+this build — every runtime-emptiness the planner can statistically see
 narrows the classify-first shape before any remote write fragment
-exists. The decided §5.5 empty-input PRODUCER-MODE outcome therefore
-lives exactly where its premise puts it — the encoded producer plan, a
-dispatch-plane input — and is pinned there by the r15 test file's
-refused scopes, which carry no rows at all; the public case's leg Pb
-was delivered as the honest complement of the boundary (a
-runtime-empty pinned statement executes as the ordinary write it plans
-as, pinning the refusal's narrowness), with the empirical refutations
-kept in the round-45 run logs. No §1/§5.3/§5.5 decision, invariant or
-policy text changes: the finite bound, the zero-admission policy, the
-D3' mirror and the P3' rescission are exactly as approved.
+exists — so the decided §5.5 empty-input PRODUCER-MODE outcome is
+pinned at the encoded producer plan (a dispatch-plane input) and the
+public case's Pb leg was delivered as the honest complement of that
+boundary. No §1/§5.3/§5.5 decision, invariant or policy text changed.
 
-
-
-CI ROUND RECORD (2026-10-26, PR-event on head f7932823633; design-record
-follow-up, ordinary-fix scope): matrixone ALL CI run 40257231611 attempt
-1, job 121364104873 ("multi CN e2e BVT Test on Linux/x64(COMPOSE,
-PESSIMISTIC)") failed exactly one row of the new r15 public case
-`update_remote_fragment_capability_receiver_refusal.sql`: row 144,
-`select mo_ctl('dn', 'SetProtocolVersion', '129')` - expected the recorded
-"internal error: no such tn service", actual the SETPROTOCOLVERSION
-success echo; 77/78 rows passed, including every refusal, sentinel,
-restore and probe row. Root cause, verified against the failed job's raw
-log and its uploaded compose service logs: the case's two dn-form rows
-are legitimately outcome-dependent - the CI docker-compose TN (separate
-container, port-base set) publishes a query address, so
-mo_ctl's dn form reaches it (`transferToTN` in pkg/sql/plan/function/
-ctl/cmd_rpc_version.go) and succeeds, while a launch whose TN ships
-without a query address (the round-45 replay's in-process TN, and the
-recorded .result) gets the documented benign refusal; the compose TN's
-uuid is uppercase (713F97B0-...) and the case's uuid walk regexp -
-maintained case-sensitive by MatrixOne's RE2 regexp implementation - never
-matches its pair, which is why the compose run's teardown restore still
-evaluates the empty argument ("cmd invalid, expected version number")
-exactly as recorded, and only the mark row diverged. mo-tester's @ignore:0
-masks result columns of matching structures; it cannot reconcile a
-recorded error against a successful row, so a single-variant error
-record cannot validate a row whose legitimate outcome is
-topology-dependent. The implementation's r45 comment claimed the row was
-"@ignore:0-masked"; that mechanism claim was wrong and is what CI caught.
-Correction (test-expectation mechanics only; binary, provisioning and
-owner-path code untouched; every invariant, decision and validation
-clause of the approved r15 unchanged): the mark row and its teardown
-restore are each validated by a mo-tester @regex pattern naming exactly
-the two legitimate outcomes - `@regex("(no such tn service|
-SETPROTOCOLVERSION)", true)` for the mark,
-`@regex("(cmd invalid, expected version number|SETPROTOCOLVERSION)",
-true)` for the restore - so the case passes on every reachable topology
-and still fails on anything else (transport faults, malformed echoes,
-a wrong version echo would still fail the downstream value-level
-probes). The recorded .result variants remain in force unchanged.
-Validation (this round, all against the same PR-head binary the CI
-build shares, three handler-owned isolated local launches, ports fully
-verified free before each launch and confirmed released after each
-teardown): (1) a compose-shaped launch (separate log/TN/cn1/cn2
-processes, query-addressed uppercase-uuid TN) reproduces the CI failure
-with the UNFIXED file byte-for-byte - row 144 failed with the identical
-expect/actual pair and 77/78 - and passes 78/78 with the corrected file;
-(2) a query-addressed lowercase-uuid TN launch passes 78/78, exercising
-the restore row's success echo (the marked TN is recaptured by uuid and
-restored to its captured advertisement, confirmed by post-run
-GetProtocolVersion showing all three services at 132); (3) the
-round-45 standalone launch shape (in-process TN without query address,
-the recorded expectations' own origin) passes 78/78, exercising both
-recorded error variants. The three launches jointly cover every reachable
-outcome combination of the two pattern-validated rows; the refused
-mass-update error text and receive-log witness behaved identically in
-all three. The compose job's remaining failed-job siblings of the same
-run (the PROXY compose leg still executing at snapshot time) are left to
-the controller's next scan per the loop rules; the two tracked unrelated
-CI blocker classes (checkout/toolchain transport) played no part in this
-failure. The pre-correction document sha256 is
-2a83657cbdd94edf5f8f6639851e918f36f1eb9e310dc05513141a692575f8e2; this
-append is the only design-document change of the round.
-
-CI ROUND RECORD, SECOND FOLLOW-UP (2026-10-26, head 37b2e4422d;
-test-fixture ordinary fix): the same-lane re-run validated the previous
-record's correction first - matrixone ALL CI run 40267988027 attempt 1
-finished BOTH multi-CN compose BVT legs green (jobs 121397070654
-"multi CN e2e BVT Test on Linux/x64(COMPOSE, PESSIMISTIC)" and
-121397070699 "multi cn e2e bvt test docker compose(PROXY)", both
-success) on the exact expectation-mechanics fix - and then failed one
-unit lane:
-"UT Test on Ubuntu/x86" (job 121394532310, the -race lane) with exactly
-one caught defect: TestIssue25590LegacyProducerDispatchSustainedZero-
-AdmissionR15, "race detected during execution of test"; the downstream
-"CI Required" job projected it. The race is a fixture defect in this
-PR's own r15 test file, NOT in the admission path: two of the test's
-eight barrier-concurrent worker goroutines both WRITE the shared
-compile's c.proc.Base.TxnOperator inside r15ProducerScope
-(remote_dispatch_refusal_r15_test.go:192 at both heads - the identical
-report appears in the prior run 40257231611's lane job 121361633440),
-each worker building its producer scope after its barrier release.
-Equivalently: the helper armed a new fake transaction operator on the
-SHARED compile on EVERY scope build, so the concurrency testament of
-the same gate became a data race under -race; the non-race replay had
-masked it, and both CI lanes caught it deterministically. Repair
-(test-only; no production, assertion or recorded-expectation change):
-arm the shared compile exactly once on the test goroutine's sequential
-setup point - r15InstallPipelineClient, which every r15 test already
-calls first - and keep r15ProducerScope a pure READER of c.proc; the
-stateless fakeTxnOperator (nil embedding plus two pure methods,
-remoterun_test.go:3985) makes one armed instance shared across all
-producer scopes exactly equivalent. Validation ladder on the PR-head
-tree with the repository Makefile's CGO_CFLAGS include set:
-- RED, same command as CI's caught defect: go test -race -run
-  'TestIssue25590LegacyProducerDispatchSustainedZeroAdmissionR15'
-  -count=5 ./pkg/sql/compile fails with TWO identical
-  "WARNING: DATA RACE" reports at remote_dispatch_refusal_r15_test.go
-  :192/:292/:295 and "--- FAIL" exit 1
-  (/tmp/issue25590-race-round/race-repro2.log, REPRO2_RC=1),
-  matching both failed CI jobs' signatures.
-- GREEN, the identical command post-fix: ok, exit 0
-  (/tmp/issue25590-race-round/green-sustained.log,
-  GREEN_SUSTAINED_RC=0, 5 sustained-test replays under race
-  instrumentation).
-- FAMILY under -race: go test -race -run 'TestIssue25590.*R15'
-  -count=3 ./pkg/sql/compile ok, exit 0 - every r15 gate test
-  (the direct-refusal matrix, the dispatch integration subtests, the
-  capable-receiver control, the sustained campaign) replays three
-  times race-clean (/tmp/issue25590-race-round/green-family.log,
-  GREEN_FAMILY_RC=0).
-- FULL package family, nonrace regression net: go test -run
-  'TestIssue25590' -v ./pkg/sql/compile - 21 passing tests, 0 FAIL,
-  ok exit 0 (/tmp/issue25590-race-round/family-nonrace-v.log,
-  RC=0), confirming the fixture's blast radius did not reach any
-  other issue-25590 test of pkg/sql/compile.
-No §1/§5.3/§5.5 decision, invariant, or admission-path behavior
-changes; the gate's own sustainment and counterexample semantics are
-exactly as previously approved and locally re-proven here.
-
-MERGE RENUMBER RECORD (2026-10-26, third intake renumber: 132 -> 133;
-conflict-resolution round on head 7e0a2cc9b8): the final PR-state
-re-fetch showed mergeable=CONFLICTING against origin/main
-(e033d4a587) - a verified-reason base update. The conflict surface is
-the version ladder: main took MORPCVersion132 for
-"decimal float rounding and strict textual float conversions" while
-this branch's r42 renumber had already claimed 132 for the intake
-build, so V_adopt moves to MORPCVersion133 exactly as the r39
-(114->131) and r42 (114->132) renumbers before it. The resolution:
-main's 132 (decimal float) stays untouched; this PR's intake asserts
-133 (MORPCLatestVersion = MORPCVersion133), so a current-main receiver
-advertising 132 still lacks the intake and is refused - the r44
-mixed-version fork keeps its meaning against main's real latest, and
-every pre-merge recorded expectation that named the adoption value is
-renumbered with it. Sweep, complete:
-- production: coordinatorIntakeAdoptionVersion = defines.MORPCVersion133
-  (remote_object_admission.go); every threshold consults that constant,
-  so the refusal/gate sites follow symbolically.
-- fixtures: the r11 thresholds matrix (main's shipped latest probe
-  moves 131->132, adoption pins 132->133; the generic old-coordinator
-  stamp pin stays 131 - a below-adoption old-build value), the r44
-  below-adoption sentinel (131->132, "a 132 stream" - main's shipped
-  latest receiving pre-intake traffic), the r15 ladder (its six
-  "main's shipped latest" sites and the sustained campaign's receiver
-  confirm move to 132; every refusal still asserts: 132 < 133), the
-  r29 receiver-at-adoption construction -> 133.
-- protobuf: pipeline.proto auto-merged; pipeline.pb.go regenerated
-  from the merged .proto with the repository toolchain pin (gen.sh's
-  protoc 3.21.1 + protoc-gen-gogofast + goimports; descriptor 9541
-  bytes), not hand-spliced.
-- BVT: update_remote_fragment_capability.result's two refusal texts
-  and its captured-advertisement restore echo (132->133);
-  update_remote_fragment_capability_receiver_refusal.sql's three
-  adoption probes (>=132/`<132` -> 133) and its .result's matching
-  rows, its refusal text and its restore echo; forward_compat stays
-  version-independent (pins nothing, the coordinator advertises its
-  own build) and is untouched; replace_workspace's 132 sites are row
-  data, not protocol, and stay.
-No design decision, invariant, or policy text changes: V_adopt remains
-"the first build carrying this PR's remote fragment workspace
-intake"; its numeric ground moved with main's ladder. Validation for
-this round is recorded in the round's report: the merged-tree build,
-the renumbered r11/r15/r29/r44 families (nonrace + the r15 lane under
--race), and the three-topology local replay of the renumbered D4''
-BVT cases against a cluster built from the merged tree.
+The r15 rounds' complete execution chronicle — the receiver-refusal
+public case's CI expectation correction (a topology-dependent
+`mo_ctl` outcome pair replaced by a two-outcome `@regex` cell), the
+r15 race-lane fixture repair (arming the shared compile once on the
+sequential setup point), and the third intake renumber (132 → 133)
+resolving main's taken version slot on the merged tree — including
+every CI run identity, reproduction log and validation ladder, is
+archived outside the tracked tree (header, delivery maintenance). The
+receiver-refusal subsystem this record guarded — the refusal test
+families, the receiver-refusal BVT case and the intake renumber — was
+removed in full by r16 (round 51) under the shutdown-only upgrade
+contract, and nothing of it ships in this PR.
 
 ## 10 design review record - round 49 (implementation follow-up): fragment-settlement segment retirement is owner-scoped and proportional
 
-The request-changes review on head `6352367bfe` (P2 at
-`remoterunServer.go:292`, mo-bot job `0fc71205c535beea09789067`)
+The request-changes review (P2 at `remoterunServer.go:292`)
 measured an ordinary remote SELECT fragment's settlement performing a
 CN-wide segment-map scan: across 32 fragments, 2.007 µs per fragment
 with zero foreign segments, 448.743 µs with 50,000, and 8.080 ms with
@@ -4895,50 +4512,33 @@ Deliberately unchanged, recorded for round completeness:
   their input set differs only in that a fragment can no longer
   remove entries it never owned.
 
-Validation (repository CGo wrapper; commands and logs in the round's
-handler artifacts, `/tmp/issue25590-r49/`):
-
-- Red on the pre-fix head:
-  `TestIssue25590FragmentSettlementRetiresOnlyOwnSegmentRegistrations`
-  registers a write fragment's segment through the REAL publish path
-  (`WriteFile` -> `stageWorkspaceRecordLocked` ->
-  `publishStagedWorkspaceRecordLocked` -> `PutCnSegment`), settles a
-  second mirror workspace bound to the same txn operator through the
-  production settlement leg, and asserts the writer's registration
-  survives. On `6352367bfe` (source-verified swap run) it fails at
-  exactly that assertion (`expected: 1 actual: 0`, "a read-only
-  fragment settlement must not unregister another fragment's segment
-  registration", `ut-disttae-prefix-red.log`, exit 1); on the fixed
-  head it passes, and the writer's own rollback still removes exactly
-  its own registration (no overcorrection into never-removing).
-- Owner-scope UTs: `TestTxnWorkspaceSegmentsRetireExactlyOwnRegistrations`
-  (same-txnID competitor isolation, foreign-transaction isolation,
-  re-registration dedupe, double-terminal idempotence, zero-value
-  retirement) and `TestTxnWorkspaceSegmentsRetireEmptyNeverOpensSegmentMutex`
-  (an empty-ledger retirement completes while the test holds the
-  segment mutex — the removed sweep blocks there).
-- Proportionality: `BenchmarkRetireTxnWorkspaceSegments` across the
-  review's foreign populations shows the read-fragment ledger
-  retirement flat at ~5 ns/op (0/50k/200k foreign segments; the sweep:
-  2.007 µs/448.743 µs/8.080 ms) and a 16-object write fragment's full
-  register+retire cycle at 6.3/8.7/24.1 µs — its own 32 map operations,
-  never the CN's population (`bench-retire.log`, exit 0).
-- Broad runs on the fixed tree: the `TestIssue25590` families of
-  `pkg/sql/compile` (settlement/transport/refusal legs included,
-  `ok 2.252s`) and `pkg/vm/engine/disttae` (`ok 41.422s`), the full
-  `disttae` package (`ok 51.349s`), the full `colexec` package
-  (`ok 2.590s`), the focused three-root set under `-race` ×3 across
-  both packages (`ok 4.528s`/`ok 4.372s`, exit 0), and gofmt/vet/
-  golangci-lint clean on the changed closure.
+Validation (maintained coverage; the round's executed red/green,
+benchmark and family logs are archived outside the tree — header,
+delivery maintenance):
+`TestIssue25590FragmentSettlementRetiresOnlyOwnSegmentRegistrations`
+(a READ-ONLY fragment's settlement leaves the write fragment's
+registration intact, and the writer's own rollback removes exactly its
+own), `TestTxnWorkspaceSegmentsRetireExactlyOwnRegistrations`
+(same-ledger dedupe, foreign-ledger isolation, re-registration dedupe,
+double-terminal idempotence) and
+`TestTxnWorkspaceSegmentsRetireEmptyNeverOpensSegmentMutex`. The
+proportionality contract is pinned by
+`BenchmarkRetireTxnWorkspaceSegments`: an owner-scoped ledger
+retirement stays flat against foreign-segment populations (the
+review's measurement — 2.007 µs / 448.743 µs / 8.080 ms CN-wide scans
+at 0 / 50k / 200k foreign entries — is the cost class the owner
+scoping removes; a write fragment's full register+retire cycle costs
+its own map operations, never the CN's population). The
+`TestIssue25590` families of both owning packages, the full disttae
+and colexec packages and the focused set under `-race` are the re-run
+envelope.
 
 ## Revision r16 (round 51): the shutdown-only compatibility contract — removal of the capability-advertisement subsystem
 
 [SUPERSEDED BY r17 — the round-52 independent design review returned r16 REQUEST_CHANGES with one P2: the barrier r16 left behind the negotiated batch flow does not exist in the supported disable-stream-reuse mode, so a clean run could transfer before the recording intake adopted, orphaning refused names one per retry and racing deletion in the other direction. r17 below re-scopes the barrier to the run itself and carries r16's removal content forward unchanged; the round-51 removal decisions of this revision stand — only the barrier's scoping is corrected.]
 
-
-Context. The round-51 independent review of PR #30988, head
-d87fefaabdbffd7c72452d796eb320e26344ddd4 (2026-10-26T21:38:25Z, mo-bot
-review, request_changes) returned one P2 at `pkg/defines/const.go:171`:
+Context. The round-51 independent review of PR #30988 head
+`d87fefaabd` returned one P2 at `pkg/defines/const.go:171`:
 this feature adds `MORPCVersion133`, advances `MORPCLatestVersion`, and
 introduces coordinator advertisements (`proto/pipeline.proto` field
 `coordinator_protocol_version = 20`), peer-version refusals
@@ -5175,7 +4775,7 @@ parse); `pkg/vm/engine/disttae/txn.go:3596/:3621` (the adoption fork);
 and the policy file
 `.agents/skills/mo-dev/references/upgrade-compatibility.md` (identical
 blob `b17242eebd45de98796b68f554daa79b76e33196` at frozen base and head)
-— each site named by the review re-read this turn.
+— each site named by the review was re-read.
 
 Reproduction: the primary executed evidence for this round is the
 static presence/absence comparison at the frozen base and head — base
@@ -5434,7 +5034,7 @@ supersession marker with the finding verbatim; the operative header,
 §1 I4, §5.3, the §5.5 bound table and the §7 r16 row carry r17's shape;
 the round-51 record carries the OUTCOME paragraph.
 
-Verified owner paths, re-read this turn: pkg/cnservice/types.go:169-174,
+Verified owner paths, re-read for the checkpoint: pkg/cnservice/types.go:169-174,
 :509-510 (the knob and its live wiring);
 pkg/sql/compile/remoterunClient.go:739/:771-773 (the negotiation gate),
 :482/:520/:579 (the three ack-after-intake loops), :1003-1008
@@ -5513,9 +5113,7 @@ against the reviewed owner paths.
 
 ## 10 design review record - round 54 (implementation follow-up): an idle cached plan's delegate drops its execution-scoped capacity hook at Reset
 
-The request-changes review on PR #30988 head `622a803baf` (mo-bot job
-`c081744340e4e323db79a2f3`, P2 at `pkg/sql/colexec/multi_update/s3writer_delegate.go:292`)
-found: a cached UpdateWriteS3 operator persists data, unwinds before
+The request-changes review (P2 at `pkg/sql/colexec/multi_update/s3writer_delegate.go:292`) found: a cached UpdateWriteS3 operator persists data, unwinds before
 metadata publication, and is reset; its transaction then finalizes while
 the prepared plan remains idle. The persistent insert sinkers keep
 their `WithUncommittedCapacityHook` closure — installed by
@@ -5554,30 +5152,20 @@ joins `RebindWorkspaceSinkerCapacity` as the Reset-side half of the
 round-35 rebind contract; a fresh execution's Prepare re-arms each
 sinker with the current workspace before any spill.
 
-Validation (logs under `/tmp/issue25590-r55/`, the round's handler
-artifacts):
-
-- RED on the pre-fix tree (production files stashed to the
-  `622a803baf` shape, tests present): both new regressions fail exactly
-  at the defect contract —
-  `TestMultiUpdateResetDropsCompletedExecutionCapacityHook` at
-  "reset drops the execution-scoped capacity hook" (hook still armed)
-  and `TestMultiUpdateResetReleasesCompletedWorkspaceRetention` at the
-  same drop assertion
-  (`red-multiupdate.log`, exit 1).
-- GREEN on the fixed tree, same filters: same tests pass
-  (`focused-multiupdate-retention.log` exit 0, then
-  `race-multiupdate.log` and `green-multiupdate-full.log` for the
-  package-level and race legs), the reclamation oracle included — a
-  hook-captured probe collects under forced GC while the delegate AND
-  its sinkers stay alive, so the collection claim cannot pass through
-  weakening the reuse contract; the next execution's Prepare re-arms
-  the binding (workspace-2 spill consults the current workspace only).
+Validation (maintained regressions; executed red/green, package and
+race logs archived outside the tree — header, delivery maintenance):
+`TestMultiUpdateResetDropsCompletedExecutionCapacityHook`,
+`TestMultiUpdateResetReleasesCompletedWorkspaceRetention` and the
+reclamation oracle — a probe captured by the hook collects under
+forced GC while the delegate AND its sinkers stay alive, so the
+release claim cannot pass by weakening the reuse contract — with the
+next execution's Prepare re-arming the binding against the current
+workspace.
 
 ## 10 design review record - round 55 (implementation follow-up): the transferred fragment settlement tears down its local workspace, and segment claims retire per ledger
 
-The request-changes review on PR #30988 head `622a803baf` (inline
-finding at `pkg/sql/compile/remoterunServer.go:331` P1): when
+The request-changes review (inline finding at
+`pkg/sql/compile/remoterunServer.go:331`, P1): when
 `transferred` is true, `FinalizeRemoteFragmentWorkspace` releases the
 object-name accounting and returns without calling `delTransaction`;
 the false leg calls Rollback, which performs the full local teardown. A
@@ -5649,40 +5237,25 @@ Deliberately unchanged, recorded for round completeness:
 - The failed leg (`Rollback`) and every other `delTransaction` caller
   are unchanged.
 
-Validation (logs under `/tmp/issue25590-r55/`, the round's handler
-artifacts):
-
-- RED on the pre-fix tree (production files stashed to the
-  `622a803baf` shape, tests present):
-  `TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace`
-  fails at "a successful transfer terminates the mirror workspace — no
-  other terminal ever reaches it" (`red-disttae-teardown.log`, exit 1);
-  `TestTxnWorkspaceSegmentsRetireOnlyWhenLastClaimRetires` fails at
-  "the recording workspace's claim keeps the entry routing while that
-  workspace is live" — the parent's whole-key deletion removed the
-  entry the recording claim still needed
-  (`red-colexec-dualclaim.log`, exit 1).
-- GREEN on the fixed tree, same tests: the transferred settlement
-  restores the mirror's mpool baseline (on-heap outstanding restored
-  to the pre-stage baseline), retires the mirror's sole-claim
-  registration, keeps both probed objects on the filesystem (the
-  coordinator's recorded names own their fate), retires the
-  workspace accounting and pending obligations, and leaves the
-  re-claimed entry routing until the recording workspace's own
-  terminal — where the LAST claim retires it
-  (`green-disttae-transfer.log` exit 0 for the full transfer family
-  including the five pre-existing settlement legs and the round-49
-  segment-retirement regression unchanged;
-  `focused-colexec-segments.log` exit 0 for the whole
-  `TestTxnWorkspaceSegments` family; `race-colexec-disttae.log` and
-  `race-multiupdate.log` for the race legs;
-  `green-disttae-issue25590.log` / `green-colexec-full.log` /
-  `green-multiupdate-full.log` for the owning-package sweeps).
+Validation (maintained regressions; executed red/green, transfer,
+family and race logs archived outside the tree — header, delivery
+maintenance):
+`TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace`
+(the transferred terminal restores the mirror's mpool baseline,
+retires its workspace accounting and its own segment claims, and
+leaves both adopted objects on the filesystem on their recorded-name
+fate) and
+`TestTxnWorkspaceSegmentsRetireOnlyWhenLastClaimRetires` (a
+dual-claimed entry keeps routing for the recording workspace until
+that workspace's own terminal retires the last claim), with the five
+pre-existing settlement legs, the round-49 segment-retirement
+regression, the `TestTxnWorkspaceSegments` family and both owning
+packages' suites re-run green, including the race legs.
 
 ## 10 design review record - round 57 (implementation follow-up): the capacity ledger's retained-name membership retires per workspace claim
 
-The request-changes review on PR #30988 head `9df36413c2` (finding P2
-at `pkg/vm/engine/disttae/txn.go:1818`): two workspaces of the SAME
+The request-changes review (P2 at
+`pkg/vm/engine/disttae/txn.go:1818`): two workspaces of the SAME
 Engine record a transferred object — the exact same-CN re-recording
 case the round-55 record documents as supported production topology —
 but the unpublished-pending capacity ledger held ONE shared
@@ -5754,60 +5327,27 @@ Deliberately unchanged, recorded for round completeness:
   round-40 terminal detach keep their exact semantics; the claim set
   is membership-side state, enqueued and deleted names carry none.
 
-Validation (logs under `/tmp/issue25590-r57/`, the round's handler
-artifacts):
-
-- RED on the pre-fix tree (the new production-path regression
-  present, production files unchanged):
-  `TestIssue25590SharedEngineReRecordKeepsLedgerCapacityThroughTransfer`
-  fails at "the fragment's settlement keeps the recording workspace's
-  claim counted" — the transferred settlement dropped the shared
-  membership and `live` fell to 0 while the recorder and its file
-  remained (`red-fixture.log`, exit 1).
-- GREEN on the fixed tree, same regression: `live` stays 1 through
-  the fragment's settlement, the first further reservation passes and
-  the second is refused fail-closed (the distinct-engine control's
-  verdict), the recorder's own terminal retires the final claim and
-  the capacity, the object's physical file survives both settlements
-  on its record's fate, and the full bound returns afterwards
-  (`green-fixture.log` exit 0). The unit-level matrix
-  `TestIssue25590LedgerPublishedReleaseRetiresPerWorkspaceClaim` pins
-  the claim sets directly: duplicate records stay idempotent per
-  (workspace, name), one workspace's release never touches another's
-  claim, the final claim retires membership and capacity, and the
-  enqueue/deletion classes keep whole-membership retire.
-- The owning corpora on the fixed tree: the disttae
-  `TestIssue25590` corpus passes (`p1-disttae-issue25590.log` exit 0,
-  41.337s), the verbose name-proof lists the two new regressions plus
-  the round-55 settlement and segment families passing
-  (`verbose-touched.log` exit 0, 4 PASS), the colexec parent package —
-  the `TestTxnWorkspaceSegments` per-claim corpus's home — passes
-  (`ok 6.678s` inside `p2-colexec-full.log`), the full multi_update
-  package passes (`p3-multiupdate-full.log` exit 0), and the
-  external-package engine-test drivers pass
-  (`p4-engine-test-drivers.log` exit 0); the race leg of the two new
-  regressions plus both settlement families passes
-  (`p5-race-disttae-ledger.log` exit 0). gofmt, `go vet` and
-  `golangci-lint --new-from-rev HEAD ./pkg/vm/engine/disttae` are
-  clean (0 issues).
-- Environmental classifier, recorded because the round's colexec
-  sweep used the `/...` pattern for the first time: five UPSTREAM
-  colexec subpackages (top, fill, adaptivetop, dedupjoin, mergeorder)
-  fail the same spill-budget-accounted test families on this host, and
-  the SAME failures reproduce at the verified clean baseline — the
-  round-57 diff stashed, pristine `9df36413c2` — with identical names
-  and the identical `resource exhausted: spill disk budget` class
-  (`baseline-spill.log`, exit 1). The failures therefore pre-exist
-  this round's change, in upstream-owned ground this PR never
-  touched; the same families are green in this head's Linux CI `UT
-  Test on Ubuntu/x86` run, so the residual is a local-host condition
-  of the spill test surface, not code evidence — reported, not
-  worked around.
+Validation (maintained regressions; executed red/green, corpus and
+race logs archived outside the tree — header, delivery maintenance):
+`TestIssue25590SharedEngineReRecordKeepsLedgerCapacityThroughTransfer`
+(the fragment's settlement keeps the recording workspace's claim
+counted — `live` stays 1 through the transfer, the first further
+reservation passes and the second is refused fail-closed, and the
+recorder's own terminal retires the final claim and the capacity)
+and `TestIssue25590LedgerPublishedReleaseRetiresPerWorkspaceClaim`
+(the claim matrix: duplicate records stay idempotent per (workspace,
+name), one workspace's release never touches another's claim, the
+final claim retires membership and capacity, and the enqueue and
+deletion classes keep whole-membership retire). The re-run envelope:
+the disttae `TestIssue25590` corpus, the colexec parent package, the
+multi_update package, the external engine-test drivers, the race leg
+of the new and affected families, and gofmt/vet/golangci-lint clean
+over the changed closure.
 
 ## 10 design review record - round 58 (implementation follow-up): the accepted GC delete batch holds the stalled name's capacity as an engine-owned claim
 
-The request-changes review on PR #30988 head `7c75f3e07b` (finding P2
-at `pkg/vm/engine/disttae/txn.go:3906`): intermediate-object
+The request-changes review (P2 at
+`pkg/vm/engine/disttae/txn.go:3906`): intermediate-object
 compaction (the `compactDeletionOnObjsLocked` tail's `GCObjsByStats`
 after `releaseWorkspaceEntryBatchLocked` removed the originals'
 entries) and dropped-table cleanup (`mergeTxnWorkspaceLocked`'s
@@ -5905,134 +5445,62 @@ obligation, the published replacement files survive, and (stronger
 than before) both superseded originals' files are provably removed by
 their accepted delete jobs.
 
-Validation (logs under `/tmp/issue25590-r58/`, the round's handler
-artifacts):
-
-- RED on the pre-fix tree: the production diff stashed aside
-  (`git stash`, restored after), the reviewed head `7c75f3e07b`
-  rebuilding with only the new regressions present.
-  `TestIssue25590AcceptedGCDeletionObligationKeepsCapacityThroughCommit`
-  fails at exactly the review's classification — `live` 0 where the
-  retained obligation requires 1 at the commit terminal
-  (`red-pristine.log`, exit 1; the earlier red-fixture.log captured the
-  identical failure before the controlled stash rerun).
-- GREEN on the fixed tree, same regression plus the round's other
-  orders: the stalled obligation stays counted through
-  `FinalizeCommit` (`live` 1), exactly one further reservation passes
-  the bound-2 engine and the second is refused fail-closed, the
-  recovered worker's settle alone returns the full capacity
-  (`green-family.log` `green-rerun.log`); the settle-first order
-  proves the settlement — never a terminal — returns the deleted
-  object's capacity; the released-pool order proves the refused
-  submission's lossless queue handoff counts exactly one unit
-  (`p2-verbose-touched.log` exit 0, all eight name-proofs PASS).
-  `TestIssue25590EngineOwnedGCClaimOutlivesFinalClaimRelease` and
-  `...RefCountAndUnwind` pin the mechanics directly: the final-claim
-  release keeps the engine-owned claim counted for every claimant
-  count, duplicate accepted batches retire one reference per settle
-  (the first settle frees the unit whole per round-57's deleted-file
-  class), the submit-failure unwind leaves no phantom claim behind
-  the queue's slot, and both claim maps close empty.
-- The round-41 weak-ref regression now asserts this round's contract
-  (`live=1` while the worker stays parked, 0 after its settle — the
-  immediate post-commit assertion and the recovery tail both updated
-  with the ledger-sync point) and still passes both original
-  collection checks: the completed transaction stays collectible
-  while its obligation stays counted (`p2`, `p5`).
-- The round-34 failed-merge recovery passes on the updated tail
-  (`reladder-r34.log`, verbose PASS); the whole disttae
-  `TestIssue25590` corpus passes (`reladder-p1-issue25590.log`), the
-  FULL `pkg/vm/engine/disttae` package passes with ONLY the
-  round-34-family delta resolved (`p3-disttae-full.log`: the
-  pre-update run failed exactly that one test, exit 1; the
-  post-update corpus exit recorded in the reladder log), the external
-  `pkg/vm/engine/test` drivers pass (`p4-engine-test.log` `ok`
-  370.353s, exit 0), and the race leg of every new and affected family
-  passes (`p5-race-disttae-ledger.log` exit 0).
-- Static: `gofmt -l` clean on the changed closure, `go vet` clean
-  through the wrapper's CGo environment (`static-vet.log`, vet exit
-  0), and `golangci-lint run --new-from-rev HEAD
-  ./pkg/vm/engine/disttae` — under the same environment, after its own
-  two ineffassign findings in the new matrix regression were fixed —
-  reports 0 issues (`static-lint3.log`, exit 0).
+Validation (maintained regressions; executed red/green, package,
+race and static logs archived outside the tree — header, delivery
+maintenance):
+`TestIssue25590AcceptedGCDeletionObligationKeepsCapacityThroughCommit`
+(its family of orders: the stalled obligation stays counted through
+`FinalizeCommit`, the settle-first order proves the settlement —
+never a terminal — returns the deleted object's capacity, and the
+released-pool order proves the refused submission's lossless queue
+handoff counts exactly one unit),
+`TestIssue25590EngineOwnedGCClaimOutlivesFinalClaimRelease` and the
+refcount/unwind matrix (the final-claim release keeps the engine-owned
+claim counted for every claimant count; duplicate accepted batches
+retire one reference per settle; the submit-failure unwind leaves no
+phantom claim behind the queue's slot), the round-41 weak-ref
+regression re-pinned to the same contract, and the updated round-34
+failed-merge recovery tail (the terminal publishes the payload's
+members; the settle retires the superseded originals' units with
+their files provably removed). The re-run envelope: the full disttae
+`TestIssue25590` corpus, the full disttae package, the external
+engine-test drivers, the race legs of every new and affected family,
+and gofmt/vet/golangci-lint clean on the changed closure.
 
 ## 10 design review record - round 59 (CI follow-up): the r58 recovery leg waits the settle's ledger retire
 
-CI run 40798664858 (head 8b41e39227, attempt 1, terminal 02:57:45Z)
-triaged: the round-58 regression
-TestIssue25590AcceptedGCDeletionObligationKeepsCapacityThroughCommit
-failed at the recovery tail (`txn_issue25590_r58_test.go:302`, live 1
-where the settled bound requires 0) on a throttle-starved runner (the
-job heartbeat shows 19-24 live test processes, 11.4-14.2 GiB of the
-16 GiB limit, and ~749 s of accumulated cgroup CPU throttle). The
-root cause is test-side; the production bytes are untouched. The leg
-waited FILE-GONE and asserted LEDGER-ZERO immediately, but gcFiles'
-worker settles the ledger only after DeleteUnpublishedObjects returns
-on the whole batch, so the file-gone observation can legitimately
-precede the membership retire — the same window r41's recovery tail,
-the r58 settle-before-commit order, and the round-34 tail already
-guard with a ledger-sync `Eventually`. The CI log itself pins the
-interleaving: at the failing check the stalled obligation's membership
-was still retained while the file was already absent, exactly the
-inherent ordering gap — not a settle that never happens.
+The first full-UT CI lane of the round-58 head failed exactly one of
+this PR's cases,
+`TestIssue25590AcceptedGCDeletionObligationKeepsCapacityThroughCommit`,
+at the recovery tail (`live` 1 where the settled bound requires 0), on
+a load-starved runner. The root cause is test-side; the production
+bytes are untouched. The leg had waited file-gone and asserted
+ledger-zero immediately, but gcFiles' worker settles the ledger only
+after `DeleteUnpublishedObjects` returns on the whole batch, so the
+file-gone observation can legitimately precede the membership retire —
+the same window the r41 recovery tail, the r58 settle-before-commit
+order and the round-34 tail already guard with a ledger-sync
+`Eventually`; the failing lane's own log pinned the interleaving
+exactly (membership still retained with the file already absent).
+The same lane's remaining failures matched pre-existing tracked flake
+classes (#31044, #8767, #30949) whose test binaries do not even link
+this PR's code or whose bytes were identical between the adjacent
+green run; their disposition lives on those issues, not in this
+document.
 
 Decision (no invariant, interface or production change): the recovery
 leg takes the same bounded ledger-sync point — `Eventually`(queued
-empty, `live` 0, `inFlight` 0; 10 s, 10 ms tick) — before asserting
-the settled bound re-opens. The proven contract is unchanged (the
-settle alone returns the stalled obligation's capacity; no terminal,
-no caller waits on storage), and a product that failed to retire the
-claim would still fail the bounded wait. The whole diff is one test
-file.
+empty, `live` 0, `inFlight` 0) — before asserting the settled bound
+re-opens. The proven contract is unchanged: the settle alone returns
+the stalled obligation's capacity; no terminal, no caller waits on
+storage. The whole diff is one test file.
 
-The same run's other failures match pre-existing flake classes,
-verified against the immediately preceding green run 40778977585
-(head 7c75f3e07b passed the same UT and PROXY jobs at 23:18:54Z; the
-only delta to the failed head is the round-58 disttae commit):
-
-- pkg/embed TestCrossTargetUpgradeRecovery hung polling
-  `mo_upgrade state = 1` until the 37m7s package alarm — the #31044
-  cross-process cluster-admission hang class.
-- pkg/logservice TestAddScheduleCommands died in a hakeeper propose
-  timeout after no-leader churn — the #8767 class;
-  `pkg/logservice` imports neither `disttae` nor `colexec`, so the
-  round-58 commit cannot even link into that test binary.
-- The PROXY compose BVT failed 5/324 statements of
-  `pub_sub_data_branch.sql`, all cascading from one transient
-  subscription-source resolve miss at its B6 case — the #30949
-  regression coverage added by fix #31039, whose frontend bytes are
-  identical between the green and the failed run.
-
-The Coverage gate failed fail-closed (`PREREQUISITES_READY: false`,
-no verdict) and CI Required projects them — aggregates, not separate
-root causes. Reproduction records were posted on issues #31044,
-#8767 and #30949; no rerun of run 40798664858 was issued (its UT
-failure set contained this PR's own race; the head advances with the
-push, starting a fresh run).
-
-Validation (logs under `/tmp/issue25590-r59/`, the round's handler
-artifacts):
-
-- GREEN, blocked retry order now deterministic: the r58 family — the
-  accepted-stall order the CI failed, the settle-first order, and the
-  submit-failure order — passes 3x consecutive on the fixed tree
-  (`r58_family.log`, `ok 3.624s`, exit 0) and verbose per-test
-  (`r58_family_verbose.log`: all three `--- PASS`, `ok 5.235s`,
-  exit 0), the CI-failing test's recovery leg settling through the
-  new bounded wait.
-- The full disttae `TestIssue25590` corpus stays green on the fixed
-  tree (`corpus-25590.log`, `ok 44.985s`, exit 0).
-- Static: `gofmt -l` clean on the changed closure (single test file,
-  +12 lines).
-- Reused evidence: the round-58 production code, its red/green proof,
-  the external engine-test drivers and the race leg stand unchanged —
-  this round edits no production byte; the round-59 commit's own
-  corpus rerun above re-covers the package on the fixed tree.
+The executed corpus reruns and the CI run identities for this round
+are archived outside the tree (header, delivery maintenance).
 
 ## 10 design review record - round 60 (implementation follow-up): the accepted GC worker transfers a FAILED delete batch to the bounded retry owner instead of settling it
 
-The request-changes review on PR #30988 head `a52b906996` (2026-10-29
-15:23Z, the review's single finding): an accepted GC worker treated an
+The request-changes review's single finding: an accepted GC worker treated an
 UNSUCCESSFUL DeleteUnpublishedObjects call as a completed deletion —
 it logged the storage error, then unconditionally settled the whole
 ledger batch (settleUnpublishedPendingDeleted retires the membership,
@@ -6065,9 +5533,7 @@ tick, settled only at deletion or not-found. The r58 record pinned the
 accepted job's capacity claim but never defined the settle's trigger;
 the implementation had conflated "the worker's storage call returned"
 with "the deletion is proven". The r57/r58 settle classes are
-whole-membership ON A PROOF; the correction restores that trigger. The
-PR-body round-60 work (the RC tombstone transfer, head `19358d2881`) is
-the round-59 review's own follow-up and needed no design record of its
+whole-membership ON A PROOF; the correction restores that trigger. The RC-tombstone transfer of the round-60 review period is the round-59 review's own follow-up and needed no design record of its
 own; the numbering below continues the review sequence.
 
 Decision (inside the approved I2/I4 terms):
@@ -6124,42 +5590,23 @@ Deliberately unchanged, recorded for round completeness:
   refcount and refreshes the holder registration on the deduped name
   in the same pass.
 
-Validation (logs under `/tmp/issue25590-r60/`, the round's handler
-artifacts):
-
-- RED on the pre-fix head (the three round-60 regressions with the
-  production + helper diff stashed aside, i.e. the reviewed head
-  `a52b906996` tree minus the round-60 changes): all three fail at the
-  review's own sentence — the accepted worker's failed delete never
-  reached the queue (`red-r60.log`, exit 1: each regression fails its
-  `Eventually` on the queue membership with the batch settled, `live`
-  0 and the name lost).
-- GREEN on the fixed tree, same three regressions (`green-r60.log`,
-  exit 0, all `--- PASS`): the whole-batch failure requeues losslessly
-  (both names queued, `live` 0, capacity held: a further reservation
-  is refused at the bound of two while the files exist), the
-  recorded-name holder keeps tracking through the outage, the recovery
-  drain deletes both objects and retires the ledger, the recorded
-  copies and the full bound; the mid-batch order applies the first
-  file, fails the whole unproven call, requeues all three names,
-  tolerates the absent prefix on recovery and settles the whole batch
-  per file; the terminal order proves the queued obligation survives
-  the commit with the completed transaction's owner entries detached
-  and the emptied holder settling nothing while the drain still
-  deletes and closes the ledger whole.
-- Owning corpora on the fixed tree: the full disttae `TestIssue25590`
-  corpus passes on the extended head (`p1-disttae-issue25590.log`,
-  `ok 44.407s`, exit 0 — the new three are part of the corpus); the
-  verbose name-proof of every touched ledger family passes
-  (`p2-verbose-touched.log`, 13 `--- PASS`: the three round-60
-  regressions, the full r58 family and its refcount matrix, the r40
-  detached-ownerpair, the r41 worker-stall collection, the r57 claim
-  matrix and the round-8 handoff recovery); the race leg of the new
-  and affected families passes (`p3-race-touched.log`, `ok 4.147s`,
-  exit 0); `go vet` on the package closure passes through the CGo
-  environment (`p4-static-vet.log`, exit 0 — the worktree checkout
-  ships only the `mo-cgo-test` wrapper, so the vet ran through an
-  environment-equivalent scratch wrapper outside the repository);
-  the external `pkg/vm/engine/test` issue-25590 drivers pass
-  (`p5-engine-test.log`, `ok 5.871s`, exit 0); `gofmt -l` clean on the
-  changed closure.
+Validation (maintained regressions; executed red/green, corpus and
+race logs archived outside the tree — header, delivery maintenance):
+the round-60 regressions pin the review's exact orders — the
+whole-batch failure order (both names requeued losslessly, capacity
+held for the whole outage, the recovery drain deletes both objects and
+closes the ledger, the recorded copies and the full bound), the
+mid-batch order (the first file applied, the whole unproven call
+requeues all three names, the absent prefix tolerated on recovery and
+the batch settled per file) and the terminal order (the queued
+obligation survives the commit with the completed transaction's owner
+entries detached, and the emptied holder settles nothing while the
+drain still deletes and closes the ledger whole). The re-run
+envelope: the full disttae `TestIssue25590` corpus with the three new
+regressions included, the verbose name-proof of every touched ledger
+family (the round-60 regressions, the full r58 family and its
+refcount matrix, the r40 detached-owner pair, the r41 worker-stall
+collection, the r57 claim matrix and the round-8 handoff recovery),
+the race leg of the new and affected families, vet/gofmt clean over
+the changed closure, and the external `pkg/vm/engine/test`
+issue-25590 drivers.
