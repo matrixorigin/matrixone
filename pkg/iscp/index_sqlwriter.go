@@ -301,6 +301,7 @@ func NewFulltextSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef
 
 	w.indexTableName = w.indexdef[0].IndexTableName
 	w.dbName = tabledef.DbName
+	w.param = w.indexdef[0].IndexAlgoParams
 
 	return w, nil
 }
@@ -340,13 +341,9 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	cnames := make([]string, 0, len(w.srcPos))
 	for i, pos := range w.srcPos {
 		typstr := w.srcType[i].DescString()
-		// Alias is quoted (byte-identical to the old `name` wrapping for ordinary
-		// names, safe for special chars). cnames keeps the RAW name: it feeds the
-		// column references in fulltext_index_tokenize(...) below, and quoting
-		// those would change that call's SQL for every column — keep it identical
-		// to the original.
+		// Both the alias and its subsequent reference represent one atomic name.
 		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, sqlquote.Ident(w.tabledef.Cols[pos].Name)))
-		cnames = append(cnames, w.tabledef.Cols[pos].Name)
+		cnames = append(cnames, sqlquote.Ident(w.tabledef.Cols[pos].Name))
 	}
 
 	cols := strings.Join(coldefs, ", ")
@@ -361,7 +358,7 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	}
 
 	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s) as __mo_iscp_values) ", cols, string(w.vbuf))
-	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", w.param, w.pkType.Oid, cnames_str)
+	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize(%s, %d, %s) as f", sqlquote.String(w.param), w.pkType.Oid, cnames_str)
 
 	return []byte(sql), nil
 }

@@ -3,6 +3,7 @@
 """Statement-scoped LOCAL file authority on SDK-owned physical connections."""
 
 import os
+import weakref
 from contextlib import contextmanager
 
 from pymysql.constants import CLIENT
@@ -39,7 +40,7 @@ def _physical_driver(dbapi_connection):
 
 class _LocalFileGuard:
     def __init__(self, driver):
-        self.driver = driver
+        self.driver = weakref.proxy(driver)
         self.path = None
         self.consumed = False
         self.reading = False
@@ -71,17 +72,32 @@ def _install_guard(dbapi_connection):
     driver._local_infile = False
     # Validate both instance-method mutation points before SQLAlchemy owns the
     # connection; unsupported driver shapes must fail closed during setup.
+    packet_was_instance = '_read_packet' in vars(driver)
+    packet_value = vars(driver).get('_read_packet')
     driver._read_packet = driver._read_packet
+    if packet_was_instance:
+        driver._read_packet = packet_value
+    else:
+        del driver._read_packet
     guard = _LocalFileGuard(driver)
-    read_result = driver._read_query_result
+    driver_ref = weakref.ref(driver)
+    original = driver._read_query_result
+    bound = getattr(original, '__self__', None) is driver
+    read_function = original.__func__ if bound else original
     import inspect
 
-    if inspect.iscoroutinefunction(read_result):
+    if inspect.iscoroutinefunction(read_function):
 
         async def read(*args, **kwargs):
+            driver = driver_ref()
+            if driver is None:
+                raise ReferenceError('Connection has been released')
+            read_result = read_function.__get__(driver, type(driver)) if bound else read_function
             if guard.reading:
                 guard.reject()
             guard.reading = True
+            packet_was_instance = '_read_packet' in vars(driver)
+            packet_value = vars(driver).get('_read_packet')
             read_packet = driver._read_packet
             first = True
 
@@ -97,16 +113,25 @@ def _install_guard(dbapi_connection):
             try:
                 return await read_result(*args, **kwargs)
             finally:
-                driver._read_packet = read_packet
+                if packet_was_instance:
+                    driver._read_packet = packet_value
+                else:
+                    del driver._read_packet
                 driver._local_infile = False
                 guard.reading = False
 
     else:
 
         def read(*args, **kwargs):
+            driver = driver_ref()
+            if driver is None:
+                raise ReferenceError('Connection has been released')
+            read_result = read_function.__get__(driver, type(driver)) if bound else read_function
             if guard.reading:
                 guard.reject()
             guard.reading = True
+            packet_was_instance = '_read_packet' in vars(driver)
+            packet_value = vars(driver).get('_read_packet')
             read_packet = driver._read_packet
             first = True
 
@@ -122,7 +147,10 @@ def _install_guard(dbapi_connection):
             try:
                 return read_result(*args, **kwargs)
             finally:
-                driver._read_packet = read_packet
+                if packet_was_instance:
+                    driver._read_packet = packet_value
+                else:
+                    del driver._read_packet
                 driver._local_infile = False
                 guard.reading = False
 

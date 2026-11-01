@@ -148,6 +148,13 @@ func NewCompile(
 	c.sql = sqlmongodb.RedactSQLForDiagnostics(sql)
 	c.proc.SetMessageBoard(c.MessageBoard)
 	c.sequenceState = captureSequenceStatementState(proc)
+	// One fresh tier-2 retry state per statement execution (design §4 D):
+	// publication unset, no retry window until this statement's own first
+	// arbitrated admission. Retry generations carry this instance over the
+	// reseed (buildRetryCompile re-installs it after calling NewCompile), so
+	// the flag and the sticky window survive retries of THIS statement while
+	// a new statement can never inherit a predecessor's window.
+	proc.ReplaceSequenceRetryState(process.NewSequenceRetryState())
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -305,6 +312,10 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
 	c.sequenceState = captureSequenceStatementState(proc)
+	// Per-statement tier-2 retry state (see NewCompile): a pooled Compile
+	// serving a new query starts with a fresh publication flag and no retry
+	// window.
+	proc.ReplaceSequenceRetryState(process.NewSequenceRetryState())
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.applyPlanSnapshot()
 	c.captureStringShuffleHashAlgorithm()

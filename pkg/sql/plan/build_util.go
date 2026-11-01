@@ -2160,7 +2160,7 @@ func expandDefaultExprsInValueScan(
 			if expr, ok := defaultExprs[colIdx]; ok {
 				return expr, true
 			}
-			expr, err := getDefaultExpr(ctx, tableDef.Cols[colIdx])
+			expr, err := getDefaultExpr(ctx, tableDef.Cols[colIdx], tableDef.DbName)
 			if err != nil {
 				resolveErr = err
 				return nil, false
@@ -2494,7 +2494,7 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		// Replace the persisted assignment wrapper, not a user-written
 		// explicit CAST inside the expression. Validate its final value once.
 		if f != nil && f.Func != nil && len(f.Args) > 0 &&
-			(f.Func.ObjName == "cast" || f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_strict" || f.Func.ObjName == "cast_ignore") {
+			IsAssignmentCastFamilyName(f.Func.ObjName) {
 			expr = f.Args[0]
 		}
 		return builder.forceAssignmentCastExpr(expr, target, isIgnore)
@@ -2665,8 +2665,10 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 // getDefaultExprForAssignment restores a catalog default under the current
 // statement policy. The column owns the byte limit, including for legacy
 // expressions that lack an assignment wrapper or carry stale type widths.
-func getDefaultExprForAssignment(ctx context.Context, col *plan.ColDef, proc *process.Process, ignore bool) (*Expr, error) {
-	expr, err := getDefaultExpr(ctx, col)
+// ownerDb is the database of the table owning the default; unqualified
+// sequence functions inside it are pinned to that database.
+func getDefaultExprForAssignment(ctx context.Context, col *plan.ColDef, ownerDb string, proc *process.Process, ignore bool) (*Expr, error) {
+	expr, err := getDefaultExpr(ctx, col, ownerDb)
 	if err != nil {
 		return nil, err
 	}
@@ -2691,7 +2693,11 @@ func getDefaultExprForAssignment(ctx context.Context, col *plan.ColDef, proc *pr
 	return forceAssignmentCastExprWithProcess(ctx, expr, col.Typ, ignore, proc, col.Name)
 }
 
-func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
+// getDefaultExpr restores a catalog default expression. ownerDb is the
+// database of the table owning d; sequence functions referenced without a
+// database are pinned to it so evaluation never resolves them in the caller's
+// current database.
+func getDefaultExpr(ctx context.Context, d *plan.ColDef, ownerDb string) (*Expr, error) {
 	if d == nil {
 		return nil, moerr.NewInvalidInput(ctx, "cannot resolve default value for a missing column definition")
 	}
@@ -2725,7 +2731,50 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	}
 	newDefExpr := DeepCopyExpr(d.Default.Expr)
 	err := replaceFuncId(ctx, newDefExpr)
-	return newDefExpr, err
+	if err != nil {
+		return newDefExpr, err
+	}
+	pinSequenceFunctionsToOwnerDb(newDefExpr, ownerDb)
+	return newDefExpr, nil
+}
+
+// pinSequenceFunctionsToOwnerDb appends the owner table's database as the
+// internal trailing argument of every unqualified nextval/currval/setval call
+// in a restored default expression, so execution-time sequence resolution uses
+// the table owner's database instead of the caller's current one.  It mirrors
+// the view-expansion pin in base_binder.bindFuncExprImplByAstExpr, including
+// the SETVAL arity normalization; calls that already carry a database are left
+// untouched.  A no-op when ownerDb is empty.
+func pinSequenceFunctionsToOwnerDb(expr *plan.Expr, ownerDb string) {
+	if expr == nil || ownerDb == "" {
+		return
+	}
+	fn, ok := expr.Expr.(*plan.Expr_F)
+	if !ok || fn.F == nil || fn.F.Func == nil {
+		return
+	}
+	for _, arg := range fn.F.Args {
+		pinSequenceFunctionsToOwnerDb(arg, ownerDb)
+	}
+	switch strings.ToLower(fn.F.Func.ObjName) {
+	case "nextval", "currval":
+		if len(fn.F.Args) == 1 {
+			fn.F.Args = append(fn.F.Args, makePlan2StringConstExprWithType(ownerDb))
+			fid, _ := function.DecodeOverloadID(fn.F.Func.Obj)
+			fn.F.Func.Obj = function.EncodeOverloadID(fid, 1)
+		}
+	case "setval":
+		// Normalize the optional is_called argument before appending the
+		// database, matching the single internal four-argument overload.
+		if len(fn.F.Args) == 2 {
+			fn.F.Args = append(fn.F.Args, makePlan2BoolConstExprWithType(true))
+		}
+		if len(fn.F.Args) == 3 {
+			fn.F.Args = append(fn.F.Args, makePlan2StringConstExprWithType(ownerDb))
+			fid, _ := function.DecodeOverloadID(fn.F.Func.Obj)
+			fn.F.Func.Obj = function.EncodeOverloadID(fid, 2)
+		}
+	}
 }
 
 func replaceFuncId(ctx context.Context, expr *Expr) error {

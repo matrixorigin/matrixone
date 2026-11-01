@@ -1135,17 +1135,17 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 	ctx := context.Background()
 	intTyp := expressionDefaultIntType()
 
-	_, err := getDefaultExpr(ctx, nil)
+	_, err := getDefaultExpr(ctx, nil, "")
 	require.ErrorContains(t, err, "missing column definition")
 
 	nonNullable := &planpb.ColDef{Name: "required", Typ: planpb.Type{
 		Id: int32(types.T_int64), NotNullable: true,
 	}}
-	_, err = getDefaultExpr(ctx, nonNullable)
+	_, err = getDefaultExpr(ctx, nonNullable, "")
 	require.ErrorContains(t, err, "invalid default value")
 
 	nullable := &planpb.ColDef{Name: "nullable", Typ: intTyp}
-	expr, err := getDefaultExpr(ctx, nullable)
+	expr, err := getDefaultExpr(ctx, nullable, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 	require.False(t, expr.Typ.NotNullable)
@@ -1153,7 +1153,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 	auto := &planpb.ColDef{Name: "id", Typ: planpb.Type{
 		Id: int32(types.T_int64), NotNullable: true, AutoIncr: true,
 	}}
-	expr, err = getDefaultExpr(ctx, auto)
+	expr, err = getDefaultExpr(ctx, auto, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 	require.False(t, expr.Typ.NotNullable)
@@ -1165,7 +1165,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 			NullAbility: false,
 		},
 	}
-	_, err = getDefaultExpr(ctx, invalidMetadata)
+	_, err = getDefaultExpr(ctx, invalidMetadata, "")
 	require.ErrorContains(t, err, "invalid default value")
 
 	autoInvalidMetadata := &planpb.ColDef{
@@ -1175,7 +1175,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 			NullAbility: false,
 		},
 	}
-	expr, err = getDefaultExpr(ctx, autoInvalidMetadata)
+	expr, err = getDefaultExpr(ctx, autoInvalidMetadata, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 
@@ -1183,7 +1183,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 		Name:    "explicit_null",
 		Typ:     intTyp,
 		Default: &planpb.Default{NullAbility: true},
-	})
+	}, "")
 	require.NoError(t, err)
 	require.True(t, expr.GetLit().GetIsnull())
 
@@ -1191,7 +1191,7 @@ func TestGetDefaultExprHandlesMissingAndNullableMetadata(t *testing.T) {
 		Name:    "explicit_value",
 		Typ:     intTyp,
 		Default: &planpb.Default{Expr: expressionDefaultInt(7)},
-	})
+	}, "")
 	require.NoError(t, err)
 	require.Equal(t, int64(7), expr.GetLit().GetI64Val())
 }

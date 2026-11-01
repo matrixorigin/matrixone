@@ -2690,8 +2690,10 @@ func dateStringInterval(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
+		// Match ParseDatetime normalization after success; diagnostics above use the raw input.
+		text = strings.TrimSpace(text)
 		// Compact 14-digit calendars carry a clock even without separators.
-		hasTimePart := strings.ContainsAny(text, " :") || len(text) >= 14 && isAllDigits(text)
+		hasTimePart := strings.ContainsAny(text, " :T") || len(text) >= 14 && isAllDigits(text[:14])
 		var formatted string
 		if !hasTimePart && !isTimeUnit {
 			formatted = dt.ToDate().String()
@@ -10669,11 +10671,10 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	//
 	// Precision: the result is materialized as []float32 (metric.PairwiseDistance* is
 	// float32-out by construction), which is the domain the scalar path answers in for float32
-	// elements. The two are NOT bit-identical for Metric_L2Distance: this path resolves
-	// L2DistanceSq[float32], which accumulates the square in float32, while the scalar
-	// moarray.L2Distance accumulates in float64 (l2DistanceF64, #29083). Measured at dim 768,
-	// 313 of 2000 random pairs differ, by at most 1.2e-07 relative -- one float32 ULP, the
-	// rounding this domain already carries. For float64 the resolver
+	// elements. The two are not guaranteed bit-identical for Metric_L2Distance: this path
+	// resolves L2DistanceSq[float32] and takes the root, while the scalar moarray.L2Distance
+	// calls metric.L2Distance[T]; both sum in float32, in an order that can differ, so a
+	// result can differ by one float32 ULP, the rounding this domain already carries. For float64 the resolver
 	// wraps the kernel in a float64->float32 cast: `l1_distance(vecf64_col, '[16777217]')`
 	// against [0] answers 16777216 where the scalar path answers 16777217. Distinct
 	// distances can collapse and reorder an ORDER BY, so float64 stays on the scalar path.

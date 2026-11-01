@@ -985,7 +985,7 @@ func getProjectNode(
 			continue
 		}
 
-		defExpr, err := getDefaultExprForAssignment(ctx.GetContext(), tableDef.Cols[i], ctx.GetProcess(), loadAssignmentIgnore(stmt))
+		defExpr, err := getDefaultExprForAssignment(ctx.GetContext(), tableDef.Cols[i], tableDef.DbName, ctx.GetProcess(), loadAssignmentIgnore(stmt))
 		if err != nil {
 			return false, err
 		}

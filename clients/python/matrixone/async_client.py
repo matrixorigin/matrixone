@@ -41,6 +41,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from ._telemetry import observe, pool_wait
 from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
+from .restore import AsyncRestoreManager
 from .account import AsyncAccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .branch import AsyncBranchManager
@@ -114,101 +115,6 @@ class AsyncResultSet:
 
     def __len__(self):
         return len(self.rows)
-
-
-class AsyncRestoreManager:
-    """Async manager for restore operations"""
-
-    def __init__(self, client):
-        self.client = client
-
-    async def restore_cluster(self, snapshot_name: str) -> bool:
-        """Restore entire cluster from snapshot asynchronously"""
-        try:
-            sql = f"RESTORE CLUSTER FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
-            result = await self.client.execute(sql)
-            return result is not None
-        except Exception as e:
-            raise RestoreError(f"Failed to restore cluster from snapshot '{snapshot_name}': {e}")
-
-    async def restore_tenant(self, snapshot_name: str, account_name: str, to_account: Optional[str] = None) -> bool:
-        """Restore tenant from snapshot asynchronously"""
-        try:
-            if to_account:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
-                    f"TO ACCOUNT {self.client._escape_identifier(to_account)}"
-                )
-            else:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
-                )
-
-            result = await self.client.execute(sql)
-            return result is not None
-        except Exception as e:
-            raise RestoreError(f"Failed to restore tenant '{account_name}' from snapshot '{snapshot_name}': {e}")
-
-    async def restore_database(
-        self,
-        snapshot_name: str,
-        account_name: str,
-        database_name: str,
-        to_account: Optional[str] = None,
-    ) -> bool:
-        """Restore database from snapshot asynchronously"""
-        try:
-            if to_account:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"DATABASE {self.client._escape_identifier(database_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
-                    f"TO ACCOUNT {self.client._escape_identifier(to_account)}"
-                )
-            else:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"DATABASE {self.client._escape_identifier(database_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
-                )
-
-            result = await self.client.execute(sql)
-            return result is not None
-        except Exception as e:
-            raise RestoreError(f"Failed to restore database '{database_name}' from snapshot '{snapshot_name}': {e}")
-
-    async def restore_table(
-        self,
-        snapshot_name: str,
-        account_name: str,
-        database_name: str,
-        table_name: str,
-        to_account: Optional[str] = None,
-    ) -> bool:
-        """Restore table from snapshot asynchronously"""
-        try:
-            if to_account:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"DATABASE {self.client._escape_identifier(database_name)} "
-                    f"TABLE {self.client._escape_identifier(table_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)} "
-                    f"TO ACCOUNT {self.client._escape_identifier(to_account)}"
-                )
-            else:
-                sql = (
-                    f"RESTORE ACCOUNT {self.client._escape_identifier(account_name)} "
-                    f"DATABASE {self.client._escape_identifier(database_name)} "
-                    f"TABLE {self.client._escape_identifier(table_name)} "
-                    f"FROM SNAPSHOT {self.client._escape_identifier(snapshot_name)}"
-                )
-
-            result = await self.client.execute(sql)
-            return result is not None
-        except Exception as e:
-            raise RestoreError(f"Failed to restore table '{table_name}' from snapshot '{snapshot_name}': {e}")
 
 
 class AsyncMoCtlManager:
@@ -1318,8 +1224,10 @@ class AsyncClient(BaseMatrixOneClient):
         start_time = time.time()
 
         try:
-            # Check if this is a SQLAlchemy statement
-            if not isinstance(sql_or_stmt, str):
+            non_transactional = is_non_transactional_statement(sql_or_stmt)
+            typed_statement = not isinstance(sql_or_stmt, str)
+            # Keep typed statements on their SQLAlchemy execution path.
+            if typed_statement and not non_transactional:
                 # SQLAlchemy statement - delegate to session for consistent behavior
                 async with self.session() as session:
                     # Suppress session-level logging; AsyncClient logs below
@@ -1354,18 +1262,17 @@ class AsyncClient(BaseMatrixOneClient):
                         )
                         return async_result
 
-            # String SQL - original implementation
-            mode_sensitive = not _driver_bound and params is not None and '\\' in sql_or_stmt
+            # Route standalone DDL on the same checkout used for execution.
+            mode_sensitive = not typed_statement and not _driver_bound and params is not None and '\\' in sql_or_stmt
             final_sql = (
                 sql_or_stmt
-                if _driver_bound
+                if _driver_bound or typed_statement
                 else None if mode_sensitive else self._substitute_parameters(sql_or_stmt, params)
             )
 
-            # MERGE/PICK require autocommit outside explicit sessions. Change
+            # Standalone DDL and MERGE/PICK require autocommit. Change
             # only this checkout, restoring its baseline before pool reuse.
             # Ordinary SQL retains the engine.begin() transaction path.
-            non_transactional = is_non_transactional_statement(sql_or_stmt)
             pool_wait()
             async with self._engine.connect() if non_transactional else self._engine.begin() as conn:
                 restore_autocommit = False
@@ -1389,7 +1296,9 @@ class AsyncClient(BaseMatrixOneClient):
                         await conn.exec_driver_sql("SET autocommit = 1")
                     # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
                     # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-                    if hasattr(conn, 'exec_driver_sql'):
+                    if typed_statement:
+                        result = await conn.execute(sql_or_stmt, params or {})
+                    elif hasattr(conn, 'exec_driver_sql'):
                         # Escape % to %% for pymysql's format string handling
                         escaped_sql = final_sql if _driver_bound else final_sql.replace('%', '%%')
                         if _driver_bound:
@@ -1426,17 +1335,18 @@ class AsyncClient(BaseMatrixOneClient):
                                 raise
 
                 execution_time = time.time() - start_time
+                sql_display = sql_or_stmt if not typed_statement else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
 
                 if result.returns_rows:
                     from ._query_compilation import buffer_result
 
                     async_result = buffer_result(AsyncResultSet, result)
                     rows = async_result.rows
-                    self.logger.log_query(sql_or_stmt, execution_time, len(rows), success=True, log_mode=log_mode)
+                    self.logger.log_query(sql_display, execution_time, len(rows), success=True, log_mode=log_mode)
                     return async_result
                 else:
                     async_result = AsyncResultSet([], [], affected_rows=result.rowcount)
-                    self.logger.log_query(sql_or_stmt, execution_time, result.rowcount, success=True, log_mode=log_mode)
+                    self.logger.log_query(sql_display, execution_time, result.rowcount, success=True, log_mode=log_mode)
                     return async_result
 
         except Exception as e:

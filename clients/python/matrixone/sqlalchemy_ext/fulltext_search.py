@@ -1304,6 +1304,7 @@ class FulltextSearchBuilder:
         self._search_mode = FulltextSearchMode.NATURAL_LANGUAGE
         self._algorithm = None
         self._query_obj = FulltextQueryBuilder()
+        self._raw_query = ''
         self._include_score = False
         self._where_conditions: List[str] = []
         self._order_by: Optional[str] = None
@@ -1417,8 +1418,11 @@ class FulltextSearchBuilder:
 
         Note: This method resets any previously added terms, phrases, or wildcards.
         """
+        string_grammar_token(query_string)
+        if not query_string.strip():
+            raise ValueError('Query is required')
         self._query_obj = FulltextQueryBuilder()
-        self._query_obj.encourage(query_string)
+        self._raw_query = query_string
         return self
 
     def add_term(
@@ -1613,7 +1617,7 @@ class FulltextSearchBuilder:
         if not self._columns:
             raise ValueError("Search columns are required")
 
-        query_string = self._query_obj.build()
+        query_string = ' '.join(part for part in (self._raw_query, self._query_obj.build()) if part)
         if not query_string:
             raise ValueError("Query is required")
 
