@@ -587,6 +587,46 @@ func TestLikePrefixKeepsSelectiveINBackfill(t *testing.T) {
 	require.True(t, planHasIndexJoin(query), "unavailable prefix statistics cannot hide ordinary IN")
 }
 
+func TestLikePrefixKeepsSelectiveCoveringRange(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	addIndexHintChoiceTableForTest(mock)
+	table := mock.ctxt.tables["index_hint_t"]
+	table.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 40}
+	table.Indexes = table.Indexes[:1]
+	optimizer := likePrefixPlanOptimizer(mock)
+	stats := optimizer.ctx.statsByID[table.TblId]
+	stats.TableCnt = 100_000
+	for _, col := range table.Cols {
+		stats.NdvMap[col.Name] = 100_000
+		stats.SizeMap[col.Name] = 100_000 * 8
+	}
+	stats.SizeMap["a"] = 100_000 * 24
+	distribution := prefixDistribution(table, 1, 2048, 1)
+	distribution.PopulationRows, distribution.CompleteSample = 100_000, false
+	stats.ByteRangeMap["a"] = distribution
+	for _, predicate := range []string{
+		"a like 'abc%'",
+		"a like 'abc%' and a >= 'a'",
+		"a >= 'a' and a like 'abc%'",
+	} {
+		t.Run(predicate, func(t *testing.T) {
+			query, err := runOneStmt(optimizer, t, "select a from index_hint_t where "+predicate)
+			require.NoError(t, err)
+			index := findFirstIndexScanNode(query)
+			require.NotNil(t, index, "a redundant broad range cannot hide the selective covering prefix")
+			require.False(t, planHasIndexJoin(query))
+			require.Equal(t, "prefix_in_range", index.FilterList[0].GetF().Func.ObjName)
+		})
+	}
+	stats.ByteRangeMap = nil
+	query, err := runOneStmt(optimizer, t, "select a from index_hint_t where a like 'abc%' and a >= 'a'")
+	require.NoError(t, err)
+	if index := findFirstIndexScanNode(query); index != nil {
+		require.NotEqual(t, "prefix_in_range", index.FilterList[0].GetF().Func.ObjName,
+			"missing prefix statistics must retain the historical access policy")
+	}
+}
+
 func TestLikePrefixBackfillAlternativesUseBothCosts(t *testing.T) {
 	for _, prefixFirst := range []bool{true, false} {
 		t.Run(map[bool]string{true: "prefix first", false: "ordinary first"}[prefixFirst], func(t *testing.T) {

@@ -2458,7 +2458,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	fallback := regularIndexAccessCandidate{indexPos: -1}
 	sawScorable := false
 	prefixEvaluationChecked, prefixEvaluationSafe := false, false
-	consider := func(candidate regularIndexAccessCandidate) {
+	consider := func(candidate regularIndexAccessCandidate, affectsFallback bool) {
 		for _, pos := range candidate.filterIdx {
 			if !costCtx.filterFacts[pos].logicalPrefix {
 				continue
@@ -2479,19 +2479,19 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		work, skip, valid := costCtx.score(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape)
 		if candidate.shape == encodedRegularIndexCostBackfill && !valid && !IsDefaultStats(node.Stats) && costCtx.backfillCapacityExceeded(node.Stats.Outcnt) {
 			// Incomparable work cannot erase a known output lower bound.
-			sawScorable = true
+			sawScorable = sawScorable || affectsFallback
 			return
 		}
 		candidate.work = work
 		if valid && skip {
-			sawScorable = true
+			sawScorable = sawScorable || affectsFallback
 			return
 		}
 		// This new range path requires a comparable cost even on small tables.
 		// Other access paths retain their established small-table policy.
 		for _, pos := range candidate.filterIdx {
 			if costCtx.filterFacts[pos].logicalPrefix && !forceIndex {
-				sawScorable = true
+				sawScorable = sawScorable || affectsFallback
 				if valid && !skip && work < costCtx.baseWork && (best.indexPos == -1 || work < best.work) {
 					best = candidate
 				}
@@ -2527,7 +2527,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			}
 			return
 		}
-		sawScorable = true
+		sawScorable = sawScorable || affectsFallback
 		if skip || (best.indexPos != -1 && work >= best.work) {
 			return
 		}
@@ -2536,12 +2536,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	for idx, idxDef := range indexes {
 		if !preferSortedScan {
-			if match, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx); ok {
+			for alternative, match := range builder.matchRegularIndexOnlyScans(idxDef, node, costCtx) {
+				if match == nil {
+					continue
+				}
 				consider(regularIndexAccessCandidate{
 					indexPos: idx, shape: encodedRegularIndexCostIndexOnly,
 					filterType: match.filterType, filterIdx: match.filterIdx,
 					leadingEqual: match.leadingEqual, residualLeadingPos: match.residualLeadingPos,
-				})
+				}, alternative == 0)
 			}
 		}
 		if !pointBlocked {
@@ -2549,7 +2552,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				consider(regularIndexAccessCandidate{
 					indexPos: idx, shape: encodedRegularIndexCostBackfill,
 					filterType: EqualIndexCondition, filterIdx: filterIdx,
-				})
+				}, true)
 			}
 		}
 		if preferSortedScan || functionalIndexColumn(node.TableDef, idxDef) != nil {
@@ -2571,7 +2574,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			consider(regularIndexAccessCandidate{
 				indexPos: idx, shape: encodedRegularIndexCostBackfill,
 				filterType: filterType, filterIdx: filterIdx,
-			})
+			}, true)
 		}
 	}
 	if best.indexPos == -1 && !sawScorable {
@@ -3331,18 +3334,19 @@ type encodedRegularIndexCostContext struct {
 	baseWork      float64
 	baseUpperWork float64
 
-	columnWidths []float64
-	serialWidths []float64
-	filterFacts  []encodedIndexFilterFact
-	filterRefs   []int
-	equalFilters []int32
-	firstEquals  []int32
-	firstFilters []int32
-	filterTypes  []int
-	rangeFilters [][]int32
-	lowerFilters []int32
-	upperFilters []int32
-	requiredCols []int32
+	columnWidths  []float64
+	serialWidths  []float64
+	filterFacts   []encodedIndexFilterFact
+	filterRefs    []int
+	equalFilters  []int32
+	firstEquals   []int32
+	firstFilters  []int32
+	firstPrefixes []int32
+	filterTypes   []int
+	rangeFilters  [][]int32
+	lowerFilters  []int32
+	upperFilters  []int32
+	requiredCols  []int32
 
 	unknownRangeLowerSelectivities map[int32]float64
 
@@ -3548,6 +3552,7 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 	ctx.equalFilters = make([]int32, numCols)
 	ctx.firstEquals = make([]int32, numCols)
 	ctx.firstFilters = make([]int32, numCols)
+	ctx.firstPrefixes = make([]int32, numCols)
 	ctx.filterTypes = make([]int, len(node.FilterList))
 	ctx.rangeFilters = make([][]int32, numCols)
 	ctx.lowerFilters = make([]int32, numCols)
@@ -3561,6 +3566,7 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		ctx.equalFilters[colPos] = -1
 		ctx.firstEquals[colPos] = -1
 		ctx.firstFilters[colPos] = -1
+		ctx.firstPrefixes[colPos] = -1
 		ctx.lowerFilters[colPos] = -1
 		ctx.upperFilters[colPos] = -1
 		ctx.partPositions[colPos] = -1
@@ -3589,6 +3595,9 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		filterType, col := checkIndexFilter(filter.GetF())
 		if col != nil && col.ColPos >= 0 && int(col.ColPos) < numCols {
 			ctx.filterTypes[filterIdx] = filterType
+			if fact.logicalPrefix && filterType != UnsupportedIndexCondition && ctx.firstPrefixes[col.ColPos] < 0 {
+				ctx.firstPrefixes[col.ColPos] = int32(filterIdx)
+			}
 			// A newly recognized prefix is a fallback, so it cannot hide a
 			// previously supported equality/range on the same leading column.
 			if filterType != UnsupportedIndexCondition && (ctx.firstFilters[col.ColPos] < 0 || ctx.filterFacts[ctx.firstFilters[col.ColPos]].logicalPrefix && !fact.logicalPrefix) {
@@ -4427,10 +4436,41 @@ func (ctx *encodedRegularIndexCostContext) indexCoversRequiredColumns(idxDef *In
 	return covered
 }
 
-func (builder *QueryBuilder) matchRegularIndexOnlyScan(
+// matchRegularIndexOnlyScans keeps the historical match first, then lets one
+// logical-prefix alternative compete on cost. A rejected alternative must not
+// suppress the historical fallback; equal costs retain the first match.
+func (builder *QueryBuilder) matchRegularIndexOnlyScans(idxDef *IndexDef, node *plan.Node, costCtx *encodedRegularIndexCostContext) (matches [2]*regularIndexOnlyMatch) {
+	matches[0], _ = builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
+	if idxDef == nil || len(idxDef.Parts) == 0 || node == nil || node.TableDef == nil {
+		return matches
+	}
+	col, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
+	if !ok || col < 0 || int(col) >= len(costCtx.firstPrefixes) {
+		return matches
+	}
+	prefix := costCtx.firstPrefixes[col]
+	if prefix >= 0 && prefix != costCtx.firstFilters[col] {
+		matches[1], _ = builder.matchRegularIndexOnlyScanWithLeadingFilter(idxDef, node, costCtx, prefix)
+	}
+	return matches
+}
+
+func (builder *QueryBuilder) matchRegularIndexOnlyScan(idxDef *IndexDef, node *plan.Node, costCtx *encodedRegularIndexCostContext) (*regularIndexOnlyMatch, bool) {
+	if idxDef == nil || len(idxDef.Parts) == 0 || node == nil || node.TableDef == nil {
+		return nil, false
+	}
+	col, ok := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[0])]
+	if !ok || col < 0 || int(col) >= len(costCtx.firstFilters) {
+		return nil, false
+	}
+	return builder.matchRegularIndexOnlyScanWithLeadingFilter(idxDef, node, costCtx, costCtx.firstFilters[col])
+}
+
+func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 	idxDef *IndexDef,
 	node *plan.Node,
 	costCtx *encodedRegularIndexCostContext,
+	firstFilter int32,
 ) (*regularIndexOnlyMatch, bool) {
 	if idxDef == nil || len(idxDef.Parts) == 0 || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 		return nil, false
@@ -4452,7 +4492,6 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	if !ok || leadingColPos < 0 || int(leadingColPos) >= len(costCtx.firstFilters) {
 		return nil, false
 	}
-	firstFilter := costCtx.firstFilters[leadingColPos]
 	if firstFilter < 0 {
 		return nil, false
 	}

@@ -104,6 +104,22 @@ func TestLikePrefixIndex(t *testing.T) {
 		prefixPlan := explain(prefixQuery)
 		require.Contains(t, prefixPlan, "Join Type: INDEX")
 		require.Contains(t, prefixPlan, "prefix_in_range(")
+		// Reuse the analyzed fixture for covering access: the redundant broad
+		// range must not suppress the narrow prefix, in either predicate order.
+		for _, predicate := range []string{
+			"name like 'abc%'",
+			"name like 'abc%' and name >= 'a'",
+			"name >= 'a' and name like 'abc%'",
+		} {
+			q := "select count(*) from prefix_backfill where " + predicate
+			coveringPlan := explain(q)
+			require.Contains(t, coveringPlan, "Index Table Scan")
+			require.NotContains(t, coveringPlan, "Join Type: INDEX")
+			require.Contains(t, coveringPlan, "prefix_in_range(")
+			var count int64
+			require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&count))
+			require.EqualValues(t, 100, count)
+		}
 		var prefixSum int64
 		require.NoError(t, conn.QueryRowContext(ctx, prefixQuery).Scan(&prefixSum))
 		require.Equal(t, int64(200), prefixSum)
