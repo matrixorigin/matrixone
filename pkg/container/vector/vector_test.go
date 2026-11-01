@@ -7276,3 +7276,56 @@ func TestCloneWindowToConstNullBorrowedData(t *testing.T) {
 	owner.Free(mp)
 	require.Zero(t, mp.CurrNB())
 }
+
+func BenchmarkConstSetSelection(b *testing.B) {
+	for _, shape := range []string{"flat", "flat_null", "constant", "constant_null", "borrowed_null", "text", "zero"} {
+		b.Run(shape, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			typ := types.T_int64.ToType()
+			if shape == "text" {
+				typ = types.T_text.ToType()
+			}
+			source := NewVec(typ)
+			var err error
+			switch shape {
+			case "constant":
+				source.Free(mp)
+				source, err = NewConstFixed(typ, int64(7), 2, mp)
+			case "constant_null":
+				source.Free(mp)
+				source = NewConstNull(typ, 2, mp)
+			case "text":
+				err = AppendBytesList(source, [][]byte{[]byte("first"), []byte("second")}, nil, mp)
+			default:
+				err = AppendFixedList(source, []int64{7, 8}, nil, mp)
+			}
+			require.NoError(b, err)
+			defer source.Free(mp)
+			if shape == "flat_null" {
+				source.GetNulls().Add(1)
+			}
+			if shape == "borrowed_null" {
+				validity := []byte{1}
+				lease, err := NewRefCountedBufferLease(validity, 1, nil)
+				require.NoError(b, err)
+				require.NoError(b, source.GetNulls().InstallBorrowedValidity(validity, 0, 2, 1, lease))
+				lease.Release()
+			}
+			destination := NewConstNull(typ, 0, mp)
+			defer destination.Free(mp)
+			set := GetConstSetFunction(typ, mp)
+			length := 1
+			if shape == "zero" {
+				length = 0
+			}
+			require.NoError(b, set(destination, source, 1, length))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := set(destination, source, 1, length); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
