@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 
 	moerrpb "github.com/matrixorigin/matrixone/pkg/pb/moerr"
@@ -907,6 +908,15 @@ func (e *Error) Display() string {
 		return e.message
 	}
 	return fmt.Sprintf("%s: %s", e.message, e.detail)
+}
+
+// MessageOf returns the message of code without its details.
+func MessageOf(code uint16) string {
+	item, ok := errorMsgRefer[code]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSuffix(item.errorMsgOrFormat, ": %s")
 }
 
 func (e *Error) ErrorCode() uint16 {
