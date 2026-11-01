@@ -567,6 +567,32 @@ func TestLocalFSEmptyRootPath(t *testing.T) {
 	assert.NotNil(t, fs)
 }
 
+func TestLocalFSCreateAndRemoveFileReportsUnlinkFailure(t *testing.T) {
+	ctx := context.Background()
+	local, err := NewLocalFS(ctx, "local", t.TempDir(), DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close(ctx)) })
+
+	var createdPath string
+	file, err := local.createAndRemoveFile(ctx, "spill-unlink-error", func(path string) error {
+		createdPath = path
+		return os.ErrPermission
+	})
+	require.Nil(t, file, "failed unlink must not return a live spill handle")
+	require.ErrorIs(t, err, os.ErrPermission, "failed unlink must reach caller")
+	require.FileExists(t, createdPath)
+	require.NoError(t, local.RemoveFile(ctx, "spill-unlink-error"))
+
+	file, err = local.CreateAndRemoveFile(ctx, "spill-unlinked")
+	require.NoError(t, err)
+	require.NotNil(t, file)
+	_, err = file.Write([]byte("spill contents"))
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	_, err = local.OpenFile(ctx, "spill-unlinked")
+	require.Error(t, err, "successful unlink leaves no named file")
+}
+
 func TestLocalFSOpenFile(t *testing.T) {
 	ctx := context.Background()
 	var counter perfcounter.CounterSet
