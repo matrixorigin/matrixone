@@ -29,6 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	iscppkg "github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -59,6 +60,14 @@ func (Hooks) Run(c *iscppkg.IndexConsumer, ctx context.Context, errch chan error
 		iscppkg.RunHnsw[float32](c, ctx, errch, r)
 	case *iscppkg.HnswSqlWriter[float64]:
 		iscppkg.RunHnsw[float64](c, ctx, errch, r)
+	case *iscppkg.HnswSqlWriter[types.Float16]:
+		iscppkg.RunHnsw[types.Float16](c, ctx, errch, r)
+	case *iscppkg.HnswSqlWriter[types.BF16]:
+		iscppkg.RunHnsw[types.BF16](c, ctx, errch, r)
+	case *iscppkg.HnswSqlWriter[int8]:
+		iscppkg.RunHnsw[int8](c, ctx, errch, r)
+	case *iscppkg.HnswSqlWriter[uint8]:
+		iscppkg.RunHnsw[uint8](c, ctx, errch, r)
 	default:
 		errch <- moerr.NewInternalError(ctx, "hnsw iscp Run: unexpected writer type")
 	}

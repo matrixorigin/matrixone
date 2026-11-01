@@ -29,6 +29,9 @@ type ScanOptions struct {
 	ThreadsSearch int64 `json:"threads_search,omitempty"`
 	// Iterative is set for mode=iterative: a membership search widens in rounds.
 	Iterative bool `json:"iterative,omitempty"`
+	// PrefilterExactThreshold is the largest membership a prefiltered search scans
+	// instead of traversing the graph; 0 always traverses the graph.
+	PrefilterExactThreshold int64 `json:"prefilter_exact_threshold,omitempty"`
 }
 
 // EncodeScanOptions returns the algo_options bytes of opts.
@@ -88,4 +91,16 @@ func SearchIndexConfig(algoParams string) (vectorindex.IndexConfig, error) {
 	}
 	idxcfg.Type = vectorindex.HNSW
 	return idxcfg, nil
+}
+
+// Quantization returns the QUANTIZATION of an hnsw index from its IndexAlgoParams JSON;
+// empty when the index stores the base column type.
+func Quantization(algoParams string) (string, error) {
+	var param vectorindex.HnswParam
+	if len(algoParams) > 0 {
+		if err := sonic.Unmarshal([]byte(algoParams), &param); err != nil {
+			return "", err
+		}
+	}
+	return param.Quantization, nil
 }

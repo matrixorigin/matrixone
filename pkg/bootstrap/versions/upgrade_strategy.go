@@ -107,6 +107,7 @@ const (
 
 	CREATE_DATABASE
 	MODIFY_METADATA
+	RECONCILE_LEGACY_INFORMATION_SCHEMA_VIEW
 )
 
 // ColumnInfo Describe the detailed information of the table column
@@ -189,6 +190,10 @@ func (u *UpgradeEntry) upgrade(
 		if err := checkCommonProtocolVersion(txn, u.RequiredProtocolVersion); err != nil {
 			return err
 		}
+	}
+
+	if u.UpgType == RECONCILE_LEGACY_INFORMATION_SCHEMA_VIEW {
+		return u.reconcileLegacyInformationSchemaView(txn, accountId)
 	}
 
 	// 1. First, judge whether there is prefix sql
@@ -332,6 +337,10 @@ func CheckTableColumn(txn executor.TxnExecutor,
 		Name:    columnName,
 	}
 
+	systemAccountFilter := ""
+	if accountId == catalog.System_Account {
+		systemAccountFilter = " AND account_id = 0"
+	}
 	sql := fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE,
        CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE,
        internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,
@@ -343,25 +352,8 @@ func CheckTableColumn(txn executor.TxnExecutor,
        CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
        att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
             WHERE att_relname != 'mo_increment_columns' AND NOT prefix_eq(att_relname, '__mo_cpkey_')
-            AND attname != '__mo_rowid'
-            AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
-
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE,
-       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE,
-       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,
-       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,
-       internal_numeric_scale(atttyp) AS NUMERIC_SCALE,
-       internal_datetime_scale(atttyp) AS DATETIME_PRECISION,
-       attnum AS ORDINAL_POSITION,
-       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
-       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
-       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
-            WHERE att_relname != 'mo_increment_columns' AND NOT prefix_eq(att_relname, '__mo_cpkey_')
-            AND attname != '__mo_rowid' AND account_id = 0
-            AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
-	}
-
+            AND attname != '__mo_rowid'%s
+            AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, systemAccountFilter, schema, tableName, columnName)
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
 	if err != nil {
 		return colInfo, err
@@ -399,10 +391,11 @@ func CheckTableColumn(txn executor.TxnExecutor,
 
 // CheckViewDefinition Check if the view exists, if so, return true and return the view definition
 var CheckViewDefinition = func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
-	sql := fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
+	accountFilter := ""
 	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND account_id = 0 AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
+		accountFilter = "account_id = 0 AND "
 	}
+	sql := fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND %stbl.reldatabase = '%s'  AND  tbl.relname = '%s'", accountFilter, schema, viewName)
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
 	if err != nil {
@@ -426,6 +419,23 @@ var CheckViewDefinition = func(txn executor.TxnExecutor, accountId uint32, schem
 	return loaded, view_def, nil
 }
 
+func tableDefinitionProbeSQL(accountID uint32, schema, tableName string, includeComment bool) string {
+	columns := ""
+	if includeComment {
+		columns = ", rel_comment"
+	}
+	// Keep the historical SQL text, including its account-specific indentation.
+	indent := "                              "
+	accountFilter := ""
+	if accountID == catalog.System_Account {
+		indent = "                                  "
+		accountFilter = "account_id = 0 AND "
+	}
+	return fmt.Sprintf(`SELECT reldatabase, relname, account_id%s FROM mo_catalog.mo_tables tbl
+%sWHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
+%sAND %sreldatabase = '%s' AND relname = '%s'`, columns, indent, indent, accountFilter, schema, tableName)
+}
+
 // CheckTableDefinition is used to check if the specified table definition exists in the specified database. If it exists,
 // return true; otherwise, return false.
 var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, error) {
@@ -433,14 +443,7 @@ var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, sche
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}
 
-	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
-                              WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
-                              AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
-                                  WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
-                                  AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
-	}
+	sql := tableDefinitionProbeSQL(accountId, schema, tableName, false)
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
 	if err != nil {
@@ -464,14 +467,7 @@ func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string
 		return false, "", moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}
 
-	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
-                              WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
-                              AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
-                                  WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
-                                  AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
-	}
+	sql := tableDefinitionProbeSQL(accountId, schema, tableName, true)
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
@@ -519,16 +515,15 @@ func CheckIndexDefinition(txn executor.TxnExecutor, accountId uint32, schema str
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name or indexName is empty")
 	}
 
+	accountFilter := ""
+	if accountId == catalog.System_Account {
+		accountFilter = fmt.Sprintf("`tbl`.`account_id` = %d AND ", accountId)
+	}
 	sql := fmt.Sprintf("select distinct `idx`.`name` from `mo_catalog`.`mo_indexes` `idx` "+
 		"left join `mo_catalog`.`mo_tables` `tbl` on `idx`.`table_id` = `tbl`.`rel_id` "+
-		"where `tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
-		schema, tableName, indexName)
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf("select distinct `idx`.`name` from `mo_catalog`.`mo_indexes` `idx` "+
-			"left join `mo_catalog`.`mo_tables` `tbl` on `idx`.`table_id` = `tbl`.`rel_id` "+
-			"where `tbl`.`account_id` = %d AND `tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
-			accountId, schema, tableName, indexName)
-	}
+		"where %s`tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
+		accountFilter, schema, tableName, indexName)
+
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
 		return false, err

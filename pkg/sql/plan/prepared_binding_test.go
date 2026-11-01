@@ -770,6 +770,55 @@ func TestPreparedSQLPresentationKeepsDerivedNumericConsumer(t *testing.T) {
 	}
 }
 
+func TestPreparedSQLPresentationKeepsDependentProgramTypes(t *testing.T) {
+	const query = `SELECT ?, (o.N_NATIONKEY,(SELECT ?)) <=>
+		(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY)
+		FROM NATION o`
+	for _, binary := range []bool{false, true} {
+		for _, tc := range []struct {
+			name  string
+			typ   types.Type
+			value any
+		}{
+			{"integer", types.T_int64.ToType(), "1"},
+			{"decimal", types.New(types.T_decimal128, 20, 2), "1.25"},
+			{"boolean", types.T_bool.ToType(), "true"},
+			{"text", types.T_text.ToType(), "2"},
+			{"null", types.T_any.ToType(), nil},
+		} {
+			t.Run(fmt.Sprintf("binary=%v/%s", binary, tc.name), func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				proc := mock.ctxt.GetProcess()
+				params := vector.NewVec(types.T_text.ToType())
+				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+				for range 2 {
+					require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(tc.value)), tc.value == nil, proc.Mp()))
+				}
+				proc.SetPrepareParams(params)
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, query, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				value := ParamValue{Value: tc.value, IsBinaryProtocol: binary}
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+					[]PreparedSourceBinding{{Position: 0, Type: tc.typ}, {Position: 1, Type: tc.typ}},
+					[]any{value, value})
+				require.NoError(t, err)
+				q := bound.Plan.GetQuery()
+				require.NotNil(t, q.Correlation)
+				require.NoError(t, q.ValidateCorrelation(), "presentation must not rewrite internal program outputs")
+				if tc.value != nil {
+					root := q.Nodes[q.Steps[q.MainOutputStep()]]
+					want := types.T_text
+					if binary {
+						want = tc.typ.Oid
+					}
+					require.Equal(t, int32(want), root.ProjectList[0].Typ.Id, "preserve the public bare-marker contract")
+				}
+			})
+		}
+	}
+}
+
 func TestPreparedBindingBeforeKeyLowering(t *testing.T) {
 	for _, tc := range []struct {
 		name, predicate string
@@ -952,13 +1001,11 @@ func TestPreparedSourceTransportDiagnosticOwnership(t *testing.T) {
 	for _, tc := range []struct {
 		typ        types.T
 		valid, bad string
-		badSafe    bool
 	}{
-		{types.T_int64, "12", "12.5", false},
-		{types.T_time, "00:00:01", "900:00:00", false},
-		// Expression DATE casts return NULL without a warning for lexical
-		// errors; conservative classification must still accept that proof.
-		{types.T_date, "2024-01-02", "invalid-date", true},
+		{types.T_int64, "12", "12.5"},
+		{types.T_time, "00:00:01", "900:00:00"},
+		// Invalid expression DATE casts emit a warning and cannot be folded.
+		{types.T_date, "2024-01-02", "invalid-date"},
 	} {
 		t.Run(tc.typ.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -972,7 +1019,7 @@ func TestPreparedSourceTransportDiagnosticOwnership(t *testing.T) {
 			for _, binding := range []struct {
 				value      string
 				null, safe bool
-			}{{tc.valid, false, true}, {tc.bad, false, tc.badSafe}, {"", true, true}, {tc.valid, false, true}} {
+			}{{tc.valid, false, true}, {tc.bad, false, false}, {"", true, true}, {tc.valid, false, true}} {
 				func() {
 					params := vector.NewVec(types.T_text.ToType())
 					defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
@@ -1680,6 +1727,84 @@ func TestPreparedExplainSelectClassification(t *testing.T) {
 		}
 	}
 	require.False(t, preparedUnderlyingSelect(nil))
+}
+
+func TestPreparedExplicitIntegerCastFilters(t *testing.T) {
+	for _, predicate := range []string{
+		"cast(id as int)=?", "cast(cast(id as int) as signed)=?",
+		"?<cast(id as signed)", "cast(id as int) between ? and ?", "cast(id as int) in (?,?)",
+	} {
+		t.Run(predicate, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			addIndexHintChoiceTableForTest(mock)
+			proc := mock.ctxt.GetProcess()
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select id from index_hint_t use index() where "+predicate, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			count := strings.Count(predicate, "?")
+			bindings := make([]PreparedSourceBinding, count)
+			for i := range bindings {
+				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_int64.ToType()}
+			}
+			for _, tc := range []struct {
+				name, value  string
+				null, native bool
+			}{
+				{"safe", "7", false, true},
+				{"above maximum", "2147483648", false, false},
+				{"below minimum", "-2147483649", false, false},
+				{"null", "", true, false},
+				{"safe again", "9", false, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					params := vector.NewVec(types.T_text.ToType())
+					t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+					values := make([]any, count)
+					for i := range values {
+						value := tc.value
+						if i > 0 && !tc.null {
+							value = "11"
+						}
+						require.NoError(t, vector.AppendBytes(params, []byte(value), tc.null, proc.Mp()))
+						if !tc.null {
+							values[i] = ParamValue{Value: value, IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}
+						}
+					}
+					proc.SetPrepareParams(params)
+					bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+					require.NoError(t, err)
+					var found bool
+					for _, node := range bound.Plan.GetQuery().Nodes {
+						if node.NodeType != planpb.Node_TABLE_SCAN {
+							continue
+						}
+						for _, filter := range node.FilterList {
+							require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
+								fn := expr.GetF()
+								if fn == nil || fn.Func == nil || len(fn.Args) != 2 ||
+									(!isPreparedNumericComparison(fn.Func.ObjName) && fn.Func.ObjName != "in" && fn.Func.ObjName != "not_in") {
+									return nil
+								}
+								found = true
+								if tc.native {
+									require.NotNil(t, fn.Args[0].GetCol(), expr.String())
+									require.Equal(t, int32(types.T_int32), fn.Args[0].Typ.Id)
+									require.True(t, function.ContainsParameter(expr), "proof must retain the executable parameter")
+								} else if count == 1 && !tc.null {
+									require.Nil(t, fn.Args[0].GetCol(), "out-of-domain bindings must not be narrowed")
+								}
+								return nil
+							}))
+						}
+					}
+					if tc.native {
+						require.True(t, found, bound.Plan.String())
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {

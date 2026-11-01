@@ -15,6 +15,7 @@
 package pSpool
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -22,6 +23,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
+
+func BenchmarkCachedBatchWideReuse(b *testing.B) {
+	for _, rows := range []int{64, 8192} {
+		b.Run(fmt.Sprintf("rows_%d", rows), func(b *testing.B) {
+			mp := mpool.MustNewZeroNoFixed()
+			b.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				if remaining := mp.CurrNB(); remaining != 0 {
+					b.Errorf("unreleased vector backing: %d", remaining)
+				}
+			})
+			source := newWideSpoolSource(b, mp, rows)
+			sourceBytes := mp.CurrNB()
+			cache := initCachedBatch(mp, 1)
+			b.Cleanup(cache.free)
+			b.SetBytes(int64(rows * (8 + 2*types.VarlenaSize + 3072 + 16384)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				copied, useCache, cacheID, err := cache.GetCopiedBatch(source)
+				if err != nil {
+					b.Fatal(err)
+				}
+				cache.CacheBatch(useCache, cacheID, copied)
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(mp.CurrNB()-sourceBytes), "retained-B")
+		})
+	}
+}
 
 func BenchmarkCachedBatchReuse(b *testing.B) {
 	mp := mpool.MustNewZero()

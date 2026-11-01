@@ -8,6 +8,7 @@ The process constrains only its own address space and file descriptor limits.
 """
 
 import argparse
+import gc
 import json
 import logging
 import os
@@ -34,9 +35,9 @@ def client():
     return Client(
         host='127.0.0.1',
         port=int(os.environ.get('MO_PORT', '6001')),
-        user='root',
-        password='111',
-        database='mo_analytics_test',
+        user=os.environ.get('MO_USER', 'root'),
+        password=os.environ.get('MO_PASSWORD', '111'),
+        database=os.environ.get('MO_DATABASE', 'mo_analytics_test'),
         pool_size=8,
         max_overflow=8,
         pool_timeout=5,
@@ -289,6 +290,12 @@ def main(args):
             'external_leaks': external,
             'owned_tables_left': sorted(owned),
         }
+        # Worker exception tracebacks can form unreachable Python cycles that
+        # retain Arrow arrays. Measure after collecting them, while keeping all
+        # connection/catalog/FD/pinned checks above independent of GC cleanup.
+        soak['arrow_live_bytes_before_gc'] = soak['arrow_live_bytes']
+        soak['gc_collected_objects'] = gc.collect()
+        soak['arrow_live_bytes'] = pa.total_allocated_bytes()
         Path(args.output).write_text(json.dumps({'soak': soak, 'passed': False}, indent=2) + '\n')
         assert not errors and not owned and not external
         assert after['checkedout'] == 0 and after['pinned'] == 0

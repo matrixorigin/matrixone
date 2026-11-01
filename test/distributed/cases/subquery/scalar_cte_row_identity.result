@@ -26,6 +26,28 @@ null  ¦  null  ¦  0  𝄀
 2  ¦  null  ¦  0  𝄀
 2  ¦  null  ¦  0
 with q as (select k, v from bag_rows union all select k, v from bag_rows)
-select (select max(v) from bag_rows x where x.k <= b.k) from q b;
-non-equality correlated aggregate with outer composition cannot be safely decorrelated is not yet implemented
+select b.k, b.v,
+(select max(v) from bag_rows x where x.k <= b.k) as m,
+(select count(*) from bag_rows x where x.k <= b.k) as c,
+(select count(v) from bag_rows x where x.k <= b.k) as cv
+from q b order by b.k, b.v;
+➤ k[4,32,0]  ¦  v[4,32,0]  ¦  m[4,32,0]  ¦  c[-5,64,0]  ¦  cv[-5,64,0]  𝄀
+null  ¦  7  ¦  null  ¦  0  ¦  0  𝄀
+null  ¦  7  ¦  null  ¦  0  ¦  0  𝄀
+0  ¦  null  ¦  null  ¦  1  ¦  0  𝄀
+0  ¦  null  ¦  null  ¦  1  ¦  0  𝄀
+2  ¦  10  ¦  10  ¦  3  ¦  2  𝄀
+2  ¦  10  ¦  10  ¦  3  ¦  2  𝄀
+2  ¦  10  ¦  10  ¦  3  ¦  2  𝄀
+2  ¦  10  ¦  10  ¦  3  ¦  2
+with q as (select distinct k from bag_rows)
+select b.k,
+(select count(*) from bag_rows x where x.k <= b.k) as c,
+(select count(v) from bag_rows x where x.k <= b.k) as cv,
+(select count(distinct v) from bag_rows x where x.k <= b.k) as cd
+from q b order by b.k;
+➤ k[4,32,0]  ¦  c[-5,64,0]  ¦  cv[-5,64,0]  ¦  cd[-5,64,0]  𝄀
+null  ¦  0  ¦  0  ¦  0  𝄀
+0  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  3  ¦  2  ¦  1
 drop database test_scalar_cte_row_identity;

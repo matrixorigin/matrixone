@@ -660,30 +660,49 @@ type ExportParam struct {
 func (ep *ExportParam) String() string {
 	buf := bytes.Buffer{}
 	if ep.Fields != nil {
-		buf.WriteString("FIELDS TERMINATED BY ")
-		buf.WriteString(escapeExportParamLiteral(ep.Fields.Terminated.Value))
-		buf.WriteString(" ")
+		if ep.Fields.Terminated != nil {
+			buf.WriteString("FIELDS TERMINATED BY ")
+			buf.WriteString(escapeExportParamLiteral(ep.Fields.Terminated.Value))
+			buf.WriteString(" ")
+		}
 
-		buf.WriteString("ENCLOSED BY ")
-		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EnclosedBy.Value)))
-		buf.WriteString(" ")
+		if ep.Fields.EnclosedBy != nil {
+			buf.WriteString("ENCLOSED BY ")
+			buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EnclosedBy.Value)))
+			buf.WriteString(" ")
+		}
 
-		buf.WriteString("ESCAPED BY ")
-		buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EscapedBy.Value)))
-		buf.WriteString(" ")
+		// ESCAPED BY is optional in the grammar: nil means "not specified"
+		// (both reader and writer then fall back to '\\'), not "disabled".
+		if ep.Fields.EscapedBy != nil {
+			buf.WriteString("ESCAPED BY ")
+			buf.WriteString(escapeExportParamLiteral(string(ep.Fields.EscapedBy.Value)))
+			buf.WriteString(" ")
+		}
 	}
 
 	if ep.Lines != nil {
-		buf.WriteString("LINES TERMINATED BY ")
-		buf.WriteString(escapeExportParamLiteral(ep.Lines.TerminatedBy.Value))
+		// STARTING BY is optional; an empty value is omitted.
+		if ep.Lines.StartingBy != "" {
+			buf.WriteString("LINES STARTING BY ")
+			buf.WriteString(escapeExportParamLiteral(ep.Lines.StartingBy))
+			buf.WriteString(" ")
+		}
+		if ep.Lines.TerminatedBy != nil {
+			buf.WriteString("LINES TERMINATED BY ")
+			buf.WriteString(escapeExportParamLiteral(ep.Lines.TerminatedBy.Value))
+		}
 	}
 
 	return buf.String()
 }
 
 func escapeExportParamLiteral(val string) string {
-	if val == "" {
-		return ""
+	if val == "" || val == "\x00" {
+		// A NUL byte is the tree representation of an explicit '' clause
+		// (e.g. ENCLOSED BY '' / ESCAPED BY ''): render it as that clause,
+		// not as a quoted literal NUL.
+		return "''"
 	}
 
 	var b strings.Builder

@@ -28,7 +28,7 @@ func fullTextBooleanCompositionExpr(expr *plan.Expr) bool {
 		return false
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
-		if (fn.Func.ObjName == "or" || fn.Func.ObjName == "not") && exprCallsFunc(expr, "fulltext_match") {
+		if (fn.Func.ObjName == "or" || fn.Func.ObjName == "not" || fn.Func.ObjName == "unary_mark" || fn.Func.ObjName == "xor") && exprCallsFunc(expr, "fulltext_match") {
 			return true
 		}
 		for _, arg := range fn.Args {
@@ -56,7 +56,51 @@ func scanHasFullTextBooleanComposition(scan *plan.Node) bool {
 			return true
 		}
 	}
+	return scanHasUndrivenFullTextScoreFilter(scan)
+}
+
+// scanHasUndrivenFullTextScoreFilter reports a scan predicate such as `MATCH(...) = 0`,
+// `< c` or `>= 0` whose MATCH no AND-reachable bare or membership-implying predicate drives.
+// A relevance of 0 can satisfy it, so an INNER index stream would drop rows; only the
+// composition path, which LEFT-attaches the score, can answer it (#31604).
+func scanHasUndrivenFullTextScoreFilter(scan *plan.Node) bool {
+	var drivers []*plan.Expr
+	for _, expr := range scan.FilterList {
+		if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "fulltext_match" {
+			drivers = append(drivers, expr)
+			continue
+		}
+		drivers = collectDrivingFullTextMatches(expr, drivers)
+	}
+	for _, expr := range scan.FilterList {
+		for _, match := range collectNestedFullTextMatches(expr, nil) {
+			driven := false
+			for _, d := range drivers {
+				if sameScanFullTextMatch(match.GetF(), d.GetF()) {
+					driven = true
+					break
+				}
+			}
+			if !driven {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+func sameScanFullTextMatch(a, b *plan.Function) bool {
+	if len(a.Args) != len(b.Args) || len(a.Args) < 2 ||
+		!fullTextMatchArgEqual(a.Args[0], b.Args[0]) || !fullTextMatchArgEqual(a.Args[1], b.Args[1]) {
+		return false
+	}
+	for i := 2; i < len(a.Args); i++ {
+		c1, c2 := a.Args[i].GetCol(), b.Args[i].GetCol()
+		if c1 == nil || c2 == nil || c1.RelPos != c2.RelPos || c1.ColPos != c2.ColPos {
+			return false
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) fullTextBooleanUnsupported() error {
@@ -151,19 +195,29 @@ func (builder *QueryBuilder) applyFullTextBooleanComposition(nodeID int32, scan 
 		scorePos := int32(len(projectList))
 		projectList = append(projectList, normalized)
 		replacement := &plan.Expr{Typ: normalized.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: scorePos}}}
-		served = append(served, fulltextServedMatch{fn: leaf.GetF(), nodeID: streamID, replacementExpr: replacement})
+		// Emitted scores are never NULL, so the raw score is NULL exactly when the index
+		// did not return the row.
+		rawScore := DeepCopyExpr(score)
+		foundPos := int32(len(projectList))
+		projectList = append(projectList, rawScore)
+		found := &plan.Expr{Typ: rawScore.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: projectTag, ColPos: foundPos}}}
+		served = append(served, fulltextServedMatch{fn: leaf.GetF(), nodeID: streamID, replacementExpr: replacement, foundExpr: found})
 		builder.nameByColRef[[2]int32{projectTag, scorePos}] = fmt.Sprintf("fulltext_score_%d", i)
+		builder.nameByColRef[[2]int32{projectTag, foundPos}] = fmt.Sprintf("fulltext_found_%d", i)
 		for j, col := range stream.TableDef.Cols {
 			builder.nameByColRef[[2]int32{streamTag, int32(j)}] = fmt.Sprintf("mo_fulltext_boolean_%d.%s", i, col.Name)
 		}
 	}
 	normalizedID := builder.appendNode(&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{chain}, BindingTags: []int32{projectTag}, ProjectList: projectList}, ctx)
 	for i, expr := range lifted {
+		// The binder leaves a bare MATCH predicate numeric; as a predicate it is whether
+		// the index returned the row.
+		expr, err := fullTextPredicateAsBool(builder.GetContext(), expr)
+		if err != nil {
+			return -1, err
+		}
 		expr = replaceScoreFnInExprBy(expr, func(fn *plan.Function) *plan.Expr { return builder.servedFullTextScoreSameTable(fn, served) })
 		expr = replaceColumnsForExpr(expr, remap)
-		// The binder intentionally leaves bare legacy drivers numeric. Once they
-		// are real scalar predicates, ordinary nonzero-to-BOOL coercion is required.
-		var err error
 		lifted[i], err = makePlan2CastExpr(builder.GetContext(), expr, plan.Type{Id: int32(types.T_bool)})
 		if err != nil {
 			return -1, err
@@ -200,40 +254,38 @@ func (builder *QueryBuilder) isFullTextBooleanScoreProject(node *plan.Node) bool
 // This closes PROJECT/SORT/AGG/WINDOW/PARTITION and join-child consumers without
 // reapplying COALESCE above a user join or silently serving a different leaf.
 func (builder *QueryBuilder) rewriteFullTextBooleanConsumers(node *plan.Node) error {
-	hasBooleanScore := false
+	var composed []fulltextServedMatch
 	for _, served := range builder.ftJoinServed {
 		if served.replacementExpr != nil {
-			hasBooleanScore = true
-			break
+			composed = append(composed, served)
 		}
 	}
-	if !hasBooleanScore {
+	if len(composed) == 0 {
 		return nil
 	}
 	var rewriteErr error
 	rewrite := func(fn *plan.Function) *plan.Expr {
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" {
+		if builder.fullTextIfConditionAsBool(fn) {
 			return nil
 		}
-		if len(fn.Args) < 3 {
+		match := fn
+		if inner := fullTextMatchCastToBool(fn); inner != nil {
+			match = inner
+		}
+		if match == nil || match.Func == nil || match.Func.ObjName != "fulltext_match" {
+			return nil
+		}
+		if len(match.Args) < 3 {
 			rewriteErr = builder.fullTextBooleanUnsupported()
 			return nil
 		}
-		for _, s := range builder.ftJoinServed {
-			if s.replacementExpr == nil {
-				continue
-			}
-			if builder.equalsFullTextMatchFuncSameTable(fn, s.fn) {
-				return DeepCopyExpr(s.replacementExpr)
-			}
+		if expr := builder.servedFullTextExpr(fn, composed, true); expr != nil {
+			return expr
 		}
 		// A different served leaf on this binding is not evidence that this
 		// leaf is unserved: search all exact identities before refusing it.
-		for _, s := range builder.ftJoinServed {
-			if s.replacementExpr == nil {
-				continue
-			}
-			for _, arg := range fn.Args[2:] {
+		for _, s := range composed {
+			for _, arg := range match.Args[2:] {
 				if c := arg.GetCol(); c != nil && c.RelPos == s.fn.Args[2].GetCol().RelPos {
 					rewriteErr = builder.fullTextBooleanUnsupported()
 				}
@@ -248,9 +300,15 @@ func (builder *QueryBuilder) rewriteFullTextBooleanConsumers(node *plan.Node) er
 	}
 	for _, predicates := range [][]*plan.Expr{node.FilterList, node.OnList} {
 		for i, expr := range predicates {
-			replaced := replaceScoreFnInExprBy(expr, rewrite)
+			predicate, err := fullTextPredicateAsBool(builder.GetContext(), expr)
+			if err != nil {
+				return err
+			}
+			replaced := replaceScoreFnInExprBy(predicate, rewrite)
+			if replaced == predicate {
+				replaced = expr
+			}
 			if replaced != expr && replaced.Typ.Id != int32(types.T_bool) {
-				var err error
 				replaced, err = makePlan2CastExpr(builder.GetContext(), replaced, plan.Type{Id: int32(types.T_bool)})
 				if err != nil {
 					return err

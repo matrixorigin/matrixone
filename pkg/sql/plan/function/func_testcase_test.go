@@ -262,6 +262,8 @@ func (fc *FunctionTestCase) Run() (succeed bool, errInfo string) {
 		return compareFunctionFixedResult[uint8](v, fc.expected, fc.fnLength)
 	case types.T_uint16:
 		return compareFunctionFixedResult[uint16](v, fc.expected, fc.fnLength)
+	case types.T_year:
+		return compareFunctionFixedResult[types.MoYear](v, fc.expected, fc.fnLength)
 	case types.T_uint32:
 		return compareFunctionFixedResult[uint32](v, fc.expected, fc.fnLength)
 	case types.T_uint64:

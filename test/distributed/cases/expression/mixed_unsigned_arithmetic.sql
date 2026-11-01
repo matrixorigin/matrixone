@@ -62,5 +62,35 @@ set @explicit_unsigned_a = 2, @explicit_unsigned_b = 1;
 execute explicit_unsigned_stmt using @explicit_unsigned_a, @explicit_unsigned_b;
 deallocate prepare explicit_unsigned_stmt;
 
+create table narrow_values(id int primary key,b tinyint,s smallint,i int,u tinyint unsigned);
+insert into narrow_values values(1,100,30000,2147483647,200),(2,-128,NULL,NULL,NULL);
+select id,b+b as bp,b*b as bs,s*s as ss,i*i as ii,u*u as uu from narrow_values order by id;
+select sum(b*b) as total from narrow_values;
+create table narrow_result as select b*b as bb,i*i as ii from narrow_values;
+select column_name,column_type from information_schema.columns where table_schema='mixed_unsigned_arithmetic_28581' and table_name='narrow_result' order by ordinal_position;
+select bb,ii from narrow_result order by bb;
+prepare narrow_stmt from 'select b*b as square from narrow_values where id=?';
+set @narrow_id=1;
+execute narrow_stmt using @narrow_id;
+deallocate prepare narrow_stmt;
+
+-- Non-NULL narrow vectors preserve signed minima and unsigned high bits on widening.
+create table narrow_cast_values(id int primary key,b tinyint not null,s smallint not null,i int not null,ub tinyint unsigned not null,us smallint unsigned not null,ui int unsigned not null);
+insert into narrow_cast_values values
+    (1,-128,-32768,-2147483648,0,0,0),
+    (2,0,0,0,128,32768,2147483648),
+    (3,127,32767,2147483647,255,65535,4294967295);
+-- @metacmp(true)
+select id,cast(b as signed) as b,cast(s as signed) as s,cast(i as signed) as i,cast(ub as unsigned) as ub,cast(us as unsigned) as us,cast(ui as unsigned) as ui from narrow_cast_values order by id;
+create table wide_cast_values(id int primary key,b bigint,s bigint,i bigint,ub bigint unsigned,us bigint unsigned,ui bigint unsigned);
+insert into wide_cast_values select * from narrow_cast_values;
+-- @metacmp(true)
+select * from wide_cast_values order by id;
+
+-- Lexical integer precision must not change numeric-to-text assignment.
+create table literal_texts(id int primary key,b binary(4),v varchar(4),j json);
+insert into literal_texts values(1,0002,0002,0002),(2,'0002','0002','"0002"');
+select id,hex(b) as b,v,j from literal_texts order by id;
+
 set session sql_mode = @mixed_unsigned_saved_sql_mode;
 drop database mixed_unsigned_arithmetic_28581;

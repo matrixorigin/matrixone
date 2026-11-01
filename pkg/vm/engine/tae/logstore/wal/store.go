@@ -31,7 +31,8 @@ type StoreImpl struct {
 	sm.ClosedState
 	*StoreInfo
 
-	driver driver.Driver
+	driver        driver.Driver
+	maxRecordSize int
 
 	appendMu sync.Mutex
 	appendWg sync.WaitGroup
@@ -44,10 +45,12 @@ type StoreImpl struct {
 
 func NewLogserviceHandle(
 	factory logservicedriver.LogServiceClientFactory,
+	maxRecordSize int,
 ) *StoreImpl {
 	cfg := logservicedriver.NewConfig(
 		"",
 		logservicedriver.WithConfigOptClientFactory(factory),
+		logservicedriver.WithConfigOptMaxWALRecordSize(maxRecordSize),
 	)
 	driver := logservicedriver.NewLogServiceDriver(&cfg)
 	return NewStore(driver)
@@ -67,6 +70,9 @@ func NewStore(driver driver.Driver) *StoreImpl {
 	w := &StoreImpl{
 		StoreInfo: newWalInfo(),
 		driver:    driver,
+	}
+	if sized, ok := driver.(interface{ MaxWALRecordSize() int }); ok {
+		w.maxRecordSize = sized.MaxWALRecordSize()
 	}
 	w.driverAppendQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDriverAppendQueue)
 	w.doneWithErrQueue = sm.NewSafeQueue(DefaultMaxBatchSize*10, DefaultMaxBatchSize, w.onDoneWithErrQueue)
@@ -106,13 +112,18 @@ func (w *StoreImpl) start() {
 
 func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
 	w.appendWg.Add(1)
+	accepted := false
+	defer func() {
+		if !accepted {
+			w.appendWg.Done()
+		}
+	}()
 	if w.IsClosed() {
-		w.appendWg.Done()
 		return nil, 0, sm.ErrClose
 	}
 	w.appendMu.Lock()
 	defer w.appendMu.Unlock()
-	lsn = w.nextLSN(gid)
+	lsn = w.peekNextLSN(gid)
 	v1 := e.GetInfo()
 	var info *entry.Info
 	if v1 == nil {
@@ -124,12 +135,29 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 	info.Group = gid
 	info.GroupLSN = lsn
 	drEntry = driverEntry.NewEntry(e)
+	if w.maxRecordSize > 0 && gid == GroupUserTxn {
+		// A rejected record must not consume an LSN. Materialize callbacks
+		// and measure the complete one-entry Log Service record first.
+		e.PrepareWrite()
+		if err = drEntry.Prepare(); err != nil {
+			e.DoneWithErr(err)
+			return nil, 0, err
+		}
+		actual := logservicedriver.EmptyLogEntrySize + drEntry.GetSize() + logservicedriver.OneEntryFooterSize
+		if actual > w.maxRecordSize {
+			err = NewRecordTooLargeError(actual, w.maxRecordSize)
+			e.DoneWithErr(err)
+			return nil, 0, err
+		}
+	}
+	lsn = w.nextLSN(gid)
 	// e.DoneWithErr(nil)
 	// return
 	_, err = w.driverAppendQueue.Enqueue(drEntry)
 	if err != nil {
 		panic(err)
 	}
+	accepted = true
 	return
 }
 
@@ -137,7 +165,9 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 func (w *StoreImpl) onDriverAppendQueue(items ...any) {
 	for _, item := range items {
 		driverEntry := item.(*driverEntry.Entry)
-		driverEntry.Entry.PrepareWrite()
+		if w.maxRecordSize == 0 || driverEntry.Entry.GetInfo().(*entry.Info).Group != GroupUserTxn {
+			driverEntry.Entry.PrepareWrite()
+		}
 		err := w.driver.Append(driverEntry)
 		if err != nil {
 			panic(err)

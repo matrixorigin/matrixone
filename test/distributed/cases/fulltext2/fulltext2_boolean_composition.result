@@ -291,6 +291,106 @@ execute boolean_stmt using @term, @threshold, @tag;
 5  𝄀
 7
 deallocate prepare boolean_stmt;
+create table every_doc (id bigint primary key, body text, tag int);
+insert into every_doc values (1, 'qaanchor one', 0), (2, 'qaanchor two', 1), (3, 'qaanchor three', NULL);
+create fulltext2 index ft_every on every_doc(body) with parser gojieba;
+alter table every_doc alter reindex ft_every fulltext2 force_sync;
+select id, match(body) against('qaanchor') as score from every_doc where match(body) against('qaanchor') order by id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0
+select id from every_doc where match(body) against('qaanchor') or id = -1 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from every_doc where not match(body) against('qaanchor') order by id;
+➤ id[-5,64,0]
+select id from every_doc where match(body) against('+qaanchor' in boolean mode) or tag = 1 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from every_doc where not (match(body) against('+qaanchor' in boolean mode)) and tag is not null order by id;
+➤ id[-5,64,0]
+select id, case when match(body) against('qaanchor') then 'y' else 'n' end as hit from every_doc where match(body) against('qaanchor') or id > 0 order by id;
+➤ id[-5,64,0]  ¦  hit[12,1,0]  𝄀
+1  ¦  y  𝄀
+2  ¦  y  𝄀
+3  ¦  y
+select id, if(match(body) against('qaanchor'), 'y', 'n') as hit from every_doc where match(body) against('qaanchor') order by id;
+➤ id[-5,64,0]  ¦  hit[12,1,0]  𝄀
+1  ¦  y  𝄀
+2  ¦  y  𝄀
+3  ¦  y
+select id, if(match(body) against('qaanchor'), 'y', 'n') as hit from every_doc where match(body) against('qaanchor') or id = -1 order by id;
+➤ id[-5,64,0]  ¦  hit[12,1,0]  𝄀
+1  ¦  y  𝄀
+2  ¦  y  𝄀
+3  ¦  y
+select count(if(match(body) against('qaanchor'), 1, null)) as hits from every_doc where match(body) against('qaanchor') or id = -1;
+➤ hits[-5,64,0]  𝄀
+3
+select id, cast(match(body) against('qaanchor') as bool) as b, cast(cast(match(body) against('qaanchor') as double) as bool) as d from every_doc where match(body) against('qaanchor') order by id;
+➤ id[-5,64,0]  ¦  b[-6,8,0]  ¦  d[-6,8,0]  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  1  ¦  0
+select id, cast(match(body) against('qaanchor') as bool) as b from every_doc where match(body) against('qaanchor') or id = -1 order by id;
+➤ id[-5,64,0]  ¦  b[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+select id from every_doc where match(body) against('qaanchor') = 0 or id = -1 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from every_doc where (match(body) against('qaanchor') and tag = 1) or id = -1 order by id;
+➤ id[-5,64,0]  𝄀
+2
+select id from every_doc where match(body) against('qaanchor') xor tag = 1 order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from every_doc where !match(body) against('qaanchor') order by id;
+➤ id[-5,64,0]
+select id, match(body) against('qaanchor') is true as t, round(match(body) against('qaanchor'), 3) as r from every_doc where match(body) against('qaanchor') or id = -1 order by id;
+➤ id[-5,64,0]  ¦  t[-6,8,0]  ¦  r[8,53,31]  𝄀
+1  ¦  1  ¦  0.0  𝄀
+2  ¦  1  ¦  0.0  𝄀
+3  ¦  1  ¦  0.0
+select id from every_doc where match(body) against('one') or not match(body) against('qaanchor') order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') or id > 0) d where sc order by id;
+➤ id[-5,64,0]
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor')) d where sc or id = -1 order by id;
+➤ id[-5,64,0]
+select id, if(sc, 'y', 'n') as hit from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor')) d where not sc order by id;
+➤ id[-5,64,0]  ¦  hit[12,1,0]  𝄀
+1  ¦  n  𝄀
+2  ¦  n  𝄀
+3  ¦  n
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') or id > 0 union all select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') or id > 0) d where sc order by id;
+➤ id[-5,64,0]
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') union select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') or id > 0) d where not sc order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+create table one_doc (id bigint primary key, body text);
+insert into one_doc values (1, 'solo');
+create fulltext2 index ft_one on one_doc(body) with parser gojieba;
+alter table one_doc alter reindex ft_one fulltext2 force_sync;
+select id from one_doc where match(body) against('solo');
+➤ id[-5,64,0]  𝄀
+1
+select id from one_doc where match(body) against('solo') or false;
+➤ id[-5,64,0]  𝄀
+1
+select id from one_doc where not match(body) against('solo');
+➤ id[-5,64,0]
 select id from docs where match(body, alt) against('alpha' in boolean mode) or match(body) against('beta' in boolean mode) or tag = 1 order by id;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 select a.id from docs a join docs b on a.id = b.id where match(a.body, b.alt) against('alpha' in boolean mode) or a.tag = 1 order by a.id;

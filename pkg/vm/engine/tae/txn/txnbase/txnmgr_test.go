@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -33,6 +35,59 @@ import (
 type rollbackCleanupErrorStore struct {
 	NoopTxnStore
 	err error
+}
+
+type oversizeWALTestStore struct {
+	NoopTxnStore
+	reject           bool
+	preparedRollback bool
+	appliedRollback  bool
+}
+
+func (s *oversizeWALTestStore) PrepareWAL() error {
+	if s.reject {
+		return wal.NewRecordTooLargeError(101, 100)
+	}
+	return nil
+}
+
+func (s *oversizeWALTestStore) PrepareRollback() error {
+	s.preparedRollback = true
+	return nil
+}
+
+func (s *oversizeWALTestStore) ApplyRollback() error {
+	s.appliedRollback = true
+	return nil
+}
+
+func TestOversizeWALRollsBackBeforeAppend(t *testing.T) {
+	firstStore := &oversizeWALTestStore{reject: true}
+	secondStore := &oversizeWALTestStore{}
+	var started atomic.Int32
+	mgr := NewTxnManager(func() txnif.TxnStore {
+		if started.Add(1) == 1 {
+			return firstStore
+		}
+		return secondStore
+	}, nil, types.NewMockHLCClock(1), WithTxnSkipFlag(TxnFlag_Heartbeat))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+
+	first, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	err = first.Commit(context.Background())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "%v", err)
+	require.ErrorContains(t, err, "WAL record is too large")
+	require.True(t, firstStore.preparedRollback)
+	require.True(t, firstStore.appliedRollback)
+	require.Equal(t, txnif.TxnStateRollbacked, first.GetTxnState(false))
+
+	second, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, second.Commit(context.Background()))
+	require.Equal(t, txnif.TxnStateCommitted, second.GetTxnState(false))
 }
 
 func (store *rollbackCleanupErrorStore) Close() error {

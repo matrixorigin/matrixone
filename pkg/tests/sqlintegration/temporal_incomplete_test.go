@@ -46,7 +46,7 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
 		exec("create table " + schema + ".dates(id int primary key,v varchar(16))")
 		exec("insert into " + schema + ".dates values(1,'2024-00-00'),(2,'2024-02-29'),(3,NULL)")
-		warnings := func(t *testing.T, want int) {
+		warningsFor := func(t *testing.T, want int, input string) {
 			t.Helper()
 			rows, err := conn.QueryContext(ctx, "show warnings")
 			require.NoError(t, err)
@@ -58,12 +58,13 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 				require.NoError(t, rows.Scan(&level, &code, &message))
 				require.Equal(t, "Warning", level)
 				require.Equal(t, 1292, code)
-				require.Contains(t, message, "2024-00-00")
+				require.Contains(t, message, input)
 				n++
 			}
 			require.NoError(t, rows.Err())
 			require.Equal(t, want, n)
 		}
+		warnings := func(t *testing.T, want int) { warningsFor(t, want, "2024-00-00") }
 		check := func(t *testing.T, q string, want []sql.NullString) {
 			t.Helper()
 			rows, err := conn.QueryContext(ctx, q)
@@ -79,6 +80,76 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 			require.Equal(t, want, got, q)
 		}
 		value := func(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
+		t.Run("time_comparison_policy", func(t *testing.T) {
+			exec("set sql_mode='STRICT_TRANS_TABLES'")
+			defer exec("set sql_mode=''")
+			exec("create table " + schema + ".times(t time(2))")
+			exec("insert into " + schema + ".times values('12:00:00.24')")
+			stmt, err := conn.PrepareContext(ctx, "select t = ? from "+schema+".times")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, input := range []string{"12:00:00.24", "not-a-time", "12:00:00.24"} {
+				var got sql.NullInt64
+				err := stmt.QueryRowContext(ctx, input).Scan(&got)
+				if input == "not-a-time" {
+					require.ErrorContains(t, err, "invalid time value not-a-time")
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, sql.NullInt64{Int64: 1, Valid: true}, got)
+				}
+			}
+			exec("prepare temporal_time_compare from 'select t = ? from " + schema + ".times'")
+			defer exec("deallocate prepare temporal_time_compare")
+			exec("set @temporal_time_input='not-a-time'")
+			var got sql.NullInt64
+			require.ErrorContains(t, conn.QueryRowContext(ctx, "execute temporal_time_compare using @temporal_time_input").Scan(&got), "invalid time value not-a-time")
+			check(t, "select cast('not-a-time' as time)", []sql.NullString{{}})
+			warningsFor(t, 1, "not-a-time")
+		})
+		t.Run("gapfill_constant_bounds", func(t *testing.T) {
+			exec("create table " + schema + ".bounded_readings(device varchar(8), event_ts datetime, value int)")
+			exec("insert into " + schema + ".bounded_readings values ('d1','2026-01-01 00:02:10',20),('d1','2026-01-01 00:04:20',40),('d2','2026-01-01 00:01:30',7)")
+			for _, partitioned := range []bool{false, true} {
+				func() {
+					query := "select _wstart, sum(value) from " + schema + ".bounded_readings where event_ts >= '2026-01-02 00:00:00' and event_ts < '2026-01-02 00:03:00' interval(event_ts, 1, minute) gapfill(partition) fill(null) order by _wstart"
+					wantRows := 3
+					if partitioned {
+						query = "select _wstart, sum(value) from " + schema + ".bounded_readings where event_ts >= '2026-01-01 00:00:00' and event_ts < '2026-01-01 00:06:00' group by device interval(event_ts, 1, minute) gapfill(partition) fill(value, 0) order by device, _wstart"
+						wantRows = 12
+					}
+					checkRows := func(runQuery func() (*sql.Rows, error)) {
+						rows, err := runQuery()
+						require.NoError(t, err)
+						defer rows.Close()
+						count := 0
+						for rows.Next() {
+							var start string
+							var sum sql.NullInt64
+							require.NoError(t, rows.Scan(&start, &sum))
+							day, minute := 2, count
+							if partitioned {
+								day, minute = 1, count%6
+							}
+							require.Equal(t, fmt.Sprintf("2026-01-%02d 00:%02d:00", day, minute), start)
+							require.Equal(t, partitioned, sum.Valid)
+							count++
+						}
+						require.NoError(t, rows.Err())
+						require.Equal(t, wantRows, count)
+					}
+					checkRows(func() (*sql.Rows, error) { return conn.QueryContext(ctx, query) })
+					stmt, err := conn.PrepareContext(ctx, query)
+					require.NoError(t, err)
+					defer stmt.Close()
+					exec("prepare temporal_gapfill from '" + strings.ReplaceAll(query, "'", "''") + "'")
+					defer exec("deallocate prepare temporal_gapfill")
+					for round := 0; round < 2; round++ {
+						checkRows(func() (*sql.Rows, error) { return stmt.QueryContext(ctx) })
+						checkRows(func() (*sql.Rows, error) { return conn.QueryContext(ctx, "execute temporal_gapfill") })
+					}
+				}()
+			}
+		})
 		t.Run("date_format_invalid_conversion", func(t *testing.T) {
 			inputs := []string{"123456", "19981321000000", "19981033000000", "0000-01-01", "0000-02-28", "2026-02-30"}
 			stmt, err := conn.PrepareContext(ctx, "select date_format(?,'%Y-%m-%d')")
@@ -86,7 +157,7 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 			defer stmt.Close()
 			for _, input := range inputs {
 				check(t, "select date_format('"+input+"','%Y-%m-%d')", []sql.NullString{{}})
-				warnings(t, 0)
+				warningsFor(t, 1, input)
 				for _, next := range []string{input, "2024-02-29", "2024-00-00"} {
 					var got sql.NullString
 					require.NoError(t, stmt.QueryRowContext(ctx, next).Scan(&got))
@@ -95,13 +166,17 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 						want = value(next)
 					}
 					require.Equal(t, want, got)
-					warnings(t, 0)
+					count := 0
+					if next == input {
+						count = 1
+					}
+					warningsFor(t, count, input)
 				}
 			}
 			exec("insert into " + schema + ".dates values(4,'2026-02-30'),(5,'2024-02-29')")
 			defer exec("delete from " + schema + ".dates where id>=4")
 			check(t, "select date_format(v,'%Y-%m-%d') from "+schema+".dates order by id", []sql.NullString{value("2024-00-00"), value("2024-02-29"), {}, {}, value("2024-02-29")})
-			warnings(t, 0)
+			warningsFor(t, 1, "2026-02-30")
 		})
 
 		for _, tc := range []struct {

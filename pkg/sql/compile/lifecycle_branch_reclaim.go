@@ -304,7 +304,7 @@ func (c *Compile) databaseHasBranchLineageRC(tableIDs []uint64) (bool, error) {
 
 // lockBranchCatalogRowsRC retains exact PK locks through the outer owner.
 // Admission locks disable later cumulative range coarsening on this table.
-func (c *Compile) lockBranchCatalogRowsRC(relationName string, keys *batch.Batch) (uint64, error) {
+func (c *Compile) lockBranchCatalogRowsRC(relationName string, keys *batch.Batch, waitPolicy ...lock.WaitPolicy) (uint64, error) {
 	ctx := context.WithValue(
 		defines.AttachAccountId(c.proc.Ctx, catalog.System_Account),
 		defines.LockWriterFairKey{}, false,
@@ -320,7 +320,7 @@ func (c *Compile) lockBranchCatalogRowsRC(relationName string, keys *batch.Batch
 	id := relation.GetTableID(ctx)
 	_, err = lockop.LockRowsForAdmissionWithContext(
 		ctx, c.e, c.proc, id, keys, 0, *keys.Vecs[0].GetType(),
-		lock.LockMode_Exclusive, catalog.System_Account,
+		lock.LockMode_Exclusive, catalog.System_Account, waitPolicy...,
 	)
 	return id, err
 }
@@ -338,7 +338,7 @@ func (c *Compile) branchCatalogRelationIDRC(relationName string) (uint64, error)
 	return relation.GetTableID(ctx), nil
 }
 
-func (c *Compile) loadBranchReclaimComponentsRC(deadTIDs []uint64) (databranchutils.BranchReclaimDag, error) {
+func (c *Compile) loadBranchReclaimComponentsRC(deadTIDs []uint64, waitPolicy ...lock.WaitPolicy) (databranchutils.BranchReclaimDag, error) {
 	return databranchutils.LoadLockedBranchComponents(
 		c.proc.Ctx, deadTIDs,
 		func(ctx context.Context, sql string) (executor.Result, error) {
@@ -356,7 +356,7 @@ func (c *Compile) loadBranchReclaimComponentsRC(deadTIDs []uint64) (databranchut
 					return err
 				}
 			}
-			lockedID, err := c.lockBranchCatalogRowsRC(catalog.MO_BRANCH_METADATA, keys)
+			lockedID, err := c.lockBranchCatalogRowsRC(catalog.MO_BRANCH_METADATA, keys, waitPolicy...)
 			if err != nil {
 				return err
 			}

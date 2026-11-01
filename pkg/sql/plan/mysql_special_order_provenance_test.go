@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -130,6 +131,15 @@ func newMySQLSpecialOrderMock(t testing.TB) *MockOptimizer {
 		Cols: []*planpb.ColDef{
 			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
 			{Name: "s", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}},
+		},
+	}
+	mock.ctxt.objects["enum_empty_label_t"] = &planpb.ObjectRef{Obj: 9006, ObjName: "enum_empty_label_t"}
+	mock.ctxt.tables["enum_empty_label_t"] = &planpb.TableDef{
+		TblId: 9006,
+		Name:  "enum_empty_label_t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "e", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: ",a"}},
 		},
 	}
 	return mock
@@ -412,10 +422,24 @@ func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
 			conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
 			require.NotNil(t, conversion)
 			require.False(t, conversion.Typ.NotNullable)
+			hasGroupBy := strings.Contains(sql, "group by")
 			for _, node := range p.GetQuery().Nodes {
 				if node.NodeType == planpb.Node_AGG {
-					require.Len(t, node.GroupBy, 1, "raw payload must not split display equality")
-					require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+					if hasGroupBy {
+						// The ENUM/SET boolean-contract change groups a plain
+						// GROUP BY by the composite (display, storage) key: the
+						// display key keeps its text identity and a hidden
+						// storage sibling carries the stored bitmap, so the
+						// empty-member declaration splits MySQL-correctly
+						// instead of merging the zero sentinel into it.
+						require.Len(t, node.GroupBy, 2,
+							"a display group key carries its storage sibling beside it")
+						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						require.Equal(t, int32(types.T_uint64), node.GroupBy[1].Typ.Id)
+					} else {
+						require.Len(t, node.GroupBy, 1, "distinct keeps the raw payload")
+						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+					}
 				}
 			}
 		})
@@ -715,10 +739,21 @@ func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 				conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
 				require.NotNil(t, conversion, "cast must use surviving canonical display, not raw bitmap")
 				require.Empty(t, conversion.Typ.Enumvalues)
+				hasGroupBy := strings.Contains(source, "group by")
 				for _, node := range p.GetQuery().Nodes {
 					if node.NodeType == planpb.Node_AGG {
-						require.Len(t, node.GroupBy, 1)
-						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						if hasGroupBy {
+							// Composite (display, storage) grouping from the
+							// ENUM/SET boolean-contract change: the display
+							// group key keeps its text identity and the hidden
+							// storage sibling disambiguates the empty-member
+							// declaration's zero sentinel.
+							require.Len(t, node.GroupBy, 2)
+							require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						} else {
+							require.Len(t, node.GroupBy, 1)
+							require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						}
 					}
 				}
 			})

@@ -16,23 +16,27 @@ package bootstrap
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTableCollationDerivedViewPublication(t *testing.T) {
-	for _, failAt := range []int{0, 1, 2} {
-		t.Run(map[int]string{0: "success", 1: "drop_error", 2: "create_error"}[failAt], func(t *testing.T) {
+	for _, failAt := range []int{0, 1, 3} {
+		t.Run(map[int]string{0: "success", 1: "lookup_error", 3: "replace_error"}[failAt], func(t *testing.T) {
 			var statements []string
 			rejected := moerr.NewNotSupportedNoCtx("protocol version 118")
+			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			op.EXPECT().TxnOptions().Return(txnpb.TxnOptions{}).AnyTimes()
 			exec := mock_executor.NewMockSQLExecutor(gomock.NewController(t))
 			exec.EXPECT().ExecTxn(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, body func(executor.TxnExecutor) error, opts executor.Options) error {
 				require.True(t, opts.HasTxnMode())
@@ -46,15 +50,15 @@ func TestTableCollationDerivedViewPublication(t *testing.T) {
 					if len(statements) == failAt {
 						return executor.Result{}, rejected
 					}
-					if len(statements) <= 2 {
+					if strings.HasPrefix(sql, "SELECT tbl.rel_createsql") || sql == versions.InformationSchemaTablesUpgradeEntry().UpgSql {
 						return executor.Result{}, nil
 					}
 					return newBootstrapStringResult(catalog.SystemViewRel), nil
-				}, nil))
+				}, op))
 			}).Times(1)
 			err := InitSystemViews(t.Context(), exec)
 			require.NotEmpty(t, statements)
-			require.Equal(t, "DROP VIEW IF EXISTS information_schema.TABLES", statements[0])
+			require.Contains(t, statements[0], "SELECT tbl.rel_createsql")
 			if failAt > 0 {
 				require.ErrorIs(t, err, rejected)
 				require.Len(t, statements, failAt, "stop the transaction body before later derived views")
@@ -62,8 +66,8 @@ func TestTableCollationDerivedViewPublication(t *testing.T) {
 				require.NoError(t, err)
 				require.Greater(t, len(statements), 2)
 			}
-			if len(statements) > 1 {
-				require.Equal(t, sysview.InformationSchemaTablesV118DDL, statements[1])
+			if len(statements) > 2 {
+				require.Equal(t, versions.InformationSchemaTablesUpgradeEntry().UpgSql, statements[2])
 			}
 		})
 	}

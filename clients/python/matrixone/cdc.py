@@ -61,6 +61,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from dateutil.parser import isoparse
 
 from ._sql_literals import sql_literal, sql_object_name, sql_string_token
+from ._utils import rows_from_result
 
 
 class CDCSinkType(str, Enum):
@@ -743,10 +744,7 @@ class CDCManager(BaseCDCManager):
         """Return CDC tasks as :class:`CDCTaskInfo` objects."""
         sql = self._build_select_tasks_sql(task_name)
         result = self._get_executor().execute(sql)
-        if hasattr(result, "rows"):
-            rows = result.rows
-        else:
-            rows = result.fetchall() if result else []
+        rows = rows_from_result(result)
         return self._rows_to_tasks(rows)
 
     def get(self, task_name: str) -> CDCTaskInfo:
@@ -768,10 +766,7 @@ class CDCManager(BaseCDCManager):
         """Return CDC watermark rows as :class:`CDCWatermarkInfo`."""
         sql = self._build_select_watermarks_sql(task_name)
         result = self._get_executor().execute(sql)
-        if hasattr(result, "rows"):
-            rows = result.rows
-        else:
-            rows = result.fetchall() if result else []
+        rows = rows_from_result(result)
         return self._rows_to_watermarks(rows)
 
     # ------------------------------------------------------------------
@@ -977,10 +972,7 @@ class AsyncCDCManager(BaseCDCManager):
     async def list(self, task_name: Optional[str] = None) -> List[CDCTaskInfo]:
         sql = self._build_select_tasks_sql(task_name)
         result = await self._get_executor().execute(sql)
-        if hasattr(result, "rows"):
-            rows = result.rows
-        else:
-            rows = result.fetchall() if result else []
+        rows = rows_from_result(result)
         return self._rows_to_tasks(rows)
 
     async def get(self, task_name: str) -> CDCTaskInfo:
@@ -999,8 +991,5 @@ class AsyncCDCManager(BaseCDCManager):
     async def list_watermarks(self, task_name: Optional[str] = None) -> List[CDCWatermarkInfo]:
         sql = self._build_select_watermarks_sql(task_name)
         result = await self._get_executor().execute(sql)
-        if hasattr(result, "rows"):
-            rows = result.rows
-        else:
-            rows = result.fetchall() if result else []
+        rows = rows_from_result(result)
         return self._rows_to_watermarks(rows)

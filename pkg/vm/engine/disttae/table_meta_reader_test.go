@@ -84,6 +84,16 @@ func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
 	require.True(t, txn.engine.cloneTxnCache.IsTxnLocalSharedFile(txnID, stats[1].ObjectName().String()))
 }
 
+func TestInMemTombstonePKVector(t *testing.T) {
+	pkVec := vector.NewVec(types.T_int64.ToType())
+	compact := &logtailreplay.RowEntry{Batch: batch.NewWithSize(1)}
+	compact.Batch.Vecs[0] = pkVec
+	require.Same(t, pkVec, inMemTombstonePKVector(compact))
+	legacy := &logtailreplay.RowEntry{Batch: batch.NewWithSize(4)}
+	legacy.Batch.Vecs[2] = pkVec
+	require.Same(t, pkVec, inMemTombstonePKVector(legacy))
+}
+
 func TestNewImmutableTableMetaReader(t *testing.T) {
 	tbl := newTxnTableForTest()
 	tbl.getTxn().proc = testutil.NewProcess(t)

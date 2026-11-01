@@ -129,6 +129,46 @@ class TestMoCtlManager(unittest.TestCase):
 
         self.assertIn("Failed to parse mo_ctl result", str(context.exception))
 
+    def test_execute_moctl_non_json_keeps_raw_output(self):
+        """Regression #31384: a non-JSON mo_ctl reply must not lose the server's raw text."""
+        mock_result = Mock()
+        mock_result.rows = [('plain text banner OK',)]
+        self.mock_client.execute.return_value = mock_result
+
+        with self.assertRaises(MoCtlError) as context:
+            self.moctl_manager._execute_moctl('dn', 'flush', 'db1.t')
+
+        self.assertIn("raw output: 'plain text banner OK'", str(context.exception))
+        self.assertEqual(context.exception.raw_output, 'plain text banner OK')
+
+    def test_execute_moctl_failed_return_str_is_not_double_wrapped(self):
+        """A failed returnStr is reported once, not re-wrapped by the generic handler."""
+        mock_result = Mock()
+        mock_result.rows = [(json.dumps({"result": [{"returnStr": "table not found"}]}),)]
+        self.mock_client.execute.return_value = mock_result
+
+        with self.assertRaises(MoCtlError) as context:
+            self.moctl_manager._execute_moctl('dn', 'flush', 'db1.t')
+
+        self.assertEqual(str(context.exception), "mo_ctl operation failed: table not found")
+
+    def test_async_execute_moctl_non_json_keeps_raw_output(self):
+        """Regression #31384: the async manager keeps the raw non-JSON reply too."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from matrixone.async_client import AsyncMoCtlManager
+        from matrixone.exceptions import MoCtlError as AsyncMoCtlError
+
+        client = Mock()
+        client.execute = AsyncMock(return_value=Mock(rows=[('plain text banner OK',)]))
+
+        with self.assertRaises(AsyncMoCtlError) as context:
+            asyncio.run(AsyncMoCtlManager(client)._execute_moctl('dn', 'flush', 'db1.t'))
+
+        self.assertIn("raw output: 'plain text banner OK'", str(context.exception))
+        self.assertEqual(context.exception.raw_output, 'plain text banner OK')
+
     def test_execute_moctl_exception(self):
         """Test mo_ctl execution with exception"""
         # Mock exception

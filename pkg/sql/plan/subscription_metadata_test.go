@@ -1295,8 +1295,10 @@ func TestBuildSubscriptionMetadataProtocolAndViewGate(t *testing.T) {
 	require.Equal(t, subscriptionColumnsFunctionName, columnsNode.TableDef.TblFunc.Name)
 	require.Equal(t, "key_priority", columnsNode.TableDef.Cols[17].Name)
 	require.Equal(t, int32(types.T_int64), columnsNode.TableDef.Cols[17].Typ.Id)
-	require.Equal(t, "table_owner", columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Name)
-	require.Equal(t, int32(types.T_uint32), columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Typ.Id)
+	// The unsigned-attribute mask column ships code-only after table_owner;
+	// no shipped view definition references it yet.
+	require.Equal(t, "att_is_unsigned", columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Name)
+	require.Equal(t, int32(types.T_int8), columnsNode.TableDef.Cols[len(columnsNode.TableDef.Cols)-1].Typ.Id)
 
 	_, err = builder.buildSubscriptionTables(tableFunction, columnsCtx, nil, nil)
 	require.NoError(t, err, "COLUMNS enumerates authorized subscription View candidates before binding")

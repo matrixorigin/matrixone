@@ -674,9 +674,6 @@ func intLongMap(raw any) (map[int]int64, error) {
 		}
 		out[key] = val
 	}
-	if len(out) == 0 {
-		return nil, nil
-	}
 	return out, nil
 }
 
@@ -709,9 +706,6 @@ func intBytesMap(raw any) (map[int][]byte, error) {
 			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg Avro bound map has a duplicate key", nil)
 		}
 		out[key] = val
-	}
-	if len(out) == 0 {
-		return nil, nil
 	}
 	return out, nil
 }

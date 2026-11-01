@@ -14,8 +14,8 @@ source/test/config hashes, test selection, counts and exit status in
 failures, errors, skips or inputs changing during execution. Server fixtures
 record observed version and git revision in JUnit properties. A revision alone
 does not identify a dirty checkout; the content manifest identifies its tested
-inputs. Portable native reports and their JUnit results are indexed in
-[docs/validation/README.md](docs/validation/README.md).
+inputs. Keep generated provenance and JUnit reports with the CI run or other
+external test artifacts; generate fresh reports for the revision being qualified.
 
 ## Dependency and server dimensions
 
@@ -107,10 +107,9 @@ stored `distance` colliding with the computed value. Select
 `distance AS stored_distance` explicitly to keep both. `l2_sq` uses the server's
 squared-distance function; unknown metric names raise.
 
-LOCAL imports require `connect(..., local_infile=True)` on both clients. The
-option is false by default and negotiated when the driver opens a connection.
-LOCAL calls on disabled or externally adopted engines fail before execution;
-use an explicitly configured SDK connection. No per-load pool mutation occurs.
+Default SDK connections negotiate LOCAL but authorize only the requested file
+for the duration of one load statement. Set `local_infile=False` to disable
+LOCAL; calls on disabled or externally adopted engines fail before execution.
 
 Fulltext STRING grammar supports ordinary quoted text and backslashes without a
 dollar sign. NUL or combined backslash/dollar input raises before execution due

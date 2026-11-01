@@ -1,0 +1,69 @@
+drop account if exists mts_size_a;
+drop account if exists mts_size_b;
+drop database if exists mts_account_sizes;
+create database mts_account_sizes;
+create table mts_account_sizes.expected_size (account_name varchar(100), size double);
+create account mts_size_a admin_name 'admin' identified by '111' comment 'storage size a';
+create account mts_size_b admin_name 'admin' identified by '111' comment 'storage size b';
+create database size_db;
+create table size_db.t (v int);
+insert into size_db.t values (1), (2);
+create database size_db;
+create table size_db.t (v int);
+insert into size_db.t values (1), (2), (3), (4);
+set @previous_save_query_result = @@save_query_result;
+set save_query_result = on;
+show accounts like 'mts_size_a';
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110257  ¦  0.0  ¦  storage size a
+insert into mts_account_sizes.expected_size
+select account_name, size from result_scan(last_query_id()) as r;
+show accounts like 'mts_size_b';
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_b  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110349  ¦  0.0  ¦  storage size b
+insert into mts_account_sizes.expected_size
+select account_name, size from result_scan(last_query_id()) as r;
+show accounts like 'mts_size_%';
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110257  ¦  0.0  ¦  storage size a  𝄀
+mts_size_b  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110349  ¦  0.0  ¦  storage size b
+select r.account_name, r.size = e.size as matches_forced,
+r.size > 0 as has_size, r.snapshot_size = 0 as no_snapshot
+from result_scan(last_query_id()) as r
+join mts_account_sizes.expected_size as e on r.account_name = e.account_name
+order by r.account_name;
+➤ account_name[12,-1,0]  ¦  matches_forced[-6,8,0]  ¦  has_size[-6,8,0]  ¦  no_snapshot[-6,8,0]  𝄀
+mts_size_a  ¦  1  ¦  1  ¦  1  𝄀
+mts_size_b  ¦  1  ¦  1  ¦  1
+set save_query_result = on;
+show accounts;
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110257  ¦  0.0  ¦  storage size a
+select account_name, size > 0 as has_size, snapshot_size = 0 as no_snapshot
+from result_scan(last_query_id()) as r;
+➤ account_name[12,-1,0]  ¦  has_size[-6,8,0]  ¦  no_snapshot[-6,8,0]  𝄀
+mts_size_a  ¦  1  ¦  1
+set save_query_result = off;
+drop table size_db.t;
+delete from mts_account_sizes.expected_size where account_name = 'mts_size_a';
+show accounts like 'mts_size_a';
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  82  ¦  0.110166  ¦  0.0  ¦  storage size a
+insert into mts_account_sizes.expected_size
+select account_name, size from result_scan(last_query_id()) as r;
+show accounts like 'mts_size_%';
+➤ account_name[12,300,0]  ¦  admin_name[12,300,0]  ¦  created_time[93,19,0]  ¦  status[12,300,0]  ¦  suspended_time[93,19,0]  ¦  db_count[-5,64,0]  ¦  tbl_count[-5,64,0]  ¦  size[8,53,31]  ¦  snapshot_size[8,53,31]  ¦  comments[12,256,0]  𝄀
+mts_size_a  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  82  ¦  0.110166  ¦  0.0  ¦  storage size a  𝄀
+mts_size_b  ¦  admin  ¦  2026-10-27 07:55:18  ¦  open  ¦  null  ¦  6  ¦  83  ¦  0.110349  ¦  0.0  ¦  storage size b
+select r.account_name, r.size = e.size as matches_forced,
+r.snapshot_size = 0 as no_snapshot
+from result_scan(last_query_id()) as r
+join mts_account_sizes.expected_size as e on r.account_name = e.account_name
+order by r.account_name;
+➤ account_name[12,-1,0]  ¦  matches_forced[-6,8,0]  ¦  no_snapshot[-6,8,0]  𝄀
+mts_size_a  ¦  1  ¦  1  𝄀
+mts_size_b  ¦  1  ¦  1
+set save_query_result = @previous_save_query_result;
+drop account mts_size_a;
+drop account mts_size_b;
+drop database mts_account_sizes;

@@ -168,7 +168,9 @@ const (
 	MORPCVersion130    int64 = 130 // incomplete temporal string overloads and rejection diagnostics
 	MORPCVersion131    int64 = 131 // exact weighted percentile aggregate remote dispatch
 	MORPCVersion132    int64 = 132 // decimal float rounding and strict textual float conversions
-	MORPCLatestVersion       = MORPCVersion132
+	MORPCVersion133    int64 = 133 // typed JSON MIN/MAX aggregate comparison
+	MORPCVersion134    int64 = 134 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
+	MORPCLatestVersion       = MORPCVersion134
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

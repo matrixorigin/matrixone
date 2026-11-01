@@ -148,10 +148,9 @@ func TestGetUpgradeTenantTasksSkipsDeletedRanges(t *testing.T) {
 				}
 			}, txnOperator)
 
-			taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := GetUpgradeTenantTasks(10, exec)
+			taskID, tenants, createVersions, hasDeletedTenantTasks, err := GetUpgradeTenantTasks(10, 0, exec)
 			require.NoError(t, err)
 			require.True(t, hasDeletedTenantTasks)
-			require.False(t, hasConflictTenantTasks)
 			require.Equal(t, uint64(200), taskID)
 			require.Equal(t, []int32{10, 12}, tenants)
 			require.Equal(t, []string{"3.0.0", "3.0.0"}, createVersions)
@@ -159,49 +158,32 @@ func TestGetUpgradeTenantTasksSkipsDeletedRanges(t *testing.T) {
 	)
 }
 
-func TestGetUpgradeTenantTasksReturnsConflictHint(t *testing.T) {
+func TestGetUpgradeTenantTasksStopsOnConflict(t *testing.T) {
 	sid := ""
-	runtime.RunTest(
-		sid,
-		func(rt runtime.Runtime) {
-			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
-
-			firstTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
-				catalog.MOUpgradeTenantTable, 0, 10, No)
-			firstTenantSQL := "select account_id, create_version from mo_account where account_id >= 1 and account_id <= 4 for update"
-			secondTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
-				catalog.MOUpgradeTenantTable, 5, 10, No)
-			secondTenantSQL := "select account_id, create_version from mo_account where account_id >= 10 and account_id <= 12 for update"
-			finalTaskSQL := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
-				catalog.MOUpgradeTenantTable, 13, 10, No)
-
-			exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-				switch {
-				case strings.EqualFold(sql, firstTaskSQL):
-					return buildUpgradeTenantTaskResult([]uint64{100}, []int32{1}, []int32{4}), nil
-				case strings.EqualFold(sql, firstTenantSQL):
-					return executor.Result{}, moerr.NewLockConflictNoCtx()
-				case strings.EqualFold(sql, secondTaskSQL):
-					return buildUpgradeTenantTaskResult([]uint64{200}, []int32{10}, []int32{12}), nil
-				case strings.EqualFold(sql, secondTenantSQL):
-					return buildUpgradeTenantRows(nil, nil), nil
-				case strings.EqualFold(sql, finalTaskSQL):
-					return executor.Result{}, nil
-				default:
-					return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
-				}
-			}, txnOperator)
-
-			taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := GetUpgradeTenantTasks(10, exec)
-			require.NoError(t, err)
-			require.True(t, hasDeletedTenantTasks)
-			require.True(t, hasConflictTenantTasks)
-			require.Zero(t, taskID)
-			require.Nil(t, tenants)
-			require.Nil(t, createVersions)
-		},
-	)
+	runtime.RunTest(sid, func(rt runtime.Runtime) {
+		txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+		calls := 0
+		lockErr := moerr.NewLockConflictNoCtx()
+		exec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+			calls++
+			switch calls {
+			case 1:
+				return buildUpgradeTenantTaskResult([]uint64{100}, []int32{1}, []int32{4}), nil
+			case 2:
+				return executor.Result{}, lockErr
+			default:
+				t.Fatalf("issued SQL after the transaction was aborted: %s", sql)
+				return executor.Result{}, nil
+			}
+		}, txnOperator)
+		_, _, _, _, err := GetUpgradeTenantTasks(10, 0, exec)
+		var conflict *TenantTaskConflict
+		require.ErrorAs(t, err, &conflict)
+		require.ErrorIs(t, err, lockErr)
+		require.Equal(t, int32(5), conflict.NextAccountID)
+		require.Equal(t, 2, calls)
+	})
 }
 
 func TestReconcileDeletedUpgradeTenantTasks(t *testing.T) {
@@ -275,13 +257,14 @@ func TestGetUpgradeTenantTasksStopsAtMaxInt32Conflict(t *testing.T) {
 				}
 			}, txnOperator)
 
-			taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := GetUpgradeTenantTasks(10, exec)
-			require.NoError(t, err)
+			taskID, tenants, createVersions, hasDeletedTenantTasks, err := GetUpgradeTenantTasks(10, 0, exec)
+			var conflict *TenantTaskConflict
+			require.ErrorAs(t, err, &conflict)
+			require.Zero(t, conflict.NextAccountID)
 			require.Zero(t, taskID)
 			require.Nil(t, tenants)
 			require.Nil(t, createVersions)
 			require.False(t, hasDeletedTenantTasks)
-			require.True(t, hasConflictTenantTasks)
 		},
 	)
 }
@@ -311,13 +294,12 @@ func TestGetUpgradeTenantTasksStopsAtMaxInt32DeletedRange(t *testing.T) {
 				}
 			}, txnOperator)
 
-			taskID, tenants, createVersions, hasDeletedTenantTasks, hasConflictTenantTasks, err := GetUpgradeTenantTasks(10, exec)
+			taskID, tenants, createVersions, hasDeletedTenantTasks, err := GetUpgradeTenantTasks(10, 0, exec)
 			require.NoError(t, err)
 			require.Zero(t, taskID)
 			require.Nil(t, tenants)
 			require.Nil(t, createVersions)
 			require.True(t, hasDeletedTenantTasks)
-			require.False(t, hasConflictTenantTasks)
 		},
 	)
 }

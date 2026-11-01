@@ -48,6 +48,20 @@ class MoCtlError(MatrixOneError):
     """Raised when mo_ctl operations fail"""
 
 
+_RAW_OUTPUT_PREVIEW = 500
+
+
+def _decode_moctl_result(raw_output, error_type=MoCtlError):
+    """Decode mo_ctl's JSON reply; a non-JSON reply keeps its raw text on the error."""
+    try:
+        return json.loads(raw_output)
+    except (json.JSONDecodeError, TypeError) as e:
+        preview = str(raw_output)[:_RAW_OUTPUT_PREVIEW]
+        error = error_type(f"Failed to parse mo_ctl result: {e}; raw output: {preview!r}")
+        error.raw_output = raw_output
+        raise error from e
+
+
 class MoCtlManager:
     """
     Manager for MatrixOne control operations (mo_ctl).
@@ -142,7 +156,7 @@ class MoCtlManager:
 
             # Parse the JSON result
             result_str = result.rows[0][0]
-            parsed_result = json.loads(result_str)
+            parsed_result = _decode_moctl_result(result_str)
 
             # Check for errors in the result
             if "result" in parsed_result and parsed_result["result"]:
@@ -152,8 +166,8 @@ class MoCtlManager:
 
             return parsed_result
 
-        except json.JSONDecodeError as e:
-            raise MoCtlError(f"Failed to parse mo_ctl result: {e}") from e
+        except MoCtlError:
+            raise
         except Exception as e:
             raise MoCtlError(f"mo_ctl operation failed: {e}") from e
 

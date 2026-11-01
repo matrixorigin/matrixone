@@ -354,6 +354,11 @@ func (c *viewSchemaCompilerContext) ResolveViewSchemaRoot(database, table string
 	return c.TxnCompilerContext.Resolve(database, table, snapshot)
 }
 
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *viewSchemaCompilerContext) ResolveWithoutTemporaryAlias(string, string, *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
+}
+
 // Resolve keeps every View source lookup in the publisher's catalog domain,
 // including databases other than the publication database. Ordinary Resolve
 // only switches tenants when the database itself is a subscription.

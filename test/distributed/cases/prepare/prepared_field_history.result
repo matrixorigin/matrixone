@@ -786,13 +786,13 @@ EXECUTE p_field_history USING @field_condition,@field_value;
 2
 SET SESSION sql_mode = 'NO_UNSIGNED_SUBTRACTION';
 EXECUTE p_field_history USING @field_condition;
-invalid input: Incorrect arguments to EXECUTE
+Incorrect arguments to EXECUTE
 EXECUTE p_field_history USING @field_condition,@field_value;
 ➤ f[-5,64,0]  𝄀
 2
 SET SESSION div_precision_increment = 8;
 EXECUTE p_field_history USING @field_condition;
-invalid input: Incorrect arguments to EXECUTE
+Incorrect arguments to EXECUTE
 EXECUTE p_field_history USING @field_condition,@field_value;
 ➤ f[-5,64,0]  𝄀
 2

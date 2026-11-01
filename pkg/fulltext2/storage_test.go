@@ -118,14 +118,8 @@ func TestSegmentPersistBinary(t *testing.T) {
 }
 
 func TestCreateLocalSpillAndTempFile(t *testing.T) {
-	// nil sqlproc ⇒ both spill helpers fall back to the OS temp dir.
+	// nil sqlproc ⇒ the spill dir and temp file fall back to the OS temp dir.
 	require.Equal(t, "", localSpillDir(nil))
-
-	fp, err := createLocalSpillFile(nil, "ft2test")
-	require.NoError(t, err)
-	name := fp.Name()
-	require.NoError(t, fp.Close())
-	require.NoError(t, os.Remove(name))
 
 	f, path, err := createLocalTempFile(nil, "ft2test")
 	require.NoError(t, err)
@@ -381,4 +375,32 @@ func TestTailPersistPackedRanges(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(510), next)
 	require.Equal(t, expected, actual)
+}
+
+func TestSegmentSpillIsUnlinked(t *testing.T) {
+	b := NewBuilder("uid", int32(types.T_int64))
+	require.NoError(t, b.Add("alpha", 0, int64(1)))
+	require.NoError(t, b.Add("beta", 6, int64(2)))
+	seg, err := b.Finish()
+	require.NoError(t, err)
+	want, err := seg.Serialize()
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	spilled, err := seg.Spill(dir)
+	require.NoError(t, err)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Empty(t, entries, "the spill file is unlinked while its handle stays readable")
+	got := make([]byte, spilled.size)
+	_, err = spilled.fp.ReadAt(got, 0)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Equal(t, seg.Id, spilled.Id)
+	require.Equal(t, seg.N, spilled.N)
+	spilled.Discard()
+	spilled.Discard()
+
+	_, err = seg.Spill(dir + "/missing")
+	require.Error(t, err)
 }

@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"io"
 	"strconv"
@@ -108,15 +109,19 @@ func ArraysToString[T ArrayElement](input [][]T, sep string) string {
 }
 
 func StringToArray[T ArrayElement](str string) ([]T, error) {
+	return stringToArrayWithContext[T](moerr.Context(), str)
+}
+
+func stringToArrayWithContext[T ArrayElement](ctx context.Context, str string) ([]T, error) {
 	input := strings.ReplaceAll(str, " ", "")
 
 	if !(strings.HasPrefix(input, "[") && strings.HasSuffix(input, "]")) {
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorf(parseErrorContext(ctx), "malformed vector input: %s", str)
 	}
 
 	if len(input) == 2 {
 		// We don't handle empty vector like "[]"
-		return nil, moerr.NewInternalErrorNoCtxf("malformed vector input: %s", str)
+		return nil, moerr.NewInternalErrorf(parseErrorContext(ctx), "malformed vector input: %s", str)
 	}
 
 	// remove "[" and "]"
@@ -124,14 +129,14 @@ func StringToArray[T ArrayElement](str string) ([]T, error) {
 
 	numStrs := strings.Split(input, ",")
 	if len(numStrs) > MaxArrayDimension {
-		return nil, moerr.NewInternalErrorNoCtxf("typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
+		return nil, moerr.NewInternalErrorf(parseErrorContext(ctx), "typeLen is over the MaxVectorLen: %v", MaxArrayDimension)
 	}
 	result := make([]T, len(numStrs))
 
 	var t T
 	var err error
 	for i, numStr := range numStrs {
-		t, err = stringToT[T](numStr)
+		t, err = stringToTWithContext[T](ctx, numStr)
 		if err != nil {
 			return nil, err
 		}
@@ -143,8 +148,13 @@ func StringToArray[T ArrayElement](str string) ([]T, error) {
 
 // StringToArrayToBytes convert "[1,2,3]" --> []float32{1.0,2.0,3.0} --> []bytes{11,33...}
 func StringToArrayToBytes[T ArrayElement](input string) ([]byte, error) {
+	return StringToArrayToBytesWithContext[T](moerr.Context(), input)
+}
+
+// StringToArrayToBytesWithContext parses with the caller's error reporting context.
+func StringToArrayToBytesWithContext[T ArrayElement](ctx context.Context, input string) ([]byte, error) {
 	// Convert "[1,2,3]" --> []float32{1.0, 2.0, 3.0}
-	a, err := StringToArray[T](input)
+	a, err := stringToArrayWithContext[T](ctx, input)
 	if err != nil {
 		return nil, err
 	}
