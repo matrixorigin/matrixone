@@ -1447,6 +1447,34 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	pkTyp := tableDef.Cols[pkColIdx].Typ
 	incomingPkPos := colName2Idx[tableDef.Name+"."+pkName]
 
+	// Lookup joins may reorder rows, including across batches. Assign one ordinal
+	// on the converted input before any probe and restore it globally before the
+	// statement-local arbiter observes or publishes a key.
+	rowNumberFunc, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", nil)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	ordinalTag := builder.genNewBindTag()
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_WINDOW,
+		Children: []int32{lastNodeID},
+		WinSpecList: []*plan.Expr{{
+			Typ: rowNumberFunc.Typ,
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				WindowFunc: rowNumberFunc,
+				Name:       "row_number",
+				Frame: &plan.FrameClause{
+					Type:  plan.FrameClause_ROWS,
+					Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+					End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true},
+				},
+			}},
+		}},
+		WindowIdx:   0,
+		BindingTags: []int32{ordinalTag},
+		SpillMem:    builder.sortSpillMem,
+	}, bindCtx)
+
 	keyExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 	targetExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 
@@ -1606,6 +1634,20 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 		targetColumns[i] = int32(len(projectList))
 		projectList = append(projectList, targetExprs[i])
 	}
+	// SORT compiles to Order plus a global MergeOrder, so the arbiter receives
+	// one ordered stream even when the lookup joins introduce multiple scopes.
+	// Keep the ordinal private to this sort: the projection and arbiter retain
+	// their original column positions and the resolved identity stays last.
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{lastNodeID},
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{Typ: rowNumberFunc.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: ordinalTag, ColPos: 0}}},
+			Flag: plan.OrderBySpec_ASC | plan.OrderBySpec_INTERNAL,
+		}},
+		SpillMem: builder.sortSpillMem,
+	}, bindCtx)
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projectList,

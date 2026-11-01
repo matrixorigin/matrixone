@@ -98,6 +98,13 @@ type container struct {
 	emitOffset int
 	rBat       *batch.Batch
 
+	// Unordered, unpartitioned ROW_NUMBER borrows one child batch until all chunks
+	// have been consumed. It never owns or materializes that input.
+	streamRowNumber    bool
+	rowNumberInput     *batch.Batch
+	rowNumberCounter   uint64
+	rowNumberChildDone bool
+
 	runtimeFrames []*plan.FrameClause
 
 	// timestampCivilOrder caches the monotonic civil-time spans of a sorted
@@ -229,6 +236,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 
 	ctr.freeLocalRankIndex()
 	ctr.cleanOutput(proc.Mp())
+	ctr.resetRowNumber()
 	ctr.runtimeFrames = nil
 	ctr.clearCivilOrder()
 	// Free aggregators before the batch so an error exit from Call (which skips
@@ -250,6 +258,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 func (ctr *container) resetParam() {
 	ctr.status = receive
 	ctr.emitOffset = 0
+	ctr.resetRowNumber()
 	ctr.desc = nil
 	ctr.nullsLast = nil
 	ctr.clearSortState()

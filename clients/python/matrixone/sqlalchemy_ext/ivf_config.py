@@ -175,8 +175,11 @@ class IVFConfig:
         """
         try:
             with self.engine.begin() as conn:
-                _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'experimental_ivf_index'")
-            return True
+                result = _exec_sql_safe(conn, "SHOW VARIABLES LIKE 'experimental_ivf_index'")
+                try:
+                    return result.fetchone() is not None
+                finally:
+                    result.close()
         except Exception:
             return False
 
