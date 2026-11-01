@@ -139,12 +139,24 @@ func TestStatementDigestParseLimitsAndScannerReuse(t *testing.T) {
 			require.Nil(t, scanner.parseControl)
 		}()
 	}
-	// Digest version filtering must not leak into MO's pre-existing executable
-	// comment policy on a subsequent ordinary parse.
-	statement, err := ParseOne(t.Context(), "SELECT /*!99999 1+ */ 2", 1)
-	require.NoError(t, err)
-	defer statement.Free()
-	require.Equal(t, "select 1 + 2", tree.String(statement, dialect.MYSQL))
+	// Upstream execution now filters at 80030, while digest targets 80411.
+	// Keep the original 99999 input and exercise both sides of the differing
+	// policies; a leaked digestMode must not make ordinary 80411 execute.
+	for _, test := range []struct {
+		sql, ordinary, digest string
+	}{
+		{"SELECT /*!80030 1+ */ 2", "select 1 + 2", "SELECT ? + ?"},
+		{"SELECT /*!80411 1+ */ 2", "select 2", "SELECT ? + ?"},
+		{"SELECT /*!99999 1+ */ 2", "select 2", "SELECT ?"},
+	} {
+		text, _, err := StatementDigest(t.Context(), test.sql, "")
+		require.NoError(t, err)
+		require.Equal(t, test.digest, text)
+		statement, err := ParseOne(t.Context(), test.sql, 1)
+		require.NoError(t, err)
+		defer statement.Free()
+		require.Equal(t, test.ordinary, tree.String(statement, dialect.MYSQL))
+	}
 }
 
 func TestStatementDigestEmptyHintBudget(t *testing.T) {

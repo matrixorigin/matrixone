@@ -429,6 +429,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// Preserve identifier identity even when digest-only grammar adaptation
 	// below turns QUOTE_ID into ID. This is token-local, never scanner state.
 	lval.quotedIdentifier = typ == QUOTE_ID
+	if l.digest != nil && (typ == ID || typ == QUOTE_ID) && !tree.ValidMySQLTableName(str) {
+		l.digest.checkTableNames = true
+	}
 	// Digest input is parsed, never bound/executed. Admit MySQL's explicit
 	// ROW constructor and quoted user-variable names without changing ordinary
 	// SQL execution syntax. The independent digest scanner keeps their tokens.
@@ -463,7 +466,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		} else if typ == ID && strings.EqualFold(str, "dual") && !l.scanner.qualifiedIdentifier {
 			typ = DIGEST_DUAL
 		} else if typ == QUOTE_ID {
-			typ = ID
+			typ, str = ID, digestSystemIdentifier(str)
 		} else if typ == ID && l.lastToken != '.' && digestCharsetIntroducer(str) {
 			typ = UNDERSCORE_BINARY
 		} else if typ == ASSIGNMENT && l.lastToken == AT_ID {
@@ -879,12 +882,13 @@ func validateSelectIntoStatements(lexer *Lexer) error {
 		}
 		// WITH/CTE scope is complete only at this boundary. Avoid a query-tree
 		// walk on the ordinary zero/single-lock path.
-		if lexer.selectLockClauses > 1 {
+		checkNames := lexer.digest != nil && lexer.digest.checkTableNames
+		if lexer.selectLockClauses > 1 || checkNames {
 			nameKey := strings.ToLower
 			if lexer.digest != nil {
 				nameKey = digestIdentifierKey
 			}
-			if errMsg := tree.ValidateSelectLocking(stmt, nameKey); errMsg != "" {
+			if errMsg := tree.ValidateSelectContext(stmt, nameKey, lexer.selectLockClauses > 1, checkNames); errMsg != "" {
 				lexer.Error(errMsg)
 				return lexer.scanner.LastError
 			}

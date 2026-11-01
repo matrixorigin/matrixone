@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -50,6 +51,9 @@ type statementDigestSyntaxKey struct{}
 type statementDigestSyntax struct {
 	nulls      map[int]struct{}
 	normalized *statementDigest
+	// Lexical candidates only enable the final contextual walk. The same
+	// spelling can be an alias or appear in an unused CTE, so do not reject it.
+	checkTableNames bool
 }
 type digestSymbol struct {
 	id       uint16
@@ -109,6 +113,11 @@ func StatementDigest(ctx context.Context, sql, sqlMode string) (string, string, 
 				formatted.WriteString("...")
 				continue
 			}
+			// Conversion errors suppress the entire displayed identifier, not
+			// its stored bytes. This includes valid supplementary utf8mb4.
+			if token.name == "" || !utf8.ValidString(token.name) || strings.ContainsFunc(token.name, func(r rune) bool { return r > 0xffff }) {
+				continue
+			}
 			formatted.WriteByte('`')
 			formatted.WriteString(token.name)
 			formatted.WriteByte('`')
@@ -129,6 +138,7 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 	previousEnd := 0
 	previousRaw := ""
 	hintStarted := false
+	hintPrevious := 0
 	if hint {
 		defer func() {
 			if hintStarted {
@@ -140,7 +150,7 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 		var kind int
 		var value string
 		if hint {
-			kind, value = scanDigestHint(s)
+			kind, value = scanDigestHint(s, hintPrevious)
 		} else if afterDot {
 			kind, value = s.ScanWithCommentsAfterDot()
 		} else {
@@ -153,10 +163,16 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 		// Only scanner whitespace is removable; Unicode spaces can be
 		// identifier bytes and must not turn a name into a keyword.
 		raw := strings.Trim(s.buf[s.PrePos:s.Pos], " \t\r\n")
-		if kind == LEX_ERROR && hint {
-			// Invalid hints are warnings, not failures of the surrounding SQL.
-			// Keep the token prefix before the hint lexer stopped.
-			return nil
+		if hint {
+			hintPrevious = kind
+			if kind == QUOTE_ID {
+				hintPrevious = ID
+			}
+			if kind == LEX_ERROR {
+				// MySQL's hint error recovery continues scanning. A failed
+				// lexical item contributes no bytes, but later valid items do.
+				continue
+			}
 		}
 		if hint && !hintStarted {
 			// Empty hints (including discarded dots or an initial lexical error)
@@ -210,16 +226,9 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 					continue
 				}
 			}
-		case '@':
-			if !hint {
-				break
-			}
-			if d.last(0) == digestIdentifier && priorEnd == s.Pos-len(raw) {
-				name := d.tokens[len(d.tokens)-1].name
-				d.pop(1)
-				d.add(digestIdentifierAt, name, false)
-			}
+		case digestHintQueryBlock:
 			d.add('@', "", false)
+			d.add(digestIdentifier, value, false)
 			continue
 		case AT_ID, AT_AT_ID:
 			d.add('@', "", false)
@@ -277,7 +286,11 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 			continue
 		}
 		if kind == QUOTE_ID || !hint && kind == ID && s.qualifiedIdentifier {
-			d.add(digestIdentifier, value, false)
+			id := digestIdentifier
+			if hint && s.cur() == '@' {
+				id = digestIdentifierAt
+			}
+			d.add(id, value, false)
 			continue
 		}
 		upper := digestKeywordUpper(raw)
@@ -292,6 +305,7 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 		}
 		if hint {
 			if id, ok := digestHintSymbols[upper]; ok {
+				hintPrevious = 0 // A keyword is not a query-block name prefix.
 				d.add(id, "", false)
 				continue
 			}
@@ -308,7 +322,11 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 		if kind < 256 {
 			d.add(uint16(kind), "", false)
 		} else {
-			d.add(digestIdentifier, value, false)
+			id := digestIdentifier
+			if hint && s.cur() == '@' {
+				id = digestIdentifierAt
+			}
+			d.add(id, value, false)
 		}
 	}
 }
@@ -609,37 +627,87 @@ func isDigestTemporalFunctionName(name string) bool {
 // Hint punctuation is not SQL punctuation: '?' is not a bind parameter,
 // compound operators are separate bytes, and '--'/'#' are not comments.
 // Reuse the lexical primitives without borrowing the SQL token dispatcher.
-func scanDigestHint(s *Scanner) (int, string) {
-	for {
-		s.scanCheckpoint()
-		s.PrePos = s.Pos
-		s.skipBlank()
-		ch := s.cur()
-		switch {
-		case ch == eofChar:
-			return 0, ""
-		case supplementaryUTF8SequenceSizeAt(s.buf, s.Pos) != 0:
-			return LEX_ERROR, ""
-		case isUnquotedIdentifierLetterAt(s.buf, s.Pos):
-			return s.scanIdentifier(false)
-		case isDigit(ch) || ch == '.' && isDigit(s.peek(1)):
-			kind, value := scanDigestHintNumber(s)
-			if kind != skippedScannerToken {
+const digestHintQueryBlock = -2
+
+func scanDigestHint(s *Scanner, previous int) (int, string) {
+	start := s.Pos
+	for strings.ContainsRune(" \t\r\n\v\f", rune(s.cur())) {
+		s.inc()
+	}
+	s.PrePos = s.Pos
+	ch := s.cur()
+	switch {
+	case ch == eofChar:
+		return 0, ""
+	case ch == '@' && (previous == '(' || previous == ID && s.Pos == start):
+		s.inc()
+		var kind int
+		var value string
+		if s.cur() == '`' || s.cur() == '"' {
+			kind, value = scanDigestHintQuoted(s)
+			if kind != QUOTE_ID {
+				return LEX_ERROR, ""
+			}
+		} else if isLetter(s.cur()) || isDigit(s.cur()) || s.cur() >= utf8.RuneSelf && s.cur() != eofChar {
+			kind, value = scanDigestHintIdentifier(s)
+			if kind == LEX_ERROR {
 				return kind, value
 			}
-		case ch == '.':
-			// A nonnumeric dot is discarded by the MySQL hint lexer.
-			s.inc()
-		case ch == '\'' || ch == '"' || ch == '`':
-			return s.stepBackOneChar(ch, false)
-		default:
-			s.inc()
-			if ch < 128 {
-				return int(ch), ""
-			}
+		} else {
 			return LEX_ERROR, ""
 		}
+		return digestHintQueryBlock, value
+	case isDigit(ch) || ch == '.':
+		return scanDigestHintNumber(s)
+	case isLetter(ch) || ch >= utf8.RuneSelf:
+		return scanDigestHintIdentifier(s)
+	case ch == '\'' || ch == '"' || ch == '`':
+		return scanDigestHintQuoted(s)
+	default:
+		s.inc()
+		return int(ch), ""
 	}
+}
+
+// Hint names allow repeated '$' and all valid utf8mb4 sequences. They never
+// enter SQL keyword, native-function, variable, or qualified-name dispatch.
+func scanDigestHintIdentifier(s *Scanner) (int, string) {
+	start := s.Pos
+	for s.cur() != eofChar {
+		if isLetter(s.cur()) || isDigit(s.cur()) {
+			s.inc()
+		} else if s.cur() >= utf8.RuneSelf {
+			_, size := utf8.DecodeRuneInString(s.buf[s.Pos:])
+			s.incN(size)
+			if size == 1 {
+				return LEX_ERROR, ""
+			}
+		} else {
+			break
+		}
+	}
+	return ID, s.buf[start:s.Pos]
+}
+
+func scanDigestHintQuoted(s *Scanner) (int, string) {
+	quote := s.cur()
+	s.inc()
+	// Unlike SQL identifiers, an empty hint name fails without consuming
+	// the closing quote; recovery starts a new quoted item at that byte.
+	if s.cur() == quote && s.peek(1) != quote {
+		return LEX_ERROR, ""
+	}
+	kind, value := s.scanLiteralIdentifierWithDelim(quote)
+	if kind == LEX_ERROR || !utf8.ValidString(value) {
+		return LEX_ERROR, ""
+	}
+	// Quoted hints are converted to the system charset before digest storage;
+	// unquoted names retain their client bytes and convert only for display.
+	value = digestSystemIdentifier(value)
+	if quote == '\'' || quote == '"' && !s.sqlMode.Has(SQLModeANSIQuotes) {
+		kind = STRING
+	}
+	return kind, value
 }
 
 func scanDigestHintNumber(s *Scanner) (int, string) {
@@ -649,24 +717,24 @@ func scanDigestHintNumber(s *Scanner) (int, string) {
 		s.inc()
 		fractionStart := s.Pos
 		s.scanMantissa(10)
-		if s.Pos == fractionStart || isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
-			// An invalid decimal prefix is discarded before scanning the
-			// trailing hint word; it is not a numeric token plus an alias.
-			return skippedScannerToken, ""
+		if s.Pos == fractionStart || isLetter(s.cur()) || s.cur() >= utf8.RuneSelf && s.cur() != eofChar {
+			// Error recovery discards the prefix but retains later hint words.
+			return LEX_ERROR, ""
 		}
 		return FLOAT, s.buf[start:s.Pos]
 	}
-	end := s.Pos
-	if isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
-		kind, value := s.scanIdentifier(false)
+	// A size suffix stops before a multibyte name, but ASCII name/digit
+	// continuations belong to the same identifier (1K名 versus 1Kx).
+	if strings.ContainsRune("KMG", rune(s.cur())) && !isLetter(s.peek(1)) && !isDigit(s.peek(1)) {
+		s.inc()
+		return INTEGRAL, s.buf[start:s.Pos]
+	}
+	if isLetter(s.cur()) || s.cur() >= utf8.RuneSelf && s.cur() != eofChar {
+		kind, value := scanDigestHintIdentifier(s)
 		if kind == LEX_ERROR {
 			return kind, value
 		}
-		// Hints recognize decimal/size literals, but not SQL exponents or
-		// hex/bin literals. Thus 16K is a number while 1e2 is an identifier.
-		if s.Pos != end+1 || !strings.ContainsAny(s.buf[end:s.Pos], "KMG") {
-			return ID, s.buf[start:s.Pos]
-		}
+		return ID, s.buf[start:s.Pos]
 	}
 	return INTEGRAL, s.buf[start:s.Pos]
 }
@@ -675,7 +743,7 @@ func (d *statementDigest) hint(parent *Scanner, sql string) error {
 	s := NewScannerWithSQLMode(dialect.MYSQL, sql, parent.sqlMode)
 	defer PutScanner(s)
 	// Hint words are classified by digestHintSymbols, never SQL keywords.
-	s.digestMode, s.parseControl, s.identifierAfterDot = true, parent.parseControl, true
+	s.digestMode, s.parseControl = true, parent.parseControl
 	return d.scan(s, nil, true)
 }
 

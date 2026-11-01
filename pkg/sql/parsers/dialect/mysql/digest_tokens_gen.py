@@ -41,7 +41,18 @@ for name in ("sql_yacc.yy", "sql_hints.yy"):
     numbers.update((token, int(number)) for token, number in re.findall(
         r"^%token\s*(?:<[^>]+>\s+)?(\w+)\s+(\d+)\b", files[name], re.M))
 
-nonreserved = set(re.findall(r"^%token<lexer.keyword>\s+(\w+)", files["sql_yacc.yy"], re.M))
+# Derive admission from identifier grammar, not parser semantic-value tags.
+# For the pinned 8.4.11 source this preserves the existing keyword facts.
+def identifier_terminals(rule):
+    body = re.search(r"^" + rule + r":(.*?)^\s*;", files["sql_yacc.yy"], re.M | re.S)[1]
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    result = set()
+    for alternative in body.split("|"):
+        symbol = re.match(r"\s*(\w+)", alternative)[1]
+        result.update({symbol} if symbol in numbers else identifier_terminals(symbol))
+    return result
+
+nonreserved = identifier_terminals("ident_keyword")
 symbols, hints, text = {}, {}, {}
 for token, spelling in re.findall(r'\.set_token\((\w+),\s*"([^"]*)",', files["gen_lex_token.cc"]):
     text[numbers[token]] = spelling

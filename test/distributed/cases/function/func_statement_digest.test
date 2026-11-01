@@ -249,6 +249,36 @@ SELECT STATEMENT_DIGEST_TEXT('SELECT ıf.a FROM t'), STATEMENT_DIGEST('SELECT ı
 SET sql_mode = 'IGNORE_SPACE';
 SELECT STATEMENT_DIGEST_TEXT('SELECT sum.a FROM t'), STATEMENT_DIGEST('SELECT sum.a FROM t');
 SELECT STATEMENT_DIGEST_TEXT('SELECT sum.* FROM t'), STATEMENT_DIGEST('SELECT sum.* FROM t');
+-- Table-name itemization, system-charset display, and hint lexical domains are independent.
+SET sql_mode = '';
+SELECT STATEMENT_DIGEST_TEXT('SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+SELECT STATEMENT_DIGEST_TEXT('WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT 1');
+SELECT STATEMENT_DIGEST_TEXT('WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT * FROM c');
+SELECT STATEMENT_DIGEST_TEXT('EXPLAIN SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+SELECT STATEMENT_DIGEST_TEXT('SELECT 1 AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+SELECT STATEMENT_DIGEST_TEXT('DELETE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` FROM t AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t (a int REFERENCES `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a))');
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t (a int, FOREIGN KEY (a) REFERENCES `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a))');
+SELECT STATEMENT_DIGEST_TEXT('SHOW INDEX FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+SELECT STATEMENT_DIGEST_TEXT('SHOW COLUMNS FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.t FROM db');
+SELECT STATEMENT_DIGEST_TEXT('SELECT `😀`,1'), STATEMENT_DIGEST('SELECT `😀`,1');
+SELECT STATEMENT_DIGEST_TEXT('SELECT `a😀b`,1'), STATEMENT_DIGEST('SELECT `a😀b`,1');
+SELECT STATEMENT_DIGEST_TEXT('SELECT ``'), STATEMENT_DIGEST('SELECT ``');
+SELECT STATEMENT_DIGEST_TEXT('WITH `😀` AS (SELECT 1), `😁` AS (SELECT 2) SELECT 1');
+SELECT STATEMENT_DIGEST_TEXT('SELECT t. end FROM t'), STATEMENT_DIGEST('SELECT t. end FROM t');
+SELECT STATEMENT_DIGEST_TEXT('SELECT end /*gap*/ . a FROM t'), STATEMENT_DIGEST('SELECT end /*gap*/ . a FROM t');
+SELECT STATEMENT_DIGEST_TEXT('SELECT end /*!80411 .a */ FROM t'), STATEMENT_DIGEST('SELECT end /*!80411 .a */ FROM t');
+SELECT STATEMENT_DIGEST_TEXT('SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t'), STATEMENT_DIGEST('SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t');
+SELECT STATEMENT_DIGEST_TEXT('SELECT t. integer FROM t');
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME($a$b) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME($a$b) */ 1');
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME(a😀b) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME(a😀b) */ 1');
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME(`a😀b`) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME(`a😀b`) */ 1');
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME(1K名) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME(1K名) */ 1');
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t'), STATEMENT_DIGEST('SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t');
+SELECT STATEMENT_DIGEST_TEXT(CONCAT('SELECT /*+', CHAR(11), 'QB_NAME(q)', CHAR(12), '*/ 1')), STATEMENT_DIGEST(CONCAT('SELECT /*+', CHAR(11), 'QB_NAME(q)', CHAR(12), '*/ 1'));
+SET sql_mode = 'ANSI_QUOTES';
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME("a😀b") */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME("a😀b") */ 1');
+SET sql_mode = '';
 SET sql_mode = @digest_saved_sql_mode;
 
 DROP TABLE IF EXISTS statement_digest_metadata;

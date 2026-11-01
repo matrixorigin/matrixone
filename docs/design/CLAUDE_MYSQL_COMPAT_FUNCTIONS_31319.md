@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v15，2026-10-30。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v16，2026-11-01。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -29,7 +29,7 @@ parser 将其降低为既有两个 SOUNDEX 调用的等值比较。SOUNDS 是非
 3. 归约数值/字符串字面量、合法 NULL 字面量、单值/多值列表、IN 列表以及数值的一元符号；保留结构、标识符、运算符、BOOL 常量和语法位置中的 NULL。NULL 的字面量角色由语法动作在本次可选摘要解析状态中标记，不用正则猜测 `IS NULL` 或 DDL 的 `NOT NULL`。
 4. 普通注释不参与摘要；可执行注释继续按 scanner 规则处理；可识别 optimizer hints 按 MySQL hint token 域处理，不当普通注释静默删除。
 5. 采用 MySQL 默认的 1024 字节 token 存储预算；新 token/完整标识符无法容纳时停止采集，不能截断单个编码项。即使摘要前缀已满，完整输入仍须通过语法校验。
-6. TEXT 从同一规范化 token 流生成，采用 MySQL 的标识符引号、空格及列表占位符；DIGEST 对该编码字节流作 SHA256，返回 64 位小写十六进制。两个输出共享一个规范，不维护相互漂移的两个算法。默认 utf8mb4 输入中，单个已保留 identifier 超过 64 **字节**时 TEXT 写 `...`（不额外补其后的空格），不是截为64字符；HASH仍编码完整名称及长度。该展示界限与1024字节保留预算、不同名称语法位置的字符上限相互独立。
+6. TEXT 从同一规范化 token 流生成，采用 MySQL 的标识符引号、空格及列表占位符；DIGEST 对该编码字节流作 SHA256，返回 64 位小写十六进制。两个输出共享一个规范，不维护相互漂移的两个算法。默认 utf8mb4 输入中，单个已保留 identifier 超过 64 **字节**时 TEXT 写 `...`（不额外补其后的空格），不是截为64字符；HASH仍编码完整名称及长度。该展示界限与1024字节保留预算、不同名称语法位置的字符上限相互独立。64字节检查先于utf8mb3显示转换：不能转换的四字节字符使整个名称不显示（不是逐字符替换），原始编码与HASH不变；空名称也不显示。SQL quoted identifier 的AST上下文化则使用系统字符集的`?`替代结果，故不同四字节CTE名称可能在声明/引用时相同；此转换不改独立归一化扫描所持的原始字节。
 
 兼容数据生成工具从固定 MySQL 8.4.11 输入提取公开 token 数值、关键字拼写/保留身份及 `my_unicase_default` 的696个小写映射对，输入 SHA256 和来源可追溯；不把 MySQL GPL 源码或实现复制进仓库。实现使用独立的 Go token 模型与现有 MO 解析器。独立 oracle 固定在测试 fixture 中，不依赖在线 MySQL 才能跑 UT。
 
@@ -89,15 +89,16 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - 同一查询块的重复锁不能静默丢掉外层策略。lexer 记录锁子句数，多个锁时在最终 parser 边界按完整 WITH 作用域验证；括号链共享查询块，集合查询末项继续继承外层锁，前项与真正派生/CTE/标量查询各自独立；EXPLAIN（含 ANALYZE）按 MySQL 不应用锁上下文化。仅直接基表目标重复时拒绝，常量、未加引号且非限定/别名形式的虚拟 DUAL、derived/CTE 引用没有直接目标时保留 MySQL 准入。引号身份从 lexer token 经 CStr 到 TableName 保留，digest 的 QUOTE_ID→ID 适配不能抹去该事实。SELECT 与 UPDATE/DELETE 的真实查询各自拥有调用局部作用域帧，同一 query-expression 的括号/集合操作数共享该帧，后继 WITH 替换本层绑定并对后续操作数和 body 之后的 ORDER BY 生效；真正内层查询另建帧，不修改父作用域。CTE 名称唯一性属于声明语法：摘要不经过 binder，因此每个完整 WITH 列表在 digest grammar 构造时保留原始名称，使用 MySQL identifier case table 做一次线性唯一性检查，不能先用Go现代Unicode lower合并 `ẞ/ß` 等合法不同名称；声明校验与引用期锁作用域必须使用同一名称key；独立对照使用 `lower_case_table_names=2`，不新增其他配置的名称策略兼容承诺。普通解析仍传原来的 strings.ToLower 策略，不扩大为新的运行期collation引擎；普通 SQL 保留既有 binder 的重复名称错误与拒绝前零权限/目录探测契约。零/单元素无额外 map；无锁、EXPLAIN、未引用的内层定义仍不能含同层重名，真正嵌套/后继 WITH 不共享唯一性集合。CTE 定义中的锁只有被引用时才在其定义作用域及可见前缀内校验，未引用定义不做锁上下文化；递归引用与重复引用通过本次调用内的定义访问标记终止，不指数展开。括号和集合末项链迭代、尾部表达式按 body 后的生效顺序访问；不克隆累计环境、不持久化状态、不查目录。
 - digest 模式在实际 subquery 产生式调用已有 INTO/EXPORT 查询上下文遍历，拒绝子查询内部导出/assignment，覆盖 ALTER DEFAULT、列定义和延迟窗口 specification；合法顶层 export 仍仅作为 SQL 数据归一化。该检查不依赖关闭的列观察者，不执行 IO，也不改变普通 MO SET 的已有导出诊断路径。
 - 摘要的裸 DUAL 是 MySQL 保留 token，只能作为完整 FROM 子句，不是可带别名/索引提示/括号/连接的普通表因子，也不能作为裸别名或列名。digest-only token 与专用 grammar 产生式闭合全部语法位置；引号标识符、点号限定名保留真实标识符语义：任意单词仅在紧邻点号且点后紧邻未加引号 identifier 字符时跳过 keyword 查找（含数字、BMP 字符、下划线和美元符号），不能因点后是 `*`、引号、空白或注释就降为 identifier；从前一个点号进入的限定组件则已经是 identifier，故 db.dual.* 与 dual.* 不同。该判定由共同 scanner 在 keyword/BEGIN/function 前瞻之前所有，不再是 DUAL 的词名特判；固定 token-local 的 qualifiedIdentifier 事实供摘要编码使用。实际保留词不能因 MO 更宽松的名称语法，在空白/注释之后重新成为点号前缀或后缀；保留身份从对应版本 grammar 生成。非保留 SOUNDS 仍与真正限定的 `sounds.a` 采用不同 token 编码；IGNORE_SPACE 的函数名按真实调用前瞻处理，不把未调用的 `sum.a`/`sum.*` 误当保留函数。SQL和hint的关键字查找只按ASCII名字，不用Unicode uppercase把 `ıf` 变成 IF。原始token只移除scanner认可的ASCII空白，不能用TrimSpace删除属于identifier字节的NBSP等Unicode字符，再把名称变成关键字。数字开头组件由 digest scanner 的单 token pending-dot 状态避免误分为小数，ScanAfterDot 仅在直接相邻时接收数字 identifier，普通数字 literal 不变；quoted 前缀不启用此状态。状态逐 token 消费且在 setSql/PutScanner 的共同 reset 清除。普通 MO 执行 parser 的原有标识符语法不变。新增的限定身份、前一保留词事实也在共同reset清除，注释不能错误清掉前一保留词身份。
-- 显示修复不扩展 MySQL itemization 的所有拒绝域：未知系统变量仍不查服务器注册表；物理表名超过64字符的引用期拒绝尚未模拟（未引用CTE中的同样名称在MySQL仍可形成摘要）。本轮探查结果保留为明确边界，不计作通过的兼容用例；长列/别名、合法多字节表名以及未引用CTE名称分别保留独立展示对照，不把字节展示上限误用于这些上下文。
+- 表/数据库名称的上下文化校验独立于展示：物理名称最多64字符，拒绝真实空名称及ASCII空白结尾，不能将64字节显示预算当作字符限制。lexer只记录可能非法的名称，完整语句边界再与锁检查共享作用域遍历；没有候选且不足两个锁时不增加AST遍历。CTE仅在被引用时按定义作用域展开一次；未引用定义、长列/别名、无FROM的内部空表节点不误拒绝。EXPLAIN只关闭锁检查，仍校验被itemize的名称；DELETE多表目标是别名，只校验其显式数据库；inline REFERENCES忽略名称而真正FOREIGN KEY校验；SHOW COLUMNS/INDEX的末尾FROM数据库覆盖原限定。覆盖SELECT、CTE、EXPLAIN、DML与已支持DDL入口，不做目录查询，不改变普通执行parser的名称准入。未知系统变量等服务器注册表边界依旧不在纯解析保证内。
+- 非保留限定组件需要桥接MO与MySQL的identifier grammar：如`END`在空白/注释后的点号组件可进入MO的ID语法，但保留keyword编码，不能误标为词法上的qualifiedIdentifier。紧邻组件、保留词和普通CASE END控制分别保留。前瞻复用同一lexer并带已有follower递归保护，必须识别可执行注释中的真实下个token，不能把`/*! +t */ .a`当普通注释跳过后误将CASE的END变为名称；预算仍由共享control计费。保留词事实通过固定MySQL grammar的ident_keyword闭包生成；本次从旧标签提取改为grammar提取没有改变既有token编号、function或reserved数据，实际缺陷位于语法桥接而非END元数据。
 - 生成 parser 必须零冲突且可复现。
 - 裸时间默认值须来自原生 keyword 语法域；复用 FuncExpr.IsGeneric 保存普通 identifier 函数身份，digest-only 解析额外标记被引号包裹的原生时间 keyword。IGNORE_SPACE 仅放宽函数名和左括号之间的空白，不跨注释；括号表达式也不接受这些伪装的原生函数。普通执行 parser 契约不变。
 - 摘要 lexer 的 ROW 构造器适配不能吞掉窗口 frame 的 CURRENT ROW；该 native frame token 保持原样。窗口跳过的是列 itemization，不跳过 parser、资源预算或摘要编码。
 - 上述附加 AST 遍历仅发生于 DDL 的 DEFAULT/生成属性，按 1 MiB/65536 token 输入预算线性工作，临时文本及函数引用列表均受输入大小约束；普通 SELECT 摘要路径不增加扫描、会话、IO 或持久状态。
 - 列级 REFERENCES 的准入依赖 AST 所在 DDL 上下文：CREATE/ADD 可接受，MODIFY/CHANGE 拒绝；表级 FOREIGN KEY 不套此限制，不解析引用表或执行建表校验。
 - CREATE 和 ALTER ADD/MODIFY/CHANGE 共用列属性上下文化规则；生成列拒绝 DEFAULT（包括裸 NULL）、AUTO_INCREMENT、ON UPDATE、COLUMN_FORMAT 和 STORAGE；COMMENT、NULL/NOT NULL、索引/字符属性及普通列上的属性通过独立控制组保留，不按建表执行期的键约束误拒绝其他合法摘要。
-- 可执行注释在 digestMode 中按普通 SQL 字符串规则扫描，不沿用 MO 普通解析对注释内单引号的特殊跳过/拼接规则；普通执行 parser 的既有契约不变，版本过滤/工作预算仍由原 scanner 所有。
-- hint 尺寸后缀区分大小写：大写 K/M/G 为数值，小写为名称。小数点之后没有数字（例如 1.）的前缀丢弃，不产生虚假数值 token；所有 text/hash 控制组来自独立 MySQL oracle。
+- 可执行注释在digestMode中按普通SQL字符串规则扫描，不沿用MO普通解析对注释内单引号的特殊跳过/拼接规则。上游普通执行lexer以80030比较完整数字串；digest以MySQL8.4.11的80411为目标，五位版本号为默认，第六位为数字且随后为空白时消费六位，不足五位的数字留作SQL。二者分别保留其版本准入契约，工作预算仍由原scanner所有。
+- hint尺寸后缀区分大小写：大写K/M/G后没有ASCII名称/数字延续时结束数值（`1K名`是数值加名称），小写或ASCII延续仍是名称。小数点后没有数字或紧接名称时丢弃非法前缀，不产生虚假数值token；词法错误后继续恢复扫描，不能丢掉后续有效项。所有text/hash控制组来自独立MySQL oracle。
 
 - 一元 `+` 的列默认值引用须在投影 AST 边界保留，包括嵌套括号、派生表物化、HAVING/ORDER BY 别名。MO 的数值降低可能改变行值类型，因此使用既有 provenance 中单独的 `ColumnDefaultSource`，只供 DEFAULT 命名空间读取，不伪造通用透明来源或扩大 CTAS 默认值继承；它复用不可变来源快照，无新的持久状态。负号、显式 CAST 和算术表达式仍不是来源列。
 - 字符集引入符必须来自非限定 ID token，不能由普通字符串内容或限定标识符触发；国别字符串只认紧邻的单引号。数字前缀标识符保留原始大小写，已完成的 SQL 指数数值与后续别名分开；这些兼容分支只在 digestMode 生效。
@@ -116,7 +117,7 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - ROLLUP/CUBE 内部 UNION 的物化输出使用普通临时字段默认值，不得引入只属于用户 SQL UNION 的 strict 时间错误。仍按全部分支的真实 nullability 区分日期常量（零日期）、CAST（NULL）和实际分组列的小计 NULL。
 - UNION 临时字段与普通无 FROM 派生字段还需保留来源种类：strict 模式下非空 DATE/DATETIME/TIMESTAMP 的 UNION 输出没有隐式默认值，报 1364；TIME/数值、可空转换结果不受影响。MySQL 将这条规则固定在 PREPARE/bind 时，后续仅切换 strict 模式不会改写已准备的默认值；不为此改变 prepare 的 SQL-mode 缓存协议。
 - 独立 oracle 确认 HAVING 的 SELECT 别名优先于同名的未分组物理列；已声明的同名源分组列优先于别名。ORDER BY 表达式中的列优先于别名；相关作用域允许在内层同名表无该列时继续解析外层。元数据解析必须分别保持这些命名空间规则。
-- hint 有独立词法域，不能把其内容当普通 SQL 表达式扫描：其中的 `?` 是标点而非参数，复合运算符按单字符编码，`--`/`#` 不开始行注释，字符串前的 N/字符集/X 保留为标识符；标识符与 @ 的空白也影响 token。复用现有字符串、数字和标识符扫描器，但用局部 hint 分派入口，避免给全局 scanner 增加状态。
+- hint有独立词法域：`?`是标点而非参数，复合运算符按单字符编码，`--`/`#`不开始行注释，字符串前的N/字符集/X保留为名称。unquoted名称允许重复`$`和有效utf8mb4；quoted名称采用双写引号转义，反斜线不是转义，先转换到系统utf8mb3再存储，因此四字节字符在quoted hint中变成`?`，而unquoted名称保留原始HASH字节、显示时整项转换失败。ASCII空格、tab、CR/LF、VT/FF都是hint空白，Unicode空白仍是名称字节。`@`只在左括号后或紧邻名称后引出query-block名称；IdentifierAt身份在扫描名称时决定，非法后续名称不改已经保留的前缀。复用scanner前进/预算/引号原语，但不进入SQL identifier、function、BEGIN或限定名分派，不增加池化scanner状态。
 - 摘要达到 1024 字节后进入不可变状态：追加和归约均不得修改已保存前缀；仍扫描后缀以拒绝参数占位符。长前缀后接字符集引入符或 hint 的独立 oracle 反例已加入 fixture。
 - 摘要返回类型为可空 VARCHAR(64)/LONGTEXT，字符域复用 MO 已支持的显式 utf8mb4_general_ci 标识（与既有文本函数一致）；本任务不新增 MySQL utf8mb4_0900_ai_ci 的排序引擎。文本及 hash 的内容兼容不依赖这一现有元数据边界。
 - 所有有预算的 scanner 工作均由公开 ParseWithSQLMode 边界所有，包含可选摘要归一化扫描。内部私有 context 请求携带语法事实/有界输出，公开签名不变，无通用 callback。只在已批准的解析入口捕获本 control 的 parseAbort；StatementDigest/私有 wrapper 不再独立 recover，其他 panic 原样传播。两遍共用 control 身份但重置 token/work 计数，预算独立；AST 成功才移交调用方，否则由解析入口唯一释放，两个 scanner 均立即注册归还。注释-only EmptyStmt 的既有摘要行为保留。

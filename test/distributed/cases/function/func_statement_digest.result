@@ -530,6 +530,80 @@ SELECT `sum` . `a` FROM `t`  ¦  b4851a335e997ff2cecc322c7a2d1b8344da3018fd44181
 SELECT STATEMENT_DIGEST_TEXT('SELECT sum.* FROM t'), STATEMENT_DIGEST('SELECT sum.* FROM t');
 ➤ STATEMENT_DIGEST_TEXT(SELECT sum.* FROM t)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT sum.* FROM t)[12,64,0]  𝄀
 SELECT `sum` . * FROM `t`  ¦  eae3850c2c375f74fa3f1d61588461cf1d4f4f93bcddbee2cf670b2e9f90f0c7
+SET sql_mode = '';
+SELECT STATEMENT_DIGEST_TEXT('SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT 1');
+➤ STATEMENT_DIGEST_TEXT(WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT 1)[-1,536870911,0]  𝄀
+WITH `c` AS ( SELECT * FROM ...) SELECT ?
+SELECT STATEMENT_DIGEST_TEXT('WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT * FROM c');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('EXPLAIN SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SELECT 1 AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+➤ STATEMENT_DIGEST_TEXT(SELECT 1 AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`)[-1,536870911,0]  𝄀
+SELECT ? AS ...
+SELECT STATEMENT_DIGEST_TEXT('DELETE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` FROM t AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+➤ STATEMENT_DIGEST_TEXT(DELETE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` FROM t AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`)[-1,536870911,0]  𝄀
+DELETE ...FROM `t` AS ...
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t (a int REFERENCES `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a))');
+➤ STATEMENT_DIGEST_TEXT(CREATE TABLE t (a int REFERENCES `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a)))[-1,536870911,0]  𝄀
+CREATE TABLE `t` ( `a` INTEGER REFERENCES ...( `a` ) )
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t (a int, FOREIGN KEY (a) REFERENCES `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a))');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SHOW INDEX FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SHOW COLUMNS FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.t FROM db');
+➤ STATEMENT_DIGEST_TEXT(SHOW COLUMNS FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.t FROM db)[-1,536870911,0]  𝄀
+SHOW FIELDS FROM .... `t` FROM `db`
+SELECT STATEMENT_DIGEST_TEXT('SELECT `😀`,1'), STATEMENT_DIGEST('SELECT `😀`,1');
+➤ STATEMENT_DIGEST_TEXT(SELECT `😀`,1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT `😀`,1)[12,64,0]  𝄀
+SELECT , ?  ¦  fcf53be7367b008461aaf305be2999dd26887a0f86c1dc0bda0e273da175cab7
+SELECT STATEMENT_DIGEST_TEXT('SELECT `a😀b`,1'), STATEMENT_DIGEST('SELECT `a😀b`,1');
+➤ STATEMENT_DIGEST_TEXT(SELECT `a😀b`,1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT `a😀b`,1)[12,64,0]  𝄀
+SELECT , ?  ¦  b498825f95e4170b23c984ef4adbb9744bdb8460a26272e2a4d496a9ed403feb
+SELECT STATEMENT_DIGEST_TEXT('SELECT ``'), STATEMENT_DIGEST('SELECT ``');
+➤ STATEMENT_DIGEST_TEXT(SELECT ``)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT ``)[12,64,0]  𝄀
+SELECT  ¦  12ac01426ce29198b2a75c2a303760f77833e054b877c5878a57bff2d65245b1
+SELECT STATEMENT_DIGEST_TEXT('WITH `😀` AS (SELECT 1), `😁` AS (SELECT 2) SELECT 1');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SELECT t. end FROM t'), STATEMENT_DIGEST('SELECT t. end FROM t');
+➤ STATEMENT_DIGEST_TEXT(SELECT t. end FROM t)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT t. end FROM t)[12,64,0]  𝄀
+SELECT `t` . END FROM `t`  ¦  c8c735aef1934ca1a7e0fcfbaef33a6429359c0bdaa25feb1a09a3a1e651b002
+SELECT STATEMENT_DIGEST_TEXT('SELECT end /*gap*/ . a FROM t'), STATEMENT_DIGEST('SELECT end /*gap*/ . a FROM t');
+➤ STATEMENT_DIGEST_TEXT(SELECT end /*gap*/ . a FROM t)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT end /*gap*/ . a FROM t)[12,64,0]  𝄀
+SELECT END . `a` FROM `t`  ¦  9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a
+SELECT STATEMENT_DIGEST_TEXT('SELECT end /*!80411 .a */ FROM t'), STATEMENT_DIGEST('SELECT end /*!80411 .a */ FROM t');
+➤ STATEMENT_DIGEST_TEXT(SELECT end /*!80411 .a */ FROM t)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT end /*!80411 .a */ FROM t)[12,64,0]  𝄀
+SELECT END . `a` FROM `t`  ¦  9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a
+SELECT STATEMENT_DIGEST_TEXT('SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t'), STATEMENT_DIGEST('SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t');
+➤ STATEMENT_DIGEST_TEXT(SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t)[12,64,0]  𝄀
+SELECT CASE WHEN TRUE THEN ? ELSE ? END + `t` . `a` FROM `t`  ¦  9873d695a3dc26bf14c7cecd689b1586f93a033794b6cf361a17e2fa77635688
+SELECT STATEMENT_DIGEST_TEXT('SELECT t. integer FROM t');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME($a$b) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME($a$b) */ 1');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME($a$b) */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME($a$b) */ 1)[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( `$a$b` ) */ ?  ¦  ede9bd8ecd3518af72ba7ae2c4996de31aeeddd9baa461961933b0399abc1d10
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME(a😀b) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME(a😀b) */ 1');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME(a😀b) */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME(a😀b) */ 1)[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( ) */ ?  ¦  c97d19c3a866f5d34568cbe3402992039a0a559b9fdb59d3cbd1a56033d4b955
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME(`a😀b`) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME(`a😀b`) */ 1');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME(`a😀b`) */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME(`a😀b`) */ 1)[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( `a?b` ) */ ?  ¦  ababa4f14df26b316e891beb9aff9b5fffc2bc8171ddd6df98fe9139ba24d1eb
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME(1K名) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME(1K名) */ 1');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME(1K名) */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME(1K名) */ 1)[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( ? `名` ) */ ?  ¦  c0b7c46ce1df7253bda24c94463a98a8cf86da98f1a3f867d0d4abfcded39b0c
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t'), STATEMENT_DIGEST('SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t)[12,64,0]  𝄀
+SELECT /*+ INDEX ( `t`@`?` `i` ) */ ? FROM `t`  ¦  474499d2752a24ba5435f70a7816e9b9e3716180c32b7dd8a7b37423903aabc9
+SELECT STATEMENT_DIGEST_TEXT(CONCAT('SELECT /*+', CHAR(11), 'QB_NAME(q)', CHAR(12), '*/ 1')), STATEMENT_DIGEST(CONCAT('SELECT /*+', CHAR(11), 'QB_NAME(q)', CHAR(12), '*/ 1'));
+➤ STATEMENT_DIGEST_TEXT(CONCAT(SELECT /*+, CHAR(11), QB_NAME(q), CHAR(12), */ 1))[-1,536870911,0]  ¦  STATEMENT_DIGEST(CONCAT(SELECT /*+, CHAR(11), QB_NAME(q), CHAR(12), */ 1))[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( `q` ) */ ?  ¦  b844065d8f57c3835ef74a30dd917ac8de4a4ed592619606369686f572e365fb
+SET sql_mode = 'ANSI_QUOTES';
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME("a😀b") */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME("a😀b") */ 1');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME("a😀b") */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME("a😀b") */ 1)[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( `a?b` ) */ ?  ¦  ababa4f14df26b316e891beb9aff9b5fffc2bc8171ddd6df98fe9139ba24d1eb
+SET sql_mode = '';
 SET sql_mode = @digest_saved_sql_mode;
 DROP TABLE IF EXISTS statement_digest_metadata;
 CREATE TABLE statement_digest_metadata AS SELECT STATEMENT_DIGEST('SELECT 1') AS digest, STATEMENT_DIGEST_TEXT('SELECT 1') AS normalized;

@@ -744,7 +744,7 @@ func (s *Scanner) scanLiteralIdentifierWithDelim(delim uint16) (int, string) {
 		switch s.cur() {
 		case delim:
 			if s.peek(1) != delim {
-				if s.Pos == start {
+				if s.Pos == start && !s.digestMode {
 					return LEX_ERROR, ""
 				}
 				s.inc()
@@ -1087,6 +1087,24 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 				s.cur() == '.' && (isUnquotedIdentifierLetterAt(s.buf, s.Pos+1) || isDigit(s.peek(1))) {
 				s.qualifiedIdentifier = true
 				return ID, keywordName
+			}
+			// MySQL's nonreserved grammar (for example END) is broader
+			// than MO's. Admit those qualified components without claiming
+			// lexical keyword bypass: their digest still contains the keyword.
+			if symbol, ok := digestSymbols[digestKeywordUpper(keywordName)]; ok && !symbol.reserved && !symbol.function {
+				if s.identifierAfterDot {
+					return ID, keywordName
+				}
+				if !s.aliasFollowerLookahead {
+					// Ask the same lexer for one real follower: executable
+					// comments may contain SQL, not just discardable trivia.
+					// Its existing follower guard prevents recursive lookahead.
+					lookahead := *s
+					lookahead.aliasFollowerLookahead = true
+					if next, _ := lookahead.Scan(); next == '.' {
+						return ID, keywordName
+					}
+				}
 			}
 		} else if s.identifierAfterDot {
 			return ID, keywordName

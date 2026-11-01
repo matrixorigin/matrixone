@@ -14089,5 +14089,3340 @@
     "sql": "SELECT /*+ ſet_var(sort_buffer_size=16384) */ 1",
     "text": "SELECT /*+ `ſet_var` ( `sort_buffer_size` = ? ) */ ?",
     "digest": "dcaa2e8acc05ce4d08c069ee08a6c3ce82fc5a9d3809d9257c3437664816f0c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.t",
+    "text": "SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` . `t`",
+    "digest": "944599c9ebf685d573ca97b2446335ee1face6c5198bd54c1a1dda9d0613e38d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM db.`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "SELECT * FROM `db` . `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "digest": "6e392b4dc29ae0ce9c68f1650155eca977618d917ed701542045e34a974a1551"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "EXPLAIN SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "digest": "de6f3d8e025ff73575cb8369d3bdcd916ea16639b39202450de2728fd40b301f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "EXPLAIN ANALYZE SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "digest": "11605991ea211997d5ec2203dd552f7b41c68d863176c442a9e737f2ff15b304"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` ) SELECT ?",
+    "digest": "e61c18f11665108032166313794ec5a1dcb7c3b48ef1a1814a111abd77b30648"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` ) SELECT * FROM `c`",
+    "digest": "e4aed0d656c4c70ba3f6ce932637199acc3ab0860d1fb82f61dbe46783259138"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` AS (SELECT 1) SELECT 1",
+    "text": "WITH `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` AS ( SELECT ? ) SELECT ?",
+    "digest": "470cc0c6a3ac7fc81c2a677688af7da6a52b4fa6148fcfb6e30d1af7395b1d58"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` AS (SELECT 1) SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "WITH `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` AS ( SELECT ? ) SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "digest": "d5d4b4b3229c6c95a7869d1f28edd45234a53935c98e773701e3783e1dd3e498"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) q",
+    "text": "SELECT * FROM ( SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` ) `q`",
+    "digest": "6bff6533063c158ad654ab176fa621d1796e4891f1706be5dd34b360e0cd0d0c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.a FROM t AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "SELECT `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` . `a` FROM `t` AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "digest": "aee9da074bec19df6364d83d2ea7b16205dd37e59263ef5e7bf2e4582dd91779"
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` SET a=1",
+    "text": "UPDATE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` SET `a` = ?",
+    "digest": "ad6517b85d5139f5d118d91780877901d91fba5b9b3e591f3d71ce7f4513e7b5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "DELETE FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "digest": "527bb74537b19a5b680a94c0b1005b0eb9d6754bfe1d272ac41e601650d8dafa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` FROM t AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "DELETE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` FROM `t` AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "digest": "827f9ddf2ea642af96fa178258c1aadc168b4c643a51308fca37244ef98de3de"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` VALUES (1)",
+    "text": "INSERT INTO `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` VALUES (?)",
+    "digest": "b2cb222fbebcab7c4a8b6ff9ffba33e1b166e295bd6288f7817b716001a635d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "REPLACE INTO `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` VALUES (1)",
+    "text": "REPLACE INTO `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` VALUES (?)",
+    "digest": "dc6fe3e5f783fdb82baefe98d8c8cd59f5cbb2fc95c30e7b180055725a076a38"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (a int)",
+    "text": "CREATE TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` ( `a` INTEGER )",
+    "digest": "866ab21fe9c499e231f9816c9a2e55f1d5eda5431e8725b35350dafa7cbbd618"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` ADD b int",
+    "text": "ALTER TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` ADD `b` INTEGER",
+    "digest": "11c02b557a2ca296986e0c1be152dae0fd79e76b7cf4da0331f9eb7fbd6bfd9b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DROP TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "DROP TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "digest": "02e48758da57cf3698799c75a5d9b20f4ae6eebb8a1b589d922d147cea4eea90"
+  },
+  {
+    "sql_mode": "",
+    "sql": "TRUNCATE TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "TRUNCATE TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "digest": "8918ddb190a9e4efc32ae68c436628323c6078de739fd25de4b99654259a57a2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM db.`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` AS (SELECT 1) SELECT 1",
+    "text": "WITH ...AS ( SELECT ? ) SELECT ?",
+    "digest": "b61671169480654e33e71ed9e82fe706ac2f27480439ada348b81620c4524bf7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` AS (SELECT 1) SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) q",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.a FROM t AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "SELECT .... `a` FROM `t` AS ...",
+    "digest": "e6d678a4b3379a3a4f2d1a9e608f37892b2d3ffc5dc515726f90a02678dee667"
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` SET a=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` FROM t AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "DELETE ...FROM `t` AS ...",
+    "digest": "e0d615a8e4fa7b9eb71b78e541d36b37c90f5c1eff81679005b37c10aa5e2f32"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` VALUES (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "REPLACE INTO `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` VALUES (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (a int)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` ADD b int",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DROP TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "TRUNCATE TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "SELECT * FROM ...",
+    "digest": "58274aecd1978ff9c886fdda06638a3677d65508644d8c1f0e981668738f893a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`.t",
+    "text": "SELECT * FROM .... `t`",
+    "digest": "556932244d73027f6f129ddb6021420a262d69b61a1b6daa1d0162eb6533e687"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM db.`名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "SELECT * FROM `db` . ...",
+    "digest": "1e77bcda0a48904a74664a1361d7ccd76e6e044df2009d6a9f774a85956e0d54"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "EXPLAIN SELECT * FROM ...",
+    "digest": "7cb6ffb426ac827f0f3988ef92332d688b601a1da97c92d45e9710c31e9b4f23"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "EXPLAIN ANALYZE SELECT * FROM ...",
+    "digest": "70308763ef56589ea4727502c78feb66a1bbd17559a970d3aed33cfd7d9ae392"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM ...) SELECT ?",
+    "digest": "b0c9cd88ae097f9cdc7f22fe24d213355a707f8774350d8d11125dbabd43ec94"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT * FROM ...) SELECT * FROM `c`",
+    "digest": "f117d87fc1ea20b0a8f25e07376e19c15203b9638746dc92ec74c499380b5b9a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` AS (SELECT 1) SELECT 1",
+    "text": "WITH ...AS ( SELECT ? ) SELECT ?",
+    "digest": "4230996b5e49a25dca4822e7637e406cd6ae01cf335a4850d5f37c17d63cd04d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` AS (SELECT 1) SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "WITH ...AS ( SELECT ? ) SELECT * FROM ...",
+    "digest": "8933c14de767aeb98f5ccdaafaa527de6a5e233fbf4a66dc8cb31d592e598391"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`) q",
+    "text": "SELECT * FROM ( SELECT * FROM ...) `q`",
+    "digest": "d8d0f469230a5691b194d40e872855ac9c2b0bf7e00928b3b124585445601447"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "SELECT ? AS ...",
+    "digest": "419f32fd1cd038f1e29fb103317c67479c94ecdfde1e8d2826e1f5699232129e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`.a FROM t AS `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "SELECT .... `a` FROM `t` AS ...",
+    "digest": "bd946337aee0fa4a992efefe0a9706e6fb1bad486b7630714fc23088e810cead"
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` SET a=1",
+    "text": "UPDATE ...SET `a` = ?",
+    "digest": "ffeea9daf5b29e950030dc8ea18641fe5cbb7437ec74bd087ef3053cc8d2b986"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "DELETE FROM ...",
+    "digest": "f6b9747fe4cc43cfb64cea4df4715f2edb6f9b3e31b3ca0640921688ad47cf03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` FROM t AS `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "DELETE ...FROM `t` AS ...",
+    "digest": "fcc4def001dcf54e00da8ce9265d7faf9744f8949419d804b78a76aa13d4603a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` VALUES (1)",
+    "text": "INSERT INTO ...VALUES (?)",
+    "digest": "44bda04a70df893a1e9eaf7819657f300791ee787e8b207b6290d24f1baaac1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "REPLACE INTO `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` VALUES (1)",
+    "text": "REPLACE INTO ...VALUES (?)",
+    "digest": "1534d95117d0cbb88bb7bbefcbf2b8fddf9f39a6277616a2367c1a1f6fd5126a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` (a int)",
+    "text": "CREATE TABLE ...( `a` INTEGER )",
+    "digest": "c0cadc121670e04774602018ecda4a0a1e00e32ff6e76e7ddb6c5e73b575047b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` ADD b int",
+    "text": "ALTER TABLE ...ADD `b` INTEGER",
+    "digest": "25087bb33484243712d80122a90b95b99a5a3da1897f6b3ef1d318201ca3767c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DROP TABLE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "DROP TABLE ...",
+    "digest": "5850657519dffe17bb37a0d22fe4ac5bc9edabee03168301044b1fa766eb1090"
+  },
+  {
+    "sql_mode": "",
+    "sql": "TRUNCATE TABLE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "TRUNCATE TABLE ...",
+    "digest": "c6cc03460511f10064df65f4ec4d00da71ed0aaae1d240b1225af5a91219c6e0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`.t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM db.`名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM ...) SELECT ?",
+    "digest": "5e3fb326566d8193824ba1e77397bf7901398d89792305e32720906da7cb7010"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` AS (SELECT 1) SELECT 1",
+    "text": "WITH ...AS ( SELECT ? ) SELECT ?",
+    "digest": "adcdcecc9ccca9b1a0fa69a9381235a1f949a8c9b0e981f15d766944977a31c0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` AS (SELECT 1) SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT * FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`) q",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "SELECT ? AS ...",
+    "digest": "d3106a86e31b8004e160889ee1d3dbdea7f79afdb5abce30e2fde367e60f9b9b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`.a FROM t AS `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "SELECT .... `a` FROM `t` AS ...",
+    "digest": "a6431689cc5e477e78af73daeefa6dd63fde155752c024be7c801f9221e08645"
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` SET a=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE FROM `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` FROM t AS `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "text": "DELETE ...FROM `t` AS ...",
+    "digest": "4a9d60d46a66ad2236d028e9e1905758c00d63bc718abe96883674ee38209232"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` VALUES (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "REPLACE INTO `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` VALUES (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` (a int)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名` ADD b int",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DROP TABLE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "TRUNCATE TABLE `名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "SELECT * FROM ...",
+    "digest": "44502f8d40cbb02a287fc95666f800d9df27a48b6cd3cccc4b831d15fb05fd87"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`.t",
+    "text": "SELECT * FROM .... `t`",
+    "digest": "6da85c0ebc826cd003b231f8b72826b8655ae557edb7fea4cae171916ae4bc9d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM db.`😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "SELECT * FROM `db` . ...",
+    "digest": "fac4a1003cc610cd17e23f1440e0bd89b2b21c802eb7f188ee789c67383fce7a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "EXPLAIN SELECT * FROM ...",
+    "digest": "51bf181ce051a780d73366d5a57be4e1c21150dee4e40c6a03ff03e34316c533"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "EXPLAIN ANALYZE SELECT * FROM ...",
+    "digest": "30ed299ef9508870ab77dd57852246d6f3827c6d0448ad8e1a64224ef85f4c0e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM ...) SELECT ?",
+    "digest": "a01ca52a235e9bf4446b0f5c6cc36cb3abb68fde3e1dff9aebc057af8e6d13a0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT * FROM ...) SELECT * FROM `c`",
+    "digest": "17a26a9c1f92faf8826ed844b90a71d2a874d4b59474e647e791977e4235fa8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` AS (SELECT 1) SELECT 1",
+    "text": "WITH ...AS ( SELECT ? ) SELECT ?",
+    "digest": "6a2b8b69531f5a908fb0e9872d8a800c786a6c665c62da67ed4ec279915dee55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` AS (SELECT 1) SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "WITH ...AS ( SELECT ? ) SELECT * FROM ...",
+    "digest": "ea08a3f1ae1124d890e6ee1270cb2b96fff9522169cac831574306b97b70dbbc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`) q",
+    "text": "SELECT * FROM ( SELECT * FROM ...) `q`",
+    "digest": "b7458158ae4d6966ce0cb5ff8cda158b7331556b4270fad7b2c64f99a16bb9d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "SELECT ? AS ...",
+    "digest": "60455af708efaee509405ad2ca90184baf9b5519449fb0efe1afcfc3e570136b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`.a FROM t AS `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "SELECT .... `a` FROM `t` AS ...",
+    "digest": "66be75d88b1378d443910daf5cec594dcca2990ba091f38b062032c753f1e0d4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` SET a=1",
+    "text": "UPDATE ...SET `a` = ?",
+    "digest": "1a85f3238e4a4c258ec346e1cd6a22d0fa633f6fa9d3e676177368d9b5a58b42"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "DELETE FROM ...",
+    "digest": "81d995d67e15c59bb2c7fe3af5e6abf74d79be5e522b113dee5b1b605d5fe373"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` FROM t AS `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "DELETE ...FROM `t` AS ...",
+    "digest": "23cb25351fd0fdd89cafda2f90ba47ca5096a82b22eb11a3bcbe50389ce3d023"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` VALUES (1)",
+    "text": "INSERT INTO ...VALUES (?)",
+    "digest": "f013c2d5bb56a7b160b6815144920862c9d0488cc9423d8ed7d2a7c72d2c136c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "REPLACE INTO `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` VALUES (1)",
+    "text": "REPLACE INTO ...VALUES (?)",
+    "digest": "d3376b6832c19ecd790b6f9698430fc09a8bd3b48d05d5461ee3bd830bce0855"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` (a int)",
+    "text": "CREATE TABLE ...( `a` INTEGER )",
+    "digest": "735443005307347e8018c54755f9513ae99944853344155c7e04436a7edf1162"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` ADD b int",
+    "text": "ALTER TABLE ...ADD `b` INTEGER",
+    "digest": "8c205d441ce0de150774b7248932e43b4cfefa034af0b271a007990a0537b21e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DROP TABLE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "DROP TABLE ...",
+    "digest": "6c502245af846f2f9b64b88adf2b57861433d81be5b191ffcdd6abc97b62586d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "TRUNCATE TABLE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "TRUNCATE TABLE ...",
+    "digest": "dbf084d2b84d663534dd8de837efc9f186eeed272c061fa60f32fab831f0b071"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`.t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM db.`😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN ANALYZE SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM ...) SELECT ?",
+    "digest": "648827e887f188942e9e66bf969f57754563b665f6c16820a914a50ad4624ba1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` AS (SELECT 1) SELECT 1",
+    "text": "WITH ...AS ( SELECT ? ) SELECT ?",
+    "digest": "bae6338932aeef8fe14af7353870d5a566dfe50dd79ed61a5f63fea387416643"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` AS (SELECT 1) SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`) q",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "SELECT ? AS ...",
+    "digest": "7578fa82b4cbf0ca0c6a1efb4d4ea91daee4cfc5581d1cd0165af599466a848a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`.a FROM t AS `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "SELECT .... `a` FROM `t` AS ...",
+    "digest": "ceb9b2b164529f323f39d3997ab9c17865c61573efffeaff3e1229c475e31ada"
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` SET a=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` FROM t AS `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "DELETE ...FROM `t` AS ...",
+    "digest": "cf9a1a6e5ed3ce7a0f57baa23db96301b99651ac2bdadd3b8aacecc7f3e62fb7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` VALUES (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "REPLACE INTO `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` VALUES (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` (a int)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀` ADD b int",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DROP TABLE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "TRUNCATE TABLE `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀`",
+    "text": "SELECT",
+    "digest": "e9301b7d3fe7a19cc66a9482ba65165de5eef24bfb934f695516e8bc199e8dd1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀`,1",
+    "text": "SELECT , ?",
+    "digest": "fcf53be7367b008461aaf305be2999dd26887a0f86c1dc0bda0e273da175cab7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `😀`",
+    "text": "SELECT ? AS",
+    "digest": "9c2a4191e5dfbc1c529f86e5ed9c350c075083542511b8594c7ab6b56ad8e125"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `😀`",
+    "text": "SELECT * FROM",
+    "digest": "2da2f462fb0c7c5acedb88fc8360e3d8080b04e7b83c0ab94b60a49ec6b9bab9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀`.a FROM t",
+    "text": "SELECT . `a` FROM `t`",
+    "digest": "3a2d4c3ff0ecae708a7bdd59bd1179aea53bee111d99c1061e9edd33d8b6f959"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(😀) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ) */ ?",
+    "digest": "1cf393ea4fa740e210a110d586fd0b43762158b0d33bdc22cdf65c28f4c9c1f9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`😀`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `?` ) */ ?",
+    "digest": "6439393ff3102022b973206a9bc13503e86d8c707a6e12fabe5298c7b3326328"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `a😀b`",
+    "text": "SELECT",
+    "digest": "f9a059d6471aaa66c87d66e915384abc2cf4e78176863c40af2a91b62b5829dc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `a😀b`,1",
+    "text": "SELECT , ?",
+    "digest": "b498825f95e4170b23c984ef4adbb9744bdb8460a26272e2a4d496a9ed403feb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `a😀b`",
+    "text": "SELECT ? AS",
+    "digest": "021f18bc669b25194d4c5b834b6cb981ef3a4a99173bd071542a8af3bc01c0a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `a😀b`",
+    "text": "SELECT * FROM",
+    "digest": "6fb9aeec681f8c8b5c376687a3ef46c6c208eb72800a3827a13271a1c3cbb99b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `a😀b`.a FROM t",
+    "text": "SELECT . `a` FROM `t`",
+    "digest": "ed3caa3acdf0a69adc9835929d564125dc1ba3b214eef278611c0eb248396b6a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a😀b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ) */ ?",
+    "digest": "c97d19c3a866f5d34568cbe3402992039a0a559b9fdb59d3cbd1a56033d4b955"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`a😀b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a?b` ) */ ?",
+    "digest": "ababa4f14df26b316e891beb9aff9b5fffc2bc8171ddd6df98fe9139ba24d1eb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "SELECT",
+    "digest": "9a7c8b8b63665b098910a732d1dcca886be52c8f22af8e4912e7eef2bc1bd497"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`,1",
+    "text": "SELECT , ?",
+    "digest": "8ad0a01cb3b71b23480415dd1e39acff3871828e08a1e16b19b01282087b9fe8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "SELECT ? AS",
+    "digest": "18aa7c464fd087fd70cbd59afcc39fe8f7da5ded727e026748abf8d5b3c7e8c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`",
+    "text": "SELECT * FROM",
+    "digest": "132bd84b888818be0139a52e0f6a117063cbce1eff9bf5d73ee8ecec388bea8f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`.a FROM t",
+    "text": "SELECT . `a` FROM `t`",
+    "digest": "64ed0339abbcb0492477dbee5cb552766e97387d036206a2e2f423b39fe17eed"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ) */ ?",
+    "digest": "3c405e6aa84ea6ee9d305e66eb3dcf6e6d24e7aef2eb093e97cae5b8ae945d9d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `????????????????` ) */ ?",
+    "digest": "919924acd5b644962859fd4904ec4e47509e73948456758bce5765266628adfe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a`",
+    "text": "SELECT ...",
+    "digest": "9bdef4f7b172630f67a32c77a96a0d58a01c2842ca7c69b2187f9295ac785f55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a`,1",
+    "text": "SELECT ..., ?",
+    "digest": "fc3c917f4b2e51960a3f58c79f01d909fc95505f775caaa03a71e52bc0685ae6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a`",
+    "text": "SELECT ? AS ...",
+    "digest": "f153711c6cd8e9f051bbf90f6ff596f0e24570c574034b79539086f6f414d6a8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a`",
+    "text": "SELECT * FROM ...",
+    "digest": "b3aff53444abacc43d90423da0a320a0b64420206352c59be6ddcbab10e0ded0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a`.a FROM t",
+    "text": "SELECT .... `a` FROM `t`",
+    "digest": "3b964a0282a08c22f05db6647165e7d765dce24ec75490be0d874d5a3d9c2964"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ...) */ ?",
+    "digest": "439cea61db01dfd9097ea3a058a33558f01bfef8f40648047657ba2e700040b2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀a`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `????????????????a` ) */ ?",
+    "digest": "7a16c81ad1f8382fdd9429213a6a9ceec8a4ba40673ff3699634c54083227131"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `名名名名名名名名名名名名名名名名名名名名😀`",
+    "text": "SELECT",
+    "digest": "572601b01953d83d273f70f95651aeb24de7d8335ef97ff471827396dae3d0ca"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `名名名名名名名名名名名名名名名名名名名名😀`,1",
+    "text": "SELECT , ?",
+    "digest": "d54a2856580fd0bc14e4da95515773f397aca336fe79d87e3631e389bd7e5364"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `名名名名名名名名名名名名名名名名名名名名😀`",
+    "text": "SELECT ? AS",
+    "digest": "110a7d0c847a5da22d8dfd9e2310625485837463c6b1619085a8954800aa4f50"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `名名名名名名名名名名名名名名名名名名名名😀`",
+    "text": "SELECT * FROM",
+    "digest": "b4f9ea54972e368cafa32052353af2ced3e06f0376a05eb8e1405d54b11b42b2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `名名名名名名名名名名名名名名名名名名名名😀`.a FROM t",
+    "text": "SELECT . `a` FROM `t`",
+    "digest": "9195d07db8c9eaf920f605e96e2de3a92722ae57a11d5a1e5e86f7dd87e04868"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(名名名名名名名名名名名名名名名名名名名名😀) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ) */ ?",
+    "digest": "c84be9a5b03fb54959c2df7dc56e53764c567f35c6dc127344e900ee898585ef"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`名名名名名名名名名名名名名名名名名名名名😀`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `名名名名名名名名名名名名名名名名名名名名?` ) */ ?",
+    "digest": "81ff8830e9cf120845bac5b4cf4ca10d3ff844be24a287b11f796ce75b9d0ab5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `名名名名名名名名名名名名名名名名名名名名😀a`",
+    "text": "SELECT ...",
+    "digest": "4f5307f498e329ab0ff621c0bef4d8ba8f11c92fbda2a38fe0a4e4219df6971a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `名名名名名名名名名名名名名名名名名名名名😀a`,1",
+    "text": "SELECT ..., ?",
+    "digest": "43ff40eeae66cca3b0d73f86ffb2805e2e78f5aa9a8f5365c5659e088a9138af"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `名名名名名名名名名名名名名名名名名名名名😀a`",
+    "text": "SELECT ? AS ...",
+    "digest": "969e924c28ec5ec7cb34f8429153a2ed96e9ece67474506f9049f51752864c1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `名名名名名名名名名名名名名名名名名名名名😀a`",
+    "text": "SELECT * FROM ...",
+    "digest": "35fb853c50bac47de8fe2051e72d03f6470c77d13fcd87222ba922609fc152f7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `名名名名名名名名名名名名名名名名名名名名😀a`.a FROM t",
+    "text": "SELECT .... `a` FROM `t`",
+    "digest": "e5fb235ec1da8190a1082a92f6a6cb876403a001f3e431d56a21254ed88a362e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(名名名名名名名名名名名名名名名名名名名名😀a) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ...) */ ?",
+    "digest": "73a1352b87ce8caba937838486c9143a8560aaa1a1a5cf999ef8d74f744e3b4e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`名名名名名名名名名名名名名名名名名名名名😀a`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `名名名名名名名名名名名名名名名名名名名名?a` ) */ ?",
+    "digest": "6943eb6f00ae3622616c64c2e828df586c74a3cda9ab9f53ff3eaf51ce1c3d95"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ``",
+    "text": "SELECT",
+    "digest": "12ac01426ce29198b2a75c2a303760f77833e054b877c5878a57bff2d65245b1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ``,1",
+    "text": "SELECT , ?",
+    "digest": "d114fbff136aca54e760612e77991b5e2358d5fb12d40e16b1a70c7c1d95e27b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS ``",
+    "text": "SELECT ? AS",
+    "digest": "7225d683d0fa668695ef2798793e1ea77f4b10a0ce55cf998fd84649c55bc3df"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM ``",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ``.a FROM t",
+    "text": "SELECT . `a` FROM `t`",
+    "digest": "db253bc58046288b8dcf4c3b5c76149863dd0d559c3767770a4112701ead1229"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME() */ 1",
+    "text": "SELECT /*+ QB_NAME ( ) */ ?",
+    "digest": "641d2a81ea2c731332059e9534c4b80e7df83342f573141755860d6f3bd394fe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(``) */ 1",
+    "text": "SELECT /*+ QB_NAME ( */ ?",
+    "digest": "7eef800a2b5681e96bdf8c6ed7d5a15fdb73964efec8223aa4c2fa0465933e40"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. end FROM t",
+    "text": "SELECT `t` . END FROM `t`",
+    "digest": "c8c735aef1934ca1a7e0fcfbaef33a6429359c0bdaa25feb1a09a3a1e651b002"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/end FROM t",
+    "text": "SELECT `t` . END FROM `t`",
+    "digest": "c8c735aef1934ca1a7e0fcfbaef33a6429359c0bdaa25feb1a09a3a1e651b002"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT end.* FROM t",
+    "text": "SELECT END . * FROM `t`",
+    "digest": "479dfddd2743523317d2f702678af2d6b1e2fec57b828a0a688b643d2660a895"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT end.a FROM t",
+    "text": "SELECT `end` . `a` FROM `t`",
+    "digest": "582d4cfa4a1ef54f5a9c5e5b3522618de2ffca55d8044f97785d2283df0ebbf0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. execute FROM t",
+    "text": "SELECT `t` . EXECUTE FROM `t`",
+    "digest": "54fc95d913fbd26a31c42d3f5b47556320fa1bd12cee9aac3f7830817899b546"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/execute FROM t",
+    "text": "SELECT `t` . EXECUTE FROM `t`",
+    "digest": "54fc95d913fbd26a31c42d3f5b47556320fa1bd12cee9aac3f7830817899b546"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT execute.* FROM t",
+    "text": "SELECT EXECUTE . * FROM `t`",
+    "digest": "bff33978f576daf905870b1c5f32877ffe8142e9f54f6cffd22520e6cc1e49d3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT execute.a FROM t",
+    "text": "SELECT `execute` . `a` FROM `t`",
+    "digest": "ce3530b0e566ddd1fe067e27a9d7d952ef19070e7f7a09764366eec2bf55cdf6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. restart FROM t",
+    "text": "SELECT `t` . RESTART FROM `t`",
+    "digest": "4b6f90eb93ae6abd494e276b50d5ded352d51774586e625bdf2907139dfd03c7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/restart FROM t",
+    "text": "SELECT `t` . RESTART FROM `t`",
+    "digest": "4b6f90eb93ae6abd494e276b50d5ded352d51774586e625bdf2907139dfd03c7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT restart.* FROM t",
+    "text": "SELECT RESTART . * FROM `t`",
+    "digest": "0e18d8625ce88654f672c478180102308d9db236655393ede9de9e4a2542cdbe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT restart.a FROM t",
+    "text": "SELECT `restart` . `a` FROM `t`",
+    "digest": "c0f1024cdf4e3c4174cd7dfa618bd7e1503bde5766cc34cd21a9e886523c7927"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. shutdown FROM t",
+    "text": "SELECT `t` . SHUTDOWN FROM `t`",
+    "digest": "6006a4a23eeaa1c562927188acef5ef0495db8e22dec26e8f32ac9ca797e6a79"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/shutdown FROM t",
+    "text": "SELECT `t` . SHUTDOWN FROM `t`",
+    "digest": "6006a4a23eeaa1c562927188acef5ef0495db8e22dec26e8f32ac9ca797e6a79"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT shutdown.* FROM t",
+    "text": "SELECT SHUTDOWN . * FROM `t`",
+    "digest": "070349260bce4aac3f2c1c20868c7fad6830e4a2ec373723ff294d81ecbceb11"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT shutdown.a FROM t",
+    "text": "SELECT `shutdown` . `a` FROM `t`",
+    "digest": "ab7395815ae5d42a754487f3cd2dae3a8aa9c7591157971ac6a82aad9492025b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. ascii FROM t",
+    "text": "SELECT `t` . ASCII FROM `t`",
+    "digest": "b34cc04d1f1dbc09452e15397994923ea7b2fcd0eb7a5193173f0a5acb700d13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/ascii FROM t",
+    "text": "SELECT `t` . ASCII FROM `t`",
+    "digest": "b34cc04d1f1dbc09452e15397994923ea7b2fcd0eb7a5193173f0a5acb700d13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ascii.* FROM t",
+    "text": "SELECT ASCII . * FROM `t`",
+    "digest": "09b6c81b1c065aaa21760706cc3e4c6bf195a87f40daafb1a788f275ec1ea4d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ascii.a FROM t",
+    "text": "SELECT `ascii` . `a` FROM `t`",
+    "digest": "f83275a2bac03ca74c2c87caaac0265f7506b4e5d8f5b3b92ebebaf74667a7a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. begin FROM t",
+    "text": "SELECT `t` . BEGIN FROM `t`",
+    "digest": "90c8221eca76350b438603518928a5b54eb134f71bec6c9531e33011f569f676"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/begin FROM t",
+    "text": "SELECT `t` . BEGIN FROM `t`",
+    "digest": "90c8221eca76350b438603518928a5b54eb134f71bec6c9531e33011f569f676"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. byte FROM t",
+    "text": "SELECT `t` . BYTE FROM `t`",
+    "digest": "0c265d006093f46a8614341edfb0a7b07e87786655486aec541e698320c49060"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/byte FROM t",
+    "text": "SELECT `t` . BYTE FROM `t`",
+    "digest": "0c265d006093f46a8614341edfb0a7b07e87786655486aec541e698320c49060"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT byte.* FROM t",
+    "text": "SELECT BYTE . * FROM `t`",
+    "digest": "f8d41b86d873c28cfad1c214976777f7ac1d5d1436abc2671515d69719ff0f1d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT byte.a FROM t",
+    "text": "SELECT `byte` . `a` FROM `t`",
+    "digest": "6fec095e144d7887046e1a279a3fa1aa8be702b067662758243a0535ec626d63"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. cache FROM t",
+    "text": "SELECT `t` . CACHE FROM `t`",
+    "digest": "0aa14ee54851210b46c7d906638a260be47e75324e596fb4ea2b12d8e425e719"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/cache FROM t",
+    "text": "SELECT `t` . CACHE FROM `t`",
+    "digest": "0aa14ee54851210b46c7d906638a260be47e75324e596fb4ea2b12d8e425e719"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT cache.* FROM t",
+    "text": "SELECT CACHE . * FROM `t`",
+    "digest": "209bb3e4ee47b112fd3b66fdaf168e0486514e83c066cd54a1c8ca191c49187c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT cache.a FROM t",
+    "text": "SELECT `cache` . `a` FROM `t`",
+    "digest": "f594288cbc7895d9cfcb200789f2370e1ea71aa4b67601c213b17b02e84c59ba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. comment FROM t",
+    "text": "SELECT `t` . COMMENT FROM `t`",
+    "digest": "36b4df003817bcec8ffe26479958e6b7e80dbb0ac88726a165f7d6b8251785ec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/comment FROM t",
+    "text": "SELECT `t` . COMMENT FROM `t`",
+    "digest": "36b4df003817bcec8ffe26479958e6b7e80dbb0ac88726a165f7d6b8251785ec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT comment.* FROM t",
+    "text": "SELECT COMMENT . * FROM `t`",
+    "digest": "689454a2db50104bd212872341def862ea16d4dd845bfbb9dcdd0905a9115caa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT comment.a FROM t",
+    "text": "SELECT `comment` . `a` FROM `t`",
+    "digest": "14b902452fe90acd0b60583f9cebff28646ce3565da5008382b8e100b2476e4f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. contains FROM t",
+    "text": "SELECT `t` . CONTAINS FROM `t`",
+    "digest": "d65889baf64d8906b8ecbf0bda4cc0d108619ff91f6822e1d98d1c3ff5419dee"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/contains FROM t",
+    "text": "SELECT `t` . CONTAINS FROM `t`",
+    "digest": "d65889baf64d8906b8ecbf0bda4cc0d108619ff91f6822e1d98d1c3ff5419dee"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT contains.* FROM t",
+    "text": "SELECT CONTAINS . * FROM `t`",
+    "digest": "cd6674def1b8b8871879c153f6ac32dfc5d1e37b641b466c7c323e6940ac540a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT contains.a FROM t",
+    "text": "SELECT `contains` . `a` FROM `t`",
+    "digest": "8a2c248e09781987ef51d51a955746d4e5b60a378b9e309d6a59caa30a7d5cb3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. do FROM t",
+    "text": "SELECT `t` . DO FROM `t`",
+    "digest": "3dcb6cd6d55038e87d5ee2702ecb9e244163eec30ba0bab945843b69869204b1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/do FROM t",
+    "text": "SELECT `t` . DO FROM `t`",
+    "digest": "3dcb6cd6d55038e87d5ee2702ecb9e244163eec30ba0bab945843b69869204b1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT do.* FROM t",
+    "text": "SELECT DO . * FROM `t`",
+    "digest": "ac58b4f7d8f56e34be1ec526a5c817255ef8c85fba1d5fa2015afa6e131caf25"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT do.a FROM t",
+    "text": "SELECT `do` . `a` FROM `t`",
+    "digest": "99edf88e226ad07408c0bf915492cc67f5f4cb8c9e417fbc932e4543cafb58e5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. flush FROM t",
+    "text": "SELECT `t` . FLUSH FROM `t`",
+    "digest": "68771d0dca472b514913970fabfbaeb60801291c21c91e493835d772f8045266"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/flush FROM t",
+    "text": "SELECT `t` . FLUSH FROM `t`",
+    "digest": "68771d0dca472b514913970fabfbaeb60801291c21c91e493835d772f8045266"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT flush.* FROM t",
+    "text": "SELECT FLUSH . * FROM `t`",
+    "digest": "ae14d60def05ec61e3cc18db36dc5248d86c86bb5280b1b311ed7835b80484b1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT flush.a FROM t",
+    "text": "SELECT `flush` . `a` FROM `t`",
+    "digest": "911af60a969037383fa9c36e9510a5b92636bcf0db993b9af3ec974a7726bec7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. handler FROM t",
+    "text": "SELECT `t` . HANDLER FROM `t`",
+    "digest": "65f60012a83ec33a5e616b3402d7603695c38f21cc43a44f8540c97d96c7a9da"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/handler FROM t",
+    "text": "SELECT `t` . HANDLER FROM `t`",
+    "digest": "65f60012a83ec33a5e616b3402d7603695c38f21cc43a44f8540c97d96c7a9da"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT handler.* FROM t",
+    "text": "SELECT HANDLER . * FROM `t`",
+    "digest": "b46af91f2f6057fbf2c7798eb0ebcfd698be7f8dec2cfe93f510f17f1f4fee25"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT handler.a FROM t",
+    "text": "SELECT `handler` . `a` FROM `t`",
+    "digest": "8b13233db8b1dfb44774dde71baac2d6016c744cc0c08d79bc98fa5d25c038c4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. prepare FROM t",
+    "text": "SELECT `t` . PREPARE FROM `t`",
+    "digest": "a3df831b8782dde14107b05eb204ba0412eb667c4b351db3967fde5110c7de6e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/prepare FROM t",
+    "text": "SELECT `t` . PREPARE FROM `t`",
+    "digest": "a3df831b8782dde14107b05eb204ba0412eb667c4b351db3967fde5110c7de6e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT prepare.* FROM t",
+    "text": "SELECT PREPARE . * FROM `t`",
+    "digest": "8da887d689005ff6a040432294bc91a4307bc9ad36dbb820c3bac1379a15083b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT prepare.a FROM t",
+    "text": "SELECT `prepare` . `a` FROM `t`",
+    "digest": "8d9f335a472b8c4bd98b4e6d4bb0b16f4b8d52c656da0dfeb05712463fc82084"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. repeat FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/repeat FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT repeat.* FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT repeat.a FROM t",
+    "text": "SELECT `repeat` . `a` FROM `t`",
+    "digest": "0706c4f44a3d1a979cf5fe3b6f5ff7dcf4e13003ce94ec212de7fb0dd360c7e4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. return FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/return FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT return.* FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT return.a FROM t",
+    "text": "SELECT `return` . `a` FROM `t`",
+    "digest": "967ed13c98cd479e1c5b8da2dc5c25d82908090946e37fe77cf2967f52fcb672"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. while FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/while FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT while.* FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT while.a FROM t",
+    "text": "SELECT `while` . `a` FROM `t`",
+    "digest": "15c40a694d4df146703e55bdf753736c0eb06f9d19e5f59dd460034c7364d97a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. loop FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/loop FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT loop.* FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT loop.a FROM t",
+    "text": "SELECT `loop` . `a` FROM `t`",
+    "digest": "4727f55cb8b21b3f79b4742ed95560d7b57ad9ee3bc14588d24d229966130e70"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. select FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/select FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. qualify FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t./*gap*/qualify FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME($a$b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `$a$b` ) */ ?",
+    "digest": "ede9bd8ecd3518af72ba7ae2c4996de31aeeddd9baa461961933b0399abc1d10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@$a$b i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`$a$b` `i` ) */ ? FROM `t`",
+    "digest": "435da9ba2dafb7f8a06fdf100fee40763dd9c226c1ccb4db08778441bd8e32e2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`$a$b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `$a$b` ) */ ?",
+    "digest": "ede9bd8ecd3518af72ba7ae2c4996de31aeeddd9baa461961933b0399abc1d10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`$a$b` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`$a$b` `i` ) */ ? FROM `t`",
+    "digest": "435da9ba2dafb7f8a06fdf100fee40763dd9c226c1ccb4db08778441bd8e32e2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"$a$b\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"$a$b\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"$a$b\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `$a$b` ) */ ?",
+    "digest": "ede9bd8ecd3518af72ba7ae2c4996de31aeeddd9baa461961933b0399abc1d10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('$a$b') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'$a$b' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME($$) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `$$` ) */ ?",
+    "digest": "e8053b361264c0e4631daddaddf6758a019bafe1588d2040ba2b1aa784d3f021"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@$$ i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`$$` `i` ) */ ? FROM `t`",
+    "digest": "d81cc3ac8f132648f6bf403ce260a9b10b68743d1d6597fd59371d4fc59b02f0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`$$`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `$$` ) */ ?",
+    "digest": "e8053b361264c0e4631daddaddf6758a019bafe1588d2040ba2b1aa784d3f021"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`$$` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`$$` `i` ) */ ? FROM `t`",
+    "digest": "d81cc3ac8f132648f6bf403ce260a9b10b68743d1d6597fd59371d4fc59b02f0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"$$\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"$$\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"$$\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `$$` ) */ ?",
+    "digest": "e8053b361264c0e4631daddaddf6758a019bafe1588d2040ba2b1aa784d3f021"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('$$') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'$$' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME($1$2) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `$1$2` ) */ ?",
+    "digest": "d14c395eacac1c23611323eb1b07252d4d7cc4eaf6925f3e9d7b57aa81c27360"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@$1$2 i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`$1$2` `i` ) */ ? FROM `t`",
+    "digest": "40327937ba802bff26067bd59bbc74620e730a86203d89488964bc02ca0e3d8e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`$1$2`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `$1$2` ) */ ?",
+    "digest": "d14c395eacac1c23611323eb1b07252d4d7cc4eaf6925f3e9d7b57aa81c27360"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`$1$2` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`$1$2` `i` ) */ ? FROM `t`",
+    "digest": "40327937ba802bff26067bd59bbc74620e730a86203d89488964bc02ca0e3d8e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"$1$2\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"$1$2\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"$1$2\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `$1$2` ) */ ?",
+    "digest": "d14c395eacac1c23611323eb1b07252d4d7cc4eaf6925f3e9d7b57aa81c27360"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('$1$2') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'$1$2' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a$b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a$b` ) */ ?",
+    "digest": "7f0644e0a328b0b9f5bf78d1699c5f471e4665f5b6cdbd9435b31aa2eb304df6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@a$b i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a$b` `i` ) */ ? FROM `t`",
+    "digest": "5a8056b6577fc0eeaea6dab3fc683abe4c8e8e74e72d3514b064f2f5b8d3e16d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`a$b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a$b` ) */ ?",
+    "digest": "7f0644e0a328b0b9f5bf78d1699c5f471e4665f5b6cdbd9435b31aa2eb304df6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`a$b` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a$b` `i` ) */ ? FROM `t`",
+    "digest": "5a8056b6577fc0eeaea6dab3fc683abe4c8e8e74e72d3514b064f2f5b8d3e16d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"a$b\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"a$b\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"a$b\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a$b` ) */ ?",
+    "digest": "7f0644e0a328b0b9f5bf78d1699c5f471e4665f5b6cdbd9435b31aa2eb304df6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('a$b') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'a$b' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1$a$b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1$a$b` ) */ ?",
+    "digest": "a089fbb90bcd8fa141fa9af3b5d3bced9ad3ba6e6797b9478923336852843532"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@1$a$b i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1$a$b` `i` ) */ ? FROM `t`",
+    "digest": "bf62c4402545451466196070dbe809886eee15f31539823662b5f50c5589823b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`1$a$b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1$a$b` ) */ ?",
+    "digest": "a089fbb90bcd8fa141fa9af3b5d3bced9ad3ba6e6797b9478923336852843532"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`1$a$b` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1$a$b` `i` ) */ ? FROM `t`",
+    "digest": "bf62c4402545451466196070dbe809886eee15f31539823662b5f50c5589823b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"1$a$b\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"1$a$b\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"1$a$b\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1$a$b` ) */ ?",
+    "digest": "a089fbb90bcd8fa141fa9af3b5d3bced9ad3ba6e6797b9478923336852843532"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('1$a$b') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'1$a$b' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1K😀) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ? ) */ ?",
+    "digest": "1c9154f7273ff0b0d21e42c9f34f664b307f090690dbae8dd360b2472f11c93b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@1K😀 i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`i` ) */ ? FROM `t`",
+    "digest": "04d410436fb479381d3bcd61620bb0341fa28ad7bed9a95ecfacc26406f3afc3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`1K😀`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1K?` ) */ ?",
+    "digest": "69739c133a3a648c976b086b55e14632fbbe5211c20f8659f39694bdae6ecdc3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`1K😀` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1K?` `i` ) */ ? FROM `t`",
+    "digest": "e79e08af1b24d8f6ea9f1fe4021b376b735027ed94172cfdf37e56d8110d6320"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"1K😀\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"1K😀\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"1K😀\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1K?` ) */ ?",
+    "digest": "69739c133a3a648c976b086b55e14632fbbe5211c20f8659f39694bdae6ecdc3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('1K😀') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'1K😀' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1K名) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ? `名` ) */ ?",
+    "digest": "c0b7c46ce1df7253bda24c94463a98a8cf86da98f1a3f867d0d4abfcded39b0c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@1K名 i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1K名` `i` ) */ ? FROM `t`",
+    "digest": "b1d738790d6e7e3485bf0d9418877fcc5867a37a54ae42532957e703a94699f7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`1K名`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1K名` ) */ ?",
+    "digest": "0b7b10c823b1277e197f54663ec11349f17daba803d0fe1f8e34b660f8093c57"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`1K名` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1K名` `i` ) */ ? FROM `t`",
+    "digest": "b1d738790d6e7e3485bf0d9418877fcc5867a37a54ae42532957e703a94699f7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"1K名\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"1K名\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"1K名\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1K名` ) */ ?",
+    "digest": "0b7b10c823b1277e197f54663ec11349f17daba803d0fe1f8e34b660f8093c57"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('1K名') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'1K名' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1M😀) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ? ) */ ?",
+    "digest": "1c9154f7273ff0b0d21e42c9f34f664b307f090690dbae8dd360b2472f11c93b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@1M😀 i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`i` ) */ ? FROM `t`",
+    "digest": "bdd7904fff25e03c152a3e21725ebbe30f4f5a8f2fba0c36aa6662f5076d2e6e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`1M😀`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1M?` ) */ ?",
+    "digest": "5b9deb9ff0550de104cfb2221bc8fa20baaefb0688c2569d56dc7050b157ba9c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`1M😀` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1M?` `i` ) */ ? FROM `t`",
+    "digest": "0532ab791ff9374f869c5ee74666d54e1a8780943dc43b7cd4a2abfb8d2317d7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"1M😀\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"1M😀\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"1M😀\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1M?` ) */ ?",
+    "digest": "5b9deb9ff0550de104cfb2221bc8fa20baaefb0688c2569d56dc7050b157ba9c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('1M😀') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'1M😀' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1Gé) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ? `é` ) */ ?",
+    "digest": "0016234ec5cc3005db1345171c0b89633e30a864c875ccf87adac31d3e960f85"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@1Gé i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1Gé` `i` ) */ ? FROM `t`",
+    "digest": "ef7b79b430a36441f5a6526577dd706229f9c63397309b9be8776a73421181b7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`1Gé`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1Gé` ) */ ?",
+    "digest": "71f1bce5bf59e3c4cde2f95c8d256999fdbb7de741cfb288697866f8542a2df4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`1Gé` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1Gé` `i` ) */ ? FROM `t`",
+    "digest": "ef7b79b430a36441f5a6526577dd706229f9c63397309b9be8776a73421181b7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"1Gé\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"1Gé\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"1Gé\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1Gé` ) */ ?",
+    "digest": "71f1bce5bf59e3c4cde2f95c8d256999fdbb7de741cfb288697866f8542a2df4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('1Gé') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'1Gé' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1K$) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1K$` ) */ ?",
+    "digest": "51ece07ce14eb6febf87f633ae0186eb394ca385a3a573b0a206da3b6d09ea5b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@1K$ i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1K$` `i` ) */ ? FROM `t`",
+    "digest": "c1369f0d94391bfb4877483bb3c60bbcdb3b067779b11ac46b7a60132d50b385"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`1K$`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1K$` ) */ ?",
+    "digest": "51ece07ce14eb6febf87f633ae0186eb394ca385a3a573b0a206da3b6d09ea5b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`1K$` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1K$` `i` ) */ ? FROM `t`",
+    "digest": "c1369f0d94391bfb4877483bb3c60bbcdb3b067779b11ac46b7a60132d50b385"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"1K$\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"1K$\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"1K$\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1K$` ) */ ?",
+    "digest": "51ece07ce14eb6febf87f633ae0186eb394ca385a3a573b0a206da3b6d09ea5b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('1K$') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'1K$' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1k😀) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ) */ ?",
+    "digest": "96f0a8915a1aadea3991769d36dc143dac100cdeaed3099d922023f22ecd7524"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@1k😀 i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`i` ) */ ? FROM `t`",
+    "digest": "1c5d01b439cc087150088e8086638b1b2e47cde94ca79dfb3cce03b9161da400"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`1k😀`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1k?` ) */ ?",
+    "digest": "6869f6f0c4e46f4f333e59704813db2e904f299b198081199ae40107cc466982"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`1k😀` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1k?` `i` ) */ ? FROM `t`",
+    "digest": "57c82ff677dede57cd737c76c2b6bdf2af9154697ab261c717f9bcd320620485"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"1k😀\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"1k😀\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"1k😀\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1k?` ) */ ?",
+    "digest": "6869f6f0c4e46f4f333e59704813db2e904f299b198081199ae40107cc466982"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('1k😀') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'1k😀' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(1😀) */ 1",
+    "text": "SELECT /*+ QB_NAME ( ) */ ?",
+    "digest": "29500abf342f6893d8e199eda207383f97806b5f38ff51ff51f8cf2a1ee8088d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@1😀 i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`i` ) */ ? FROM `t`",
+    "digest": "47473ecacfe5948fe44492b56b507a3874a9e2f5cc13aaf49eb4c08aae5a97b7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`1😀`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1?` ) */ ?",
+    "digest": "7081e26e309d040c26461208e860cedd7b77e8ff4f58a38cdf3d63775f5e2328"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`1😀` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`1?` `i` ) */ ? FROM `t`",
+    "digest": "bf18515ae696fbcd5f0da23038696bf0df8163c1cfb43bc279552632d2ac9595"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"1😀\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"1😀\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"1😀\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `1?` ) */ ?",
+    "digest": "7081e26e309d040c26461208e860cedd7b77e8ff4f58a38cdf3d63775f5e2328"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('1😀') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'1😀' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@a😀b i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`i` ) */ ? FROM `t`",
+    "digest": "3238bebb8402c7f3a8dab457137c7be7b9f8e27c2320377540ae83fdea8777bb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`a😀b` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a?b` `i` ) */ ? FROM `t`",
+    "digest": "bdfd05059bdacf9447679e4f969c4a1a3d6e1bfba3cb087652174f55caecdafb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"a😀b\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"a😀b\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"a😀b\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a?b` ) */ ?",
+    "digest": "ababa4f14df26b316e891beb9aff9b5fffc2bc8171ddd6df98fe9139ba24d1eb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('a😀b') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'a😀b' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\\b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` \\ `b` ) */ ?",
+    "digest": "f6035d464d1b328f145ba6ec7ec13b662aafab8754cbbd36294ddd10fcc33988"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@a\\b i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a` \\ `b` `i` ) */ ? FROM `t`",
+    "digest": "36a2a483c33aa86b28916c36ddb2491431d14e21b5beb88ec3ef764a31e8d89c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`a\\b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a\\b` ) */ ?",
+    "digest": "79c3cb565f44a74db22115eefa3d5c9610f5dc03b578623da1df37675cd86c1b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`a\\b` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a\\b` `i` ) */ ? FROM `t`",
+    "digest": "0873ade6554ff8ac432a441738d7279d2454a1877b2ee4e64b7e3fcbe4d53f2c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"a\\b\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"a\\b\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"a\\b\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a\\b` ) */ ?",
+    "digest": "79c3cb565f44a74db22115eefa3d5c9610f5dc03b578623da1df37675cd86c1b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('a\\b') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'a\\b' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a`b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` */ ?",
+    "digest": "4521f53b8c9f6b20e018c6e22b1bad83ba356f800cbbb12a1828c41d01f044d6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@a`b i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a` */ ? FROM `t`",
+    "digest": "3f33b420712ba26bb0d5fdb2aed98af9bc194e9043a4af6957f5947c6627c186"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`a``b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a`b` ) */ ?",
+    "digest": "9fc495c8ea3c28325d8b9e8caf631e89449ecf8df2a40ebc3dcafe780e9e56fe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`a``b` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a`b` `i` ) */ ? FROM `t`",
+    "digest": "6567839f5d3f9a592cb5d4b700c3debd4cc384db3ea23ad94358566c704e6042"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"a`b\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"a`b\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"a`b\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a`b` ) */ ?",
+    "digest": "9fc495c8ea3c28325d8b9e8caf631e89449ecf8df2a40ebc3dcafe780e9e56fe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('a`b') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'a`b' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\"b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` */ ?",
+    "digest": "4521f53b8c9f6b20e018c6e22b1bad83ba356f800cbbb12a1828c41d01f044d6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@a\"b i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a` */ ? FROM `t`",
+    "digest": "3f33b420712ba26bb0d5fdb2aed98af9bc194e9043a4af6957f5947c6627c186"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`a\"b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a\"b` ) */ ?",
+    "digest": "b6f93a253c19b989dc926b272154763513803acaf3181005b13bcfd3f3e29c18"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`a\"b` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a\"b` `i` ) */ ? FROM `t`",
+    "digest": "649ed08b34e5a6e34682daf54398a7183da8548ee82dfa356ae6bd6c0cf8eb8c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"a\"\"b\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"a\"\"b\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"a\"\"b\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a\"b` ) */ ?",
+    "digest": "b6f93a253c19b989dc926b272154763513803acaf3181005b13bcfd3f3e29c18"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('a\"b') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'a\"b' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(é) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `é` ) */ ?",
+    "digest": "225a2882d67d8326cf59c8c3cd39bf94b0ffeee8f4cdaff26e66bb2a60ef3b16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@é i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`é` `i` ) */ ? FROM `t`",
+    "digest": "9e1a1b4cf33d7d5b61e05d28a6c4f167e81d73ec4c96f6387535acbd406ad012"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`é`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `é` ) */ ?",
+    "digest": "225a2882d67d8326cf59c8c3cd39bf94b0ffeee8f4cdaff26e66bb2a60ef3b16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`é` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`é` `i` ) */ ? FROM `t`",
+    "digest": "9e1a1b4cf33d7d5b61e05d28a6c4f167e81d73ec4c96f6387535acbd406ad012"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"é\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"é\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"é\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `é` ) */ ?",
+    "digest": "225a2882d67d8326cf59c8c3cd39bf94b0ffeee8f4cdaff26e66bb2a60ef3b16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('é') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'é' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\u000b b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@a\u000b b i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a` `b` `i` ) */ ? FROM `t`",
+    "digest": "57f350e1a0981ebc425e304c7db7b9e40d74a4aa92d9cdc472836e262dd15f0c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`a\u000b b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a\u000b b` ) */ ?",
+    "digest": "632d12860b697c4970a9e309c82a99668fcadc8ae2372966c8b54a8982cc7be1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`a\u000b b` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a\u000b b` `i` ) */ ? FROM `t`",
+    "digest": "4cb3040669f3986a30536a359da44dae20776b637240fd1743b894bbabe02e56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"a\u000b b\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"a\u000b b\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"a\u000b b\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a\u000b b` ) */ ?",
+    "digest": "632d12860b697c4970a9e309c82a99668fcadc8ae2372966c8b54a8982cc7be1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('a\u000b b') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'a\u000b b' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\f b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@a\f b i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a` `b` `i` ) */ ? FROM `t`",
+    "digest": "57f350e1a0981ebc425e304c7db7b9e40d74a4aa92d9cdc472836e262dd15f0c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(`a\f b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a\f b` ) */ ?",
+    "digest": "a8ebcdab5c9941bf47dea0693fb946a2ec4fd69140a44a7d3ded95338ff19d52"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`a\f b` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`a\f b` `i` ) */ ? FROM `t`",
+    "digest": "83058de38180aa65e08e9e7516d127ae93be82dddd161690b823ad6327ae1c23"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(\"a\f b\") */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@\"a\f b\" i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t``i` ) */ ? FROM `t`",
+    "digest": "13c9042ccabc00e1c31af78e9562a2c5133028cda9806610a0c9b18ec0bbd683"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(\"a\f b\") */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a\f b` ) */ ?",
+    "digest": "a8ebcdab5c9941bf47dea0693fb946a2ec4fd69140a44a7d3ded95338ff19d52"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('a\f b') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@'a\f b' i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`? `i` ) */ ? FROM `t`",
+    "digest": "6a61a99c4efaa235e245e7562240f6513fefd027f3343524c47f51c4cd3eab56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(q) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `q` ) */ ?",
+    "digest": "b844065d8f57c3835ef74a30dd917ac8de4a4ed592619606369686f572e365fb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t @q i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t` @`q` `i` ) */ ? FROM `t`",
+    "digest": "46b3855f340ba97d33466ce46056d433673269a4c26bffa248ab9dbbb2a29a50"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\t*/ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\tQB_NAME(q)\t*/ 1",
+    "text": "SELECT /*+ QB_NAME ( `q` ) */ ?",
+    "digest": "b844065d8f57c3835ef74a30dd917ac8de4a4ed592619606369686f572e365fb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t\t@q i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t` @`q` `i` ) */ ? FROM `t`",
+    "digest": "46b3855f340ba97d33466ce46056d433673269a4c26bffa248ab9dbbb2a29a50"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\tb) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\n*/ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\nQB_NAME(q)\n*/ 1",
+    "text": "SELECT /*+ QB_NAME ( `q` ) */ ?",
+    "digest": "b844065d8f57c3835ef74a30dd917ac8de4a4ed592619606369686f572e365fb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t\n@q i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t` @`q` `i` ) */ ? FROM `t`",
+    "digest": "46b3855f340ba97d33466ce46056d433673269a4c26bffa248ab9dbbb2a29a50"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\nb) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\r*/ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\rQB_NAME(q)\r*/ 1",
+    "text": "SELECT /*+ QB_NAME ( `q` ) */ ?",
+    "digest": "b844065d8f57c3835ef74a30dd917ac8de4a4ed592619606369686f572e365fb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t\r@q i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t` @`q` `i` ) */ ? FROM `t`",
+    "digest": "46b3855f340ba97d33466ce46056d433673269a4c26bffa248ab9dbbb2a29a50"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\rb) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\u000b*/ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\u000bQB_NAME(q)\u000b*/ 1",
+    "text": "SELECT /*+ QB_NAME ( `q` ) */ ?",
+    "digest": "b844065d8f57c3835ef74a30dd917ac8de4a4ed592619606369686f572e365fb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t\u000b@q i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t` @`q` `i` ) */ ? FROM `t`",
+    "digest": "46b3855f340ba97d33466ce46056d433673269a4c26bffa248ab9dbbb2a29a50"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\u000bb) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\f*/ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+\fQB_NAME(q)\f*/ 1",
+    "text": "SELECT /*+ QB_NAME ( `q` ) */ ?",
+    "digest": "b844065d8f57c3835ef74a30dd917ac8de4a4ed592619606369686f572e365fb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t\f@q i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t` @`q` `i` ) */ ? FROM `t`",
+    "digest": "46b3855f340ba97d33466ce46056d433673269a4c26bffa248ab9dbbb2a29a50"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\fb) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `😀` AS (SELECT 1), `😁` AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `😀` AS (SELECT 1), `?` AS (SELECT 2) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `😀` AS (((SELECT * FROM t FOR SHARE) FOR UPDATE)) SELECT * FROM `?`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `😀` AS (((SELECT * FROM t FOR SHARE) FOR UPDATE)) SELECT * FROM `😁`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH `😀` AS (((SELECT * FROM t FOR SHARE) FOR UPDATE)) SELECT * FROM `other`",
+    "text": "WITH AS ( ( ( SELECT * FROM `t` FOR SHARE ) FOR UPDATE ) ) SELECT * FROM `other`",
+    "digest": "d0ba7c2d010d3d816b9ad84f1b22f7ebd1edefcc9e980530878954e9bee6d7ef"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT end /*gap*/ . a FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. /*gap*/ end FROM t",
+    "text": "SELECT `t` . END FROM `t`",
+    "digest": "c8c735aef1934ca1a7e0fcfbaef33a6429359c0bdaa25feb1a09a3a1e651b002"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. END FROM t",
+    "text": "SELECT `t` . END FROM `t`",
+    "digest": "c8c735aef1934ca1a7e0fcfbaef33a6429359c0bdaa25feb1a09a3a1e651b002"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT end.`a` FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t WHERE CASE WHEN TRUE THEN 1 ELSE 2 END = 1",
+    "text": "SELECT * FROM `t` WHERE CASE WHEN TRUE THEN ? ELSE ? END = ?",
+    "digest": "5d3c2ff485278f0e654668f393dc855a3127148dd23bf96e8ce656e6a43d58cf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t LIKE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a int REFERENCES `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER REFERENCES ...( `a` ) )",
+    "digest": "18fb10ce50a3c2ffd046a22dd02e47e43a87c3b65a8c539a2ed62a477e323fe1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a int, FOREIGN KEY (a) REFERENCES `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a int REFERENCES `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a)",
+    "text": "ALTER TABLE `t` ADD `a` INTEGER REFERENCES ...( `a` )",
+    "digest": "a505fb29b684e880bbbe03b3177d115b9f2820f5a9ec040f7661734416d8904e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t RENAME TO `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "RENAME TABLE t TO `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CREATE TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "text": "SHOW CREATE TABLE ...",
+    "digest": "f9efc011ddb7809f8cb1bfee8cfd43633528eef5ff39bbbc24b581ed0550cf1c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` AS SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DROP VIEW `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE INDEX i ON `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`(a)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DROP INDEX i ON `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.t FROM db.t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT 1) q",
+    "text": "SELECT * FROM ( WITH `c` AS ( SELECT * FROM ...) SELECT ? ) `q`",
+    "digest": "d7ac9ffe7b46e5a57f1fc9fcbebd4d216ebe984b8ada6012a4159454ffe72523"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT * FROM c) q",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM t FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM t FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.t FROM db",
+    "text": "SHOW FIELDS FROM .... `t` FROM `db`",
+    "digest": "4fd65f689ab39418928793caddb72b73ee1192372f13189c123cd015ccd92164"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.t FROM db",
+    "text": "SHOW INDEX FROM .... `t` FROM `db`",
+    "digest": "63d2e377a31f60ddc4337481f374a57e30540c127acccba481ada146756a3801"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DESCRIBE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ANALYZE TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "TABLE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT 1",
+    "text": "INSERT INTO `t` WITH `c` AS ( SELECT * FROM ...) SELECT ?",
+    "digest": "0eebbc656da8f54ebb4a4423c062ebe0b0a2708d73bb0de0fad91ccfbb7f1216"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) UPDATE t SET a=1",
+    "text": "WITH `c` AS ( SELECT * FROM ...) UPDATE `t` SET `a` = ?",
+    "digest": "9d6cd2f6ab4fe44a479cfc5d3d2b6ea12be165f16bfa8a883880d5bb1cf991a5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) UPDATE c SET a=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) DELETE t FROM t",
+    "text": "WITH `c` AS ( SELECT * FROM ...) DELETE `t` FROM `t`",
+    "digest": "ff38a25ce29b510a139dc66419852b789ac81b88744a828e52346f03ceb057f4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) DELETE t FROM c AS t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT 1",
+    "text": "EXPLAIN WITH `c` AS ( SELECT * FROM ...) SELECT ?",
+    "digest": "cfd46343b26b667954753fc1c8607a37c184726505fd9d92b081525e155b177a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` UNION ALL SELECT * FROM c) SELECT 1",
+    "text": "WITH RECURSIVE `c` AS ( SELECT * FROM ...UNION ALL SELECT * FROM `c` ) SELECT ?",
+    "digest": "121bdb656ba76dc0aceed2993bb6b6a795105bf81a4791d34abb76bef06c085b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH RECURSIVE c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` UNION ALL SELECT * FROM c) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT * FROM (WITH c AS (SELECT 1) SELECT * FROM c) q",
+    "text": "WITH `c` AS ( SELECT * FROM ...) SELECT * FROM ( WITH `c` AS ( SELECT ? ) SELECT * FROM `c` ) `q`",
+    "digest": "8c0e7789c42ab89dd334be8e1ac33d578f2597762592e19156c3b57d18dfbeeb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT (SELECT * FROM c)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE `` (a int)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t RENAME TO ``",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM ``",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*! +t */ .a FROM t",
+    "text": "SELECT CASE WHEN TRUE THEN ? ELSE ? END + `t` . `a` FROM `t`",
+    "digest": "9873d695a3dc26bf14c7cecd689b1586f93a033794b6cf361a17e2fa77635688"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t",
+    "text": "SELECT CASE WHEN TRUE THEN ? ELSE ? END + `t` . `a` FROM `t`",
+    "digest": "9873d695a3dc26bf14c7cecd689b1586f93a033794b6cf361a17e2fa77635688"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!99999 +t */ .a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT end /*! .a */ FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT end /*!80411 .a */ FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT end /*!99999 junk */ .a FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. end",
+    "text": "SELECT `t` . END",
+    "digest": "2898fd9b50cd44b5624b1644a976a8532ebf55e5572ae5854245b3f489a2f488"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`?` `i` ) */ ? FROM `t`",
+    "digest": "474499d2752a24ba5435f70a7816e9b9e3716180c32b7dd8a7b37423903aabc9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\u000b\fb) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME(a\\\\b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` \\ \\ `b` ) */ ?",
+    "digest": "86d4a28c33892d86e6266e2c06b600ed6929c54595aac2ff98cab70bfd3cb07a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t. sum FROM t",
+    "text": "SELECT `t` . `sum` FROM `t`",
+    "digest": "c64d1e9e2128b0bb1b8006c4af9865485c0aa90416e9d1147a26f3c7ae5cbee6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT end/*! +1 */.a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*! +t */ .a FROM t",
+    "text": "SELECT CASE WHEN TRUE THEN ? ELSE ? END + `t` . `a` FROM `t`",
+    "digest": "9873d695a3dc26bf14c7cecd689b1586f93a033794b6cf361a17e2fa77635688"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t",
+    "text": "SELECT CASE WHEN TRUE THEN ? ELSE ? END + `t` . `a` FROM `t`",
+    "digest": "9873d695a3dc26bf14c7cecd689b1586f93a033794b6cf361a17e2fa77635688"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!99999 +t */ .a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT end /*! .a */ FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT end /*!80411 .a */ FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT end /*!99999 junk */ .a FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT t. end",
+    "text": "SELECT `t` . END",
+    "digest": "2898fd9b50cd44b5624b1644a976a8532ebf55e5572ae5854245b3f489a2f488"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT end /*gap*/ . a FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT t. integer FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(`a😀b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a?b` ) */ ?",
+    "digest": "ababa4f14df26b316e891beb9aff9b5fffc2bc8171ddd6df98fe9139ba24d1eb"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`?` `i` ) */ ? FROM `t`",
+    "digest": "474499d2752a24ba5435f70a7816e9b9e3716180c32b7dd8a7b37423903aabc9"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(a\u000b\fb) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(a\\\\b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` \\ \\ `b` ) */ ?",
+    "digest": "86d4a28c33892d86e6266e2c06b600ed6929c54595aac2ff98cab70bfd3cb07a"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT sum. a FROM t",
+    "text": "SELECT `sum` . `a` FROM `t`",
+    "digest": "b4851a335e997ff2cecc322c7a2d1b8344da3018fd44181991578841e00e6241"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT t. sum FROM t",
+    "text": "SELECT `t` . `sum` FROM `t`",
+    "digest": "c64d1e9e2128b0bb1b8006c4af9865485c0aa90416e9d1147a26f3c7ae5cbee6"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT end/*! +1 */.a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*! +t */ .a FROM t",
+    "text": "SELECT CASE WHEN TRUE THEN ? ELSE ? END + `t` . `a` FROM `t`",
+    "digest": "9873d695a3dc26bf14c7cecd689b1586f93a033794b6cf361a17e2fa77635688"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t",
+    "text": "SELECT CASE WHEN TRUE THEN ? ELSE ? END + `t` . `a` FROM `t`",
+    "digest": "9873d695a3dc26bf14c7cecd689b1586f93a033794b6cf361a17e2fa77635688"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!99999 +t */ .a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT end /*! .a */ FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT end /*!80411 .a */ FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT end /*!99999 junk */ .a FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT t. end",
+    "text": "SELECT `t` . END",
+    "digest": "2898fd9b50cd44b5624b1644a976a8532ebf55e5572ae5854245b3f489a2f488"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT end /*gap*/ . a FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT t. integer FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT /*+ QB_NAME(`a😀b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a?b` ) */ ?",
+    "digest": "ababa4f14df26b316e891beb9aff9b5fffc2bc8171ddd6df98fe9139ba24d1eb"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`?` `i` ) */ ? FROM `t`",
+    "digest": "474499d2752a24ba5435f70a7816e9b9e3716180c32b7dd8a7b37423903aabc9"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT /*+ QB_NAME(a\u000b\fb) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT /*+ QB_NAME(a\\\\b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` \\ \\ `b` ) */ ?",
+    "digest": "86d4a28c33892d86e6266e2c06b600ed6929c54595aac2ff98cab70bfd3cb07a"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT sum. a FROM t",
+    "text": "SELECT `sum` . `a` FROM `t`",
+    "digest": "b4851a335e997ff2cecc322c7a2d1b8344da3018fd44181991578841e00e6241"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT t. sum FROM t",
+    "text": "SELECT `t` . `sum` FROM `t`",
+    "digest": "c64d1e9e2128b0bb1b8006c4af9865485c0aa90416e9d1147a26f3c7ae5cbee6"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT end/*! +1 */.a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*! +t */ .a FROM t",
+    "text": "SELECT CASE WHEN TRUE THEN ? ELSE ? END + `t` . `a` FROM `t`",
+    "digest": "9873d695a3dc26bf14c7cecd689b1586f93a033794b6cf361a17e2fa77635688"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!80411 +t */ .a FROM t",
+    "text": "SELECT CASE WHEN TRUE THEN ? ELSE ? END + `t` . `a` FROM `t`",
+    "digest": "9873d695a3dc26bf14c7cecd689b1586f93a033794b6cf361a17e2fa77635688"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT CASE WHEN TRUE THEN 1 ELSE 2 END /*!99999 +t */ .a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT end /*! .a */ FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT end /*!80411 .a */ FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT end /*!99999 junk */ .a FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT t. end",
+    "text": "SELECT `t` . END",
+    "digest": "2898fd9b50cd44b5624b1644a976a8532ebf55e5572ae5854245b3f489a2f488"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT end /*gap*/ . a FROM t",
+    "text": "SELECT END . `a` FROM `t`",
+    "digest": "9ce6c19ef46d41f288adf301c91a3d1ab699cea470fbc94e2285f24ce488ab9a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT t. integer FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT /*+ QB_NAME(`a😀b`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a?b` ) */ ?",
+    "digest": "ababa4f14df26b316e891beb9aff9b5fffc2bc8171ddd6df98fe9139ba24d1eb"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT /*+ INDEX(t@`😀` i) */ 1 FROM t",
+    "text": "SELECT /*+ INDEX ( `t`@`?` `i` ) */ ? FROM `t`",
+    "digest": "474499d2752a24ba5435f70a7816e9b9e3716180c32b7dd8a7b37423903aabc9"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT /*+ QB_NAME(a\u000b\fb) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` `b` ) */ ?",
+    "digest": "40d053b0b8911a55d58a86191bc3c06cf7522bf589678a53dfb89c3d861cbb97"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT /*+ QB_NAME(a\\\\b) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `a` \\ \\ `b` ) */ ?",
+    "digest": "86d4a28c33892d86e6266e2c06b600ed6929c54595aac2ff98cab70bfd3cb07a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT sum. a FROM t",
+    "text": "SELECT `sum` . `a` FROM `t`",
+    "digest": "b4851a335e997ff2cecc322c7a2d1b8344da3018fd44181991578841e00e6241"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT t. sum FROM t",
+    "text": "SELECT `t` . `sum` FROM `t`",
+    "digest": "c64d1e9e2128b0bb1b8006c4af9865485c0aa90416e9d1147a26f3c7ae5cbee6"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT end/*! +1 */.a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM ``) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM ) SELECT ?",
+    "digest": "40419686c8ed428d782528babc404c7c860959074de706dfd8e522df8b037766"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `a `",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `a `) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM `a ` ) SELECT ?",
+    "digest": "b3328763ec9ff9bea57157be15fc63c412049888b448ca1883ed0e46093675f9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `a\t`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `a\t`) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM `a\t` ) SELECT ?",
+    "digest": "3b5b4e64ca99f0874bbcc621cb58c5e15b0212f14e6c9f7f148b281e7a4a96ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `a\u000b`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `a\u000b`) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM `a\u000b` ) SELECT ?",
+    "digest": "bc9457b32c42dd7307687218cbd528396caa4fa1850ed5ce73bbe2f5626fc6d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `a\f`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `a\f`) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM `a\f` ) SELECT ?",
+    "digest": "a5b75e25a7078efcb5153df6da395cecaf3d336c8a8ed6a77b4d00c489d23955"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM `a `",
+    "text": "SELECT * FROM `a `",
+    "digest": "12d7a4155272e6d07f0edb3851dd57d440a9812e32d90e30de3deef15b5b552c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT * FROM `a `) SELECT 1",
+    "text": "WITH `c` AS ( SELECT * FROM `a ` ) SELECT ?",
+    "digest": "25c5b1d63fba5090edc7caf81fef8ef0d87d143d62edde05bdbd4de2d3917007"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80030 +2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80030+2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80411 +2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80411+2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80412 +2 */ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80412+2 */ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!080411 +2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!080411+2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!080412 +2 */ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!080412+2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!0804110 +2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!0804110+2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!800300 +2 */ 1",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!800300+2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!000000 +2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!000000+2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!123 +2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!123+2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!1234 +2 */ 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!1234+2 */ 1",
+    "error_code": 3677
   }
 ]

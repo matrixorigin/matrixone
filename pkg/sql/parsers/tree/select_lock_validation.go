@@ -18,23 +18,70 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"unicode/utf8"
 )
 
-// ValidateSelectLocking follows query-expression contextualization, not lexical
-// nesting alone. WITH replaces the expression's local scope; its definitions are
-// itemized only when referenced. No catalog lookup or query execution occurs.
-func ValidateSelectLocking(stmt Statement, nameKey func(string) string) string {
-	return validateSelectLockValue(reflect.ValueOf(stmt), &selectLockScope{nameKey: nameKey})
+// ValidateSelectContext shares query-expression contextualization between lock
+// checks and digest-only table-name checks. WITH definitions are itemized only
+// on reference. Neither check resolves a catalog or executes a query.
+func ValidateSelectContext(stmt Statement, nameKey func(string) string, locks, tableNames bool) string {
+	return validateSelectLockValue(reflect.ValueOf(stmt), &selectLockScope{
+		nameKey: nameKey, checkLocks: locks, checkTableNames: tableNames,
+	})
+}
+
+// ValidMySQLTableName models the system-charset name check, not the digest's
+// independent 64-byte display limit. Supplementary characters convert to one
+// replacement character before itemization, so they still count as one here.
+func ValidMySQLTableName(name string) bool {
+	return name != "" && !strings.ContainsRune(" \t\r\n\v\f", rune(name[len(name)-1])) &&
+		(len(name) <= 64 || utf8.RuneCountInString(name) <= 64)
+}
+
+func validateDigestTableName(name *TableName, alias bool) string {
+	if !alias && !ValidMySQLTableName(string(name.ObjectName)) ||
+		name.ExplicitSchema && !ValidMySQLTableName(string(name.SchemaName)) {
+		return "Invalid table or database name."
+	}
+	return ""
+}
+
+func validateDigestShowTableName(table *UnresolvedObjectName, database string) string {
+	if table == nil {
+		return ""
+	}
+	name := table.ToTableName()
+	if database != "" {
+		// SHOW's trailing FROM database replaces the table's own qualifier.
+		name.SchemaName, name.ExplicitSchema = Identifier(database), true
+	}
+	return validateDigestTableName(&name, false)
 }
 
 // Each real query owns a frame. Parentheses and set operands share that frame,
 // so a WITH encountered in the body remains effective for later operands and
 // ORDER BY. A true nested query gets a new frame and cannot mutate its parent.
 type selectLockScope struct {
-	outer   *selectLockScope
-	with    *selectLockWith
-	limit   int
-	nameKey func(string) string
+	outer           *selectLockScope
+	with            *selectLockWith
+	limit           int
+	nameKey         func(string) string
+	checkLocks      bool
+	checkTableNames bool
+}
+
+func (scope *selectLockScope) child() *selectLockScope {
+	return &selectLockScope{outer: scope, nameKey: scope.nameKey,
+		checkLocks: scope.checkLocks, checkTableNames: scope.checkTableNames}
+}
+
+func validateExplainTableNames(stmt Statement, scope *selectLockScope) string {
+	if !scope.checkTableNames {
+		return ""
+	}
+	inner := *scope
+	inner.checkLocks = false // EXPLAIN still contextualizes names, but not locks.
+	return validateSelectLockValue(reflect.ValueOf(stmt), &inner)
 }
 
 type selectLockWith struct {
@@ -98,25 +145,61 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 		}
 		if value.CanInterface() {
 			switch node := value.Interface().(type) {
-			case *ExplainStmt, *ExplainAnalyze, *ExplainPhyPlan, *With:
-				// EXPLAIN skips locking; unused CTE definitions skip itemization.
+			case *ExplainStmt:
+				return validateExplainTableNames(node.Statement, scope)
+			case *ExplainAnalyze:
+				return validateExplainTableNames(node.Statement, scope)
+			case *ExplainPhyPlan:
+				return validateExplainTableNames(node.Statement, scope)
+			case *With:
+				// Unused CTE definitions are not itemized.
 				return ""
-			case *Select:
-				return validateSelectLockQuery(node, &selectLockScope{outer: scope, nameKey: scope.nameKey}, 0)
-			case *Update:
-				return validateSelectLockDML(value.Elem(), node.With, scope, false)
-			case *Delete:
-				return validateSelectLockDML(value.Elem(), node.With, scope, len(node.TableRefs) > 0)
-			case *TableName:
-				if cte := scope.lookup(node); cte != nil && !cte.visited {
-					cte.visited = true
-					definition := &selectLockScope{outer: cte.owner.outer, with: cte.owner, limit: cte.index, nameKey: scope.nameKey}
-					if err := validateSelectLockValue(reflect.ValueOf(cte.stmt), definition); err != "" {
+			case *AttributeReference:
+				// Inline REFERENCES does not check its table name. Preserve
+				// the ordinary lock walk over any other expression children.
+				inner := *scope
+				inner.checkTableNames = false
+				return validateSelectLockValue(value.Elem(), &inner)
+			case *ForeignKey:
+				if scope.checkTableNames && node.Refer != nil && node.Refer.TableName != nil {
+					if err := validateDigestTableName(node.Refer.TableName, false); err != "" {
 						return err
 					}
 				}
-				// Keep visiting timestamp/snapshot expressions on the table even
-				// when its CTE body was already itemized.
+			case *AlterOptionTableName:
+				if scope.checkTableNames && node.Name != nil {
+					name := node.Name.ToTableName()
+					if err := validateDigestTableName(&name, false); err != "" {
+						return err
+					}
+				}
+			case *ShowColumns:
+				if scope.checkTableNames {
+					if err := validateDigestShowTableName(node.Table, node.DBName); err != "" {
+						return err
+					}
+				}
+			case *ShowIndex:
+				if scope.checkTableNames {
+					if err := validateDigestShowTableName(node.TableName, node.DbName); err != "" {
+						return err
+					}
+				}
+			case *Select:
+				return validateSelectLockQuery(node, scope.child(), 0)
+			case *Update:
+				return validateSelectLockDML(value.Elem(), node.With, scope, false)
+			case *Delete:
+				if scope.checkTableNames && len(node.TableRefs) > 0 {
+					for _, target := range node.Tables {
+						if name, ok := target.(*TableName); ok {
+							if err := validateDigestTableName(name, true); err != "" {
+								return err
+							}
+						}
+					}
+				}
+				return validateSelectLockDML(value.Elem(), node.With, scope, len(node.TableRefs) > 0)
 			case *SampleExpr:
 				return validateSelectLockValue(reflect.ValueOf(node.columns), scope)
 			}
@@ -125,6 +208,27 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 	}
 	switch value.Kind() {
 	case reflect.Struct:
+		if value.CanInterface() {
+			// Empty unquoted nodes represent implicit no-FROM inputs and
+			// unset optional DDL names. A real empty quoted name is distinct.
+			if name, ok := value.Interface().(TableName); ok &&
+				(name.ObjectName != "" || name.IsQuoted || name.ExplicitSchema || name.ExplicitCatalog) {
+				if scope.checkTableNames {
+					if err := validateDigestTableName(&name, false); err != "" {
+						return err
+					}
+				}
+				if cte := scope.lookup(&name); cte != nil && !cte.visited {
+					cte.visited = true
+					definition := *scope
+					definition.outer, definition.with, definition.limit = cte.owner.outer, cte.owner, cte.index
+					if err := validateSelectLockValue(reflect.ValueOf(cte.stmt), &definition); err != "" {
+						return err
+					}
+				}
+				// Snapshot expressions remain visible after CTE itemization.
+			}
+		}
 		for i := 0; i < value.NumField(); i++ {
 			if err := validateSelectLockValue(value.Field(i), scope); err != "" {
 				return err
@@ -141,7 +245,7 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 }
 
 func validateSelectLockDML(value reflect.Value, with *With, outer *selectLockScope, deleteAliases bool) string {
-	scope := &selectLockScope{outer: outer, nameKey: outer.nameKey}
+	scope := outer.child()
 	scope.setWith(with)
 	for i := 0; i < value.NumField(); i++ {
 		// Multi-table DELETE's target names refer to FROM aliases, not CTE
@@ -178,7 +282,7 @@ func validateSelectLockQuery(stmt SelectStatement, scope *selectLockScope, locks
 			}
 			stmt = node.Right
 		default:
-			if clause, ok := stmt.(*SelectClause); ok && locks > 1 && clause.From != nil {
+			if clause, ok := stmt.(*SelectClause); ok && scope.checkLocks && locks > 1 && clause.From != nil {
 				for _, table := range clause.From.Tables {
 					if name := directSelectLockTable(table, scope, true); name != "" {
 						return fmt.Sprintf("Table %s appears in multiple locking clauses.", name)

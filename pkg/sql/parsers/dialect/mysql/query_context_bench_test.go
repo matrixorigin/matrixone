@@ -20,6 +20,26 @@ import (
 	"testing"
 )
 
+// The 64/65-character alias pair changes only admission to the final name
+// context walk. Both queries are legal, have the same AST shape, and are never
+// executed. This measures that walk separately from the historical baseline.
+func BenchmarkDigestTableNameContext(b *testing.B) {
+	for _, depth := range []int{128, 512, 1536} {
+		for _, length := range []int{64, 65} {
+			sql := strings.Repeat("SELECT 1 UNION (", depth) + "SELECT 1 AS `" + strings.Repeat("a", length) + "` FROM t" + strings.Repeat(")", depth)
+			b.Run(fmt.Sprintf("depth=%d/name=%d", depth, length), func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(len(sql)))
+				for b.Loop() {
+					if _, _, err := StatementDigest(b.Context(), sql, ""); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkNestedSetQueryContext(b *testing.B) {
 	for _, depth := range []int{128, 512, 1536} {
 		sql := strings.Repeat("SELECT 1 UNION (", depth) + "SELECT 1" + strings.Repeat(")", depth)

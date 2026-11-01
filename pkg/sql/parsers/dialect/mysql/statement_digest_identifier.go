@@ -69,6 +69,26 @@ func digestIdentifierKey(name string) string {
 	return name
 }
 
+// digestSystemIdentifier converts quoted names for MySQL's system-charset
+// consumers. SQL digest storage still owns the original lexical bytes; quoted
+// hints instead store the converted name. Keep this separate from case folding.
+func digestSystemIdentifier(name string) string {
+	var result strings.Builder
+	start := 0
+	for position, letter := range name {
+		if letter > 0xffff {
+			result.WriteString(name[start:position])
+			result.WriteByte('?')
+			start = position + utf8.RuneLen(letter)
+		}
+	}
+	if start == 0 {
+		return name
+	}
+	result.WriteString(name[start:])
+	return result.String()
+}
+
 // SQL keywords are ASCII byte names. Unicode casing must not turn an identifier
 // such as dotless-i + f into the IF keyword.
 func digestKeywordUpper(word string) string {
