@@ -181,10 +181,6 @@ class Vectorf32(TypeDecorator):
     def process_result_value(self, value, dialect):
         return _vector_result(value)
 
-    def bind_processor(self, dialect):
-        """Return a conversion function for processing bind values."""
-        return _vector_literal
-
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
 
@@ -235,10 +231,6 @@ class Vectorf64(TypeDecorator):
 
     def process_result_value(self, value, dialect):
         return _vector_result(value)
-
-    def bind_processor(self, dialect):
-        """Return a conversion function for processing bind values."""
-        return _vector_literal
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
