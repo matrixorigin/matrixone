@@ -342,6 +342,33 @@ set @bin34 = null;
 execute pbnull34 using @bin34;
 deallocate prepare pbnull34;
 drop table if exists pbin34;
+-- JSON object/array rows against SQL character data: the character operand
+-- stays a JSON string scalar and the pair orders in the ranked JSON domain
+-- (null < number < string < object < array < boolean), so structured rows
+-- rank above the string scalar instead of rejecting with the pre-#31121
+-- invalid-argument operator error (compose BVT corpus pin: ddl/json_type.sql
+-- compares an object-valued JSON column against a character literal).
+drop table if exists obj35;
+create table obj35 (id int primary key, d json);
+insert into obj35 values (1,'{"a":1}'),(2,'"plain"'),(3,'[1,2]'),(4,'{}'),(5,'3'),(6,'true'),(7,'null');
+select id from obj35 where d > 'str' order by id;
+select id from obj35 where d < 'str' order by id;
+select id from obj35 where 'str' >= d order by id;
+select id from obj35 where d = 'str' order by id;
+select id from obj35 where d = '{"a":1}' order by id;
+select id from obj35 where d > '{"a":1}' order by id;
+select id from obj35 where '{"a":1}' <= d order by id;
+-- the ddl/json_type.sql shape: a set of objects never rejects and every
+-- object row ranks above the character scalar in both operand orders, while
+-- object equality against the character scalar still finds no row.
+drop table if exists objs36;
+create table objs36 (id int primary key, doc json);
+insert into objs36 values (1,'{"": "", "12_key": "中文mo"}'),(2,'{}'),(3,'{"3456": {"z": [2]}}');
+select id from objs36 where doc > '{"": "", "123456": "中文mo"}' order by id;
+select id from objs36 where '{"": "", "123456": "中文mo"}' < doc order by id;
+select id from objs36 where doc = '{"": "", "123456": "中文mo"}' order by id;
+drop table if exists obj35;
+drop table if exists objs36;
 drop table if exists jja33;
 drop table if exists jjb33;
 drop database if exists func_json_scalar_semantics_31121_db;

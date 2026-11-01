@@ -595,6 +595,58 @@ execute pbnull34 using @bin34;
 ➤ id[4,32,0]
 deallocate prepare pbnull34;
 drop table if exists pbin34;
+drop table if exists obj35;
+create table obj35 (id int primary key, d json);
+insert into obj35 values (1,'{"a":1}'),(2,'"plain"'),(3,'[1,2]'),(4,'{}'),(5,'3'),(6,'true'),(7,'null');
+select id from obj35 where d > 'str' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+4  𝄀
+6
+select id from obj35 where d < 'str' order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+5  𝄀
+7
+select id from obj35 where 'str' >= d order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+5  𝄀
+7
+select id from obj35 where d = 'str' order by id;
+➤ id[4,32,0]
+select id from obj35 where d = '{"a":1}' order by id;
+➤ id[4,32,0]
+select id from obj35 where d > '{"a":1}' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+4  𝄀
+6
+select id from obj35 where '{"a":1}' <= d order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+4  𝄀
+6
+drop table if exists objs36;
+create table objs36 (id int primary key, doc json);
+insert into objs36 values (1,'{"": "", "12_key": "中文mo"}'),(2,'{}'),(3,'{"3456": {"z": [2]}}');
+select id from objs36 where doc > '{"": "", "123456": "中文mo"}' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from objs36 where '{"": "", "123456": "中文mo"}' < doc order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from objs36 where doc = '{"": "", "123456": "中文mo"}' order by id;
+➤ id[4,32,0]
+drop table if exists obj35;
+drop table if exists objs36;
 drop table if exists jja33;
 drop table if exists jjb33;
 drop database if exists func_json_scalar_semantics_31121_db;
