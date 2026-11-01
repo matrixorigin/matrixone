@@ -530,3 +530,25 @@ class TestAsyncCDCManagerSQLGeneration:
 
         assert tasks[0].no_full is True
         assert tasks[0].err_msg == "error"
+
+
+@pytest.mark.parametrize(
+    'account,user,password',
+    [
+        (None, 'root', 'normal'),
+        ('tenant', 'admin', 'p:a:ss'),
+        (None, 'user%name', 'p%40word'),
+        ('组%1', 'user@name', '密 码@:/%'),
+    ],
+)
+def test_build_mysql_uri_roundtrips_cdc_credentials(account, user, password):
+    # CDC's server parser splits at the final '@' and ':', then URL-decodes
+    # the identity and password; assert the decoded values independently.
+    from urllib.parse import unquote
+
+    uri = build_mysql_uri('db.example', 6001, user, password, account)
+    credentials, host_port = uri.removeprefix('mysql://').rsplit('@', 1)
+    encoded_identity, encoded_password = credentials.rsplit(':', 1)
+    assert unquote(encoded_identity) == (f'{account}#{user}' if account else user)
+    assert unquote(encoded_password) == password
+    assert host_port == 'db.example:6001'
