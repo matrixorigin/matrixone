@@ -546,7 +546,16 @@ func testIssue29715StaleAlterIndexGeneration(t *testing.T, action string, standa
 		defer func() {
 			cc, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			execSQLMaybe(t, cc, db, "drop database if exists issue29715stale")
+			if _, err := db.ExecContext(cc, "drop database if exists issue29715stale"); err != nil {
+				t.Errorf("drop stale-index fixture database: %v", err)
+				return
+			}
+			var remaining int
+			if err := db.QueryRowContext(cc, "select count(*) from mo_catalog.mo_database where datname='issue29715stale'").Scan(&remaining); err != nil {
+				t.Errorf("verify stale-index fixture cleanup: %v", err)
+			} else if remaining != 0 {
+				t.Errorf("stale-index fixture database remains after DROP: %d", remaining)
+			}
 		}()
 		execSQLRequire(t, ctx, db, "create table issue29715stale.t(id int primary key,u int,v int,unique uk(u))")
 		execSQLRequire(t, ctx, db, "insert into issue29715stale.t values(1,1,0)")
