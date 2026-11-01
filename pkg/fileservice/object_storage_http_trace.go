@@ -18,11 +18,9 @@ import (
 	"context"
 	"io"
 	"iter"
-	"net/http/httptrace"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
 type objectStorageHTTPTrace struct {
@@ -49,51 +47,37 @@ func (o *objectStorageHTTPTrace) CopyObject(
 	if !ok {
 		return false, nil
 	}
-	traceInfo := o.newTraceInfo()
-	defer o.closeTraceInfo(traceInfo)
-	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	ctx = withHTTPTrace(ctx)
 	return copier.CopyObject(ctx, src, srcKey, dstKey)
 }
 
 func (o *objectStorageHTTPTrace) Delete(ctx context.Context, keys ...string) (err error) {
-	traceInfo := o.newTraceInfo()
-	defer o.closeTraceInfo(traceInfo)
-	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	ctx = withHTTPTrace(ctx)
 	return o.upstream.Delete(ctx, keys...)
 }
 
 func (o *objectStorageHTTPTrace) Exists(ctx context.Context, key string) (bool, error) {
-	traceInfo := o.newTraceInfo()
-	defer o.closeTraceInfo(traceInfo)
-	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	ctx = withHTTPTrace(ctx)
 	return o.upstream.Exists(ctx, key)
 }
 
 func (o *objectStorageHTTPTrace) List(ctx context.Context, prefix string) iter.Seq2[*DirEntry, error] {
-	traceInfo := o.newTraceInfo()
-	defer o.closeTraceInfo(traceInfo)
-	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	ctx = withHTTPTrace(ctx)
 	return o.upstream.List(ctx, prefix)
 }
 
 func (o *objectStorageHTTPTrace) Read(ctx context.Context, key string, min *int64, max *int64) (r io.ReadCloser, err error) {
-	traceInfo := o.newTraceInfo()
-	defer o.closeTraceInfo(traceInfo)
-	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	ctx = withHTTPTrace(ctx)
 	return o.upstream.Read(ctx, key, min, max)
 }
 
 func (o *objectStorageHTTPTrace) Stat(ctx context.Context, key string) (size int64, err error) {
-	traceInfo := o.newTraceInfo()
-	defer o.closeTraceInfo(traceInfo)
-	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	ctx = withHTTPTrace(ctx)
 	return o.upstream.Stat(ctx, key)
 }
 
 func (o *objectStorageHTTPTrace) Write(ctx context.Context, key string, r io.Reader, sizeHint *int64, expire *time.Time) (err error) {
-	traceInfo := o.newTraceInfo()
-	defer o.closeTraceInfo(traceInfo)
-	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	ctx = withHTTPTrace(ctx)
 	return o.upstream.Write(ctx, key, r, sizeHint, expire)
 }
 
@@ -105,19 +89,17 @@ func (o *objectStorageHTTPTrace) SupportsParallelMultipart() bool {
 }
 
 func (o *objectStorageHTTPTrace) WriteMultipartParallel(ctx context.Context, key string, r io.Reader, sizeHint *int64, opt *ParallelMultipartOption) (err error) {
-	traceInfo := o.newTraceInfo()
-	defer o.closeTraceInfo(traceInfo)
-	ctx = httptrace.WithClientTrace(ctx, traceInfo.trace)
+	ctx = withHTTPTrace(ctx)
 	if p, ok := o.upstream.(ParallelMultipartWriter); ok {
 		return p.WriteMultipartParallel(ctx, key, r, sizeHint, opt)
 	}
 	return moerr.NewNotSupportedNoCtx("parallel multipart upload")
 }
 
-func (o *objectStorageHTTPTrace) newTraceInfo() *traceInfo {
-	return reuse.Alloc[traceInfo](nil)
-}
+// Mark the operation; SDK retries, lazy pages and multipart parts each get a
+// fresh trace at the actual HTTP request boundary.
+type httpTraceKey struct{}
 
-func (o *objectStorageHTTPTrace) closeTraceInfo(info *traceInfo) {
-	reuse.Free(info, nil)
+func withHTTPTrace(ctx context.Context) context.Context {
+	return context.WithValue(ctx, httpTraceKey{}, true)
 }
