@@ -58,10 +58,17 @@ func TestDaemonTaskManagementPrivileges(t *testing.T) {
 		control := open("sys#root#moadmin")
 		exec(t, control, "create account daemon_priv_tenant admin_name 'admin' identified by '111'")
 		t.Cleanup(func() {
-			cleanupCtx, done := context.WithTimeout(context.Background(), 10*time.Second)
+			// DROP ACCOUNT removes the tenant's bootstrap catalog too. Give it
+			// the fixture's operation budget under race instrumentation, using
+			// an independent context so a failed assertion cannot cancel cleanup.
+			cleanupCtx, done := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer done()
 			_, err := control.ExecContext(cleanupCtx, "drop account if exists daemon_priv_tenant")
 			require.NoError(t, err)
+			var remaining int
+			require.NoError(t, control.QueryRowContext(cleanupCtx,
+				"select count(*) from mo_catalog.mo_account where account_name='daemon_priv_tenant'").Scan(&remaining))
+			require.Zero(t, remaining, "tenant cleanup must finish before the shared fixture is reused")
 		})
 		exec(t, control, "create user daemon_priv_public identified by '111'")
 		t.Cleanup(func() {
