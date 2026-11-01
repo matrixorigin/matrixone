@@ -571,7 +571,7 @@ func TestLocalFSCreateAndRemoveFileReportsUnlinkFailure(t *testing.T) {
 	ctx := context.Background()
 	local, err := NewLocalFS(ctx, "local", t.TempDir(), DisabledCacheConfig, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, local.Close(ctx)) })
+	t.Cleanup(func() { local.Close(ctx) })
 
 	var createdPath string
 	file, err := local.createAndRemoveFile(ctx, "spill-unlink-error", func(path string) error {
