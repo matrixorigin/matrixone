@@ -544,7 +544,7 @@ insert into row05 values('_bcdef','{"t1":"c"}',100000);
 insert into row05 values('__cdef',null,0);
 select (col1,col2) = ('abcdef','{"t1": "a"}') from row05;
 (col1, col2) = (abcdef, {"t1": "a"})
-1
+0
 0
 0
 select (col1,col2) != ('abcdef','{"ehyiuwqnve": "ashyiujewv"}') from row05;

@@ -367,6 +367,19 @@ insert into objs36 values (1,'{"": "", "12_key": "中文mo"}'),(2,'{}'),(3,'{"34
 select id from objs36 where doc > '{"": "", "123456": "中文mo"}' order by id;
 select id from objs36 where '{"": "", "123456": "中文mo"}' < doc order by id;
 select id from objs36 where doc = '{"": "", "123456": "中文mo"}' order by id;
+-- row constructors (operator/row_constructor.sql corpus pin): every element
+-- pair follows the same mixed-domain contract, so the character element stays
+-- a JSON string scalar - the stored object never equals it in either operand
+-- order - while an explicit JSON cast of the same text matches the object, and
+-- a definite character mismatch decides the tuple before SQL-NULL elements.
+drop table if exists rcj37;
+create table rcj37(id int primary key, col1 blob, col2 json);
+insert into rcj37 values (1,'abcdef','{"t1":"a"}'),(2,'_bcdef','{"t1":"c"}'),(3,'__cdef',null);
+select id, (col1,col2) = ('abcdef','{"t1": "a"}') from rcj37 order by id;
+select id, ('abcdef','{"t1": "a"}') = (col1,col2) from rcj37 order by id;
+select id, (col1,col2) = ('abcdef', cast('{"t1":"a"}' as json)) from rcj37 order by id;
+select id, (col1,col2) != ('abcdef','{"ehyiuwqnve": "ashyiujewv"}') from rcj37 order by id;
+drop table if exists rcj37;
 drop table if exists obj35;
 drop table if exists objs36;
 drop table if exists jja33;
