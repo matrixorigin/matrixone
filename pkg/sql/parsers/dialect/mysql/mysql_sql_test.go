@@ -1155,6 +1155,22 @@ func TestParseFirstWithSQLMode(t *testing.T) {
 			require.Equal(t, test.first, test.sql[:end])
 		})
 	}
+	t.Run("future comment does not start a continuation", func(t *testing.T) {
+		const ignored = "/*!99999 set sql_mode='ANSI_QUOTES'; select 99 */ "
+		stmt, first, next, err := parser.ParseFirstStatementWithSQLMode(ctx, SQLContinuation{SQL: ignored + "select 1; select 2"}, 1, "")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, "select 1", tree.String(stmt, dialect.MYSQL))
+		require.Equal(t, ignored+"select 1;", first)
+		require.Equal(t, SQLContinuation{SQL: " select 2"}, next)
+		second, _, rest, err := parser.ParseFirstStatementWithSQLMode(ctx, next, 1, "")
+		require.NoError(t, err)
+		defer second.Free()
+		require.Equal(t, "select 2", tree.String(second, dialect.MYSQL))
+		require.Empty(t, rest.SQL)
+		require.False(t, rest.InExecutableComment)
+	})
+
 	t.Run("executable comment continuation and parser reuse", func(t *testing.T) {
 		input := SQLContinuation{SQL: `/*!50000 set sql_mode='NO_BACKSLASH_ESCAPES'; select 'x\'; select 2 */; select 3`}
 		for i, want := range []string{

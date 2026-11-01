@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -72,7 +73,7 @@ var (
 	//process.Limitation.PartitionRows.  10 << 32 = 42949672960
 	defaultProcessLimitationPartitionRows = 42949672960
 
-	defaultServerVersionPrefix = "8.0.30-MatrixOne-v"
+	defaultServerVersionPrefix = version.MySQLCompatibilityVersionString + "-MatrixOne-v"
 
 	defaultVersionComment = "MatrixOne"
 
