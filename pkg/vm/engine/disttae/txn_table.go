@@ -2933,8 +2933,14 @@ func pkCommitTSMatchedInRange(
 // pkCheckZoneMapUsable rejects absent or incompatible bounds. AnyIn returns
 // false for an uninitialized ZM; that is not proof that a PK is absent.
 func pkCheckZoneMapUsable(zm objectio.ZoneMap, typ *types.Type) bool {
+	scale := typ.Scale
+	if typ.Oid.IsInteger() && scale == -1 {
+		// SQL integer types use -1 for unspecified scale. ZoneMap.SetScale
+		// stores six bits, so the same type reads back as 63 in persisted ZMs.
+		scale = int32(uint8(scale) & 0x3f)
+	}
 	return len(zm) == index.ZMSize && zm.IsInited() &&
-		zm.GetType() == typ.Oid && zm.GetScale() == typ.Scale
+		zm.GetType() == typ.Oid && zm.GetScale() == scale
 }
 
 // collectPKCheckObjects only inspects snapshot metadata. Complete this phase

@@ -106,6 +106,103 @@ func TestPersistedPKCheckDisjointObjectBudget(t *testing.T) {
 	}
 }
 
+func TestPKCheckZoneMapScaleCompatibility(t *testing.T) {
+	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64} {
+		t.Run(oid.String(), func(t *testing.T) {
+			typ := oid.ToTypeWithScale(-1)
+			zm := index.BuildZM(oid, make([]byte, oid.TypeLen()))
+			zm.SetScale(-1)
+			require.True(t, pkCheckZoneMapUsable(zm, &typ))
+			zm.SetScale(1)
+			require.False(t, pkCheckZoneMapUsable(zm, &typ))
+		})
+	}
+	for _, tc := range []struct {
+		name                  string
+		key, stored           types.T
+		keyScale, storedScale int32
+		want                  bool
+	}{
+		{"integer zero is not sentinel", types.T_int64, types.T_int64, 0, -1, false},
+		{"different integer type", types.T_int64, types.T_uint64, -1, -1, false},
+		{"decimal64 same", types.T_decimal64, types.T_decimal64, 2, 2, true},
+		{"decimal64 mismatch", types.T_decimal64, types.T_decimal64, 2, 3, false},
+		{"decimal128 same", types.T_decimal128, types.T_decimal128, 2, 2, true},
+		{"decimal128 mismatch", types.T_decimal128, types.T_decimal128, 2, 3, false},
+		{"decimal sentinel stays unknown", types.T_decimal64, types.T_decimal64, -1, -1, false},
+		{"temporal mismatch", types.T_datetime, types.T_datetime, 3, 6, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := tc.key.ToTypeWithScale(tc.keyScale)
+			zm := index.BuildZM(tc.stored, make([]byte, tc.stored.TypeLen()))
+			zm.SetScale(tc.storedScale)
+			require.Equal(t, tc.want, pkCheckZoneMapUsable(zm, &typ))
+		})
+	}
+}
+
+func TestPersistedPKCheckSQLIntegerScale(t *testing.T) {
+	for _, oid := range []types.T{types.T_int64, types.T_uint64} {
+		typ := oid.ToTypeWithScale(-1)
+		zm := index.NewZM(oid, typ.Scale)
+		if oid == types.T_uint64 {
+			require.NoError(t, zm.Update(uint64(7)))
+		} else {
+			require.NoError(t, zm.Update(int64(7)))
+		}
+		require.True(t, pkCheckZoneMapUsable(zm, &typ), "SQL integer sentinel survives ZM encoding")
+		zm.SetScale(1)
+		require.False(t, pkCheckZoneMapUsable(zm, &typ), "other scale mismatches remain unknown")
+	}
+	tbl, eng, fs, keys := newPersistedPKCheckTable(t, types.T_int64, false)
+	ctx := tbl.proc.Load().Ctx
+	addPKCheckObjects(t, tbl, eng, fs, 65, "disjoint", "created")
+	tbl.tableDef.Cols[0].Typ.Scale = -1
+	keys.Vecs[0].GetType().Scale = -1
+	part := eng.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId)
+	func() {
+		state, done := part.MutateState()
+		defer done()
+		_, created := state.GetChangedObjsBetween(types.TS{}, types.MaxTs())
+		for name := range created {
+			obj, ok := state.GetObject(name)
+			require.True(t, ok)
+			zm := obj.SortKeyZoneMap().Clone()
+			zm.SetScale(-1)
+			require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&obj.ObjectStats, zm))
+			require.NoError(t, state.HandleObjectEntry(ctx, fs, obj, false))
+		}
+	}()
+	reads := 0
+	eng.fs = tombstoneReadFS{FileService: fs, read: func(ctx context.Context, v *fileservice.IOVector) error {
+		reads++
+		return fs.Read(ctx, v)
+	}}
+	for _, modified := range []bool{false, true} {
+		for _, key := range []int64{99, 7} {
+			reads = 0
+			require.NoError(t, vector.SetFixedAtWithTypeCheck(keys.Vecs[0], 0, key))
+			baseline := tbl.proc.Load().Mp().CurrNB()
+			var changed bool
+			var err error
+			if modified {
+				changed, err = tbl.PrimaryKeysMayBeModified(ctx, types.BuildTS(10, 0), types.BuildTS(50, 0), keys, 0, -1)
+			} else {
+				changed, err = tbl.PrimaryKeysMayBeUpserted(ctx, types.BuildTS(10, 0), types.BuildTS(50, 0), keys, 0)
+			}
+			require.NoError(t, err)
+			require.Equal(t, key == 7, changed, "SQL integer summaries must prune disjoint history and retain real hits")
+			if key == 99 {
+				require.Zero(t, reads)
+			} else {
+				require.Positive(t, reads)
+			}
+			require.Equal(t, baseline, tbl.proc.Load().Mp().CurrNB())
+			require.Empty(t, pkCheckSemaphore)
+		}
+	}
+}
+
 func TestPersistedPKCheckUnknownObjectBudget(t *testing.T) {
 	for _, lifecycle := range []string{"created", "deleted", "mixed"} {
 		for _, shape := range []string{"missing", "uninitialized", "wrong_type", "wrong_scale", "overlap", "fake_pk"} {
