@@ -14,6 +14,13 @@
 
 package version
 
+// MySQLCompatibilityVersion is the fixed SQL dialect baseline. A configured
+// server-version display prefix and the MatrixOne release do not change it.
+const MySQLCompatibilityVersion = 80030
+
+// MySQLCompatibilityVersionString is also used by the default handshake prefix.
+const MySQLCompatibilityVersionString = "8.0.30"
+
 var (
 	// GoVersion go version, setup by makefile
 	GoVersion = ""
