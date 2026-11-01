@@ -223,7 +223,7 @@ func TestPersistedPKCheckCandidateBlockBudget(t *testing.T) {
 			ctx := tbl.proc.Load().Ctx
 			blockReads := 0
 			eng.fs = tombstoneReadFS{FileService: fs, read: func(ctx context.Context, v *fileservice.IOVector) error {
-				if len(pkCheckSemaphore) > 0 {
+				if len(v.Entries) > 1 {
 					blockReads++
 				}
 				return fs.Read(ctx, v)

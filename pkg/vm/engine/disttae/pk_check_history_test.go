@@ -45,7 +45,7 @@ func TestPersistedPKCheckUnavailableObjectHistory(t *testing.T) {
 			ctx := tbl.proc.Load().Ctx
 			reads := 0
 			eng.fs = tombstoneReadFS{FileService: fs, read: func(ctx context.Context, v *fileservice.IOVector) error {
-				if !tc.block || len(pkCheckSemaphore) > 0 {
+				if !tc.block || len(v.Entries) > 1 {
 					reads++
 					return moerr.NewFileNotFoundNoCtx(v.FilePath)
 				}

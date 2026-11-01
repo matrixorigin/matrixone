@@ -40,7 +40,7 @@ func newPersistedPKCheckTable(t testing.TB, oid types.T, tombstone bool) (*txnTa
 	return newPersistedPKCheckTableBlocks(t, oid, tombstone, 1, false)
 }
 
-func newPersistedPKCheckTableBlocks(t *testing.T, oid types.T, tombstone bool, blocks int, deleted bool) (*txnTable, *Engine, fileservice.FileService, *batch.Batch) {
+func newPersistedPKCheckTableBlocks(t testing.TB, oid types.T, tombstone bool, blocks int, deleted bool) (*txnTable, *Engine, fileservice.FileService, *batch.Batch) {
 	t.Helper()
 	tbl, eng := newPrimaryKeyCheckTableForTest(t)
 	proc := tbl.proc.Load()
