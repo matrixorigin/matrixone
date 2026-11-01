@@ -1520,6 +1520,12 @@ func (l *LocalFS) RemoveFile(ctx context.Context, filePath string) error {
 }
 
 func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
+	return l.createAndRemoveFile(ctx, filePath, os.Remove)
+}
+
+// createAndRemoveFile accepts the unlink operation to allow a deterministic
+// failure test without changing global filesystem hooks.
+func (l *LocalFS) createAndRemoveFile(ctx context.Context, filePath string, unlink func(string) error) (*os.File, error) {
 	err := ctx.Err()
 	if err != nil {
 		return nil, err
@@ -1535,7 +1541,11 @@ func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os
 		return nil, err
 	}
 
-	// do not check error for this one
-	os.Remove(nativePath)
+	// The returned handle is meant to have no directory entry. If unlink
+	// fails, hand neither the named file nor its open descriptor to a caller
+	// that assumes spill files disappear automatically on close.
+	if err := unlink(nativePath); err != nil {
+		return nil, errors.Join(err, f.Close())
+	}
 	return f, nil
 }
