@@ -27,7 +27,7 @@ func TestISCPLogUpdateResultSQLRejectsStageRegression(t *testing.T) {
 		`{"LSN":5,"Stage":1,"LifecycleVersion":1}`, 1, 1, 3, 4,
 	)
 
-	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LSN') = '4'")
+	require.Contains(t, sql, "AND JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LSN')) = '4'")
 	require.Contains(t, sql, "CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED) <= 1")
 	require.Contains(t, sql, "AND (3 = 4 OR")
 	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), 1)")
@@ -63,7 +63,28 @@ func TestISCPLogAdvanceWatermarkSQLCarriesMonotonicStage(t *testing.T) {
 
 	require.Contains(t, sql, "JSON_SET(job_status, '$.LSN', 5, '$.Stage'")
 	require.Contains(t, sql, "GREATEST(CAST(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.Stage')), '0') AS SIGNED), 1)")
-	require.Contains(t, sql, "JSON_EXTRACT(job_status, '$.LSN') = '4'")
+	require.Contains(t, sql, "AND JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LSN')) = '4'")
+}
+
+// The mo_iscp_log LSN compare-and-swap legs pair the durable JSON number with
+// the expected value only through JSON_UNQUOTE, so both sides are SQL text.
+// The #31121 mixed-domain contract makes a bare JSON/character comparison a
+// JSON comparison where a string scalar never equals the JSON number LSN,
+// which made every ISCP CAS update lose its row and stalled watermark and
+// error persistence cluster-wide.
+func TestISCPLogCASLSNLegsCompareUnquotedText(t *testing.T) {
+	resultSQL := CDCSQLBuilder.ISCPLogUpdateResultSQL(
+		1, 2, "job", 3, types.BuildTS(4, 0),
+		`{"LSN":5,"Stage":1,"LifecycleVersion":1}`, 1, 1, 3, 4,
+	)
+	advanceSQL := CDCSQLBuilder.ISCPLogAdvanceWatermarkSQL(
+		1, 2, "job", 3, types.BuildTS(4, 0), 5, 1, 3, 4,
+	)
+
+	for _, sql := range []string{resultSQL, advanceSQL} {
+		require.Contains(t, sql, "JSON_UNQUOTE(JSON_EXTRACT(job_status, '$.LSN')) = '4'")
+		require.NotContains(t, sql, "JSON_EXTRACT(job_status, '$.LSN') = '4'")
+	}
 }
 
 func TestISCPLogSQLBuildersEscapeStringLiterals(t *testing.T) {
