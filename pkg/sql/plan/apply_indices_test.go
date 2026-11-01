@@ -3801,7 +3801,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
 			require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
 		})
-		t.Run("broad single-column unique index uses common cost rejection", func(t *testing.T) {
+		t.Run("single-column unique index retains ordinary exemption", func(t *testing.T) {
 			filter := makeRangeFilterExpr(0, 0, "=", 7)
 			filter.Selectivity = 0.9
 			builder, scanID, idxDef, colRefCnt := newEncodedIndexCostTestCase(
@@ -3812,7 +3812,7 @@ func TestEncodedIndexCostBoundaryControls(t *testing.T) {
 			idxDef.Unique = true
 			node := builder.qry.Nodes[scanID]
 			node.FilterList[0].GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
-			require.Equal(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
+			require.NotEqual(t, int32(-1), builder.tryIndexOnlyScan(idxDef, node, colRefCnt, map[[2]int32]*planpb.Expr{}, &Snapshot{}))
 		})
 		t.Run("single-user-column non-unique index keeps selective win", func(t *testing.T) {
 			filter := makeRangeFilterExpr(0, 0, "=", 7)
@@ -3863,6 +3863,7 @@ func TestEncodedRegularIndexCostShapeAndPaginationControls(t *testing.T) {
 			wantSkip    bool
 		}{
 			{name: "broad rejects", selectivity: 0.20, outcnt: 120_000, wantSkip: true},
+			{name: "selective wins", selectivity: 0.001, outcnt: 1_000},
 			{name: "single key wins", selectivity: 0.000001, outcnt: 1},
 			{name: "force preserves broad", selectivity: 0.20, outcnt: 120_000, force: true},
 		} {
@@ -4212,39 +4213,21 @@ func TestEncodedIndexCostChoosesNarrowCoveringSiblingIndependentOfDDLOrder(t *te
 }
 
 func TestEncodedIndexCostChoosesAcrossCoveringAndBackfill(t *testing.T) {
-	for _, wideBytes := range []uint64{32, 1 << 20} {
-		t.Run(fmt.Sprintf("trailing payload %d bytes", wideBytes), func(t *testing.T) {
-			ctx := newEncodedExistsPlanTestContext(t, 600_000)
-			activity := ctx.tables["cost_activity"]
-			activity.Indexes = nil
-			// A columnar base scan need not read this unprojected value, while a
-			// covering tuple must read its entire encoded key. Either shape can win.
-			activity.Name2ColIndex["payload"] = int32(len(activity.Cols))
-			activity.Cols = append(activity.Cols, &planpb.ColDef{
-				ColId: uint64(len(activity.Cols)), Name: "payload",
-				Typ: planpb.Type{Id: int32(types.T_text)}, Default: &planpb.Default{},
-			})
-			stats := ctx.statsByID[activity.TblId]
-			stats.SizeMap["payload"] = uint64(stats.TableCnt) * wideBytes
-			stats.NdvMap["payload"] = stats.TableCnt
-			addCostActivityRegularIndex(t, ctx, "idx_state_wide_covering", []string{
-				"state", "payload", "amount", catalog.CreateAlias(catalog.CPrimaryKeyColName),
-			}, false)
-			addCostActivityRegularIndex(t, ctx, "idx_state_narrow_backfill", []string{
-				"state", catalog.CreateAlias(catalog.CPrimaryKeyColName),
-			}, false)
-			queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
-				"select amount from cost_activity where state = 'READY'")
-			require.NoError(t, err)
-			if wideBytes == 32 {
-				require.Equal(t, "idx_state_wide_covering", findFirstIndexScanName(queryPlan))
-				require.False(t, planHasIndexJoin(queryPlan))
-			} else {
-				require.Equal(t, "idx_state_narrow_backfill", findFirstIndexScanName(queryPlan))
-				require.True(t, planHasIndexJoin(queryPlan))
-			}
-		})
-	}
+	ctx := newEncodedExistsPlanTestContext(t, 50)
+	ctx.tables["cost_activity"].Indexes = nil
+	addCostActivityRegularIndex(t, ctx, "idx_state_wide_covering", []string{
+		"state", "tenant_id", "created_at", "activity_id", "amount",
+		catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+	addCostActivityRegularIndex(t, ctx, "idx_state_narrow_backfill", []string{
+		"state", catalog.CreateAlias(catalog.CPrimaryKeyColName),
+	}, false)
+
+	queryPlan, err := runOneStmt(&encodedIndexPlanTestOptimizer{ctx: ctx}, t,
+		"select amount from cost_activity where state = 'READY'")
+	require.NoError(t, err)
+	require.Equal(t, "idx_state_narrow_backfill", findFirstIndexScanName(queryPlan))
+	require.True(t, planHasIndexJoin(queryPlan))
 }
 
 func TestEncodedIndexCostChoosesAcrossPointAndRange(t *testing.T) {
@@ -4737,7 +4720,7 @@ func TestForceIndexPreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
 	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
 	covering, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
 	require.True(t, ok)
-	backfillFilters := costCtx.matchPointBackfill(idxDef)
+	backfillFilters := costCtx.matchPointBackfill(idxDef, false)
 	require.NotEmpty(t, backfillFilters)
 	coveringWork, _, coveringValid := costCtx.score(
 		idxDef, covering.filterIdx, covering.residualLeadingPos, encodedRegularIndexCostIndexOnly,
@@ -4802,7 +4785,7 @@ func TestSmallTablePreservesCoveringShapeOverCheaperBackfill(t *testing.T) {
 	covering, ok := builder.matchRegularIndexOnlyScan(idxDef, node, costCtx)
 	require.True(t, ok)
 	require.Equal(t, []int32{0}, covering.residualLeadingPos)
-	backfillFilters := costCtx.matchPointBackfill(idxDef)
+	backfillFilters := costCtx.matchPointBackfill(idxDef, false)
 	require.NotEmpty(t, backfillFilters)
 	coveringWork, _, coveringValid := costCtx.score(
 		idxDef, covering.filterIdx, covering.residualLeadingPos, encodedRegularIndexCostIndexOnly,
@@ -5263,7 +5246,8 @@ func TestEncodedIndexCostRejectsBroadBackfillSiblingFromPublicPlan(t *testing.T)
 		wantIndex bool
 	}{
 		{name: "broad predicate rejects covering and backfill siblings", stateNDV: 2},
-		{name: "selective predicate keeps backfill index join", stateNDV: 600_000, wantIndex: true},
+		{name: "selective predicate keeps backfill index join", stateNDV: 1000, wantIndex: true},
+		{name: "nearly unique predicate keeps backfill index join", stateNDV: 600_000, wantIndex: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := newEncodedExistsPlanTestContext(t, test.stateNDV)
@@ -10350,6 +10334,10 @@ func TestRegularIndexCostRequiresBlockLayoutEvidence(t *testing.T) {
 			if tc.disableBlocks {
 				builder.optimizerHints = &OptimizerHints{blockFilter: 2}
 			}
+			prefix := makeStringEqFilterExpr(node.BindingTags[0], 2, "R")
+			prefix.GetF().Func.ObjName = "prefix_eq"
+			prefix.Selectivity = filter.Selectivity
+			node.FilterList = append(node.FilterList, prefix)
 			for i, predicate := range node.FilterList {
 				bound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), predicate.GetF().Func.ObjName, predicate.GetF().Args)
 				require.NoError(t, err)
@@ -10361,9 +10349,8 @@ func TestRegularIndexCostRequiresBlockLayoutEvidence(t *testing.T) {
 			require.True(t, ctx.valid)
 			require.Equal(t, tc.wantRows, ctx.baseRows)
 			if tc.disableBlocks {
-				work, reject, valid := ctx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostBackfill)
+				_, reject, valid := ctx.score(idxDef, []int32{int32(len(node.FilterList) - 1)}, nil, encodedRegularIndexCostBackfill)
 				require.True(t, valid)
-				require.Greater(t, work, ctx.baseWork, "disabled hidden pruning cannot borrow a one-row key read")
 				require.True(t, reject)
 			}
 		})
@@ -10372,6 +10359,7 @@ func TestRegularIndexCostRequiresBlockLayoutEvidence(t *testing.T) {
 
 func TestRegularIndexDisabledPruningReadsKeysBeforeSelectedPKs(t *testing.T) {
 	filter := makeStringEqFilterExpr(0, 2, "READY")
+	filter.GetF().Func.ObjName = "prefix_eq"
 	filter.Selectivity = 1.0 / 800_000
 	builder, scanID, idxDef, refs := newEncodedIndexCostTestCase(t,
 		[]string{"category", catalog.CreateAlias(catalog.CPrimaryKeyColName)}, []*planpb.Expr{filter},
@@ -10379,15 +10367,15 @@ func TestRegularIndexDisabledPruningReadsKeysBeforeSelectedPKs(t *testing.T) {
 	node := builder.qry.Nodes[scanID]
 	filter.GetF().Args[0].GetCol().RelPos = node.BindingTags[0]
 	ctx := builder.newEncodedRegularIndexCostContext(node, refs)
-	normalWork, _, valid := ctx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly)
+	normalWork, normalReject, valid := ctx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly)
 	require.True(t, valid)
 	builder.optimizerHints = &OptimizerHints{blockFilter: 2}
 	ctx = builder.newEncodedRegularIndexCostContext(node, refs)
-	disabledWork, _, valid := ctx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly)
+	disabledWork, disabledReject, valid := ctx.score(idxDef, []int32{0}, nil, encodedRegularIndexCostIndexOnly)
 	require.True(t, valid)
-	// The tuple contains a 4-byte category and 14-byte compound PK, each with
-	// 3 encoding bytes. The separate 14-byte PK column remains a one-row read.
-	require.Equal(t, float64((800_000-1)*24), disabledWork-normalWork)
+	require.False(t, normalReject)
+	require.True(t, disabledReject, "full hidden-key input is charged before the selected physical PKs")
+	require.Equal(t, normalWork, disabledWork, "admission changes do not reprice candidate ranking")
 }
 
 func TestRegularIndexResidualStaysWithItsScan(t *testing.T) {
@@ -10483,6 +10471,10 @@ func TestRegularIndexPruningUsesCanonicalIdentity(t *testing.T) {
 		actual := calcScanStats(node, builder)
 		require.InDelta(t, 8_000.0, actual.Cost, 0.01)
 		require.Len(t, node.BlockFilterList, 1, "the real scan retains canonical layout pruning")
+		prefix := makeStringEqFilterExpr(node.BindingTags[0], 2, "R")
+		prefix.GetF().Func.ObjName = "prefix_eq"
+		prefix.Selectivity = filter.Selectivity
+		node.FilterList = append(node.FilterList, prefix)
 		ctx := builder.newEncodedRegularIndexCostContext(node, refs)
 		require.InDelta(t, 88_000.0, ctx.baseRows, 0.01)
 	}
@@ -10511,7 +10503,10 @@ func TestRegularIndexLayoutRejectsNonBoundPredicates(t *testing.T) {
 		}
 		require.NoError(t, err)
 		predicate.Selectivity = 0.00001
-		node.FilterList = []*planpb.Expr{predicate}
+		prefix := makeStringEqFilterExpr(tag, 2, "READY")
+		prefix.GetF().Func.ObjName = "prefix_eq"
+		prefix.Selectivity = 0.00001
+		node.FilterList = []*planpb.Expr{predicate, prefix}
 		ctx := builder.newEncodedRegularIndexCostContext(node, refs)
 		require.Equal(t, 800_000.0, ctx.baseRows)
 	}
@@ -10589,6 +10584,10 @@ func TestRegularIndexObjectInputGranularity(t *testing.T) {
 				bound.Selectivity = 0.001
 				node.FilterList = append(node.FilterList, bound)
 			}
+			prefix := makeStringEqFilterExpr(node.BindingTags[0], 2, "R")
+			prefix.GetF().Func.ObjName = "prefix_eq"
+			prefix.Selectivity = filter.Selectivity
+			node.FilterList = append(node.FilterList, prefix)
 			for i, predicate := range node.FilterList {
 				bound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), predicate.GetF().Func.ObjName, predicate.GetF().Args)
 				require.NoError(t, err)
@@ -10623,5 +10622,52 @@ func TestRegularIndexOverlappingObjectsKeepSparseBackfill(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "idx_amount", findFirstIndexScanName(query))
 		require.True(t, planHasIndexJoin(query))
+	}
+}
+
+func TestRangeBackfillSkipsLargePairedRangeByStats(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	bindTag := builder.genNewBindTag()
+	idxDef := &IndexDef{
+		IndexName:      "idx_price",
+		Parts:          []string{"price", catalog.FakePrimaryKeyColName},
+		Unique:         false,
+		IndexTableName: "__mo_index_secondary_idx_price",
+	}
+
+	node := &planpb.Node{
+		BindingTags: []int32{bindTag},
+		TableDef: &planpb.TableDef{
+			Name2ColIndex: map[string]int32{
+				catalog.FakePrimaryKeyColName: 0,
+				"price":                       1,
+			},
+			Cols: []*planpb.ColDef{
+				{Name: catalog.FakePrimaryKeyColName, Typ: planpb.Type{Id: int32(types.T_uint64)}},
+				{Name: "price", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			},
+			Pkey:    &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+			Indexes: []*planpb.IndexDef{idxDef},
+		},
+		Stats: &planpb.Stats{
+			TableCnt:    100000,
+			Outcnt:      float64(InFilterCardLimitNonPK),
+			Selectivity: 0.05,
+		},
+		FilterList: []*planpb.Expr{
+			makeRangeFilterExpr(bindTag, 1, ">=", 99),
+			makeRangeFilterExpr(bindTag, 1, "<=", 299),
+		},
+	}
+
+	for _, filters := range [][]*planpb.Expr{node.FilterList, node.FilterList[:1]} {
+		node.FilterList = filters
+		for _, force := range []bool{false, true} {
+			costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+			costCtx.force = force
+			for _, match := range costCtx.matchRangeBackfills(idxDef) {
+				require.Empty(t, match)
+			}
+		}
 	}
 }

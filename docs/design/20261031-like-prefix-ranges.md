@@ -74,13 +74,31 @@ floating-point integer representation are unknown. Missing or invalid data
 rejects the new automatic prefix candidate. FORCE retains existing semantics.
 
 Candidate work uses the sampled upper range fraction before suffix residuals.
-The shared regular-index scorer accounts for index input, actual decoding and
-output, PK transfer, base blocks and post-filter row work. For K lookup rows and
-an independently pruned base input budget R, its conservative dispersed-key
-estimate is `min(R, max(K, ceil(K)*BlockMaxRows))`. It saturates before multiplying
-to avoid overflow. Physical PK input is included exactly once; an unsorted or
-fake PK cannot borrow the ordered-PK block-search estimate. Base residuals and
-join materialization remain charged on filtered rows.
+One shared scorer ranks ordinary and logical-prefix alternatives using the
+established vector-width, predicate, extraction, transfer and join heuristics.
+These are relative work proxies, not calibrated latency or compressed I/O bytes.
+Extraction is charged per materialized filter or projection expression, including
+exact decoded rechecks of lossy serialized lookups.
+Ordinary scan-input estimates, point admission and large-range admission retain
+the target branch's policy, including the direct single-column cost exemption.
+The transfer-key capacity guard also applies on small tables; this deliberately
+rejects some formerly admitted backfills that exceed the existing filter budget.
+FORCE bypasses common cost/capacity rejection after
+matching; it does not bypass the existing ordinary large-range matching guard.
+
+New logical-prefix access has an additional conservative admission check, while
+using the same ranking score as its competitors. Let K be transferred keys, R
+the independently estimated scan input, and L the existing dispersed-block
+estimate `min(R, max(K, ceil(K)*BlockMaxRows))`, saturated before multiplication.
+For a backfill, replace the ranking contribution `K * baseWidth` in the admission
+check with `max(K * baseWidth, L * otherRequiredWidth + P * physicalPKWidth)`.
+P is R for a fake/unsorted PK or disabled block pruning, and L otherwise.
+Disabled pruning also charges all hidden key input in this prefix admission
+check. Covering prefixes have that hidden-key charge but no backfill input.
+All common stages are calculated once. Capacity uses the original transferred
+keys, and unknown prepared bounds retain the existing lower-cardinality check.
+This admission policy limits risks from new access; it is not a second ranking
+model or a cache-residency estimate.
 
 PK filter capacity applies only to backfill candidates, after index-side
 residuals. Covering scans build no such filter and are compared with the base
@@ -90,15 +108,27 @@ existing uncertainty comparison rather than using a neutral ranking estimate
 as a capacity bound. FORCE, full-primary-key access and spatial policy retain
 their established responsibilities.
 
-The new prefix candidate must beat the base scan even on small tables; LIMIT
+New automatic prefix access retains the existing scan or ordinary candidate
+when independently estimated base input is at most `BlockMaxRows`. This is a
+conservative admission budget using an existing granularity, not proof of one
+physical block, one execution batch, or a hidden-key read floor. It applies only
+to a prefix used as the leading access, leaves ordinary fallback available, and
+FORCE bypasses it. It can decline useful small-input indexes and introduces a
+plan boundary; estimates may be stale. Measurements of the original 500-row
+COUNT(*) showed index startup/execution overhead outweighing its row reduction
+in both memory and base-flushed states, so automatic index use there is not a
+performance acceptance requirement. Results and FORCE/IGNORE agreement remain
+required, with larger selective workloads proving automatic prefix access.
+Above this budget the new prefix candidate must beat the base scan; LIMIT
 cannot reduce work before required residuals. Broad prefixes lose by their real
 estimated work. The sample upper bound can conservatively reject useful
 noncovering paths; this tradeoff avoids charging a dispersed backfill as if it
 read only its result rows. It is not a guarantee against every possible cache,
 layout or stale-statistics performance change.
 
-A row-frequency estimate is not layout evidence. The shared scorer discounts
-base input using physical key ordering or fully observed object layouts;
+A row-frequency estimate is not layout evidence. On scans containing a logical
+content-prefix predicate, one corrected scan estimate is shared by all competing
+candidates. It discounts input using physical key ordering or observed layouts;
 missing/high-overlap layouts do not turn heuristic row selectivity into skipped
 blocks. Unsorted prefixes do not discount base input from their sampled row
 frequency. Independently useful pruning is preserved, and executable block
@@ -111,7 +141,9 @@ independent sorted-block pruning. This uses average object sizes, not a hard
 bound for skewed layouts. Unknown/partial object or column observations give no such
 credit; an object sampling ratio of one alone does not establish column coverage. If static pruning is explicitly disabled, both the base
 and hidden-key input are charged as full scans; per-key search after a block
-read does not restore block pruning.
+read does not restore block pruning. Scans without such a prefix retain the
+ordinary scan estimate. Physical-read assumptions introduced for the new prefix
+must not silently reprice unrelated regular-index workloads.
 
 GlobalStats publishes one complete analyzed generation. Samples are deeply
 copied and uncollected columns do not inherit old distributions. Metadata-only
@@ -137,7 +169,18 @@ capacity, block-input saturation and PK ordering, and encoded-range
 membership against independent raw-byte classification. Generation tests cover
 copy ownership, partial collection, patching, and transient views. Performance
 validation compares selective and broad distributions with the same extrema,
-including a non-covering payload workload, without forced access hints.
+including a non-covering payload workload. Independent primitive benchmarks
+distinguish block acquisition, full/selected materialization, predicates and PK
+search. Their cache/type/density sensitivity does not justify fitting universal
+latency coefficients or overriding ordinary admission policy.
+Automatic plans must show no measurable regression versus rebased main on an
+independent narrow/wide, sparse/broad, covering/backfill and pruning-control
+matrix, with exact results and A/A-derived repeatability. Include text/prepared
+execution and verified application-cache hit/miss controls; application-cache
+misses do not establish cold disk or S3 latency. An inconclusive comparison is
+not a pass. The sparse compound-PK case must also improve reproducibly over the
+previous automatic scan. Forced alternatives diagnose decisions, without
+requiring the fastest forced plan in every cache regime.
 
 Optional backfill residuals share admission between construction and costing.
 They require one direct column and literal, parameter or literal-list/vector

@@ -93,13 +93,16 @@ func TestLikePrefixIndex(t *testing.T) {
 		exec("analyze table t(name) fullscan")
 		require.NotContains(t, explain(equalityQuery), "Join Type: INDEX")
 		require.Contains(t, explain(equalityQuery), "Index Table Scan")
-		require.Contains(t, explain(query), "Index Table Scan")
+		require.NotContains(t, explain(query), "Index Table Scan", "small input retains its scan")
 		require.NotContains(t, explain("select count(*) from t where name like 'a%'"), "Index Table Scan", "a measured broad prefix must keep the scan")
 		// Cross one storage block so automatic non-covering access can save reads.
 		// Keep this in the existing fixture; tiny tables cannot prove that choice.
 		exec("create table prefix_backfill(id int primary key,name varchar(40),amount int,payload int,key ix(name,amount))")
 		exec("insert into prefix_backfill select result,concat(if(result%100=0,'abc','zzz'),result),result,result from generate_series(1,10000)g")
+		largeQuery := "select count(*) from prefix_backfill where name like 'abc%'"
+		require.NotContains(t, explain(largeQuery), "Index Table Scan", "unknown prefix frequency retains the scan")
 		exec("analyze table prefix_backfill(name,amount) fullscan")
+		require.Contains(t, explain(largeQuery), "Index Table Scan")
 		prefixQuery := "select sum(id+payload) from prefix_backfill where name like 'abc%' and amount=100"
 		prefixPlan := explain(prefixQuery)
 		require.Contains(t, prefixPlan, "Join Type: INDEX")
@@ -111,10 +114,15 @@ func TestLikePrefixIndex(t *testing.T) {
 		exec("create table issue_rows(id int primary key,name varchar(20),key ix(name))")
 		exec("insert into issue_rows select result,case result%10 when 0 then 'apple' when 1 then 'apply' when 2 then 'apricot' when 3 then 'banana' when 4 then 'band' when 5 then 'bank' when 6 then 'zebra' when 7 then 'zoo' when 8 then 'orange' else 'pear' end from generate_series(0,499) g")
 		exec("analyze table issue_rows(name) fullscan")
-		require.Contains(t, explain("select count(*) from issue_rows where name like 'ap%'"), "Index Table Scan")
+		require.NotContains(t, explain("select count(*) from issue_rows where name like 'ap%'"), "Index Table Scan")
+		require.Contains(t, explain("select count(*) from issue_rows force index(ix) where name like 'ap%'"), "Index Table Scan")
 		var count int64
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from issue_rows where name like 'ap%'").Scan(&count))
 		require.Equal(t, int64(150), count)
+		for _, hint := range []string{" force index(ix)", " ignore index(ix)"} {
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from issue_rows"+hint+" where name like 'ap%'").Scan(&count))
+			require.EqualValues(t, 150, count)
+		}
 
 		ids := func(q string) []int64 {
 			t.Helper()
@@ -156,7 +164,7 @@ func TestLikePrefixIndex(t *testing.T) {
 					}
 					exec("analyze table t(name) fullscan")
 					exec("analyze table prefix_backfill(name,amount) fullscan")
-					require.Contains(t, explain(query), "Index Table Scan")
+					require.NotContains(t, explain(query), "Index Table Scan", "small input retains its scan")
 				}
 				// Reuse the analyzed fixture for covering access: the redundant broad
 				// range must not suppress the narrow prefix, in either predicate order.
@@ -174,14 +182,14 @@ func TestLikePrefixIndex(t *testing.T) {
 					require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&count))
 					require.EqualValues(t, 100, count)
 				}
-				nulQuery := "select id from t where name like 'ab\\0%' order by id"
+				nulQuery := "select id from t force index(ix) where name like 'ab\\0%'"
 				require.Contains(t, explain(nulQuery), "Index Table Scan")
 				require.Contains(t, explain(nulQuery), "prefix_in_range")
-				gapQuery := "select id from t force index(ix) where name like '\x7f%' order by id"
+				gapQuery := "select id from t force index(ix) where name like '\x7f%'"
 				gapPlan := explain(gapQuery)
 				require.Contains(t, gapPlan, "Index Table Scan")
 				require.Contains(t, gapPlan, "prefix_eq", "Unicode-successor gaps require an exact prefix residual")
-				require.Equal(t, []int64{11, 12}, ids(gapQuery))
+				require.ElementsMatch(t, []int64{11, 12}, ids(gapQuery))
 
 				require.Equal(t, []int64{9}, ids(nulQuery))
 				require.Equal(t, []int64{9}, ids("select id from t force index(ix_multi) where name like 'ab\\0%' order by id"))
@@ -205,6 +213,18 @@ func TestLikePrefixIndex(t *testing.T) {
 						require.Equal(t, []int64{0, 1}, ids(q))
 					}
 					require.Equal(t, []int64{0, 1}, ids("select id+length(payload)-7 from t ignore index(ix,ix_multi) where concat(name,'') like 'abc%' and name in ('abc','abcd') order by id"))
+				})
+				t.Run("forced covering IN retains exact residuals", func(t *testing.T) {
+					predicate := "name like 'ab%' and name in ('ab','abc')"
+					q := "select id from t force index(ix) where " + predicate
+					plan := explain(q)
+					require.Contains(t, plan, "Index Table Scan")
+					require.NotContains(t, plan, "Join Type: INDEX")
+					require.Contains(t, plan, "prefix_in(")
+					// 'ab\\0c' shares the encoded lookup prefix of 'ab', but is not IN the list.
+					actual := ids(q)
+					require.ElementsMatch(t, []int64{0, 5}, actual)
+					require.ElementsMatch(t, ids("select id from t ignore index(ix,ix_multi) where concat(name,'') like 'ab%' and name in ('ab','abc') order by id"), actual)
 				})
 				t.Run("alternative preserves error domains", func(t *testing.T) {
 					check := func(query string, wantError bool) {
@@ -320,11 +340,14 @@ func TestLikePrefixIndex(t *testing.T) {
 		})
 
 		exec("begin")
-		exec("update t set name='abcd_new' where id=4")
-		require.NotContains(t, explain(query), "Index Table Scan", "workspace changes cannot use the published population sample")
-		require.Equal(t, []int64{1, 4}, ids("select id from t where name like 'abcd%' order by id"))
+		exec("update prefix_backfill set name='abc_new' where id=1")
+		require.NotContains(t, explain(largeQuery), "Index Table Scan", "workspace changes cannot use the published population sample")
+		require.NoError(t, conn.QueryRowContext(ctx, largeQuery).Scan(&count))
+		require.EqualValues(t, 101, count)
 		exec("rollback")
-		require.Equal(t, []int64{1}, ids("select id from t where name like 'abcd%' order by id"))
+		require.Contains(t, explain(largeQuery), "Index Table Scan", "rollback restores eligible analyzed statistics")
+		require.NoError(t, conn.QueryRowContext(ctx, largeQuery).Scan(&count))
+		require.EqualValues(t, 100, count)
 
 	})
 }

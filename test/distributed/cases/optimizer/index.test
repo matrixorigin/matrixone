@@ -78,9 +78,7 @@ insert into t1 select *,*,* from generate_series(1,100000)g;
 select mo_ctl('dn','flush','d1.t1');
 select * from t1 where c2=1;
 -- @separator:table
--- Broad fake-PK backfill adds a join; the costed base scan wins here.
--- @regex("Table Scan on d1.t1",true)
--- @regex("Join Type: INDEX",false)
+-- @regex("Index",true)
 explain select * from t1 where c3<2000;
 select count(*) from t1 where c3<2000;
 drop table if exists t1;

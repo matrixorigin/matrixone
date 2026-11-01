@@ -17,6 +17,15 @@ analyze table names(name) fullscan;
 ➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
 like_prefix_range.names  ¦  FULLSCAN  ¦  SNAPSHOT_VISIBLE_V1  ¦  1  ¦  500  ¦  1  ¦  500  ¦  1  ¦  24000  ¦  OK  ¦  q=1/1
 explain select count(*) from names where name like 'ap%';
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: starcount(1)  𝄀
+        ->  Table Scan on like_prefix_range.names  𝄀
+              Filter Cond: prefix_eq(names.name)  𝄀
+              Block Filter Cond: prefix_eq(names.name)
+explain select count(*) from names force index(ix) where name like 'ap%';
 -- @regex("Index Table Scan", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀

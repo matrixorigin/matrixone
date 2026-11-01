@@ -16,6 +16,8 @@ package plan
 
 import (
 	"bytes"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"slices"
 	"strings"
 	"testing"
@@ -23,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,17 +36,20 @@ import (
 
 // Use the existing planner fixture with a coherent analyzed population. The
 // public SQL test separately verifies collection instead of trusting this input.
-func likePrefixPlanOptimizer(mock *MockOptimizer) *encodedIndexPlanTestOptimizer {
+func likePrefixPlanOptimizer(mock *MockOptimizer, population uint64) *encodedIndexPlanTestOptimizer {
 	table := mock.ctxt.tables["index_hint_t"]
 	stats := NewStatsInfo()
-	stats.TableCnt = 500
+	stats.TableCnt = float64(population)
 	stats.TableName = table.Name
 	stats.AccurateObjectNumber = 1
 	for _, col := range table.Cols {
 		stats.NdvMap[col.Name] = 500
-		stats.SizeMap[col.Name] = 500 * 16
+		stats.SizeMap[col.Name] = population * 16
 	}
-	stats.ByteRangeMap = map[string]*statspb.ByteRangeDistribution{"a": prefixDistribution(table, 1, 500, 50)}
+	sampleRows := min(population, uint64(2048))
+	distribution := prefixDistribution(table, 1, sampleRows, sampleRows/10)
+	distribution.PopulationRows, distribution.CompleteSample = population, population == sampleRows
+	stats.ByteRangeMap = map[string]*statspb.ByteRangeDistribution{"a": distribution}
 	cache := NewStatsCache()
 	cache.Set(table.TblId, stats)
 	return &encodedIndexPlanTestOptimizer{ctx: &encodedIndexPlanTestContext{MockCompilerContext: &mock.ctxt, statsCache: cache, statsByID: map[uint64]*statspb.StatsInfo{table.TblId: stats}}}
@@ -79,7 +85,7 @@ func TestLikePrefixIndexAccess(t *testing.T) {
 			table := mock.ctxt.tables["index_hint_t"]
 			table.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 40}
 			table.Indexes = table.Indexes[:1]
-			p, err := runOneStmt(likePrefixPlanOptimizer(mock), t, "select count(*) from index_hint_t where a like '"+tc.pattern+"'")
+			p, err := runOneStmt(likePrefixPlanOptimizer(mock, 32768), t, "select count(*) from index_hint_t where a like '"+tc.pattern+"'")
 			require.NoError(t, err)
 			if tc.indexed {
 				require.Equal(t, "idx_a", findFirstIndexScanName(p))
@@ -250,7 +256,7 @@ func TestPrefixIndexRepresentations(t *testing.T) {
 			if tc.declaredPrefix {
 				table.Indexes[0].IndexAlgoParams = `{"prefix_lengths":"a:2"}`
 			}
-			p, err := runOneStmt(likePrefixPlanOptimizer(mock), t, "select count(*) from index_hint_t where a like 'abc%'")
+			p, err := runOneStmt(likePrefixPlanOptimizer(mock, 32768), t, "select count(*) from index_hint_t where a like 'abc%'")
 			require.NoError(t, err)
 			scan := findFirstIndexScanNode(p)
 			if !tc.indexed {
@@ -463,7 +469,7 @@ func TestLikePrefixPlanCostScales(t *testing.T) {
 				table.Indexes[0].Parts = []string{"a"}
 				mock.ctxt.tables["idx_hint_a"].Cols[0].Typ = table.Cols[1].Typ
 			}
-			optimizer := likePrefixPlanOptimizer(mock)
+			optimizer := likePrefixPlanOptimizer(mock, 500)
 			stats := optimizer.ctx.statsByID[table.TblId]
 			stats.TableCnt = float64(tc.rows)
 			stats.SizeMap = map[string]uint64{"a": tc.rows * 24, "id": tc.rows * 4, "b": tc.rows * 4}
@@ -485,7 +491,7 @@ func TestLikePrefixPlanCostScales(t *testing.T) {
 			}
 			p, err := runOneStmt(optimizer, t, "select "+projection+" from index_hint_t where a like 'abc%'")
 			require.NoError(t, err)
-			if tc.broad || tc.noncover {
+			if tc.broad || tc.noncover || tc.rows == 500 {
 				require.Empty(t, findFirstIndexScanName(p))
 				return
 			}
@@ -541,7 +547,7 @@ func TestLikePrefixKeepsSelectiveINBackfill(t *testing.T) {
 	table := mock.ctxt.tables["index_hint_t"]
 	table.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 40}
 	table.Indexes = table.Indexes[:1]
-	optimizer := likePrefixPlanOptimizer(mock)
+	optimizer := likePrefixPlanOptimizer(mock, 500)
 	stats := optimizer.ctx.statsByID[table.TblId]
 	stats.TableCnt = 100_000
 	for _, col := range table.Cols {
@@ -560,7 +566,8 @@ func TestLikePrefixKeepsSelectiveINBackfill(t *testing.T) {
 		{name: "computed LIKE control", predicate: "a in ('abc1','abc2') and concat(a,'') like 'abc%'", projection: "b", backfill: true},
 		{name: "prefix first", predicate: "a like 'abc%' and a in ('abc1','abc2')", projection: "b", backfill: true},
 		{name: "IN first", predicate: "a in ('abc1','abc2') and a like 'abc%'", projection: "b", backfill: true},
-		{name: "existing covering path", predicate: "a like 'abc%' and a in ('abc1','abc2')", projection: "a"},
+		// Rebased main also chooses backfill for this serialized-key projection.
+		{name: "projected key baseline", predicate: "a like 'abc%' and a in ('abc1','abc2')", projection: "a", backfill: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			query, err := runOneStmt(optimizer, t, "select "+tc.projection+" from index_hint_t where "+tc.predicate)
@@ -572,6 +579,17 @@ func TestLikePrefixKeepsSelectiveINBackfill(t *testing.T) {
 			require.Equal(t, "prefix_in", index.FilterList[0].GetF().Func.ObjName)
 		})
 	}
+	// FORCE exercises the covering form without changing automatic ranking.
+	forced, err := runOneStmt(optimizer, t, "select a from index_hint_t force index(idx_a) where a like 'abc%' and a in ('abc1','abc2')")
+	require.NoError(t, err)
+	require.False(t, planHasIndexJoin(forced))
+	scan := findFirstIndexScanNode(forced)
+	require.NotNil(t, scan)
+	predicates := make([]string, 0, len(scan.FilterList))
+	for _, filter := range scan.FilterList {
+		predicates = append(predicates, filter.GetF().Func.ObjName)
+	}
+	require.ElementsMatch(t, []string{"prefix_in", "in", "prefix_eq"}, predicates)
 	for _, sql := range []string{
 		"select b from index_hint_t where a like 'abc%def' and a in ('abc1','abc2')",
 		"prepare guarded_in from 'select b from index_hint_t where a like ''abc%'' and a in (?,?)'",
@@ -593,7 +611,7 @@ func TestLikePrefixKeepsSelectiveCoveringRange(t *testing.T) {
 	table := mock.ctxt.tables["index_hint_t"]
 	table.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 40}
 	table.Indexes = table.Indexes[:1]
-	optimizer := likePrefixPlanOptimizer(mock)
+	optimizer := likePrefixPlanOptimizer(mock, 500)
 	stats := optimizer.ctx.statsByID[table.TblId]
 	stats.TableCnt = 100_000
 	for _, col := range table.Cols {
@@ -920,4 +938,83 @@ func TestLikeLiteralEqualitySelectivity(t *testing.T) {
 			require.InDelta(t, tc.selectivity, node.FilterList[0].Selectivity, 1e-12)
 		})
 	}
+}
+
+func TestLikePrefixSmallInputAdmission(t *testing.T) {
+	run := func(t *testing.T, rows, input uint64, covering, force, ordinary bool) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		addIndexHintChoiceTableForTest(mock)
+		table := mock.ctxt.tables["index_hint_t"]
+		table.Cols[1].Typ = planpb.Type{Id: int32(types.T_varchar), Width: 40}
+		table.Indexes = table.Indexes[:1]
+		optimizer := likePrefixPlanOptimizer(mock, rows)
+		stats := optimizer.ctx.statsByID[table.TblId]
+		stats.SizeMap["a"] = rows * 24
+		stats.NdvMap["a"] = float64(rows)
+		distribution := prefixDistribution(table, 1, 2048, 1)
+		distribution.PopulationRows, distribution.CompleteSample = rows, false
+		stats.ByteRangeMap["a"] = distribution
+		builder := NewQueryBuilder(planpb.Query_SELECT, optimizer.ctx, false, true)
+		tag := builder.genNewBindTag()
+		prefix := makeStringEqFilterExpr(tag, 1, "abc")
+		prefix.GetF().Args[0].Typ = table.Cols[1].Typ
+		prefix, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_eq", prefix.GetF().Args)
+		require.NoError(t, err)
+		prefix.Selectivity = 1 / float64(rows)
+		filters := []*planpb.Expr{prefix}
+		if input < rows {
+			// The primary key is independently ordered; prefix row frequency alone
+			// cannot establish this smaller base input.
+			primary := makeRangeFilterExpr(tag, 0, ">=", 7)
+			bindEncodedIndexCostFilterTypes(t, builder.GetContext(), table, primary)
+			primary.GetF().Args[0].GetCol().Name = "id"
+			primary, err = BindFuncExprImplByPlanExpr(builder.GetContext(), ">=", primary.GetF().Args)
+			require.NoError(t, err)
+			primary.Selectivity = 0.001
+			filters = append(filters, primary)
+		}
+		if ordinary {
+			equality := makeStringEqFilterExpr(tag, 1, "abc1")
+			equality.GetF().Args[0].Typ = table.Cols[1].Typ
+			equality, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "=", equality.GetF().Args)
+			require.NoError(t, err)
+			equality.Selectivity = 1 / float64(rows)
+			filters = append(filters, equality)
+		}
+		node := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, ObjRef: mock.ctxt.objects[table.Name], TableDef: table, BindingTags: []int32{tag}, FilterList: filters}
+		id := builder.appendNode(node, NewBindContext(builder, nil))
+		node.Stats = &planpb.Stats{TableCnt: float64(rows), Cost: float64(input), Outcnt: 1, Selectivity: 1 / float64(rows)}
+		if force {
+			require.NoError(t, builder.recordIndexHints(id, table, []*tree.IndexHint{{HintType: tree.HintForce, HintScope: tree.HintForScan, IndexNames: []string{"idx_a"}}}))
+		}
+		refs := map[[2]int32]int{{tag, 1}: 1}
+		if !covering {
+			refs[[2]int32{tag, 2}] = 1
+		}
+		cost := builder.newEncodedRegularIndexCostContext(node, refs)
+		require.True(t, cost.valid)
+		require.Equal(t, float64(input), cost.baseRows, "use independently estimated scan input, not table or result rows")
+		if covering && !force && !ordinary {
+			_, reject, valid := cost.score(table.Indexes[0], []int32{0}, nil, encodedRegularIndexCostIndexOnly)
+			require.True(t, valid)
+			require.False(t, reject, "the small-input admission policy is tested independently of numeric cost rejection")
+		}
+		result := builder.applyIndicesForFiltersRegularIndex(id, node, refs, map[[2]int32]*planpb.Expr{})
+		wantIndex := force || ordinary || covering && input > objectio.BlockMaxRows
+		if wantIndex {
+			require.NotEqual(t, id, result)
+			require.Equal(t, !covering, builder.qry.Nodes[result].NodeType == planpb.Node_JOIN)
+		} else {
+			require.Equal(t, id, result)
+		}
+	}
+	for _, input := range []uint64{objectio.BlockMaxRows - 1, objectio.BlockMaxRows, objectio.BlockMaxRows + 1} {
+		for _, covering := range []bool{false, true} {
+			for _, force := range []bool{false, true} {
+				t.Run(fmt.Sprintf("input_%d_cover_%t_force_%t", input, covering, force), func(t *testing.T) { run(t, input, input, covering, force, false) })
+			}
+		}
+	}
+	t.Run("independent primary bound prunes large scan to budget", func(t *testing.T) { run(t, 32768, objectio.BlockMaxRows, true, false, false) })
+	t.Run("ordinary equality survives prefix rejection", func(t *testing.T) { run(t, objectio.BlockMaxRows, objectio.BlockMaxRows, true, false, true) })
 }

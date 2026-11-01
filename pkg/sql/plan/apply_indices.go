@@ -2452,6 +2452,18 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 
 	//small table means this table maybe not flushed yet, or it's not worse to go index
 	ignoreStats := forceIndex || node.Stats.TableCnt < 50000
+	allowOrdinaryBackfill := true
+	if !ignoreStats {
+		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
+			// for cluster by table, make it less prone to go index
+			if node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK {
+				allowOrdinaryBackfill = false
+			}
+		}
+		if node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), node.Stats.TableCnt)) {
+			allowOrdinaryBackfill = false
+		}
+	}
 
 	costCtx := builder.newEncodedRegularIndexCostContext(node, colRefCnt)
 	best := regularIndexAccessCandidate{indexPos: -1, work: math.Inf(1)}
@@ -2459,10 +2471,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	sawScorable := false
 	prefixEvaluationChecked, prefixEvaluationSafe := false, false
 	consider := func(candidate regularIndexAccessCandidate, affectsFallback bool) {
+		prefixCandidate := false
 		for _, pos := range candidate.filterIdx {
 			if !costCtx.filterFacts[pos].logicalPrefix {
 				continue
 			}
+			prefixCandidate = true
 			// New prefix access must preserve the evaluation domain of existing
 			// predicates, including throwing bounds and residuals. Prove this
 			// once per scan, only when a prefix candidate is actually considered.
@@ -2474,6 +2488,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				return
 			}
 			break
+		}
+		// Small independent scan inputs retain the established access paths. This
+		// is a conservative admission budget, not a minimum physical block size.
+		if prefixCandidate && !forceIndex && costCtx.valid && costCtx.baseRows <= float64(objectio.BlockMaxRows) {
+			return
+		}
+		if candidate.shape == encodedRegularIndexCostBackfill && !prefixCandidate && !allowOrdinaryBackfill {
+			return
 		}
 		idxDef := indexes[candidate.indexPos]
 		work, skip, valid := costCtx.score(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape)
@@ -2489,14 +2511,12 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 		// This new range path requires a comparable cost even on small tables.
 		// Other access paths retain their established small-table policy.
-		for _, pos := range candidate.filterIdx {
-			if costCtx.filterFacts[pos].logicalPrefix && !forceIndex {
-				sawScorable = sawScorable || affectsFallback
-				if valid && !skip && work < costCtx.baseWork && (best.indexPos == -1 || work < best.work) {
-					best = candidate
-				}
-				return
+		if prefixCandidate && !forceIndex {
+			sawScorable = sawScorable || affectsFallback
+			if valid && !skip && work < costCtx.baseWork && (best.indexPos == -1 || work < best.work) {
+				best = candidate
 			}
+			return
 		}
 		if preferSortedScan {
 			// Preserve the sorted-scan shortcut unless a legal point lookup has
@@ -2548,7 +2568,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			}
 		}
 		if !pointBlocked {
-			if filterIdx := costCtx.matchPointBackfill(idxDef); len(filterIdx) > 0 {
+			if filterIdx := costCtx.matchPointBackfill(idxDef, ignoreStats); len(filterIdx) > 0 {
 				consider(regularIndexAccessCandidate{
 					indexPos: idx, shape: encodedRegularIndexCostBackfill,
 					filterType: EqualIndexCondition, filterIdx: filterIdx,
@@ -3574,10 +3594,12 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		ctx.columnWidths[colPos] = estimatedRegularIndexColumnBytes(col, sizeMap, ctx.statsTableCnt)
 		ctx.serialWidths[colPos] = estimatedRegularIndexPartBytes(col, sizeMap, ctx.statsTableCnt)
 	}
+	hasLogicalPrefix := false
 	for filterIdx, filter := range node.FilterList {
 		fact := &ctx.filterFacts[filterIdx]
 		fact.directCol = directEncodedIndexFilterCol(filter, ctx.relPos, numCols)
 		fact.logicalPrefix = logicalPrefixOnTable(filter.GetF(), node.TableDef)
+		hasLogicalPrefix = hasLogicalPrefix || fact.logicalPrefix
 		if fact.logicalPrefix && fact.directCol >= 0 {
 			fact.prefixUpper, fact.prefixKnown = stringPrefixSelectivity(filter.GetF(), statsInfo, node)
 		}
@@ -3646,50 +3668,53 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		)
 		ctx.baseRows = max(ctx.baseRows, selectedBlockRows)
 	}
-	// Row frequency does not establish skipped blocks. Physical ordering can
-	// retain block estimates; ShuffleRange describes object-level ranges only.
-	blockSel, objectSel := 1.0, 1.0
-	objectCount := 0.0
-	if StatsInfoUsableForCache(statsInfo) && statsInfo.TableCnt == node.Stats.TableCnt && StatsCacheEligible(builder.compCtx.GetProcess(), node.ScanSnapshot) &&
-		statsInfo.AccurateObjectNumber > 0 && statsInfo.AccurateObjectNumber <= int64(statsInfo.BlockNumber) {
-		objectCount = float64(statsInfo.AccurateObjectNumber)
+	if hasLogicalPrefix {
+		// Row frequency does not establish skipped blocks. Physical ordering can
+		// retain block estimates; ShuffleRange describes object-level ranges only.
+		blockSel, objectSel := 1.0, 1.0
+		objectCount := 0.0
+		if StatsInfoUsableForCache(statsInfo) && statsInfo.TableCnt == node.Stats.TableCnt && StatsCacheEligible(builder.compCtx.GetProcess(), node.ScanSnapshot) &&
+			statsInfo.AccurateObjectNumber > 0 && statsInfo.AccurateObjectNumber <= int64(statsInfo.BlockNumber) {
+			objectCount = float64(statsInfo.AccurateObjectNumber)
+		}
+		for _, filter := range node.FilterList {
+			if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
+				break
+			}
+			col := regularIndexBoundColumn(filter.GetF())
+			if col == nil || col.RelPos != ctx.relPos || col.ColPos < 0 || int(col.ColPos) >= numCols {
+				continue
+			}
+			sortOrder := GetSortOrder(node.TableDef, col.ColPos)
+			if logicalPrefixOnTable(filter.GetF(), node.TableDef) && sortOrder != 0 {
+				continue
+			}
+			selectivity := estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, statsInfo)
+			if sortOrder >= 0 {
+				blockSel = andSelectivity(blockSel, selectivity)
+				continue
+			}
+			if objectCount == 0 {
+				continue
+			}
+			layout := statsInfo.ShuffleRangeMap[node.TableDef.Cols[col.ColPos].Name]
+			if layout == nil || layout.Sz <= 0 || float64(layout.Sz) != statsInfo.TableCnt || layout.SampleRatio != 1 || math.IsNaN(layout.Overlap) || layout.Overlap < 0 || layout.Overlap > 1 {
+				continue
+			}
+			// Eval counts overlaps between objects, excluding each object's self
+			// contribution. Restore an average-object term, not a block-level claim.
+			objectInput := min(1.0, layout.Overlap+1/objectCount)
+			objectSel = andSelectivity(objectSel, max(selectivity, objectInput))
+		}
+		if objectCount > 0 {
+			// Several object predicates must not multiply the same object's grain
+			// into sub-object resolution. Independent sorted pruning remains useful.
+			objectSel = max(objectSel, 1/objectCount)
+		}
+		blockSel = andSelectivity(blockSel, objectSel)
+		ctx.baseRows = min(node.Stats.TableCnt, max(ctx.baseRows, node.Stats.TableCnt*blockSel))
 	}
-	for _, filter := range node.FilterList {
-		if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
-			break
-		}
-		col := regularIndexBoundColumn(filter.GetF())
-		if col == nil || col.RelPos != ctx.relPos || col.ColPos < 0 || int(col.ColPos) >= numCols {
-			continue
-		}
-		sortOrder := GetSortOrder(node.TableDef, col.ColPos)
-		if logicalPrefixOnTable(filter.GetF(), node.TableDef) && sortOrder != 0 {
-			continue
-		}
-		selectivity := estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, statsInfo)
-		if sortOrder >= 0 {
-			blockSel = andSelectivity(blockSel, selectivity)
-			continue
-		}
-		if objectCount == 0 {
-			continue
-		}
-		layout := statsInfo.ShuffleRangeMap[node.TableDef.Cols[col.ColPos].Name]
-		if layout == nil || layout.Sz <= 0 || float64(layout.Sz) != statsInfo.TableCnt || layout.SampleRatio != 1 || math.IsNaN(layout.Overlap) || layout.Overlap < 0 || layout.Overlap > 1 {
-			continue
-		}
-		// Eval counts overlaps between objects, excluding each object's self
-		// contribution. Restore an average-object term, not a block-level claim.
-		objectInput := min(1.0, layout.Overlap+1/objectCount)
-		objectSel = andSelectivity(objectSel, max(selectivity, objectInput))
-	}
-	if objectCount > 0 {
-		// Several object predicates must not multiply the same object's grain
-		// into sub-object resolution. Independent sorted pruning remains useful.
-		objectSel = max(objectSel, 1/objectCount)
-	}
-	blockSel = andSelectivity(blockSel, objectSel)
-	ctx.baseRows = min(node.Stats.TableCnt, max(ctx.baseRows, node.Stats.TableCnt*blockSel))
+
 	ctx.outputRows = max(0, node.Stats.Outcnt)
 	ctx.valid = finitePositive(node.Stats.TableCnt) && finitePositive(node.Stats.Cost) &&
 		!math.IsNaN(node.Stats.Outcnt) && !math.IsInf(node.Stats.Outcnt, 0) && node.Stats.Outcnt >= 0 &&
@@ -3706,7 +3731,7 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 	return ctx
 }
 
-func (ctx *encodedRegularIndexCostContext) matchPointBackfill(idxDef *IndexDef) []int32 {
+func (ctx *encodedRegularIndexCostContext) matchPointBackfill(idxDef *IndexDef, ignoreStats bool) []int32 {
 	if idxDef == nil || ctx.node == nil || ctx.node.TableDef == nil || ctx.node.Stats == nil {
 		return nil
 	}
@@ -3717,7 +3742,11 @@ func (ctx *encodedRegularIndexCostContext) matchPointBackfill(idxDef *IndexDef) 
 	if numKeyParts <= 0 {
 		return nil
 	}
+	cardLimit := float64(GetInFilterCardLimitOnPK(
+		ctx.builder.compCtx.GetProcess().GetService(), ctx.node.Stats.TableCnt,
+	))
 	filterIdx := make([]int32, 0, numKeyParts)
+	usePartialIndex := false
 	for partPos := 0; partPos < numKeyParts; partPos++ {
 		colPos, ok := ctx.node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[partPos])]
 		if !ok || colPos < 0 || int(colPos) >= len(ctx.equalFilters) {
@@ -3730,11 +3759,14 @@ func (ctx *encodedRegularIndexCostContext) matchPointBackfill(idxDef *IndexDef) 
 			break
 		}
 		filterIdx = append(filterIdx, matchedFilter)
+		filter := ctx.node.FilterList[matchedFilter]
+		if ignoreStats || (filter.Selectivity <= InFilterSelectivityLimit && ctx.node.Stats.TableCnt*filter.Selectivity <= cardLimit) {
+			usePartialIndex = true
+		}
 	}
-	if idxDef.Unique && len(filterIdx) < numKeyParts {
+	if len(filterIdx) < len(idxDef.Parts) && (idxDef.Unique || !usePartialIndex) {
 		return nil
 	}
-
 	return filterIdx
 }
 
@@ -3771,7 +3803,7 @@ func (ctx *encodedRegularIndexCostContext) matchRangeBackfills(idxDef *IndexDef)
 			lowerIdx := ctx.lowerFilters[leadingColPos]
 			upperIdx := ctx.upperFilters[leadingColPos]
 			if lowerIdx >= 0 && upperIdx >= 0 {
-				if int32(currentFilterIdx) != min(lowerIdx, upperIdx) {
+				if int32(currentFilterIdx) != min(lowerIdx, upperIdx) || shouldSkipLargeRangeIndexByStats(ctx.node) {
 					continue
 				}
 				if !ctx.builder.regularIndexRangeFunctionsUsable(
@@ -3788,6 +3820,9 @@ func (ctx *encodedRegularIndexCostContext) matchRangeBackfills(idxDef *IndexDef)
 		}
 		if len(filterIdx) == 0 {
 			if !ctx.builder.regularIndexRangeFunctionsUsable(idxDef, ctx.node.TableDef, fn, nil, false) {
+				continue
+			}
+			if isRangeOp(fn) && shouldSkipLargeRangeIndexByStats(ctx.node) {
 				continue
 			}
 			if ctx.filterFacts[currentFilterIdx].logicalPrefix && !ctx.prefixStatsUsable(currentFilterPos) {
@@ -4044,6 +4079,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 		return 0, false, false
 	}
 
+	prefixAccess := false
 	candidateSelectivity := 1.0
 	boundedLeading := true
 	lowerCandidateSelectivity := 1.0
@@ -4056,8 +4092,11 @@ func (ctx *encodedRegularIndexCostContext) score(
 			continue
 		}
 		selectivity := ctx.node.FilterList[pos].Selectivity
-		if ctx.filterFacts[pos].logicalPrefix && ctx.filterFacts[pos].prefixKnown {
-			selectivity = ctx.filterFacts[pos].prefixUpper
+		if ctx.filterFacts[pos].logicalPrefix {
+			prefixAccess = true
+			if ctx.filterFacts[pos].prefixKnown {
+				selectivity = ctx.filterFacts[pos].prefixUpper
+			}
 		}
 		lowerSelectivity := selectivity
 		if ctx.filterFacts[pos].unknownRangeBounds {
@@ -4263,16 +4302,17 @@ func (ctx *encodedRegularIndexCostContext) score(
 	if shape == encodedRegularIndexCostBackfill {
 		hiddenOutputWidth = pkWidth
 	}
-	calculateWork := func(candidateRows, hiddenRows, outputRows float64) (float64, bool) {
+	calculateWork := func(candidateRows, hiddenRows, outputRows float64) (float64, float64, bool) {
 		hiddenScanInput := candidateRows * hiddenInputWidth
-		if ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2 {
-			// PK search loads every hidden key block, but associated PK values
-			// and materialization still follow the selected candidates.
-			hiddenScanInput = ctx.node.Stats.TableCnt*encodedWidth + candidateRows*(hiddenInputWidth-encodedWidth)
+		prefixScanInput := hiddenScanInput
+		if prefixAccess && ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2 {
+			// Only new prefix access requires the conservative disabled-pruning
+			// admission check. All candidates retain the common ranking score.
+			prefixScanInput = max(hiddenScanInput, ctx.node.Stats.TableCnt*encodedWidth+candidateRows*(hiddenInputWidth-encodedWidth))
 		}
 		hiddenScanOutput := hiddenRows * hiddenOutputWidth
 		hiddenPredicates := candidateRows * float64(hiddenFilterCount) * regularIndexPredicateRowWork
-		indexWork := hiddenScanInput + hiddenScanOutput + hiddenPredicates
+		commonWork := hiddenScanOutput + hiddenPredicates
 
 		prefixWidth := 0.0
 		for partPos, part := range idxDef.Parts {
@@ -4286,46 +4326,54 @@ func (ctx *encodedRegularIndexCostContext) score(
 				downstreamRefs := max(0, totalRefs-ctx.filterRefs[colPos])
 				if len(idxDef.Parts) > 1 && colPos != pkIdx {
 					extractWork := prefixWidth + ctx.columnWidths[colPos]
-					indexWork += candidateRows * float64(ctx.extractRefs[colPos]) * extractWork
-					indexWork += outputRows * float64(downstreamRefs) * extractWork
+					commonWork += candidateRows * float64(ctx.extractRefs[colPos]) * extractWork
+					commonWork += outputRows * float64(downstreamRefs) * extractWork
 				}
 			} else if refs := ctx.extractRefs[colPos]; refs > 0 {
 				extractWork := prefixWidth + ctx.columnWidths[colPos]
-				indexWork += candidateRows * float64(refs) * extractWork
+				commonWork += candidateRows * float64(refs) * extractWork
 			}
 		}
 
+		rankingBaseInput, prefixBaseInput := 0.0, 0.0
 		if shape == encodedRegularIndexCostBackfill {
 			compoundPrefixWidth := 0.0
 			for _, name := range ctx.node.TableDef.Pkey.Names {
 				componentIdx, ok := ctx.node.TableDef.Name2ColIndex[name]
 				if !ok || componentIdx < 0 || int(componentIdx) >= len(ctx.columnWidths) {
-					return 0, false
+					return 0, 0, false
 				}
 				compoundPrefixWidth += ctx.serialWidths[componentIdx]
 				if refs := ctx.compoundRefs[componentIdx]; refs > 0 {
 					extractWork := compoundPrefixWidth + ctx.columnWidths[componentIdx]
-					indexWork += candidateRows * float64(refs) * extractWork
+					commonWork += candidateRows * float64(refs) * extractWork
 				}
 			}
 
 			// The hidden output already accounts for transferring each physical PK.
 			// Charge the targeted base lookup once more as a per-key operation.
 			pkBackfill := hiddenRows * regularIndexPredicateRowWork
-			lookupRows := regularIndexBackfillInputRows(ctx.baseRows, hiddenRows)
-			probeRows := lookupRows
-			if !sortedPK && hiddenRows > 0 {
-				probeRows = ctx.baseRows
+			rankingBaseInput = hiddenRows * ctx.baseWidth
+			prefixBaseInput = rankingBaseInput
+			if prefixAccess {
+				lookupRows := regularIndexBackfillInputRows(ctx.baseRows, hiddenRows)
+				probeRows := lookupRows
+				if hiddenRows > 0 && (!sortedPK || ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2) {
+					probeRows = ctx.baseRows
+				}
+				prefixBaseInput = max(rankingBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
 			}
-			baseChildInput := lookupRows*lookupOtherWidth + probeRows*pkWidth
 			baseChildPredicates := hiddenRows * float64(len(ctx.node.FilterList)) * regularIndexPredicateRowWork
 			joinFixed := regularIndexJoinFixedWork + ctx.outputWidth + float64(ctx.outputCols)*regularIndexPredicateRowWork
 			joinRows := outputRows * (ctx.outputWidth + regularIndexPredicateRowWork)
-			indexWork += pkBackfill + baseChildInput + baseChildPredicates + joinFixed + joinRows
+			commonWork += pkBackfill + baseChildPredicates + joinFixed + joinRows
 		}
 
-		valid := !math.IsNaN(indexWork) && !math.IsInf(indexWork, 0) && indexWork >= 0
-		return indexWork, valid
+		rankingWork := hiddenScanInput + commonWork + rankingBaseInput
+		prefixWork := prefixScanInput + commonWork + prefixBaseInput
+		valid := !math.IsNaN(rankingWork) && !math.IsInf(rankingWork, 0) && rankingWork >= 0 &&
+			!math.IsNaN(prefixWork) && !math.IsInf(prefixWork, 0) && prefixWork >= 0
+		return rankingWork, prefixWork, valid
 	}
 
 	// Prefix-correlated output estimates cannot discount downstream extraction
@@ -4334,8 +4382,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	if hasCorrelatedPrefix {
 		outputCostRows = max(outputCostRows, hiddenRows)
 	}
-	indexWork, validWork := calculateWork(candidateRows, hiddenRows, outputCostRows)
-	rejectionWork := indexWork
+	indexWork, rejectionWork, validWork := calculateWork(candidateRows, hiddenRows, outputCostRows)
 	baseComparisonWork := ctx.baseWork
 	if len(ctx.unknownRangeLowerSelectivities) > 0 && validWork {
 		// Compare uncertainty intervals instead of the ranking point estimate. An
@@ -4351,11 +4398,11 @@ func (ctx *encodedRegularIndexCostContext) score(
 			// in the uncertainty lower bound.
 			lowerOutputRows = lowerHiddenRows
 		}
-		rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, lowerOutputRows)
+		_, rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, lowerOutputRows)
 		baseComparisonWork = ctx.baseUpperWork
 	}
 	overBudget := shape == encodedRegularIndexCostBackfill && boundedLeading && ctx.backfillCapacityExceeded(budgetRows)
-	shouldReject = !ctx.force && (overBudget || ctx.node.Stats.TableCnt >= 50000 && validWork && rejectionWork >= baseComparisonWork)
+	shouldReject = !ctx.force && (overBudget || (prefixAccess || len(idxDef.Parts) >= 2 && ctx.node.Stats.TableCnt >= 50000) && validWork && rejectionWork >= baseComparisonWork)
 	ctx.resetScratch()
 	if !validWork {
 		return 0, false, false
@@ -4852,6 +4899,13 @@ func (builder *QueryBuilder) regularIndexRangeFunctionsUsable(
 		return false
 	}
 	return true
+}
+
+func shouldSkipLargeRangeIndexByStats(node *plan.Node) bool {
+	if node == nil || node.Stats == nil || node.Stats.TableCnt < 50000 {
+		return false
+	}
+	return node.Stats.Selectivity >= InFilterSelectivityLimit || node.Stats.Outcnt >= float64(InFilterCardLimitNonPK)
 }
 
 // hasUnsafeRangeOp returns true if fn (or any OR arm within it) uses <= or >

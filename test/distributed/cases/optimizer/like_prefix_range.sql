@@ -9,8 +9,11 @@ select result, case result%10 when 0 then 'apple' when 1 then 'apply' when 2 the
 -- @regex("Index Table Scan",false)
 explain select count(*) from names where name like 'ap%';
 analyze table names(name) fullscan;
--- @regex("Index Table Scan",true)
+-- Small independent scan inputs retain AUTO's established scan.
+-- @regex("Index Table Scan",false)
 explain select count(*) from names where name like 'ap%';
+-- @regex("Index Table Scan",true)
+explain select count(*) from names force index(ix) where name like 'ap%';
 select count(*) as matches, sum(id) as ids from names where name like 'ap%';
 select count(*) as matches, sum(id) as ids from names ignore index(ix)
 where concat(name,'') like 'ap%';
