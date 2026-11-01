@@ -353,6 +353,84 @@ func IsJSONBooleanComparison(left, right types.T) bool {
 		left == types.T_bool && right == types.T_json
 }
 
+// isMixedJSONBooleanBetweenInputs identifies a BETWEEN whose expression and
+// bound operands all live in the JSON/BOOL scalar comparison domain. Every
+// leg (expression, lower bound) and (expression, upper bound) then resolves
+// like the binary ordering operators admitted above: the generic cast rule
+// must not fold the JSON operand into BOOL, because `x BETWEEN lo AND hi` is
+// `lo <= x AND x <= hi` and the lowered NOT BETWEEN form (x < lo OR x > hi)
+// already binds those legs in the JSON domain. An all-BOOL or all-JSON
+// triple keeps its historical domains.
+func isMixedJSONBooleanBetweenInputs(inputs []types.Type) bool {
+	hasJSON, hasBool := false, false
+	for _, input := range inputs {
+		switch input.Oid {
+		case types.T_json:
+			hasJSON = true
+		case types.T_bool:
+			hasBool = true
+		default:
+			return false
+		}
+	}
+	return hasJSON && hasBool
+}
+
+// betweenTypeCheck admits the mixed JSON/BOOL scalar comparison domain
+// directly; every other shape keeps the historical cast-based check.
+func betweenTypeCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 3 && isMixedJSONBooleanBetweenInputs(inputs) {
+		return newCheckResultWithSuccess(0)
+	}
+	return betweenLegacyCheckTail(overloads, inputs)
+}
+
+// betweenLegacyCheckTail is the pre-#31121 BETWEEN type check. The DUMP/LOAD
+// era rebinds predecessor persisted expressions through this tail so their
+// implicit CAST(JSON AS BOOL) folds stay verifiable, cell for cell.
+func betweenLegacyCheckTail(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 3 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
+		jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	if target, ok := integerComparisonDomain(inputs); ok {
+		for _, input := range inputs {
+			if input.Oid != target.Oid {
+				return newCheckResultWithCast(0, []types.Type{target, target, target})
+			}
+		}
+		return newCheckResultWithSuccess(0)
+	}
+
+	has0, t01, t1 := comparisonTypeCastRule(inputs[0], inputs[1])
+	has1, t02, t2 := comparisonTypeCastRule(inputs[0], inputs[2])
+	if t01.Oid != t02.Oid {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
+		if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+	}
+
+	if has0 || has1 {
+		if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+			return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
+		}
+	} else {
+		if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
+			return newCheckResultWithSuccess(0)
+		}
+	}
+
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
 // decimalComparisonSource exposes BIT's full unsigned numeric domain without
 // changing its public type or the non-decimal coercion rules. BIT is stored as
 // uint64, but intentionally does not satisfy Type.IsIntOrUint.
@@ -759,48 +837,7 @@ var supportedOperators = []FuncNew{
 		functionId: BETWEEN,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     BETWEEN_AND_EXPRESSION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 3 {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			if jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[1]}) ||
-				jsonOrderingWithStringNotSupported([]types.Type{inputs[0], inputs[2]}) {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-
-			if target, ok := integerComparisonDomain(inputs); ok {
-				for _, input := range inputs {
-					if input.Oid != target.Oid {
-						return newCheckResultWithCast(0, []types.Type{target, target, target})
-					}
-				}
-				return newCheckResultWithSuccess(0)
-			}
-
-			has0, t01, t1 := comparisonTypeCastRule(inputs[0], inputs[1])
-			has1, t02, t2 := comparisonTypeCastRule(inputs[0], inputs[2])
-			if t01.Oid != t02.Oid {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-
-			if t01.Oid == types.T_decimal64 || t01.Oid == types.T_decimal128 || t01.Oid == types.T_decimal256 {
-				if t01.Scale != t1.Scale || t02.Scale != t2.Scale {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-			}
-
-			if has0 || has1 {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithCast(0, []types.Type{t01, t1, t2})
-				}
-			} else {
-				if otherCompareOperatorSupports(t01, t1) && otherCompareOperatorSupports(t01, t2) {
-					return newCheckResultWithSuccess(0)
-				}
-			}
-
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
+		checkFn:    betweenTypeCheck,
 
 		Overloads: []overload{
 			{

@@ -313,6 +313,22 @@ func tableDumpJSONScalarSemanticExpr(expr *planpb.Expr) bool {
 				function.IsJSONBinaryStringComparisonNotSupported(left, right) ||
 				tableDumpJSONBinaryCoercedComparisonOperand(fn.Args[0]) ||
 				tableDumpJSONBinaryCoercedComparisonOperand(fn.Args[1])
+		case function.BETWEEN:
+			if len(fn.Args) == 3 && fn.Args[0] != nil {
+				// The #31121 review's range form: a mixed JSON/BOOL BETWEEN
+				// binds without the historical implicit CAST legs today, so
+				// an archived BETWEEN from that era needs the candidate too.
+				for _, other := range []*planpb.Expr{fn.Args[1], fn.Args[2]} {
+					if other == nil {
+						continue
+					}
+					left := types.T(fn.Args[0].Typ.Id)
+					right := types.T(other.Typ.Id)
+					found = found || function.IsJSONStringComparison(left, right) ||
+						function.IsJSONBooleanComparison(left, right) ||
+						function.IsJSONNumericComparison(left, right)
+				}
+			}
 		case function.COALESCE:
 			switch types.T(current.Typ.Id) {
 			case types.T_char, types.T_varchar, types.T_text:
@@ -708,8 +724,12 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 		}
 		bound, err := buildOnUpdate(bindCtx, col, item.col.Typ, proc)
 		if err != nil {
+			// A predecessor-authored expression can fail the current bind
+			// outright; its archived shape still witnesses the era.
+			tableDumpRecordFailedExpressionWitness(session, item.expr)
 			return nil, err
 		}
+		tableDumpRecordBoundExpressionWitness(session, bound.Expr)
 		return bound.Expr, nil
 	case "generated":
 		col := &tree.ColumnTableDef{
@@ -724,26 +744,71 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 		}
 		bound, err := buildGeneratedExpr(bindCtx, col, item.col.Typ, cols, proc)
 		if err != nil {
+			tableDumpRecordFailedExpressionWitness(session, item.expr)
 			return nil, err
 		}
 		if exprReferencesColumn(bound.Expr, item.name, cols) {
+			tableDumpRecordFailedExpressionWitness(session, item.expr)
 			return nil, moerr.NewInvalidInputf(ctx.GetContext(), "generated column '%s' cannot refer to itself", item.name)
 		}
+		tableDumpRecordBoundExpressionWitness(session, bound.Expr)
 		return bound.Expr, nil
 	case "check":
 		wrapper := tableDumpBindContext{CompilerContext: ctx, ctx: bindCtx, increment: increment}
 		scratch := *def
 		scratch.Checks = nil
 		if err := appendCheckDef(wrapper, &scratch, item.name, ast, -1); err != nil {
+			tableDumpRecordFailedExpressionWitness(session, item.expr)
 			return nil, err
 		}
 		if len(scratch.Checks) != 1 {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "check expression binding did not produce one check")
 		}
+		tableDumpRecordBoundExpressionWitness(session, scratch.Checks[0].Check)
 		return scratch.Checks[0].Check, nil
 	default:
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "unknown persisted table expression kind")
 	}
+}
+
+// tableDumpRecordBoundExpressionWitness records the scalar-JSON and
+// JSON-folding era witnesses of a successfully bound expression owner
+// (ON UPDATE, generated column, CHECK constraint): a predecessor source may
+// have persisted those shapes under the historical binding rules, so the
+// era candidates below must still be composed for it, exactly like DEFAULT.
+func tableDumpRecordBoundExpressionWitness(session *tableDumpDefaultSession, bound *planpb.Expr) {
+	if session == nil || bound == nil {
+		return
+	}
+	if tableDumpJSONScalarSemanticExpr(bound) {
+		session.scalarJSONSemantics = true
+	}
+	if features, err := planpb.RequiredRemoteExpressionFeatures(bound); err == nil {
+		session.opaqueJSONFolding = session.opaqueJSONFolding || features.JSONOpaqueTextContracts
+	}
+}
+
+// tableDumpRecordFailedExpressionWitness classifies the archived tree
+// itself when the current bind fails, mirroring the DEFAULT branch: the
+// era candidates still have to form for an otherwise unmatched archived
+// shape.
+func tableDumpRecordFailedExpressionWitness(session *tableDumpDefaultSession, persisted *planpb.Expr) {
+	if session == nil || !tableDumpJSONScalarSemanticExpr(persisted) {
+		return
+	}
+	session.scalarJSONSemantics = true
+}
+
+// tableDumpExpressionWitnessKind reports whether the persisted expression
+// owner participates in the bind-observed era witnesses. The witness is
+// tree-shaped, so every owner that persists a bound expression tree gets the
+// same reconstruction chance.
+func tableDumpExpressionWitnessKind(kind string) bool {
+	switch kind {
+	case "default", "on_update", "generated", "check":
+		return true
+	}
+	return false
 }
 
 // tableDumpBoundExpressionNeedsNormalization follows exactly the edges that
@@ -1319,9 +1384,12 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					if mode == tableDumpBindingCurrent && dependency.observed {
 						needsIncompleteEra = dependency.incompleteTemporal
 					}
-					if item.kind == "default" && dependency.opaqueJSONFolding && !foldingCandidatesAdded {
-						// Resolved contracts also catch CAST(JSON AS CHAR) and JSON
-						// column consumers whose SQL contains no json_* function.
+					if tableDumpExpressionWitnessKind(item.kind) && dependency.opaqueJSONFolding && !foldingCandidatesAdded {
+						// A predecessor source did not bind only folded DEFAULTs:
+						// ON UPDATE, generated and CHECK owners persist the same
+						// COALESCE cast layout. Resolved contracts also catch
+						// CAST(JSON AS CHAR) and JSON column consumers whose SQL
+						// contains no json_* function, for every owner kind.
 						for _, era := range append([]tableDumpBindingMode(nil), eras...) {
 							eras = append(eras, era|tableDumpBindingPreJSONFolding)
 						}
@@ -1330,12 +1398,14 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						}
 						foldingCandidatesAdded = true
 					}
-					if item.kind == "default" && dependency.scalarJSONSemantics && !scalarJSONCandidatesAdded {
+					if tableDumpExpressionWitnessKind(item.kind) && dependency.scalarJSONSemantics && !scalarJSONCandidatesAdded {
 						// One complete pre-#31121 scalar-JSON era, composed with
 						// every earlier migration era, including the float
 						// formatting candidates the float block appends below.
 						// Complete eras only: a partial mix of old and new
-						// JSON kernels never verifies a real archive.
+						// JSON kernels never verifies a real archive. Generated
+						// expressions and CHECK constraints persist those shapes
+						// too, so the DEFAULT-only restriction is lifted.
 						for _, era := range append([]tableDumpBindingMode(nil), eras...) {
 							eras = append(eras, era|tableDumpBindingPreJSONScalarSemantics)
 						}

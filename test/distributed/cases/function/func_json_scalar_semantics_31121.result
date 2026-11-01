@@ -669,6 +669,91 @@ select id, (col1,col2) != ('abcdef','{"ehyiuwqnve": "ashyiujewv"}') from rcj37 o
 2  ¦  1  𝄀
 3  ¦  1
 drop table if exists rcj37;
+drop table if exists btw38;
+create table btw38 (id int primary key, d json);
+insert into btw38 values (1,'null'),(2,'"true"'),(3,'true'),(4,'false'),(5,'3'),(6,'-1'),(7,'0.5'),(8,null);
+select id, d between true and true as inside, d not between true and true as outside from btw38 order by id;
+➤ id[4,32,0]  ¦  inside[-6,8,0]  ¦  outside[-6,8,0]  𝄀
+1  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  1  ¦  0  𝄀
+4  ¦  0  ¦  1  𝄀
+5  ¦  1  ¦  0  𝄀
+6  ¦  1  ¦  0  𝄀
+7  ¦  1  ¦  0  𝄀
+8  ¦  null  ¦  null
+select id from btw38 where d between true and true order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+5  𝄀
+6  𝄀
+7
+select id from btw38 where d not between true and true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4
+select id from btw38 where d between false and true order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7
+select id from btw38 where d not between false and true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from btw38 where d between true and false order by id;
+➤ id[4,32,0]
+select id from btw38 where d not between true and false order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7
+select id from btw38 where d between true and cast('"true"' as json) order by id;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6  𝄀
+7
+select id from btw38 where d not between true and cast('"true"' as json) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+drop table if exists btw39;
+create table btw39 (id int primary key, b bool);
+insert into btw39 values (1,true),(2,false),(3,null);
+select id from btw39 where b between cast('false' as json) and cast('true' as json) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from btw39 where b not between cast('false' as json) and cast('true' as json) order by id;
+➤ id[4,32,0]
+select id from btw39 where b between cast('true' as json) and cast('true' as json) order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from btw39 where b between cast('null' as json) and cast('true' as json) order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+drop table if exists btw40;
+create table btw40 (id int primary key, d json, lo bool, hi json);
+insert into btw40 values (1,'3',false,cast('"true"' as json)),(2,'"true"',false,cast('"true"' as json)),(3,'true',null,null);
+select id from btw40 where d between lo and hi order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from btw40 where d not between lo and hi order by id;
+➤ id[4,32,0]  𝄀
+2
+drop table if exists btw40;
+drop table if exists btw39;
+drop table if exists btw38;
 drop table if exists obj35;
 drop table if exists objs36;
 drop table if exists jja33;

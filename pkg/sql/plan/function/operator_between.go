@@ -18,6 +18,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,6 +31,12 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[bool](result)
 	if isMixedDatetimeTimestampTypes(parameters) {
 		return opBetweenDatetimeTimestamp(parameters, rs, proc, length)
+	}
+	if mixedJSONBooleanBetweenVectors(parameters) {
+		// The JSON/BOOL scalar domain admits these legs through the same
+		// comparison identities as the binary ordering operators, so the
+		// plain and lowered NOT BETWEEN forms agree row for row.
+		return opBetweenJSONBoolean(parameters, rs, proc, length, selectList)
 	}
 	switch paramType.Oid {
 	case types.T_bool:
@@ -90,6 +97,174 @@ func betweenImpl(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	}
 
 	panic("unreached code")
+}
+
+// mixedJSONBooleanBetweenVectors recognizes the runtime shape admitted by
+// isMixedJSONBooleanBetweenInputs: every operand is JSON or SQL BOOL, with
+// both domains present.
+func mixedJSONBooleanBetweenVectors(parameters []*vector.Vector) bool {
+	if len(parameters) != 3 {
+		return false
+	}
+	hasJSON, hasBool := false, false
+	for _, parameter := range parameters {
+		switch parameter.GetType().Oid {
+		case types.T_json:
+			hasJSON = true
+		case types.T_bool:
+			hasBool = true
+		default:
+			return false
+		}
+	}
+	return hasJSON && hasBool
+}
+
+// betweenJSONBooleanOperand is one BETWEEN operand in the mixed JSON/BOOL
+// scalar domain, invocation-owned. JSON bytes are borrowed from the input
+// vector or the kernel's constant cache.
+type betweenJSONBooleanOperand struct {
+	isJSON    bool
+	sqlNull   bool
+	boolValue bool
+	json      bytejson.ByteJson
+}
+
+func readBetweenJSONBooleanJSON(proc *process.Process, vec *vector.Vector, row int) (betweenJSONBooleanOperand, error) {
+	bj, isNull, err := comparisonJSONAt(proc, vec, row)
+	if err != nil {
+		return betweenJSONBooleanOperand{isJSON: true, sqlNull: true}, err
+	}
+	return betweenJSONBooleanOperand{isJSON: true, sqlNull: isNull, json: bj}, nil
+}
+
+// compareBetweenJSONBooleanOperands returns the ordering of left against
+// right for the per-domain legs: JSON/BOOL pairs rank by the JSON scalar
+// category exactly like the binary ordering kernels, JSON/JSON pairs by the
+// trusted byte ordering, and BOOL/BOOL pairs by the boolean total order.
+// A JSON scalar null-out (the legacy era fold) reports through jsonNull.
+func compareBetweenJSONBooleanOperands(
+	proc *process.Process, left, right betweenJSONBooleanOperand,
+) (comparison int, jsonNull bool, err error) {
+	if left.isJSON && right.isJSON {
+		return bytejson.CompareByteJsonTrusted(left.json, right.json), false, nil
+	}
+	if !left.isJSON && !right.isJSON {
+		switch {
+		case !left.boolValue && right.boolValue:
+			return -1, false, nil
+		case left.boolValue && !right.boolValue:
+			return 1, false, nil
+		default:
+			return 0, false, nil
+		}
+	}
+	if left.isJSON {
+		comparison, jsonNull, err := compareJSONScalarWithBoolean(proc.Ctx, left.json, right.boolValue)
+		return comparison, jsonNull, err
+	}
+	comparison, jsonNull, err = compareJSONScalarWithBoolean(proc.Ctx, right.json, left.boolValue)
+	return -comparison, jsonNull, err
+}
+
+// opBetweenJSONBoolean evaluates `x BETWEEN lo AND hi` as
+// `lo <= x AND x <= hi` with each leg in its own comparison domain, exactly
+// like the binary ordering operators the NOT BETWEEN lowering produces.
+// SQL NULL in any operand propagates NULL; a JSON literal null stays a
+// comparable value that ranks below the boolean peer.
+func opBetweenJSONBoolean(
+	parameters []*vector.Vector,
+	result *vector.FunctionResult[bool],
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	rss := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+	resultNulls := result.GetResultVector().GetNulls()
+	if selectList != nil && selectList.IgnoreAllRow() {
+		nulls.AddRange(resultNulls, 0, uint64(length))
+		return nil
+	}
+
+	var boolColumns [3][]bool
+	for i, parameter := range parameters {
+		if parameter.GetType().Oid != types.T_json && !parameter.IsConstNull() {
+			boolColumns[i] = vector.MustFixedColNoTypeCheck[bool](parameter)
+		}
+	}
+	readOperand := func(index, row int) (betweenJSONBooleanOperand, error) {
+		if parameters[index].GetType().Oid == types.T_json {
+			if parameters[index].IsConst() {
+				row = 0
+			}
+			return readBetweenJSONBooleanJSON(proc, parameters[index], row)
+		}
+		boolRow := row
+		if parameters[index].IsConst() {
+			boolRow = 0
+		}
+		if parameters[index].IsNull(uint64(row)) {
+			return betweenJSONBooleanOperand{sqlNull: true}, nil
+		}
+		return betweenJSONBooleanOperand{boolValue: boolColumns[index][boolRow]}, nil
+	}
+
+	// Constant operands only need one validating decode per invocation.
+	constCache := [3]betweenJSONBooleanOperand{}
+	constReady := [3]bool{}
+	for index, parameter := range parameters {
+		if parameter.GetType().Oid == types.T_json && parameter.IsConst() {
+			operand, err := readOperand(index, 0)
+			if err != nil {
+				return err
+			}
+			constCache[index], constReady[index] = operand, true
+		}
+	}
+
+	for row := 0; row < length; row++ {
+		rss[row] = false
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			resultNulls.Add(uint64(row))
+			continue
+		}
+		operands := [3]betweenJSONBooleanOperand{}
+		for index := range parameters {
+			operand := constCache[index]
+			if !constReady[index] {
+				var err error
+				operand, err = readOperand(index, row)
+				if err != nil {
+					return err
+				}
+			}
+			operands[index] = operand
+		}
+		if operands[0].sqlNull || operands[1].sqlNull || operands[2].sqlNull {
+			resultNulls.Add(uint64(row))
+			continue
+		}
+		comparison, jsonNull, err := compareBetweenJSONBooleanOperands(proc, operands[1], operands[0])
+		if err != nil {
+			return err
+		}
+		if jsonNull {
+			resultNulls.Add(uint64(row))
+			continue
+		}
+		lowerOK := comparison <= 0
+		comparison, jsonNull, err = compareBetweenJSONBooleanOperands(proc, operands[0], operands[2])
+		if err != nil {
+			return err
+		}
+		if jsonNull {
+			resultNulls.Add(uint64(row))
+			continue
+		}
+		upperOK := comparison <= 0
+		rss[row] = lowerOK && upperOK
+	}
+	return nil
 }
 
 func isMixedDatetimeTimestampTypes(parameters []*vector.Vector) bool {

@@ -520,6 +520,20 @@ func CanUseZoneMapComparison(overloadID int64, args []*plan.Expr) bool {
 				IsJSONBooleanComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id))) {
 			return false
 		}
+		if fid == BETWEEN && len(args) == 3 &&
+			// The JSON/BOOL BETWEEN legs order by the JSON scalar category,
+			// so no bytewise min/max bound in the metadata domain can answer
+			// either leg without changing the row's ranking.
+			((args[0] != nil && args[1] != nil &&
+				(IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+					IsJSONStringComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+					IsJSONBooleanComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)))) ||
+				(args[0] != nil && args[2] != nil &&
+					(IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[2].Typ.Id)) ||
+						IsJSONStringComparison(types.T(args[0].Typ.Id), types.T(args[2].Typ.Id)) ||
+						IsJSONBooleanComparison(types.T(args[0].Typ.Id), types.T(args[2].Typ.Id))))) {
+			return false
+		}
 		if len(args) == 0 {
 			return false
 		}
@@ -1047,6 +1061,21 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 			// so a physically non-NULL JSON value can still carry a JSON
 			// literal null. Do not infer a non-NULL result merely from the
 			// two vector-level argument declarations.
+			return false
+		}
+	case BETWEEN:
+		if len(args) == 3 &&
+			// The mixed-domain BETWEEN evaluates against either ordering
+			// kernel through the lowering, so its result follows the same
+			// conservative contract as the legs above.
+			((args[0] != nil && args[1] != nil &&
+				(IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+					IsJSONStringComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+					IsJSONBooleanComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)))) ||
+				(args[0] != nil && args[2] != nil &&
+					(IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[2].Typ.Id)) ||
+						IsJSONStringComparison(types.T(args[0].Typ.Id), types.T(args[2].Typ.Id)) ||
+						IsJSONBooleanComparison(types.T(args[0].Typ.Id), types.T(args[2].Typ.Id))))) {
 			return false
 		}
 	case EQUAL, NOT_EQUAL:

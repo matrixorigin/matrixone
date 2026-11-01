@@ -176,6 +176,16 @@ func isMixedJSONScalarComparisonArgs(args []*plan.Expr) bool {
 			function.IsJSONBooleanComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)))
 }
 
+// isMixedJSONScalarBetweenArgs extends that mixed-domain classification to
+// the persisted three-node BETWEEN form: every leg whose operands cross the
+// JSON scalar boundary keeps its per-domain ranking, so the BETWEEN must stay
+// a typed residual exactly like its lowered legs.
+func isMixedJSONScalarBetweenArgs(args []*plan.Expr) bool {
+	return len(args) == 3 && args[0] != nil &&
+		((args[1] != nil && isMixedJSONScalarComparisonArgs(args[0:2])) ||
+			(args[2] != nil && isMixedJSONScalarComparisonArgs([]*plan.Expr{args[0], args[2]})))
+}
+
 func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
 		if !IsEqualFunc(e.F.Func.GetObj()) || isMixedJSONScalarComparisonArgs(e.F.Args) {
