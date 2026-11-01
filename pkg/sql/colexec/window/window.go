@@ -84,6 +84,12 @@ func (window *Window) OpType() vm.OpType {
 }
 
 func (window *Window) Prepare(proc *process.Process) (err error) {
+	// A prior unaccounted execution may retain input and expression capacity.
+	// Retire that generation before admitting copies under the new account.
+	if window.ctr.allocation.Account != nil && window.ctr.bat != nil {
+		window.Free(proc, false, nil)
+	}
+
 	window.ctr.prepareParamKind.Reset(window.Aggs)
 	if window.OpAnalyzer == nil {
 		window.OpAnalyzer = process.NewAnalyzer(window.GetIdx(), window.IsFirst, window.IsLast, "window")
@@ -307,6 +313,33 @@ func decimal256RangeOffset(expr *plan.Expr, orderType plan.Type) (types.Decimal2
 	return offset, nil
 }
 
+// appendInput owns the materialized input independently of the child. Dup
+// inherits the source selection, which can be absent (e.g. VALUE_SCAN) or
+// belong to a different owner. Configure empty destination vectors before
+// copying so every retained data/area/null/grouping allocation is admitted by
+// Window's account. Without a Window account, retain the legacy copy policy.
+func (ctr *container) appendInput(proc *process.Process, input *batch.Batch) error {
+	if ctr.bat == nil && ctr.allocation.Vector != nil {
+		attrs, typs := input.GetSchema()
+		owned := batch.NewWithSchema(true, attrs, typs)
+		owned.Recursive = input.Recursive
+		if err := owned.SetAllocationAccount(ctr.allocation.Vector); err != nil {
+			owned.Clean(proc.Mp())
+			return err
+		}
+		// CloneTo preserves the first batch's vector metadata and cleans the
+		// destination on failure. Publish only the fully admitted first copy.
+		if err := input.CloneTo(owned, proc.Mp()); err != nil {
+			return err
+		}
+		ctr.bat = owned
+		return nil
+	}
+	var err error
+	ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), input)
+	return err
+}
+
 func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, callErr error) {
 	defer func() {
 		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "window", callErr)
@@ -346,7 +379,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 				if result.Batch.IsEmpty() {
 					continue
 				}
-				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+				err = ctr.appendInput(proc, result.Batch)
 				if err != nil {
 					return result, err
 				}
@@ -368,7 +401,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 				if ctr.bat != nil {
 					ctr.bat.CleanOnlyData()
 				}
-				ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), result.Batch)
+				err = ctr.appendInput(proc, result.Batch)
 				if err != nil {
 					return result, err
 				}

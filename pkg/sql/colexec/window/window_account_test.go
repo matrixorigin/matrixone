@@ -16,6 +16,7 @@ package window
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -184,6 +185,154 @@ func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
 			require.NoError(t, err)
 			_, _, err = registry.CompleteTerminal(next)
 			require.NoError(t, err)
+		})
+	}
+}
+
+// Window owns each buffered copy even when VALUE_SCAN supplies ordinary,
+// unaccounted vectors or the producer uses a different allocation account.
+func TestWindowBufferedInputAccountAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name                            string
+		sourceAccounted, varlen, legacy bool
+	}{
+		{name: "unaccounted fixed input"},
+		{name: "accounted fixed input", sourceAccounted: true},
+		{name: "unaccounted variable input", varlen: true},
+		{name: "accounted variable input", sourceAccounted: true, varlen: true},
+		{name: "unaccounted buffer enters accounted execution", legacy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			child := colexec.NewMockOperator()
+			spec := makeWindowSpec()
+			spec.GetW().Name = "row_number"
+			spec.GetW().WindowFunc = newFunExpr("row_number")
+			arg := &Window{WinSpecList: []*plan.Expr{spec}, Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)}}
+			arg.AppendChild(child)
+			t.Cleanup(func() {
+				arg.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			})
+			registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+			require.NoError(t, err)
+			sourceRegistry, err := mpool.NewAllocationAccountRegistry(1, 512)
+			require.NoError(t, err)
+			limits := []uint64{1024, 3072, 1 << 20}
+			if tc.legacy {
+				limits = append([]uint64{0}, limits...)
+			}
+			for _, limit := range limits {
+				func() {
+					var account, sourceAccount *mpool.AllocationAccount
+					var selection *vector.AllocationAccountSelection
+					if limit > 0 {
+						account, err = registry.Open(limit)
+						require.NoError(t, err)
+						require.NoError(t, arg.SetAllocationAccount(account))
+						defer func() {
+							arg.Free(proc, false, nil)
+							require.Zero(t, account.Snapshot().Used)
+							require.NoError(t, arg.ClearAllocationAccount(account))
+							terminal, _, err := registry.CompleteTerminal(account)
+							require.NoError(t, err)
+							require.Zero(t, terminal.LiveAllocations)
+						}()
+					}
+					if tc.sourceAccounted {
+						sourceAccount, err = sourceRegistry.Open(1 << 20)
+						require.NoError(t, err)
+						selection, err = vector.NewAllocationAccountSelection(sourceAccount, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+						require.NoError(t, err)
+						defer func() {
+							arg.Free(proc, false, nil)
+							child.Free(proc, false, nil)
+							require.Zero(t, sourceAccount.Snapshot().Used)
+							terminal, _, err := sourceRegistry.CompleteTerminal(sourceAccount)
+							require.NoError(t, err)
+							require.Zero(t, terminal.LiveAllocations)
+						}()
+					} else {
+						defer child.Free(proc, false, nil)
+					}
+					width := 64
+					typ := types.T_int64.ToType()
+					if tc.varlen {
+						width = 1
+						typ = types.T_varchar.ToType()
+					}
+					for batchIdx := range 2 {
+						input := batch.NewWithSize(width)
+						child.WithBatchs([]*batch.Batch{input})
+						for col := range width {
+							var v *vector.Vector
+							if selection != nil {
+								v, err = vector.NewOffHeapVecWithTypeAndAllocation(typ, selection)
+								require.NoError(t, err)
+							} else {
+								v = vector.NewVec(typ)
+							}
+							input.Vecs[col] = v
+							for row := range 4 {
+								if tc.varlen {
+									require.NoError(t, vector.AppendBytes(v, []byte(strings.Repeat("x", 512)), row == 0, mp))
+								} else {
+									require.NoError(t, vector.AppendFixed(v, int64(batchIdx*4+row+col), false, mp))
+								}
+							}
+						}
+						input.SetRowCount(4)
+					}
+					sourceUsed := uint64(0)
+					if sourceAccount != nil {
+						sourceUsed = sourceAccount.Snapshot().Used
+					}
+					require.NoError(t, arg.Prepare(proc))
+					result, callErr := vm.Exec(arg, proc)
+					if limit > 0 && limit < 1<<20 {
+
+						retained := 0
+						if arg.ctr.bat != nil {
+							for _, v := range arg.ctr.bat.Vecs {
+								if v != nil {
+									retained += v.Allocated()
+								}
+							}
+						}
+						t.Logf("%d-byte limit: retained=%d bytes, Window account=%d bytes, error=%v", limit, retained, account.Snapshot().Used, callErr)
+						require.ErrorIs(t, callErr, mpool.ErrAllocationAccountCapacity, "retained input must not bypass Window admission")
+					} else {
+						require.NoError(t, callErr)
+						require.NotNil(t, result.Batch)
+						require.Equal(t, 8, result.Batch.RowCount())
+						for row := range 8 {
+							require.Equal(t, uint64(row+1), vector.GetFixedAtNoTypeCheck[uint64](result.Batch.Vecs[width], row))
+						}
+						if account != nil {
+							retained := 0
+							for _, v := range arg.ctr.bat.Vecs {
+								require.Same(t, arg.ctr.allocation.Vector, v.AllocationAccountSelection())
+								retained += v.Allocated()
+							}
+							require.GreaterOrEqual(t, retained, 3072)
+							require.GreaterOrEqual(t, account.Snapshot().Used, uint64(retained))
+							t.Logf("retained input=%d bytes, full Window account=%d bytes", retained, account.Snapshot().Used)
+						}
+					}
+					if sourceAccount != nil {
+						require.Equal(t, sourceUsed, sourceAccount.Snapshot().Used, "Window copies must not charge the producer")
+					}
+					arg.Reset(proc, callErr != nil, callErr)
+					if account != nil {
+						require.Zero(t, account.Snapshot().Used)
+					} else {
+						require.NotNil(t, arg.ctr.bat, "legacy unaccounted capacity is reusable")
+					}
+				}()
+			}
 		})
 	}
 }
