@@ -27,15 +27,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (w *Window) canStreamRowNumber() bool {
-	if len(w.WinSpecList) != 1 || len(w.Aggs) != 1 || w.PartitionTopN {
+func (window *Window) canStreamRowNumber() bool {
+	if len(window.WinSpecList) != 1 || len(window.Aggs) != 1 || window.PartitionTopN {
 		return false
 	}
-	spec := w.WinSpecList[0].GetW()
+	spec := window.WinSpecList[0].GetW()
 	return spec != nil && spec.Name == "row_number" &&
 		len(spec.PartitionBy) == 0 && len(spec.OrderBy) == 0 &&
-		w.Aggs[0].GetAggID() == aggexec.WinIdOfRowNumber &&
-		!w.Aggs[0].IsDistinct() && len(w.Aggs[0].GetArgExpressions()) == 0
+		window.Aggs[0].GetAggID() == aggexec.WinIdOfRowNumber &&
+		!window.Aggs[0].IsDistinct() && len(window.Aggs[0].GetArgExpressions()) == 0
 }
 
 func (ctr *container) resetRowNumber() {
@@ -50,8 +50,8 @@ func (ctr *container) resetRowNumber() {
 // input when neither partitioning nor ordering is requested. Borrowed child
 // vectors stay valid until the next child Call. ODKU lookup joins still require
 // the subsequent global SORT to restore this order before arbitration.
-func (w *Window) callRowNumber(proc *process.Process) (vm.CallResult, error) {
-	ctr := &w.ctr
+func (window *Window) callRowNumber(proc *process.Process) (vm.CallResult, error) {
+	ctr := &window.ctr
 	for {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return vm.CancelResult, err
@@ -92,7 +92,7 @@ func (w *Window) callRowNumber(proc *process.Process) (vm.CallResult, error) {
 			}
 			vec.SetPrepareParamKind(ctr.prepareParamKind.Get(0))
 			output.Vecs = append(output.Vecs, vec)
-			w.OpAnalyzer.Alloc(int64(vec.Size()))
+			window.OpAnalyzer.Alloc(int64(vec.Size()))
 			ctr.rBat = output
 			ctr.rowNumberCounter += uint64(count)
 			ctr.emitOffset = end
@@ -105,7 +105,7 @@ func (w *Window) callRowNumber(proc *process.Process) (vm.CallResult, error) {
 		if ctr.rowNumberChildDone {
 			return vm.CallResult{Status: vm.ExecStop}, nil
 		}
-		result, err := vm.ChildrenCall(w.GetChildren(0), proc, w.OpAnalyzer)
+		result, err := vm.ChildrenCall(window.GetChildren(0), proc, window.OpAnalyzer)
 		if err != nil {
 			return result, err
 		}
