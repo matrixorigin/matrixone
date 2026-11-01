@@ -164,13 +164,25 @@ func AuthorizeNativeViewSchemaPlanForTest(ctx context.Context, compiler *TxnComp
 	return err
 }
 
+// Invoke the actual compile-retry callback with the fixture-owned session.
+// The caller controls the catalog transition between initial admission and retry.
+func RebuildNativeSelectLockCTASForTest(ctx context.Context, compiler *TxnCompilerContext, statement tree.Statement, prepared bool, bindingDatabase string) (*plan.Plan, error) {
+	ses := compiler.GetSession().(*Session)
+	var retry *preparedExecutionRetry
+	if prepared {
+		ses.SetSql("execute select_lock_ctas")
+		retry = &preparedExecutionRetry{}
+	}
+	return preparedExecutionBuildPlanFunc(ses, statement, false, retry, bindingDatabase, prepared)(ctx)
+}
+
 // 测试角色只具有一个明确的 active role，直接复用既有 view privilege 查询。
 // 此 helper 不把它推广为生产 SHOW/查询权限策略。
 func NativeViewSchemaRoleAuthorizerForTest(compiler *TxnCompilerContext) ViewSchemaAuthorizer {
 	return func(ctx context.Context, database, name string, _ *plan.Snapshot) error {
 		ses := compiler.GetSession().(*Session)
 		allowed, err := verifyViewPrivilegeForRole(ctx, compiler.getOrCreateBackExec(ctx), ses,
-			nil, int64(ses.GetTenantInfo().GetDefaultRoleID()), PrivilegeTypeSelect, database, name, false)
+			nil, int64(ses.GetTenantInfo().GetDefaultRoleID()), PrivilegeTypeSelect, database, name, false, false)
 		if err != nil {
 			return err
 		}

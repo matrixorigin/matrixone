@@ -2468,6 +2468,8 @@ const (
 
 // privilegeItem is the item for in the compound entry
 type privilegeItem struct {
+	// SELECT is checked separately; this item requires a locking-read alternative.
+	selectLock            bool
 	privilegeTyp          PrivilegeType
 	objType               objectType
 	viewPath              []*plan.ViewStep
@@ -5673,6 +5675,8 @@ func resolveViewChainPrivilegeContext(
 	privType PrivilegeType,
 	viewPath []*plan.ViewStep,
 	enableCache bool,
+	selectLock bool,
+	lockRoles *btree.Set[int64],
 ) (viewPrivilegePrincipal, bool, bool, error) {
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -5686,7 +5690,7 @@ func resolveViewChainPrivilegeContext(
 		return caller, false, false, err
 	}
 	if isSystemViewDatabase(viewPath[0].DatabaseName) {
-		return caller, true, true, nil
+		return caller, true, !selectLock, nil
 	}
 
 	principal := caller
@@ -5703,7 +5707,12 @@ func resolveViewChainPrivilegeContext(
 			cacheToUse = nil
 		}
 		grantCtx := defines.AttachAccountId(ctx, principal.accountID)
-		viewAllowed, err := verifyViewPrivilegeForRole(grantCtx, bh, ses, cacheToUse, principal.roleID, privType, grantDb, viewName, useCache)
+		var viewAllowed bool
+		if lockRoles != nil {
+			viewAllowed, err = verifySelectLockPrivilegeForRoles(grantCtx, bh, ses, lockRoles, objectTypeView, grantDb, viewName)
+		} else {
+			viewAllowed, err = verifyViewPrivilegeForRole(grantCtx, bh, ses, cacheToUse, principal.roleID, privType, grantDb, viewName, useCache, selectLock)
+		}
 		if err != nil {
 			return principal, false, false, err
 		}
@@ -5729,6 +5738,15 @@ func resolveViewChainPrivilegeContext(
 		}
 		if viewInfo.securityType == viewSecurityDefiner {
 			principal = viewPrivilegePrincipal{accountID: snapshot.Tenant.TenantID, roleID: viewInfo.definerRoleId}
+			if lockRoles != nil {
+				// The caller owns this temporary set. A definer transition replaces
+				// the complete role namespace, even when numeric IDs collide.
+				lockRoles.Clear()
+				lockRoles.Insert(principal.roleID)
+				if err := expandRoleSetWithInheritedRoles(defines.AttachAccountId(ctx, principal.accountID), bh, lockRoles); err != nil {
+					return principal, false, false, err
+				}
+			}
 		}
 	}
 
@@ -7542,6 +7560,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 			})
 		}
 	}
+	lockTips, err := selectLockPrivilegeTips(p.GetQuery())
+	if err != nil {
+		return nil, err
+	}
+	pts = append(pts, lockTips...)
 	return appendLogicalViewPrivilegeTips(pts, p.GetQuery())
 }
 
@@ -7856,6 +7879,124 @@ func replaceFunctionPreservesNull(fn *plan.Function) bool {
 	return strings.Contains(fnName, "cast")
 }
 
+// privilegeAlternatives keeps a locking read distinct from a data modification.
+// The SELECT requirement is checked independently of these alternatives.
+func privilegeAlternatives(typ PrivilegeType, selectLock bool) []PrivilegeType {
+	if selectLock {
+		return []PrivilegeType{PrivilegeTypeUpdate, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
+	}
+	return []PrivilegeType{typ, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
+}
+
+// selectLockPrivilegeTips uses binding identities rather than an outer AST or
+// physical table IDs: nested blocks and different view paths retain their own
+// requirements even when optimization removes their scan nodes.
+func selectLockPrivilegeTips(q *plan.Query) (privilegeTipsArray, error) {
+	if q == nil || len(q.SelectLockReferences) == 0 {
+		return nil, nil
+	}
+	var tips privilegeTipsArray
+	seen := make(map[string]struct{}, len(q.SelectLockReferences))
+	for _, reference := range q.SelectLockReferences {
+		obj := reference.GetObjectRef()
+		if obj == nil || obj.SchemaName == "" || obj.ObjName == "" {
+			return nil, moerr.NewInternalErrorNoCtx("invalid SELECT lock authorization target")
+		}
+		if err := validateViewPath(reference.ViewPath); err != nil {
+			return nil, err
+		}
+		identity, err := reference.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		key := string(identity)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		tips = append(tips, privilegeTips{
+			typ: PrivilegeTypeSelect, objType: objectTypeTable,
+			databaseName: getDbNameForPrivilege(obj), tableName: obj.ObjName,
+			objectRef: obj, viewPath: reference.ViewPath,
+			isClusterTable:        reference.IsClusterTable || isClusterTable(obj.SchemaName, obj.ObjName),
+			clusterTableOperation: clusterTableSelect,
+		})
+	}
+	return tips, nil
+}
+
+// This check consumes one already-validated, statement-local role closure.
+// It deliberately bypasses the session cache, which has no account/role key.
+func verifySelectLockPrivilegeForRoles(ctx context.Context, bh BackgroundExec, ses *Session, roles *btree.Set[int64], obj objectType, db, table string) (bool, error) {
+	entry := privilegeEntriesMap[PrivilegeTypeSelect]
+	entry.objType, entry.databaseName, entry.tableName = obj, db, table
+	levels, err := getPrivilegeLevelsOfObjectType(ctx, obj)
+	if err != nil {
+		return false, err
+	}
+	for _, role := range roles.Keys() {
+		if obj == objectTypeView {
+			ok, err := verifyViewPrivilegeForRole(ctx, bh, ses, nil, role, PrivilegeTypeSelect, db, table, false, true)
+			if err != nil || ok {
+				return ok, err
+			}
+			continue
+		}
+		for _, typ := range privilegeAlternatives(PrivilegeTypeSelect, true) {
+			entry.privilegeId = typ
+			ok, err := verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, nil, role, entry, levels, false)
+			if err != nil || ok {
+				return ok, err
+			}
+		}
+	}
+	return false, nil
+}
+
+func determineSelectLockViewPrivilege(ctx context.Context, bh BackgroundExec, ses *Session, roles *btree.Set[int64], item privilegeItem) (bool, error) {
+	if !verifyLightPrivilege(ses, item.dbName, false, item.isClusterTable, clusterTableSelect) {
+		return false, nil
+	}
+	principal, allowed, _, err := resolveViewChainPrivilegeContext(ctx, bh, ses, nil,
+		int64(ses.GetTenantInfo().GetDefaultRoleID()), PrivilegeTypeSelect, item.viewPath, false, true, roles)
+	if err != nil || !allowed {
+		return false, err
+	}
+	db := item.dbName
+	if item.objectRef != nil && item.objectRef.GetPubInfo() != nil && principal.accountID == uint32(item.objectRef.GetPubInfo().TenantId) {
+		db = item.objectRef.SchemaName
+	}
+	return verifySelectLockPrivilegeForRoles(defines.AttachAccountId(ctx, principal.accountID), bh, ses, roles, objectTypeTable, db, item.tableName)
+}
+
+func authenticateSelectLockReferences(ctx context.Context, ses *Session, q *plan.Query) (bool, statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	tips, err := selectLockPrivilegeTips(q)
+	if err != nil {
+		return false, stats, err
+	}
+	for _, tip := range tips {
+		// Each target has its own alternative and effective role/view principal.
+		// A grant on a sibling target cannot authorize this lock.
+		priv := &privilege{objType: objectTypeTable, entries: []privilegeEntry{{
+			privilegeEntryTyp: privilegeEntryTypeCompound,
+			compound: &compoundEntry{items: []privilegeItem{{
+				privilegeTyp: PrivilegeTypeSelect, selectLock: true, objType: objectTypeTable,
+				dbName: tip.databaseName, tableName: tip.tableName,
+				objectRef: tip.objectRef, viewPath: tip.viewPath,
+				isClusterTable: tip.isClusterTable, clusterTableOperation: clusterTableSelect,
+			}}},
+		}}}
+		ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, priv)
+		stats.Add(&delta)
+		if err != nil || !ok {
+			return ok, stats, err
+		}
+	}
+	return true, stats, nil
+}
+
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
 func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	// rewirte the privilege entries based on privilege tips
@@ -8061,6 +8202,7 @@ func verifyViewPrivilegeForRole(
 	dbName string,
 	viewName string,
 	enableCache bool,
+	selectLock bool,
 ) (bool, error) {
 	// Admin roles bypass view privilege checks to keep grants output stable.
 	accountID, err := defines.GetAccountId(ctx)
@@ -8070,7 +8212,7 @@ func verifyViewPrivilegeForRole(
 	if (accountID == sysAccountID && roleId == moAdminRoleID) || (accountID != sysAccountID && roleId == accountAdminRoleID) {
 		return true, nil
 	}
-	privTypes := []PrivilegeType{privType, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
+	privTypes := privilegeAlternatives(privType, selectLock)
 	seen := make(map[PrivilegeType]struct{}, len(privTypes))
 	for _, p := range privTypes {
 		if _, ok := seen[p]; ok {
@@ -8210,6 +8352,8 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									mi.privilegeTyp,
 									viewPath,
 									usePrivilegeCache,
+									mi.selectLock,
+									nil,
 								)
 								if err != nil {
 									return false, 0, err
@@ -8231,7 +8375,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									if !useCache {
 										cacheToUse = nil
 									}
-									for i, typ := range [3]PrivilegeType{mi.privilegeTyp, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+									for i, typ := range privilegeAlternatives(mi.privilegeTyp, mi.selectLock) {
 										if i > 0 && tempEntry.objType != objectTypeTable {
 											break
 										}
@@ -8448,6 +8592,20 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	err = loadAllSecondaryRoles(ctx, bh, tenant, roleSetOfKthIteration)
 	if err != nil {
 		return false, stats, err
+	}
+
+	// A locking read through views can combine grants from active/inherited
+	// roles at each INVOKER step. Keep that set intact until a DEFINER replaces
+	// its namespace; never put partial cross-principal results in the session cache.
+	if len(priv.entries) == 1 && priv.entries[0].compound != nil && len(priv.entries[0].compound.items) == 1 {
+		item := priv.entries[0].compound.items[0]
+		if item.selectLock && len(item.viewPath) > 0 {
+			if err = expandRoleSetWithInheritedRoles(ctx, bh, roleSetOfKthIteration); err != nil {
+				return false, stats, err
+			}
+			ret, err = determineSelectLockViewPrivilege(ctx, bh, ses, roleSetOfKthIteration, item)
+			return ret, stats, err
+		}
 	}
 
 	// init RVisited = Rk
@@ -9422,8 +9580,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return false, stats, err
 		}
 		stats.Add(&delta)
-
-		return ok, stats, nil
+		if !ok {
+			return false, stats, nil
+		}
+		ok, delta, err = authenticateSelectLockReferences(ctx, ses, p.GetQuery())
+		stats.Add(&delta)
+		return ok, stats, err
 	}
 	return true, stats, nil
 }
@@ -9652,6 +9814,11 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 	convertPrivilegeTipsToPrivilege(sourcePriv, arr)
 
 	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, sourcePriv)
+	stats.Add(&delta)
+	if err != nil || !ok {
+		return ok, stats, err
+	}
+	ok, delta, err = authenticateSelectLockReferences(ctx, ses, sourcePlan.GetQuery())
 	stats.Add(&delta)
 	return ok, stats, err
 }
@@ -10237,10 +10404,13 @@ func expandRoleSetWithInheritedRoles(ctx context.Context, bh BackgroundExec, rol
 	for roleSetOfKthIteration.Len() != 0 {
 		roleSetOfKPlusOneThIteration.Clear()
 		for _, roleID := range roleSetOfKthIteration.Keys() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			sqlForInheritedRoleIdOfRoleId := getSqlForInheritedRoleIdOfRoleId(roleID)
 			bh.ClearExecResultSet()
 			if err := bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId); err != nil {
-				return moerr.NewInternalErrorf(ctx, "get inherited role id of the role id. error:%v", err)
+				return err
 			}
 
 			erArray, err := getResultSet(ctx, bh)

@@ -7608,6 +7608,7 @@ func addTablePrivilegeResultsForRole(
 	privTypes := []PrivilegeType{
 		PrivilegeTypeSelect,
 		PrivilegeTypeInsert,
+		PrivilegeTypeUpdate,
 		PrivilegeTypeDelete,
 		PrivilegeTypeTableAll,
 		PrivilegeTypeTableOwnership,
