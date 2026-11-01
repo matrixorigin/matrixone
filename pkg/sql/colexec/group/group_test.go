@@ -5896,3 +5896,48 @@ func TestGroupJointGroupingFlagsPreserveStorageTruthOnActiveArms(t *testing.T) {
 		})
 	}
 }
+
+func TestGroupDecimalAggregateArgumentFusion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	narrow := types.New(types.T_decimal64, 15, 2)
+	wide := types.New(types.T_decimal128, 15, 2)
+	call := func(name string, args ...*plan.Expr) *plan.Expr {
+		ts := make([]types.Type, len(args))
+		for i, arg := range args {
+			ts[i] = types.MustTypeFromPlan(arg.Typ)
+		}
+		f, err := function.GetFunctionByName(proc.Ctx, name, ts)
+		require.NoError(t, err)
+		return &plan.Expr{Typ: f.GetReturnType().PlanType(), Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name, Obj: f.GetEncodedOverloadID()}, Args: args}}}
+	}
+	cast := func(col int32) *plan.Expr {
+		e := call("cast", colExprWithType(col, narrow), &plan.Expr{Typ: wide.PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+		e.Typ = wide.PlanType()
+		return e
+	}
+	one := &plan.Expr{Typ: types.New(types.T_decimal128, 19, 0).PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: 1}}}}}
+	revenue := call("*", cast(0), call("-", one, cast(1)))
+	sum, err := function.GetFunctionByName(proc.Ctx, "sum", []types.Type{types.MustTypeFromPlan(revenue.Typ)})
+	require.NoError(t, err)
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(sum.GetEncodedOverloadID(), false, []*plan.Expr{revenue}, nil), countStarLiteralAgg(),
+	})
+	child := colexec.NewMockOperator()
+	g.AppendChild(child)
+	defer func() { g.Free(proc, false, nil); child.Free(proc, false, nil); require.Zero(t, proc.Mp().CurrNB()) }()
+	input := batch.NewWithSize(2)
+	for i, values := range [][]types.Decimal64{{10000, 20000, 30000}, {5, 10, 20}} {
+		input.Vecs[i] = vector.NewVec(narrow)
+		require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
+	}
+	input.SetRowCount(3)
+	child.WithBatchs([]*batch.Batch{input})
+	require.NoError(t, g.Prepare(proc))
+	require.Equal(t, "decimal multiply/subtract", g.ctr.aggArgEvaluate[0].Executor[0].TypeName())
+	require.IsType(t, &colexec.FixedVectorExpressionExecutor{}, g.ctr.aggArgEvaluate[1].Executor[0])
+	results := collectBatches(t, g, proc)
+	require.Len(t, results, 1)
+	require.Equal(t, "515.0000", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0].Vecs[0], 0).Format(4))
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](results[0].Vecs[1], 0))
+}
