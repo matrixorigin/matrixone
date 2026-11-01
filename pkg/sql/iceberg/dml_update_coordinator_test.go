@@ -167,3 +167,25 @@ func (c *recordingDMLUpdateCommitter) CommitUpdate(ctx context.Context, req DMLU
 	}
 	return DMLCommitActionStreamResult{}, c.err
 }
+
+func TestResolveDMLCommitBase(t *testing.T) {
+	req := icebergwrite.AppendRequest{
+		Namespace: "catalog.sales", Table: "orders", DefaultRef: "default-ref",
+		IdempotencyKey: "request-key", StatementID: "request-statement",
+		DMLScan: icebergwrite.DMLScanMetadata{Ref: "scan-ref", BaseSnapshotID: 42, BaseSchemaID: 3},
+	}
+	got := resolveDMLCommitBase(dml.CommitBase{}, req)
+	require.Equal(t, api.Namespace{"catalog", "sales"}, got.Namespace)
+	require.Equal(t, "orders", got.Table)
+	require.Equal(t, "scan-ref", got.TargetRef)
+	require.Equal(t, "request-key", got.IdempotencyKey)
+	require.Equal(t, "request-statement", got.StatementID)
+	require.Equal(t, int64(42), got.BaseSnapshotID)
+	require.Equal(t, 3, got.BaseSchemaID)
+	base := dml.CommitBase{Namespace: api.Namespace{"original"}, Table: "old", TargetRef: "existing", IdempotencyKey: "key", StatementID: "stmt", BaseSnapshotID: 5, BaseSchemaID: 6}
+	require.Equal(t, base, resolveDMLCommitBase(base, req))
+	fallback := resolveDMLCommitBase(dml.CommitBase{}, icebergwrite.AppendRequest{StatementID: "stmt"})
+	require.Equal(t, "main", fallback.TargetRef)
+	require.Equal(t, "stmt", fallback.IdempotencyKey)
+	require.Equal(t, "stmt", fallback.StatementID)
+}

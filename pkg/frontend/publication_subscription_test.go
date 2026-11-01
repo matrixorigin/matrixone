@@ -2749,36 +2749,32 @@ func Test_doCreateSubscription_NoDataKey(t *testing.T) {
 
 func Test_doCreateSubscription_SyncLevels(t *testing.T) {
 	tests := []struct {
-		name           string
-		isDatabase     bool
-		dbName         string
-		tableName      string
-		expectedLevel  string
-		expectedDbName string
+		name          string
+		isDatabase    bool
+		dbName        string
+		tableName     string
+		expectedLevel string
 	}{
 		{
-			name:           "account level - empty db name",
-			isDatabase:     true,
-			dbName:         "",
-			tableName:      "",
-			expectedLevel:  "account",
-			expectedDbName: "",
+			name:          "account level - empty db name",
+			isDatabase:    true,
+			dbName:        "",
+			tableName:     "",
+			expectedLevel: "account",
 		},
 		{
-			name:           "database level",
-			isDatabase:     true,
-			dbName:         "testdb",
-			tableName:      "",
-			expectedLevel:  "database",
-			expectedDbName: "testdb",
+			name:          "database level",
+			isDatabase:    true,
+			dbName:        "testdb",
+			tableName:     "",
+			expectedLevel: "database",
 		},
 		{
-			name:           "table level",
-			isDatabase:     false,
-			dbName:         "testdb",
-			tableName:      "testtable",
-			expectedLevel:  "table",
-			expectedDbName: "testdb",
+			name:          "table level",
+			isDatabase:    false,
+			dbName:        "testdb",
+			tableName:     "testtable",
+			expectedLevel: "table",
 		},
 	}
 
@@ -2786,19 +2782,7 @@ func Test_doCreateSubscription_SyncLevels(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cs := tree.NewCreateSubscription(tt.isDatabase, tree.Identifier(tt.dbName), tt.tableName, "mysql://user:pass@host:3306", "", "pub1", 0)
 
-			// Determine sync_level based on the same logic as in doCreateSubscription
-			var syncLevel string
-			if cs.IsDatabase {
-				if string(cs.DbName) == "" {
-					syncLevel = "account"
-				} else {
-					syncLevel = "database"
-				}
-			} else {
-				syncLevel = "table"
-			}
-
-			require.Equal(t, tt.expectedLevel, syncLevel)
+			require.Equal(t, tt.expectedLevel, subscriptionSyncLevel(cs))
 		})
 	}
 }
@@ -3197,4 +3181,26 @@ func TestSplitPublicationPersistedTableList(t *testing.T) {
 	// genuinely empty segments are dropped without touching any byte
 	require.Equal(t, []string{"base"}, splitPublicationPersistedTableList("base,,"))
 	require.Empty(t, splitPublicationPersistedTableList(""))
+}
+
+func TestBatchInsertMoSubsSQLAndErrors(t *testing.T) {
+	accounts := map[int32]*pubsub.AccountInfo{
+		8: {Id: 8, Name: `a'\b`},
+		9: {Id: 9, Name: `other`},
+	}
+	const want = `insert into mo_catalog.mo_subs (sub_account_id, sub_account_name, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status) values (8, 'a''\\b', 7, 'p''\\q', 'pub''x', 'db\\name', 'tab''a,tab2', now(), 'c''\\m', 0),(9, 'other', 7, 'p''\\q', 'pub''x', 'db\\name', 'tab''a,tab2', now(), 'c''\\m', 0)`
+	call := func(bh *backgroundExecTest, ids []int32) error {
+		return batchInsertMoSubs(context.Background(), bh, 7, `p'\q`, `pub'x`, `db\name`, `tab'a,tab2`, `c'\m`, ids, accounts)
+	}
+	bh := &backgroundExecTest{}
+	require.NoError(t, call(bh, nil))
+	require.Empty(t, bh.executedSQLs)
+	require.NoError(t, call(bh, []int32{8, 9}))
+	require.Equal(t, []string{want}, bh.executedSQLs)
+	require.Equal(t, []uint32{catalog.System_Account}, bh.executionAccountIDs)
+
+	sentinel := errors.New("batch insert failed")
+	failed := &backgroundExecTest{sql2err: map[string]error{want: sentinel}}
+	require.ErrorIs(t, call(failed, []int32{8, 9}), sentinel)
+	require.Equal(t, []string{want}, failed.executedSQLs)
 }

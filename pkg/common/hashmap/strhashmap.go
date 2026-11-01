@@ -145,10 +145,11 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			continue
 		}
 
-		// Raw string keys need no per-row type/collation dispatch. Keep the
+		// Flat byte-domain strings need no per-row type/collation dispatch. Keep the
 		// exact sizing pass (and allocation admission) before encoding, but
 		// read the physical vector and nullable bitmap only once per column.
-		if isFlatRawStringHashKey(vec) {
+		flatChar := isFlatCharStringHashKey(vec)
+		if isFlatRawStringHashKey(vec) || flatChar {
 			values, area := vector.MustVarlenaRawData(vec)
 			nsp := vec.GetNulls()
 			hasNulls := nsp.Any()
@@ -162,7 +163,11 @@ func (itr *strHashmapIterator) prepareHashKeys(
 					}
 					continue
 				}
-				if err := add(i, prefix+4+len(values[row].GetByteSlice(area))); err != nil {
+				value := values[row].GetByteSlice(area)
+				if flatChar {
+					value = canonicalVarlenaHashValue(types.T_char, value)
+				}
+				if err := add(i, prefix+4+len(value)); err != nil {
 					return err
 				}
 			}
@@ -381,7 +386,15 @@ func (m *StrHashMap) Size() int64 {
 }
 
 func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
+	if count == UnitLimit && len(vecs) >= 2 && len(vecs) <= 16 &&
+		itr.encodeFlatFixedKeyRows(vecs, start, count) {
+		return
+	}
 	for _, vec := range vecs {
+		if isFlatCharStringHashKey(vec) {
+			fillFlatCharStringHashKey(itr, vec, count, start)
+			continue
+		}
 		if itr.mp.groupingAware || itr.mp.hasNull {
 			switch vec.GetType().Oid {
 			case types.T_json, types.T_array_float32, types.T_array_float64,
@@ -417,6 +430,56 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
 		}
 	}
+}
+
+// encodeFlatFixedKeyRows writes complete fixed-width keys in one pass over the
+// rows. prepareHashKeys has already validated the vectors and allocated each
+// key's exact capacity, including its domain bytes and minimum padding.
+// Representations needing normalization or per-row metadata use the original
+// column-wise encoder.
+func (itr *strHashmapIterator) encodeFlatFixedKeyRows(vecs []*vector.Vector, start, count int) bool {
+	if len(vecs) < 2 || len(vecs) > 16 {
+		return false
+	}
+	type fixedKeyColumn struct {
+		data  []byte
+		width int
+	}
+	var columns [16]fixedKeyColumn
+	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	keySize := 0
+	for i, vec := range vecs {
+		typ := vec.GetType()
+		if !typ.IsFixedLen() || typ.Oid == types.T_float32 || typ.Oid == types.T_float64 ||
+			vec.IsConst() || vec.HasGrouping() || vec.GetNulls().Any() {
+			return false
+		}
+		width := typ.TypeSize()
+		columns[i] = fixedKeyColumn{data: vec.GetData(), width: width}
+		keySize += width
+		if withDomain {
+			keySize++
+		}
+	}
+	bufferSize := max(16, keySize)
+	for row := 0; row < count; row++ {
+		key := itr.keys[row][:bufferSize]
+		offset := 0
+		for _, column := range columns[:len(vecs)] {
+			if withDomain {
+				key[offset] = 0
+				offset++
+			}
+			from := (start + row) * column.width
+			copy(key[offset:offset+column.width], column.data[from:from+column.width])
+			offset += column.width
+		}
+		if offset < 16 {
+			copy(key[offset:16], hashtable.StrKeyPadding[offset:])
+		}
+		itr.keys[row] = key
+	}
+	return true
 }
 
 func appendVarlenaHashKey(dst []byte, typ types.Type, value []byte) []byte {
@@ -696,6 +759,39 @@ func (itr *strHashmapIterator) sizeCanonicalStringKeys(vec *vector.Vector, start
 		}
 	}
 	return nil
+}
+
+// CHAR cannot use the raw-string path: its byte domain removes trailing ASCII
+// spaces. Unicode keys, constants and GROUPING rows keep their existing path.
+func isFlatCharStringHashKey(vec *vector.Vector) bool {
+	typ := vec.GetType()
+	return typ.Oid == types.T_char && !types.IsUnicodeCollation(typ.Charset) &&
+		!vec.IsConst() && !vec.HasGrouping()
+}
+
+func fillFlatCharStringHashKey(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
+	values, area := vector.MustVarlenaRawData(vec)
+	nsp := vec.GetNulls()
+	hasNulls := nsp.Any()
+	withDomain := itr.mp.hasNull || itr.mp.groupingAware
+	for i := 0; i < n; i++ {
+		row := start + i
+		if hasNulls && nsp.Contains(uint64(row)) {
+			if itr.mp.hasNull {
+				itr.keys[i] = append(itr.keys[i], byte(1))
+			} else {
+				itr.zValues[i] = 0
+			}
+			continue
+		}
+		value := canonicalVarlenaHashValue(types.T_char, values[row].GetByteSlice(area))
+		length := uint32(len(value))
+		if withDomain {
+			itr.keys[i] = append(itr.keys[i], byte(0))
+		}
+		itr.keys[i] = append(itr.keys[i], util.UnsafeToBytes(&length)...)
+		itr.keys[i] = append(itr.keys[i], value...)
+	}
 }
 
 func fillFlatRawStringGroupingAwareStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {

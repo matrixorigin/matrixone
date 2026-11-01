@@ -33,6 +33,11 @@ import (
 )
 
 func TestConsolidatedTenantEntriesKeepWriterProtocolGates(t *testing.T) {
+	require.Equal(t, "4.0.7", Handler.Metadata().Version)
+	require.Equal(t, uint32(41), Handler.Metadata().VersionOffset)
+	require.Len(t, tenantUpgEntries, 27)
+	require.Len(t, clusterUpgEntries, 14)
+	require.Contains(t, upgradeInformationSchemaStatistics().UpgSql, "sub_part")
 	for _, tc := range []struct {
 		table   string
 		minimum int64
@@ -268,7 +273,7 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 	}{
 		{versions.InformationSchemaTablesUpgradeEntry(), sysview.InformationSchemaTablesV118DDL},
 		{versions.InformationSchemaColumnsUpgradeEntry(), sysview.InformationSchemaColumnsDDL},
-		{upgradeInformationSchemaStatistics(), sysview.InformationSchemaStatisticsDDL},
+		{upgradeInformationSchemaStatistics(), sysview.InformationSchemaStatisticsPrefixSubPartDDL},
 		{upgradeInformationSchemaTableConstraints(), sysview.InformationSchemaTableConstraintsDDL},
 		{upgradeInformationSchemaKeyColumnUsage(), sysview.InformationSchemaKeyColumnUsageDDL},
 		{upgradeInformationSchemaReferentialConstraints(), sysview.InformationSchemaReferentialConstraintsDDL},

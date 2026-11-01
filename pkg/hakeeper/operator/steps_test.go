@@ -691,3 +691,27 @@ func TestDeleteProxyStore(t *testing.T) {
 		}))
 	}
 }
+
+func TestLogRemovalCompletionUsesStoreAndShard(t *testing.T) {
+	replica := Replica{UUID: "store-a", ShardID: 7, ReplicaID: 3}
+	steps := []OpStep{StopLogService{Replica: replica}, StopNonVotingLogService{Replica: replica}, KillLogZombie{Replica: replica}}
+	cases := []struct {
+		name     string
+		stores   map[string]pb.LogStoreInfo
+		finished bool
+	}{
+		{name: "missing store", finished: true},
+		{name: "empty store", stores: map[string]pb.LogStoreInfo{"store-a": {}}, finished: true},
+		{name: "different shard", stores: map[string]pb.LogStoreInfo{"store-a": {Replicas: []pb.LogReplicaInfo{{LogShardInfo: pb.LogShardInfo{ShardID: 8}}}}}, finished: true},
+		{name: "same shard different replica", stores: map[string]pb.LogStoreInfo{"store-a": {Replicas: []pb.LogReplicaInfo{{LogShardInfo: pb.LogShardInfo{ShardID: 7}, ReplicaID: 99}}}}, finished: false},
+		{name: "same shard other store", stores: map[string]pb.LogStoreInfo{"store-b": {Replicas: []pb.LogReplicaInfo{{LogShardInfo: pb.LogShardInfo{ShardID: 7}, ReplicaID: 3}}}}, finished: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := ClusterState{LogState: pb.LogState{Stores: tc.stores}}
+			for _, step := range steps {
+				assert.Equal(t, tc.finished, step.IsFinish(state), "%T", step)
+			}
+		})
+	}
+}

@@ -851,6 +851,30 @@ func TestEstimateAndSelectivityNormalizesSameColumnRanges(t *testing.T) {
 	require.Equal(t, 1.0, estimateExprSelectivity(redundantUpperBounds, builder, stats))
 }
 
+func TestEstimateConjunctiveYearRange(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.DataTypeMap["d"] = uint64(types.T_date)
+	stats.MinValMap["d"] = float64(types.DateFromCalendar(2020, 1, 1))
+	stats.MaxValMap["d"] = float64(types.DateFromCalendar(2030, 1, 1))
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{MockCompilerContext: &MockCompilerContext{ctx: context.Background()}, statsCache: statsCache}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &planpb.TableDef{TblId: 1, Cols: []*planpb.ColDef{{Name: "d", Typ: planpb.Type{Id: int32(types.T_date)}}}}
+	col := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "d"}}}
+	year := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "year"}, Args: []*planpb.Expr{col}}}}
+	lit := func(value int64) *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}}}}
+	}
+	between := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "between"}, Args: []*planpb.Expr{year, lit(2022), lit(2025)}}}}
+	got, ok := estimateConjunctiveRangeSelectivity([]*planpb.Expr{between}, builder)
+	require.True(t, ok)
+	require.InDelta(t, 0.4, got, 1e-12)
+	between.GetF().Args[2] = &planpb.Expr{}
+	_, ok = estimateConjunctiveRangeSelectivity([]*planpb.Expr{between}, builder)
+	require.False(t, ok)
+}
+
 func TestEstimateIntervalSelectivityPreservesClippedBoundaryMembership(t *testing.T) {
 	const emptySelectivity = 0.00000001
 	tests := []struct {

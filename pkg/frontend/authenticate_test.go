@@ -13321,24 +13321,7 @@ func newMrsForRoleIdOfUserId(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForCheckRoleHasPrivilege(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("role_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("with_grant_option")
-	col2.SetColumnType(defines.MYSQL_TYPE_BOOL)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForRoleIdOfUserId(rows)
 }
 
 func newMrsForInheritedRoleIdOfRoleId(rows [][]interface{}) *MysqlResultSet {
@@ -13389,29 +13372,7 @@ func newMrsForGetAllStuffRoleGrant(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForCheckRoleGrant(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("granted_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("grantee_id")
-	col2.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	col3 := &MysqlColumn{}
-	col3.SetName("with_grant_option")
-	col3.SetColumnType(defines.MYSQL_TYPE_BOOL)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-	mrs.AddColumn(col3)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForGetAllStuffRoleGrant(rows)
 }
 
 func newMrsForPasswordOfUser(rows [][]interface{}) *MysqlResultSet {
@@ -13667,19 +13628,7 @@ func newMrsForCheckUserGrant(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForRoleOfUser(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("role_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	mrs.AddColumn(col1)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForRoleIdOfRole(rows)
 }
 
 func newMrsForCheckDatabase(rows [][]interface{}) *MysqlResultSet {
@@ -13965,19 +13914,7 @@ func newMrsForRoleWGO(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("role_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	mrs.AddColumn(col1)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForRoleIdOfRole(rows)
 }
 
 func newMrsForSystemVariableNameOfAccount(rows [][]interface{}) *MysqlResultSet {

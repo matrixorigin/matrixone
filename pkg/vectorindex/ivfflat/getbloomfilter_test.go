@@ -108,7 +108,7 @@ func TestExactRelationMembershipScanThreshold(t *testing.T) {
 		data, err := vec.MarshalBinary()
 		require.NoError(t, err)
 		sqlproc := sqlexec.NewSqlProcess(proc)
-		sqlproc.RelationScanner = &scriptedRelationScanner{t: t}
+		sqlproc.RelationScanner = &scriptedRelationScanner{}
 		sqlproc.IvfHasMembershipFilter = true
 		sqlproc.IvfRuntimeFilterData = data
 		return sqlproc

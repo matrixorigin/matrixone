@@ -16,7 +16,6 @@ package fileservice
 
 import (
 	"encoding/csv"
-	"os"
 	pathpkg "path"
 	"path/filepath"
 	"strings"
@@ -248,19 +247,10 @@ func JoinPath(serviceName string, path string) string {
 	return buf.String()
 }
 
-var osPathSeparatorStr = string([]rune{os.PathSeparator})
-
 func toOSPath(filePath string) string {
-	if os.PathSeparator == '/' {
-		return filePath
-	}
-	return strings.ReplaceAll(filePath, "/", osPathSeparatorStr)
+	return filepath.FromSlash(filePath)
 }
 
 func fromOSPath(diskPath string) string {
-	diskPath = filepath.Clean(diskPath)
-	if os.PathSeparator == '/' {
-		return diskPath
-	}
-	return strings.ReplaceAll(diskPath, osPathSeparatorStr, "/")
+	return filepath.ToSlash(filepath.Clean(diskPath))
 }

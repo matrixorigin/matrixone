@@ -2774,6 +2774,7 @@ func (tbl *txnTable) BuildReaders(
 			tbl.db.op.SnapshotTS(),
 			expr,
 			ds,
+			readutil.GetThresholdForReader(newNum),
 			hint,
 		)
 		if err != nil {

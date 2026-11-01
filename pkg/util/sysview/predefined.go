@@ -343,7 +343,7 @@ func InformationSchemaColumnsV110DDL() string {
 // accounts carry. Every historical reader recognizes it byte-stably
 // (design 5.5, D9-1), and a stored live definition holding it refreshes
 // to the current identity through the shared upgrade entry and the
-// 4.0.19 hop. The V110 template itself stays byte-stable.
+// consolidated 4.0.7 entry. The V110 template itself stays byte-stable.
 func InformationSchemaColumnsBinaryFamilyNullDDL() string {
 	return strings.ReplaceAll(InformationSchemaColumnsV110DDL(),
 		"WHEN 2 then 'binary'", "WHEN 2 then NULL")
@@ -425,7 +425,7 @@ const (
 
 // informationSchemaColumnsPreAttributesDDL is the pre-change CURRENT template:
 // what a pre-change binary persists in information_schema.COLUMNS before the
-// v4_0_18 upgrade entry recreates it with the attributed-DECIMAL decoration.
+// consolidated 4.0.7 entry recreates it with the attributed-DECIMAL decoration.
 // It is built from the frozen V109 historical constructor and literal
 // replacements only, so this identity cannot drift with later revisions of
 // the current derivation; a test pins it byte-identical to the base-era
@@ -444,7 +444,7 @@ func informationSchemaColumnsPreAttributesDDL() string {
 // pre-change variant: the #31461 selector revision of the pre-change current
 // template (the T0 text with the binary-family charset selectors rendering
 // NULL). A binary from the #31461 era persists exactly this text before the
-// v4_0_18 entry recreates the view with the attributed-DECIMAL decoration.
+// consolidated 4.0.7 entry recreates the view with the attributed-DECIMAL decoration.
 // It is built from the frozen T0 text and a literal replacement only, so it
 // cannot drift with later revisions of the current derivation; a test pins
 // it byte-identical to the live pre-decoration derivation.

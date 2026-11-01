@@ -149,7 +149,7 @@ class TestFulltextAdvancedOperators(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").encourage("tutorial")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python tutorial' IN BOOLEAN MODE)"
+        expected = "MATCH(`title`, `content`) AGAINST('+python tutorial' IN BOOLEAN MODE)"
         self.assertEqual(sql, expected)
 
     def test_discourage_operator(self):
@@ -157,7 +157,7 @@ class TestFulltextAdvancedOperators(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").discourage("legacy")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python ~legacy' IN BOOLEAN MODE)"
+        expected = "MATCH(`title`, `content`) AGAINST('+python ~legacy' IN BOOLEAN MODE)"
         self.assertEqual(sql, expected)
 
     def test_complex_boolean_with_all_operators(self):
@@ -171,7 +171,9 @@ class TestFulltextAdvancedOperators(unittest.TestCase):
         )
         sql = expr.compile()
 
-        expected = "MATCH(title, content, tags) AGAINST('+programming tutorial ~legacy -deprecated' IN BOOLEAN MODE)"
+        expected = (
+            "MATCH(`title`, `content`, `tags`) AGAINST('+programming tutorial ~legacy -deprecated' IN BOOLEAN MODE)"
+        )
         self.assertEqual(sql, expected)
 
     def test_group_with_weights(self):
@@ -203,7 +205,7 @@ class TestFulltextComplexScenarios(unittest.TestCase):
 
         result = filter_obj.compile()
         # Check that all required elements are present
-        self.assertIn("MATCH(title, content, tags) AGAINST(", result)
+        self.assertIn("MATCH(`title`, `content`, `tags`) AGAINST(", result)
         self.assertIn("IN BOOLEAN MODE)", result)
         self.assertIn("+programming", result)
         self.assertIn("+(python java javascript)", result)
@@ -222,7 +224,7 @@ class TestFulltextComplexScenarios(unittest.TestCase):
 
         result = filter_obj.compile()
         # Check that all required elements are present
-        self.assertIn("MATCH(name, description) AGAINST(", result)
+        self.assertIn("MATCH(`name`, `description`) AGAINST(", result)
         self.assertIn("IN BOOLEAN MODE)", result)
         self.assertIn("+laptop", result)
         self.assertIn("(>gaming portable <budget)", result)
@@ -233,7 +235,7 @@ class TestFulltextComplexScenarios(unittest.TestCase):
         # Test case: Basic boolean with score
         expr = boolean_match("body", "title").must("fast").encourage("red").label("score")
         sql = expr.compile()
-        self.assertIn("MATCH(body, title)", sql)
+        self.assertIn("MATCH(`body`, `title`)", sql)
         self.assertIn("+fast", sql)
         self.assertIn("red", sql)
         self.assertIn("AS score", sql)
@@ -396,13 +398,13 @@ class TestFulltextEdgeCases(unittest.TestCase):
     def test_single_column(self):
         """Test single column search."""
         filter_obj = boolean_match("title").must("python")
-        expected = "MATCH(title) AGAINST('+python' IN BOOLEAN MODE)"
+        expected = "MATCH(`title`) AGAINST('+python' IN BOOLEAN MODE)"
         self.assertEqual(filter_obj.compile(), expected)
 
     def test_many_columns(self):
         """Test many columns search."""
         filter_obj = boolean_match("title", "content", "tags", "description").must("python")
-        expected = "MATCH(title, content, tags, description) AGAINST('+python' IN BOOLEAN MODE)"
+        expected = "MATCH(`title`, `content`, `tags`, `description`) AGAINST('+python' IN BOOLEAN MODE)"
         self.assertEqual(filter_obj.compile(), expected)
 
     def test_empty_group_building(self):
@@ -418,7 +420,7 @@ class TestFulltextEdgeCases(unittest.TestCase):
 
         result = filter_obj.compile()
         # Should default to basic AGAINST syntax
-        self.assertEqual(result, "MATCH(title, content) AGAINST('test')")
+        self.assertEqual(result, "MATCH(`title`, `content`) AGAINST('test')")
 
 
 class TestFulltextLabel(unittest.TestCase):
@@ -429,7 +431,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label("score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS score"
+        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS score"
         self.assertEqual(sql, expected)
 
     def test_basic_natural_label(self):
@@ -437,7 +439,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = natural_match("title", "content", query="machine learning").label("relevance")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('machine learning') AS relevance"
+        expected = "MATCH(`title`, `content`) AGAINST('machine learning') AS relevance"
         self.assertEqual(sql, expected)
 
     def test_phrase_search_label(self):
@@ -445,7 +447,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must('"machine learning"').label("phrase_score")
         sql = expr.compile()
 
-        expected = 'MATCH(title, content) AGAINST(\'+"machine learning"\' IN BOOLEAN MODE) AS phrase_score'
+        expected = 'MATCH(`title`, `content`) AGAINST(\'+"machine learning"\' IN BOOLEAN MODE) AS phrase_score'
         self.assertEqual(sql, expected)
 
     def test_wildcard_search_label(self):
@@ -453,7 +455,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python*").label("wildcard_score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python*' IN BOOLEAN MODE) AS wildcard_score"
+        expected = "MATCH(`title`, `content`) AGAINST('+python*' IN BOOLEAN MODE) AS wildcard_score"
         self.assertEqual(sql, expected)
 
     def test_multiple_labels(self):
@@ -464,8 +466,8 @@ class TestFulltextLabel(unittest.TestCase):
         sql1 = expr1.compile()
         sql2 = expr2.compile()
 
-        expected1 = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS python_score"
-        expected2 = "MATCH(title, content) AGAINST('+java' IN BOOLEAN MODE) AS java_score"
+        expected1 = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS python_score"
+        expected2 = "MATCH(`title`, `content`) AGAINST('+java' IN BOOLEAN MODE) AS java_score"
 
         self.assertEqual(sql1, expected1)
         self.assertEqual(sql2, expected2)
@@ -475,7 +477,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("C++").label("cpp_score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+C++' IN BOOLEAN MODE) AS cpp_score"
+        expected = "MATCH(`title`, `content`) AGAINST('+C++' IN BOOLEAN MODE) AS cpp_score"
         self.assertEqual(sql, expected)
 
     def test_unicode_label(self):
@@ -483,7 +485,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = natural_match("title", "content", query="机器学习").label("ml_score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('机器学习') AS ml_score"
+        expected = "MATCH(`title`, `content`) AGAINST('机器学习') AS ml_score"
         self.assertEqual(sql, expected)
 
     def test_numeric_label(self):
@@ -491,7 +493,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label("score_123")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS score_123"
+        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS score_123"
         self.assertEqual(sql, expected)
 
     def test_underscore_label(self):
@@ -499,7 +501,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label("python_relevance_score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS python_relevance_score"
+        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS python_relevance_score"
         self.assertEqual(sql, expected)
 
     def test_long_label(self):
@@ -508,7 +510,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label(long_label)
         sql = expr.compile()
 
-        expected = f"MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS {long_label}"
+        expected = f"MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS {long_label}"
         self.assertEqual(sql, expected)
 
     def test_label_with_spaces(self):
@@ -516,7 +518,7 @@ class TestFulltextLabel(unittest.TestCase):
         expr = boolean_match("title", "content").must("python").label("python score")
         sql = expr.compile()
 
-        expected = "MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS python score"
+        expected = "MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE) AS python score"
         self.assertEqual(sql, expected)
 
 
@@ -618,6 +620,24 @@ class TestBM25AlgorithmSupport(unittest.TestCase):
 class TestComplexBooleanModeQueries(unittest.TestCase):
     """Test complex boolean mode operators - offline SQL generation tests"""
 
+    def test_raw_query_and_structured_terms(self):
+        from matrixone.sqlalchemy_ext.fulltext_search import FulltextSearchBuilder as SearchBuilder
+
+        builder = SearchBuilder(Mock()).table('articles').columns(['content'])
+        self.assertIn(
+            "AGAINST('machine learning' IN natural language mode)", builder.query('machine learning')._build_sql()
+        )
+        self.assertIn("AGAINST($sdk$C:\\path$sdk$ IN natural language mode)", builder.query(r'C:\path')._build_sql())
+        self.assertIn("AGAINST('O''Reilly' IN natural language mode)", builder.query("O'Reilly")._build_sql())
+        builder.with_mode(FulltextSearchMode.BOOLEAN).query('+machine -java').add_term('python', required=True)
+        self.assertIn("AGAINST('+machine -java +python' IN BOOLEAN MODE)", builder._build_sql())
+        builder.query('reset')
+        self.assertIn("AGAINST('reset' IN BOOLEAN MODE)", builder._build_sql())
+        for invalid in ('bad\x00term', r'bad\$term', ''):
+            with self.assertRaises(ValueError):
+                builder.query(invalid)
+            self.assertIn("AGAINST('reset' IN BOOLEAN MODE)", builder._build_sql())
+
     def test_wildcard_suffix_generation(self):
         """Test wildcard suffix (*) in boolean queries - SQL should contain wildcard"""
         # Note: The SDK may not expose wildcard directly in the API
@@ -685,7 +705,7 @@ class TestNullAndEdgeCases(unittest.TestCase):
         sql = expr.compile()
 
         self.assertIn("机器学习", sql)
-        self.assertIn("MATCH(title, content)", sql)
+        self.assertIn("MATCH(`title`, `content`)", sql)
 
     def test_very_long_search_query(self):
         """Test very long search queries"""
@@ -694,7 +714,7 @@ class TestNullAndEdgeCases(unittest.TestCase):
         sql = expr.compile()
 
         self.assertIn(long_query, sql)
-        self.assertIn("MATCH(content)", sql)
+        self.assertIn("MATCH(`content`)", sql)
 
 
 class TestIndexCreationVariations(unittest.TestCase):
@@ -773,7 +793,7 @@ class TestSearchBuilderCombinations(unittest.TestCase):
         expr = natural_match("title", "content", query="machine learning tutorial")
         sql = expr.compile()
 
-        self.assertIn("MATCH(title, content)", sql)
+        self.assertIn("MATCH(`title`, `content`)", sql)
         self.assertIn("AGAINST('machine learning tutorial')", sql)
         # Natural language mode can omit the explicit mode clause or include it
         # Depends on implementation - let's just check it's valid
@@ -787,8 +807,8 @@ class TestSearchBuilderCombinations(unittest.TestCase):
         sql2 = expr2.compile()
 
         # Should preserve the order specified
-        self.assertIn("title, content, summary", sql1)
-        self.assertIn("summary, content, title", sql2)
+        self.assertIn("`title`, `content`, `summary`", sql1)
+        self.assertIn("`summary`, `content`, `title`", sql2)
 
 
 if __name__ == '__main__':

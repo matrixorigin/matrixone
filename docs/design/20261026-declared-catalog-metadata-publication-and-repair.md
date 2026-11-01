@@ -1,5 +1,7 @@
 # Declared catalog metadata: publication admission and account repair
 
+The maintained upgrade target is [4.0.7/41](20261028-catalog-upgrade-407.md). This supersedes earlier draft references below to 4.0.18/19 successor routes; those handlers are retired. Stored-view history recognition remains supported independently.
+
 Status: revision 16 (2026-10-30) - documentation-only evidence
 linkage on top of revision 15; the delivered design content remains
 the independently approved revision 14, and no design decision,
@@ -479,60 +481,22 @@ applies to their content; the label-aware overloads and
 MO_INDEX_SUB_PART, like every other function overload, carry no new
 protocol requirement.
 
-### 5.2 The v4_0_19 tenant hop (retained stored-view migration, merged-ladder numbering)
+### 5.2 Consolidated tenant metadata publication
 
-The handler is a standard version handle on the merged consolidated
-ladder (`versions.Version{Version: "4.0.19", MinUpgradeVersion: "4.0.7",
-UpgradeCluster: No, UpgradeTenant: Yes, RequiredProtocolVersion: 118,
-VersionOffset: 2}` - its two tenant entries, registration appended
-after upstream's `v4_0_18.Handler`, numeric order 4.0.7 -> 4.0.18 ->
-4.0.19), and HandleTenantUpgrade is the plain per-account entry loop,
-invoking `entry.Upgrade` per entry with the framework's logging - no
-paging walker, no skip, no new durable progress. For an account that
-crossed the upstream v4_0_18 handle in the same startup the COLUMNS leg
-re-checks content-equal and writes nothing while the STATISTICS leg
-installs the prefix-aware identity (D13-1). Two MODIFY_VIEW entries,
-both in the upstream shared-builder form revision 10 specifies:
+The released source catalog is 4.0.6/5. Before release, the existing 4.0.7
+COLUMNS and STATISTICS entries install the final declared-label and numeric
+prefix-length definitions; no 4.0.18/19 successor is registered. The two shared
+view-entry builders remain the implementation owners. The STATISTICS definition
+returns a prefix length for declared prefix indexes and SQL NULL otherwise.
+Current entry prerequisites, tenant isolation, logical identity and exact grants
+remain intact. Fresh-account initialization installs the same definitions.
 
-- `versions.InformationSchemaColumnsUpgradeEntry()`: the upstream
-  shared-builder form (authors `CREATE OR REPLACE VIEW` on
-  `sysview.InformationSchemaColumnsDDL`, RequiredProtocolVersion 109,
-  canonicalized CheckFunc through
-  `InformationSchemaViewDefinitionMatches`) - and the identity symbol
-  now carries the merged corrected identity (upstream's
-  attributed-DECIMAL COLUMN_TYPE decoration composed verbatim over the
-  declared-label projections and the unbounded generated-expression
-  row, D13-2), so bootstrap publication, the upstream v4_0_18 handle
-  and the historical hops observe exactly one current identity.
-- `versions.InformationSchemaViewUpgradeEntry("STATISTICS",
-  sysview.InformationSchemaStatisticsPrefixSubPartDDL,
-  defines.MORPCVersion41)`: publishes the prefix-aware identity with
-  the same shared-builder authoring and CheckFunc, at the historical
-  STATISTICS refresh gate revision 9 chose (41, a pre-existing
-  constant); `sysview.InformationSchemaStatisticsDDL` keeps its
-  historical value so main's own 4.0.7 statistics entry stays
-  upstream-identical.
-
-Terminal paths and failure behavior - all inherited from the
-framework's base-hop semantics:
-
-- **Leg current:** the CheckFunc skips it; no write; a completed hop
-  never touches the view again.
-- **Leg stale or missing:** the entry rewrites it to the published
-  identity inside the hop's account transaction (the shared builder's
-  CREATE OR REPLACE VIEW covers the missing case; neither leg drops
-  a view).
-- **Hop error (transaction, DDL, catalog):** the error stays visible to
-  the framework exactly as every historical hop exposes failures; the
-  account's marker is untouched, so the next login or startup tenant
-  pass re-enters, and re-probes make the retry a no-op except for the
-  failed legs.
-- **Crash partway through a pass:** restart re-runs the hop from the
-  marker; completed accounts are skipped, and an interrupted account
-  repeats only its transaction.
-- **Concurrency:** one driver per account - the framework's existing
-  login/startup discipline; the change adds no coordination, cursor or
-  lock.
+The [4.0.7 upgrade design](20261028-catalog-upgrade-407.md) owns the supported
+source boundary and all routing, CDC, rollback, restart and readiness contracts.
+A same-offset unreleased-main catalog cannot be identified by markers; it is not
+a supported source. After the 4.0.7 release, new migrations require a new identity.
+The obsolete forward-hop tests are consolidated at the real 4.0.7 owner, with
+public SQL and transaction rollback/retry checks rather than a second walker.
 
 ### 5.3 Ownership, bounds, and hot paths
 
@@ -603,91 +567,14 @@ merged current), so recorded 4.0.18 text always routes to the adapter
 where it now binds, and the undecorated label-aware intermediate stays
 dev-lineage-only and unrecognized (D14-1).
 
-### 5.6 Preserved upgrade admission and on-demand continuation for the successor final (revisions 11-13)
+### 5.6 Upgrade admission and completion
 
-Registering the successor final silences four upgrade-admission guards
-the pre-rework upstream keyed on the literal
-`final.Version == "4.0.7"`. Current main itself re-keys them onto the
-consolidated-line `>= 4.0.7` comparison, the registered frozen-handle
-identity and the `crossingPending`-in-route predicates, and this
-design adopts that re-keying verbatim while keeping the recovery-path
-guards (D11-1/D11-2 as amended by D13-3):
-
-- **Legacy CDC admission** (`rejectLegacyCDCTasks`) runs before any
-  catalog mutation whenever this binary admits a source below the
-  frozen stage or resumes an unfinished route to it: at route
-  creation with `final` in the consolidated line and the recorded
-  source below 4.0.7 or an unready 4.0.7, at recheck of a non-ready
-  retained row in the same line, and at recovery before returning the
-  resume verdict for a retained 4.0.7-stage route. Sources containing
-  pre-4.0.7 CDC tasks (paused tasks included) terminate with the
-  upstream message; an empty task catalog admits; a catalog-read
-  error stays retryable. The capped diagnostic and the wrapped error
-  of pkg/bootstrap/service_upgrade_cdc.go are unchanged.
-- **Frozen source validation:** a ready (4.0.7, offset) row whose
-  offset differs from `v4_0_7.Handler.Metadata().VersionOffset`
-  terminates with upstream's "4.0.7 is frozen" message before route
-  creation, so no earlier-generation 4.0.7 catalog can leap directly
-  to 4.0.19 and skip the consolidated migrations; an unready
-  (4.0.7, frozen-offset) route carrying a 4.0.7 -> 4.0.7 offset-only
-  step terminates with the "unsupported in-progress 4.0.7 offset-only
-  upgrade" message, at the pre-mutation check and again in
-  `checkUpgradeRecovery` (same-version steps for the frozen target are
-  rejected instead of resumed); unready (4.0.7, other-offset) rows
-  keep terminating through `canResumeUpgrade`'s handle-offset
-  comparison exactly as upstream does.
-- **Allowed transitions, unchanged from a current-main binary:** a
-  ready source below 4.0.7 chains through the frozen 4.0.7 stage with
-  CDC admission and the view-metadata catalog prerequisites (both
-  `>= 4.0.7`-keyed admissions now agree); a ready 4.0.7 at the frozen
-  offset takes the single direct [4.0.7 -> 4.0.19] hop; an interrupted
-  normal semantic route (e.g. [4.0.6 -> 4.0.7]) resumes with CDC
-  admission enforced; fresh clusters initialize at 4.0.19. Every other
-  recorded state terminates before mutation with upstream's message
-  text, error type and finalVersionCompleted behavior - including the
-  crossed-route non-rejection upstream's pending-scan permits (a route
-  whose 4.0.7 step crossed with its own admission is not re-rejected).
-
-These are source-validation admissions, not protocol mechanisms: no
-version constant moves, no capability checks appear, and nothing about
-peer negotiation changes (upgrade-compatibility.md holds). The oracles
-pinning them are listed in section 7's admission entries.
-
-**On-demand continuation past the paged stage (revisions 12-13).**
-The login-compensation walk (`MaybeUpgradeTenant`) and the manual
-walk (`UpgradeOneTenant`) inherit the paged-4.0.7 special case:
-without a caller-owned transaction they break the register walk at
-`v4_0_7.Handler` and complete through `upgradeV407TenantOnDemand`,
-which advances the account only to 4.0.7. With this branch's
-successor registered, both walks must reach it: current main owns
-this through re-entrant planning loops (both walks re-enter planning
-after each paged crossing and step every registered successor handle,
-skipping the frozen handle in-walk when the account is already at
-4.0.7), this design adopts those loops verbatim, and it adds the
-manual walk's in-transaction completion check
-(`if !pendingV407 && from != currentCN.Version` ->
-"cannot upgrade tenant version %s to current cn version %s",
-absent upstream; D13-4 supersedes revision 12's service-owned
-continuation transaction). Three invariants hold for both walks:
-
-- **Completion equals the final:** an on-demand or manual completion
-  (and its success caching) requires the account's persisted
-  create_version to equal `getFinalVersionHandle().Metadata().Version`;
-  no path caches success with the account left below it.
-- **Failure resumes from the stamp:** a later-stage error leaves the
-  account at its last committed create_version, the success cache
-  unset, and the next entry resumes the walk from there without
-  duplicating committed legs (the existing per-account authority rule:
-  mo_account.create_version is the sole progress marker).
-- **The paged stage keeps its ownership:** the special case exists to
-  release planning transactions before 4.0.7's bounded per-page work;
-  the continuation changes neither the stage's transactions nor its
-  completion owner, and the successor hop needs no paging (two
-  idempotent view legs bounded by one account's DDL).
-
-The route-based startup pass is unaffected: its upgrade rows already
-drive the registered final for snapshot-captured accounts, and
-`shouldRunTenantUpgrade` ignores the paged special case.
+Use the existing 4.0.7 paged crossing for background, manual and login work.
+Legacy CDC rejection precedes catalog mutation; already-current catalogs preserve
+new CDC tasks. Account completion follows all successful entry transactions,
+and caller-owned transactions retain atomic rollback of definitions and progress.
+Bootstrap readiness, snapshot decisions and cancellation keep their existing owners.
+There is no post-4.0.7 continuation in the current registry.
 
 ## 6. Compatibility and upgrade model (shutdown-only)
 

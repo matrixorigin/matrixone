@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,23 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
 )
-
-func removeIf[T any](data []T, pred func(t T) bool) []T {
-	// from plan.RemoveIf
-	if len(data) == 0 {
-		return data
-	}
-	res := 0
-	for i := 0; i < len(data); i++ {
-		if !pred(data[i]) {
-			if res != i {
-				data[res] = data[i]
-			}
-			res++
-		}
-	}
-	return data[:res]
-}
 
 // ReadDataByFilter only read block data from storage by filter, don't apply deletes.
 // Right now, it cannot support filter by physical address column.
@@ -122,7 +106,7 @@ func ReadDataByFilter(
 		}
 		sels = searchFunc(cacheVectors)
 		if !deleteMask.IsEmpty() {
-			sels = removeIf(sels, func(i int64) bool {
+			sels = util.RemoveIf(sels, func(i int64) bool {
 				return deleteMask.Contains(uint64(i))
 			})
 		}
