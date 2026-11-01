@@ -136,3 +136,66 @@ func TestValidateServiceUUID(t *testing.T) {
 	}
 	require.NoError(t, validateCNServiceUUID(strings.Repeat("é", 63)+"x"))
 }
+
+func TestTaskAndTransactionDefaults(t *testing.T) {
+	const serviceID = "task-transaction-defaults"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(serviceID, rt) })
+	for _, mode := range []struct {
+		name        string
+		consistency int64
+	}{
+		{name: "optimistic", consistency: 1},
+		{name: "pessimistic", consistency: -1},
+	} {
+		for _, defaultsOnly := range []bool{false, true} {
+			cfg := Config{UUID: serviceID}
+			cfg.Txn.Mode = mode.name
+			cfg.TaskRunner.Parallelism = 7
+			if defaultsOnly {
+				cfg.SetDefaultValue()
+			} else {
+				require.NoError(t, cfg.Validate())
+			}
+			require.Equal(t, 7, cfg.TaskRunner.QueryLimit)
+			require.Equal(t, 256, cfg.TaskRunner.MaxWaitTasks)
+			require.Equal(t, 10*time.Second, cfg.TaskRunner.FetchTimeout.Duration)
+			require.EqualValues(t, mode.consistency, cfg.Txn.EnableCNBasedConsistency)
+			require.EqualValues(t, -1, cfg.Txn.EnableRefreshExpression)
+			require.Equal(t, 2*time.Minute, cfg.Txn.MaxActiveAges.Duration)
+		}
+	}
+	cfg := Config{UUID: serviceID}
+	cfg.HAKeeper.HeatbeatInterval.Duration = -time.Second
+	require.Error(t, cfg.Validate())
+	require.Zero(t, cfg.TaskRunner.Parallelism)
+	require.Zero(t, cfg.Txn.MaxActiveAges.Duration)
+}
+
+func TestServiceAddressAndHAKeeperDefaults(t *testing.T) {
+	const serviceID = "address-defaults"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(serviceID, rt) })
+	for _, defaultsOnly := range []bool{false, true} {
+		cfg := Config{UUID: serviceID, ServiceAddress: "cn.example:6002"}
+		if defaultsOnly {
+			cfg.SetDefaultValue()
+		} else {
+			require.NoError(t, cfg.Validate())
+		}
+		require.Equal(t, defaultListenAddress, cfg.ListenAddress)
+		require.Equal(t, "cn.example:6002", cfg.ServiceAddress)
+		require.Equal(t, "cn.example:19998", cfg.QueryServiceConfig.Address.ServiceAddress)
+		require.Equal(t, time.Second, cfg.HAKeeper.HeatbeatInterval.Duration)
+		require.Equal(t, 3*time.Second, cfg.HAKeeper.HeatbeatTimeout.Duration)
+		require.Equal(t, 30*time.Second, cfg.HAKeeper.DiscoveryTimeout.Duration)
+	}
+	cfg := Config{UUID: serviceID}
+	cfg.HAKeeper.HeatbeatInterval.Duration = -time.Second
+	require.Error(t, cfg.Validate())
+	require.Equal(t, defaultListenAddress, cfg.ListenAddress)
+	require.Equal(t, 3*time.Second, cfg.HAKeeper.HeatbeatTimeout.Duration)
+	require.Empty(t, cfg.QueryServiceConfig.Address.ServiceAddress)
+}

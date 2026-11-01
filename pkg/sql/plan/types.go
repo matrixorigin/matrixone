@@ -233,6 +233,9 @@ type CompilerContext interface {
 	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
 	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	// ResolveWithoutTemporaryAlias skips session aliases for standalone RENAME TABLE.
+	// It retains catalog visibility, temporary ownership and access checks.
+	ResolveWithoutTemporaryAlias(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get index table definition by an ObjectRef, will skip unnecessary subscription check
 	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get table definition by table id
@@ -381,7 +384,16 @@ type ViewData struct {
 	RequiredProtocolVersion *int64 `json:"required_protocol_version,omitempty"`
 }
 
+// updateTargetScope borrows the existing target-side binding while UPDATE FROM
+// temporarily joins its separate read sources. It is local to one bindUpdate call.
+type updateTargetScope struct {
+	join    *tree.JoinTableExpr
+	context *BindContext
+}
+
 type QueryBuilder struct {
+	updateTargetScope *updateTargetScope
+
 	// DELETE owns these generated scan identities. Optimizer consumers must
 	// revalidate the binding and table after join rewrites.
 	deleteIndexScanTables map[int32]deleteIndexScan

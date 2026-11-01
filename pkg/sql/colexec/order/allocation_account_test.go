@@ -358,13 +358,14 @@ func TestAccountedOrderFinalShuffleUsesRecoveryCapacity(t *testing.T) {
 	require.NoError(t, op.Prepare(proc))
 	_, err := op.ctr.appendBatch(proc, input)
 	require.NoError(t, err)
-	op.ctr.resultOrderList, op.ctr.resultOrderMP, err = growOrderSlice(
+	op.ctr.resultOrderList, op.ctr.resultOrderMP, err = growOrderSliceWithCapacityClass(
 		op.ctr.resultOrderList,
 		op.ctr.resultOrderMP,
 		op.ctr.batWaitForSort.RowCount(),
 		proc,
 		op.ctr.allocationAccount,
 		ordersites.OrderSelections,
+		mpool.AllocationCapacityClassDefault,
 	)
 	require.NoError(t, err)
 	for i := range op.ctr.resultOrderList {
@@ -884,38 +885,38 @@ func TestOrderAllocationHelperBoundaryMatrix(t *testing.T) {
 	require.NoError(t, ctr.setAllocationAccount(account))
 	require.NoError(t, ctr.setAllocationAccount(account))
 
-	_, _, err = growOrderSlice[int](nil, nil, -1, proc, account, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[int](nil, nil, -1, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
-	_, _, err = growOrderSlice[int](nil, proc.Mp(), 1, proc, nil, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[int](nil, proc.Mp(), 1, proc, nil, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
-	plain, owner, err := growOrderSlice[int](nil, nil, 3, proc, nil, ordersites.OrderSelections)
+	plain, owner, err := growOrderSliceWithCapacityClass[int](nil, nil, 3, proc, nil, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, plain, 3)
 	require.Nil(t, owner)
 
-	accounted, accountedOwner, err := growOrderSlice[int](
-		nil, nil, 3, proc, account, ordersites.OrderSelections)
+	accounted, accountedOwner, err := growOrderSliceWithCapacityClass[int](
+		nil, nil, 3, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, accounted, 3)
-	accounted, accountedOwner, err = growOrderSlice(
-		accounted, accountedOwner, 2, proc, account, ordersites.OrderSelections)
+	accounted, accountedOwner, err = growOrderSliceWithCapacityClass(
+		accounted, accountedOwner, 2, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, accounted, 2)
-	accounted, accountedOwner, err = growOrderSlice(
-		accounted, accountedOwner, 100, proc, account, ordersites.OrderSelections)
+	accounted, accountedOwner, err = growOrderSliceWithCapacityClass(
+		accounted, accountedOwner, 100, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.NoError(t, err)
 	require.Len(t, accounted, 100)
 	mpool.FreeSlice(accountedOwner, accounted)
-	_, _, err = growOrderSlice[uint64](
-		nil, nil, math.MaxInt, proc, account, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[uint64](
+		nil, nil, math.MaxInt, proc, account, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAllocatorLimit)
 	rejectRegistry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
 	rejectController := &orderTestCapacityController{limit: 1 << 20, rejectNext: true}
 	rejectAccount, err := rejectRegistry.OpenWithController(1<<20, rejectController)
 	require.NoError(t, err)
-	_, _, err = growOrderSlice[int](
-		nil, nil, 1, proc, rejectAccount, ordersites.OrderSelections)
+	_, _, err = growOrderSliceWithCapacityClass[int](
+		nil, nil, 1, proc, rejectAccount, ordersites.OrderSelections, mpool.AllocationCapacityClassDefault)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	_, _, err = rejectRegistry.CompleteTerminal(rejectAccount)
 	require.NoError(t, err)

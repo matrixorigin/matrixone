@@ -198,7 +198,7 @@ func (builder *QueryBuilder) normalizeUpdateAssignment(
 ) (*plan.Expr, error) {
 	var err error
 	if isDefaultValExpr(rhs) {
-		rhs, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), ignore)
+		rhs, err = getDefaultExprForAssignment(builder.GetContext(), col, table.DbName, builder.compCtx.GetProcess(), ignore)
 		if err != nil {
 			return nil, err
 		}
@@ -600,10 +600,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 	// still tracks only the target tables. buildFrom requires a single
 	// TableExpr, so cross-join target and the FROM-clause join tree here.
 	selectFromTables := stmt.Tables
+	var targetScope *updateTargetScope
 	if stmt.From != nil && len(stmt.From.Tables) > 0 {
 		joined := tree.TableExpr(stmt.Tables[0])
 		for _, src := range stmt.From.Tables {
-			joined = &tree.JoinTableExpr{Left: joined, Right: src, JoinType: tree.JOIN_TYPE_CROSS}
+			join := &tree.JoinTableExpr{Left: joined, Right: src, JoinType: tree.JOIN_TYPE_CROSS}
+			if targetScope == nil {
+				targetScope = &updateTargetScope{join: join}
+			}
+			joined = join
 		}
 		selectFromTables = tree.TableExprs{joined}
 	}
@@ -625,8 +630,14 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		bindCtx.numericProjectionTypes[pos] = typ
 	}
 
+	previousScope := builder.updateTargetScope
+	builder.updateTargetScope = targetScope
+	defer func() { builder.updateTargetScope = previousScope }()
 	lastNodeID, err := builder.bindSelect(selectAst, bindCtx, false)
 	if err != nil {
+		return 0, err
+	}
+	if err = validateUpdateAssignmentTargets(builder, bindCtx, targetScope, dmlCtx, stmt); err != nil {
 		return 0, err
 	}
 
@@ -5413,4 +5424,47 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 	}
 	lastNodeID = builder.appendNode(projectNode, bindCtx)
 	return lastNodeID, projectNode, projectNode.BindingTags[0], nil
+}
+
+// Validate SET against the source binder's namespace, which includes read-only
+// CTEs and USING's chosen source, before accepting the provisional write target.
+func validateUpdateAssignmentTargets(builder *QueryBuilder, bindCtx *BindContext, targetScope *updateTargetScope, dmlCtx *DMLContext, stmt *tree.Update) error {
+	if targetScope != nil && targetScope.context == nil {
+		return moerr.NewInternalError(builder.GetContext(), "UPDATE target namespace was not bound")
+	}
+	for _, assignment := range stmt.Exprs {
+		for _, lhs := range assignment.Names {
+			sourceCtx := bindCtx
+			if targetScope != nil && lhs.TblName() == "" {
+				sourceCtx = targetScope.context
+			}
+			binding, err := resolveUpdateAssignmentTarget(builder.GetContext(), sourceCtx, lhs)
+			if err != nil {
+				return err
+			}
+
+			idx, writable := dmlCtx.aliasMap[binding.table]
+			if !writable || binding.tableID != dmlCtx.tableDefs[idx].TblId {
+				return moerr.NewInvalidInputf(builder.GetContext(), "UPDATE target table '%s' is not updatable", binding.table)
+			}
+		}
+	}
+	return nil
+}
+
+// Use the existing source identity owner for SET, never SELECT projection aliases.
+func resolveUpdateAssignmentTarget(ctx context.Context, bindCtx *BindContext, lhs *tree.UnresolvedName) (*Binding, error) {
+	binding, _, ok := resolveColumnIdentity(bindCtx, lhs)
+	if !ok {
+		if lhs.TblName() == "" {
+			if value, found := bindCtx.bindingByCol[lhs.ColName()]; found && value == nil {
+				return nil, moerr.NewInvalidInputf(ctx, "ambiguous column reference '%s'", lhs.ColNameOrigin())
+			}
+		}
+		return nil, moerr.NewBadFieldErrorf(ctx, "unknown UPDATE target column '%s'", lhs.ColNameOrigin())
+	}
+	if lhs.TblName() == "" && len(bindCtx.outerUsingCols[lhs.ColName()]) > 1 {
+		return nil, moerr.NewInvalidInputf(ctx, "UPDATE target column '%s' is not uniquely writable", lhs.ColNameOrigin())
+	}
+	return binding, nil
 }

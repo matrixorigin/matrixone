@@ -92,11 +92,8 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local)
-	// The frozen consolidated 4.0.7 terminal crosses in a dedicated on-demand
-	// pass that first releases the planning transaction and account lock. Any
-	// forward handles after 4.0.7 (e.g. 4.0.18) still owe that tenant their
-	// entries, so re-enter planning after each paged crossing until a planning
-	// pass completes without another pending crossing.
+	// Release the planning transaction and account lock before the paged
+	// 4.0.7 walk, then recheck the committed account version before caching it.
 	for {
 		pendingV407 := false
 		err := s.exec.ExecTxn(
@@ -200,6 +197,14 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 						}
 						from = v.Metadata().Version
 					}
+				}
+				// A manual upgrade reports success only with the account at the
+				// cluster's final version. The re-planned loop below still takes
+				// over after a committed paged 4.0.7 stage, so only a non-pending
+				// shortfall is terminal here instead of being cached as success.
+				if !pendingV407 && from != currentCN.Version {
+					return moerr.NewInvalidInputNoCtxf("cannot upgrade tenant version %s to current cn version %s",
+						from, currentCN.Version)
 				}
 				return nil
 			},

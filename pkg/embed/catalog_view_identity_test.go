@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
@@ -213,13 +214,18 @@ func TestCallerOwnedTenantUpgradeRollsBackAndRetries(t *testing.T) {
 		internal := context.WithValue(ctx, defines.InternalExecutorKey{}, true)
 		opts := executor.Options{}.WithAccountID(0).WithDatabase("mo_catalog").WithWaitCommittedLogApplied().WithTxnMode(txnpb.TxnMode_Pessimistic).WithTxnIsolation(txnpb.TxnIsolation_RC)
 		versionSQL := fmt.Sprintf("select create_version from mo_catalog.mo_account where account_id=%d", accountID)
-		definitionSQL := fmt.Sprintf("select rel_createsql from mo_catalog.mo_tables where account_id=%d and reldatabase='information_schema' and lower(relname)='key_column_usage'", accountID)
+		definitionSQL := func(view string) string {
+			return fmt.Sprintf("select rel_createsql from mo_catalog.mo_tables where account_id=%d and reldatabase='information_schema' and lower(relname)='%s'", accountID, view)
+		}
+		queries := []string{versionSQL, definitionSQL("key_column_usage"), definitionSQL("columns"), definitionSQL("statistics")}
 		require.NoError(t, exec.ExecTxn(internal, func(tx executor.TxnExecutor) error {
 			for _, stmt := range []struct {
 				sql string
 				id  uint32
 			}{
 				{"create or replace view information_schema.KEY_COLUMN_USAGE as select 17 as pending_upgrade", accountID},
+				{strings.Replace(sysview.InformationSchemaColumnsV58DDL(), "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), accountID},
+				{strings.Replace(sysview.InformationSchemaStatisticsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), accountID},
 				{fmt.Sprintf("update mo_catalog.mo_account set create_version='4.0.6' where account_id=%d", accountID), 0},
 			} {
 				res, err := tx.Exec(stmt.sql, versions.UpgradeStatementOption(stmt.id))
@@ -230,8 +236,12 @@ func TestCallerOwnedTenantUpgradeRollsBackAndRetries(t *testing.T) {
 			}
 			return nil
 		}, opts))
-		var oldDefinition string
-		require.NoError(t, sys.QueryRowContext(ctx, definitionSQL).Scan(&oldDefinition))
+		oldDefinitions := make(map[string]string)
+		for _, query := range queries[1:] {
+			var definition string
+			require.NoError(t, sys.QueryRowContext(ctx, query).Scan(&definition))
+			oldDefinitions[query] = definition
+		}
 		abort := errors.New("caller rolls back after migration")
 		for _, rollback := range []bool{true, false} {
 			observed := make(map[string]string)
@@ -243,7 +253,7 @@ func TestCallerOwnedTenantUpgradeRollsBackAndRetries(t *testing.T) {
 					return err
 				}
 				didUpgrade = upgraded
-				for _, query := range []string{versionSQL, definitionSQL} {
+				for _, query := range queries {
 					res, err := tx.Exec(query, versions.UpgradeStatementOption(0))
 					if err != nil {
 						return err
@@ -267,17 +277,24 @@ func TestCallerOwnedTenantUpgradeRollsBackAndRetries(t *testing.T) {
 			}
 			require.True(t, didUpgrade, "a rolled-back migration must not publish completion to the CN cache")
 			require.Equal(t, final, observed[versionSQL])
-			require.NotEqual(t, oldDefinition, observed[definitionSQL], "the real v407 walker must replace the old view")
-			var version, definition string
+			var version string
 			require.NoError(t, sys.QueryRowContext(ctx, versionSQL).Scan(&version))
-			require.NoError(t, sys.QueryRowContext(ctx, definitionSQL).Scan(&definition))
 			if rollback {
 				require.Equal(t, "4.0.6", version)
-				require.Equal(t, oldDefinition, definition, "no migration operation may commit outside the caller transaction")
 			} else {
 				require.Equal(t, final, version)
-				require.NotEqual(t, oldDefinition, definition)
 			}
+			for _, query := range queries[1:] {
+				require.NotEqual(t, oldDefinitions[query], observed[query], "the caller transaction sees the migrated view")
+				var definition string
+				require.NoError(t, sys.QueryRowContext(ctx, query).Scan(&definition))
+				if rollback {
+					require.Equal(t, oldDefinitions[query], definition, "all view writes roll back with account progress")
+				} else {
+					require.Equal(t, observed[query], definition)
+				}
+			}
+
 		}
 	})
 }

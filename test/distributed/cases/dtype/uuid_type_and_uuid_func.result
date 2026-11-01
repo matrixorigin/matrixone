@@ -11,7 +11,7 @@ drop table if exists t1;
 create table t1 (a int default uuid());
 invalid input: invalid default value for column 'a'
 drop table t1;
-no such table uuid_type_and_uuid_func.t1
+Unknown table 'uuid_type_and_uuid_func.t1'
 drop table if exists t2;
 create table t2(a uuid primary key);
 desc t2;

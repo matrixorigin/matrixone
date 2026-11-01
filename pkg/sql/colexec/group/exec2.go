@@ -858,23 +858,45 @@ func dynamicGroupingAggregateGroups(
 	if marker == nil || marker.GetType().Oid != types.T_bool || offset < 0 || offset+len(groups) > marker.Length() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid dynamic grouping aggregate marker")
 	}
+	if len(groups) == 0 {
+		return groups, nil
+	}
 
-	hasSynthetic := false
-	for i := range groups {
-		row := offset + i
-		if marker.IsNull(uint64(row)) {
+	// Projection produces constant markers, while shuffle can materialize them.
+	// Avoid inspecting every row of the ordinary constant-false marker.
+	if marker.IsConst() {
+		if marker.IsConstNull() {
 			return nil, moerr.NewInvalidInputNoCtx("dynamic grouping aggregate marker cannot be NULL")
 		}
-		if vector.GetFixedAtNoTypeCheck[bool](marker, row) {
-			hasSynthetic = true
+		if !vector.GetFixedAtNoTypeCheck[bool](marker, 0) {
+			return groups, nil
+		}
+		for i := range groups {
+			scratch[i] = aggexec.GroupNotMatched
+		}
+		return scratch[:len(groups)], nil
+	}
+
+	// Validate the entire selected window before changing scratch. NULLs outside
+	// this mini-batch are checked when their own window is consumed.
+	if nulls := marker.GetNulls(); nulls.Any() {
+		for i := range groups {
+			if nulls.Contains(uint64(offset + i)) {
+				return nil, moerr.NewInvalidInputNoCtx("dynamic grouping aggregate marker cannot be NULL")
+			}
 		}
 	}
-	if !hasSynthetic {
+	markers := vector.MustFixedColNoTypeCheck[bool](marker)[offset : offset+len(groups)]
+	firstSynthetic := 0
+	for firstSynthetic < len(markers) && !markers[firstSynthetic] {
+		firstSynthetic++
+	}
+	if firstSynthetic == len(markers) {
 		return groups, nil
 	}
 	copy(scratch, groups)
-	for i := range groups {
-		if vector.GetFixedAtNoTypeCheck[bool](marker, offset+i) {
+	for i := firstSynthetic; i < len(markers); i++ {
+		if markers[i] {
 			scratch[i] = aggexec.GroupNotMatched
 		}
 	}
