@@ -228,6 +228,14 @@ func (w *CNS3Writer) AppendAllocation(bat *batch.Batch) int64 { return w.sinker.
 
 func (w *CNS3Writer) RetainedBitmapBytes() int64 { return w.sinker.RetainedBitmapBytes() }
 
+func (w *CNS3Writer) StagedSize() int64 { return int64(w.sinker.StagedSize()) }
+
+func (w *CNS3Writer) Flush(ctx context.Context) error { return w.sinker.Flush(ctx) }
+
+func (w *CNS3Writer) TakeCompletedStats() ([]objectio.ObjectStats, error) {
+	return w.sinker.TakeCompletedResults()
+}
+
 func (w *CNS3Writer) WriteBorrowedToFile(ctx context.Context, bat *batch.Batch, workspace *rscthrottler.WorkspaceLease) error {
 	return w.sinker.WriteBorrowedToFile(ctx, bat, workspace)
 }
@@ -252,7 +260,7 @@ func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch,
 		return w.blockInfoBat, nil
 	}
 
-	if err = ExpandObjectStatsToBatch(
+	if err := ExpandObjectStatsToBatch(
 		w.sinker.GetMPool(),
 		w.isTombstone,
 		w.blockInfoBat,

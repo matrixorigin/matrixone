@@ -527,13 +527,7 @@ func (sinker *Sinker) WriteBorrowedToFile(ctx context.Context, data *batch.Batch
 	if lease == nil {
 		return moerr.NewInternalErrorNoCtx("borrowed spill requires IO workspace")
 	}
-	var payload int64
-	schema := make([]types.Type, len(data.Vecs))
-	for i, v := range data.Vecs {
-		payload += v.WindowSize(0, data.RowCount())
-		schema[i] = *v.GetType()
-	}
-	need, err := IOEnvelope([][]types.Type{schema}, sinker.config.bufferBytes, payload)
+	need, uploadBytes, err := BatchIOEnvelope(data, sinker.config.bufferBytes)
 	if err != nil {
 		return err
 	}
@@ -541,19 +535,27 @@ func (sinker *Sinker) WriteBorrowedToFile(ctx context.Context, data *batch.Batch
 		return &rscthrottler.RequestTooLargeError{Requested: need, Maximum: lease.Capacity()}
 	}
 	ioMP := mpool.MustNew("sinker-borrowed-io")
-	defer mpool.DeleteMPool(ioMP)
+	defer func() { mpool.DeleteMPool(ioMP) }()
 	copy, err := data.Clone(ioMP, sinker.config.offHeap)
 	if err != nil {
 		return err
 	}
-	defer copy.Clean(ioMP)
+	defer func() {
+		if copy != nil {
+			copy.Clean(ioMP)
+		}
+	}()
 	if sinker.schema.sortKeyIdx >= 0 {
 		if err = mergeutil.SortColumnsByIndex(copy.Vecs, sinker.schema.sortKeyIdx, ioMP); err != nil {
 			return err
 		}
 	}
 	f := sinker.fSinker.factory(ioMP, sinker.fs)
-	defer f.Close()
+	defer func() {
+		if f != nil {
+			f.Close()
+		}
+	}()
 	if fs, ok := f.(*FSinkerImpl); ok {
 		fs.workspaceBytes = lease.Capacity()
 		fs.arenaBytes = warmArenaBytes(int64(copy.Size()), int64(len(copy.Vecs)))
@@ -570,6 +572,24 @@ func (sinker *Sinker) WriteBorrowedToFile(ctx context.Context, data *batch.Batch
 			return err
 		}
 		start = end
+	}
+	if sinker.pipe.enabled && sinker.workspace != nil {
+		// A borrowed caller already owns W. An additional upload owner is
+		// optional and must never queue behind another workspace request.
+		uploadLease, err := sinker.workspace.TryAcquireIO(ctx, uploadBytes)
+		if err != nil {
+			return err
+		}
+		if uploadLease != nil {
+			copy.Clean(ioMP)
+			copy = nil
+			sinker.initPipelineResult(ctx)
+			r := sinker.pipe.result
+			r.pending.Add(1)
+			job := &poolSyncJob{fSinker: f, result: r, workspace: uploadLease, ioMP: ioMP}
+			f, ioMP = nil, nil
+			return GetDefaultSinkPool().enqueueSync(job)
+		}
 	}
 	stats, err := f.Sync(ctx)
 	if err != nil {
@@ -674,6 +694,69 @@ func (sinker *Sinker) trySortInMemoryStaged(ctx context.Context) error {
 // parent context (e.g., ALTER TABLE's process context). If the parent
 // context is cancelled, all in-flight pipeline operations will be aborted.
 func (sinker *Sinker) pipelineSubmit(ctx context.Context, data []*batch.Batch) error {
+	return sinker.pipelineSubmitOwned(ctx, data, sinker.mp, nil)
+}
+
+func (sinker *Sinker) pipelineSubmitOwned(ctx context.Context, data []*batch.Batch, mp *mpool.MPool, lease *rscthrottler.WorkspaceLease) error {
+	sinker.initPipelineResult(ctx)
+	var bitmapBytes int64
+	var sourceReleased func()
+	if mp == sinker.mp {
+		for _, bat := range data {
+			bitmapBytes += batchBitmapAllocation(bat)
+		}
+		sinker.pipelineBitmapBytes.Add(bitmapBytes)
+		sourceReleased = func() {
+			sinker.pipelineBitmapBytes.Add(-bitmapBytes)
+			if sinker.retainedRelease != nil {
+				sinker.retainedRelease()
+			}
+		}
+	}
+	var ioMP *mpool.MPool
+	if lease != nil {
+		ioMP = mp
+	}
+	waitStart := time.Now()
+	job := &poolSinkJob{
+		data: data, factory: sinker.fSinker.factory, mp: mp, fs: sinker.fs,
+		result: sinker.pipe.result, lease: lease, ioMP: ioMP,
+		sourceReleased: sourceReleased,
+	}
+	if sinker.workspace != nil {
+		var payload int64
+		for _, b := range data {
+			payload += int64(b.Size())
+		}
+		unit := min(sinker.config.bufferBytes, max(1, payload))
+		need, err := IOEnvelope([][]types.Type{sinker.schema.attrTypes}, unit, payload)
+		if err != nil {
+			job.discard()
+			return err
+		}
+		job.uploadBytes, err = UploadEnvelope(sinker.schema.attrTypes, unit, payload)
+		if err != nil {
+			job.discard()
+			return err
+		}
+		if lease == nil {
+			job.lease, err = sinker.workspace.AcquireIO(ctx, need)
+			if err != nil {
+				job.discard()
+				return err
+			}
+			job.ioMP = mpool.MustNew("sink-pool-io")
+		} else if need > lease.Capacity() {
+			job.discard()
+			return &rscthrottler.RequestTooLargeError{Requested: need, Maximum: lease.Capacity()}
+		}
+	}
+	err := GetDefaultSinkPool().Submit(job)
+	atomic.AddInt64(&sinker.timing.waitNs, int64(time.Since(waitStart)))
+	return err
+}
+
+func (sinker *Sinker) initPipelineResult(ctx context.Context) {
 	if sinker.pipe.result == nil {
 		pctx, cancel := context.WithCancel(ctx)
 		sinker.pipe.result = &pipelineResult{
@@ -681,28 +764,6 @@ func (sinker *Sinker) pipelineSubmit(ctx context.Context, data []*batch.Batch) e
 			cancel: cancel,
 		}
 	}
-	waitStart := time.Now()
-	var bitmapBytes int64
-	for _, bat := range data {
-		bitmapBytes += batchBitmapAllocation(bat)
-	}
-	sinker.pipelineBitmapBytes.Add(bitmapBytes)
-	err := GetDefaultSinkPool().Submit(&poolSinkJob{
-		data:      data,
-		factory:   sinker.fSinker.factory,
-		mp:        sinker.mp,
-		fs:        sinker.fs,
-		result:    sinker.pipe.result,
-		workspace: sinker.workspace,
-		sourceReleased: func() {
-			sinker.pipelineBitmapBytes.Add(-bitmapBytes)
-			if sinker.retainedRelease != nil {
-				sinker.retainedRelease()
-			}
-		},
-	})
-	atomic.AddInt64(&sinker.timing.waitNs, int64(time.Since(waitStart)))
-	return err
 }
 
 // drainPipeline waits for all in-flight pipeline jobs to complete and returns
@@ -726,7 +787,12 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	var workspace *rscthrottler.WorkspaceLease
 	if sinker.workspace != nil {
 		var err error
-		workspace, err = sinker.workspace.AcquireIO(ctx, sinker.workspace.IOBytes())
+		payload := int64(sinker.staged.inMemorySize)
+		need, boundErr := IOEnvelope([][]types.Type{sinker.schema.attrTypes}, min(sinker.config.bufferBytes, max(1, payload)), payload)
+		if boundErr != nil {
+			return boundErr
+		}
+		workspace, err = sinker.workspace.AcquireIO(ctx, need)
 		if err != nil {
 			return err
 		}
@@ -773,7 +839,10 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 			return err
 		}
 
-		if sinker.pipe.enabled && sinker.workspace == nil {
+		if sinker.pipe.enabled {
+			if workspace != nil {
+				return sinker.trySpillMergeSortBounded(ctx, workspace)
+			}
 			err := sinker.trySpillMergeSortPipeline(ctx)
 			atomic.AddInt64(&sinker.timing.sortNs, int64(time.Since(sortStart)))
 			return err
@@ -824,6 +893,43 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	err := sinker.syncFileSinker(ctx, fSinker)
 	sinker.resetFileSinker()
 	return err
+}
+
+// Merge output remains under W when it crosses the async boundary. The job
+// already owns its complete encoding/upload peak and never waits for another W.
+func (sinker *Sinker) trySpillMergeSortBounded(ctx context.Context, workspace *rscthrottler.WorkspaceLease) (err error) {
+	mp := sinker.ioMP
+	var owned []*batch.Batch
+	newBuffer := func() *batch.Batch {
+		b := batch.NewWithSchema(sinker.config.offHeap, sinker.schema.attrs, sinker.schema.attrTypes)
+		owned = append(owned, b)
+		return b
+	}
+	defer func() {
+		for _, b := range owned {
+			b.Clean(mp)
+		}
+	}()
+	var data []*batch.Batch
+	buffer, err := mergeutil.MergeSortBatches(sinker.staged.inMemory, sinker.schema.sortKeyIdx, newBuffer(),
+		func(b *batch.Batch) (*batch.Batch, error) {
+			data = append(data, b)
+			return newBuffer(), nil
+		}, mp, sinker.putBackOneInMemory, sinker.config.bufferBytes)
+	if err != nil {
+		return err
+	}
+	if buffer != nil {
+		buffer.Clean(mp)
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	// The final empty buffer has already been retired. The submitted batches,
+	// private pool and workspace now share the pool job's destruction owner.
+	owned = nil
+	sinker.ioMP = nil
+	return sinker.pipelineSubmitOwned(ctx, data, mp, workspace.Transfer())
 }
 
 // syncFileSinker persists the file sinker's data. On error, the caller is
@@ -1257,6 +1363,45 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 	panic("not implemented")
 }
 
+// Flush submits the current object without waiting for previously submitted
+// uploads. Ordinary import writers spool completed metadata between objects.
+func (sinker *Sinker) Flush(ctx context.Context) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if sinker.pipe.result != nil {
+		if err := sinker.pipe.result.getError(); err != nil {
+			return err
+		}
+	}
+	if sinker.staged.inMemorySize > 0 {
+		return sinker.trySpill(ctx)
+	}
+	return nil
+}
+
+// TakeCompletedResults publishes only objects with successful Sync. Callers
+// must use Sync for all-merge/dedup results, which require the complete input.
+func (sinker *Sinker) TakeCompletedResults() ([]objectio.ObjectStats, error) {
+	if sinker.config.allMergeSorted || sinker.config.dedupAll {
+		return nil, moerr.NewInternalErrorNoCtx("partial results require independent objects")
+	}
+	if sinker.pipe.result != nil {
+		r := sinker.pipe.result
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.err != nil {
+			return nil, r.err
+		}
+		sinker.staged.persisted = append(sinker.staged.persisted, r.persisted...)
+		r.persisted = nil
+	}
+	stats := append(sinker.result.persisted, sinker.staged.persisted...)
+	sinker.result.persisted = nil
+	sinker.staged.persisted = nil
+	return stats, nil
+}
+
 func (sinker *Sinker) GetInMemoryThreshold() int {
 	return sinker.staged.memorySizeThreshold
 }
@@ -1291,6 +1436,9 @@ func (sinker *Sinker) StagedSize() int {
 func (sinker *Sinker) Close() error {
 	var drainErr error
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
+		if sinker.workspace != nil {
+			sinker.pipe.result.cancel()
+		}
 		drainErr = sinker.drainPipeline()
 	}
 	sinker.cleanupInMemoryStaged()
@@ -1331,6 +1479,9 @@ func (sinker *Sinker) Reset() {
 	// ensures the next Write/Sync cycle gets a fresh pipelineResult and
 	// doesn't inherit stale errors or persisted stats.
 	if sinker.pipe.result != nil {
+		if sinker.workspace != nil {
+			sinker.pipe.result.cancel()
+		}
 		sinker.drainPipeline()
 		sinker.pipe.result = nil
 	}

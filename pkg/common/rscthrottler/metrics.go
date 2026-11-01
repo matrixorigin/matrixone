@@ -25,6 +25,12 @@ func init() {
 		"retained_data": func() float64 { return float64(processMemoryCoordinator.dataReserved.Load()) },
 		"input_promise": func() float64 { return float64(processMemoryCoordinator.inputPromise.Load()) },
 		"io_promise":    func() float64 { return float64(processMemoryCoordinator.workspacePromise.Load()) },
+		"workspace_in_use": func() float64 {
+			c := processMemoryCoordinator
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			return float64(c.ioUsed)
+		},
 		"sample_rss": func() float64 {
 			c := processMemoryCoordinator
 			c.sampleMu.Lock()
@@ -63,10 +69,11 @@ func init() {
 			c := processMemoryCoordinator
 			c.mu.Lock()
 			defer c.mu.Unlock()
-			if c.ioBusy {
-				return 1
+			var owners int
+			for ticket := range c.tickets {
+				owners += ticket.ioRefs
 			}
-			return 0
+			return float64(owners - len(c.ioQueue))
 		},
 	} {
 		registry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Namespace: "mo", Subsystem: "memory_admission", Name: "tasks", Help: "Memory admission waiters and running IO workspace owners.", ConstLabels: prometheus.Labels{"kind": kind}}, read))
