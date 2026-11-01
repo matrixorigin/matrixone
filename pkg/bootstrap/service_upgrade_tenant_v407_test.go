@@ -75,38 +75,27 @@ func TestV407TaskCompletionAfterLastAccountCommit(t *testing.T) {
 	})
 }
 
-// A ready semantic version has no offset progress to replay. On the
-// integrated chain the final handle is 4.0.18, so the converged leg uses a
-// cluster READY at 4.0.18/1 with the account already at 4.0.18: the manual
-// path reads its route state, runs no migration SQL, and caches the account.
-// The frozen-4.0.7 staging pins the other reachable branch of the same
-// boundary: a CN at final 4.0.18 refuses a manual tenant upgrade while the
-// cluster still reports 4.0.7 as its latest version, because its own cluster
-// route has not been created yet. The final==4.0.7 arm inside
-// UpgradeOneTenant can no longer fire on this binary; the frozen offset-only
-// rejection now lives in the bootstrap guards.
-func TestManualV407ReadyAccountDoesNotReplay(t *testing.T) {
-	final := v4_0_7.Handler.Metadata()
-	for _, midRoll := range []bool{false, true} {
-		t.Run(fmt.Sprint(midRoll), func(t *testing.T) {
+// An account at the cluster's final version has no migration to replay. A
+// restarted CN must skip DDL rather than silently rebuilding existing objects
+// and grants - a matching offset. A differently stamped row is rejected before any DDL.
+func TestManualFinalReadyAccountDoesNotReplay(t *testing.T) {
+	for _, mismatch := range []bool{false, true} {
+		t.Run(fmt.Sprint(mismatch), func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
-				accountVersion := "4.0.18"
-				latest := versions.Version{Version: "4.0.18", VersionOffset: 1, State: versions.StateReady}
-				wantReads := 3
-				if midRoll {
-					accountVersion = final.Version
-					latest = versions.Version{Version: final.Version, VersionOffset: final.VersionOffset, State: versions.StateReady}
-					wantReads = 2
+				final := v4_0_7.Handler.Metadata()
+				offset := final.VersionOffset
+				if mismatch {
+					offset++
 				}
 				reads := 0
 				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 					reads++
 					switch {
 					case sql == "select create_version from mo_account where account_id = 7":
-						return newBootstrapStringResult(accountVersion), nil
+						return newBootstrapStringResult(final.Version), nil
 					case sql == versions.LatestVersionSQL:
-						return statisticsLatestVersionResult(t, latest, versions.StateReady), nil
-					case strings.Contains(sql, "from mo_upgrade") && !midRoll:
+						return statisticsLatestVersionResult(t, versions.Version{Version: final.Version, VersionOffset: offset}, versions.StateReady), nil
+					case strings.Contains(sql, "from mo_upgrade"):
 						return executor.Result{}, nil
 					default:
 						t.Fatalf("ready account must not run migrations: %s", sql)
@@ -116,16 +105,17 @@ func TestManualV407ReadyAccountDoesNotReplay(t *testing.T) {
 				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
 				t.Cleanup(s.stopper.Stop)
 				err := s.UpgradeOneTenant(t.Context(), 7)
-				if midRoll {
-					require.ErrorContains(t, err,
-						"tenant upgrade requires current cn version 4.0.18 to match cluster latest version 4.0.7")
+				if mismatch {
+					require.ErrorContains(t, err, "offset-only upgrades are not supported")
 					require.Empty(t, s.mu.tenants)
-				} else {
-					require.NoError(t, err)
-					require.True(t, s.mu.tenants[7])
-					require.NoError(t, s.UpgradeOneTenant(t.Context(), 7))
+					require.Equal(t, 2, reads)
+					return
 				}
-				require.Equal(t, wantReads, reads)
+				require.NoError(t, err)
+				require.True(t, s.mu.tenants[7])
+				require.Equal(t, 2, reads)
+				require.NoError(t, s.UpgradeOneTenant(t.Context(), 7))
+				require.Equal(t, 2, reads)
 			})
 		})
 	}

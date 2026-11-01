@@ -1,6 +1,6 @@
 # DELETE target name ownership
 
-Revision 1. Refs #29249. Reviewed baseline: `b4cd00ee34f1`.
+Revision 2. Refs #29249 and #31794. Original refactor baseline: `b4cd00ee34f1`.
 
 ## Problem and contract
 
@@ -14,11 +14,13 @@ This is maintenance consolidation; no new runtime failure or speedup is claimed.
 
 `pkg/sql/plan/dml_table_name.go` owns two pure operations:
 
-- `CollectDeleteSourceAliases(tableRefs)` collects explicit aliases into the existing
-  `map[string][2]string` representation. Values contain raw schema/object names.
-- `ResolveDMLTargetName(db, table, alias, aliases)` substitutes both names on an alias
-  hit and keeps the original target object as its binding alias. A miss preserves
-  all inputs, including an explicit schema and any existing binding alias.
+- `CollectDeleteSourceAliases(tableRefs)` collects visible source names into one
+  statement-local map. Values retain raw schema/object names and whether the name
+  is an explicit alias; the latter can override a qualified target.
+- `ResolveDMLTargetName(db, table, alias, aliases)` substitutes both names on a
+  source hit and keeps the target object as its binding alias. DELETE validation
+  first rejects mismatched qualified targets for implicit source names; explicit
+  aliases retain their qualified-target precedence. A miss preserves all inputs.
 
 The frontend already depends on planner. It consumes these name facts without
 catalog access. Both planners use the same collector and substitution. Remove
@@ -26,13 +28,16 @@ catalog access. Both planners use the same collector and substitution. Remove
 planner substitution blocks. Keep `sourceTableName`, which UPDATE still uses.
 
 Collection visits aliased tables and joins left-to-right, retaining last-entry-wins
-behavior. Unaliased tables and derived SELECTs contribute no aliases. The MySQL
-parser flattens parentheses around base-table references; its `ParenTableExpr`
-source wraps a derived SELECT. Do not add synthetic-AST compatibility modes.
+behavior. Unaliased tables contribute their visible table names; derived SELECTs
+and group aliases do not identify writable base tables. APPLY contributes only its
+left source. Parentheses retain the underlying source identity.
 
-CTE exclusion remains before substitution in each planner. An omitted source schema
-remains empty until the existing default-database fallback immediately before
-catalog Resolve. The statement default is stable across this pure operation;
+DELETE validates CTE and writable identity against the original source before
+catalog resolution. A same-named target alias cannot hide a writable source, while
+an actual CTE source cannot resolve to a same-named catalog table. Generic target
+resolution then receives no WITH; the SELECT still retains it. INSERT/UPDATE CTE
+handling is unchanged. An omitted source schema remains empty until the existing
+default-database fallback immediately before catalog Resolve. The statement default is stable across this pure operation;
 prepared/session/remap resolution stays with the existing compiler/frontend owners.
 Frontend classification copies the target value locally and never mutates the
 parsed/prepared AST. Unsupported target shapes retain its conservative verdict.
@@ -44,9 +49,10 @@ DELETE introduces no deferred check or catalog read. Temporary-table exemptions,
 transaction survival after rejection, user-origin procedure checks, sequence guards,
 unknown-table errors, and modern/legacy route selection keep their existing owners.
 
-For S source nodes, A aliases and T targets, work remains O(S + T), storage O(A).
-Each phase owns one short-lived map; no cache, shared state, worker, I/O, AST clone,
-new traversal, or additional catalog lookup is introduced. There is no persisted,
+For S source nodes, T targets and C CTE names, work is O(S + T + C), with
+statement-local storage O(S + C). Each consumer uses the same source map contract;
+DELETE adds a CTE set and a bounded target validation pass. No cache, shared state,
+worker, I/O, AST clone, per-row work, or additional catalog lookup is introduced. There is no persisted,
 wire, configuration or external API change, so no migration or fallback is needed.
 
 ## Alternatives and scope

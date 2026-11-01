@@ -59,6 +59,12 @@ func NewTestTmpFileService(name, rootPath string, gcInterval time.Duration) (*Tm
 	return buildTmpFileService(name, rootPath, gcInterval)
 }
 
+// RunGCForTest runs the registered application collectors without waiting for
+// the background ticker. Tests should use a long ticker interval for isolation.
+func (fs *TmpFileService) RunGCForTest(ctx context.Context) {
+	fs.gc(ctx)
+}
+
 func buildTmpFileService(name, rootPath string, gcInterval time.Duration) (*TmpFileService, error) {
 	var etlfs FileService
 	var err error

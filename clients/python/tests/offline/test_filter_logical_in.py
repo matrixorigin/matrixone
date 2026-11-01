@@ -105,7 +105,7 @@ class TestFilterLogicalIn:
         assert "SELECT" in sql1
         assert "FROM articles" in sql1
         assert (
-            "WHERE articles.id IN (SELECT id FROM articles WHERE MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE))"
+            "WHERE articles.id IN (SELECT id FROM articles WHERE MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE))"
             in sql1
         )
 
@@ -118,7 +118,7 @@ class TestFilterLogicalIn:
         sql2 = query2.to_sql()
 
         assert (
-            "WHERE articles.id IN (SELECT id FROM articles WHERE MATCH(title, content) AGAINST('+python programming -java' IN BOOLEAN MODE))"
+            "WHERE articles.id IN (SELECT id FROM articles WHERE MATCH(`title`, `content`) AGAINST('+python programming -java' IN BOOLEAN MODE))"
             in sql2
         )
 
@@ -167,7 +167,7 @@ class TestFilterLogicalIn:
 
         assert "WHERE articles.author = '张三'" in sql
         assert (
-            "AND articles.id IN (SELECT id FROM articles WHERE MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE))"
+            "AND articles.id IN (SELECT id FROM articles WHERE MATCH(`title`, `content`) AGAINST('+python' IN BOOLEAN MODE))"
             in sql
         )
         assert "AND created_at > '2023-01-01'" in sql

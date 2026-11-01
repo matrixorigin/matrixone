@@ -146,11 +146,10 @@ def create_query(query_type, client, columns, snapshot=None, transaction_wrapper
     if model is None:
         expressions = [item for item in projection if not isinstance(item, str)]
         sources = select(*expressions).get_final_froms() if expressions else []
-        if len(sources) == 1:
+        if sources:
             query._source_selectable = query._root_selectable = sources[0]
             query._table_name = getattr(sources[0], 'name', None)
-        elif len(sources) > 1:
-            raise ValueError('Ambiguous query sources; provide a model and explicit JOIN')
+            query._check_projection_sources = True
         else:
             for item in projection:
                 if isinstance(item, str) and '.' in item:
@@ -787,6 +786,7 @@ class BaseMatrixOneQuery:
         self._source_selectable = selectable_of(model_class)
         self._root_selectable = self._source_selectable
         self._joined_selectables = []
+        self._check_projection_sources = False
         self._having_conditions = []
         self._having_params = []
         self._order_by_columns = []
@@ -1198,11 +1198,23 @@ class BaseMatrixOneQuery:
         self._offset_count = count
         return self
 
+    def _validate_projection_sources(self):
+        if self._check_projection_sources:
+            from sqlalchemy.sql import select
+
+            expressions = [normalize_expression(col) for col in self._select_columns if not isinstance(col, str)]
+            sources = select(*expressions).get_final_froms() if expressions else []
+            admitted = [self._source_selectable] + self._joined_selectables
+            known = {id(source._deannotate()) for source in admitted if source is not None}
+            if any(id(source._deannotate()) not in known for source in sources):
+                raise ValueError('Ambiguous query sources; provide an explicit JOIN')
+
     @statement_compilation
     def _build_sql(self) -> tuple[str, List[Any]]:
         """Build SQL query using unified SQL builder"""
         from .sql_builder import MatrixOneSQLBuilder
 
+        self._validate_projection_sources()
         builder = MatrixOneSQLBuilder()
 
         # Build CTE clause if any CTEs are defined
@@ -1451,6 +1463,7 @@ class BaseMatrixOneQuery:
         """
         if self._snapshot_name:
             raise ValueError('Snapshot queries are read-only')
+        self._validate_projection_sources()
         _require_single_table_mutation(self._joins)
         self._check_mutation_source()
         if not self._update_set_columns:
@@ -1481,6 +1494,7 @@ class BaseMatrixOneQuery:
         """Build DELETE SQL query using unified SQL builder"""
         if self._snapshot_name:
             raise ValueError('Snapshot queries are read-only')
+        self._validate_projection_sources()
         _require_single_table_mutation(self._joins)
         self._check_mutation_source()
         from .sql_builder import build_delete_query

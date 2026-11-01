@@ -365,6 +365,7 @@ func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*
 func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, preparePlan *Plan) ([]*plan.ObjectRef, error) {
 	var tableNames []*tree.TableName
 	var schemas []*plan.ObjectRef
+	resolveTable := ctx.Resolve
 
 	addTableNames := func(names tree.TableNames) {
 		for _, name := range names {
@@ -436,6 +437,9 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			}
 		}
 	case *tree.RenameTable:
+		// Dependencies must use the same persisted namespace as buildRenameTable,
+		// including destinations that do not exist yet but have temporary aliases.
+		resolveTable = ctx.ResolveWithoutTemporaryAlias
 		for _, alterTable := range ddl.AlterTables {
 			tableNames = append(tableNames, alterTable.Table)
 			for _, option := range alterTable.Options {
@@ -505,7 +509,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			databaseName = ctx.DefaultDatabase()
 		}
 		name := string(tableName.ObjectName)
-		objRef, tableDef, err := ctx.Resolve(databaseName, name, nil)
+		objRef, tableDef, err := resolveTable(databaseName, name, nil)
 		if err != nil {
 			return nil, err
 		}

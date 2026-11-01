@@ -32,11 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-const (
-	defaultCDCTaskMaxRetryTimes = 10
-	defaultCDCTaskRetryInterval = int64(10 * time.Second)
-)
-
 type CDCUserInfo struct {
 	UserName    string
 	AccountId   uint32
@@ -336,48 +331,12 @@ func validateLosslessNoFullStartProtocol(ctx context.Context, protocolVersion in
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
-	executor := task.TaskCode_InitCdc
-	switch {
-	case cdc.UsesGenerationAwareProtocol(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcSourcePatternV1
-	case cdc.UsesSourcePatternProtocol(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcSourcePatternV1
-	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcLosslessStart
-	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcStableEpoch
-	}
-	return task.TaskMetadata{
-		ID:       opts.TaskId,
-		Executor: executor,
-		Options: task.TaskOptions{
-			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
-			RetryInterval: defaultCDCTaskRetryInterval,
-			DelayDuration: 0,
-			Concurrency:   0,
-		},
-	}
+	return cdc.BuildTaskMetadata(opts.TaskId, opts.ExtraOpts, opts.NoFull)
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskDetails() (details *task.Details, err error) {
-	details = &task.Details{
-		AccountID: opts.UserInfo.AccountId,
-		Account:   opts.UserInfo.AccountName,
-		Username:  opts.UserInfo.UserName,
-		Details: &task.Details_CreateCdc{
-			CreateCdc: &task.CreateCdcDetails{
-				TaskName: opts.TaskName,
-				TaskId:   opts.TaskId,
-				Accounts: []*task.Account{
-					{
-						Id:   uint64(opts.UserInfo.AccountId),
-						Name: opts.UserInfo.AccountName,
-					},
-				},
-			},
-		},
-	}
-	return
+	return cdc.BuildTaskDetails(opts.UserInfo.AccountId, opts.UserInfo.AccountName,
+		opts.UserInfo.UserName, opts.TaskName, opts.TaskId), nil
 }
 
 func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
@@ -480,10 +439,10 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
-	if !isValidFrequency(frequency) {
+	if !cdc.IsValidFrequency(frequency) {
 		return moerr.NewInternalErrorf(ctx, "invalid frequency: %s", frequency)
 	}
-	normalized := transformIntoHours(frequency)
+	normalized := cdc.FrequencyHours(frequency)
 	var patterTupples *cdc.PatternTuples
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, req.Tables,

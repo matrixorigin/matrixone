@@ -1021,3 +1021,61 @@ def test_show_accounts_uses_column_names_even_when_fields_move(asynchronous):
     assert selected.admin_name == 'admin' and selected.status == 'suspend'
     assert selected.comment == 'actual comment' and selected.suspended_time == '2026-01-01'
     assert selected.suspended_reason is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.parametrize('operation', ['create_user', 'list_users'])
+async def test_user_account_uses_show_column_metadata(asynchronous, operation):
+    from matrixone.client import ResultSet
+
+    account = ResultSet(['comments', 'account_name', 'admin_name'], [('description', 'tenant', 'admin')])
+
+    def execute(sql):
+        if sql.startswith('SHOW ACCOUNTS'):
+            return account
+        return ResultSet(['user_name'], [('alice',)])
+
+    from matrixone import Client, AsyncClient
+
+    client = AsyncClient() if asynchronous else Client()
+    client.execute = AsyncMock(side_effect=execute) if asynchronous else Mock(side_effect=execute)
+    manager = AsyncAccountManager(client) if asynchronous else AccountManager(client)
+    result = manager.create_user('alice', 'pw') if operation == 'create_user' else manager.list_users()
+    if asynchronous:
+        result = await result
+    user = result if operation == 'create_user' else result[0]
+    assert user.account == 'tenant'
+
+
+@pytest.mark.parametrize(
+    'columns,row,invalid',
+    [
+        (['account_name', 'admin_name', 'future_field'], ('tenant', 'admin', 'ignored'), False),
+        (['ACCOUNT_NAME', 'ADMIN_NAME'], ('tenant', 'admin'), False),
+        (['account_name', 'admin_name', 'ACCOUNT_NAME'], ('tenant', 'admin', 'duplicate'), True),
+        (['account_name', 'comments'], ('tenant', 'description'), True),
+    ],
+)
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.asyncio
+async def test_account_metadata_optional_and_invalid_shapes(columns, row, invalid, asynchronous):
+    from types import SimpleNamespace
+    from matrixone.client import ResultSet
+
+    result = ResultSet(columns, [row])
+    manager_type = AsyncAccountManager if asynchronous else AccountManager
+    client = SimpleNamespace(execute=AsyncMock(return_value=result) if asynchronous else Mock(return_value=result))
+    manager = manager_type(client)
+    if invalid:
+        from matrixone.exceptions import AccountError
+
+        with pytest.raises(AccountError, match='(?i)(column|metadata)'):
+            operation = manager.list_accounts()
+            if asynchronous:
+                await operation
+    else:
+        operation = manager.list_accounts()
+        accounts = await operation if asynchronous else operation
+        assert len(accounts) == 1 and accounts[0].name == 'tenant' and accounts[0].admin_name == 'admin'
+        assert accounts[0].comment is None and accounts[0].suspended_time is None

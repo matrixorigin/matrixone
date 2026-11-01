@@ -698,26 +698,6 @@ func hashBuildStatInt64(value uint64) int64 {
 	return int64(value)
 }
 
-// calculateBloomFilterProbability calculates the false positive rate for bloom filter
-// based on row count. Reference fuzzyfilter experience, choose different false positive rates
-// based on row count to balance memory usage and filtering accuracy.
-func calculateBloomFilterProbability(rowCount int) float64 {
-	switch {
-	case rowCount < 10_0001:
-		return 0.00001
-	case rowCount < 100_0001:
-		return 0.000003
-	case rowCount < 1000_0001:
-		return 0.000001
-	case rowCount < 1_0000_0001:
-		return 0.0000005
-	case rowCount < 10_0000_0001:
-		return 0.0000002
-	default:
-		return 0.0000001
-	}
-}
-
 func planExprType(expr *plan.Expr) (types.Type, bool) {
 	if expr == nil {
 		return types.Type{}, false

@@ -78,6 +78,21 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan()),
 			}
 			freezeResultMetadata(execCtx.runner)
+			// PERFORM persists every result batch through the saved-result
+			// writer without marking the statement published (resp_client
+			// writeClientBatch returns before the publication mark), so a
+			// tier-2 statement retry stays eligible after rows were
+			// retained. Arm the transition-time discard so the failed
+			// generation's blocks and accounting are dropped after
+			// quiescence and before the replay — the same attempt-output
+			// lifecycle the prepared-cursor arms (design §4 D; #30359
+			// review). The per-statement SessionInfo rebuild clears the
+			// hook at the next statement boundary.
+			if ses.proc != nil && ses.proc.Base != nil {
+				ses.proc.Base.SessionInfo.RetryDiscardOutput = func() error {
+					return abortPerformAttemptSavedResult(execCtx)
+				}
+			}
 			runBegin := time.Now()
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return

@@ -1356,6 +1356,30 @@ func TestDefaultDatabaseUsesCanonicalRemapPolicy(t *testing.T) {
 		reqCtx: ctx, ses: ses, remapDb: map[string]string{"srcuse27190": "dstuse27190"},
 	}
 	require.Equal(t, "dstuse27190", tcc.DefaultDatabase())
+
+	// Prepared binding restores the captured database after the session changes.
+	ses.SetDatabaseName("other")
+	tcc.SetDatabase("SrcUse27190")
+	require.Equal(t, "dstuse27190", tcc.DefaultDatabase())
+	// Mode 2 compares case-insensitively while preserving the mapped spelling.
+	ses.sesSysVars.Set("lower_case_table_names", int64(2))
+	tcc.execCtx.remapDb = map[string]string{"srcuse27190": "Destination"}
+	require.Equal(t, "Destination", tcc.DefaultDatabase())
+	// Mode 0 requires the exact source spelling and retains a miss unchanged.
+	ses.sesSysVars.Set("lower_case_table_names", int64(0))
+	tcc.execCtx.remapDb = map[string]string{"srcuse27190": "wrong-case"}
+	require.Equal(t, "SrcUse27190", tcc.DefaultDatabase())
+	tcc.execCtx.remapDb["SrcUse27190"] = "exact"
+	require.Equal(t, "exact", tcc.DefaultDatabase())
+	// A missing session uses mode 1, and a present empty value remains a hit.
+	tcc.execCtx.ses = nil
+	tcc.execCtx.remapDb = map[string]string{"srcuse27190": ""}
+	require.Equal(t, "", tcc.DefaultDatabase())
+	tcc.SetDatabase("")
+	tcc.execCtx.remapDb = map[string]string{"": "empty-key-target"}
+	require.Equal(t, "empty-key-target", tcc.DefaultDatabase())
+	tcc.execCtx = nil
+	require.Equal(t, "", tcc.DefaultDatabase())
 }
 
 func TestValidateRewriteRuleSQL(t *testing.T) {

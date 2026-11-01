@@ -32,7 +32,9 @@ const (
 	FJ_CommitWait    = "fj/commit/wait"
 	// FJ_CommitWaitTargetTenant restricts FJ_CommitWait to one tenant in
 	// multi-tenant lifecycle tests. Without this selector, FJ_CommitWait keeps
-	// its original process-wide behavior.
+	// its original process-wide behavior. CommitWaitInjected reads the
+	// selector as configuration inside its atomic trigger; the point's own
+	// action never runs.
 	FJ_CommitWaitTargetTenant = "fj/commit/wait-target-tenant"
 	// FJ_CommitWaitTargetTxn restricts the barrier to one transaction, including
 	// when other transactions from the same tenant finish asynchronously.
@@ -457,14 +459,17 @@ func PrintFlushEntryInjected() (string, bool) {
 	return sarg, injected
 }
 
+// CommitWaitInjected reports the scoped commit barrier for the accepted
+// tenant and transaction. Selector matching and consumption of the barrier's
+// trigger count run in one faultMap operation: a commit admitted before the
+// selectors and the barrier were installed can neither consume the barrier
+// nor wait on it unless the installed selectors match.
 func CommitWaitInjected(tenantID uint32, txnID string) (string, bool) {
-	if target, _, selected := fault.TriggerFault(FJ_CommitWaitTargetTenant); selected && uint32(target) != tenantID {
-		return "", false
-	}
-	if _, target, selected := fault.TriggerFault(FJ_CommitWaitTargetTxn); selected && target != txnID {
-		return "", false
-	}
-	_, sarg, injected := fault.TriggerFault(FJ_CommitWait)
+	_, sarg, injected := fault.TriggerFaultScoped(
+		FJ_CommitWait,
+		fault.IntSelector(FJ_CommitWaitTargetTenant, int64(tenantID)),
+		fault.StringSelector(FJ_CommitWaitTargetTxn, txnID),
+	)
 	return sarg, injected
 }
 

@@ -120,7 +120,6 @@ func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	require.True(t, setTypeHasEmptyMember(ambiguousSet))
 	require.False(t, setTypeHasEmptyMember(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(&plan.Type{Id: int32(types.T_varchar)}))
-	require.Equal(t, equalFoldKey("K"), equalFoldKey("K"))
 	require.True(t, mysqlSpecialOrderTypesCompatible(enum, DeepCopyType(enum)))
 	require.False(t, mysqlSpecialOrderTypesCompatible(enum, set))
 	require.Error(t, newNonReversibleMySQLSpecialOrderError(context.Background()))

@@ -170,6 +170,10 @@ const (
 	// HY000) contract for DROP on a parent table: a dedicated user error
 	// naming the referenced table, the constraint, and the child table.
 	ErrFkCannotDropParent uint16 = 20344
+	// ErrDropNonExistsTable preserves MySQL's ER_BAD_TABLE_ERROR contract
+	// (1051, "Unknown table") when DROP TABLE targets an absent table,
+	// keeping ErrNoSuchTable (1146) for query/DML lookups.
+	ErrDropNonExistsTable uint16 = 20345
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -583,6 +587,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrLogServiceNotReady:                       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "log service not ready"},
 	ErrBadDB:                                    {ER_BAD_DB_ERROR, []string{"42000"}, "Unknown database %s"},
 	ErrNoSuchTable:                              {ER_NO_SUCH_TABLE, []string{"42S02"}, "no such table %s.%s"},
+	ErrDropNonExistsTable:                       {ER_BAD_TABLE_ERROR, []string{"42S02"}, "Unknown table '%-.129s'"},
 	ErrNoSuchSequence:                           {ER_NO_SUCH_TABLE, []string{"42S02"}, "no such sequence %s.%s"},
 	ErrEmptyVector:                              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "empty vector"},
 	ErrFileNotFound:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "file %s is not found"},
@@ -1478,6 +1483,14 @@ func NewNoSuchTablef(ctx context.Context, format string, args ...any) *Error {
 	err := NewNoSuchTable(ctx, "", "")
 	err.message = fmt.Sprintf(format, args...)
 	return err
+}
+
+// NewErrDropNonExistsTable reports DROP TABLE on an absent table with
+// MySQL's ER_BAD_TABLE_ERROR contract (1051, "Unknown table"), keeping
+// ErrNoSuchTable for query/DML lookups.
+func NewErrDropNonExistsTable(ctx context.Context, db, tbl string) *Error {
+	noReportCtx := errutil.ContextWithNoReport(ctx, true)
+	return newError(noReportCtx, ErrDropNonExistsTable, db+"."+tbl)
 }
 
 func NewNoSuchSequence(ctx context.Context, db, tbl string) *Error {

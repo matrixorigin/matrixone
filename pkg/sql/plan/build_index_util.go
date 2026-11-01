@@ -110,65 +110,40 @@ func newAlterColumnUniqueIndex(tableDef *TableDef, column *tree.ColumnTableDef) 
 	return index
 }
 
-// setEmptyUniqueIndexName Set name for unique index constraint whose effective
-// name (explicit index name or constraint symbol) is empty
+// setEmptyIndexConstraintName assigns a collision-free name using the first
+// key column. Explicit names and indexes without key parts are left alone.
+func setEmptyIndexConstraintName(namesMap map[string]bool, name *string, keyParts []*tree.KeyPart) {
+	if *name != "" || len(keyParts) == 0 {
+		return
+	}
+	colName := keyParts[0].ColName.ColName()
+	constrName := colName
+	i := 2
+	if IndexNamesEqual(constrName, "PRIMARY") {
+		constrName = fmt.Sprintf("%s_%d", constrName, 2)
+		i = 3
+	}
+	for namesMap[indexNameKey(constrName)] {
+		constrName = fmt.Sprintf("%s_%d", colName, i)
+		i++
+	}
+	*name = constrName
+	namesMap[indexNameKey(constrName)] = true
+}
+
 func setEmptyUniqueIndexName(namesMap map[string]bool, indexConstr *tree.UniqueIndex) {
-	if len(indexConstr.GetIndexName()) == 0 && len(indexConstr.KeyParts) > 0 {
-		colName := indexConstr.KeyParts[0].ColName.ColName()
-		constrName := colName
-		i := 2
-		if IndexNamesEqual(constrName, "PRIMARY") {
-			constrName = fmt.Sprintf("%s_%d", constrName, 2)
-			i = 3
-		}
-		for namesMap[indexNameKey(constrName)] {
-			// loop forever until we find constrName that haven't been used.
-			constrName = fmt.Sprintf("%s_%d", colName, i)
-			i++
-		}
-		indexConstr.Name = constrName
-		namesMap[indexNameKey(constrName)] = true
+	if indexConstr.GetIndexName() != "" {
+		return
 	}
+	setEmptyIndexConstraintName(namesMap, &indexConstr.Name, indexConstr.KeyParts)
 }
 
-// setEmptyIndexName Set name for index constraint with an empty name
 func setEmptyIndexName(namesMap map[string]bool, indexConstr *tree.Index) {
-	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		colName := indexConstr.KeyParts[0].ColName.ColName()
-		constrName := colName
-		i := 2
-		if IndexNamesEqual(constrName, "PRIMARY") {
-			constrName = fmt.Sprintf("%s_%d", constrName, 2)
-			i = 3
-		}
-		for namesMap[indexNameKey(constrName)] {
-			//  loop forever until we find constrName that haven't been used.
-			constrName = fmt.Sprintf("%s_%d", colName, i)
-			i++
-		}
-		indexConstr.Name = constrName
-		namesMap[indexNameKey(constrName)] = true
-	}
+	setEmptyIndexConstraintName(namesMap, &indexConstr.Name, indexConstr.KeyParts)
 }
 
-// setEmptyFullTextIndexName Set name for index constraint with an empty name
 func setEmptyFullTextIndexName(namesMap map[string]bool, indexConstr *tree.FullTextIndex) {
-	if indexConstr.Name == "" && len(indexConstr.KeyParts) > 0 {
-		colName := indexConstr.KeyParts[0].ColName.ColName()
-		constrName := colName
-		i := 2
-		if IndexNamesEqual(constrName, "PRIMARY") {
-			constrName = fmt.Sprintf("%s_%d", constrName, 2)
-			i = 3
-		}
-		for namesMap[indexNameKey(constrName)] {
-			//  loop forever until we find constrName that haven't been used.
-			constrName = fmt.Sprintf("%s_%d", colName, i)
-			i++
-		}
-		indexConstr.Name = constrName
-		namesMap[indexNameKey(constrName)] = true
-	}
+	setEmptyIndexConstraintName(namesMap, &indexConstr.Name, indexConstr.KeyParts)
 }
 
 // TODO

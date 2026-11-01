@@ -134,7 +134,7 @@ def _build_csv_export_sql(
     query_sql = _query_to_sql(query)
 
     # Build the export SQL
-    sql_parts = [query_sql, "INTO OUTFILE", sql_string_token(output_path)]
+    sql_parts = [query_sql, "INTO OUTFILE", sql_string_token(output_path), "FORMAT 'csv'"]
 
     # Add CSV options
     options = []
@@ -277,6 +277,8 @@ class ExportManager:
         Note:
             - For local paths, the MatrixOne server must have write permissions
             - For stage paths, use format: 'stage://stage_name/filename.csv'
+            - Recognized non-CSV suffixes are rejected by the server; other suffixes use CSV.
+            - Requires server support for explicit OUTFILE FORMAT, also used by to_jsonl().
             - sep and quotechar can be used together
             - path/sep/quotechar/lineterminator must not contain NUL or backslashes; use actual tabs for TSV
             - header=True is not yet supported by MatrixOne
@@ -393,6 +395,8 @@ class ExportManager:
         Note:
             - The stage must exist before calling this method
             - Use client.stage.create_s3() or client.stage.create_local() to create stages
+            - Recognized non-CSV suffixes are rejected by the server; other suffixes use CSV.
+            - Requires server support for explicit OUTFILE FORMAT, also used by to_jsonl().
             - sep and quotechar can be used together
         """
         # Build stage path

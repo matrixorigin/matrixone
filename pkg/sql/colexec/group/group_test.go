@@ -5815,3 +5815,84 @@ func TestJSONMinMaxFinalGroupPhysicalSpillReload(t *testing.T) {
 	require.Len(t, seen, 64)
 	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows, "final group must physically spill")
 }
+
+// TestGroupJointGroupingFlagsPreserveStorageTruthOnActiveArms pins the D6
+// joint activation contract at the operator seam (review repair, finding 1):
+// the rollup replacement nulls every flag-false group-by vector, so an arm
+// whose visible display key is active but whose hidden storage sibling is
+// flag-false loses the storage truth on EVERY active group. The planner side
+// must therefore activate both slots together; this test records the operator
+// consequence of each flag shape: joint activation keeps both key vectors
+// real, an inactive arm nulls both, and a display-only activation nulls the
+// storage sibling (the pre-fix symptom the planner repair removes).
+func TestGroupJointGroupingFlagsPreserveStorageTruthOnActiveArms(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		flags           []bool
+		wantRows        int
+		wantStorageKept bool
+	}{
+		{name: "joint active display and storage keep truth", flags: []bool{true, true}, wantRows: 3, wantStorageKept: true},
+		{name: "inactive arm nulls both key vectors", flags: []bool{false, false}, wantRows: 1, wantStorageKept: false},
+		{name: "display-only activation nulls the storage sibling", flags: []bool{true, false}, wantRows: 2, wantStorageKept: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeVarcharVector([]string{"a", "a", "b"}, nil, proc.Mp())
+			input.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 2}, nil, proc.Mp())
+			input.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
+			input.SetRowCount(3)
+
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			partial := newGroupOp(proc, []*plan.Expr{
+				colExpr(0, types.T_varchar), colExpr(1, types.T_int32),
+			}, []aggexec.AggFuncExecExpression{sumAgg(2)})
+			partial.NeedEval = false
+			partial.GroupingFlag = tc.flags
+			partial.AppendChild(child)
+			require.NoError(t, partial.Prepare(proc))
+			partialOutputs := collectBatches(t, partial, proc)
+			partials := make([]*batch.Batch, len(partialOutputs))
+			for i := range partialOutputs {
+				partials[i] = cloneBatch(t, proc, partialOutputs[i])
+			}
+
+			partial.Free(proc, false, nil)
+			child.Free(proc, false, nil)
+
+			mergeChild := colexec.NewMockOperator().WithBatchs(partials)
+			merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{sumAgg(2)})
+			merge.GroupingAware = true
+			merge.AppendChild(mergeChild)
+			require.NoError(t, merge.Prepare(proc))
+			outputs := collectBatches(t, merge, proc)
+
+			rows := 0
+			storageNulls := 0
+			for _, output := range outputs {
+				rows += output.RowCount()
+				wrapper := vector.GenerateFunctionFixedTypeParameter[int32](output.Vecs[1])
+				for row := uint64(0); row < uint64(output.RowCount()); row++ {
+					_, isNull := wrapper.GetValue(row)
+					if isNull {
+						storageNulls++
+					}
+				}
+			}
+			require.Equal(t, tc.wantRows, rows)
+			if tc.wantStorageKept {
+				require.Zero(t, storageNulls,
+					"an activated arm keeps the storage sibling's truth on every group")
+			} else {
+				require.Equal(t, rows, storageNulls,
+					"every flag-false storage slot is a rollup NULL on every arm")
+			}
+
+			merge.Free(proc, false, nil)
+			mergeChild.Free(proc, false, nil)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
