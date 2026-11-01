@@ -168,6 +168,9 @@ func (r *ZonemapReader) needRead(ctx context.Context, proc *process.Process) boo
 func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *process.Process, bat *batch.Batch) error {
 	var tmpBat *batch.Batch
 	var vecTmp *vector.Vector
+	// Only vectors allocated here belong to this reader. Loaded block vectors
+	// remain owned by tmpBat and are released with the loaded batch.
+	var ownedVec *vector.Vector
 	var release func()
 	mp := proc.Mp()
 	param := r.param
@@ -176,15 +179,11 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 	defer func() {
 		span.End()
 		if tmpBat != nil {
-			for i, v := range tmpBat.Vecs {
-				if v == vecTmp {
-					tmpBat.Vecs[i] = nil
-				}
-			}
 			tmpBat.Clean(mp)
 		}
-		if vecTmp != nil {
-			vecTmp.Free(mp)
+		// Retain cleanup ownership if allocation, SetBytesAt or Union fails.
+		if ownedVec != nil {
+			ownedVec.Free(mp)
 		}
 		if release != nil {
 			release()
@@ -228,6 +227,7 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 			if err != nil {
 				return err
 			}
+			ownedVec = vecTmp
 			for j := 0; j < rows; j++ {
 				nulls.Add(vecTmp.GetNulls(), uint64(j))
 			}
@@ -239,6 +239,7 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 			if err != nil {
 				return err
 			}
+			ownedVec = vecTmp
 			for j := 0; j < rows; j++ {
 				if err = vector.SetBytesAt(vecTmp, j, filepathBytes, mp); err != nil {
 					return err
@@ -259,6 +260,12 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 
 		if err = bat.Vecs[i].Union(vecTmp, sels, proc.GetMPool()); err != nil {
 			return err
+		}
+		// Union has copied the rows into bat, so this allocation no longer
+		// needs to stay live through subsequent projected columns.
+		if ownedVec != nil {
+			ownedVec.Free(mp)
+			ownedVec = nil
 		}
 	}
 
