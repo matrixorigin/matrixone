@@ -5938,6 +5938,11 @@ func TestGroupDecimalAggregateArgumentFusion(t *testing.T) {
 	require.IsType(t, &colexec.FixedVectorExpressionExecutor{}, g.ctr.aggArgEvaluate[1].Executor[0])
 	results := collectBatches(t, g, proc)
 	require.Len(t, results, 1)
-	require.Equal(t, "515.0000", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0].Vecs[0], 0).Format(4))
+	// SUM uses its existing Decimal256 carrier; the fused argument remains Decimal128.
+	require.Equal(t, types.T_decimal128, g.ctr.aggArgEvaluate[0].Typ[0].Oid)
+	sumResult := results[0].Vecs[0]
+	require.Equal(t, types.T_decimal256, sumResult.GetType().Oid)
+	require.Equal(t, int32(4), sumResult.GetType().Scale)
+	require.Equal(t, "515.0000", vector.GetFixedAtWithTypeCheck[types.Decimal256](sumResult, 0).Format(4))
 	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](results[0].Vecs[1], 0))
 }
