@@ -4470,6 +4470,7 @@ func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
 		jsonValue  string
 		paramValue string
 		paramNull  bool
+		paramKind  vector.PrepareParamKind
 		want       bool
 		wantNull   bool
 		wantErr    bool
@@ -4479,7 +4480,14 @@ func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
 		{name: "maximum uint64", op: "<", jsonOnLeft: true, jsonValue: "18446744073709551614", paramValue: "18446744073709551615", want: true},
 		{name: "precise decimals", op: "<", jsonOnLeft: true, jsonValue: "0.123456789123456788", paramValue: "0.123456789123456789", want: true},
 		{name: "null parameter", op: "<", jsonOnLeft: true, jsonValue: "1", paramNull: true, wantNull: true},
-		{name: "invalid string parameter", op: "<", jsonOnLeft: true, jsonValue: "1", paramValue: "not-json", wantErr: true},
+		// A character parameter is a JSON string scalar (issue #31121): MySQL
+		// 8.0.44 returns cast('1' as json) < 'not-json' as 1 without any parse
+		// error, because numbers rank below strings; the receipt for this row
+		// is review-artifacts/r18-oracle-mysql-adapter.out.
+		{name: "text parameter is a JSON string scalar", op: "<", jsonOnLeft: true, jsonValue: "1", paramValue: "not-json", want: true},
+		// Parse errors belong to the numeric parameter category, whose payload
+		// must still decode exactly.
+		{name: "integer parameter payload must parse", op: "<", jsonOnLeft: true, jsonValue: "1", paramValue: "not-json", paramKind: vector.PrepareParamInteger, wantErr: true},
 	}
 
 	for _, test := range tests {
@@ -4490,7 +4498,16 @@ func TestJsonOrderingWithTextPrepareParamExact(t *testing.T) {
 			previous := proc.DetachPrepareParams()
 			t.Cleanup(func() { proc.RestorePrepareParams(previous) })
 			require.NoError(t, vector.AppendBytes(params, []byte(test.paramValue), test.paramNull, proc.Mp()))
-			proc.SetPrepareParams(params)
+			// Prepared-parameter provenance reaches the executor through the
+			// process metadata that ParamExpressionExecutor copies onto its
+			// materialized vector; a kind set directly on the transport vector
+			// never becomes the parameter's own category.
+			if test.paramKind != vector.PrepareParamNone {
+				proc.SetPrepareParamsWithTypedMeta(
+					params, nil, []vector.PrepareParamKind{test.paramKind}, []types.T{types.T_int64})
+			} else {
+				proc.SetPrepareParams(params)
+			}
 			paramExpr := bindTestFunction(t, proc, function.JsonOrderingParamFunctionName,
 				&plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}})
 			jsonExpr := &plan.Expr{

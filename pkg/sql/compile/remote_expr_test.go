@@ -1544,6 +1544,9 @@ func TestFoldRemoteJSONVariablePreservesTypeAndBinding(t *testing.T) {
 		{"string", `"true"`, `"true"`},
 		{"boolean", `true`, `true`},
 		{"number", `12.34`, `12.34`},
+		// Issue #31121 keeps the fractional marker on integral-valued JSON
+		// DOUBLE values so display and text round trip reparse as DOUBLE, like
+		// MySQL's "1.0" rendering, instead of collapsing to INTEGER "1".
 		{"nested_float", `{"a":[1.0,18446744073709551615]}`, `{"a": [1.0, 18446744073709551615]}`},
 		{"json_null", `null`, `null`},
 		{"sql_null", nil, ""},

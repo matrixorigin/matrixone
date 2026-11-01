@@ -1,0 +1,600 @@
+drop database if exists func_json_scalar_semantics_31121_db;
+create database func_json_scalar_semantics_31121_db;
+use func_json_scalar_semantics_31121_db;
+drop table if exists sc33;
+create table sc33 (id int primary key, d json);
+insert into sc33 values (1,'null'),(2,'3'),(3,'"str"'),(4,'true'),(5,'false'),(6,'-1'),(7,'0.5');
+select id from sc33 where d > '1' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5
+select id from sc33 where d < '1' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+6  𝄀
+7
+select id from sc33 where d >= '1' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5
+select id from sc33 where d <= '1' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+6  𝄀
+7
+select id from sc33 where '1' < d order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5
+select id from sc33 where '1' >= d order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+6  𝄀
+7
+select id from sc33 where d > 'null' order by id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5
+select id from sc33 where d > 'true' order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5
+select id from sc33 where d = '3' order by id;
+➤ id[4,32,0]
+select id from sc33 where d = '"str"' order by id;
+➤ id[4,32,0]
+select id from sc33 where '3' = d order by id;
+➤ id[4,32,0]
+select id from sc33 where d <=> '3' order by id;
+➤ id[4,32,0]
+select id from sc33 where d != '3' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7
+drop table if exists sc23;
+create table sc23 (id int primary key, d json);
+insert into sc23 values (1,'"3"'),(2,'3');
+select id from sc23 where d = '3' order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from sc23 where d = '"3"' order by id;
+➤ id[4,32,0]
+select id from sc23 where d > '0' order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from sc23 where '2' < d order by id;
+➤ id[4,32,0]  𝄀
+1
+select json_extract('"a"', '$') < json_extract('"b"', '$') as sa_lt_sb,
+json_extract('"b"', '$') > json_extract('"a"', '$') as sb_gt_sa,
+json_extract('"a"', '$') > json_extract('"b"', '$') as sa_gt_sb;
+➤ sa_lt_sb[-6,8,0]  ¦  sb_gt_sa[-6,8,0]  ¦  sa_gt_sb[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+select id, d > '1' as gt, d = '3' as eq, d <=> '3' as nse from sc33 order by id;
+➤ id[4,32,0]  ¦  gt[-6,8,0]  ¦  eq[-6,8,0]  ¦  nse[-6,8,0]  𝄀
+1  ¦  0  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  0  ¦  0  𝄀
+3  ¦  1  ¦  0  ¦  0  𝄀
+4  ¦  1  ¦  0  ¦  0  𝄀
+5  ¦  1  ¦  0  ¦  0  𝄀
+6  ¦  0  ¦  0  ¦  0  𝄀
+7  ¦  0  ¦  0  ¦  0
+select id, '1' < d as rev_lt from sc33 order by id;
+➤ id[4,32,0]  ¦  rev_lt[-6,8,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  1  𝄀
+4  ¦  1  𝄀
+5  ¦  1  𝄀
+6  ¦  0  𝄀
+7  ¦  0
+prepare pe33 from 'select id from sc23 where d = ? order by id';
+set @a33 = '3';
+execute pe33 using @a33;
+➤ id[4,32,0]  𝄀
+1
+set @a33 = '"3"';
+execute pe33 using @a33;
+➤ id[4,32,0]
+set @a33 = 'x';
+execute pe33 using @a33;
+➤ id[4,32,0]
+deallocate prepare pe33;
+prepare po33 from 'select id from sc33 where d > ? order by id';
+set @o33 = '1';
+execute po33 using @o33;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5
+set @o33 = 'null';
+execute po33 using @o33;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5
+set @o33 = '{"X":1}';
+execute po33 using @o33;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5
+deallocate prepare po33;
+drop table if exists tj33;
+create table tj33 (id int primary key, doc json);
+insert into tj33 values (1,'{"a":null}'),(2,'{"a":0}'),(3,'{"a":1}'),(4,'{}'),(5,null);
+select id, json_extract(doc,'$.a') is null as sql_null,
+json_extract(doc,'$.a') < 1 as lt_one,
+json_extract(doc,'$.a') = 1 as eq_one,
+json_extract(doc,'$.a') <=> 1 as nse_one
+from tj33 order by id;
+➤ id[4,32,0]  ¦  sql_null[-6,8,0]  ¦  lt_one[-6,8,0]  ¦  eq_one[-6,8,0]  ¦  nse_one[-6,8,0]  𝄀
+1  ¦  0  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  1  ¦  0  ¦  0  𝄀
+3  ¦  0  ¦  0  ¦  1  ¦  1  𝄀
+4  ¦  1  ¦  null  ¦  null  ¦  0  𝄀
+5  ¦  1  ¦  null  ¦  null  ¦  0
+select id from tj33 where json_extract(doc,'$.a') < 1 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from tj33 where json_extract(doc,'$.a') > 0 order by id;
+➤ id[4,32,0]  𝄀
+3
+select id from tj33 where json_extract(doc,'$.a') > null order by id;
+➤ id[4,32,0]
+select id from tj33 where 1 > json_extract(doc,'$.a') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select cast('null' as json) = 1 as n_eq_num,
+cast('null' as json) < 1 as n_lt_num,
+cast('null' as json) > 1 as n_gt_num,
+cast('null' as json) <=> 1 as n_nse_num;
+➤ n_eq_num[-6,8,0]  ¦  n_lt_num[-6,8,0]  ¦  n_gt_num[-6,8,0]  ¦  n_nse_num[-6,8,0]  𝄀
+0  ¦  1  ¦  0  ¦  0
+select cast('null' as json) <=> cast('null' as json) as n_nse_n;
+➤ n_nse_n[-6,8,0]  𝄀
+1
+prepare pj33 from 'select id, json_extract(doc, ''$.a'') < ? as lt from tj33 order by id';
+set @n33 = 1;
+execute pj33 using @n33;
+➤ id[4,32,0]  ¦  lt[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  0  𝄀
+4  ¦  null  𝄀
+5  ¦  null
+set @n33 = null;
+execute pj33 using @n33;
+➤ id[4,32,0]  ¦  lt[-6,8,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null  𝄀
+5  ¦  null
+deallocate prepare pj33;
+select cast('null' as json) = false as n_eq_bool,
+cast('null' as json) <=> false as n_nse_bool;
+➤ n_eq_bool[-6,8,0]  ¦  n_nse_bool[-6,8,0]  𝄀
+0  ¦  0
+select cast('null' as json) < true as n_lt_true,
+cast('null' as json) <= true as n_le_true,
+cast('null' as json) > true as n_gt_true,
+cast('null' as json) >= true as n_ge_true,
+cast('null' as json) < false as n_lt_false,
+cast('null' as json) > false as n_gt_false;
+➤ n_lt_true[-6,8,0]  ¦  n_le_true[-6,8,0]  ¦  n_gt_true[-6,8,0]  ¦  n_ge_true[-6,8,0]  ¦  n_lt_false[-6,8,0]  ¦  n_gt_false[-6,8,0]  𝄀
+1  ¦  1  ¦  0  ¦  0  ¦  1  ¦  0
+select true > cast('null' as json) as true_gt_n,
+true >= cast('null' as json) as true_ge_n,
+false > cast('null' as json) as false_gt_n;
+➤ true_gt_n[-6,8,0]  ¦  true_ge_n[-6,8,0]  ¦  false_gt_n[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+select cast('true' as json) < true as t_lt_true,
+cast('true' as json) >= true as t_ge_true,
+cast('false' as json) <= true as f_le_true,
+true <= cast('false' as json) as true_le_f;
+➤ t_lt_true[-6,8,0]  ¦  t_ge_true[-6,8,0]  ¦  f_le_true[-6,8,0]  ¦  true_le_f[-6,8,0]  𝄀
+0  ¦  1  ¦  1  ¦  0
+select cast('true' as json) = true as t_eq_true,
+cast('true' as json) <=> true as t_nse_true,
+cast('false' as json) = true as f_eq_true,
+cast('false' as json) <=> true as f_nse_true;
+➤ t_eq_true[-6,8,0]  ¦  t_nse_true[-6,8,0]  ¦  f_eq_true[-6,8,0]  ¦  f_nse_true[-6,8,0]  𝄀
+1  ¦  1  ¦  0  ¦  0
+drop table if exists vals33;
+create table vals33 (id int primary key, j json);
+insert into vals33 values (1,'null'),(2,'true'),(3,'false'),(4,null);
+select id, JSON_EXTRACT(j,'$') < true as lt_true,
+JSON_EXTRACT(j,'$') = true as eq_true,
+JSON_EXTRACT(j,'$') <=> true as nse_true
+from vals33 order by id;
+➤ id[4,32,0]  ¦  lt_true[-6,8,0]  ¦  eq_true[-6,8,0]  ¦  nse_true[-6,8,0]  𝄀
+1  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  1  ¦  1  𝄀
+3  ¦  1  ¦  0  ¦  0  𝄀
+4  ¦  null  ¦  null  ¦  0
+select id from vals33 where JSON_EXTRACT(j,'$') < true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select id from vals33 where true > JSON_EXTRACT(j,'$') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3
+select JSON_EXTRACT('null','$') <=> JSON_EXTRACT('null','$') as n_nse_n,
+JSON_EXTRACT('null','$') <=> null as n_nse_sqlnull,
+null <=> null as null_nse;
+➤ n_nse_n[-6,8,0]  ¦  n_nse_sqlnull[-6,8,0]  ¦  null_nse[-6,8,0]  𝄀
+1  ¦  0  ¦  1
+prepare pb33 from 'select cast(''null'' as json) < ? as lt_bool';
+set @b33 = true;
+execute pb33 using @b33;
+➤ lt_bool[-6,8,0]  𝄀
+1
+set @b33 = null;
+execute pb33 using @b33;
+➤ lt_bool[-6,8,0]  𝄀
+null
+deallocate prepare pb33;
+select cast('"x"' as json) < true as sx_lt_true,
+cast('"true"' as json) < true as strtrue_lt_true,
+cast('{}' as json) < true as obj_lt_true,
+cast('[1,2]' as json) < true as arr_lt_true;
+➤ sx_lt_true[-6,8,0]  ¦  strtrue_lt_true[-6,8,0]  ¦  obj_lt_true[-6,8,0]  ¦  arr_lt_true[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+select cast('"x"' as json) > true as sx_gt_true,
+cast('"x"' as json) = true as sx_eq_true,
+cast('"x"' as json) <=> true as sx_nse_true,
+cast('"x"' as json) != true as sx_ne_true;
+➤ sx_gt_true[-6,8,0]  ¦  sx_eq_true[-6,8,0]  ¦  sx_nse_true[-6,8,0]  ¦  sx_ne_true[-6,8,0]  𝄀
+0  ¦  0  ¦  0  ¦  1
+select cast('"x"' as json) < false as sx_lt_false,
+cast('{}' as json) < false as obj_lt_false,
+true > cast('"x"' as json) as true_gt_sx,
+true >= cast('"true"' as json) as true_ge_strtrue,
+false > cast('[1,2]' as json) as false_gt_arr;
+➤ sx_lt_false[-6,8,0]  ¦  obj_lt_false[-6,8,0]  ¦  true_gt_sx[-6,8,0]  ¦  true_ge_strtrue[-6,8,0]  ¦  false_gt_arr[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+select cast('1.20' as json) = true as num_eq_true,
+cast('2' as json) < true as num_lt_true,
+cast('0' as json) = false as zero_eq_false,
+cast('2' as json) > false as num_gt_false;
+➤ num_eq_true[-6,8,0]  ¦  num_lt_true[-6,8,0]  ¦  zero_eq_false[-6,8,0]  ¦  num_gt_false[-6,8,0]  𝄀
+1  ¦  0  ¦  1  ¦  1
+drop table if exists vals33;
+select json_type(cast('1.0' as json)) as before_type,
+cast(cast('1.0' as json) as char) as exported_text,
+json_type(cast(cast(cast('1.0' as json) as char) as json)) as after_type;
+➤ before_type[12,65535,0]  ¦  exported_text[12,65535,0]  ¦  after_type[12,65535,0]  𝄀
+DOUBLE  ¦  1.0  ¦  DOUBLE
+select cast('1.0' as json) as d10, cast('-0.0' as json) as dneg0,
+cast('0.0' as json) as dzero, cast('1.000' as json) as dtrailing,
+cast('1.5e-7' as json) as dtiny;
+➤ d10[-1,2147483647,0]  ¦  dneg0[-1,2147483647,0]  ¦  dzero[-1,2147483647,0]  ¦  dtrailing[-1,2147483647,0]  ¦  dtiny[-1,2147483647,0]  𝄀
+1.0  ¦  -0.0  ¦  0.0  ¦  1.0  ¦  0.00000015
+drop table if exists dbl33;
+create table dbl33 (id int primary key, doc json not null);
+insert into dbl33 values (1,'1.0'),(2,'1.000'),(3,'1.5'),(4,'1'),(5,'{"a":1.0,"b":2.5,"c":3}'),(6,'-0.0');
+select id, json_type(doc) as jt, doc from dbl33 order by id;
+➤ id[4,32,0]  ¦  jt[12,65535,0]  ¦  doc[-1,2147483647,0]  𝄀
+1  ¦  DOUBLE  ¦  1.0  𝄀
+2  ¦  DOUBLE  ¦  1.0  𝄀
+3  ¦  DOUBLE  ¦  1.5  𝄀
+4  ¦  INTEGER  ¦  1  𝄀
+5  ¦  OBJECT  ¦  {"a": 1.0, "b": 2.5, "c": 3}  𝄀
+6  ¦  DOUBLE  ¦  -0.0
+select id, json_pretty(doc) from dbl33 order by id;
+➤ id[4,32,0]  ¦  json_pretty(doc)[12,65535,0]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0  𝄀
+3  ¦  1.5  𝄀
+4  ¦  1  𝄀
+5  ¦  {
+  "a": 1.0,
+  "b": 2.5,
+  "c": 3
+}  𝄀
+6  ¦  -0.0
+drop table if exists dbl33_out;
+create table dbl33_out as select id, doc, json_pretty(doc) as pretty from dbl33;
+select id, json_type(doc) as jt, doc, pretty, json_type(pretty) as pretty_type from dbl33_out order by id;
+➤ id[4,32,0]  ¦  jt[12,65535,0]  ¦  doc[-1,2147483647,0]  ¦  pretty[12,65535,0]  ¦  pretty_type[12,65535,0]  𝄀
+1  ¦  DOUBLE  ¦  1.0  ¦  1.0  ¦  DOUBLE  𝄀
+2  ¦  DOUBLE  ¦  1.0  ¦  1.0  ¦  DOUBLE  𝄀
+3  ¦  DOUBLE  ¦  1.5  ¦  1.5  ¦  DOUBLE  𝄀
+4  ¦  INTEGER  ¦  1  ¦  1  ¦  INTEGER  𝄀
+5  ¦  OBJECT  ¦  {"a": 1.0, "b": 2.5, "c": 3}  ¦  {
+  "a": 1.0,
+  "b": 2.5,
+  "c": 3
+}  ¦  OBJECT  𝄀
+6  ¦  DOUBLE  ¦  -0.0  ¦  -0.0  ¦  DOUBLE
+drop table if exists src33;
+drop table if exists dst33;
+create table src33 (id int primary key, v json);
+create table dst33 (id int primary key, v json);
+insert into src33 values (1,'"2"'),(2,'"a b"'),(3,'null'),(4,'{"x":1}'),(5,'123'),(6,'1.0');
+select id, v, cast(v as char) as casted, coalesce(v,'fallback') as coa from src33 order by id;
+➤ id[4,32,0]  ¦  v[-1,2147483647,0]  ¦  casted[12,65535,0]  ¦  coa[-1,16383,0]  𝄀
+1  ¦  "2"  ¦  "2"  ¦  "2"  𝄀
+2  ¦  "a b"  ¦  "a b"  ¦  "a b"  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  {"x": 1}  ¦  {"x": 1}  ¦  {"x": 1}  𝄀
+5  ¦  123  ¦  123  ¦  123  𝄀
+6  ¦  1.0  ¦  1.0  ¦  1.0
+insert into src33 values (7,null);
+select id, coalesce(v,'fallback') as coa from src33 where id = 7;
+➤ id[4,32,0]  ¦  coa[-1,16383,0]  𝄀
+7  ¦  fallback
+insert into dst33 select id, coalesce(v,'fallback') from src33 where id <> 7;
+select id, json_type(v) as jt, v from dst33 order by id;
+➤ id[4,32,0]  ¦  jt[12,65535,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  STRING  ¦  "2"  𝄀
+2  ¦  STRING  ¦  "a b"  𝄀
+3  ¦  NULL  ¦  null  𝄀
+4  ¦  OBJECT  ¦  {"x": 1}  𝄀
+5  ¦  INTEGER  ¦  123  𝄀
+6  ¦  DOUBLE  ¦  1.0
+delete from dst33;
+insert into dst33 select id, coalesce(v,cast('"fallback"' as json)) from src33 where id <> 7;
+select id, json_type(v) as jt, v from dst33 order by id;
+➤ id[4,32,0]  ¦  jt[12,65535,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  STRING  ¦  "2"  𝄀
+2  ¦  STRING  ¦  "a b"  𝄀
+3  ¦  NULL  ¦  null  𝄀
+4  ¦  OBJECT  ¦  {"x": 1}  𝄀
+5  ¦  INTEGER  ¦  123  𝄀
+6  ¦  DOUBLE  ¦  1.0
+delete from dst33;
+prepare pc33 from 'insert into dst33 select id, coalesce(v, ?) from src33 where id <> 7';
+set @c33 = 'fallback';
+execute pc33 using @c33;
+select id, json_type(v) as jt, v from dst33 order by id;
+➤ id[4,32,0]  ¦  jt[12,65535,0]  ¦  v[-1,2147483647,0]  𝄀
+1  ¦  STRING  ¦  "2"  𝄀
+2  ¦  STRING  ¦  "a b"  𝄀
+3  ¦  NULL  ¦  null  𝄀
+4  ¦  OBJECT  ¦  {"x": 1}  𝄀
+5  ¦  INTEGER  ¦  123  𝄀
+6  ¦  DOUBLE  ¦  1.0
+deallocate prepare pc33;
+drop table if exists src33;
+drop table if exists dst33;
+drop table if exists sc33;
+drop table if exists sc23;
+drop table if exists tj33;
+drop table if exists dbl33;
+drop table if exists dbl33_out;
+create table jja33 (i int primary key, j json);
+insert into jja33 values (1,'"three"'),(2,'3'),(3,'"3"'),(4,'{"a":1}'),(5,'[1,2]');
+create table jjb33 (i int primary key, s varchar(32));
+insert into jjb33 values (1,'three'),(2,'3'),(3,'{"a":1}'),(4,'other');
+select a.i as ai, b.i as bi from jja33 a join jjb33 b on a.i = b.i and a.j = b.s order by a.i;
+➤ ai[4,32,0]  ¦  bi[4,32,0]  𝄀
+1  ¦  1
+select a.i as ai, b.i as bi from jja33 a join jjb33 b on b.i = a.i and b.s = a.j order by a.i;
+➤ ai[4,32,0]  ¦  bi[4,32,0]  𝄀
+1  ¦  1
+select a.i as ai, b.i as bi from jja33 a join jjb33 b on a.j = b.s order by a.i, b.i;
+➤ ai[4,32,0]  ¦  bi[4,32,0]  𝄀
+1  ¦  1  𝄀
+3  ¦  2
+select a.i as ai, b.i as bi from jja33 a join jjb33 b on b.s = a.j order by a.i, b.i;
+➤ ai[4,32,0]  ¦  bi[4,32,0]  𝄀
+1  ¦  1  𝄀
+3  ¦  2
+select a.i as ai, b.i as bi from jja33 a left join jjb33 b on a.j = b.s order by a.i, b.i;
+➤ ai[4,32,0]  ¦  bi[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  2  𝄀
+4  ¦  null  𝄀
+5  ¦  null
+create table bin33 (id int primary key, d json, bl blob, vb varbinary(16), bx binary(16));
+insert into bin33 values (1,'"3"','3','3','3'),(2,'3','3','3','3'),(3,'true','true','true','true'),(4,'{}','{}','{}','{}');
+select id from bin33 where d = cast('3' as binary) order by id;
+invalid argument operator =, bad value [JSON BINARY]
+select id from bin33 where cast('3' as binary) = d order by id;
+invalid argument operator =, bad value [BINARY JSON]
+select id from bin33 where d = cast('3' as varbinary) order by id;
+invalid argument operator =, bad value [JSON VARBINARY]
+select id from bin33 where cast('3' as varbinary) = d order by id;
+invalid argument operator =, bad value [VARBINARY JSON]
+select id from bin33 where d = bl order by id;
+invalid argument operator =, bad value [JSON BLOB]
+select id from bin33 where bl = d order by id;
+invalid argument operator =, bad value [BLOB JSON]
+select id from bin33 where d = vb order by id;
+invalid argument operator =, bad value [JSON VARBINARY]
+select id from bin33 where vb = d order by id;
+invalid argument operator =, bad value [VARBINARY JSON]
+select id from bin33 where d = bx order by id;
+invalid argument operator =, bad value [JSON BINARY]
+select id from bin33 where bx = d order by id;
+invalid argument operator =, bad value [BINARY JSON]
+select id from bin33 where d <=> cast('3' as binary) order by id;
+invalid argument operator <=>, bad value [JSON BINARY]
+select id from bin33 where d != cast('3' as binary) order by id;
+invalid argument operator <>, bad value [JSON BINARY]
+select id from bin33 where d > cast('1' as binary) order by id;
+invalid argument operator >, bad value [JSON BINARY]
+select id from bin33 where cast('1' as binary) < d order by id;
+invalid argument operator <, bad value [BINARY JSON]
+select id from bin33 where d >= cast('1' as varbinary) order by id;
+invalid argument operator >=, bad value [JSON VARBINARY]
+select id from bin33 where cast('1' as varbinary) <= d order by id;
+invalid argument operator <=, bad value [VARBINARY JSON]
+select id from bin33 where d > bl order by id;
+invalid argument operator >, bad value [JSON BLOB]
+select id from bin33 where bl < d order by id;
+invalid argument operator <, bad value [BLOB JSON]
+select id from bin33 where d = '3' order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from bin33 where d > '1' order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+4
+select id from bin33 where '3' = d order by id;
+➤ id[4,32,0]  𝄀
+1
+drop table if exists bin33;
+create table pbo34 (id int primary key, d json);
+insert into pbo34 values (1,'"str"'),(2,'true'),(3,'false'),(4,'3'),(5,'0'),(6,'null'),(7,'0.5'),(8,'-2');
+select id from pbo34 where d < true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+5  𝄀
+6
+select id from pbo34 where d < false order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+6
+select id from pbo34 where d = true order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+4  𝄀
+7  𝄀
+8
+select id from pbo34 where d <= true order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8
+prepare plt34 from 'select id from pbo34 where d < ? order by id';
+set @b34 = true;
+execute plt34 using @b34;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+5  𝄀
+6
+set @b34 = false;
+execute plt34 using @b34;
+➤ id[4,32,0]  𝄀
+1  𝄀
+6
+deallocate prepare plt34;
+prepare ple34 from 'select id from pbo34 where d <= ? order by id';
+set @b34 = true;
+execute ple34 using @b34;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6  𝄀
+7  𝄀
+8
+deallocate prepare ple34;
+prepare pge34 from 'select id from pbo34 where d >= ? order by id';
+execute pge34 using @b34;
+➤ id[4,32,0]  𝄀
+2  𝄀
+4  𝄀
+7  𝄀
+8
+deallocate prepare pge34;
+prepare peq34 from 'select id from pbo34 where d = ? order by id';
+execute peq34 using @b34;
+➤ id[4,32,0]  𝄀
+2  𝄀
+4  𝄀
+7  𝄀
+8
+deallocate prepare peq34;
+prepare pneq34 from 'select id from pbo34 where d != ? order by id';
+execute pneq34 using @b34;
+➤ id[4,32,0]  𝄀
+1  𝄀
+3  𝄀
+5  𝄀
+6
+deallocate prepare pneq34;
+prepare prev34 from 'select id from pbo34 where ? > d order by id';
+set @b34 = false;
+execute prev34 using @b34;
+➤ id[4,32,0]  𝄀
+1  𝄀
+6
+deallocate prepare prev34;
+prepare pnull34 from 'select id from pbo34 where d = ? order by id';
+set @b34 = null;
+execute pnull34 using @b34;
+➤ id[4,32,0]
+deallocate prepare pnull34;
+prepare pnse34 from 'select id from pbo34 where d <=> ? order by id';
+execute pnse34 using @b34;
+➤ id[4,32,0]
+deallocate prepare pnse34;
+drop table if exists pbo34;
+create table pbin34 (id int primary key, d json);
+insert into pbin34 values (1,'"3"'),(2,'3'),(3,'true'),(4,'{}');
+prepare pbq34 from 'select id from pbin34 where d = ? order by id';
+set @bin34 = cast('3' as binary);
+execute pbq34 using @bin34;
+invalid argument operator =, bad value [JSON BINARY]
+set @bin34 = cast('3' as varbinary);
+execute pbq34 using @bin34;
+invalid argument operator =, bad value [JSON VARBINARY]
+set @bin34 = cast('3' as blob);
+execute pbq34 using @bin34;
+invalid argument operator =, bad value [JSON BLOB]
+deallocate prepare pbq34;
+prepare pbrq34 from 'select id from pbin34 where ? = d order by id';
+set @bin34 = cast('3' as binary);
+execute pbrq34 using @bin34;
+invalid argument operator =, bad value [JSON BINARY]
+deallocate prepare pbrq34;
+prepare pbne34 from 'select id from pbin34 where d != ? order by id';
+execute pbne34 using @bin34;
+invalid argument operator <>, bad value [JSON BINARY]
+deallocate prepare pbne34;
+prepare pbnse34 from 'select id from pbin34 where d <=> ? order by id';
+execute pbnse34 using @bin34;
+invalid argument operator <=>, bad value [JSON BINARY]
+deallocate prepare pbnse34;
+prepare pbolt34 from 'select id from pbin34 where d < ? order by id';
+execute pbolt34 using @bin34;
+invalid argument operator <, bad value [JSON BINARY]
+deallocate prepare pbolt34;
+prepare pborgt34 from 'select id from pbin34 where ? > d order by id';
+execute pborgt34 using @bin34;
+invalid argument operator <, bad value [JSON BINARY]
+deallocate prepare pborgt34;
+prepare pbcq34 from 'select id from pbin34 where d = ? order by id';
+set @ch34 = '3';
+execute pbcq34 using @ch34;
+➤ id[4,32,0]  𝄀
+1
+deallocate prepare pbcq34;
+prepare pbnull34 from 'select id from pbin34 where d = ? order by id';
+set @bin34 = null;
+execute pbnull34 using @bin34;
+➤ id[4,32,0]
+deallocate prepare pbnull34;
+drop table if exists pbin34;
+drop table if exists jja33;
+drop table if exists jjb33;
+drop database if exists func_json_scalar_semantics_31121_db;

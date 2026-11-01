@@ -259,6 +259,7 @@ const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 11
 const tableDumpBindingLegacyFloatFormatting tableDumpBindingMode = 1 << 12
 const tableDumpBindingFrozenFloatDefaults tableDumpBindingMode = 1 << 13
 const tableDumpBindingPreJSONFolding tableDumpBindingMode = 1 << 14
+const tableDumpBindingPreJSONScalarSemantics tableDumpBindingMode = 1 << 18
 
 type tableDumpDefaultSession struct {
 	timeZone, locale, folded     bool
@@ -268,6 +269,97 @@ type tableDumpDefaultSession struct {
 	captureUnfolded              bool
 	floatFormatting              bool
 	opaqueJSONFolding            bool
+	scalarJSONSemantics          bool
+}
+
+// tableDumpJSONScalarSemanticExpr reports whether a bound expression tree
+// contains a shape whose folded value the #31121 change set re-categorized: a
+// mixed JSON/string or JSON/BOOL comparison, a mixed JSON/numeric comparison
+// (earlier servers folded a JSON literal null as SQL NULL), or a COALESCE
+// that keeps a JSON branch alive under a character-typed result. This is a
+// dump-verifier classification of bound shapes only; it is not a remote
+// protocol feature and takes no part in worker negotiation.
+func tableDumpJSONScalarSemanticExpr(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	found := false
+	_ = planpb.VisitExprTree(expr, func(current *planpb.Expr) error {
+		if found {
+			return nil
+		}
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil
+		}
+		switch int32(fn.Func.Obj >> 32) {
+		case function.EQUAL, function.NOT_EQUAL,
+			function.GREAT_THAN, function.GREAT_EQUAL,
+			function.LESS_THAN, function.LESS_EQUAL,
+			function.NULL_SAFE_EQUAL:
+			if len(fn.Args) != 2 {
+				return nil
+			}
+			left, right := types.T(fn.Args[0].Typ.Id), types.T(fn.Args[1].Typ.Id)
+			// A binary-string peer from any of its archived shapes must
+			// classify: it binds no longer in the current era, so only the
+			// persisted tree can report it. The historical comparison cast
+			// row coerced the pair into the JSON domain or a common
+			// character target, so the provenance hides inside the operands'
+			// casts.
+			found = function.IsJSONStringComparison(left, right) ||
+				function.IsJSONBooleanComparison(left, right) ||
+				function.IsJSONNumericComparison(left, right) ||
+				function.IsJSONBinaryStringComparisonNotSupported(left, right) ||
+				tableDumpJSONBinaryCoercedComparisonOperand(fn.Args[0]) ||
+				tableDumpJSONBinaryCoercedComparisonOperand(fn.Args[1])
+		case function.COALESCE:
+			switch types.T(current.Typ.Id) {
+			case types.T_char, types.T_varchar, types.T_text:
+				for _, arg := range fn.Args {
+					if arg != nil && types.T(arg.Typ.Id) == types.T_json {
+						found = true
+					}
+				}
+			}
+		}
+		return nil
+	})
+	return found
+}
+
+// tableDumpJSONBinaryCoercedComparisonOperand recognizes the persisted
+// shapes of a predecessor JSON/binary-string comparison. The historical
+// comparison cast row coerced the pair either into the JSON domain
+// (CAST(CAST(... AS BINARY) AS JSON), the BINARY and VARBINARY legs) or into
+// a common character target (CAST(CAST(... AS BLOB) AS VARCHAR), the BLOB
+// leg), so the binary provenance survives only inside the operand's cast.
+// The era kernel reproduces both rows exactly; every reverse and ordering
+// leg failed to bind in the predecessor too, so neither shape can appear in
+// an archive outside this comparison family. The unchecked character and
+// character literal legs bind in the current era; their operands carry no
+// cast from a binary domain, so the scan leaves them unclassified.
+func tableDumpJSONBinaryCoercedComparisonOperand(operand *planpb.Expr) bool {
+	if operand == nil {
+		return false
+	}
+	found := false
+	_ = planpb.VisitExprTree(operand, func(current *planpb.Expr) error {
+		if found {
+			return nil
+		}
+		cast := current.GetF()
+		if cast == nil || cast.Func == nil ||
+			int32(cast.Func.Obj>>32) != function.CAST || len(cast.Args) != 2 {
+			return nil
+		}
+		switch types.T(cast.Args[0].Typ.Id) {
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			found = true
+		}
+		return nil
+	})
+	return found
 }
 
 // Inspect the unfolded source: folding removes the registry and width witness.
@@ -438,7 +530,7 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreJSONScalarSemantics | tableDumpBindingPreTimeNullability)
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
 	}
@@ -477,6 +569,14 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	proc := ctx.GetProcess()
 	if proc == nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
+	}
+	if mode&tableDumpBindingPreJSONScalarSemantics != 0 {
+		// Constant folding executes with proc.Ctx. This process is private to
+		// origin verification; restore its context before the next candidate.
+		bindCtx = function.WithLegacyJSONScalarSemantics(bindCtx)
+		previous := proc.Ctx
+		proc.Ctx = bindCtx
+		defer func() { proc.Ctx = previous }()
 	}
 	if mode&tableDumpBindingPreJSON != 0 {
 		// Constant folding executes with proc.Ctx. This process is private to
@@ -574,6 +674,9 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			if features, err := planpb.RequiredRemoteExpressionFeatures(assigned); err == nil {
 				session.opaqueJSONFolding = features.JSONOpaqueTextContracts
 			}
+			if tableDumpJSONScalarSemanticExpr(assigned) {
+				session.scalarJSONSemantics = true
+			}
 			tz, locale := tableDumpDefaultDependencies(source)
 			session.timeZone = session.timeZone || tz
 			session.locale = session.locale || locale
@@ -581,6 +684,14 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			session.floatFormatting = session.floatFormatting || hasFloatDefaultFormatting(source) || hasFloatDefaultFormatting(assigned)
 		})
 		if err != nil {
+			// A predecessor-era default can fail the current bind outright:
+			// for example, a persisted mixed JSON/binary-string pair rejects
+			// at comparison build before the observer above ever runs.
+			// Classify the archived tree itself so the era candidates still
+			// form; an exact match remains required for acceptance.
+			if tableDumpJSONScalarSemanticExpr(item.expr) {
+				session.scalarJSONSemantics = true
+			}
 			return nil, err
 		}
 		if (session.timeZone || session.locale) && !sameTableDumpBoundExpression(unfolded, bound.Expr) {
@@ -1168,6 +1279,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			}
 			floatCandidatesAdded := false
 			foldingCandidatesAdded := false
+			scalarJSONCandidatesAdded := false
 			// Give every cheap precision/era witness priority over a wrong
 			// precision's exhaustive session search. Retain flags, not trees.
 			var sessions []tableDumpSessionCandidate
@@ -1217,6 +1329,20 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 							modes = append(modes, era|tableDumpBindingPreJSONFolding)
 						}
 						foldingCandidatesAdded = true
+					}
+					if item.kind == "default" && dependency.scalarJSONSemantics && !scalarJSONCandidatesAdded {
+						// One complete pre-#31121 scalar-JSON era, composed with
+						// every earlier migration era, including the float
+						// formatting candidates the float block appends below.
+						// Complete eras only: a partial mix of old and new
+						// JSON kernels never verifies a real archive.
+						for _, era := range append([]tableDumpBindingMode(nil), eras...) {
+							eras = append(eras, era|tableDumpBindingPreJSONScalarSemantics)
+						}
+						for _, era := range append([]tableDumpBindingMode(nil), modes...) {
+							modes = append(modes, era|tableDumpBindingPreJSONScalarSemantics)
+						}
+						scalarJSONCandidatesAdded = true
 					}
 					if item.kind == "default" && dependency.floatFormatting && !floatCandidatesAdded {
 						// Inspect resolved pre-fold types, since a fully folded

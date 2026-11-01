@@ -1310,8 +1310,16 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 			continue
 		}
 		castTypes := make([]types.Type, len(inputs))
-		for j := range castTypes {
+		for j, input := range inputs {
 			castTypes[j] = target
+			// The JSON branches keep their JSON type so CoalesceStr serializes
+			// the selected document with CAST AS CHAR text semantics. An
+			// implicit JSON->text cast unquotes string scalars, and inserting
+			// that unquoted text into a JSON column silently changes the value
+			// type (issue #30934).
+			if input.Oid == types.T_json {
+				castTypes[j] = input
+			}
 		}
 		return newCheckResultWithCast(i, castTypes), true
 	}
@@ -1521,12 +1529,33 @@ func CoalesceStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	for i := range ivecs {
 		vecs[i] = vector.GenerateFunctionStrParameter(ivecs[i])
 	}
+	// A JSON branch selected here serializes as complete JSON text, matching
+	// MySQL's COALESCE result: the branch conversion is the CAST AS CHAR
+	// document form, so string scalars keep their quotes and an INSERT back
+	// into a JSON column preserves the scalar type. An unquoted payload text
+	// would silently change "2" to the number 2 after reparse (issue #30934).
+	// A JSON-typed result keeps the raw payload instead: the branch bytes are
+	// already the internal JSON encoding, and marshaling them there would
+	// store document text inside a JSON vector.
+	rawPayloadJSONResult := result.GetResultVector().GetType().Oid == types.T_json
+	jsonBranch := make([]bool, len(ivecs))
+	for j := range ivecs {
+		jsonBranch[j] = !rawPayloadJSONResult && ivecs[j].GetType().Oid == types.T_json
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		isFill := false
 		for j := range vecs {
 			v, null := vecs[j].GetStrValue(i)
 			if null {
 				continue
+			}
+			if jsonBranch[j] {
+				bj := types.DecodeJson(v)
+				text, textErr := bj.MarshalJSON()
+				if textErr != nil {
+					return textErr
+				}
+				v = text
 			}
 			if err = rs.AppendBytes(v, false); err != nil {
 				return err

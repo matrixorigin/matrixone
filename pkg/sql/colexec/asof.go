@@ -20,10 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-// HasMixedJSONNumericEquality identifies ASOF predicates whose eligibility
-// cannot be represented by ordinary equality hash keys. It must not be used
-// to admit these predicates as hash, shuffle or runtime-filter keys.
-func HasMixedJSONNumericEquality(exprs ...*plan.Expr) bool {
+// HasMixedJSONScalarEquality identifies ASOF predicates whose eligibility
+// cannot be represented by ordinary equality hash keys. The mixed domain
+// covers SQL numeric peers and the SQL character peers admitted by issue
+// #31121: JSON hashes through its canonical encoding while scalars hash as
+// their own physical values. It must not be used to admit these predicates
+// as hash, shuffle or runtime-filter keys.
+func HasMixedJSONScalarEquality(exprs ...*plan.Expr) bool {
 	for _, expr := range exprs {
 		f := expr.GetF()
 		if f == nil || f.Func == nil || len(f.Args) != 2 {
@@ -31,7 +34,7 @@ func HasMixedJSONNumericEquality(exprs ...*plan.Expr) bool {
 		}
 		id, _ := function.DecodeOverloadID(f.Func.Obj)
 		if id == function.AND {
-			if HasMixedJSONNumericEquality(f.Args...) {
+			if HasMixedJSONScalarEquality(f.Args...) {
 				return true
 			}
 			continue
@@ -39,7 +42,9 @@ func HasMixedJSONNumericEquality(exprs ...*plan.Expr) bool {
 		if id != function.EQUAL {
 			continue
 		}
-		if function.IsJSONNumericComparison(types.T(f.Args[0].Typ.Id), types.T(f.Args[1].Typ.Id)) {
+		if function.IsJSONNumericComparison(types.T(f.Args[0].Typ.Id), types.T(f.Args[1].Typ.Id)) ||
+			function.IsJSONStringComparison(types.T(f.Args[0].Typ.Id), types.T(f.Args[1].Typ.Id)) ||
+			function.IsJSONBooleanComparison(types.T(f.Args[0].Typ.Id), types.T(f.Args[1].Typ.Id)) {
 			return true
 		}
 		// A prepared adapter has JSON output but carries the SQL peer's runtime

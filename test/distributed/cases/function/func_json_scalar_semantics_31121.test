@@ -1,0 +1,347 @@
+-- JSON scalar comparison and text round-trip semantics retained from #30783
+-- (split follow-up #31121):
+--   1. JSON/string ordering and equality in both operand orders with the SQL
+--      string compared as a JSON string scalar, literal and prepared.
+--   2. JSON literal null ranked against numeric peers (#30770), with separate
+--      SQL NULL and missing-path controls.
+--   3. Integral-valued JSON DOUBLE text round trip (#30782).
+--   4. COALESCE JSON/text round trip (#30934).
+drop database if exists func_json_scalar_semantics_31121_db;
+create database func_json_scalar_semantics_31121_db;
+use func_json_scalar_semantics_31121_db;
+drop table if exists sc33;
+create table sc33 (id int primary key, d json);
+insert into sc33 values (1,'null'),(2,'3'),(3,'"str"'),(4,'true'),(5,'false'),(6,'-1'),(7,'0.5');
+-- literal ordering against SQL string, json on the left
+select id from sc33 where d > '1' order by id;
+select id from sc33 where d < '1' order by id;
+select id from sc33 where d >= '1' order by id;
+select id from sc33 where d <= '1' order by id;
+-- literal ordering against SQL string, json on the right
+select id from sc33 where '1' < d order by id;
+select id from sc33 where '1' >= d order by id;
+-- JSON null ranks below the string peer; booleans rank above strings
+select id from sc33 where d > 'null' order by id;
+select id from sc33 where d > 'true' order by id;
+-- equality keeps JSON types: a SQL string is a JSON string scalar
+select id from sc33 where d = '3' order by id;
+select id from sc33 where d = '"str"' order by id;
+select id from sc33 where '3' = d order by id;
+select id from sc33 where d <=> '3' order by id;
+select id from sc33 where d != '3' order by id;
+-- explicit JSON string/number controls side by side
+drop table if exists sc23;
+create table sc23 (id int primary key, d json);
+insert into sc23 values (1,'"3"'),(2,'3');
+select id from sc23 where d = '3' order by id;
+select id from sc23 where d = '"3"' order by id;
+select id from sc23 where d > '0' order by id;
+select id from sc23 where '2' < d order by id;
+-- JSON documents also order against each other by MySQL scalar precedence
+-- (retained contract; func_json_extract_order.sql pins the cross-category
+-- matrix). These rows must keep working and must never fall into the
+-- JSON/SQL-string rejection or the mixed cast domains.
+select json_extract('"a"', '$') < json_extract('"b"', '$') as sa_lt_sb,
+       json_extract('"b"', '$') > json_extract('"a"', '$') as sb_gt_sa,
+       json_extract('"a"', '$') > json_extract('"b"', '$') as sa_gt_sb;
+-- projection form keeps the same result as WHERE
+select id, d > '1' as gt, d = '3' as eq, d <=> '3' as nse from sc33 order by id;
+select id, '1' < d as rev_lt from sc33 order by id;
+-- prepared statement peers must agree with the literal forms
+prepare pe33 from 'select id from sc23 where d = ? order by id';
+set @a33 = '3';
+execute pe33 using @a33;
+set @a33 = '"3"';
+execute pe33 using @a33;
+set @a33 = 'x';
+execute pe33 using @a33;
+deallocate prepare pe33;
+prepare po33 from 'select id from sc33 where d > ? order by id';
+set @o33 = '1';
+execute po33 using @o33;
+set @o33 = 'null';
+execute po33 using @o33;
+set @o33 = '{"X":1}';
+execute po33 using @o33;
+deallocate prepare po33;
+-- JSON literal null versus numeric peers, SQL NULL and missing path kept apart
+drop table if exists tj33;
+create table tj33 (id int primary key, doc json);
+insert into tj33 values (1,'{"a":null}'),(2,'{"a":0}'),(3,'{"a":1}'),(4,'{}'),(5,null);
+select id, json_extract(doc,'$.a') is null as sql_null,
+       json_extract(doc,'$.a') < 1 as lt_one,
+       json_extract(doc,'$.a') = 1 as eq_one,
+       json_extract(doc,'$.a') <=> 1 as nse_one
+from tj33 order by id;
+select id from tj33 where json_extract(doc,'$.a') < 1 order by id;
+select id from tj33 where json_extract(doc,'$.a') > 0 order by id;
+select id from tj33 where json_extract(doc,'$.a') > null order by id;
+select id from tj33 where 1 > json_extract(doc,'$.a') order by id;
+select cast('null' as json) = 1 as n_eq_num,
+       cast('null' as json) < 1 as n_lt_num,
+       cast('null' as json) > 1 as n_gt_num,
+       cast('null' as json) <=> 1 as n_nse_num;
+select cast('null' as json) <=> cast('null' as json) as n_nse_n;
+prepare pj33 from 'select id, json_extract(doc, ''$.a'') < ? as lt from tj33 order by id';
+set @n33 = 1;
+execute pj33 using @n33;
+set @n33 = null;
+execute pj33 using @n33;
+deallocate prepare pj33;
+-- JSON null versus SQL boolean keeps the ranked contract for equality and
+-- ordering: the mixed JSON/BOOL pair evaluates in the JSON domain rather than
+-- casting the JSON operand to BOOL, which would fold a JSON literal null
+-- into SQL NULL before comparison.
+select cast('null' as json) = false as n_eq_bool,
+       cast('null' as json) <=> false as n_nse_bool;
+select cast('null' as json) < true as n_lt_true,
+       cast('null' as json) <= true as n_le_true,
+       cast('null' as json) > true as n_gt_true,
+       cast('null' as json) >= true as n_ge_true,
+       cast('null' as json) < false as n_lt_false,
+       cast('null' as json) > false as n_gt_false;
+select true > cast('null' as json) as true_gt_n,
+       true >= cast('null' as json) as true_ge_n,
+       false > cast('null' as json) as false_gt_n;
+select cast('true' as json) < true as t_lt_true,
+       cast('true' as json) >= true as t_ge_true,
+       cast('false' as json) <= true as f_le_true,
+       true <= cast('false' as json) as true_le_f;
+select cast('true' as json) = true as t_eq_true,
+       cast('true' as json) <=> true as t_nse_true,
+       cast('false' as json) = true as f_eq_true,
+       cast('false' as json) <=> true as f_nse_true;
+-- vector-level SQL NULL stays distinct from the JSON literal null, and the
+-- json/json null-safe control keeps its own identity.
+drop table if exists vals33;
+create table vals33 (id int primary key, j json);
+insert into vals33 values (1,'null'),(2,'true'),(3,'false'),(4,null);
+select id, JSON_EXTRACT(j,'$') < true as lt_true,
+       JSON_EXTRACT(j,'$') = true as eq_true,
+       JSON_EXTRACT(j,'$') <=> true as nse_true
+from vals33 order by id;
+select id from vals33 where JSON_EXTRACT(j,'$') < true order by id;
+select id from vals33 where true > JSON_EXTRACT(j,'$') order by id;
+select JSON_EXTRACT('null','$') <=> JSON_EXTRACT('null','$') as n_nse_n,
+       JSON_EXTRACT('null','$') <=> null as n_nse_sqlnull,
+       null <=> null as null_nse;
+-- a prepared boolean parameter keeps the same ranked ordering
+prepare pb33 from 'select cast(''null'' as json) < ? as lt_bool';
+set @b33 = true;
+execute pb33 using @b33;
+set @b33 = null;
+execute pb33 using @b33;
+deallocate prepare pb33;
+-- Mixed JSON/BOOL category rows keep the heterogeneous contract: strings,
+-- objects and arrays rank below the SQL boolean exactly like a JSON literal
+-- null (MySQL 8.0.44 receipts, review round 21: mysql-r21-bool-table.txt,
+-- mysql-r21-bool-category-cells.txt), so no row aborts through the
+-- pre-change boolean-text cast.
+select cast('"x"' as json) < true as sx_lt_true,
+       cast('"true"' as json) < true as strtrue_lt_true,
+       cast('{}' as json) < true as obj_lt_true,
+       cast('[1,2]' as json) < true as arr_lt_true;
+select cast('"x"' as json) > true as sx_gt_true,
+       cast('"x"' as json) = true as sx_eq_true,
+       cast('"x"' as json) <=> true as sx_nse_true,
+       cast('"x"' as json) != true as sx_ne_true;
+select cast('"x"' as json) < false as sx_lt_false,
+       cast('{}' as json) < false as obj_lt_false,
+       true > cast('"x"' as json) as true_gt_sx,
+       true >= cast('"true"' as json) as true_ge_strtrue,
+       false > cast('[1,2]' as json) as false_gt_arr;
+-- JSON numbers keep MO's pinned zero/nonzero fold (upstream rows
+-- cast(1.20 as decimal) = true and 1e100 = true in func_json_extract), and
+-- the ordering cells stay coherent with those pinned equality rows.
+select cast('1.20' as json) = true as num_eq_true,
+       cast('2' as json) < true as num_lt_true,
+       cast('0' as json) = false as zero_eq_false,
+       cast('2' as json) > false as num_gt_false;
+drop table if exists vals33;
+-- DOUBLE text round trip keeps the DOUBLE kind
+select json_type(cast('1.0' as json)) as before_type,
+       cast(cast('1.0' as json) as char) as exported_text,
+       json_type(cast(cast(cast('1.0' as json) as char) as json)) as after_type;
+-- Boundary control: the tiny-double row follows the MySQL 8.0.44 receipt
+-- (select cast('1.5e-7' as json) prints 0.00000015; see round-20 oracle
+-- receipts). The fractional-marker change keeps the DOUBLE kind and value;
+-- the text spelling itself belongs to the base serializer, which reached
+-- MySQL parity within this change set's tracked base.
+select cast('1.0' as json) as d10, cast('-0.0' as json) as dneg0,
+       cast('0.0' as json) as dzero, cast('1.000' as json) as dtrailing,
+       cast('1.5e-7' as json) as dtiny;
+drop table if exists dbl33;
+create table dbl33 (id int primary key, doc json not null);
+insert into dbl33 values (1,'1.0'),(2,'1.000'),(3,'1.5'),(4,'1'),(5,'{"a":1.0,"b":2.5,"c":3}'),(6,'-0.0');
+select id, json_type(doc) as jt, doc from dbl33 order by id;
+select id, json_pretty(doc) from dbl33 order by id;
+drop table if exists dbl33_out;
+create table dbl33_out as select id, doc, json_pretty(doc) as pretty from dbl33;
+select id, json_type(doc) as jt, doc, pretty, json_type(pretty) as pretty_type from dbl33_out order by id;
+-- COALESCE with a text fallback preserves the JSON document text
+drop table if exists src33;
+drop table if exists dst33;
+create table src33 (id int primary key, v json);
+create table dst33 (id int primary key, v json);
+insert into src33 values (1,'"2"'),(2,'"a b"'),(3,'null'),(4,'{"x":1}'),(5,'123'),(6,'1.0');
+select id, v, cast(v as char) as casted, coalesce(v,'fallback') as coa from src33 order by id;
+-- the SQL-NULL row selects the raw text fallback
+insert into src33 values (7,null);
+select id, coalesce(v,'fallback') as coa from src33 where id = 7;
+-- selected JSON branches round-trip through INSERT SELECT into JSON columns
+insert into dst33 select id, coalesce(v,'fallback') from src33 where id <> 7;
+select id, json_type(v) as jt, v from dst33 order by id;
+delete from dst33;
+insert into dst33 select id, coalesce(v,cast('"fallback"' as json)) from src33 where id <> 7;
+select id, json_type(v) as jt, v from dst33 order by id;
+delete from dst33;
+prepare pc33 from 'insert into dst33 select id, coalesce(v, ?) from src33 where id <> 7';
+set @c33 = 'fallback';
+execute pc33 using @c33;
+select id, json_type(v) as jt, v from dst33 order by id;
+deallocate prepare pc33;
+drop table if exists src33;
+drop table if exists dst33;
+drop table if exists sc33;
+drop table if exists sc23;
+drop table if exists tj33;
+drop table if exists dbl33;
+drop table if exists dbl33_out;
+-- join regressions (review round 18): a mixed JSON/string join equality is a
+-- typed residual and never a hash key over incompatible JSON/character domains,
+-- in both operand orders, with and without an additional valid hash key.
+create table jja33 (i int primary key, j json);
+insert into jja33 values (1,'"three"'),(2,'3'),(3,'"3"'),(4,'{"a":1}'),(5,'[1,2]');
+create table jjb33 (i int primary key, s varchar(32));
+insert into jjb33 values (1,'three'),(2,'3'),(3,'{"a":1}'),(4,'other');
+-- a separate valid key still hash-joins; the mixed equality only filters
+select a.i as ai, b.i as bi from jja33 a join jjb33 b on a.i = b.i and a.j = b.s order by a.i;
+select a.i as ai, b.i as bi from jja33 a join jjb33 b on b.i = a.i and b.s = a.j order by a.i;
+-- no valid key exists: the join runs on the residual equality alone
+select a.i as ai, b.i as bi from jja33 a join jjb33 b on a.j = b.s order by a.i, b.i;
+select a.i as ai, b.i as bi from jja33 a join jjb33 b on b.s = a.j order by a.i, b.i;
+select a.i as ai, b.i as bi from jja33 a left join jjb33 b on a.j = b.s order by a.i, b.i;
+-- JSON/binary-string boundary (round 23): BINARY, VARBINARY and BLOB are
+-- opaque byte domains, not JSON string scalars. Every ordering or equality
+-- comparison between a JSON operand and a binary-string peer rejects with
+-- the invalid-argument operator error in both operand orders, while the
+-- character peer in the same battery keeps the string-scalar identity.
+create table bin33 (id int primary key, d json, bl blob, vb varbinary(16), bx binary(16));
+insert into bin33 values (1,'"3"','3','3','3'),(2,'3','3','3','3'),(3,'true','true','true','true'),(4,'{}','{}','{}','{}');
+-- cast literal forms, both operand orders
+select id from bin33 where d = cast('3' as binary) order by id;
+select id from bin33 where cast('3' as binary) = d order by id;
+select id from bin33 where d = cast('3' as varbinary) order by id;
+select id from bin33 where cast('3' as varbinary) = d order by id;
+-- typed binary-string columns, both operand orders
+select id from bin33 where d = bl order by id;
+select id from bin33 where bl = d order by id;
+select id from bin33 where d = vb order by id;
+select id from bin33 where vb = d order by id;
+select id from bin33 where d = bx order by id;
+select id from bin33 where bx = d order by id;
+-- null-safe equal and not-equal reject like plain equality
+select id from bin33 where d <=> cast('3' as binary) order by id;
+select id from bin33 where d != cast('3' as binary) order by id;
+-- ordering, both directions and both operand orders
+select id from bin33 where d > cast('1' as binary) order by id;
+select id from bin33 where cast('1' as binary) < d order by id;
+select id from bin33 where d >= cast('1' as varbinary) order by id;
+select id from bin33 where cast('1' as varbinary) <= d order by id;
+select id from bin33 where d > bl order by id;
+select id from bin33 where bl < d order by id;
+-- the character peer keeps the direct JSON string-scalar identity
+select id from bin33 where d = '3' order by id;
+select id from bin33 where d > '1' order by id;
+select id from bin33 where '3' = d order by id;
+drop table if exists bin33;
+-- prepared boolean ordering parity (review round 24): a Boolean prepared
+-- parameter folds JSON numbers by zero/nonzero and ranks strings and the
+-- JSON literal null below the SQL boolean exactly like the SQL literal, in
+-- both operand orders, through the SQL EXECUTE channel.
+create table pbo34 (id int primary key, d json);
+insert into pbo34 values (1,'"str"'),(2,'true'),(3,'false'),(4,'3'),(5,'0'),(6,'null'),(7,'0.5'),(8,'-2');
+-- literal anchors for the same operators
+select id from pbo34 where d < true order by id;
+select id from pbo34 where d < false order by id;
+select id from pbo34 where d = true order by id;
+select id from pbo34 where d <= true order by id;
+-- prepared parity on the number-fold and category rows, both constants
+prepare plt34 from 'select id from pbo34 where d < ? order by id';
+set @b34 = true;
+execute plt34 using @b34;
+set @b34 = false;
+execute plt34 using @b34;
+deallocate prepare plt34;
+prepare ple34 from 'select id from pbo34 where d <= ? order by id';
+set @b34 = true;
+execute ple34 using @b34;
+deallocate prepare ple34;
+prepare pge34 from 'select id from pbo34 where d >= ? order by id';
+execute pge34 using @b34;
+deallocate prepare pge34;
+prepare peq34 from 'select id from pbo34 where d = ? order by id';
+execute peq34 using @b34;
+deallocate prepare peq34;
+prepare pneq34 from 'select id from pbo34 where d != ? order by id';
+execute pneq34 using @b34;
+deallocate prepare pneq34;
+-- reversed operand order exercises the executor's orientation flip
+prepare prev34 from 'select id from pbo34 where ? > d order by id';
+set @b34 = false;
+execute prev34 using @b34;
+deallocate prepare prev34;
+-- a SQL NULL parameter keeps the SQL NULL contract, not a rejection
+prepare pnull34 from 'select id from pbo34 where d = ? order by id';
+set @b34 = null;
+execute pnull34 using @b34;
+deallocate prepare pnull34;
+prepare pnse34 from 'select id from pbo34 where d <=> ? order by id';
+execute pnse34 using @b34;
+deallocate prepare pnse34;
+drop table if exists pbo34;
+-- prepared binary parameters (review round 24): a BINARY, VARBINARY or
+-- BLOB parameter in a direct JSON comparison rejects with the same
+-- invalid-argument operator error as the literal CAST peer, at SQL EXECUTE
+-- time, in both operand orders, while the character parameter keeps the
+-- JSON string-scalar identity and a SQL NULL parameter selects no rows.
+create table pbin34 (id int primary key, d json);
+insert into pbin34 values (1,'"3"'),(2,'3'),(3,'true'),(4,'{}');
+prepare pbq34 from 'select id from pbin34 where d = ? order by id';
+set @bin34 = cast('3' as binary);
+execute pbq34 using @bin34;
+set @bin34 = cast('3' as varbinary);
+execute pbq34 using @bin34;
+set @bin34 = cast('3' as blob);
+execute pbq34 using @bin34;
+deallocate prepare pbq34;
+prepare pbrq34 from 'select id from pbin34 where ? = d order by id';
+set @bin34 = cast('3' as binary);
+execute pbrq34 using @bin34;
+deallocate prepare pbrq34;
+prepare pbne34 from 'select id from pbin34 where d != ? order by id';
+execute pbne34 using @bin34;
+deallocate prepare pbne34;
+prepare pbnse34 from 'select id from pbin34 where d <=> ? order by id';
+execute pbnse34 using @bin34;
+deallocate prepare pbnse34;
+prepare pbolt34 from 'select id from pbin34 where d < ? order by id';
+execute pbolt34 using @bin34;
+deallocate prepare pbolt34;
+prepare pborgt34 from 'select id from pbin34 where ? > d order by id';
+execute pborgt34 using @bin34;
+deallocate prepare pborgt34;
+-- the character parameter keeps the direct JSON string-scalar identity
+prepare pbcq34 from 'select id from pbin34 where d = ? order by id';
+set @ch34 = '3';
+execute pbcq34 using @ch34;
+deallocate prepare pbcq34;
+-- a SQL NULL binary parameter keeps the SQL NULL contract
+prepare pbnull34 from 'select id from pbin34 where d = ? order by id';
+set @bin34 = null;
+execute pbnull34 using @bin34;
+deallocate prepare pbnull34;
+drop table if exists pbin34;
+drop table if exists jja33;
+drop table if exists jjb33;
+drop database if exists func_json_scalar_semantics_31121_db;

@@ -722,7 +722,7 @@ id	ordinary_equal	null_safe_equal
 1	null	0
 2	null	0
 3	null	1
-4	null	1
+4	null	0
 5	null	0
 6	null	0
 deallocate prepare json_null_compare_stmt;
@@ -868,7 +868,7 @@ id    eq    ne    nseq    lt    le    gt    ge
 5    0    1    0    0    0    1    1
 6    0    1    0    0    0    1    1
 7    0    1    0    0    0    1    1
-8    null    null    0    null    null    null    null
+8    0    1    0    1    1    0    0
 9    null    null    0    null    null    null    null
 10    null    null    0    null    null    null    null
 11    0    1    0    1    1    0    0
@@ -916,7 +916,7 @@ id    eq    gt    reverse_gt
 5    0    1    1
 6    0    1    1
 7    0    1    1
-8    null    null    null
+8    0    0    0
 9    null    null    null
 10    null    null    null
 11    0    0    0
@@ -930,7 +930,7 @@ id    eq    gt    reverse_gt
 5    0    1    1
 6    0    1    1
 7    0    1    1
-8    null    null    null
+8    0    0    0
 9    null    null    null
 10    null    null    null
 11    0    0    0
@@ -958,7 +958,7 @@ id    eq    gt    reverse_gt
 5    0    1    1
 6    0    1    1
 7    0    1    1
-8    null    null    null
+8    0    0    0
 9    null    null    null
 10    null    null    null
 11    0    0    0

@@ -226,7 +226,10 @@ func TestJSONNumericOrderingAdapterMetadataAndReuse(t *testing.T) {
 		{"1.5", types.T_float64, vector.PrepareParamFloat, true, false},
 		{"1.25", types.T_decimal256, vector.PrepareParamDecimal, true, false},
 		{"", types.T_int64, vector.PrepareParamNone, true, true},
-		{`"text"`, types.T_text, vector.PrepareParamNone, false, false},
+		// A character parameter compares like the equivalent string literal:
+		// its bytes become a quoted JSON string scalar instead of being parsed
+		// as a JSON document.
+		{"text", types.T_text, vector.PrepareParamNone, true, false},
 	} {
 		func() {
 			input, err := vector.NewConstBytes(types.T_text.ToType(), []byte(tc.text), 2, proc.Mp())
@@ -245,6 +248,11 @@ func TestJSONNumericOrderingAdapterMetadataAndReuse(t *testing.T) {
 			require.Equal(t, tc.null, got.IsNull(0))
 			if tc.marker {
 				require.Equal(t, tc.typ, got.GetPrepareParamType())
+			}
+			if !tc.null && tc.typ == types.T_text {
+				// The character payload stays in the string-scalar domain: the
+				// bytes are quoted, never decoded as a JSON document.
+				require.Equal(t, bytejson.TpCodeString, types.DecodeJson(got.GetBytesAt(0)).Type)
 			}
 		}()
 	}

@@ -3022,7 +3022,7 @@ func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*p
 				return
 			}
 		}
-		if len(f.Args) != 2 || (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) || isJSONNumericComparisonArgs(f.Args) {
+		if len(f.Args) != 2 || (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) || isMixedJSONScalarComparisonArgs(f.Args) {
 			return
 		}
 
@@ -4353,7 +4353,7 @@ func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.
 
 func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
 	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isJSONNumericComparisonArgs(f.Args) {
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isMixedJSONScalarComparisonArgs(f.Args) {
 		return nil, false
 	}
 	if c := f.Args[0].GetCorr(); c != nil && c.Depth == 1 && f.Args[1].GetCol() != nil {
@@ -4367,7 +4367,7 @@ func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
 
 func correlatedWindowIdentityKey(expr *plan.Expr) (*plan.Expr, bool) {
 	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isJSONNumericComparisonArgs(f.Args) {
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isMixedJSONScalarComparisonArgs(f.Args) {
 		return nil, false
 	}
 	if f.Args[0].GetCorr() != nil && f.Args[0].GetCorr().Depth == 1 && f.Args[1].GetCol() != nil {
@@ -4429,7 +4429,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 			if err := plan.VisitExprTree(pred, func(expr *plan.Expr) error {
 				f := expr.GetF()
 				if f != nil && f.Func != nil && (f.Func.ObjName == "=" || f.Func.ObjName == "<=>") &&
-					isJSONNumericComparisonArgs(f.Args) && exprHasColRef(expr) {
+					isMixedJSONScalarComparisonArgs(f.Args) && exprHasColRef(expr) {
 					return moerr.NewNYI(builder.GetContext(), "correlated window with mixed JSON/numeric predicates")
 				}
 				return nil
@@ -4841,7 +4841,7 @@ func collectCorrelatedPaginationPartitionKeys(expr *plan.Expr, keys *[]*plan.Exp
 	// match one FLOAT32 peer after rounding, but form separate raw JSON groups.
 	if fn != nil && fn.Func != nil &&
 		(fn.Func.ObjName == "=" || fn.Func.ObjName == "<=>") && len(fn.Args) == 2 &&
-		!isJSONNumericComparisonArgs(fn.Args) {
+		!isMixedJSONScalarComparisonArgs(fn.Args) {
 		leftCorr := hasCorrCol(fn.Args[0])
 		rightCorr := hasCorrCol(fn.Args[1])
 		if leftCorr != rightCorr {

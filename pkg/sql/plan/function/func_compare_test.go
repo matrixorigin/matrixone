@@ -191,7 +191,10 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 
 	t.Run("JSON numeric operators preserve category fraction and orientation", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{int64(1), 1.5, int64(-1), -1.5, map[string]any{"a": int64(1)}, []any{int64(1)}, "str", "1", true, false, int64(128), uint64(math.MaxUint64), 1e100, -1e100, nil, nil}, 15)
-		signs := []int{0, 1, -1, -1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, 0, 0}
+		// Row 14 holds a JSON literal null document: it type-ranks below the
+		// numeric peer like any other JSON category. Only row 15, the vector's
+		// SQL NULL entry, keeps SQL NULL comparison semantics.
+		signs := []int{0, 1, -1, -1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1, 0}
 		const length = 16
 		direct, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), length, proc.Mp())
 		require.NoError(t, err)
@@ -235,7 +238,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 							require.NoError(t, op.fn(args, result, proc, length, nil))
 							got := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
 							for row, sign := range signs {
-								if row >= 14 {
+								if row >= 15 {
 									require.Equal(t, !op.nullSafe, result.GetResultVector().IsNull(uint64(row)))
 									require.False(t, got[row])
 									continue
@@ -265,7 +268,9 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		require.NoError(t, equalFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, selected))
 		require.Equal(t, []bool{true, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		require.True(t, result.GetResultVector().IsNull(1))
-		require.True(t, result.GetResultVector().IsNull(2))
+		// Row 2 holds a JSON literal null document versus 0: it type-ranks
+		// below the number instead of collapsing into SQL NULL.
+		require.False(t, result.GetResultVector().IsNull(2))
 		allSkipped := &FunctionSelectList{AllNull: true}
 		require.NoError(t, nullSafeEqualFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, allSkipped))
 		for row := range 3 {
@@ -274,12 +279,16 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		nullPeer := vector.NewConstNull(types.T_int64.ToType(), 3, proc.Mp())
 		t.Cleanup(func() { nullPeer.Free(proc.Mp()) })
 		require.NoError(t, nullSafeEqualFn([]*vector.Vector{nullPeer, jsonValues}, result, proc, 3, nil))
-		require.Equal(t, []bool{false, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+		// Row 2 holds a JSON literal null document, which is not SQL NULL:
+		// NULL <=> <that value> is false, like any other JSON category.
+		require.Equal(t, []bool{false, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		require.True(t, result.GetResultVector().GetNulls().IsEmpty())
 		require.NoError(t, equalFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, nil))
 		require.Equal(t, []bool{true, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		require.False(t, result.GetResultVector().IsNull(1))
-		require.True(t, result.GetResultVector().IsNull(2))
+		// Row 1 compares through the exact comparator (#31719 behavior on main);
+		// row 2 keeps the JSON literal null as a ranked value (#31121).
+		require.False(t, result.GetResultVector().IsNull(2))
 		empty := makeJSON(t, nil)
 		require.NoError(t, equalFn([]*vector.Vector{empty, numbers}, makeResult(t, 0), proc, 0, nil))
 	})
@@ -310,13 +319,13 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 						name:          "equal",
 						fn:            equalFn,
 						expected:      []bool{true, false, true, true, false, false, false, false, false},
-						expectedNulls: []bool{false, false, false, false, false, false, true, true, true},
+						expectedNulls: []bool{false, false, false, false, false, false, false, true, true},
 					},
 					{
 						name:          "not equal",
 						fn:            notEqualFn,
-						expected:      []bool{false, true, false, false, true, true, false, false, false},
-						expectedNulls: []bool{false, false, false, false, false, false, true, true, true},
+						expected:      []bool{false, true, false, false, true, true, true, false, false},
+						expectedNulls: []bool{false, false, false, false, false, false, false, true, true},
 					},
 					{
 						name:          "null safe equal",
@@ -354,14 +363,20 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		}
 	})
 
-	t.Run("mixed JSON boolean comparison rejects containers", func(t *testing.T) {
+	t.Run("mixed JSON boolean comparison ranks containers below the boolean", func(t *testing.T) {
 		booleanValue, err := vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
 		require.NoError(t, err)
 		t.Cleanup(func() { booleanValue.Free(proc.Mp()) })
 		for _, value := range []any{map[string]any{"v": true}, []any{true}} {
 			jsonValue := makeJSON(t, []any{value})
-			require.Error(t, equalFn(
-				[]*vector.Vector{jsonValue, booleanValue}, makeResult(t, 1), proc, 1, nil))
+			result := makeResult(t, 1)
+			// #31121 JSON/BOOL kernel: objects and arrays are comparable
+			// categories ranking below the SQL boolean peer (MySQL receipts
+			// in json_bool_ordering_comparison_test.go), not a cast error.
+			require.NoError(t, equalFn(
+				[]*vector.Vector{jsonValue, booleanValue}, result, proc, 1, nil))
+			require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+			require.True(t, result.GetResultVector().GetNulls().IsEmpty())
 		}
 	})
 
@@ -427,7 +442,9 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		result := makeResult(t, 3)
 		require.NoError(t, nullSafeEqualFn(
 			[]*vector.Vector{jsonValues, booleanNull}, result, proc, 3, nil))
-		require.Equal(t, []bool{true, false, false},
+		// Row 0 holds a JSON literal null document. It is comparable JSON content,
+		// so it is not equal to the SQL NULL peer under <=>, unlike a SQL NULL JSON row.
+		require.Equal(t, []bool{false, false, false},
 			vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
@@ -448,7 +465,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		params := makePreparedJSON(t, []any{true, true, true})
 		params.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean, vector.PrepareParamBoolean, vector.PrepareParamBoolean})
 		result := makeResult(t, 3)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 3, false, func(c int) bool { return c == 0 }, nil))
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 3, false, func(c int) bool { return c == 0 }, nil, "="))
 		got := result.GetResultVector()
 		require.Equal(t, []bool{true, false, true}, vector.MustFixedColNoTypeCheck[bool](got))
 	})
@@ -459,7 +476,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		params.SetPrepareParamKind(vector.PrepareParamBoolean)
 		require.Error(t, comparePreparedJSON(
 			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1, false,
-			func(c int) bool { return c == 0 }, nil))
+			func(c int) bool { return c == 0 }, nil, "="))
 	})
 
 	t.Run("reversed numeric and null safe nulls", func(t *testing.T) {
@@ -467,7 +484,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		params := makePreparedJSON(t, []any{2.0, nil}, 1)
 		params.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamFloat})
 		result := makeResult(t, 2)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{params, jsonValues}, result, proc, 2, true, func(c int) bool { return c == 0 }, nil))
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{params, jsonValues}, result, proc, 2, true, func(c int) bool { return c == 0 }, nil, "<=>"))
 		got := result.GetResultVector()
 		require.Equal(t, []bool{true, true}, vector.MustFixedColNoTypeCheck[bool](got))
 	})
@@ -487,7 +504,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		})
 		params.SetPrepareParamKind(vector.PrepareParamDecimal)
 		result := makeResult(t, 4)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 4, false, func(c int) bool { return c == 0 }, nil))
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 4, false, func(c int) bool { return c == 0 }, nil, "="))
 		require.Equal(t, []bool{true, false, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
@@ -498,13 +515,13 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		result := makeResult(t, 1)
 		require.NoError(t, comparePreparedJSON(
 			[]*vector.Vector{jsonValues, params}, result, proc, 1,
-			false, func(c int) bool { return c == 0 }, nil))
+			false, func(c int) bool { return c == 0 }, nil, "="))
 		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		// A bad numeric parameter is still an error, unlike a JSON string row.
 		badParam := makePreparedJSON(t, []any{"bad"})
 		badParam.SetPrepareParamKind(vector.PrepareParamDecimal)
 		require.Error(t, comparePreparedJSON([]*vector.Vector{jsonValues, badParam}, makeResult(t, 1), proc, 1,
-			false, func(c int) bool { return c == 0 }, nil))
+			false, func(c int) bool { return c == 0 }, nil, "="))
 	})
 
 	t.Run("ordinary comparison propagates null", func(t *testing.T) {
@@ -512,7 +529,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		params := makePreparedJSON(t, []any{true})
 		params.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean})
 		result := makeResult(t, 1)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, false, func(c int) bool { return c == 0 }, nil))
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, false, func(c int) bool { return c == 0 }, nil, "="))
 		require.True(t, result.GetResultVector().IsNull(0))
 	})
 
@@ -524,7 +541,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		left.SetType(types.T_json.ToType())
 		right := makePreparedJSON(t, []any{true})
 		right.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamBoolean})
-		require.Error(t, comparePreparedJSON([]*vector.Vector{left, right}, makeResult(t, 1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
+		require.Error(t, comparePreparedJSON([]*vector.Vector{left, right}, makeResult(t, 1), proc, 1, false, func(c int) bool { return c == 0 }, nil, "="))
 	})
 
 	t.Run("string category and malformed adapter output", func(t *testing.T) {
@@ -532,12 +549,12 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		params := makePreparedJSON(t, []any{"7"})
 		params.SetPrepareParamKind(vector.PrepareParamNone)
 		result := makeResult(t, 1)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, false, func(c int) bool { return c == 0 }, nil))
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, false, func(c int) bool { return c == 0 }, nil, "="))
 		require.Equal(t, []bool{true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 
 		malformed := makePreparedJSON(t, []any{"bad"})
 		malformed.SetPrepareParamKind(vector.PrepareParamInteger)
-		require.Error(t, comparePreparedJSON([]*vector.Vector{jsonValues, malformed}, makeResult(t, 1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
+		require.Error(t, comparePreparedJSON([]*vector.Vector{jsonValues, malformed}, makeResult(t, 1), proc, 1, false, func(c int) bool { return c == 0 }, nil, "="))
 	})
 
 	t.Run("integer comparison preserves precision", func(t *testing.T) {
@@ -557,7 +574,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
 		result := makeResult(t, 5)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 5, false, func(c int) bool { return c == 0 }, nil))
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 5, false, func(c int) bool { return c == 0 }, nil, "="))
 		got := result.GetResultVector()
 		require.Equal(t, []bool{false, false, false, false, false}, vector.MustFixedColNoTypeCheck[bool](got))
 		require.True(t, got.GetNulls().IsEmpty())
@@ -578,7 +595,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
 		result := makeResult(t, 4)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 4, false, func(c int) bool { return c == 0 }, nil))
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 4, false, func(c int) bool { return c == 0 }, nil, "="))
 		require.Equal(t, []bool{true, true, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
@@ -590,7 +607,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		result := makeResult(t, 1)
 		err := comparePreparedJSON(
 			[]*vector.Vector{jsonValues, params}, result, proc, 1,
-			false, func(c int) bool { return c == 0 }, nil)
+			false, func(c int) bool { return c == 0 }, nil, "=")
 		require.NoError(t, err)
 		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
@@ -603,7 +620,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		result := makeResult(t, 1)
 		err := comparePreparedJSON(
 			[]*vector.Vector{jsonValues, params}, result, proc, 1,
-			false, func(c int) bool { return c == 0 }, nil)
+			false, func(c int) bool { return c == 0 }, nil, "=")
 		require.NoError(t, err)
 		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
@@ -616,7 +633,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		result := makeResult(t, 1)
 		err := comparePreparedJSON(
 			[]*vector.Vector{jsonValues, params}, result, proc, 1,
-			false, func(c int) bool { return c == 0 }, nil)
+			false, func(c int) bool { return c == 0 }, nil, "=")
 		require.NoError(t, err)
 		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
@@ -629,7 +646,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		result := makeResult(t, 1)
 		require.NoError(t, comparePreparedJSON(
 			[]*vector.Vector{jsonValues, params}, result, proc, 1,
-			false, func(c int) bool { return c == 0 }, nil))
+			false, func(c int) bool { return c == 0 }, nil, "="))
 		require.Equal(t, []bool{true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
@@ -661,14 +678,17 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 			}
 			ordinary := makeResult(t, 3)
 			require.NoError(t, comparePreparedJSON(parameters, ordinary, proc, 3,
-				false, func(c int) bool { return c == 0 }, nil))
+				false, func(c int) bool { return c == 0 }, nil, "="))
 			for row := range 3 {
 				require.True(t, ordinary.GetResultVector().IsNull(uint64(row)))
 			}
 			nullSafe := makeResult(t, 3)
 			require.NoError(t, comparePreparedJSON(parameters, nullSafe, proc, 3,
-				true, func(c int) bool { return c == 0 }, nil))
-			require.Equal(t, []bool{false, true, true}, vector.MustFixedColNoTypeCheck[bool](nullSafe.GetResultVector()))
+				true, func(c int) bool { return c == 0 }, nil, "<=>"))
+			// Row 1 holds a JSON literal null document: it is a JSON value, so
+			// <=> against the SQL NULL parameter is false. Row 2 is SQL NULL on
+			// both sides and stays true.
+			require.Equal(t, []bool{false, false, true}, vector.MustFixedColNoTypeCheck[bool](nullSafe.GetResultVector()))
 			require.True(t, nullSafe.GetResultVector().GetNulls().IsEmpty())
 		})
 	}
@@ -694,7 +714,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 			params.SetPrepareParamKind(test.kind)
 			params.SetPrepareParamType(test.typ)
 			err := comparePreparedJSON([]*vector.Vector{jsonValues, params}, makeResult(t, 1),
-				proc, 1, false, func(c int) bool { return c == 0 }, nil)
+				proc, 1, false, func(c int) bool { return c == 0 }, nil, "=")
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
 			require.ErrorContains(t, err, "does not match conversion kind")
 		})
@@ -705,7 +725,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		params := makePreparedJSON(t, []any{true})
 		params.SetPrepareParamKind(vector.PrepareParamBoolean)
 		result := makeResult(t, 1)
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, true, func(c int) bool { return c == 0 }, nil))
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, true, func(c int) bool { return c == 0 }, nil, "<=>"))
 		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		require.True(t, result.GetResultVector().GetNulls().IsEmpty())
 	})
@@ -716,18 +736,23 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		params.SetPrepareParamKind(vector.PrepareParamBoolean)
 		result := makeResult(t, 3)
 		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, false}}
-		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 3, false, func(c int) bool { return c == 0 }, selectList))
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 3, false, func(c int) bool { return c == 0 }, selectList, "="))
 		got := result.GetResultVector()
 		require.True(t, vector.MustFixedColNoTypeCheck[bool](got)[0])
 		require.True(t, got.IsNull(1))
 		require.True(t, got.IsNull(2))
 	})
 
-	t.Run("unsupported boolean cast returns an error", func(t *testing.T) {
+	t.Run("json containers rank below a prepared boolean peer", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{map[string]any{"unsupported": true}})
 		params := makePreparedJSON(t, []any{true})
 		params.SetPrepareParamKind(vector.PrepareParamBoolean)
-		require.Error(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1, false, func(c int) bool { return c == 0 }, nil))
+		result := makeResult(t, 1)
+		// #31121 JSON/BOOL kernel: the container category compares (false
+		// against TRUE, no error), mirroring the direct-operand contract.
+		require.NoError(t, comparePreparedJSON([]*vector.Vector{jsonValues, params}, result, proc, 1, false, func(c int) bool { return c == 0 }, nil, "="))
+		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+		require.True(t, result.GetResultVector().GetNulls().IsEmpty())
 	})
 
 }
@@ -771,7 +796,7 @@ func BenchmarkPreparedJSONIntegerComparison(b *testing.B) {
 		}
 		if err := comparePreparedJSON(
 			[]*vector.Vector{jsonValues, param}, result, proc, length,
-			false, func(c int) bool { return c == 0 }, nil); err != nil {
+			false, func(c int) bool { return c == 0 }, nil, "="); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -817,7 +842,7 @@ func BenchmarkPreparedJSONDecimalComparison(b *testing.B) {
 		}
 		if err := comparePreparedJSON(
 			[]*vector.Vector{jsonValues, param}, result, proc, length,
-			false, func(c int) bool { return c == 0 }, nil); err != nil {
+			false, func(c int) bool { return c == 0 }, nil, "="); err != nil {
 			b.Fatal(err)
 		}
 	}

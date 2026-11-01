@@ -514,7 +514,10 @@ func CanUseZoneMapComparison(overloadID int64, args []*plan.Expr) bool {
 			return false
 		}
 	case EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN:
-		if len(args) == 2 && args[0] != nil && args[1] != nil && IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) {
+		if len(args) == 2 && args[0] != nil && args[1] != nil &&
+			(IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+				IsJSONStringComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+				IsJSONBooleanComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id))) {
 			return false
 		}
 		if len(args) == 0 {
@@ -650,6 +653,11 @@ func getFunctionByName(
 	}
 	if (r.fid == FORMAT || r.fid == MAKEDATE || r.fid == MAKETIME) && LegacySpecialConsumers(ctx) {
 		if legacy, ok := legacySpecialConsumerCheck(r.fid, f.Overloads, args); ok {
+			check = legacy
+		}
+	}
+	if LegacyJSONScalarSemantics(ctx) {
+		if legacy, ok := legacyJSONScalarCheck(r.fid, f.Overloads, args, check); ok {
 			check = legacy
 		}
 	}
@@ -1032,19 +1040,26 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 	case GREATEST, LEAST:
 		return false
 	case GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL:
-		if len(args) == 2 && IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) {
+		if len(args) == 2 && (IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+			IsJSONStringComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+			IsJSONBooleanComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id))) {
+			// Direct mixed JSON/BOOL ordering keeps the JSON scalar category,
+			// so a physically non-NULL JSON value can still carry a JSON
+			// literal null. Do not infer a non-NULL result merely from the
+			// two vector-level argument declarations.
 			return false
 		}
 	case EQUAL, NOT_EQUAL:
-		if len(args) == 2 && IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) {
+		if len(args) == 2 && (IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) ||
+			IsJSONStringComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id))) {
 			return false
 		}
 		// Direct JSON/BOOL equality preserves the JSON scalar category. A
 		// physically non-NULL JSON value can still contain JSON null, which the
 		// comparison maps to SQL UNKNOWN. Do not infer a non-NULL result merely
 		// from the two vector-level argument declarations.
-		if len(args) == 2 && isJSONBooleanComparison(
-			types.T(args[0].Typ.Id).ToType(), types.T(args[1].Typ.Id).ToType()) {
+		if len(args) == 2 && IsJSONBooleanComparison(
+			types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) {
 			return false
 		}
 	// Value window functions can synthesize NULLs even when every input is

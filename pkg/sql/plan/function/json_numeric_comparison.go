@@ -123,12 +123,17 @@ func checkJSONNumericDomain(ctx context.Context, value bytejson.ByteJson, typ ty
 }
 
 func compareJSONNumeric(ctx context.Context, value bytejson.ByteJson, peer *jsonNumericPeer) (int, bool, error) {
-	if isJSONLiteralNull(value) {
+	if LegacyJSONScalarSemantics(ctx) && isJSONLiteralNull(value) {
+		// Pre-#31121 catalogs folded JSON literal null as SQL NULL here.
+		// DUMP verification reproduces those archives; ordinary execution
+		// keeps the value ranking below.
 		return 0, true, nil
 	}
 	if !isJSONNumber(value) {
 		// Both inputs came from admitted vectors. Different category ranks
 		// decide this comparison without scanning any container descendants.
+		// A JSON null is a value here, not SQL NULL: it type-ranks below the
+		// numeric peer so null < 1 holds and null = 1 is false.
 		return bytejson.CompareByteJsonTrusted(value, peer.value), false, nil
 	}
 	if peer.typ.IsFloat() || peer.typ == types.T_any && peer.kind == vector.PrepareParamFloat {
@@ -214,22 +219,28 @@ func compareJSONNumericVectors(parameters []*vector.Vector, result vector.Functi
 			output.GetNulls().Add(uint64(row))
 			continue
 		}
-		value, jsonNull := cachedJSON, cachedJSONNull
+		jsonValue, jsonNull := cachedJSON, cachedJSONNull
 		if !jsonReady {
 			var err error
-			value, jsonNull, err = comparisonJSONAt(proc, jsonVector, row)
+			jsonValue, jsonNull, err = comparisonJSONAt(proc, jsonVector, row)
 			if err != nil {
 				return err
 			}
 			if jsonVector.IsConst() {
-				cachedJSON, cachedJSONNull, jsonReady = value, jsonNull, true
+				cachedJSON, cachedJSONNull, jsonReady = jsonValue, jsonNull, true
 			}
 		}
-		jsonNull = jsonNull || isJSONLiteralNull(value)
+		// JSON literal null stays a comparable value here; only the vector's
+		// SQL NULL participates in the SQL NULL contract below. Pre-#31121
+		// archives folded literal null into the SQL NULL contract, so the
+		// verifier rebinds that behavior too.
 		numericNull := numericVector.IsNull(uint64(row))
-		if jsonNull || numericNull {
+		legacyNull := LegacyJSONScalarSemantics(proc.Ctx) && isJSONLiteralNull(jsonValue)
+		if jsonNull || numericNull || legacyNull {
 			if nullSafe {
-				values[row] = jsonNull && numericNull
+				// Base archives folded literal null into the JSON side of the
+				// SQL NULL contract, so it participates on both sides of <=>.
+				values[row] = (jsonNull || legacyNull) && numericNull
 			} else {
 				output.GetNulls().Add(uint64(row))
 			}
@@ -243,7 +254,7 @@ func compareJSONNumericVectors(parameters []*vector.Vector, result vector.Functi
 			}
 			peerReady = numericVector.IsConst()
 		}
-		comparison, _, err := compareJSONNumeric(proc.Ctx, value, &peer)
+		comparison, _, err := compareJSONNumeric(proc.Ctx, jsonValue, &peer)
 		if err != nil {
 			return err
 		}

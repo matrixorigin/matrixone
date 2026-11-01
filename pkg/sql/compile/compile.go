@@ -6648,7 +6648,7 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 	if node == nil || left == nil || right == nil ||
 		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
-		left.Stats == nil || isMixedJSONNumericAsof(node) {
+		left.Stats == nil || isMixedJSONScalarAsof(node) {
 		return false
 	}
 	leftRows := left.Stats.Outcnt
@@ -6706,7 +6706,7 @@ func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
-	if isMixedJSONNumericAsof(node) {
+	if isMixedJSONScalarAsof(node) {
 		// Gather complete inputs on one coordinator worker before selecting
 		// eligible predecessors. This also handles a single remote scope.
 		node.RuntimeFilterBuildList = nil
@@ -7128,7 +7128,7 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 }
 
 func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
-	if isMixedJSONNumericAsof(node) {
+	if isMixedJSONScalarAsof(node) {
 		return true
 	}
 	isEq := plan2.IsEquiJoin2(node.OnList)
