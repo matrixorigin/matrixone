@@ -114,6 +114,46 @@ func TestPreparedRoutineFieldHistory(t *testing.T) {
 				require.Equal(t, uint64(1), direct)
 				check("a", 1)
 				check("a", 1)
+
+				// Temporal inference owns the same routine declaration generation,
+				// including when the routine is a separate result expression.
+				calendarQuery := "select date_add(?, interval 1 day), " + name + "('a')"
+				var calendar *sql.Stmt
+				if protocol == "binary" {
+					calendar, err = conn.PrepareContext(ctx, calendarQuery)
+					require.NoError(t, err)
+					defer calendar.Close()
+				} else {
+					exec("prepare routine_calendar from " + calendarQuery)
+					defer exec("deallocate prepare routine_calendar")
+				}
+				checkCalendar := func(input, wantType, wantRoutine string) {
+					t.Helper()
+					var rows *sql.Rows
+					var err error
+					if calendar != nil {
+						rows, err = calendar.QueryContext(ctx, input)
+					} else {
+						exec("set @calendar_input='" + input + "'")
+						rows, err = conn.QueryContext(ctx, "execute routine_calendar using @calendar_input")
+					}
+					require.NoError(t, err)
+					defer rows.Close()
+					columns, err := rows.ColumnTypes()
+					require.NoError(t, err)
+					require.Equal(t, wantType, columns[0].DatabaseTypeName())
+					require.True(t, rows.Next())
+					var date, routine string
+					require.NoError(t, rows.Scan(&date, &routine))
+					require.Contains(t, date, "2024-02-29")
+					require.Equal(t, wantRoutine, routine)
+					require.False(t, rows.Next())
+					require.NoError(t, rows.Err())
+				}
+				checkCalendar("2024-02-28 00:00:00", "DATETIME", "a")
+				checkCalendar("2024-02-28", "DATETIME", "a")
+				create(true, "varchar(10)", "upper($1)")
+				checkCalendar("2024-02-28", "DATE", "A")
 			})
 		}
 
