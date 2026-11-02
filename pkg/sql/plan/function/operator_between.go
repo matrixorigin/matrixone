@@ -16,6 +16,7 @@ package function
 
 import (
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -324,10 +325,11 @@ type betweenJSONNumericOperand struct {
 }
 
 // betweenJSONNumericDecimal keeps a DECIMAL operand's exact typed value and
-// scale. The adapter's encoded peer renders a decimal as formatted text for
-// the exact numeric taxonomy; that text re-parsed with ParseFloat can round
-// a hard decimal one ULP away from the ordinary comparison channel, whose
-// DECIMAL->DOUBLE leg converts through Decimal64/128/256ToFloat64.
+// scale so the DOUBLE-coercion leg can follow the ordinary comparison
+// channel's own DECIMAL->DOUBLE cast for its width: DECIMAL64/128 data
+// converts through a Format->ParseFloat reparse (func_cast.go decimalToFloat)
+// while DECIMAL256 data converts arithmetically through Decimal256ToFloat64
+// (func_cast.go decimal256ToFloat).
 type betweenJSONNumericDecimal struct {
 	present bool
 	scale   int32
@@ -394,22 +396,40 @@ func jsonNumericPeerFloatCoercionDomain(peer *jsonNumericPeer) bool {
 
 // betweenJSONDoubleCoercion returns the DOUBLE-domain value of a numeric
 // BETWEEN operand exactly the way the ordinary comparison casts it there:
-// a DECIMAL-typed operand converts through its per-type cast
-// (Decimal64/128/256ToFloat64, the cast the binary `x <= hi` leg binds),
-// while every other operand keeps the scalar decode the ranked domain uses.
+// a DECIMAL-typed operand converts through its own width's ordinary
+// DECIMAL->DOUBLE cast - the DECIMAL64 and DECIMAL128 casts reparse the
+// operand's rendered text (func_cast.go decimalToFloat: Format then
+// strconv.ParseFloat), while the DECIMAL256 cast converts arithmetically
+// (func_cast.go decimal256ToFloat : Decimal256ToFloat64) - and every other
+// operand keeps the scalar decode the ranked domain uses.
 // The receiver underpins mixed JSON/numeric and unmixable-lower leg parity:
-// a formatted-text reparse of DECIMAL data (ParseFloat of the adapter's
-// rendering) can agree on most rows yet disagree on hard decimal boundaries
-// like DECIMAL(39,2) 90071992547409.93 beside the DOUBLE 90071992547409.92,
-// where the ordinary channel rounds the subject into the bound and the
-// reparse rounds it one ULP above.
+// substituting either width's conversion for the other breaks a hard decimal
+// boundary. Beside the DOUBLE bound 90071992547409.92 the DECIMAL(16,2) and
+// DECIMAL(20,2) subject 90071992547409.93 keeps its correctly rounded
+// ...9375 through the reparse (above the bound, so the ordinary binary legs
+// reject the row), while the arithmetic coefficient conversion rounds the
+// coefficient 2^53+1 one ULP down into the bound; the DECIMAL(39,2) neighbor
+// answers the opposite way because its own ordinary cast is the arithmetic
+// one and the reparse of its rendered text rounds it above the bound.
+// Following each width's own cast keeps BETWEEN equal to the binary
+// `x <= hi` legs on all of them.
 func betweenJSONDoubleCoercion(operand *betweenJSONNumericOperand) (float64, bool) {
 	if operand.decimal.present {
 		switch operand.peer.typ {
 		case types.T_decimal64:
-			return types.Decimal64ToFloat64(operand.decimal.d64, operand.decimal.scale), true
+			value, err := strconv.ParseFloat(
+				operand.decimal.d64.Format(operand.decimal.scale), 64)
+			if err != nil {
+				return 0, false
+			}
+			return value, true
 		case types.T_decimal128:
-			return types.Decimal128ToFloat64(operand.decimal.d128, operand.decimal.scale), true
+			value, err := strconv.ParseFloat(
+				operand.decimal.d128.Format(operand.decimal.scale), 64)
+			if err != nil {
+				return 0, false
+			}
+			return value, true
 		case types.T_decimal256:
 			return types.Decimal256ToFloat64(operand.decimal.d256, operand.decimal.scale), true
 		}
@@ -443,10 +463,10 @@ func compareBetweenJSONNumericOperands(
 			// integer/float) comparison coerces both operands to DOUBLE, so
 			// the lowered `x <= hi` leg rounds the subject before comparing
 			// and this leg answers from the same domain. A DECIMAL operand
-			// converts through its ordinary per-type cast instead of
-			// re-parsing the adapter's formatted text, whose ParseFloat
-			// reparse can round a hard decimal one ULP away from the
-			// ordinary channel at the DOUBLE boundary.
+			// converts through its own width's ordinary cast - the rendered-
+			// text reparse for DECIMAL64/128, the arithmetic per-type cast
+			// for DECIMAL256 - so a hard decimal boundary answers identically
+			// in both spellings.
 			leftFloat, ok := betweenJSONDoubleCoercion(&left)
 			rightFloat, okRight := betweenJSONDoubleCoercion(&right)
 			if !ok || !okRight {

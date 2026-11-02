@@ -521,6 +521,74 @@ set @j46 = '0';
 execute pb46 using @j46, @j46, @j46;
 deallocate prepare pb46;
 drop table if exists btw46;
+-- DECIMAL64/128 DOUBLE coercion (review round 7): every decimal width
+-- follows its own ordinary DECIMAL->DOUBLE cast in the BETWEEN ternary, so
+-- every spelling of the same range answers one row identically. The
+-- DECIMAL(16,2) and DECIMAL(20,2) boundary subject 90071992547409.93 keeps
+-- its correctly rounded value one ULP above the DOUBLE bound
+-- 90071992547409.92 under the widths' own rendered-text reparse cast and
+-- stays outside the range, while the DECIMAL(39,2) neighbor of the same
+-- digits rounds into the bound under its arithmetic cast and stays inside.
+drop table if exists btw47;
+create table btw47 (id int primary key, d16 decimal(16,2), d20 decimal(20,2), d39 decimal(39,2));
+insert into btw47 values (1,90071992547409.93,90071992547409.93,90071992547409.93),
+       (2,90071992547409.91,90071992547409.91,90071992547409.91),
+       (3,90071992547409.94,90071992547409.94,90071992547409.94);
+select id, (cast('0' as json) <= abs(d16)) and (abs(d16) <= cast(90071992547409.92 as double)) as inside_bin,
+       abs(d16) between cast('0' as json) and cast(90071992547409.92 as double) as inside_stat
+       from btw47 order by id;
+select id, (cast('0' as json) <= abs(d20)) and (abs(d20) <= cast(90071992547409.92 as double)) as inside_bin,
+       abs(d20) between cast('0' as json) and cast(90071992547409.92 as double) as inside_stat
+       from btw47 order by id;
+select id, (cast('0' as json) <= abs(d39)) and (abs(d39) <= cast(90071992547409.92 as double)) as inside_bin,
+       abs(d39) between cast('0' as json) and cast(90071992547409.92 as double) as inside_stat
+       from btw47 order by id;
+prepare pb47a from 'select id, abs(d16) between cast(? as json) and cast(90071992547409.92 as double) as inside_pre,
+       not(abs(d16) between cast(? as json) and cast(90071992547409.92 as double)) as outside_not,
+       abs(d16) not between cast(? as json) and cast(90071992547409.92 as double) as outside_lower
+       from btw47 order by id';
+set @j47 = '0';
+execute pb47a using @j47, @j47, @j47;
+deallocate prepare pb47a;
+prepare pb47b from 'select id, abs(d20) between cast(? as json) and cast(90071992547409.92 as double) as inside_pre,
+       not(abs(d20) between cast(? as json) and cast(90071992547409.92 as double)) as outside_not,
+       abs(d20) not between cast(? as json) and cast(90071992547409.92 as double) as outside_lower
+       from btw47 order by id';
+execute pb47b using @j47, @j47, @j47;
+deallocate prepare pb47b;
+drop table if exists btw47;
+-- The scale-10 family pins the same split: the DECIMAL(16,10)/(20,10)
+-- boundary subject 900719.9254740993 stays above the DOUBLE bound
+-- 900719.9254740992 under the widths' own reparse cast, while DECIMAL(39,10)
+-- rounds into the bound under its arithmetic cast.
+drop table if exists btw48;
+create table btw48 (id int primary key, e16 decimal(16,10), e20 decimal(20,10), e39 decimal(39,10));
+insert into btw48 values (1,900719.9254740993,900719.9254740993,900719.9254740993),
+       (2,900719.9254740992,900719.9254740992,900719.9254740992),
+       (3,900719.9254740994,900719.9254740994,900719.9254740994);
+select id, (cast('0' as json) <= abs(e16)) and (abs(e16) <= cast(900719.9254740992 as double)) as inside_bin,
+       abs(e16) between cast('0' as json) and cast(900719.9254740992 as double) as inside_stat
+       from btw48 order by id;
+select id, (cast('0' as json) <= abs(e20)) and (abs(e20) <= cast(900719.9254740992 as double)) as inside_bin,
+       abs(e20) between cast('0' as json) and cast(900719.9254740992 as double) as inside_stat
+       from btw48 order by id;
+select id, (cast('0' as json) <= abs(e39)) and (abs(e39) <= cast(900719.9254740992 as double)) as inside_bin,
+       abs(e39) between cast('0' as json) and cast(900719.9254740992 as double) as inside_stat
+       from btw48 order by id;
+prepare pb48a from 'select id, abs(e16) between cast(? as json) and cast(900719.9254740992 as double) as inside_pre,
+       not(abs(e16) between cast(? as json) and cast(900719.9254740992 as double)) as outside_not,
+       abs(e16) not between cast(? as json) and cast(900719.9254740992 as double) as outside_lower
+       from btw48 order by id';
+set @j48 = '0';
+execute pb48a using @j48, @j48, @j48;
+deallocate prepare pb48a;
+prepare pb48b from 'select id, abs(e20) between cast(? as json) and cast(900719.9254740992 as double) as inside_pre,
+       not(abs(e20) between cast(? as json) and cast(900719.9254740992 as double)) as outside_not,
+       abs(e20) not between cast(? as json) and cast(900719.9254740992 as double) as outside_lower
+       from btw48 order by id';
+execute pb48b using @j48, @j48, @j48;
+deallocate prepare pb48b;
+drop table if exists btw48;
 drop table if exists btw44;
 drop table if exists btw40;
 drop table if exists btw39;

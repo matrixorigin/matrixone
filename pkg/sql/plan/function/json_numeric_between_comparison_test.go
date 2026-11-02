@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -430,75 +431,167 @@ func TestJSONNumericBetweenExecutorContract(t *testing.T) {
 }
 
 // TestJSONNumericBetweenDecimalDoubleCoercion pins the DECIMAL boundary of
-// the DOUBLE-coercion leg: a DECIMAL operand in a mixed JSON/numeric range
-// with a float-typed peer converts through the ordinary per-type cast
-// (Decimal64/128/256ToFloat64 - the cast the binary `x <= hi` leg binds),
-// never through a ParseFloat reparse of the adapter's formatted text. At the
-// DECIMAL(39,2) subject 90071992547409.93 beside the DOUBLE bound
-// 90071992547409.92, the ordinary channel rounds the subject into the bound
-// (per-type cast == bound) while the text reparse rounds it one ULP above,
-// so the BETWEEN ternary answered false where the equivalent binary
-// comparisons answered true, and NOT(BETWEEN) disagreed with lowered
-// NOT BETWEEN. Rows pin one boundary, one neighbor below and one above.
+// the DOUBLE-coercion leg: a DECIMAL operand of a mixed JSON/numeric range
+// with a float-typed peer converts through its own width's ordinary
+// DECIMAL->DOUBLE cast - the rendered-text reparse (func_cast.go
+// decimalToFloat: Format + ParseFloat) for DECIMAL64/128 data, the
+// arithmetic per-type conversion (func_cast.go decimal256ToFloat:
+// Decimal256ToFloat64) for DECIMAL256 data - and the ternary must answer
+// row for row the binary comparisons the same conversion yields against a
+// DOUBLE bound.
+//
+// A DECIMAL(16,2)/(20,2) subject 90071992547409.93 beside the DOUBLE bound
+// 90071992547409.92 keeps its correctly rounded value one ULP above the
+// bound through the reparse, so the equivalent binary comparisons reject
+// the row; converting it arithmetically instead (types.Decimal64ToFloat64)
+// rounds its coefficient (2^53+1) one ULP down into the bound and answers a
+// BETWEEN the binaries reject. The DECIMAL(39,2) family of the same digits
+// answers the opposite way: its own ordinary cast is the arithmetic one,
+// which rounds the subject into the bound, while the formatted-text reparse
+// rounds it above. A scale-10 family (subject 900719.9254740993 beside the
+// DOUBLE bound 900719.9254740992) shows the same split. Each family pins
+// the boundary subject, one neighbor below and one above, and validates
+// every BETWEEN row against the binary `<=` leg built from the same
+// per-width ordinary conversion.
 func TestJSONNumericBetweenDecimalDoubleCoercion(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
 
-	const bound = 90071992547409.92
-	// Unscaled coefficients at scale 2: the hard boundary subject, a neighbor
-	// below it, and a neighbor above it.
-	coefficients := []int64{9007199254740993, 9007199254740991, 9007199254740994}
-	expected := []bool{true, true, false}
-	rows64 := make([]types.Decimal64, len(coefficients))
-	rows128 := make([]types.Decimal128, len(coefficients))
-	rows256 := make([]types.Decimal256, len(coefficients))
-	for i, coefficient := range coefficients {
-		rows64[i] = types.Decimal64(uint64(coefficient))
-		rows128[i] = types.Decimal128FromInt64(coefficient)
-		rows256[i] = types.Decimal256FromInt64(coefficient)
+	families := []struct {
+		name string
+		// rows: the hard boundary subject, a neighbor below it, one above it
+		subjects []int64
+		scale    int32
+		bound    float64
+		// the answer each row must take against the bound inside the width's
+		// own ordinary cast: identical for the neighbors, split at the
+		// boundary, because the two reparse-converted widths correctly round
+		// the boundary subject above the bound while the arithmetic width
+		// rounds it into the bound.
+		expected64128 []bool
+		expected256   []bool
+	}{
+		{
+			name:          "scale 2 subject 90071992547409.93 beside DOUBLE 90071992547409.92",
+			subjects:      []int64{9007199254740993, 9007199254740991, 9007199254740994},
+			scale:         2,
+			bound:         90071992547409.92,
+			expected64128: []bool{false, true, false},
+			expected256:   []bool{true, true, false},
+		},
+		{
+			name:          "scale 10 subject 900719.9254740993 beside DOUBLE 900719.9254740992",
+			subjects:      []int64{9007199254740993, 9007199254740992, 9007199254740994},
+			scale:         10,
+			bound:         900719.9254740992,
+			expected64128: []bool{false, true, false},
+			expected256:   []bool{true, true, false},
+		},
 	}
-	// The ordinary channel's own conversion is the oracle for the boundary
-	// row: the subject equals the DOUBLE bound after its per-type cast.
-	require.EqualValues(t, bound, types.Decimal64ToFloat64(rows64[0], 2))
-	require.EqualValues(t, bound, types.Decimal128ToFloat64(rows128[0], 2))
-	require.EqualValues(t, bound, types.Decimal256ToFloat64(rows256[0], 2))
+	for _, fix := range families {
+		rows64 := make([]types.Decimal64, len(fix.subjects))
+		rows128 := make([]types.Decimal128, len(fix.subjects))
+		rows256 := make([]types.Decimal256, len(fix.subjects))
+		// widened keeps each row's DOUBLE value exactly the way its
+		// per-width ordinary cast produces it: the Format->ParseFloat
+		// reparse the DECIMAL64/128 cast performs, the arithmetic per-type
+		// conversion the DECIMAL256 cast performs.
+		widened64 := make([]float64, len(fix.subjects))
+		widened128 := make([]float64, len(fix.subjects))
+		widened256 := make([]float64, len(fix.subjects))
+		for i, coefficient := range fix.subjects {
+			rows64[i] = types.Decimal64(uint64(coefficient))
+			rows128[i] = types.Decimal128FromInt64(coefficient)
+			rows256[i] = types.Decimal256FromInt64(coefficient)
+			reparsed64, err := strconv.ParseFloat(rows64[i].Format(fix.scale), 64)
+			require.NoError(t, err, "%s: decimal64 render must parse", fix.name)
+			widened64[i] = reparsed64
+			reparsed128, err := strconv.ParseFloat(rows128[i].Format(fix.scale), 64)
+			require.NoError(t, err, "%s: decimal render must parse", fix.name)
+			widened128[i] = reparsed128
+			widened256[i] = types.Decimal256ToFloat64(rows256[i], fix.scale)
+		}
+		// The ordinary channel's own conversion is the oracle for the
+		// boundary row, per width: the reparse-converted widths keep the
+		// subject above the bound, the arithmetic-converted width rounds it
+		// onto the bound. Neighbors must agree on both channels.
+		require.Greater(t, widened64[0], fix.bound, "%s: reparse keeps the boundary subject above the bound", fix.name)
+		require.Equal(t, widened64[0], widened128[0], "%s", fix.name)
+		require.EqualValues(t, fix.bound, widened256[0], "%s: the arithmetic width rounds the subject into the bound", fix.name)
+		last := len(fix.subjects) - 1
+		require.True(t, widened64[1] <= fix.bound && widened256[1] <= fix.bound,
+			"%s: the neighbor below rounds below the bound on every width", fix.name)
+		require.True(t, widened64[last] > fix.bound && widened256[last] > fix.bound,
+			"%s: the neighbor above rounds above the bound on every width", fix.name)
 
-	cases := []betweenJSONNumericCase{
-		{
-			name: "decimal64 rows between JSON 0 and the DOUBLE boundary",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.New(types.T_decimal64, types.T_decimal64.ToType().Width, 2), rows64, nil),
-				NewFunctionTestInput(types.T_json.ToType(),
-					repeatString(mustJsonBinaryString(t, `0`), len(coefficients)), nil),
-				NewFunctionTestInput(types.T_float64.ToType(), repeatFloat64(bound, len(coefficients)), nil),
+		cases := []betweenJSONNumericCase{
+			{
+				name: "decimal64 rows between JSON 0 and the " + fix.name,
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.New(types.T_decimal64, 16, fix.scale), rows64, nil),
+					NewFunctionTestInput(types.T_json.ToType(),
+						repeatString(mustJsonBinaryString(t, `0`), len(fix.subjects)), nil),
+					NewFunctionTestInput(types.T_float64.ToType(), repeatFloat64(fix.bound, len(fix.subjects)), nil),
+				},
+				expected: fix.expected64128,
 			},
-			expected: expected,
-		},
-		{
-			name: "decimal128 rows between JSON 0 and the DOUBLE boundary",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.New(types.T_decimal128, types.T_decimal128.ToType().Width, 2), rows128, nil),
-				NewFunctionTestInput(types.T_json.ToType(),
-					repeatString(mustJsonBinaryString(t, `0`), len(coefficients)), nil),
-				NewFunctionTestInput(types.T_float64.ToType(), repeatFloat64(bound, len(coefficients)), nil),
+			{
+				name: "decimal128 rows between JSON 0 and the " + fix.name,
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.New(types.T_decimal128, 20, fix.scale), rows128, nil),
+					NewFunctionTestInput(types.T_json.ToType(),
+						repeatString(mustJsonBinaryString(t, `0`), len(fix.subjects)), nil),
+					NewFunctionTestInput(types.T_float64.ToType(), repeatFloat64(fix.bound, len(fix.subjects)), nil),
+				},
+				expected: fix.expected64128,
 			},
-			expected: expected,
-		},
-		{
-			name: "decimal256 rows between JSON 0 and the DOUBLE boundary",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.New(types.T_decimal256, 39, 2), rows256, nil),
-				NewFunctionTestInput(types.T_json.ToType(),
-					repeatString(mustJsonBinaryString(t, `0`), len(coefficients)), nil),
-				NewFunctionTestInput(types.T_float64.ToType(), repeatFloat64(bound, len(coefficients)), nil),
+			{
+				name: "decimal256 rows between JSON 0 and the " + fix.name,
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.New(types.T_decimal256, 39, fix.scale), rows256, nil),
+					NewFunctionTestInput(types.T_json.ToType(),
+						repeatString(mustJsonBinaryString(t, `0`), len(fix.subjects)), nil),
+					NewFunctionTestInput(types.T_float64.ToType(), repeatFloat64(fix.bound, len(fix.subjects)), nil),
+				},
+				expected: fix.expected256,
 			},
-			expected: expected,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			runBetweenJSONNumericCase(t, proc, tc)
-		})
+		}
+		widenedCases := [][]float64{widened64, widened128, widened256}
+		for i, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				between := runBetweenJSONNumericCase(t, proc, tc)
+				// Parity against the equivalent binary comparisons: the
+				// lowered upper leg compares the same per-width ordinary
+				// DOUBLE conversion against the bound through the real
+				// binary kernels. The JSON 0 lower leg ranks below every
+				// subject here, so BETWEEN equals its `x <= hi` leg on
+				// every row and NOT BETWEEN complements through `x > hi`.
+				subjectColumn := NewFunctionTestInput(types.T_float64.ToType(),
+					append([]float64(nil), widenedCases[i]...), nil)
+				boundColumn := NewFunctionTestInput(types.T_float64.ToType(),
+					repeatFloat64(fix.bound, len(fix.subjects)), nil)
+				upper := runJsonFunctionWithSelectList(t, proc,
+					[]FunctionTestInput{subjectColumn, boundColumn},
+					types.T_bool.ToType(), lessEqualFn, nil)
+				negated := runJsonFunctionWithSelectList(t, proc,
+					[]FunctionTestInput{
+						NewFunctionTestInput(types.T_float64.ToType(),
+							append([]float64(nil), widenedCases[i]...), nil),
+						NewFunctionTestInput(types.T_float64.ToType(),
+							repeatFloat64(fix.bound, len(fix.subjects)), nil),
+					},
+					types.T_bool.ToType(), greatThanFn, nil)
+				upperValues := vector.MustFixedColNoTypeCheck[bool](upper)
+				negatedValues := vector.MustFixedColNoTypeCheck[bool](negated)
+				betweenValues := vector.MustFixedColNoTypeCheck[bool](between)
+				for row := range tc.expected {
+					require.Equal(t, upperValues[row], betweenValues[row],
+						"%s row %d: BETWEEN must equal its binary `x <= hi` leg", tc.name, row)
+					require.Equal(t, !negatedValues[row], betweenValues[row],
+						"%s row %d: BETWEEN must complement `x > hi`", tc.name, row)
+				}
+			})
+		}
 	}
 }
 
