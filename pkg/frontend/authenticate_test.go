@@ -19282,3 +19282,37 @@ func TestExtensionPrivilegeClassification(t *testing.T) {
 		})
 	}
 }
+
+func TestFlushPrivilegesAuthorization(t *testing.T) {
+	stmt := &tree.FlushPrivileges{}
+	priv := determinePrivilegeSetOfStatement(stmt)
+	require.Equal(t, objectTypeNone, priv.objectType())
+	require.Equal(t, privilegeKindSpecial, priv.privilegeKind())
+	for _, tc := range []struct {
+		tenant, role string
+		allowed      bool
+	}{
+		{"sys", "moadmin", true}, {"tenant_a", "accountadmin", true},
+		{"sys", "accountadmin", false}, {"tenant_a", "moadmin", false},
+		{"tenant_a", "public", false}, {"sys", "public", false},
+	} {
+		t.Run(tc.tenant+"/"+tc.role, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newSes(priv, ctrl)
+			ses.SetTenantInfo(&TenantInfo{Tenant: tc.tenant, DefaultRole: tc.role})
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(context.Background(), ses, stmt)
+			require.NoError(t, err)
+			require.Equal(t, tc.allowed, ok)
+		})
+	}
+}
+
+func TestFlushPrivilegesTransactionAndPrepare(t *testing.T) {
+	stmt := &tree.FlushPrivileges{}
+	ok, err := statementCanBeExecutedInUncommittedTransaction(context.Background(), nil, stmt)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.False(t, NeedToBeCommittedInActiveTransaction(stmt))
+	_, err = createPrepareStmtInSession(&ExecCtx{reqCtx: context.Background()}, nil, nil, "flush privileges", nil, stmt)
+	require.Error(t, err)
+}

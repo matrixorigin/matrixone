@@ -283,7 +283,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		*tree.SetLogserviceSettings:
 		return true, nil
 		//others
-	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *tree.ExplainPhyPlan, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
+	case *tree.FlushPrivileges, *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *tree.ExplainPhyPlan, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
 		return true, nil
 	case *tree.PrepareStmt:
 		if isDataBranchStatement(st.Stmt) {
