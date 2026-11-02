@@ -595,6 +595,9 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 }
 
 func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	if delegate := c.resolveDelegate(); delegate != nil {
+		return delegate.ResolveIndexTableByRef(ref, tblName, snapshot)
+	}
 	obj, def, err := c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
 	if obj != nil && ref.NotLockMeta {
 		obj.NotLockMeta = true
@@ -618,6 +621,30 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 
 func (c *compilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	return c.resolve(dbName, tableName, snapshot, false)
+}
+
+func (c *compilerContext) ResolveTemporaryTable(dbName, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	if delegate := c.resolveDelegate(); delegate != nil {
+		if resolver, ok := delegate.(interface {
+			ResolveTemporaryTable(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error)
+		}); ok {
+			return resolver.ResolveTemporaryTable(dbName, tableName, snapshot)
+		}
+		return delegate.Resolve(dbName, tableName, snapshot)
+	}
+	if c.proc != nil {
+		if ses := c.proc.GetSession(); ses != nil {
+			if dbName == "" {
+				dbName = c.DefaultDatabase()
+			}
+			if _, ok := ses.GetTempTable(dbName, tableName); !ok {
+				if owner, ok := ses.(process.TemporaryTableDDL); !ok || !owner.OwnsTemporaryTable(dbName, tableName) {
+					return nil, nil, nil
+				}
+			}
+		}
+	}
+	return c.Resolve(dbName, tableName, snapshot)
 }
 
 func (c *compilerContext) resolve(dbName string, tableName string, snapshot *plan.Snapshot, resolveTemporaryAlias bool) (*plan.ObjectRef, *plan.TableDef, error) {

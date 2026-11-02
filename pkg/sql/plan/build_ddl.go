@@ -4722,7 +4722,10 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	skip := IsFkBannedDatabase(createTable.Database)
+	// Temporary destinations live in the session namespace and cannot own or
+	// receive foreign keys. Persistent same-name tables and forward references
+	// must not be resolved while constructing a temporary table.
+	skip := createTable.Temporary || IsFkBannedDatabase(createTable.Database)
 	if !skip {
 		// Existing relations are handled by the execution-time RelationExists
 		// check. Their reverse foreign keys belong to the existing definition and
@@ -7940,8 +7943,13 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				continue
 			}
 
-			// TODO ONLY Check
-			_, destination, err := ctx.Resolve(databaseName, newName, nil)
+			var destination *plan.TableDef
+			var err error
+			if tableDef.IsTemporary {
+				_, destination, err = resolveTemporaryTable(ctx, databaseName, newName, nil)
+			} else {
+				_, destination, err = ctx.Resolve(databaseName, newName, nil)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -8956,7 +8964,8 @@ func buildCreatePitr(stmt *tree.CreatePitr, ctx CompilerContext) (*Plan, error) 
 		if !ctx.DatabaseExists(string(stmt.DatabaseName), nil) {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "database "+string(stmt.DatabaseName)+" does not exist")
 		}
-		objRef, tableDef, err := ctx.Resolve(string(stmt.DatabaseName), string(stmt.TableName), nil)
+		// PITR's frontend owner reads persistent mo_tables, not session aliases.
+		objRef, tableDef, err := ctx.ResolveWithoutTemporaryAlias(string(stmt.DatabaseName), string(stmt.TableName), nil)
 		if err != nil {
 			return nil, err
 		}
