@@ -1381,6 +1381,9 @@ message Node {
   // MARK only: a proven Boolean existence consumer with total, pure predicates.
   // Permits Boolean membership lowering; the generated IS TRUE consumer stays.
   bool mark_existence_only = 96;
+
+  // TABLE_SCAN only: read without whole-object disk-cache preloads.
+  bool skip_full_file_preloads = 97;
 }
 
 message SnapshotExtraInfo {

@@ -954,6 +954,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		if outerPkExpr == nil || outerPkExpr.GetCol() == nil {
 			return nodeID, nil
 		}
+		// The join reads only the candidate rows of the base table.
+		scanNode.SkipFullFilePreloads = true
 
 		// JOIN( table, ivf )
 		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -414,11 +415,22 @@ func (s *Scope) Run(c *Compile) (err error) {
 			if len(s.DataSource.RecvMsgList) > 0 {
 				tag = s.DataSource.RecvMsgList[0].MsgTag
 			}
+			if ts, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+				ts.ReadPolicy = scanReadPolicy(s.DataSource.node)
+			}
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
 	return err
+}
+
+// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads.
+func scanReadPolicy(node *plan.Node) fileservice.Policy {
+	if node.GetSkipFullFilePreloads() {
+		return fileservice.SkipFullFilePreloads
+	}
+	return 0
 }
 
 func (s *Scope) FreeOperator(c *Compile) {
