@@ -58,6 +58,11 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	if ses.ast == nil {
 		return false
 	}
+	// A saved result is read back without the SELECT check on the table these show.
+	switch ses.ast.(type) {
+	case *tree.ShowIndexIgnored, *tree.ShowIndexStatus:
+		return false
+	}
 
 	stmtProfile := ses.GetStmtProfile()
 	sqlSourceType := stmtProfile.GetSqlSourceType()

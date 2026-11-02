@@ -53,6 +53,12 @@ type IndexConsumer struct {
 	rowdelete    []any
 	sqlBufSendCh chan []byte
 	algo         string
+	ignored      *ignoredRows
+}
+
+// ignoredRowWriter is a writer that leaves out the rows its index cannot store.
+type ignoredRowWriter interface {
+	setIgnored(*ignoredRows)
 }
 
 var _ Consumer = new(IndexConsumer)
@@ -125,6 +131,16 @@ func NewIndexConsumer(cnUUID string,
 		return nil, err
 	}
 
+	var ignored *ignoredRows
+	if w, ok := sqlwriter.(ignoredRowWriter); ok {
+		if ignored, err = newIgnoredRows(info.DBName, tableDef, ie.indexes); err != nil {
+			return nil, err
+		}
+		if ignored != nil {
+			w.setIgnored(ignored)
+		}
+	}
+
 	// Give the fulltext2 sink the CN engine/txn handles so it can open a short txn with a
 	// FULL sqlproc to resolve DATALINK columns to file CONTENT during CDC (stage:// +
 	// PDF/DOCX extraction) — parity with the sync build. Done here because the write path
@@ -144,9 +160,9 @@ func NewIndexConsumer(cnUUID string,
 		rowdata:     make([]any, len(tableDef.Cols)),
 		rowdelete:   make([]any, 1),
 		algo:        ie.algo,
+		ignored:     ignored,
 		//sqlBufSendCh: make(chan []byte),
 	}
-
 	return c, nil
 }
 
@@ -181,6 +197,11 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				return
 			case sql, ok := <-c.sqlBufSendCh:
 				if !ok {
+					if c.ignored != nil {
+						if err := c.RunTxn(ctx, r, 5*time.Minute, c.flushIgnored); err != nil {
+							reportIndexConsumerErr(errch, err)
+						}
+					}
 					return
 				}
 
@@ -236,6 +257,9 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 							// channel closed
 							if objectio.ISCPIndexWatermarkErrInjected() {
 								return injectedISCPIndexErr("watermark")
+							}
+							if err := c.flushIgnored(sqlproc); err != nil {
+								return err
 							}
 							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 						}
@@ -363,6 +387,9 @@ func runHnsw[T types.ArrayElement](c *IndexConsumer, ctx context.Context, errch 
 						if err != nil {
 							return
 						}
+						if err = c.flushIgnored(sqlproc); err != nil {
+							return
+						}
 
 						// update watermark
 						if datatype == ISCPDataType_Tail {
@@ -461,6 +488,14 @@ func waitISCPIndexCancelCtx(ctx context.Context, key, indexName string) error {
 	return ctx.Err()
 }
 
+// flushIgnored writes the iteration's ignored rows in the transaction that commits it.
+func (c *IndexConsumer) flushIgnored(sqlproc *sqlexec.SqlProcess) error {
+	if c.ignored == nil {
+		return nil
+	}
+	return c.ignored.flush(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), c.indexName())
+}
+
 func (c *IndexConsumer) indexName() string {
 	if c == nil || c.info == nil {
 		return ""
@@ -549,6 +584,18 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 	// (iteration.go), which is the wrong tenant for a per-account stage lookup.
 	if w, ok := c.sqlWriter.(*Fulltext2SqlWriter); ok {
 		w.srcAccountID = r.GetAccountID()
+	}
+
+	if c.ignored != nil {
+		err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
+			func(sqlproc *sqlexec.SqlProcess, cbdata any) error {
+				return c.ignored.load(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), datatype == ISCPDataType_Snapshot, resolveHostSpillDir(sqlproc))
+			})
+		defer c.ignored.close()
+		if err != nil {
+			return err
+		}
+		c.ignored.setTs(r.GetToTS())
 	}
 
 	// create thread to poll sql
@@ -679,6 +726,9 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsert
 	// get row from the batch
 	if err = upsertIter.Row(ctx, c.rowdata, c.valueRepr()); err != nil {
 		return err
+	}
+	if c.ignored != nil {
+		c.ignored.setTs(upsertIter.Item().Ts)
 	}
 
 	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_INSERT) {
