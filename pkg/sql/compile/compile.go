@@ -1443,12 +1443,22 @@ func (c *Compile) lockTable() error {
 		// grant through the execution-read publication barrier (D-5/D-2)
 		// instead of failing today's terminal "SI not support retry". The
 		// fixed transaction snapshot is never advanced and table/DDL fences
-		// stay terminal (N3/G3). Unmarked staged entries keep the legacy
-		// call byte-identically. Round 10, finding 1: markedLocks is the
+		// stay terminal (N3/G3). Unmarked staged entries keep the legacy call
+		// byte-identically. Round 10, finding 1: markedLocks is the
 		// EFFECTIVE set — a table joins only through an occurrence this
 		// execution's admission admits (the engaging explicit-snapshot
 		// occurrence that stays historical claims nothing), so a promoted
 		// historical LOCK IN SHARE MODE keeps the legacy call above.
+		// PR-review P2 (aunjgr): the single staged acquisition serves EVERY
+		// promoted occurrence compileLock collapsed under this physical table
+		// ID, so the effective set additionally drops a table ANY of whose
+		// collapsed occurrences keeps a legacy obligation (the
+		// same-physical-table current + engaging-historical promoted join, the
+		// nested unmarked promoted pair) — a marked acquisition here would
+		// suppress the whole table's legacy SI wait-resolved conflict, so a
+		// collapsed historical or nested occurrence conservatively leaves the
+		// acquisition on today's terminal path, retaining today's outcome for
+		// the whole shape.
 		if _, marked := markedLocks[tbl.TableId]; marked {
 			if err := lockop.LockTableWithModeMarked(
 				c.e,
@@ -1492,13 +1502,26 @@ func (c *Compile) lockTable() error {
 // declines the attempt up front, so the FINAL whole-statement admission
 // decision is already shared with source initialization when the lock
 // options are chosen. Round 10, finding 1: beyond those declinatures, a
-// presence-marked table is only offered the marked options when at least
-// one of its occurrences is EFFECTIVELY admitted by this execution's own
-// admission predicate (executionReadAdmittedLockTables — the engaging
+// presence-marked table is only offered the marked options when one of its
+// occurrences is EFFECTIVELY admitted by this execution's own admission
+// predicate (executionReadAdmittedLockTables — the engaging
 // explicit-snapshot occurrence that stays historical for this execution
 // never claims the marked contract), so an occurrence-exempt but locked
 // shape — the promoted historical LOCK IN SHARE MODE — keeps today's
-// legacy acquisition as D-1/R8-F3 require.
+// legacy acquisition as D-1/R8-F3 require. PR-review P2 (aunjgr,
+// promoted aliases share a table): the effective-admission claim alone is
+// an ANY-occurrence test over the physical table ID, and compileLock
+// collapses every promoted occurrence of one table into a single staged
+// acquisition with no later per-occurrence validation, so the claim must
+// additionally resolve the contract of EVERY occurrence that collapses
+// into that acquisition (executionReadStagedLegacyObligations): a table
+// whose promoted occurrence set cannot preserve both the marked
+// current-read contract and an occurrence's legacy obligation — an
+// engaging-historical occurrence or a presence-less nested occurrence of
+// the same physical table — conservatively declines the whole acquisition
+// to today's legacy options (G3 lock acquisition unchanged; G4 one
+// acquisition never mixes contracts), exactly as the round-10 exemption
+// already demands for any historical-only occurrence.
 func (c *Compile) markedPrePipelineLockTables() map[uint64]struct{} {
 	if c.execReadDisabled {
 		return nil
@@ -1532,15 +1555,32 @@ func (c *Compile) markedPrePipelineLockTables() map[uint64]struct{} {
 	// acquisition no scan serves), while every table with at least one
 	// effectively admitted occurrence (ordinary outer, non-engaging
 	// H >= S) keeps the marked options the round-8/9 contracts promise.
+	// PR-review P2 (the same-table promoted join): "at least one admitted
+	// occurrence" is insufficient once compileLock collapses ALL promoted
+	// occurrences of one physical table into the single staged acquisition
+	// (c.lockTables[TableId] drops every row target of that table), so the
+	// marked options are additionally withheld from a table ANY of whose
+	// promoted occurrences must keep the legacy contract for this
+	// execution. A current alias of the same table must not turn off a
+	// collapsed occurrence's historical/nested exemption: without this
+	// conjunction, a writer committing while the shared staged lock waits
+	// would be served by the marked suppression (the acquisition succeeds,
+	// the historical occurrence reads its named snapshot) exactly where
+	// today's terminal w-w conflict must surface.
 	admitted := c.executionReadAdmittedLockTables(qry)
 	if len(admitted) == 0 {
 		return nil
 	}
+	legacyObligations := c.executionReadStagedLegacyObligations(qry)
 	effective := make(map[uint64]struct{}, len(presence))
 	for tableID := range presence {
-		if _, ok := admitted[tableID]; ok {
-			effective[tableID] = struct{}{}
+		if _, ok := admitted[tableID]; !ok {
+			continue
 		}
+		if _, legacy := legacyObligations[tableID]; legacy {
+			continue
+		}
+		effective[tableID] = struct{}{}
 	}
 	if len(effective) == 0 {
 		return nil
@@ -1581,6 +1621,76 @@ func (c *Compile) executionReadAdmittedLockTables(qry *plan.Query) map[uint64]st
 		claims[tbl.TblId] = struct{}{}
 	}
 	return claims
+}
+
+// executionReadStagedLegacyObligations reports the physical tables at least
+// one of whose PROMOTED lock occurrences — the occurrences compileLock
+// collapses into that table's single staged pre-pipeline acquisition
+// (c.lockTables[TableId]; the same-table row targets are dropped from the
+// lock operator) — must keep today's legacy contract for this execution:
+// a promoted occurrence WITHOUT locking-current-read presence (a
+// nested-block/locked-without-mark occurrence, the promoted variant of the
+// same-table shape of round 10 finding 2) or WITH a stored explicit snapshot
+// that ENGAGES the historical cohort for the executing SnapshotTS (the same
+// nonzero-and-strictly-older predicate the scan admission and the row
+// operator's per-target stamp resolve with). One acquisition carrying the
+// marked current-read contract would suppress the legacy SI wait-resolved
+// conflict for the WHOLE table — silently turning a collapsed historical or
+// nested occurrence's exemption off just because a current alias of the same
+// physical table was also promoted — and no per-occurrence validation
+// remains after the collapse, so such a table conservatively keeps the
+// legacy acquisition (G3: lock acquisition unchanged for the exempted
+// occurrence class; G4: never a mixture across one acquisition). Row
+// occurrences of the same table are irrelevant here: they never collapse
+// into the staged acquisition and keep their own per-occurrence resolution
+// in the lock operator (rev 24 round 11).
+func (c *Compile) executionReadStagedLegacyObligations(qry *plan.Query) map[uint64]struct{} {
+	if qry == nil {
+		return nil
+	}
+	txnOp := c.proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	execSnapshotTS := txnOp.Txn().SnapshotTS
+	var legacy map[uint64]struct{}
+	for _, node := range qry.GetNodes() {
+		for _, target := range node.GetLockTargets() {
+			// Only a promoted target reaches the staged acquisition; every
+			// other occurrence keeps the lock operator's per-occurrence
+			// contract.
+			if target == nil || !target.GetLockTable() {
+				continue
+			}
+			keepsLegacy := !target.GetLockingRead() ||
+				stagedSnapshotEngagesCohort(target, execSnapshotTS)
+			if !keepsLegacy {
+				continue
+			}
+			if legacy == nil {
+				legacy = make(map[uint64]struct{})
+			}
+			legacy[target.GetTableId()] = struct{}{}
+		}
+	}
+	return legacy
+}
+
+// stagedSnapshotEngagesCohort resolves one promoted plan target's stored
+// explicit-snapshot provenance against the executing transaction's
+// SnapshotTS with the same predicate the row operator's occurrence stamp
+// uses (lockop lockingSnapshotEngagesCohort) and the scan admission implies
+// (executionReadScanAdmitted's SnapshotHasExplicitTS && Less check): a
+// stored H that is nonzero and strictly older than the executing SnapshotTS
+// engages the historical cohort for this execution. Ordinary targets and
+// targets whose source carried no real snapshot store zero and never
+// engage.
+func stagedSnapshotEngagesCohort(target *plan.LockTarget, execSnapshotTS timestamp.Timestamp) bool {
+	h := timestamp.Timestamp{
+		PhysicalTime: target.GetExplicitSnapshotPhysical(),
+		LogicalTime:  target.GetExplicitSnapshotLogical(),
+	}
+	return !h.IsEmpty() && h.Less(execSnapshotTS)
 }
 
 // anyScopePlacedRemote reports whether any pipeline piece of this compile
