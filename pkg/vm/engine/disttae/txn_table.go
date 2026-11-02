@@ -254,6 +254,9 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 	if err != nil || tbl.isLogicalView(ctx) {
 		return published, err
 	}
+	if published != nil && len(published.ByteRangeMap) > 0 && (tbl.db.op.IsSnapOp() || !tbl.getTxn().Readonly()) {
+		published = transientTableStats(published, published.TableCnt)
+	}
 	if tbl.remoteWorkspace {
 		if plan2.StatsInfoUsableForCache(published) && tbl.getTxn().Readonly() {
 			return published, nil
@@ -343,6 +346,7 @@ func transientTableStats(published *pb.StatsInfo, rows float64) *pb.StatsInfo {
 			}
 		}
 	}
+	stats.ByteRangeMap = nil
 	stats.TableName = ""
 	stats.TableCnt = rows
 	return &stats

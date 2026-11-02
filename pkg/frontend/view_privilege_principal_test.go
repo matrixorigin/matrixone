@@ -119,7 +119,7 @@ func TestViewAdminRoleIsAccountQualified(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		bh.resultSets = []interface{}{&MysqlResultSet{}}
-		allowed, err := verifyViewPrivilegeForRole(ctx, bh, nil, nil, tc.role, PrivilegeTypeSelect, "db", "v", false)
+		allowed, err := verifyViewPrivilegeForRole(ctx, bh, nil, nil, tc.role, PrivilegeTypeSelect, "db", "v", false, false)
 		require.NoError(t, err)
 		require.Equal(t, tc.allowed, allowed)
 	}
