@@ -309,6 +309,8 @@ type Lexer struct {
 	sqlMode               SQLModeFlags
 	parseFirst            bool
 	stopLexing            bool
+	digestShow            bool
+	digestShowWhere       bool
 	statementEnd          int
 	selectLockClauses     int
 }
@@ -355,6 +357,8 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.sqlMode = sqlMode
 	l.parseFirst = false
 	l.stopLexing = false
+	l.digestShow = false
+	l.digestShowWhere = false
 	l.statementEnd = 0
 	l.selectLockClauses = 0
 }
@@ -426,8 +430,8 @@ func rejectDigestReservedKeyword(yylex yyLexer, name string) bool {
 // TEXT_STRING_validated rejects lossy conversion to MySQL's system charset.
 // This is a grammar-time check, including unused CTEs and bytes after NUL;
 // quoted identifiers and ordinary string expressions have different contracts.
-func digestStringAliasValid(yylex yyLexer, alias string, introduced bool) bool {
-	if yylex.(*Lexer).digest == nil || !introduced && digestSystemCharsetValid(alias) {
+func digestStringAliasValid(yylex yyLexer, alias string) bool {
+	if yylex.(*Lexer).digest == nil || digestSystemCharsetValid(alias) {
 		return true
 	}
 	yylex.Error("Invalid string alias.")
@@ -481,16 +485,38 @@ func digestCharsetLiteralValid(yylex yyLexer, charset, value string, hexadecimal
 	return valid
 }
 
+// Validate the raw parameter, before display-width sentinel normalization.
+// BOOL and YEAR are not unrestricted integer display-width declarations.
+func digestIntegerTypeValid(yylex yyLexer, typ *tree.T, width int32) bool {
+	if yylex.(*Lexer).digest == nil {
+		return true
+	}
+	valid := width <= 255
+	switch digestKeywordUpper(typ.InternalType.FamilyString) {
+	case "BIT":
+		valid = width < 0 || width >= 1 && width <= 64
+	case "BOOL", "BOOLEAN":
+		valid = width < 0
+	case "YEAR":
+		valid = width < 0 || width == 4
+	}
+	if !valid {
+		yylex.Error("Invalid integer type display width")
+	}
+	return valid
+}
+
 // CAST and DDL share type construction, not admissible target syntax. Inspect
 // the grammar-owned type before mo_cast_type rewrites CHAR into VARCHAR.
-func digestCastTypeValid(yylex yyLexer, typ *tree.T) bool {
+func digestCastTypeValid(yylex yyLexer, typ *tree.T, modifiers bool) bool {
 	if yylex.(*Lexer).digest == nil {
 		return true
 	}
 	t := typ.InternalType
 	valid := false
 	switch digestKeywordUpper(t.FamilyString) {
-	case "CHAR", "CHARACTER", "NCHAR", "BINARY", "DATE", "JSON":
+	case "CHAR", "CHARACTER", "NCHAR", "BINARY", "DATE", "JSON",
+		"POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
 		valid = true
 	case "DECIMAL", "DEC":
 		valid = t.Scale <= 30
@@ -500,6 +526,9 @@ func digestCastTypeValid(yylex yyLexer, typ *tree.T) bool {
 		valid = t.Scale <= 6
 	case "YEAR":
 		valid = t.DisplayWith == 0
+	}
+	if modifiers {
+		valid = false
 	}
 	if !valid {
 		yylex.Error("Invalid CAST target type or parameters")
@@ -521,7 +550,6 @@ func (l *Lexer) GetParamIndex() int {
 }
 
 func (l *Lexer) Lex(lval *yySymType) int {
-	lval.introducedString = false
 	l.scanner.parseControl.token()
 	if l.stopLexing {
 		return 0
@@ -543,11 +571,10 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// ROW constructor and quoted user-variable names without changing ordinary
 	// SQL execution syntax. The independent digest scanner keeps their tokens.
 	if l.digest != nil {
-		// Scanner folds _utf8mb4 literals to STRING. Preserve the token's
-		// introducer role without changing ordinary or expression parsing.
-		if typ == STRING {
-			raw := strings.TrimLeft(l.scanner.buf[l.scanner.PrePos:l.scanner.Pos], " \t\r\n")
-			lval.introducedString = strings.HasPrefix(raw, "_")
+		// A SHOW filter accepts a text token, not an arbitrary expression.
+		// WHERE and nested queries retain ordinary LIKE expression syntax.
+		if typ == LIKE && l.digestShow && !l.digestShowWhere && l.syntaxDepth == 0 {
+			typ = DIGEST_SHOW_LIKE
 		}
 		if typ == CHARACTER {
 			// CHARACTER is also the charset clause keyword. Only its type
@@ -585,8 +612,10 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			}
 		} else if typ == ID && l.lastToken != '.' && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
 			// National strings are one literal, not an identifier plus alias.
-			lval.introducedString = true
 			typ, str = l.scanner.Scan()
+			if typ == STRING {
+				typ = DIGEST_INTRODUCED_STRING
+			}
 		} else if typ == ID && strings.EqualFold(str, "dual") && !l.scanner.qualifiedIdentifier {
 			typ = DIGEST_DUAL
 		} else if typ == ID && !l.scanner.qualifiedIdentifier && rejectDigestReservedKeyword(l, str) {
@@ -810,7 +839,18 @@ func hasAsofLeftFactorAlias(expr tree.TableExpr) bool {
 }
 
 func (l *Lexer) recordSyntaxToken(token int) {
+	if l.digest != nil {
+		if l.syntaxLastToken == 0 || l.syntaxLastToken == int(';') {
+			l.digestShow = token == SHOW
+			l.digestShowWhere = false
+		}
+		if token == WHERE && l.syntaxDepth == 0 {
+			l.digestShowWhere = true
+		}
+	}
 	if token == int(';') {
+		l.digestShow = false
+		l.digestShowWhere = false
 		l.syntaxLastToken = token
 		l.syntaxDepth = 0
 		l.syntaxInFrom = l.syntaxInFrom[:0]

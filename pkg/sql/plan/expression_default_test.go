@@ -777,6 +777,30 @@ func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T
 		"b's row expression must read the appended a input, not inline rand()")
 }
 
+func TestSequentialUpdateBindingKeepsDefaultAndVirtualReadMetadata(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
+	parent := NewBindContext(builder, nil)
+	column := &ColDef{Name: "a", Typ: expressionDefaultIntType(), Default: &planpb.Default{Expr: expressionDefaultInt(1), OriginString: "1"}}
+	table := &TableDef{Name: "t", Name2ColIndex: map[string]int32{"a": 0}, Cols: []*ColDef{column}}
+	metadata := []SourceColumnMetadata{snapshotSourceColumnMetadata(column)}
+	column.Default.Expr = expressionDefaultInt(99)
+	tag := builder.genNewBindTag()
+	node := &planpb.Node{NodeType: planpb.Node_PROJECT, BindingTags: []int32{tag},
+		ProjectList: []*planpb.Expr{expressionDefaultInt(3), expressionDefaultInt(0)}}
+	nodeID := builder.appendNode(node, parent)
+	for _, staged := range []bool{false, true} {
+		ctx, binder := builder.newSequentialUpdateProjectionBinder(parent, nodeID, tag, table, "t", node.ProjectList, metadata, staged)
+		require.Len(t, ctx.bindings, 1)
+		require.Same(t, table, ctx.bindings[0].virtualTimestampTable)
+		require.Equal(t, staged, ctx.bindings[0].virtualTimestampStaged)
+		expr, err := binder.BindExpr(&tree.DefaultColExpr{Column: tree.NewUnresolvedColName("a"), StrictMode: true}, 0, true)
+		require.NoError(t, err)
+		require.NotNil(t, expr.GetLit())
+		require.Equal(t, int64(1), expr.GetLit().GetI64Val(), "DEFAULT metadata is the immutable declaration, not the current row or mutated catalog")
+		require.Nil(t, expr.GetCol(), "DEFAULT metadata must not invent a row dependency")
+	}
+}
+
 func TestSequentialUpdateDefaultReadsCurrentRowImage(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	nodeCtx := NewBindContext(builder, nil)
@@ -858,6 +882,10 @@ func TestSequentialUpdateDefaultReadsCurrentRowImage(t *testing.T) {
 	// RAND is the source default for a, and b=DEFAULT must read that
 	// materialized value instead of carrying a second RAND root.
 	require.Equal(t, 1, count)
+	for pos, column := range tableDef.Cols {
+		require.Equal(t, int32(len(tableDef.Cols)+pos), oldColName2Idx["expression_default_update."+column.Name],
+			"every physical OLD field, including untouched rowid, lives in the passthrough half")
+	}
 }
 
 func TestExpandDefaultExprsInValueScanIsRowLocal(t *testing.T) {

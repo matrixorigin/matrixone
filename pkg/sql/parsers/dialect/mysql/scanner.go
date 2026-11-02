@@ -179,7 +179,7 @@ func (s *Scanner) scan(comments bool) (int, string) {
 				}
 				if token == COMMENT {
 					s.digestReservedWord = reserved
-				} else if token != QUOTE_ID && token != STRING && token != AT_ID && token != AT_AT_ID && !s.qualifiedIdentifier {
+				} else if token != QUOTE_ID && token != STRING && token != DIGEST_INTRODUCED_STRING && token != AT_ID && token != AT_AT_ID && !s.qualifiedIdentifier {
 					symbol := digestSymbols[digestKeywordUpper(value)]
 					if s.identifierAfterDot && symbol.reserved {
 						return LEX_ERROR, value
@@ -291,7 +291,11 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 				s.skipBlank()
 				if s.cur() == '\'' {
 					s.inc()
-					return s.scanString('\'', STRING)
+					token, value := s.scanString('\'', STRING)
+					if s.digestMode && token == STRING {
+						token = DIGEST_INTRODUCED_STRING
+					}
+					return token, value
 				}
 				// A character-set-introduced hex literal is text, not a
 				// binary HEXNUM or a width-constrained CAST. Decode through
@@ -304,6 +308,9 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 				decoded, err := hex.DecodeString(value[2:])
 				if err != nil || s.digestMode && !utf8.Valid(decoded) {
 					return LEX_ERROR, value
+				}
+				if s.digestMode {
+					return DIGEST_INTRODUCED_STRING, string(decoded)
 				}
 				return STRING, string(decoded)
 			}

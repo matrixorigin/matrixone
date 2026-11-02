@@ -205,7 +205,7 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 		case INTEGRAL, FLOAT, HEXNUM, BIT_LITERAL:
 			d.add(digestValue, "", true)
 			continue
-		case STRING:
+		case STRING, DIGEST_INTRODUCED_STRING:
 			if !hint && d.last(0) == digestIdentifier && d.last(1) != '.' && strings.TrimSpace(s.buf[priorEnd:s.PrePos]) == "" {
 				if strings.EqualFold(priorRaw, "n") && strings.HasPrefix(raw, "'") && priorEnd == s.Pos-len(raw) {
 					d.pop(1)

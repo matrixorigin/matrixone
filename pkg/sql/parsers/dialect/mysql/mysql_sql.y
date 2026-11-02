@@ -198,9 +198,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     pos int
     quotedIdentifier bool
     singleTypePrecision bool
-    introducedString bool
-    typeLength int32
     stringTableAlias bool
+    numericModifiers bool
+    typeLength int32
 }
 
 %union {
@@ -758,7 +758,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
 // DUAL is reserved only in MySQL digest syntax; ordinary MO identifiers keep
 // their existing grammar. Its only unqualified form is the entire FROM clause.
-%token <str> DIGEST_DUAL DIGEST_NATIONAL
+%token <str> DIGEST_DUAL DIGEST_NATIONAL DIGEST_INTRODUCED_STRING DIGEST_SHOW_LIKE
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
 %token <str> DATASTREAM ESQL KAFKA
 
@@ -5853,12 +5853,18 @@ like_opt:
     {
         $$ = nil
     }
+|   DIGEST_SHOW_LIKE STRING
+    {
+        $$ = tree.NewComparisonExpr(tree.LIKE, nil, tree.NewNumVal($2, $2, false, tree.P_char))
+    }
 |   LIKE simple_expr
     {
+        if yylex.(*Lexer).digest != nil { yylex.Error("SHOW LIKE requires a text string"); goto ret1 }
         $$ = tree.NewComparisonExpr(tree.LIKE, nil, $2)
     }
 |   ILIKE simple_expr
     {
+        if yylex.(*Lexer).digest != nil { yylex.Error("SHOW does not support ILIKE"); goto ret1 }
         $$ = tree.NewComparisonExpr(tree.ILIKE, nil, $2)
     }
 
@@ -8799,13 +8805,13 @@ as_name_opt:
     }
 |   STRING
     {
-        if !digestStringAliasValid(yylex, $1, $<introducedString>1) { goto ret1 }
+        if !digestStringAliasValid(yylex, $1) { goto ret1 }
         $$ = tree.NewCStr($1, 1)
         $$.Quoted = yylex.(*Lexer).digest != nil
     }
 |   AS STRING
     {
-        if !digestStringAliasValid(yylex, $2, $<introducedString>2) { goto ret1 }
+        if !digestStringAliasValid(yylex, $2) { goto ret1 }
         $$ = tree.NewCStr($2, 1)
         $$.Quoted = yylex.(*Lexer).digest != nil
     }
@@ -9417,10 +9423,13 @@ account_comment_opt:
     }
 
 create_user_stmt:
-    CREATE USER not_exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
+    CREATE USER not_exists_opt user_spec_list default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
         var IfNotExists = $3
         var Users = $4
+        if yylex.(*Lexer).digest == nil {
+            for _, user := range Users { if user.AuthOption == nil { yylex.Error("syntax error"); goto ret1 } }
+        }
         var Role = $5
         var MiscOpt = $6
         var CommentOrAttribute = $7
@@ -13950,7 +13959,7 @@ mo_cast_type:
     column_type
 {
    t := $$
-   if !digestCastTypeValid(yylex, t) { goto ret1 }
+   if !digestCastTypeValid(yylex, t, $<numericModifiers>1) { goto ret1 }
    str := strings.ToLower(t.InternalType.FamilyString)
    if str == "binary" {
         t.InternalType.Scale = -1
@@ -13996,7 +14005,13 @@ mo_cast_type:
 mysql_cast_type:
     decimal_type
     {
-        if !digestCastTypeValid(yylex, $1) { goto ret1 }
+        if !digestCastTypeValid(yylex, $1, false) { goto ret1 }
+        $$ = $1
+    }
+|   spatial_type
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        if !digestCastTypeValid(yylex, $1, false) { goto ret1 }
         $$ = $1
     }
 |   JSON
@@ -15617,6 +15632,10 @@ literal:
     {
         $$ = tree.NewNumVal($1, $1, false, tree.P_char)
     }
+|   DIGEST_INTRODUCED_STRING
+    {
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
+    }
 |   INTEGRAL
     {
         str := $<str>1
@@ -15680,15 +15699,28 @@ literal:
 column_type:
     numeric_type unsigned_opt zero_fill_opt
     {
+        $<numericModifiers>$ = $<numericModifiers>2 || $3
+        if $<numericModifiers>$ {
+            if yylex.(*Lexer).digest != nil && ($1.InternalType.Family == tree.BitFamily || $1.InternalType.Family == tree.BoolFamily) {
+                yylex.Error("This type does not accept numeric modifiers"); goto ret1
+            }
+            if yylex.(*Lexer).digest == nil && $1.InternalType.Oid == uint32(defines.MYSQL_TYPE_YEAR) {
+                yylex.Error("syntax error"); goto ret1
+            }
+        }
         $$ = $1
         $$.InternalType.Unsigned = $2
         $$.InternalType.Zerofill = $3
     }
 |   char_type
+    { $$ = $1; $<numericModifiers>$ = false }
 |   time_type
+    { $$ = $1; $<numericModifiers>$ = false }
 |   spatial_type
+    { $$ = $1; $<numericModifiers>$ = false }
 |   ARRAY '(' column_type ')'
     {
+        $<numericModifiers>$ = false
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -15704,10 +15736,7 @@ column_type:
 numeric_type:
     int_type length_opt
     {
-        if yylex.(*Lexer).digest != nil && $1.InternalType.Family == tree.BitFamily &&
-            ($<typeLength>2 == 0 || $<typeLength>2 > 64) {
-            yylex.Error("BIT length must be between 1 and 64"); goto ret1
-        }
+        if !digestIntegerTypeValid(yylex, $1, $<typeLength>2) { goto ret1 }
         $$ = $1
         $$.InternalType.DisplayWith = $2
     }
@@ -15717,7 +15746,15 @@ numeric_type:
     }
 
 int_type:
-    BIT
+    YEAR
+    {
+        locale := ""
+        $$ = &tree.T{InternalType: tree.InternalType{
+            Family: tree.IntFamily, FamilyString: $1, Width: 16,
+            Locale: &locale, Oid: uint32(defines.MYSQL_TYPE_YEAR),
+        }}
+    }
+|   BIT
     {
         locale := ""
         $$ = &tree.T{
@@ -16190,20 +16227,6 @@ time_type:
             }
         }
     }
-|   YEAR length_opt
-    {
-        locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-                Family: tree.IntFamily,
-                FamilyString: $1,
-                DisplayWith: $2,
-                Width:  16,
-                Locale: &locale,
-                Oid:    uint32(defines.MYSQL_TYPE_YEAR),
-            },
-        }
-    }
 
 char_type_name:
     CHAR
@@ -16595,11 +16618,24 @@ declare_stmt:
 spatial_type:
     spatial_type_name
     {
+        if yylex.(*Lexer).digest != nil {
+            if _, ok := digestSymbols[digestKeywordUpper($1)]; !ok { yylex.Error("Invalid MySQL spatial type"); goto ret1 }
+        }
         $$ = tree.NewSpatialType($1)
     }
 
 spatial_type_name:
-    GEOMETRY
+    ID
+    {
+        // A native alias missing from MO's keyword table stays an ID in
+        // function/name positions. Bridge it only in the type grammar.
+        if yylex.(*Lexer).digest == nil ||
+            digestSymbols[digestKeywordUpper($1)].id != digestSymbols["GEOMETRYCOLLECTION"].id {
+            yylex.Error("Invalid MySQL spatial type"); goto ret1
+        }
+        $$ = "GEOMETRYCOLLECTION"
+    }
+|   GEOMETRY
 |   POINT
 |   LINESTRING
 |   POLYGON
@@ -16746,19 +16782,22 @@ unsigned_opt:
     %prec LOWER_THAN_SIGNED
     {
         $$ = false
+        $<numericModifiers>$ = false
     }
 |   UNSIGNED
     {
         $$ = true
+        $<numericModifiers>$ = true
     }
 |   SIGNED
     {
         $$ = false
+        $<numericModifiers>$ = true
     }
 
 zero_fill_opt:
     %prec LOWER_THAN_ZEROFILL
-    {}
+    { $$ = false }
 |   ZEROFILL
     {
         $$ = true

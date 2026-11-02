@@ -266,6 +266,149 @@ func TestDigestRoleBoundariesAndReuse(t *testing.T) {
 	}
 }
 
+func TestDigestCastAndTextDomains(t *testing.T) {
+	for _, test := range []struct {
+		name, sql string
+		reject    bool
+	}{
+		{"spatial-cast", "SELECT CAST(NULL AS POINT)", false},
+		{"spatial-convert", "SELECT CONVERT(1, GEOMETRYCOLLECTION)", false},
+		{"spatial-alias-cast", "SELECT CAST(NULL AS GEOMCOLLECTION)", false},
+		{"spatial-alias-convert", "SELECT CONVERT(1, GEOMCOLLECTION)", false},
+		{"spatial-alias-function", "SELECT geomcollection(POINT(1,2))", false},
+		{"unknown-type-not-alias", "CREATE TABLE t (a unknown_type)", true},
+		{"generic-geometry-not-target", "SELECT CAST(1 AS GEOMETRY)", true},
+		{"mo-spatial-not-mysql", "CREATE TABLE t (a GEOMETRY32)", true},
+		{"integer-limit", "CREATE TABLE t (a INT(255))", false},
+		{"integer-overflow", "CREATE TABLE t (a INT(256))", true},
+		{"integer-zero", "CREATE TABLE t (a INT(0))", false},
+		{"bool-no-width", "CREATE TABLE t (a BOOL(1))", true},
+		{"bit-no-modifiers", "CREATE TABLE t (a BIT UNSIGNED)", true},
+		{"year-width", "CREATE TABLE t (a YEAR(4) UNSIGNED)", false},
+		{"year-wrong-width", "CREATE TABLE t (a YEAR(0))", true},
+		{"cast-signed-modifier", "SELECT CAST(1 AS FLOAT SIGNED)", true},
+		{"cast-unsigned-modifier", "SELECT CAST(1 AS DECIMAL(10,2) UNSIGNED)", true},
+		{"cast-zerofill-modifier", "SELECT CAST(1 AS DOUBLE ZEROFILL)", true},
+		{"ddl-modifiers", "CREATE TABLE t (a FLOAT SIGNED, b DECIMAL(10,2) UNSIGNED ZEROFILL)", false},
+		{"cast-signed-target", "SELECT CAST(1 AS SIGNED INTEGER)", false},
+		{"cast-unsigned-target", "SELECT CONVERT(1, UNSIGNED)", false},
+		{"engine-introducer", "CREATE TABLE t (a INT) ENGINE=_utf8mb4'a'", true},
+		{"engine-text", "CREATE TABLE t (a INT) ENGINE='a'", false},
+		{"comment-introducer", "CREATE TABLE t (a INT COMMENT _utf8mb4'a')", true},
+		{"comment-executable-introducer", "CREATE TABLE t (a INT COMMENT /*!80411 _utf8mb4'a' */)", true},
+		{"comment-text", "CREATE TABLE t (a INT COMMENT 'a')", false},
+		{"expression-introducer", "SELECT _utf8mb4'SELECT'", false},
+		{"expression-national", "SELECT N'a'", false},
+		{"show-number", "SHOW TABLES LIKE 1", true},
+		{"show-function", "SHOW TABLES LIKE CONCAT('a','b')", true},
+		{"show-subquery", "SHOW TABLES LIKE (SELECT 'a')", true},
+		{"show-parenthesized-text", "SHOW TABLES LIKE ('a')", true},
+		{"show-introduced-text", "SHOW TABLES LIKE _utf8mb4'a'", true},
+		{"show-text", "SHOW TABLES LIKE 'a'", false},
+		{"show-where-like", "SHOW TABLES WHERE 'a' LIKE _utf8mb4'a'", false},
+		{"show-where-nested-like", "SHOW TABLES WHERE EXISTS (SELECT 1 WHERE 'a' LIKE 'a')", false},
+		{"user-comment", "CREATE USER u COMMENT 'a'", false},
+		{"user-comment-introducer", "CREATE USER u COMMENT _utf8mb4'a'", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for range 3 {
+				_, _, err := StatementDigest(t.Context(), test.sql, "")
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				text, hash, err := StatementDigest(t.Context(), "SELECT 1", "")
+				require.NoError(t, err)
+				require.Equal(t, "SELECT ?", text)
+				require.Equal(t, "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae", hash)
+			}
+		})
+	}
+	for _, test := range []struct {
+		sql    string
+		reject bool
+	}{
+		{"CREATE TABLE t (a INT(256))", false},
+		{"SELECT CAST(1 AS FLOAT SIGNED)", false},
+		{"CREATE TABLE t (a INT) ENGINE=_utf8mb4'a'", false},
+		{"SHOW TABLES LIKE 1", false},
+		{"SELECT CONVERT(1, POINT)", true},
+		{"SELECT CAST(NULL AS GEOMCOLLECTION)", true},
+		{"CREATE TABLE t (a unknown_type)", true},
+		{"CREATE USER u COMMENT 'a'", true},
+		{"CREATE TABLE t (a YEAR UNSIGNED)", true},
+	} {
+		func() {
+			statements, err := Parse(t.Context(), test.sql, 0)
+			defer func() {
+				for _, stmt := range statements {
+					stmt.Free()
+				}
+			}()
+			if test.reject {
+				require.Error(t, err, "ordinary admission must remain unchanged: %s", test.sql)
+			} else {
+				require.NoError(t, err, test.sql)
+			}
+		}()
+	}
+}
+
+// Test lexical provenance and SHOW scope at their owner, including resetting the
+// same lexer after EOF/WHERE and after semicolons. Public syntax/hash are checked
+// independently by the frozen MySQL fixture, not inferred from these token IDs.
+func TestDigestTextTokenAndShowScopeReuse(t *testing.T) {
+	lexer := &Lexer{}
+	for _, test := range []struct {
+		sql                        string
+		digest                     bool
+		showLike, like, introduced int
+	}{
+		{"SHOW TABLES LIKE 'a'", true, 1, 0, 0},
+		{"SHOW TABLES WHERE 'a' LIKE 'a'", true, 0, 1, 0},
+		{"SHOW TABLES WHERE EXISTS (SELECT 1 WHERE 'a' LIKE 'a')", true, 0, 1, 0},
+		{"SELECT 'a' LIKE 'a'", true, 0, 1, 0},
+		{"SHOW TABLES WHERE 1; SHOW TABLES LIKE 'a'", true, 1, 0, 0},
+		{"SHOW TABLES /*!80411 LIKE 'a' */", true, 1, 0, 0},
+		{"SELECT _utf8mb4'SELECT'", true, 0, 0, 1},
+		{"SELECT /*!80411 _utf8mb4'SELECT' */", true, 0, 0, 1},
+		{"SELECT N'a'", true, 0, 0, 1},
+		{"SHOW TABLES LIKE 1", false, 0, 1, 0},
+		{"SELECT _utf8mb4'SELECT'", false, 0, 0, 0},
+	} {
+		func() {
+			scanner := NewScanner(dialect.MYSQL, test.sql)
+			defer PutScanner(scanner)
+			scanner.digestMode = test.digest
+			lexer.setScanner(scanner, 0, 0)
+			lexer.digest = nil
+			if test.digest {
+				lexer.digest = &statementDigestSyntax{nulls: make(map[int]struct{})}
+			}
+			require.False(t, lexer.digestShow)
+			require.False(t, lexer.digestShowWhere)
+			counts := make(map[int]int)
+			for i := 0; ; i++ {
+				require.Less(t, i, 100)
+				var value yySymType
+				token := lexer.Lex(&value)
+				require.NotEqual(t, LEX_ERROR, token, test.sql)
+				if token == 0 {
+					break
+				}
+				counts[token]++
+				if token == DIGEST_INTRODUCED_STRING {
+					require.False(t, scanner.digestReservedWord, "literal contents are not a keyword")
+				}
+			}
+			require.Equal(t, test.showLike, counts[DIGEST_SHOW_LIKE], test.sql)
+			require.Equal(t, test.like, counts[LIKE], test.sql)
+			require.Equal(t, test.introduced, counts[DIGEST_INTRODUCED_STRING], test.sql)
+		}()
+	}
+}
+
 func TestDigestHintCompactionOwnsBytes(t *testing.T) {
 	for _, test := range []struct {
 		input string
