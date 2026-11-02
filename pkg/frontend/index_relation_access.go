@@ -122,10 +122,12 @@ func checkFrontendIndexTarget(ctx context.Context, ses FeSession, stmt tree.Stat
 type explicitIndexTarget struct {
 	database, table               string
 	at                            *tree.AtTimeStamp
+	cloneSource                   *tree.CloneTable
 	snapshotName, pitrTimestamp   string
 	publisherAccount, publication string
 	withoutTemporaryAlias         bool
 	temporaryOnly                 bool
+	deferDestinationCatalog       bool
 }
 
 type explicitIndexTargetResolver func(explicitIndexTarget) error
@@ -150,6 +152,11 @@ func checkFrontendIndexTargetWithCatalog(execCtx *ExecCtx, stmt tree.Statement) 
 
 func checkExplicitIndexTargetCatalog(execCtx *ExecCtx, target explicitIndexTarget) error {
 	if target.table == "" || execCtx == nil || execCtx.ses == nil {
+		return nil
+	}
+	if target.deferDestinationCatalog {
+		// The authorized clone/branch owner resolves TO ACCOUNT once and
+		// checks the destination with that ID before its mutation admission.
 		return nil
 	}
 	ses := execCtx.ses
@@ -205,6 +212,13 @@ func checkExplicitIndexTargetCatalog(execCtx *ExecCtx, target explicitIndexTarge
 	var snapshot *pbplan.Snapshot
 	var err error
 	switch {
+	case target.cloneSource != nil:
+		// Clone execution installs the source account before resolving a hint.
+		// Restore it before checking the destination or another statement.
+		previous := tcc.GetSnapshot()
+		defer tcc.SetSnapshot(previous)
+		builder := plan2.NewQueryBuilder(pbplan.Query_INSERT, tcc, false, true)
+		snapshot, err = builder.ResolveCloneTableSourceSnapshot(target.cloneSource)
 	case target.at != nil:
 		builder := plan2.NewQueryBuilder(pbplan.Query_SELECT, tcc, false, false)
 		snapshot, err = builder.ResolveTsHint(target.at)
@@ -239,6 +253,43 @@ func checkExplicitIndexTargetCatalog(execCtx *ExecCtx, target explicitIndexTarge
 	return checkResolvedIndexRelation(execCtx, target.table, physical, def.TableType, def.FeatureFlag)
 }
 
+// checkCloneDestinationAtAccount runs at the authorized owner after its
+// existing account resolution and before clone or branch mutation admission.
+// Only the catalog namespace changes; index access still uses the caller.
+func checkCloneDestinationAtAccount(execCtx *ExecCtx, ses *Session, table *tree.TableName, opAccount, targetAccount uint32) error {
+	if execCtx == nil || ses == nil || table == nil {
+		return moerr.NewInternalErrorNoCtx("missing clone destination admission context")
+	}
+	admission := *execCtx
+	admission.ses = ses
+	name := string(table.ObjectName)
+	if err := checkResolvedIndexRelation(&admission, name, name, "", 0); err != nil {
+		return err
+	}
+	if checkResolvedIndexRelation(&admission, catalog.IndexTableNamePrefix, "", "", 0) == nil {
+		return nil
+	}
+	handler := ses.GetTxnHandler()
+	tcc := ses.GetTxnCompileCtx()
+	if handler == nil || handler.GetTxn() == nil || tcc == nil {
+		return moerr.NewInternalError(execCtx.reqCtx, "missing transaction for clone destination admission")
+	}
+	previous := tcc.GetContext()
+	tcc.SetContext(defines.AttachAccountId(previous, targetAccount))
+	defer tcc.SetContext(previous)
+	if targetAccount != opAccount {
+		// An active subscription belongs to the source namespace and must
+		// not redirect a same-named database in the destination account.
+		previousSub := tcc.GetQueryingSubscription()
+		tcc.SetQueryingSubscription(nil)
+		defer tcc.SetQueryingSubscription(previousSub)
+	}
+	return checkExplicitIndexTargetCatalog(&admission, explicitIndexTarget{
+		database: string(table.SchemaName), table: name,
+		withoutTemporaryAlias: targetAccount != opAccount,
+	})
+}
+
 func checkFrontendIndexTargetWithResolver(execCtx *ExecCtx, stmt tree.Statement, resolve explicitIndexTargetResolver) error {
 	checkTarget := func(target explicitIndexTarget) error {
 		if err := checkResolvedIndexRelation(execCtx, target.table, target.table, "", 0); err != nil {
@@ -271,6 +322,15 @@ func checkFrontendIndexTargetWithResolver(execCtx *ExecCtx, stmt tree.Statement,
 		return checkTarget(explicitIndexTarget{
 			database: string(table.SchemaName), table: string(table.ObjectName),
 			temporaryOnly: true,
+		})
+	}
+	checkCloneDestination := func(table *tree.TableName, temporary bool, account *tree.ToAccountOpt) error {
+		if account == nil || temporary || table == nil {
+			return checkCreateDestination(table, temporary)
+		}
+		return checkTarget(explicitIndexTarget{
+			database: string(table.SchemaName), table: string(table.ObjectName),
+			deferDestinationCatalog: true,
 		})
 	}
 	checkTables := func(tables tree.TableNames) error {
@@ -377,15 +437,18 @@ func checkFrontendIndexTargetWithResolver(execCtx *ExecCtx, stmt tree.Statement,
 			}
 		}
 	case *tree.CloneTable:
-		if err := checkTable(&st.SrcTable); err != nil {
+		if err := checkTarget(explicitIndexTarget{
+			database: string(st.SrcTable.SchemaName), table: string(st.SrcTable.ObjectName),
+			at: st.SrcTable.AtTsExpr, cloneSource: st,
+		}); err != nil {
 			return err
 		}
-		return checkCreateDestination(&st.CreateTable.Table, st.CreateTable.Temporary)
+		return checkCloneDestination(&st.CreateTable.Table, st.CreateTable.Temporary, st.ToAccountOpt)
 	case *tree.DataBranchCreateTable:
 		if err := checkTable(&st.SrcTable); err != nil {
 			return err
 		}
-		return checkTable(&st.CreateTable.Table)
+		return checkCloneDestination(&st.CreateTable.Table, st.CreateTable.Temporary, st.ToAccountOpt)
 	case *tree.DataBranchDeleteTable:
 		return checkTable(&st.TableName)
 	case *tree.DataBranchDiff:

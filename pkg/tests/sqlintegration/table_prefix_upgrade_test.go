@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -41,6 +42,29 @@ type tablesUpgradeTxn struct {
 	executor.TxnExecutor
 	owner *tablesUpgradeExecutor
 }
+
+// Frozen TABLES input from release v4.2.7, commit
+// 260678bace0177678255089a23d0fe7d54cfc745. Its formatting is immaterial to
+// the persisted view, but its source, columns and predicates are retained here.
+const releasedV427TablesDDL = `CREATE VIEW information_schema.TABLES AS SELECT
+'def' AS TABLE_CATALOG, reldatabase AS TABLE_SCHEMA, relname AS TABLE_NAME,
+(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW'
+when relkind = 'v' then 'VIEW' when relkind = 'e' then 'EXTERNAL TABLE'
+when relkind = 'r' then 'BASE TABLE' else 'INTERNAL TABLE' end) AS TABLE_TYPE,
+if(relkind = 'r','Tae',NULL) AS ENGINE, if(relkind = 'v',NULL,10) AS VERSION,
+'Compressed' AS ROW_FORMAT, if(relkind = 'v', NULL, 0) AS TABLE_ROWS,
+if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH, if(relkind = 'v', NULL, 0) AS DATA_LENGTH,
+if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH, if(relkind = 'v', NULL, 0) AS INDEX_LENGTH,
+if(relkind = 'v', NULL, 0) AS DATA_FREE,
+if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS ` + "`AUTO_INCREMENT`" + `,
+created_time AS CREATE_TIME, if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,
+if(relkind = 'v', NULL, created_time) AS CHECK_TIME, 'utf8mb4_0900_ai_ci' AS TABLE_COLLATION,
+if(relkind = 'v', NULL, 0) AS CHECKSUM,
+if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,
+cast(rel_comment as text) AS TABLE_COMMENT FROM mo_catalog.mo_tables tbl
+WHERE tbl.account_id = current_account_id() and tbl.relname not like '__mo_index_%' and
+not (tbl.relkind = 'temporary_table' or mo_is_legacy_temporary_table(coalesce(tbl.relkind, ''), coalesce(tbl.relname, ''), coalesce(tbl.reldatabase, ''), coalesce(tbl.rel_createsql, ''), coalesce(tbl.extra_info, '')) or (coalesce(tbl.relkind, '') not in ('r', 'v', 'e', 'm', 's', 'cluster', 'partition', 'S') and regexp_like(tbl.relname, '^__mo_tmp_[0-9a-f]{32}_'))) and
+tbl.relname != '__mo_account_lock' and tbl.relkind != 'partition'`
 
 func (e *tablesUpgradeExecutor) ExecTxn(ctx context.Context, body func(executor.TxnExecutor) error, opts executor.Options) error {
 	return e.SQLExecutor.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
@@ -150,16 +174,20 @@ func TestTablePrefixMetadataUpgrade(t *testing.T) {
 		const corrected = "not startswith(tbl.relname, '__mo_index_')"
 		require.Equal(t, 2, strings.Count(sysview.InformationSchemaTablesV118DDL, corrected))
 		oldDDL := strings.ReplaceAll(sysview.InformationSchemaTablesV118DDL, corrected, "tbl.relname not like '__mo_index_%'")
-		require.NoError(t, internal.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
-			for _, statement := range []string{"DROP VIEW IF EXISTS information_schema.TABLES;", oldDDL} {
-				result, err := tx.Exec(statement, versions.UpgradeStatementOption(uint32(accountID)))
-				if err != nil {
-					return err
+		installOldView := func(ddl string) {
+			t.Helper()
+			require.NoError(t, internal.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+				for _, statement := range []string{"DROP VIEW IF EXISTS information_schema.TABLES;", ddl} {
+					result, err := tx.Exec(statement, versions.UpgradeStatementOption(uint32(accountID)))
+					if err != nil {
+						return err
+					}
+					result.Close()
 				}
-				result.Close()
-			}
-			return nil
-		}, executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied()))
+				return nil
+			}, executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied()))
+		}
+		installOldView(oldDDL)
 		require.Zero(t, count(), "historical view reproduces the defect")
 		entry := versions.InformationSchemaTablesUpgradeEntry()
 		owner := &tablesUpgradeExecutor{SQLExecutor: internal, failure: errors.New("injected view replacement failure")}
@@ -179,6 +207,27 @@ func TestTablePrefixMetadataUpgrade(t *testing.T) {
 		freshOwner := &tablesUpgradeExecutor{SQLExecutor: internal}
 		require.NoError(t, repair(freshOwner))
 		require.Zero(t, freshOwner.creates, "a fresh executor must see the persisted view")
+		require.Equal(t, []string{"demo_index_data"}, restrictedNames("select table_name from information_schema.tables where table_schema='prefix_upgrade'"))
+
+		// A supported released deployment enters through the actual v4_0_7
+		// tenant handler. Failed replacement rolls back, and a fresh retry and
+		// a subsequent duplicate invocation leave one current definition.
+		installOldView(releasedV427TablesDDL)
+		require.Zero(t, count(), "the pinned release retains the old wildcard predicate")
+		releasedOwner := &tablesUpgradeExecutor{SQLExecutor: internal, failure: errors.New("injected released-view replacement failure")}
+		runTenantUpgrade := func(e *tablesUpgradeExecutor) error {
+			return e.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+				return v4_0_7.Handler.HandleTenantUpgrade(ctx, accountID, tx)
+			}, executor.Options{}.WithAccountID(0).WithWaitCommittedLogApplied())
+		}
+		require.ErrorIs(t, runTenantUpgrade(releasedOwner), releasedOwner.failure)
+		require.Zero(t, count(), "the released view survives a failed transaction")
+		releasedOwner.failure = nil
+		require.NoError(t, runTenantUpgrade(releasedOwner))
+		require.Equal(t, 1, count())
+		require.Equal(t, 1, releasedOwner.creates)
+		require.NoError(t, runTenantUpgrade(releasedOwner))
+		require.Equal(t, 1, releasedOwner.creates)
 		require.Equal(t, []string{"demo_index_data"}, restrictedNames("select table_name from information_schema.tables where table_schema='prefix_upgrade'"))
 	})
 }

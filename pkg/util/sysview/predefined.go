@@ -1025,6 +1025,15 @@ var (
 		"cast(null as timestamp) AS CHECK_TIME,",
 	).Replace(InformationSchemaTablesDDL)
 
+	// The released definitions above remain stable. Only current listings add
+	// the physical-index classifier, independently in each SELECT branch.
+	InformationSchemaTablesCurrentDDL = strings.ReplaceAll(InformationSchemaTablesV118DDL,
+		catalog.NonTemporaryTableSQLPredicate("tbl"),
+		catalog.NonTemporaryTableSQLPredicate("tbl")+" and "+catalog.NonIndexRelationSQLPredicate("tbl"))
+	InformationSchemaTablesLocalCurrentDDL = strings.Replace(InformationSchemaTablesV41DDL,
+		catalog.NonTemporaryTableSQLPredicate("tbl"),
+		catalog.NonTemporaryTableSQLPredicate("tbl")+" and "+catalog.NonIndexRelationSQLPredicate("tbl"), 1)
+
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +
 		"'def' AS `TABLE_CATALOG`," +

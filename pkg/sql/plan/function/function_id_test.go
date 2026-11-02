@@ -881,16 +881,17 @@ var predefinedFunids = map[int]int{
 	MO_INDEX_SUB_PART:                 623,
 	// Exponentially weighted window statistics (issue #29945); renumbered
 	// above main's 605..623 allocation during the PR rebase.
-	EWM_MEAN:            624,
-	EWM_VAR:             625,
-	EWM_STD:             626,
-	EWM_COV:             627,
-	EWM_CORR:            628,
-	VECTOR_MATMUL:       629,
-	VECBLOCK_JSON:       630,
-	VECBLOCK_BINARY:     631,
-	UNZIP_FILE:          632,
-	FUNCTION_END_NUMBER: 633,
+	EWM_MEAN:             624,
+	EWM_VAR:              625,
+	EWM_STD:              626,
+	EWM_COV:              627,
+	EWM_CORR:             628,
+	VECTOR_MATMUL:        629,
+	VECBLOCK_JSON:        630,
+	VECBLOCK_BINARY:      631,
+	UNZIP_FILE:           632,
+	MO_IS_PHYSICAL_INDEX: 633,
+	FUNCTION_END_NUMBER:  634,
 }
 
 func Test_funids(t *testing.T) {

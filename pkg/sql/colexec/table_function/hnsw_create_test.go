@@ -115,6 +115,7 @@ func int64Result(t *testing.T, mp *mpool.MPool, n int64) executor.Result {
 func runHnswCreate(t *testing.T, params, cfg string, src hnswSource) (*hnswCreateRun, error) {
 	mp := mpool.MustNewZero()
 	run := &hnswCreateRun{proc: testutil.NewProcessWithMPool(t, "", mp)}
+	installOrdinaryMaintenanceRelations(t, run.proc)
 	run.tf = &TableFunction{
 		Attrs:    []string{"status"},
 		Rets:     []*plan.ColDef{{Name: "status", Typ: plan.Type{Id: int32(types.T_int32)}}},

@@ -22,7 +22,7 @@ import (
 // InformationSchemaTablesUpgradeEntry refreshes the current TABLES definition.
 // Historical and forward handlers share the same idempotent view repair.
 func InformationSchemaTablesUpgradeEntry() UpgradeEntry {
-	return InformationSchemaViewUpgradeEntry("TABLES", sysview.InformationSchemaTablesV118DDL, defines.MORPCVersion118)
+	return InformationSchemaViewUpgradeEntry("TABLES", sysview.InformationSchemaTablesCurrentDDL, defines.MORPCVersion118)
 }
 
 // InformationSchemaPartitionsUpgradeEntry refreshes the current PARTITIONS

@@ -68,6 +68,13 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		}, nil, nil
 	case *tree.SetVar:
 		return buildSetVariablesWithQuery(stmt, ctx, true)
+	case *tree.CloneTable:
+		if stmt.ToAccountOpt != nil && !stmt.IsRestore {
+			p, err := buildPrepareCloneTableWithAccount(stmt, ctx)
+			return p, nil, err
+		}
+		p, err := BuildPlan(ctx, stmt, true)
+		return p, nil, err
 	case *tree.ShowPublications:
 		if stmt.Like != nil {
 			switch pattern := stmt.Like.Right.(type) {
@@ -503,8 +510,10 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			return nil, err
 		}
 	case *tree.CloneTable:
-		if err := addDatabaseSchema(string(ddl.CreateTable.Table.SchemaName)); err != nil {
-			return nil, err
+		if ddl.ToAccountOpt == nil || ddl.IsRestore {
+			if err := addDatabaseSchema(string(ddl.CreateTable.Table.SchemaName)); err != nil {
+				return nil, err
+			}
 		}
 	}
 

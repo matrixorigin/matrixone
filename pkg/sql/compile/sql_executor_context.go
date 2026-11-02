@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -66,7 +67,8 @@ type compilerContext struct {
 	sql                  string
 	mu                   sync.Mutex
 
-	lower int64
+	lower               int64
+	indexRelationPolicy *executor.IndexRelationPolicy
 }
 
 func (c *compilerContext) NewViewDescriptionCompilerContext(
@@ -76,7 +78,8 @@ func (c *compilerContext) NewViewDescriptionCompilerContext(
 		ctx: ctx, defaultDB: c.defaultDB, engine: c.engine, proc: c.proc,
 		statsCache: c.statsCache, lower: c.lower, viewChild: true,
 		buildAlterView: c.buildAlterView, dbOfView: c.dbOfView, nameOfView: c.nameOfView,
-		sql: c.sql,
+		sql:                 c.sql,
+		indexRelationPolicy: c.indexRelationPolicy.Clone(),
 	}
 	if delegate := c.sessionCompilerContextValue(); delegate != nil {
 		provider, ok := delegate.(plan.ViewDescriptionContextProvider)
@@ -220,8 +223,13 @@ func (c *compilerContext) ResolveUdf(name string, args []*plan.Expr) (*function.
 	if c.viewChild {
 		return c.ResolveViewUdf(name, args, c.DefaultDatabase())
 	}
+	if c.indexRelationPolicy != nil {
+		return c.ResolveViewUdf(name, args, c.DefaultDatabase())
+	}
 	panic("not supported in internal sql executor")
 }
+
+func (c *compilerContext) IndexMaintenanceRestricted() bool { return c.indexRelationPolicy != nil }
 
 func (c *compilerContext) ResolveViewUdf(name string, args []*plan.Expr, database string) (*function.Udf, error) {
 	if c.viewDelegate != nil {
@@ -230,7 +238,7 @@ func (c *compilerContext) ResolveViewUdf(name string, args []*plan.Expr, databas
 		}
 		return c.viewDelegate.ResolveUdf(name, args)
 	}
-	if !c.viewChild || c.proc == nil {
+	if (!c.viewChild && c.indexRelationPolicy == nil) || c.proc == nil {
 		return nil, moerr.NewNotSupported(c.GetContext(), "View UDF resolution requires an isolated compiler context")
 	}
 	if err := c.GetContext().Err(); err != nil {
@@ -598,7 +606,7 @@ func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName st
 	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.ResolveIndexTableByRef(ref, tblName, snapshot)
 	}
-	obj, def, err := c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+	obj, def, err := c.resolve(plan.DbNameOfObjRef(ref), tblName, snapshot, true)
 	if obj != nil && ref.NotLockMeta {
 		obj.NotLockMeta = true
 	}
@@ -616,21 +624,65 @@ func (c *compilerContext) resolveDelegate() plan.CompilerContext {
 }
 
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	return c.resolve(dbName, tableName, snapshot, true)
+	if err := c.checkIndexRelationName(tableName); err != nil {
+		return nil, nil, err
+	}
+	obj, def, err := c.resolve(dbName, tableName, snapshot, true)
+	return c.checkIndexRelationDefinition(tableName, obj, def, err)
 }
 
 func (c *compilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	return c.resolve(dbName, tableName, snapshot, false)
+	if err := c.checkIndexRelationName(tableName); err != nil {
+		return nil, nil, err
+	}
+	obj, def, err := c.resolve(dbName, tableName, snapshot, false)
+	return c.checkIndexRelationDefinition(tableName, obj, def, err)
+}
+
+func (c *compilerContext) checkIndexRelationName(name string) error {
+	if c.indexRelationPolicy == nil || c.indexRelationPolicy.CallerMayAccess {
+		return nil
+	}
+	proc := &process.Process{Ctx: process.WithUserIndexRelationAccess(c.GetContext()), Base: &process.BaseProcess{}}
+	return process.CheckIndexRelationAccess(proc, name, "", 0)
+}
+
+func (c *compilerContext) checkIndexRelationDefinition(name string, obj *plan.ObjectRef, def *plan.TableDef, err error) (*plan.ObjectRef, *plan.TableDef, error) {
+	if err != nil || c.indexRelationPolicy == nil || c.indexRelationPolicy.CallerMayAccess || (obj == nil && def == nil) {
+		return obj, def, err
+	}
+	proc := &process.Process{Ctx: process.WithUserIndexRelationAccess(c.GetContext()), Base: &process.BaseProcess{}}
+	if err := process.CheckIndexRelationDefinitionAccess(proc, name, def); err != nil {
+		return nil, nil, err
+	}
+	if def != nil && def.Name != name {
+		if err := process.CheckIndexRelationDefinitionAccess(proc, def.Name, def); err != nil {
+			return nil, nil, err
+		}
+	}
+	return obj, def, nil
 }
 
 func (c *compilerContext) ResolveTemporaryTable(dbName, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
 	if delegate := c.resolveDelegate(); delegate != nil {
+		var obj *plan.ObjectRef
+		var def *plan.TableDef
+		var err error
 		if resolver, ok := delegate.(interface {
 			ResolveTemporaryTable(string, string, *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error)
 		}); ok {
-			return resolver.ResolveTemporaryTable(dbName, tableName, snapshot)
+			obj, def, err = resolver.ResolveTemporaryTable(dbName, tableName, snapshot)
+		} else {
+			obj, def, err = delegate.Resolve(dbName, tableName, snapshot)
 		}
-		return delegate.Resolve(dbName, tableName, snapshot)
+		// A temporary namespace miss is not an attempted relation access.
+		if err != nil || (obj == nil && def == nil) {
+			return obj, def, err
+		}
+		if err := c.checkIndexRelationName(tableName); err != nil {
+			return nil, nil, err
+		}
+		return c.checkIndexRelationDefinition(tableName, obj, def, nil)
 	}
 	if c.proc != nil {
 		if ses := c.proc.GetSession(); ses != nil {

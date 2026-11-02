@@ -53,7 +53,7 @@ var (
 		InformationSchemaCharacterSetsDDL,
 		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
-		InformationSchemaTablesV118DDL,
+		InformationSchemaTablesCurrentDDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
 		// The current STATISTICS identity reports retained prefix lengths
@@ -93,7 +93,7 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 			if protocol < defines.MORPCVersion118 {
 				sql = InformationSchemaSchemataLegacyDDL
 			}
-		case InformationSchemaTablesV118DDL:
+		case InformationSchemaTablesCurrentDDL:
 			if protocol < defines.MORPCVersion118 {
 				if protocol < defines.MORPCVersion46 {
 					sql = InformationSchemaTablesV41DDL
@@ -237,7 +237,7 @@ func initInformationSchemaTablesForProtocol(
 	for _, sql := range InitInformationSchemaSysTablesForProtocol(protocol) {
 		// Bootstrap prerequisites precede the v118 table-collation fence.
 		// InitSystemViews publishes that consumer after catalog admission.
-		if sql == InformationSchemaTablesV118DDL {
+		if sql == InformationSchemaTablesCurrentDDL {
 			sql = InformationSchemaTablesDDL
 		}
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {

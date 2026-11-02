@@ -57,3 +57,8 @@ func TestPhysicalIndexRelationClassification(t *testing.T) {
 		require.True(t, RequiresPrivilegedRelationAccess("ordinary", kind, 0), kind)
 	}
 }
+
+func TestNonIndexRelationSQLPredicate(t *testing.T) {
+	require.Equal(t, "not mo_is_physical_index(coalesce(relname, ''), coalesce(relkind, ''), coalesce(extra_info, ''))", NonIndexRelationSQLPredicate(""))
+	require.Equal(t, "not mo_is_physical_index(coalesce(tbl.relname, ''), coalesce(tbl.relkind, ''), coalesce(tbl.extra_info, ''))", NonIndexRelationSQLPredicate("tbl"))
+}

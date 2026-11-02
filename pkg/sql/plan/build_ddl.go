@@ -2890,6 +2890,46 @@ func marshalExternalTableParam(param *tree.ExternParam) (string, error) {
 	return string(payload), nil
 }
 
+// prepareCreateLikeSource validates and owns source metadata before any
+// destination planning. Prepared cross-account clones use the same source
+// checks without probing destination metadata in the caller's account.
+func prepareCreateLikeSource(
+	ctx CompilerContext, tableDef *TableDef, snapshot *Snapshot, sub *SubscriptionMeta, dbName, tblName string,
+) (*TableDef, bool, error) {
+	if err := validateTableIndexDefinitions(tableDef); err != nil {
+		return nil, false, err
+	}
+	tableDef = DeepCopyTableDef(tableDef, true)
+	if sub == nil {
+		if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
+			return nil, false, err
+		}
+	}
+	hadStructuredChecks := len(tableDef.Checks) > 0
+	if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		return nil, false, err
+	}
+	recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
+	if len(tableDef.Checks) > 0 {
+		if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
+			return nil, false, err
+		}
+	}
+	if tableDef.TableType == catalog.SystemViewRel ||
+		tableDef.TableType == catalog.SystemExternalRel ||
+		tableDef.TableType == catalog.SystemSequenceRel {
+		isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
+		if err != nil {
+			return nil, false, err
+		}
+		if isIceberg {
+			return nil, false, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
+		}
+		return nil, false, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
+	}
+	return tableDef, recoveredLegacyChecks, nil
+}
+
 func buildCreateTable(
 	ctx CompilerContext,
 	stmt *tree.CreateTable,
@@ -2937,44 +2977,14 @@ func buildCreateTable(
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), dbName, tblName)
 		}
-		if err := validateTableIndexDefinitions(tableDef); err != nil {
-			return nil, err
-		}
-		// Resolve and rewrite a private source definition. Resolve can return a
-		// cached TableDef, and the reconstruction below changes its table name.
-		tableDef = DeepCopyTableDef(tableDef, true)
 		// IndexDef.Visible is ambiguous for pre-upgrade tables. Resolve the
 		// authoritative catalog value before CREATE TABLE LIKE/CLONE serializes
 		// a local source definition and asks the normal CREATE planner to rebuild
 		// it. A subscription definition belongs to the publisher, whose catalog
 		// is not available through this compiler context.
-		if sub == nil {
-			if err := reconcileIndexVisibility(ctx, tableDef.TblId, tableDef, snapshot); err != nil {
-				return nil, err
-			}
-		}
-		hadStructuredChecks := len(tableDef.Checks) > 0
-		if err := recoverLegacyChecks(ctx, tableDef); err != nil {
+		tableDef, recoveredLegacyChecks, err := prepareCreateLikeSource(ctx, tableDef, snapshot, sub, dbName, tblName)
+		if err != nil {
 			return nil, err
-		}
-		recoveredLegacyChecks := !hadStructuredChecks && len(tableDef.Checks) > 0
-		if len(tableDef.Checks) > 0 {
-			if err := requireCheckConstraintProtocol(ctx.GetContext(), ctx.GetProcess()); err != nil {
-				return nil, err
-			}
-		}
-		// TODO WHY?
-		if tableDef.TableType == catalog.SystemViewRel ||
-			tableDef.TableType == catalog.SystemExternalRel ||
-			tableDef.TableType == catalog.SystemSequenceRel {
-			isIceberg, err := IsIcebergTableDef(ctx.GetContext(), tableDef)
-			if err != nil {
-				return nil, err
-			}
-			if isIceberg {
-				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "cannot create table like Iceberg table mapping %s.%s", dbName, tblName)
-			}
-			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "%s.%s is not BASE TABLE", dbName, tblName)
 		}
 
 		tableDef.Name = string(newTable.ObjectName)

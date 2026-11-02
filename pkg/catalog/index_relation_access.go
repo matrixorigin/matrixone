@@ -15,11 +15,23 @@
 package catalog
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 )
+
+// NonIndexRelationSQLPredicate excludes physical index children from metadata
+// listings. It must not be used by clone or restore scans, which need children.
+func NonIndexRelationSQLPredicate(alias string) string {
+	prefix := ""
+	if alias != "" {
+		prefix = alias + "."
+	}
+	return fmt.Sprintf("not mo_is_physical_index(coalesce(%s%s, ''), coalesce(%s%s, ''), coalesce(%s%s, ''))",
+		prefix, SystemRelAttr_Name, prefix, SystemRelAttr_Kind, prefix, SystemRelAttr_ExtraInfo)
+}
 
 // RequiresPrivilegedRelationAccess checks an explicit physical relation target.
 // Unknown nonempty kinds fail closed: they may belong to an index plugin not

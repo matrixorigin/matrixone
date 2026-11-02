@@ -597,7 +597,7 @@ func TestCreateTenantInformationSchemaRequiresCurrentProtocol(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			for _, ddl := range []string{sysview.InformationSchemaColumnsDDL, sysview.InformationSchemaTablesV118DDL,
+			for _, ddl := range []string{sysview.InformationSchemaColumnsDDL, sysview.InformationSchemaTablesCurrentDDL,
 				sysview.InformationSchemaSchemataDDL, sysview.InformationSchemaViewsDDL} {
 				require.Contains(t, executed, ddl)
 			}

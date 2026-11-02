@@ -17,13 +17,20 @@ package sqlintegration
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +40,7 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 		defer cancel()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
-		defer cleanupSQLIntegration(t, cn, "drop user if exists hidden_access_user", "drop user if exists hidden_access_connect_user", "drop role if exists hidden_access_role", "drop role if exists hidden_access_connect_role", "drop database if exists hidden_access_db")
+		defer cleanupSQLIntegration(t, cn, "drop user if exists index_show_reader", "drop role if exists index_show_role", "drop user if exists hidden_access_user", "drop user if exists hidden_access_connect_user", "drop role if exists hidden_access_role", "drop role if exists hidden_access_connect_role", "drop database if exists hidden_cross_dst", "drop database if exists hidden_access_db")
 		port := cn.GetServiceConfig().CN.Frontend.Port
 		cleanups := make([]func(), 0, 4)
 		defer func() {
@@ -227,6 +234,21 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 		exec(user, "create table hidden_access_db.copied as select id,y,u from hidden_access_db.t force index(iu) order by id")
 		require.Equal(t, 2, count(user, "hidden_access_db.copied"))
 		exec(user, "drop table hidden_access_db.copied")
+		exec(admin, "create snapshot hidden_access_snapshot for account")
+		defer exec(admin, "drop snapshot hidden_access_snapshot")
+		for _, hint := range []string{"", " {snapshot='hidden_access_snapshot'}"} {
+			func() {
+				exec(user, "create table hidden_access_db.cloned_base clone hidden_access_db.t"+hint)
+				defer exec(user, "drop table hidden_access_db.cloned_base")
+				require.Equal(t, 2, count(user, "hidden_access_db.cloned_base"))
+			}()
+			for _, name := range hidden {
+				deny(user, "create table hidden_access_db.denied_clone clone hidden_access_db.`"+name+"`"+hint)
+			}
+		}
+		var deniedClones int
+		require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='hidden_access_db' and relname='denied_clone'").Scan(&deniedClones))
+		require.Zero(t, deniedClones)
 		// All ordinary writes maintain both physical indexes through generated paths.
 		exec(user, "insert into hidden_access_db.t values(3,30,300)")
 		exec(user, "update hidden_access_db.t set y=31,u=301 where id=3")
@@ -316,6 +338,36 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 			exec(admin, "alter table "+original+" rename to renamed_child")
 			defer exec(admin, "alter table "+renamed+" rename to `"+child+"`")
 			require.Equal(t, physicalRows, count(admin, renamed))
+			// The diagnostic rename leaves docs' stored index name stale.
+			// Exercise listing admission with the child and a valid ordinary
+			// base; computing docs' size would independently follow that old name.
+			for _, query := range []string{
+				"show table status from hidden_access_db where Name in ('renamed_child','t')",
+				"show tables from hidden_access_db",
+				"show full tables from hidden_access_db",
+				"select table_name,table_rows,data_length from information_schema.tables where table_schema='hidden_access_db'",
+			} {
+				func() {
+					rows, err := user.QueryContext(ctx, query)
+					require.NoError(t, err, query)
+					defer rows.Close()
+					columns, err := rows.Columns()
+					require.NoError(t, err)
+					values := make([]sql.RawBytes, len(columns))
+					args := make([]any, len(columns))
+					for i := range values {
+						args[i] = &values[i]
+					}
+					sawBase := false
+					for rows.Next() {
+						require.NoError(t, rows.Scan(args...))
+						require.NotEqual(t, "renamed_child", string(values[0]), query)
+						sawBase = sawBase || string(values[0]) == "t"
+					}
+					require.NoError(t, rows.Err(), query)
+					require.True(t, sawBase, query)
+				}()
+			}
 			_, err := admin.ExecContext(ctx, "grant select on table "+renamed+" to hidden_access_role")
 			var grantError *mysql.MySQLError
 			require.ErrorAs(t, err, &grantError)
@@ -403,6 +455,170 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 		var restoredMatchID int
 		require.NoError(t, user.QueryRowContext(ctx, "select id from hidden_access_db.docs where match(body) against('aurora' in natural language mode)>0").Scan(&restoredMatchID))
 		require.Equal(t, 1, restoredMatchID)
+		// Public calls naming physical fulltext storage require diagnostic
+		// authority; normal base-table index maintenance retains its owner.
+		func() {
+			exec(user, "set experimental_fulltext2_index=1")
+			exec(user, "create table hidden_access_db.fulltext_runtime(id bigint primary key,body text)")
+			exec(user, "insert into hidden_access_db.fulltext_runtime values(1,'alpha'),(2,'beta')")
+			exec(user, "create fulltext2 index fr on hidden_access_db.fulltext_runtime(body)")
+			var store, meta string
+			for kind, dst := range map[string]*string{"ftv2_index": &store, "ftv2_meta": &meta} {
+				require.NoError(t, admin.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='hidden_access_db' and relname='fulltext_runtime') and algo_table_type='"+kind+"' limit 1").Scan(dst))
+			}
+			deny(user, "select * from fulltext2_compact('hidden_access_db','"+store+"','"+meta+"','1') f")
+			config, err := json.Marshal(fulltext2.TableConfig{DbName: "hidden_access_db", SrcTable: "fulltext_runtime", IndexTable: store, MetadataTable: meta, PKey: "id"})
+			require.NoError(t, err)
+			deny(user, "select f.* from hidden_access_db.fulltext_runtime s cross apply fulltext2_create('{}','"+strings.ReplaceAll(string(config), "'", "''")+"',s.id,s.body) f")
+			exec(user, "alter table hidden_access_db.fulltext_runtime alter reindex fr fulltext2 merge force_sync")
+			exec(user, "alter table hidden_access_db.fulltext_runtime alter reindex fr fulltext2 force_sync")
+			var found int
+			require.NoError(t, user.QueryRowContext(ctx, "select id from hidden_access_db.fulltext_runtime where match(body) against('alpha')").Scan(&found))
+			require.Equal(t, 1, found)
+			require.Equal(t, 2, count(user, "hidden_access_db.fulltext_runtime"))
+		}()
+		// Runtime build functions cannot turn a caller's JSON into authority
+		// over another index, even with an empty source and no build work.
+		func() {
+			exec(user, "create table hidden_access_db.tvf_source(id bigint primary key,v vecf32(2))")
+			config, err := json.Marshal(vectorindex.IndexTableConfig{
+				DbName: "hidden_access_db", SrcTable: "tvf_source",
+				MetadataTable: hidden[0], IndexTable: hidden[0], EntriesTable: hidden[0],
+				PKey: "id", KeyPart: "v", KeyPartType: int32(types.T_array_float32), KeyPartWidth: 2,
+			})
+			require.NoError(t, err)
+			for _, function := range []string{"hnsw_create", "ivf_create"} {
+				deny(user, "select * from "+function+"('{\"lists\":\"1\",\"op_type\":\"vector_l2_ops\"}','"+strings.ReplaceAll(string(config), "'", "''")+"') f")
+				require.Equal(t, 2, count(admin, sqlquote.QualifiedIdent("hidden_access_db", hidden[0])))
+				require.Equal(t, 2, count(user, "hidden_access_db.t"))
+			}
+			exec(user, "create table hidden_access_db.tvf_meta(id int)")
+			exec(user, "create table hidden_access_db.tvf_store(id int)")
+			exec(user, "create view hidden_access_db.tvf_ordinary_view as select id,v from hidden_access_db.tvf_source where base_count()>0")
+			ordinary, err := json.Marshal(vectorindex.IndexTableConfig{
+				DbName: "hidden_access_db", SrcTable: "tvf_ordinary_view", MetadataTable: "tvf_meta", IndexTable: "tvf_store",
+				PKey: "id", KeyPart: "v", KeyPartType: int32(types.T_array_float32), KeyPartWidth: 2,
+			})
+			require.NoError(t, err)
+			exec(admin, "create view hidden_access_db.tvf_source_view as select 1 as id,cast('[1,1]' as vecf32(2)) as v from "+sqlquote.QualifiedIdent("hidden_access_db", hidden[0]))
+			viewConfig, err := json.Marshal(vectorindex.IndexTableConfig{
+				DbName: "hidden_access_db", SrcTable: "tvf_source_view", MetadataTable: "tvf_meta", IndexTable: "tvf_store",
+				PKey: "id", KeyPart: "v", KeyPartType: int32(types.T_array_float32), KeyPartWidth: 2,
+			})
+			require.NoError(t, err)
+			exec(user, "insert into hidden_access_db.tvf_store values(7)")
+			deny(user, "select * from hnsw_create('{\"op_type\":\"vector_l2_ops\"}','"+strings.ReplaceAll(string(viewConfig), "'", "''")+"') f")
+			require.Equal(t, 1, count(user, "hidden_access_db.tvf_store"))
+			exec(admin, "use hidden_access_db")
+			exec(admin, "create view hidden_access_db.tvf_udf_view as select id,v from hidden_access_db.tvf_source where hidden_count()>0")
+			udfConfig, err := json.Marshal(vectorindex.IndexTableConfig{
+				DbName: "hidden_access_db", SrcTable: "tvf_udf_view", MetadataTable: "tvf_meta", IndexTable: "tvf_store",
+				PKey: "id", KeyPart: "v", KeyPartType: int32(types.T_array_float32), KeyPartWidth: 2,
+			})
+			require.NoError(t, err)
+			deny(user, "select * from hnsw_create('{\"op_type\":\"vector_l2_ops\"}','"+strings.ReplaceAll(string(udfConfig), "'", "''")+"') f")
+			require.Equal(t, 1, count(user, "hidden_access_db.tvf_store"))
+			exec(user, "delete from hidden_access_db.tvf_store")
+			for _, binary := range []bool{false, true} {
+				func() {
+					query := "select * from hnsw_create('{\"op_type\":\"vector_l2_ops\"}',cast(? as varchar)) f"
+					var execute func(string) error
+					if binary {
+						stmt, err := user.PrepareContext(ctx, query)
+						require.NoError(t, err)
+						defer func() { require.NoError(t, stmt.Close()) }()
+						execute = func(value string) error { _, err := stmt.ExecContext(ctx, value); return err }
+					} else {
+						exec(user, "prepare tvf_build from '"+strings.ReplaceAll(query, "'", "''")+"'")
+						defer exec(user, "deallocate prepare tvf_build")
+						execute = func(value string) error {
+							exec(user, "set @tvf_config='"+strings.ReplaceAll(value, "'", "''")+"'")
+							_, err := user.ExecContext(ctx, "execute tvf_build using @tvf_config")
+							return err
+						}
+					}
+					require.NoError(t, execute(string(ordinary)))
+					var rejected *mysql.MySQLError
+					require.ErrorAs(t, execute(string(config)), &rejected)
+					require.Contains(t, strings.ToLower(rejected.Message), "privilege")
+					require.Equal(t, 2, count(admin, sqlquote.QualifiedIdent("hidden_access_db", hidden[0])))
+					require.NoError(t, execute(string(ordinary)))
+				}()
+			}
+			exec(user, "insert into hidden_access_db.tvf_source values(1,'[1,1]'),(2,'[2,2]')")
+			exec(user, "alter table hidden_access_db.tvf_source add column "+sqlquote.Ident("v`x")+" vecf32(2)")
+			exec(user, "update hidden_access_db.tvf_source set "+sqlquote.Ident("v`x")+"=v")
+			exec(user, "create index iv using ivfflat on hidden_access_db.tvf_source("+sqlquote.Ident("v`x")+") lists=1 op_type 'vector_l2_ops'")
+			exec(user, "alter table hidden_access_db.tvf_source alter reindex iv ivfflat force_sync")
+			var nearest int
+			require.NoError(t, user.QueryRowContext(ctx, "select id from hidden_access_db.tvf_source order by l2_distance("+sqlquote.Ident("v`x")+",'[1,1]') limit 1").Scan(&nearest))
+			require.Equal(t, 1, nearest)
+		}()
+		// Server-authored SHOW scans remain authorized on behalf of the base,
+		// while caller-written WHERE subqueries retain their own permissions.
+		func() {
+			exec(admin, "set experimental_hnsw_index=1")
+			exec(admin, "create table hidden_access_db.hnsw_base(id bigint primary key,v vecf32(2))")
+			exec(admin, "insert into hidden_access_db.hnsw_base values(1,'[1,1]'),(2,'[100000,1]')")
+			exec(admin, "create index ih using hnsw on hidden_access_db.hnsw_base(v) op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1")
+			exec(admin, "create table hidden_access_db.show_private(id int)")
+			exec(admin, "insert into hidden_access_db.show_private values(1)")
+			exec(admin, "create role index_show_role")
+			exec(admin, "create user index_show_reader identified by '111' default role index_show_role")
+			exec(admin, "grant connect on account * to index_show_role")
+			reader := open("sys#index_show_reader#index_show_role")
+			show := func(q string) {
+				t.Helper()
+				rows, err := reader.QueryContext(ctx, q)
+				require.NoError(t, err, q)
+				defer rows.Close()
+				cols, err := rows.Columns()
+				require.NoError(t, err)
+				seen := 0
+				for rows.Next() {
+					values := make([]sql.RawBytes, len(cols))
+					args := make([]any, len(cols))
+					for i := range args {
+						args[i] = &values[i]
+					}
+					require.NoError(t, rows.Scan(args...))
+					require.Equal(t, "ih", string(values[0]))
+					metadata := make(map[string]string, len(cols))
+					for i, name := range cols {
+						metadata[name] = string(values[i])
+					}
+					if strings.HasPrefix(q, "show index ignored") {
+						require.Equal(t, "2", metadata["Primary_key"])
+						require.Equal(t, "20348", metadata["Error_code"])
+					} else {
+						require.Equal(t, "1", metadata["Ignored_rows"])
+						require.Equal(t, "1", metadata["Max_bad_records"])
+					}
+					seen++
+				}
+				require.NoError(t, rows.Err())
+				require.Equal(t, 1, seen)
+			}
+			var physical string
+			require.NoError(t, admin.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='hidden_access_db' and relname='hnsw_base') and algo_table_type='ignored' limit 1").Scan(&physical))
+			for _, mode := range []string{"ignored", "status"} {
+				q := "show index " + mode + " from hidden_access_db.hnsw_base"
+				deny(reader, q)
+			}
+			exec(admin, "grant select on table hidden_access_db.hnsw_base to index_show_role")
+			for _, mode := range []string{"ignored", "status"} {
+				q := "show index " + mode + " from hidden_access_db.hnsw_base"
+				show(q)
+				show(q + " where Key_name='ih'")
+				deny(reader, q+" where exists(select 1 from hidden_access_db.show_private)")
+				deny(reader, q+" where exists(select 1 from hidden_access_db.`"+physical+"`)")
+				deny(reader, "show index "+mode+" from hidden_access_db.`"+physical+"`")
+			}
+			exec(admin, "grant select on table hidden_access_db.show_private to index_show_role")
+			for _, mode := range []string{"ignored", "status"} {
+				show("show index " + mode + " from hidden_access_db.hnsw_base where exists(select 1 from hidden_access_db.show_private)")
+			}
+		}()
 		// Tenant accountadmin is not a physical-index diagnostic capability,
 		// including frontend DUMP/LOAD owners that bypass the SQL planner.
 		func() {
@@ -424,6 +640,175 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 			deny(tenant, "select count(*) from "+target)
 			deny(tenant, "dump table "+target+" to 'stage://hidden_access_unavailable/' metadata only")
 			deny(tenant, "load table "+target+" from 'stage://hidden_access_unavailable/'")
+			func() {
+				exec(admin, "create database hidden_cross_dst")
+				exec(tenant, "create database hidden_cross_dst")
+				exec(admin, "grant create table on database hidden_cross_dst to index_show_role")
+				exec(admin, "grant select on table hidden_access_db.t to index_show_role")
+				reader := open("sys#index_show_reader#index_show_role")
+				var snapshotTS int64
+				require.NoError(t, admin.QueryRowContext(ctx, "select ts from mo_catalog.mo_snapshots where sname='hidden_access_snapshot'").Scan(&snapshotTS))
+				hints := []string{" {snapshot='hidden_access_snapshot'}", fmt.Sprintf(" {MO_TS=%d}", snapshotTS)}
+				indexName := func(conn *sql.Conn) string {
+					t.Helper()
+					var name string
+					require.NoError(t, conn.QueryRowContext(ctx, "select distinct index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='hidden_cross_dst' and relname='owner') and index_table_name is not null and index_table_name<>'' limit 1").Scan(&name))
+					return name
+				}
+				commands := func(name, hint string) []string {
+					return []string{
+						"create table hidden_cross_dst." + name + " clone hidden_access_db.t" + hint + " to account hidden_access_tenant",
+						"data branch create table hidden_cross_dst." + name + " from hidden_access_db.t" + hint + " to account hidden_access_tenant",
+					}
+				}
+				exec(admin, "create table hidden_cross_dst.owner(id int primary key,y int,key iy(y))")
+				func() {
+					physical := indexName(admin)
+					exec(admin, "alter table hidden_cross_dst.`"+physical+"` rename to cross_shadow")
+					defer exec(admin, "alter table hidden_cross_dst.cross_shadow rename to `"+physical+"`")
+					for _, q := range commands("cross_shadow", "") {
+						_, err := reader.ExecContext(ctx, q)
+						var missingSnapshot *mysql.MySQLError
+						require.ErrorAs(t, err, &missingSnapshot)
+						require.Contains(t, strings.ToLower(missingSnapshot.Message), "snapshot")
+					}
+					for _, hint := range hints {
+						for _, q := range commands("cross_shadow", hint) {
+							func() {
+								exec(reader, q)
+								defer exec(tenant, "drop table hidden_cross_dst.cross_shadow")
+								require.Equal(t, 2, count(tenant, "hidden_cross_dst.cross_shadow"))
+							}()
+							if strings.HasPrefix(q, "create table") {
+								for _, binary := range []bool{false, true} {
+									func() {
+										verify := func(execute func() error) {
+											require.NoError(t, execute())
+											defer exec(tenant, "drop table hidden_cross_dst.cross_shadow")
+											require.Equal(t, 2, count(tenant, "hidden_cross_dst.cross_shadow"))
+										}
+										if binary {
+											stmt, err := reader.PrepareContext(ctx, q)
+											require.NoError(t, err, q)
+											defer func() { require.NoError(t, stmt.Close()) }()
+											verify(func() error { _, err := stmt.ExecContext(ctx); return err })
+											return
+										}
+										exec(reader, "prepare prepared_cross from '"+strings.ReplaceAll(q, "'", "''")+"'")
+										defer exec(reader, "deallocate prepare prepared_cross")
+										verify(func() error { _, err := reader.ExecContext(ctx, "execute prepared_cross"); return err })
+									}()
+								}
+							}
+						}
+					}
+				}()
+				for _, binary := range []bool{false, true} {
+					func() {
+						query := commands("revoked_clone", hints[0])[0]
+						var execute func() error
+						if binary {
+							stmt, err := reader.PrepareContext(ctx, query)
+							require.NoError(t, err)
+							defer func() { require.NoError(t, stmt.Close()) }()
+							execute = func() error { _, err := stmt.ExecContext(ctx); return err }
+						} else {
+							exec(reader, "prepare revoked_cross from '"+strings.ReplaceAll(query, "'", "''")+"'")
+							defer exec(reader, "deallocate prepare revoked_cross")
+							execute = func() error { _, err := reader.ExecContext(ctx, "execute revoked_cross"); return err }
+						}
+						exec(admin, "revoke select on table hidden_access_db.t from index_show_role")
+						defer exec(admin, "grant select on table hidden_access_db.t to index_show_role")
+						var denied *mysql.MySQLError
+						require.ErrorAs(t, execute(), &denied)
+						require.Contains(t, strings.ToLower(denied.Message), "privilege")
+						var published int
+						require.NoError(t, tenant.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='hidden_cross_dst' and relname='revoked_clone'").Scan(&published))
+						require.Zero(t, published)
+					}()
+				}
+				// Destination forward references belong to the target's CREATE
+				// planner at EXECUTE, including both prepared protocols.
+				for _, binary := range []bool{false, true} {
+					func() {
+						exec(tenant, "set foreign_key_checks=0")
+						defer exec(tenant, "set foreign_key_checks=1")
+						exec(tenant, "create table hidden_cross_dst.fk_child(id int primary key,parent_id int,constraint fk_clone foreign key(parent_id) references hidden_cross_dst.fk_parent(id))")
+						defer func() {
+							exec(tenant, "drop table hidden_cross_dst.fk_child")
+							exec(tenant, "drop table if exists hidden_cross_dst.fk_parent")
+						}()
+						exec(tenant, "set foreign_key_checks=1")
+						query := commands("fk_parent", hints[0])[0]
+						if binary {
+							stmt, err := reader.PrepareContext(ctx, query)
+							require.NoError(t, err)
+							defer func() { require.NoError(t, stmt.Close()) }()
+							_, err = stmt.ExecContext(ctx)
+							require.NoError(t, err)
+						} else {
+							exec(reader, "prepare fk_cross from '"+strings.ReplaceAll(query, "'", "''")+"'")
+							defer exec(reader, "deallocate prepare fk_cross")
+							exec(reader, "execute fk_cross")
+						}
+						require.Equal(t, 2, count(tenant, "hidden_cross_dst.fk_parent"))
+						exec(tenant, "insert into hidden_cross_dst.fk_child values(1,1)")
+						_, err := tenant.ExecContext(ctx, "insert into hidden_cross_dst.fk_child values(2,999)")
+						var foreignKeyError *mysql.MySQLError
+						require.ErrorAs(t, err, &foreignKeyError)
+						require.Contains(t, strings.ToLower(foreignKeyError.Message), "foreign key")
+					}()
+				}
+				exec(tenant, "create table hidden_cross_dst.owner(id int primary key,y int,key iy(y))")
+				exec(tenant, "insert into hidden_cross_dst.owner values(1,10)")
+				physical := indexName(tenant)
+				var targetID uint32
+				require.NoError(t, admin.QueryRowContext(ctx, "select account_id from mo_catalog.mo_account where account_name='hidden_access_tenant'").Scan(&targetID))
+				// Privileged kernel setup renames genuine tenant index storage;
+				// the client under test still has only its explicit base grants.
+				internal := func(q string) {
+					t.Helper()
+					result, err := testutils.GetSQLExecutor(cn).Exec(ctx, q, executor.Options{}.WithAccountID(targetID).WithWaitCommittedLogApplied())
+					require.NoError(t, err)
+					result.Close()
+				}
+				preparedQuery := commands("blocked_clone", hints[0])[0]
+				preparedBlocked, err := reader.PrepareContext(ctx, preparedQuery)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, preparedBlocked.Close()) }()
+				exec(reader, "prepare prepared_blocked from '"+strings.ReplaceAll(preparedQuery, "'", "''")+"'")
+				defer exec(reader, "deallocate prepare prepared_blocked")
+				internal("alter table hidden_cross_dst.`" + physical + "` rename to blocked_clone")
+				defer internal("alter table hidden_cross_dst.blocked_clone rename to `" + physical + "`")
+				deny(reader, "execute prepared_blocked")
+				_, err = preparedBlocked.ExecContext(ctx)
+				var blockedError *mysql.MySQLError
+				require.ErrorAs(t, err, &blockedError)
+				require.Contains(t, strings.ToLower(blockedError.Message), "privilege")
+				for _, hint := range hints {
+					for _, q := range commands("blocked_clone", hint) {
+						deny(reader, q)
+					}
+				}
+				require.Equal(t, 1, count(tenant, "hidden_cross_dst.owner"))
+			}()
+			exec(tenant, "set experimental_hnsw_index=1")
+			exec(tenant, "create table tenant_data.h(id bigint primary key,v vecf32(2))")
+			exec(tenant, "insert into tenant_data.h values(1,'[1,1]'),(2,'[100000,1]')")
+			exec(tenant, "create index ih using hnsw on tenant_data.h(v) op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1")
+			for _, mode := range []string{"ignored", "status"} {
+				func() {
+					rows, err := tenant.QueryContext(ctx, "show index "+mode+" from tenant_data.h")
+					require.NoError(t, err)
+					defer rows.Close()
+					seen := 0
+					for rows.Next() {
+						seen++
+					}
+					require.NoError(t, rows.Err())
+					require.Equal(t, 1, seen)
+				}()
+			}
 		}()
 		// The reserved-looking identifier below is a CTE, not a physical relation.
 		require.NoError(t, user.QueryRowContext(ctx, "with __mo_index_cte as (select 7 as n) select n from __mo_index_cte").Scan(&id))

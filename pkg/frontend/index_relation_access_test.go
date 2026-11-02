@@ -27,11 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -79,6 +81,128 @@ func TestIndexRelationAccessCallerAndInternalScope(t *testing.T) {
 	require.NoError(t, checkResolvedIndexRelation(body, index, index, "", 0))
 	body.input.sameStatementAuthorization = true
 	require.Error(t, checkResolvedIndexRelation(body, index, index, "", 0))
+}
+
+func TestCloneIndexAdmissionRestoresSourceScopeOnError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = defines.AttachAccountId(context.Background(), 8)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	ses, _ := newObservedProtocolSession()
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "public"})
+	ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
+	execCtx := &ExecCtx{reqCtx: proc.Ctx, ses: ses, proc: proc, input: &UserInput{}}
+	tcc := &TxnCompilerContext{execCtx: execCtx}
+	ses.txnCompileCtx = tcc
+	prior := &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 12}, Tenant: &plan.SnapshotTenant{TenantID: 8}}
+	tcc.SetSnapshot(prior)
+	stmt, err := mysql.ParseOne(proc.Ctx, "create table mo_catalog.dst clone mo_catalog.src {MO_TS=0}", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	clone := stmt.(*tree.CloneTable)
+	clone.IsRestore, clone.IsRestoreByTS, clone.FromAccount = true, true, 0
+	err = checkExplicitIndexTargetCatalog(execCtx, explicitIndexTarget{
+		database: "mo_catalog", table: "src", at: clone.SrcTable.AtTsExpr, cloneSource: clone,
+	})
+	require.Error(t, err)
+	require.Same(t, prior, tcc.GetSnapshot())
+}
+
+func TestCloneDestinationAdmissionResolvedAccount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	ctx := defines.AttachAccountId(context.Background(), 0)
+	proc.Ctx = ctx
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	storage := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	storage.EXPECT().Database(gomock.Any(), "mo_catalog", txnOp).Return(db, nil).AnyTimes()
+	relation := mock_frontend.NewMockRelation(ctrl)
+	def := &plan.TableDef{Name: "shadow", TableType: catalog.SystemOrdinaryRel}
+	relation.EXPECT().GetTableDef(gomock.Any()).DoAndReturn(func(context.Context) *plan.TableDef { return def }).AnyTimes()
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).AnyTimes()
+	var seen []uint32
+	var lookupErr error
+	db.EXPECT().Relation(gomock.Any(), gomock.Any(), nil).DoAndReturn(func(c context.Context, name string, _ any) (engine.Relation, error) {
+		account, err := defines.GetAccountId(c)
+		require.NoError(t, err)
+		seen = append(seen, account)
+		require.Equal(t, "shadow", name, "foreign target must not use the caller's temporary alias")
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		return relation, nil
+	}).AnyTimes()
+	ses, _ := newObservedProtocolSession()
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "public"})
+	ses.tempTables, ses.tempTablesRev = make(map[string]string), make(map[string]string)
+	ses.AddTempTable("mo_catalog", "shadow", "__mo_tmp_00112233445566778899aabbccddeeff_mo_catalog_shadow")
+	ses.txnHandler = InitTxnHandler("", storage, ctx, txnOp)
+	execCtx := &ExecCtx{reqCtx: ctx, ses: ses, proc: proc, input: &UserInput{}}
+	tcc := &TxnCompilerContext{execCtx: execCtx}
+	ses.txnCompileCtx = tcc
+	prior := &plan.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: 19}}
+	tcc.SetSnapshot(prior)
+	priorSub := &plan.SubscriptionMeta{DbName: "mo_catalog", AccountId: 19}
+	tcc.SetQueryingSubscription(priorSub)
+	table := tree.NewTableName("shadow", tree.ObjectNamePrefix{SchemaName: "mo_catalog", ExplicitSchema: true}, nil)
+
+	require.NoError(t, checkCloneDestinationAtAccount(execCtx, ses, table, 0, 7))
+	require.Equal(t, []uint32{7}, seen)
+	require.Same(t, ctx, tcc.GetContext())
+	require.Same(t, prior, tcc.GetSnapshot())
+	require.Same(t, priorSub, tcc.GetQueryingSubscription())
+
+	def = &plan.TableDef{Name: "shadow", TableType: catalog.SystemOrdinaryRel, FeatureFlag: features.IndexTable}
+	require.ErrorContains(t, checkCloneDestinationAtAccount(execCtx, ses, table, 0, 7), "privilege")
+	require.Same(t, ctx, tcc.GetContext())
+	require.Same(t, priorSub, tcc.GetQueryingSubscription())
+	// Zero is a valid target tenant ID, not a missing-value sentinel.
+	require.ErrorContains(t, checkCloneDestinationAtAccount(execCtx, ses, table, 7, 0), "privilege")
+	require.Equal(t, uint32(0), seen[len(seen)-1])
+	require.Same(t, ctx, tcc.GetContext())
+
+	lookupErr = errors.New("target catalog failed")
+	require.ErrorIs(t, checkCloneDestinationAtAccount(execCtx, ses, table, 0, 7), lookupErr)
+	require.Same(t, ctx, tcc.GetContext())
+	require.Same(t, prior, tcc.GetSnapshot())
+	require.Same(t, priorSub, tcc.GetQueryingSubscription())
+}
+
+func TestCloneDestinationDeferredOnlyForExplicitAccount(t *testing.T) {
+	ses := &Session{}
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(&TenantInfo{Tenant: "sys", User: "reader", DefaultRole: "public"})
+	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
+	name := func(table string) tree.TableName {
+		return *tree.NewTableName(tree.Identifier(table), tree.ObjectNamePrefix{SchemaName: "db", ExplicitSchema: true}, nil)
+	}
+	src, dst := name("src"), name("dst")
+	account := &tree.ToAccountOpt{AccountName: "target"}
+	for _, stmt := range []tree.Statement{
+		&tree.CloneTable{SrcTable: src, CreateTable: tree.CreateTable{Table: dst}, ToAccountOpt: account},
+		&tree.DataBranchCreateTable{SrcTable: src, CreateTable: tree.CreateTable{Table: dst}, ToAccountOpt: account},
+	} {
+		var targets []explicitIndexTarget
+		err := checkFrontendIndexTargetWithResolver(execCtx, stmt, func(target explicitIndexTarget) error {
+			targets = append(targets, target)
+			return nil
+		})
+		require.NoError(t, err)
+		require.Len(t, targets, 2)
+		require.False(t, targets[0].deferDestinationCatalog)
+		require.True(t, targets[1].deferDestinationCatalog)
+	}
+	reserved := name(catalog.SecondaryIndexTableNamePrefix + "reserved")
+	stmt := &tree.CloneTable{SrcTable: src, CreateTable: tree.CreateTable{Table: reserved}, ToAccountOpt: account}
+	err := checkFrontendIndexTargetWithResolver(execCtx, stmt, func(explicitIndexTarget) error { return nil })
+	require.ErrorContains(t, err, "privilege", "reserved destination names are denied before deferral")
 }
 
 func TestIndexRelationAccessFrontendTargets(t *testing.T) {
@@ -277,13 +401,14 @@ func TestIndexRelationTemporaryAndPersistentNamespaces(t *testing.T) {
 		return *tree.NewTableName(tree.Identifier(table), tree.ObjectNamePrefix{SchemaName: "db", ExplicitSchema: true}, nil)
 	}
 	shadow, base := name("shadow"), name("base")
+	cloneTemp := &tree.CloneTable{SrcTable: base, CreateTable: tree.CreateTable{Temporary: true, Table: shadow}}
 	for _, tc := range []struct {
 		name string
 		stmt tree.Statement
 		want []explicitIndexTarget
 	}{
 		{"create temp", &tree.CreateTable{Temporary: true, Table: shadow}, []explicitIndexTarget{{database: "db", table: "shadow", temporaryOnly: true}}},
-		{"clone temp", &tree.CloneTable{SrcTable: base, CreateTable: tree.CreateTable{Temporary: true, Table: shadow}}, []explicitIndexTarget{{database: "db", table: "base"}, {database: "db", table: "shadow", temporaryOnly: true}}},
+		{"clone temp", cloneTemp, []explicitIndexTarget{{database: "db", table: "base", cloneSource: cloneTemp}, {database: "db", table: "shadow", temporaryOnly: true}}},
 		{"dump", &tree.DumpTable{Table: &shadow}, []explicitIndexTarget{{database: "db", table: "shadow", withoutTemporaryAlias: true}}},
 		{"load", &tree.LoadTable{Table: &shadow}, []explicitIndexTarget{{database: "db", table: "shadow", withoutTemporaryAlias: true}}},
 		{"truncate", &tree.TruncateTable{Name: &shadow}, []explicitIndexTarget{{database: "db", table: "shadow"}}},

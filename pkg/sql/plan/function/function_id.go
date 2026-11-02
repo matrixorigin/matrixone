@@ -968,9 +968,10 @@ const (
 
 	// UNZIP_FILE returns the decompressed bytes of the first file of a zip archive.
 	UNZIP_FILE = 632
+	MO_IS_PHYSICAL_INDEX = 633
 
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 633
+	FUNCTION_END_NUMBER = 634
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1088,6 +1089,7 @@ var functionIdRegister = map[string]int32{
 	"ewmcov":                       EWM_COV,
 	"ewmcorr":                      EWM_CORR,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"mo_is_physical_index":         MO_IS_PHYSICAL_INDEX,
 	"mo_view_definition":           MO_VIEW_DEFINITION,
 	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
 	"mrank":                        MRANK,

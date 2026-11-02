@@ -19,6 +19,7 @@ package table_function
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,4 +32,13 @@ func TestCreateEndWithoutRows(t *testing.T) {
 	require.NotPanics(t, func() {
 		require.NoError(t, (&ivfpqCreateState{}).end(nil, nil))
 	})
+}
+
+func TestGPUCreateResetEndDoesNotReuseAdmission(t *testing.T) {
+	cagra := &cagraCreateState{policy: &executor.IndexRelationPolicy{}}
+	cagra.reset(nil, nil)
+	require.NoError(t, cagra.end(nil, nil))
+	ivfpq := &ivfpqCreateState{policy: &executor.IndexRelationPolicy{}}
+	ivfpq.reset(nil, nil)
+	require.NoError(t, ivfpq.end(nil, nil))
 }

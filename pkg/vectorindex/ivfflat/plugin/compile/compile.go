@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -428,6 +429,13 @@ func ivfIndexCentroidsTable(
 
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfFlatAlgo.ToString())
 	indexName := indexDef.IndexName
+	runBuild := func() error {
+		if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
+			return ctx.RunSql(sql)
+		}
+		return maintenance.RunSQL(ctx, sql, "ivf_create", indexName,
+			catalog.SystemSI_IVFFLAT_TblType_Metadata, catalog.SystemSI_IVFFLAT_TblType_Centroids)
+	}
 
 	if async {
 		if forceSync {
@@ -437,7 +445,7 @@ func ivfIndexCentroidsTable(
 			if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_start"); err != nil {
 				return err
 			}
-			if err = ctx.RunSql(sql); err != nil {
+			if err = runBuild(); err != nil {
 				return err
 			}
 			if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_end"); err != nil {
@@ -464,7 +472,7 @@ func ivfIndexCentroidsTable(
 	if err = logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_start"); err != nil {
 		return err
 	}
-	if err = ctx.RunSql(sql); err != nil {
+	if err = runBuild(); err != nil {
 		return err
 	}
 	return logTimestamp(ctx, qryDatabase, metadataTableName, "clustering_end")
