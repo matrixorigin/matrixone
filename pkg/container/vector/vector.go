@@ -4730,7 +4730,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 	if err := writeVectorMarshalByte(w, uint8(v.class)); err != nil {
 		return err
 	}
-	if err := writeVectorMarshalBytes(w, types.EncodeType(&v.typ)); err != nil {
+	if err := types.WriteFull(w, types.EncodeType(&v.typ)); err != nil {
 		return err
 	}
 
@@ -4752,7 +4752,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 					canonical.SetOffsetLen(p.canonicalOffset[index], length)
 				}
 				bytes := unsafe.Slice((*byte)(unsafe.Pointer(&canonical)), types.VarlenaSize)
-				if err := writeVectorMarshalBytes(w, bytes); err != nil {
+				if err := types.WriteFull(w, bytes); err != nil {
 					return err
 				}
 			}
@@ -4761,7 +4761,7 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 			if p.normalizedVarlenData != nil {
 				data = p.normalizedVarlenData
 			}
-			if err := writeVectorMarshalBytes(w, data); err != nil {
+			if err := types.WriteFull(w, data); err != nil {
 				return err
 			}
 		}
@@ -4777,12 +4777,12 @@ func (p MarshalBinaryPlan) MarshalTo(w io.Writer) error {
 					continue
 				}
 				offset, length := descriptor.OffsetLen()
-				if err := writeVectorMarshalBytes(w, v.area[offset:offset+length]); err != nil {
+				if err := types.WriteFull(w, v.area[offset:offset+length]); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := writeVectorMarshalBytes(w, v.area); err != nil {
+			if err := types.WriteFull(w, v.area); err != nil {
 				return err
 			}
 		}
@@ -4814,7 +4814,7 @@ func writeVectorMarshalByte(w io.Writer, value byte) error {
 	}
 	var data [1]byte
 	data[0] = value
-	return writeVectorMarshalBytes(w, data[:])
+	return types.WriteFull(w, data[:])
 }
 
 func writeVectorMarshalUint32(w io.Writer, value uint32) error {
@@ -4823,18 +4823,7 @@ func writeVectorMarshalUint32(w io.Writer, value uint32) error {
 	}
 	var data [4]byte
 	binary.NativeEndian.PutUint32(data[:], value)
-	return writeVectorMarshalBytes(w, data[:])
-}
-
-func writeVectorMarshalBytes(w io.Writer, value []byte) error {
-	written, err := w.Write(value)
-	if err != nil {
-		return err
-	}
-	if written != len(value) {
-		return io.ErrShortWrite
-	}
-	return nil
+	return types.WriteFull(w, data[:])
 }
 
 // UnmarshalBinary binds a vector to its binary encoding after fully validating
@@ -8051,13 +8040,31 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return err
 			}
 		}
+		if length == 0 {
+			if err := set(v, w, sel, length); err != nil {
+				return err
+			}
+			v.resetPrepareParamKind()
+			v.resetBinaryString()
+			v.resetStringSource()
+			v.gsp.Reset()
+			return nil
+		}
+		// The selected source row is stable through set: aliases were cloned above.
+		// Compute NULL once for both provenance admission and publication.
+		var sourceNull bool
+		if w.IsConst() {
+			sourceNull = w.IsConstNull()
+		} else {
+			sourceNull = w.nsp.Contains(uint64(sel))
+		}
 		domain := types.RuntimeStringInherit
-		if length > 0 && !w.IsConstNull() && !w.IsNull(uint64(sel)) {
+		if !sourceNull {
 			domain = w.GetRuntimeStringDomainAt(int(sel))
 		}
 		// Admit the only fallible provenance allocation before SetConst*
 		// publishes the new payload, const state, and logical length.
-		if domain == types.RuntimeStringText && length > 0 {
+		if domain == types.RuntimeStringText {
 			if err := v.ensureBinaryStringCapacity(1, mp); err != nil {
 				return err
 			}
@@ -8069,7 +8076,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		// constant value.  The value and its prepared-parameter provenance are
 		// one state: copy only the selected row's category, never the source
 		// sidecar's whole row layout. NULL retains its independent source.
-		if length == 0 || w.IsConstNull() || w.IsNull(uint64(sel)) {
+		if sourceNull {
 			v.resetPrepareParamKind()
 			v.resetBinaryString()
 		} else {
@@ -8078,13 +8085,11 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return err
 			}
 		}
-		if length == 0 {
-			v.resetStringSource()
-		} else if err := v.SetStringSource(w.GetStringSourceAt(int(sel))); err != nil {
+		if err := v.SetStringSource(w.GetStringSourceAt(int(sel))); err != nil {
 			return err
 		}
 		v.gsp.Reset()
-		if grouping && length > 0 {
+		if grouping {
 			v.gsp.AddRange(0, uint64(length))
 		}
 		return nil
@@ -8138,6 +8143,92 @@ func pregrowVarlenaArea(vec *Vector, totalBytes int, mp *mpool.MPool) error {
 
 func (v *Vector) UnionNull(mp *mpool.MPool) error {
 	return appendOneFixed(v, 0, true, mp)
+}
+
+// FixedSourceRow identifies an immutable source for a single append call.
+type FixedSourceRow struct {
+	Vec *Vector
+	Row int64
+}
+
+// TryUnionFlatFixedRows copies rows across source vectors without changing their
+// order. A false result leaves v untouched, allowing the caller to use UnionOne.
+// A true result transfers no source ownership; v owns every copied payload.
+func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
+	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() ||
+		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() ||
+		v.preflightStringSourceReady {
+		return false, nil
+	}
+	size := v.typ.TypeSize()
+	if size <= 0 || rows[0].Vec == nil {
+		return false, nil
+	}
+	source := rows[0].Vec.stringSource
+	if v.length != 0 && v.stringSource != source {
+		return false, nil
+	}
+
+	hasNulls, hasValues := false, false
+	for _, row := range rows {
+		w := row.Vec
+		if w == nil || w == v || w.class != FLAT || w.typ != v.typ ||
+			w.DataBackingKind() != OwnedMPoolUnique || row.Row < 0 || row.Row >= int64(w.length) ||
+			!w.gsp.EmptyByFlag() || !w.hasPlainFixedMetadata() || w.stringSource != source {
+			return false, nil
+		}
+		isNull := !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(row.Row))
+		hasNulls = hasNulls || isNull
+		hasValues = hasValues || !isNull
+	}
+	oldLen := v.length
+	if err := extendWithBitmaps(v, len(rows), mp, hasNulls && v.allocationAccount != nil, false); err != nil {
+		return true, err
+	}
+	// Keep the nullable path separate: ordinary fixed columns need neither
+	// row-by-row NULL checks nor scalar append/admission work in the gather loop.
+	if hasNulls {
+		for i, row := range rows {
+			if !row.Vec.nsp.EmptyByFlag() && nulls.Contains(&row.Vec.nsp, uint64(row.Row)) {
+				nulls.Add(&v.nsp, uint64(oldLen+i))
+				continue
+			}
+			dst, src := (oldLen+i)*size, int(row.Row)*size
+			copy(v.data[dst:dst+size], row.Vec.data[src:src+size])
+		}
+	} else {
+		switch size {
+		case 8:
+			for i, row := range rows {
+				*(*uint64)(unsafe.Pointer(&v.data[(oldLen+i)*8])) =
+					*(*uint64)(unsafe.Pointer(&row.Vec.data[row.Row*8]))
+			}
+		case 4:
+			for i, row := range rows {
+				*(*uint32)(unsafe.Pointer(&v.data[(oldLen+i)*4])) =
+					*(*uint32)(unsafe.Pointer(&row.Vec.data[row.Row*4]))
+			}
+		default:
+			for i, row := range rows {
+				dst, src := (oldLen+i)*size, int(row.Row)*size
+				copy(v.data[dst:dst+size], row.Vec.data[src:src+size])
+			}
+		}
+	}
+	v.length = oldLen + len(rows)
+	v.stringSource = source
+	if hasValues {
+		if !v.nsp.EmptyByFlag() {
+			v.prepareParamKindAppendStart(oldLen)
+		}
+		v.prepareParamKindSeen = true
+	}
+	return true, nil
+}
+
+func (v *Vector) hasPlainFixedMetadata() bool {
+	return v.prepareParamKinds == nil && v.prepareParamKind == PrepareParamNone &&
+		!v.binaryStringRowsActive && !v.binaryString && v.stringSources == nil
 }
 
 // It is simply append. the purpose of retention is ease of use
@@ -8535,8 +8626,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			fillSlice(col, oldLen, v.length, va)
 		} else {
 			tlen := v.GetType().TypeSize()
-			copy(v.data[oldLen*tlen:(oldLen+1)*tlen], w.data[:tlen])
-			broadcastFixed(v.data[oldLen*tlen:v.length*tlen], tlen)
+			dst := v.data[oldLen*tlen : v.length*tlen]
+			copy(dst[:tlen], w.data[:tlen])
+			broadcastFixed(dst, tlen)
 		}
 
 		if err := propagatePrepareParamKindsSelection(v, w, oldLen, sels, mp); err != nil {
@@ -8573,7 +8665,32 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		if err = pregrowVarlenaArea(v, total, mp); err != nil {
 			return err
 		}
-		if !w.GetNulls().EmptyByFlag() {
+		// Reuse the area sizing pass to select an inline-copy batch. The small
+		// check still handles non-inline zero-length descriptors correctly.
+		// Mixed/area payloads and Unicode admission keep the original loops.
+		if total == 0 && !types.IsUnicodeCollation(v.typ.Charset) {
+			if hasNull {
+				for i, sel := range sels {
+					if w.nsp.Contains(uint64(sel)) {
+						nulls.Add(&v.nsp, uint64(oldLen+i))
+						continue
+					}
+					if wCol[sel].IsSmall() {
+						vCol[oldLen+i] = wCol[sel]
+					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
+						return err
+					}
+				}
+			} else {
+				for i, sel := range sels {
+					if wCol[sel].IsSmall() {
+						vCol[oldLen+i] = wCol[sel]
+					} else if err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp); err != nil {
+						return err
+					}
+				}
+			}
+		} else if hasNull {
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
@@ -8586,7 +8703,6 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 			}
 		} else {
 			for i, sel := range sels {
-
 				err = BuildVarlenaFromVarlena(v, &vCol[oldLen+i], &wCol[sel], &w.area, mp)
 				if err != nil {
 					return err
@@ -8609,18 +8725,33 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 				copy(v.data[dstOffset:dstOffset+tlen], w.data[srcOffset:srcOffset+tlen])
 			}
 		} else {
+			// Cases are payload widths in bytes; len(sels) is the output row count.
+			// The profiled 4/8-byte paths copy the first row directly, then
+			// check the tail once. The 1/2-byte paths retain their scalar loops.
 			switch tlen {
 			case 8:
-				for i, sel := range sels {
-					p1 := unsafe.Pointer(&v.data[(oldLen+i)*8])
-					p2 := unsafe.Pointer(&w.data[int(sel)*8])
-					*(*int64)(p1) = *(*int64)(p2)
+				dst := unsafe.Pointer(&v.data[oldLen*8])
+				src := unsafe.Pointer(&w.data[int(sels[0])*8])
+				*(*uint64)(dst) = *(*uint64)(src)
+				if len(sels) > 1 {
+					// The first store uses the original checked indexes.
+					// Admit the tail before deriving the remaining pointers.
+					_ = v.data[(oldLen+len(sels))*8-1]
+					for i := 1; i < len(sels); i++ {
+						src = unsafe.Pointer(&w.data[int(sels[i])*8])
+						*(*uint64)(unsafe.Add(dst, i*8)) = *(*uint64)(src)
+					}
 				}
 			case 4:
-				for i, sel := range sels {
-					p1 := unsafe.Pointer(&v.data[(oldLen+i)*4])
-					p2 := unsafe.Pointer(&w.data[int(sel)*4])
-					*(*int32)(p1) = *(*int32)(p2)
+				dst := unsafe.Pointer(&v.data[oldLen*4])
+				src := unsafe.Pointer(&w.data[int(sels[0])*4])
+				*(*uint32)(dst) = *(*uint32)(src)
+				if len(sels) > 1 {
+					_ = v.data[(oldLen+len(sels))*4-1]
+					for i := 1; i < len(sels); i++ {
+						src = unsafe.Pointer(&w.data[int(sels[i])*4])
+						*(*uint32)(unsafe.Add(dst, i*4)) = *(*uint32)(src)
+					}
 				}
 			case 2:
 				for i, sel := range sels {
@@ -8648,7 +8779,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 }
 
 // unionWideFixedSelected handles widths that otherwise require a dynamic copy
-// per row. Keep the existing scalar paths in unionT for narrow values.
+// per row.
 func unionWideFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S, width int) {
 	// Bound the byte ranges before constructing typed views. The backing
 	// allocation can contain padding, especially for 12/20/24-byte values.

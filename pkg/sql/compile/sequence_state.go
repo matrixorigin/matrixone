@@ -16,7 +16,10 @@ package compile
 
 import (
 	"context"
+	"maps"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,8 +41,8 @@ func captureSequenceStatementState(proc *process.Process) sequenceStatementState
 	}
 	info := proc.GetSessionInfo()
 	state := sequenceStatementState{
-		curValues:  cloneSequenceValues(info.SeqCurValues),
-		addValues:  cloneSequenceValues(info.SeqAddValues),
+		curValues:  maps.Clone(info.SeqCurValues),
+		addValues:  maps.Clone(info.SeqAddValues),
 		deleteKeys: append([]uint64(nil), info.SeqDeleteKeys...),
 	}
 	if len(info.SeqLastValue) != 0 {
@@ -57,8 +60,8 @@ func (c *Compile) restoreSequenceStatementState() {
 
 func (state sequenceStatementState) apply(proc *process.Process) {
 	info := proc.GetSessionInfo()
-	info.SeqCurValues = cloneSequenceValues(state.curValues)
-	info.SeqAddValues = cloneSequenceValues(state.addValues)
+	info.SeqCurValues = maps.Clone(state.curValues)
+	info.SeqAddValues = maps.Clone(state.addValues)
 	info.SeqDeleteKeys = append([]uint64(nil), state.deleteKeys...)
 	if len(info.SeqLastValue) == 0 {
 		info.SeqLastValue = make([]string, 1)
@@ -66,29 +69,117 @@ func (state sequenceStatementState) apply(proc *process.Process) {
 	info.SeqLastValue[0] = state.lastValue
 }
 
-func cloneSequenceValues(values map[uint64]string) map[uint64]string {
-	if values == nil {
-		return nil
+// arbitrateSequenceRetryAdmission is the authoritative second admission
+// phase of tier-2 allocation retry (design
+// docs/design/sequence_ownership_state_consistency.md §4 D, v13–v21). It
+// runs at the retry quiescence boundary — after prepareRetryTransition's
+// producer join, before the retry generation is rebuilt — and answers for
+// the WHOLE consumed pending set of the current statement generation as a
+// unit (B3): the frozen dispatch envelope facts {Autocommit=true,
+// ByBegin=false}, RC isolation, generic canRetry acceptance, and the live
+// terms (the synchronized publication flag, the exactly-once terminal
+// stamp, the window D through the shared probe-first expiry decision)
+// are re-verified once for the statement. Publication always wins: a
+// statement whose first result batch already entered the client write path
+// is never replayed. Both phases read ONLY that flag — the unsynchronized
+// ResultRows accounting is never consulted (F1). On admission the retry
+// window (min(statement, 10 s), evaluated at the first admission) is
+// created — reused, never reset, while the episode is live (G2), opened
+// fresh after an episode closure (Z1) — and the admission probe creates
+// every newly contended watch entry carrying its committed-tuple baseline
+// (A1/Z2); a failed sample records the entry young. A declined verdict
+// surfaces the FIRST-recorded pending's named terminal error.
+func (c *Compile) arbitrateSequenceRetryAdmission(retryState *process.SequenceRetryState, items []process.SequencePendingItem, err error) (bool, error) {
+	if retryState.Published() {
+		return false, nil
 	}
-	cloned := make(map[uint64]string, len(values))
-	for key, value := range values {
-		cloned[key] = value
+	if _, terminal := retryState.TerminalIdentity(); terminal {
+		return false, nil
 	}
-	return cloned
+	op := c.proc.GetTxnOperator()
+	if op == nil {
+		return false, nil
+	}
+	opts := op.TxnOptions()
+	if !opts.GetAutocommit() || opts.GetByBegin() {
+		return false, nil
+	}
+	if !op.Txn().IsRCIsolation() {
+		return false, nil
+	}
+	if !c.canRetry(err) {
+		return false, nil
+	}
+	// The session statement deadline is a session fact; every conversion
+	// observed it. The tightest observation caps the window and the probes.
+	var stmtDeadline time.Time
+	for _, item := range items {
+		if !item.Pending.StmtDeadline.IsZero() && (stmtDeadline.IsZero() || item.Pending.StmtDeadline.Before(stmtDeadline)) {
+			stmtDeadline = item.Pending.StmtDeadline
+		}
+	}
+	if window, ok := retryState.RetryDeadline(); ok && !window.After(time.Now()) {
+		// The window elapsed at the seam (site 1): the probe-first expiry
+		// decision — never the wall clock alone — chooses between renewed
+		// continuation, episode closure and the terminal.
+		outcome := function.RunSequenceRetryExpiryDecision(c.proc.Ctx, c.proc, stmtDeadline)
+		if outcome.Kind == process.DecideCancelled {
+			// Caller's own cancellation outranks a pending's stale error:
+			// the client receives its own cancellation (v21 precedence,
+			// F2), never the old named terminal.
+			return false, outcome.Err
+		}
+		if outcome.Kind == process.DecideExhausted {
+			return false, nil
+		}
+	}
+	candidate := time.Now().Add(function.SequenceAllocationRetryBudget())
+	if !stmtDeadline.IsZero() && stmtDeadline.Before(candidate) {
+		candidate = stmtDeadline
+	}
+	retryState.AdmitRetry(candidate)
+	// The admission probe (A1/Z2): every newly contended watch entry is
+	// created CARRYING its committed-tuple baseline; a failed sample
+	// records the entry young and the next expiry decision retries its
+	// initialization first inside the single probe round.
+	for _, item := range items {
+		if retryState.HasWatch(item.Identity) {
+			continue
+		}
+		if tuple, err := function.SampleSequenceBaseline(c.proc.Ctx, c.proc, item.Identity, function.SequenceExpiryProbeBudget(), stmtDeadline); err == nil {
+			retryState.RecordBaseline(item.Identity, tuple, time.Now())
+		} else {
+			retryState.EnsureWatching(item.Identity)
+		}
+	}
+	return true, nil
 }
 
 // internalSequenceState is a synchronous CTAS handoff. The child owns its
 // cloned attempt state; only a successful child supplies an output snapshot.
 // The outer statement remains responsible for frontend publication and rollback.
+//
+// obligations carries the session-owned SequenceObligationSet itself (not a
+// clone). The child's process comes from NewTopProcess with a fresh
+// SessionInfo, so without this carry an allocation from a transaction-local
+// sequence inside CTAS population would see a nil store: Raise cannot record
+// the issued values, and the pre-commit stamp would never repair them
+// (#30896; v12-review F5). The set is mutex-guarded and deliberately outside
+// the statement snapshot/restore machinery (see SessionInfo.SeqObligations),
+// so nothing here clones, restores, or clears it.
 type internalSequenceState struct {
-	input  sequenceStatementState
-	output *sequenceStatementState
+	input       sequenceStatementState
+	output      *sequenceStatementState
+	obligations *process.SequenceObligationSet
 }
 
 type internalSequenceStateKey struct{}
 
 func attachInternalSequenceState(ctx context.Context, proc *process.Process) (context.Context, *internalSequenceState) {
-	state := &internalSequenceState{input: captureSequenceStatementState(proc)}
+	state := &internalSequenceState{
+		input:       captureSequenceStatementState(proc),
+		obligations: proc.GetSequenceObligationSet(),
+	}
 	return context.WithValue(ctx, internalSequenceStateKey{}, state), state
 }
 
@@ -107,6 +198,14 @@ func initInternalSequenceState(proc *process.Process, database string, state *in
 	proc.InitSeq()
 	if state != nil {
 		state.input.apply(proc)
+		// A CTAS child allocating from a transaction-local sequence shares the
+		// session's obligation store, so Raise records the issued values and
+		// the outer transaction's pre-commit stamp can repair them (#30896;
+		// v12-review F5). A nil handoff (nested metadata SQL) keeps the fresh
+		// process's nil store: its allocations still fail loudly there.
+		if state.obligations != nil {
+			proc.GetSessionInfo().SeqObligations = state.obligations
+		}
 		// A caller without prior sequence state still needs writable containers.
 		info := proc.GetSessionInfo()
 		if info.SeqCurValues == nil {

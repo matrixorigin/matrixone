@@ -678,3 +678,25 @@ func vectorStrings(vec *vector.Vector, rows int) []string {
 	}
 	return out
 }
+
+func TestIcebergPositionDeleteRowUsesFirstNonNullValue(t *testing.T) {
+	text := parquet.Row{
+		parquet.NullValue().Level(0, 0, 0),
+		parquet.ValueOf("first").Level(1, 1, 0),
+		parquet.ValueOf("second").Level(1, 1, 0),
+	}
+	value, ok := parquetRowString(text, 0)
+	require.True(t, ok)
+	require.Equal(t, "first", value)
+
+	positions := parquet.Row{
+		parquet.NullValue().Level(0, 0, 0),
+		parquet.Int32Value(7).Level(1, 1, 0),
+		parquet.Int64Value(8).Level(1, 1, 0),
+	}
+	position, ok := parquetRowInt64(positions, 0)
+	require.True(t, ok)
+	require.Equal(t, int64(7), position)
+	_, ok = parquetRowInt64(parquet.Row{parquet.NullValue().Level(0, 0, 0)}, 0)
+	require.False(t, ok)
+}

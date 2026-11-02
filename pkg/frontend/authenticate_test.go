@@ -676,6 +676,42 @@ func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *tes
 	require.NotContains(t, current, sysview.InformationSchemaViewsLegacyDDL)
 }
 
+// TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally
+// pins the account-creation publication contract of the declared catalog
+// metadata: the corrected COLUMNS identity (declared ENUM/SET label
+// character metadata with SQL NULL numeric classification and the unbounded
+// generated expression) and the prefix-aware STATISTICS identity publish
+// whenever account creation succeeds. Account creation installs the complete
+// current definition set or aborts, so no peer answer or deferral can leave a
+// fresh account with pre-correction metadata, and a predecessor identity is
+// never authored.
+func TestCreateTablesInformationSchemaPublishesDeclaredMetadataUnconditionally(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx = defines.AttachAccount(ctx, 42, 1, 2)
+	bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+	bh.EXPECT().ClearExecResultSet().AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{
+		newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:126,cn-b:126"}`}}),
+	}).AnyTimes()
+	var executed []string
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, sql string) error {
+			executed = append(executed, sql)
+			return nil
+		}).AnyTimes()
+
+	require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(ctx, bh))
+	require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+	require.Contains(t, executed, sysview.InformationSchemaStatisticsPrefixSubPartDDL)
+	// A fresh publication never installs the predecessor templates; they are
+	// recognized only for reading state older binaries persisted (historical
+	// snapshots), never authored here.
+	require.NotContains(t, executed, sysview.InformationSchemaColumnsV100DDL())
+	require.NotContains(t, executed, sysview.InformationSchemaColumnsV110DDL())
+	require.NotContains(t, executed, sysview.InformationSchemaStatisticsDDL)
+}
+
 func containsSQL(sqls []string, expected string) bool {
 	for _, sql := range sqls {
 		if sql == expected {
@@ -7572,6 +7608,7 @@ func addTablePrivilegeResultsForRole(
 	privTypes := []PrivilegeType{
 		PrivilegeTypeSelect,
 		PrivilegeTypeInsert,
+		PrivilegeTypeUpdate,
 		PrivilegeTypeDelete,
 		PrivilegeTypeTableAll,
 		PrivilegeTypeTableOwnership,
@@ -10154,8 +10191,8 @@ func Test_doDropRole(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		roleLookup, lookupErr := getSqlForRoleIdOfRole(context.TODO(), stmt.Roles[0].UserName)
 		require.NoError(t, lookupErr)
-		require.Equal(t, []string{"begin;", "select 1", roleLookup}, bh.executedSQLs[:3])
-		require.Equal(t, fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(0)), bh.executedSQLs[3])
+		require.Equal(t, []string{"begin;", "select 1", "select 1", roleLookup}, bh.executedSQLs[:4])
+		require.Equal(t, fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(0)), bh.executedSQLs[4])
 		require.Nil(t, ses.ruleCache)
 	})
 	convey.Convey("drop role succ (if exists)", t, func() {
@@ -13285,24 +13322,7 @@ func newMrsForRoleIdOfUserId(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForCheckRoleHasPrivilege(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("role_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("with_grant_option")
-	col2.SetColumnType(defines.MYSQL_TYPE_BOOL)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForRoleIdOfUserId(rows)
 }
 
 func newMrsForInheritedRoleIdOfRoleId(rows [][]interface{}) *MysqlResultSet {
@@ -13353,29 +13373,7 @@ func newMrsForGetAllStuffRoleGrant(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForCheckRoleGrant(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("granted_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	col2 := &MysqlColumn{}
-	col2.SetName("grantee_id")
-	col2.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	col3 := &MysqlColumn{}
-	col3.SetName("with_grant_option")
-	col3.SetColumnType(defines.MYSQL_TYPE_BOOL)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-	mrs.AddColumn(col3)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForGetAllStuffRoleGrant(rows)
 }
 
 func newMrsForPasswordOfUser(rows [][]interface{}) *MysqlResultSet {
@@ -13631,19 +13629,7 @@ func newMrsForCheckUserGrant(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForRoleOfUser(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("role_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	mrs.AddColumn(col1)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForRoleIdOfRole(rows)
 }
 
 func newMrsForCheckDatabase(rows [][]interface{}) *MysqlResultSet {
@@ -13929,19 +13915,7 @@ func newMrsForRoleWGO(rows [][]interface{}) *MysqlResultSet {
 }
 
 func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
-	mrs := &MysqlResultSet{}
-
-	col1 := &MysqlColumn{}
-	col1.SetName("role_id")
-	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-
-	mrs.AddColumn(col1)
-
-	for _, row := range rows {
-		mrs.AddRow(row)
-	}
-
-	return mrs
+	return newMrsForRoleIdOfRole(rows)
 }
 
 func newMrsForSystemVariableNameOfAccount(rows [][]interface{}) *MysqlResultSet {
@@ -14413,9 +14387,12 @@ func TestDetermineUserHasPrivilegeSetPublishesRoleGrantOnlyAfterCommit(t *testin
 			defer backgroundExecStub.Reset()
 
 			priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
-			_, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
+			valid, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
 			require.ErrorIs(t, err, commitErr)
-			require.Contains(t, bh.executedSQLs, "rollback;")
+			require.Equal(t, []string{"begin;", roleGrantSQL, "commit;", "rollback;"}, bh.executedSQLs)
+			if tc.rows == nil {
+				require.False(t, valid)
+			}
 			_, cached := cache.getActiveRoleGrant(2, 3)
 			require.False(t, cached)
 		})
@@ -14433,13 +14410,16 @@ func TestDetermineUserHasPrivilegeSetPublishesRoleGrantAfterSuccessfulCommit(t *
 	defer cacheHitStub.Reset()
 
 	for _, tc := range []struct {
-		name      string
-		rows      [][]interface{}
-		wantValid bool
-		wantError bool
+		name       string
+		rows       [][]interface{}
+		wantValid  bool
+		wantError  bool
+		invalidate bool
 	}{
 		{name: "granted", rows: [][]interface{}{{int64(3), int64(2), false}}, wantValid: true},
 		{name: "revoked", wantError: true},
+		{name: "granted invalidated during commit", rows: [][]interface{}{{int64(3), int64(2), false}}, wantValid: true, invalidate: true},
+		{name: "revoked invalidated during commit", wantError: true, invalidate: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cache := &privilegeCache{}
@@ -14460,6 +14440,9 @@ func TestDetermineUserHasPrivilegeSetPublishesRoleGrantAfterSuccessfulCommit(t *
 				if sql == "commit;" {
 					_, cached := cache.getActiveRoleGrant(2, 3)
 					require.False(t, cached)
+					if tc.invalidate {
+						cache.invalidate()
+					}
 				}
 			}
 			backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
@@ -14468,14 +14451,18 @@ func TestDetermineUserHasPrivilegeSetPublishesRoleGrantAfterSuccessfulCommit(t *
 			priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
 			valid, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
 			if tc.wantError {
-				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+				require.EqualError(t, err, "internal error: do not have privilege to execute the statement")
 			} else {
 				require.NoError(t, err)
 			}
 			require.Equal(t, tc.wantValid, valid)
 			cachedValid, cached := cache.getActiveRoleGrant(2, 3)
-			require.True(t, cached)
-			require.Equal(t, tc.wantValid, cachedValid)
+			require.Equal(t, []string{"begin;", roleGrantSQL, "commit;"}, bh.executedSQLs)
+			require.Equal(t, !tc.invalidate, cached)
+			if cached {
+				require.Equal(t, tc.wantValid, cachedValid)
+			}
 		})
 	}
 }

@@ -764,12 +764,17 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 	case types.T_array_float32:
 		switch leaf.Type().Kind() {
 		case parquet.Float:
-			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float32, error) {
-				return v.Float(), nil
+			configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (float32, error) {
+				f := v.Float()
+				return f, parquetVectorElemFinite(ctx, float64(f))
 			})
 		case parquet.Double:
 			configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (float32, error) {
-				return parquetFloat64ToFloat32(ctx, v.Double())
+				f, err := parquetFloat64ToFloat32(ctx, v.Double())
+				if err != nil {
+					return 0, err
+				}
+				return f, parquetVectorElemFinite(ctx, float64(f))
 			})
 		default:
 			return nil, nil
@@ -777,12 +782,14 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 	case types.T_array_float64:
 		switch leaf.Type().Kind() {
 		case parquet.Float:
-			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float64, error) {
-				return float64(v.Float()), nil
+			configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (float64, error) {
+				f := float64(v.Float())
+				return f, parquetVectorElemFinite(ctx, f)
 			})
 		case parquet.Double:
-			configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (float64, error) {
-				return v.Double(), nil
+			configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (float64, error) {
+				f := v.Double()
+				return f, parquetVectorElemFinite(ctx, f)
 			})
 		default:
 			return nil, nil
@@ -792,15 +799,19 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 		if leaf.Type().Kind() != parquet.Float {
 			return nil, nil
 		}
-		configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (types.BF16, error) {
-			return types.BF16FromFloat32(v.Float()), nil
+		configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (types.BF16, error) {
+			// Check the narrowed value: a finite FLOAT beyond the bf16 range
+			// becomes ±Inf only after narrowing, as in the SQL input path.
+			bf := types.BF16FromFloat32(v.Float())
+			return bf, parquetVectorElemFinite(ctx, float64(bf.ToFloat32()))
 		})
 	case types.T_array_float16:
 		if leaf.Type().Kind() != parquet.Float {
 			return nil, nil
 		}
-		configureParquetListMapper(mp, width, func(_ context.Context, v parquet.Value) (types.Float16, error) {
-			return types.Float16FromFloat32(v.Float()), nil
+		configureParquetListMapper(mp, width, func(ctx context.Context, v parquet.Value) (types.Float16, error) {
+			h := types.Float16FromFloat32(v.Float())
+			return h, parquetVectorElemFinite(ctx, float64(h.ToFloat32()))
 		})
 	case types.T_array_int8:
 		// int8/uint8 vectors are stored in parquet as INT32 leaves; load is strict
@@ -4290,6 +4301,15 @@ func parquetValueToFloat32(ctx context.Context, st parquet.Type, v parquet.Value
 		return 0, err
 	}
 	return parquetFloat64ToFloat32(ctx, val)
+}
+
+// parquetVectorElemFinite rejects NaN and ±Inf vector elements, matching the
+// vector column's SQL input check ("vector element cannot be NaN or Inf").
+func parquetVectorElemFinite(ctx context.Context, f float64) error {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return moerr.NewInternalErrorf(ctx, "vector element cannot be NaN or Inf: %v", f)
+	}
+	return nil
 }
 
 func parquetFloat64ToFloat32(ctx context.Context, val float64) (float32, error) {

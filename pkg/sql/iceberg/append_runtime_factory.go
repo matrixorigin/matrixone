@@ -140,8 +140,8 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	if err != nil {
 		return nil, api.ToMOErr(ctx, err)
 	}
-	namespace := dottedNamespace(firstNonEmpty(mapping.Namespace, req.Namespace))
-	rawTargetRef := firstNonEmpty(req.DefaultRef, mapping.DefaultRef, model.DefaultRefMain)
+	namespace := dottedNamespace(api.FirstNonBlankPreserveWhitespace(mapping.Namespace, req.Namespace))
+	rawTargetRef := api.FirstNonBlankPreserveWhitespace(req.DefaultRef, mapping.DefaultRef, model.DefaultRefMain)
 	catalogReq, targetRef, targetRefType, err := resolveRuntimeCatalogRequestPrefixForWriteRef(ctx, client, api.CatalogRequest{
 		Catalog:           catalogModel,
 		ExternalPrincipal: req.ExternalPrincipal,
@@ -152,7 +152,7 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	loadResp, err := client.LoadTable(ctx, api.LoadTableRequest{
 		CatalogRequest: catalogReq,
 		Namespace:      namespace,
-		Table:          firstNonEmpty(mapping.TableName, req.Table),
+		Table:          api.FirstNonBlankPreserveWhitespace(mapping.TableName, req.Table),
 		Snapshots:      "all",
 	})
 	if err != nil {
@@ -185,7 +185,7 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	if err != nil {
 		return nil, err
 	}
-	objectIO, err := f.objectIOContext(ctx, client, catalogReq, loadResp, namespace, firstNonEmpty(mapping.TableName, req.Table), catalogModel)
+	objectIO, err := f.objectIOContext(ctx, client, catalogReq, loadResp, namespace, api.FirstNonBlankPreserveWhitespace(mapping.TableName, req.Table), catalogModel)
 	if err != nil {
 		return nil, err
 	}
@@ -200,8 +200,8 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	now := f.now()
 	snapshotID := f.nextSnapshotID(now, tableMeta)
 	sequenceNumber := nextDMLSequenceNumber(tableMeta)
-	writerID := "append-" + api.PathHash(firstNonEmpty(req.StatementID, req.IdempotencyKey))
-	manifestPaths, err := buildAppendManifestPaths(ctx, tableMeta.Location, firstNonEmpty(req.StatementID, req.IdempotencyKey), snapshotID)
+	writerID := "append-" + api.PathHash(api.FirstNonBlankPreserveWhitespace(req.StatementID, req.IdempotencyKey))
+	manifestPaths, err := buildAppendManifestPaths(ctx, tableMeta.Location, api.FirstNonBlankPreserveWhitespace(req.StatementID, req.IdempotencyKey), snapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +213,7 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 		Schema:              schema,
 		PartitionSpec:       spec,
 		TableLocation:       strings.TrimRight(strings.TrimSpace(tableMeta.Location), "/"),
-		DataDir:             appendDataDir(firstNonEmpty(req.StatementID, req.IdempotencyKey), snapshotID),
+		DataDir:             appendDataDir(api.FirstNonBlankPreserveWhitespace(req.StatementID, req.IdempotencyKey), snapshotID),
 		WriterID:            writerID,
 		TargetFileSizeBytes: f.opts.TargetFileSizeBytes,
 		TimeZone:            req.TimeZone,
@@ -256,7 +256,7 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 	appendReq, err := icebergwritecore.BuildAppendRequest(ctx, icebergwritecore.AppendRequestSpec{
 		CatalogRequest:       catalogReq,
 		Namespace:            namespace,
-		Table:                firstNonEmpty(mapping.TableName, req.Table),
+		Table:                api.FirstNonBlankPreserveWhitespace(mapping.TableName, req.Table),
 		TableLocation:        tableMeta.Location,
 		TargetRef:            targetRef,
 		TargetRefType:        targetRefType,
@@ -272,7 +272,7 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 		BaseSpec:             spec,
 		KnownPartitionSpecs:  append([]api.PartitionSpec(nil), tableMeta.PartitionSpecs...),
 		WriterOwnerAccountID: mapping.WriterOwnerAccountID,
-		IdempotencyKey:       firstNonEmpty(req.IdempotencyKey, req.StatementID),
+		IdempotencyKey:       api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.StatementID),
 		SourceKind:           icebergwritecore.AppendSourceSQLInsert,
 		SourceQueryID:        req.StatementID,
 		WriterID:             writerID,
@@ -281,8 +281,8 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 			"mo-operation": string(icebergwrite.OperationAppend),
 		},
 		PublishAuditHint: api.PublishAuditHint{
-			JobID:       firstNonEmpty(req.StatementID, req.IdempotencyKey),
-			SourceBatch: firstNonEmpty(req.StatementID, req.IdempotencyKey),
+			JobID:       api.FirstNonBlankPreserveWhitespace(req.StatementID, req.IdempotencyKey),
+			SourceBatch: api.FirstNonBlankPreserveWhitespace(req.StatementID, req.IdempotencyKey),
 		},
 	})
 	if err != nil {
@@ -295,9 +295,6 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 		workflow:     workflow,
 		closed:       false,
 		committed:    false,
-		dataFiles:    nil,
-		objectRef:    "",
-		releaseRef:   nil,
 		memoryBudget: appendWriteBudget,
 	}, nil
 }
@@ -565,12 +562,12 @@ func (c *appendRuntimeSharedCoordinator) releaseOnce() {
 }
 
 func appendRuntimeCoordinatorCacheKey(req icebergwrite.AppendRequest) string {
-	statementKey := strings.TrimSpace(firstNonEmpty(req.IdempotencyKey, req.StatementID))
+	statementKey := strings.TrimSpace(api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.StatementID))
 	if statementKey == "" {
 		return ""
 	}
-	ref := strings.TrimSpace(firstNonEmpty(req.DefaultRef, model.DefaultRefMain))
-	return lengthPrefixedKey(
+	ref := strings.TrimSpace(api.FirstNonBlankPreserveWhitespace(req.DefaultRef, model.DefaultRefMain))
+	return api.LengthPrefixedKey(
 		strconv.FormatUint(uint64(req.AccountID), 10),
 		strconv.FormatUint(req.RoleID, 10),
 		strconv.FormatUint(req.UserID, 10),
@@ -598,7 +595,7 @@ func (f AppendRuntimeCoordinatorFactory) validateRuntimeRequest(ctx context.Cont
 	if strings.TrimSpace(req.CatalogName) == "" || strings.TrimSpace(req.Namespace) == "" || strings.TrimSpace(req.Table) == "" {
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append write requires catalog, namespace, and table", nil))
 	}
-	if strings.TrimSpace(firstNonEmpty(req.IdempotencyKey, req.StatementID)) == "" {
+	if strings.TrimSpace(api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.StatementID)) == "" {
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append write requires a statement idempotency key", map[string]string{
 			"table": req.Table,
 		}))
@@ -647,6 +644,37 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 		}, nil
 	}
 	credentials := append([]api.StorageCredential(nil), loadResp.StorageCredentials...)
+	objectIO, ok, err := resolveWriteObjectIOContext(ctx, client, catalogReq, loadResp, namespace, table, catalog, credentials, writeObjectIOOptions{
+		buildFileService: f.opts.BuildFileService, scopeForLocation: f.opts.ScopeForLocation,
+		residencyPolicies: f.opts.ResidencyPolicies, store: f.opts.Store, now: f.opts.Now,
+		requireResidencyPolicy: f.requireResidencyPolicy(), defaultPrincipal: "matrixone-append", operation: "append",
+	})
+	if err != nil {
+		return appendObjectIOContext{}, err
+	}
+	if !ok {
+		return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrCredentialExpired, "Iceberg append catalog did not return usable storage credentials", map[string]string{
+			"catalog": catalog.Name,
+			"table":   table,
+		}))
+	}
+	return objectIO, nil
+}
+
+// writeObjectIOOptions holds the shared object access inputs for append and DML.
+type writeObjectIOOptions struct {
+	buildFileService       icebergio.ScopedFileServiceBuilder
+	scopeForLocation       icebergio.ObjectScopeForLocation
+	residencyPolicies      []model.ResidencyPolicy
+	store                  any
+	now                    func() time.Time
+	requireResidencyPolicy bool
+	defaultPrincipal       string
+	operation              string
+}
+
+// resolveWriteObjectIOContext resolves credentials, residency and signing for a write.
+func resolveWriteObjectIOContext(ctx context.Context, client api.CatalogClient, catalogReq api.CatalogRequest, loadResp *api.LoadTableResponse, namespace api.Namespace, table string, catalog model.Catalog, credentials []api.StorageCredential, opts writeObjectIOOptions) (appendObjectIOContext, bool, error) {
 	if len(credentials) == 0 {
 		creds, err := client.LoadCredentials(ctx, api.LoadCredentialsRequest{
 			CatalogRequest: catalogReq,
@@ -654,31 +682,31 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 			Table:          table,
 		})
 		if err != nil {
-			return appendObjectIOContext{}, api.ToMOErr(ctx, err)
+			return appendObjectIOContext{}, false, api.ToMOErr(ctx, err)
 		}
 		if creds != nil {
 			credentials = append(credentials, creds.StorageCredentials...)
 		}
 	}
-	buildFileService := f.opts.BuildFileService
+	buildFileService := opts.buildFileService
 	if buildFileService == nil {
 		buildFileService = icebergio.NewS3VendedFileServiceBuilder().Build
 	}
 	baseScope := icebergio.ObjectScope{
 		AccountID: catalog.AccountID,
 		CatalogID: catalog.CatalogID,
-		Principal: firstNonEmpty(catalogReq.ExternalPrincipal, "matrixone-append"),
+		Principal: api.FirstNonBlankPreserveWhitespace(catalogReq.ExternalPrincipal, opts.defaultPrincipal),
 	}
-	scopeForLocation := f.opts.ScopeForLocation
+	scopeForLocation := opts.scopeForLocation
 	if scopeForLocation == nil {
 		scopeForLocation = icebergio.S3ObjectScopeForLocation(baseScope, credentials)
 	}
-	policies := append([]model.ResidencyPolicy(nil), f.opts.ResidencyPolicies...)
+	policies := append([]model.ResidencyPolicy(nil), opts.residencyPolicies...)
 	if len(policies) == 0 {
-		if lister, ok := f.opts.Store.(ResidencyPolicyLister); ok {
+		if lister, ok := opts.store.(ResidencyPolicyLister); ok {
 			loaded, err := lister.ListResidencyPolicies(ctx, catalog.AccountID, catalog.CatalogID)
 			if err != nil {
-				return appendObjectIOContext{}, err
+				return appendObjectIOContext{}, false, err
 			}
 			policies = append(policies, loaded...)
 		}
@@ -689,34 +717,34 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 		provider := icebergio.VendedCredentialProvider{
 			Credentials:            vendedCredentials,
 			BuildFileService:       buildFileService,
-			Now:                    f.opts.Now,
+			Now:                    opts.now,
 			ResidencyValidator:     residencyValidator,
-			RequireResidencyPolicy: f.requireResidencyPolicy(),
+			RequireResidencyPolicy: opts.requireResidencyPolicy,
 		}
 		return appendObjectIOContext{
 			WriterProvider:   provider,
 			ReaderProvider:   provider,
 			ScopeForLocation: scopeForLocation,
-		}, nil
+		}, true, nil
 	}
 	if loadResp != nil && loadResp.Capabilities.RemoteSigning {
 		signerFactory, ok := client.(interface {
 			NewRemoteSigner(api.CatalogRequest, map[string]string) icebergio.RemoteSigner
 		})
 		if !ok {
-			return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg append catalog client cannot create remote signer", map[string]string{
+			return appendObjectIOContext{}, false, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg "+opts.operation+" catalog client cannot create remote signer", map[string]string{
 				"catalog": catalog.Name,
 				"table":   table,
 			}))
 		}
 		signer := signerFactory.NewRemoteSigner(catalogReq, loadResp.Config)
 		if signer == nil {
-			return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg append catalog client returned empty remote signer", map[string]string{
+			return appendObjectIOContext{}, false, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg "+opts.operation+" catalog client returned empty remote signer", map[string]string{
 				"catalog": catalog.Name,
 				"table":   table,
 			}))
 		}
-		scopeForLocation = f.opts.ScopeForLocation
+		scopeForLocation = opts.scopeForLocation
 		if scopeForLocation == nil {
 			scopeForLocation = icebergio.S3ObjectScopeForConfig(baseScope, loadResp.Config)
 		}
@@ -726,25 +754,22 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 				Signer:                 signer,
 				BuildFileService:       buildSignedFileService,
 				Method:                 http.MethodPut,
-				Now:                    f.opts.Now,
+				Now:                    opts.now,
 				ResidencyValidator:     residencyValidator,
-				RequireResidencyPolicy: f.requireResidencyPolicy(),
+				RequireResidencyPolicy: opts.requireResidencyPolicy,
 			},
 			ReaderProvider: icebergio.RemoteSigningProvider{
 				Signer:                 signer,
 				BuildFileService:       buildSignedFileService,
 				Method:                 http.MethodGet,
-				Now:                    f.opts.Now,
+				Now:                    opts.now,
 				ResidencyValidator:     residencyValidator,
-				RequireResidencyPolicy: f.requireResidencyPolicy(),
+				RequireResidencyPolicy: opts.requireResidencyPolicy,
 			},
 			ScopeForLocation: scopeForLocation,
-		}, nil
+		}, true, nil
 	}
-	return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrCredentialExpired, "Iceberg append catalog did not return usable storage credentials", map[string]string{
-		"catalog": catalog.Name,
-		"table":   table,
-	}))
+	return appendObjectIOContext{}, false, nil
 }
 
 func (f AppendRuntimeCoordinatorFactory) requireResidencyPolicy() bool {
@@ -761,10 +786,10 @@ func filterS3AccessCredentials(credentials []api.StorageCredential) []api.Storag
 		for key, value := range credential.Config {
 			cfg[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
 		}
-		if firstNonEmpty(cfg["s3.access-key-id"], cfg["s3.access_key_id"], cfg["aws.access-key-id"]) == "" {
+		if api.FirstNonBlankPreserveWhitespace(cfg["s3.access-key-id"], cfg["s3.access_key_id"], cfg["aws.access-key-id"]) == "" {
 			continue
 		}
-		if firstNonEmpty(cfg["s3.secret-access-key"], cfg["s3.secret_access_key"], cfg["aws.secret-access-key"]) == "" {
+		if api.FirstNonBlankPreserveWhitespace(cfg["s3.secret-access-key"], cfg["s3.secret_access_key"], cfg["aws.secret-access-key"]) == "" {
 			continue
 		}
 		out = append(out, credential)
@@ -801,9 +826,6 @@ type AppendRuntimeCoordinator struct {
 	workflow     icebergwritecore.AppendWorkflow
 	closed       bool
 	committed    bool
-	dataFiles    []api.DataFile
-	objectRef    string
-	releaseRef   func()
 	memoryBudget *dmlMemoryBudget
 }
 
@@ -929,7 +951,6 @@ func (c *AppendRuntimeCoordinator) Commit(ctx context.Context) error {
 		return api.ToMOErr(ctx, errors.Join(err, abortErr, recordErr))
 	}
 	c.closed = true
-	c.dataFiles = append([]api.DataFile(nil), files...)
 	if len(files) == 0 {
 		c.committed = true
 		return nil
@@ -998,15 +1019,15 @@ func buildAppendManifestPaths(ctx context.Context, tableLocation, statementKey s
 	if strings.TrimSpace(statementKey) == "" || snapshotID <= 0 {
 		return appendManifestPaths{}, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append manifest paths require statement key and snapshot id", nil))
 	}
-	base := joinDMLObjectPath(tableLocation, "metadata", "mo-append", "stmt-"+api.PathHash(statementKey))
+	base := api.JoinObjectPath(tableLocation, "metadata", "mo-append", "stmt-"+api.PathHash(statementKey))
 	return appendManifestPaths{
-		ManifestPath:     joinDMLObjectPath(base, "data-manifest-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
-		ManifestListPath: joinDMLObjectPath(base, "manifest-list-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
+		ManifestPath:     api.JoinObjectPath(base, "data-manifest-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
+		ManifestListPath: api.JoinObjectPath(base, "manifest-list-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
 	}, nil
 }
 
 func appendDataDir(statementKey string, snapshotID int64) string {
-	return joinDMLObjectPath("data", "mo-append", "stmt-"+api.PathHash(statementKey), "snap-"+strconv.FormatInt(snapshotID, 10))
+	return api.JoinObjectPath("data", "mo-append", "stmt-"+api.PathHash(statementKey), "snap-"+strconv.FormatInt(snapshotID, 10))
 }
 
 func appendCurrentSchema(ctx context.Context, meta *api.TableMetadata, table string) (api.Schema, error) {
@@ -1036,7 +1057,7 @@ func appendBaseSnapshot(ctx context.Context, meta *api.TableMetadata, ref string
 		return api.Snapshot{}, 0, nil
 	}
 	snapshot, err := metadata.ResolveSnapshot(meta, metadata.SnapshotSelector{
-		RefName:           firstNonEmpty(ref, model.DefaultRefMain),
+		RefName:           api.FirstNonBlankPreserveWhitespace(ref, model.DefaultRefMain),
 		AllowMainFallback: true,
 	})
 	if err != nil {

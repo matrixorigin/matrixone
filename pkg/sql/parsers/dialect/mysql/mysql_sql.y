@@ -152,6 +152,9 @@ func mergeIndexOption(left, right *tree.IndexOption) *tree.IndexOption {
         left.KmeansMaxIteration = right.KmeansMaxIteration
     } else if right.MaxIndexCapacity > 0 {
         left.MaxIndexCapacity = right.MaxIndexCapacity
+    } else if right.MaxBadRecordsSet {
+        left.MaxBadRecords = right.MaxBadRecords
+        left.MaxBadRecordsSet = true
     } else if right.MaxPostingsCapacity > 0 {
         left.MaxPostingsCapacity = right.MaxPostingsCapacity
     } else if right.QuantizerTrainLimit > 0 {
@@ -600,7 +603,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN TOKEN_FILTER
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_BAD_RECORDS MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN TOKEN_FILTER
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -620,6 +623,11 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Account
 %token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY RESTRICTED
 
+// GRANT role TO user WITH ADMIN OPTION: ADMIN is a contextual token, the
+// lexer only yields it inside that clause (see mysql_lexer.go), so the word
+// admin keeps parsing as a plain identifier everywhere else.
+%token <str> ADMIN
+
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD SHARED EXCLUSIVE
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
@@ -638,7 +646,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS ROLES RULE RULES
+%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES IGNORED SCHEMAS NODE LOCKS ROLES RULE RULES
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE TASKS RUNS
 
 // SET tokens
@@ -680,6 +688,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK MRANK CUMRANK TMRANK
 %token <str> SMA WMA TRIMA EMA WILDER KAMA DEMA TEMA T3 MMAXDRAWDOWN CUMPOSITIVESTREAK
+%token <str> EWM_MEAN EWM_VAR EWM_STD EWM_COV EWM_CORR
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> JSON_ARRAYAGG JSON_OBJECTAGG
 %token <str> GET_FORMAT
@@ -765,7 +774,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
-%type <statement> show_variables_stmt show_status_stmt show_index_stmt
+%type <statement> show_variables_stmt show_status_stmt show_index_stmt show_index_ignored_stmt show_index_status_stmt
 %type <statement> show_servers_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt alter_database_defaults_stmt
 %type <merge> merge_no_with_stmt
@@ -1002,7 +1011,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <updateExprs> update_list on_duplicate_key_update on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
-%type <boolVal> grant_option_opt enforce enforce_opt generated_column_type_opt
+%type <boolVal> grant_option_opt grant_role_option_opt enforce enforce_opt generated_column_type_opt
 
 %type <varAssignmentExpr> var_assignment
 %type <varAssignmentExprs> var_assignment_list
@@ -2560,7 +2569,7 @@ grant_stmt:
             },
         }
     }
-|   GRANT role_spec_list TO drop_user_spec_list grant_option_opt
+|   GRANT role_spec_list TO drop_user_spec_list grant_role_option_opt
     {
         $$ = &tree.Grant{
             Typ: tree.GrantTypeRole,
@@ -2596,6 +2605,23 @@ grant_option_opt:
 // |    WITH MAX_UPDATES_PER_HOUR INTEGRAL
 // |    WITH MAX_CONNECTIONS_PER_HOUR INTEGRAL
 // |    WITH MAX_USER_CONNECTIONS INTEGRAL
+
+// The role grant accepts MySQL 8.0's WITH ADMIN OPTION alongside the legacy
+// WITH GRANT OPTION; both set the same GrantRole.GrantOption flag, persisted
+// as with_grant_option and enforced on re-grants. Privilege and proxy grants
+// keep grant_option_opt and therefore reject ADMIN.
+grant_role_option_opt:
+    {
+        $$ = false
+    }
+|   WITH GRANT OPTION
+    {
+        $$ = true
+    }
+|   WITH ADMIN OPTION
+    {
+        $$ = true
+    }
 
 revoke_stmt:
     REVOKE exists_opt  priv_list ON object_type priv_level FROM role_spec_list
@@ -5160,6 +5186,8 @@ show_stmt:
 |   show_variables_stmt
 |   show_status_stmt
 |   show_index_stmt
+|   show_index_ignored_stmt
+|   show_index_status_stmt
 |   show_target_filter_stmt
 |   show_table_status_stmt
 |   show_grants_stmt
@@ -5580,6 +5608,24 @@ show_index_stmt:
             TableName: $4,
             DbName: $5,
             Where: $6,
+        }
+    }
+
+show_index_ignored_stmt:
+    SHOW extended_opt index_kwd IGNORED from_or_in unresolved_object_name where_expression_opt
+    {
+        $$ = &tree.ShowIndexIgnored{
+            TableName: $6,
+            Where: $7,
+        }
+    }
+
+show_index_status_stmt:
+    SHOW extended_opt index_kwd STATUS from_or_in unresolved_object_name where_expression_opt
+    {
+        $$ = &tree.ShowIndexStatus{
+            TableName: $6,
+            Where: $7,
         }
     }
 
@@ -10205,6 +10251,19 @@ index_option:
 	io.MaxIndexCapacity = val
 	$$ = io
     }
+|   MAX_BAD_RECORDS equal_opt INTEGRAL
+    {
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
+	if val < 0 {
+		yylex.Error("MAX_BAD_RECORDS should not be negative")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxBadRecords = val
+	io.MaxBadRecordsSet = true
+	$$ = io
+    }
 |   MAX_POSTINGS_CAPACITY equal_opt INTEGRAL
     {
 	val, ok := signedIntegral(yylex, $3)
@@ -14278,6 +14337,56 @@ function_call_aggregate:
             WithinGroup: $5 != nil,
         }
     }
+|   EWM_MEAN '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_VAR '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_STD '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_COV '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_CORR '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
 |   BIT_AND '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
@@ -16790,6 +16899,7 @@ non_reserved_keyword:
 |   INT
 |   INTEGER
 |   INDEXES
+|   IGNORED
 |   ICEBERG
 |   MONGODB
 |   MONGODB_PATH
@@ -16814,6 +16924,7 @@ non_reserved_keyword:
 |   KMEANS_TRAIN_PERCENT
 |   KMEANS_MAX_ITERATION
 |   MAX_INDEX_CAPACITY
+|   MAX_BAD_RECORDS
 |   MAX_POSTINGS_CAPACITY
 |   QUANTIZER_TRAIN_LIMIT
 |   POSITION_FREE
@@ -17221,6 +17332,11 @@ not_keyword:
 |   BITMAP_COUNT
 |   PERCENTILE_CONT
 |   PERCENTILE_DISC
+|   EWM_MEAN
+|   EWM_VAR
+|   EWM_STD
+|   EWM_COV
+|   EWM_CORR
 
 value_window_null_treatment_opt:
     {

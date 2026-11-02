@@ -865,15 +865,15 @@ func makeApproxCount(mp *mpool.MPool, id int64, arg types.Type) AggFuncExec {
 	}}}
 }
 
-func (exec *approxCountExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+func (exec *hllStateExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 }
 
-func (exec *approxCountExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+func (exec *hllStateExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
 }
 
-func (exec *approxCountExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+func (exec *hllStateExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -910,7 +910,7 @@ func (exec *approxCountExec) BatchMerge(next AggFuncExec, offset int, groups []u
 	return mergeHLLStates(&exec.hllStateExec, &other.hllStateExec, offset, groups)
 }
 
-func (exec *approxCountExec) SetExtraInformation(any, int) error { return nil }
+func (exec *hllStateExec) SetExtraInformation(any, int) error { return nil }
 
 func (exec *approxCountExec) Flush() (_ []*vector.Vector, retErr error) {
 	vecs := make([]*vector.Vector, len(exec.state))
@@ -934,7 +934,7 @@ func (exec *approxCountExec) Flush() (_ []*vector.Vector, retErr error) {
 	return vecs, nil
 }
 
-func (exec *approxCountExec) Size() int64 { return hllStateSize(exec.state) }
+func (exec *hllStateExec) Size() int64 { return hllStateSize(exec.state) }
 
 type hllAddExec struct {
 	hllStateExec
@@ -976,42 +976,6 @@ func hllAddUsesCanonicalTypedKey(arg types.Type) bool {
 	}
 }
 
-func (exec *hllAddExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
-}
-
-func (exec *hllAddExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
-}
-
-func (exec *hllAddExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	for i, group := range groups {
-		if group == GroupNotMatched {
-			continue
-		}
-		row := offset + i
-		if vectors[0].IsConst() {
-			row = 0
-		}
-		if vectors[0].IsNull(uint64(row)) {
-			continue
-		}
-		x, y := exec.getXY(group - 1)
-		sketch, err := exec.sketchForPublication(x, y)
-		if err != nil {
-			return err
-		}
-		scratch, err := exec.prepareCanonicalScratch(
-			x, vectors[0].GetRawBytesAt(row))
-		if err != nil {
-			return err
-		}
-		insertHLLValueWithScratch(
-			sketch, exec.argTypes[0], vectors[0].GetRawBytesAt(row), scratch)
-	}
-	return nil
-}
-
 func (exec *hllAddExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
 }
@@ -1021,13 +985,9 @@ func (exec *hllAddExec) BatchMerge(next AggFuncExec, offset int, groups []uint64
 	return mergeHLLStates(&exec.hllStateExec, &other.hllStateExec, offset, groups)
 }
 
-func (exec *hllAddExec) SetExtraInformation(any, int) error { return nil }
-
-func (exec *hllAddExec) Flush() ([]*vector.Vector, error) {
-	return flushHLLSketches(&exec.hllStateExec)
+func (exec *hllStateExec) Flush() ([]*vector.Vector, error) {
+	return flushHLLSketches(exec)
 }
-
-func (exec *hllAddExec) Size() int64 { return hllStateSize(exec.state) }
 
 type hllMergeExec struct {
 	hllStateExec
@@ -1083,14 +1043,6 @@ func (exec *hllMergeExec) BatchMerge(next AggFuncExec, offset int, groups []uint
 	other := next.(*hllMergeExec)
 	return mergeHLLStates(&exec.hllStateExec, &other.hllStateExec, offset, groups)
 }
-
-func (exec *hllMergeExec) SetExtraInformation(any, int) error { return nil }
-
-func (exec *hllMergeExec) Flush() ([]*vector.Vector, error) {
-	return flushHLLSketches(&exec.hllStateExec)
-}
-
-func (exec *hllMergeExec) Size() int64 { return hllStateSize(exec.state) }
 
 func mergeHLLStates(destination, source *hllStateExec, offset int, groups []uint64) error {
 	for i, group := range groups {

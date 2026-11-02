@@ -27,7 +27,7 @@ func metadataMemoryWeight(serializedBytes int, meta *api.TableMetadata) int64 {
 	// Table metadata is JSON-backed and the cache retains both representations.
 	// Three decoded bytes per source byte conservatively covers Go string/map/
 	// slice headers without a second full reflective walk of this large model.
-	decoded := saturatingMetadataMul(int64(serializedBytes), 3)
+	decoded := api.SaturatingMemoryMul(int64(serializedBytes), 3)
 	if decoded < 1024 && meta != nil {
 		decoded = 1024
 	}
@@ -105,14 +105,4 @@ func saturatingMetadataAdd(left, right int64) int64 {
 		return math.MaxInt64
 	}
 	return left + right
-}
-
-func saturatingMetadataMul(left, right int64) int64 {
-	if left <= 0 || right <= 0 {
-		return 0
-	}
-	if left > math.MaxInt64/right {
-		return math.MaxInt64
-	}
-	return left * right
 }

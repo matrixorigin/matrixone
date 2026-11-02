@@ -55,7 +55,7 @@ deallocate prepare create_index_stmt;
 prepare drop_index_stmt from 'drop index idx_created on prepared_t';
 execute drop_index_stmt;
 execute drop_index_stmt;
-internal error: not found index: idx_created
+Can't DROP 'idx_created'; check that column/key exists
 show index from prepared_t;
 ➤ Table[12,-1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,-1,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,-1,0]  ¦  Packed[12,-1,0]  ¦  Null[12,-1,0]  ¦  Index_type[12,-1,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,-1,0]  ¦  Index_params[12,-1,0]  ¦  Visible[12,-1,0]  ¦  Expression[12,-1,0]  𝄀
 prepared_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v  𝄀

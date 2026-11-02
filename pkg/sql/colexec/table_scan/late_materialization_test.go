@@ -54,7 +54,7 @@ func (r *lateMaterializationTestReader) ReadWithFilter(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	bat *batch.Batch,
 ) (bool, error) {
@@ -68,7 +68,7 @@ func (r *lateMaterializationTestReader) ReadWithFilter(
 		}
 	}
 	bat.SetRowCount(4)
-	_, err := filter(bat, earlyColumns)
+	_, err := filter.Apply(bat, earlyColumns)
 	return false, err
 }
 
@@ -266,32 +266,63 @@ func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
 }
 
 func TestTableScanUsesLateMaterializationReader(t *testing.T) {
-	proc := testutil.NewProc(t)
 	intType := types.T_int32.ToType()
 	textType := types.T_text.ToType()
-	reader := &lateMaterializationTestReader{}
-	scan := &TableScan{
-		Reader: reader,
-		Attrs:  []string{"filter_col", "payload"},
-		Types:  []pbplan.Type{plan.MakePlan2Type(&intType), plan.MakePlan2Type(&textType)},
-		FilterExprs: []*pbplan.Expr{
-			lateTestCompare(t, ">", 0, 10),
-		},
+	for _, tc := range []struct {
+		name        string
+		latePayload bool
+		op          string
+		bound       int32
+		want        []int32
+	}{
+		{name: "dead late payload", latePayload: true, op: ">", bound: 10},
+		{name: "fully loaded partial result", op: ">", bound: 1, want: []int32{2, 3}},
+		{name: "fully loaded all rows", op: ">=", bound: 0, want: []int32{0, 1, 2, 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			reader := &lateMaterializationTestReader{}
+			scan := &TableScan{
+				Reader:      reader,
+				Attrs:       []string{"filter_col"},
+				Types:       []pbplan.Type{plan.MakePlan2Type(&intType)},
+				FilterExprs: []*pbplan.Expr{lateTestCompare(t, tc.op, 0, tc.bound)},
+			}
+			t.Cleanup(func() {
+				scan.Free(proc, false, nil)
+				proc.Free()
+				require.Zero(t, proc.GetMPool().CurrNB())
+			})
+			if tc.latePayload {
+				scan.Attrs = append(scan.Attrs, "payload")
+				scan.Types = append(scan.Types, plan.MakePlan2Type(&textType))
+			}
+			require.NoError(t, scan.Prepare(proc))
+
+			result, err := vm.Exec(scan, proc)
+			require.NoError(t, err)
+			if tc.want == nil {
+				require.Nil(t, result.Batch)
+				require.Zero(t, scan.ctr.buf.Vecs[0].Length())
+				require.Zero(t, scan.ctr.buf.Vecs[1].Length())
+			} else {
+				require.NotNil(t, result.Batch)
+				require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
+				require.Equal(t, len(tc.want), result.Batch.RowCount())
+				result, err = vm.Exec(scan, proc)
+				require.NoError(t, err)
+				require.Nil(t, result.Batch)
+			}
+			require.Equal(t, 2, reader.reads)
+			require.False(t, reader.eagerRead)
+			stats := scan.OpAnalyzer.GetOpStats()
+			require.Equal(t, int64(1), stats.InputBlocks)
+			require.Equal(t, int64(4), stats.InputRows)
+			require.Equal(t, int64(16), stats.InputSize)
+			require.Equal(t, int64(16), stats.ScanBytes)
+
+			scan.Reset(proc, false, nil)
+			require.True(t, reader.closed)
+		})
 	}
-	require.NoError(t, scan.Prepare(proc))
-
-	result, err := vm.Exec(scan, proc)
-	require.NoError(t, err)
-	require.Nil(t, result.Batch)
-	require.Equal(t, 2, reader.reads)
-	require.False(t, reader.eagerRead)
-	require.Zero(t, scan.ctr.buf.Vecs[0].Length())
-	require.Zero(t, scan.ctr.buf.Vecs[1].Length())
-	require.Equal(t, int64(4), scan.OpAnalyzer.GetOpStats().InputRows)
-
-	scan.Reset(proc, false, nil)
-	require.True(t, reader.closed)
-	scan.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.GetMPool().CurrNB())
 }

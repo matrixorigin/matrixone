@@ -564,9 +564,9 @@ show create table create_index_18;
 Table    Create Table
 create_index_18    CREATE TABLE `create_index_18` (\n  `col1` bigint NOT NULL AUTO_INCREMENT,\n  `col2` varchar(25) DEFAULT NULL,\n  `col3` int DEFAULT NULL,\n  `col4` varchar(50) DEFAULT NULL,\n  PRIMARY KEY (`col1`),\n  UNIQUE KEY `m5_index` (`col4`)\n)
 drop index m3_index on create_index_18;
-internal error: not found index: m3_index
+Can't DROP 'm3_index'; check that column/key exists
 drop index m4_index on create_index_18;
-internal error: not found index: m4_index
+Can't DROP 'm4_index'; check that column/key exists
 drop index m5_index on create_index_18;
 drop table create_index_18;
 create table create_index_18(col1 int,col2 char(15));
@@ -614,7 +614,7 @@ create table create_index_20(col1 int,col2 char(15));
 create unique index m3_index on create_index_20(col3);
 invalid input: column 'col3' is not exist
 drop index char_index on create_index_20;
-internal error: not found index: char_index
+Can't DROP 'char_index'; check that column/key exists
 drop account if exists unique_test_account;
 create account unique_test_account admin_name='admin' identified by '123456';
 create user if not exists user_1 identified by '123456';
@@ -830,7 +830,7 @@ duplicate key name 'secondary_key1'
 drop table create_secondary_01;
 create table create_secondary_01 (col1 bigint primary key,col2 varchar(25) unique key,col3 float,col4 varchar(50),col5 int);
 drop index secondary_key1 on create_secondary_01;
-internal error: not found index: secondary_key1
+Can't DROP 'secondary_key1'; check that column/key exists
 create unique index secondary_key1 on create_secondary_01(col1);
 create index secondary_key1 on create_secondary_01(col1);
 duplicate key name 'secondary_key1'

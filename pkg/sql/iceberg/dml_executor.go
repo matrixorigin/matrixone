@@ -41,7 +41,7 @@ type DMLActionExecutor struct {
 }
 
 func (e DMLActionExecutor) CommitDelete(ctx context.Context, req DMLDeleteActionStreamRequest) (DMLCommitActionStreamResult, error) {
-	req.TableLocation = firstNonEmpty(req.TableLocation, e.TableLocation)
+	req.TableLocation = api.FirstNonBlankPreserveWhitespace(req.TableLocation, e.TableLocation)
 	if req.SnapshotID == 0 {
 		req.SnapshotID = e.SnapshotID
 	}
@@ -58,7 +58,7 @@ func (e DMLActionExecutor) CommitDelete(ctx context.Context, req DMLDeleteAction
 }
 
 func (e DMLActionExecutor) CommitUpdate(ctx context.Context, req DMLUpdateActionStreamRequest) (DMLCommitActionStreamResult, error) {
-	req.TableLocation = firstNonEmpty(req.TableLocation, e.TableLocation)
+	req.TableLocation = api.FirstNonBlankPreserveWhitespace(req.TableLocation, e.TableLocation)
 	if req.SnapshotID == 0 {
 		req.SnapshotID = e.SnapshotID
 	}
@@ -75,7 +75,7 @@ func (e DMLActionExecutor) CommitUpdate(ctx context.Context, req DMLUpdateAction
 }
 
 func (e DMLActionExecutor) CommitMerge(ctx context.Context, req DMLMergeActionStreamRequest) (DMLCommitActionStreamResult, error) {
-	req.TableLocation = firstNonEmpty(req.TableLocation, e.TableLocation)
+	req.TableLocation = api.FirstNonBlankPreserveWhitespace(req.TableLocation, e.TableLocation)
 	if req.SnapshotID == 0 {
 		req.SnapshotID = e.SnapshotID
 	}
@@ -92,7 +92,7 @@ func (e DMLActionExecutor) CommitMerge(ctx context.Context, req DMLMergeActionSt
 }
 
 func (e DMLActionExecutor) CommitOverwrite(ctx context.Context, req DMLOverwriteActionStreamRequest) (DMLCommitActionStreamResult, error) {
-	req.TableLocation = firstNonEmpty(req.TableLocation, e.TableLocation)
+	req.TableLocation = api.FirstNonBlankPreserveWhitespace(req.TableLocation, e.TableLocation)
 	if req.SnapshotID == 0 {
 		req.SnapshotID = e.SnapshotID
 	}
@@ -193,10 +193,10 @@ func (e DMLActionExecutor) recordMaterializedOrphans(ctx context.Context, tableL
 		candidates = append(candidates, icebergwrite.OrphanCandidate{
 			AccountID:         e.Catalog.Catalog.AccountID,
 			CatalogID:         e.Catalog.Catalog.CatalogID,
-			JobID:             firstNonEmpty(base.StatementID, base.IdempotencyKey),
+			JobID:             api.FirstNonBlankPreserveWhitespace(base.StatementID, base.IdempotencyKey),
 			Namespace:         strings.Join(base.Namespace, "."),
 			TableName:         base.Table,
-			TableLocationHash: api.PathHash(firstNonEmpty(tableLocation, base.Table)),
+			TableLocationHash: api.PathHash(api.FirstNonBlankPreserveWhitespace(tableLocation, base.Table)),
 			FilePath:          path,
 			FilePathHash:      api.PathHash(path),
 			FilePathRedacted:  api.RedactPath(path),

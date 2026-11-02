@@ -225,8 +225,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 					// inferred results. Only compiler-owned character coercions
 					// follow their changed input; root assignment has its own owner.
 					cast := len(f.Args) == 2 && f.Args[1].GetT() != nil &&
-						(f.Func.ObjName == "cast" || f.Func.ObjName == "cast_strict" ||
-							f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_ignore")
+						IsAssignmentCastFamilyName(f.Func.ObjName)
 					if cast && isPersistedCharacterCoercion(e) {
 						bound, err := refreshedPersistedCharacterCoercion(ctx, e)
 						if err != nil {

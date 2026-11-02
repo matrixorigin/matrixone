@@ -15,7 +15,9 @@
 package mergeorder
 
 import (
+	"context"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -44,6 +47,20 @@ func (shortMergeOrderDiskWriter) Write(value []byte) (int, error) {
 	return len(value) - 1, nil
 }
 
+type failingSpillCreationFS struct {
+	fileservice.MutableFileService
+	generation *process.ExecutionResourceGeneration
+	err        error
+	calls      int
+	fdDuring   uint64
+}
+
+func (fs *failingSpillCreationFS) CreateAndRemoveFile(context.Context, string) (*os.File, error) {
+	fs.calls++
+	fs.fdDuring = fs.generation.SpillFDUsed()
+	return nil, fs.err
+}
+
 func installMergeOrderTestAllocation(
 	t testing.TB,
 	op *MergeOrder,
@@ -52,6 +69,8 @@ func installMergeOrderTestAllocation(
 ) mergeOrderTestAllocation {
 	t.Helper()
 	proc.Base.Lim.Size = int64(limit)
+	// Tests that exercise spill need disk capacity independently of the memory limit.
+	proc.Base.Lim.SpillSize = 64 << 20
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<14)
@@ -385,6 +404,67 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 	}
 }
 
+func TestAccountedMergeOrderSpillCreationFailure(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	op := newAccountedMergeOrder()
+	state := installMergeOrderTestAllocation(t, op, proc, 64<<20)
+	t.Cleanup(func() { finalizeMergeOrderTestAllocation(t, op, state) })
+	t.Cleanup(func() { op.Free(proc, false, nil) })
+	require.NoError(t, op.Prepare(proc))
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	createErr := &os.PathError{Op: "remove", Path: "spill", Err: os.ErrPermission}
+	failingFS := &failingSpillCreationFS{MutableFileService: baseFS, generation: state.generation, err: createErr}
+	op.ctr.spillFS = failingFS
+	bat := newValuesBatch(proc, []int8{2, 1})
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	analyzer := process.NewAnalyzer(0, false, false, "mergeorder-spill-creation")
+	before := state.generation.Snapshot()
+	accountBefore := state.account.Snapshot().Used
+
+	run, err := op.ctr.spillBatchToNewRun(proc, bat, nil, analyzer)
+	if run != nil {
+		t.Cleanup(run.close)
+	}
+	require.Nil(t, run)
+	require.Same(t, createErr, err)
+	require.ErrorIs(t, err, os.ErrPermission)
+	require.Equal(t, 1, failingFS.calls)
+	require.Equal(t, uint64(1), failingFS.fdDuring)
+	after := state.generation.Snapshot()
+	require.Equal(t, before.SpillFDUsed, after.SpillFDUsed)
+	require.Equal(t, before.SpillDiskUsed, after.SpillDiskUsed)
+	require.Equal(t, accountBefore, state.account.Snapshot().Used)
+	require.Zero(t, analyzer.GetOpStats().SpillSize)
+	require.Zero(t, analyzer.GetOpStats().SpillRows)
+
+	// A successful real spill makes the accounting and write assertions above
+	// meaningful: a run has a live unlinked file, bytes, and reservations.
+	op.ctr.spillFS = baseFS
+	run, err = op.ctr.spillBatchToNewRun(proc, bat, nil, analyzer)
+	if run != nil {
+		t.Cleanup(run.close)
+	}
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	_, err = os.Stat(run.file.Name())
+	require.ErrorIs(t, err, os.ErrNotExist)
+	info, err := run.file.Stat()
+	require.NoError(t, err)
+	require.Positive(t, info.Size())
+	require.Positive(t, analyzer.GetOpStats().SpillSize)
+	require.EqualValues(t, bat.RowCount(), analyzer.GetOpStats().SpillRows)
+	require.Equal(t, before.SpillFDUsed+1, state.generation.SpillFDUsed())
+	require.Greater(t, state.generation.SpillDiskUsed(), before.SpillDiskUsed)
+	run.close()
+	require.Equal(t, before.SpillFDUsed, state.generation.SpillFDUsed())
+	require.Equal(t, before.SpillDiskUsed, state.generation.SpillDiskUsed())
+}
+
 func TestAccountedMergeOrderShortDiskWriteReconciles(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	op := newAccountedMergeOrder()
@@ -416,6 +496,7 @@ func TestAccountedMergeOrderShortDiskWriteReconciles(t *testing.T) {
 func TestAccountedMergeOrderOptionalTailFallsBackToCommittedRun(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.Base.Lim.Size = 64 << 20
+	proc.Base.Lim.SpillSize = 64 << 20
 	generation, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<14)

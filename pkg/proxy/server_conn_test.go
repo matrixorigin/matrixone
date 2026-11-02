@@ -46,6 +46,29 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+func TestParseProxyAddress(t *testing.T) {
+	for _, tc := range []struct {
+		address, network, endpoint string
+		wantError                  bool
+	}{
+		{"127.0.0.1:6001", "tcp4", "127.0.0.1:6001", false},
+		{"tcp://[::1]:6001", "tcp", "[::1]:6001", false},
+		{"unix:///tmp/mo.sock", "unix", "/tmp/mo.sock", false},
+		{"tcp://bad%zz", "", "", true},
+	} {
+		t.Run(tc.address, func(t *testing.T) {
+			network, endpoint, err := parseProxyAddress(tc.address)
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.network, network)
+			require.Equal(t, tc.endpoint, endpoint)
+		})
+	}
+}
+
 var testSlat = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0}
 var testPacket = &frontend.Packet{
 	Length:     1,
