@@ -90,21 +90,6 @@ func IsFullText2IndexAlgo(algo string) bool {
 	return _algo == MoIndexFullText2Algo.ToString()
 }
 
-func IsHnswIndexAlgo(algo string) bool {
-	_algo := ToLower(algo)
-	return _algo == MoIndexHnswAlgo.ToString()
-}
-
-func IsCagraIndexAlgo(algo string) bool {
-	_algo := ToLower(algo)
-	return _algo == MoIndexCagraAlgo.ToString()
-}
-
-func IsIvfpqIndexAlgo(algo string) bool {
-	_algo := ToLower(algo)
-	return _algo == MoIndexIvfpqAlgo.ToString()
-}
-
 // ------------------------[START] IndexAlgoParams------------------------
 const (
 	IndexAlgoParamLists     = "lists"
@@ -155,6 +140,11 @@ const (
 	// Recorded only when POSITION_FREE=TRUE; absence ⇒ positional (phrase-capable).
 	IndexAlgoParamPositionFree = "position_free"
 
+	// IndexAlgoParamTokenFilter (fulltext2): the comma-separated token_filter analyzer
+	// chain (currently only "stop"), applied symmetrically at build/CDC/query so a
+	// dropped token (stopword) never breaks a query for it. Recorded only when set.
+	IndexAlgoParamTokenFilter = "token_filter"
+
 	// IndexAlgoParamPrefixLengths is the legacy, delimiter-separated encoding.
 	// It remains readable for metadata written by older versions.
 	IndexAlgoParamPrefixLengths = "prefix_lengths"
@@ -195,6 +185,30 @@ func ParseIncludeColumnsValue(raw string) ([]string, error) {
 		return nil, nil
 	}
 	return cols, nil
+}
+
+// IncludeColumnsFromIndexParams returns the INCLUDE columns of an index's algo-params
+// JSON (the IncludedColumns key, or the historical "include_columns").
+func IncludeColumnsFromIndexParams(indexParams string) ([]string, error) {
+	if indexParams == "" {
+		return nil, nil
+	}
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(indexParams), &params); err != nil {
+		return nil, err
+	}
+	value, ok := params[IncludedColumns]
+	if !ok {
+		value, ok = params["include_columns"]
+	}
+	if !ok {
+		return nil, nil
+	}
+	var raw string
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return nil, err
+	}
+	return ParseIncludeColumnsValue(raw)
 }
 
 // MarshalIncludeColumnsValue encodes INCLUDE column names without losing
@@ -321,6 +335,12 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 	// position-free instead of silently reverting to the phrase-capable positional one.
 	if val, ok := result[IndexAlgoParamPositionFree]; ok && val == "true" {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamPositionFree, val)
+	}
+
+	// token_filter is recorded only when set. Render the quoted form so a SHOW CREATE /
+	// checkpoint-restore DDL re-parses it (grammar: token_filter = '<list>').
+	if val, ok := result[IndexAlgoParamTokenFilter]; ok && val != "" {
+		res += fmt.Sprintf(" %s = '%s' ", IndexAlgoParamTokenFilter, val)
 	}
 
 	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
@@ -595,13 +615,6 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 		return res, nil
 	}
 	return res, moerr.NewInternalErrorNoCtx("indexParamsToMap: invalid index type")
-}
-
-func DefaultIvfIndexAlgoOptions() map[string]string {
-	res := make(map[string]string)
-	res[IndexAlgoParamLists] = "1"                       // set lists = 1 as default
-	res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
-	return res
 }
 
 // IndexAlgoParamVersionOf returns the engine version recorded in an index's

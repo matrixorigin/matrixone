@@ -18,8 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,12 +41,12 @@ func (minus *Minus) Prepare(proc *process.Process) error {
 		minus.OpAnalyzer.Reset()
 	}
 
-	minus.ctr.hashTable, err = hashmap.NewStrHashMap(true, proc.Mp())
+	minus.ctr.hashTable, err = minus.NewHashMap(proc)
 	if err != nil {
 		return err
 	}
 	minus.ctr.iterator = minus.ctr.hashTable.NewIterator()
-	return minus.ctr.keyEvaluator.Prepare(proc, minus.KeyExprs)
+	return minus.ctr.keyEvaluator.Prepare(proc, minus.KeyExprs, minus.ExpressionAllocation())
 }
 
 // Call is the execute method of minus operator
@@ -63,8 +61,12 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 		switch minus.ctr.state {
 		case buildingHashMap:
 			// step 1: build the hash table by all right batches.
-			if err = minus.buildHashTable(proc, analyzer, 1); err != nil {
+			done, err := minus.buildHashTable(proc, analyzer, 1)
+			if err != nil {
 				return vm.CancelResult, err
+			}
+			if !done {
+				return vm.CallResult{Status: vm.ExecYield}, nil
 			}
 			if minus.ctr.hashTable != nil {
 				analyzer.Alloc(minus.ctr.hashTable.Size())
@@ -96,16 +98,19 @@ func (minus *Minus) Call(proc *process.Process) (vm.CallResult, error) {
 }
 
 // buildHashTable use all batches from proc.Reg.MergeReceiver[index] to build the hash map.
-func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analyzer, index int) error {
+func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analyzer, index int) (bool, error) {
 	ctr := &minus.ctr
 	child, err := vm.GetChild(minus, index)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for {
 		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
-			return err
+			return false, err
+		}
+		if input.Status == vm.ExecYield {
+			return false, nil
 		}
 
 		// the last batch of pipeline.
@@ -120,7 +125,7 @@ func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analy
 
 		keyVecs, err := ctr.keyEvaluator.Eval(proc, input.Batch)
 		if err != nil {
-			return err
+			return false, err
 		}
 		count := input.Batch.Vecs[0].Length()
 		for i := 0; i < count; i += hashmap.UnitLimit {
@@ -130,19 +135,18 @@ func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analy
 			}
 			_, _, err := ctr.iterator.Insert(i, n, keyVecs)
 			if err != nil {
-				return err
+				return false, err
 			}
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // probeHashTable use a batch from proc.Reg.MergeReceivers[index] to probe and update the hash map.
 // If a row of data never appears in the hash table, add it into hath table and send it to the next operator.
 // if batch is the last one, return true, else return false.
 func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analyzer, index int, result *vm.CallResult) (bool, error) {
-	inserted := make([]uint8, hashmap.UnitLimit)
-	restoreInserted := make([]uint8, hashmap.UnitLimit)
+	inserted, restoreInserted := minus.Scratch()
 	child, err := vm.GetChild(minus, index)
 	if err != nil {
 		return false, err
@@ -152,6 +156,10 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
 			return false, err
+		}
+		if input.Status == vm.ExecYield {
+			*result = input
+			return false, nil
 		}
 
 		// the last batch of block.
@@ -168,9 +176,9 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 		}
 
 		if minus.ctr.bat == nil {
-			minus.ctr.bat = batch.NewWithSize(len(input.Batch.Vecs))
-			for i := range input.Batch.Vecs {
-				minus.ctr.bat.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+			minus.ctr.bat, err = minus.NewBatch(proc, input.Batch)
+			if err != nil {
+				return false, err
 			}
 		}
 		minus.ctr.bat.CleanOnlyData()

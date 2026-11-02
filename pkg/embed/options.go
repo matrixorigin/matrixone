@@ -79,7 +79,7 @@ func WithTesting() Option {
 
 // WithTestAdmissionContext controls admission waits for a WithTesting cluster.
 // It does not cancel service startup or shutdown. A nil context retains the
-// default background context; successful admission remains owned until Close.
+// default background context; successful admission remains owned until Stop or Close completes.
 func WithTestAdmissionContext(ctx context.Context) Option {
 	return func(c *cluster) {
 		c.options.testAdmissionContext = ctx

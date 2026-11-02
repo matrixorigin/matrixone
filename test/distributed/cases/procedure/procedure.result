@@ -163,4 +163,157 @@ call test_sql_mode_pipes();
 ab
 drop procedure test_sql_mode_pipes;
 set sql_mode = default;
+set @saved_sp_recursion_depth = @@session.max_sp_recursion_depth;
+set max_sp_recursion_depth = 0;
+create table recursion_effects(n int);
+create procedure recursion_self(in n int) 'begin insert into recursion_effects values(n); if n > 0 then call recursion_self(n-1); end if; end';
+call recursion_self(0);
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+0
+truncate table recursion_effects;
+call recursion_self(1);
+Recursive limit 0 (as set by the max_sp_recursion_depth variable) was exceeded for routine recursion_self
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+call recursion_self(0);
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+0
+truncate table recursion_effects;
+set max_sp_recursion_depth = 1;
+call recursion_self(1);
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+0  𝄀
+1
+truncate table recursion_effects;
+call recursion_self(2);
+Recursive limit 1 (as set by the max_sp_recursion_depth variable) was exceeded for routine recursion_self
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+set max_sp_recursion_depth = 2;
+call recursion_self(2);
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2
+truncate table recursion_effects;
+set max_sp_recursion_depth = 0;
+create procedure recursion_leaf() 'begin insert into recursion_effects values(30); end';
+create procedure recursion_middle() 'begin call recursion_leaf(); call recursion_leaf(); end';
+create procedure recursion_outer() 'begin call recursion_middle(); end';
+call recursion_outer();
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+30  𝄀
+30
+truncate table recursion_effects;
+create procedure recursion_a(in n int) 'begin insert into recursion_effects values(n); if n > 0 then call recursion_b(n-1); end if; end';
+create procedure recursion_b(in n int) 'begin insert into recursion_effects values(n); if n > 0 then call recursion_a(n-1); end if; end';
+call recursion_a(1);
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+0  𝄀
+1
+truncate table recursion_effects;
+call recursion_a(2);
+Recursive limit 0 (as set by the max_sp_recursion_depth variable) was exceeded for routine recursion_a
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+set max_sp_recursion_depth = 1;
+call recursion_a(3);
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+0  𝄀
+1  𝄀
+2  𝄀
+3
+truncate table recursion_effects;
+call recursion_a(4);
+Recursive limit 1 (as set by the max_sp_recursion_depth variable) was exceeded for routine recursion_a
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+drop database if exists procedure_recursion_other;
+create database procedure_recursion_other;
+create procedure procedure_recursion_other.recursion_same() 'begin insert into procedure_test.recursion_effects values(40); end';
+create procedure recursion_same() 'begin call procedure_recursion_other.recursion_same(); end';
+set max_sp_recursion_depth = 0;
+call recursion_same();
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+40
+truncate table recursion_effects;
+drop procedure procedure_recursion_other.recursion_same;
+create procedure procedure_recursion_other.recursion_same() 'begin call procedure_test.recursion_same(); end';
+call recursion_same();
+Recursive limit 0 (as set by the max_sp_recursion_depth variable) was exceeded for routine recursion_same
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+drop database procedure_recursion_other;
+set max_sp_recursion_depth = 1;
+use procedure_test;
+call recursion_self(1);
+Recursive limit 0 (as set by the max_sp_recursion_depth variable) was exceeded for routine recursion_self
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+call recursion_self(0);
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+0
+truncate table recursion_effects;
+call ReCuRsIoN_SeLf(1);
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+0  𝄀
+1
+truncate table recursion_effects;
+set max_sp_recursion_depth = 0;
+call recursion_self(1);
+Recursive limit 0 (as set by the max_sp_recursion_depth variable) was exceeded for routine recursion_self
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+call recursion_self(0);
+select n from recursion_effects order by n;
+➤ n[4,32,0]  𝄀
+0
+create procedure recursion_starlark(in n int) language 'starlark' $$
+mo.setvar("st_entered", n)
+rows, err = mo.sql("call recursion_starlark({})".format(n-1)) if n > 0 else [None, None]
+code = mo.errno()
+state = mo.sqlstate()
+mo.setvar("st_errno", code) if err else None
+mo.setvar("st_state", state) if err else None
+$$;
+set @st_entered = -1, @st_errno = 0, @st_state = '';
+call recursion_starlark(3);
+select @st_entered = 3 as stopped_at_entry, @st_errno = 1456 as recursion_error, @st_state = 'HY000' as recursion_state;
+➤ stopped_at_entry[-7,1,0]  ¦  recursion_error[-7,1,0]  ¦  recursion_state[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+set max_sp_recursion_depth = 1;
+set @st_entered = -1, @st_errno = 0, @st_state = '';
+call recursion_starlark(3);
+select @st_entered = 2 as one_reentry, @st_errno = 1456 as recursion_error;
+➤ one_reentry[-7,1,0]  ¦  recursion_error[-7,1,0]  𝄀
+1  ¦  1
+set @st_entered = -1, @st_errno = 0, @st_state = '';
+call recursion_starlark(0);
+select @st_entered = 0 as reusable, @st_errno = 0 as no_error;
+➤ reusable[-7,1,0]  ¦  no_error[-7,1,0]  𝄀
+1  ¦  1
+create procedure recursion_starlark_bridge(in n int) 'begin call recursion_starlark_mixed(n); end';
+create procedure recursion_starlark_mixed(in n int) language 'starlark' $$
+mo.setvar("st_entered", n)
+rows, err = mo.sql("call recursion_starlark_bridge({})".format(n-1)) if n > 0 else [None, None]
+code = mo.errno()
+mo.setvar("st_errno", code) if err else None
+$$;
+set max_sp_recursion_depth = 0;
+set @st_entered = -1, @st_errno = 0;
+call recursion_starlark_mixed(3);
+select @st_entered = 3 as mixed_stopped_at_entry, @st_errno = 1456 as recursion_error;
+➤ mixed_stopped_at_entry[-7,1,0]  ¦  recursion_error[-7,1,0]  𝄀
+1  ¦  1
+set max_sp_recursion_depth = @saved_sp_recursion_depth;
 drop database if exists procedure_test;

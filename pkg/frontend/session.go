@@ -365,6 +365,14 @@ type Session struct {
 	statsCache         *plan2.StatsCache
 	statsCacheVersions map[uint64]optimizerStatsCacheTag
 	seqCurValues       map[uint64]string
+	// seqObligations tracks issued values of transaction-local sequence
+	// generations (created inside explicit-transaction CLONE/snapshot
+	// restore) so statement rewinds cannot re-issue them and the pre-commit
+	// stamp can persist a safe counter position. Session-owned and shared
+	// into each statement's process via CopySeqToProc; deliberately outside
+	// the statement-level sequence snapshot/restore machinery. Consumed by
+	// the pre-commit stamp and discarded on transaction rollback.
+	seqObligations *process.SequenceObligationSet
 
 	/*
 		CORNER CASE:
@@ -786,7 +794,7 @@ func (ses *Session) addTempTableWithIdentity(
 ) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := dbName + "." + alias
+	key := defines.TempTableAliasKey(dbName, alias)
 	if ses.tempTableIdentities == nil {
 		ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	}
@@ -868,7 +876,7 @@ func (ses *Session) snapshotTempTablesForMigration(ctx context.Context) ([]*quer
 func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	val, ok := ses.tempTables[dbName+"."+alias]
+	val, ok := ses.tempTables[defines.TempTableAliasKey(dbName, alias)]
 	return val, ok
 }
 
@@ -930,7 +938,7 @@ func (ses *Session) removeTempTablesByDatabase(dbName, txnKey, stmtKey string) {
 func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := dbName + "." + alias
+	key := defines.TempTableAliasKey(dbName, alias)
 	if realName, ok := ses.tempTables[key]; ok {
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 		delete(ses.tempTables, key)
@@ -1249,6 +1257,13 @@ func (ses *Session) SetSeqLastValue(proc *process.Process) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	*ses.seqLastValue = proc.GetSessionInfo().SeqLastValue[0]
+	// Statement-success publication point (J2): a SETVAL/restart boundary
+	// staged during this statement is made permanent exactly here, on the
+	// single statement-success funnel, so a later same-statement failure
+	// could never have cleared the obligation of the boundary it rewound.
+	// A failed statement never reaches this funnel; the statement-rollback
+	// path restores staged removals instead.
+	ses.seqObligations.ApplyStaged()
 }
 
 func (ses *Session) DeleteSeqValues(proc *process.Process) {
@@ -1280,6 +1295,35 @@ func (ses *Session) CopySeqToProc(proc *process.Process) {
 		proc.GetSessionInfo().SeqCurValues[k] = v
 	}
 	proc.GetSessionInfo().SeqLastValue[0] = *ses.seqLastValue
+	// Share the session-owned obligation store with the statement process.
+	// Pointer fields are re-seeded per statement because the process is
+	// rebuilt wholesale for each execution.
+	proc.GetSessionInfo().SeqObligations = ses.seqObligations
+}
+
+// getSequenceObligationSet exposes the session-owned store to the terminal
+// transaction hooks (pre-commit stamp, rollback cleanup).
+func (ses *Session) getSequenceObligationSet() *process.SequenceObligationSet {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.seqObligations
+}
+
+// restoreStagedSequenceObligations returns staged boundary removals to
+// enforcement after the statement that staged them failed and its workspace
+// writes were rewound.
+func (ses *Session) restoreStagedSequenceObligations() {
+	if set := ses.getSequenceObligationSet(); set != nil {
+		set.RestoreStaged()
+	}
+}
+
+// clearSequenceObligations discards the transaction's issued-value records
+// after a terminal rollback outcome.
+func (ses *Session) clearSequenceObligations() {
+	if set := ses.getSequenceObligationSet(); set != nil {
+		set.Clear()
+	}
 }
 
 func (ses *Session) InheritSequenceData(other *Session) {
@@ -2029,6 +2073,9 @@ func NewSession(
 	// For seq init values.
 	ses.seqCurValues = make(map[uint64]string)
 	ses.seqLastValue = new(string)
+	// The obligation store outlives single statements: it is bounded by the
+	// owning transaction and cleaned at every terminal transaction outcome.
+	ses.seqObligations = process.NewSequenceObligationSet()
 
 	ses.buf = buffer.New()
 	ses.sqlHelper = &SqlHelper{ses: ses}
@@ -2153,8 +2200,15 @@ func dropSessionTempTables(
 				WithRoleID(tenant.GetDefaultRoleID()),
 		)
 	}
+	ctx = defines.AttachTemporaryTableAccess(ctx)
 	var cleanupErr error
 	for _, tbl := range tempTables {
+		// Hidden indexes are destroyed by their root's DROP. Independently
+		// dropping one first (or after a failed root DROP) corrupts the root's
+		// remaining index metadata and prevents a later cleanup retry.
+		if tbl.identity.internal {
+			continue
+		}
 		dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
 		res, err := exec.Exec(ctx, dropSQL, opts)
 		if err != nil {
@@ -2272,6 +2326,7 @@ func (ses *Session) Close() {
 	ses.planCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
+	ses.seqObligations = nil
 	if ses.sqlHelper != nil {
 		ses.sqlHelper.ses = nil
 		ses.sqlHelper = nil
@@ -2484,6 +2539,18 @@ func (ses *Session) invalidateCachedPlans(prepared bool) {
 		for _, statement := range ses.prepareStmts {
 			statement.needsRebuild = true
 		}
+	}
+}
+
+// markPreparedPlansForRollupAlgorithmChange marks prepared plan generations
+// stale without closing their handles. The session variable is read while
+// building the physical rollup plan, so EXECUTE must rebuild the plan after
+// the value changes.
+func (ses *Session) markPreparedPlansForRollupAlgorithmChange() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	for _, stmt := range ses.prepareStmts {
+		stmt.needsRebuild = true
 	}
 }
 
@@ -2705,6 +2772,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 		be.backSes.cloneSnapshotUsesBackgroundTxn = opts[0].cloneSnapshotUsesBackgroundTxn
 		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
 		be.backSes.authorizationSnapshot = opts[0].authorizationSnapshot
+		be.internalExecution = opts[0].internalExecution
 	}
 	return be
 }
@@ -2742,7 +2810,8 @@ func (ses *Session) AppendData(row []interface{}) {
 func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep = &ExportConfig{userConfig: ep, service: ses.service, proc: ses.proc}
+	auditEnabled := ses.tStmt != nil && ses.tStmt.HasOutfileReceipt()
+	ses.ep = &ExportConfig{userConfig: ep, service: ses.service, proc: ses.proc, auditEnabled: auditEnabled}
 }
 
 func (ses *Session) GetExportConfig() *ExportConfig {
@@ -2772,6 +2841,21 @@ func (ses *Session) GetShowStmtType() ShowStatementType {
 func (ses *Session) GetOutputCallback(execCtx *ExecCtx) func(*batch.Batch, *perfcounter.CounterSet) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	if execCtx != nil && execCtx.input != nil && execCtx.input.isCursorExecute &&
+		ses.proc != nil && ses.proc.Base != nil {
+		// The cursor branch below retains output batches for COM_STMT_FETCH
+		// instead of publishing them to the wire, so the statement remains
+		// eligible for a tier-2 retry after rows were captured. Replay
+		// without a discard would append the retried result behind the
+		// failed generation's stale rows (#30359 review): arm the
+		// transition-time discard that releases the stale row set, its byte
+		// reservation and any staged saved-result blocks. The per-statement
+		// SessionInfo rebuild (mysql_cmd_executor.go) reseats or clears the
+		// hook at the next statement boundary.
+		ses.proc.Base.SessionInfo.RetryDiscardOutput = func() error {
+			return discardPreparedCursorRetryOutput(execCtx)
+		}
+	}
 	return func(bat *batch.Batch, crs *perfcounter.CounterSet) error {
 		if execCtx != nil && execCtx.resultMetadata != nil && bat != nil && bat.RowCount() > 0 {
 			if err := execCtx.resultMetadata.publish(); err != nil {
@@ -3217,17 +3301,6 @@ func (ses *Session) RemoveAllPrepareStmts() {
 
 // GetUserDefinedVar gets value of the config
 func (ses *Session) GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error) {
-	// if val, ok := ses.configs[dbName+"-"+varName]; ok {
-	// 	return val, nil
-	// }
-	// if varName == "unique_check_on_autoincr" {
-	// 	ret, err := GetUniqueCheckOnAutoIncr(ctx, ses, dbName)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	ses.configs[dbName+"-"+varName] = ret
-	// 	return ret, nil
-	// }
 	return nil, moerr.NewInternalError(ctx, errorConfigDoesNotExist())
 }
 
@@ -4327,34 +4400,6 @@ func (ses *Session) closeForReset(ctx context.Context) error {
 }
 
 func commitAfterMigrate(ses *Session, err error) error {
-	//if ses == nil {
-	//	logutil.Error("session is nil")
-	//	return moerr.NewInternalErrorNoCtx("session is nil")
-	//}
-	//txnHandler := ses.GetTxnHandler()
-	//if txnHandler == nil {
-	//	logutil.Error("txn handler is nil")
-	//	return moerr.NewInternalErrorNoCtx("txn handler is nil")
-	//}
-	//if txnHandler.GetSession() == nil {
-	//	logutil.Error("ses in txn handler is nil")
-	//	return moerr.NewInternalErrorNoCtx("ses in txn handler is nil")
-	//}
-	//defer func() {
-	//	txnHandler.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-	//	txnHandler.ClearOptionBits(OPTION_BEGIN)
-	//}()
-	//if err != nil {
-	//	if rErr := txnHandler.RollbackTxn(); rErr != nil {
-	//		logutil.Errorf("failed to rollback txn: %v", rErr)
-	//	}
-	//	return err
-	//} else {
-	//	if cErr := txnHandler.CommitTxn(); cErr != nil {
-	//		logutil.Errorf("failed to commit txn: %v", cErr)
-	//		return cErr
-	//	}
-	//}
 	return nil
 }
 
@@ -4557,6 +4602,14 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 		// authoritative value. Do not turn that absence into a zero on the
 		// target session.
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	for _, prepared := range req.PrepareStmts {
+		if prepared == nil || prepared.RequiredProtocolVersion < 0 {
+			return moerr.NewInvalidInput(ctx, "invalid prepared statement migration contract")
+		}
+		if prepared.RequiredProtocolVersion > currentProtocolVersion(ses.proc) {
+			return moerr.NewNotSupportedf(ctx, "prepared statement migration requires protocol version %d", prepared.RequiredProtocolVersion)
+		}
 	}
 	parameters := getPu(ses.GetService()).SV
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().

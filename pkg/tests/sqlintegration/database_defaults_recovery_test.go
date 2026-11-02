@@ -42,23 +42,27 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 		const schema = "c03_recovery"
 		defer cleanupSQLIntegration(t, cn, "drop snapshot if exists c03_recovery_snapshot", "drop pitr if exists c03_recovery_pitr", "drop database if exists "+schema,
 			"drop account if exists c03_restore_source", "drop account if exists c03_restore_target")
-		exec := func(t *testing.T, connection *sql.DB, statement string) {
+		exec := func(t *testing.T, ctx context.Context, connection *sql.DB, statement string) {
 			t.Helper()
 			_, err := connection.ExecContext(ctx, statement)
 			require.NoError(t, err, statement)
 		}
-		column := func(t *testing.T, connection *sql.DB, table, want string) {
+		column := func(t *testing.T, ctx context.Context, connection *sql.DB, table, want string) {
 			t.Helper()
 			var actual string
 			require.NoError(t, connection.QueryRowContext(ctx,
 				"select collation_name from information_schema.columns where table_schema='c03_recovery' and table_name=? and column_name='v'", table).Scan(&actual))
 			require.Equal(t, want, actual)
 		}
-		exec(t, db, "create database "+schema+" collate utf8mb4_bin")
-		exec(t, db, "create table "+schema+".t(id int primary key,v varchar(8),index iv(v))")
-		exec(t, db, "insert into "+schema+".t values (1,'ß'),(2,'ss')")
+		exec(t, ctx, db, "create database "+schema+" collate utf8mb4_bin")
+		exec(t, ctx, db, "create table "+schema+".t(id int primary key,v varchar(8),index iv(v))")
+		exec(t, ctx, db, "insert into "+schema+".t values (1,'ß'),(2,'ss')")
 
-		t.Run("commit failure preserves every owner", func(t *testing.T) {
+		// Setup and every sequential recovery scenario own independent budgets.
+		cancel()
+		if !t.Run("commit failure preserves every owner", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+			defer cancel()
 			wasEnabled := fault.Status()
 			fault.Enable()
 			defer func() {
@@ -96,16 +100,20 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 				require.Equal(t, "utf8mb4_bin", defaults)
 				require.NoError(t, db.QueryRowContext(ctx, "select table_collation from information_schema.tables where table_schema=? and table_name='t'", schema).Scan(&tableDefault))
 				require.Equal(t, "utf8mb4_bin", tableDefault)
-				column(t, db, "t", "utf8mb4_bin")
+				column(t, ctx, db, "t", "utf8mb4_bin")
 				var matched, leftovers int
 				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
 				require.Equal(t, 1, matched)
 				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from information_schema.tables where table_schema=? and table_name<>'t'", schema).Scan(&leftovers))
 				require.Zero(t, leftovers, "failed COPY must not retain a replacement table")
 			}
-		})
+		}) {
+			return // Later scenarios depend on this state; quarantine the failed fixture.
+		}
 
-		t.Run("corrupt generation fails closed in metadata and planning", func(t *testing.T) {
+		if !t.Run("corrupt generation fails closed in metadata and planning", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+			defer cancel()
 			internal := testutils.GetSQLExecutor(cn)
 			setVersion := func(version uint64) {
 				t.Helper()
@@ -120,13 +128,17 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 			require.False(t, actual.Valid, "a corrupt persisted row must not look like an admitted default")
 			_, err := db.ExecContext(ctx, "create table "+schema+".rejected(v varchar(8))")
 			require.ErrorContains(t, err, "invalid database default metadata")
-		})
+		}) {
+			return // Later scenarios depend on this state; quarantine the failed fixture.
+		}
 
-		t.Run("snapshot and PITR honor restoration granularity", func(t *testing.T) {
-			exec(t, db, "alter database "+schema+" collate utf8mb4_unicode_ci")
-			exec(t, db, "alter table "+schema+".t convert to character set utf8mb4 collate utf8mb4_unicode_ci")
-			exec(t, db, "create pitr c03_recovery_pitr for database "+schema+" range 1 'h'")
-			exec(t, db, "create snapshot c03_recovery_snapshot for database "+schema)
+		if !t.Run("snapshot and PITR honor restoration granularity", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+			defer cancel()
+			exec(t, ctx, db, "alter database "+schema+" collate utf8mb4_unicode_ci")
+			exec(t, ctx, db, "alter table "+schema+".t convert to character set utf8mb4 collate utf8mb4_unicode_ci")
+			exec(t, ctx, db, "create pitr c03_recovery_pitr for database "+schema+" range 1 'h'")
+			exec(t, ctx, db, "create snapshot c03_recovery_snapshot for database "+schema)
 			// PITR 的公开语法以秒为精度；观察真实时钟跨过前述已提交
 			// 数据所在秒，不用 sleep 作为并发屏障或猜测提交发生时间。
 			var previous, at string
@@ -136,29 +148,33 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 				err := db.QueryRowContext(ctx, clock).Scan(&at)
 				return err == nil && at != previous
 			}, 5*time.Second, 20*time.Millisecond)
-			exec(t, db, "alter database "+schema+" collate utf8mb4_bin")
-			exec(t, db, "alter table "+schema+".t convert to character set utf8mb4 collate utf8mb4_bin")
+			exec(t, ctx, db, "alter database "+schema+" collate utf8mb4_bin")
+			exec(t, ctx, db, "alter table "+schema+".t convert to character set utf8mb4 collate utf8mb4_bin")
 			for _, restore := range []string{
 				"restore table " + schema + ".t {snapshot='c03_recovery_snapshot'}",
 				"restore database " + schema + " table t from pitr c03_recovery_pitr '" + at + "'",
 			} {
-				exec(t, db, restore)
-				column(t, db, "t", "utf8mb4_unicode_ci")
+				exec(t, ctx, db, restore)
+				column(t, ctx, db, "t", "utf8mb4_unicode_ci")
 				var current string
 				require.NoError(t, db.QueryRowContext(ctx, "select default_collation_name from information_schema.schemata where schema_name=?", schema).Scan(&current))
 				require.Equal(t, "utf8mb4_bin", current, "table-only restore must not overwrite the database")
 			}
-			exec(t, db, "restore database "+schema+" from pitr c03_recovery_pitr '"+at+"'")
-			exec(t, db, "create table "+schema+".inherited(v varchar(8))")
-			column(t, db, "inherited", "utf8mb4_unicode_ci")
+			exec(t, ctx, db, "restore database "+schema+" from pitr c03_recovery_pitr '"+at+"'")
+			exec(t, ctx, db, "create table "+schema+".inherited(v varchar(8))")
+			column(t, ctx, db, "inherited", "utf8mb4_unicode_ci")
 			var matched int
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
 			require.Equal(t, 2, matched)
-		})
+		}) {
+			return // Later scenarios depend on this state; quarantine the failed fixture.
+		}
 
-		t.Run("cross account identity and revision remapping", func(t *testing.T) {
-			exec(t, db, "create account c03_restore_source admin_name 'root' identified by '111'")
-			exec(t, db, "create account c03_restore_target admin_name 'root' identified by '111'")
+		if !t.Run("cross account identity and revision remapping", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+			defer cancel()
+			exec(t, ctx, db, "create account c03_restore_source admin_name 'root' identified by '111'")
+			exec(t, ctx, db, "create account c03_restore_target admin_name 'root' identified by '111'")
 			open := func(name string) *sql.DB {
 				t.Helper()
 				connection, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", name, cn.GetServiceConfig().CN.Frontend.Port))
@@ -169,37 +185,41 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 			defer source.Close()
 			target := open("c03_restore_target")
 			defer target.Close()
-			exec(t, source, "create database "+schema+" collate utf8_unicode_ci")
-			exec(t, source, "create table "+schema+".t(v varchar(8),index iv(v))")
-			exec(t, source, "insert into "+schema+".t values ('ß'),('ss')")
-			exec(t, db, "create snapshot c03_cross_account for account c03_restore_source")
+			exec(t, ctx, source, "create database "+schema+" collate utf8_unicode_ci")
+			exec(t, ctx, source, "create table "+schema+".t(v varchar(8),index iv(v))")
+			exec(t, ctx, source, "insert into "+schema+".t values ('ß'),('ss')")
+			exec(t, ctx, db, "create snapshot c03_cross_account for account c03_restore_source")
 			defer cleanupSQLIntegration(t, cn, "drop snapshot if exists c03_cross_account")
-			exec(t, source, "alter database "+schema+" collate utf8mb4_bin")
-			exec(t, db, "restore account c03_restore_source {snapshot='c03_cross_account'} to account c03_restore_target")
-			exec(t, target, "create table "+schema+".inherited(v varchar(8))")
-			column(t, target, "inherited", "utf8_unicode_ci")
+			exec(t, ctx, source, "alter database "+schema+" collate utf8mb4_bin")
+			exec(t, ctx, db, "restore account c03_restore_source {snapshot='c03_cross_account'} to account c03_restore_target")
+			exec(t, ctx, target, "create table "+schema+".inherited(v varchar(8))")
+			column(t, ctx, target, "inherited", "utf8_unicode_ci")
 			var sourceRule string
 			require.NoError(t, source.QueryRowContext(ctx, "select default_collation_name from information_schema.schemata where schema_name=?", schema).Scan(&sourceRule))
 			require.Equal(t, "utf8mb4_bin", sourceRule)
 			var matched int
 			require.NoError(t, target.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
 			require.Equal(t, 2, matched)
-		})
+		}) {
+			return // Later scenarios depend on this state; quarantine the failed fixture.
+		}
 
 		// Destructive cluster restore runs last; the existing fixture owns every
 		// account and database and closes earlier tenant connections beforehand.
-		t.Run("cluster snapshot TS restores source defaults", func(t *testing.T) {
+		if !t.Run("cluster snapshot TS restores source defaults", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
+			defer cancel()
 			const snapshot = "c03_cluster_defaults"
 			defer cleanupSQLIntegration(t, cn, "drop snapshot if exists "+snapshot)
-			exec(t, db, "alter database "+schema+" collate utf8mb4_bin")
-			exec(t, db, "create snapshot "+snapshot+" for cluster")
-			exec(t, db, "alter database "+schema+" collate utf8mb4_general_ci")
-			exec(t, db, "restore cluster {snapshot='"+snapshot+"'}")
+			exec(t, ctx, db, "alter database "+schema+" collate utf8mb4_bin")
+			exec(t, ctx, db, "create snapshot "+snapshot+" for cluster")
+			exec(t, ctx, db, "alter database "+schema+" collate utf8mb4_general_ci")
+			exec(t, ctx, db, "restore cluster {snapshot='"+snapshot+"'}")
 			var restored string
 			require.NoError(t, db.QueryRowContext(ctx, "select default_collation_name from information_schema.schemata where schema_name=?", schema).Scan(&restored))
 			require.Equal(t, "utf8mb4_bin", restored)
-			exec(t, db, "create table "+schema+".cluster_inherited(v varchar(8))")
-			column(t, db, "cluster_inherited", "utf8mb4_bin")
+			exec(t, ctx, db, "create table "+schema+".cluster_inherited(v varchar(8))")
+			column(t, ctx, db, "cluster_inherited", "utf8mb4_bin")
 			conn, err := db.Conn(ctx)
 			require.NoError(t, err)
 			defer conn.Close()
@@ -207,6 +227,8 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, conn.QueryRowContext(ctx, "select @@collation_database").Scan(&restored))
 			require.Equal(t, "utf8mb4_bin", restored)
-		})
+		}) {
+			return // Later scenarios depend on this state; quarantine the failed fixture.
+		}
 	})
 }

@@ -24,9 +24,25 @@ various edge cases including:
 - Double escaping scenarios
 """
 
-import pytest
 from unittest.mock import Mock
+
+import pytest
+
+from matrixone import AsyncClient, Client
+from matrixone.account import BaseAccountManager
 from matrixone.base_client import BaseMatrixOneClient
+
+
+@pytest.mark.parametrize('client_factory', [Client, AsyncClient])
+def test_client_helpers_escape_mysql_identifiers(client_factory):
+    """Client-side DDL helpers must not let names terminate quoted identifiers."""
+    client = client_factory()
+    account_name = "tenant` ; DROP DATABASE prod; --"
+
+    assert client._escape_identifier(account_name) == "`tenant`` ; DROP DATABASE prod; --`"
+    assert BaseAccountManager(client)._build_drop_account_sql(account_name) == (
+        "DROP ACCOUNT `tenant`` ; DROP DATABASE prod; --`"
+    )
 
 
 class TestSQLEscapingEdgeCases:
@@ -378,12 +394,9 @@ class TestSQLEscapingEdgeCases:
 
         sql = client._build_batch_insert_sql("test_table", data_list)
 
-        # Verify backslashes are preserved
-        assert "C:\\\\Users" in sql or "C:\\Users" in sql
-        assert "\\\\d+" in sql or "\\d+" in sql
-
-        print(f"Generated SQL with backslashes:\n{sql}\n")
-        print("⚠️  WARNING: Backslash handling may need review for SQL injection safety.\n")
+        # Hex UTF-8 text preserves exact bytes in both backslash SQL modes.
+        for row in data_list:
+            assert "CONVERT(X'%s' USING utf8mb4)" % row['text'].encode().hex() in sql
 
     def test_sql_injection_attempt_in_json(self):
         """Test potential SQL injection in JSON strings"""
@@ -453,8 +466,8 @@ class TestSQLEscapingEdgeCases:
             'missing': None,
         }
         assert BaseMatrixOneClient()._build_batch_insert_sql('t', [row]) == (
-            'INSERT INTO t (integer, floating, precise, flag, numpy_flag, text, quoted, json, vector, missing) '
-            'VALUES (7, 1.0, 12345678901234567890.125, True, False, '
+            'INSERT INTO t (`integer`, floating, precise, flag, numpy_flag, text, quoted, json, vector, missing) '
+            'VALUES (7, 1.0, 12345678901234567890.125, 1, 0, '
             "'1.0', 'O''Brien', '{\"name\": \"O''Brien\"}', '[1,2]', NULL)"
         )
 

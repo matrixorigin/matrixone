@@ -24,10 +24,12 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -344,26 +346,13 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			require.NoError(t, execConn(conn1, "data branch delete database branch_quota_destination"))
 			execSQLRequire(t, ctx, sysDB, fmt.Sprintf("select mo_feature_limit_upsert(%d, 'branch', '', 1)", accountID))
 
-			rt := moruntime.ServiceRuntime(cn.ServiceID())
-			oldMode, hadMode := rt.GetGlobalVariables(moruntime.TxnMode)
-			oldIsolation, hadIsolation := rt.GetGlobalVariables(moruntime.TxnIsolation)
-			rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Optimistic)
-			rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_SI)
-			defer func() {
-				if hadMode {
-					rt.SetGlobalVariables(moruntime.TxnMode, oldMode)
-				} else {
-					rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Pessimistic)
-				}
-				if hadIsolation {
-					rt.SetGlobalVariables(moruntime.TxnIsolation, oldIsolation)
-				} else {
-					rt.SetGlobalVariables(moruntime.TxnIsolation, pbtxn.TxnIsolation_RC)
-				}
-			}()
-			// conn1 and conn2 were initialized before the service default changed.
-			// Set their session defaults explicitly so the transactions below test
-			// the intended SI behavior rather than their original RC defaults.
+			// Scope the alternate mode to this tenant. Changing the CN default
+			// also changes task-storage transactions on existing RC connections.
+			testingContext := moruntime.MustGetTestingContext(cn.ServiceID())
+			previousMode := testingContext.SetTxnModeTestConfig(moruntime.TxnModeTestConfig{
+				AccountID: uint32(accountID), Mode: pbtxn.TxnMode_Optimistic, Enabled: true,
+			})
+			defer testingContext.SetTxnModeTestConfig(previousMode)
 			require.NoError(t, execConn(conn1, "set session transaction isolation level repeatable read"))
 			require.NoError(t, execConn(conn2, "set session transaction isolation level repeatable read"))
 
@@ -373,6 +362,35 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				"select count(*) from branch_quota_race.mode_probe where a = 2",
 			).Scan(&fixedSnapshotProbe))
 			require.Zero(t, fixedSnapshotProbe)
+			// The alternate mode must not affect system connections sharing this
+			// CN, including the task-storage pools used by daemon task claims.
+			func() {
+				sysTxn, err := sysDB.BeginTx(execCtx, nil)
+				require.NoError(t, err)
+				defer sysTxn.Rollback()
+				var taskCount int
+				require.NoError(t, sysTxn.QueryRowContext(execCtx,
+					"select count(*) from mo_task.sys_daemon_task").Scan(&taskCount))
+				var tenantTxns, systemTxns int
+				cn.RawService().(cnservice.Service).GetTxnClient().IterTxns(func(tx client.TxnOverview) bool {
+					if !tx.UserTxn {
+						return true
+					}
+					switch tx.AccountID {
+					case uint32(accountID):
+						tenantTxns++
+						require.Equal(t, pbtxn.TxnMode_Optimistic, tx.Meta.Mode)
+						require.Equal(t, pbtxn.TxnIsolation_SI, tx.Meta.Isolation)
+					case 0:
+						systemTxns++
+						require.Equal(t, pbtxn.TxnMode_Pessimistic, tx.Meta.Mode)
+						require.Equal(t, pbtxn.TxnIsolation_RC, tx.Meta.Isolation)
+					}
+					return true
+				})
+				require.Positive(t, tenantTxns)
+				require.Positive(t, systemTxns)
+			}()
 			require.NoError(t, execConn(conn2, "insert into branch_quota_race.mode_probe values (2)"))
 			explicitErr := execConn(conn1,
 				"data branch create table branch_quota_race.explicit_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")
@@ -438,6 +456,14 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			defer optimisticDB.Close()
 			const creators = 8
 			optimisticDB.SetMaxOpenConns(creators)
+			creatorConnections := make([]*sql.Conn, 0, creators)
+			for range creators {
+				conn, err := optimisticDB.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				require.NoError(t, execConn(conn, "set session transaction isolation level repeatable read"))
+				creatorConnections = append(creatorConnections, conn)
+			}
 			type createResult struct {
 				name string
 				err  error
@@ -463,7 +489,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 				name := fmt.Sprintf("optimistic_branch_%d", i)
 				go func() {
 					<-start
-					_, createErr := optimisticDB.ExecContext(optimisticCtx, fmt.Sprintf(
+					_, createErr := creatorConnections[i].ExecContext(optimisticCtx, fmt.Sprintf(
 						"data branch create table branch_quota_race.%s from branch_quota_race.src{snapshot='issue_26087_sp'}", name))
 					results <- createResult{name: name, err: createErr}
 				}()
@@ -496,7 +522,7 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 
 			// The component protocol rejects a fixed-SI branch owner before
 			// quota, catalog, or source locks are taken.
-			rt.SetGlobalVariables(moruntime.TxnMode, pbtxn.TxnMode_Pessimistic)
+			testingContext.SetTxnModeTestConfig(previousMode)
 			require.NoError(t, execConn(conn1, "begin"))
 			quotaErr := execConn(conn1,
 				"data branch create table branch_quota_race.pessimistic_si_branch from branch_quota_race.src{snapshot='issue_26087_sp'}")

@@ -41,18 +41,16 @@ const (
 )
 
 type storage struct {
-	sid  string
 	exec executor.SQLExecutor
 	eng  engine.Engine
 }
 
 func NewStorage(
-	sid string,
+	_ string, // service ID retained for caller compatibility
 	exec executor.SQLExecutor,
 	eng engine.Engine,
 ) PartitionStorage {
 	s := &storage{
-		sid:  sid,
 		exec: exec,
 		eng:  eng,
 	}
@@ -356,11 +354,13 @@ func (s *storage) Redefine(
 				tree.WithSingleQuoteString(),
 			)
 
-			// 1. create a temporary table
+			// 1. create a temporary table. The staged definition carries the
+			// parent's CHECK names and replaces the parent below, so it is an
+			// owned recreate, not an unrelated sibling.
 			txn.Use(def.DbName)
 			rs, err := txn.Exec(
 				sql,
-				executor.StatementOption{},
+				executor.StatementOption{}.WithTrustedCheckConstraintNames(),
 			)
 			if err != nil {
 				return err
@@ -443,7 +443,8 @@ func (s *storage) Rename(
 					),
 					executor.StatementOption{}.
 						WithIgnoreForeignKey().
-						WithIgnorePublish(),
+						WithIgnorePublish().
+						WithTrustedCheckConstraintNames(),
 				)
 				if err != nil {
 					return err
@@ -834,7 +835,12 @@ func (s *storage) createPartitionTable(
 			executor.StatementOption{}.
 				WithDisableLock().
 				WithIgnoreForeignKey().
-				WithIgnorePublish(),
+				WithIgnorePublish().
+				// Backing tables copy the parent's CHECK names verbatim. They
+				// share ownership with the parent and never appear in
+				// information_schema, so the 3822 sibling scan must not treat
+				// them as unrelated tables.
+				WithTrustedCheckConstraintNames(),
 		)
 		if err != nil {
 			return err

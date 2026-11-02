@@ -32,7 +32,7 @@
 //     pkg/vectorindex/<algo>/plugin/
 //     ├── plugin.go            -- this file: registry entry point
 //     ├── runtime/runtime.go   -- CatalogHooks (HiddenTableTypes,
-//     │                          DefaultOptions, ExperimentalFlag)
+//     │                          ParamsFromTree, ExperimentalFlag)
 //     ├── compile/compile.go   -- compile.Hooks (CREATE/ALTER/DROP/SYNC)
 //     └── plan/
 //     ├── plan.go          -- plan.Hooks: thin redirect (~20 LoC)

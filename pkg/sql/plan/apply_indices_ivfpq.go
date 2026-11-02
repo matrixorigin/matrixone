@@ -98,9 +98,12 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
-	nProbe, err := builder.resolveVectorNprobe(vecCtx.rankOption, 20)
+	nProbe, err := builder.resolveInt64Variable("probe_limit", 20)
 	if err != nil {
 		return nil, err
+	}
+	if vecCtx.rankOption != nil && vecCtx.rankOption.Nprobe > 0 {
+		nProbe = int64(vecCtx.rankOption.Nprobe)
 	}
 
 	gpuMultiSim, err := builder.resolveInt64Variable("gpu_multi_simulation", 0)
@@ -108,6 +111,10 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
+	// Checked once the index is known to serve the query: another index on the table may.
+	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexIvfpqAlgo.ToString()); err != nil {
+		return nil, err
+	}
 	return &ivfpqIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
@@ -126,6 +133,10 @@ func (builder *QueryBuilder) prepareIvfpqIndexContext(vecCtx *vectorSortContext,
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForSortUsingIvfpqWithColRefCnt(nodeID, vecCtx, multiTableIndex, nil, idxColMap)
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingIvfpqWithColRefCnt(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
@@ -135,10 +146,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 	if err != nil || ivfpqCtx == nil {
 		return nodeID, err
 	}
+	if vectorRankMode(vecCtx) == "auto" {
+		// pre differs from post with any filter but a distance range predicate: INCLUDE
+		// and primary-key filters run in the search, any other through membership. Under
+		// a MATCH filter post already runs the PRE shape.
+		branch := func(root int32, branchCtx *vectorSortContext, branchMap map[[2]int32]*plan.Expr) (int32, error) {
+			return builder.applyIndicesForSortUsingIvfpqWithColRefCnt(root, branchCtx, multiTableIndex, colRefCnt, branchMap)
+		}
+		withPre := hasNonDistFnFilter(vecCtx.scanNode.FilterList, ivfpqCtx.partPos, ivfpqCtx.origFuncName, ivfpqCtx.vecLitArg) &&
+			!builder.scanHasMatchedFullTextFilter(vecCtx.scanNode)
+		return builder.buildAdaptiveModeTop(nodeID, vecCtx, idxColMap, branch, withPre)
+	}
 
 	return builder.applyCuvsIndexSearchScan(nodeID, vecCtx, idxColMap, cuvsSearchScan{
 		algo:         "IVF-PQ",
-		alias:        "mo_ivfpq_alias_0",
+		alias:        "mo_ivfpq_alias",
 		metaDef:      ivfpqCtx.metaDef,
 		idxDef:       ivfpqCtx.idxDef,
 		metaRole:     catalog.Ivfpq_TblType_Metadata,
@@ -149,7 +171,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 		partPos:      ivfpqCtx.partPos,
 		pkPos:        ivfpqCtx.pkPos,
 		pkType:       ivfpqCtx.pkType,
-		algoOptions: func(filterJSON string) ([]byte, error) {
+		colRefCnt:    colRefCnt,
+		algoOptions: func(filterJSON string, iterative bool) ([]byte, error) {
 			return ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{
 				ThreadsSearch:      ivfpqCtx.nThread,
 				BatchWindow:        ivfpqCtx.batchWindow,
@@ -157,6 +180,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfpq(nodeID int32, vecCtx 
 				Nprobe:             uint(ivfpqCtx.nProbe),
 				KeyPartType:        ivfpqCtx.partType.Id,
 				FilterJSON:         filterJSON,
+				Iterative:          iterative,
 			})
 		},
 	})

@@ -192,10 +192,6 @@ func (insert *Insert) refreshAndReleaseS3MemGrant() {
 	insert.releaseS3MemGrant()
 }
 
-func (insert *Insert) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (insert *Insert) GetAffectedRows() uint64 {
 	return insert.ctr.affectedRows
 }

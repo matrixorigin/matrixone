@@ -58,6 +58,26 @@ var (
 	}
 )
 
+// sqlStringValue returns s encoded as the *content* of a single-quoted SQL
+// string literal, i.e. without the surrounding quotes: every backslash is
+// doubled first, then every single quote is doubled. Under the MySQL-like
+// modes used by the task storage connections (backslash escapes enabled, no
+// NO_BACKSLASH_ESCAPES), the enclosing literal then parses as exactly one
+// value byte-identical to s, so untrusted strings such as task names taken
+// from parsed statements cannot alter the surrounding WHERE clause structure.
+// Backslash must be doubled before quotes, otherwise the inserted quote
+// escapes would themselves be escaped.
+//
+// This encoding is mode-dependent: under NO_BACKSLASH_ESCAPES a doubled
+// backslash would no longer collapse, breaking name matching (but not
+// re-opening injection). The task storage factory connections do not set
+// that mode; re-evaluate before changing the task storage DSN or auth.
+func sqlStringValue(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "'", "''")
+	return s
+}
+
 type condition interface {
 	eval(v any) bool
 	sql() string
@@ -116,7 +136,7 @@ func (c *taskRunnerCond) sql() string {
 		// the same owner state; non-empty owners remain strict equality fences.
 		return "(task_runner='' or task_runner is NULL)"
 	}
-	return fmt.Sprintf("task_runner%s'%s'", OpName[c.op], c.taskRunner)
+	return fmt.Sprintf("task_runner%s'%s'", OpName[c.op], sqlStringValue(c.taskRunner))
 }
 
 type taskStatusCond struct {
@@ -174,7 +194,7 @@ func (c *taskParentTaskIDCond) eval(v any) bool {
 }
 
 func (c *taskParentTaskIDCond) sql() string {
-	return fmt.Sprintf("task_parent_id%s'%s'", OpName[c.op], c.taskParentTaskID)
+	return fmt.Sprintf("task_parent_id%s'%s'", OpName[c.op], sqlStringValue(c.taskParentTaskID))
 }
 
 type taskExecutorCond struct {
@@ -208,7 +228,7 @@ func (c *taskTypeCond) eval(v any) bool {
 }
 
 func (c *taskTypeCond) sql() string {
-	return fmt.Sprintf("task_type%s'%s'", OpName[c.op], c.taskType)
+	return fmt.Sprintf("task_type%s'%s'", OpName[c.op], sqlStringValue(c.taskType))
 }
 
 type orderByDescCond struct{}
@@ -252,7 +272,7 @@ func (c *accountCond) eval(v any) bool {
 }
 
 func (c *accountCond) sql() string {
-	return fmt.Sprintf("account%s%s", OpName[c.op], c.account)
+	return fmt.Sprintf("account%s?", OpName[c.op])
 }
 
 type lastHeartbeatCond struct {
@@ -319,7 +339,7 @@ func (c *taskMetadataIDCond) eval(v any) bool {
 }
 
 func (c *taskMetadataIDCond) sql() string {
-	return fmt.Sprintf("task_metadata_id %s '%s'", OpName[c.op], c.taskMetadataID)
+	return fmt.Sprintf("task_metadata_id %s '%s'", OpName[c.op], sqlStringValue(c.taskMetadataID))
 }
 
 type taskNameCond struct {
@@ -332,7 +352,7 @@ func (c *taskNameCond) eval(v any) bool {
 }
 
 func (c *taskNameCond) sql() string {
-	return fmt.Sprintf("task_name %s '%s'", OpName[c.op], c.taskName)
+	return fmt.Sprintf("task_name %s '%s'", OpName[c.op], sqlStringValue(c.taskName))
 }
 
 type cnLabelsCond struct {
@@ -397,7 +417,7 @@ func (c *sqlTaskRunStatusCond) eval(v any) bool {
 }
 
 func (c *sqlTaskRunStatusCond) sql() string {
-	return fmt.Sprintf("status %s '%s'", OpName[c.op], c.status)
+	return fmt.Sprintf("status %s '%s'", OpName[c.op], sqlStringValue(c.status))
 }
 
 type sqlTaskTriggerTypeCond struct {
@@ -414,7 +434,7 @@ func (c *sqlTaskTriggerTypeCond) eval(v any) bool {
 }
 
 func (c *sqlTaskTriggerTypeCond) sql() string {
-	return fmt.Sprintf("trigger_type %s '%s'", OpName[c.op], c.triggerType)
+	return fmt.Sprintf("trigger_type %s '%s'", OpName[c.op], sqlStringValue(c.triggerType))
 }
 
 type sqlTaskRunnerCond struct {
@@ -431,7 +451,7 @@ func (c *sqlTaskRunnerCond) eval(v any) bool {
 }
 
 func (c *sqlTaskRunnerCond) sql() string {
-	return fmt.Sprintf("runner_cn%s'%s'", OpName[c.op], c.runner)
+	return fmt.Sprintf("runner_cn%s'%s'", OpName[c.op], sqlStringValue(c.runner))
 }
 
 func compare[T cmp.Ordered](op Op, a T, b T) bool {
@@ -694,6 +714,9 @@ type TaskService interface {
 	// claim. release also clears its lease and restores RestartRequested. It never
 	// rewrites last_run or unrelated metadata; zero means the claim was superseded.
 	UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error)
+	// RequestDaemonTaskStatus changes only status when the observed account,
+	// state, runner and claim generation still match. Zero means superseded.
+	RequestDaemonTaskStatus(ctx context.Context, observed task.DaemonTask, status task.TaskStatus) (int, error)
 	// UpdateDaemonTaskStatus updates only status-owned fields. In particular, it
 	// preserves the runner lease (TaskRunner and LastHeartbeat) while applying
 	// the supplied compare-and-swap conditions.
@@ -809,6 +832,8 @@ type TaskStorage interface {
 	// UpdateDaemonTask updates daemon tasks and returns number of successful updated.
 	UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error)
 	UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error)
+	// RequestDaemonTaskStatus changes only status for the observed claim.
+	RequestDaemonTaskStatus(ctx context.Context, observed task.DaemonTask, status task.TaskStatus) (int, error)
 	// UpdateDaemonTaskStatus updates only task_status, update_at and end_at.
 	UpdateDaemonTaskStatus(
 		ctx context.Context,

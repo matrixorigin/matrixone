@@ -21,6 +21,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// TempTableAliasKey returns an injective map key for a logical temporary
+// table identity. The lengths make the encoding unambiguous even when either
+// identifier contains dots or other separator-like bytes.
+func TempTableAliasKey(dbName, alias string) string {
+	return fmt.Sprintf("%d:%s%d:%s", len(dbName), dbName, len(alias), alias)
+}
+
 const (
 	// TempTableNamePrefix is used to identify session temporary tables.
 	TempTableNamePrefix = "__mo_tmp_"

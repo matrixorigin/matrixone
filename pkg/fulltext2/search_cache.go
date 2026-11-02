@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -109,7 +110,18 @@ type Fulltext2Search struct {
 	// Load. A generation with neither serves no docs (see EmptyGeneration).
 	baseSegs int
 	tailSegs int
+
+	// threadsSearch is the fulltext2_threads_search degree of parallelism for the
+	// multi-segment top-k search, set by the reader (SetThreadsSearch) before Load and
+	// baked onto the Index at Load. 0 = use GOMAXPROCS. Perf-only hint.
+	threadsSearch int
 }
+
+// SetThreadsSearch records the per-query search parallelism (fulltext2_threads_search)
+// before Load bakes it onto the Index. Called by the search reader on the handle it
+// hands the cache; a warm cache entry keeps the value from its own cold Load (like the
+// vector plugins' ThreadsSearch), which is safe because it is a perf-only hint.
+func (s *Fulltext2Search) SetThreadsSearch(n int) { s.threadsSearch = n }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 
@@ -117,6 +129,19 @@ var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 // the first Search.
 func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 	return &Fulltext2Search{cfg: cfg}
+}
+
+// EvictIdleCache drops the live cached index for indexTable IF no search is in
+// flight, so the next query reloads the just-appended cdc_tail generation. A busy
+// entry is left warm (RemoveIdle returns false) and refreshes at a later idle
+// moment or via the IsStale sweep. Called after a CDC tail flush commits, this
+// bounds the stale window an incremental INSERT/UPDATE/DELETE would otherwise show
+// until the ~10-minute housekeeping sweep (#30401), without the reader thrash a
+// forced evict on every flush would cause. It evicts only the local CN's entry, so
+// it gives read-your-writes on the CN that hosts the CDC consumer (the single-CN
+// standalone case); a different querying CN still converges via the IsStale sweep.
+func EvictIdleCache(indexTable string) bool {
+	return veccache.Cache.RemoveIdle(indexTable, "cdc")
 }
 
 // Load reads the index from the chunk store: the tag=0 base sub-indexes plus the
@@ -169,6 +194,15 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	}
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
+	s.idx.threadsSearch = s.threadsSearch
+	// Bake the token_filter chain from the index's config so every query path
+	// strips the same tokens (stopwords) the build/CDC paths stripped.
+	filters, ferr := tokenfilter.Build(s.cfg.TokenFilters)
+	if ferr != nil {
+		freeSegs(segs)
+		return ferr
+	}
+	s.idx.tokenFilters = filters
 	s.loaded = true
 	s.baseSegs = len(bases)
 	s.tailSegs = len(tails)
@@ -318,7 +352,9 @@ func (s *Fulltext2Search) prepare(proc *sqlexec.SqlProcess, query any, rt vector
 }
 
 // runTopK dispatches the bounded top-k search (ranked bag-of-words vs positional query).
-func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter) ([]Result, error) {
+// dfCutoff is the per-query high-df term cutoff (fulltext2_search_df_cutoff), applied only
+// on the ranked bag-of-words path.
+func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter, dfCutoff float64) ([]Result, error) {
 	var (
 		res []Result
 		err error
@@ -326,7 +362,7 @@ func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter) ([]Res
 	if q.JSONProbe {
 		res, err = s.idx.SearchJSONProbe(q.Pattern, q.Algo, k, pf)
 	} else if q.BagOfWords {
-		res, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
+		res, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf, dfCutoff)
 	} else {
 		res, err = s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
 	}
@@ -372,7 +408,7 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		if q.JSONProbe {
 			serr = s.idx.StreamJSONProbe(q.Pattern, q.Algo, pf, wantInclude, rt.Emit)
 		} else if q.BagOfWords {
-			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)
+			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit, rt.SearchDFCutoff)
 		} else {
 			serr = s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)
 		}
@@ -382,7 +418,7 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		return []any{}, []float64{}, nil
 	}
 
-	results, err := s.runTopK(q, k, pf)
+	results, err := s.runTopK(q, k, pf, rt.SearchDFCutoff)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -424,7 +460,7 @@ func (s *Fulltext2Search) SearchInto(proc *sqlexec.SqlProcess, query any, rt vec
 		return nil
 	}
 
-	results, err := s.runTopK(q, k, pf)
+	results, err := s.runTopK(q, k, pf, rt.SearchDFCutoff)
 	if err != nil {
 		return err
 	}

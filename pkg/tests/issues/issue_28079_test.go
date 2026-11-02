@@ -62,29 +62,7 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 		const accountB = "issue_28079_account_b"
 		accounts := []string{accountA, accountB}
 		cleanupAccounts := func() error {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-			defer cleanupCancel()
-			for _, account := range accounts {
-				if _, err := db0.ExecContext(
-					cleanupCtx,
-					"drop account if exists `"+account+"`",
-				); err != nil {
-					return fmt.Errorf("drop account %s: %w", account, err)
-				}
-			}
-			var remaining int
-			if err := db0.QueryRowContext(
-				cleanupCtx,
-				"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
-				accountA,
-				accountB,
-			).Scan(&remaining); err != nil {
-				return fmt.Errorf("verify account cleanup: %w", err)
-			}
-			if remaining != 0 {
-				return fmt.Errorf("account cleanup left %d rows", remaining)
-			}
-			return nil
+			return cleanupIssueAccounts(db0, accounts...)
 		}
 		require.NoError(t, cleanupAccounts())
 		t.Cleanup(func() {

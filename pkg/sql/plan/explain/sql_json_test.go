@@ -422,7 +422,7 @@ func TestBuildSQLJSONPlanResolvesUpdateExpressionInputs(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &decoded))
 	require.Equal(t, []sqlJSONAssignment{
 		{Target: "db.t.id", Value: "1"},
-		{Target: "db.t.v", Value: "(2 + 2)"},
+		{Target: "db.t.v", Value: "(cast(2 AS BIGINT) + cast(2 AS BIGINT))"},
 		{Target: "db.t.w", Value: "left.v"},
 	}, decoded.MatrixOne.Nodes[0].Assignments)
 	after, err := json.Marshal(query)

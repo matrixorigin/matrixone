@@ -134,6 +134,101 @@ func TestBinaryStringMixedLengthOrdAndPosition(t *testing.T) {
 	require.Equal(t, []int64{0, 2}, vector.MustFixedColNoTypeCheck[int64](instrResult.GetResultVector()))
 }
 
+func TestBinaryStringFieldComparison(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			mp := proc.Mp()
+			// Preserve bytes, first-match ordering, and the distinct NULL rules
+			// for the subject and candidates.
+			subject := testutil.MakeVarlenaVector([][]byte{
+				{'a'}, {0xff}, {0}, {'a'}, {}, nil, {'a'},
+			}, []uint64{5}, oid.ToType(), mp)
+			defer subject.Free(mp)
+			first := testutil.MakeVarlenaVector([][]byte{
+				{'A'}, {0xfe}, {}, {'a', ' '}, {}, {'a'}, nil,
+			}, []uint64{6}, types.T_blob.ToType(), mp)
+			defer first.Free(mp)
+			second := testutil.MakeVarlenaVector([][]byte{
+				{'a'}, {0xff}, {0}, {'a'}, {}, {'a'}, {'a'},
+			}, nil, types.T_blob.ToType(), mp)
+			defer second.Free(mp)
+			result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(subject.Length()))
+			require.NoError(t, FieldString([]*vector.Vector{subject, first, second}, result, proc, subject.Length(), nil))
+			require.Equal(t, []uint64{2, 2, 2, 2, 1, 0, 2}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+			for row := range subject.Length() {
+				require.False(t, result.GetResultVector().IsNull(uint64(row)))
+			}
+		})
+	}
+}
+
+func TestBinaryStringFieldSubjectDomain(t *testing.T) {
+	binaryText := types.T_varchar.ToType()
+	binaryText.Charset = types.CharsetBinary
+	for _, tc := range []struct {
+		name    string
+		typ     types.Type
+		domains []types.RuntimeStringDomain
+		want    []uint64
+	}{
+		{name: "text with binary candidates", typ: types.T_varchar.ToType(), want: []uint64{1, 1}},
+		{name: "text with binary row", typ: types.T_varchar.ToType(),
+			domains: []types.RuntimeStringDomain{types.RuntimeStringInherit, types.RuntimeStringBinary}, want: []uint64{1, 1}},
+		{name: "binary with text row", typ: types.T_blob.ToType(),
+			domains: []types.RuntimeStringDomain{types.RuntimeStringText, types.RuntimeStringInherit}, want: []uint64{2, 2}},
+		{name: "binary charset", typ: binaryText, want: []uint64{2, 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			mp := proc.Mp()
+			subject := makeBinaryStringTestInput(t, proc, tc.typ, [][]byte{{'a'}, {'a'}}, tc.domains)
+			defer subject.Free(mp)
+			first, err := vector.NewConstBytes(types.T_blob.ToType(), []byte("A"), 2, mp)
+			require.NoError(t, err)
+			defer first.Free(mp)
+			second, err := vector.NewConstBytes(types.T_blob.ToType(), []byte("a"), 2, mp)
+			require.NoError(t, err)
+			defer second.Free(mp)
+			result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+			defer result.Free()
+			for range 2 {
+				require.NoError(t, result.PreExtendAndReset(2))
+				require.NoError(t, FieldString([]*vector.Vector{subject, first, second}, result, proc, 2, nil))
+				require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+			}
+			for row, domain := range tc.domains {
+				require.Equal(t, domain, subject.GetRuntimeStringDomainAt(row))
+			}
+		})
+	}
+}
+
+func TestBinaryStringFieldConstantAndSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	subject, err := vector.NewConstBytes(types.T_blob.ToType(), []byte("a"), 2, mp)
+	require.NoError(t, err)
+	defer subject.Free(mp)
+	candidate := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{{'A'}, {'a'}}, nil)
+	defer candidate.Free(mp)
+	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 2, nil))
+	require.Equal(t, []uint64{0, 1}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 2,
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}))
+	require.True(t, result.GetResultVector().IsNull(0))
+	require.Equal(t, uint64(1), vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector())[1])
+	require.NoError(t, result.PreExtendAndReset(0))
+	require.NoError(t, FieldString([]*vector.Vector{subject, candidate}, result, proc, 0, nil))
+	require.Zero(t, result.GetResultVector().Length())
+}
+
 func TestBinaryStringMixedSlicingReverseAndCase(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	mp := proc.Mp()

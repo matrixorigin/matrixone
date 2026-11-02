@@ -70,7 +70,7 @@ func TestDatabaseDefaultsDurableRestart(t *testing.T) {
 	exec("set div_precision_increment=0")
 	exec("alter table c03_durable.expressions convert to character set utf8mb4 collate utf8mb4_unicode_ci")
 	require.NoError(t, db.Close())
-	require.NoError(t, cluster.Close())
+	require.NoError(t, cluster.Stop())
 	require.NoError(t, cluster.Start())
 	db = open()
 	exec("use c03_durable")

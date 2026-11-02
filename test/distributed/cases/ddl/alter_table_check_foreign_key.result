@@ -81,7 +81,7 @@ sal    decimal(7,2)    YES        null        雇员的基本工资
 comm    decimal(7,2)    YES        null        奖金
 deptid    int unsigned    YES    MUL    null        
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptid
@@ -218,7 +218,7 @@ empno    ename    job    mgr    hiredate    sal    comm    deptid
 7902    FORD    ANALYST    7566    1981-12-03    3000.00    null    20
 7934    MILLER    CLERK    7782    1982-01-23    1300.00    null    10
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptid
@@ -315,7 +315,7 @@ no    product_kind    product_id    customer_id    order_date
 INSERT INTO product_order VALUES (4, 30, 4, 3, '2016-12-31 15:43:26');
 Duplicate entry '([^']*)' for key '([^']*)'
 INSERT INTO product_order VALUES (5, 30, 5, 3, '2016-12-31 15:43:26');
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO product_order VALUES (5, 30, 4, 4, '2016-12-31 15:43:26');
 select *from product_order;
 no    product_kind    product_id    customer_id    order_date
@@ -325,7 +325,7 @@ no    product_kind    product_id    customer_id    order_date
 4    30    4    3    2016-12-31 15:43:26
 5    30    4    4    2016-12-31 15:43:26
 INSERT INTO product_order VALUES (6, 30, 4, 5, '2016-12-31 15:43:26');
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 drop table product_order;
 drop table customer;
 drop table product;

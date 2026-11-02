@@ -18,14 +18,17 @@ package runtime
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 var _ catalogplugin.Hooks = CatalogHooks{}
@@ -36,6 +39,7 @@ func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.Hnsw_TblType_Metadata,
 		catalog.Hnsw_TblType_Storage,
+		catalog.Hnsw_TblType_Dict,
 	}
 }
 
@@ -70,12 +74,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	return nil
 }
 
-func (CatalogHooks) DefaultOptions() map[string]string {
-	return map[string]string{
-		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,
-	}
-}
-
 // HnswIndexFlag is the experimental-feature flag gating HNSW DDL. Single
 // source of truth; both the catalog gate (pkg/sql/compile/util.go via
 // ExperimentalFlag) and the per-plugin HandleCreateIndex gate reference
@@ -85,9 +83,10 @@ const HnswIndexFlag = "experimental_hnsw_index"
 // ExperimentalFlag: HNSW DDL is gated by HnswIndexFlag.
 func (CatalogHooks) ExperimentalFlag() string { return HnswIndexFlag }
 
-// SupportedVectorTypes: HNSW (usearch) indexes f32 or f64 vectors.
+// SupportedVectorTypes: HNSW (usearch) indexes f32, f64, f16, bf16, int8 and uint8 vectors.
 func (CatalogHooks) SupportedVectorTypes() []types.T {
-	return []types.T{types.T_array_float32, types.T_array_float64}
+	return []types.T{types.T_array_float32, types.T_array_float64, types.T_array_float16,
+		types.T_array_bf16, types.T_array_int8, types.T_array_uint8}
 }
 
 func (CatalogHooks) IsVectorIndex() bool { return true }
@@ -95,10 +94,51 @@ func (CatalogHooks) IsVectorIndex() bool { return true }
 // SupportedPrimaryKeyTypes: requires an int64 primary key.
 func (CatalogHooks) SupportedPrimaryKeyTypes() []types.T { return []types.T{types.T_int64} }
 
-// ValidQuantization: HNSW (usearch) validates quantization on its own
-// param-build path (ParamsFromTree), and REINDEX does not accept a quantization
-// change, so there is nothing to gate here.
-func (CatalogHooks) ValidQuantization(_, _ string) error { return nil }
+// ValidQuantization gates the (quantization, op_type) pair for HNSW: the value must be
+// an element type usearch stores (float32, float16, bf16, float64, int8, uint8), and
+// int8/uint8 are L2-only: their trained affine map q(x)=x*mul+add preserves L2 ordering
+// (the offset cancels in a difference) but not inner product or cosine. quant=="" =>
+// the base column type (valid); op=="" => value rule only.
+func (CatalogHooks) ValidQuantization(quant, op string) error {
+	switch strings.ToLower(quant) {
+	case "", metric.Quantization_F32_Str, metric.Quantization_F16_Str, metric.Quantization_BF16_Str,
+		metric.Quantization_F64_Str:
+		return nil
+	case metric.Quantization_INT8_Str, metric.Quantization_UINT8_Str:
+		switch strings.ToLower(op) {
+		case metric.OpType_InnerProduct, metric.OpType_CosineDistance:
+			return moerr.NewNotSupportedNoCtxf(
+				"hnsw quantization %q is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry", quant)
+		}
+		return nil
+	default:
+		return moerr.NewNotSupportedNoCtxf(
+			"hnsw quantization %q (supported: float32, float16, bf16, float64, int8, uint8)", quant)
+	}
+}
+
+// NeedsDict reports whether an index of this QUANTIZATION has a dict table holding the
+// range it maps vectors with.
+func NeedsDict(quant string) bool {
+	switch strings.ToLower(quant) {
+	case metric.Quantization_INT8_Str, metric.Quantization_UINT8_Str:
+		return true
+	}
+	return false
+}
+
+// CheckQuantizationBase rejects a QUANTIZATION wider than the base column element type.
+func CheckQuantizationBase(quant string, base types.T) error {
+	if strings.ToLower(quant) == metric.Quantization_F64_Str {
+		if base != types.T_array_float64 {
+			return moerr.NewNotSupportedNoCtxf(
+				"HNSW QUANTIZATION '%s' (8 bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
+				quant, base.String(), types.Type{Oid: base}.GetArrayElementSize())
+		}
+		return nil
+	}
+	return quantizer.CheckNoUpcast("HNSW", quant, base)
+}
 
 // SupportedIncludeColumnTypes: this index has no INCLUDE-column support.
 func (CatalogHooks) SupportedIncludeColumnTypes() []types.T { return nil }
@@ -122,10 +162,9 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	}
 }
 
-// DefaultMaxIndexCapacity mirrors the hnsw_max_index_capacity session-var
-// default; the build path (hnsw_create) uses it when the flat algo_params key
-// is absent (a legacy index created before the param was promoted).
-const DefaultMaxIndexCapacity = int64(1000000)
+// DefaultMaxIndexCapacity is the hnsw_max_index_capacity session-var default: 0 sizes
+// each model from the host memory budget.
+const DefaultMaxIndexCapacity = int64(0)
 
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_HNSW case (pkg/catalog/secondary_index_utils.go:341-375).
@@ -168,6 +207,14 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 
 	if idx.IndexOption.MaxIndexCapacity > 0 {
 		res[catalog.IndexAlgoParamMaxIndexCapacity] = strconv.FormatInt(idx.IndexOption.MaxIndexCapacity, 10)
+	}
+
+	if len(idx.IndexOption.Quantization) > 0 {
+		quantization := catalog.ToLower(idx.IndexOption.Quantization)
+		if err := (CatalogHooks{}).ValidQuantization(quantization, res[catalog.IndexAlgoParamOpType]); err != nil {
+			return nil, err
+		}
+		res[catalog.Quantization] = quantization
 	}
 	return res, nil
 }

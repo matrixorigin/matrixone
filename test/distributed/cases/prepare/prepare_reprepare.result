@@ -10,7 +10,7 @@ execute stale_stmt;
 88
 set @bad_prepare_sql = 'select from';
 prepare stale_stmt from @bad_prepare_sql;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from";
 execute stale_stmt;
 invalid state prepared statement 'stale_stmt' does not exist
 prepare stale_stmt from 'select 99';
@@ -39,7 +39,7 @@ rollback;
 prepare active_string from 'select 102';
 begin;
 prepare active_string from 'select from';
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " from";
 execute active_string;
 invalid state prepared statement 'active_string' does not exist
 rollback;

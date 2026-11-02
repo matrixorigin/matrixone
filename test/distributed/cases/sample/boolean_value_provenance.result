@@ -1,0 +1,43 @@
+drop database if exists boolean_value_provenance;
+create database boolean_value_provenance;
+use boolean_value_provenance;
+values row(1=1),row(1=0) order by column_0;
+➤ column_0[-6,8,0]  𝄀
+0  𝄀
+1
+select distinct p from (values row(1=1),row(1=0)) d(p) order by p;
+➤ p[-6,8,0]  𝄀
+0  𝄀
+1
+create table bools(id int primary key, flag boolean, n int);
+insert into bools values (1,true,7),(2,false,null),(3,null,0);
+select sample(id,1 rows) as id,n>0 as p from bools group by flag,n>0 order by id;
+➤ id[4,32,0]  ¦  p[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  0
+select sample(id,1 rows) as id,cast(flag as signed) as b from bools group by n>0,flag order by id;
+id    b
+1    1
+2    0
+3    NULL
+select sample(id,1 rows) as id,n>0 as p from bools group by flag,n+1,n>0 order by id;
+➤ id[4,32,0]  ¦  p[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  0
+prepare values_predicate from 'select p from (values row(1=1),row(1=0)) d(p) order by p';
+execute values_predicate;
+➤ p[-6,8,0]  𝄀
+0  𝄀
+1
+deallocate prepare values_predicate;
+prepare sample_predicate from 'select sample(id,1 rows) as id,n>0 as p from bools group by flag,n>0 order by id';
+execute sample_predicate;
+➤ id[4,32,0]  ¦  p[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  null  𝄀
+3  ¦  0
+deallocate prepare sample_predicate;
+use mo_catalog;
+drop database boolean_value_provenance;

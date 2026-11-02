@@ -51,6 +51,11 @@ func NewZonemapReader(param *ExternalParam, proc *process.Process) *ZonemapReade
 
 func (r *ZonemapReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
 	r.param = param
+	// Block metadata (zone maps, null counts) is indexed by physical file
+	// column, but param.Filter.columnMap was resolved against the (possibly
+	// pruned) output schema. Translate it through the physical file indexes
+	// before block pruning (issue #30571 follow-up, filtered projections).
+	translateZonemapFilterColumnMap(param)
 	r.blockReader, err = ioutil.NewFileReader(
 		param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
@@ -59,6 +64,23 @@ func (r *ZonemapReader) Open(param *ExternalParam, proc *process.Process) (fileE
 	r.zoneparam.offset = 0
 	r.zoneparam.bs = nil
 	return false, nil
+}
+
+// translateZonemapFilterColumnMap rewrites a filter columnMap that was
+// resolved against the scan output schema so each referenced column maps to
+// its physical file index. Zone maps and null counts in block metadata are
+// indexed by physical file column, and column projection may prune the
+// output schema without affecting the file layout.
+func translateZonemapFilterColumnMap(param *ExternalParam) {
+	if param.Filter == nil || len(param.Filter.columnMap) == 0 {
+		return
+	}
+	for _, attr := range param.Attrs {
+		key := int(attr.ColIndex)
+		if _, ok := param.Filter.columnMap[key]; ok {
+			param.Filter.columnMap[key] = int(attr.ColFieldIndex)
+		}
+	}
 }
 
 func (r *ZonemapReader) ReadBatch(
@@ -178,10 +200,16 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 	meta := r.zoneparam.bs[r.zoneparam.offset].GetMeta()
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
-		idxs[i] = uint16(param.Attrs[i].ColIndex)
-		if idxs[i] >= colCnt {
-			idxs[i] = 0
+		// Column positions inside the file live in ColFieldIndex: the query
+		// may prune or projection-reorder the scan schema, remapping ColIndex
+		// to the position in the output schema. Using ColIndex here reads
+		// the wrong file column (issue #30571).
+		fieldIdx := param.Attrs[i].ColFieldIndex
+		if fieldIdx < 0 || fieldIdx >= int32(colCnt) {
+			idxs[i] = 0 // column absent from the file; an all-null column is produced below
+			continue
 		}
+		idxs[i] = uint16(fieldIdx)
 	}
 
 	var err error
@@ -194,8 +222,9 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 
 	var sels []int64
 	for i := 0; i < len(param.Attrs); i++ {
-		if uint16(param.Attrs[i].ColIndex) >= colCnt {
-			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
+		attr := &param.Attrs[i]
+		if attr.ColFieldIndex < 0 || attr.ColFieldIndex >= int32(colCnt) {
+			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[attr.ColIndex].Typ, false), rows, nil)
 			if err != nil {
 				return err
 			}

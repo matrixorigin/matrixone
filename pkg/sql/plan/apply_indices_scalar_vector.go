@@ -36,7 +36,7 @@ func (builder *QueryBuilder) scalarVectorContext(proj *plan.Node) (*vectorSortCo
 	scan := builder.directScanWithVectorIndex(builder.qry.Nodes[join.Children[0]])
 	provider := builder.qry.Nodes[join.Children[1]]
 	if scan == nil || !builder.isSingleRowVectorProvider(provider) || !builder.scalarVectorProviderSafe(provider) ||
-		!builder.adaptiveIvfReplaySafe(proj.NodeId) {
+		!builder.adaptiveVectorReplaySafe(proj.NodeId) {
 		return nil, nil
 	}
 	fn := sort.OrderBy[0].Expr.GetF()

@@ -7,7 +7,11 @@ unique prefix 'cb_' (clone builder) with timestamps to avoid collisions.
 
 import pytest
 import time
+from sqlalchemy import Column, Integer, MetaData, UniqueConstraint
+from sqlalchemy.orm import declarative_base
+from matrixone.branch_builder import create_table_branch
 from matrixone.clone_builder import clone_table, clone_database
+from .test_config import online_config
 
 
 def _uid():
@@ -58,7 +62,11 @@ class TestCloneTableOnline:
             test_client.execute(f"CREATE TABLE {src} (id INT PRIMARY KEY, val INT)")
             test_client.execute(f"INSERT INTO {src} VALUES (1, 100)")
 
-            test_client.execute(f"CREATE SNAPSHOT {snap} FOR TABLE test {src}")
+            # The table above is created unqualified, so it lives in the
+            # connection's active database. Snapshot that same database;
+            # MATRIXONE_TEST_DATABASE may name a different one.
+            db_name = test_client._escape_identifier(online_config.database)
+            test_client.execute(f"CREATE SNAPSHOT {snap} FOR TABLE {db_name} {src}")
 
             # Insert after snapshot — should NOT appear in clone
             test_client.execute(f"INSERT INTO {src} VALUES (2, 200)")
@@ -77,8 +85,10 @@ class TestCloneTableOnline:
             except Exception:
                 pass
 
-    def test_cross_database(self, test_client):
-        """Clone using 'db.table' qualified names."""
+    @pytest.mark.parametrize('schema_style', ['string', 'tuple', 'metadata'])
+    @pytest.mark.parametrize('builder', [clone_table, create_table_branch])
+    def test_cross_database(self, test_client, schema_style, builder):
+        """Clone/branch using resolved ORM schemas as well as qualified strings."""
         src_db = f"cb_xdb_src_{_uid()}"
         tgt_db = f"cb_xdb_tgt_{_uid()}"
         try:
@@ -88,15 +98,33 @@ class TestCloneTableOnline:
 
             test_client.execute(f"CREATE DATABASE {tgt_db}")
 
-            stmt = clone_table(f'{tgt_db}.t1').from_table(f'{src_db}.t1')
+            def table_model(database):
+                base = declarative_base(metadata=MetaData(schema=database if schema_style == 'metadata' else None))
+
+                class Model(base):
+                    __tablename__ = 't1'
+                    __table_args__ = (UniqueConstraint('id'), {'schema': database}) if schema_style == 'tuple' else {}
+                    id = Column(Integer, primary_key=True)
+                    val = Column(Integer)
+
+                return Model
+
+            source, target = f'{src_db}.t1', f'{tgt_db}.t1'
+            if schema_style != 'string':
+                source, target = table_model(src_db), table_model(tgt_db)
+            stmt = builder(target).from_table(source)
             test_client.execute(str(stmt))
 
             rows = test_client.execute(f"SELECT * FROM {tgt_db}.t1").fetchall()
             assert len(rows) == 1
             assert rows[0][1] == 42
         finally:
-            test_client.execute(f"DROP DATABASE IF EXISTS {tgt_db}")
-            test_client.execute(f"DROP DATABASE IF EXISTS {src_db}")
+            try:
+                test_client.execute(f"DROP DATABASE IF EXISTS {tgt_db}")
+            finally:
+                test_client.execute(f"DROP DATABASE IF EXISTS {src_db}")
+            databases = {row[0] for row in test_client.execute('SHOW DATABASES').fetchall()}
+            assert src_db not in databases and tgt_db not in databases
 
     def test_clone_nonexistent_source_fails(self, test_client):
         """Cloning from a non-existent table should raise an error."""

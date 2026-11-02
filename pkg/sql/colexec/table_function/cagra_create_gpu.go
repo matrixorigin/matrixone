@@ -115,7 +115,8 @@ type cagraCreateState struct {
 }
 
 func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
-	if u.srcEmpty {
+	// A parallel instance that received no rows never created a builder.
+	if u.srcEmpty || u.builder == nil {
 		return nil
 	}
 
@@ -125,12 +126,8 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	)
 
 	ts := time.Now().UnixMicro()
-	if u.builder != nil {
-		sqls, err = u.builder.PreparePersistence(ts, buildSnapshotTS(proc),
-			metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable))
-	}
-	// No builder selected → init didn't set one. Nothing to do for the cuvs
-	// side; the CDC tail (if any) below still emits.
+	sqls, err = u.builder.PreparePersistence(ts, buildSnapshotTS(proc),
+		metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable))
 	if err != nil {
 		return err
 	}

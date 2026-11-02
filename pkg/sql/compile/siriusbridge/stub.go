@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !sirius || !cgo || !linux || !amd64
+//go:build !sirius || !cgo || !linux || (!amd64 && !arm64)
 
 package siriusbridge
 
@@ -21,5 +21,5 @@ import "github.com/matrixorigin/matrixone/pkg/common/moerr"
 func Available() bool { return false }
 
 func New(Config) (*Runtime, error) {
-	return nil, moerr.NewBadConfigNoCtx("Sirius embedded backend requires Linux amd64, CGo and MO_SIRIUS=1")
+	return nil, moerr.NewBadConfigNoCtx("Sirius embedded backend requires Linux amd64 or arm64, CGo and MO_SIRIUS=1")
 }

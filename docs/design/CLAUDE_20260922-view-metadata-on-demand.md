@@ -1,9 +1,9 @@
 # 普通 View 按需元数据：完整系列契约与消费者迁移设计
 
-- 修订：**v2.0-draft.1，2026-09-28，待审批**。S2 内存上限与实现方式已由用户于 2026-10-05 调整；以 [v2.1 S2 修订](CLAUDE_20261005-view-s2-scope-revision.md) 为准，原 §11 中逐对象先准入、128 MiB 硬证明及对应性能目标不再是 S2 验收条件。其余语义与安全边界保持。
+- 修订：**v2.0-draft.1，2026-09-28；冻结 S1 与 E1 批准范围见文末**。S2 内存上限与实现方式已由用户于 2026-10-05 调整；以 [v2.1 S2 修订](CLAUDE_20261005-view-s2-scope-revision.md) 为准，原 §11 中逐对象先准入、128 MiB 硬证明及对应性能目标不再是 S2 验收条件。其余语义与安全边界保持。
 - 设计所有者：[S1 #29436](https://github.com/matrixorigin/matrixone/issues/29436)；完整系列：[#29433](https://github.com/matrixorigin/matrixone/issues/29433)，S2–S9 见第 15 节。
 - 核查基线：`d99187d7b3bfda8744088b3ae8cf16739b690aa0`，包含已合入的 [#29139](https://github.com/matrixorigin/matrixone/pull/29139)。本次仅修改设计，不修改生产行为。
-- 精确修订摘要、自审和审批记录：[S1 审查记录](CLAUDE_20260928-view-metadata-s1-review.md)。**同意执行设计整理不等于批准本修订。未经对精确修订的明确批准，后续生产修改仍阻塞。**
+- 精确修订摘要和审批边界见 [S1 批准与 E1 勘误](#s1-批准与-e1-勘误)。历史批准不覆盖后续任意正文修改或 S2–S9 的实施与上线。
 - v1 原文和审批历史保留在 [#29139 合入修订](https://github.com/matrixorigin/matrixone/blob/8db6d7ff4f0f38701f6e3154a578e4ce01f4f7ac/docs/design/CLAUDE_20260922-view-metadata-on-demand.md)。本修订整合而非追认旧版未覆盖的契约；不撤销已合入 PR，不把其审批外推到整个系列。
 
 ## 1. 问题、证据与范围
@@ -400,7 +400,7 @@ S7 若经 S6 选择，另审 CN-local immutable cache：硬 byte/entry 限额、
 | #29006（OPEN） | reusable/cursor 不陈旧、取消/生命周期安全、无关 SQL 可用 | refresh authority lease、终结包/COMMIT 新鲜性 fencing 路线被 snapshot+依赖校验替代；独立已有安全门禁保留；需 frontend/control-plane owner 协调任务处置 |
 | #29007（OPEN） | 混合版本、重启/恢复、rollback denial、公共一致性证据 | required generation → recovery COMPLETE → authority reopened 激活序列被 R0–R4 替代；owner 明确重定向后才修改任务 |
 
-#28079/#28317/#29396/#29400 仅为生命周期/升级场景来源，#29095 为元数据可见性协调项；不声明同根因或已修复。本任务不擅自修改、关闭或评论任何旧 issue。
+\#28079/#28317/#29396/#29400 仅为生命周期/升级场景来源，#29095 为元数据可见性协调项；不声明同根因或已修复。本任务不擅自修改、关闭或评论任何旧 issue。
 
 ## 17. 契约到验证映射
 
@@ -450,7 +450,7 @@ S7 若经 S6 选择，另审 CN-local immutable cache：硬 byte/entry 限额、
 | D09 | 第 11 节数字是提前确定的验收预算；不假设 on-demand 更快 | **性能/容量预算显式批准** |
 | D10 | COM_FIELD_LIST/View DUMP 不扩功能；其它列消费者按契约迁移 | 整体范围审批 |
 
-没有留给实现者的“二选一”架构决策；上述选择仍是**待批准提案**，特别是 D03/D04/D08/D09。若任何必需 owner 不接受，应修改设计并生成新精确修订，不在代码中悄悄偏离。
+没有留给实现者的“二选一”架构决策；上述 D03/D04/D08/D09 的冻结 S1 设计批准范围见文末，后续修订不能自动继承批准。若任何必需 owner 不接受，应修改设计并生成新精确修订，不在代码中悄悄偏离。
 
 审批记录必须包含：修订摘要、批准人/身份、日期、明确范围、批准或拒绝、未接受条款的处理。仅“方向可以”、执行计划授权、旧 PR approval 或本地自审不够。S1 完成条件是精确版本获批且无阻塞决策；本文自审可提交评审，不等于已满足该条件。后续实现每个 PR 引用获批修订与对应契约/证据，不以 issue roadmap 代替设计。
 
@@ -460,3 +460,35 @@ S7 若经 S6 选择，另审 CN-local immutable cache：硬 byte/entry 限额、
 - MySQL 8.0 [INFORMATION_SCHEMA COLUMNS](https://dev.mysql.com/doc/refman/8.0/en/information-schema-columns-table.html)：字段展示参照。
 - MySQL client/server [COM_STMT_EXECUTE](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_execute.html) 与 [COM_STMT_FETCH](https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_fetch.html)：执行/游标协议边界参照；实际 MO 支持范围以 frontend 源码和客户端验证为准。
 - v1 保留的 MySQL 8.0.45 invalid-view 对照及 #29139 reviews 是历史证据。本次没有重新测量，也不从其局部成功推导整个系列已经正确。
+
+## S1 批准与 E1 勘误
+
+2026-09-28，请求者在会话 `01a0e784-4ba8-77a3-a8db-a557d65db125`
+审阅精确设计并对 D03/D04/D08/D09 的逐项审批请求回复 “go ahead”。
+第一次 “go ahead” 只授权整理；第二次才批准冻结 S1 设计与 D01–D10。
+原获批提交为 `371e3c1761dab22dff95d0e830caab31aa46eeeb`，正文 SHA256：
+`f8cd0a71d59c37d14bb6dc964e968d4c68b0d95b01cb6a371f597c1eb6ea0120`。
+2026-09-29 用户指定 E1：物理主键名从 `__mo_cpkey` 改为
+`__mo_cpkey_col`，与 `pkg/catalog/types.go` 的 `CPrimaryKeyColName` 一致，
+不改变物理兼容分类、D01–D10 或预算。E1 后冻结正文 SHA256：
+`f631ef3fa7c1c100f8c52ce718b22dc27a23e7155d3464a54b5f5bb78d879db7`。
+这两个摘要不是本次合并后文件的摘要。
+
+批准的特别条款为：D03 raw `mo_columns` 保留物理快照语义，替代旧持久化
+freshness 验收；D04 缺少必要历史 star/环境时受控拒绝，不猜测；D08 v2
+激活后不在线降回旧 reader，保留共享保护；D09 数值预算是待验证门禁。
+此批准仅完成 S1 文档设计，不代表 S2–S9 已执行、生产上线、兼容、性能、
+race 或 leak 验证通过。S2 的 v2.1 修订有独立优先级：原 128 MiB 硬证明、
+逐对象先准入和相应性能要求不再是 S2 条件，不能从旧 S1 文本重新引入。
+
+实现仍须关闭 `SELECT * FROM v LIMIT 0` 经 `BuildTableDefByMoColumns`
+读取持久列的旁路；COM_FIELD_LIST 未有列枚举、DUMP TABLE 拒绝 View，
+不能记成已迁移。memo 命中也按无缓存逻辑子树计结构预算；结构拒绝条件
+不随 cache 改变。历史 I_S 只读模板适配不能改历史用户 schema 或 raw catalog。
+激活必须先封旧入口并 drain，再提交租户版本；catalog 完成不等于 admission
+完成。共享锁的不同全序和 account writer-fair/owner-atomic 协议继续保留。
+
+[原 S1 决定与勘误记录](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/CLAUDE_20260928-view-metadata-s1-review.md)
+保留源码核查、原结构检查、未执行项和历史批准上下文。原记录只验证文档，
+未执行 Go UT/BVT、MySQL 对照、race、多 CN、恢复或性能实验；本次整理也不
+把历史自审或 #29139/#29450 的陈述扩张为当前实现验证。

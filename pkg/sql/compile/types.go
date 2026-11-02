@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -283,13 +282,14 @@ type scopeContext struct {
 	root     *scopeContext
 	parent   *scopeContext
 	children []*scopeContext
-	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
 }
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scopes []*Scope
+	// Unprepared source metadata owners, never scheduled or run.
+	dependentSourceScopes []*Scope
+	scopes                []*Scope
 	// Shared broadcast HashBuild producers are attached after downstream placement.
 	pendingProductBuilds []*pendingProductBuild
 	// Non-owning producer regions: true marks an independent auxiliary job;
@@ -422,6 +422,9 @@ type Compile struct {
 	// runtime-filter producers which were actually visited by compilePlanScope.
 	// It is statement-local and excludes physically pruned subtrees.
 	compiledLocalRuntimeFilterNodes []int32
+	// Non-owning, compileQuery-generation evidence for optional deep filters.
+	deepRuntimeFilterTags           map[int32]bool
+	completeDeepRuntimeFilterBuilds map[vm.Operator]bool
 
 	needLockMeta bool
 	needBlock    bool
@@ -462,10 +465,11 @@ type Compile struct {
 	keepAutoIncrement        uint64
 	// lastInsertIDBaseline is the session-visible LAST_INSERT_ID when this
 	// statement started; a retry restores it.
-	lastInsertIDBaseline    uint64
-	ignorePublish           bool
-	ignoreCheckExperimental bool
-	disableLock             bool
+	lastInsertIDBaseline      uint64
+	ignorePublish             bool
+	ignoreCheckExperimental   bool
+	skipIndexTaskRegistration bool
+	disableLock               bool
 
 	icebergScanPlanner icebergapi.ScanPlanner
 	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan

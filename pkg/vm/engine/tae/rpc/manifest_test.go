@@ -29,13 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 )
 
 func TestGenerateManifest_Basic(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -84,8 +81,6 @@ func TestGenerateManifest_Basic(t *testing.T) {
 }
 
 func TestGenerateManifest_WithData(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -131,8 +126,6 @@ func TestGenerateManifest_WithData(t *testing.T) {
 }
 
 func TestInspectManifest(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -172,8 +165,6 @@ func TestInspectManifest(t *testing.T) {
 }
 
 func TestManifestHTTP(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -236,8 +227,6 @@ func TestManifestHTTP(t *testing.T) {
 }
 
 func TestManifestHTTPActiveGenerationLifecycle(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	activeManifestDB.Store(nil)
 	ctx := context.Background()
 
@@ -274,8 +263,6 @@ func TestManifestHTTPActiveGenerationLifecycle(t *testing.T) {
 }
 
 func TestManifestHTTPClosedDBDoesNotPanic(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))

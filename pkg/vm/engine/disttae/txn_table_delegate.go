@@ -66,7 +66,6 @@ func newTxnTableWithItem(
 		tableDef:      item.TableDef,
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
-		clusterByIdx:  item.ClusterByIdx,
 		relKind:       item.Kind,
 		viewdef:       item.ViewDef,
 		comment:       item.Comment,
@@ -148,6 +147,13 @@ func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.
 	return tbl.origin.CollectChanges(ctx, from, to, skipDeletes, mp)
 }
 
+func (tbl *txnTableDelegate) CreatedInCurrentTxn(ctx context.Context) (bool, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.CreatedInCurrentTxn(ctx)
+	}
+	return tbl.origin.CreatedInCurrentTxn(ctx)
+}
+
 func (tbl *txnTableDelegate) CollectObjectList(ctx context.Context, from, to types.TS, bat *batch.Batch, mp *mpool.MPool) error {
 	if tbl.combined.is {
 		return tbl.combined.tbl.CollectObjectList(ctx, from, to, bat, mp)
@@ -211,6 +217,12 @@ func (tbl *txnTableDelegate) Stats(
 		return transientTableStats(&stats, float64(^uint64(0))), nil
 	}
 
+	// A readonly remote owner cannot see this CN's delete/update workspace.
+	// The decoded response is owned here, so clearing its sample cannot mutate
+	// the published generation at either CN.
+	if len(stats.ByteRangeMap) > 0 && (!tbl.origin.getTxn().Readonly() || tbl.origin.db.op.IsSnapOp()) {
+		stats.ByteRangeMap = nil
+	}
 	return &stats, nil
 }
 

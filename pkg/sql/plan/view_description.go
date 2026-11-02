@@ -72,6 +72,11 @@ func (c *viewDescriptionDependencyContext) record(obj *ObjectRef, def *TableDef,
 	c.refs = appendPrepareSchemas(c.refs, ref)
 }
 
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *viewDescriptionDependencyContext) ResolveWithoutTemporaryAlias(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
+}
+
 func (c *viewDescriptionDependencyContext) Resolve(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	obj, def, err := c.CompilerContext.Resolve(db, name, snapshot)
 	if err == nil && obj != nil && def != nil {
@@ -107,8 +112,38 @@ func (c *viewDescriptionDependencyContext) ResolveViewDependencyAccount(
 // Columns and their complete dependency evidence must travel together: callers
 // may embed the description in a reusable plan without retaining source scans.
 func describeViewForMetadata(
-	ctx CompilerContext, def *TableDef, accountID uint32,
+	ctx CompilerContext, def *TableDef, obj *ObjectRef, accountID uint32,
 ) ([]*ColDef, []*ObjectRef, bool, error) {
+	if HasViewMetadataRequest(ctx.GetContext()) {
+		if obj == nil {
+			return nil, nil, false, moerr.NewInternalError(ctx.GetContext(), "View metadata target has no identity")
+		}
+		database := obj.SchemaName
+		if obj.SubscriptionName != "" {
+			database = obj.SubscriptionName
+		}
+		result, err := DescribeViewMetadata(ctx.GetContext(), database, obj.ObjName, ctx.GetSnapshot())
+		if err != nil {
+			return nil, nil, false, err
+		}
+		defer result.Release()
+		columns, err := result.Columns()
+		if err != nil {
+			return nil, nil, false, err
+		}
+		dependencies, err := result.Dependencies()
+		if err != nil {
+			return nil, nil, false, err
+		}
+		caller, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, nil, false, err
+		}
+		// S2 captures relation evidence, not function versions. Conservatively
+		// use the existing SHOW rebind flag until that evidence is available:
+		// a VALUES plan must not survive an untracked function replacement.
+		return columns, viewMetadataDependencyRefs(dependencies, caller), true, nil
+	}
 	if provider, ok := ctx.(ViewDescriptionContextProvider); ok {
 		child, cleanup, err := provider.NewViewDescriptionCompilerContext(ctx.GetContext())
 		if err != nil {
@@ -145,9 +180,9 @@ func describeViewForMetadata(
 // formatting and filtering expressions. No rows are read from the persisted
 // View column snapshot, and no generated definition is written back.
 func viewDescriptionRelation(
-	ctx CompilerContext, def *TableDef, accountID uint32, databaseName, viewName string,
+	ctx CompilerContext, def *TableDef, obj *ObjectRef, accountID uint32, databaseName, viewName string,
 ) (string, []*ObjectRef, bool, error) {
-	cols, dependencies, dependsOnUdf, err := describeViewForMetadata(ctx, def, accountID)
+	cols, dependencies, dependsOnUdf, err := describeViewForMetadata(ctx, def, obj, accountID)
 	if err != nil {
 		return "", nil, false, err
 	}

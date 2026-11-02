@@ -850,6 +850,14 @@ func (l *store) read(ctx context.Context,
 	shardID uint64, query interface{}) (interface{}, error) {
 	count := 0
 	for {
+		// Preserve Dragonboat's cancellation error while refusing a request
+		// canceled before admission (including a retry of an unready shard).
+		if ctx.Err() == context.Canceled {
+			// Keep the driver's missing/expired-deadline error precedence.
+			if deadline, ok := ctx.Deadline(); ok && time.Now().Before(deadline) {
+				return nil, dragonboat.ErrCanceled
+			}
+		}
 		count++
 		result, err := l.nh.SyncRead(ctx, shardID, query)
 		if err != nil {
@@ -1335,7 +1343,7 @@ func (l *store) addScheduleCommands(ctx context.Context,
 }
 
 func (l *store) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error {
-	state, err := l.getCheckerState()
+	state, err := l.getCheckerStateWithContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -1379,7 +1387,7 @@ func (l *store) updateCNWorkState(ctx context.Context, workState pb.CNWorkState)
 }
 
 func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
-	state, err := l.getCheckerState()
+	state, err := l.getCheckerStateWithContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -1401,7 +1409,7 @@ func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) er
 }
 
 func (l *store) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error {
-	state, err := l.getCheckerState()
+	state, err := l.getCheckerStateWithContext(ctx)
 	if err != nil {
 		return err
 	}

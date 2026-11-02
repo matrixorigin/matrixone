@@ -1,0 +1,774 @@
+# github.com/matrixorigin/matrixone/pkg/fulltext/plugin/iscp
+{}
+# github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/iscp
+{}
+# github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/iscp
+{}
+# github.com/matrixorigin/matrixone/pkg/backup
+# [github.com/matrixorigin/matrixone/pkg/backup]
+{}
+# github.com/matrixorigin/matrixone/cmd/mo-service
+# [github.com/matrixorigin/matrixone/cmd/mo-service]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_0
+# [github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_0]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap
+# [github.com/matrixorigin/matrixone/pkg/bootstrap]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_0
+# [github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_0]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_1
+# [github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_1]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_2
+# [github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_0_2]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_2_0
+# [github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v2_2_0]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v3_0_0
+# [github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v3_0_0]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_0
+# [github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_0]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_9
+# [github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_9]
+{}
+# github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6
+# [github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6]
+{}
+# github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver
+{}
+# github.com/matrixorigin/matrixone/pkg/cdc
+# [github.com/matrixorigin/matrixone/pkg/cdc]
+{
+	"github.com/matrixorigin/matrixone/pkg/cdc": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/cdc/table_scanner.go:681:11",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/cdc.TableDetector.processAdmittedCallback()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/cdc/table_scanner.go:971:11",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/cdc.TableHasForeignKeyConstraint()"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/datasync
+# [github.com/matrixorigin/matrixone/pkg/datasync]
+{}
+# github.com/matrixorigin/matrixone/pkg/cnservice
+# [github.com/matrixorigin/matrixone/pkg/cnservice]
+{}
+# github.com/matrixorigin/matrixone/pkg/fileservice_test
+# [github.com/matrixorigin/matrixone/pkg/fileservice_test]
+{}
+# github.com/matrixorigin/matrixone/pkg/embed
+# [github.com/matrixorigin/matrixone/pkg/embed]
+{}
+# github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan
+# [github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan]
+{}
+# github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/iscp
+# [github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/iscp]
+{}
+# github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan
+# [github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan]
+{}
+# github.com/matrixorigin/matrixone/pkg/iscp
+# [github.com/matrixorigin/matrixone/pkg/iscp]
+{
+	"github.com/matrixorigin/matrixone/pkg/iscp": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/iscp/fulltext2_sqlwriter.go:102:11",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/iscp.Fulltext2SqlWriter.datalinkText()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/iscp/iteration.go:1167:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/iscp.runInitSQLTransaction()"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/partitionprune
+# [github.com/matrixorigin/matrixone/pkg/partitionprune]
+{}
+# github.com/matrixorigin/matrixone/pkg/frontend
+# [github.com/matrixorigin/matrixone/pkg/frontend]
+{
+	"github.com/matrixorigin/matrixone/pkg/frontend": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/frontend/data_branch_lineage_lock.go:188:11",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/frontend.getDataBranchComponentExecutor()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/frontend/data_branch_lineage_lock.go:216:10",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/frontend.finishDataBranchComponent()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/frontend/mysql_cmd_executor.go:7391:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/frontend.parseStmtExecute()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/frontend/mysql_cmd_executor.go:7504:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/frontend.parseStmtSendLongData()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/frontend/routine.go:323:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/frontend.Routine.handleRequest()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/frontend/txn.go:657:17",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/frontend.TxnHandler.createUnsafe()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/frontend/user_var_migration.go:660:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/frontend.decodeUserVarByteJSONValue()"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/publication
+# [github.com/matrixorigin/matrixone/pkg/publication]
+{}
+# github.com/matrixorigin/matrixone/pkg/proxy
+# [github.com/matrixorigin/matrixone/pkg/proxy]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/adaptivetop
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/adaptivetop]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/apply
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/apply]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dedup_key.go:36:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/colexec.FormatDedupKey()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dedup_key.go:70:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/colexec.FormatDedupEntry()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dedup_key.go:94:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/colexec.FormatDedupKeyFromRow()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/evalExpression.go:2632:7",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/colexec.EvaluateFilterByZoneMap()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/evalExpression.go:3282:10",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/colexec.GetExprZoneMap()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/evalExpression.go:3394:20",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/colexec.evaluateZoneMapFunction()"
+			}
+		],
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/analytic_allocation.go:24:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/analytic_allocation.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dependent_expression.go:19:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent_expression.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dependent_reducer.go:24:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent_reducer.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/set_operation_allocation.go:25:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/set_operation_allocation.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/dedupjoin]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec_test
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec_test]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent": {
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dependent/join.go:28:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent/join.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dependent/kernel.go:28:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent/kernel.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dependent/program.go:24:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent/program.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dependent/recursive.go:25:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent/recursive.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dependent/setup.go:24:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent/setup.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/dependent/source.go:25:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent/source.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent_test
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent_test]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/fill
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/fill]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/filter
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/filter]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/external
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/external]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external": {
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/external/reader_arrow_test.go:30:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/external/reader_arrow_test.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/group
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/group]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild_test
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild_test]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/insert
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/insert]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/limit
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/limit]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/merge_test
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/merge_test]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte": {
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/mergecte/mergecte.go:19:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/mergecte/mergecte.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeblock]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/minus
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/minus]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop": {
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/mergetop/types.go:22:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop/types.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/offset
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/offset]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/order
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/order]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order": {
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/order/types.go:22:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/order/types.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/output
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/output]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/partition
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/partition]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition": {
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/partition/hash.go:19:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/partition/hash.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/partition/hash_test.go:23:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/partition/hash_test.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/postdml]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertsecondaryindex]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/product
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/product]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/projection
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/projection]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/sample
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/sample]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/shuffle/shuffle.go:307:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle.Shuffle.runLocalProducer()"
+			}
+		],
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/shuffle/shufflepool.go:21:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle/shufflepool.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/table_clone]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/top
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/top]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorquery
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorquery]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/colexec/window
+# [github.com/matrixorigin/matrixone/pkg/sql/colexec/window]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window": {
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/colexec/window/window.go:26:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/colexec/window/window.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/compile/siriusbridge
+# [github.com/matrixorigin/matrixone/pkg/sql/compile/siriusbridge]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/compile/siriusbridge": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/siriusbridge/bridge.go:324:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile/siriusbridge.callCleanup()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/siriusbridge/bridge.go:333:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile/siriusbridge.callPrepare()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/siriusbridge/bridge.go:599:22",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile/siriusbridge.Query.Run()"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/crt
+# [github.com/matrixorigin/matrixone/pkg/sql/crt]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/internal/ordersites
+# [github.com/matrixorigin/matrixone/pkg/sql/internal/ordersites]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/internal/topsites
+# [github.com/matrixorigin/matrixone/pkg/sql/internal/topsites]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/compile
+# [github.com/matrixorigin/matrixone/pkg/sql/compile]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/compile": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/allocation_account_lifecycle.go:31:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.allocationLifecycleCall()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/compile2.go:615:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Compile.Run()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/compile2.go:1017:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Compile.buildRetryCompile()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/remoterunServer.go:412:17",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.handlePipelineMessage()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/remoterunServer.go:435:20",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.handlePipelineMessage()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/sirius_runtime.go:131:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Compile.runSiriusRead()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/temporary_ddl.go:148:12",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Scope.createSessionTemporaryTable()"
+			}
+		],
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/dependent.go:35:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/compile/dependent.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/compile/dependent_external.go:28:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/compile/dependent_external.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/plan
+# [github.com/matrixorigin/matrixone/pkg/sql/plan]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/plan": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/expr_opt.go:1095:6",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/plan.blockFilterConstantVectorSet()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/expr_opt.go:1145:6",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/plan.materializeInRHSValues()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/returning.go:311:6",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/plan.returningQualifierFeature()"
+			}
+		],
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/base_binder_case_test.go:23:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/plan/base_binder_case_test.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/plan/explain
+# [github.com/matrixorigin/matrixone/pkg/sql/plan/explain]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/explain/explain_expr.go:268:6",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/plan/explain.literalVecText()"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/explain/sql_json.go:1142:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/plan/explain.sqlJSONExpr()"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/plan/rule
+# [github.com/matrixorigin/matrixone/pkg/sql/plan/rule]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/rule/constant_fold.go:1267:17",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/plan/rule.EvaluateConstantExpression()"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/plan/substrait
+# [github.com/matrixorigin/matrixone/pkg/sql/plan/substrait]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait": {
+		"checkrecover": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/substrait/export.go:1042:19",
+				"message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/plan/substrait.literalVectorOptions()"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/sql/util
+# [github.com/matrixorigin/matrixone/pkg/sql/util]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/arrowload
+# [github.com/matrixorigin/matrixone/pkg/tests/arrowload]
+{}
+# github.com/matrixorigin/matrixone/pkg/sql/plan/function
+# [github.com/matrixorigin/matrixone/pkg/sql/plan/function]
+{
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function": {
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/function/byte_like_wildcard_search.go:17:8",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/plan/function/byte_like_wildcard_search.go"
+			},
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/sql/plan/function/func_cast_integer_assignment.go:21:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/plan/function/func_cast_integer_assignment.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/tests/issues/internal/joinspill
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/dml
+# [github.com/matrixorigin/matrixone/pkg/tests/dml]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/issues
+# [github.com/matrixorigin/matrixone/pkg/tests/issues]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/issues/isolated
+# [github.com/matrixorigin/matrixone/pkg/tests/issues/isolated]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/partition
+# [github.com/matrixorigin/matrixone/pkg/tests/partition]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/shard
+# [github.com/matrixorigin/matrixone/pkg/tests/shard]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/service
+# [github.com/matrixorigin/matrixone/pkg/tests/service]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn
+# [github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/sqlintegration
+# [github.com/matrixorigin/matrixone/pkg/tests/sqlintegration]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/testutils
+# [github.com/matrixorigin/matrixone/pkg/tests/testutils]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/txn
+# [github.com/matrixorigin/matrixone/pkg/tests/txn]
+{}
+# github.com/matrixorigin/matrixone/pkg/tests/upgrade
+# [github.com/matrixorigin/matrixone/pkg/tests/upgrade]
+{}
+# github.com/matrixorigin/matrixone/pkg/tnservice
+# [github.com/matrixorigin/matrixone/pkg/tnservice]
+{}
+# github.com/matrixorigin/matrixone/pkg/tools/checkpointtool
+# [github.com/matrixorigin/matrixone/pkg/tools/checkpointtool]
+{}
+# github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive
+# [github.com/matrixorigin/matrixone/pkg/tools/checkpointtool/interactive]
+{}
+# github.com/matrixorigin/matrixone/pkg/util/status
+# [github.com/matrixorigin/matrixone/pkg/util/status]
+{}
+# github.com/matrixorigin/matrixone/pkg/txn/storage/tae
+# [github.com/matrixorigin/matrixone/pkg/txn/storage/tae]
+{}
+# github.com/matrixorigin/matrixone/pkg/util/test
+# [github.com/matrixorigin/matrixone/pkg/util/test]
+{}
+# github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan
+# [github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan]
+{}
+# github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan
+# [github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan]
+{}
+# github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/search_test
+# [github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/search_test]
+{}
+# github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan
+# [github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan]
+{}
+# github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat
+# [github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat]
+{}
+# github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/search
+# [github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/search]
+{}
+# github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan
+# [github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay_test
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay_test]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/disttae
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/disttae]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/readutil
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/readutil]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/readutil_test
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/readutil_test]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3]
+{
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3": {
+		"checkunsafe": [
+			{
+				"posn": "/private/tmp/mo-issue30995/pkg/vm/engine/tae/db/gc/v3/window_test.go:25:2",
+				"message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3/window_test.go"
+			}
+		]
+	}
+}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/test
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/test]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/test
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/test]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/pipeline
+# [github.com/matrixorigin/matrixone/pkg/vm/pipeline]
+{}
+# github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil
+# [github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil]
+{}

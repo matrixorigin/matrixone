@@ -38,14 +38,15 @@ import (
 )
 
 type MinioSDK struct {
-	name                 string
-	endpoint             string
-	bucket               string
-	core                 *minio.Core
-	client               *minio.Client
-	copyCredentialDomain objectStorageCopyCredentialDomain
-	perfCounterSets      []*perfcounter.CounterSet
-	listMaxKeys          int
+	name                   string
+	endpoint               string
+	supportsConditionalPut bool
+	bucket                 string
+	core                   *minio.Core
+	client                 *minio.Client
+	copyCredentialDomain   objectStorageCopyCredentialDomain
+	perfCounterSets        []*perfcounter.CounterSet
+	listMaxKeys            int
 }
 
 var _ objectStorageCopier = new(MinioSDK)
@@ -243,11 +244,12 @@ func NewMinioSDK(
 	}
 
 	return &MinioSDK{
-		name:     args.Name,
-		endpoint: args.Endpoint,
-		bucket:   args.Bucket,
-		client:   client,
-		core:     core,
+		name:                   args.Name,
+		endpoint:               args.Endpoint,
+		supportsConditionalPut: args.IsMinio && !minioEndpointIsKnownUnsupported(args.Endpoint),
+		bucket:                 args.Bucket,
+		client:                 client,
+		core:                   core,
 		copyCredentialDomain: newObjectStorageCopyCredentialDomain(
 			keyID, keySecret, sessionToken, args.RoleARN, args.ExternalID,
 		),
@@ -265,6 +267,13 @@ type sqlMinioSTSTransport struct {
 
 func (t sqlMinioSTSTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.next.RoundTrip(req.WithContext(t.ctx))
+}
+
+func minioEndpointIsKnownUnsupported(endpoint string) bool {
+	endpoint = strings.ToLower(endpoint)
+	return strings.Contains(endpoint, "ctyunapi.cn") ||
+		strings.Contains(endpoint, "myqcloud.com") ||
+		strings.Contains(endpoint, "aliyuncs.com")
 }
 
 var _ ObjectStorage = new(MinioSDK)
@@ -409,22 +418,7 @@ func (a *MinioSDK) Exists(
 	error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-
-	_, err := a.statObject(
-		ctx,
-		key,
-	)
-	if err != nil {
-		if a.is404(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	return true, nil
+	return objectExists(ctx, key, a.statObject, a.is404)
 }
 
 func (a *MinioSDK) Write(
@@ -446,7 +440,7 @@ func (a *MinioSDK) Write(
 		}
 	}
 
-	if sizeHint != nil && *sizeHint < smallObjectThreshold {
+	if sizeHint != nil && (*sizeHint < smallObjectThreshold || exclusiveWrite(ctx)) {
 		data, err := io.ReadAll(r)
 		if err != nil {
 			return err
@@ -500,25 +494,6 @@ func (a *MinioSDK) Read(
 		}
 	}()
 
-	if max == nil {
-		// read to end
-		r, err := a.getObject(
-			ctx,
-			key,
-			min,
-			nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		// eager read to expose file not found error
-		_, err = r.Read(nil)
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
-	}
-
 	r, err = a.getObject(
 		ctx,
 		key,
@@ -533,6 +508,9 @@ func (a *MinioSDK) Read(
 	if err != nil {
 		return nil, err
 	}
+	if max == nil {
+		return r, nil
+	}
 	return &readCloser{
 		r:         io.LimitReader(r, int64(*max-*min)),
 		closeFunc: r.Close,
@@ -546,22 +524,7 @@ func (a *MinioSDK) Delete(
 	err error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	if len(keys) == 0 {
-		return nil
-	}
-	if len(keys) == 1 {
-		return a.deleteSingle(ctx, keys[0])
-	}
-
-	if _, err := a.deleteObjects(ctx, keys...); err != nil {
-		return err
-	}
-
-	return nil
+	return deleteObjectKeys(ctx, keys, 0, a.deleteSingle, a.deleteObjects)
 }
 
 func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
@@ -640,16 +603,24 @@ func (a *MinioSDK) putObject(
 	if sizeHint != nil {
 		size = *sizeHint
 	}
+	opts := minio.PutObjectOptions{}
+	if exclusiveWrite(ctx) {
+		opts.DisableMultipart = true
+		opts.SetMatchETagExcept("*")
+	}
 	info, err := a.client.PutObject(
 		ctx,
 		a.bucket,
 		key,
 		r,
 		size,
-		minio.PutObjectOptions{},
+		opts,
 	)
 	if err == nil {
 		recordS3AcceptedBytes(ctx, info.Size, a.perfCounterSets...)
+	}
+	if exclusiveWrite(ctx) && minio.ToErrorResponse(err).StatusCode == 412 {
+		err = moerr.NewFileAlreadyExistsNoCtx(key)
 	}
 	return info, err
 }

@@ -41,11 +41,11 @@ func minimumRemoteVectorProtocol(p *pipeline.Pipeline) int64 {
 	var required int64
 	if p.DataSource != nil && p.DataSource.Node != nil &&
 		p.DataSource.Node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
-		required = vectorscan.IndexSearchScanProtocolVersion
+		required = vectorscan.RequiredProtocolVersion(p.DataSource.Node.IndexSearchScan)
 	}
 	for _, in := range p.InstructionList {
-		if in.GetApply().GetIndexSearchScan() != nil {
-			required = vectorscan.IndexSearchScanProtocolVersion
+		if spec := in.GetApply().GetIndexSearchScan(); spec != nil {
+			required = max(required, vectorscan.RequiredProtocolVersion(spec))
 		}
 	}
 	for _, child := range p.Children {
@@ -162,13 +162,17 @@ func (c *Compile) constrainRequiredIVFWorkers(qry *plan.Query) error {
 		device = brute_force.DispatchesToDevice[float32](gpu)
 	}
 	if coordinator && readonly && !device {
-		supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, vectorscan.IndexSearchScanProtocolVersion)
+		requiredVersion, err := c.indexSearchScanProtocolVersion(spec)
+		if err != nil {
+			return err
+		}
+		supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, requiredVersion)
 		if err != nil {
 			return err
 		}
 		if !supported {
 			return moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", vectorscan.IndexSearchScanProtocolVersion)
+				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
 		}
 		return nil
 	}
@@ -176,4 +180,14 @@ func (c *Compile) constrainRequiredIVFWorkers(qry *plan.Query) error {
 	c.execType = plan2.ExecTypeAP_ONECN
 	c.cnList, err = c.scheduleQueryWorkers()
 	return err
+}
+
+// indexSearchScanProtocolVersion returns the MORPC protocol version every CN needs to run
+// spec once its unset knobs are filled from the session variables.
+func (c *Compile) indexSearchScanProtocolVersion(spec *plan.IndexSearchScan) (int64, error) {
+	stamped := plan2.DeepCopyIndexSearchScan(spec)
+	if err := vectorscan.StampSessionKnobs(stamped, c.proc.GetResolveVariableFunc()); err != nil {
+		return 0, err
+	}
+	return vectorscan.RequiredProtocolVersion(stamped), nil
 }

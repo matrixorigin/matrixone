@@ -271,13 +271,10 @@ func (ctr *container) commitGroupByChunk(
 		return nil, 0, &groupPrePublicationError{cause: err}
 	}
 
-	more, err := ctr.appendGroupByBatchWithStringSources(
-		vectors, offset, preview.inserted, sourcePublication.overrides, 0)
+	err = ctr.appendGroupByBatchWithStringSources(
+		vectors, offset, preview.inserted, preview.newGroups, sourcePublication.overrides, 0)
 	if err != nil {
 		return nil, 0, err
-	}
-	if more != preview.newGroups {
-		return nil, 0, mpool.ErrAllocationAccountInvariant
 	}
 	if hasStringSourceMetadata {
 		if err := ctr.applyPreviewGroupKeyStringSources(vectors, offset, values); err != nil {
@@ -285,7 +282,7 @@ func (ctr *container) commitGroupByChunk(
 		}
 		ctr.groupKeyStringSourceMetadata = true
 	}
-	return values, more, nil
+	return values, preview.newGroups, nil
 }
 
 func (ctr *container) previewGroupDestination(groupIndex int) (*batch.Batch, int, error) {
@@ -585,43 +582,17 @@ func (hr *ResHashRelated) Free0() {
 	hr.mp = nil
 }
 
-// countNonZeroAndFindKth is a helper function to count the number of non-zero values
-// and find index of values, that is the kth non-zero, -1 if there are less than k
-// non-zero values.
-func countNonZeroAndFindKth(values []uint8, k int) (count int, kth int) {
-	count = 0
-	kth = -1
-	if len(values) < k {
-		for _, v := range values {
-			if v == 0 {
-				continue
+// findKthNonZero returns the row of the kth selected value, or -1 if absent.
+func findKthNonZero(values []uint8, k int) int {
+	for row, flag := range values {
+		if flag != 0 {
+			k--
+			if k == 0 {
+				return row
 			}
-			count++
-		}
-		return count, kth
-	}
-
-	for i, v := range values {
-		if v == 0 {
-			continue
-		}
-
-		count++
-		if count == k {
-			kth = i
-			break
 		}
 	}
-
-	if kth != -1 {
-		for i := kth + 1; i < len(values); i++ {
-			if values[i] == 0 {
-				continue
-			}
-			count++
-		}
-	}
-	return count, kth
+	return -1
 }
 
 func resizeGroupScratch[T any](
@@ -1849,6 +1820,18 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 	return ctr.makeAggListForMode(aggExprs, ctr.aggregateAllocation, ctr.mtyp == H0)
 }
 
+// makeSingleGroupAggList constructs the bounded aggregate state used by an
+// ordered ROLLUP prefix.  The ordinary GROUP BY path chooses the aggregate
+// representation from ctr.mtyp; that representation is intentionally not
+// reused here because every live ROLLUP prefix owns exactly one group even
+// when the input relation has an unbounded number of groups.
+func (ctr *container) makeSingleGroupAggList(
+	aggExprs []aggexec.AggFuncExecExpression,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocationMode(
+		aggExprs, ctr.aggregateAllocation, true)
+}
+
 func (ctr *container) makeSpillAggList(
 	aggExprs []aggexec.AggFuncExecExpression,
 ) ([]aggexec.GroupAggFuncExec, error) {
@@ -1895,6 +1878,15 @@ func (ctr *container) buildSpillReloadHashTable(
 }
 
 func (ctr *container) makeAggListWithAllocation(
+	aggExprs []aggexec.AggFuncExecExpression,
+	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocationMode(
+		aggExprs, allocation, singleGroup)
+}
+
+func (ctr *container) makeAggListWithAllocationMode(
 	aggExprs []aggexec.AggFuncExecExpression,
 	allocation *aggexec.AllocationAccount,
 	singleGroup bool,

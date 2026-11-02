@@ -16,9 +16,9 @@ package merge
 
 import (
 	"context"
-	"fmt"
+
 	"os"
-	"strings"
+
 	"testing"
 	"time"
 
@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/btree"
 )
 
 // region: test utils
@@ -94,41 +93,6 @@ func newTestObjectEntry(t *testing.T, size uint32, isTombstone bool) *catalog.Ob
 		ObjectMVCCNode: catalog.ObjectMVCCNode{ObjectStats: *stats},
 		ObjectNode:     catalog.ObjectNode{IsTombstone: isTombstone},
 	}
-}
-
-func StatsString(stats objectio.ObjectStats, zonemapKind common.ZonemapPrintKind) string {
-	zonemapStr := "nil"
-	if z := stats.SortKeyZoneMap(); z != nil {
-		switch zonemapKind {
-		case common.ZonemapPrintKindNormal:
-			zonemapStr = z.String()
-		case common.ZonemapPrintKindCompose:
-			zonemapStr = z.StringForCompose()
-		case common.ZonemapPrintKindHex:
-			zonemapStr = z.StringForHex()
-		}
-	}
-	return fmt.Sprintf(
-		"%s oSize:%s, cSzie:%s rows:%d, zm: %s",
-		stats.ObjectName().ObjectId().ShortStringEx(),
-		common.HumanReadableBytes(int(stats.OriginSize())),
-		common.HumanReadableBytes(int(stats.Size())),
-		stats.Rows(),
-		zonemapStr,
-	)
-}
-
-func DisplayPointEvents(events *btree.BTreeG[*pointEvent]) string {
-	iter := events.Iter()
-	var sb strings.Builder
-	sb.Grow(events.Len() * 50) // Pre-allocate buffer based on estimated size per event
-
-	for iter.Next() {
-		event := iter.Item()
-		sb.WriteString(event.String())
-		sb.WriteByte('\n')
-	}
-	return sb.String()
 }
 
 // endregion: test utils

@@ -194,9 +194,27 @@ func generateSeriesDatetimeScale(exprs []*plan.Expr, runtimeValues ...[]any) int
 }
 
 func datetimeLiteralScale(value string) int32 {
+	value = strings.TrimSpace(value)
 	dot := strings.LastIndexByte(value, '.')
 	if dot < 0 {
 		return 0
+	}
+	// A dot in the date part separates calendar fields, not seconds.
+	// Compact datetimes have no date/time separator; their fraction starts
+	// only after the fourteen YYYYMMDDHHMMSS digits.
+	if timeStart := strings.IndexAny(value, " T"); timeStart >= 0 {
+		if dot < timeStart {
+			return 0
+		}
+	} else {
+		if dot != 14 {
+			return 0
+		}
+		for i := 0; i < dot; i++ {
+			if value[i] < '0' || value[i] > '9' {
+				return 0
+			}
+		}
 	}
 
 	var scale int32

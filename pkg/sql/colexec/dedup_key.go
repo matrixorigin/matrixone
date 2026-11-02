@@ -15,13 +15,16 @@
 package colexec
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // FormatDedupKey formats a duplicate key from the expression vector used by a
@@ -80,4 +83,49 @@ func FormatDedupEntry(vec *vector.Vector, row int, colName string, colTypes []pl
 		}
 	}
 	return FormatDedupKey(vec, row, colTypes)
+}
+
+// FormatDedupKeyFromRow renders lossless logical index parts. Only the rejected
+// row is evaluated, so successful inserts do not allocate diagnostic vectors.
+// The expressions reference a single incoming child; supplying the same window
+// for both relation positions also covers a physically swapped DEDUP join.
+func FormatDedupKeyFromRow(proc *process.Process, exprs []*plan.Expr, input *batch.Batch, row int) (entry string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			entry = ""
+			err = moerr.NewInternalErrorNoCtxf("cannot format logical duplicate key: %v", recovered)
+		}
+	}()
+	if len(exprs) == 0 {
+		return "", moerr.NewInternalErrorNoCtx("missing logical duplicate key")
+	}
+	one, err := input.Window(row, row+1)
+	if err != nil {
+		return "", err
+	}
+	defer one.Clean(nil)
+	items := make([]string, len(exprs))
+	for i, expr := range exprs {
+		value, err := formatDedupPart(proc, expr, one)
+		if err != nil {
+			return "", err
+		}
+		items[i] = value
+	}
+	if len(items) == 1 {
+		return items[0], nil
+	}
+	return "(" + strings.Join(items, ",") + ")", nil
+}
+
+func formatDedupPart(proc *process.Process, expr *plan.Expr, one *batch.Batch) (string, error) {
+	vec, free, err := GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{one, one})
+	if err != nil {
+		return "", err
+	}
+	defer free()
+	// Keep ordinary UTF-8 text readable while escaping NUL, control characters
+	// and invalid byte sequences in the user's actual logical value.
+	quoted := strconv.Quote(vec.RowToString(0))
+	return quoted[1 : len(quoted)-1], nil
 }

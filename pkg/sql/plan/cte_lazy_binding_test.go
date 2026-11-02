@@ -1170,7 +1170,7 @@ func TestCTEReuseRewritesConsumersInsideInlineCTE(t *testing.T) {
 	require.Equal(t, 1, lineitemScans)
 }
 
-func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
+func TestCTEIdentityIncludesProducerContainingRecursiveCTE(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `with recursive r(n) as (
 		select 1
@@ -1190,7 +1190,8 @@ func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
 			cteSinks++
 		}
 	}
-	require.Equal(t, 0, cteSinks)
+	require.Equal(t, 2, cteSinks)
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_RECURSIVE_CTE))
 }
 
 func TestCTEMultiReferenceReuseGuards(t *testing.T) {
@@ -1212,7 +1213,18 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 				select a.n_nationkey from c a join c b on a.n_nationkey = b.n_nationkey`,
 		},
 		{
-			name: "volatile producer",
+			name: "stable session reader remains no-fold",
+			sql: `with c as(select n_regionkey,max(row_count())x from nation group by n_regionkey)
+				select a.x from c a join c b on a.n_regionkey=b.n_regionkey`,
+		},
+		{
+			name: "stable JSON_TABLE keeps optional scan guard",
+			sql: `with c as(select x from json_table('[1,2,3]','$[*]' columns(x int path '$'))j)
+				select a.x from c a join c b on a.x=b.x`,
+		},
+		{
+			name:          "volatile producer",
+			wantSinkScans: 2,
 			sql: `with c as (
 				select n_regionkey, max(rand()) as r from nation group by n_regionkey
 			) select a.n_regionkey from c a join c b on a.n_regionkey = b.n_regionkey`,
@@ -1224,7 +1236,8 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 			) select a.n_regionkey from c a join c b on a.n_regionkey = b.n_regionkey`,
 		},
 		{
-			name: "sample producer",
+			name:          "sample producer",
+			wantSinkScans: 2,
 			sql: `with c as (
 				select sample(total, 2 rows) as n from (
 					select l_suppkey, sum(l_extendedprice) as total
@@ -2334,6 +2347,8 @@ func TestCTEMultiReferenceCompactsReaderInputOrdinals(t *testing.T) {
 			`select a.g,a.mx,a.total,b.g,b.mx,b.total from r a join r b on a.g<=>b.g and a.mx=b.mx`, 3, [][]int32{{0, 1, 2}, {0, 1, 2}}},
 		{"aggregate-first", aggregate,
 			`select total,mx from r union all select total,mx from r`, 2, [][]int32{{0, 1}, {0, 1}}},
+		{"discarded-sum", aggregate,
+			`select a.g,a.mx,b.mx from r a join r b on a.g=b.g`, 2, [][]int32{{0, 1}, {0, 1}}},
 		{"asymmetric", `select n_regionkey g,min(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`,
 			`select a.g,a.total,b.g,b.mx from r a join r b on a.g=b.g`, 3, [][]int32{{0, 1}, {0, 2}}},
 		{"single-late-output", `select n_regionkey g,min(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`,
@@ -2367,6 +2382,20 @@ func TestCTEMultiReferenceCompactsReaderInputOrdinals(t *testing.T) {
 				require.Equal(t, planpb.Node_SINK, sink.NodeType)
 				require.Equal(t, materialized.CTESinkOption, sink.ExtraOptions)
 				require.Len(t, sink.ProjectList, tc.producerWidth)
+				child := query.Nodes[sink.Children[0]]
+				require.Len(t, child.ProjectList, tc.producerWidth,
+					"the published batch must implement the compacted SINK schema")
+				for pos, expr := range sink.ProjectList {
+					require.Zero(t, expr.GetCol().RelPos)
+					require.Equal(t, int32(pos), expr.GetCol().ColPos)
+					require.Equal(t, expr.Typ, child.ProjectList[pos].Typ)
+				}
+				if tc.name == "discarded-sum" {
+					require.Equal(t, planpb.Node_PROJECT, child.NodeType)
+					producer := query.Nodes[child.Children[0]]
+					require.Greater(t, len(producer.ProjectList), tc.producerWidth,
+						"the discarded SUM must still be evaluated by the wider producer")
+				}
 				var positions []int32
 				for _, expr := range node.ProjectList {
 					col := expr.GetCol()

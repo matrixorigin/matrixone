@@ -62,6 +62,13 @@ func AdmissionForService(service string) MemoryAdmission {
 	return admission
 }
 
+// AcquireMemory reserves bytes with admission for an allocation outside a filter (a
+// search's working memory); the returned release, nil when nothing was reserved, gives
+// it back. A refusal is a *MemoryAdmissionError.
+func AcquireMemory(admission MemoryAdmission, bytes int64) (func(), error) {
+	return acquireMemory(admission, bytes)
+}
+
 func acquireMemory(admission MemoryAdmission, bytes int64) (func(), error) {
 	if admission == nil || bytes <= 0 {
 		return nil, nil

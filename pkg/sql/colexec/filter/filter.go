@@ -53,6 +53,7 @@ func (filter *Filter) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return
 		}
+		filter.ctr.subjectReuseAdmissionDone = false
 	}
 
 	if len(filter.RuntimeFilterExprs) > 0 {
@@ -93,9 +94,17 @@ func (filter *Filter) Call(proc *process.Process) (vm.CallResult, error) {
 			vector.PutSels(sels)
 		}
 	}()
+	firstInvocation := !filter.ctr.subjectReuseAdmissionDone
+	filter.ctr.subjectReuseAdmissionDone = true
 	for i := range filter.ctr.allExecutors {
 		if filterBat.IsEmpty() {
 			break
+		}
+		if firstInvocation && !filter.OwnsConstantCastWarnings && i >= len(filter.ctr.runtimeExecutors) {
+			staticIndex := i - len(filter.ctr.runtimeExecutors)
+			executor := colexec.ReuseFilterExpressionExecutor(filter.FilterExprs[staticIndex], filter.ctr.executors[staticIndex], filterBat.RowCount())
+			filter.ctr.executors[staticIndex] = executor
+			filter.ctr.allExecutors[i] = executor
 		}
 
 		var vec *vector.Vector

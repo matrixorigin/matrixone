@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -71,7 +70,11 @@ var (
 
 	getSqlForCheckAccountFmt = `select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s';`
 
-	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
+	// The layout must stay in sync with extractPubInfosFromExecResult: the
+	// parser reads account_id and account_name first. A projection starting
+	// at pub_name fed the pub name into ParseInt and aborted database
+	// restores for published databases (#30607).
+	getPubInfoWithPitrFormat = `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
 
 	// update mo_pitr object id
 	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = %d where account_name = '%s' and pitr_status = 1 and obj_id = %d;`
@@ -1063,6 +1066,13 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		); err != nil {
 			return stats, err
 		}
+		targetAccount, targetExists, err := restoreTargetAccountID(ctx, bh, accountName)
+		if err != nil {
+			return stats, err
+		}
+		if err = preflightIcebergAccountRestore(ctx, bh, ts, uint32(accountRecord.accountId), targetAccount, targetExists); err != nil {
+			return stats, err
+		}
 
 		restoreOtherAccount := func() (rtnErr error) {
 			var (
@@ -1146,12 +1156,20 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 		}
 		return stats, nil
 	}
+	if restoreLevel == tree.RESTORELEVELDATABASE || restoreLevel == tree.RESTORELEVELTABLE {
+		if err = preflightIcebergPartialRestore(ctx, bh, ts, tenantInfo.TenantID, dbName, tblName); err != nil {
+			return stats, err
+		}
+	}
 	if err = preflightRestorePitrEntry(
 		ctx, ses.GetService(), bh, pitrName, ts, restoreLevel, dbName, tenantInfo.TenantID,
 	); err != nil {
 		return stats, err
 	}
 	if restoreLevel == tree.RESTORELEVELACCOUNT {
+		if err = preflightIcebergAccountRestore(ctx, bh, ts, tenantInfo.TenantID, tenantInfo.TenantID, true); err != nil {
+			return stats, err
+		}
 		if err = invalidateAccountViewMetadata(ctx, ses, bh, tenantInfo.TenantID); err != nil {
 			return stats, err
 		}
@@ -1301,6 +1319,9 @@ func preflightRestorePitrEntry(
 	var err error
 	switch level {
 	case tree.RESTORELEVELACCOUNT:
+		if err = preflightHistoricalCDCAccountRestore(ctx, bh, ts, sourceAccount); err != nil {
+			return err
+		}
 		databaseNames, err = showDatabasesWithPitr(sourceCtx, sid, bh, pitrName, ts)
 		if err != nil {
 			return err
@@ -1618,7 +1639,7 @@ func restoreToDatabaseOrTableWithPitr(
 	// restore publication record
 	if !restoreToTbl {
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", pitrName, dbName))
-		if err = createPubByPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts); err != nil {
+		if err = createPubByPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts, nil); err != nil {
 			return
 		}
 	}
@@ -1635,14 +1656,15 @@ func reCreateTableWithPitr(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
 	}
-	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
+	if isCurrentSchemaRoutineCatalog(tblInfo) {
 		accountID, accountErr := defines.GetAccountId(ctx)
 		if accountErr != nil {
 			return accountErr
 		}
-		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+		return restoreRoutineCatalogWithCurrentSchema(
 			ctx,
 			bh,
+			tblInfo.tblName,
 			fmt.Sprintf(" {MO_TS = %d}", ts),
 			accountID,
 			accountID,
@@ -1703,7 +1725,7 @@ func reCreateTableWithPitr(
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] insert select table: %v, cost: %v", pitrName, tblInfo.tblName, time.Since(beginTime)))
 
-	return
+	return ensureRestoredIcebergAllocator(ctx, bh, tblInfo)
 }
 
 func getTableInfoWithPitr(
@@ -1952,14 +1974,14 @@ func restoreViewsWithPitr(
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 		freeStatements(stmts)
 		if err != nil {
 			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
 			if err != nil {
 				return err
 			}
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 			freeStatements(stmts)
 			if err != nil {
 				// The dependency sort plans every view BEFORE the restore loop, so the
@@ -2620,7 +2642,8 @@ func createPubByPitr(
 	pitrName,
 	dbName string,
 	toAccountId uint32,
-	ts int64) (err error) {
+	ts int64,
+	omittedViews map[restoreObjectName]struct{}) (err error) {
 	// read pub info from mo_pubs
 	sql := getPubInfoWithPitr(ts, toAccountId, dbName)
 	getLogger(sid).Info(fmt.Sprintf("[%s] create pub: get pub info sql: %s", pitrName, sql))
@@ -2640,21 +2663,13 @@ func createPubByPitr(
 	}
 
 	// restore pub to toAccount
-	var ast []tree.Statement
-	defer func() {
-		for _, s := range ast {
-			s.Free()
-		}
-	}()
-
 	for _, pubInfo := range pubInfos {
-		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Owner, pubInfo.Creator)
-		if ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1); err != nil {
-			return
-		}
-
-		getLogger(sid).Info(fmt.Sprintf("[%s] create pub: create pub sql: %s", pitrName, pubInfo.GetCreateSql()))
-		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication)); err != nil {
+		// mo_pubs stores the role in owner and the user in creator.  AttachAccount
+		// takes the user before the role, so keep the historical publication
+		// identities in their respective context slots while replaying the CREATE.
+		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Creator, pubInfo.Owner)
+		getLogger(sid).Info(fmt.Sprintf("[%s] recreate publication %s for database %s", pitrName, pubInfo.PubName, pubInfo.DbName))
+		if err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, ts, omittedViews); err != nil {
 			return
 		}
 	}

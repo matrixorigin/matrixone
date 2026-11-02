@@ -86,6 +86,62 @@ func TestLockRowsAdmissionKeepsOwnerWithoutSnapshotWait(t *testing.T) {
 	}, client.WithTimestampWaiter(waiter))
 }
 
+func TestFixedSnapshotNamespaceAdmission(t *testing.T) {
+	for _, outcome := range []string{"visible", "waited_visible", "waited_newer", "late_newer", "missing_watermark", "lock_error"} {
+		t.Run(outcome, func(t *testing.T) {
+			waiter := &failAfterInitialTimestampWaiter{}
+			runLockOpTest(t, func(proc *process.Process) {
+				bat := admissionKeys(t, proc)
+				defer bat.Clean(proc.Mp())
+				op := proc.GetTxnOperator()
+				defer func() { require.NoError(t, op.Rollback(proc.Ctx)) }()
+				op.TxnRef().Isolation = txnpb.TxnIsolation_SI
+				snapshot := op.Txn().SnapshotTS
+				ls := proc.GetLockService()
+				proc.Base.LockService = admissionLockService{LockService: ls, lockFn: func(ctx context.Context, table uint64, rows [][]byte, id []byte, opts lock.LockOptions) (lock.Result, error) {
+					require.True(t, opts.KeepRows)
+					require.Equal(t, lock.Granularity_Row, opts.Granularity)
+					if outcome == "lock_error" {
+						return lock.Result{}, assert.AnError
+					}
+					result, err := ls.Lock(ctx, table, rows, id, opts)
+					result.Timestamp = snapshot
+					switch outcome {
+					case "waited_visible":
+						result.HasConflict, result.HasPrevCommit = true, true
+					case "waited_newer":
+						result.HasConflict, result.HasPrevCommit = true, true
+						result.Timestamp = snapshot.Next()
+					case "late_newer":
+						// No waiter/previous-owner flag: this is still stale.
+						result.Timestamp = snapshot.Next()
+					case "missing_watermark":
+						result.Timestamp = timestamp.Timestamp{}
+					}
+					return result, err
+				}}
+				result, err := LockRowsForFixedSnapshotAdmissionResult(proc.Ctx, nil, proc, 48, bat, 0,
+					*bat.Vecs[0].GetType(), lock.LockMode_Exclusive, 0)
+				switch outcome {
+				case "visible", "waited_visible":
+					require.NoError(t, err)
+					require.True(t, result.LockedOn.Valid)
+				case "missing_watermark":
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), "%v", err)
+				case "lock_error":
+					require.ErrorIs(t, err, assert.AnError)
+				default:
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
+					require.Empty(t, result, "failed admission cannot publish a grant")
+				}
+				require.Equal(t, snapshot, op.Txn().SnapshotTS)
+				require.Equal(t, 1, waiter.calls, "SI admission must never call the snapshot waiter")
+				require.Empty(t, op.GetOverview().WaitLocks)
+			}, client.WithTimestampWaiter(waiter))
+		})
+	}
+}
+
 func TestLockRowsAdmissionFastFailPolicyIsPerRequest(t *testing.T) {
 	runLockOpTest(t, func(proc *process.Process) {
 		bat := admissionKeys(t, proc)

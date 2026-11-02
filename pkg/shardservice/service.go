@@ -315,9 +315,10 @@ func (s *service) HasAllLocalReplicas(
 		) bool {
 			total = int(metadata.ShardsCount)
 			for _, replica := range shard.Replicas {
-				s.isLocalReplica(replica)
-				local++
-				break
+				if s.isLocalReplica(replica) {
+					local++
+					break
+				}
 			}
 
 			return true

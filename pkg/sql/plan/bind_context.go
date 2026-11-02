@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
@@ -55,7 +56,10 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 
 	if builder != nil {
-		bc.odkuAdmission = builder.odkuAdmission
+		if builder.integerPrecision == nil {
+			builder.integerPrecision = newIntegerPrecisionBuilder()
+		}
+		bc.integerPrecision = builder.integerPrecision
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
 		if parent == nil && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
 			bc.defaultDatabase = builder.compCtx.DefaultDatabase()
@@ -64,10 +68,20 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 			requiredProtocol := int64(0)
 			bc.persistedExpressionProtocolRequirement = &requiredProtocol
 		}
+		if parent == nil {
+			// D11 carrier one: resolve the statement compatibility scalar once
+			// at (root) BindContext entry from the session flag the executors
+			// read. Children inherit it below.
+			bc.mysqlConditionalBooleanContracts = function.MySQLConditionalBooleanContractsFromProcess(builder.compCtx.GetProcess())
+			bc.mysqlConditionalBooleanContractsValid = true
+		}
 	}
 
 	if parent != nil {
 		bc.persistedExpressionProtocolRequirement = parent.persistedExpressionProtocolRequirement
+		bc.ctasExecutionProtocolRequirement = parent.ctasExecutionProtocolRequirement
+		bc.mysqlConditionalBooleanContracts = parent.mysqlConditionalBooleanContracts
+		bc.mysqlConditionalBooleanContractsValid = parent.mysqlConditionalBooleanContractsValid
 		bc.existentialBlock = parent.existentialBlock
 		bc.subqueryNestingDepth = parent.subqueryNestingDepth
 		bc.lower = parent.lower
@@ -643,14 +657,8 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 	}
 }
 
-func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandAliasMode) (qualified tree.Expr, err error) {
-	if bc.odkuAdmission != nil {
-		defer func() {
-			if err != nil {
-				qualified, err = tree.NewNumVal("", "", false, tree.P_null), nil
-			}
-		}()
-	}
+func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandAliasMode) (tree.Expr, error) {
+	var err error
 
 	switch exprImpl := astExpr.(type) {
 	case *tree.ParenExpr:
@@ -695,6 +703,15 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, expandAlias)
 
 	case *tree.FuncExpr:
+		if having, ok := bc.binder.(*HavingBinder); ok &&
+			expandAlias == AliasAfterColumn && having.resolvesAggregateAliases() {
+			name, _ := exprImpl.Func.FunctionReference.(*tree.UnresolvedName)
+			if exprImpl.WindowSpec != nil || name != nil && function.GetFunctionIsAggregateByName(strings.ToLower(name.ColName())) {
+				// Aggregate/window inputs use source names, including when a
+				// projected alias collides. Qualify before aggregate AST reuse.
+				expandAlias = NoAlias
+			}
+		}
 		for i := range exprImpl.Exprs {
 			exprImpl.Exprs[i], err = bc.qualifyColumnNames(exprImpl.Exprs[i], expandAlias)
 			if err != nil {
@@ -736,6 +753,14 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 		}
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.ColName()
+			if having, ok := bc.binder.(*HavingBinder); ok &&
+				expandAlias == AliasAfterColumn && having.resolvesAggregateAliases() {
+				if _, candidate := bc.aliasMap[col]; candidate {
+					// HavingBinder checks GROUP BY identity before the output name.
+					// Qualifying here would irreversibly choose the source column.
+					return astExpr, nil
+				}
+			}
 			if expandAlias == AliasBeforeColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
 					if selectItem.astExpr != nil {

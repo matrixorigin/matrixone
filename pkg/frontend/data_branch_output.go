@@ -422,6 +422,21 @@ func mergeDiffs(
 		}
 	}()
 
+	// Merge-scoped sequence watermarks (design §4 B): resolved from the
+	// destination's defaults once, accumulated from typed apply rows, and
+	// reconciled after the final flush below. Identity keying follows the
+	// session's lower_case_table_names, the same case semantics the engine
+	// applies when resolving the sequence names the defaults pin.
+	seqLctn := int64(1)
+	if v, sysErr := ses.GetSessionSysVar("lower_case_table_names"); sysErr == nil && v != nil {
+		if n, ok := v.(int64); ok {
+			seqLctn = n
+		}
+	}
+	if tblStuff.seqWatermarks, err = newSequenceWatermarkTracker(ctx, tblStuff, seqLctn); err != nil {
+		return err
+	}
+
 	// Successful delivery transfers the batch; emitBatch releases failures.
 	if err = produce(func(wrapped batchWithKind) (bool, error) {
 		if err := ctx.Err(); err != nil {
@@ -435,7 +450,12 @@ func mergeDiffs(
 	}); err != nil {
 		return err
 	}
-	return appender.flushAll()
+	if err = appender.flushAll(); err != nil {
+		return err
+	}
+	// Watermarks are final only after the last flush succeeded; advancing
+	// before then could consume range for rows the merge never applied.
+	return reconcileMergeSequenceWatermarks(ctx, ses, bh, tblStuff.seqWatermarks)
 }
 
 // resolveProjectedIdxes resolves the user-specified COLUMNS list to the
@@ -1537,7 +1557,7 @@ func submitCSVBatchForConversion(
 	ep *ExportConfig,
 	workerWg *sync.WaitGroup,
 ) error {
-	copied, err := bat.Dup(ses.proc.Mp())
+	copied, err := cloneExportWorkerBatch(bat, ses.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -1609,7 +1629,6 @@ func writeCSV(
 		streamChan = make(chan executor.Result, runtime.NumCPU())
 
 		writerWg  sync.WaitGroup
-		workerWg  sync.WaitGroup
 		writerErr = make(chan error, 1)
 		closeByte sync.Once
 
@@ -1633,10 +1652,27 @@ func writeCSV(
 		mrs.AddColumn(&MysqlColumn{})
 	}
 
-	ep.init()
 	ep.ctx = ctx
+	ep.init()
+	ctx = ep.ctx
 	ep.mrs = mrs
 	ep.ByteChan = make(chan *BatchByte, runtime.NumCPU())
+	defer func() {
+		if err != nil {
+			cancelCtx()
+		}
+		ep.workers.Wait()
+		closeByte.Do(func() {
+			if ep.ByteChan != nil {
+				close(ep.ByteChan)
+			}
+		})
+		writerWg.Wait()
+		err = ep.finish(err)
+		if err != nil && cleanup != nil {
+			cleanup()
+		}
+	}()
 
 	ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
 	initExportFileParam(ep, mrs)
@@ -1673,66 +1709,38 @@ func writeCSV(
 	}
 
 	writerWg.Add(1)
-	if err = tblStuff.worker.Submit(func() {
+	// Coordination must not occupy the bounded conversion pool.
+	go func() {
 		defer writerWg.Done()
-		for bb := range ep.ByteChan {
-			if bb.err != nil {
+		report := func(err error) {
+			if err != nil {
 				select {
-				case writerErr <- bb.err:
+				case writerErr <- err:
 				default:
 				}
-				return
+				cancelCtx()
 			}
-			ep.BatchMap[bb.index] = bb
-			for {
-				value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				report(ctx.Err())
+				return
+			case bb, ok := <-ep.ByteChan:
 				if !ok {
-					break
-				}
-				if err2 := writeExportBatchToFile(ep, value); err2 != nil {
-					select {
-					case writerErr <- err2:
-					default:
-					}
+					report(flushRemainingCSVBatchBytes(ctx, ep))
 					return
 				}
-				ep.WriteIndex.Add(1)
-				ep.BatchMap[ep.WriteIndex.Load()] = nil
+				if err := acceptExportBatch(ep, bb); err != nil {
+					report(err)
+					return
+				}
 			}
-		}
-		if err2 := flushRemainingCSVBatchBytes(ctx, ep); err2 != nil {
-			select {
-			case writerErr <- err2:
-			default:
-			}
-		}
-	}); err != nil {
-		writerWg.Done()
-		return err
-	}
-
-	defer func() {
-		if err != nil && cleanup != nil {
-			cleanup()
-		}
-	}()
-
-	defer func() {
-		closeByte.Do(func() {
-			close(ep.ByteChan)
-		})
-		writerWg.Wait()
-		closeErr := Close(ep)
-		ep.Close()
-		if err == nil {
-			err = closeErr
-		} else {
-			err = errors.Join(err, closeErr)
 		}
 	}()
 
 	wg.Add(1)
-	if err = tblStuff.worker.Submit(func() {
+	go func() {
 		defer func() {
 			wg.Done()
 			close(streamChan)
@@ -1744,15 +1752,15 @@ func writeCSV(
 			default:
 			}
 		}
-	}); err != nil {
-		wg.Done()
-		return err
-	}
+	}()
 
 	streamOpen, errOpen := true, true
+	inputDone := inputCtx.Done()
 	for streamOpen || errOpen {
 		select {
-		case <-inputCtx.Done():
+		case <-inputDone:
+			// Observe cancellation once while the producer finishes releasing results.
+			inputDone = nil
 			err = errors.Join(err, inputCtx.Err())
 			stop = true
 		case e := <-writerErr:
@@ -1780,7 +1788,7 @@ func writeCSV(
 			}
 			for _, bat := range sqlRet.Batches {
 				if submitErr := submitCSVBatchForConversion(
-					ctx, ses, tblStuff, bat, ep, &workerWg,
+					ctx, ses, tblStuff, bat, ep, &ep.workers,
 				); submitErr != nil {
 					err = errors.Join(err, submitErr)
 					stop = true
@@ -1793,7 +1801,7 @@ func writeCSV(
 	}
 
 	wg.Wait()
-	inputErr := waitForCSVConversionWorkers(inputCtx, &workerWg)
+	inputErr := waitForCSVConversionWorkers(inputCtx, &ep.workers)
 	closeByte.Do(func() {
 		close(ep.ByteChan)
 	})
@@ -1809,6 +1817,7 @@ func writeCSV(
 	default:
 	}
 
+	err = ep.finish(err)
 	if err != nil {
 		return err
 	}
@@ -1816,7 +1825,7 @@ func writeCSV(
 	mrs = ses.GetMysqlResultSet()
 	mrs.AddRow([]any{sqlRetPath, sqlRetHint})
 
-	return trySaveQueryResult(ctx, ses, mrs)
+	return trySaveQueryResult(inputCtx, ses, mrs)
 }
 
 func newDiffCSVUserConfig() *tree.ExportParam {
@@ -1980,6 +1989,25 @@ func appendDataBranchApplyRowAsSQLValues(
 
 	if tmpValsBuffer.Len() == 0 {
 		return nil
+	}
+
+	// Track sequence-generated values of every row this merge actually
+	// applies: insert values, staged-update values, and direct applies.
+	// Deletes never advance a sequence.
+	if tracker := tblStuff.seqWatermarks; tracker != nil {
+		switch kind {
+		case diffDelete:
+		case diffUpdate:
+			if appender.batchInfo != nil {
+				tracker.capture(tblStuff, row, appender.batchInfo.updateValueIdxes)
+			}
+		default:
+			insertIdxes := tblStuff.def.writableIdxes
+			if len(tblStuff.def.tarOnlyIdxes) > 0 {
+				insertIdxes = tblStuff.def.commonWritableIdxes
+			}
+			tracker.capture(tblStuff, row, insertIdxes)
+		}
 	}
 
 	return appender.appendRow(kind, tmpValsBuffer.Bytes())
@@ -2343,6 +2371,11 @@ func prepareFSForDiffAsFile(
 		return
 	}
 
+	// The process-wide shared file service is borrowed; only an ETL service
+	// created here belongs to this operation, so terminal paths must close
+	// only that owned service.
+	ownsTargetFS := false
+
 	if fsPath.Service == defines.SharedFileServiceName {
 		targetFS = getPu(ses.GetService()).FileService
 		targetPath = fullFilePath
@@ -2360,6 +2393,7 @@ func prepareFSForDiffAsFile(
 			return
 		}
 		targetFS = etlFS
+		ownsTargetFS = true
 	}
 
 	cleanup = func() {
@@ -2371,7 +2405,9 @@ func prepareFSForDiffAsFile(
 			if cleanup != nil {
 				cleanup()
 			}
-			targetFS.Close(ctx)
+			if ownsTargetFS {
+				targetFS.Close(ctx)
+			}
 		}
 	}()
 
@@ -2402,22 +2438,44 @@ func prepareFSForDiffAsFile(
 			})
 		}
 
-		release = func() error {
-			closeErr := mut.Close()
-			targetFS.Close(ctx)
-			return closeErr
-		}
+		release = releaseDiffTargetFS(ctx, targetFS, ownsTargetFS, mut.Close)
 	} else {
 		if writeFile, release, err = newSingleWriteAppender(
 			ctx, tblStuff.worker, targetFS, targetPath,
 		); err != nil {
 			return
 		}
+		release = releaseDiffTargetFS(ctx, targetFS, ownsTargetFS, release)
 	}
 
 	return
 }
 
+// releaseDiffTargetFS chains the terminal file-service close after the owned
+// writer or mutator release: an ETL service created by prepareFSForDiffAsFile
+// is closed once its owned writers finished, while the process-wide shared
+// file service is borrowed and never closed here.
+func releaseDiffTargetFS(
+	ctx context.Context,
+	targetFS fileservice.FileService,
+	ownsTargetFS bool,
+	releaseOwned func() error,
+) func() error {
+	if !ownsTargetFS {
+		return releaseOwned
+	}
+	return func() error {
+		err := releaseOwned()
+		targetFS.Close(ctx)
+		return err
+	}
+}
+
+// newSingleWriteAppender streams exactly one output file through a pooled
+// writer task. The returned release closes the pipe endpoint, waits for the
+// writer task, and reports the joined write result; it never closes the
+// target file service, whose lifetime stays with its owner (see
+// releaseDiffTargetFS).
 func newSingleWriteAppender(
 	ctx context.Context,
 	worker *ants.Pool,
@@ -2466,7 +2524,6 @@ func newSingleWriteAppender(
 	release = func() error {
 		closeErr := pw.Close()
 		writeErr := <-done
-		targetFS.Close(ctx)
 		return errors.Join(closeErr, writeErr)
 	}
 
@@ -2688,24 +2745,6 @@ func quotedColumnNames(names []string) []string {
 
 func joinQuotedColumnNames(names []string) string {
 	return strings.Join(quotedColumnNames(names), ",")
-}
-
-func writeDeleteRowValues(
-	ses *Session,
-	tblStuff tableStuff,
-	row []any,
-	buf *bytes.Buffer,
-) error {
-	return writeDeleteRowValuesWithColIdxes(ses, tblStuff, row, tblStuff.def.pkColIdxes, buf, false)
-}
-
-func writeDeleteRowValuesAsTuple(
-	ses *Session,
-	tblStuff tableStuff,
-	row []any,
-	buf *bytes.Buffer,
-) error {
-	return writeDeleteRowValuesWithColIdxes(ses, tblStuff, row, tblStuff.def.pkColIdxes, buf, true)
 }
 
 func writeDeleteRowValuesWithColIdxes(

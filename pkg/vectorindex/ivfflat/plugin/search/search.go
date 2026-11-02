@@ -30,6 +30,31 @@ type Hooks struct{}
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.ParallelHooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
+var _ searchplugin.MembershipHooks = Hooks{}
+var _ searchplugin.ProbeKnobsHooks = Hooks{}
+var _ searchplugin.IndexFilterHooks = Hooks{}
+var _ searchplugin.IterativeSearchHooks = Hooks{}
+
+// SupportsMembership reports true: the reader applies Request.MembershipFilter
+// to the entries scan.
+func (Hooks) SupportsMembership() bool { return true }
+
+// SupportsProbeKnobs reports true: the search probes centroid lists.
+func (Hooks) SupportsProbeKnobs() bool { return true }
+
+// SupportsIndexFilter reports true: the search applies the INCLUDE and
+// primary-key predicates of its filter inside the index search.
+func (Hooks) SupportsIndexFilter() bool { return true }
+
+// StartRound returns the first round of the ivfflat widening policy.
+func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
+	return ivfflat.IterativeSearch{}.StartRound(spec, req, stats)
+}
+
+// NextRound returns the round after prev of the ivfflat widening policy.
+func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
+	return ivfflat.IterativeSearch{}.NextRound(spec, req, stats, prev, got)
+}
 
 func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
 	return ivfflat.NewPlanReader(proc, spec, req)

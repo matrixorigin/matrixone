@@ -15,7 +15,11 @@
 package compile
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -24,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestStrictWriteRequiresCompleteWorkerReporting(t *testing.T) {
@@ -49,6 +52,25 @@ func TestStrictWriteRequiresCompleteWorkerReporting(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+	workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	for _, probeErr := range []error{errors.New("unavailable"), context.DeadlineExceeded, context.Canceled} {
+		client.customResponse, client.sendErr = true, probeErr
+		c.execType, c.cnList = plan2.ExecTypeAP_MULTICN, workers
+		require.NoError(t, c.constrainStrictWriteWorkers())
+		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+		require.Equal(t, c.addr, c.cnList[0].Addr)
+		require.ErrorIs(t, validateStrictWriteDestination(c.proc, wire), probeErr)
+	}
+	parent := c.proc.Ctx
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	c.proc.Ctx, client.onSend = ctx, cancel
+	c.execType, c.cnList = plan2.ExecTypeAP_MULTICN, workers
+	require.ErrorIs(t, c.constrainStrictWriteWorkers(), context.Canceled)
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	require.Equal(t, workers, c.cnList)
+	c.proc.Ctx, client.onSend = parent, nil
+	client.customResponse, client.sendErr = false, nil
 	client.version = defines.MORPCVersion67
 	c.stmt = &tree.Select{} // internal SELECT inherits the strict parent's intent
 	c.execType = plan2.ExecTypeAP_MULTICN

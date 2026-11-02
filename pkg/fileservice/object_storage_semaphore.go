@@ -105,31 +105,7 @@ func (o *objectStorageSemaphore) Read(ctx context.Context, key string, min *int6
 	if err := o.acquireContext(ctx); err != nil {
 		return nil, err
 	}
-	r, err := o.upstream.Read(ctx, key, min, max)
-	if err != nil {
-		o.release()
-		return nil, err
-	}
-
-	release := sync.OnceFunc(func() {
-		o.release()
-	})
-
-	return &readCloser{
-		r: readerFunc(func(buf []byte) (n int, err error) {
-			n, err = r.Read(buf)
-			if err != nil {
-				// release if error
-				release()
-			}
-			return
-		}),
-		closeFunc: func() error {
-			// release when close
-			release()
-			return r.Close()
-		},
-	}, nil
+	return o.wrapReadResult(o.upstream.Read(ctx, key, min, max))
 }
 
 func (o *objectStorageSemaphore) StatObjectIdentity(ctx context.Context, key string) (ObjectIdentity, error) {
@@ -158,13 +134,17 @@ func (o *objectStorageSemaphore) ReadObjectWithIdentity(
 	if err := o.acquireContext(ctx); err != nil {
 		return nil, err
 	}
-	r, err := upstream.ReadObjectWithIdentity(ctx, key, min, max, expected)
+	return o.wrapReadResult(upstream.ReadObjectWithIdentity(ctx, key, min, max, expected))
+}
+
+// The permit ends on the first read error or Close; the body still needs Close.
+func (o *objectStorageSemaphore) wrapReadResult(r io.ReadCloser, err error) (io.ReadCloser, error) {
 	if err != nil {
 		o.release()
 		return nil, err
 	}
 	release := sync.OnceFunc(o.release)
-	return &readCloser{
+	return &onceReadCloser{readCloser: readCloser{
 		r: readerFunc(func(buffer []byte) (int, error) {
 			n, readErr := r.Read(buffer)
 			if readErr != nil {
@@ -176,7 +156,7 @@ func (o *objectStorageSemaphore) ReadObjectWithIdentity(
 			release()
 			return r.Close()
 		},
-	}, nil
+	}}, nil
 }
 
 func (o *objectStorageSemaphore) Stat(ctx context.Context, key string) (size int64, err error) {

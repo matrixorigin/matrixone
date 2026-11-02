@@ -509,6 +509,11 @@ func (s *server) closeClientSession(cs *clientSession) {
 		s.logger.Error("close client session failed",
 			zap.Error(err))
 	}
+	// Only the writer's finalizer (or rejected start) releases getSession's
+	// reference, after the last Encode/Flush access to the session buffers.
+	if err := cs.conn.Close(); err != nil {
+		s.logger.Error("release client session transport failed", zap.Error(err))
+	}
 }
 
 func (s *server) getSession(rs goetty.IOSession) (*clientSession, error) {
@@ -754,7 +759,8 @@ func (cs *clientSession) Close() error {
 		c.cancelContexts()
 	}
 	cs.cancelWrite()
-	return cs.conn.Close()
+	// Interrupt socket I/O without releasing the active writer's buffers.
+	return cs.conn.Disconnect()
 }
 
 func (cs *clientSession) disconnected() {

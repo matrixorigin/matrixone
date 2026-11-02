@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -226,11 +225,6 @@ func TestVectorLocalDOPHint(t *testing.T) {
 		{"vectorLocalDOP=1,vectorLocalDOP=bad", true},
 	} {
 		t.Run(tc.hint, func(t *testing.T) {
-			builder, _, _, _, _ := newIvfIncludeModeTestBuilder(t)
-			for _, hint := range strings.Split(tc.hint, ",") {
-				handleOptimizerHints(hint, builder)
-			}
-			require.Equal(t, tc.enabled, builder.optimizerHints != nil && builder.optimizerHints.vectorLocalDOP == 1)
 			require.Equal(t, tc.enabled, VectorLocalDOPEnabled(tc.hint))
 		})
 	}

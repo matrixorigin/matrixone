@@ -58,34 +58,6 @@ func IsDeletionOnTxnUnCommit(
 	return segmentMap[segmentKey(txnID, tableId, segId)] == TxnWorkspaceUnCommitType
 }
 
-// IsDeletionOnTxnUnCommitPersisted check if the segId
-// is an UnCommit and flushed segment in the workspace.
-func IsDeletionOnTxnUnCommitPersisted(
-	segmentMap map[string]int32,
-	segId *types.Segmentid,
-	tableId uint64,
-	txnID []byte,
-) bool {
-	if IsDeletionOnTxnUnCommit(segmentMap, segId, tableId, txnID) {
-		return !segId.EQ(&TxnWorkspaceSegment)
-	}
-	return false
-}
-
-// IsDeletionOnTxnUnCommitInMem check if the segId
-// is an UnCommit inmem segment in the workspace.
-func IsDeletionOnTxnUnCommitInMem(
-	segmentMap map[string]int32,
-	segId *types.Segmentid,
-	tableId uint64,
-	txnID []byte,
-) bool {
-	if IsDeletionOnTxnUnCommit(segmentMap, segId, tableId, txnID) {
-		return segId.EQ(&TxnWorkspaceSegment)
-	}
-	return false
-}
-
 func segmentKey(txnID []byte, tableId uint64, segId *types.Segmentid) string {
 	if len(txnID) > maxTxnIDLen {
 		txnID = txnID[:maxTxnIDLen]

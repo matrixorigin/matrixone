@@ -14,9 +14,9 @@ select st_geohash(180.0001, 0, 12);
 -- @regex("latitude must be finite",true)
 select st_geohash(0, 90.0001, 12);
 -- @regex("longitude must be finite",true)
-select st_geohash(cast('NaN' as double), 0, 12);
+select st_geohash(bit_cast(unhex('000000000000f87f') as double), 0, 12);
 -- @regex("latitude must be finite",true)
-select st_geohash(0, cast('Inf' as double), 12);
+select st_geohash(0, bit_cast(unhex('000000000000f07f') as double), 12);
 -- @regex("longitude must be finite",true)
 select st_geohash(st_geomfromtext('POINT(180.0001 0)'), 12);
 -- @regex("got 101",true)

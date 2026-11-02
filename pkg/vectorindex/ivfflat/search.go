@@ -324,7 +324,36 @@ func (idx *IvfflatSearchIndex[T]) rankCentroids(sqlproc *sqlexec.SqlProcess, que
 	if limit == 0 {
 		limit = 1
 	}
-	return idx.probeCentroids(sqlproc, query, limit, idxcfg.Ivfflat.Lists)
+	ids, err := idx.probeCentroids(sqlproc, query, limit, idxcfg.Ivfflat.Lists)
+	if err != nil {
+		return nil, err
+	}
+	return completeCentroidRanking(ids, idxcfg.Ivfflat.Lists), nil
+}
+
+// completeCentroidRanking returns ids as a permutation of the centroid ids 0..lists-1:
+// the first occurrence of each id in ids, then the ids missing from it in ascending
+// order. A query whose centroid distances tie or are not numbers (a zero vector under
+// cosine) can rank a centroid twice and leave others out.
+func completeCentroidRanking(ids []int64, lists uint) []int64 {
+	if lists == 0 {
+		return ids
+	}
+	seen := make([]bool, lists)
+	ranked := make([]int64, 0, lists)
+	for _, id := range ids {
+		if id < 0 || uint64(id) >= uint64(lists) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ranked = append(ranked, id)
+	}
+	for id := range seen {
+		if !seen[id] {
+			ranked = append(ranked, int64(id))
+		}
+	}
+	return ranked
 }
 
 func (idx *IvfflatSearchIndex[T]) findCentroids(sqlproc *sqlexec.SqlProcess, query []T, idxcfg vectorindex.IndexConfig, probe uint, _ int64) ([]int64, error) {
@@ -472,6 +501,14 @@ func filterRequestedIncludeColumns(requested []string, configured []string) []st
 		}
 	}
 	return filtered
+}
+
+// searchAllLists sets the window of cursor's current round to every ranked list and
+// marks cursor exhausted: an exact primary-key search reads every list in one round.
+func searchAllLists(cursor *vectorindex.IvfSearchCursor) {
+	cursor.NextBucketOffset = 0
+	cursor.CurrentBucketCount = uint(len(cursor.RankedCentroidIDs))
+	cursor.Exhausted = true
 }
 
 func buildActiveCentroidIDs(cursor *vectorindex.IvfSearchCursor, probe uint) []int64 {
@@ -701,7 +738,7 @@ func sortAndLimitExactResults(
 		return distances[order[i]] < distances[order[j]]
 	})
 
-	if limit == 0 || int(limit) > len(order) {
+	if limit == 0 || limit > uint(len(order)) {
 		limit = uint(len(order))
 	}
 
@@ -835,12 +872,13 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 		includeCols := filterRequestedIncludeColumns(rt.RequestedIncludeColumns, tblcfg.IncludeColumns)
 		if rt.IncludeResult != nil {
+			capacity := vectorindex.SearchResultPreallocate(uint64(roundLimit))
 			rt.IncludeResult.ColNames = append(rt.IncludeResult.ColNames[:0], includeCols...)
 			rt.IncludeResult.Data = make(map[string][]any, len(includeCols))
 			rt.IncludeResult.Nulls = make(map[string][]bool, len(includeCols))
 			for _, col := range includeCols {
-				rt.IncludeResult.Data[col] = make([]any, 0, roundLimit)
-				rt.IncludeResult.Nulls[col] = make([]bool, 0, roundLimit)
+				rt.IncludeResult.Data[col] = make([]any, 0, capacity)
+				rt.IncludeResult.Nulls[col] = make([]bool, 0, capacity)
 			}
 		}
 
@@ -865,7 +903,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			scanCentroidIDs := activeCentroidIDs
 			if directExactMembership {
 				scanCentroidIDs = nil
-				cursor.Exhausted = true
+				searchAllLists(cursor)
 			}
 			res, err = idx.scanEntriesInDomain(
 				sqlproc,
@@ -892,9 +930,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			if err != nil {
 				return nil, nil, err
 			}
-			if cursor != nil {
-				cursor.Exhausted = true
-			}
+			searchAllLists(cursor)
 		} else {
 			sql, err = idx.buildSearchRoundSQL(
 				idxcfg,

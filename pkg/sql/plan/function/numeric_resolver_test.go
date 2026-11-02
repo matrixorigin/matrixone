@@ -137,8 +137,17 @@ func TestResolveNumericBinaryTypesContextPriority(t *testing.T) {
 			got, ok := resolveNumericBinaryTypes(numericOpAdd, test.left, test.right, test.outer)
 			require.True(t, ok)
 			if test.left.Oid == types.T_any || test.right.Oid == types.T_any {
-				require.Equal(t, test.wantInputs, got.left.Oid)
-				require.Equal(t, test.wantInputs, got.right.Oid)
+				wantOperand := func(source types.T) types.T {
+					if source.IsInteger() && test.wantInputs.IsInteger() {
+						if source.IsUnsignedInt() {
+							return types.T_uint64
+						}
+						return types.T_int64
+					}
+					return test.wantInputs
+				}
+				require.Equal(t, wantOperand(test.left.Oid), got.left.Oid)
+				require.Equal(t, wantOperand(test.right.Oid), got.right.Oid)
 			}
 			paramType, ok := InferNumericParameterType([]types.Type{test.left, test.right}, test.outer)
 			require.True(t, ok)
@@ -395,9 +404,9 @@ func TestResolveNumericIntegerDivDomains(t *testing.T) {
 			name:       "unsigned dividend and decimal divisor",
 			left:       types.T_uint64.ToType(),
 			right:      types.New(types.T_decimal64, 10, 2),
-			wantLeft:   types.T_uint64,
+			wantLeft:   types.T_decimal256,
 			wantRight:  types.T_decimal256,
-			wantResult: types.T_int64,
+			wantResult: types.T_uint64,
 		},
 		{
 			name:       "floating point fallback",
@@ -548,4 +557,26 @@ func TestResolveNumericBinaryTypesBitSignedBigintUsesDecimal(t *testing.T) {
 
 func typePtr(typ types.Type) *types.Type {
 	return &typ
+}
+
+func TestLegacyDecimalIntegerDivNumericContext(t *testing.T) {
+	require.False(t, LegacyDecimalIntegerDiv(nil))
+	decimal := types.New(types.T_decimal64, 10, 2)
+	unsigned := types.T_uint64.ToType()
+	for _, right := range []types.Type{decimal, unsigned} {
+		legacy := WithLegacyDecimalIntegerDiv(context.Background())
+		_, _, oldResult, ok := ResolveNumericBinaryTypesWithContext(legacy, "div", decimal, right, nil)
+		require.True(t, ok)
+		require.Equal(t, types.T_int64, oldResult.Oid)
+		require.Zero(t, oldResult.Width)
+		_, _, current, ok := ResolveNumericBinaryTypes("div", decimal, right, nil)
+		require.True(t, ok)
+		require.Positive(t, current.Width)
+		if right.Oid == types.T_uint64 {
+			require.Equal(t, types.T_uint64, current.Oid)
+		}
+		_, _, plain, ok := ResolveNumericBinaryTypesWithContext(context.Background(), "div", decimal, right, nil)
+		require.True(t, ok)
+		require.Equal(t, current, plain, "a historical context cannot change ordinary binding")
+	}
 }

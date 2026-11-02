@@ -8,17 +8,24 @@ Design approval was merged as `c61b617e5429f4a65e7c5665c686f46286cfdef9`.
 Its acceptance matrix and before-leaving-Draft requirements remain authoritative.
 This implementation remains **Draft pending external QA acceptance**.
 
-Current maintenance starts from source
-`f39f156059d28cfc0b0ba812bf5455b2755e9b52`, rebased onto main
-`3fc00709eccc277c175c7a09eed2605ca1aaee29`. The original 41 commit objects,
-parents, authors and exact source tree are archived. Final delivery commit/tree,
-commands, input fingerprints and terminal receipts are recorded with the PR.
+Current maintenance integrates main
+`d24f446e1e94a58c329d422519f7aad621cdcd05` with the prior PR head
+`56ae60633d1941e65ef0dfe602394fa1a414f369`. Earlier validation retains its
+original identity. Final delivery commit/tree, commands, input fingerprints and
+terminal receipts are recorded with the PR.
 
 The binder now rejects subqueries introduced by SQL UDF expansion in the same
 row-alias admission owner as explicit subqueries. The earlier whole-RHS AST
 check remains, preserving explicit-subquery error priority and no-key rejection.
 Legacy uncorrelated UDFs and expression-only row-alias UDFs retain their paths.
 No new wire, function ID, execution operator or background state is introduced.
+
+Main now supports legacy target-correlated ODKU using dependent assignment
+execution after duplicate-key arbitration. The integration preserves that
+existing main behavior, including its no-key fallback and prepared parameters;
+the row-alias subquery rejection above remains in effect. This differs from the
+previous design's legacy-rejection boundary and requires maintainer review of
+the reconciliation. It does not imply that row-alias subqueries are supported.
 
 ## SQL-facing admission and rollout
 
@@ -27,9 +34,9 @@ No new wire, function ID, execution operator or background state is introduced.
   eligible routes use the upgraded parser/planner and pass the same probes.
 - Do not randomly dispatch this SQL class across old and new routes. The absence
   of a wire change does not prove parser compatibility or mixed-route safety.
-  Keep legacy correlated clients on a separately validated route until migrated.
-- Migrate legacy correlated ODKU clients before opening new admission. Upgrade
-  and probe the homogeneous route, then enable clients using the new syntax.
+  Verify existing legacy correlated clients against the actual target build.
+- Upgrade and probe the homogeneous route, then enable clients using the new
+  row-alias syntax. Preserve the main-branch legacy correlated behavior.
 - Roll back by stopping new syntax, draining in-flight and prepared statements,
   and downgrading the entire eligible SQL-facing route before verifying the
   legacy corpus. Do not rely on a prepared statement surviving route/version
@@ -53,7 +60,7 @@ identity and cannot substitute for the design's full binary protocol oracle.
 
 | Gate | Evidence / remaining requirement |
 | --- | --- |
-| Exact matrix maintainer approval | Approved design merge above; policy unchanged |
+| Exact matrix maintainer approval | Original row-alias design approved above; reconciliation with main's legacy correlated behavior requires review |
 | Current-head local regressions | Commands, outcomes and scoped race/SCA in final PR delivery record |
 | Frozen old-head defect / exact legacy parity / typed binary corpus / two-batch historical probes | Historical evidence retains its original input identity; not relabeled as rerun at this head |
 | Actual route inventory and homogeneous admission | NOT_RUN: local one-CN checks prove only the local route |

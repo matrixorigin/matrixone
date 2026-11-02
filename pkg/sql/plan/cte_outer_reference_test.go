@@ -644,7 +644,7 @@ func TestLocalCTEGuardedLiteralProof(t *testing.T) {
 	require.False(t, localCTEStringLiteralFits(lit(42), planpb.Type{Id: int32(types.T_varchar), Width: 20}))
 }
 
-func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
+func TestLocalCTEOuterReferencesUseDependentDomains(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sql  string
@@ -890,8 +890,10 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
-			require.ErrorContains(t, err, "correlated local CTE")
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			require.NotNil(t, p.GetQuery().Correlation)
+			require.NoError(t, p.GetQuery().ValidateCorrelation())
 		})
 	}
 }

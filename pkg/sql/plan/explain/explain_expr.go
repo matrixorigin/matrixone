@@ -183,6 +183,12 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 	case *plan.Expr_Sub:
 		subqryExpr := expr.Expr.(*plan.Expr_Sub)
 		buf.WriteString("subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10))
+	case *plan.Expr_Dependent:
+		d := exprImpl.Dependent
+		buf.WriteString("dependent program=" + strconv.FormatUint(uint64(d.ProgramId), 10) + " occurrence=" + strconv.FormatUint(uint64(d.OccurrenceId), 10) + " reducer=" + d.Reducer.String())
+	case *plan.Expr_Slot:
+		s := exprImpl.Slot
+		buf.WriteString("slot[" + strconv.FormatUint(uint64(s.ProgramId), 10) + "," + strconv.FormatUint(uint64(s.Ordinal), 10) + "]")
 	case *plan.Expr_Corr:
 		buf.WriteString("#[")
 		buf.WriteString(strconv.FormatInt(int64(exprImpl.Corr.RelPos), 10))

@@ -308,9 +308,9 @@ order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=pre';
 select cast(id as unsigned) from t_bit_pk_retry where selected = 1
 order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=auto';
 
--- No INCLUDE columns means include mode falls back to PRE and shares the same predicate.
+-- No INCLUDE columns means iterative mode falls back to PRE and shares the same predicate.
 select cast(id as unsigned) from t_bit_pk_retry where selected = 1
-order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=include';
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=iterative';
 drop table t_bit_pk_retry;
 
 set probe_limit = 5;

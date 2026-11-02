@@ -80,6 +80,130 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 		load := func(path, table string) string {
 			return fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", path, table)
 		}
+
+		t.Run("session policy and cached statements", func(t *testing.T) {
+			var enabled int
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.mo_pk_check_by_cn").Scan(&enabled))
+			require.Zero(t, enabled)
+			other, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer other.Close()
+			exec(t, "create table switch_load(id bigint primary key,name varchar(20))")
+			exec(t, "create table switch_other(id bigint primary key,name varchar(20))")
+			query := load(writeInput(t, "switch.csv", "1,a\n1,b\n"), "switch_load")
+			exec(t, query)
+			require.Equal(t, 2, count(t, "switch_load"), "OFF bypasses CN checking with TN checking also OFF")
+			exec(t, "delete from switch_load")
+			exec(t, "set session mo_pk_check_by_cn=on")
+			requireDuplicate(t, query)
+			require.Zero(t, count(t, "switch_load"))
+			requireDuplicate(t, "insert into switch_load values(1,'a'),(1,'b')")
+			require.NoError(t, other.QueryRowContext(ctx, "select @@session.mo_pk_check_by_cn").Scan(&enabled))
+			require.Zero(t, enabled, "another live connection must not inherit ON")
+			_, err = other.ExecContext(ctx, load(filepath.Join(inputDir, "switch.csv"), database+".switch_other"))
+			require.NoError(t, err)
+			require.Equal(t, 2, count(t, "switch_other"))
+			_, err = conn.ExecContext(ctx, "set global mo_pk_check_by_cn=on")
+			require.Error(t, err, "this is a session-only setting")
+			_, err = conn.ExecContext(ctx, "set session mo_pk_check_by_cn=2")
+			require.Error(t, err)
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.mo_pk_check_by_cn").Scan(&enabled))
+			require.Equal(t, 1, enabled, "invalid SET preserves the value")
+			exec(t, "set session mo_pk_check_by_cn=off")
+			requireDuplicate(t, "insert into switch_load values(1,'a'),(1,'b')")
+			// PREPARE LOAD is not admitted by the existing SQL grammar. Use
+			// repeated LOAD text and a prepared INSERT across the same SETs.
+			prepared, err := conn.PrepareContext(ctx, "insert into switch_load values(?,?),(?,?)")
+			require.NoError(t, err)
+			defer prepared.Close()
+			for _, on := range []bool{false, true, false} {
+				exec(t, fmt.Sprintf("set session mo_pk_check_by_cn=%t", on))
+				_, err = conn.ExecContext(ctx, query)
+				if on {
+					var duplicate *mysql.MySQLError
+					require.ErrorAs(t, err, &duplicate)
+					require.Equal(t, uint16(1062), duplicate.Number)
+					require.Zero(t, count(t, "switch_load"))
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, 2, count(t, "switch_load"))
+					exec(t, "delete from switch_load")
+				}
+				_, err = prepared.ExecContext(ctx, 5, "a", 5, "b")
+				var duplicate *mysql.MySQLError
+				require.ErrorAs(t, err, &duplicate)
+				require.Equal(t, uint16(1062), duplicate.Number)
+				require.Zero(t, count(t, "switch_load"), "prepared INSERT keeps validation and rollback across SETs")
+			}
+		})
+		t.Run("procedure session policy and rollback", func(t *testing.T) {
+			defer func() { _, _ = conn.ExecContext(ctx, "set session mo_pk_check_by_cn=off") }()
+			exec(t, "create table procedure_load(id bigint primary key,name varchar(20))")
+			// Reuse fixed procedure definitions across SETs. Only the owning
+			// connection's current policy may determine LOAD validation.
+			procedure := func(name, data, declarations string) []string {
+				query := fmt.Sprintf("load data inline format='csv', data='%s' into table procedure_load fields terminated by ','", data)
+				exec(t, "create procedure "+name+"() 'begin "+declarations+strings.ReplaceAll(query, "'", "''")+"; end'")
+				exec(t, "create procedure outer_"+name+"() 'begin call "+name+"(); end'")
+				return []string{query, "call " + name + "()", "call outer_" + name + "()"}
+			}
+			duplicate := procedure("load_input_duplicates", "1,a\n1,b\n", "")
+			modes := []string{"direct", "call", "nested call"}
+			for round, on := range []bool{true, false, true} {
+				exec(t, fmt.Sprintf("set session mo_pk_check_by_cn=%t", on))
+				for i, query := range duplicate {
+					t.Run(fmt.Sprintf("round=%d/on=%t/%s", round, on, modes[i]), func(t *testing.T) {
+						exec(t, "truncate table procedure_load")
+						if on {
+							requireDuplicate(t, query)
+							require.Zero(t, count(t, "procedure_load"), "failed LOAD must not commit duplicate rows")
+						} else {
+							exec(t, query)
+							require.Equal(t, 2, count(t, "procedure_load"), "OFF with TN OFF bypasses CN validation at every call depth")
+						}
+					})
+				}
+			}
+			conflicts := procedure("load_target_conflict", "2,new\n1,conflict\n", "")
+			valid := procedure("load_valid", "2,new\n3,new\n", "")
+			for i, query := range conflicts {
+				t.Run("target conflict and recovery/"+modes[i], func(t *testing.T) {
+					exec(t, "truncate table procedure_load")
+					exec(t, "insert into procedure_load values(1,'old')")
+					requireDuplicate(t, query)
+					require.Equal(t, 1, count(t, "procedure_load"), "target conflict must roll back all incoming rows")
+					var payload string
+					require.NoError(t, conn.QueryRowContext(ctx, "select name from procedure_load where id=1").Scan(&payload))
+					require.Equal(t, "old", payload)
+					exec(t, valid[i])
+					require.Equal(t, 3, count(t, "procedure_load"), "same call depth remains usable after rejection")
+				})
+			}
+			for i, declaration := range []string{
+				"declare mo_pk_check_by_cn int; ",
+				"declare mo_pk_check_by_cn int default 0; ",
+				"declare mo_pk_check_by_cn int default 1; ",
+			} {
+				queries := procedure(fmt.Sprintf("load_local_collision_%d", i), "1,a\n1,b\n", declaration)
+				for _, on := range []bool{true, false} {
+					exec(t, fmt.Sprintf("set session mo_pk_check_by_cn=%t", on))
+					for depth, query := range queries[1:] {
+						t.Run(fmt.Sprintf("local collision=%d/on=%t/%s", i, on, modes[depth+1]), func(t *testing.T) {
+							exec(t, "truncate table procedure_load")
+							if on {
+								requireDuplicate(t, query)
+								require.Zero(t, count(t, "procedure_load"))
+							} else {
+								exec(t, query)
+								require.Equal(t, 2, count(t, "procedure_load"))
+							}
+						})
+					}
+				}
+			}
+		})
+		// The existing correctness suite exercises the explicitly enabled policy.
+		exec(t, "set session mo_pk_check_by_cn=on")
 		exec(t, "create table t(id bigint primary key, name varchar(256))")
 		t.Run("input duplicate and rollback", func(t *testing.T) {
 			path := writeInput(t, "duplicate.csv", "1,a\n1,b\n")
@@ -105,6 +229,24 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 			require.Zero(t, count(t, "composite"))
 			exec(t, load(writeInput(t, "composite_valid.csv", "1,1\n1,2\n"), "composite"))
 			require.Equal(t, 2, count(t, "composite"))
+		})
+		t.Run("shared prepared image and index rollback", func(t *testing.T) {
+			exec(t, "create table indexed(id int auto_increment primary key, u int unique key, v int, key idx_v(v))")
+			path := writeInput(t, "indexed.csv", "10,100\n20,200\n")
+			exec(t, load(path, "indexed")+" (u,v)")
+			var image string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select group_concat(concat(id,':',u,':',v) order by id) from indexed").Scan(&image))
+			require.Equal(t, "1:10:100,2:20:200", image, "auto-increment image is evaluated once for validation and writes")
+			requireDuplicate(t, load(writeInput(t, "indexed_conflict.csv", "3,30,300\n1,40,400\n"), "indexed"))
+			require.Equal(t, 2, count(t, "indexed"))
+			var visible int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from indexed force index(idx_v) where v>=300").Scan(&visible))
+			require.Zero(t, visible, "rejected LOAD leaves no secondary-index rows")
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from indexed where u in (30,40)").Scan(&visible))
+			require.Zero(t, visible, "rejected LOAD leaves no unique-index rows")
+			exec(t, load(writeInput(t, "indexed_reuse.csv", "3,30,300\n"), "indexed"))
+			require.Equal(t, 3, count(t, "indexed"))
 		})
 		t.Run("foreign key fallback", func(t *testing.T) {
 			exec(t, "create table parent(id int primary key)")

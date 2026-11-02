@@ -15,15 +15,18 @@
 package colexec
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestFormatDedupKeyDecodesFloatIdentity(t *testing.T) {
@@ -81,4 +84,51 @@ func TestFormatDedupKeyRejectsMalformedEncodedIdentity(t *testing.T) {
 		{Id: int32(types.T_int64)},
 	})
 	require.Error(t, err)
+}
+
+func TestFormatDedupKeyFromLogicalRow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+	defer bat.Clean(proc.Mp())
+	require.NoError(t, vector.AppendBytesList(bat.Vecs[0], [][]byte{[]byte("Alpha"), []byte("éclair"), []byte("a\x00\n\xffb")}, nil, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []int32{1, 7, 9}, nil, proc.Mp()))
+	bat.SetRowCount(3)
+	col := func(rel, pos int32, typ types.Type) *plan.Expr {
+		return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel, ColPos: pos}}}
+	}
+	integer := func(v int64) *plan.Expr {
+		return &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: v}}}}
+	}
+	before := proc.Mp().CurrNB()
+	for _, rel := range []int32{0, 1} {
+		text := col(rel, 0, types.T_varchar.ToType())
+		prefix := bindTestFunction(t, proc, "substring", text, integer(1), integer(2))
+		for _, tc := range []struct {
+			name  string
+			exprs []*plan.Expr
+			row   int
+			want  string
+		}{
+			{"source spelling", []*plan.Expr{text}, 0, "Alpha"},
+			{"unicode prefix", []*plan.Expr{prefix}, 1, "éc"},
+			{"composite", []*plan.Expr{text, col(rel, 1, types.T_int32.ToType())}, 1, "(éclair,7)"},
+			{"escaped controls", []*plan.Expr{text}, 2, `a\x00\n\xffb`},
+		} {
+			t.Run(fmt.Sprintf("rel%d/%s", rel, tc.name), func(t *testing.T) {
+				got, err := FormatDedupKeyFromRow(proc, tc.exprs, bat, tc.row)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got)
+				require.Equal(t, before, proc.Mp().CurrNB(), "diagnostic windows and executors must release borrowed/owned state")
+			})
+		}
+		_, err := FormatDedupKeyFromRow(proc, []*plan.Expr{text}, bat, 3)
+		require.Error(t, err)
+	}
+	bad := col(0, 7, types.T_varchar.ToType())
+	_, err := FormatDedupKeyFromRow(proc, []*plan.Expr{bad}, bat, 0)
+	require.Error(t, err)
+	require.Equal(t, before, proc.Mp().CurrNB())
+	require.Equal(t, "Alpha", bat.Vecs[0].RowToString(0), "diagnostic cleanup must preserve the input")
 }

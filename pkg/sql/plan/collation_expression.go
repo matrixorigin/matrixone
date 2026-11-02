@@ -154,7 +154,7 @@ func collationForExpression(expr *Expr) (expressionCollation, bool) {
 		default:
 			// Foreign/old plans may lack provenance. Read types only; never
 			// evaluate a CASE branch while inferring its collation.
-			if index := preparedStringDomainSourceIndex(name, len(fn.Args)); index >= 0 {
+			if index, _ := preparedStringDomainSourceIndex(name, len(fn.Args)); index >= 0 {
 				if child, ok := collationForExpression(fn.Args[index]); ok {
 					c.rank = child.rank
 				}
@@ -181,6 +181,26 @@ func illegalExpressionCollations(ctx context.Context, operation string, left, ri
 		expressionCollationName(right), ranks[min(right.rank, 6)], operation)
 }
 
+// At equal non-explicit coercibility, a text _bin collation wins over another
+// collation of the same charset, even when their metadata revisions differ.
+func sameCharsetTextBinWinner(left, right expressionCollation) (expressionCollation, bool) {
+	bin, other := left, right
+	if bin.charset != uint32(types.CharsetUTF8MB4Bin) {
+		bin, other = right, left
+	}
+	if bin.charset != uint32(types.CharsetUTF8MB4Bin) || other.charset == bin.charset {
+		return expressionCollation{}, false
+	}
+	binDefinition, binErr := collation.EffectiveDefinition(bin.charset, bin.version)
+	otherDefinition, otherErr := collation.EffectiveDefinition(other.charset, other.version)
+	if binErr != nil || otherErr != nil || binDefinition.Charset != otherDefinition.Charset ||
+		binDefinition.Charset != collation.CharsetUTF8MB4 {
+		return expressionCollation{}, false
+	}
+	bin.conflict = left.conflict || right.conflict
+	return bin, true
+}
+
 // Resolve the strongest rank before checking equal-rank conflicts. Otherwise
 // adding a stronger third operand makes a left-to-right resolver order-dependent.
 func resolveExpressionCollation(ctx context.Context, operation string, candidates []expressionCollation) (expressionCollation, bool, error) {
@@ -195,6 +215,17 @@ func resolveExpressionCollation(ctx context.Context, operation string, candidate
 	}
 	var chosen expressionCollation
 	chosenSet := false
+	if winningRank != 0 {
+		// Choose an equal-rank text _bin candidate before comparing CI peers.
+		// Otherwise a revision mismatch between two CI inputs can make the
+		// result depend on whether the _bin branch appears first or last.
+		for _, candidate := range candidates {
+			if candidate.rank == winningRank && candidate.charset == uint32(types.CharsetUTF8MB4Bin) && candidate.version == 0 {
+				chosen, chosenSet = candidate, true
+				break
+			}
+		}
+	}
 	for _, candidate := range candidates {
 		if candidate.rank != winningRank {
 			continue
@@ -206,6 +237,12 @@ func resolveExpressionCollation(ctx context.Context, operation string, candidate
 		if chosen.charset == candidate.charset && chosen.version == candidate.version {
 			chosen.conflict = chosen.conflict || candidate.conflict
 			continue
+		}
+		if winningRank != 0 {
+			if bin, ok := sameCharsetTextBinWinner(chosen, candidate); ok {
+				chosen = bin
+				continue
+			}
 		}
 		if winningRank == 0 || chosen.version != candidate.version {
 			return expressionCollation{}, false, illegalExpressionCollations(ctx, operation, chosen, candidate)
@@ -250,7 +287,7 @@ func expressionCollationIndexes(name string, arity int) []int {
 		}
 		return indexes
 	}
-	if index := preparedStringDomainSourceIndex(name, arity); index >= 0 {
+	if index, _ := preparedStringDomainSourceIndex(name, arity); index >= 0 {
 		return []int{index}
 	}
 	return nil

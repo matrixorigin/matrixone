@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -88,4 +89,33 @@ func indexPrimaryPartName(idxDef *planpb.IndexDef) string {
 		return ""
 	}
 	return catalog.ResolveAlias(idxDef.Parts[0])
+}
+
+// makeIndexDedupKeyExprs preserves logical index parts for diagnostics without
+// materializing a second key for every input row. Physical keys are opaque and
+// cannot be decoded back to the source spelling.
+func (builder *QueryBuilder) makeIndexDedupKeyExprs(
+	tableDef *planpb.TableDef, idxDef *planpb.IndexDef, inputTag int32,
+	columnPos func(string) (int32, bool),
+) ([]*planpb.Expr, error) {
+	if idxDef.KeyFormat != collation.KeyFormatV1 {
+		return nil, nil
+	}
+	prefixes, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]*planpb.Expr, len(idxDef.Parts))
+	for i, part := range idxDef.Parts {
+		name := catalog.ResolveAlias(part)
+		pos, ok := columnPos(name)
+		if !ok {
+			return nil, moerr.NewInternalErrorf(builder.GetContext(), "missing duplicate diagnostic column %s", name)
+		}
+		parts[i], err = builder.makeIndexPartExpr(inputTag, pos, name, tableDef.Cols[tableDef.Name2ColIndex[name]].Typ, prefixes)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return parts, nil
 }

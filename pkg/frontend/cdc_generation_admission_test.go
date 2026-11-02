@@ -337,6 +337,8 @@ func TestCDCSourceGuardRetryContract(t *testing.T) {
 	}{
 		{"snapshot advanced", moerr.NewTxnNeedRetryNoCtx(), true},
 		{"definition changed", moerr.NewTxnNeedRetryWithDefChangedNoCtx(), true},
+		{"lock bind changed", moerr.NewLockTableBindChangedNoCtx(), true},
+		{"wire lock bind changed", &gomysql.MySQLError{Number: moerr.ErrLockTableBindChanged}, true},
 		{"rpc timeout", moerr.NewRPCTimeoutNoCtx(), true},
 		{"target wire timeout", &gomysql.MySQLError{Number: 1159, Message: "communication timeout"}, true},
 		{"deadline", context.DeadlineExceeded, true},

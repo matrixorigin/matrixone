@@ -72,7 +72,6 @@ type TailBuilder struct {
 	tokenize   func(string) []WordPos
 	dir        string
 	seq        int
-	delSeq     int
 	cur        *Builder       // open INSERT segment (nil between insert runs)
 	delBatch   []DeleteRecord // open DELETE run (sealed on an op switch to insert, at capacity, or at Finish)
 	frames     []TailSegment  // sealed frames (insert segs + delete frames) in chronological (recency) order
@@ -246,7 +245,6 @@ func (t *TailBuilder) sealDeletes() error {
 		return err
 	}
 	t.delBatch = nil // free the run; the next delete re-grows a fresh slice
-	t.delSeq++
 	path, off, err := t.writeFrame(framed)
 	if err != nil {
 		return err

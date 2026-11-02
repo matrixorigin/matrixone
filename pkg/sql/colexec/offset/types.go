@@ -114,7 +114,3 @@ func (offset *Offset) Free(proc *process.Process, pipelineFailed bool, err error
 		offset.ctr.buf = nil
 	}
 }
-
-func (offset *Offset) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

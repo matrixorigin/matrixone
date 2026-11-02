@@ -57,7 +57,7 @@ func (builder *QueryBuilder) hasParameterizedLocalCTEConsumer(expr *plan.Expr) b
 		if builder.localCTERoots[id] {
 			d := &localCTEDomain{builder: builder, nodes: make(map[int32]bool)}
 			d.collect(id)
-			if d.needsDomain(id) {
+			if d.needsDomain() {
 				return true
 			}
 		}
@@ -90,7 +90,7 @@ func (builder *QueryBuilder) parameterizeLocalCTEs(
 			d := &localCTEDomain{builder: builder, outerID: outerID, ctx: ctx, subType: subType, guarded: guarded,
 				params: make(map[[2]int32]int), nodes: make(map[int32]bool), scans: make(map[int32][]*plan.Expr)}
 			d.collect(id)
-			if d.needsDomain(id) {
+			if d.needsDomain() {
 				// These consumers require their own per-identity rewrite. Letting
 				// the generic predicate pull-up cross them merges outer rows or
 				// leaves hidden columns out of the set-operation schema.
@@ -174,6 +174,13 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 		case plan.Node_WINDOW:
 			windowed = true
 		case plan.Node_UNION_ALL:
+			for _, child := range n.Children {
+				probe := &localCTEDomain{builder: d.builder, nodes: make(map[int32]bool)}
+				probe.collect(child)
+				if !probe.needsDomain() {
+					return d.unsupported("consumer UNION ALL arm has no replay identity")
+				}
+			}
 			branched = true
 		case plan.Node_JOIN:
 			for _, on := range n.OnList {
@@ -404,6 +411,9 @@ func (d *localCTEDomain) admitVariableDemand(root int32) error {
 		d.variableDemandProjects[id] = true
 		return nil
 	}
+	// Required publication adds a reader boundary above the original producer.
+	// Seed-demand admission still belongs to that producer, not its reader.
+	root = d.builder.cteIdentityProducer(root)
 	rootNode := d.builder.qry.Nodes[root]
 	if len(rootNode.SourceStep) == 0 {
 		if err := mark(root); err != nil {
@@ -439,11 +449,19 @@ func (d *localCTEDomain) admitVariableDemand(root int32) error {
 
 // Keep barrier admission and parameterization on the same dependency proof,
 // including recursive producers whose parameters live behind SourceStep edges.
-func (d *localCTEDomain) needsDomain(root int32) bool {
+func (d *localCTEDomain) needsDomain() bool {
+	// A visible projection may wrap a required materialization boundary.
+	sourceBacked := false
+	for id := range d.nodes {
+		if len(d.builder.qry.Nodes[id].SourceStep) > 0 {
+			sourceBacked = true
+			break
+		}
+	}
 	for id := range d.nodes {
 		n := d.builder.qry.Nodes[id]
 		if n.NodeType != plan.Node_PROJECT && n.NodeType != plan.Node_VALUE_SCAN &&
-			len(n.SourceStep) == 0 && len(d.builder.qry.Nodes[root].SourceStep) == 0 {
+			len(n.SourceStep) == 0 && !sourceBacked {
 			continue
 		}
 		for _, expr := range localCTENodeExprs(n) {

@@ -61,6 +61,14 @@ func (tcc *TxnCompilerContext) NewViewSchemaRequest(ctx context.Context, authori
 	return plan.NewViewSchemaRequest(ctx, &viewSchemaProvider{parent: tcc, authorize: authorize})
 }
 
+// NewViewMetadataRequest explicitly opts a statement owner into the derived
+// introspection consumers. The owner supplies the surface's visibility policy,
+// propagates Context to planning and origin-CN execution, and closes the request
+// only after all consumers have released their results. Default SQL is unchanged.
+func (tcc *TxnCompilerContext) NewViewMetadataRequest(ctx context.Context, authorize ViewSchemaAuthorizer) *plan.ViewMetadataRequest {
+	return plan.NewViewMetadataRequest(ctx, &viewSchemaProvider{parent: tcc, authorize: authorize})
+}
+
 type catalogStampReader interface {
 	CatalogReadStamp() (client.CatalogReadStamp, error)
 }
@@ -344,6 +352,11 @@ func (c *viewSchemaCompilerContext) CheckTimeStampValid(ts int64) (bool, error) 
 // names in this entry-point namespace are not names in persisted publisher SQL.
 func (c *viewSchemaCompilerContext) ResolveViewSchemaRoot(database, table string, snapshot *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
 	return c.TxnCompilerContext.Resolve(database, table, snapshot)
+}
+
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *viewSchemaCompilerContext) ResolveWithoutTemporaryAlias(string, string, *plan.Snapshot) (*pb.ObjectRef, *pb.TableDef, error) {
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
 }
 
 // Resolve keeps every View source lookup in the publisher's catalog domain,

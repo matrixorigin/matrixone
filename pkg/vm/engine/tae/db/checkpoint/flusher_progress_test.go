@@ -38,12 +38,15 @@ type flushReadyObject struct {
 	data.Object
 	ready bool
 	calls int
+	size  int
 }
 
 func (o *flushReadyObject) PrepareCompact() bool {
 	o.calls++
 	return o.ready
 }
+
+func (o *flushReadyObject) EstimateMemSize() int { return o.size }
 
 type flushAdmissionScheduler struct {
 	tasks.TaskScheduler
@@ -119,18 +122,18 @@ func (f *flushSelectionFixture) scopes(indices ...int) []common.ID {
 
 func TestFireFlushTabletailSelectsReadyObjects(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		data          []bool
-		tombstones    []bool
-		wantScopes    [][]int
-		wantDeferred  bool
-		wantTombCalls int
+		name         string
+		data         []bool
+		tombstones   []bool
+		wantScopes   [][]int
+		wantDeferred bool
+		wantCalls    []int
 	}{
-		{"ready-busy-ready", []bool{true, false, true}, []bool{true, true}, [][]int{{0, 2, 3, 4}}, true, 1},
-		{"all-busy-does-not-flush-tombstones", []bool{false, false}, []bool{true}, nil, true, 0},
-		{"no-objects", nil, nil, nil, false, 0},
-		{"tombstone-only", nil, []bool{true, true}, [][]int{{0, 1}}, false, 1},
-		{"busy-tombstone-blocks-prepared-data", []bool{true}, []bool{false}, nil, true, 1},
+		{"ready-busy-ready", []bool{true, false, true}, []bool{true, true}, [][]int{{0, 3, 4}}, true, []int{1, 1, 0, 1, 1}},
+		{"busy-data-can-flush-tombstones", []bool{false, false}, []bool{true}, [][]int{{2}}, true, []int{1, 0, 1}},
+		{"no-objects", nil, nil, nil, false, nil},
+		{"tombstone-only", nil, []bool{true, true}, [][]int{{0, 1}}, false, []int{1, 1}},
+		{"busy-tombstone-can-flush-data", []bool{true}, []bool{false}, [][]int{{0}}, true, []int{1, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFlushSelectionFixture(t, tc.data, tc.tombstones)
@@ -145,11 +148,7 @@ func TestFireFlushTabletailSelectsReadyObjects(t *testing.T) {
 				require.Equal(t, f.scopes(indices...), f.scheduler.scopes[i])
 			}
 			for i, object := range f.objects {
-				wantCalls := 1
-				if i >= len(tc.data) {
-					wantCalls = tc.wantTombCalls
-				}
-				require.Equal(t, wantCalls, object.calls)
+				require.Equal(t, tc.wantCalls[i], object.calls)
 			}
 		})
 	}
@@ -176,7 +175,9 @@ func TestFireFlushTabletailPreservesChunkBoundaries(t *testing.T) {
 			err := f.flusher.fireFlushTabletail(f.table, f.end(), types.TS{})
 			require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB), "got %v", err)
 			if scenario == "busy-first-chunk" {
-				require.Equal(t, [][]common.ID{f.scopes(400, 401)}, f.scheduler.scopes)
+				require.Equal(t, [][]common.ID{f.scopes(401)}, f.scheduler.scopes)
+			} else if scenario == "partial-first-chunk" {
+				require.Equal(t, [][]common.ID{f.scopes(0, 401)}, f.scheduler.scopes)
 			} else {
 				firstIndices = append(firstIndices, 401)
 				require.Equal(t, [][]common.ID{f.scopes(firstIndices...), f.scopes(400)}, f.scheduler.scopes)
@@ -202,7 +203,7 @@ func TestFlushDeadlineWaitsForAllData(t *testing.T) {
 			entry := newTestDirtyTreeEntry(types.BuildTS(1, 0), f.end(), f.table.ID)
 			f.flusher.checkFlushConditionAndFire(entry, tc.mode, 0, types.TS{})
 			require.Equal(t, deadline, f.table.Stats.GetFlushDeadline())
-			require.Equal(t, [][]common.ID{f.scopes(0, 2, 3)}, f.scheduler.scopes)
+			require.Equal(t, [][]common.ID{f.scopes(0, 3)}, f.scheduler.scopes)
 			firstScopes := slices.Clone(f.scheduler.scopes[0])
 
 			f.objects[1].ready = true
@@ -219,6 +220,68 @@ func TestFlushDeadlineWaitsForAllData(t *testing.T) {
 	}
 }
 
+func TestFlushPartialPrefixUsesItsOwnMemory(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		data       []bool
+		tombstones []bool
+		wantScopes []int
+	}{
+		{"data", []bool{true, false, true}, nil, []int{0}},
+		{"tombstone", nil, []bool{true, false, true}, []int{0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFlushSelectionFixture(t, tc.data, tc.tombstones)
+			f.table.Stats.Init(time.Hour)
+			threshold := int(common.FlushMemCapacity.Load())
+			f.objects[0].size = common.Const1MBytes / 2
+			// The whole table passes the memory threshold, but its prepared
+			// prefix does not. The busy object and newer objects must not be
+			// scheduled just because they contributed to the table total.
+			ticket := tableAndSize{tbl: f.table, asize: threshold + 1}
+			if tc.name == "tombstone" {
+				ticket.asize = 0
+				ticket.dsize = threshold + 1
+			}
+			f.flusher.objMemSizeList = []tableAndSize{ticket}
+			entry := newTestDirtyTreeEntry(types.BuildTS(1, 0), f.end(), f.table.ID)
+			f.flusher.checkFlushConditionAndFire(entry, flushScheduleCron, 0, types.TS{})
+			require.Empty(t, f.scheduler.scopes)
+			require.Equal(t, 0, f.objects[2].calls)
+
+			f.objects[0].size = threshold + 1
+			f.flusher.checkFlushConditionAndFire(entry, flushScheduleCron, 0, types.TS{})
+			require.Equal(t, [][]common.ID{f.scopes(tc.wantScopes...)}, f.scheduler.scopes)
+			require.Equal(t, 0, f.objects[2].calls)
+		})
+	}
+}
+
+func TestFlushPartialPrefixUsesPressureThreshold(t *testing.T) {
+	f := newFlushSelectionFixture(t, []bool{true, false}, nil)
+	f.table.Stats.Init(time.Hour)
+	f.flusher.objMemSizeList = []tableAndSize{{tbl: f.table, asize: 2 * common.Const1MBytes}}
+	entry := newTestDirtyTreeEntry(types.BuildTS(1, 0), f.end(), f.table.ID)
+	f.objects[0].size = common.Const1MBytes / 2
+	f.flusher.checkFlushConditionAndFire(entry, flushScheduleCron, 1, types.TS{})
+	require.Empty(t, f.scheduler.scopes)
+
+	f.objects[0].size = 2 * common.Const1MBytes
+	f.flusher.checkFlushConditionAndFire(entry, flushScheduleCron, 1, types.TS{})
+	require.Equal(t, [][]common.ID{f.scopes(0)}, f.scheduler.scopes)
+}
+
+func TestFlushBusyTombstoneDoesNotBlockQualifiedData(t *testing.T) {
+	f := newFlushSelectionFixture(t, []bool{true}, []bool{false})
+	f.table.Stats.Init(time.Hour)
+	f.objects[0].size = int(common.FlushMemCapacity.Load()) + 1
+	f.flusher.objMemSizeList = []tableAndSize{{tbl: f.table, asize: f.objects[0].size}}
+	entry := newTestDirtyTreeEntry(types.BuildTS(1, 0), f.end(), f.table.ID)
+	f.flusher.checkFlushConditionAndFire(entry, flushScheduleCron, 0, types.TS{})
+	require.Equal(t, [][]common.ID{f.scopes(0)}, f.scheduler.scopes)
+	require.Equal(t, 1, f.objects[1].calls)
+}
+
 func TestFireFlushTabletailBoundsDeferredLogging(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -228,10 +291,10 @@ func TestFireFlushTabletailBoundsDeferredLogging(t *testing.T) {
 		wantBusy  int64
 		wantScans int
 	}{
-		{name: "busy-across-chunks", wantBusy: 401, wantScans: 401},
+		{name: "busy-across-chunks", wantBusy: 401, wantScans: 1},
 		{name: "ready-has-no-deferred-log", allReady: true, wantScans: 401},
-		{name: "busy-tombstone-early-return", busyTomb: true, wantBusy: 399, wantScans: 400},
-		{name: "scheduler-early-return", failAt: 1, wantBusy: 399, wantScans: 400},
+		{name: "busy-tombstone-early-return", busyTomb: true, wantBusy: 400, wantScans: 2},
+		{name: "scheduler-early-return", failAt: 1, wantBusy: 400, wantScans: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			readiness := make([]bool, 401)

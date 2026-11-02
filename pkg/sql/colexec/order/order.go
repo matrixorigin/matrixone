@@ -560,6 +560,9 @@ func (order *Order) Call(proc *process.Process) (
 					// originate here and hid Order's own phase diagnostics.
 					return vm.CancelResult, err
 				}
+				if input.Status == vm.ExecYield {
+					return input, nil
+				}
 			}
 			if input.Batch == nil {
 				if err, canceled := vm.CancelCheck(proc); canceled {

@@ -160,6 +160,23 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 		}
 	}
 
+	for i := range node.DedupKeyExprs {
+		node.DedupKeyExprs[i], err = rule.ApplyExpr(node.DedupKeyExprs[i])
+		if err != nil {
+			return err
+		}
+	}
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			for i := range exprs.GetList() {
+				exprs.List[i], err = rule.ApplyExpr(exprs.List[i])
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	for i := range node.FilterList {
 		node.FilterList[i], err = rule.ApplyExpr(node.FilterList[i])
 		if err != nil {

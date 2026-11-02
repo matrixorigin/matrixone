@@ -392,7 +392,7 @@ func (r *mergeReader) ReadWithFilter(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (bool, error) {
@@ -400,7 +400,7 @@ func (r *mergeReader) ReadWithFilter(
 	defer func() {
 		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-	if filter == nil {
+	if filter == nil || filter.Apply == nil {
 		return false, moerr.NewInvalidInputNoCtx("nil reader filter")
 	}
 
@@ -419,7 +419,7 @@ func (r *mergeReader) ReadWithFilter(
 		} else {
 			isEnd, err = r.rds[0].Read(ctx, cols, nil, mp, outBatch)
 			if err == nil && !isEnd && !outBatch.IsEmpty() {
-				_, err = filter(outBatch, nil)
+				_, err = filter.Apply(outBatch, nil)
 			}
 		}
 		if err != nil {
@@ -445,7 +445,7 @@ func (r *mergeReader) ReadWithFilterAndTopK(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
@@ -454,7 +454,7 @@ func (r *mergeReader) ReadWithFilterAndTopK(
 	defer func() {
 		v2.TxnMergeReaderDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
-	if filter == nil {
+	if filter == nil || filter.Apply == nil {
 		return false, false, moerr.NewInvalidInputNoCtx("nil reader filter")
 	}
 
@@ -473,7 +473,7 @@ func (r *mergeReader) ReadWithFilterAndTopK(
 		} else {
 			isEnd, err = r.rds[0].Read(ctx, cols, nil, mp, outBatch)
 			if err == nil && !isEnd && !outBatch.IsEmpty() {
-				_, err = filter(outBatch, nil)
+				_, err = filter.Apply(outBatch, nil)
 			}
 		}
 		if err != nil {
@@ -538,6 +538,24 @@ func NewReader(
 	if err != nil {
 		baseFilter.Cleanup()
 		return nil, err
+	}
+
+	// Composite cluster-by tables keep their sort key in a hidden serialized
+	// column instead of the primary key, so the same expression can also prune
+	// the committed replay iteration through a nonunique cluster iterator.
+	clusterFilter, err := NewMemClusterKeyFilter(
+		tableDef,
+		expr,
+		ts,
+		mp,
+		packerPool,
+	)
+	if err != nil {
+		baseFilter.Cleanup()
+		return nil, err
+	}
+	if clusterFilter.Valid() {
+		memFilter.SetClusterKeyFilter(&clusterFilter)
 	}
 
 	blockFilter, err := ConstructBlockPKFilter(
@@ -781,11 +799,11 @@ func (r *reader) ReadWithFilter(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, err error) {
-	if filter == nil {
+	if filter == nil || filter.Apply == nil {
 		return false, moerr.NewInvalidInputNoCtx("nil reader filter")
 	}
 	isEnd, _, err = r.read(ctx, cols, nil, mp, outBatch, earlyColumns, filter, false)
@@ -796,12 +814,12 @@ func (r *reader) ReadWithFilterAndTopK(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (isEnd bool, topKApplied bool, err error) {
-	if filter == nil {
+	if filter == nil || filter.Apply == nil {
 		return false, false, moerr.NewInvalidInputNoCtx("nil reader filter")
 	}
 	// Keep the distance heap across blocks read by this reader. Re-parsing the
@@ -832,7 +850,7 @@ func (r *reader) read(
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 	earlyColumns []int,
-	readerFilter engine.ReaderFilter,
+	readerFilter *engine.ReaderFilterRequest,
 	filterBeforeTopK bool,
 ) (isEnd bool, lateMaterialized bool, err error) {
 	outBatch.CleanOnlyData()
@@ -960,7 +978,7 @@ func (r *reader) read(
 	}
 	if state == engine.InMem {
 		if readerFilter != nil && filterBeforeTopK && !outBatch.IsEmpty() {
-			if _, err = readerFilter(outBatch, nil); err != nil {
+			if _, err = readerFilter.Apply(outBatch, nil); err != nil {
 				return false, false, err
 			}
 		}
@@ -992,7 +1010,7 @@ func (r *reader) read(
 		}
 
 		if readerFilter != nil && !filterBeforeTopK && !outBatch.IsEmpty() {
-			if _, err = readerFilter(outBatch, nil); err != nil {
+			if _, err = readerFilter.Apply(outBatch, nil); err != nil {
 				return false, false, err
 			}
 		}
@@ -1102,7 +1120,7 @@ func (r *reader) read(
 	}
 
 	if readerFilter != nil && !lateMaterialized && !outBatch.IsEmpty() {
-		if _, err = readerFilter(outBatch, nil); err != nil {
+		if _, err = readerFilter.Apply(outBatch, nil); err != nil {
 			return false, false, err
 		}
 	}

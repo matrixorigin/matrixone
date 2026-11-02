@@ -19,12 +19,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCompareGeneric(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	x := types.Decimal256{
 		B0_63: 0, B64_127: 0,
 		B128_191: 0, B192_255: 0,

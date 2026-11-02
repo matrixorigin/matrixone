@@ -817,6 +817,7 @@ func TestRestartTxnRejectsPendingRunningSQLCleanup(t *testing.T) {
 		op, err := c.New(ctx, timestamp.Timestamp{})
 		require.NoError(t, err)
 		tc := op.(*txnOperator)
+		id := append([]byte(nil), tc.Txn().ID...)
 		closedC := make(chan struct{})
 		tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
 			close(closedC)
@@ -828,6 +829,7 @@ func TestRestartTxnRejectsPendingRunningSQLCleanup(t *testing.T) {
 		commitCtx, cancelCommit := context.WithCancel(ctx)
 		cancelCommit()
 		require.ErrorIs(t, tc.Commit(commitCtx), context.Canceled)
+		require.False(t, tc.IsAbortedTxnCleanupComplete(id))
 
 		_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
@@ -839,14 +841,13 @@ func TestRestartTxnRejectsPendingRunningSQLCleanup(t *testing.T) {
 			t.Fatal("deferred rollback did not close the transaction")
 		}
 		require.Eventually(t, func() bool {
-			tc.mu.RLock()
-			defer tc.mu.RUnlock()
-			return tc.mu.terminalOutcome == txnTerminalOutcomeSucceeded
+			return tc.IsAbortedTxnCleanupComplete(id)
 		}, time.Second, time.Millisecond)
 
 		restarted, err := client.RestartTxn(ctx, op, timestamp.Timestamp{})
 		require.NoError(t, err)
 		require.NoError(t, restarted.Rollback(ctx))
+		require.False(t, tc.IsAbortedTxnCleanupComplete(id))
 	})
 }
 
@@ -901,6 +902,7 @@ func TestRestartTxnRejectsFailedDeferredRollback(t *testing.T) {
 				}, time.Second, time.Millisecond)
 				require.Equal(t, 1, workspace.rollbackCount)
 				require.Equal(t, 1, lockService.unlockCount)
+				require.False(t, tc.IsAbortedTxnCleanupComplete(tc.Txn().ID))
 				requests := sender.(*testTxnSender).getLastRequests()
 				require.Len(t, requests, 1)
 				require.Equal(t, txn.TxnMethod_Rollback, requests[0].Method)
@@ -965,6 +967,7 @@ func TestRestartTxnRejectsFailedSynchronousTerminalCall(t *testing.T) {
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
 				}
 				require.Equal(t, oldTxnID, tc.reset.txnID)
+				require.False(t, tc.IsAbortedTxnCleanupComplete(oldTxnID))
 				_, err = tc.TryEnterRunSqlWithTokenAndSQL(nil, "after failed terminal call")
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
 			})
@@ -1076,6 +1079,7 @@ func TestRestartTxnRejectsAbnormalTerminalFinalization(t *testing.T) {
 						require.Equal(t, 1, workspace.finalizeCount)
 						require.Equal(t, oldTxnID, tc.reset.txnID)
 						require.Same(t, workspace, tc.reset.workspace)
+						require.False(t, tc.IsAbortedTxnCleanupComplete(oldTxnID))
 
 						for range 2 {
 							_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
@@ -1188,6 +1192,7 @@ func TestCloseAsAbortedDoesNotPublishSuccessAfterAbnormalCallback(t *testing.T) 
 				require.True(t, tc.mu.closed)
 				require.Equal(t, txnTerminalOutcomeFailed, tc.mu.terminalOutcome)
 				tc.mu.RUnlock()
+				require.False(t, tc.IsAbortedTxnCleanupComplete(tc.Txn().ID))
 				_, err = client.RestartTxn(ctx, op, timestamp.Timestamp{})
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed), err)
 			})

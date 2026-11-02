@@ -1,0 +1,26 @@
+# service node type, [DN|CN|LOG]
+service-type = "LOG"
+data-dir = "./mo-data"
+
+[log]
+level = "info"
+
+[malloc]
+check-fraction = 65536
+enable-metrics = true
+
+[observability]
+trace-export-interval = 1
+disableMetric = true
+enable-metric-to-prom = false
+status-port = 17880
+
+[logservice]
+raft-port = 33300
+logservice-port = 33301
+gossip-port = 33302
+gossip-seed-addresses = ["127.0.0.1:33302"]
+gossip-allow-self-as-seed = true
+
+[hakeeper-client]
+service-addresses = ["127.0.0.1:33301"]

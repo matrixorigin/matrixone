@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -240,6 +241,55 @@ func TestApplyUsesParameterizedSourceLifecycle(t *testing.T) {
 	require.Equal(t, []int64{10, 11}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
 	require.Equal(t, 1, source.prepare)
 	require.Equal(t, 2, source.starts)
+}
+
+type boundedAppliedSource struct{ scriptedAppliedSource }
+
+func (*boundedAppliedSource) ApplyPreserveBatch() bool { return true }
+
+func TestApplyPreservesBoundedSourcePages(t *testing.T) {
+	for _, early := range []bool{false, true} {
+		t.Run(fmt.Sprint("early=", early), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+			input.SetRowCount(2)
+			source := &boundedAppliedSource{}
+			arg := NewArgument()
+			arg.Source = source
+			arg.Result = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}
+			arg.Typs = []types.Type{types.T_int64.ToType()}
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			arg.AppendChild(child)
+			t.Cleanup(func() {
+				arg.Reset(proc, false, nil)
+				arg.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				arg.Release()
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			require.NoError(t, arg.Prepare(proc))
+			for row := 0; row < 2; row++ {
+				result, err := arg.Call(proc)
+				require.NoError(t, err)
+				require.Equal(t, 1, result.Batch.RowCount(), "do not coalesce bounded pages across candidates")
+				require.Equal(t, []int64{int64(row + 10)}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+				if early {
+					return
+				}
+			}
+			for attempts := 0; attempts < 3; attempts++ {
+				result, err := arg.Call(proc)
+				require.NoError(t, err)
+				if result.Batch.IsDone() {
+					return
+				}
+				require.Zero(t, result.Batch.RowCount())
+			}
+			t.Fatal("bounded source did not terminate")
+		})
+	}
 }
 
 func makeColumnExpr(pos int32, typ types.T) *plan.Expr {

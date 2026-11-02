@@ -74,7 +74,7 @@ func runIcebergSQLEngineEmbeddedSnapshotlessTable(t *testing.T, c Cluster, db *e
 			}, nil
 		}},
 	}
-	installEmbeddedIcebergPlanner(t, c, evolutionSQLPlanner{planner: native, objectRef: fixture.objectRef})
+	installEmbeddedIcebergPlanner(t, c, &evolutionSQLPlanner{planner: native, objectRef: fixture.objectRef})
 	table := createEmbeddedIcebergTable(t, db, fixture, "empty_orders", "empty_orders", "append_only")
 	for _, value := range []string{"-1", "null"} {
 		currentSnapshot = value
@@ -136,7 +136,7 @@ func runIcebergSQLEngineEmbeddedSchemaEvolution(t *testing.T, c Cluster, db *emb
 		payload = bytes.Replace(payload, []byte(`"Refs":`), []byte(`"refs":`), 1)
 		return &api.LoadTableResponse{MetadataLocation: base + "metadata.json", MetadataJSON: payload}, nil
 	}}}
-	installEmbeddedIcebergPlanner(t, c, evolutionSQLPlanner{planner: native, objectRef: fixture.objectRef})
+	installEmbeddedIcebergPlanner(t, c, &evolutionSQLPlanner{planner: native, objectRef: fixture.objectRef})
 	table := fixture.databaseName + ".evolution"
 	mustExecSQL(t, db, fmt.Sprintf("create external table %s (renamed_id bigint,id bigint,hidden_key bigint,bucket bigint,amount bigint) engine = iceberg with ('catalog'='%s','namespace'='sales','table'='evolution','ref'='main','read_mode'='merge_on_read','write_mode'='read_only')", table, fixture.catalogName))
 	query := "select renamed_id,coalesce(id,cast(-1 as bigint)) from " + table + " order by renamed_id"

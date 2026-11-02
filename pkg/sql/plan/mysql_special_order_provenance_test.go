@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -132,6 +133,15 @@ func newMySQLSpecialOrderMock(t testing.TB) *MockOptimizer {
 			{Name: "s", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}},
 		},
 	}
+	mock.ctxt.objects["enum_empty_label_t"] = &planpb.ObjectRef{Obj: 9006, ObjName: "enum_empty_label_t"}
+	mock.ctxt.tables["enum_empty_label_t"] = &planpb.TableDef{
+		TblId: 9006,
+		Name:  "enum_empty_label_t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+			{Name: "e", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: ",a"}},
+		},
+	}
 	return mock
 }
 
@@ -148,9 +158,63 @@ func singleSortSpec(t *testing.T, logicPlan *planpb.Plan) *planpb.OrderBySpec {
 	return found[0]
 }
 
+// Display recovery uses an unsigned ordinal IF to preserve the error member
+// without feeding its empty display into the assignment converter. Raw ENUM
+// keys retain their ENUM type; both representations have definition ordering.
+func requireMySQLSpecialOrderKeyType(t *testing.T, expr *planpb.Expr, typ types.T) {
+	t.Helper()
+	if typ == types.T_enum && expr.Typ.Id == int32(types.T_uint16) {
+		require.NotEmpty(t, expr.Typ.Enumvalues)
+		return
+	}
+	require.Equal(t, int32(typ), expr.Typ.Id)
+}
+
+func TestEnumOrderRecoveryPreservesErrorMember(t *testing.T) {
+	storage := &planpb.Type{Id: int32(types.T_enum), Enumvalues: "z,a"}
+	display := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "e"}}}
+	key, err := makeMySQLSpecialOrderKey(context.Background(), display, storage)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_uint16), key.Typ.Id)
+	require.Equal(t, storage.Enumvalues, key.Typ.Enumvalues)
+	require.False(t, key.Typ.NotNullable)
+	fn := key.GetF()
+	require.Equal(t, "if", fn.Func.ObjName)
+	require.Len(t, fn.Args, 3)
+	require.Equal(t, "=", fn.Args[0].GetF().Func.ObjName)
+	converted := fn.Args[2]
+	if cast := converted.GetF(); cast != nil && cast.Func.ObjName == "cast" {
+		converted = cast.Args[0]
+	}
+	converter := converted.GetF()
+	require.Equal(t, "cast_value_to_index", converter.Func.ObjName)
+	require.Equal(t, storage.Enumvalues, converter.Args[0].GetLit().GetSval())
+	placeholder := converter.Args[1].GetF()
+	require.Equal(t, "if", placeholder.Func.ObjName)
+	label := placeholder.Args[1]
+	for label.GetF() != nil && label.GetF().Func.ObjName == "cast" {
+		label = label.GetF().Args[0]
+	}
+	require.Equal(t, "z", label.GetLit().GetSval())
+	// Numeric coercion of the enum zero is represented as a cast by IF binding.
+	zero := fn.Args[1]
+	if cast := zero.GetF(); cast != nil {
+		zero = cast.Args[0]
+	}
+	require.NotNil(t, zero.GetLit())
+	switch value := zero.GetLit().Value.(type) {
+	case *planpb.Literal_EnumVal:
+		require.Zero(t, value.EnumVal)
+	case *planpb.Literal_U16Val:
+		require.Zero(t, value.U16Val)
+	default:
+		t.Fatalf("unexpected zero literal %T", value)
+	}
+}
+
 func requireSingleSortKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {
 	t.Helper()
-	require.Equal(t, int32(typ), singleSortSpec(t, logicPlan).Expr.Typ.Id)
+	requireMySQLSpecialOrderKeyType(t, singleSortSpec(t, logicPlan).Expr, typ)
 }
 
 func requireSingleWindowOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {
@@ -167,7 +231,7 @@ func requireSingleWindowOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ t
 		found = append(found, window.OrderBy[0].Expr)
 	}
 	require.Len(t, found, 1)
-	require.Equal(t, int32(typ), found[0].Typ.Id)
+	requireMySQLSpecialOrderKeyType(t, found[0], typ)
 }
 
 func requireSingleGroupConcatOrderKeyType(t *testing.T, logicPlan *planpb.Plan, typ types.T) {
@@ -191,7 +255,7 @@ func requireSingleGroupConcatOrderKeyType(t *testing.T, logicPlan *planpb.Plan, 
 		}
 	}
 	require.Len(t, found, 1)
-	require.Equal(t, int32(typ), found[0].Typ.Id)
+	requireMySQLSpecialOrderKeyType(t, found[0], typ)
 }
 
 func TestMySQLSpecialMultiKeyEnumOrderUsesRawEnumKey(t *testing.T) {
@@ -358,10 +422,24 @@ func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
 			conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
 			require.NotNil(t, conversion)
 			require.False(t, conversion.Typ.NotNullable)
+			hasGroupBy := strings.Contains(sql, "group by")
 			for _, node := range p.GetQuery().Nodes {
 				if node.NodeType == planpb.Node_AGG {
-					require.Len(t, node.GroupBy, 1, "raw payload must not split display equality")
-					require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+					if hasGroupBy {
+						// The ENUM/SET boolean-contract change groups a plain
+						// GROUP BY by the composite (display, storage) key: the
+						// display key keeps its text identity and a hidden
+						// storage sibling carries the stored bitmap, so the
+						// empty-member declaration splits MySQL-correctly
+						// instead of merging the zero sentinel into it.
+						require.Len(t, node.GroupBy, 2,
+							"a display group key carries its storage sibling beside it")
+						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						require.Equal(t, int32(types.T_uint64), node.GroupBy[1].Typ.Id)
+					} else {
+						require.Len(t, node.GroupBy, 1, "distinct keeps the raw payload")
+						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+					}
 				}
 			}
 		})
@@ -661,10 +739,21 @@ func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 				conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
 				require.NotNil(t, conversion, "cast must use surviving canonical display, not raw bitmap")
 				require.Empty(t, conversion.Typ.Enumvalues)
+				hasGroupBy := strings.Contains(source, "group by")
 				for _, node := range p.GetQuery().Nodes {
 					if node.NodeType == planpb.Node_AGG {
-						require.Len(t, node.GroupBy, 1)
-						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						if hasGroupBy {
+							// Composite (display, storage) grouping from the
+							// ENUM/SET boolean-contract change: the display
+							// group key keeps its text identity and the hidden
+							// storage sibling disambiguates the empty-member
+							// declaration's zero sentinel.
+							require.Len(t, node.GroupBy, 2)
+							require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						} else {
+							require.Len(t, node.GroupBy, 1)
+							require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+						}
 					}
 				}
 			})

@@ -16,14 +16,18 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -37,6 +41,25 @@ type checkpointRunnerWithMax struct {
 
 func (r *checkpointRunnerWithMax) MaxCheckpoint() *checkpoint.CheckpointEntry {
 	return r.entry
+}
+
+func (r *checkpointRunnerWithMax) GetAllCheckpoints() []*checkpoint.CheckpointEntry {
+	if r.entry != nil {
+		return []*checkpoint.CheckpointEntry{r.entry}
+	}
+	return r.Runner.GetAllCheckpoints()
+}
+
+type checkpointDataFailingFileService struct {
+	fileservice.FileService
+	failPath string
+}
+
+func (fs *checkpointDataFailingFileService) Read(ctx context.Context, vector *fileservice.IOVector) error {
+	if vector.FilePath == fs.failPath {
+		return errors.New("checkpoint data read failure")
+	}
+	return fs.FileService.Read(ctx, vector)
 }
 
 // TestHandleTTLChecker exercises the disk-cleaner TTL checker predicate built
@@ -195,6 +218,68 @@ func TestHandleGetChangedTableListCollectChangedUsesIndexWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, historyStart.ToTimestamp(), *resp.Oldest)
 	require.Contains(t, resp.TableIds, uint64(1000))
+}
+
+func TestGetChangedListFromCheckpointsPropagatesDataReadError(t *testing.T) {
+	ctx := context.Background()
+	h := mockTAEHandle(ctx, t, &options.Options{})
+	defer func() { require.NoError(t, h.HandleClose(ctx)) }()
+
+	fs := h.db.Runtime.Fs
+	cat := catalog.MockCatalog(nil)
+	defer cat.Close()
+	dbEntry, err := cat.CreateDBEntry("debug_test", "", "", nil)
+	require.NoError(t, err)
+	table, err := dbEntry.CreateTableEntry(catalog.MockSchema(2, 0), nil, nil)
+	require.NoError(t, err)
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()))
+	_, err = table.CreateCommittedObject(
+		types.BuildTS(1, 0),
+		&objectio.CreateObjOpt{Stats: stats},
+		nil,
+	)
+	require.NoError(t, err)
+
+	collector := logtail.NewBaseCollector_V2(types.TS{}, types.BuildTS(3, 0), 0, fs)
+	defer collector.Close()
+	require.NoError(t, collector.Collect(cat))
+	data := collector.OrphanData()
+	defer data.Close()
+	location, _, err := data.Sync(ctx, fs)
+	require.NoError(t, err)
+	reader, err := logtail.GetCheckpointReader(
+		ctx, h.db.Runtime.SID(), fs, location, logtail.CheckpointCurrentVersion,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, reader.GetLocations())
+
+	entry := checkpoint.NewCheckpointEntry(
+		h.db.Runtime.SID(),
+		types.BuildTS(1, 0),
+		types.BuildTS(3, 0),
+		checkpoint.ET_Incremental,
+		checkpoint.WithStateEntryOption(checkpoint.ST_Finished),
+	)
+	entry.SetLocation(location, objectio.Location{})
+	h.db.BGCheckpointRunner = &checkpointRunnerWithMax{
+		Runner: h.db.BGCheckpointRunner,
+		entry:  entry,
+	}
+	h.db.Runtime.Fs = &checkpointDataFailingFileService{
+		FileService: fs,
+		failPath:    reader.GetLocations()[0].Name().UnsafeString(),
+	}
+
+	_, _, _, _, err = getChangedListFromCheckpoints(
+		ctx,
+		types.BuildTS(1, 0),
+		types.BuildTS(3, 0),
+		h.Handle,
+		func([]uint64, uint64, types.TS) bool { return true },
+		func([]uint64, uint64, types.TS, types.TS) bool { return false },
+	)
+	require.ErrorContains(t, err, "checkpoint data read failure")
 }
 
 func TestHandleDiskCleaner_AddCheckerTTL(t *testing.T) {

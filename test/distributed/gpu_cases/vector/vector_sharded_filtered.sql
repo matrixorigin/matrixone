@@ -192,6 +192,13 @@ select id from t where id between 50 and 80 order by l2_distance(v, '[128,128,12
 -- Filter excludes everything below 100 (most of both shards): probe 50 -> 100.
 select id from t where id >= 100 order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
 
+-- Membership filters (not pushed into the index) across both shards, in pre and iterative;
+-- the subquery spanning the boundary takes rows from both shards.
+select group_concat(id order by id) from (select id from t where id % 7 = 0 order by l2_distance(v, '[30,30,30,30,30,30,30,30]') limit 3 by rank with option 'mode=pre') x;
+select group_concat(id order by id) from (select id from t where id % 7 = 0 order by l2_distance(v, '[30,30,30,30,30,30,30,30]') limit 3 by rank with option 'mode=iterative') x;
+select group_concat(id order by id) from (select id from t where id in (select id from t where id between 60 and 70) order by l2_distance(v, '[30,30,30,30,30,30,30,30]') limit 3 by rank with option 'mode=iterative') x;
+select group_concat(id order by id) from (select id from t where id in (select id from t where id between 60 and 70) order by l2_distance(v, '[64,64,64,64,64,64,64,64]') limit 4 by rank with option 'mode=pre') x;
+
 drop database sharded_filtered;
 
 SET gpu_multi_simulation = 0;

@@ -15,9 +15,17 @@
 package iscp
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/stretchr/testify/require"
 )
 
 // TestSplitInitSQL covers the multi-statement InitSQL format: a JSON array of
@@ -53,5 +61,35 @@ func TestSplitInitSQL(t *testing.T) {
 	}
 	if got := splitInitSQL(string(js)); !reflect.DeepEqual(got, stmts) {
 		t.Fatalf("round-trip: got %v, want %v", got, stmts)
+	}
+}
+
+func TestInitSQLTemporaryAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, index string
+		want              bool
+	}{
+		{"temporary index", catalog.SystemTemporaryTable, "ft", true},
+		{"permanent control", catalog.SystemOrdinaryRel, "ft", false},
+		{"missing index", catalog.SystemTemporaryTable, "missing", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			ctx := defines.AttachAccountId(context.Background(), 42)
+			eng.EXPECT().Database(ctx, "db", nil).Return(db, nil)
+			db.EXPECT().Relation(ctx, "source", nil).Return(rel, nil)
+			rel.EXPECT().CopyTableDef(ctx).Return(&plan.TableDef{TableType: tc.kind, Indexes: []*plan.IndexDef{{IndexName: "ft"}}})
+			initCtx, vars, err := initSQLSessionVars(ctx, eng, nil, "db", "source", tc.index)
+			require.NoError(t, err)
+			require.Empty(t, vars)
+			require.Equal(t, tc.want, defines.HasTemporaryTableAccess(initCtx))
+			require.False(t, defines.HasTemporaryTableAccess(ctx), "capability must not escape into the caller")
+			account, err := defines.GetAccountId(initCtx)
+			require.NoError(t, err)
+			require.EqualValues(t, 42, account)
+		})
 	}
 }

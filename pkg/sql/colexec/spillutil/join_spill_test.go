@@ -697,3 +697,29 @@ func TestCleanupDoubleSafe(t *testing.T) {
 	engine.Cleanup(proc)
 	require.Nil(t, engine.buckets)
 }
+
+func TestBucketWriterRejectedAppendPreservesFile(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	require.NoError(t, budget.SetSpillCaps(16, 4))
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	w := BucketWriter{Name: "rejected-append", Budget: generation}
+	defer w.Close()
+	require.NoError(t, writeBucketPayload(proc, []byte("original"), 1, &w, nil))
+	require.ErrorIs(t, writeBucketPayload(proc, []byte("too-large"), 1, &w, nil), process.ErrExecutionResourceAdmission)
+	require.Equal(t, uint64(8), w.Bytes)
+	require.Equal(t, int64(1), w.Rows)
+	f, err := w.fileFS.OpenFile(proc.Ctx, w.Name)
+	require.NoError(t, err)
+	defer f.Close()
+	got, err := io.ReadAll(f)
+	require.NoError(t, err)
+	require.Equal(t, "original", string(got))
+	require.NoError(t, f.Close())
+	w.Close()
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
+}

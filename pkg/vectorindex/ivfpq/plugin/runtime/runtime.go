@@ -102,17 +102,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	}
 }
 
-// DefaultOptions is the params map produced when CREATE INDEX is issued
-// without a WITH(...) clause. Return nil if your algorithm requires
-// explicit options. Keys come from pkg/catalog (IndexAlgoParamOpType etc.).
-func (CatalogHooks) DefaultOptions() map[string]string {
-	return map[string]string{
-		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,
-		catalog.Quantization:         metric.Quantization_F32_Str,
-		catalog.DistributionMode:     vectorindex.DistributionMode_SINGLE_GPU_Str,
-	}
-}
-
 // IvfpqIndexFlag is the experimental-feature flag gating IVF-PQ DDL.
 // Single source of truth; both the catalog gate (pkg/sql/compile/util.go
 // via ExperimentalFlag) and the per-plugin HandleCreateIndex gate

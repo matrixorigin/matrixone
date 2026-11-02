@@ -1373,6 +1373,12 @@ func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			hb.IsDedup = true
 			hb.OnDuplicateAction = plan.Node_IGNORE
+			session := &hashBuildWarningSession{}
+			proc.Session = session
+			proc.SetStmtProfile(&process.StmtProfile{})
+			proc.GetStmtProfile().SetStatementRuntimeProfile("Update", "DML", true)
+			hb.DedupColName = "uk_named"
+			hb.DedupKeyExprs = []*plan.Expr{newExpr(2, types.T_varchar.ToType())}
 			defer func() {
 				hb.Reset(proc, true)
 				hb.Free(proc)
@@ -1380,13 +1386,24 @@ func TestDedupBuildIgnorePrefersOriginalKeyOwner(t *testing.T) {
 			}()
 
 			require.NoError(t, hb.Prepare([]*plan.Expr{newExpr(0, types.T_int32.ToType())}, 1, -1, nil, proc))
-			bat := makeIntKeyValueBatch(proc, []int32{2, 2}, oldKeys)
-			require.NoError(t, hb.CopyBuildBatch(bat, proc))
-			hb.InputBatchRowCount = bat.RowCount()
-			bat.Clean(proc.Mp())
+			func() {
+				bat := makeIntKeyValueBatch(proc, []int32{2, 2}, oldKeys)
+				defer bat.Clean(proc.Mp())
+				logical := vector.NewVec(types.T_varchar.ToType())
+				bat.Vecs = append(bat.Vecs, logical)
+				bat.Attrs = append(bat.Attrs, "logical")
+				require.NoError(t, vector.AppendBytesList(logical, [][]byte{[]byte("BETA"), []byte("beta")}, nil, proc.Mp()))
+				require.NoError(t, hb.CopyBuildBatch(bat, proc))
+				hb.InputBatchRowCount = bat.RowCount()
+			}()
 
 			require.NoError(t, hb.BuildHashmap(false, false, false, proc))
 			require.Equal(t, 1, hb.Batches.RowCount())
+			rejected := "beta"
+			if oldKeys[0] != 2 {
+				rejected = "BETA"
+			}
+			require.Equal(t, []hashBuildWarning{{code: moerr.ER_DUP_ENTRY, msg: moerr.FormatDuplicateEntry(rejected, "uk_named")}}, session.warnings)
 			keptOldKeys := vector.MustFixedColNoTypeCheck[int32](hb.Batches.Buf[0].Vecs[1])
 			require.Equal(t, []int32{2}, keptOldKeys[:hb.Batches.RowCount()])
 			require.NotNil(t, hb.DelRows)

@@ -104,6 +104,9 @@ type Group struct {
 	// batches.
 	DynamicGrouping bool
 	GroupByHashKey  []int32
+	// SortRollup selects the single-stage ordered ROLLUP executor. Its input
+	// must already be sorted by the grouping equality keys.
+	SortRollup bool
 
 	Aggs []aggexec.AggFuncExecExpression
 
@@ -314,6 +317,7 @@ type container struct {
 	warningRetentionLimit       int
 	warningRetentionSet         bool
 	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
+	sortRollup                  *sortRollupState
 	prepareParamKind            aggexec.PrepareParamKindStates
 	prepareParamKindWireV1      bool
 	legacyTextMinMax            bool
@@ -746,6 +750,10 @@ func (ctr *container) free() {
 
 	ctr.freeGroupByBatches()
 	ctr.freeGroupingRollups()
+	if ctr.sortRollup != nil {
+		ctr.sortRollup.free(ctr.mp)
+		ctr.sortRollup = nil
+	}
 	ctr.freeAggList()
 	ctr.groupConcatWarnings.Reset()
 	ctr.prepareParamKind.Reset(nil)

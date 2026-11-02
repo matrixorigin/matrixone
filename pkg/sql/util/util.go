@@ -67,25 +67,6 @@ func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	return rbat, nil
 }
 
-func SplitTableAndColumn(name string) (string, string) {
-	var schema string
-
-	{ // determine if it is a function call
-		i, j := strings.Index(name, "("), strings.Index(name, ")")
-		if i >= 0 && j >= 0 && j > i {
-			return "", name
-		}
-	}
-	xs := strings.Split(name, ".")
-	for i := 0; i < len(xs)-1; i++ {
-		if i > 0 {
-			schema += "."
-		}
-		schema += xs[i]
-	}
-	return schema, xs[len(xs)-1]
-}
-
 func TableIsLoggingTable(dbName string, tableName string) bool {
 	if tableName == "statement_info" && dbName == "system" {
 		return true
@@ -195,6 +176,76 @@ func BuildTableScanAccountFilter(
 	default:
 		return nil
 	}
+}
+
+// BuildTableScanTemporaryFilter hides session temporary roots from direct
+// mo_catalog.mo_tables scans. The durable relkind marker is the classifier;
+// the generated physical-name prefix only selects the current session's rows.
+// An empty string leaves the scan unchanged. Internal processes normally pass
+// the zero UUID instead, which hides all real session-owned temporary rows.
+// Authorized maintenance bypasses this filter with TemporaryTableAccessKey;
+// it must not rely on an absent frontend session to obtain catalog visibility.
+func BuildTableScanTemporaryFilter(sessionID string) tree.Expr {
+	if sessionID == "" {
+		return nil
+	}
+	sessionID = strings.ReplaceAll(sessionID, "-", "")
+	relKind := tree.NewUnresolvedColName(catalog.SystemRelAttr_Kind)
+	relName := tree.NewUnresolvedColName(catalog.SystemRelAttr_Name)
+	temporaryRoot := tree.NewComparisonExpr(
+		tree.EQUAL,
+		relKind,
+		tree.NewNumVal(catalog.SystemTemporaryTable, catalog.SystemTemporaryTable, false, tree.P_char),
+	)
+	coalesce := func(column string) tree.Expr {
+		return &tree.FuncExpr{
+			Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("coalesce", 1))),
+			Exprs: tree.Exprs{
+				tree.NewUnresolvedColName(column),
+				tree.NewNumVal("", "", false, tree.P_char),
+			},
+		}
+	}
+	legacyTemporary := &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("mo_is_legacy_temporary_table", 1))),
+		Exprs: tree.Exprs{
+			coalesce(catalog.SystemRelAttr_Kind),
+			coalesce(catalog.SystemRelAttr_Name),
+			coalesce(catalog.SystemRelAttr_DBName),
+			coalesce(catalog.SystemRelAttr_CreateSQL),
+			coalesce(catalog.SystemRelAttr_ExtraInfo),
+		},
+	}
+	temporary := tree.NewOrExpr(temporaryRoot, legacyTemporary)
+	legacyDerived := tree.NewAndExpr(
+		tree.NewComparisonExpr(tree.NOT_IN, relKind, tree.NewTuple(tree.Exprs{
+			tree.NewNumVal(catalog.SystemOrdinaryRel, catalog.SystemOrdinaryRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemViewRel, catalog.SystemViewRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemExternalRel, catalog.SystemExternalRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemMaterializedRel, catalog.SystemMaterializedRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemSourceRel, catalog.SystemSourceRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemClusterRel, catalog.SystemClusterRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemPartitionRel, catalog.SystemPartitionRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemSequenceRel, catalog.SystemSequenceRel, false, tree.P_char),
+		})),
+		&tree.FuncExpr{
+			Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("regexp_like", 1))),
+			Exprs: tree.Exprs{
+				relName,
+				tree.NewNumVal(`^__mo_tmp_[0-9a-f]{32}_`, `^__mo_tmp_[0-9a-f]{32}_`, false, tree.P_char),
+			},
+		},
+	)
+	temporary = tree.NewOrExpr(temporary, legacyDerived)
+	prefix := defines.TempTableNamePrefix + sessionID + "_"
+	owned := &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("startswith", 1))),
+		Exprs: tree.Exprs{
+			relName,
+			tree.NewNumVal(prefix, prefix, false, tree.P_char),
+		},
+	}
+	return tree.NewOrExpr(tree.NewNotExpr(temporary), owned)
 }
 
 // BuildViewMetadataDependenciesFilter exposes only the current account's

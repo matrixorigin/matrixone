@@ -23,7 +23,7 @@ insert into include_rounds_main values
 create index idx_ivf_include_rounds using ivfflat on include_rounds_main(embedding)
 lists=2 op_type "vector_l2_ops" include(title, category);
 
--- With nprobe below lists, include mode must widen past the first probe until
+-- With nprobe below lists, iterative mode must widen past the first probe until
 -- it finds enough filtered rows.
 set probe_limit = 1;
 -- @separator:table
@@ -31,7 +31,7 @@ select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 -- EXPLAIN ANALYZE VERBOSE must report the adaptive widening that the static
 -- NProbe setting alone cannot describe. In multi-CN execution each participating
@@ -46,7 +46,7 @@ explain analyze verbose select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 set probe_limit = 10;
 
 -- Check that each mode has an IVF search path without binding the test to
@@ -57,7 +57,7 @@ explain select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
 -- @separator:table
 -- @regex("Vector Index Scan", true)
@@ -84,15 +84,15 @@ select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 
--- Include mode must compensate OFFSET before the final sort window is sliced.
+-- Iterative mode must compensate OFFSET before the final sort window is sliced.
 -- @separator:table
 select id, title, category
 from include_rounds_main
 where category = 20
 order by l2_distance(embedding, "[0,0,0]")
-limit 1 offset 1 by rank with option 'mode=include';
+limit 1 offset 1 by rank with option 'mode=iterative';
 
 -- @separator:table
 select id, title, category
@@ -141,7 +141,7 @@ select id, note
 from include_rounds_residual
 where category = 20 and note = "target"
 order by l2_distance(embedding, "[0,0,0]")
-limit 1 by rank with option 'mode=include';
+limit 1 by rank with option 'mode=iterative';
 
 drop table include_rounds_residual;
 drop table include_rounds_main;

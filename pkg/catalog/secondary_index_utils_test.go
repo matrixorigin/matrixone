@@ -336,3 +336,22 @@ func TestParseIncludeColumnsValue_BackwardCompatible(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"[legacy", "other"}, cols)
 }
+
+func TestIncludeColumnsFromIndexParams(t *testing.T) {
+	cols, err := IncludeColumnsFromIndexParams(`{"op_type":"vector_l2_ops","lists":4,"included_columns":"category,note"}`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"category", "note"}, cols)
+	cols, err = IncludeColumnsFromIndexParams(`{"include_columns":"price"}`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"price"}, cols)
+	cols, err = IncludeColumnsFromIndexParams(`{"op_type":"vector_l2_ops"}`)
+	require.NoError(t, err)
+	require.Empty(t, cols)
+	cols, err = IncludeColumnsFromIndexParams("")
+	require.NoError(t, err)
+	require.Empty(t, cols)
+	_, err = IncludeColumnsFromIndexParams("{")
+	require.Error(t, err)
+	_, err = IncludeColumnsFromIndexParams(`{"included_columns":3}`)
+	require.Error(t, err)
+}

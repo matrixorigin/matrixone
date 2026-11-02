@@ -255,43 +255,47 @@ func TestWin(t *testing.T) {
 }
 
 func TestWindowFrameEvaluationHonorsCancellation(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	const rows = cancellationCheckInterval * 2
-	values := make([]int32, rows)
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
-	bat.SetRowCount(rows)
+	for _, tc := range []struct {
+		name   string
+		frame  *plan.FrameClause
+		checks int32
+	}{
+		{"full partition", makeFullFrame(), 2},
+		{"ordinary frame", &plan.FrameClause{
+			Type:  plan.FrameClause_ROWS,
+			Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true},
+		}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			const rows = cancellationCheckInterval * 2
+			values := make([]int32, rows)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+			bat.SetRowCount(rows)
 
-	arg := &Window{
-		WinSpecList: []*plan.Expr{makeWindowSpec()},
-		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+			spec := makeWindowSpec()
+			spec.GetW().Frame = tc.frame
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+			}
+			require.NoError(t, arg.Prepare(proc))
+			arg.ctr.bat = bat
+			require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+
+			// Cancel after the first 1024 rows have been aggregated in either path.
+			proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, tc.checks)
+
+			err := arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
+			require.ErrorIs(t, err, context.Canceled)
+
+			arg.Free(proc, true, err)
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
 	}
-	require.NoError(t, arg.Prepare(proc))
-	arg.ctr.bat = bat
-	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
-
-	arg.ctr.batAggs = make([]aggexec.AggFuncExec, 1)
-	var err error
-	arg.ctr.batAggs[0], err = aggexec.MakeAgg(
-		proc.Mp(),
-		arg.Aggs[0].GetAggID(),
-		arg.Aggs[0].IsDistinct(),
-		types.T_int32.ToType(),
-	)
-	require.NoError(t, err)
-	require.NoError(t, arg.ctr.batAggs[0].GroupGrow(bat.RowCount()))
-
-	// processFunc checks once at the outer row, then every 1024 frame rows.
-	// Cancel on the third check so the test proves an already-running frame is
-	// interrupted, rather than only proving that a pre-canceled call is rejected.
-	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 3)
-
-	err = arg.ctr.processFunc(0, arg, proc, arg.OpAnalyzer)
-	require.ErrorIs(t, err, context.Canceled)
-
-	arg.Free(proc, true, err)
-	proc.Free()
-	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 func TestCumulativeWindowCancellationReleasesState(t *testing.T) {
@@ -1570,13 +1574,13 @@ func TestWindowOrderedPercentileSpills(t *testing.T) {
 		}
 		outputRows += len(got)
 		if outputRows < rows {
-			require.NotNil(t, arg.ctr.orderedSetPartitionResults,
+			require.NotNil(t, arg.ctr.fullPartitionResults,
 				"partition result must survive until the final output chunk")
 		}
 	}
 	require.Equal(t, rows, outputRows)
 	require.Equal(t, 3, outputChunks)
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 	// With a one-byte spill threshold every source row is reported once. A
 	// per-output-chunk recomputation would report 60,000 rows for this input.
 	require.Equal(t, int64(rows), arg.OpAnalyzer.GetOpStats().SpillRows)
@@ -1606,7 +1610,7 @@ func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
 	result, err := vm.Exec(arg, proc)
 	require.Nil(t, result.Batch)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 	require.Nil(t, arg.ctr.batAggs)
 
 	arg.Free(proc, true, err)
@@ -1644,7 +1648,7 @@ func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testi
 	require.Nil(t, result.Batch)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 	require.Nil(t, arg.ctr.batAggs)
 	spilledFiles := trackingFS.openedFiles()
 	require.NotEmpty(t, spilledFiles)
@@ -1668,7 +1672,7 @@ func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testi
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []float64{20, 20, 20},
 		vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1]))
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 
 	arg.Free(proc, false, nil)
 	secondChild.Free(proc, false, nil)
@@ -1713,7 +1717,7 @@ func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
 	}
 	require.Equal(t, wantFirst,
 		vector.MustFixedColWithTypeCheck[int32](first))
-	require.NotNil(t, ctr.orderedSetPartitionResults)
+	require.NotNil(t, ctr.fullPartitionResults)
 	first.Free(proc.Mp())
 
 	second, err := ctr.processAggregateFuncRange(
@@ -1728,7 +1732,7 @@ func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
 		}
 	}
 	require.Equal(t, want, vector.MustFixedColWithTypeCheck[int32](second))
-	require.Nil(t, ctr.orderedSetPartitionResults)
+	require.Nil(t, ctr.fullPartitionResults)
 	second.Free(proc.Mp())
 
 	bat.Clean(proc.Mp())
@@ -1756,14 +1760,14 @@ func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
 	result, err := vm.Exec(arg, proc)
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
-	require.NotNil(t, arg.ctr.orderedSetPartitionResults)
+	require.NotNil(t, arg.ctr.fullPartitionResults)
 
 	// Model a LIMIT consumer that stops before the cached partition's final
 	// chunk, then reuse the operator generation.
 	arg.Reset(proc, false, nil)
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
-	require.Zero(t, arg.ctr.orderedSetNextRow)
-	require.Zero(t, arg.ctr.orderedSetPartition)
+	require.Nil(t, arg.ctr.fullPartitionResults)
+	require.Zero(t, arg.ctr.fullPartitionNextRow)
+	require.Zero(t, arg.ctr.fullPartition)
 	child.Free(proc, false, nil)
 
 	secondBatch := makeInt32Batch(proc.Mp(), []int32{10, 20, 30})
@@ -1776,7 +1780,7 @@ func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []float64{20, 20, 20},
 		vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1]))
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 
 	arg.Free(proc, false, nil)
 	secondChild.Free(proc, false, nil)
@@ -1802,20 +1806,42 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.AppendChild(op)
 
+	t.Cleanup(func() {
+		arg.Free(proc, true, nil)
+		op.Free(proc, true, nil)
+		mp := proc.Mp()
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	})
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	require.NoError(t, err)
+	for col, vec := range bat.Vecs {
+		copied, err := vec.DupOffHeapWithAllocation(proc.Mp(), selection)
+		require.NoError(t, err)
+		bat.Vecs[col] = copied
+		vec.Free(proc.Mp())
+	}
+
 	require.NoError(t, arg.Prepare(proc))
-	_, err := vm.Exec(arg, proc)
+	_, err = vm.Exec(arg, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "key cannot be NULL")
 	// Chunk-local aggregators do not need to survive until pipeline Reset.
 	require.Nil(t, arg.ctr.batAggs)
 
+	op.Free(proc, true, err)
+	require.Positive(t, account.Snapshot().Used)
 	arg.Reset(proc, true, err)
 	require.Nil(t, arg.ctr.batAggs, "Reset must release window aggregators after an error")
 
-	arg.Free(proc, true, err)
-	op.Free(proc, true, err)
-	proc.Free()
-	require.Equal(t, int64(0), proc.Mp().CurrNB(), "no mpool leak on the json_objectagg error path")
+	terminal, _, terminalErr := registry.CompleteTerminal(account)
+	require.NoError(t, terminalErr)
+	require.Zero(t, terminal.Used)
+	require.Zero(t, terminal.LiveAllocations)
 }
 
 func collectFixedWindowColumn[T types.FixedSizeT](
@@ -1839,6 +1865,9 @@ func collectFixedWindowColumn[T types.FixedSizeT](
 
 // TestWindowAggResultAcrossChunks verifies that a cumulative aggregate retains
 // its running state across bounded output batches.
+// TestWindowAggResultAcrossChunks verifies that the aggregate executor's
+// physical result chunks are invisible to the Window operator. CURRENT ROW is
+// deliberately used to keep the test O(n) while crossing AggBatchSize.
 func TestWindowAggResultAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
@@ -3571,66 +3600,6 @@ func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
 	}
 }
 
-func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
-	mp := mpool.MustNewZero()
-	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
-	require.NoError(t, err)
-
-	partitionVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
-	require.NoError(t, partitionVec.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(partitionVec, int32(1), false, mp))
-	orderVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
-	require.NoError(t, orderVec.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(orderVec, int32(10), false, mp))
-	input := batch.NewOffHeapWithSize(2)
-	input.SetVector(0, partitionVec)
-	input.SetVector(1, orderVec)
-	input.SetRowCount(1)
-
-	partitionExpr := newColExpr(0)
-	arg := &Window{
-		WinSpecList: []*plan.Expr{{
-			Expr: &plan.Expr_W{W: &plan.WindowSpec{
-				Name:        "row_number",
-				WindowFunc:  newFunExpr("row_number"),
-				PartitionBy: []*plan.Expr{partitionExpr},
-				OrderBy: []*plan.OrderBySpec{{
-					Expr: newColExpr(1),
-				}},
-			}},
-		}},
-		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
-	}
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	arg.AppendChild(child)
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	require.NoError(t, arg.Prepare(proc))
-	result, err := arg.Call(proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-
-	// Mirror child-first pipeline cleanup. The remaining account usage belongs
-	// to Window's materialized input and expression duplicates.
-	child.Free(proc, false, nil)
-	require.Positive(t, account.Snapshot().Used)
-	arg.Reset(proc, false, nil)
-	require.Zero(t, account.Snapshot().Used)
-
-	require.NoError(t, arg.Prepare(proc))
-	arg.Free(proc, false, nil)
-	snapshot := account.Seal()
-	require.Zero(t, snapshot.Used)
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-	proc.Free()
-	require.Zero(t, mp.CurrNB())
-}
-
 func TestWindowOrderHonorsCancellation(t *testing.T) {
 	testCases := []struct {
 		name   string
@@ -4558,6 +4527,69 @@ func TestBuildRangeIntervalSignedBoundaries(t *testing.T) {
 	})
 }
 
+func wideSignedRangeOffset(value int64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_I64Val{I64Val: value},
+	}}}
+}
+
+func testBuildRangeIntervalWideSignedBounds[T types.OrderedT](
+	t *testing.T, mp *mpool.MPool, oid types.T, values []T, offset int64,
+) {
+	t.Helper()
+	for _, desc := range []bool{false, true} {
+		ordered := values
+		if desc {
+			ordered = append([]T(nil), values...)
+			for left, right := 0, len(ordered)-1; left < right; left, right = left+1, right-1 {
+				ordered[left], ordered[right] = ordered[right], ordered[left]
+			}
+		}
+		vec := makeFixedVec(t, mp, oid, ordered)
+		func() {
+			defer vec.Free(mp)
+			ctr := &container{
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+				desc:      []bool{desc},
+			}
+			preceding := &plan.FrameClause{
+				Type:  plan.FrameClause_RANGE,
+				Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: wideSignedRangeOffset(offset)},
+				End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			}
+			following := &plan.FrameClause{
+				Type:  plan.FrameClause_RANGE,
+				Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+				End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, Val: wideSignedRangeOffset(offset)},
+			}
+			for row := range ordered {
+				start, end, err := ctr.buildRangeInterval(row, 0, len(ordered), preceding)
+				require.NoError(t, err)
+				require.Equal(t, 0, start)
+				require.Equal(t, row+1, end)
+				start, end, err = ctr.buildRangeInterval(row, 0, len(ordered), following)
+				require.NoError(t, err)
+				require.Equal(t, row, start)
+				require.Equal(t, len(ordered), end)
+			}
+		}()
+	}
+}
+
+func TestBuildRangeIntervalWideSignedBounds(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+	t.Run("int8", func(t *testing.T) {
+		testBuildRangeIntervalWideSignedBounds(t, mp, types.T_int8, []int8{1, 2, 3}, 200)
+	})
+	t.Run("int16", func(t *testing.T) {
+		testBuildRangeIntervalWideSignedBounds(t, mp, types.T_int16, []int16{1, 2, 3}, 70000)
+	})
+	t.Run("int32", func(t *testing.T) {
+		testBuildRangeIntervalWideSignedBounds(t, mp, types.T_int32, []int32{1, 2, 3}, int64(math.MaxInt32)+1)
+	})
+}
+
 // TestSearchLeftRightAllFloatTypes covers float32/64.
 func TestSearchLeftRightAllFloatTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -5027,6 +5059,58 @@ func TestWindowTimestampRangeUsesSessionTimeZone(t *testing.T) {
 			require.Equal(t, test.utcFollowing, [2]int{start, end})
 		})
 	}
+}
+
+func TestWindowAccountedScratchRetirement(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, t.Name(), mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<20, budget)
+	require.NoError(t, err)
+	defer func() {
+		account.Seal()
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	}()
+	ctr := &container{}
+	require.NoError(t, ctr.allocation.Set(account))
+	defer ctr.allocation.FreeMetadata()
+	defer ctr.clearCivilOrder()
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	vec := vector.NewVec(types.T_timestamp.ToType())
+	defer vec.Free(proc.Mp())
+	for _, instant := range []string{"2024-11-03 05:30:00", "2024-11-03 06:30:00"} {
+		value, err := types.ParseTimestamp(time.UTC, instant, 6)
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendFixed(vec, value, false, proc.Mp()))
+	}
+	frame := &plan.FrameClause{Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: intervalExpr(30, types.Minute)},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW}}
+	for range 3 {
+		selection, err := ctr.timestampRangeSelection(proc, loc, 1, 0, 2, vec, frame)
+		require.NoError(t, err)
+		require.Equal(t, []timestampCivilOrderSpan{{start: 0, end: 1}, {start: 1, end: 2}}, selection.spans)
+		live := budget.Used()
+		require.Positive(t, live)
+		_, err = ctr.timestampRangeSelection(proc, loc, 0, 0, 2, vec, frame)
+		require.NoError(t, err)
+		require.Equal(t, live, budget.Used(), "row demands reuse admitted scratch")
+		ctr.clearCivilOrder()
+		require.Zero(t, budget.Used(), "the next materialized order batch starts with no retained index")
+	}
+	reservation, err := budget.ReserveTransientMemory(budget.Cap())
+	require.NoError(t, err)
+	defer reservation.Release()
+	_, err = ctr.timestampCivilOrderIndex(proc, loc, 0, 2, vec, false)
+	require.Error(t, err)
+	require.Empty(t, ctr.timestampCivilOrder)
+	reservation.Release()
+	require.Zero(t, budget.Used())
 }
 
 func TestWindowTimestampRangeFoldMembership(t *testing.T) {

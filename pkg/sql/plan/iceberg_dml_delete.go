@@ -64,6 +64,22 @@ func buildIcebergUpdatePlan(stmt *tree.Update, ctx CompilerContext, isPrepareStm
 		return nil, err
 	}
 
+	qualifier := target.alias
+	if qualifier == "" {
+		qualifier = target.tableName
+	}
+	for _, assignment := range stmt.Exprs {
+		for _, lhs := range assignment.Names {
+			binding, bindErr := resolveUpdateAssignmentTarget(builder.GetContext(), bindCtx, lhs)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			if binding.table != qualifier || binding.tableID != target.tableDef.TblId {
+				return nil, moerr.NewInvalidInputf(builder.GetContext(), "UPDATE target table '%s' is not updatable", binding.table)
+			}
+		}
+	}
+
 	insertNode := &plan.Node{
 		NodeType:     plan.Node_INSERT,
 		Children:     []int32{lastNodeID},
@@ -84,16 +100,16 @@ func buildIcebergUpdatePlan(stmt *tree.Update, ctx CompilerContext, isPrepareStm
 	if err != nil {
 		return nil, err
 	}
-	dmlTableDef, err := appendIcebergUpdateMetadataProjection(ctx.GetContext(), query, query.Steps[len(query.Steps)-1])
+	dmlTableDef, err := appendIcebergUpdateMetadataProjection(ctx.GetContext(), query, query.Steps[query.MainOutputStep()])
 	if err != nil {
 		return nil, err
 	}
-	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	root := query.Nodes[query.Steps[query.MainOutputStep()]]
 	root.TableDef = dmlTableDef
 	if root.InsertCtx != nil {
 		root.InsertCtx.TableDef = dmlTableDef
 	}
-	if err := rewriteIcebergUpdateProjection(ctx.GetContext(), query, query.Steps[len(query.Steps)-1], builder, bindCtx, target, stmt); err != nil {
+	if err := rewriteIcebergUpdateProjection(ctx.GetContext(), query, query.Steps[query.MainOutputStep()], builder, bindCtx, target, stmt); err != nil {
 		return nil, err
 	}
 	query.StmtType = plan.Query_UPDATE
@@ -149,11 +165,11 @@ func buildIcebergDeletePlan(stmt *tree.Delete, ctx CompilerContext, isPrepareStm
 	if err != nil {
 		return nil, err
 	}
-	dmlTableDef, err := appendIcebergDeleteMetadataProjection(ctx.GetContext(), query, query.Steps[len(query.Steps)-1])
+	dmlTableDef, err := appendIcebergDeleteMetadataProjection(ctx.GetContext(), query, query.Steps[query.MainOutputStep()])
 	if err != nil {
 		return nil, err
 	}
-	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	root := query.Nodes[query.Steps[query.MainOutputStep()]]
 	root.TableDef = dmlTableDef
 	if root.InsertCtx != nil {
 		root.InsertCtx.TableDef = dmlTableDef
@@ -704,7 +720,7 @@ func buildIcebergUpdateReplacementProjects(ctx context.Context, query *plan.Quer
 		if astExpr, ok := updates[strings.ToLower(col.Name)]; ok {
 			var expr *plan.Expr
 			if _, isDefault := astExpr.(*tree.DefaultVal); isDefault {
-				expr, err = getDefaultExprForAssignment(ctx, col, builder.compCtx.GetProcess(), stmt.Ignore)
+				expr, err = getDefaultExprForAssignment(ctx, col, tableDef.DbName, builder.compCtx.GetProcess(), stmt.Ignore)
 			} else {
 				expr, err = binder.BindExpr(astExpr, 0, true)
 			}

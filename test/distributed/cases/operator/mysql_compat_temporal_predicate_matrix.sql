@@ -41,4 +41,48 @@ select id,
 from t_temporal_pred
 order by id;
 
+-- A synthesized Decimal comparison domain must retain the full BIGINT
+-- capacity.  In particular, equal physical Decimal64 targets must still be
+-- widened before casting either operand.
+drop table if exists t_bigint_time_pred;
+create table t_bigint_time_pred (i bigint, tm time(0));
+insert into t_bigint_time_pred values
+  (-1000000000000000000, '00:00:00'),
+  (-999999999999999999, '00:00:00'),
+  (999999999999999999, '00:00:00'),
+  (1000000000000000000, '00:00:00');
+select i,
+       tm,
+       i = tm as bigint_eq_time,
+       tm = i as time_eq_bigint,
+       i < tm as bigint_lt_time,
+       tm < i as time_lt_bigint
+from t_bigint_time_pred
+order by i;
+
+-- BIT is an unsigned numeric source even though IsIntOrUint excludes it.
+-- Comparison coercion must preserve its complete domain without relaxing
+-- strict DECIMAL assignment precision checks.
+set @temporal_pred_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table t_bit_time_pred (id int primary key, b bit(64), tm time(0));
+insert into t_bit_time_pred values
+  (1, 0, '00:00:00'),
+  (2, 999999999999999999, '00:00:00'),
+  (3, 1000000000000000000, '00:00:00'),
+  (4, 18446744073709551615, '00:00:00'),
+  (5, null, '00:00:00');
+select id,
+       b = tm as bit_eq_time,
+       tm = b as time_eq_bit,
+       b < tm as bit_lt_time,
+       tm < b as time_lt_bit,
+       b <=> tm as bit_nseq_time
+from t_bit_time_pred
+order by id;
+create table t_bit_decimal_pred (d decimal(18,0));
+insert into t_bit_decimal_pred select b from t_bit_time_pred where id = 3;
+select count(*) as rejected_rows from t_bit_decimal_pred;
+set session sql_mode = @temporal_pred_saved_sql_mode;
+
 drop database mysql_compat_temporal_predicate_matrix;

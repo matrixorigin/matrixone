@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -855,7 +856,11 @@ func execReadSql(
 	if disableLog {
 		opts = opts.WithStatementOption(executor.StatementOption{}.WithDisableLog())
 	}
-	return exec.Exec(ctx, sql, opts)
+	// Engine catalog reads must see every physical relation in the already
+	// authorized tenant/transaction. User-session visibility filters would
+	// otherwise hide roots from DROP DATABASE and rowids from schema updates.
+	// Keep this capability local to the internal catalog execution.
+	return exec.Exec(defines.AttachTemporaryTableAccess(ctx), sql, opts)
 }
 
 func fillTsVecForSysTableQueryBatch(bat *batch.Batch, ts types.TS, m *mpool.MPool) error {

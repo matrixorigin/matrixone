@@ -31,7 +31,7 @@ t  ¦  CREATE TABLE `t` (
 )
 desc t;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+id  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 v  ¦  VECF32(8)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  
 select name, type, algo, algo_table_type from mo_catalog.mo_indexes
 where table_id = (select rel_id from mo_catalog.mo_tables

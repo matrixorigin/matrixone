@@ -1,0 +1,543 @@
+drop database if exists ind_kernels_bvt;
+create database ind_kernels_bvt;
+use ind_kernels_bvt;
+select ema(CAST(1 AS DOUBLE),3) result;
+SQL syntax error: Window function 'ema' requires an OVER clause
+select kama(CAST(1 AS DOUBLE),3) result;
+SQL syntax error: Window function 'kama' requires an OVER clause
+select mmaxDrawdown(CAST(1 AS DOUBLE),3) result;
+SQL syntax error: Window function 'mmaxdrawdown' requires an OVER clause
+select cumPositiveStreak(CAST(1 AS DOUBLE)) result;
+SQL syntax error: Window function 'cumpositivestreak' requires an OVER clause
+drop table if exists ind_kernels_series;
+create table ind_kernels_series(id int primary key, g int, x double, xi int);
+insert into ind_kernels_series VALUES
+(1,1,100,100),(2,1,120,120),(3,1,90,90),(4,1,110,110),(5,1,80,80),(6,1,70,70),
+(11,2,10,10),(12,2,-20,-20),(13,2,30,30),(14,2,30,30),(15,2,30,30),
+(21,3,10,10),(22,3,20,20),(23,3,30,30),(24,3,30,30),(25,3,30,30),
+(31,4,NULL,NULL),(32,4,NULL,NULL),(33,4,NULL,NULL);
+select id, ema(x, 3) over () from ind_kernels_series where g = 1;
+invalid input: window function 'ema' requires an ORDER BY expression: series order is part of the indicator's definition
+select id, ema(x, 3) over (order by id rows between 2 preceding and current row) from ind_kernels_series where g = 1;
+invalid input: window frame is not applicable to ema: the period is given by ema's parameter
+select id, ema(x, 1025) over (order by id) from ind_kernels_series where g = 3;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, ema(x, 0) over (order by id) from ind_kernels_series where g = 3;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, ema(x, 1024) over (order by id) from ind_kernels_series where g = 3;
+➤ id[4,32,0]  ¦  ema(x, 1024) over (order by id)[8,53,31]  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  null  𝄀
+24  ¦  null  𝄀
+25  ¦  null
+select id, sma(x, abs(3)) over (order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  sma(x, abs(3)) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  103.33333333333333  𝄀
+4  ¦  106.66666666666667  𝄀
+5  ¦  93.33333333333333  𝄀
+6  ¦  86.66666666666667
+select id, ema(x, 2+1) over (order by id) from ind_kernels_series where g = 3 order by id;
+➤ id[4,32,0]  ¦  ema(x, 2 + 1) over (order by id)[8,53,31]  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  20.0  𝄀
+24  ¦  25.0  𝄀
+25  ¦  27.5
+select id, wma(x, CAST(3 AS TINYINT)) over (order by id) from ind_kernels_series where g = 2 order by id;
+➤ id[4,32,0]  ¦  wma(x, cast(3 as tinyint)) over (order by id)[8,53,31]  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  10.0  𝄀
+14  ¦  21.666666666666668  𝄀
+15  ¦  30.0
+select id, dema(x, CAST(2 AS UNSIGNED)) over (order by id) from ind_kernels_series where g = 3 order by id;
+➤ id[4,32,0]  ¦  dema(x, cast(2 as unsigned)) over (order by id)[8,53,31]  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  30.0  𝄀
+24  ¦  31.111111111111114  𝄀
+25  ¦  30.740740740740744
+select id, ema(x, abs(1025)) over (order by id) from ind_kernels_series where g = 1;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, ema(x, ABS(1.5)) over (order by id) from ind_kernels_series where g = 1;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, ema(x, CAST(3 AS DOUBLE)) over (order by id) from ind_kernels_series where g = 1;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, ema(x, CAST(1000 AS TINYINT)) over (order by id) from ind_kernels_series where g = 1;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, ema(x, abs(x)) over (order by id) from ind_kernels_series where g = 1;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, ema(x, 512*3) over (order by id) from ind_kernels_series where g = 1;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, ema(x, LENGTH('abc')) over (order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  ema(x, LENGTH(abc)) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  103.33333333333333  𝄀
+4  ¦  106.66666666666666  𝄀
+5  ¦  93.33333333333333  𝄀
+6  ¦  81.66666666666666
+select id, wma(x, GREATEST(2,3)) over (order by id) from ind_kernels_series where g = 2 order by id;
+➤ id[4,32,0]  ¦  wma(x, GREATEST(2, 3)) over (order by id)[8,53,31]  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  10.0  𝄀
+14  ¦  21.666666666666668  𝄀
+15  ¦  30.0
+select id, ema(x, LENGTH(x)) over (order by id) from ind_kernels_series where g = 1;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, ema(x, GREATEST(2000,3)) over (order by id) from ind_kernels_series where g = 1;
+invalid input: period argument of ema must be a constant integer in [1, 1024]
+select id, sma(x, 3) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  sma(x, 3) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  103.33333333333333  𝄀
+4  ¦  106.66666666666667  𝄀
+5  ¦  93.33333333333333  𝄀
+6  ¦  86.66666666666667  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  6.666666666666667  𝄀
+14  ¦  13.333333333333334  𝄀
+15  ¦  30.0  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  20.0  𝄀
+24  ¦  26.666666666666668  𝄀
+25  ¦  30.0  𝄀
+31  ¦  null  𝄀
+32  ¦  null  𝄀
+33  ¦  null
+select id, wma(x, 3) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  wma(x, 3) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  101.66666666666667  𝄀
+4  ¦  105.0  𝄀
+5  ¦  91.66666666666667  𝄀
+6  ¦  80.0  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  10.0  𝄀
+14  ¦  21.666666666666668  𝄀
+15  ¦  30.0  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  23.333333333333332  𝄀
+24  ¦  28.333333333333332  𝄀
+25  ¦  30.0  𝄀
+31  ¦  null  𝄀
+32  ¦  null  𝄀
+33  ¦  null
+select id, trima(x, 4) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  trima(x, 4) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  105.0  𝄀
+5  ¦  100.0  𝄀
+6  ¦  90.0  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  null  𝄀
+14  ¦  10.0  𝄀
+15  ¦  21.666666666666668  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  null  𝄀
+24  ¦  23.333333333333332  𝄀
+25  ¦  28.333333333333332  𝄀
+31  ¦  null  𝄀
+32  ¦  null  𝄀
+33  ¦  null
+select id, ema(x, 3) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  ema(x, 3) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  103.33333333333333  𝄀
+4  ¦  106.66666666666666  𝄀
+5  ¦  93.33333333333333  𝄀
+6  ¦  81.66666666666666  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  6.666666666666667  𝄀
+14  ¦  18.333333333333332  𝄀
+15  ¦  24.166666666666664  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  20.0  𝄀
+24  ¦  25.0  𝄀
+25  ¦  27.5  𝄀
+31  ¦  null  𝄀
+32  ¦  null  𝄀
+33  ¦  null
+select id, wilder(x, 3) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  wilder(x, 3) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  103.33333333333333  𝄀
+4  ¦  105.55555555555554  𝄀
+5  ¦  97.03703703703701  𝄀
+6  ¦  88.02469135802467  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  6.666666666666667  𝄀
+14  ¦  14.444444444444445  𝄀
+15  ¦  19.62962962962963  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  20.0  𝄀
+24  ¦  23.333333333333332  𝄀
+25  ¦  25.555555555555554  𝄀
+31  ¦  null  𝄀
+32  ¦  null  𝄀
+33  ¦  null
+select id, kama(x, 3) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  kama(x, 3) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  90.45323158746676  𝄀
+5  ¦  89.056083279557  𝄀
+6  ¦  87.7155158146111  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  null  𝄀
+14  ¦  30.0  𝄀
+15  ¦  30.0  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  null  𝄀
+24  ¦  30.0  𝄀
+25  ¦  30.0  𝄀
+31  ¦  null  𝄀
+32  ¦  null  𝄀
+33  ¦  null
+select id, dema(x, 3) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  dema(x, 3) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null  𝄀
+5  ¦  85.55555555555556  𝄀
+6  ¦  71.94444444444443  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  null  𝄀
+14  ¦  null  𝄀
+15  ¦  31.94444444444444  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  null  𝄀
+24  ¦  null  𝄀
+25  ¦  30.833333333333332  𝄀
+31  ¦  null  𝄀
+32  ¦  null  𝄀
+33  ¦  null
+select id, tema(x, 3) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  tema(x, 3) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null  𝄀
+5  ¦  null  𝄀
+6  ¦  null  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  null  𝄀
+14  ¦  null  𝄀
+15  ¦  null  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  null  𝄀
+24  ¦  null  𝄀
+25  ¦  null  𝄀
+31  ¦  null  𝄀
+32  ¦  null  𝄀
+33  ¦  null
+select id, t3(x, 2) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  t3(x, 2) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null  𝄀
+5  ¦  null  𝄀
+6  ¦  null  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+13  ¦  null  𝄀
+14  ¦  null  𝄀
+15  ¦  null  𝄀
+21  ¦  null  𝄀
+22  ¦  null  𝄀
+23  ¦  null  𝄀
+24  ¦  null  𝄀
+25  ¦  null  𝄀
+31  ¦  null  𝄀
+32  ¦  null  𝄀
+33  ¦  null
+drop table if exists ind_kernels_chain;
+create table ind_kernels_chain(id int primary key, x double);
+insert into ind_kernels_chain values (1,100),(2,120),(3,90),(4,110),(5,80),(6,70),(7,95),(8,85);
+select id, x, tema(x, 3) over (order by id) from ind_kernels_chain order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  tema(x, 3) over (order by id)[8,53,31]  𝄀
+1  ¦  100.0  ¦  null  𝄀
+2  ¦  120.0  ¦  null  𝄀
+3  ¦  90.0  ¦  null  𝄀
+4  ¦  110.0  ¦  null  𝄀
+5  ¦  80.0  ¦  null  𝄀
+6  ¦  70.0  ¦  null  𝄀
+7  ¦  95.0  ¦  89.537037037037  𝄀
+8  ¦  85.0  ¦  86.40046296296299
+select id, x, t3(x, 2) over (order by id) from ind_kernels_chain order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  t3(x, 2) over (order by id)[8,53,31]  𝄀
+1  ¦  100.0  ¦  null  𝄀
+2  ¦  120.0  ¦  null  𝄀
+3  ¦  90.0  ¦  null  𝄀
+4  ¦  110.0  ¦  null  𝄀
+5  ¦  80.0  ¦  null  𝄀
+6  ¦  70.0  ¦  null  𝄀
+7  ¦  95.0  ¦  85.0000447086318  𝄀
+8  ¦  85.0  ¦  86.16157157614865
+select id, cumPositiveStreak(xi) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  cumPositiveStreak(xi) over (partition by g order by id)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+11  ¦  1  𝄀
+12  ¦  0  𝄀
+13  ¦  1  𝄀
+14  ¦  2  𝄀
+15  ¦  3  𝄀
+21  ¦  1  𝄀
+22  ¦  2  𝄀
+23  ¦  3  𝄀
+24  ¦  4  𝄀
+25  ¦  5  𝄀
+31  ¦  0  𝄀
+32  ¦  0  𝄀
+33  ¦  0
+select id, cumPositiveStreak(x) over (partition by g order by id) from ind_kernels_series order by g, id;
+➤ id[4,32,0]  ¦  cumPositiveStreak(x) over (partition by g order by id)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6  𝄀
+11  ¦  1  𝄀
+12  ¦  0  𝄀
+13  ¦  1  𝄀
+14  ¦  2  𝄀
+15  ¦  3  𝄀
+21  ¦  1  𝄀
+22  ¦  2  𝄀
+23  ¦  3  𝄀
+24  ¦  4  𝄀
+25  ¦  5  𝄀
+31  ¦  0  𝄀
+32  ¦  0  𝄀
+33  ¦  0
+select id, sma(CAST(2 AS DOUBLE), 3) over (order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  sma(cast(2 as double), 3) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  2.0  𝄀
+4  ¦  2.0  𝄀
+5  ¦  2.0  𝄀
+6  ¦  2.0
+select id, ema(CAST(2 AS DOUBLE), 2) over (order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  ema(cast(2 as double), 2) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  2.0  𝄀
+3  ¦  2.0  𝄀
+4  ¦  2.0  𝄀
+5  ¦  2.0  𝄀
+6  ¦  2.0
+select id, mmaxDrawdown(CAST(2 AS DOUBLE), 3) over (order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  mmaxDrawdown(cast(2 as double), 3) over (order by id)[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  0.0  𝄀
+4  ¦  0.0  𝄀
+5  ¦  0.0  𝄀
+6  ¦  0.0
+select id, cumPositiveStreak(CAST(2 AS DOUBLE)) over (order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  cumPositiveStreak(cast(2 as double)) over (order by id)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  4  𝄀
+5  ¦  5  𝄀
+6  ¦  6
+select id, x, sma(x, 1) over (partition by g order by id), ema(x, 1) over (partition by g order by id), wilder(x, 1) over (partition by g order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  sma(x, 1) over (partition by g order by id)[8,53,31]  ¦  ema(x, 1) over (partition by g order by id)[8,53,31]  ¦  wilder(x, 1) over (partition by g order by id)[8,53,31]  𝄀
+1  ¦  100.0  ¦  100.0  ¦  100.0  ¦  100.0  𝄀
+2  ¦  120.0  ¦  120.0  ¦  120.0  ¦  120.0  𝄀
+3  ¦  90.0  ¦  90.0  ¦  90.0  ¦  90.0  𝄀
+4  ¦  110.0  ¦  110.0  ¦  110.0  ¦  110.0  𝄀
+5  ¦  80.0  ¦  80.0  ¦  80.0  ¦  80.0  𝄀
+6  ¦  70.0  ¦  70.0  ¦  70.0  ¦  70.0
+select id, x, dema(x, 1) over (order by id), tema(x, 1) over (order by id) from ind_kernels_series where g = 3 order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  dema(x, 1) over (order by id)[8,53,31]  ¦  tema(x, 1) over (order by id)[8,53,31]  𝄀
+21  ¦  10.0  ¦  10.0  ¦  10.0  𝄀
+22  ¦  20.0  ¦  20.0  ¦  20.0  𝄀
+23  ¦  30.0  ¦  30.0  ¦  30.0  𝄀
+24  ¦  30.0  ¦  30.0  ¦  30.0  𝄀
+25  ¦  30.0  ¦  30.0  ¦  30.0
+select id, x, mmaxDrawdown(x, 4) over (order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  mmaxDrawdown(x, 4) over (order by id)[8,53,31]  𝄀
+1  ¦  100.0  ¦  null  𝄀
+2  ¦  120.0  ¦  null  𝄀
+3  ¦  90.0  ¦  null  𝄀
+4  ¦  110.0  ¦  0.25  𝄀
+5  ¦  80.0  ¦  0.33333333333333337  𝄀
+6  ¦  70.0  ¦  0.36363636363636365
+select id, x, mmaxDrawdown(x, 3) over (order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  mmaxDrawdown(x, 3) over (order by id)[8,53,31]  𝄀
+1  ¦  100.0  ¦  null  𝄀
+2  ¦  120.0  ¦  null  𝄀
+3  ¦  90.0  ¦  0.25  𝄀
+4  ¦  110.0  ¦  0.25  𝄀
+5  ¦  80.0  ¦  0.2727272727272727  𝄀
+6  ¦  70.0  ¦  0.36363636363636365
+select id, x, mmaxDrawdown(x, 2) over (order by id) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  mmaxDrawdown(x, 2) over (order by id)[8,53,31]  𝄀
+1  ¦  100.0  ¦  null  𝄀
+2  ¦  120.0  ¦  0.0  𝄀
+3  ¦  90.0  ¦  0.25  𝄀
+4  ¦  110.0  ¦  0.0  𝄀
+5  ¦  80.0  ¦  0.2727272727272727  𝄀
+6  ¦  70.0  ¦  0.125
+drop table if exists ind_kernels_dd;
+create table ind_kernels_dd(case_id int, ord int, v double);
+insert into ind_kernels_dd values (1,1,100),(1,2,0),(2,1,100),(2,2,-20),(3,1,1),(3,2,-10),
+(4,1,0),(4,2,0),(5,1,0),(5,2,-5),(6,1,-10),(6,2,-20),
+(7,1,100),(7,2,90),(7,3,NULL),(8,1,100),(8,2,90),(8,3,NULL),(8,4,95),
+(9,1,NULL),(9,2,NULL),(9,3,100),(9,4,95);
+select case_id, ord, mmaxDrawdown(v, 3) over (partition by case_id order by ord) from ind_kernels_dd order by case_id, ord;
+➤ case_id[4,32,0]  ¦  ord[4,32,0]  ¦  mmaxDrawdown(v, 3) over (partition by case_id order by ord)[8,53,31]  𝄀
+1  ¦  1  ¦  null  𝄀
+1  ¦  2  ¦  null  𝄀
+2  ¦  1  ¦  null  𝄀
+2  ¦  2  ¦  null  𝄀
+3  ¦  1  ¦  null  𝄀
+3  ¦  2  ¦  null  𝄀
+4  ¦  1  ¦  null  𝄀
+4  ¦  2  ¦  null  𝄀
+5  ¦  1  ¦  null  𝄀
+5  ¦  2  ¦  null  𝄀
+6  ¦  1  ¦  null  𝄀
+6  ¦  2  ¦  null  𝄀
+7  ¦  1  ¦  null  𝄀
+7  ¦  2  ¦  null  𝄀
+7  ¦  3  ¦  null  𝄀
+8  ¦  1  ¦  null  𝄀
+8  ¦  2  ¦  null  𝄀
+8  ¦  3  ¦  null  𝄀
+8  ¦  4  ¦  0.0  𝄀
+9  ¦  1  ¦  null  𝄀
+9  ¦  2  ¦  null  𝄀
+9  ¦  3  ¦  0.0  𝄀
+9  ¦  4  ¦  0.050000000000000044
+select case_id, ord, mmaxDrawdown(v, 2) over (partition by case_id order by ord) from ind_kernels_dd order by case_id, ord;
+➤ case_id[4,32,0]  ¦  ord[4,32,0]  ¦  mmaxDrawdown(v, 2) over (partition by case_id order by ord)[8,53,31]  𝄀
+1  ¦  1  ¦  null  𝄀
+1  ¦  2  ¦  1.0  𝄀
+2  ¦  1  ¦  null  𝄀
+2  ¦  2  ¦  1.2  𝄀
+3  ¦  1  ¦  null  𝄀
+3  ¦  2  ¦  11.0  𝄀
+4  ¦  1  ¦  null  𝄀
+4  ¦  2  ¦  null  𝄀
+5  ¦  1  ¦  null  𝄀
+5  ¦  2  ¦  null  𝄀
+6  ¦  1  ¦  null  𝄀
+6  ¦  2  ¦  null  𝄀
+7  ¦  1  ¦  null  𝄀
+7  ¦  2  ¦  0.09999999999999998  𝄀
+7  ¦  3  ¦  null  𝄀
+8  ¦  1  ¦  null  𝄀
+8  ¦  2  ¦  0.09999999999999998  𝄀
+8  ¦  3  ¦  null  𝄀
+8  ¦  4  ¦  0.0  𝄀
+9  ¦  1  ¦  null  𝄀
+9  ¦  2  ¦  null  𝄀
+9  ¦  3  ¦  0.0  𝄀
+9  ¦  4  ¦  0.050000000000000044
+select case_id, ord, mmaxDrawdown(v, 1) over (partition by case_id order by ord) from ind_kernels_dd where case_id in (4,5,6,9) order by case_id, ord;
+➤ case_id[4,32,0]  ¦  ord[4,32,0]  ¦  mmaxDrawdown(v, 1) over (partition by case_id order by ord)[8,53,31]  𝄀
+4  ¦  1  ¦  null  𝄀
+4  ¦  2  ¦  null  𝄀
+5  ¦  1  ¦  null  𝄀
+5  ¦  2  ¦  null  𝄀
+6  ¦  1  ¦  null  𝄀
+6  ¦  2  ¦  null  𝄀
+9  ¦  1  ¦  null  𝄀
+9  ¦  2  ¦  null  𝄀
+9  ¦  3  ¦  0.0  𝄀
+9  ¦  4  ¦  0.0
+select id, kama(x, 2) over (order by id), kama(x, 4) over (order by id) from ind_kernels_series where g = 3 order by id;
+➤ id[4,32,0]  ¦  kama(x, 2) over (order by id)[8,53,31]  ¦  kama(x, 4) over (order by id)[8,53,31]  𝄀
+21  ¦  null  ¦  null  𝄀
+22  ¦  null  ¦  null  𝄀
+23  ¦  24.444444444444443  ¦  null  𝄀
+24  ¦  26.91358024691358  ¦  null  𝄀
+25  ¦  26.926426947238603  ¦  30.0
+select id, mmaxDrawdown(x, 2) over (order by id) from (select 1 id, CAST(1e-308 AS DOUBLE) x union all select 2, CAST(-1e308 AS DOUBLE)) t order by id;
+invalid input: drawdown ratio is not finite for mmaxdrawdown at row 2
+select id, dema(x, 2) over (order by id) from (select 1 id, CAST(1.7976931348623157e308 AS DOUBLE) x union all select 2, CAST(1 AS DOUBLE)) t order by id;
+invalid input: input magnitude exceeds the finite range of dema (period n = 2, bound MAXFLOAT/3)
+WITH a AS (SELECT id,price,MAX(price) OVER(ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) peak
+FROM (
+SELECT 1 id,CAST(100 AS DOUBLE) price
+UNION ALL SELECT 2,120
+UNION ALL SELECT 3,90
+UNION ALL SELECT 4,110) fixture) SELECT id,MAX(CAST(1 AS DOUBLE)-price/peak) OVER(ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) result FROM a ORDER BY id;
+➤ id[-5,64,0]  ¦  result[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.25  𝄀
+4  ¦  0.25
+select id, x, avg(x) over (order by id rows between 2 preceding and current row) from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  avg(x) over (order by id rows between 2 preceding and current row)[8,53,31]  𝄀
+1  ¦  100.0  ¦  100.0  𝄀
+2  ¦  120.0  ¦  110.0  𝄀
+3  ¦  90.0  ¦  103.33333333333333  𝄀
+4  ¦  110.0  ¦  106.66666666666667  𝄀
+5  ¦  80.0  ¦  93.33333333333333  𝄀
+6  ¦  70.0  ¦  86.66666666666667
+select id, x, x / lag(x, 3) over (order by id) - 1 pct_change_3 from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  pct_change_3[8,53,31]  𝄀
+1  ¦  100.0  ¦  null  𝄀
+2  ¦  120.0  ¦  null  𝄀
+3  ¦  90.0  ¦  null  𝄀
+4  ¦  110.0  ¦  0.10000000000000009  𝄀
+5  ¦  80.0  ¦  -0.33333333333333337  𝄀
+6  ¦  70.0  ¦  -0.2222222222222222
+select id, x, avg(up) over (order by id rows between 9 preceding and current row) up_share_10
+from (select id, x, case when x > lag(x) over (order by id) then 1 else 0 end up
+from ind_kernels_series where g = 1) t order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  up_share_10[3,23,4]  𝄀
+1  ¦  100.0  ¦  0.0000  𝄀
+2  ¦  120.0  ¦  0.5000  𝄀
+3  ¦  90.0  ¦  0.3333  𝄀
+4  ¦  110.0  ¦  0.5000  𝄀
+5  ¦  80.0  ¦  0.4000  𝄀
+6  ¦  70.0  ¦  0.3333
+select id, x, least(cumPositiveStreak(x) over (order by id), 2) streak_max_2 from ind_kernels_series where g = 1 order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  streak_max_2[-5,64,0]  𝄀
+1  ¦  100.0  ¦  1  𝄀
+2  ¦  120.0  ¦  2  𝄀
+3  ¦  90.0  ¦  2  𝄀
+4  ¦  110.0  ¦  2  𝄀
+5  ¦  80.0  ¦  2  𝄀
+6  ¦  70.0  ¦  2
+drop database ind_kernels_bvt;

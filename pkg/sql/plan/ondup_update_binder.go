@@ -236,7 +236,12 @@ func NewOndupUpdateBinder(
 	}
 	b.sysCtx = sysCtx
 	b.builder = builder
-	b.ctx = ctx
+	// The conflict row is a lexical owner. Nested subqueries capture this
+	// assignment image, rather than the incoming INSERT projection.
+	b.ctx = NewBindContext(builder, ctx)
+	b.ctx.binder = b
+	b.ctx.bindingByTag[scanTag] = &Binding{tag: scanTag}
+	b.ctx.bindingByTag[selectTag] = &Binding{tag: selectTag}
 	b.impl = b
 
 	return b
@@ -274,6 +279,10 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 			if !ok || (b.rowAlias != nil && b.tableDef.Cols[idx].Hidden) {
 				return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", col.ColNameOrigin())
 			}
+			if depth > 0 {
+				return &plan.Expr{Typ: b.tableDef.Cols[idx].Typ,
+					Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: b.selectTag, ColPos: idx, Depth: depth}}}, nil
+			}
 
 			return &plan.Expr{
 				Typ: b.tableDef.Cols[idx].Typ,
@@ -292,9 +301,6 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 }
 
 func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
-	if err := b.validateSubqueryAdmission(astExpr); err != nil {
-		return nil, err
-	}
 	if !useNumericAssignmentContext(target, b.builder.isInsertIgnore) {
 		return b.BindExpr(astExpr, 0, true)
 	}
@@ -324,6 +330,25 @@ func scalarSubqueryExpr(astExpr tree.Expr) (*tree.Subquery, bool) {
 }
 
 func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
+	if b.rowAlias == nil {
+		// Preserve main's legacy ODKU name resolution and error precedence.
+		if err := validateInsertColumnQualifiers(b.GetContext(), []*tree.UnresolvedName{astExpr},
+			b.targetDBName, b.targetTableName, b.lowerCaseTableNames); err != nil {
+			return nil, err
+		}
+		colName := astExpr.ColName()
+		idx, ok := b.tableDef.Name2ColIndex[colName]
+		if !ok {
+			return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
+		}
+		if depth > 0 {
+			return &plan.Expr{Typ: b.tableDef.Cols[idx].Typ,
+				Expr: &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: b.scanTag, ColPos: idx, Depth: depth}}}, nil
+		}
+		return &plan.Expr{Typ: b.tableDef.Cols[idx].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: b.scanTag, ColPos: int32(idx), Name: colName,
+		}}}, nil
+	}
 	colName := astExpr.ColName()
 	tableName := astExpr.TblName()
 	dbName := astExpr.DbName()
@@ -343,14 +368,19 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 		}
 		return b.makeColRef(column.targetIdx, column.incomingPos, depth, colName, b.selectTag), nil
 	}
-
+	if depth == 0 {
+		if err := validateInsertColumnQualifiers(b.GetContext(), []*tree.UnresolvedName{astExpr},
+			b.targetDBName, b.targetTableName, b.lowerCaseTableNames); err != nil {
+			return nil, err
+		}
+	}
 	if tableName != "" {
 		if tableName != targetTableName || (dbName != "" && dbName != targetDBName) {
 			// At a correlated depth, let the ordinary parent chain resolve a
 			// local/outer subquery table before reporting this ODKU scope as
 			// missing. At depth zero no other table is legal in this scope.
 			if depth > 0 {
-				return b.baseBindColRef(astExpr, depth, isRoot)
+				return b.bindOuterColRef(astExpr, depth, isRoot)
 			}
 			return nil, moerr.NewInvalidInputf(b.GetContext(),
 				"missing FROM-clause entry for table '%s'", astExpr.TblNameOrigin())
@@ -389,17 +419,34 @@ func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32
 		return b.makeColRef(int(idx), int(idx), depth, colName, relPos), nil
 	}
 	if depth > 0 {
-		return b.baseBindColRef(astExpr, depth, isRoot)
+		return b.bindOuterColRef(astExpr, depth, isRoot)
 	}
 
 	return nil, moerr.NewBadFieldErrorf(b.GetContext(),
 		"invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
 }
 
-func (b *OndupUpdateBinder) makeColRef(targetIdx, colPos int, depth int32, name string, relPos int32) *plan.Expr {
-	if depth > 0 && b.builder != nil && b.builder.odkuAdmission != nil {
-		b.builder.odkuAdmission.hasOuterReference = true
+// bindOuterColRef skips a parent context that points back to this same binder.
+// The conflict-row scope owns a nested context, while its caller may also
+// temporarily install this binder on the parent during RHS binding.
+func (b *OndupUpdateBinder) bindOuterColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
+	if b.ctx == nil {
+		return b.baseBindColRef(astExpr, depth, isRoot)
 	}
+	scope := *b.ctx
+	for scope.parent != nil && (scope.parent.binder == nil || scope.parent.binder == b) {
+		scope.parent = scope.parent.parent
+	}
+	outer := b.baseBinder
+	outer.ctx = &scope
+	expr, err := outer.baseBindColRef(astExpr, depth, isRoot)
+	if scope.isCorrelated {
+		b.ctx.isCorrelated = true
+	}
+	return expr, err
+}
+
+func (b *OndupUpdateBinder) makeColRef(targetIdx, colPos int, depth int32, name string, relPos int32) *plan.Expr {
 	expr := &plan.Expr{Typ: b.tableDef.Cols[targetIdx].Typ}
 	if depth == 0 {
 		expr.Expr = &plan.Expr_Col{Col: &plan.ColRef{
@@ -423,50 +470,6 @@ func (b *OndupUpdateBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr,
 
 func (b *OndupUpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return nil, moerr.NewInvalidInputf(b.GetContext(), "cannot bind window functions '%s'", funcName)
-}
-
-// odkuAdmissionState belongs exclusively to a validation-only builder. A
-// resolved outer reference survives a later sibling error independently of
-// whether the complete subquery expression can be built.
-type odkuAdmissionState struct {
-	hasOuterReference bool
-	// Recovery only needs to visit operands that ordinary binding did not
-	// reach. Keep visits scoped to their canonical query block and depth;
-	// the same AST in another scope must still resolve its own provenance.
-	visited map[odkuAdmissionExprKey]struct{}
-}
-
-type odkuAdmissionExprKey struct {
-	expr  tree.Expr
-	ctx   *BindContext
-	depth int32
-}
-
-// validateSubqueryAdmission classifies the complete legacy assignment before
-// ordinary binding can stop on an unrelated earlier operand or type error.
-func (b *OndupUpdateBinder) validateSubqueryAdmission(astExpr tree.Expr) error {
-	if b.rowAlias == nil && b.builder != nil && b.builder.odkuAdmission == nil && b.ctx != nil && valueExprContainsSubquery(astExpr) {
-		hasOuterReference := func() bool {
-			probe := NewQueryBuilder(plan.Query_SELECT, b.builder.compCtx, b.builder.isPrepareStatement, true)
-			probe.nextBindTag = b.builder.nextBindTag
-			probe.odkuAdmission = &odkuAdmissionState{}
-			probeCtx := cloneBindContextForWindowValidation(b.ctx)
-			probeCtx.odkuAdmission = probe.odkuAdmission
-			restoreCTEs := snapshotWindowValidationCTEState(probeCtx, true)
-			defer restoreCTEs()
-			binder := NewOndupUpdateBinder(b.GetContext(), probe, probeCtx,
-				b.scanTag, b.selectTag, b.tableDef, b.targetDBName, b.targetTableName,
-				b.lowerCaseTableNames, b.rowAlias)
-			binder.SetTargetCorrelationTag(b.targetCorrelationTag)
-			probeCtx.binder = binder
-			_, _ = binder.BindExpr(cloneTreeExpr(astExpr), 0, true)
-			return probe.odkuAdmission.hasOuterReference
-		}()
-		if hasOuterReference {
-			return moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
-		}
-	}
-	return nil
 }
 
 func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {

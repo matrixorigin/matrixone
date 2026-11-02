@@ -53,10 +53,11 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
-	memCache    *MemCache
-	diskCache   *DiskCache
-	remoteCache *RemoteCache
-	asyncUpdate bool
+	memCache       *MemCache
+	diskCache      *DiskCache
+	indexFileCache *IndexFileCache
+	remoteCache    *RemoteCache
+	asyncUpdate    bool
 
 	perfCounterSets []*perfcounter.CounterSet
 
@@ -107,34 +108,12 @@ func newLocalFS(
 	noChecksum bool,
 ) (*LocalFS, error) {
 
-	// Keep os.CreateTemp and the final rename under one filesystem root. An
-	// empty root still means the current working directory, but make that
-	// meaning explicit before any temporary file is created.
-	if rootPath == "" {
-		rootPath = "."
-	}
-	var err error
-	rootPath, err = filepath.Abs(rootPath)
+	rootPath, rootFile, err := prepareLocalRoot(rootPath)
 	if err != nil {
 		return nil, err
 	}
-
-	// ensure dir
-	f, err := os.Open(rootPath)
-	if os.IsNotExist(err) {
-		// not exists, create
-		err := os.MkdirAll(rootPath, 0755)
-		if err != nil {
-			return nil, err
-		}
-
-	} else if err != nil {
-		// stat error
-		return nil, err
-
-	} else {
-		defer f.Close()
-
+	if rootFile != nil {
+		defer rootFile.Close()
 	}
 
 	fs := &LocalFS{
@@ -283,6 +262,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	l.remoteCache = caches.remote
 	l.memCache = caches.memory
 	l.diskCache = caches.disk
+	l.indexFileCache = caches.index
 	return nil
 }
 
@@ -1033,9 +1013,11 @@ func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
-	nativePath := l.toNativeFilePath(path.File)
+	return deleteLocalFile(&l.RWMutex, l.dirFiles, l.toNativeFilePath(path.File))
+}
 
-	_, err = os.Stat(nativePath)
+func deleteLocalFile(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath string) error {
+	_, err := os.Stat(nativePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// ignore not found error
@@ -1050,7 +1032,7 @@ func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	}
 
 	parentDir, _ := filepath.Split(nativePath)
-	err = l.syncDir(parentDir)
+	err = syncLocalDir(mu, dirFiles, parentDir)
 	if err != nil {
 		return err
 	}
@@ -1169,20 +1151,29 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 }
 
 func (l *LocalFS) ensureDir(nativePath string) error {
+	return ensureLocalDir(&l.RWMutex, l.dirFiles, nativePath)
+}
+
+func (l *LocalFS) syncDir(nativePath string) error {
+	return syncLocalDir(&l.RWMutex, l.dirFiles, nativePath)
+}
+
+// ensureLocalDir preserves the caller's directory cache and synchronization.
+func ensureLocalDir(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath string) error {
 	nativePath = filepath.Clean(nativePath)
 	if nativePath == "" {
 		return nil
 	}
 
-	// check existence by l.dirFiles
-	l.RLock()
-	_, ok := l.dirFiles[nativePath]
+	// check existence by dirFiles
+	mu.RLock()
+	_, ok := dirFiles[nativePath]
 	if ok {
 		// dir existed
-		l.RUnlock()
+		mu.RUnlock()
 		return nil
 	}
-	l.RUnlock()
+	mu.RUnlock()
 
 	// check existence by fstat
 	_, err := os.Stat(nativePath)
@@ -1194,7 +1185,7 @@ func (l *LocalFS) ensureDir(nativePath string) error {
 	// ensure parent
 	parent, _ := filepath.Split(nativePath)
 	if parent != nativePath {
-		if err := l.ensureDir(parent); err != nil {
+		if err := ensureLocalDir(mu, dirFiles, parent); err != nil {
 			return err
 		}
 	}
@@ -1209,50 +1200,129 @@ func (l *LocalFS) ensureDir(nativePath string) error {
 	}
 
 	// sync parent dir
-	if err := l.syncDir(parent); err != nil {
+	if err := syncLocalDir(mu, dirFiles, parent); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (l *LocalFS) syncDir(nativePath string) error {
-	l.Lock()
-	f, ok := l.dirFiles[nativePath]
+// syncLocalDir opens and syncs a directory using the caller-owned cache.
+func syncLocalDir(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath string) error {
+	mu.Lock()
+	f, ok := dirFiles[nativePath]
 	if !ok {
 		var err error
 		f, err = os.Open(nativePath)
 		if err != nil {
-			l.Unlock()
+			mu.Unlock()
 			return err
 		}
-		l.dirFiles[nativePath] = f
+		dirFiles[nativePath] = f
 	}
-	l.Unlock()
+	mu.Unlock()
 	if err := f.Sync(); err != nil {
 		return err
 	}
 	return nil
 }
 
+// prepareLocalRoot keeps temporary writes on the same filesystem as their destination.
+// The caller closes the returned directory handle when its constructor returns.
+func prepareLocalRoot(rootPath string) (string, *os.File, error) {
+	if rootPath == "" {
+		rootPath = "."
+	}
+	rootPath, err := filepath.Abs(rootPath)
+	if err != nil {
+		return "", nil, err
+	}
+	rootFile, err := os.Open(rootPath)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(rootPath, 0755); err != nil {
+			return "", nil, err
+		}
+		return rootPath, nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	return rootPath, rootFile, nil
+}
+
 func (l *LocalFS) toNativeFilePath(filePath string) string {
 	return filepath.Join(l.rootPath, toOSPath(filePath))
+}
+
+// openLocalMutatorFile validates the service path and returns an opened file
+// only when the OS open succeeds. The caller owns the returned file.
+func openLocalMutatorFile(ctx context.Context, serviceName, filePath string, toNativePath func(string) string) (*os.File, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path, err := parseFilePathAtService(filePath, serviceName)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(toNativePath(path.File), os.O_RDWR, 0644)
+	if os.IsNotExist(err) {
+		return nil, moerr.NewFileNotFoundNoCtx(path.File)
+	}
+	return f, err
+}
+
+func ensureMutableLocalDir(ctx context.Context, name, filePath string, native func(string) string, ensure func(string) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := ParsePathAtService(filePath, name)
+	if err != nil {
+		return err
+	}
+	return ensure(native(path.File))
+}
+
+func mutableLocalPath(ctx context.Context, name, filePath string, native func(string) string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	path, err := parseFilePathAtService(filePath, name)
+	if err != nil {
+		return "", err
+	}
+	return native(path.File), nil
+}
+
+func openMutableLocalFile(ctx context.Context, name, filePath string, native func(string) string) (*os.File, error) {
+	path, err := mutableLocalPath(ctx, name, filePath, native)
+	if err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_RDWR, 0644)
+}
+
+func createMutableLocalFile(ctx context.Context, name, filePath string, native func(string) string) (*os.File, error) {
+	path, err := mutableLocalPath(ctx, name, filePath, native)
+	if err != nil {
+		return nil, err
+	}
+	return os.Create(path)
+}
+
+func removeMutableLocalFile(ctx context.Context, name, filePath string, native func(string) string) error {
+	path, err := mutableLocalPath(ctx, name, filePath, native)
+	if err != nil {
+		return err
+	}
+	return os.Remove(path)
 }
 
 var _ MutableFileService = new(LocalFS)
 
 func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	path, err := parseFilePathAtService(filePath, l.name)
+	f, err := openLocalMutatorFile(ctx, l.name, filePath, l.toNativeFilePath)
 	if err != nil {
 		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
-	if os.IsNotExist(err) {
-		return nil, moerr.NewFileNotFoundNoCtx(path.File)
 	}
 	return &LocalFSMutator{
 		osFile:           f,
@@ -1289,29 +1359,39 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 		return err
 	}
 
+	return writeLocalMutatorEntries(l.fileWithChecksum, baseOffset, entries)
+}
+
+type localMutatorFile interface {
+	io.Writer
+	io.WriterAt
+	io.Seeker
+}
+
+func writeLocalMutatorEntries(file localMutatorFile, baseOffset int64, entries []IOEntry) error {
 	// write
 	for _, entry := range entries {
 
 		if entry.ReaderForWrite != nil {
 			// seek and copy
-			_, err := l.fileWithChecksum.Seek(entry.Offset+baseOffset, 0)
+			_, err := file.Seek(entry.Offset+baseOffset, 0)
 			if err != nil {
 				return err
 			}
 			var buf []byte
 			put := ioBufferPool.Get(&buf)
 			defer put.Put()
-			n, err := io.CopyBuffer(l.fileWithChecksum, entry.ReaderForWrite, buf)
+			n, err := io.CopyBuffer(file, entry.ReaderForWrite, buf)
 			if err != nil {
 				return err
 			}
-			if int64(n) != entry.Size {
+			if n != entry.Size {
 				return moerr.NewSizeNotMatchNoCtx("")
 			}
 
 		} else {
 			// WriteAt
-			n, err := l.fileWithChecksum.WriteAt(entry.Data, int64(entry.Offset+baseOffset))
+			n, err := file.WriteAt(entry.Data, int64(entry.Offset+baseOffset))
 			if err != nil {
 				return err
 			}
@@ -1353,8 +1433,13 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 
 var _ CachingFileService = new(LocalFS)
 
+// IndexFileCache returns the index-file cache, or nil.
+func (l *LocalFS) IndexFileCache() *IndexFileCache {
+	return l.indexFileCache
+}
+
 func (l *LocalFS) Close(ctx context.Context) {
-	caches := fileServiceCaches{memory: l.memCache, disk: l.diskCache}
+	caches := fileServiceCaches{memory: l.memCache, disk: l.diskCache, index: l.indexFileCache}
 	caches.close(ctx)
 	closeDirFiles(&l.RWMutex, l.dirFiles)
 }
@@ -1417,63 +1502,23 @@ func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 	return false, nil
 }
 
-// open for read and write, raw os.File API.
+// EnsureDir creates a directory for a local file service.
 func (l *LocalFS) EnsureDir(ctx context.Context, filePath string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	path, err := ParsePathAtService(filePath, l.name)
-	if err != nil {
-		return err
-	}
-	return l.ensureDir(l.toNativeFilePath(path.File))
+	return ensureMutableLocalDir(ctx, l.name, filePath, l.toNativeFilePath, l.ensureDir)
 }
 
 func (l *LocalFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
-	err := ctx.Err()
-	if err != nil {
-		return nil, err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	return os.OpenFile(nativePath, os.O_RDWR, 0644)
+	return openMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath)
 }
 
-// create or truncate.
 func (l *LocalFS) CreateFile(ctx context.Context, filePath string) (*os.File, error) {
-	err := ctx.Err()
-	if err != nil {
-		return nil, err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	return os.Create(nativePath)
+	return createMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath)
 }
 
-// remove file
 func (l *LocalFS) RemoveFile(ctx context.Context, filePath string) error {
-	err := ctx.Err()
-	if err != nil {
-		return err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	return os.Remove(nativePath)
+	return removeMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath)
 }
 
-// open/create then immediately remove.   the opend file is good for read/write.
 func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
 	err := ctx.Err()
 	if err != nil {

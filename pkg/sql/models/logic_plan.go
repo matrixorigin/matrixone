@@ -192,13 +192,6 @@ func NewGlobal() *Global {
 	}
 }
 
-func NewLabel(name string, value interface{}) *Label {
-	return &Label{
-		Name:  name,
-		Value: value,
-	}
-}
-
 func NewStatistics() *Statistics {
 	return &Statistics{
 		Memory:     make([]StatisticValue, 0),
@@ -209,31 +202,6 @@ func NewStatistics() *Statistics {
 }
 
 //----------------------------------------------------------------------------------------------------------------------
-
-const TableScan = "Table Scan"
-const ExternalScan = "External Scan"
-
-// StatisticsRead statistics read rows, size in ExplainData
-//
-// Deprecated: please use explain.GetInputRowsAndInputSize instead.
-func (d *ExplainData) StatisticsRead() (rows int64, size int64) {
-	for _, step := range d.Steps {
-		for _, node := range step.GraphData.Nodes {
-			if node.Name != TableScan && node.Name != ExternalScan {
-				continue
-			}
-			for _, s := range node.Statistics.Throughput {
-				switch s.Name {
-				case InputRows:
-					rows += s.Value
-				case InputSize:
-					size += s.Value
-				}
-			}
-		}
-	}
-	return
-}
 
 // Statistics of global resource usage, adding resources of all nodes
 func (graphData *GraphData) StatisticsGlobalResource(ctx context.Context) error {

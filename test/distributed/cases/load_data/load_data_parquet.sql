@@ -354,6 +354,7 @@ load data infile {'filepath'='$resources/parquet/decimal_boundary_test.parquet',
 select * from pq_decimal_boundary;
 select dec_p38_s0 from pq_decimal_boundary WHERE dec_p38_s0 > 0;
 select dec_p38_s38 from pq_decimal_boundary WHERE dec_p38_s38 > 0;
+-- @metacmp(true)
 select dec_p9_s2 * 1.1 from pq_decimal_boundary LIMIT 1;
 
 

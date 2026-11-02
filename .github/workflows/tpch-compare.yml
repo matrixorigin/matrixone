@@ -1,0 +1,33 @@
+name: TPC-H comparison harness
+
+on:
+  pull_request:
+    paths:
+      - 'optools/tpch_compare/**'
+      - '.github/workflows/tpch-compare.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: optools/tpch_compare
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: optools/tpch_compare/go.mod
+          cache-dependency-path: optools/tpch_compare/go.sum
+      - name: Formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Static checks
+        run: GOWORK=off go vet -mod=readonly ./...
+      - name: Deterministic tests and native client fixture
+        run: GOWORK=off go test -mod=readonly -race -count=1 -timeout=120s ./...
+      - name: Build CLI
+        run: GOWORK=off go build -mod=readonly -o tpch-compare .

@@ -17,6 +17,7 @@ package lockservice
 import (
 	"cmp"
 	"context"
+	"errors"
 	"math/rand"
 	"slices"
 	"sort"
@@ -422,6 +423,13 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 	}
 	handleResult := func(result keepResult) {
 		if result.err != nil {
+			// Caller cancellation is not evidence that a remote owner failed. Do
+			// not log it or queue one allocator refresh per cancelled request.
+			// Successful responses carrying a newer bind, and explicit bind-change
+			// errors, still take the fencing path.
+			if callerErr := ctx.Err(); callerErr != nil && errors.Is(result.err, callerErr) {
+				return
+			}
 			recordFailure(result.bind, result.err)
 		}
 		if result.refresh {
@@ -487,6 +495,14 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 	bind pb.LockTable,
 	invalidateAfterRefresh bool,
 ) {
+	if ctx.Err() != nil {
+		// An ended round cannot refresh from the allocator. Keep the
+		// authoritative fencing side effect for a bind-change response.
+		if invalidateAfterRefresh {
+			k.invalidateRemoteBind(bind)
+		}
+		return
+	}
 	requestAllocator := k.service.allocatorStateSnapshot()
 	newBind, allocator, err := getLockTableBindWithContext(
 		ctx,

@@ -21,7 +21,7 @@ SELECT JSON_LENGTH('false') AS result;
 1
 SELECT JSON_LENGTH('null') AS result;
 ➤ result[-5,64,0]  𝄀
-null
+1
 SELECT JSON_LENGTH('"hello"') AS result;
 ➤ result[-5,64,0]  𝄀
 1

@@ -75,7 +75,6 @@ type ProgressTracker struct {
 	totalSQLExecuted      atomic.Uint64 // Total SQL statements executed
 
 	// Timing metrics
-	lastRoundStartTime  time.Time
 	lastRoundDuration   time.Duration
 	avgRoundDuration    time.Duration
 	maxRoundDuration    time.Duration
@@ -241,7 +240,6 @@ func (pt *ProgressTracker) EndRound(success bool, err error) {
 
 	duration := time.Since(pt.currentRoundStartTime)
 	pt.lastRoundDuration = duration
-	pt.lastRoundStartTime = pt.currentRoundStartTime
 	pt.totalProcessingTime += duration
 
 	// Update average and max duration

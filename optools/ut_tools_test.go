@@ -220,7 +220,14 @@ if [[ "$MOCK_SHADOW" == true ]]; then
 fi
 mkdir -p "$BUILD_WKSP/ut-report/failed/outputs"
 printf 'previous failure\n' > "$BUILD_WKSP/ut-report/failed/outputs/stale"
-: > "$UT_REPORT"
+cat > "$UT_REPORT" <<'EOF'
+{"Action":"start","Package":"example/summary"}
+{"Action":"run","Package":"example/summary","Test":"TestSummary"}
+{"Action":"pause","Package":"example/summary","Test":"TestSummary"}
+{"Action":"cont","Package":"example/summary","Test":"TestSummary"}
+{"Action":"pass","Package":"example/summary","Test":"TestSummary"}
+{"Action":"pass","Package":"example/summary"}
+EOF
 ut_summary
 [[ ! -e "$BUILD_WKSP/ut-report/failed/outputs/stale" ]] || exit 93
 [[ -n $(find "$G_WKSP" -path '*previous-failed*/failed/outputs/stale' -type f -print -quit) ]] || exit 94

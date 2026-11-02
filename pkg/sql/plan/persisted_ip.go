@@ -21,6 +21,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -45,6 +46,42 @@ func RequirePersistedExpressionProtocolForAuthoring(
 	owner any,
 ) error {
 	return requirePersistedExpressionProtocol(ctx, proc, owner, true)
+}
+
+// RequireMySQLConditionalBooleanConsumption enforces the same-version
+// cross-mode boundary for an already-bound expression that crosses the
+// catalog boundary (persisted generated columns, defaults, CHECK, ON UPDATE,
+// VIEW/CTAS rebinds). The conditional boolean contracts are admitted and
+// evaluated only on a MySQL-mode statement; the durable protocol floor
+// cannot distinguish the two session modes at the same binary version. A
+// native-mode session keeps the pre-contract admission, so it must fail
+// closed here instead of mis-executing: the pre-contract BOOL decoding of a
+// T_json condition panics, and the ENUM storage-truth cast would apply the
+// new kernel to a native-mode statement.
+func RequireMySQLConditionalBooleanConsumption(
+	ctx context.Context,
+	proc *process.Process,
+	owner any,
+) error {
+	if owner == nil {
+		return nil
+	}
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	if err != nil {
+		return err
+	}
+	if !features.JSONBooleanConditionContracts {
+		return nil
+	}
+	if function.MySQLConditionalBooleanContractsFromProcess(proc) {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return moerr.NewNotSupported(
+		ctx,
+		"implicit boolean-condition contracts expression cannot be evaluated by a MatrixOne native-mode session")
 }
 
 // RequirePersistedIPFunctionProtocol is retained for source compatibility
@@ -102,8 +139,14 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		return 0, moerr.NewNotSupportedNoCtx("persisted legacy interval unit contract requires rebinding")
 	}
 	requiredVersion := int64(0)
+	if features.FloatConversionSemantics {
+		requiredVersion = defines.MORPCVersion132
+	}
+	if features.JSONNumericComparisons {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion128)
+	}
 	if features.IPFunctionSemantics {
-		requiredVersion = defines.MORPCVersion72
+		requiredVersion = max(requiredVersion, defines.MORPCVersion72)
 	}
 	if features.StringNumericResultContracts && requiredVersion < defines.MORPCVersion80 {
 		requiredVersion = defines.MORPCVersion80
@@ -127,6 +170,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.SpatialDistanceSemantics && requiredVersion < defines.MORPCVersion90 {
 		requiredVersion = defines.MORPCVersion90
 	}
+	if features.DecimalIntegerDivisionSemantics && requiredVersion < defines.MORPCVersion121 {
+		requiredVersion = defines.MORPCVersion121
+	}
 	if features.DecimalDivisionSemantics && requiredVersion < defines.MORPCVersion97 {
 		requiredVersion = defines.MORPCVersion97
 	}
@@ -141,11 +187,29 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.JSONInputContracts || features.YearBitCast {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion134)
+	}
+	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion129)
+	}
+	if features.JSONMinMaxTypedComparison {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion133)
+	}
+	if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion122)
+	}
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
 	}
+	if features.DependentPrograms {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
+	}
 	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+	}
+	if features.TimestampAddSecondIntervals {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion124)
 	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
@@ -156,15 +220,30 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
+	if features.ViewMetadataFunctions {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
+	}
+	if features.IncompleteTemporalStrings {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
+	}
 	return requiredVersion, nil
 }
 
-// observePersistedExpressionProtocol records the requirement while a
-// persisted view expression is still represented as a function tree. Binding
+// observeExpressionProtocol records the requirement while a
+// persisted view or CTAS expression is still represented as a function tree. Binding
 // folds some expressions (notably BETWEEN bounds) before the view validator
 // sees the plan; recording here keeps admission independent of that rewrite.
-func (b *baseBinder) observePersistedExpressionProtocol(expr *planpb.Expr) error {
-	if b == nil || b.ctx == nil || b.ctx.persistedExpressionProtocolRequirement == nil {
+func (b *baseBinder) observeExpressionProtocol(expr *planpb.Expr) error {
+	if b == nil || b.ctx == nil {
+		return nil
+	}
+	if requirement := b.ctx.ctasExecutionProtocolRequirement; requirement != nil && *requirement < defines.MORPCVersion122 {
+		timestamp, dynamicTime := planpb.TemporalResultContractFeatures(expr)
+		if timestamp || dynamicTime {
+			*requirement = defines.MORPCVersion122
+		}
+	}
+	if b.ctx.persistedExpressionProtocolRequirement == nil {
 		return nil
 	}
 	requiredVersion, err := RequiredPersistedExpressionProtocolVersion(expr)

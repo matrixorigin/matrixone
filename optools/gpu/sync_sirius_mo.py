@@ -64,6 +64,10 @@ def read_dependencies(manifest: Path, section: str) -> dict[str, str]:
 
 def desired_constraints(sirius_manifest: Path) -> dict[str, str]:
     sirius = read_dependencies(sirius_manifest, "feature.mo.dependencies")
+    # The standalone MO profile is linux-64. Sirius's combined profile also
+    # supports ARM and scopes its compiler packages to their native platform.
+    if "[feature.mo.target.linux-64.dependencies]" in sirius_manifest.read_text():
+        sirius.update(read_dependencies(sirius_manifest, "feature.mo.target.linux-64.dependencies"))
     missing = [name for name in SHARED if name not in sirius]
     if missing:
         raise ValueError(f"{sirius_manifest}: missing shared MO dependencies: {missing}")

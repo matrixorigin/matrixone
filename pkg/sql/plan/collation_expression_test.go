@@ -89,6 +89,18 @@ func TestBitwiseAggregateCollationProvenance(t *testing.T) {
 					require.Equal(t, expected, arg.Typ)
 					expected.NotNullable = true
 					require.Equal(t, expected, result.Typ)
+
+					// Consuming a binary declaration may change representation,
+					// but must not demote the aggregate's explicit collation.
+					binder := baseBinder{sysCtx: ctx}
+					consumed, err := binder.bindStringSourceDeclaration("=", []*Expr{result})
+					require.NoError(t, err)
+					consumedType := expected
+					if oid == types.T_binary {
+						consumedType.Id = int32(types.T_varbinary) // no fixed-width padding in the representation cast
+					}
+					require.Equal(t, consumedType, consumed[0].Typ)
+					require.Equal(t, expected, result.Typ, "the source declaration remains immutable")
 				})
 			}
 			text := makePlan2StringConstExprWithType("3")
@@ -126,6 +138,9 @@ func TestExplicitCollationConflicts(t *testing.T) {
 		"select greatest('a' collate utf8mb4_bin,'bb') = 'bb' collate utf8mb4_general_ci",
 		"select least('a' collate utf8mb4_bin,'b') = 'a' collate utf8mb4_general_ci",
 		"select name_const('x','a' collate utf8mb4_unicode_ci) = 'a' collate utf8mb4_bin",
+		"select bit_and(substring(cast(X'03' as binary(1)),1,511) collate binary) = (_utf8mb4'a' collate utf8mb4_bin)",
+		"select bit_or(substring(cast(X'03' as binary(1)),1,511) collate binary) = (_utf8mb4'a' collate utf8mb4_bin)",
+		"select bit_xor(substring(cast(X'03' as binary(1)),1,511) collate binary) = (_utf8mb4'a' collate utf8mb4_bin)",
 		"select least(coalesce(cast('a' as char(3)) collate utf8mb4_bin,'a'),coalesce(cast('bb' as char(3)),'bb')) = 'a' collate utf8mb4_general_ci",
 		"select greatest(coalesce(cast('a' as char(3)) collate utf8mb4_bin,'a'),coalesce(cast('bb' as char(3)),'bb')) = 'bb' collate utf8mb4_general_ci",
 		"select least(ifnull(cast('a' as char(3)) collate utf8mb4_bin,'a'),ifnull(cast('b' as char(4)),'b')) = 'a' collate utf8mb4_general_ci",
@@ -661,6 +676,43 @@ func TestExpressionCollationResolution(t *testing.T) {
 		require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), arg.Typ.Charset)
 		require.Equal(t, uint32(1), arg.Typ.CollationVersion)
 	}
+}
+
+func TestImplicitSameCharsetTextBinWinsAcrossCollationRevisions(t *testing.T) {
+	ctx := context.Background()
+	unicode := expressionCollation{charset: uint32(types.CharsetUTF8MB4UnicodeCI), version: 1, rank: 2}
+	general := expressionCollation{charset: uint32(types.CharsetUTF8), rank: 2}
+	bin := expressionCollation{charset: uint32(types.CharsetUTF8MB4Bin), rank: 2}
+	for _, candidates := range [][]expressionCollation{
+		{unicode, bin}, {bin, unicode},
+		{unicode, general, bin}, {bin, general, unicode},
+	} {
+		selected, active, err := resolveExpressionCollation(ctx, "=", candidates)
+		require.NoError(t, err)
+		require.True(t, active)
+		require.Equal(t, bin, selected)
+	}
+
+	// An explicit conflict, a different charset, or two CI revisions cannot
+	// borrow the implicit same-charset _bin precedence.
+	_, _, err := resolveExpressionCollation(ctx, "=", []expressionCollation{
+		{charset: unicode.charset, version: 1, rank: 0},
+		{charset: bin.charset, rank: 0},
+	})
+	require.Error(t, err)
+	_, _, err = resolveExpressionCollation(ctx, "=", []expressionCollation{
+		{charset: uint32(types.CharsetUTF8MB3UnicodeCI), version: 1, rank: 2}, bin,
+	})
+	require.Error(t, err)
+	_, _, err = resolveExpressionCollation(ctx, "=", []expressionCollation{unicode, general})
+	require.Error(t, err)
+	selected, active, err := resolveExpressionCollation(ctx, "=", []expressionCollation{
+		{charset: unicode.charset, version: 1, rank: 0}, bin,
+	})
+	require.NoError(t, err)
+	require.True(t, active)
+	require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), selected.charset)
+	require.Equal(t, uint32(1), selected.version)
 }
 
 func TestExpressionCollationVectorAndReuse(t *testing.T) {

@@ -36,9 +36,14 @@ if [ ! -d "$CONDA_PREFIX" ] || [ ! -d "$mo_gpu_expected_prefix" ] ||
     mo_gpu_env_error 'CONDA_PREFIX does not match the activated Pixi environment' || return 1
 fi
 MO_GPU_PREFIX=$(CDPATH= cd -P "$CONDA_PREFIX" && pwd)
-MO_GPU_CUDA_ROOT=$MO_GPU_PREFIX/targets/x86_64-linux
-MO_GPU_CC=$MO_GPU_PREFIX/bin/x86_64-conda-linux-gnu-cc
-MO_GPU_CXX=$MO_GPU_PREFIX/bin/x86_64-conda-linux-gnu-c++
+case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64) MO_GPU_TARGET_ARCH=x86_64; MO_GPU_CUDA_TARGET=x86_64 ;;
+    Linux/aarch64|Linux/arm64) MO_GPU_TARGET_ARCH=aarch64; MO_GPU_CUDA_TARGET=sbsa ;;
+    *) mo_gpu_env_error 'GPU builds require Linux amd64 or arm64' || return 1 ;;
+esac
+MO_GPU_CUDA_ROOT=$MO_GPU_PREFIX/targets/$MO_GPU_CUDA_TARGET-linux
+MO_GPU_CC=$MO_GPU_PREFIX/bin/$MO_GPU_TARGET_ARCH-conda-linux-gnu-cc
+MO_GPU_CXX=$MO_GPU_PREFIX/bin/$MO_GPU_TARGET_ARCH-conda-linux-gnu-c++
 MO_GPU_NVCC=$MO_GPU_PREFIX/bin/nvcc
 for mo_gpu_path in "$PIXI_PROJECT_ROOT/pixi.lock" \
     "$MO_GPU_CC" "$MO_GPU_CXX" "$MO_GPU_NVCC" \
@@ -58,6 +63,6 @@ MO_GPU_LDFLAGS="-L$MO_GPU_CUDA_ROOT/lib/stubs -lcuda -L$MO_GPU_CUDA_ROOT/lib -lc
 MO_GPU_RUNTIME_PATH="$MO_GPU_CUDA_ROOT/lib:$MO_GPU_PREFIX/lib"
 CC=$MO_GPU_CC
 CXX=$MO_GPU_CXX
-export MO_GPU_PREFIX MO_GPU_CUDA_ROOT MO_GPU_CC MO_GPU_CXX MO_GPU_NVCC
+export MO_GPU_PREFIX MO_GPU_TARGET_ARCH MO_GPU_CUDA_ROOT MO_GPU_CC MO_GPU_CXX MO_GPU_NVCC
 export MO_GPU_CFLAGS MO_GPU_LDFLAGS MO_GPU_RUNTIME_PATH CC CXX
 unset mo_gpu_path mo_gpu_expected_prefix

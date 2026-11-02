@@ -288,7 +288,7 @@ func runBranchRestartScenario(t *testing.T, sc branchRestartScenario) {
 
 	for restart := 1; restart <= sc.restarts; restart++ {
 		require.NoError(t, db.Close())
-		require.NoError(t, c.Close())
+		require.NoError(t, c.Stop())
 		ctx, err = start()
 		require.NoError(t, err)
 		db = openConn()

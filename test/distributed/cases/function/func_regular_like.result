@@ -19,6 +19,18 @@ NULL
 SELECT REGEXP_LIKE(NULL, NULL);
 regexp_like(null, null)
 NULL
+select regexp_like(cast(NULL as varbinary(20)), cast(concat('^', char(92), 'x{100}') as varbinary(20)), 'm');
+invalid input: binary regular expressions only support byte escapes up to \x{FF}
+select regexp_like(cast(NULL as varbinary(20)), cast(concat('^', char(92), 'x{100}') as varbinary(20)), 'mu');
+invalid input: binary regular expressions only support byte escapes up to \x{FF}
+select regexp_like(cast(NULL as varbinary(20)), cast(_binary'^a' as varbinary(2)), 'm') as valid_binary_null;
+valid_binary_null
+NULL
+select regexp_instr(concat('a', convert(char(13) using utf8mb4)), '($)+', 1, 2, 0, 'm') as terminal_at,
+length(regexp_substr(concat('a', convert(char(13) using utf8mb4)), '($)+', 1, 2, 'm')) as terminal_len,
+hex(regexp_replace(concat('a', convert(char(13) using utf8mb4)), '($)+', 'X', 1, 0, 'm')) as terminal_replaced;
+terminal_at    terminal_len    terminal_replaced
+3    0    61580D58
 drop table if exists t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
@@ -169,16 +181,94 @@ mt VARCHAR(8)
 INSERT INTO t_regexp_match_type VALUES
 (1, 'Abc', 'abc', 'X', 'i'),
 (2, 'Abc', 'abc', 'X', 'c'),
-(3, 'abc', 'abc', 'X', 'u');
+(3, 'abc', 'abc', 'X', 'u'),
+(4, CONCAT('a', CHAR(13), 'b'), '^b', 'X', 'm'),
+(5, CONCAT('a', CHAR(13), 'b'), '^b', 'X', 'mu');
 SELECT id,
 REGEXP_LIKE(s, p, mt) AS is_match,
 REGEXP_INSTR(s, p, 1, 1, 0, mt) AS start_pos,
 REGEXP_SUBSTR(s, p, 1, 1, mt) AS substr_value,
-REGEXP_REPLACE(s, p, r, 1, 0, mt) AS replaced
+HEX(REGEXP_REPLACE(s, p, r, 1, 0, mt)) AS replaced_hex
 FROM t_regexp_match_type
 ORDER BY id;
-id    is_match    start_pos    substr_value    replaced
-1    1    1    Abc    X
-2    0    0    null    Abc
-3    1    1    abc    X
+id    is_match    start_pos    substr_value    replaced_hex
+1    1    1    Abc    58
+2    0    0    null    416263
+3    1    1    abc    58
+4    1    3    b    610D58
+5    0    0    null    610D62
 DROP TABLE t_regexp_match_type;
+SELECT REGEXP_LIKE('$', '[[:alpha:]^$]', 'm') AS posix_literal,
+REGEXP_LIKE('a', '[^]$]', 'm') AS negated_class,
+REGEXP_LIKE(CAST(CONCAT('a', CHAR(13), 'b') AS CHAR), '(?-m:^b)', 'm') AS scoped_off;
+posix_literal    negated_class    scoped_off
+1    1    0
+SELECT REGEXP_LIKE(X'618562', _binary '^b', 'm') AS binary_nel,
+REGEXP_LIKE(X'618562', _binary '^b', 'mu') AS binary_unix;
+binary_nel    binary_unix
+0    0
+SELECT REGEXP_LIKE(s, '^a\\sb', 'm') AS matched,
+REGEXP_INSTR(s, '^a\\sb', 1, 1, 1, 'm') AS end_pos,
+HEX(REGEXP_SUBSTR(s, '^a\\sb', 1, 1, 'm')) AS matched_hex,
+LENGTH(REGEXP_REPLACE(s, '^a\\sb', 'X', 1, 1, 'm')) AS replaced_length
+FROM (SELECT CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b', REPEAT('y', 1048577)) AS s) AS input;
+matched    end_pos    matched_hex    replaced_length
+1    4    610D62    1048578
+DROP TABLE IF EXISTS t_regexp_line_terminators;
+CREATE TABLE t_regexp_line_terminators (
+id INT,
+name VARCHAR(8),
+s VARCHAR(16)
+);
+INSERT INTO t_regexp_line_terminators VALUES
+(1, 'cr',   CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b')),
+(2, 'lf',   CONCAT('a', CONVERT(CHAR(10) USING utf8mb4), 'b')),
+(3, 'crlf', CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'b')),
+(4, 'vt',   CONCAT('a', CONVERT(CHAR(11) USING utf8mb4), 'b')),
+(5, 'ff',   CONCAT('a', CONVERT(CHAR(12) USING utf8mb4), 'b')),
+(6, 'nel',  CONCAT('a', CONVERT(UNHEX('C285') USING utf8mb4), 'b')),
+(7, 'ls',   CONCAT('a', CONVERT(UNHEX('E280A8') USING utf8mb4), 'b')),
+(8, 'ps',   CONCAT('a', CONVERT(UNHEX('E280A9') USING utf8mb4), 'b'));
+SELECT id, name,
+REGEXP_LIKE(s, '^b', 'm') AS like_m,
+REGEXP_LIKE(s, '^b', 'mu') AS like_mu,
+REGEXP_INSTR(s, '^b', 1, 1, 0, 'm') AS instr_m,
+REGEXP_INSTR(s, '^b', 1, 1, 0, 'mu') AS instr_mu,
+HEX(REGEXP_SUBSTR(s, '^b', 1, 1, 'm')) AS substr_m_hex,
+HEX(REGEXP_SUBSTR(s, '^b', 1, 1, 'mu')) AS substr_mu_hex,
+HEX(REGEXP_REPLACE(s, '^b', 'X', 1, 0, 'm')) AS replace_m_hex,
+HEX(REGEXP_REPLACE(s, '^b', 'X', 1, 0, 'mu')) AS replace_mu_hex
+FROM t_regexp_line_terminators
+ORDER BY id;
+id    name    like_m    like_mu    instr_m    instr_mu    substr_m_hex    substr_mu_hex    replace_m_hex    replace_mu_hex
+1    cr    1    0    3    0    62    null    610D58    610D62
+2    lf    1    1    3    3    62    62    610A58    610A58
+3    crlf    1    1    4    4    62    62    610D0A58    610D0A58
+4    vt    1    0    3    0    62    null    610B58    610B62
+5    ff    1    0    3    0    62    null    610C58    610C62
+6    nel    1    0    3    0    62    null    61C28558    61C28562
+7    ls    1    0    3    0    62    null    61E280A858    61E280A862
+8    ps    1    0    3    0    62    null    61E280A958    61E280A962
+DROP TABLE t_regexp_line_terminators;
+SELECT REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'b'), '^\\n', 'm') AS crlf_sealed_single_m,
+REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\nx', 'm') AS crlf_exempt_run_m,
+REGEXP_INSTR(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\nx', 1, 1, 0, 'm') AS crlf_exempt_run_instr_m,
+HEX(REGEXP_SUBSTR(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\nx', 1, 1, 'm')) AS crlf_exempt_run_substr_m,
+REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\n$\\nx', 'm') AS crlf_assertion_sealed_m,
+REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\n\\nx', 'm') AS crlf_adjacent_run_m;
+crlf_sealed_single_m    crlf_exempt_run_m    crlf_exempt_run_instr_m    crlf_exempt_run_substr_m    crlf_assertion_sealed_m    crlf_adjacent_run_m
+0    1    3    0A78    0    1
+SELECT REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'm') AS r2_cr_m,
+REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'mu') AS r2_cr_mu,
+REGEXP_LIKE(CONCAT('a', CONVERT(UNHEX('E280A8') USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'm') AS r2_ls_m,
+REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(11) USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'm') AS r2_vt_m;
+r2_cr_m    r2_cr_mu    r2_ls_m    r2_vt_m
+1    0    1    1
+SELECT REGEXP_LIKE(X'610B62', _binary '^b', 'm') AS binary_vt_m,
+REGEXP_LIKE(X'610C62', _binary '^b', 'm') AS binary_ff_m,
+REGEXP_LIKE(X'610D62', _binary '^b', 'm') AS binary_cr_m,
+REGEXP_LIKE(X'618562', _binary '^b', 'm') AS binary_nel_m,
+REGEXP_LIKE(X'618562', _binary '^b', 'mi') AS binary_nel_mi,
+REGEXP_LIKE(X'618562', _binary '^b', 'mu') AS binary_nel_mu;
+binary_vt_m    binary_ff_m    binary_cr_m    binary_nel_m    binary_nel_mi    binary_nel_mu
+1    1    1    0    0    0

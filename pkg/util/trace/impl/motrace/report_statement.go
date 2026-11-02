@@ -267,6 +267,9 @@ type StatementInfo struct {
 	// co-operate with Aggregator and StatementInfoFilter
 	disableAgg bool
 
+	// outfileReceipt is statement-owned and detached from frontend/session state.
+	outfileReceipt *StatementOutfileReceipt
+
 	// skipTxnOnce, readonly, for flow control
 	// see more on NeedSkipTxn() and SkipTxnId()
 	skipTxnOnce bool
@@ -294,6 +297,7 @@ var stmtPool = sync.Pool{
 
 func NewStatementInfo() *StatementInfo {
 	s := stmtPool.Get().(*StatementInfo)
+	s.outfileReceipt = nil
 	s.statsArray.Reset()
 	s.stated = false
 	s.cuStated = false
@@ -358,6 +362,9 @@ func (s *StatementInfo) Size() int64 {
 			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag)+
 			len(s.SqlSourceType)+len(s.StatementType)+len(s.QueryType)+len(s.jsonByte)+len(s.statsArray)*8,
 	)
+	if s.outfileReceipt != nil {
+		num += int64(len(s.outfileReceipt.Target))
+	}
 	if s.jsonByte == nil {
 		return num + jsonByteLength
 	}
@@ -427,6 +434,7 @@ func (s *StatementInfo) free() {
 	s.statsArray.Reset()
 	s.stated = false
 	s.disableAgg = false
+	s.outfileReceipt = nil
 	// clean skipTxn ctrl
 	s.skipTxnOnce = false
 	s.skipTxnID = nil
@@ -481,6 +489,11 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	stmt.resourceMPeakSet = false
 	// part: disableAgg ctl
 	stmt.disableAgg = s.disableAgg
+	if s.outfileReceipt != nil {
+		receipt := *s.outfileReceipt
+		receipt.Target = strings.Clone(receipt.Target)
+		stmt.outfileReceipt = &receipt
+	}
 	// part: skipTxn ctrl
 	stmt.skipTxnOnce = s.skipTxnOnce
 	stmt.skipTxnID = s.skipTxnID
@@ -625,6 +638,14 @@ var noExecPlan = []byte(`{}`)
 // please used in s.mux.Lock()
 func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
 	if s.jsonByte == nil {
+		if s.outfileReceipt != nil {
+			plan := noExecPlan
+			if s.ExecPlan != nil {
+				plan = s.ExecPlan.Marshal(ctx)
+			}
+			s.jsonByte = execPlanWithOutfileReceipt(plan, *s.outfileReceipt)
+			return s.jsonByte
+		}
 		if s.ExecPlan == nil {
 			return noExecPlan
 		}

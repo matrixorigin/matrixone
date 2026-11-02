@@ -89,7 +89,8 @@ ORDER BY id;
 4  ¦  null
 DROP TABLE temporal_format_rows;
 SELECT DATE_FORMAT('123456', '%Y-%m-%d %H:%i:%s');
-invalid input: invalid datetime value 123456
+➤ DATE_FORMAT('123456', '%Y-%m-%d %H:%i:%s')[12,24,0]  𝄀
+null
 SELECT DATE_FORMAT('2023-11-08 12:00', '%Y-%m-%d %H:%i:%s');
 ➤ DATE_FORMAT('2023-11-08 12:00', '%Y-%m-%d %H:%i:%s')[12,24,0]  𝄀
 2023-11-08 12:00:00
@@ -100,17 +101,20 @@ SELECT DATE_FORMAT('2023-11-08 15:00:', '%Y-%m-%d %H:%i:%s');
 ➤ DATE_FORMAT('2023-11-08 15:00:', '%Y-%m-%d %H:%i:%s')[12,24,0]  𝄀
 2023-11-08 15:00:00
 select date_format('19980021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
-invalid input: invalid datetime value 19980021000000
+➤ date_format('19980021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W')[12,342,0]  𝄀
+null
 select date_format('19980131131415', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
 ➤ date_format('19980131131415', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W')[12,342,0]  𝄀
 13|01|13|1|14|PM|01:14:15 PM|15|13:14:15| January|Saturday|31st|1998|98|Sat|Jan|031|01|31|01|15|Saturday
 select date_format('19981321000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
-invalid input: invalid datetime value 19981321000000
+➤ date_format('19981321000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W')[12,342,0]  𝄀
+null
 select date_format('19981021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
 ➤ date_format('19981021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W')[12,342,0]  𝄀
 00|12|0|12|00|AM|12:00:00 AM|00|00:00:00| October|Wednesday|21st|1998|98|Wed|Oct|294|10|21|12|00|Wednesday
 select date_format('19981033000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
-invalid input: invalid datetime value 19981033000000
+➤ date_format('19981033000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W')[12,342,0]  𝄀
+null
 select date_format('19981031000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
 ➤ date_format('19981031000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W')[12,342,0]  𝄀
 00|12|0|12|00|AM|12:00:00 AM|00|00:00:00| October|Saturday|31st|1998|98|Sat|Oct|304|10|31|12|00|Saturday

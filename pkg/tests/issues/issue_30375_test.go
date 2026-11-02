@@ -49,7 +49,9 @@ func TestIssue30375CTASSequence(t *testing.T) {
 				name := testutils.GetDatabaseName(t)
 				exec("create database `" + name + "`")
 				defer func() {
-					cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					// Budget fixture teardown independently for all created tables
+					// and sequence metadata, including cross-CN catalog admission.
+					cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 					defer cancel()
 					_, err := conn.ExecContext(cleanupCtx, "drop database `"+name+"`")
 					require.NoError(t, err)

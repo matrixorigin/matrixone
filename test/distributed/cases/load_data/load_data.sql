@@ -197,7 +197,10 @@ col3 int
 
 -- echo duplicate
 -- @bvt:issue#3433
+set @load_pk_check_saved = @@session.mo_pk_check_by_cn;
+set session mo_pk_check_by_cn = on;
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6 fields terminated by ',';
+set session mo_pk_check_by_cn = @load_pk_check_saved;
 select * from t6;
 -- @bvt:issue
 load data infile '$resources/load_data/auto_increment_2.csv' into table t6 FIELDS ESCAPED BY '\\' TERMINATED BY ',';

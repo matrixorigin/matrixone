@@ -21,6 +21,8 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // validateGeometrySRID rejects SRIDs that cannot be stored in the type Width
@@ -153,6 +156,182 @@ func isDirectPreparedGeometrySRIDArg(expr *plan.Expr) bool {
 		return true
 	}
 	return isImplicitPreparedParamCast(expr)
+}
+
+// isGeometrySRIDConstFunction reports whether name is one of the geometry
+// functions whose trailing argument the binder decodes as a constant
+// integer SRID: the constructors that record the SRID in the geometry
+// result type, and the ST_SRID setter. The decode treats the last bound
+// argument of these calls identically, so the argument-level fold below
+// addresses exactly that position.
+func isGeometrySRIDConstFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "st_geomfromtext", "st_geomfromwkb", "st_geomfrombinary", "st_geometryfromtext",
+		"st_geometryfromwkb", "st_pointfromtext", "st_linefromtext", "st_polygonfromtext",
+		"st_mpointfromtext", "st_mlinefromtext", "st_mpolyfromtext", "st_geomcollfromtext",
+		"st_pointfromgeohash", "st_geomfromgeojson", "st_srid":
+		return true
+	default:
+		return false
+	}
+}
+
+// isGeometrySRIDConstFoldSafe reports whether the whole SRID argument tree
+// is built from literals, the same operator set the binder's own
+// constant-fold switch covers (plus the conversion nodes the resolver adds
+// inside those operators, down to their target-type metadata), and nested
+// functions the function registry positively proves side-effect-free. Only
+// such a tree may be folded here: every node is the pure number or typing
+// machinery of those operators, or a curated pure-value builtin whose
+// evaluation has no effect outside the expression tree, so the fold below
+// cannot execute anything else of a stored definition, and the curated
+// set's reserved entry conditions - the internal-machinery registration bit
+// (plain or combined with other class flags, the python UDF builtin among
+// them) and the volatile and real-time-related overload flags - exclude
+// exactly the machinery and non-determinism the walk must not run.
+// Anything else - a parameter, a column, an unproven builtin (llm_chat is
+// registered STRICT without any excluded flag and still performs an HTTP
+// request through its executor), a volatile or real-time-related builtin,
+// internal machinery, or a function unresolved in the builtin registry (a
+// caller-named user-defined function binds through the separate UDF path
+// and its own marker veto instead) - keeps the argument untouched and the
+// decode reports its own constant-integer error, exactly like an ordinary
+// build of a non-constant definition.
+func isGeometrySRIDConstFoldSafe(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch node := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		// Any literal atom is admissible: the fold result still has to
+		// decode as a constant integer, so a folded fraction or string meets
+		// the decode's own rejection, the same verdict ordinary binding
+		// gives it.
+		return true
+	case *plan.Expr_T:
+		// Expr_T is the conversion operators' target-type metadata: the
+		// resolver appends it as the trailing argument of every cast node it
+		// builds (appendCastBeforeExprWithOverload in base_binder.go), it
+		// cannot be written from SQL, and nothing executes it - the fold
+		// executor consumes it as a type descriptor. Accepting exactly this
+		// structural leaf lets the implicit casts of otherwise safe
+		// arithmetic ('4325' + 1) pass the walk, while every executable node
+		// keeps requiring the operator whitelist above.
+		return true
+	case *plan.Expr_F:
+		switch node.F.GetFunc().GetObjName() {
+		case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
+			"unary_tilde", "cast", "serial", "serial_full":
+			for _, arg := range node.F.GetArgs() {
+				if !isGeometrySRIDConstFoldSafe(arg) {
+					return false
+				}
+			}
+			return true
+		default:
+			// A nested function is admissible only through the function
+			// registry's positively proven pure set - never through the
+			// absence of a flag: llm_chat is registered STRICT without the
+			// internal bit and without a volatile or real-time-related
+			// overload, so a negative-only test admits it and the guarded
+			// fold executes its HTTP request. The curated set keeps a pure
+			// deterministic builtin inside the arithmetic (ABS of a
+			// literal) folding exactly as ordinary binding folds it, while
+			// rand and sleep stay out through the volatile and real-time
+			// flags, the relation resolvers, the fault-injection machinery
+			// and the LLM, starlark and UDF executors stay out through the
+			// internal bit or pure-set membership, and nothing of any of
+			// them executes here.
+			if !function.GetFunctionIsProvenPureFoldableById(node.F.GetFunc().GetObj()) {
+				return false
+			}
+			for _, arg := range node.F.GetArgs() {
+				if !isGeometrySRIDConstFoldSafe(arg) {
+					return false
+				}
+			}
+			return true
+		}
+	default:
+		return false
+	}
+}
+
+// isGeometrySRIDFoldableRoot reports whether the SRID argument's own root
+// can reach the fold the ordinary binder applies. Only the fold-switch
+// operator names fold there: an arithmetic root binds as a function
+// expression and meets the post-bind fold switch, so an ordinary build
+// folds its whole constant subtree - a nested pure function like ABS folds
+// through that switch's recursion, never as the root itself. The explicit
+// CAST root does not fold either: CAST syntax binds through the dedicated
+// CastExpr path, which wraps its operand with the cast node directly and
+// never visits the fold switch, so an ordinary build leaves a cast-rooted
+// SRID argument unfolded and the decode rejects it with the
+// constant-integer verdict. With the walk accepting deterministic builtins
+// and the resolver's target-type metadata (Expr_T) as subtrees, this root
+// check keeps the probe on the ordinary admission rule's side of both
+// boundaries: it must not start folding at a root ordinary binding itself
+// never folds.
+func isGeometrySRIDFoldableRoot(expr *Expr) bool {
+	fn := expr.GetF()
+	if fn == nil {
+		return true
+	}
+	switch strings.ToLower(fn.GetFunc().GetObjName()) {
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
+		"unary_tilde", "serial", "serial_full":
+		return true
+	default:
+		return false
+	}
+}
+
+// foldGeometrySRIDConstArg pre-folds a geometry function's constant
+// expression SRID argument before the bind decodes it. An ordinary build
+// folds the argument during its own nested binding (the post-bind
+// arithmetic constant-fold switch runs for the argument expression), so the
+// decode only ever meets a literal there and a definition with a constant
+// expression SRID is a valid, creatable view. The publication binding
+// marker returns in front of that switch, so the marked probe would meet
+// the still un-folded argument and misclassify the same valid stored
+// definition as broken. This fold runs the same executor-backed
+// ConstantFold over the same already-bound argument, and only after
+// isGeometrySRIDConstFoldSafe proved the tree is literals, that switch's
+// own operator slice, the conversion metadata the resolver added inside it,
+// and nested builtins the registry positively proves side-effect-free (see
+// GetFunctionIsProvenPureFoldableById), and only when
+// isGeometrySRIDFoldableRoot kept the argument on the
+// ordinary admission rule's side of the explicit CAST and non-operator root
+// boundaries - so the probe's admission and rejection verdicts keep
+// matching the ordinary build for proven pure trees, nothing beyond that
+// constant machinery and the curated pure
+// set can execute during validation, and prepared SRID markers keep their own
+// admission path.
+func foldGeometrySRIDConstArg(proc *process.Process, name string, args []*Expr) {
+	if proc == nil || len(args) < 2 || !isGeometrySRIDConstFunction(name) {
+		return
+	}
+	sridArg := args[len(args)-1]
+	if _, ok := sridArg.Expr.(*plan.Expr_Lit); ok {
+		return
+	}
+	if isDirectPreparedGeometrySRIDArg(sridArg) {
+		return
+	}
+	if !isGeometrySRIDFoldableRoot(sridArg) {
+		return
+	}
+	if !isGeometrySRIDConstFoldSafe(sridArg) {
+		return
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(sridArg), proc, false, true)
+	if err != nil || folded == nil {
+		return
+	}
+	if _, ok := folded.Expr.(*plan.Expr_Lit); !ok {
+		return
+	}
+	args[len(args)-1] = folded
 }
 
 // SRID lives in the geometry type, so bind its value before a parent function
@@ -295,9 +474,9 @@ func isEnumOrSetPlanType(typ *plan.Type) bool {
 }
 
 // makeInsertIgnoreMySQLSpecialTypeConstExpr implements MySQL's INSERT IGNORE
-// coercion for literal YEAR, ENUM, and SET values. BIT coercion stays in the
-// shared literal parser. Regular INSERT keeps the existing strict conversion
-// path; only IGNORE reaches this helper.
+// coercion for literal YEAR values. ENUM/SET use runtime conversion so their
+// diagnostics and the current execution's SQL mode are preserved. BIT coercion
+// stays in the shared literal parser; only IGNORE reaches this helper.
 func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 	ctx context.Context,
 	value *tree.NumVal,
@@ -307,29 +486,6 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 		return nil, false, nil
 	}
 
-	if isEnumPlanType(&targetType) {
-		index, err := mysqlEnumLiteralIndex(targetType.Enumvalues, value)
-		if err != nil {
-			index = 0 // invalid ENUM values are stored as the empty-error member
-		}
-		return &plan.Expr{
-			Typ: targetType,
-			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-				Value: &plan.Literal_EnumVal{EnumVal: uint32(index)},
-			}},
-		}, true, nil
-	}
-
-	if isSetPlanType(&targetType) {
-		bits := mysqlSetIgnoreLiteralBits(targetType.Enumvalues, value)
-		return &plan.Expr{
-			Typ: targetType,
-			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-				Value: &plan.Literal_U64Val{U64Val: bits},
-			}},
-		}, true, nil
-	}
-
 	if types.T(targetType.Id) == types.T_year && !mysqlYearLiteralIsValid(value) {
 		zero := makePlan2Int64ConstExprWithType(0)
 		expr, err := appendCastBeforeExpr(ctx, zero, targetType)
@@ -337,52 +493,6 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 	}
 
 	return nil, false, nil
-}
-
-func mysqlEnumLiteralIndex(enumValues string, value *tree.NumVal) (types.Enum, error) {
-	switch value.ValType {
-	case tree.P_int64:
-		v, ok := value.Int64()
-		if !ok || v < 0 || v > int64(^uint16(0)) {
-			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
-		}
-		return types.ParseEnumValue(enumValues, uint16(v))
-	case tree.P_uint64:
-		v, ok := value.Uint64()
-		if !ok || v > uint64(^uint16(0)) {
-			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
-		}
-		return types.ParseEnumValue(enumValues, uint16(v))
-	default:
-		return types.ParseEnum(enumValues, value.String())
-	}
-}
-
-func mysqlSetIgnoreLiteralBits(setValues string, value *tree.NumVal) uint64 {
-	if value.ValType == tree.P_int64 {
-		if v, ok := value.Int64(); ok {
-			return uint64(v) & mysqlSetValidBitmap(setValues)
-		}
-	}
-	if value.ValType == tree.P_uint64 {
-		if v, ok := value.Uint64(); ok {
-			return v & mysqlSetValidBitmap(setValues)
-		}
-	}
-
-	bits := uint64(0)
-	for _, member := range strings.Split(value.String(), ",") {
-		memberBits, err := types.ParseSet(setValues, member)
-		if err == nil {
-			bits |= memberBits
-		}
-	}
-	return bits
-}
-
-func mysqlSetValidBitmap(setValues string) uint64 {
-	bitmap, _ := types.SetValidBitmap(setValues)
-	return bitmap
 }
 
 func mysqlYearLiteralIsValid(value *tree.NumVal) bool {
@@ -662,6 +772,38 @@ func (bc *BindContext) mysqlSpecialOrderTypeForExpr(expr *plan.Expr) *plan.Type 
 	return DeepCopyType(binding.mysqlSpecialOrderTypes[col.ColPos])
 }
 
+// mysqlSpecialGroupStorageSlotFor recovers the hidden storage-identity slot a
+// GroupBinder registered beside a visible ENUM/SET display group key. The
+// sibling is itself a group key of the same GROUP BY, so referencing it above
+// the aggregation is remap-legal, and its per-group value is the stored
+// ordinal/bitmap instead of the display text. That distinction is decisive
+// for ENUM declarations containing an empty label (and for empty-member
+// SETs), whose zero sentinel and that member display identically as text
+// while their stored values decide opposite truths.
+func (bc *BindContext) mysqlSpecialGroupStorageSlotFor(expr *plan.Expr) *plan.Expr {
+	if bc == nil || bc.mysqlSpecialGroupStorageSlots == nil {
+		return nil
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return nil
+	}
+	if bc.groupTag > 0 && col.RelPos != bc.groupTag {
+		return nil
+	}
+	storagePos, ok := bc.mysqlSpecialGroupStorageSlots[col.ColPos]
+	if !ok || storagePos < 0 || int(storagePos) >= len(bc.groups) || bc.groups[storagePos] == nil {
+		return nil
+	}
+	typ := bc.groups[storagePos].Typ
+	if isSetPlanType(&typ) {
+		// Truth reads the plain uint64 bitmap; SET metadata belongs only to
+		// display-value semantics.
+		typ.Enumvalues = ""
+	}
+	return GetColExpr(typ, col.RelPos, storagePos)
+}
+
 func (bc *BindContext) setMySQLSpecialOrderType(colPos int32, typ *plan.Type) {
 	if bc.mysqlSpecialOrderTypes == nil {
 		bc.mysqlSpecialOrderTypes = make(map[int32]*plan.Type)
@@ -759,7 +901,7 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	case isEnumPlanType(typ):
 		seen := make(map[string]struct{})
 		for _, value := range strings.Split(typ.Enumvalues, ",") {
-			key := equalFoldKey(value)
+			key := commonutil.EqualFoldKey(value)
 			if _, exists := seen[key]; exists {
 				return false
 			}
@@ -827,6 +969,61 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 			return []*plan.Expr{value}, nil
 		}
 	}
+	// Boolean-truth consumers evaluate the operand's MySQL numeric truth:
+	// IF/IFF and CASE WHEN conditions, AND/OR/XOR operands, NOT and IS
+	// TRUE/FALSE values. ENUM/SET storage supplies the ordinal/bitmap that
+	// decides truthiness, including for operands recovered across a GROUP BY or
+	// transparent query boundary. The registry keeps these operands in their
+	// own domain, so a display label would otherwise be re-parsed as unrelated
+	// text and silently evaluate to FALSE for every valid nonzero member.
+	if indexes := mysqlBooleanTruthOperandIndexes(name, len(args)); len(indexes) > 0 {
+		changed := false
+		for _, i := range indexes {
+			if args[i] == nil {
+				continue
+			}
+			// The display-wrapper recovery below needs the BindContext's
+			// provenance machinery; the standalone DDL expression binders carry
+			// none (their ENUM references arrive raw), and the recovery helper
+			// no-ops for them. The explicit storage-truth normalization ahead
+			// stays context-aware: it applies only to a raw ENUM operand and the
+			// statement's mode scalar gates it, so both the SELECT path and
+			// the DDL-generated-column path hand the bool-checker family a
+			// BOOL-typed operand.
+			recovered := args[i]
+			if b != nil && b.ctx != nil {
+				var recoveryErr error
+				recovered, recoveryErr = b.mysqlSpecialBooleanTruthyOperand(ctx, args[i])
+				if recoveryErr != nil {
+					return nil, recoveryErr
+				}
+			}
+			// AND/OR/XOR/NOT and the IS TRUE/FALSE family bind through checkers
+			// that only consult the general implicit-cast table - base keeps no
+			// ENUM -> BOOL row there, and adding one would leak the contract's
+			// admission into native-mode statements. Normalize a recovered ENUM
+			// condition through the explicit storage-truth BOOL cast instead,
+			// exactly the contract the caseCheck schedule and predicate casts
+			// already use. IF/CASE keep their in-domain condition admission. A
+			// native-mode statement skips this and keeps the base checker
+			// failure byte-identically.
+			if function.MySQLConditionalBooleanContracts(ctx) &&
+				mysqlBooleanOperandBindsBoolChecker(name) && isEnumPlanType(&recovered.Typ) {
+				casted, castErr := makePlan2CastExpr(ctx, recovered, plan.Type{Id: int32(types.T_bool)})
+				if castErr != nil {
+					return nil, castErr
+				}
+				recovered = casted
+			}
+			if recovered != args[i] {
+				if !changed {
+					args = append([]*plan.Expr(nil), args...)
+					changed = true
+				}
+				args[i] = recovered
+			}
+		}
+	}
 	result := useStoredMySQLSpecialTypesForNumericContract(ctx, name, args)
 	if b == nil || b.ctx == nil {
 		return result, nil
@@ -855,6 +1052,19 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	if mysqlSpecialNumericInList(name, args) {
 		if _, direct := storedMySQLSpecialTypeExpr(args[0]); !direct {
 			storageType := b.ctx.mysqlSpecialOrderTypeForExpr(args[0])
+			// A numeric IN/NOT IN list reads the stored value, never display
+			// text. SET operands always route through mysqlSpecialNumericOperand:
+			// its recovery is identity-based (canonical-materialized or
+			// transparent retained storage) and restores the stored bitmap
+			// exactly even for declarations with an empty member, whose label
+			// text overlaps the zero bitmask's display; when no exact identity
+			// exists the helper fails closed with its typed error instead of
+			// letting the pending comparison re-parse the labels. The narrow
+			// display-decode reversibility requirement stays the ENUM arm's
+			// policy - an empty/duplicate-label ENUM's text cannot decode
+			// uniquely across a boundary, so its numeric lists keep the display
+			// operand. The boolean-truth boundary policy (zone fail-closure)
+			// is separate and lives in mysqlSpecialBooleanTruthyOperand.
 			if storageType != nil && (isSetPlanType(storageType) || mysqlSpecialNumericTypeReversible(storageType)) {
 				recovered, err := b.mysqlSpecialNumericOperand(ctx, args[0])
 				if err != nil {
@@ -904,6 +1114,127 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 		result[i] = recovered
 	}
 	return result, nil
+}
+
+// mysqlBooleanTruthOperandIndexes reports the operands a function evaluates
+// with MySQL numeric truth. IF/IFF, NOT and the IS TRUE/FALSE family consume
+// their first argument, AND/OR/XOR consume both operands, and CASE WHEN
+// consumes the condition slot that leads each searched pair; value slots and
+// ELSE never decide truth. Operands with no ENUM/SET provenance pass through
+// the recovery unchanged, so JSON, BIT and ordinary columns are unaffected.
+func mysqlBooleanTruthOperandIndexes(name string, length int) []int {
+	switch name {
+	case "if", "iff":
+		if length == 3 {
+			return []int{0}
+		}
+	case "and", "or", "xor":
+		if length == 2 {
+			return []int{0, 1}
+		}
+	case "not", "istrue", "isnottrue", "isfalse", "isnotfalse":
+		if length == 1 {
+			return []int{0}
+		}
+	case "case":
+		indexes := make([]int, 0, length/2)
+		for i := 0; i < length-1; i += 2 {
+			indexes = append(indexes, i)
+		}
+		return indexes
+	}
+	return nil
+}
+
+// mysqlBooleanOperandBindsBoolChecker reports the boolean-truth consumers whose
+// registry checkers admit only operands the general implicit-cast table can
+// convert to BOOL (AND/OR/XOR, NOT, IS TRUE/FALSE). A recovered ENUM condition
+// for one of these consumers is normalized through the explicit storage-truth
+// BOOL cast, because the implicit table deliberately keeps no ENUM -> BOOL row:
+// a context-free row would admit the same operands on native-mode statements
+// through the byte-identical base checkers. IF/CASE conditions keep their
+// in-domain admission and are deliberately absent here.
+func mysqlBooleanOperandBindsBoolChecker(name string) bool {
+	switch name {
+	case "and", "or", "xor", "not", "istrue", "isnottrue", "isfalse", "isnotfalse":
+		return true
+	}
+	return false
+}
+
+// mysqlSpecialBooleanPredicateOperand recovers the stored ENUM ordinal or SET
+// bitmap for a bare predicate condition (HAVING/ON/WHERE) that a GROUP BY
+// flattened into a display-typed reference. Ungrouped display wrappers and
+// operands without ENUM/SET provenance pass through unchanged, leaving the
+// cast-time display rewrite in charge.
+func (b *baseBinder) mysqlSpecialBooleanPredicateOperand(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	if b == nil || b.ctx == nil || expr == nil {
+		return expr, nil
+	}
+	if _, direct := storedMySQLSpecialTypeExpr(expr); direct {
+		return expr, nil
+	}
+	if b.ctx.mysqlSpecialOrderTypeForExpr(expr) == nil {
+		return expr, nil
+	}
+	return b.mysqlSpecialBooleanTruthyOperand(ctx, expr)
+}
+
+// mysqlSpecialBooleanTruthyOperand recovers the stored ENUM ordinal / SET
+// bitmap a boolean-truth consumer evaluates. Truth never converts back into a
+// label, so the display-label reversibility numeric contracts require does
+// not apply here: an empty-label ENUM declaration displays its zero sentinel
+// and that member identically, and only the recovered storage resolves the
+// correct MySQL truth for each. Direct display wrappers and the hidden
+// storage slot beside a grouped display key are recovered first; canonical
+// SET materializations and transparent boundaries follow; a reversible
+// display falls back to label reconstruction, and operands without a
+// recoverable stored value pass through unchanged so their pending cast keeps
+// the previous behavior.
+func (b *baseBinder) mysqlSpecialBooleanTruthyOperand(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	if b == nil || b.ctx == nil || expr == nil {
+		return expr, nil
+	}
+	if !function.MySQLConditionalBooleanContracts(ctx) {
+		// D11: a native-mode statement keeps every boolean context exactly as
+		// the pre-contract behavior - no storage recovery, so display text
+		// decides truth the way base does.
+		return expr, nil
+	}
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return raw, nil
+	}
+	if raw := b.ctx.mysqlSpecialGroupStorageSlotFor(expr); raw != nil {
+		return raw, nil
+	}
+	typ := b.ctx.mysqlSpecialOrderTypeForExpr(expr)
+	if typ == nil {
+		return expr, nil
+	}
+	// Zone-1-class recovery first: through a proven row-preserving boundary the
+	// stored value itself is carried, so it stays exact for every declaration.
+	if b.builder != nil {
+		if raw, ok := b.builder.materializeTransparentMySQLSpecialValue(expr); ok {
+			return raw, nil
+		}
+	}
+	// D10 complete-domain rule: every reconstruction below decodes display
+	// text, so the declaration's whole stored domain must be reversibly
+	// decodable (ENUM also rejects duplicated labels and the empty label; SET
+	// also rejects an empty member). An ambiguous declaration cannot decide
+	// truth from display at all - a silent fallthrough would let the pending
+	// BOOL cast re-parse the labels and turn a valid nonzero member FALSE
+	// (probe 2's empty-label '' row), so the third zone fails closed with the
+	// typed error instead.
+	if !mysqlSpecialNumericTypeReversible(typ) {
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"boolean truth of an ENUM/SET value from declaration %s cannot recover the stored value across a query boundary; use the stored value in the same query block",
+			typ.Enumvalues)
+	}
+	if isSetPlanType(typ) && b.ctx.mysqlSpecialCanonicalTypeForExpr(expr) != nil {
+		return makeCanonicalSetValue(ctx, expr, typ)
+	}
+	return makeMySQLSpecialNumericValue(ctx, expr, typ)
 }
 
 // Numeric consumers distinguish retained input identity from a canonical
@@ -1071,6 +1402,11 @@ func newNonReversibleMySQLSpecialOrderError(ctx context.Context) error {
 func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, storageType *plan.Type) (*plan.Expr, error) {
 	if !mysqlSpecialOrderTypeReversible(storageType) {
 		return nil, newNonReversibleMySQLSpecialOrderError(ctx)
+	}
+	if isEnumPlanType(storageType) && mysqlSpecialNumericTypeReversible(storageType) {
+		// An empty display in this domain is the stored error member, not an
+		// invalid assignment. Reuse the safe label/typed-zero restoration.
+		return makeMySQLSpecialNumericValue(ctx, displayExpr, storageType)
 	}
 	_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(storageType)
 	if err != nil {

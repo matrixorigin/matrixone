@@ -142,6 +142,8 @@ func (s *service) initQueryService() error {
 }
 
 func (s *service) initQueryCommandHandler() {
+	s.addQueryCommandHandler(query.CmdMethod_KillSession, s.handleKillSession)
+	s.addQueryCommandHandler(query.CmdMethod_DisconnectSession, s.handleDisconnectSession)
 	s.addQueryCommandHandler(query.CmdMethod_KillConn, s.handleKillConn)
 	s.addQueryCommandHandler(query.CmdMethod_AlterAccount, s.handleAlterAccount)
 	s.addQueryCommandHandler(query.CmdMethod_TraceSpan, s.handleTraceSpan)
@@ -341,11 +343,29 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 	defer cancel()
 	exec, ok := getISCPExecutorRuntime(readyCtx, s.cfg.UUID)
 	if !ok || exec == nil {
+		// The published runtime is removed only after its workers stop. A
+		// replacement copies the CN fence before it can admit consumers, so a
+		// real registry miss already proves quiescence. The fault-aware lookup
+		// above can also report a synthetic miss while a runtime is active;
+		// retain the wait and drain for that case.
+		if _, present := iscp.GetExecutorRuntime(s.cfg.UUID); !present {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
+			return nil
+		}
 		exec, ok = waitISCPExecutorRuntime(readyCtx, s.cfg.UUID)
 	}
 	if !ok || exec == nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// The runtime may have stopped while the fault-aware wait was in
+		// progress. Its workers are drained before registry removal.
+		if _, present := iscp.GetExecutorRuntime(s.cfg.UUID); !present {
+			resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
+			return nil
 		}
 		// This code is preserved by queryservice's response error envelope and
 		// is retried by the compile-side drain path only.
@@ -697,6 +717,9 @@ func (s *service) handleMigrateConnTo(
 	if req.MigrateConnToRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
 	}
+	if !s.viewMetadataIngressReady.Load() {
+		return moerr.NewServiceUnavailableNoCtx("CN is not ready for connection migration")
+	}
 	rm := s.mo.GetRoutineManager()
 	if err := rm.MigrateConnectionTo(ctx, req.MigrateConnToRequest); err != nil {
 		logutil.Errorf("failed to migrate conn to: %v", err)
@@ -959,5 +982,36 @@ func (s *service) handleWorkspaceThresholdRequest(
 		WriteThreshold:  write,
 	}
 
+	return nil
+}
+
+// SQL authorization is performed by the owning frontend routine manager. These
+// trusted RPC handlers never execute SQL or forward to another CN.
+func (s *service) handleKillSession(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	if req == nil || req.KillSessionRequest == nil {
+		return moerr.NewInvalidInput(ctx, "missing kill session request")
+	}
+	if err := qclient.CheckMethodVersion(ctx, s.serviceID(), req); err != nil {
+		return err
+	}
+	found, err := s.mo.GetRoutineManager().KillSession(ctx, req.KillSessionRequest)
+	if err != nil {
+		return err
+	}
+	resp.KillSessionResponse = &query.KillSessionResponse{Found: found}
+	return nil
+}
+
+func (s *service) handleDisconnectSession(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	if req == nil || req.DisconnectSessionRequest == nil {
+		return moerr.NewInvalidInput(ctx, "missing disconnect session request")
+	}
+	if err := qclient.CheckMethodVersion(ctx, s.serviceID(), req); err != nil {
+		return err
+	}
+	if err := s.mo.GetRoutineManager().DisconnectSession(ctx, req.DisconnectSessionRequest.ConnID); err != nil {
+		return err
+	}
+	resp.DisconnectSessionResponse = &query.DisconnectSessionResponse{}
 	return nil
 }

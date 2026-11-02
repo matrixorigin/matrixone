@@ -60,6 +60,7 @@ Read a reference when its trigger applies:
 | `colexec`/`process`/pipeline lifecycle, typed terminal signals, distributed dispatch/receiver hangs | [references/operator-pipeline.md](references/operator-pipeline.md) |
 | Planner/explain/rewrite correctness, public reachability, independent black-/white-box oracles | [references/counterexample-testing.md](references/counterexample-testing.md) |
 | Vector/fulltext algorithm registry, build-tag registration, ISCP/CDC and index-plugin review | [references/index-plugin.md](references/index-plugin.md) |
+| RPC/plan/pipeline encoding, persisted-state format, upgrade steps, `MORPCVersion` (shutdown upgrade only; when to bump) | [references/upgrade-compatibility.md](references/upgrade-compatibility.md) |
 
 ## Enforcement gates
 

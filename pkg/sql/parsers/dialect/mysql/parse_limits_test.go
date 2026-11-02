@@ -27,7 +27,7 @@ import (
 )
 
 func TestParseLimitsExactBoundariesAndOrdinaryParity(t *testing.T) {
-	for _, sql := range []string{"select 1", "create view v as select a from t", "select 'a\\nb' /* comment */ as x"} {
+	for _, sql := range []string{"select 1", "create view v as select a from t", "select 'a\\nb' /* comment */ as x", "select id from t for update nowait", "select id from t for share nowait", "select id from t for share skip locked"} {
 		t.Run(sql, func(t *testing.T) {
 			lexer := NewLexer(dialect.MYSQL, sql, 1)
 			control := &parseControl{ctx: t.Context(), limits: ParseLimits{Input: len(sql), Tokens: 10000, Work: 10000}}
@@ -225,7 +225,9 @@ func (c *cancelDuringParseContext) Err() error {
 	return c.Context.Err()
 }
 func TestParseLimitsCancelDuringScannerAndRecoverForNextParse(t *testing.T) {
-	for _, sql := range []string{"select 1,2,3,4,5,6", "select /*" + strings.Repeat("x", 8192) + "*/ 1"} {
+	for _, sql := range []string{"select 1,2,3,4,5,6", "select /*" + strings.Repeat("x", 8192) + "*/ 1",
+		"/*!" + strings.Repeat("9", 8192) + " select 99 */ select 1",
+		"/*!99999 " + strings.Repeat("x", 8192) + " */ select 1"} {
 		base, cancel := context.WithCancel(t.Context())
 		ctx := &cancelDuringParseContext{Context: base, cancel: cancel}
 		statements, err := ParseWithSQLMode(WithParseLimits(ctx, ParseLimits{Input: len(sql), Tokens: 100, Work: len(sql) * 4}), sql, 1, "")
@@ -238,5 +240,52 @@ func TestParseLimitsCancelDuringScannerAndRecoverForNextParse(t *testing.T) {
 		for _, stmt := range statements {
 			stmt.Free()
 		}
+	}
+}
+
+// Seven lexical tokens plus EOF must still count when NOWAIT shares the mode's
+// parser token; lexical folding cannot bypass the public token budget.
+func TestSelectLockModifierTokenBudget(t *testing.T) {
+	for _, mode := range []string{"update", "share"} {
+		sql := "select id from t for " + mode + " nowait"
+		for _, budget := range []int{7, 8} {
+			limits := ParseLimits{Input: len(sql), Tokens: budget, Work: 10000}
+			stmts, err := ParseWithSQLMode(WithParseLimits(t.Context(), limits), sql, 1, "")
+			for _, stmt := range stmts {
+				stmt.Free()
+			}
+			if budget == 7 {
+				require.ErrorIs(t, err, ErrParseLimit)
+			} else {
+				require.NoError(t, err)
+			}
+		}
+	}
+}
+
+func TestSelectSkipLockedTokenBudget(t *testing.T) {
+	sql := "select id from t for share skip locked"
+	for _, budget := range []int{8, 9} {
+		limits := ParseLimits{Input: len(sql), Tokens: budget, Work: 10000}
+		stmts, err := ParseWithSQLMode(WithParseLimits(t.Context(), limits), sql, 1, "")
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		if budget == 8 {
+			require.ErrorIs(t, err, ErrParseLimit)
+		} else {
+			require.NoError(t, err)
+		}
+	}
+}
+
+func TestExecutableCommentParseWorkBudget(t *testing.T) {
+	for _, sql := range []string{
+		"/*!" + strings.Repeat("9", 1024) + " select 99 */ select 1",
+		"/*!99999 " + strings.Repeat("x", 1024) + " */ select 1",
+	} {
+		stmts, err := ParseWithSQLMode(WithParseLimits(t.Context(), ParseLimits{Input: len(sql), Tokens: 100, Work: 32}), sql, 1, "")
+		require.ErrorIs(t, err, ErrParseLimit)
+		require.Empty(t, stmts)
 	}
 }

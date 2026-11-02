@@ -2,6 +2,7 @@
 - Start Date: 2026-09-01
 - Design revision: v11 (2026-09-14)
 - Follow-up amendment: integration-v1 (2026-10-06), pending review in [#29646](https://github.com/matrixorigin/matrixone/pull/29646)
+- Current amendment: analytic-execution-v1 (2026-10-30), design review pending in [#31761](https://github.com/matrixorigin/matrixone/pull/31761)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934), [#28752](https://github.com/matrixorigin/matrixone/pull/28752)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -10,7 +11,8 @@
 
 ## Summary
 
-This RFC is the single design record for the complete four-PR rewrite series.
+This RFC is the design record for the original four-PR rewrite series and the
+explicitly scoped follow-up amendments below.
 It defines the legality, global ordering, resource, compatibility, rollout,
 rollback, and validation contracts for:
 
@@ -29,11 +31,11 @@ The implementation may use statistics to choose among plans already proved
 equivalent. Statistics, benchmark query identity, table names, scale factors,
 and constants are never correctness evidence.
 
-The implementations, rollback cohorts, and acceptance evidence are aligned, so
-this revision is `in-progress`.  Design and implementation are reviewed
-together: a GitHub `APPROVE` on the exact candidate head accepts the RFC,
-implementation, and evidence together.  No separate design-only approval or PR
-is required.
+The original series is `in-progress`. Its approval does not approve subsequent
+amendments. For #31761, review the amendment's design first in that same PR and
+record the reviewed revision and decision before implementation approval; a
+separate design-only PR is not needed. The original approval record below is
+historical, not an exemption from that review order.
 
 ## PR #29646 amendment: integration closures
 
@@ -122,6 +124,228 @@ of this amendment.
 [integration-multicn-tests]: https://github.com/matrixorigin/matrixone/blob/0a647334ea9e6ab5270cac0fe70e4e8c1596ab09/pkg/tests/issues/shuffle_multicn_test.go
 [integration-ci]: https://github.com/matrixorigin/matrixone/actions/runs/37427131266
 
+## PR #31761 amendment: analytic execution
+
+Revision: **analytic-execution-v1**, owned by the optimizer/compiler maintainers
+under [#26768](https://github.com/matrixorigin/matrixone/issues/26768), implemented
+in [#31761](https://github.com/matrixorigin/matrixone/pull/31761). Design decision:
+**pending**. The PR links the exact document commit and review decision. The
+size and planner/compiler/executor boundary changes trigger design review; this
+amendment supplies that review input, not a claim of prior approval.
+
+### Problem, scope, and composition
+
+The remaining work is avoidable multiplicity, repeated scalar evaluation after
+join fanout, late ordinary runtime filters, and serial projection after UNION
+fan-in. Increasing DOP or spill thresholds does not remove that work. The
+proposal uses SQL bag/set semantics and total pointwise-expression identities;
+statistics rank opportunities but never prove equivalence. It extends existing
+SEMI, PROJECT, broadcast HashBuild, and bounded vector-selection owners instead
+of adding a scheduler, aggregate-state format, or cross-query cache.
+
+The implementation order is part of the contract:
+
+| Boundary | Owner and operation | Composition invariant |
+| --- | --- | --- |
+| After INNER join ordering, association, initial build/probe selection and aggregate pullup | `QueryBuilder.reduceSetMembershipJoins` changes eligible set-arm INNER joins to SEMI; ordinary stats, SEMI pushdown and orientation then run | Do not freeze an existence boundary before INNER enumeration can remove fact multiplicity. |
+| Final physical runtime-filter generation | `generateRuntimeFiltersInTree` adds optional deep pairs | Preserve finalized join conditions, distribution and estimates; an optional filter later removed by compilation must not leave optimistic costs behind. |
+| After column remapping and ordinary projection removal | `pushdownGroupingExpressions` inserts a build-side PROJECT | Preserve old build slots, grouping ordinals and all observable references; do not recost or reselect shuffle afterward. |
+| Physical scope construction, then topology validation | `Compile` places eligible UNION projections and proves deep-filter publishers | Revalidate actual scope placement/startup/completeness; logical eligibility alone cannot authorize a scan wait. |
+| HashJoin probe and finalize | Existing operator batches selections | Preserve match ownership, NULL extension, iteration order and terminal cleanup. |
+
+Every pass proves its own conditions against its current input. Set reduction
+can introduce a SEMI boundary that makes the deep-filter tree ineligible;
+group-expression motion rejects nodes carrying runtime filters. These are safe
+missed opportunities, not reasons to relax either proof. `HashOnPK` is cleared
+and recomputed from current inputs, never inherited from a previous rewrite or
+trial. New parallel UNION DISTINCT ownership is **not** in this amendment.
+
+### Set-membership reduction
+
+For a non-ALL UNION/INTERSECT/EXCEPT arm, duplicate elimination makes
+`distinct(project_A(A INNER JOIN B))` equivalent to
+`distinct(project_A(A SEMI JOIN B))`. A preserves its own duplicates until the
+original set operator removes them; SQL NULL comparison and set equality remain
+owned by the existing join and set operators. No key-uniqueness estimate is
+needed. Right-only output is symmetric after logical child exchange.
+
+Admission requires a direct PROJECT over an equality INNER JOIN, output from
+exactly one input, and one ownership path across all query steps. The complete
+arm must contain only supported scans, projections, filters and INNER joins
+with total, side-effect-free expressions. This whole-domain proof matters:
+SEMI short-circuiting could otherwise suppress a cast error in the discarded
+input even when the output columns are safe. Shared ancestors, correlation,
+materialization/message dependencies, runtime filters, barriers, LIMIT/OFFSET,
+unknown expression owners and unsupported nodes reject the rewrite. ALL sets,
+COUNT, windows and mixed-side outputs are not duplicate-insensitive witnesses.
+
+No node, runtime worker or new retained state is added. The ownership census
+visits each reachable node/edge; each candidate then checks its arm rather than
+enumerating a rewrite fixpoint. Final global duplicate elimination remains one
+owner across worker outputs, retains physical equality keys, and inherits the
+set node's `agg_spill_mem`. This is not parallel final DISTINCT.
+
+### Group-expression motion before join fanout
+
+A deterministic total function of build columns may be evaluated before an
+INNER join without changing which result value each joined row receives. This
+does **not** move aggregation or introduce `SUM(SUM(...))`. The first admitted
+domain is the resolved three-argument VARCHAR `SUBSTRING` overload, with
+literal INT64 offset/nonnegative length, valid declared width, and unchanged
+charset/collation and declaration metadata. Unsafe casts, arbitrary functions,
+unknown provenance, and incompatible types retain join-then-evaluate.
+
+The shape is AGG over a non-right, non-shuffle equality INNER join with a plain
+build scan. It is SELECT/AP only, without prepared parameters, correlation,
+background queries, shared ancestors, inactive grouping keys or extra execution
+owners. The candidate input cannot be a join-condition input. Every remaining
+aggregate expression, HAVING and hidden declaration reference participates in
+the slot-use proof: preserve the old output slot if another consumer needs it;
+otherwise replace only that slot. The original group ordinal remains fixed.
+
+Cost admission requires finite positive row/width estimates and at least 4x
+estimated join-output/build-row fanout. At most one expression is moved per
+join. One extra build value has declared modeled width
+`VarlenaSize + 4 * result_character_width`; existing HashBuild accounting and
+spill limits still govern its retention. Bad stats can make this tradeoff
+slower or wider, but cannot change results or relax a budget. Traversal rejects
+depth 64, retains at most 4097 visited nodes, and bounds each reference
+proof to 4096 expression visits. Projection errors/allocations retain the
+existing child, batch and query cleanup owners.
+
+### Deep ordinary runtime filters
+
+This extends ordinary INNER-join filters, not the scalar `SINGLE` contract.
+The candidate is a non-right broadcast INNER join with one bare-column equality
+key. Exact SQL-equality encoding, ordinary selectivity/key-count admission and
+payload limits are retained. A bounded, single-step SELECT tree must have no
+shared nodes, correlation, source steps or unsupported dependencies. Existing
+scan-filter edges must point from an ancestor build to its probe subtree,
+never into the producing build. Tree depth is below 128, node count at most
+4096, and each ordinary-node expression inspection has a 4096-visit budget.
+
+Lineage crosses only INNER joins and transparent FILTERs, with total predicates
+and no LIMIT/OFFSET. It cannot cross PROJECT, AGG, SORT, outer/SEMI/ANTI/SINGLE
+joins or other evaluation barriers. Descending into an inner build additionally
+requires its probe sibling to be safe to skip: pruning that build can prevent
+the sibling from running. Same-collation bounded text widening may prove
+totality, but the cast and original predicates remain; this is not permission
+to suppress arbitrary conversion diagnostics.
+
+The wait/completeness proof has a separate physical owner. After all scopes are
+built, compilation requires a naturally local AP graph on one message board,
+no dependent-source or lazy/remote startup, at least one consumer and exactly
+one non-shuffle, Mcpu=1 publisher for each tag. The publisher must be recorded
+by the broadcast-build construction path after it has made the input complete;
+one arbitrary HashBuild or one partial worker is insufficient. Lower local
+shuffle is allowed only when the complete broadcast still meets that proof.
+No CN relocation, forced producer launch or additional startup protocol is
+introduced to make a filter eligible.
+
+The state sequence is: logical candidate -> physical proof -> retained pair or
+pair removal -> existing complete-build publication -> scan consumption ->
+existing query cleanup. On rejection both publisher and scan spec are removed
+before execution, including a private source-node view so initialization or
+serialization cannot resurrect a wait. The reusable logical plan is unchanged.
+On admission the original join still decides results: complete empty/no-key
+state may publish DROP; a supported bounded key set publishes IN; excess keys,
+spill or unavailable/unsupported payload state publish PASS. Build error and
+cancellation use existing HashBuild finalization/message-board cancellation,
+not a successful empty-build result. Reset/Free retain the existing exactly-once
+generation gate and release payload/key storage. There is no new queue,
+goroutine, retry, persistent state or independent memory ledger.
+
+### Projection before UNION ALL fan-in
+
+A total pointwise projection commutes with unordered concatenation. Compile
+attaches an independent projection to each existing branch/packed worker,
+then preserves the one-stream downstream merge. Supported expressions are
+type-correct columns/literals, GROUPING over columns and the resolved IF
+overload with non-failing numeric/Boolean truth conversion and total branches.
+Deferred-conversion literals, text truth conversion, arbitrary functions/casts,
+side effects and unknown executable fields reject admission.
+
+Outer streaming demand, LIMIT/OFFSET/order, barriers, ordered scalar UNION
+evaluation and TP execution retain the legacy placement. Branch semantics,
+grouping sentinels, result types and existing Mcpu are unchanged. A pass-through
+UNION marker is not a branch activation owner: only a UNION with more than one
+sequential branch installs a starter; missing or multiple real owners still
+fail. Existing scope cancellation and partial-compilation cleanup remain the
+owners of branch operators and receivers.
+
+There is no new worker pool or higher selected DOP. Expression work stays
+linear in input rows, but per-worker expression/result buffers replace one
+serial projection's buffers: resident output can scale with existing worker
+count times batch width. Existing mpool accounting and bounded receiver queues
+remain authoritative; high-core machines are not assumed to gain linearly.
+This change does not parallelize final global deduplication.
+
+### RIGHT-join batching and other executor fast paths
+
+The original INNER-only matched-row batching restriction is extended narrowly
+to unique, residual-free RIGHT joins. Every successful build ordinal is marked
+in the existing bitmap before projection. Worker bitmap union, single-match
+checks and unmatched-row ownership are unchanged. Finalize can gather adjacent
+iterator rows from the same build batch using the existing ordinal scratch;
+this applies to existing finalize consumers, not just unique RIGHT joins.
+It never sorts selections or changes which rows the iterator emits. Unmatched
+probe columns are NULL-extended as before.
+
+Scratch remains bounded by `hashmap.UnitLimit`, output by `DefaultBatchSize`.
+Whole flat varlena vectors use selected-payload copying so dead area bytes are
+not retained. Allocation failure returns without publishing an incomplete
+batch; existing Reset/Free and mailbox cancellation own all cleanup. Non-unique
+or residual matched-probe paths retain their existing loops.
+
+The accompanying hash/selection, COUNT, scalar MIN/MAX, NULL-ELSE CASE, group
+and sorted-Partition merge fast paths reuse existing owners and supported-type
+fallbacks. They do not change aggregate-state/error contracts or bounded-RANK
+admission. Heap merge uses the existing comparator and stable tie ordering;
+concatenation cannot preserve a sorted flag without proof. Shuffle must drain
+buffered terminal batches before release. These correctness requirements remain
+independent of the planner optimizations and their measured speedups.
+
+### Alternatives, operations, and validation
+
+Keeping legacy plans is the fallback and cheapest implementation, but retains
+unobservable multiplicity and serial scalar work. Pushing arbitrary expressions
+or filters through every operator would expose more opportunities but lacks the
+evaluation-domain/startup proof. A general memo, adaptive DOP or distributed
+filter coordinator is a much broader ownership/search change; none is needed
+for these identities. The selected approach reuses narrow existing operators,
+accepting missed opportunities rather than speculative equivalence.
+
+There is no new SQL option, persistent/catalog/wire format, authentication or
+tenant boundary. Full-cluster shutdown upgrade and existing formats suffice;
+no mixed-version gate is introduced. Existing `runtimeFilter=1` can disable
+ordinary filter generation. The other new paths have no new session switches:
+targeted implementation reverts restore their legacy paths before new queries
+are admitted. Revert a complete planner/compiler pair, and preserve correctness
+fixes for uniqueness, spill settings, metadata and terminal cleanup. Already
+running queries retain their original process-owned cleanup.
+
+Plain EXPLAIN and physical operator profiles expose the SEMI, build projection,
+scan-filter pair and before-merge projection. No new per-row instrumentation is
+required. Comparable same-query or same-fixture controls must include terminal
+results; time, memory and spill are collected where they support the mechanism.
+TPC-H controls check shared hot paths, not unrelated numerical query neighbors.
+No fixed 1 TiB rerun is required solely for a documentation amendment.
+
+| Contract | Existing focused validation | Required refusal/terminal oracle |
+| --- | --- | --- |
+| Set multiplicity and ordering | [set-membership tests](../../pkg/sql/plan/set_membership_reduction_test.go) | ALL/count/window/mixed output, fallible origins, shared ownership/dependencies remain unchanged. |
+| Group-expression domain and slots | [group-expression tests](../../pkg/sql/plan/group_expression_pushdown_test.go) | Original column still used, provenance/type mismatch, weak/invalid cost, shared and physical barriers. |
+| Deep logical order and physical completeness | [planner tests](../../pkg/sql/plan/deep_runtime_filter_test.go), [compiler tests](../../pkg/sql/compile/deep_runtime_filter_test.go), [topology tests](../../pkg/sql/compile/runtime_filter_topology_test.go) | Cyclic waits, unsafe siblings, remote/lazy/TP/partial/cloned publishers lose both endpoints; logical plan remains reusable. |
+| UNION projection and activation | [projection tests](../../pkg/sql/compile/parallel_union_projection_test.go), [lifecycle tests](../../pkg/sql/compile/lazy_branch_completion_test.go), [public CTE case](../../test/distributed/cases/cte/evaluation_identity.sql) | Packed workers and grouping rows preserved; streaming/scalar/fallible controls remain lazy; passive markers never own startup. |
+| Matched/finalized join projection | [unique tests](../../pkg/sql/colexec/hashjoin/unique_projection_test.go), [finalize tests](../../pkg/sql/colexec/hashjoin/finalize_projection_test.go) | Ordered NULL/duplicate/varlena results, allocation failure, reset and reuse retain original ownership. |
+
+These links describe coverage, not an approval or a substitute for public SQL
+result comparison. Performance evidence and its source revisions remain in
+#31761; historical measurements are not relabeled as a fresh rebased run.
+Implementation approval follows the explicit design decision on this amendment
+and risk-proportional normal/race/public/CI evidence under the acceptance
+contract below. New semantic deviations require a further design update.
+
 ## Motivation
 
 TPC-DS 1 TiB exposed repeated fact-table work, late filters, unnecessary
@@ -143,7 +367,8 @@ In scope:
 - extracting a common typed join equality from every DNF arm;
 - guarded LEFT-join association and LEFT-to-ANTI conversion;
 - conservative ANTI cardinality and exact shuffle-lineage reuse;
-- batching output projection for unique residual-free INNER hash joins;
+- batching output projection for unique residual-free INNER/RIGHT hash joins,
+  with the RIGHT match-tracking and finalize contract in the #31761 amendment;
 - bounded per-partition `RANK` for a small literal upper bound while retaining
   every row tied at the rank boundary.
 
@@ -477,16 +702,18 @@ starts and executes the unchanged logical plan.
 
 ### Batched unique INNER hash-join projection
 
-The hash join may batch result projection only for an INNER join whose build
-map is proved unique and which has no residual predicate or unmatched-row
-contract. `Find` still determines one build ordinal for each probe row. The
+The original path batches result projection for an INNER join whose build map
+is proved unique and which has no residual predicate or unmatched-row contract.
+The #31761 amendment above adds RIGHT matched-row batching while retaining its
+bitmap/finalize owner; it also defines the independent finalize gather path.
+`Find` still determines one build ordinal for each probe row. The
 operator records at most one hashmap chunk of matching probe/build ordinals in
 fixed operator-owned scratch, appends probe vectors in one selection, and
 appends build vectors in consecutive source-batch runs. It never sorts or
 groups non-consecutive build batches, so probe order, repeated references to the
 same build row, NULLs, and result-column order are identical to the row-at-a-
-time path. Non-unique, residual, outer, mark, semi/anti, single, ASOF, and
-unmatched-output paths retain their existing loops.
+time path. Other matched-probe paths retain their existing loops; the RIGHT and
+finalize extensions do not remove their unmatched-output contract.
 
 The scratch arrays are statically bounded by `hashmap.UnitLimit` and reused for
 the operator lifetime; the result remains bounded by `DefaultBatchSize` and is
@@ -711,7 +938,7 @@ described as a measured performance pass.
 | grouping sets | internal-origin marker, typed branch compatibility, every-branch drain/conditional totality, inherited-sentinel exclusion, byte-aware fanout/storage gate, raw-input aggregate order, MORPC v48/v49 plan and send/receive boundaries, codec round trips | distributed ROLLUP/CUBE/GROUPING SETS results with SQL NULL, rollup sentinel, duplicates, nested grouping extensions, runtime-empty input, decimal cancellation/NULL/empty multi-prefix cases, early-stop readers, and spill | user UNION ALL, aggregate-over-aggregate prefix reuse, partial drain with fallible expression, incompatible state/type, inherited grouping provenance, old protocol, unknown/wide variable row, high-cardinality output, no all-rolled set |
 | MARK/OR EXISTS | positive marker ownership, totality, typed keys, and reachable `UNION ALL + SEMI` tests | independent EXISTS/OR results with duplicates, NULLs, multiple/composite arms | NOT/IN/ANY/projected/mixed/volatile/fallible/non-equality/correlated/different-key markers |
 | scalar filter | retained `SINGLE`, actual-cardinality state machine, exact join lineage, safe-to-skip build sibling, one-producer-per-CN topology | scalar 0/1/>1-row results/errors; local/shuffled delivery; empty/NULL/one-value sibling error and volatile controls | correlated, unsafe build sibling, right SEMI/ANTI, outer/nested-single/project/window/barrier/limit/unsafe predicate, missing/duplicate/non-colocated endpoint |
-| unique hash projection | unique residual-free admission, fixed scratch, ordered consecutive-build-batch selections | byte-identical matched/NULL/repeated-build results; allocation error and reset/reuse cleanup | non-unique, residual, unmatched-output, MARK/SINGLE/SEMI/ANTI/outer/ASOF paths |
+| unique hash projection | unique residual-free INNER/RIGHT admission, fixed scratch, ordered consecutive-build-batch selections and RIGHT bitmap tracking | byte-identical matched/NULL/repeated-build and finalized results; allocation error and reset/reuse cleanup | non-unique/residual matched-probe paths and other join modes; unmatched ownership unchanged |
 | RANK Partition Top-N | literal-bound recognition, complete peer comparator, obsolete-tie recycle, two-stage exactness, mpool ownership, MORPC v67/v68 boundary and codec round trip | differential ROW_NUMBER/RANK results with NULL/order ties, >batch peer output, grouping sentinel, reset/cancel/error | prepared/dynamic/>1024/OR/wrapped/unsafe bounds, unsupported partition equality, multi-window, old protocol |
 | DNF key | exact total common-key, complete relation walk, residual retention | differential DNF results/errors with NULLs and duplicates | single-table range DNF, missing-arm key, computed/fallible/incompatible/volatile/ambiguous key |
 | LEFT/ANTI | null-rejection, pure marker lineage, complete uniqueness and rule-order tests | public outer/anti result checks with duplicates and NULLs | nullable/computed marker, partial PK, non-total predicate, RIGHT/FULL/non-equi join |
@@ -786,7 +1013,7 @@ before approval.
 
 ## Observability, rollout, and rollback
 
-Every admitted logical transformation records a named optimizer-history entry.
+Named optimizer-history entries, where available, complement plan inspection.
 Plain `EXPLAIN` and statement/operator profiles expose the resulting producer,
 grouping domain, join tree/type, ANTI estimate, runtime-filter tag/type, shuffle
 key/reuse method, Partition Top-N keys/limit, memory, spill, and terminal
@@ -826,13 +1053,16 @@ cohort does not require reverting unrelated stats or executor memory work.
 
 ## Approval record
 
-The RFC and its owning implementation are one review unit. Review comments may
+For the original v11 series, the RFC and its owning implementation were one
+review unit. Its recorded convention was: review comments may
 iterate on design or code in any order, but the decisive GitHub `APPROVE` applies
 to the complete exact head: RFC, production code, tests, and attached evidence.
 Any later semantic or implementation commit changes that head and requires
 re-review under normal GitHub rules. All four implementation PR bodies link
 the same RFC revision so reviewers can assess the global order while approving
-each PR's final implementation diff.
+each PR's final implementation diff. This historical convention does not approve
+the #31761 amendment: its design decision must be recorded first in the same PR
+before implementation approval, as specified above.
 
 ## Decision log
 

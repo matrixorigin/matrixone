@@ -238,8 +238,8 @@ func (f *Sorted64Filter) Free() {
 }
 
 // CHandle points at the complete [count][values] payload. C only borrows it for
-// the duration of one cgo call; FilteredSearchUnsafeWithMembership keeps f
-// alive until that call returns.
+// the duration of one cgo call (TestVector); the payload is Go memory, so the
+// vector-index search bridges reject it (CMembershipOf).
 func (f *Sorted64Filter) CHandle() unsafe.Pointer {
 	if !f.Valid() {
 		return nil

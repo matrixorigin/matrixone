@@ -1,0 +1,35 @@
+service-type = "TN"
+data-dir = "./mo-data"
+
+# Opt into the checksum-free DISK-V2 backend. The cluster-wide default remains
+# DISK (CRC-framed) for backward compatibility with existing data dirs; this
+# config explicitly selects DISK-V2 for a fresh deployment.
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK-V2"
+data-dir = "./mo-data/local2"
+
+[[fileservice]]
+name = "SHARED"
+backend = "DISK-V2"
+data-dir = "./mo-data/shared2"
+
+[log]
+level = "info"
+
+[tn]
+uuid = "27d432a9-8d11-458f-a5cc-ae83ca56c7bb"
+port-base = 30300
+
+[malloc]
+check-fraction = 65536
+enable-metrics = true
+
+[observability]
+trace-export-interval = 1
+disableMetric = true
+enable-metric-to-prom = false
+status-port = 17880
+
+[hakeeper-client]
+service-addresses = ["127.0.0.1:33301"]

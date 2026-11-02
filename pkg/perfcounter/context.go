@@ -86,11 +86,6 @@ func AttachS3RequestKey(ctx context.Context, counter *CounterSet) context.Contex
 	return context.WithValue(ctx, S3RequestKey{}, counter)
 }
 
-func GetS3RequestKey(ctx context.Context) (*CounterSet, bool) {
-	counter, ok := ctx.Value(S3RequestKey{}).(*CounterSet)
-	return counter, ok
-}
-
 // Background Executor Internal Executor
 type BackgroundExecutorKey struct{}
 
@@ -140,16 +135,4 @@ type CalcTableStatsKey struct{}
 
 func AttachCalcTableStatsKey(ctx context.Context) context.Context {
 	return context.WithValue(ctx, CalcTableStatsKey{}, true)
-}
-
-type CalcTableSizeKey struct{}
-
-func AttachCalcTableSizeKey(ctx context.Context) context.Context {
-	return context.WithValue(ctx, CalcTableSizeKey{}, true)
-}
-
-type CalcTableRowsKey struct{}
-
-func AttachCalcTableRowsKey(ctx context.Context) context.Context {
-	return context.WithValue(ctx, CalcTableRowsKey{}, true)
 }

@@ -197,7 +197,7 @@ cold  ¦  1  ¦  hot  ¦  3  𝄀
 hot  ¦  2  ¦  cold  ¦  2  𝄀
 warm  ¦  3  ¦  warm  ¦  1
 select id, status from vector_ivfflat_sync_enum where status = 'hot'
-order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=include';
+order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=iterative';
 ➤ id[12,65535,0]  ¦  status[12,65535,0]  𝄀
 cold  ¦  hot
 select id, status from vector_ivfflat_sync_enum where status = 'hot'
@@ -288,8 +288,11 @@ execute enum_stored;
 3  ¦  NULL  ¦  NULL  ¦  NULL
 select cast(0 as enum('','2','1'));
 Data truncation: data out of range: data type enum, value 0
+set @ivf_enum_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 insert into vector_ivfflat_async_enum values ('invalid', 'warm', '[4,0]', '');
-internal error: convert to MySQL enum failed: item invalid is not in enum [cold hot warm]
+Data truncated for ENUM value: 'invalid'
+set session sql_mode = @ivf_enum_saved_sql_mode;
 delete from vector_ivfflat_async_enum where id+0 = 0;
 update vector_ivfflat_async_enum set stored = '1' where id = 'cold';
 execute enum_stored;

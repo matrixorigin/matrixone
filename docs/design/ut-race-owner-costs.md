@@ -42,7 +42,7 @@ error behavior. PR #29760 additionally introduces a scheduling projection,
 retaining store/runtime state and LOG WAL recovery status while omitting display
 configuration. Public/private full getters, GET_CLUSTER_STATE and existing full
 truncation queries remain complete. The current consumer and failure contracts
-are defined in [Race UT critical path](pr29760-race-ut-critical-path.md).
+are defined in [Race UT ownership](race-ut-runner.md#fixture-and-supporting-state-owners).
 There is no cache, aliased mutable map, assertion reuse or cadence change.
 Dragonboat retains lookup serialization ownership.
 

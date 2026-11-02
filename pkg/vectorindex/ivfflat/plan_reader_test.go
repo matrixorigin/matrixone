@@ -53,7 +53,6 @@ import (
 )
 
 type scriptedRelationScanner struct {
-	t        *testing.T
 	requests []sqlexec.RelationScanRequest
 	run      func(sqlexec.RelationScanRequest) executor.Result
 }
@@ -78,7 +77,7 @@ func (s *scriptedRelationScanner) ScanRelation(req sqlexec.RelationScanRequest) 
 func TestGetVersionUsesTypedRelationScan(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, "db1", req.Schema)
 		require.Equal(t, "meta1", req.Table)
@@ -109,8 +108,8 @@ func TestRelationScanPolicyAssignsInMemoryRowsOnlyToCoordinator(t *testing.T) {
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(1, false))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(2, true))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), relationScanPolicy(2, false))
-	advancePlanCursor(nil)
-	advancePlanCursor(&vectorindex.IvfSearchCursor{Exhausted: true})
+	advancePlanCursor(nil, 1)
+	advancePlanCursor(&vectorindex.IvfSearchCursor{Exhausted: true}, 1)
 }
 
 func TestValidateIvfQueryDimensions(t *testing.T) {
@@ -124,7 +123,7 @@ func TestValidateIvfQueryDimensions(t *testing.T) {
 func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Zero(t, req.ReadPolicy)
 		require.Equal(t, "entries1", req.Table)
@@ -209,12 +208,63 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	require.Equal(t, int32(9), vector.GetFixedAtNoTypeCheck[int32](res.Batches[0].Vecs[2], 0))
 }
 
+// TestScanEntriesOversizedLimitKeepsStorageTopK scans with a limit of the largest uint
+// (an oversized itopk): storage receives a Top-K limit it accepts (at most the largest
+// int) and returns the distance column.
+func TestScanEntriesOversizedLimitKeepsStorageTopK(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	scanner := &scriptedRelationScanner{}
+	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+		require.NotNil(t, req.IndexParam)
+		require.Equal(t, uint64(math.MaxInt), req.IndexParam.GetLimit().GetLit().GetU64Val())
+
+		bat := batch.NewWithSize(7) // version, centroid, pk, entry, include, cpkey, distance
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+		bat.Vecs[4] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(4), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
+		require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{1, 2}, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[4], int32(9), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("cpkey"), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[6], float64(5), false, mp))
+		bat.SetRowCount(1)
+		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+	}
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.RelationScanner = scanner
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}},
+	}
+	idx := &IvfflatSearchIndex[float32]{Version: 4, QuantMul: 1}
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
+
+	res, err := idx.scanEntries(sqlproc, idxcfg, vectorindex.IndexTableConfig{
+		DbName:         "db1",
+		EntriesTable:   "entries1",
+		IncludeColumns: []string{"payload"},
+	}, []float32{0, 0}, 4, []int64{2, 3}, []string{"payload"}, nil, ^uint(0))
+	require.NoError(t, err)
+	defer res.Close()
+	require.Len(t, res.Batches, 1)
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[0], 0))
+	require.Equal(t, float64(5), vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[1], 0))
+}
+
 func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 	require.NoError(t, err)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.True(t, req.PostFilterTopOnly)
 		require.Nil(t, req.IndexParam.OrderBy[0].Expr)
@@ -264,7 +314,7 @@ func TestScanEntriesPrunesFilteredSearchToSelectedCentroids(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 	require.NoError(t, err)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.False(t, req.PostFilterTopOnly)
 		require.True(t, req.FilterBeforeTopK)
@@ -457,7 +507,7 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-			scanner := &scriptedRelationScanner{t: t}
+			scanner := &scriptedRelationScanner{}
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.False(t, req.PostFilterTopOnly)
 				require.Equal(t, metric.DistFn_L2Distance, req.IndexParam.OrigFuncName)
@@ -584,7 +634,7 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-			scanner := &scriptedRelationScanner{t: t}
+			scanner := &scriptedRelationScanner{}
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.True(t, req.PostFilterTopOnly)
 				require.Nil(t, req.IndexParam.DistRange)
@@ -637,7 +687,7 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 func TestScanEntriesFallsBackBeforeL2LowerBoundTopK(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.True(t, req.PostFilterTopOnly)
 		require.Nil(t, req.IndexParam.DistRange)
@@ -712,7 +762,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	})
 
 	t.Run("storage omits distance", func(t *testing.T) {
-		scanner := &scriptedRelationScanner{t: t, run: func(req sqlexec.RelationScanRequest) executor.Result {
+		scanner := &scriptedRelationScanner{run: func(req sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(len(req.Columns))
 			for i := range bat.Vecs {
 				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
@@ -731,7 +781,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	t.Run("local distance evaluation fails", func(t *testing.T) {
 		residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 		require.NoError(t, err)
-		scanner := &scriptedRelationScanner{t: t, run: func(sqlexec.RelationScanRequest) executor.Result {
+		scanner := &scriptedRelationScanner{run: func(sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(5)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
@@ -831,18 +881,18 @@ func TestAdvancePlanCursorExpandsDisjointCentroidWindows(t *testing.T) {
 		NextBucketOffset:   0,
 		CurrentBucketCount: 2,
 	}
-	advancePlanCursor(cursor)
+	advancePlanCursor(cursor, 4)
 	require.Equal(t, uint(2), cursor.NextBucketOffset)
 	require.Equal(t, uint(4), cursor.CurrentBucketCount)
 	require.False(t, cursor.Exhausted)
 
 	cursor.Round++
-	advancePlanCursor(cursor)
+	advancePlanCursor(cursor, 8)
 	require.Equal(t, uint(6), cursor.NextBucketOffset)
 	require.Equal(t, uint(4), cursor.CurrentBucketCount)
 
 	cursor.Round++
-	advancePlanCursor(cursor)
+	advancePlanCursor(cursor, 8)
 	require.True(t, cursor.Exhausted)
 	require.Equal(t, uint(10), cursor.NextBucketOffset)
 }
@@ -1348,7 +1398,7 @@ func (r *lateFilterRelationReader) ReadWithFilter(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	out *batch.Batch,
 ) (bool, error) {
@@ -1385,7 +1435,7 @@ func (r *lateFilterRelationReader) ReadWithFilter(
 	}
 	out.SetRowCount(len(rows))
 	r.wideWasDeferred = out.Vecs[3].Length() == 0
-	filtered, err := filter(out, earlyColumns)
+	filtered, err := filter.Apply(out, earlyColumns)
 	if err != nil {
 		return false, err
 	}
@@ -1429,7 +1479,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	out *batch.Batch,
@@ -1451,7 +1501,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 		}
 	}
 	out.SetRowCount(2)
-	filtered, err := filter(out, earlyColumns)
+	filtered, err := filter.Apply(out, earlyColumns)
 	if err != nil {
 		return false, false, err
 	}
@@ -2092,7 +2142,7 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	currentFunction := metric.DistFn_L2Distance
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		switch req.Table {

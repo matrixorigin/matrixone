@@ -1,0 +1,26 @@
+name: MO atomic event sink
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/mo-eos-sink.yml'
+      - 'connectors/mo-eos-sink/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  java-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: connectors/mo-eos-sink/pom.xml
+      - name: Verify connector package and protocol unit tests
+        run: mvn -B --no-transfer-progress -f connectors/mo-eos-sink/pom.xml verify

@@ -105,6 +105,10 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 		return nil, err
 	}
 
+	// Checked once the index is known to serve the query: another index on the table may.
+	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexCagraAlgo.ToString()); err != nil {
+		return nil, err
+	}
 	return &cagraIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
@@ -122,6 +126,10 @@ func (builder *QueryBuilder) prepareCagraIndexContext(vecCtx *vectorSortContext,
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForSortUsingCagraWithColRefCnt(nodeID, vecCtx, multiTableIndex, nil, idxColMap)
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingCagraWithColRefCnt(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
@@ -131,10 +139,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 	if err != nil || cagraCtx == nil {
 		return nodeID, err
 	}
+	if vectorRankMode(vecCtx) == "auto" {
+		// pre differs from post with any filter but a distance range predicate: INCLUDE
+		// and primary-key filters run in the search, any other through membership. Under
+		// a MATCH filter post already runs the PRE shape.
+		branch := func(root int32, branchCtx *vectorSortContext, branchMap map[[2]int32]*plan.Expr) (int32, error) {
+			return builder.applyIndicesForSortUsingCagraWithColRefCnt(root, branchCtx, multiTableIndex, colRefCnt, branchMap)
+		}
+		withPre := hasNonDistFnFilter(vecCtx.scanNode.FilterList, cagraCtx.partPos, cagraCtx.origFuncName, cagraCtx.vecLitArg) &&
+			!builder.scanHasMatchedFullTextFilter(vecCtx.scanNode)
+		return builder.buildAdaptiveModeTop(nodeID, vecCtx, idxColMap, branch, withPre)
+	}
 
 	return builder.applyCuvsIndexSearchScan(nodeID, vecCtx, idxColMap, cuvsSearchScan{
 		algo:         "CAGRA",
-		alias:        "mo_cagra_alias_0",
+		alias:        "mo_cagra_alias",
 		metaDef:      cagraCtx.metaDef,
 		idxDef:       cagraCtx.idxDef,
 		metaRole:     catalog.Cagra_TblType_Metadata,
@@ -145,60 +164,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingCagra(nodeID int32, vecCtx 
 		partPos:      cagraCtx.partPos,
 		pkPos:        cagraCtx.pkPos,
 		pkType:       cagraCtx.pkType,
-		algoOptions: func(filterJSON string) ([]byte, error) {
+		colRefCnt:    colRefCnt,
+		algoOptions: func(filterJSON string, iterative bool) ([]byte, error) {
 			return cagraplan.EncodeScanOptions(cagraplan.ScanOptions{
 				ThreadsSearch:      cagraCtx.nThread,
 				BatchWindow:        cagraCtx.batchWindow,
 				GpuMultiSimulation: cagraCtx.gpuMultiSim,
 				KeyPartType:        cagraCtx.partType.Id,
 				FilterJSON:         filterJSON,
+				Iterative:          iterative,
 			})
 		},
 	})
 }
-
-/*
-func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPos int32) (key *plan.Expr, value *plan.Expr, found bool) {
-
-	if _, ok := metric.DistFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
-		return
-	}
-
-	distFnArgs := distFnExpr.Args
-	if distFnArgs[0].Typ.GetId() != int32(types.T_array_float32) && distFnArgs[0].Typ.GetId() != int32(types.T_array_float64) {
-		return
-	}
-
-	if distFnArgs[1].GetCol() != nil {
-		if distFnArgs[0].GetCol() != nil {
-			return
-		}
-
-		distFnArgs[0], distFnArgs[1] = distFnArgs[1], distFnArgs[0]
-	}
-
-	vecColArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[0], builder.compCtx.GetProcess(), false, true)
-	if vecColArg != nil {
-		distFnArgs[0] = vecColArg
-	}
-	vecLitArg, _ := ConstantFold(batch.EmptyForConstFoldBatch, distFnArgs[1], builder.compCtx.GetProcess(), false, true)
-	if vecLitArg != nil {
-		distFnArgs[1] = vecLitArg
-	}
-
-	if vecColArg.GetCol() == nil {
-		return
-	}
-	if !rule.IsConstant(vecLitArg, true) {
-		return
-	}
-
-	vecLitArg.Typ = vecColArg.Typ
-
-	if vecColArg.GetCol().ColPos != partPos {
-		return
-	}
-
-	return vecColArg, vecLitArg, true
-}
-*/

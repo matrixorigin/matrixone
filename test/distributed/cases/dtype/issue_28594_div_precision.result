@@ -38,7 +38,7 @@ select q, a / b as direct_q from ddl_precision;
 0.333333333333  ¦  0.333333333333
 insert into ddl_precision(a,b) values (0,3);
 -- @regex("constraint violation", true)
-constraint violation: Check constraint '__mo_chk_1' is violated
+constraint violation: Check constraint 'ddl_precision_chk_1' is violated
 select count(*) as accepted_rows from ddl_precision;
 ➤ accepted_rows[-5,64,0]  𝄀
 1
@@ -110,7 +110,7 @@ select q from ctas_precision_nullable where a = 2;
 ➤ q[3,30,12]  𝄀
 0.666666666667
 select q is null as q_is_null from ctas_precision_nullable where a is null;
-➤ q_is_null[-7,1,0]  𝄀
+➤ q_is_null[-6,8,0]  𝄀
 1
 set session div_precision_increment = 10;
 create table ddl_replay (
@@ -166,7 +166,7 @@ select q, a / b as direct_q from ddl_reorder;
 insert into ddl_reorder(a,b) values (1,3);
 insert into ddl_reorder(a,b) values (0,3);
 -- @regex("constraint violation", true)
-constraint violation: Check constraint '__mo_chk_1' is violated
+constraint violation: Check constraint 'ddl_reorder_chk_1' is violated
 select count(*) as accepted_rows from ddl_reorder;
 ➤ accepted_rows[-5,64,0]  𝄀
 2

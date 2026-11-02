@@ -71,7 +71,7 @@ func TestAutoIDCacheRestartAndDisabledNode(t *testing.T) {
 		// shutdown; restart admission may queue behind other test clusters.
 		cancel()
 		require.NoError(t, db.Close())
-		require.NoError(t, c.Close())
+		require.NoError(t, c.Stop())
 		cn.Adjust(func(cfg *embed.ServiceConfig) { cfg.CN.AutoIncrement.EnableAutoIDCache = enabled })
 		require.NoError(t, c.Start())
 		ctx, cancel = context.WithTimeout(t.Context(), 3*time.Minute)

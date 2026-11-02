@@ -32,7 +32,7 @@ select json_object('binary', cast('hello' as binary(10)), 'varbin', cast('world'
 {"binary": "base64:type254:aGVsbG8AAAAAAA==", "varbin": "base64:type15:d29ybGQ="}
 select json_object('vec32', cast('[1.0,2.0,3.0]' as vecf32(3)), 'vec64', cast('[1.5,2.5,3.5]' as vecf64(3)));
 ➤ json_object(vec32, cast([1.0,2.0,3.0] as vecf32(3)), vec64, cast([1.5,2.5,3.5] as vecf64(3)))[-1,2147483647,0]  𝄀
-{"vec32": [1, 2, 3], "vec64": [1.5, 2.5, 3.5]}
+{"vec32": [1.0, 2.0, 3.0], "vec64": [1.5, 2.5, 3.5]}
 select json_object('arr', json_array(1, 2, 3), 'obj', json_object('x', 1, 'y', 2));
 ➤ json_object(arr, json_array(1, 2, 3), obj, json_object(x, 1, y, 2))[-1,2147483647,0]  𝄀
 {"arr": [1, 2, 3], "obj": {"x": 1, "y": 2}}
@@ -156,9 +156,9 @@ select id, json_object('nullval', null) from jot;
 3  ¦  {"nullval": null}
 select id, json_object('vf32', vf32, 'vf64', vf64) from jot;
 ➤ id[4,32,0]  ¦  json_object(vf32, vf32, vf64, vf64)[-1,2147483647,0]  𝄀
-1  ¦  {"vf32": [1, 2, 3], "vf64": [1.5, 2.5, 3.5]}  𝄀
+1  ¦  {"vf32": [1.0, 2.0, 3.0], "vf64": [1.5, 2.5, 3.5]}  𝄀
 2  ¦  {"vf32": null, "vf64": null}  𝄀
-3  ¦  {"vf32": [4, 5, 6], "vf64": [3, 2, 1]}
+3  ¦  {"vf32": [4.0, 5.0, 6.0], "vf64": [3.0, 2.0, 1.0]}
 select json_type(json_extract(json_object('year', cast('2024' as year)), '$.year')), json_contains(json_object('year', cast('2024' as year)), '2024', '$.year'), json_contains(json_object('year', cast('2024' as year)), '"2024"', '$.year');
 ➤ json_type(json_extract(json_object(year, cast(2024 as year)), $.year))[12,65535,0]  ¦  json_contains(json_object(year, cast(2024 as year)), 2024, $.year)[-5,64,0]  ¦  json_contains(json_object(year, cast(2024 as year)), "2024", $.year)[-5,64,0]  𝄀
 INTEGER  ¦  1  ¦  0
@@ -191,9 +191,9 @@ execute json_object_typed using @json_object_year, @json_object_time;
 deallocate prepare json_object_typed;
 select id, json_object('id', id, 'b', b, 'bi', bi, 'f', f, 'd', d, 'd64', d64, 'd128', d128, 'd256', d256, 'c1', c1, 'vc', vc, 't', t, 'bin', bin, 'vbin', vbin, 'bit', bitcol, 'date', td, 'time', tt, 'dt', tdt, 'ts', ts, 'yr', yr, 'uid', uid, 'js', js, 'vf32', vf32, 'vf64', vf64) from jot;
 ➤ id[4,32,0]  ¦  json_object(id, id, b, b, bi, bi, f, f, d, d, d64, d64, d128, d128, d256, d256, c1, c1, vc, vc, t, t, bin, bin, vbin, vbin, bit, bitcol, date, td, time, tt, dt, tdt, ts, ts, yr, yr, uid, uid, js, js, vf32, vf32, vf64, vf64)[-1,2147483647,0]  𝄀
-1  ¦  {"b": true, "bi": 11111111111111, "bin": "base64:type254:aGVsbG8AAAAAAA==", "bit": "base64:type16:AQ==", "c1": "a", "d": 0.2222222, "d128": 3.1415926536, "d256": 3.14159265358979323846, "d64": 3.140, "date": "2021-02-01", "dt": "2021-02-01 11:11:11.000000", "f": 0.10000000149011612, "id": 1, "js": {"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}, "t": "tttttttt", "time": "11:11:11.000000", "ts": "2022-01-01 01:02:03.000000", "uid": "550e8400-e29b-41d4-a716-446655440000", "vbin": "base64:type15:d29ybGQ=", "vc": "vvvv", "vf32": [1, 2, 3], "vf64": [1.5, 2.5, 3.5], "yr": 2021}  𝄀
+1  ¦  {"b": true, "bi": 11111111111111, "bin": "base64:type254:aGVsbG8AAAAAAA==", "bit": "base64:type16:AQ==", "c1": "a", "d": 0.2222222, "d128": 3.1415926536, "d256": 3.14159265358979323846, "d64": 3.140, "date": "2021-02-01", "dt": "2021-02-01 11:11:11.000000", "f": 0.10000000149011612, "id": 1, "js": {"a": 1, "b": [1, 2, 3], "c": {"d": "hello"}}, "t": "tttttttt", "time": "11:11:11.000000", "ts": "2022-01-01 01:02:03.000000", "uid": "550e8400-e29b-41d4-a716-446655440000", "vbin": "base64:type15:d29ybGQ=", "vc": "vvvv", "vf32": [1.0, 2.0, 3.0], "vf64": [1.5, 2.5, 3.5], "yr": 2021}  𝄀
 2  ¦  {"b": false, "bi": null, "bin": null, "bit": null, "c1": null, "d": null, "d128": null, "d256": null, "d64": null, "date": null, "dt": null, "f": null, "id": 2, "js": null, "t": null, "time": null, "ts": null, "uid": null, "vbin": null, "vc": null, "vf32": null, "vf64": null, "yr": null}  𝄀
-3  ¦  {"b": true, "bi": 2, "bin": "base64:type254:eDAweEZGAAAAAA==", "bit": "base64:type16:AA==", "c1": "z", "d": 2.5, "d128": 0.1234567890, "d256": 1.23456789012345678901, "d64": 99.999, "date": "2021-12-31", "dt": "2021-12-31 23:59:59.000000", "f": 1.5, "id": 3, "js": {"foo": "bar", "nested": {"x": null}, "zoo": [1, 2, 3]}, "t": "txt", "time": "23:59:59.000000", "ts": "2022-12-31 23:59:59.000000", "uid": "660e8400-e29b-41d4-a716-446655440001", "vbin": null, "vc": null, "vf32": [4, 5, 6], "vf64": [3, 2, 1], "yr": 1999}
+3  ¦  {"b": true, "bi": 2, "bin": "base64:type254:eDAweEZGAAAAAA==", "bit": "base64:type16:AA==", "c1": "z", "d": 2.5, "d128": 0.1234567890, "d256": 1.23456789012345678901, "d64": 99.999, "date": "2021-12-31", "dt": "2021-12-31 23:59:59.000000", "f": 1.5, "id": 3, "js": {"foo": "bar", "nested": {"x": null}, "zoo": [1, 2, 3]}, "t": "txt", "time": "23:59:59.000000", "ts": "2022-12-31 23:59:59.000000", "uid": "660e8400-e29b-41d4-a716-446655440001", "vbin": null, "vc": null, "vf32": [4.0, 5.0, 6.0], "vf64": [3.0, 2.0, 1.0], "yr": 1999}
 select json_object();
 ➤ json_object()[-1,2147483647,0]  𝄀
 {}

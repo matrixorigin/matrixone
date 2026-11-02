@@ -55,7 +55,24 @@ import (
 
 const (
 	TransferSinkerMemorySizeThreshold = common.Const1MBytes * 50
+	dedupMetricFreeze                 = "freeze"
+	dedupMetricPrePrepare             = "preprepare"
+	dedupMetricAppend                 = "append"
+	dedupMetricLookup                 = "lookup"
+	dedupMetricOther                  = "other"
 )
+
+// Keep metric phases bounded even if a future caller adds a transaction phase.
+func dedupMetricPhase(phase string) string {
+	switch phase {
+	case txnif.FreezePhase:
+		return dedupMetricFreeze
+	case txnif.PrePreparePhase:
+		return dedupMetricPrePrepare
+	default:
+		return dedupMetricOther
+	}
+}
 
 // debugSkipFreezePhaseTransfer is a test-only flag. When enabled,
 // TransferDeletes is skipped during the Freeze phase so that the
@@ -113,9 +130,10 @@ type txnTable struct {
 	txnEntries  *txnEntries
 	csnStart    uint32
 
-	dataTable      *baseTable
-	tombstoneTable *baseTable
-	transferedTS   types.TS
+	dataTable       *baseTable
+	tombstoneTable  *baseTable
+	transferedTS    types.TS
+	transferChanged bool
 
 	// Before publication, a sink retains exact object references until delete
 	// succeeds. After publication, the table retains exact object names until
@@ -240,6 +258,9 @@ func (tbl *txnTable) PrePreareTransfer(
 	if debugSkipFreezePhaseTransfer.Load() && phase == txnif.FreezePhase {
 		return
 	}
+	if phase == txnif.PrePreparePhase {
+		tbl.transferChanged = false
+	}
 	err = tbl.TransferDeletes(ctx, ts, phase)
 	tbl.transferedTS = ts
 	return
@@ -347,6 +368,11 @@ func (tbl *txnTable) TransferDeletes(
 		return
 	}
 	id := tbl.entry.AsCommonID()
+	// Transfer covers the inclusive upper fence ts, while the conflict checker
+	// intentionally tests whether an object was deleted strictly before its
+	// argument. Use the successor so an object deleted exactly at ts is waited
+	// for and transferred as well.
+	conflictTS := ts.Next()
 	var softDeleteObjects []*catalog.ObjectEntry
 	if len(tbl.tombstoneTable.tableSpace.stats) != 0 {
 		tGetSoftdeleteObjects := time.Now()
@@ -558,7 +584,7 @@ func (tbl *txnTable) TransferDeletes(
 		// if deleted, try to transfer the delete node
 		if err = tbl.store.warChecker.checkOne(
 			id,
-			ts,
+			conflictTS,
 			phase == txnif.PrePreparePhase,
 		); err == nil {
 			continue
@@ -580,7 +606,7 @@ func (tbl *txnTable) TransferDeletes(
 		// nil: transferred successfully
 		// ErrTxnRWConflict: the target block was also be compacted
 		// ErrTxnWWConflict: w-w error
-		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, pkType, phase, ts); err != nil {
+		if _, err = tbl.TransferDeleteRows(id, rowOffset, pk, pkType, phase, conflictTS); err != nil {
 			return
 		}
 		// TransferDeleteRows may append to the same anode, which can
@@ -592,6 +618,9 @@ func (tbl *txnTable) TransferDeletes(
 	}
 	if transferd.IsEmpty() {
 		return
+	}
+	if phase == txnif.PrePreparePhase {
+		tbl.transferChanged = true
 	}
 	for i, attr := range deletes.Attrs {
 		// Skip the rowid column.
@@ -1247,7 +1276,13 @@ func (tbl *txnTable) GetByFilter(
 	}
 	defer candidates.Close()
 	if candidates.HasCandidate() {
-		err = tbl.findDeletesForCandidates(tbl.store.ctx, candidates, types.TS{}, types.MaxTs())
+		err = tbl.findDeletesForCandidates(
+			tbl.store.ctx,
+			candidates,
+			types.TS{},
+			tbl.store.txn.GetStartTS(),
+			dedupMetricLookup,
+		)
 		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			return
 		}
@@ -1271,6 +1306,37 @@ func (tbl *txnTable) GetByFilter(
 		id = nil
 		err = moerr.NewNotFoundNoCtx()
 	}
+	return
+}
+
+func (tbl *txnTable) waitTombstoneRowsCommittedBefore(
+	ts types.TS,
+	rowIDs containers.Vector,
+	rowIDsZM index.ZM,
+) (waited bool) {
+	// Resolve catalog-level creation/deletion first. The per-object wait below
+	// handles row AppendNodes inside already visible appendable objects.
+	tbl.entry.WaitTombstoneObjectCommitted(ts)
+	tbl.entry.MakeTombstoneObjectSnapshot().VisitAllUnlocked(func(obj *catalog.ObjectEntry) bool {
+		if obj.CreatedAt.GT(&ts) || !obj.VisibleByTS(ts) {
+			return true
+		}
+		if !obj.IsAppendable() {
+			return true
+		}
+		objData := obj.GetObjectData()
+		if objData == nil {
+			// Persisted/catalog-only entries do not have an in-memory append
+			// handle to wait on. Their committed state is covered by the
+			// catalog wait above; only memory objects can contribute a pending
+			// append for these RowIDs.
+			return true
+		}
+		if objData.WaitAppendCommittingBefore(ts, tbl.store.txn, rowIDs, rowIDsZM) {
+			waited = true
+		}
+		return true
+	})
 	return
 }
 
@@ -1365,6 +1431,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 
 // PrePrepareDedup performs deduplication during the shared pre-commit prepare phase.
 func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phase string, ts types.TS) (err error) {
+	metricPhase := dedupMetricPhase(phase)
 	baseTable := tbl.getBaseTable(isTombstone)
 	if baseTable == nil || baseTable.tableSpace == nil || !baseTable.schema.HasPK() || baseTable.schema.IsSecondaryIndexTable() {
 		return
@@ -1373,7 +1440,7 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 	dedupType := tbl.store.txn.GetDedupType()
 	if !dedupType.SkipSourcePersisted() {
 		for _, stats := range baseTable.tableSpace.stats {
-			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone)
+			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone, metricPhase)
 			if err != nil {
 				return
 			}
@@ -1436,7 +1503,7 @@ func (tbl *txnTable) DedupSnapByPK(
 	}
 	from, to := types.TS{}, tbl.store.txn.GetStartTS()
 	if !isTombstone && candidates.HasCandidate() {
-		err = tbl.findDeletesForCandidates(ctx, candidates, from, to)
+		err = tbl.findDeletesForCandidates(ctx, candidates, from, to, dedupMetricAppend)
 		if err != nil {
 			logutil.Errorf("getRowsByPK failed 2, %v", err)
 			return
@@ -1470,6 +1537,7 @@ func (tbl *txnTable) findDeletesForCandidates(
 	ctx context.Context,
 	candidates *duplicatedRowIDs,
 	from, to types.TS,
+	metricPhase string,
 ) error {
 	combined := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	defer combined.Close()
@@ -1501,7 +1569,7 @@ func (tbl *txnTable) findDeletesForCandidates(
 			}
 		}
 	}
-	err := tbl.findDeletes(ctx, combined, from, to)
+	err := tbl.findDeletes(ctx, combined, from, to, metricPhase)
 	// findDeletes may have completed filtering for earlier tombstones before
 	// returning a WW conflict from a later one. Preserve that partial result so
 	// callers that intentionally tolerate the conflict do not resurrect a stale
@@ -1521,6 +1589,7 @@ func (tbl *txnTable) findDeletes(
 	ctx context.Context,
 	rowIDs containers.Vector,
 	from, to types.TS,
+	metricPhase string,
 ) (err error) {
 	pkType := rowIDs.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
@@ -1529,33 +1598,65 @@ func (tbl *txnTable) findDeletes(
 	}
 	tbl.contains(ctx, rowIDs, keysZM, common.WorkspaceAllocator)
 
-	tbl.entry.WaitTombstoneObjectCommitted(to)
-	it := tbl.entry.MakeTombstoneObjectIt()
-	defer it.Release()
-	return foreachIncrementalObject(&it, from, to, func(obj *catalog.ObjectEntry) error {
-		objData := obj.GetObjectData()
-		if objData == nil {
-			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
-		}
-		// PXU TODO: jxm need to double check this logic
-		// if !obj.ObjectLocation().IsEmpty() {
-		if obj.Rows() != 0 {
-			var skip bool
-			if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
-				return err
-			} else if skip {
-				return nil
-			}
-		}
+	// Dedup uses a PrepareTS-based upper fence. A delete that is still
+	// committing conflicts with the writer regardless of whether it prepared
+	// before or after the writer's StartTS, so waiting through the fence and
+	// rechecking its outcome is safe. PrePrepare currently passes an rt.Now()
+	// fence because the current transaction's PrepareTS is assigned immediately
+	// after PrePrepare returns. The pre-WAL worker finishes PrepareCommit for one
+	// transaction before starting the next; merge/flush transfer appends are
+	// attached during that PrepareCommit. Therefore a queue transaction only
+	// waits for predecessors that have already left this worker and can make
+	// progress in the WAL/apply workers, rather than forming a same-worker cycle.
+	//
+	// GetByFilter passes the reader's StartTS instead: it asks whether a
+	// successful delete is visible to that snapshot. After the wait, Contains
+	// checks the AppendNode again. A committed delete participates in the lookup;
+	// an aborted delete has IsAborted set by ApplyRollback and is ignored.
+	tbl.waitTombstoneRowsCommittedBefore(to, rowIDs, keysZM)
 
-		return objData.Contains(
-			ctx,
-			tbl.store.txn,
-			rowIDs,
-			keysZM,
-			common.WorkspaceAllocator,
-		)
-	})
+retryScan:
+	for {
+		tbl.entry.WaitTombstoneObjectCommitted(to)
+		snapshot := tbl.entry.MakeTombstoneObjectSnapshot()
+		err = foreachIncrementalObjectInPhase(snapshot, true, from, to, metricPhase, func(obj *catalog.ObjectEntry) error {
+			objData := obj.GetObjectData()
+			if objData == nil {
+				panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
+			}
+			// PXU TODO: jxm need to double check this logic
+			// if !obj.ObjectLocation().IsEmpty() {
+			if obj.Rows() != 0 {
+				var skip bool
+				if skip, err = quickSkipThisObject(ctx, keysZM, obj); err != nil {
+					return err
+				} else if skip {
+					return nil
+				}
+			}
+
+			return objData.Contains(
+				ctx,
+				tbl.store.txn,
+				rowIDs,
+				keysZM,
+				common.WorkspaceAllocator,
+			)
+		})
+		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) &&
+				tbl.waitTombstoneRowsCommittedBefore(to, rowIDs, keysZM) {
+				// A merge/flush transaction may attach transfer tombstones
+				// after the pre-scan wait. It has now reached a terminal state;
+				// retry to distinguish its commit from rollback. If no eligible
+				// transaction was found, the WW lies beyond to and must remain.
+				err = nil
+				continue retryScan
+			}
+			return
+		}
+		return
+	}
 }
 
 // DoPrecommitDedupByPK 1. it do deduplication by traversing all the Objects/blocks, and
@@ -1570,6 +1671,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 	phase string,
 	ts types.TS,
 ) (err error) {
+	metricPhase := dedupMetricPhase(phase)
 	base := tbl.getBaseTable(isTombstone)
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		now := tbl.store.rt.Now()
@@ -1577,13 +1679,13 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 			base.dedupTS = tbl.store.txn.GetStartTS()
 		}
 		var rowIDs containers.Vector
-		rowIDs, err = base.incrementalGetRowsByPK(tbl.store.ctx, pks, base.dedupTS.Next(), ts, phase == txnif.PrePreparePhase)
+		rowIDs, err = base.incrementalGetRowsByPK(tbl.store.ctx, pks, base.dedupTS.Next(), ts, metricPhase)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(tbl.store.ctx, rowIDs, base.dedupTS.Next(), now)
+			err = tbl.findDeletes(tbl.store.ctx, rowIDs, base.dedupTS.Next(), now, metricPhase)
 			if err != nil {
 				return
 			}
@@ -1596,12 +1698,43 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 				colName = tbl.dataTable.schema.GetPrimaryKey().Name
 			}
 			if !rowIDs.IsNull(i) {
+				matchedRowID := vector.GetFixedAtNoTypeCheck[types.Rowid](rowIDs.GetDownstreamVector(), i)
+				matchedObject, lookupErr := tbl.entry.GetObjectByID(matchedRowID.BorrowObjectID(), isTombstone)
+				var matchedObjectState string
+				if lookupErr != nil || matchedObject == nil {
+					matchedObjectState = fmt.Sprintf("lookup-error=%v", lookupErr)
+				} else {
+					matchedObjectState = fmt.Sprintf(
+						"group=%d created=%s deleted=%s appendable=%v d-entry=%v has-d-counterpart=%v",
+						matchedObject.ObjectListGroup(), matchedObject.CreatedAt.ToString(),
+						matchedObject.DeletedAt.ToString(), matchedObject.IsAppendable(),
+						matchedObject.IsDEntry(), matchedObject.HasDCounterpart(),
+					)
+				}
+				var workspaceDeletes []types.Rowid
+				var workspaceDeleteCount int
+				var workspaceDeleteStats int
+				if tbl.tombstoneTable != nil && tbl.tombstoneTable.tableSpace != nil {
+					workspaceDeleteStats = len(tbl.tombstoneTable.tableSpace.stats)
+					if spaceNode := tbl.tombstoneTable.tableSpace.node; spaceNode != nil && spaceNode.data != nil {
+						workspaceDeletes = vector.MustFixedColWithTypeCheck[types.Rowid](
+							spaceNode.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+						)
+						workspaceDeleteCount = len(workspaceDeletes)
+						workspaceDeletes = workspaceDeletes[:min(len(workspaceDeletes), 16)]
+					}
+				}
 				logutil.Error("Duplicate",
 					zap.String("table", tbl.dataTable.schema.Name),
 					zap.Bool("is tombstone", isTombstone),
 					zap.String("phase", phase),
 					zap.String("from", base.dedupTS.Next().ToString()),
 					zap.String("to", ts.ToString()),
+					zap.String("matched-rowid", matchedRowID.String()),
+					zap.String("matched-object", matchedObjectState),
+					zap.String("workspace-delete-rowids", fmt.Sprint(workspaceDeletes)),
+					zap.Int("workspace-delete-count", workspaceDeleteCount),
+					zap.Int("workspace-delete-stats", workspaceDeleteStats),
 				)
 				entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
 				err = moerr.NewDuplicateEntryNoCtx(entry, colName)
@@ -1612,7 +1745,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 	return
 }
 
-func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.ObjectStats, isTombstone bool) (err error) {
+func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.ObjectStats, isTombstone bool, metricPhase string) (err error) {
 	//loaded := false
 	//TODO::load ZM/BF index first, then load PK column if necessary.
 
@@ -1659,13 +1792,13 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 		if base.dedupTS.IsEmpty() {
 			base.dedupTS = tbl.store.txn.GetStartTS()
 		}
-		rowIDs, err = base.incrementalGetRowsByPK(ctx, pks, base.dedupTS.Next(), now, true)
+		rowIDs, err = base.incrementalGetRowsByPK(ctx, pks, base.dedupTS.Next(), now, metricPhase)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(ctx, rowIDs, base.dedupTS, now)
+			err = tbl.findDeletes(ctx, rowIDs, base.dedupTS, now, metricPhase)
 		}
 		if err != nil {
 			return
@@ -1746,9 +1879,7 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
-		if err = txnEntry.PrepareRollback(); err != nil {
-			break
-		}
+		err = combineTxnLifecycleErrors(err, txnEntry.PrepareRollback())
 	}
 	return combineTxnLifecycleErrors(err, tbl.rollbackTransferredTombstones())
 }
@@ -1766,13 +1897,32 @@ func (tbl *txnTable) ApplyAppend() (err error) {
 	return
 }
 
-func (tbl *txnTable) PrePrepare() (err error) {
-	err = tbl.dataTable.PrePrepare()
+func (tbl *txnTable) FreezeAppend(ctx context.Context) (err error) {
+	if tbl.dataTable.tableSpace != nil {
+		if err = tbl.dataTable.tableSpace.FreezeApply(ctx); err != nil {
+			return err
+		}
+	}
+	if tbl.tombstoneTable != nil && tbl.tombstoneTable.tableSpace != nil {
+		err = tbl.tombstoneTable.tableSpace.FreezeApply(ctx)
+	}
+	return err
+}
+
+func (tbl *txnTable) ReapplyTransferredTombstones() error {
+	if !tbl.transferChanged || tbl.tombstoneTable == nil || tbl.tombstoneTable.tableSpace == nil {
+		return nil
+	}
+	return tbl.tombstoneTable.tableSpace.ReapplyFrozen()
+}
+
+func (tbl *txnTable) PrePrepare(ctx context.Context) (err error) {
+	err = tbl.dataTable.PrePrepare(ctx)
 	if err != nil {
 		return
 	}
 	if tbl.tombstoneTable != nil {
-		err = tbl.tombstoneTable.PrePrepare()
+		err = tbl.tombstoneTable.PrePrepare(ctx)
 	}
 	return
 }
@@ -1916,15 +2066,35 @@ func isAppendableObjectCreateEntry(entry txnif.TxnEntry) bool {
 
 func (tbl *txnTable) ApplyRollback() (err error) {
 	tbl.transferredTombstoneRollback = true
-	csn := tbl.csnStart
 	for idx, node := range tbl.txnEntries.entries {
 		if tbl.txnEntries.IsDeleted(idx) {
 			continue
 		}
-		if err = node.ApplyRollback(); err != nil {
-			break
+		if _, isCatalogTable := node.(*catalog.TableEntry); isCatalogTable {
+			// PrepareRollback has already detached this MVCC version.
+			continue
 		}
-		csn++
+		err = combineTxnLifecycleErrors(err, node.ApplyRollback())
+	}
+	return
+}
+
+func (tbl *txnTable) ApplyRollbackPendingAppends() (err error) {
+	for idx, entry := range tbl.txnEntries.entries {
+		if tbl.txnEntries.IsDeleted(idx) {
+			continue
+		}
+		appendNode, ok := entry.(txnif.AppendNode)
+		if !ok {
+			continue
+		}
+		// Full ApplyRollback may already have handled this node. More
+		// importantly, an earlier entry failure must not prevent a later append
+		// from releasing its global MVCC state.
+		if appendNode.GetTxn() == nil {
+			continue
+		}
+		err = combineTxnLifecycleErrors(err, appendNode.ApplyRollback())
 	}
 	return
 }
@@ -2033,7 +2203,9 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 		anode.isMergeCompact = true
 		if tbl.store.txn.GetTxnState(false) != txnif.TxnStateActive {
 			startOffset := anode.data.Length() - deleteBatch.Length()
-			tbl.tombstoneTable.tableSpace.prepareApplyANode(anode, uint32(startOffset))
+			if err = tbl.tombstoneTable.tableSpace.prepareApplyANode(context.WithoutCancel(tbl.store.ctx), anode, uint32(startOffset)); err != nil {
+				return
+			}
 		}
 	}
 	rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](rowIDVec.GetDownstreamVector())

@@ -16,348 +16,290 @@ package service
 
 import (
 	"context"
+	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
-func waitTaskScheduled(t *testing.T, ctx context.Context, taskService taskservice.TaskService) string {
-	i := 0
+// Cancellation is receiver-independent and precedes service teardown, including
+// when startup or an assertion fails before an executor has started.
+type taskTestCluster struct {
+	Cluster
+	cancel context.CancelFunc
+}
+
+func (c *taskTestCluster) Close() error { c.cancel(); return c.Cluster.Close() }
+
+func newTaskTestCluster(t *testing.T, opt Options) (*taskTestCluster, context.Context) {
+	t.Helper()
+	owner, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	c, err := NewCluster(owner, t, opt)
+	require.NoError(t, err)
+	fixture := &taskTestCluster{Cluster: c, cancel: cancel}
+	t.Cleanup(func() { require.NoError(t, fixture.Close()) })
+	require.NoError(t, c.Start())
+	ctx, stop := context.WithTimeout(owner, defaultTestTimeout)
+	t.Cleanup(stop)
+	return fixture, ctx
+}
+
+func createOwnedTask(t *testing.T, ctx context.Context, svc taskservice.TaskService, name string) task.AsyncTask {
+	t.Helper()
+	metadata := task.TaskMetadata{ID: name, Executor: task.TaskCode_TestOnly}
+	require.NoError(t, svc.CreateAsyncTask(ctx, metadata))
+	rows, err := svc.QueryAsyncTask(ctx, taskservice.WithTaskMetadataId(taskservice.EQ, metadata.ID), taskservice.WithTaskExecutorCond(taskservice.EQ, metadata.Executor))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, metadata, rows[0].Metadata)
+	return rows[0]
+}
+
+func waitOwnedTask(t *testing.T, ctx context.Context, svc taskservice.TaskService, original task.AsyncTask, ready func([]task.AsyncTask) bool, retryRead func(error) bool) task.AsyncTask {
+	var last task.AsyncTask
+	var lastErr error
+	t.Helper()
 	for {
+		require.NoError(t, ctx.Err(), "task %d did not reach its expected owner; last=%s; read error=%v", original.ID, last.String(), lastErr)
+		rows, err := svc.QueryAsyncTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, original.ID))
+		require.NoError(t, ctx.Err(), "task %d last=%s; read error=%v", original.ID, last.String(), err)
+		if err != nil {
+			require.True(t, retryRead != nil && retryRead(err), "task %d read failed: %v", original.ID, err)
+			lastErr = err
+			rows = nil
+		}
+		require.LessOrEqual(t, len(rows), 1)
+		if len(rows) == 1 {
+			if last.ID != rows[0].ID || last.Status != rows[0].Status || last.TaskRunner != rows[0].TaskRunner || last.Epoch != rows[0].Epoch {
+				t.Logf("task=%d status=%s runner=%s epoch=%d", rows[0].ID, rows[0].Status, rows[0].TaskRunner, rows[0].Epoch)
+			}
+			last = rows[0]
+			require.Equal(t, original.ID, rows[0].ID)
+			require.Equal(t, original.Metadata, rows[0].Metadata)
+
+		}
+		if err == nil && ready(rows) {
+			if len(rows) == 1 {
+				return rows[0]
+			}
+			return task.AsyncTask{}
+		}
+		timer := time.NewTimer(300 * time.Millisecond)
 		select {
 		case <-ctx.Done():
-			assert.FailNow(t, "task not allocated")
-		default:
-			t.Logf("iteration: %d", i)
-			tasks, err := taskService.QueryAsyncTask(context.TODO(),
-				taskservice.WithTaskIDDesc())
-			require.NoError(t, err)
-
-			if len(tasks) != 0 && tasks[0].TaskRunner != "" {
-				t.Logf("task %d allocated on %s", tasks[0].ID, tasks[0].TaskRunner)
-				t.Logf("num task: %d", len(tasks))
-				return tasks[0].TaskRunner
-			}
-			time.Sleep(300 * time.Millisecond)
-			i++
+			timer.Stop()
+			require.NoError(t, ctx.Err(), "task %d last=%s; read error=%v", original.ID, last.String(), lastErr)
+		case <-timer.C:
 		}
 	}
 }
 
-func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskservice.TaskService, uuid string) {
-	i := 0
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(t, "task not reallocated")
-		default:
-			t.Logf("iteration: %d", i)
-			tasks, err := taskService.QueryAsyncTask(context.TODO(),
-				taskservice.WithTaskIDDesc(),
-				taskservice.WithTaskStatusCond(task.TaskStatus_Running))
-			require.NoError(t, err)
-			if tasks[0].TaskRunner == uuid {
-				t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
-				time.Sleep(1 * time.Second)
-				i++
-				continue
-			} else {
-				t.Logf("task %d reallocated on %s", tasks[0].ID, tasks[0].TaskRunner)
-				return
+func waitTaskScheduled(t *testing.T, ctx context.Context, svc taskservice.TaskService, original task.AsyncTask, runners ...string) task.AsyncTask {
+	t.Helper()
+	return waitOwnedTask(t, ctx, svc, original, func(rows []task.AsyncTask) bool {
+		if len(rows) != 1 || rows[0].Status != task.TaskStatus_Running {
+			return false
+		}
+		row := rows[0]
+		for _, runner := range runners {
+			if runner != "" && row.TaskRunner == runner {
+				return true
 			}
 		}
+		return false
+	}, nil)
+}
+
+func waitTaskExpired(t *testing.T, ctx context.Context, svc taskservice.TaskService, original task.AsyncTask) {
+	t.Helper()
+	waitOwnedTask(t, ctx, svc, original, func(rows []task.AsyncTask) bool { return len(rows) == 0 }, retryTaskFailoverRead)
+}
+
+// Recovery reads cross an intentionally disrupted service lifecycle. Reuse the
+// transport classifier; never retry business writes or semantic SQL failures.
+func retryTaskFailoverRead(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
 	}
+	return errors.Is(err, taskservice.ErrNotReady) || morpc.IsConnectionError(err)
 }
 
 func TestTaskServiceCanCreate(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	t.Cleanup(leaktest.AfterTest(t))
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
-		return
 	}
-	ctx := context.Background()
-
-	// initialize cluster
-	c, err := NewCluster(ctx, t, DefaultOptions().
-		WithCNServiceNum(1).
-		WithCNShardNum(1).
-		WithTNServiceNum(1).
-		WithTNShardNum(1).
-		WithLogServiceNum(3).
-		WithLogShardNum(1))
-	require.NoError(t, err)
-
-	// close the cluster
-	defer func(c Cluster) {
-		require.NoError(t, c.Close())
-	}(c)
-	// start the cluster
-	require.NoError(t, c.Start())
-
-	t.Log("cluster log svcs length:", len(c.(*testCluster).log.svcs))
-
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-	defer cancel()
+	c, ctx := newTaskTestCluster(t, DefaultOptions().WithCNServiceNum(1).WithCNShardNum(1).WithTNServiceNum(1).WithTNShardNum(1).WithLogServiceNum(3).WithLogShardNum(1))
+	require.Len(t, c.Cluster.(*testCluster).log.svcs, 3)
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
 	c.WaitTNStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 1)
-	c.WaitLogStoreTaskServiceCreatedIndexed(ctx, 2)
+	for i := 0; i < 3; i++ {
+		c.WaitLogStoreTaskServiceCreatedIndexed(ctx, i)
+	}
 }
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	t.Cleanup(leaktest.AfterTest(t))
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
-		return
 	}
-	ctx := context.Background()
-
-	opt := DefaultOptions()
-	// initialize cluster
-	c, err := NewCluster(ctx, t, opt)
-	require.NoError(t, err)
-
-	// close the cluster
-	defer func(c Cluster) {
-		require.NoError(t, c.Close())
-	}(c)
-	// start the cluster
-	require.NoError(t, c.Start())
-
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-	defer cancel()
-
+	c, ctx := newTaskTestCluster(t, DefaultOptions())
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-	indexed, err := c.GetCNServiceIndexed(0)
+	cn, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
-	taskService, ok := indexed.GetTaskService()
-	require.True(t, ok)
-
-	i := 0
-	for {
+	cn.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, func(runCtx context.Context, _ task.Task) error {
 		select {
+		case <-runCtx.Done():
 		case <-ctx.Done():
-			require.FailNow(t, "failed to query tasks")
-		default:
 		}
-		t.Logf("iter %d", i)
-		tasks, err := taskService.QueryAsyncTask(ctx)
-		require.NoError(t, err)
-		if len(tasks) == 0 {
-			time.Sleep(time.Second)
-			i++
-			continue
-		}
-		require.Equal(t, 1, len(tasks))
-		t.Logf("task status: %s", tasks[0].Status)
-		break
-	}
-
-	waitTaskScheduled(t, ctx, taskService)
+		return nil
+	})
+	svc, ok := cn.GetTaskService()
+	require.True(t, ok)
+	original := createOwnedTask(t, ctx, svc, t.Name())
+	waitTaskScheduled(t, ctx, svc, original, cn.ID())
 }
 
-func TestTaskSchedulerCanReallocateTask(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+func TestTaskSchedulerExpiresLostRunnerWithoutReplay(t *testing.T) {
+	t.Cleanup(leaktest.AfterTest(t))
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
-		return
 	}
-	ctx := context.Background()
-
-	cnSvcNum := 2
-	opt := DefaultOptions().
-		WithCNServiceNum(cnSvcNum)
-
-	// initialize cluster
-	c, err := NewCluster(ctx, t, opt)
+	c, ctx := newTaskTestCluster(t, DefaultOptions().WithCNServiceNum(2))
+	for i := 0; i < 2; i++ {
+		c.WaitCNStoreTaskServiceCreatedIndexed(ctx, i)
+	}
+	cn1, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
-
-	halt := make(chan bool)
-	taskExecutor := func(ctx context.Context, task task.Task) error {
-		t.Logf("task %d is running", task.GetID())
+	cn2, err := c.GetCNServiceIndexed(1)
+	require.NoError(t, err)
+	entered := make(chan uint64, 4)
+	var mu sync.Mutex
+	executions := make(map[uint64]int)
+	executor := func(runCtx context.Context, row task.Task) error {
+		mu.Lock()
+		executions[row.GetID()]++
+		mu.Unlock()
 		select {
+		case entered <- row.GetID():
+		case <-runCtx.Done():
+			return nil
 		case <-ctx.Done():
-		case <-halt:
+			return nil
+		}
+		select {
+		case <-runCtx.Done():
+		case <-ctx.Done():
 		}
 		return nil
 	}
-
-	defer func(c Cluster, halt chan bool) {
-		halt <- true
-		require.NoError(t, c.Close())
-		close(halt)
-	}(c, halt)
-	// start the cluster
-	require.NoError(t, c.Start())
-
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-	defer cancel()
-
-	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 1)
-	cn1, err := c.GetCNServiceIndexed(0)
-	require.NoError(t, err)
-
-	cn2, err := c.GetCNServiceIndexed(1)
-	require.NoError(t, err)
-	cn1.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, taskExecutor)
-	cn2.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, taskExecutor)
-
-	taskService, ok := cn1.GetTaskService()
+	cn1.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, executor)
+	cn2.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, executor)
+	svc, ok := cn1.GetTaskService()
 	require.True(t, ok)
-	err = taskService.CreateAsyncTask(context.TODO(), task.TaskMetadata{ID: "a", Executor: task.TaskCode_TestOnly})
-	require.NoError(t, err)
-
-	tasks, err := taskService.QueryAsyncTask(ctx,
-		taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_TestOnly))
-	require.NoError(t, err)
-	require.Equal(t, 1, len(tasks))
-
-	uuid1 := waitTaskScheduled(t, ctx, taskService)
-
-	err = c.CloseCNService(uuid1)
-	require.NoError(t, err)
-
-	if uuid1 == cn1.ID() {
-		taskService, ok = cn2.GetTaskService()
-		require.True(t, ok)
+	original := createOwnedTask(t, ctx, svc, t.Name())
+	running := waitTaskScheduled(t, ctx, svc, original, cn1.ID(), cn2.ID())
+	select {
+	case id := <-entered:
+		require.Equal(t, original.ID, id)
+	case <-ctx.Done():
+		require.NoError(t, ctx.Err())
 	}
-	waitTaskRescheduled(t, ctx, taskService, uuid1)
+	require.NoError(t, c.CloseCNService(running.TaskRunner))
+	survivor := cn1
+	if running.TaskRunner == cn1.ID() {
+		survivor = cn2
+	}
+	svc, ok = survivor.GetTaskService()
+	require.True(t, ok)
+	// Expired work is failed and truncated; it must not be replayed on another CN.
+	waitTaskExpired(t, ctx, svc, running)
+	followup := createOwnedTask(t, ctx, svc, "survivor-after-expiry")
+	require.NotEqual(t, original.ID, followup.ID)
+	active := waitTaskScheduled(t, ctx, svc, followup, survivor.ID())
+	require.Equal(t, uint32(1), active.Epoch)
+	select {
+	case id := <-entered:
+		require.Equal(t, followup.ID, id)
+	case <-ctx.Done():
+		require.NoError(t, ctx.Err())
+	}
+	rows, err := svc.QueryAsyncTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, original.ID))
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	mu.Lock()
+	counts := make(map[uint64]int, len(executions))
+	for id, n := range executions {
+		counts[id] = n
+	}
+	mu.Unlock()
+	require.Equal(t, map[uint64]int{original.ID: 1, followup.ID: 1}, counts, "no replay through the follow-up observation window")
 }
 
 func TestTaskRunner(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	t.Cleanup(leaktest.AfterTest(t))
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
-		return
 	}
-	ctx := context.Background()
-
-	ch := make(chan int)
-	taskExecutor := func(_ context.Context, task task.Task) error {
-		t.Logf("task %d is running", task.GetID())
-		ch <- int(task.GetID())
-		return nil
-	}
-
-	cnSvcNum := 1
-	opt := DefaultOptions().
-		WithCNServiceNum(cnSvcNum)
-
-	// initialize cluster
-	c, err := NewCluster(ctx, t, opt.WithLogLevel(zap.DebugLevel))
-	require.NoError(t, err)
-
-	// close the cluster
-	defer func(c Cluster) {
-		require.NoError(t, c.Close())
-	}(c)
-	// start the cluster
-	require.NoError(t, c.Start())
-
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-	defer cancel()
-
+	c, ctx := newTaskTestCluster(t, DefaultOptions().WithCNServiceNum(1).WithLogLevel(zap.DebugLevel))
 	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-	indexed, err := c.GetCNServiceIndexed(0)
+	cn, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
-
-	indexed.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, taskExecutor)
-
-	taskService, ok := indexed.GetTaskService()
+	executed := make(chan uint64)
+	cn.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, func(runCtx context.Context, row task.Task) error {
+		select {
+		case executed <- row.GetID():
+		case <-runCtx.Done():
+		case <-ctx.Done():
+		}
+		return nil
+	})
+	svc, ok := cn.GetTaskService()
 	require.True(t, ok)
-
-	err = taskService.CreateAsyncTask(context.TODO(), task.TaskMetadata{ID: "a", Executor: task.TaskCode_TestOnly})
-	require.NoError(t, err)
-
-	waitTaskScheduled(t, ctx, taskService)
-
+	original := createOwnedTask(t, ctx, svc, t.Name())
+	waitTaskScheduled(t, ctx, svc, original, cn.ID())
 	select {
+	case id := <-executed:
+		require.Equal(t, original.ID, id)
 	case <-ctx.Done():
-		assert.FailNow(t, "task not running")
-	case i := <-ch:
-		t.Logf("task %d is completed", i)
+		require.NoError(t, ctx.Err(), "task not running")
 	}
 }
 
 func TestCronTask(t *testing.T) {
-	defer leaktest.AfterTest(t)()
+	t.Cleanup(leaktest.AfterTest(t))
 	if testing.Short() {
 		t.Skip("skipping in short mode.")
-		return
 	}
-	ctx := context.Background()
-
-	opt := DefaultOptions()
-	// initialize cluster
-	c, err := NewCluster(ctx, t, opt.WithLogLevel(zap.DebugLevel))
+	c, ctx := newTaskTestCluster(t, DefaultOptions().WithLogLevel(zap.DebugLevel))
+	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+	cn, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
-
-	ch := make(chan int)
-	taskExecutor := func(ctx context.Context, task task.Task) error {
-		t.Logf("task %d is running", task.GetID())
+	executed := make(chan uint64)
+	cn.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, func(runCtx context.Context, row task.Task) error {
 		select {
-		case ch <- int(task.GetID()):
+		case executed <- row.GetID():
+		case <-runCtx.Done():
 		case <-ctx.Done():
-			return nil
 		}
 		return nil
-	}
-
-	// close the cluster
-	defer func(c Cluster) {
-		require.NoError(t, c.Close())
-	}(c)
-	// start the cluster
-	require.NoError(t, c.Start())
-
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
-	defer cancel()
-
-	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-	indexed, err := c.GetCNServiceIndexed(0)
-	require.NoError(t, err)
-
-	indexed.GetTaskRunner().RegisterExecutor(task.TaskCode_TestOnly, taskExecutor)
-
-	taskService, ok := indexed.GetTaskService()
+	})
+	svc, ok := cn.GetTaskService()
 	require.True(t, ok)
-
-	require.NoError(t, taskService.CreateCronTask(context.TODO(),
-		task.TaskMetadata{
-			ID:       "a",
-			Executor: task.TaskCode_TestOnly,
-		},
-		"*/1 * * * * *", // every 1 second
-	))
-
-	waitChannelFull(t, ctx, ch, 3)
-}
-
-func waitChannelFull(t *testing.T, ctx context.Context, ch chan int, expected int) {
-	i := 0
-	received := make([]int, 0, expected)
-	for {
+	require.NoError(t, svc.CreateCronTask(ctx, task.TaskMetadata{ID: t.Name(), Executor: task.TaskCode_TestOnly}, "*/1 * * * * *"))
+	for i := 0; i < 3; i++ {
 		select {
+		case <-executed:
 		case <-ctx.Done():
-			assert.FailNow(t, "cron task not repeated enough")
-		case c := <-ch:
-			received = append(received, c)
-			if len(received) == expected {
-				t.Logf("received %d numbers", expected)
-				return
-			}
-		default:
-			t.Logf("iteration: %d", i)
-			time.Sleep(time.Second)
-			i++
+			require.NoError(t, ctx.Err(), "cron task not repeated enough")
 		}
 	}
 }

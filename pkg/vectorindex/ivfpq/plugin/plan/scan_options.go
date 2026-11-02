@@ -36,6 +36,9 @@ type ScanOptions struct {
 	// FilterJSON holds the INCLUDE and primary-key predicates the search
 	// applies on the device; empty means unfiltered.
 	FilterJSON string `json:"filter_json,omitempty"`
+	// Iterative is set for mode=iterative when FilterJSON holds every filter of
+	// the query: the search widens in rounds.
+	Iterative bool `json:"iterative,omitempty"`
 }
 
 // EncodeScanOptions returns the algo_options bytes of opts.

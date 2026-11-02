@@ -10,6 +10,8 @@ The numeric work in #28968 is complete; #28966 remains open through E acceptance
 merge and verified release availability. The abandoned sidecar repository is
 outside this delivery.
 
+Execution supports native Linux amd64 or arm64.
+
 ## Data and service flow
 
 CN validates configuration, opens the native engine, and publishes it only

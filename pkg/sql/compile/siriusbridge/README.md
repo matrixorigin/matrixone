@@ -42,7 +42,7 @@ bounded prefetch; this bridge milestone does not implement that SQL path.
 
 ## Prerequisites
 
-- Linux amd64, CGo, MatrixOne's normal build prerequisites, a compatible
+- Linux amd64 or arm64, CGo, MatrixOne's normal build prerequisites, a compatible
   NVIDIA driver and GPU, and [Pixi](https://pixi.sh). CUDA, cuDF, cuVS, RMM,
   compilers, and `patchelf` come from Sirius's frozen `mo` Pixi environment;
   `/usr/local/cuda` is not required.
@@ -62,6 +62,8 @@ tree artifact, so regenerate it after changing Sirius source or its Pixi lock:
 ```sh
 export MO_SRC=/absolute/path/to/matrixone
 export SIRIUS_SRC="$MO_SRC/third_party/sirius"
+# Capture the repository-supported Go installation before Pixi activation.
+export MO_GO_ROOT="$(go env GOROOT)"
 git -C "$MO_SRC" submodule update --init third_party/sirius
 cd "$SIRIUS_SRC"
 git fetch origin perf/embedded-mo-scan
@@ -78,6 +80,7 @@ profile; omit it only if MO's GPU vector operations are not needed.
 cd "$SIRIUS_SRC"
 pixi run --frozen -e mo sh -c '
   cd "$MO_SRC"
+  export GOROOT="$MO_GO_ROOT" PATH="$MO_GO_ROOT/bin:$PATH"
   MO_CL_CUDA=1 MO_SIRIUS=1 \
     SIRIUS_SDK="$SIRIUS_SRC/build/mo/extension/sirius/embedding-sdk" \
     SIRIUS_MERGED_REF=origin/perf/embedded-mo-scan \
@@ -206,7 +209,7 @@ Docker-image verification loop.
 
 ## Bridge contract and packaging
 
-The native build requires Linux amd64 and CGo. The default is release
+The native build requires Linux amd64 or arm64 and CGo. The default is release
 provenance: the SDK must record a clean source SHA reachable from the supplied
 merged branch, plus hashes of its verified C consumer and complete
 static/device-link artifacts. Local integration before merge requires explicit

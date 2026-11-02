@@ -130,6 +130,9 @@ func functionalExpressionEligible(expr *Expr, cols []*ColDef, visiting map[int32
 		if e.F == nil || e.F.Func == nil {
 			return false
 		}
+		if functionalJSONTextCastEligible(expr, cols) {
+			return true
+		}
 		switch e.F.Func.ObjName {
 		case "lower", "upper":
 			if len(e.F.Args) != 1 || !functionalTextType(e.F.Args[0].Typ) || !functionalTextType(expr.Typ) {
@@ -311,6 +314,7 @@ func validateFunctionalTable(ctx context.Context, table *TableDef) error {
 			}
 			col := functionalIndexPartColumn(table, index, ordinal)
 			if col == nil || col.GeneratedCol.IsStored || col.GeneratedCol.Expr == nil || col.GeneratedCol.OriginString == "" ||
+				(!types.T(col.Typ.Id).IsInteger() && !functionalTextType(col.Typ)) ||
 				!sameFunctionalValueType(col.Typ, col.GeneratedCol.Expr.Typ) ||
 				!functionalExpressionEligible(col.GeneratedCol.Expr, table.Cols, make(map[int32]bool)) {
 				return moerr.NewInvalidInput(ctx, "invalid functional index metadata")
@@ -431,7 +435,7 @@ func (builder *QueryBuilder) addFunctionalIndexFilters(node *pb.Node) {
 					if constant.GetLit() == nil || constant.GetLit().Isnull {
 						continue
 					}
-					candidate := DeepCopyExpr(f.Args[side])
+					candidate := DeepCopyExpr(functionalJSONComparisonOperand(f.Args[side], node.TableDef.Cols, node.BindingTags[0]))
 					persisted := DeepCopyExpr(col.GeneratedCol.Expr)
 					if !normalizeFunctionalExpression(candidate, node.BindingTags[0]) || !normalizeFunctionalExpression(persisted, 0) ||
 						!functionalExpressionEligible(candidate, node.TableDef.Cols, make(map[int32]bool)) || !proto.Equal(candidate, persisted) {

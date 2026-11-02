@@ -704,7 +704,6 @@ type todoSupporter struct {
 	objectOperations       int
 	totalDataMergeCnt      int
 	totalTombstoneMergeCnt int
-	totalVacuumCheckCnt    int
 	paused                 bool
 	nextDue                time.Duration
 	lastMergeTime          time.Time
@@ -1308,7 +1307,6 @@ func (a *MergeScheduler) doSched(
 				return
 			}
 			supp.lastVacuumCheckTime = afterGather
-			supp.totalVacuumCheckCnt++
 		}
 	}
 

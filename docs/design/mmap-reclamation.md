@@ -4,8 +4,9 @@ Revision: v1, 2026-09-11. Owner: malloc maintainers; delivery: XuPeng-SH.
 Incident: [#28736](https://github.com/matrixorigin/matrixone/issues/28736).
 Series: [main #28737](https://github.com/matrixorigin/matrixone/pull/28737),
 [4.2-dev #28739](https://github.com/matrixorigin/matrixone/pull/28739).
-Status: proposed; the exact reviewed commit and decision are recorded separately
-in `mmap-reclamation-review.md`. That record, not this label, controls acceptance.
+Status: recorded design self-review PASS and revision-scoped implementation
+alignment PASS, as detailed below. Neither is a human review, GitHub APPROVE,
+or permission to bypass maintainer review or branch protection.
 
 ## Problem and decision boundary
 
@@ -23,7 +24,7 @@ This is a resource-controller/lifecycle design, despite the bug-fix label.
 Process-wide admission, deferred ownership and background retry/logging trigger
 the design gate. This document repairs an omitted design phase; it does not
 claim that the original implementation was written after design approval.
-Implementation acceptance must follow the separately recorded design decision.
+Implementation acceptance remains scoped to the revisions recorded below.
 
 Goals: preserve exclusive ownership after failed frees; recover without a
 process crash when kernel pressure permits; bound retry/log work; preserve
@@ -161,9 +162,11 @@ capacity or a substitute for workload admission control.
 
 4.2-dev covers SimpleCAllocator direct/cache frees and fixed-size mmap background
 frees. Its tests use the existing public fixed-size constructor; no hybrid
-allocator or allocator-selection change is imported. Main additionally routes
-its existing HybridMmapAllocator through the same owner. The controller and
-diagnostic contract are shared; no branch-specific thresholds or policies.
+allocator or allocator-selection change is imported. Main formerly also routed
+its cache-specific hybrid mmap allocator through this owner. After cache allocation moved to dedicated jemalloc arenas, the unselected
+hybrid implementation and its own tests were retired. Shared fixed-size mmap
+admission, reuse and recovery coverage remains. The controller and diagnostic
+contract are shared; no branch-specific thresholds or policies.
 
 ## Acceptance and evidence reuse
 
@@ -190,3 +193,23 @@ Changes only to this document do not invalidate code/test evidence. A change to
 ownership, admission, retries, dependency behavior, fixture or mode does. No
 full-server workload/production-root-cause proof is claimed. Before broad rollout,
 maintainers/operations own validating deployment thresholds and workload impact.
+
+## Recorded design and alignment decisions
+
+The 2026-09-11 design self-review assessed [v1 at
+1c4858f0636362cfb0ace04d6d386fd066f14dd3](https://github.com/XuPeng-SH/matrixone/blob/1c4858f0636362cfb0ace04d6d386fd066f14dd3/docs/design/mmap-reclamation.md)
+and returned PASS for implementation alignment review. It accepted the explicit
+availability tradeoff and the bounds stated above, with no blocking question for
+this containment scope. Deployment thresholds and the mapping-growth root cause
+remain operational and maintainer follow-up. A material policy change requires
+renewed design review.
+
+The subsequent alignment PASS covered main implementation
+`87fcca569d063240bcff1b00652353ff018291b4` and 4.2 implementation
+`2e2a5b31e4e174a9251a0566befa0683180e3fd4` against base
+`4199b11c5c7bb24eccdb379cd6f68abcbd89e450`. The unrelated main merge
+`547ebfcb16a3764a21a851ef2a809e4ff8dfae0f` retained that implementation.
+This is revision-scoped source alignment, not certification of all later code.
+The [original decision record](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/mmap-reclamation-review.md)
+retains the review sequence and branch-specific historical evidence. Consolidating
+it here does not establish a new runtime, performance or production result.

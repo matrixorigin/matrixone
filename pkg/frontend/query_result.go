@@ -377,6 +377,22 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 	if canSaveQueryResult(execCtx.reqCtx, ses) {
 		newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
 		if bat == nil {
+			// A query that produced zero rows sends no data batches, so the
+			// meta would have no block file to reference and result_scan
+			// rejects the saved result (issue #30553). Stage one typed empty
+			// block first, mirroring the cursor path's FinishStage handling.
+			if ses.queryRowCount == 0 && ses.blockIdx == 0 && ses.rs != nil && len(ses.rs.ResultCols) > 0 {
+				empty := batch.NewWithSize(len(ses.rs.ResultCols))
+				for i, col := range ses.rs.ResultCols {
+					empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ))
+				}
+				empty.SetRowCount(0)
+				if err := saveBatch(newCtx, ses, empty); err != nil {
+					empty.Clean(ses.GetMemPool())
+					return err
+				}
+				empty.Clean(ses.GetMemPool())
+			}
 			if err := saveMeta(newCtx, ses); err != nil {
 				return err
 			}
@@ -437,6 +453,80 @@ func abortPreparedCursorQueryResult(execCtx *ExecCtx, cause error) error {
 	return errors.Join(cause, abortErr)
 }
 
+// abortPreparedCursorAttemptStaging discards the staged saved-result blocks
+// of one failed cursor generation before the compiler's retry transition
+// replays the statement. Unlike the terminal abortPreparedCursorQueryResult
+// it preserves the session's authorized statement plan: the plan is
+// installed once before the pipeline starts and internal retries do not
+// re-send it, while the retried generation's publication re-serializes the
+// Plan/Tables provenance consumed by result_scan privilege checks (#30359
+// review). On success the saver slot is cleared, so statement lifecycle
+// cleanup never aborts the same attempt twice; on a cleanup failure the
+// slot keeps its owner, because the retry transition surfaces the error
+// and abandons the replay — no retried generation stages into this saver
+// — while terminal statement cleanup (ExecCtx.Close) re-attempts the
+// deletion of the surviving files through it (#30359 review).
+func abortPreparedCursorAttemptStaging(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.cursorResultSaver == nil {
+		return nil
+	}
+	saver := execCtx.cursorResultSaver
+	var err error
+	if result, ok := saver.(*QueryResult); ok {
+		err = result.AbortAttempt(execCtx)
+	} else {
+		err = saver.Abort(execCtx)
+	}
+	if err != nil {
+		// Cleanup failed: keep the saver slot as the owner of the
+		// surviving staged files for terminal cleanup, and report the
+		// failure so the retry is abandoned instead of rebuilding over
+		// them.
+		return err
+	}
+	execCtx.cursorResultSaver = nil
+	return nil
+}
+
+// abortPerformAttemptSavedResult discards the blocks a failed PERFORM
+// generation persisted through the session-level saved-result writer and
+// resets the per-attempt accounting before the compiler's retry transition
+// replays the statement. PERFORM saves every result batch (resp_client
+// saveResultBatch) yet never marks the statement published (writeClientBatch
+// returns before the publication mark), so a retried generation would
+// otherwise append its blocks behind the failed generation's stale ones and
+// double-count the row accounting baked into the final meta (#30359
+// review). Statement-lifetime metadata survives the abort, mirroring
+// abortPreparedCursorAttemptStaging: the session's authorized plan (ses.p)
+// and the column schema (ses.rs) are installed once before Run and internal
+// retries never re-send them, while the retried generation's publication
+// re-serializes the plan for result_scan consumers. The armed hook runs
+// only after the failed generation's running SQL has quiesced, so no
+// pipeline can still write to the discarded set.
+func abortPerformAttemptSavedResult(execCtx *ExecCtx) error {
+	if execCtx == nil || execCtx.ses == nil {
+		return nil
+	}
+	ses, ok := execCtx.ses.(*Session)
+	if !ok || ses == nil {
+		return nil
+	}
+	// Nothing was retained (a failure before the first persisted batch, or
+	// save_query_result off): the retried generation starts from the same
+	// empty state and no cleanup is needed.
+	if ses.blockIdx == 0 && ses.savedRowCount == 0 && ses.queryRowCount == 0 &&
+		ses.curResultSize == 0 {
+		return nil
+	}
+	// PERFORM writes through the session-level defResultSaver instead of a
+	// per-statement StagedBinaryWriter, so stage the session's current
+	// counters onto a temporary QueryResult the established AbortAttempt
+	// machinery can release.
+	result := &QueryResult{}
+	result.captureStage(ses)
+	return result.AbortAttempt(execCtx)
+}
+
 func trySaveQueryResult(ctx context.Context, ses *Session, mrs *MysqlResultSet) (err error) {
 	if canSaveQueryResult(ctx, ses) {
 		var data *batch.Batch
@@ -489,7 +579,7 @@ func buildColumnMap(ctx context.Context, rs *plan.ResultColDef) (string, error) 
 	return buf.String(), nil
 }
 
-func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
+func isResultQuery(ctx context.Context, proc *process.Process, p *plan.Plan) ([]string, error) {
 	var uuids []string = nil
 	if q, ok := p.Plan.(*plan.Plan_Query); ok {
 		for _, n := range q.Query.Nodes {
@@ -500,12 +590,19 @@ func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
 			} else if n.NodeType == plan.Node_FUNCTION_SCAN {
 				if n.TableDef.TblFunc.Name == "meta_scan" {
 					// calculate uuid
-					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, n.TblFuncExprList[0])
+					uuid, err := func() (types.Uuid, error) {
+						restore := bindFrontendExpressionContext(proc, ctx)
+						defer restore()
+						vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, n.TblFuncExprList[0])
+						if err != nil {
+							return types.Uuid{}, err
+						}
+						defer free()
+						return vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0], nil
+					}()
 					if err != nil {
 						return nil, err
 					}
-					uuid := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0]
-					free()
 
 					uuids = append(uuids, uuid.String())
 				}
@@ -721,12 +818,18 @@ type resultFileInfo struct {
 
 // doDumpQueryResult reads data from the query result, converts it into csv and saves it into
 // the file designated by the path.
-func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
-	var err error
+func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) (err error) {
 	var columnDefs *plan.ResultColDef
 	var reader *ioutil.BlockReader
 	var blocks []objectio.BlockObject
 	var files []resultFileInfo
+
+	// MODUMP honors the output-file suffix the same way EXPORT does:
+	// .jsonl/.jsonline/.ndjson produce JSON Lines and .parquet produces
+	// Parquet; unsuffixed and other names keep the legacy CSV bytes (#30570).
+	if err = validateExportFormat(ctx, eParam); err != nil {
+		return err
+	}
 
 	//step1: open file handler
 	if columnDefs, err = openResultMeta(ctx, ses, eParam.QueryId); err != nil {
@@ -761,6 +864,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		if err != nil {
 			return err
 		}
+		setMysqlColumnTypeMetadata(mcol, typs[i])
 		mrs.AddColumn(mcol)
 	}
 	mrs.Data = make([][]interface{}, 1)
@@ -778,18 +882,15 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	exportParam.DefaultBufSize = getPu(exportParam.service).SV.ExportDataDefaultFlushSize
 	exportParam.FileService = getPu(exportParam.service).FileService
 	exportParam.Ctx = ctx
-	defer func() {
-		if exportParam.AsyncReader != nil {
-			_ = exportParam.AsyncReader.Close()
-		}
-		if exportParam.AsyncWriter != nil {
-			_ = exportParam.AsyncWriter.Close()
-		}
-	}()
+	exportParam.ctx = ctx
+	exportParam.init()
+	dumpExecCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+	defer func() { err = exportParam.finish(err) }()
+
 	initExportFileParam(exportParam, mrs)
 
 	//open output file
-	if err = openNewFile(ctx, exportParam, mrs); err != nil {
+	if err = openNewFile(exportParam.ctx, exportParam, mrs); err != nil {
 		return err
 	}
 
@@ -820,6 +921,16 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 			defer release()
 			tmpBatch = bat
 
+			if exportParam.getExportFormat() != "csv" {
+				//step2.fmt: feed the decoded batch into the EXPORT format
+				//machinery (JSON Lines / Parquet writers) instead of the
+				//per-row CSV converter.
+				if err = exportParam.Write(dumpExecCtx, nil, tmpBatch); err != nil {
+					return err
+				}
+				continue
+			}
+
 			//step2.1: converts it into the csv string
 			//step2.2: writes the csv string into the outfile
 			n := tmpBatch.RowCount()
@@ -846,11 +957,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		}
 	}
 
-	err = Close(exportParam)
-	if err != nil {
-		return err
+	if exportParam.getExportFormat() != "csv" {
+		// Finalize the JSON Lines / Parquet writers: flush pending buffered
+		// rows and close the writer before finish() reports success.
+		if err = exportAllDataFromBatches(exportParam); err != nil {
+			return err
+		}
 	}
-
 	return err
 }
 
@@ -1077,7 +1190,24 @@ func (result *QueryResult) captureStage(ses *Session) {
 	result.stagedTenant = ses.GetTenantInfo().GetTenant()
 }
 
+// Abort releases the staged blocks and bookkeeping of a query result that
+// will not be published. It is the terminal form: the statement is over, so
+// the session's statement plan and per-result accounting are cleared as well.
 func (result *QueryResult) Abort(execCtx *ExecCtx) error {
+	return result.abortStaged(execCtx, false)
+}
+
+// AbortAttempt releases only the staged blocks and per-attempt accounting of
+// one failed generation of a statement the compiler is about to retry. The
+// session's authorized statement plan survives: computation_wrapper installs
+// it once before Run and the internal retry does not re-install it, while
+// the retried generation's publication re-serializes the plan and its
+// Plan/Tables provenance for result_scan privilege checks (#30359 review).
+func (result *QueryResult) AbortAttempt(execCtx *ExecCtx) error {
+	return result.abortStaged(execCtx, true)
+}
+
+func (result *QueryResult) abortStaged(execCtx *ExecCtx, preservePlan bool) error {
 	if result.published || result.aborted {
 		return nil
 	}
@@ -1097,16 +1227,26 @@ func (result *QueryResult) Abort(execCtx *ExecCtx) error {
 	defer cancel()
 	cleanupCtx = perfcounter.AttachS3RequestKey(cleanupCtx, result.counter())
 	err := fs.Delete(cleanupCtx, paths...)
+	if err != nil {
+		// Deletion failed: leave the staged bookkeeping and the aborted
+		// flag untouched so the session counters and this result still
+		// describe the surviving files for terminal cleanup, which
+		// re-runs this abort over the same path set (#30359 review). The
+		// file services tolerate missing paths on delete, so re-deleting
+		// any already-removed prefix is safe.
+		result.publishAccounting(execCtx.reqCtx)
+		return err
+	}
 	ses.ResetBlockIdx()
-	ses.p = nil
+	if !preservePlan {
+		ses.p = nil
+	}
 	ses.curResultSize = 0
 	ses.savedRowCount = 0
 	ses.queryRowCount = 0
-	if err == nil {
-		result.aborted = true
-	}
+	result.aborted = true
 	result.publishAccounting(execCtx.reqCtx)
-	return err
+	return nil
 }
 
 func (result *QueryResult) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {

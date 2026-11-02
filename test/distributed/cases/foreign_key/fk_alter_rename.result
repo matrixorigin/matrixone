@@ -27,7 +27,7 @@ where table_schema='fk_alter_rename' and table_name in ('child_before','child_af
 ➤ count(*)[-5,64,0]  𝄀
 0
 insert into renamed_after values(2,999);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 create table invalid_child(id int primary key, v int);
 insert into invalid_child values(1,999);
 alter table invalid_child rename to invalid_new,

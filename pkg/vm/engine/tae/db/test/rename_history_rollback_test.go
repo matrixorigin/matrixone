@@ -169,6 +169,64 @@ func TestHistoricalRenameRollback(t *testing.T) {
 	}
 }
 
+func TestRenameSwapWALReplay(t *testing.T) {
+	ctx := context.Background()
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
+	defer tae.Close()
+
+	withTxn := func(fn func(txnif.AsyncTxn)) {
+		txn, err := tae.StartTxn(nil)
+		require.NoError(t, err)
+		committed := false
+		defer func() {
+			if !committed {
+				_ = txn.Rollback(context.Background())
+			}
+		}()
+		fn(txn)
+		require.NoError(t, txn.Commit(ctx))
+		committed = true
+	}
+
+	ids := make(map[string]uint64)
+	withTxn(func(txn txnif.AsyncTxn) {
+		db, err := txn.CreateDatabase("swap", "", "")
+		require.NoError(t, err)
+		for _, name := range []string{"live", "shadow"} {
+			schema := catalog.NewEmptySchema(name)
+			require.NoError(t, schema.AppendPKCol("id", types.T_int64.ToType(), 0))
+			require.NoError(t, schema.Finalize(false))
+			rel, err := db.CreateRelation(schema)
+			require.NoError(t, err)
+			ids[name] = rel.ID()
+		}
+	})
+	withTxn(func(txn txnif.AsyncTxn) {
+		db, err := txn.GetDatabase("swap")
+		require.NoError(t, err)
+		for _, pair := range [][2]string{{"live", "tmp"}, {"shadow", "live"}, {"tmp", "shadow"}} {
+			rel, err := db.GetRelationByName(pair[0])
+			require.NoError(t, err)
+			require.NoError(t, rel.AlterTable(ctx, api.NewRenameTableReq(0, 0, pair[0], pair[1])))
+		}
+	})
+
+	// No checkpoint: restart must replay both sides of the swap from WAL.
+	tae.Restart(ctx)
+	withTxn(func(txn txnif.AsyncTxn) {
+		db, err := txn.GetDatabase("swap")
+		require.NoError(t, err)
+		live, err := db.GetRelationByName("live")
+		require.NoError(t, err)
+		shadow, err := db.GetRelationByName("shadow")
+		require.NoError(t, err)
+		require.Equal(t, ids["shadow"], live.ID())
+		require.Equal(t, ids["live"], shadow.ID())
+		_, err = db.GetRelationByName("tmp")
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB))
+	})
+}
+
 func TestHistoricalRenameCreateDrop(t *testing.T) {
 	for _, abort := range []bool{false, true} {
 		t.Run(map[bool]string{false: "commit", true: "abort"}[abort], func(t *testing.T) {

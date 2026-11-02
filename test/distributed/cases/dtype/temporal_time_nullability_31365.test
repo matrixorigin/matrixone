@@ -1,0 +1,24 @@
+-- TIME() over a NOT NULL string source keeps nullable metadata, CTAS preserves
+-- the row-level NULL for invalid input instead of rejecting the row, and the
+-- truncation warning stays visible. Regression for issue #31365 planner
+-- nullability (PR #31589 review finding).
+drop database if exists temporal_time_nullability_31365;
+create database temporal_time_nullability_31365;
+use temporal_time_nullability_31365;
+create table src (id int not null, v varchar(32) not null);
+insert into src values (1, '12:34:56'), (2, 'garbage');
+select id, time(v) as tv, time(v) is null as tv_null from src order by id;
+create table ctas as select time(v) as tv from src;
+select column_name, is_nullable from information_schema.columns
+ where table_schema = 'temporal_time_nullability_31365'
+   and table_name = 'ctas' order by ordinal_position;
+select count(*) as total_rows, sum(tv is null) as null_rows from ctas;
+create view vw as select time(v) as tv from src;
+select column_name, is_nullable from information_schema.columns
+ where table_schema = 'temporal_time_nullability_31365'
+   and table_name = 'vw' order by ordinal_position;
+select time(v) as tv from src where id = 1;
+select time(NULL) is null as null_input_null;
+select time('2024-01-15 25:00:00') is null as invalid_input_null;
+show warnings;
+drop database temporal_time_nullability_31365;

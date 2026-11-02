@@ -1,0 +1,8 @@
+Project
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)
+  ->  Aggregate
+        Analyze: timeConsumed=404ms group_time=[total=403ms,min=44ms,max=56ms,dop=8] mergegroup_time=[0ms] waitTime=57ms inputRows=1000000 outputRows=1 (min=1, max=1) InputSize=11.44 MiB OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=160.25 KiB (min=32.05 KiB, max=32.05 KiB)
+        Aggregate Functions: count(DISTINCT nn.g, nn.b)
+        ->  Table Scan on qa30995.nn
+              Analyze: timeConsumed=0ms scan_time=[total=0ms,min=0ms,max=0ms,dop=8] waitTime=11ms inputBlocks=123 inputRows=1000000 outputRows=1000000 (min=115264, max=131072) InputSize=11.44 MiB OutputSize=11.44 MiB ReadSize=63.48 KiB|0 bytes|0 bytes MemorySize=1.50 MiB (min=192.00 KiB, max=192.00 KiB)
+              Aggregate Functions: count(DISTINCT nn.g, nn.b)

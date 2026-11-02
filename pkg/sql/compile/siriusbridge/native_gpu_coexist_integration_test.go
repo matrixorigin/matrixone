@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build gpu && sirius && sirius_integration && cgo && linux && amd64
+//go:build gpu && sirius && sirius_integration && cgo && linux && (amd64 || arm64)
 
 package siriusbridge
 

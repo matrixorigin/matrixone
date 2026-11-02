@@ -1714,6 +1714,43 @@ func TestPreparedPlanHasDirectResultParamsBoundaries(t *testing.T) {
 	}
 }
 
+func TestCheckNoNeedCastIntegerLiteralEncodings(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		expr   *plan.Expr
+		target types.T
+		fits   bool
+	}{
+		{"I8 minimum widens", makePlan2Int8ConstExprWithType(math.MinInt8), types.T_int16, true},
+		{"I8 negative to unsigned", makePlan2Int8ConstExprWithType(-1), types.T_uint8, false},
+		{"I16 at I8 minimum", makePlan2Int16ConstExprWithType(math.MinInt8), types.T_int8, true},
+		{"I16 below I8 minimum", makePlan2Int16ConstExprWithType(math.MinInt8 - 1), types.T_int8, false},
+		{"I16 at I8 maximum", makePlan2Int16ConstExprWithType(math.MaxInt8), types.T_int8, true},
+		{"I16 above I8 maximum", makePlan2Int16ConstExprWithType(math.MaxInt8 + 1), types.T_int8, false},
+		{"I16 positive to unsigned", makePlan2Int16ConstExprWithType(math.MaxUint8), types.T_uint8, true},
+		{"I32 at I16 maximum", makePlan2Int32ConstExprWithType(math.MaxInt16), types.T_int16, true},
+		{"I32 above I16 maximum", makePlan2Int32ConstExprWithType(math.MaxInt16 + 1), types.T_int16, false},
+		{"I32 at I16 minimum", makePlan2Int32ConstExprWithType(math.MinInt16), types.T_int16, true},
+		{"I32 below I16 minimum", makePlan2Int32ConstExprWithType(math.MinInt16 - 1), types.T_int16, false},
+		{"I64 minimum to unsigned", makePlan2Int64ConstExprWithType(math.MinInt64), types.T_uint64, false},
+		{"I64 maximum narrows", makePlan2Int64ConstExprWithType(math.MaxInt64), types.T_int32, false},
+		{"U8 widens to signed", makePlan2Uint8ConstExprWithType(math.MaxUint8), types.T_int16, true},
+		{"U8 exceeds signed", makePlan2Uint8ConstExprWithType(math.MaxUint8), types.T_int8, false},
+		{"U16 at I16 maximum", makePlan2Uint16ConstExprWithType(math.MaxInt16), types.T_int16, true},
+		{"U16 exceeds signed", makePlan2Uint16ConstExprWithType(math.MaxInt16 + 1), types.T_int16, false},
+		{"U32 at U16 maximum", makePlan2Uint32ConstExprWithType(math.MaxUint16), types.T_uint16, true},
+		{"U32 exceeds unsigned", makePlan2Uint32ConstExprWithType(math.MaxUint16 + 1), types.T_uint16, false},
+		{"U64 at I64 maximum", makePlan2Uint64ConstExprWithType(math.MaxInt64), types.T_int64, true},
+		{"U64 exceeds signed", makePlan2Uint64ConstExprWithType(math.MaxInt64 + 1), types.T_int64, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := DeepCopyExpr(tc.expr)
+			require.Equal(t, tc.fits, checkNoNeedCast(context.Background(), makeTypeByPlan2Expr(tc.expr), tc.target.ToType(), tc.expr))
+			require.Equal(t, before, tc.expr, "range proof must not mutate the literal")
+		})
+	}
+}
+
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -1797,6 +1834,65 @@ func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 			t.Logf("Expected: %v, Got: %v", tt.expectResult, result)
 
 			require.Equal(t, tt.expectResult, result, "checkNoNeedCast result mismatch")
+		})
+	}
+}
+
+// TestCheckNoNeedCastIntIntoDecimalDomain pins the contract behind the
+// integer->DECIMAL precision fix (#30367): a constant comparison rewrite may
+// only replace `n < 1000` with `n < cast(1000 AS DECIMAL(5,2))` while that
+// cast cannot raise the declared-range error enforced by the strict
+// integer->decimal conversion. Out-of-domain constants must keep a widened
+// plan instead of erroring at execution time.
+func TestCheckNoNeedCastIntIntoDecimalDomain(t *testing.T) {
+	intLiteral := func(v int64) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: v}},
+			},
+		}
+	}
+	uintLiteral := func(v uint64) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_uint64)},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: v}},
+			},
+		}
+	}
+	column := func(width, scale int32) types.Type {
+		return types.Type{Oid: types.T_decimal64, Width: width, Scale: scale}
+	}
+
+	cases := []struct {
+		name   string
+		expr   *plan.Expr
+		column types.Type
+		want   bool
+	}{
+		{"in range below integer capacity", intLiteral(999), column(5, 2), true},
+		{"negative in range", intLiteral(-999), column(5, 2), true},
+		{"boundary value cannot cram", intLiteral(1000), column(5, 2), false},
+		{"negative boundary cannot cram", intLiteral(-1000), column(5, 2), false},
+		{"beyond declared integer digits", intLiteral(2000), column(5, 2), false},
+		{"only zero fits decimal(2,2)", intLiteral(0), column(2, 2), true},
+		{"one exceeds decimal(2,2)", intLiteral(1), column(2, 2), false},
+		{"negative one exceeds decimal(2,2)", intLiteral(-1), column(2, 2), false},
+		{"scale-free width uses int32 bound", intLiteral(math.MaxInt32), column(18, 0), true},
+		{"scale-free width keeps int32 bound", intLiteral(math.MaxInt32 + 1), column(18, 0), false},
+		{"synthesized zero width keeps legacy bound", intLiteral(math.MaxInt32), column(0, 0), true},
+		{"synthesized zero width rejects beyond legacy bound", intLiteral(math.MaxInt32 + 1), column(0, 0), false},
+		{"unsigned in range", uintLiteral(999), column(5, 2), true},
+		{"unsigned boundary cannot cram", uintLiteral(1000), column(5, 2), false},
+		{"unsigned zero fits decimal(2,2)", uintLiteral(0), column(2, 2), true},
+		{"unsigned one exceeds decimal(2,2)", uintLiteral(1), column(2, 2), false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			constT := makeTypeByPlan2Expr(tc.expr)
+			require.Equal(t, tc.want, checkNoNeedCast(context.Background(), constT, tc.column, tc.expr))
 		})
 	}
 }

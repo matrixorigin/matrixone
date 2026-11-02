@@ -40,7 +40,7 @@ func GetEmptyResultKind(aggID int64) EmptyResultKind {
 	case AggIdOfAny, AggIdOfAvg, AggIdOfGroupConcat, AggIdOfJsonArrayAgg,
 		AggIdOfJsonObjectAgg, AggIdOfMax, AggIdOfMaxBy, AggIdOfMaxByNonNull,
 		AggIdOfMedian, AggIdOfMin, AggIdOfApproxPercentile, AggIdOfPercentileCont,
-		AggIdOfPercentileDisc, AggIdOfStdDevPop,
+		AggIdOfPercentileDisc, AggIdOfQuantileExactWeighted, AggIdOfStdDevPop,
 		AggIdOfStdDevSample, AggIdOfSum, AggIdOfVarPop, AggIdOfVarSample:
 		return EmptyResultNull
 	case AggIdOfAvgTwCache, AggIdOfAvgTwResult, AggIdOfBitmapConstruct,

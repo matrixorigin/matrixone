@@ -1,6 +1,7 @@
 drop database if exists mysql_compat_only_full_group_by;
 create database mysql_compat_only_full_group_by;
 use mysql_compat_only_full_group_by;
+set @having_alias_saved_sql_mode = @@session.sql_mode;
 set session sql_mode = 'ONLY_FULL_GROUP_BY';
 create table t_sales(region varchar(10), product varchar(10), qty int);
 insert into t_sales values
@@ -17,6 +18,29 @@ order by region is null, region;
 east  ¦  phone  ¦  2  𝄀
 west  ¦  phone  ¦  3  𝄀
 null  ¦  phone  ¦  5
+select region, sum(qty) as product from t_sales group by region having product >= 3 order by region is null, region;
+➤ region[12,-1,0]  ¦  product[-5,64,0]  𝄀
+west  ¦  3  𝄀
+null  ¦  5
+select region, sum(qty) as product from t_sales group by region having sum(qty) >= 3 order by region is null, region;
+➤ region[12,-1,0]  ¦  product[-5,64,0]  𝄀
+west  ¦  3  𝄀
+null  ¦  5
+select region, sum(qty) + 1 as product from t_sales group by region having product = 4 order by region;
+➤ region[12,-1,0]  ¦  product[-5,64,0]  𝄀
+west  ¦  4
+select sum(qty) as region from t_sales group by t_sales.region having region = 'west';
+➤ region[-5,64,0]  𝄀
+3
+select region, sum(qty) as product from t_sales group by region having count(product) = 2;
+➤ region[12,-1,0]  ¦  product[-5,64,0]  𝄀
+east  ¦  2
+set session sql_mode = '';
+select region, sum(qty) as product from t_sales group by region having product >= 3 order by region is null, region;
+➤ region[12,-1,0]  ¦  product[-5,64,0]  𝄀
+west  ¦  3  𝄀
+null  ¦  5
+set session sql_mode = 'ONLY_FULL_GROUP_BY';
 create table t_fd(id int primary key, name varchar(20), amount int);
 insert into t_fd values (1, 'a', 10), (2, 'b', 20), (3, 'c', 30);
 select id, name, sum(amount)
@@ -243,5 +267,5 @@ from t_fd
 group by id
 order by id;
 SQL syntax error: column "t_fd.name" must appear in the GROUP BY clause or be used in an aggregate function
-set session sql_mode = '';
+set session sql_mode = @having_alias_saved_sql_mode;
 drop database mysql_compat_only_full_group_by;

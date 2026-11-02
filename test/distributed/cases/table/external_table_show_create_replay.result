@@ -1,0 +1,26 @@
+drop database if exists m3a;
+create database m3a;
+use m3a;
+create external table et_src (a int, b varchar(16)) infile{'filepath'='$resources/external_table_file/m3_replay.csv','format'='csv'};
+show create table et_src;
+➤ Table[12,6,0]  ¦  Create Table[12,272,0]  𝄀
+et_src  ¦  CREATE EXTERNAL TABLE `et_src` (
+  `a` int DEFAULT NULL,
+  `b` varchar(16) COLLATE utf8mb4_general_ci DEFAULT NULL
+) INFILE{'FILEPATH'='$resources/external_table_file/m3_replay.csv','FORMAT'='csv'}
+select * from et_src;
+➤ a[4,32,0]  ¦  b[12,16,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta  𝄀
+3  ¦  gamma
+drop database if exists m3a2;
+create database m3a2;
+use m3a2;
+create external table et_dst (a int, b varchar(16)) infile{'filepath'='$resources/external_table_file/m3_replay.csv','format'='csv'};
+select * from et_dst;
+➤ a[4,32,0]  ¦  b[12,16,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta  𝄀
+3  ¦  gamma
+drop database m3a;
+drop database m3a2;

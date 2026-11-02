@@ -67,10 +67,6 @@ type functionInformationForEval struct {
 		selectList *function.FunctionSelectList) error
 	resetFn func() error
 	freeFn  func() error
-
-	// retainedBytesFn reports stateful function backing allocations which are
-	// not represented by the executor's owned vectors.
-	retainedBytesFn func() uint64
 }
 
 func (fI *functionInformationForEval) reset() {
@@ -91,7 +87,7 @@ func (fI *functionInformationForEval) reset() {
 	if fI.evalFn != nil {
 		// we can set the context nil here since this function will never return an error.
 		overload, _ := function.GetFunctionById(context.TODO(), fI.overloadID)
-		fI.evalFn, fI.resetFn, fI.freeFn, fI.retainedBytesFn = overload.GetExecuteMethod()
+		fI.evalFn, fI.resetFn, fI.freeFn, _ = overload.GetExecuteMethod()
 	}
 }
 
@@ -179,6 +175,31 @@ func (expr *FunctionExpressionExecutor) tryFoldFlowControl(
 		return folded, err
 	}
 	switch expr.fid {
+	case function.ELT:
+		folded, err := expr.tryFoldParameter(proc, atRuntime, 0)
+		if err != nil || !folded {
+			return folded, err
+		}
+		index := expr.parameterResults[0]
+		if index.IsNull(0) {
+			return true, nil
+		}
+		var selected uint64
+		switch index.GetType().Oid {
+		case types.T_int64:
+			value, _ := vector.GenerateFunctionFixedTypeParameter[int64](index).GetValue(0)
+			if value < 1 {
+				return true, nil
+			}
+			selected = uint64(value)
+		case types.T_uint64, types.T_bit:
+			selected, _ = vector.GenerateFunctionFixedTypeParameter[uint64](index).GetValue(0)
+		}
+		if selected == 0 || selected >= uint64(len(expr.parameterExecutor)) {
+			return true, nil
+		}
+		return expr.tryFoldParameter(proc, atRuntime, int(selected))
+
 	case function.IFF:
 		folded, err := expr.tryFoldParameter(proc, atRuntime, 0)
 		if err != nil || !folded {
@@ -327,7 +348,8 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 
 	expr.folded.needFoldingCheck = false
 	expr.folded.canFold = false
-	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE {
+	if expr.fid == function.IFF || expr.fid == function.CASE || expr.fid == function.COALESCE ||
+		(expr.fid == function.ELT && int32(expr.overloadID) == 1) {
 		if expr.volatile || (!atRuntime && expr.timeDependent) {
 			return nil
 		}

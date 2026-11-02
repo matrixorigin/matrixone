@@ -394,30 +394,6 @@ func (rm *RoutineManager) Closed(rs *Conn) {
 	rt.cleanup()
 }
 
-/*
-kill a connection or query.
-if killConnection is true, the query will be canceled first, then the network will be closed.
-if killConnection is false, only the query will be canceled. the connection keeps intact.
-*/
-func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
-	rt := rm.getRoutineByConnID(uint32(id))
-
-	killMyself := idThatKill == id
-	if rt != nil {
-		ses := rt.getSession()
-		if killConnection {
-			ses.Debugf(ctx, "kill connection %d", id)
-			rt.killConnection(killMyself)
-		} else {
-			ses.Debugf(ctx, "kill query %s on the connection %d", statementId, id)
-			rt.killQuery(killMyself, statementId)
-		}
-	} else {
-		return moerr.NewInternalErrorf(ctx, "Unknown connection id %d", id)
-	}
-	return nil
-}
-
 func getConnectionInfo(rs *Conn) string {
 	conn := rs.RawConn()
 	if conn != nil {
@@ -544,6 +520,7 @@ func (rm *RoutineManager) MigrateConnectionFromWithContext(
 		req.TempTableMigrationSupported,
 		req.LastInsertIDMigrationSupported,
 		resp,
+		req.PreparedStatementProtocolSupported,
 	)
 }
 

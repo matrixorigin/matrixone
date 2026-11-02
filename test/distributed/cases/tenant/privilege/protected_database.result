@@ -6,7 +6,7 @@ drop user if exists protected_bvt_sys_user;
 drop role if exists protected_bvt_sys_writer;
 set global protected_databases = 'protected_bvt_sys,protected_bvt_sys_new';
 select @@global.protected_databases;
-➤ @@protected_databases[12,0,0]  𝄀
+➤ @@global.protected_databases[-1,16383,0]  𝄀
 protected_bvt_sys,protected_bvt_sys_new
 create database protected_bvt_sys;
 create table protected_bvt_sys.t1(a int primary key, b int);
@@ -47,7 +47,7 @@ internal error: protected_databases cannot be cleared directly
 set global protected_databases = ',';
 internal error: protected_databases cannot be cleared directly
 select @@global.protected_databases;
-➤ @@protected_databases[12,0,0]  𝄀
+➤ @@global.protected_databases[-1,16383,0]  𝄀
 protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB';
 create database protected_bvt_db;
@@ -92,11 +92,11 @@ set enable_privilege_cache = off;
 set global protected_databases = 'protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later';
 set enable_privilege_cache = off;
 select @@global.protected_databases;
-➤ @@protected_databases[12,0,0]  𝄀
+➤ @@global.protected_databases[-1,16383,0]  𝄀
 protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later
 select database();
-➤ database()[12,-1,0]  𝄀
-
+➤ database()[12,65535,0]  𝄀
+null
 use protected_bvt_later;
 select a from t1;
 ➤ a[4,32,0]  𝄀
@@ -104,7 +104,7 @@ select a from t1;
 set enable_privilege_cache = off;
 use protected_bvt_db;
 show tables;
-➤ Tables_in_protected_bvt_db[12,-1,0]  𝄀
+➤ Tables_in_protected_bvt_db[12,5000,0]  𝄀
 auto_pk  𝄀
 fk_child  𝄀
 fk_parent  𝄀
@@ -213,10 +213,10 @@ drop database protected_bvt_db;
 internal error: do not have privilege to execute the statement
 set enable_privilege_cache = off;
 select @@global.protected_databases;
-➤ @@protected_databases[12,0,0]  𝄀
+➤ @@global.protected_databases[-1,16383,0]  𝄀
 protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later
 select database();
-➤ database()[12,-1,0]  𝄀
+➤ database()[12,65535,0]  𝄀
 protected_bvt_later
 create table t2(a int);
 internal error: do not have privilege to execute the statement
@@ -240,7 +240,7 @@ set global lower_case_table_names = 0;
 set global protected_databases = 'ProtectedCaseDB';
 set enable_privilege_cache = off;
 select @@lower_case_table_names;
-➤ @@lower_case_table_names[12,0,0]  𝄀
+➤ @@lower_case_table_names[-1,16383,0]  𝄀
 1
 create database `protectedcasedb`;
 internal error: do not have privilege to execute the statement

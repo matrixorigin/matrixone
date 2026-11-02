@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 func consumeEntry(
@@ -36,6 +37,7 @@ func consumeEntry(
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
 	isSub bool,
+	keys ...*readutil.ClusterKeyDescriptor,
 ) error {
 	// for test only.
 	if engine.skipConsume {
@@ -52,7 +54,7 @@ func consumeEntry(
 
 	if state != nil {
 		t0 := time.Now()
-		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer, engine.mp)
+		state.HandleLogtailEntry(ctx, engine.fs, e, primarySeqnum, packer, engine.mp, keys...)
 		v2.LogtailUpdatePartitonConsumeLogtailOneEntryLogtailReplayDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 

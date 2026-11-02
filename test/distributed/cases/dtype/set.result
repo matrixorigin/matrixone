@@ -99,7 +99,8 @@ select id, tags from c order by tags, id;
 3  ¦  a
 select tags, count(*) as cnt from set_empty_member_order group by tags order by tags;
 ➤ tags[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
-  ¦  2  𝄀
+  ¦  1  𝄀
+  ¦  1  𝄀
 a  ¦  1
 select distinct tags from set_empty_member_order order by tags;
 ➤ tags[12,-1,0]  𝄀
@@ -119,7 +120,8 @@ select id, s, s + 0 as bitmap from (select id, s from set_boundary_order) d orde
 select s, count(*) as cnt from set_boundary_order group by s order by s;
 ➤ s[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 null  ¦  1  𝄀
-  ¦  2  𝄀
+  ¦  1  𝄀
+  ¦  1  𝄀
 z  ¦  1  𝄀
 a  ¦  1
 select distinct s from set_boundary_order order by s;
@@ -160,7 +162,8 @@ insert into set_boundary_order values (5, null), (4, 4), (3, 1), (2, 0), (1, 2);
 select s, count(*) as cnt from set_boundary_order group by s order by s;
 ➤ s[12,-1,0]  ¦  cnt[-5,64,0]  𝄀
 null  ¦  1  𝄀
-  ¦  2  𝄀
+  ¦  1  𝄀
+  ¦  1  𝄀
 z  ¦  1  𝄀
 a  ¦  1
 select distinct s from set_boundary_order order by s;
@@ -213,7 +216,7 @@ select * from set01 order by id;
 4  ¦  red,blue  𝄀
 5  ¦  null
 insert into set01 values (6, 'yellow');
-internal error: convert to MySQL set failed: item yellow is not in set [red,green,blue]
+Data truncated for SET value: 'yellow'
 drop table if exists set02;
 create table set02 as select colors from set01;
 show create table set02;
@@ -252,7 +255,7 @@ drop table if exists set_modify;
 create table set_modify (id int primary key, tags set('a','b','c'));
 insert into set_modify values (1, 'a,c'), (2, 'b');
 alter table set_modify modify column tags set('a','b');
-internal error: convert to MySQL set failed: item a,c is not in set [a,b]
+Data truncated for SET value: 'a,c'
 drop table set_modify;
 drop table if exists set_modify2;
 create table set_modify2 (id int primary key, tags set('a','b'));

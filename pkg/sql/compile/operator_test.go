@@ -500,8 +500,15 @@ func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
 			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
 			_, configErr = check(nil, true)
 			require.ErrorContains(t, configErr, "cannot be NULL")
-			_, configErr = check([]byte("NaN"), false)
-			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
+			// A textual NaN is a MySQL nonnumeric string, hence zero.
+			// Actual IEEE NaN/Inf rejection is covered by config-vector tests.
+			config, configErr = check([]byte("NaN"), false)
+			require.NoError(t, configErr)
+			zero := []byte("0")
+			if tc.name != plan2.NameApproxPercentile {
+				zero = aggexec.EncodeOrderedPercentileConfig(zero, false)
+			}
+			require.Equal(t, zero, config)
 
 			config, configErr = check([]byte("50"), false)
 			require.NoError(t, configErr)

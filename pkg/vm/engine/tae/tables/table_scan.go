@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -28,6 +29,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"go.uber.org/zap"
 )
+
+type preservePhysicalRowsKey struct{}
+
+// WithPreservePhysicalRows keeps append-abort holes in HybridScan results.
+// Merge and flush need source batch offsets to remain identical to physical
+// object row offsets while constructing transfer maps.
+func WithPreservePhysicalRows(ctx context.Context) context.Context {
+	return context.WithValue(ctx, preservePhysicalRowsKey{}, true)
+}
+
+func preservePhysicalRows(ctx context.Context) bool {
+	preserve, _ := ctx.Value(preservePhysicalRowsKey{}).(bool)
+	return preserve
+}
+
+func compactInvisibleAppendRows(bat *containers.Batch, invisibleRows *nulls.Bitmap) {
+	if bat == nil || invisibleRows.IsEmpty() {
+		return
+	}
+
+	invisible := invisibleRows.ToArray()
+	remainingDeletes := nulls.NewWithSize(bat.Length() - len(invisible))
+	invisibleIdx := 0
+	for _, row := range bat.Deletes.ToArray() {
+		for invisibleIdx < len(invisible) && invisible[invisibleIdx] < row {
+			invisibleIdx++
+		}
+		if invisibleIdx < len(invisible) && invisible[invisibleIdx] == row {
+			continue
+		}
+		remainingDeletes.Add(row - uint64(invisibleIdx))
+	}
+
+	// Compact rows hidden by append MVCC (rollback holes and commits newer than
+	// the reader snapshot). Tombstone and workspace deletes remain represented
+	// in the returned batch, with offsets shifted over the removed rows.
+	bat.Deletes = invisibleRows
+	bat.Compact()
+	if !remainingDeletes.IsEmpty() {
+		bat.Deletes = remainingDeletes
+	}
+}
 
 func HybridScanByBlock(
 	ctx context.Context,
@@ -45,15 +88,31 @@ func HybridScanByBlock(
 	}
 	_, offset := blkID.Offsets()
 	deleteStartOffset := 0
+	var deletesBeforeScan *nulls.Bitmap
+	filterInvisibleAppendRows := dataObject.IsAppendable() && !preservePhysicalRows(ctx)
 	if *bat != nil {
 		deleteStartOffset = (*bat).Length()
+		if filterInvisibleAppendRows {
+			deletesBeforeScan = (*bat).Deletes.Clone()
+		}
 	}
-	err = dataObject.GetObjectData().Scan(ctx, bat, txn, readSchema, offset, colIdxs, mp)
+	err = dataObject.GetObjectData().Scan(
+		ctx, bat, txn, readSchema, offset, colIdxs, mp)
 	if err != nil {
 		return err
 	}
 	if *bat == nil {
 		return nil
+	}
+	var invisibleAppendRows *nulls.Bitmap
+	if filterInvisibleAppendRows {
+		invisibleAppendRows = (*bat).Deletes.Clone()
+		if deletesBeforeScan != nil {
+			deletesBeforeScan.Foreach(func(row uint64) bool {
+				invisibleAppendRows.Del(row)
+				return true
+			})
+		}
 	}
 	it := tableEntry.MakeTombstoneVisibleObjectIt(txn)
 	defer it.Release()
@@ -70,8 +129,10 @@ func HybridScanByBlock(
 	err = txn.GetStore().FillInWorkspaceDeletes(id, &(*bat).Deletes, uint64(deleteStartOffset))
 	if err != nil {
 		(*bat).Close()
+		return err
 	}
-	return err
+	compactInvisibleAppendRows(*bat, invisibleAppendRows)
+	return nil
 }
 
 /*
@@ -96,44 +157,42 @@ func TombstoneRangeScanByObject(
 	vpool *containers.VectorPool,
 ) (bat *containers.Batch, err error) {
 	tableEntry.WaitTombstoneObjectCommitted(end)
-	it := tableEntry.MakeTombstoneObjectIt()
-	defer it.Release()
+	snapshot := tableEntry.MakeTombstoneObjectSnapshot()
 	// CreatedAt orders catalog publication, not the commit timestamps of rows
 	// appended later. Concurrent flushes can populate multiple appendable
 	// tombstone objects and commit them out of creation order, so an older
 	// object can still contain deletes in [start, end]. Do not stop the scan
 	// solely because an object's catalog lifetime precedes start.
-	for ok := it.Last(); ok; ok = it.Prev() {
-		tombstone := it.Item()
+	snapshot.VisitAllUnlocked(func(tombstone *catalog.ObjectEntry) bool {
 		if tombstone.IsAppendable() && tombstone.IsCEntry() &&
 			tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
 			// The D counterpart owns the same persisted appendable data. A
 			// non-appendable C entry is different: it is the immutable
 			// CN-created source of a tombstone merge and remains the unique
 			// range-scan owner after its drop commits.
-			continue
+			return true
 		}
 
 		if tombstone.IsAppendable() {
 			if tombstone.CreatedAt.GT(&end) {
 				// committing create object is excluded here
-				continue
+				return true
 			}
 			if tombstone.DeletedAt.Equal(&txnif.UncommitTS) {
 				// Its C counterpart remains visible until the drop commits.
-				continue
+				return true
 			}
 			if tombstone.HasDropCommitted() {
 				deleteAt := tombstone.GetDeleteAt()
 				if tombstone.CreatedAt.GT(&end) || deleteAt.LT(&start) {
-					continue
+					return true
 				}
 			}
 		} else {
 			// Check only CN-created immutable source versions. Tombstone-merge
 			// outputs copy these rows and are deliberately excluded below.
 			if tombstone.HasDropIntent() {
-				continue
+				return true
 			}
 			// A CN-side publication rewrite retains CN provenance on its output.
 			// Once the explicitly marked D counterpart commits within the scan
@@ -144,28 +203,29 @@ func TombstoneRangeScanByObject(
 				deleteAt := drop.GetDeleteAt()
 				if drop.HasDropCommitted() && !deleteAt.GT(&end) &&
 					drop.ObjectStats.GetCNDeleted() {
-					continue
+					return true
 				}
 			}
 			if !tombstone.ObjectStats.GetCNCreated() {
-				continue
+				return true
 			}
 			if tombstone.CreatedAt.GT(&end) || tombstone.CreatedAt.LT(&start) {
-				continue
+				return true
 			}
 		}
 
 		if tombstone.HasCommittedPersistedData() {
 			zm := tombstone.SortKeyZoneMap()
 			if !zm.RowidPrefixEq(objectID[:]) {
-				continue
+				return true
 			}
 			// TODO: Bloomfilter
 		}
 		err = tombstone.GetObjectData().CollectObjectTombstoneInRange(ctx, start, end, &objectID, &bat, mp, vpool)
-		if err != nil {
-			return nil, err
-		}
+		return err == nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return
 }

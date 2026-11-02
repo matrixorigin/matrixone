@@ -1113,3 +1113,43 @@ func TestWindowExpressionKeysRetainParameterOffsets(t *testing.T) {
 
 	require.NotEqual(t, windowExprAstKey(first), windowExprAstKey(second))
 }
+
+// TestPreparedQuantileExactWeightedParameters covers the flat three-argument
+// weighted percentile through the plan binder: the prepared level forces the
+// per-EXECUTE physical aggregate rebuild exactly as the ordered-set
+// percentiles do, a literal level does not, and the binder enforces the
+// level-must-be-configuration and three-argument contracts.
+func TestPreparedQuantileExactWeightedParameters(t *testing.T) {
+	t.Run("prepared level forces a fresh physical aggregate", func(t *testing.T) {
+		prepare := buildPreparedAggregatePlan(t,
+			"select quantileExactWeighted(n_nationkey, n_regionkey, ?) from nation")
+		require.Equal(t, []int32{0}, preparedParamPositions(prepare))
+		require.True(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		fn := findAggregateByName(prepare.Plan.GetQuery(), NameQuantileExactWeighted)
+		require.NotNil(t, fn)
+		require.Len(t, fn.Args, 3)
+	})
+
+	t.Run("literal level keeps the plan cacheable", func(t *testing.T) {
+		prepare := buildPreparedAggregatePlan(t,
+			"select quantileExactWeighted(n_nationkey, n_regionkey, 0.25) from nation")
+		require.False(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		fn := findAggregateByName(prepare.Plan.GetQuery(), NameQuantileExactWeighted)
+		require.NotNil(t, fn)
+		require.Len(t, fn.Args, 3)
+	})
+
+	t.Run("the level argument must be configuration", func(t *testing.T) {
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+			"select quantileExactWeighted(n_nationkey, n_regionkey, n_regionkey) from nation")
+		require.ErrorContains(t, err,
+			"level argument of quantileexactweighted must be a non-null constant or parameter")
+	})
+
+	t.Run("three arguments are required", func(t *testing.T) {
+		_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+			"select quantileExactWeighted(n_nationkey, n_regionkey) from nation")
+		require.ErrorContains(t, err,
+			"quantileexactweighted requires a value, a weight, and a level argument")
+	})
+}

@@ -36,7 +36,7 @@ func validateRequest(req Request) error {
 	validText := func(text string, required bool) bool {
 		return (!required || len(text) > 0) && len(text) <= maxMetadataTextBytes && strings.IndexByte(text, 0) < 0
 	}
-	// Conservative ABI-v1/Linux-amd64 descriptor envelopes include padding,
+	// Conservative ABI-v1 descriptor envelopes for 64-bit Linux include padding,
 	// output arrays and both read-column/input-schema arrays. Their bounds are
 	// intentionally independent of opaque C++ sizeof values.
 	total := uint64(128 + len(req.Plan) + len(req.QueryID) + 64*len(req.Columns))

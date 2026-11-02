@@ -150,12 +150,11 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{viewName: "v_view", column: "amount", wantValue: "7"},
 			{viewName: "v_join", column: "left_qty", wantValue: "7"},
 			{viewName: "v_join", column: "right_qty", wantValue: "9"},
-			{viewName: "v_source_t", column: "null_col", wantValue: "null"},
-			{viewName: "v_source_t", column: "str_col", wantValue: "'seed'"},
+			{viewName: "v_source_t", column: "str_col", wantValue: "seed"},
 			{viewName: "v_source_t", column: "amount", wantValue: "1.25"},
 			{viewName: "v_source_t", column: "expr_col", wantValue: "(uuid())"},
-			{viewName: "v_source_t", column: "priority", wantValue: "'medium'"},
-			{viewName: "v_source_t", column: "flags", wantValue: "'a'"},
+			{viewName: "v_source_t", column: "priority", wantValue: "medium"},
+			{viewName: "v_source_t", column: "flags", wantValue: "a"},
 		} {
 			got := defaultFor(test.viewName, test.column)
 			require.True(t, got.Valid, test.viewName+"."+test.column)
@@ -169,6 +168,8 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			got := defaultFor(viewName, "qty")
 			require.False(t, got.Valid, viewName)
 		}
+
+		require.False(t, defaultFor("v_source_t", "null_col").Valid)
 
 		nullableDefault := defaultFor("v_source_t", "nullable_col")
 		require.False(t, nullableDefault.Valid)
@@ -190,21 +191,21 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 			{column: "qty", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
 			{column: "nullable_col"},
 			{column: "null_col"},
-			{column: "str_col", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
+			{column: "str_col", wantInfo: sql.NullString{String: "", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
 			{column: "amount", wantInfo: sql.NullString{String: "0.00", Valid: true}, wantDesc: sql.NullString{String: "0.00", Valid: true}},
-			{column: "priority", wantInfo: sql.NullString{String: "'low'", Valid: true}, wantDesc: sql.NullString{String: "low", Valid: true}},
-			{column: "flags", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
+			{column: "priority", wantInfo: sql.NullString{String: "low", Valid: true}, wantDesc: sql.NullString{String: "low", Valid: true}},
+			{column: "flags", wantInfo: sql.NullString{String: "", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
 			{column: "date_col"},
 			{column: "datetime_col"},
-			{column: "time_col", wantInfo: sql.NullString{String: "'00:00:00'", Valid: true}, wantDesc: sql.NullString{String: "00:00:00", Valid: true}},
+			{column: "time_col", wantInfo: sql.NullString{String: "00:00:00", Valid: true}, wantDesc: sql.NullString{String: "00:00:00", Valid: true}},
 			{column: "timestamp_col"},
-			{column: "binary_col", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
-			{column: "varbinary_col", wantInfo: sql.NullString{String: "''", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
+			{column: "binary_col", wantInfo: sql.NullString{String: "", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
+			{column: "varbinary_col", wantInfo: sql.NullString{String: "", Valid: true}, wantDesc: sql.NullString{String: "", Valid: true}},
 			{column: "blob_col", wantInfo: sql.NullString{String: "('blob-seed')", Valid: true}, wantDesc: sql.NullString{String: "('blob-seed')", Valid: true}},
 			{column: "float_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
 			{column: "double_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
 			{column: "bit_col", wantInfo: sql.NullString{String: "0", Valid: true}, wantDesc: sql.NullString{String: "0", Valid: true}},
-			{column: "year_col", wantInfo: sql.NullString{String: "'0000'", Valid: true}, wantDesc: sql.NullString{String: "0000", Valid: true}},
+			{column: "year_col", wantInfo: sql.NullString{String: "0000", Valid: true}, wantDesc: sql.NullString{String: "0000", Valid: true}},
 			{column: "text_col", wantInfo: sql.NullString{String: "('text-seed')", Valid: true}, wantDesc: sql.NullString{String: "('text-seed')", Valid: true}},
 			{column: "nullable_text", wantInfo: sql.NullString{String: "('nullable-text-seed')", Valid: true}, wantDesc: sql.NullString{String: "('nullable-text-seed')", Valid: true}},
 			{column: "nullable_blob", wantInfo: sql.NullString{String: "('nullable-blob-seed')", Valid: true}, wantDesc: sql.NullString{String: "('nullable-blob-seed')", Valid: true}},

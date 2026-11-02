@@ -230,8 +230,7 @@ create table t_odku_scope_source (x int primary key, y int);
 insert into t_odku_scope_source values (1, 70);
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- Correlated ODKU subqueries are fail-closed until the UPDATE-only subtree can
--- be evaluated lazily after duplicate-key arbitration.
+-- Row-alias ODKU subqueries remain fail-closed on the current supported path.
 -- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 
@@ -256,8 +255,9 @@ insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n(x, y, z) on duplic
 
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
--- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+-- Legacy INSERT ... SELECT keeps main's dependent assignment behavior.
 insert into t_odku_row_alias (id, a, b) select 1, 5, 0 on duplicate key update b = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
+select id, a, b from t_odku_row_alias order by id;
 
 -- A target-correlated subquery is rejected even when the source alias does not
 -- shadow the row alias; the whole UPDATE-only subtree must remain unevaluated.
@@ -516,17 +516,22 @@ set @r8_fault_disabled = disable_fault_injection();
 drop table t_odku_action_batches;
 set group_concat_max_len = @r8_old_group_concat;
 
--- #28160: review counterexamples and exact frozen legacy L1-L5 controls.
+-- #28160: no-key legacy ODKU and prepared-statement compatibility controls.
 drop table if exists t_odku_correlated_nokey;
 create table t_odku_correlated_nokey (a int);
 insert into t_odku_correlated_nokey values (1) on duplicate key update a = (select t_odku_correlated_nokey.a);
 prepare s_odku_correlated_plain from insert into t_odku_correlated_nokey values (2) on duplicate key update a = (select t_odku_correlated_nokey.a);
+execute s_odku_correlated_plain;
 prepare s_odku_correlated_param from insert into t_odku_correlated_nokey values (3) on duplicate key update a = (select t_odku_correlated_nokey.a + ?);
-select count(*) = 0 as no_correlated_insert from t_odku_correlated_nokey;
+set @odku_correlated_delta = 1;
+execute s_odku_correlated_param using @odku_correlated_delta;
+select count(*) = 3 and sum(a) = 6 as no_key_correlated_preserved from t_odku_correlated_nokey;
+deallocate prepare s_odku_correlated_plain;
+deallocate prepare s_odku_correlated_param;
 insert into t_odku_correlated_nokey values (4) on duplicate key update a = (select 7);
 insert into t_odku_correlated_nokey values (5) on duplicate key update a = (select missing from nonexistent);
 insert into t_odku_correlated_nokey values (6) on duplicate key update a = (select t_odku_correlated_nokey.a from t_odku_correlated_nokey as t_odku_correlated_nokey limit 1);
-select count(*) = 3 and sum(a) = 15 as unreachable_legacy_preserved from t_odku_correlated_nokey;
+select count(*) = 6 and sum(a) = 21 as unreachable_legacy_preserved from t_odku_correlated_nokey;
 drop table t_odku_correlated_nokey;
 create table t_odku_priority (id int primary key, a int, g int generated always as (a + 1) stored);
 insert into t_odku_priority (id, a, g) values (1) as n(k, x, y) on duplicate key update g = 1;
@@ -560,6 +565,7 @@ create table t_odku_scope_no_key(a int, b varchar(30));
 insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(t_odku_scope_no_key.b,missing_column));
 insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,t_odku_scope_no_key.b));
 prepare odku_scope_stmt from insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(t_odku_scope_no_key.b,missing_column));
+deallocate prepare odku_scope_stmt;
 prepare odku_scope_stmt from insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,t_odku_scope_no_key.b,?));
 insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,b));
 select a from t_odku_scope_no_key;
@@ -603,13 +609,14 @@ drop table t_odku_scope_alias_key;
 drop table t_odku_scope_alias_no_key;
 drop table t_odku_scope_local;
 
--- #28160: whole RHS admission precedes an unrelated earlier binding failure.
+-- #28160: preserve main's ordinary keyed binding and no-key fallback.
 create table t_odku_rhs_no_key(a int,b varchar(30));
 insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_no_key.b));
 insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat((select t_odku_rhs_no_key.b),missing_column);
 insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=ifnull(1,2,(select t_odku_rhs_no_key.b));
 insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select 'local'),(select t_odku_rhs_no_key.b));
 prepare odku_whole_rhs from insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_no_key.b));
+deallocate prepare odku_whole_rhs;
 prepare odku_whole_rhs from insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select concat(t_odku_rhs_no_key.b,?)));
 select a from t_odku_rhs_no_key;
 insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select 'local'));

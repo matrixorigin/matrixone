@@ -119,7 +119,7 @@ func scalarRuntimeFilterEquality(
 ) (probeOutput, scalarOutput int32, ok bool) {
 	fn := expr.GetF()
 	if single == nil || fn == nil || fn.Func == nil ||
-		!IsEqualFunc(fn.Func.Obj) || len(fn.Args) != 2 {
+		!IsEqualFunc(fn.Func.Obj) || len(fn.Args) != 2 || isJSONNumericComparisonArgs(fn.Args) {
 		return 0, 0, false
 	}
 	leftCol, rightCol := fn.Args[0].GetCol(), fn.Args[1].GetCol()

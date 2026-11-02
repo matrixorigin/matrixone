@@ -569,6 +569,9 @@ func (mergeOrder *MergeOrder) Call(
 			if err != nil {
 				return vm.CancelResult, err
 			}
+			if input.Status == vm.ExecYield {
+				return input, nil
+			}
 
 			if input.Batch == nil {
 				ctr.releaseGrowthParticipant()

@@ -135,7 +135,7 @@ select (with q(n) as (select p.parent_id)
         select n from q union all select n from q)
 from pages p where p.id=2;
 
--- A branch without a replay identity is rejected rather than mismatching schemas.
+-- A branch without a replay identity uses its own dependent invocation.
 select p.id from pages p where exists (
   with q(n) as (select p.parent_id)
   select n from q union all select 7
@@ -327,8 +327,7 @@ select p.id, (with q(n) as (select p.parent_id from pages a where a.id=p.id and 
               select count(*) from q having count(*) in (0,1)) as c
 from pages p where p.id in (1, 2) order by p.id;
 
--- A producer cast over skipped CASE rows must fail during planning, not
--- evaluate 'bad' before the consumer chooses the inactive branch.
+-- The producer cast evaluates only the selected CASE branch.
 create table guarded_values(id int primary key, val varchar(10));
 insert into guarded_values values (1,'bad'),(2,'2');
 select p.id, case when p.id=1 then 0 else
@@ -467,7 +466,7 @@ select p.id, b.id from guarded_abs p left join guarded_abs b on
   case when p.id=1 then false else (select abs(p.v))>0 end
 order by p.id, b.id;
 -- The outer Top is not yet attached when projection subqueries are flattened.
--- Unsafe CTEs must be rejected, not evaluated for rows pagination skips.
+-- CTE expressions are evaluated only for rows surviving pagination.
 select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
 from guarded_abs p order by p.id desc limit 1;
 select p.id, (with q(n) as (select p.v) select abs(n) from q) as c

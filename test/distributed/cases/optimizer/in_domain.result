@@ -146,10 +146,10 @@ explain select code, bveh from t3
 where code in ('4999999010','5001010000','5001020000','6401010000')
 and ((code in (5001010000, 5001020000, 6401010000) and bveh = 'TFUA1000')
 or (code is not null and code not in (5001010000, 5001020000, 6401010000)));
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Table Scan on d_indomain.t3  𝄀
-        Filter Cond: prefix_in(t3.__mo_cpkey_col), ((((cast(t3.code AS DOUBLE) = 5001010000) or (cast(t3.code AS DOUBLE) = 5001020000) or (cast(t3.code AS DOUBLE) = 6401010000)) and (t3.bveh = 'TFUA1000')) or ((t3.code IS NOT NULL) and (cast(t3.code AS DOUBLE) != 5001010000) and (cast(t3.code AS DOUBLE) != 5001020000) and (cast(t3.code AS DOUBLE) != 6401010000)))
+        Filter Cond: prefix_in(t3.__mo_cpkey_col), t3.code in ([4999999010 5001010000 5001020000 6401010000]), ((((cast(t3.code AS DOUBLE) = 5001010000) or (cast(t3.code AS DOUBLE) = 5001020000) or (cast(t3.code AS DOUBLE) = 6401010000)) and (t3.bveh = 'TFUA1000')) or ((((t3.code IS NOT NULL) and (cast(t3.code AS DOUBLE) != 5001010000)) and (cast(t3.code AS DOUBLE) != 5001020000)) and (cast(t3.code AS DOUBLE) != 6401010000)))
               -- HINT: Cast expression may prevent index usage  𝄀
         Block Filter Cond: prefix_in(t3.__mo_cpkey_col), t3.code in ([4999999010 5001010000 5001020000 6401010000])
 drop database if exists d_indomain;

@@ -434,24 +434,43 @@ func TestMessageSenderOnClientNegotiatedStreamTeardown(t *testing.T) {
 	})
 
 	t.Run("FIN ACK timeout poisons backend", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		stream := mock_morpc.NewMockStream(ctrl)
-		stream.EXPECT().ID().Return(uint64(10))
-		stream.EXPECT().Send(gomock.Any(), gomock.Any()).Return(nil)
-		stream.EXPECT().Close(true).Return(nil)
-		oldTimeout := pipelineStreamFinishClientTimeout
-		pipelineStreamFinishClientTimeout = 10 * time.Millisecond
-		t.Cleanup(func() { pipelineStreamFinishClientTimeout = oldTimeout })
-		sender := &messageSenderOnClient{
-			ctx:           context.Background(),
-			streamSender:  stream,
-			receiveCh:     make(chan morpc.Message),
-			safeToClose:   true,
-			reuseEligible: true,
-		}
-		cleanupCtx, cancel := newRemoteCleanupContext(nil)
-		defer cancel()
-		sender.close(cleanupCtx)
+		synctest.Test(t, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stream := mock_morpc.NewMockStream(ctrl)
+			cleanupCtx, cancel := newRemoteCleanupContext(nil)
+			defer cancel()
+			started := time.Now()
+			gomock.InOrder(
+				stream.EXPECT().ID().Return(uint64(10)),
+				stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(ctx context.Context, request morpc.Message) error {
+						require.Equal(t, cleanupCtx, ctx)
+						require.NoError(t, ctx.Err(), "FIN must be sent before the cleanup deadline")
+						message := request.(*pipeline.Message)
+						require.Equal(t, uint64(10), message.GetID())
+						require.Equal(t, pipeline.Method_PipelineStreamFinish, message.GetCmd())
+						require.Equal(t, pipeline.Status_Last, message.GetSid())
+						require.Equal(t, pipeline.StreamTeardownMode_FinishAck, message.GetRequestedTeardownMode())
+						return nil
+					}),
+				stream.EXPECT().Close(true).DoAndReturn(func(bool) error {
+					require.ErrorIs(t, cleanupCtx.Err(), context.DeadlineExceeded)
+					return nil
+				}),
+			)
+			sender := &messageSenderOnClient{
+				ctx:          context.Background(),
+				streamSender: stream,
+				// No ACK can arrive. Virtual time advances only after FIN has
+				// been sent and the receiver blocks, not during fixture setup.
+				receiveCh:     make(chan morpc.Message),
+				safeToClose:   true,
+				reuseEligible: true,
+			}
+			sender.close(cleanupCtx)
+			require.ErrorIs(t, cleanupCtx.Err(), context.DeadlineExceeded)
+			require.Equal(t, pipelineStreamFinishClientTimeout, time.Since(started))
+		})
 	})
 
 	t.Run("clean StopSending End reuses backend", func(t *testing.T) {

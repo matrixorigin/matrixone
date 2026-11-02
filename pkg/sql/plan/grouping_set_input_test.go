@@ -277,7 +277,7 @@ func TestSplitGroupingSetCoarseDisablesShuffle(t *testing.T) {
 		qry:                        &planpb.Query{Nodes: []*planpb.Node{child, agg}},
 		splitGroupingSetCoarseAggs: map[*planpb.Node]struct{}{agg: {}},
 	}
-	determineShuffleForGroupBy(agg, builder)
+	determineShuffleForGroupBy(agg, builder, false)
 	require.False(t, agg.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(-1), agg.Stats.HashmapStats.ShuffleColIdx)
 }

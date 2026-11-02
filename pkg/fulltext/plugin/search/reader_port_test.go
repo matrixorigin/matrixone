@@ -16,6 +16,7 @@ package search
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,116 @@ func TestClassicReadBatches(t *testing.T) {
 			r := classicReader(t, mp, tc.algo, 0, searchplugin.Request{QueryPayload: []byte("pattern")})
 			require.Equal(t, []int{8192, 8192, 8192, 1}, readCounts(t, r, mp, tc.out()))
 			requireCloseReturns(t, r.Close)
+		})
+	}
+}
+
+// The complete score stream is keyed by document, even when a document has
+// repeated postings in different input batches. Zero and negative relevance are
+// emitted as non-NULL scores rather than being treated as nonmatches.
+func TestClassicUnlimitedCompleteUniqueScores(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		algo fulltext.FullTextScoreAlgo
+	}{
+		{"tfidf", fulltext.ALGO_TFIDF},
+		{"bm25", fulltext.ALGO_BM25},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			stub := newStubLimitSql(t)
+			RunSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				require.Contains(t, sql, "word = '__DocLen'")
+				bat := batch.NewWithSize(2)
+				transferred := false
+				defer func() {
+					if !transferred {
+						bat.Clean(mp)
+					}
+				}()
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(3), false, mp))
+				require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(5)/3, false, mp))
+				bat.SetRowCount(1)
+				transferred = true
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
+			}
+			RunStreamingSql = func(ctx context.Context, sqlproc *sqlexec.SqlProcess, sql string, ch chan executor.Result, _ chan error) (executor.Result, error) {
+				stub.streamed = true
+				stub.streamingSQL = sql
+				stub.streamingFilter = append([]byte(nil), sqlproc.FulltextMembershipFilter...)
+				send := func(rows [][3]int32) error {
+					bat := batch.NewWithSize(3)
+					transferred := false
+					defer func() {
+						if !transferred {
+							bat.Clean(sqlproc.Proc.Mp())
+						}
+					}()
+					for i := range bat.Vecs {
+						bat.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+					}
+					for _, row := range rows {
+						for i, value := range row {
+							if err := vector.AppendFixed(bat.Vecs[i], value, false, sqlproc.Proc.Mp()); err != nil {
+								return err
+							}
+						}
+					}
+					bat.SetRowCount(len(rows))
+					select {
+					case ch <- executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{bat}}:
+						transferred = true
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+				for _, rows := range [][][3]int32{
+					{{1, 0, 3}, {2, 0, 1}},
+					{{1, 1, 3}, {3, 0, 1}, {1, 0, 3}},
+				} {
+					if err := send(rows); err != nil {
+						return executor.Result{}, err
+					}
+				}
+				return executor.Result{}, nil
+			}
+
+			r := classicReader(t, mp, tc.algo, int64(tree.FULLTEXT_BOOLEAN), searchplugin.Request{QueryPayload: []byte("+common ~rare")})
+			t.Cleanup(func() { require.NoError(t, r.Close()) })
+			out := docScoreBatch()
+			t.Cleanup(func() { out.Clean(mp) })
+			got := make(map[int32]float32)
+			for {
+				end, err := r.Read(context.Background(), nil, nil, mp, out)
+				require.NoError(t, err)
+				if end {
+					break
+				}
+				for i := 0; i < out.RowCount(); i++ {
+					require.False(t, out.Vecs[0].IsNull(uint64(i)))
+					require.False(t, out.Vecs[1].IsNull(uint64(i)))
+					pk := vector.GetFixedAtWithTypeCheck[int32](out.Vecs[0], i)
+					require.NotContains(t, got, pk, "one output row per document")
+					got[pk] = vector.GetFixedAtWithTypeCheck[float32](out.Vecs[1], i)
+				}
+			}
+			require.Len(t, got, 3, "unlimited stream retains every matching document")
+			require.Less(t, got[1], float32(0), "the rare-term penalty is retained")
+			// Independent scorer oracle: N=3, rare df=tf=1; the ubiquitous
+			// common term contributes zero, including its repeated posting.
+			wantPenalty := -math.Pow(math.Log10(3), 2)
+			if tc.algo == fulltext.ALGO_BM25 {
+				wantPenalty *= 2.5 / (1 + 1.5*(0.25+0.75*(3/(float64(5)/3))))
+			}
+			require.InDelta(t, wantPenalty, got[1], 1e-6)
+			require.Equal(t, float32(0), got[2], "ubiquitous common term has zero IDF")
+			require.Equal(t, float32(0), got[3])
+			require.True(t, stub.streamed)
+			require.Empty(t, stub.streamingFilter)
+			require.NotContains(t, stub.streamingSQL, "LIMIT")
 		})
 	}
 }

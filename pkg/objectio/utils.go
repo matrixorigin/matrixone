@@ -59,66 +59,6 @@ func (o *CreateObjOpt) WithIsTombstone(tombstone bool) *CreateObjOpt {
 	return o
 }
 
-type CreateBlockOpt struct {
-	Loc *struct {
-		Metaloc  Location
-		Deltaloc Location
-	}
-
-	Id *struct {
-		Filen uint16
-		Blkn  uint16
-	}
-}
-
-func (o *CreateBlockOpt) WithMetaloc(s Location) *CreateBlockOpt {
-	if o.Loc != nil {
-		o.Loc.Metaloc = s
-	} else {
-		o.Loc = &struct {
-			Metaloc  Location
-			Deltaloc Location
-		}{Metaloc: s}
-	}
-	return o
-}
-
-func (o *CreateBlockOpt) WithDetaloc(s Location) *CreateBlockOpt {
-	if o.Loc != nil {
-		o.Loc.Deltaloc = s
-	} else {
-		o.Loc = &struct {
-			Metaloc  Location
-			Deltaloc Location
-		}{Deltaloc: s}
-	}
-	return o
-}
-
-func (o *CreateBlockOpt) WithFileIdx(s uint16) *CreateBlockOpt {
-	if o.Id != nil {
-		o.Id.Filen = s
-	} else {
-		o.Id = &struct {
-			Filen uint16
-			Blkn  uint16
-		}{Filen: s}
-	}
-	return o
-}
-
-func (o *CreateBlockOpt) WithBlkIdx(s uint16) *CreateBlockOpt {
-	if o.Id != nil {
-		o.Id.Blkn = s
-	} else {
-		o.Id = &struct {
-			Filen uint16
-			Blkn  uint16
-		}{Blkn: s}
-	}
-	return o
-}
-
 func WriteString(str string, w io.Writer) (n int64, err error) {
 	// Use UnsafeStringToBytes to avoid allocation: string -> []byte conversion
 	// This is safe because:

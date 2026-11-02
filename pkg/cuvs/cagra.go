@@ -29,6 +29,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -1164,9 +1165,10 @@ func (gi *GpuCagra[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap 
 	return nil
 }
 
-// SearchWithFilter runs a filtered K-NN search. predsJSON is a JSON predicate
+// SearchWithFilter runs a filtered K-NN search; mem ANDs a primary-key membership
+// into the filter mask (zero value: none). predsJSON is a JSON predicate
 // array; passing "" yields unfiltered behavior identical to Search().
-func (gi *GpuCagra[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
+func (gi *GpuCagra[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string, mem docfilter.CMembership) (SearchResult, error) {
 	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1192,6 +1194,7 @@ func (gi *GpuCagra[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
@@ -1219,7 +1222,7 @@ func (gi *GpuCagra[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 
 // SearchQuantizeWithFilter runs a filtered K-NN search with base-typed (B)
 // queries; the index converts B to storage T (copy / quantize / f32->f16 cast).
-func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (SearchResult, error) {
+func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string, mem docfilter.CMembership) (SearchResult, error) {
 	if gi.cCagra == nil {
 		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1245,6 +1248,7 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
@@ -1275,7 +1279,7 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 // SearchQuantizeAsyncWithParams + the predicate-eval semantics of
 // SearchQuantizeWithFilter. Used by MultiGpuCagra to dispatch per-shard
 // filtered searches in parallel. The index converts B to storage T.
-func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) (uint64, error) {
+func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string, mem docfilter.CMembership) (uint64, error) {
 	if gi.cCagra == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
@@ -1301,6 +1305,7 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries 
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
 		unsafe.Pointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
@@ -1311,6 +1316,115 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries 
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
+	return uint64(jobID), nil
+}
+
+// PrepareBitset builds the filter masks of a search once, from predsJSON and mem
+// as SearchQuantizeWithFilter, for SearchQuantizeWithBitset calls on this index
+// to reuse. mem is not referenced after it returns. The caller frees the bitset.
+func (gi *GpuCagra[B, Q]) PrepareBitset(predsJSON string, mem docfilter.CMembership) (*Bitset, error) {
+	if gi.cCagra == nil {
+		return nil, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	var errmsg *C.char
+	cPreds := C.CString(predsJSON)
+	defer C.free(unsafe.Pointer(cPreds))
+	ptr := C.gpu_cagra_prepare_bitset(gi.cCagra, cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)}, unsafe.Pointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return &Bitset{ptr: C.gpu_bitset_c(ptr)}, nil
+}
+
+// SearchQuantizeWithBitset is SearchQuantizeWithFilter on a bitset from
+// PrepareBitset of this index.
+func (gi *GpuCagra[B, Q]) SearchQuantizeWithBitset(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, bitset *Bitset) (SearchResult, error) {
+	if gi.cCagra == nil {
+		return SearchResult{}, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return SearchResult{}, nil
+	}
+
+	sp = gi.adjustSearchParams(sp, limit)
+
+	var errmsg *C.char
+	cSP := C.cagra_search_params_t{
+		itopk_size:   C.size_t(sp.ItopkSize),
+		search_width: C.size_t(sp.SearchWidth),
+	}
+	res := C.gpu_cagra_search_quantize_with_bitset(
+		gi.cCagra,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		bitset.handle(),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	runtime.KeepAlive(bitset)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if res.result_ptr == nil {
+		return SearchResult{}, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]int64, totalElements)
+	distances := make([]float32, totalElements)
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+	C.gpu_cagra_free_result(res.result_ptr)
+
+	return SearchResult{Neighbors: neighbors, Distances: distances}, nil
+}
+
+// SearchQuantizeWithBitsetAsync is SearchQuantizeWithFilterAsync on a bitset
+// from PrepareBitset of this index; collect the result with SearchWait.
+func (gi *GpuCagra[B, Q]) SearchQuantizeWithBitsetAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, bitset *Bitset) (uint64, error) {
+	if gi.cCagra == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+
+	sp = gi.adjustSearchParams(sp, limit)
+
+	var errmsg *C.char
+	cSP := C.cagra_search_params_t{
+		itopk_size:   C.size_t(sp.ItopkSize),
+		search_width: C.size_t(sp.SearchWidth),
+	}
+	jobID := C.gpu_cagra_search_quantize_with_bitset_async(
+		gi.cCagra,
+		unsafe.Pointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		bitset.handle(),
+		unsafe.Pointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	runtime.KeepAlive(bitset)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(unsafe.Pointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
 	return uint64(jobID), nil
 }
 

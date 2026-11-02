@@ -742,16 +742,39 @@ func TestInsertRowAliasAllDefaultExcludesGeneratedSourceSlots(t *testing.T) {
 	require.True(t, sawSource, "the actual fallback plan must contain its value scan")
 }
 
-func TestLegacyOndupNoKeyCorrelatedAdmission(t *testing.T) {
+func TestLegacyOndupUniqueKeyCorrelatedAdmission(t *testing.T) {
 	for _, rhs := range []string{"(select fake_pk_t.b)", "(select b)", "(select (select fake_pk_t.b))"} {
 		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 			"insert into constraint_test.fake_pk_t(a,b) values(1,'x') on duplicate key update b="+rhs)
-		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, rhs)
+		require.NoError(t, err, rhs)
 	}
 	for _, rhs := range []string{"(select 'safe')", "(select fake_pk_t.b from constraint_test.fake_pk_t as fake_pk_t limit 1)"} {
 		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 			"insert into constraint_test.fake_pk_t(a,b) values(1,'x') on duplicate key update b="+rhs)
 		require.NoError(t, err, rhs)
+	}
+}
+
+func TestLegacyOndupMainCorrelatedCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sql       string
+		badColumn bool
+	}{
+		{"keyed_correlated", "insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(select dept.loc)", false},
+		{"keyed_invalid_sibling", "insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(select concat(missing_column,dept.loc))", true},
+		{"no_key_correlated", "insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a=(select fake_pk_no_unique_gen.a)", false},
+		{"no_key_invalid_sibling", "insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a=(select concat(missing_column,fake_pk_no_unique_gen.a))", false},
+		{"no_key_prepared_invalid_sibling", "prepare odku_scope_stmt from insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a=(select concat(missing_column,fake_pk_no_unique_gen.a,?))", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			if tc.badColumn {
+				require.ErrorContains(t, err, "'missing_column'")
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }
 
@@ -790,7 +813,11 @@ func TestLegacyOndupCorrelationSurvivesInvalidSibling(t *testing.T) {
 		for _, args := range []string{table + "." + column + ",missing_column", "missing_column," + table + "." + column, column + ",missing_column", "missing_column," + column} {
 			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 				"insert into constraint_test."+table+insert+" on duplicate key update "+column+"=(select concat("+args+"))")
-			require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, table, args)
+			if table == "dept" {
+				require.ErrorContains(t, err, "missing_column", table, args)
+			} else {
+				require.NoError(t, err, table, args)
+			}
 		}
 	}
 }
@@ -804,7 +831,7 @@ func TestLegacyOndupDatabaseQualifiedLocalScope(t *testing.T) {
 	for _, from := range []string{"", " from constraint_test.emp as dept limit 1"} {
 		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(select concat(constraint_test.dept.loc,(select 'x'))"+from+")")
-		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+		require.NoError(t, err)
 	}
 }
 
@@ -822,20 +849,24 @@ func TestLegacyOndupCanonicalAdmissionScope(t *testing.T) {
 			require.NoError(t, err, clause, alias)
 		}
 	}
-	for _, rhs := range []string{
-		"(select concat(missing_column,loc) from constraint_test.emp limit 1)",
-		"(select concat(loc,missing_column) from constraint_test.emp limit 1)",
-		"(select ifnull(missing_column,loc,1) from constraint_test.emp limit 1)",
-		"(select (missing_column,loc)=(1,2,3) from constraint_test.emp limit 1)",
-		"(select match(missing_column,dept.loc) against(missing_pattern) from constraint_test.emp limit 1)",
-		"(select concat(empno,dept.loc) from constraint_test.emp e join constraint_test.emp e2 on e.empno=e2.empno limit 1)",
-		"(select loc as loc order by loc)",
-		"(select 'local' as loc where loc='NY' order by loc)",
-		"(select (select dept.loc) from constraint_test.emp limit 1)",
+	for _, tc := range []struct{ rhs, errorContains string }{
+		{"(select concat(missing_column,loc) from constraint_test.emp limit 1)", "missing_column"},
+		{"(select concat(loc,missing_column) from constraint_test.emp limit 1)", "missing_column"},
+		{"(select ifnull(missing_column,loc,1) from constraint_test.emp limit 1)", "ifnull function need two args"},
+		{"(select (missing_column,loc)=(1,2,3) from constraint_test.emp limit 1)", "different length"},
+		{"(select match(missing_column,dept.loc) against(missing_pattern) from constraint_test.emp limit 1)", "missing_pattern"},
+		{"(select concat(empno,dept.loc) from constraint_test.emp e join constraint_test.emp e2 on e.empno=e2.empno limit 1)", "ambiguous column"},
+		{"(select loc as loc order by loc)", ""},
+		{"(select 'local' as loc where loc='NY' order by loc)", ""},
+		{"(select (select dept.loc) from constraint_test.emp limit 1)", ""},
 	} {
 		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
-			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+rhs)
-		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, rhs)
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+tc.rhs)
+		if tc.errorContains == "" {
+			require.NoError(t, err, tc.rhs)
+		} else {
+			require.ErrorContains(t, err, tc.errorContains, tc.rhs)
+		}
 	}
 }
 
@@ -848,37 +879,17 @@ func TestLegacyOndupAdmissionCTEOwnership(t *testing.T) {
 			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+rhs)
 		require.NoError(t, err, rhs)
 	}
-	for _, rhs := range []string{
-		"(with q as (select dept.loc as x) select x from q)",
-		"(with q as (select concat(missing_column,dept.loc) as x) select x from q)",
-	} {
-		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
-			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+rhs)
-		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, rhs)
-	}
-	// Recovery in the discarded admission plan must not make the real CTE valid.
 	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(with q as (select dept.loc as x) select x from q)")
+	require.NoError(t, err)
+	_, err = runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(with q as (select concat(missing_column,dept.loc) as x) select x from q)")
+	require.ErrorContains(t, err, "missing_column")
+	// Recovery in the discarded admission plan must not make the real CTE valid.
+	_, err = runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
 		"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(with q as (select missing_column as x) select x from q)")
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), odkuTargetCorrelatedSubqueryCause)
-}
-
-func TestOdkuAdmissionRestoresSharedCTEAST(t *testing.T) {
-	original := &tree.CTE{}
-	ref := &CTERef{ast: original, hasNestedRef: true, hasNestedUse: true,
-		occurrences: []cteOccurrence{{rootID: 99}}}
-	ctx := NewBindContext(nil, nil)
-	ctx.cteByName = map[string]*CTERef{"q": ref}
-	restore := snapshotWindowValidationCTEState(ctx, true)
-	require.NotSame(t, original, ref.ast)
-	require.Empty(t, ref.occurrences)
-	ref.ast.Name = &tree.AliasClause{Alias: "probe_only"}
-	restore()
-	require.Same(t, original, ref.ast)
-	require.Nil(t, original.Name)
-	require.Equal(t, int32(99), ref.occurrences[0].rootID)
-	require.True(t, ref.hasNestedRef)
-	require.True(t, ref.hasNestedUse)
 }
 
 func TestLegacyOndupWholeRHSAdmission(t *testing.T) {
@@ -888,17 +899,21 @@ func TestLegacyOndupWholeRHSAdmission(t *testing.T) {
 			column, insert = "a", "(a) values(1)"
 		}
 		outer := "(select " + table + "." + column + ")"
-		for _, rhs := range []string{
-			"concat(missing_column," + outer + ")", "concat(" + outer + ",missing_column)",
-			"ifnull(1,2," + outer + ")", "cast(" + outer + " as char(256))",
-			"row_number() over(order by " + outer + ")",
-			"concat(missing_column,(select 'local')," + outer + ")",
-			"concat(missing_column," + outer + ",(select 'local'))",
+		for _, tc := range []struct{ rhs, keyedError string }{
+			{"concat(missing_column," + outer + ")", "missing_column"}, {"concat(" + outer + ",missing_column)", "missing_column"},
+			{"ifnull(1,2," + outer + ")", "ifnull function need two args"}, {"cast(" + outer + " as char(256))", "MaxCharLen"},
+			{"row_number() over(order by " + outer + ")", "cannot bind window"},
+			{"concat(missing_column,(select 'local')," + outer + ")", "missing_column"},
+			{"concat(missing_column," + outer + ",(select 'local'))", "missing_column"},
 		} {
 			for _, prefix := range []string{"", "prepare whole_rhs from "} {
 				_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
-					prefix+"insert into constraint_test."+table+insert+" on duplicate key update "+column+"="+rhs)
-				require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, table, rhs)
+					prefix+"insert into constraint_test."+table+insert+" on duplicate key update "+column+"="+tc.rhs)
+				if table == "dept" {
+					require.ErrorContains(t, err, tc.keyedError, tc.rhs)
+				} else {
+					require.NoError(t, err, tc.rhs)
+				}
 			}
 		}
 	}
@@ -935,11 +950,11 @@ func TestLegacyOndupAdmissionRecoveryDoesNotRebindVisitedChildren(t *testing.T) 
 				p, err := BuildPlan(ctx, stmts[0], false)
 				if keyed {
 					require.ErrorContains(t, err, "unknown function 'missing_fn'")
-					require.Equal(t, wrappers+1, ctx.udfCalls, "one admission visit per wrapper plus the ordinary binding failure")
+					require.Equal(t, 1, ctx.udfCalls, "ordinary binding stops at the first unresolved function")
 				} else {
 					require.NoError(t, err, "unreachable uncorrelated UPDATE keeps its legacy admission")
 					require.NotNil(t, p)
-					require.Equal(t, wrappers, ctx.udfCalls, "the discarded admission probe visits each wrapper once")
+					require.Zero(t, ctx.udfCalls, "the unreachable no-key update arm is not bound")
 				}
 			})
 		}

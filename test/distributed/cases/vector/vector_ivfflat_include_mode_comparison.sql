@@ -29,7 +29,7 @@ explain select id, title, category
 from phase9_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 3 by rank with option 'mode=include';
+limit 3 by rank with option 'mode=iterative';
 
 -- @separator:table
 -- @regex("Vector Index Scan", true)
@@ -56,7 +56,7 @@ select id, title, category
 from phase9_main
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 3 by rank with option 'mode=include';
+limit 3 by rank with option 'mode=iterative';
 
 -- @separator:table
 select id, title, category

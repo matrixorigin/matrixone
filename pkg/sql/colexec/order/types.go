@@ -344,20 +344,6 @@ func (ctr *container) clearRecoveryCapacity(
 	return nil
 }
 
-func growOrderSlice[T any](
-	values []T,
-	owner *mpool.MPool,
-	required int,
-	proc *process.Process,
-	account *mpool.AllocationAccount,
-	site mpool.AllocationSite,
-) ([]T, *mpool.MPool, error) {
-	return growOrderSliceWithCapacityClass(
-		values, owner, required, proc, account, site,
-		mpool.AllocationCapacityClassDefault,
-	)
-}
-
 func growOrderSliceWithCapacityClass[T any](
 	values []T,
 	owner *mpool.MPool,
@@ -524,10 +510,6 @@ func orderTerminalCapacityError(ctx context.Context, err error) error {
 		)
 	}
 	return err
-}
-
-func (order *Order) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (order *Order) cleanBatch(proc *process.Process) {

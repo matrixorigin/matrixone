@@ -60,26 +60,29 @@ function inventory(text) {
   return records;
 }
 
-function goChanges(files) {
-  if (!files?.length) return null;
+function goChanges(files, report = () => {}) {
+  if (!files?.length) { report('no verified changed inputs'); return null; }
   const changed = [];
   for (const file of files) {
-    if (file.status === 'T') return null;
+    if (file.status === 'T') { report(`file type changed: ${JSON.stringify(file.filename.slice(0, 200))}`); return null; }
     if (/^pkg\/.*\.go$/.test(file.filename) &&
         !/(^|\/)(testdata|fixtures)\//i.test(file.filename)) {
       changed.push(file.filename);
     } else if (!['docs', 'bvt'].includes(category(file.filename))) {
+      report(`input requires full analysis: ${JSON.stringify(file.filename.slice(0, 200))}`);
       return null;
     }
   }
   // No Go change means the cheap policy check still runs, but these analyzers
   // have no changed inputs. Keep a nonempty full scan rather than inventing a
   // separate successful-empty mode in this first increment.
+  if (!changed.length) report('no changed Go inputs');
   return changed.length ? changed : null;
 }
 
-function selectPackages(files, records, root) {
-  const changed = goChanges(files);
+function selectPackages(files, records, root, report = () => {}) {
+  const full = reason => { report(reason); return ['./...']; };
+  const changed = goChanges(files, report);
   if (!changed || !records.length) return ['./...'];
   const owners = new Map();
   const variants = new Map();
@@ -87,7 +90,7 @@ function selectPackages(files, records, root) {
   for (const record of records) {
     const relative = path.relative(root, record.dir);
     if (!relative || relative.startsWith('..') || path.isAbsolute(relative) ||
-        !/^[\w./-]+$/.test(relative)) return ['./...'];
+        !/^[\w./-]+$/.test(relative)) return full('package owner is outside the supported source layout');
     const owner = `./${relative}`;
     owners.set(relative, owner);
     variants.set(record.id, owner);
@@ -100,7 +103,7 @@ function selectPackages(files, records, root) {
       if (!dependency) {
         // A main-module test variant missing from discovery is not a known
         // external dependency. Do not guess how its package ID maps.
-        if (imported.includes(' [')) return ['./...'];
+        if (imported.includes(' [')) return full('test variant is missing from the verified graph');
         continue;
       }
       if (!reverse.has(dependency)) reverse.set(dependency, new Set());
@@ -111,7 +114,7 @@ function selectPackages(files, records, root) {
   const production = [];
   for (const file of changed) {
     const owner = owners.get(path.posix.dirname(file));
-    if (!owner) return ['./...']; // includes an entirely removed package
+    if (!owner) return full('changed package is missing from the verified graph');
     selected.add(owner);
     if (!file.endsWith('_test.go')) production.push(owner);
   }
@@ -125,7 +128,8 @@ function selectPackages(files, records, root) {
       }
     }
   }
-  return selected.size && selected.size < owners.size / 2 ? [...selected].sort() : ['./...'];
+  return selected.size && selected.size < owners.size / 2 ? [...selected].sort() :
+    full(`affected closure reaches full-scan threshold (${selected.size}/${owners.size} packages)`);
 }
 
 function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {}) {
@@ -136,7 +140,9 @@ function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {
     env: { ...env, GOWORK: 'off' }, stdio: ['ignore', 'pipe', 'inherit'],
   });
   const records = inventory(text);
-  let files = env.SCA_FULL === '1' ? null : immutableChanges({ cwd, env });
+  const report = reason => console.error(`SCA full-scan reason: ${reason}`);
+  let files = env.SCA_FULL === '1' ? null : immutableChanges({ cwd, env, report });
+  if (env.SCA_FULL === '1') report('SCA_FULL=1');
   if (files) {
     // Git status omits ignored files, but Go still compiles an ignored .go
     // file inside a package. Require every real source input to be committed
@@ -152,14 +158,17 @@ function plan({ cwd = process.cwd(), env = process.env, run = execFileSync } = {
       }));
       if (records.some(p => p.sources.some(source =>
         !tracked.has(path.relative(cwd, path.resolve(p.dir, source)).split(path.sep).join('/'))))) {
+        report('Go graph contains untracked, generated or nonregular source inputs');
         files = null;
       }
     } catch {
+      report('tracked source inventory unavailable');
       files = null;
     }
   }
-  const selected = selectPackages(files, records, cwd);
-  console.error(`SCA selection: ${selected[0] === './...' ? 'full graph' : `${selected.length} packages`}`);
+  const selected = selectPackages(files, records, cwd, report);
+  const total = new Set(records.map(p => p.dir)).size;
+  console.error(`SCA selection: ${selected[0] === './...' ? 'full graph' : `${selected.length}/${total} packages`}`);
   return selected;
 }
 

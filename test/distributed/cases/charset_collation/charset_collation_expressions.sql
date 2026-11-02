@@ -131,6 +131,9 @@ SELECT s3 COLLATE utf8_unicode_ci, s3 COLLATE utf8mb3_unicode_ci,
 SELECT s3 COLLATE utf8mb4_unicode_ci FROM charset_values;
 SELECT s4 COLLATE utf8_unicode_ci FROM charset_values;
 SELECT _utf8mb4'a' COLLATE utf8_unicode_ci;
+-- The utf8mb4 introducer name is matched case-insensitively.
+SELECT _utf8mb4'test', _UTF8MB4'test', _UtF8mB4'test';
+SELECT DATE_FORMAT('2024-01-15', _UTF8MB4'%Y-%m');
 
 -- A scalar subquery retains the projected expression's comparison domain.
 CREATE TABLE scalar_values (id INT PRIMARY KEY, s VARCHAR(20) COLLATE utf8mb4_unicode_ci);

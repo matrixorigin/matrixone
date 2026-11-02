@@ -825,12 +825,12 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 	checkStrLen := func(s string, binaryLiteral bool) ([]byte, error) {
 		destLen := int(typ.Width)
-		// CHAR/VARCHAR width is enforced at runtime by the assignment cast
-		// (cast_assign), which honors sql_mode, the trailing-space exemption and
-		// the INSERT IGNORE downgrade. Excluding them here avoids a plan-time
-		// hard rejection that would ignore sql_mode.
+		// CHAR/VARCHAR/TEXT/BLOB width is enforced at runtime by the assignment
+		// cast (cast_assign), which honors sql_mode, the trailing-space exemption
+		// and the INSERT IGNORE downgrade, and measures BLOB in bytes. Excluding
+		// them here avoids a plan-time hard rejection that would ignore sql_mode.
 		checkWidth := typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
-			typ.Oid != types.T_text && typ.Oid != types.T_datalink &&
+			typ.Oid != types.T_text && typ.Oid != types.T_blob && typ.Oid != types.T_datalink &&
 			(typ.Oid != types.T_binary || binaryLiteral) && destLen != 0 && !typ.Oid.IsArrayRelate()
 		if checkWidth {
 			srcLen := utf8.RuneCountInString(s)
@@ -883,7 +883,7 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 		return
 
 	case tree.P_int64, tree.P_uint64, tree.P_char, tree.P_decimal, tree.P_float64:
-		s := numVal.String()
+		s := insertLiteralText(numVal)
 		if val, err = checkStrLen(s, false); err != nil {
 			canInsert = false
 		}
@@ -916,12 +916,27 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 	return
 }
 
+// Integer spelling carries logical precision, but assignment converts the
+// numeric value to text. Keep that spelling on the AST for metadata consumers.
+func insertLiteralText(numVal *tree.NumVal) string {
+	switch numVal.ValType {
+	case tree.P_int64:
+		value, _ := numVal.Int64()
+		return strconv.FormatInt(value, 10)
+	case tree.P_uint64:
+		value, _ := numVal.Uint64()
+		return strconv.FormatUint(value, 10)
+	default:
+		return numVal.String()
+	}
+}
+
 func SetInsertValueJSON(proc *process.Process, numVal *tree.NumVal) (canInsert bool, val []byte, err error) {
 	canInsert = true
 	switch numVal.ValType {
 	default:
 		var json bytejson.ByteJson
-		originStr := numVal.String()
+		originStr := insertLiteralText(numVal)
 		json, err = types.ParseStringToByteJson(originStr)
 		if err != nil {
 			return false, nil, err
@@ -1035,8 +1050,12 @@ func SetInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, typ *ty
 	appendWithStr := func(str string) (types.Decimal64, error) {
 		return types.ParseDecimal64(str, typ.Width, typ.Scale)
 	}
+	// Integer family literals (int/uint/hexnum/bit) must observe the same
+	// DECIMAL(width, scale) bound as string literals. Routing them through
+	// ParseDecimal64 keeps int writes from bypassing precision checking
+	// (#30367).
 	appendWithUnSigned := func(v uint64) (types.Decimal64, error) {
-		return types.Decimal64(v).Scale(typ.Scale)
+		return appendWithStr(strconv.FormatUint(v, 10))
 	}
 
 	switch numVal.ValType {
@@ -1045,7 +1064,7 @@ func SetInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, typ *ty
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatInt(val, 10))
 		return
 
 	case tree.P_uint64:
@@ -1053,7 +1072,7 @@ func SetInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, typ *ty
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatUint(val, 10))
 		return
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:
@@ -1088,9 +1107,11 @@ func SetInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, typ *t
 	appendWithStr := func(str string) (types.Decimal128, error) {
 		return types.ParseDecimal128(str, typ.Width, typ.Scale)
 	}
+	// See SetInsertValueDecimal64: integer family literals must observe the
+	// DECIMAL(width, scale) bound instead of bypassing precision checking
+	// via Scale() (#30367).
 	appendWithUnSigned := func(v uint64) (types.Decimal128, error) {
-		result := types.Decimal128{B0_63: v, B64_127: 0}
-		return result.Scale(typ.Scale)
+		return appendWithStr(strconv.FormatUint(v, 10))
 	}
 
 	switch numVal.ValType {
@@ -1099,14 +1120,14 @@ func SetInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, typ *t
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatInt(val, 10))
 		return
 	case tree.P_uint64:
 		val, ok := numVal.Uint64()
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatUint(val, 10))
 		return
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:

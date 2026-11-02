@@ -154,7 +154,23 @@ const (
 	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
 	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
 	MORPCVersion118    int64 = 118 // transactional database defaults and table charset alteration
-	MORPCLatestVersion       = MORPCVersion118
+	MORPCVersion119    int64 = 119 // coordinator-owned parameterized subquery programs
+	MORPCVersion120    int64 = 120 // current-session KILL authorization and proxy disconnect cleanup
+	MORPCVersion121    int64 = 121 // exact unsigned DECIMAL DIV result domain
+	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
+	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
+	MORPCVersion124    int64 = 124 // exact fractional TIMESTAMPADD SECOND intervals
+	MORPCVersion125    int64 = 125 // LOAD IGNORE foreign-key row rejection diagnostics
+	MORPCVersion126    int64 = 126 // parser-derived information_schema.VIEWS definitions
+	MORPCVersion127    int64 = 127 // IndexSearchScan internal_topk / max_internal_topk search knobs
+	MORPCVersion128    int64 = 128 // category-preserving mixed JSON/numeric comparisons
+	MORPCVersion129    int64 = 129 // selected JSON ELT and opaque text expression execution
+	MORPCVersion130    int64 = 130 // incomplete temporal string overloads and rejection diagnostics
+	MORPCVersion131    int64 = 131 // exact weighted percentile aggregate remote dispatch
+	MORPCVersion132    int64 = 132 // decimal float rounding and strict textual float conversions
+	MORPCVersion133    int64 = 133 // typed JSON MIN/MAX aggregate comparison
+	MORPCVersion134    int64 = 134 // ordered ODKU result summary and captured session LAST_INSERT_ID baseline
+	MORPCLatestVersion       = MORPCVersion134
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -1,3 +1,7 @@
+-- Rejection and statement atomicity below require an explicit strict mode.
+set @enum_1_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+
 create table typec(a int,b enum('4','3','2','1'));
 insert into typec values(1,1);
 insert into typec values(2,'1');
@@ -51,8 +55,10 @@ select * from t4;
 delete from t4;
 insert into t5 values(3);
 insert into t4 select * from t5;
+select count(*) from t4;
 insert into t6 values('pkg');
 insert into t4 select * from t6;
+select count(*) from t4;
 drop table t4;
 drop table t5;
 drop table t6;
@@ -103,6 +109,9 @@ create table t1(name varchar(25));
 insert into t1 values ('A'),('B'),('C');
 select * from t1;
 alter table t1 modify column name enum('A','B');
+select * from t1 order by name;
 alter table t1 modify column name enum('A','B','C');
 select * from t1;
 drop table t1;
+
+set session sql_mode = @enum_1_saved_sql_mode;

@@ -181,28 +181,9 @@ func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, ma
 	}
 	defer closeOnError(&err, f)
 
-	var reader io.Reader
-	reader = f
-
-	if min != nil {
-		pos, err := f.Seek(*min, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
-		if pos != *min {
-			return nil, moerr.NewEmptyRangeNoCtx(key)
-		}
-	}
-
-	if max != nil {
-		limit := *max
-		if min != nil {
-			limit -= *min
-		}
-		if limit <= 0 {
-			return nil, moerr.NewEmptyRangeNoCtx(key)
-		}
-		reader = io.LimitReader(reader, limit)
+	reader, err := readObjectRange(f, key, min, max)
+	if err != nil {
+		return nil, err
 	}
 
 	adviseOffset := int64(0)
@@ -306,10 +287,19 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 		}
 	}
 
-	if err := os.Rename(tempFile.Name(), path); err != nil {
-		return err
+	if exclusiveWrite(ctx) {
+		if err := os.Link(tempPath, path); err != nil {
+			if os.IsExist(err) {
+				return moerr.NewFileAlreadyExistsNoCtx(key)
+			}
+			return err
+		}
+	} else {
+		if err := os.Rename(tempPath, path); err != nil {
+			return err
+		}
+		tempRenamed = true
 	}
-	tempRenamed = true
 
 	return nil
 }

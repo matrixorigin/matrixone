@@ -16,6 +16,7 @@ package ivfflat
 
 import (
 	"context"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -51,6 +52,12 @@ func ivfUint64Expr(value uint64) *plan.Expr {
 		Typ:  plan.Type{Id: int32(types.T_uint64)},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: value}}},
 	}
+}
+
+// ivfTopKLimitExpr is the limit of a storage Top-K: value, at most the largest int, which
+// keeps every row.
+func ivfTopKLimitExpr(value uint64) *plan.Expr {
+	return ivfUint64Expr(min(value, uint64(math.MaxInt)))
 }
 
 func ivfFloat64Expr(value float64) *plan.Expr {

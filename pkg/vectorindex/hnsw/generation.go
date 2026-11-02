@@ -83,10 +83,14 @@ func genChecksums(res executor.Result) (fp uint64, count int64) {
 // table's physical id (a new index table under the same name). This in-place rebuild keeps the
 // table stable and relies on the checksum generation for freshness, so we force a plain row delete.
 func ClearIndexSqls(tblcfg vectorindex.IndexTableConfig) []string {
-	return []string{
+	sqls := []string{
 		"DELETE FROM " + sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.MetadataTable) + " WHERE TRUE",
 		"DELETE FROM " + sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.IndexTable) + " WHERE TRUE",
 	}
+	if tblcfg.DictTable != "" {
+		sqls = append(sqls, "DELETE FROM "+sqlquote.QualifiedIdent(tblcfg.DbName, tblcfg.DictTable)+" WHERE TRUE")
+	}
+	return sqls
 }
 
 // loadHnswGeneration reads the current (checksumFingerprint, modelCount) generation using the

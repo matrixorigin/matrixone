@@ -22,9 +22,11 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -577,6 +579,62 @@ func TestCollectPrepareDdlSchemas(t *testing.T) {
 			}
 			if testCase.targetSchema != "" {
 				require.Equal(t, testCase.targetSchema, schemas[len(schemas)-1].SchemaName)
+			}
+		})
+	}
+}
+
+func TestCollectPrepareDdlSchemasRenameNamespace(t *testing.T) {
+	lookupErr := errors.New("persisted catalog unavailable")
+	for _, tc := range []struct {
+		name, sql, failName string
+		destinationExists   bool
+		wantIDs             []int64
+		wantNames           []string
+	}{
+		{name: "shadowed source and absent destination", sql: "rename table rn_src to rn_dst", wantIDs: []int64{11, 0}, wantNames: []string{"rn_src", "rn_dst"}},
+		{name: "shadowed existing destination", sql: "rename table rn_src to rn_dst", destinationExists: true, wantIDs: []int64{11, 12}, wantNames: []string{"rn_src", "rn_dst"}},
+		{name: "shadowed chain intermediate", sql: "rename table rn_src to rn_dst, rn_dst to rn_end", wantIDs: []int64{11, 0, 0}, wantNames: []string{"rn_src", "rn_dst", "rn_end"}},
+		{name: "alter keeps temporary dependencies", sql: "alter table rn_src rename to rn_dst", wantIDs: []int64{99, 100}, wantNames: []string{"physical_rn_src", "physical_rn_dst"}},
+		{name: "source lookup error", sql: "rename table rn_src to rn_dst", failName: "rn_src"},
+		{name: "destination lookup error", sql: "rename table rn_src to rn_dst", failName: "rn_dst"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &renameNamespaceCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)),
+				temporary: map[string]*TableDef{
+					"rn_src": {Name: "physical_rn_src", TblId: 99, Version: 90, IsTemporary: true},
+					"rn_dst": {Name: "physical_rn_dst", TblId: 100, Version: 90, IsTemporary: true},
+				},
+				failName: tc.failName, failure: lookupErr,
+			}
+			for i, name := range []string{"rn_src", "rn_dst"} {
+				if i == 1 && !tc.destinationExists {
+					continue
+				}
+				ctx.tables[name] = &TableDef{Name: name, TblId: uint64(11 + i), Version: 30}
+				ctx.objects[name] = &ObjectRef{SchemaName: "tpch", ObjName: name}
+			}
+			statements, err := mysql.Parse(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			schemas, err := collectPrepareDdlSchemas(ctx, statements[0], &planpb.Plan{})
+			if tc.failName != "" {
+				require.ErrorIs(t, err, lookupErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, schemas, len(tc.wantIDs))
+			for i, id := range tc.wantIDs {
+				require.Equal(t, id, schemas[i].Obj)
+				require.Equal(t, tc.wantNames[i], schemas[i].ObjName)
+				if id != 0 {
+					version := int64(30)
+					if id >= 99 {
+						version = 90
+					}
+					require.Equal(t, version, schemas[i].Server)
+				}
 			}
 		})
 	}
@@ -1146,6 +1204,40 @@ type lowerCaseTableNamesCompilerContext struct {
 
 func (c *lowerCaseTableNamesCompilerContext) GetLowerCaseTableNames() int64 {
 	return c.lowerCaseTableNames
+}
+
+func TestBindViewRejectsFutureProtocolBeforePreparedBinding(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+
+	required := defines.MORPCVersion86
+	viewJSON, err := json.Marshal(ViewData{
+		Stmt:                    "create view v as select 1",
+		DefaultDatabase:         "db",
+		RequiredProtocolVersion: &required,
+	})
+	require.NoError(t, err)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
+	_, err = builder.bindView(
+		NewBindContext(builder, nil),
+		&TableDef{ViewSql: &planpb.ViewDef{View: string(viewJSON)}},
+		nil,
+		&ObjectRef{SchemaName: "db", ObjName: "v"},
+		"db",
+		"v",
+		nil,
+	)
+	require.ErrorContains(t, err, "protocol version 86")
 }
 
 func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {

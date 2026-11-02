@@ -15,6 +15,8 @@
 package csvparser
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -26,7 +28,8 @@ import (
 func TestScanRecordMatchesReadFraming(t *testing.T) {
 	for _, tc := range []struct {
 		name, data, terminator, comment, startingBy string
-		header, emptyLines                          bool
+		header, emptyLines, skipWhitespace          bool
+		separator                                   string
 		records                                     int
 		syntaxError                                 bool
 	}{
@@ -36,6 +39,13 @@ func TestScanRecordMatchesReadFraming(t *testing.T) {
 		{name: "starting prefix", data: "skip\nrow:1,\"a\nb\"\nrow:2,x\n", terminator: "\n", startingBy: "row:", records: 2},
 		{name: "empty lines skipped", data: "\n1,x\n\n2,y\n", records: 2},
 		{name: "empty lines retained", data: "\n1,x\n", emptyLines: true, records: 2},
+		{name: "whitespace default data", data: " \nx\n\t", records: 3},
+		{name: "JSONLINE blank records", data: "\n \n\u00a0\nx\n\t", records: 1, skipWhitespace: true},
+		{name: "JSONLINE CRLF and EOF", data: " \r\nx\r\n ", records: 1, skipWhitespace: true},
+		{name: "JSONLINE all whitespace", data: " \n\u2003", skipWhitespace: true},
+		{name: "JSONLINE quoted whitespace", data: "\"\"\n\" \"\n", records: 2, skipWhitespace: true},
+		{name: "JSONLINE tab fields", data: " \t\n", separator: "\t", records: 1, skipWhitespace: true},
+		{name: "JSONLINE header", data: " \nID\n \nx\n", header: true, records: 1, skipWhitespace: true},
 		{name: "empty file"},
 		{name: "no final terminator", data: "1,x", records: 1},
 		{name: "comment without final terminator", data: "1,x", comment: "#", records: 1},
@@ -50,6 +60,10 @@ func TestScanRecordMatchesReadFraming(t *testing.T) {
 				LinesTerminatedBy: tc.terminator, Comment: tc.comment,
 				LinesStartingBy: tc.startingBy, AllowEmptyLine: tc.emptyLines,
 				HeaderSchemaMatch: tc.header, Null: []string{`\N`},
+			}
+			cfg.SkipWhitespaceRecords = tc.skipWhitespace
+			if tc.separator != "" {
+				cfg.FieldsTerminatedBy = tc.separator
 			}
 			// Small buffers exercise framing across input chunks too.
 			read, err := NewCSVParser(&cfg, strings.NewReader(tc.data), 7, tc.header)
@@ -127,4 +141,48 @@ func TestCSVLookaheadPropagatesReadError(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestWhitespaceRecordCancellation(t *testing.T) {
+	for _, scan := range []bool{false, true} {
+		t.Run(fmt.Sprint(scan), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			parser, err := NewCSVParser(&CSVConfig{FieldsTerminatedBy: ",", SkipWhitespaceRecords: true, Context: ctx}, strings.NewReader("x\n \n \n"), 64, false)
+			require.NoError(t, err)
+			require.NoError(t, parser.ScanRecord())
+			cancel()
+			if scan {
+				require.ErrorIs(t, parser.ScanRecord(), context.Canceled)
+			} else {
+				_, err = parser.Read(nil)
+				require.ErrorIs(t, err, context.Canceled)
+			}
+			require.Equal(t, int64(2), parser.Pos(), "buffered whitespace must not consume records after cancellation")
+		})
+	}
+}
+
+func TestUnterminatedEnclosureErrorsAndHeader(t *testing.T) {
+	for _, input := range []string{"\"a", "\"a\\"} {
+		cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: "\"", FieldsEscapedBy: "\\", AllowUnterminatedEnclosureAtEOF: true}
+		p, err := NewCSVParser(&cfg, iotest.TimeoutReader(strings.NewReader(input)), 1, false)
+		require.NoError(t, err)
+		_, err = p.Read(nil)
+		require.ErrorIs(t, err, iotest.ErrTimeout)
+		require.False(t, IsSyntaxError(err))
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: "\"", FieldsEscapedBy: "\\", AllowUnterminatedEnclosureAtEOF: true, Context: ctx}
+	p, err := NewCSVParser(&cfg, strings.NewReader("\"a"), 1, false)
+	require.NoError(t, err)
+	_, err = p.Read(nil)
+	require.ErrorIs(t, err, context.Canceled)
+	cfg.Context = nil
+	cfg.HeaderSchemaMatch = true
+	p, err = NewCSVParser(&cfg, strings.NewReader("\"\\N"), 1, true)
+	require.NoError(t, err)
+	require.ErrorIs(t, p.ScanRecord(), io.EOF)
+	require.Equal(t, []string{"\"n"}, p.Columns())
 }

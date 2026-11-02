@@ -171,10 +171,6 @@ func (tableFunction *TableFunction) Free(proc *process.Process, pipelineFailed b
 	}
 }
 
-func (tableFunction *TableFunction) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanExecutors() {
 	for i := range ctr.executorsForArgs {
 		if ctr.executorsForArgs[i] != nil {

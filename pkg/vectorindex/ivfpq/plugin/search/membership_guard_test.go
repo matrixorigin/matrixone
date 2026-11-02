@@ -23,13 +23,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A required membership filter is refused: the search would return candidates
-// the filter excludes.
-func TestNewReaderRefusesRequiredMembershipFilter(t *testing.T) {
+// A required membership filter that is missing is an error; one that is present is
+// applied by the search, so the request reaches the search setup.
+func TestNewReaderRequiresPresentMembershipFilter(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	r, err := Hooks{}.NewReader(proc, nil, searchplugin.Request{
+	r, err := Hooks{}.NewReader(proc, nil, searchplugin.Request{MembershipFilterRequired: true})
+	require.Nil(t, r)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "got %v", err)
+	require.ErrorContains(t, err, "requires a membership filter that is missing")
+
+	r, err = Hooks{}.NewReader(proc, nil, searchplugin.Request{
 		HasMembershipFilter: true, MembershipFilterRequired: true, MembershipFilter: []byte{1},
 	})
 	require.Nil(t, r)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "got %v", err)
+	require.ErrorContains(t, err, "ivfpq index search is missing source or index metadata")
+	require.True(t, Hooks{}.SupportsMembership())
 }

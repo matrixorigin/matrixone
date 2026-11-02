@@ -1,0 +1,114 @@
+DROP DATABASE IF EXISTS issue_30708_bvt;
+CREATE DATABASE issue_30708_bvt;
+USE issue_30708_bvt;
+DROP TABLE IF EXISTS issue_30708_top;
+CREATE TABLE issue_30708_top (x INT);
+INSERT INTO issue_30708_top VALUES (1), (2);
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top WHERE x = 2
+ORDER BY x DESC
+LIMIT 2;
+➤ x[4,32,0]  𝄀
+2  𝄀
+null
+SELECT COUNT(*) AS source_rows FROM issue_30708_top;
+➤ source_rows[-5,64,0]  𝄀
+2
+SELECT x FROM issue_30708_top WHERE x = 2
+UNION ALL
+SELECT NULL AS x
+ORDER BY x DESC
+LIMIT 2;
+➤ x[4,32,0]  𝄀
+2  𝄀
+null
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top WHERE x = 2
+ORDER BY x DESC;
+➤ x[4,32,0]  𝄀
+2  𝄀
+null
+SELECT NULL AS x
+UNION
+SELECT x FROM issue_30708_top WHERE x = 2
+ORDER BY x DESC;
+➤ x[4,32,0]  𝄀
+2  𝄀
+null
+SELECT x FROM issue_30708_top ORDER BY x DESC LIMIT 2;
+➤ x[4,32,0]  𝄀
+2  𝄀
+1
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top WHERE x = 2
+ORDER BY x DESC
+LIMIT 0;
+➤ x[4,32,0]
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top WHERE x = 2
+ORDER BY x DESC
+LIMIT 1;
+➤ x[4,32,0]  𝄀
+2
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top WHERE x = 2
+ORDER BY x DESC
+LIMIT 3;
+➤ x[4,32,0]  𝄀
+2  𝄀
+null
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top WHERE x = 2
+ORDER BY x DESC
+LIMIT 1 OFFSET 1;
+➤ x[4,32,0]  𝄀
+null
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top WHERE x = 2
+ORDER BY x ASC
+LIMIT 2;
+➤ x[4,32,0]  𝄀
+null  𝄀
+2
+SELECT NULL AS x
+UNION ALL
+SELECT x FROM issue_30708_top WHERE x = 2
+ORDER BY x IS NULL DESC, x DESC
+LIMIT 2;
+➤ x[4,32,0]  𝄀
+null  𝄀
+2
+SELECT NULL AS x UNION ALL SELECT 1 AS x;
+➤ x[-5,64,0]  𝄀
+null  𝄀
+1
+PREPARE issue_30708_stmt FROM
+'SELECT NULL AS x UNION ALL
+SELECT x FROM issue_30708_top WHERE x = ?
+ORDER BY x DESC LIMIT ?';
+SET @issue_30708_key = 2;
+SET @issue_30708_limit = 2;
+EXECUTE issue_30708_stmt USING @issue_30708_key, @issue_30708_limit;
+➤ x[4,32,0]  𝄀
+2  𝄀
+null
+SET @issue_30708_key = 1;
+SET @issue_30708_limit = 1;
+EXECUTE issue_30708_stmt USING @issue_30708_key, @issue_30708_limit;
+➤ x[4,32,0]  𝄀
+1
+SET @issue_30708_key = 99;
+SET @issue_30708_limit = 2;
+EXECUTE issue_30708_stmt USING @issue_30708_key, @issue_30708_limit;
+➤ x[4,32,0]  𝄀
+null
+DEALLOCATE PREPARE issue_30708_stmt;
+DROP TABLE issue_30708_top;
+DROP DATABASE issue_30708_bvt;

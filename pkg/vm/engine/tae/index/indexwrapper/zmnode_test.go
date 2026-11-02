@@ -36,7 +36,6 @@ const (
 )
 
 func TestBlockZoneMapIndex(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	var err error
 	ctx := context.Background()
 

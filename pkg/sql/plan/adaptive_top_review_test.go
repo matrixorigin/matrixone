@@ -45,7 +45,7 @@ func TestAdaptiveTopRejectsVolatileReplayAndCopiesForceMode(t *testing.T) {
 	scan := b.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ctx)
 	projectNode := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scan}, ProjectList: []*plan.Expr{randExpr}}
 	project := b.appendNode(projectNode, ctx)
-	require.False(t, b.adaptiveIvfReplaySafe(project))
+	require.False(t, b.adaptiveVectorReplaySafe(project))
 
 	original := &plan.RankOption{Mode: "auto"}
 	v := &vectorSortContext{

@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -350,7 +351,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		// ANALYZE TABLE rewrites to a derived SELECT, so it follows the same
 		// transaction policy as SELECT.
 		return true, nil
-	case *tree.CheckTableStmt, *tree.ShowProfileStmt:
+	case *tree.CheckTableStmt, *tree.ShowProfileStmt, *tree.CreateExtension, *tree.LoadExtension:
 		// These are not supported, but we let them reach the NotSupported handler
 		// instead of the generic unclassified-transaction error.
 		return true, nil
@@ -378,6 +379,11 @@ func preparedSQLCanBeExecutedInUncommittedTransaction(
 	}
 	preStmt, err := mysql.ParseOneWithSQLMode(ctx, sql, v.(int64), sessionSQLModeForParser(parserSes))
 	if err != nil {
+		// Transaction admission parses PREPARE text before the normal prepare
+		// path. Preserve its ER_PARSE_ERROR contract at this earlier boundary.
+		if _, positioned := err.(mysql.PositionedErr); positioned {
+			err = moerr.NewParseError(ctx, err.Error())
+		}
 		return false, err
 	}
 	defer preStmt.Free()

@@ -24,6 +24,7 @@ package metric
 import (
 	"math"
 	"math/rand"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -44,7 +45,7 @@ func clampUnit(x float64) float64 {
 // remainder, checking each against a plain float64 oracle.
 func TestAMD64KernelsAcrossDims(t *testing.T) {
 	r := rand.New(rand.NewSource(7))
-	dims := []int{1, 3, 4, 7, 8, 9, 15, 16, 17, 32, 33, 64, 65, 100, 105}
+	dims := []int{1, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 105, 127, 128, 129, 1024}
 	for _, n := range dims {
 		a32, b32 := make([]float32, n), make([]float32, n)
 		a64, b64 := make([]float64, n), make([]float64, n)
@@ -117,6 +118,74 @@ func TestAMD64KernelsAcrossDims(t *testing.T) {
 		sp64, err := SphericalDistanceFloat64(a64, b64)
 		require.NoError(t, err)
 		require.InDelta(t, math.Acos(clampUnit(dot))/math.Pi, sp64, rel(1), "SphF64 n=%d", n)
+	}
+}
+
+// TestAMD64DispatchSafety must also run with GOEXPERIMENT=simd GOAMD64=v3
+// and -gcflags='all=-N -l' on hardware without AVX-512. A source-level CPU
+// guard alone is insufficient: debug code generation can initialize SIMD
+// locals before the guard. Keeping each entry separately selectable makes a
+// SIGILL identify the unsafe entry without hiding its siblings.
+// MO_METRIC_NO_AVX512 on an AVX-512 host is only fallback coverage, not this
+// hardware compatibility proof.
+func TestAMD64DispatchSafety(t *testing.T) {
+	testAMD64DispatchSafety(t, "F32", L2DistanceSqFloat32, InnerProductFloat32, L1DistanceFloat32,
+		CosineDistanceF32, CosineSimilarityF32, SphericalDistanceFloat32)
+	testAMD64DispatchSafety(t, "F64", L2DistanceSqFloat64, InnerProductFloat64, L1DistanceFloat64,
+		CosineDistanceF64, CosineSimilarityF64, SphericalDistanceFloat64)
+}
+
+func testAMD64DispatchSafety[T float32 | float64](t *testing.T, suffix string,
+	l2, ip, l1, cosineDistance, cosineSimilarity, spherical func([]T, []T) (T, error)) {
+	t.Helper()
+	for _, kernel := range []struct {
+		name string
+		fn   func([]T, []T) (T, error)
+	}{
+		{"L2sq", l2}, {"IP", ip}, {"L1", l1}, {"CosDist", cosineDistance},
+		{"CosSim", cosineSimilarity}, {"Sph", spherical},
+	} {
+		t.Run(kernel.name+suffix, func(t *testing.T) {
+			for _, n := range []int{0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 1024} {
+				t.Run(strconv.Itoa(n), func(t *testing.T) {
+					a, b := make([]T, n), make([]T, n)
+					var squared, dot, absolute, normA, normB float64
+					for i := range a {
+						// Dyadic inputs keep the oracle exact before sqrt/acos.
+						a[i], b[i] = T(float64(i%7-3)/256), T(float64(i%5-2)/256)
+						x, y := float64(a[i]), float64(b[i])
+						squared += (x - y) * (x - y)
+						dot += x * y
+						absolute += math.Abs(x - y)
+						normA += x * x
+						normB += y * y
+					}
+					var want float64
+					switch kernel.name {
+					case "L2sq":
+						want = squared
+					case "IP":
+						want = -dot
+					case "L1":
+						want = absolute
+					case "CosDist":
+						want = 1
+						if n != 0 {
+							want -= clampUnit(dot / (math.Sqrt(normA) * math.Sqrt(normB)))
+						}
+					case "CosSim":
+						if n != 0 {
+							want = clampUnit(dot / (math.Sqrt(normA) * math.Sqrt(normB)))
+						}
+					case "Sph":
+						want = math.Acos(clampUnit(dot)) / math.Pi
+					}
+					got, err := kernel.fn(a, b)
+					require.NoError(t, err)
+					require.InDelta(t, want, float64(got), 1e-6*(1+math.Abs(want)))
+				})
+			}
+		})
 	}
 }
 

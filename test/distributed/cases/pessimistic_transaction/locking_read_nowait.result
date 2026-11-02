@@ -1,0 +1,64 @@
+drop database if exists locking_read_nowait_db;
+create database locking_read_nowait_db;
+use locking_read_nowait_db;
+create table t(id int primary key, v int);
+insert into t values (1, 10), (2, 20), (3, 30);
+set @saved_lock_timeout = @@session.lock_wait_timeout;
+set session lock_wait_timeout = 1;
+begin;
+select id from t where id = 1 for update;
+➤ id[4,32,0]  𝄀
+1
+use locking_read_nowait_db;
+set @saved_lock_timeout = @@session.lock_wait_timeout;
+set session lock_wait_timeout = 1;
+begin;
+update t set v = 21 where id = 2;
+select id from t where id = 3 for share nowait;
+➤ id[4,32,0]  𝄀
+3
+select id from t where id = 1 for update nowait;
+Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+select id from t where id = 1 for share nowait;
+Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+prepare nowait_stmt from 'select id from t where id = ? for update nowait';
+set @locked_id = 1;
+execute nowait_stmt using @locked_id;
+Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+deallocate prepare nowait_stmt;
+select id from t where id = 1 and id = (select (select t.id)) for update nowait;
+Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+select v from t where id = 2;
+➤ v[4,32,0]  𝄀
+21
+select id from t where id = 3 for update nowait;
+Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set.
+rollback;
+set session lock_wait_timeout = @saved_lock_timeout;
+select id from t where id > 1 order by id for update nowait;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+rollback;
+begin;
+select id from t where id = 1 for share;
+➤ id[4,32,0]  𝄀
+1
+begin;
+select id from t where id = 1 for share nowait;
+➤ id[4,32,0]  𝄀
+1
+rollback;
+rollback;
+begin;
+select id from t order by id for update nowait;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+rollback;
+select sum(v) as original_sum from t;
+➤ original_sum[-5,64,0]  𝄀
+60
+set session lock_wait_timeout = @saved_lock_timeout;
+drop database locking_read_nowait_db;

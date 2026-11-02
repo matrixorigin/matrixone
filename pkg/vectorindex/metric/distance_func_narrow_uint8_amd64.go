@@ -64,8 +64,8 @@ func l2sqUint8SIMD(a, b []uint8) (float64, error) {
 	acc := archsimd.Int32x16{}
 	i := 0
 	for ; i <= n-32; i += 32 {
-		va := archsimd.LoadUint8x32(a[i : i+32]).ExtendToUint16().AsInt16x32()
-		vb := archsimd.LoadUint8x32(b[i : i+32]).ExtendToUint16().AsInt16x32()
+		va := archsimd.LoadUint8x32(a[i : i+32]).ExtendToUint16().BitsToInt16()
+		vb := archsimd.LoadUint8x32(b[i : i+32]).ExtendToUint16().BitsToInt16()
 		d := va.Sub(vb)
 		acc = acc.Add(d.DotProductPairs(d))
 	}
@@ -86,8 +86,8 @@ func innerProductUint8SIMD(a, b []uint8) (float64, error) {
 	acc := archsimd.Int32x16{}
 	i := 0
 	for ; i <= n-32; i += 32 {
-		va := archsimd.LoadUint8x32(a[i : i+32]).ExtendToUint16().AsInt16x32()
-		vb := archsimd.LoadUint8x32(b[i : i+32]).ExtendToUint16().AsInt16x32()
+		va := archsimd.LoadUint8x32(a[i : i+32]).ExtendToUint16().BitsToInt16()
+		vb := archsimd.LoadUint8x32(b[i : i+32]).ExtendToUint16().BitsToInt16()
 		acc = acc.Add(va.DotProductPairs(vb))
 	}
 	sum := sumI32x16(acc)
@@ -151,8 +151,8 @@ func cosineDistanceUint8SIMD(a, b []uint8) (float64, error) {
 	dotA, naA, nbA := archsimd.Int32x16{}, archsimd.Int32x16{}, archsimd.Int32x16{}
 	i := 0
 	for ; i <= n-32; i += 32 {
-		va := archsimd.LoadUint8x32(a[i : i+32]).ExtendToUint16().AsInt16x32()
-		vb := archsimd.LoadUint8x32(b[i : i+32]).ExtendToUint16().AsInt16x32()
+		va := archsimd.LoadUint8x32(a[i : i+32]).ExtendToUint16().BitsToInt16()
+		vb := archsimd.LoadUint8x32(b[i : i+32]).ExtendToUint16().BitsToInt16()
 		dotA = dotA.Add(va.DotProductPairs(vb))
 		naA = naA.Add(va.DotProductPairs(va))
 		nbA = nbA.Add(vb.DotProductPairs(vb))
@@ -184,8 +184,8 @@ func l2sqUint8AVX2(a, b []uint8) (float64, error) {
 	for ; i <= n-32; i += 32 {
 		va := archsimd.LoadUint8x32(a[i : i+32])
 		vb := archsimd.LoadUint8x32(b[i : i+32])
-		dlo := va.GetLo().ExtendToUint16().AsInt16x16().Sub(vb.GetLo().ExtendToUint16().AsInt16x16())
-		dhi := va.GetHi().ExtendToUint16().AsInt16x16().Sub(vb.GetHi().ExtendToUint16().AsInt16x16())
+		dlo := va.GetLo().ExtendToUint16().BitsToInt16().Sub(vb.GetLo().ExtendToUint16().BitsToInt16())
+		dhi := va.GetHi().ExtendToUint16().BitsToInt16().Sub(vb.GetHi().ExtendToUint16().BitsToInt16())
 		acc = acc.Add(dlo.DotProductPairs(dlo)).Add(dhi.DotProductPairs(dhi))
 	}
 	sum := sumI32x8(acc)
@@ -207,8 +207,8 @@ func innerProductUint8AVX2(a, b []uint8) (float64, error) {
 	for ; i <= n-32; i += 32 {
 		va := archsimd.LoadUint8x32(a[i : i+32])
 		vb := archsimd.LoadUint8x32(b[i : i+32])
-		lo := va.GetLo().ExtendToUint16().AsInt16x16().DotProductPairs(vb.GetLo().ExtendToUint16().AsInt16x16())
-		hi := va.GetHi().ExtendToUint16().AsInt16x16().DotProductPairs(vb.GetHi().ExtendToUint16().AsInt16x16())
+		lo := va.GetLo().ExtendToUint16().BitsToInt16().DotProductPairs(vb.GetLo().ExtendToUint16().BitsToInt16())
+		hi := va.GetHi().ExtendToUint16().BitsToInt16().DotProductPairs(vb.GetHi().ExtendToUint16().BitsToInt16())
 		acc = acc.Add(lo).Add(hi)
 	}
 	sum := sumI32x8(acc)
@@ -261,10 +261,10 @@ func cosineDistanceUint8AVX2(a, b []uint8) (float64, error) {
 	for ; i <= n-32; i += 32 {
 		va := archsimd.LoadUint8x32(a[i : i+32])
 		vb := archsimd.LoadUint8x32(b[i : i+32])
-		alo := va.GetLo().ExtendToUint16().AsInt16x16()
-		ahi := va.GetHi().ExtendToUint16().AsInt16x16()
-		blo := vb.GetLo().ExtendToUint16().AsInt16x16()
-		bhi := vb.GetHi().ExtendToUint16().AsInt16x16()
+		alo := va.GetLo().ExtendToUint16().BitsToInt16()
+		ahi := va.GetHi().ExtendToUint16().BitsToInt16()
+		blo := vb.GetLo().ExtendToUint16().BitsToInt16()
+		bhi := vb.GetHi().ExtendToUint16().BitsToInt16()
 		dotA = dotA.Add(alo.DotProductPairs(blo)).Add(ahi.DotProductPairs(bhi))
 		naA = naA.Add(alo.DotProductPairs(alo)).Add(ahi.DotProductPairs(ahi))
 		nbA = nbA.Add(blo.DotProductPairs(blo)).Add(bhi.DotProductPairs(bhi))

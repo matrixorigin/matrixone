@@ -759,7 +759,10 @@ func TestPreparedNumericTemporalContracts(t *testing.T) {
 						require.NoError(t, err)
 						require.Equal(t, tc.want, got, projection)
 					}
-					_, err = readPreparedContractIDs(p.QueryContext(ctx, "not-a-number"))
+					// The rejection witness must stay a hard error: since issue
+					// #30417, invalid DECIMAL text converts leniently with a 1292
+					// warning, so a non-finite literal (still a hard error) is used.
+					_, err = readPreparedContractIDs(p.QueryContext(ctx, "Inf"))
 					require.ErrorContains(t, err, "invalid decimal string")
 					got, err := readPreparedContractIDs(p.QueryContext(ctx, "9007199254740993"))
 					require.NoError(t, err)

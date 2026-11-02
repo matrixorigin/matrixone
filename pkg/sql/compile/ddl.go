@@ -670,6 +670,101 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	return nil
 }
 
+// checkConstraintNamesAvailable reports ER_CHECK_CONSTRAINT_DUP_NAME (3822)
+// when any CHECK of the new table reuses a name already declared by another
+// table in the same database.
+func checkConstraintNamesAvailable(ctx context.Context, dbSource engine.Database, newTable string, checks []*plan.CheckDef) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	wanted := make(map[string]struct{}, len(checks))
+	for _, check := range checks {
+		if check != nil {
+			wanted[strings.ToLower(check.GetName())] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	relNames, err := dbSource.Relations(ctx)
+	if err != nil {
+		return err
+	}
+	for _, relName := range relNames {
+		if relName == newTable {
+			continue
+		}
+		rel, err := dbSource.Relation(ctx, relName, nil)
+		if err != nil {
+			// A sibling may vanish between Relations and Relation when an
+			// internal recreate (e.g. TRUNCATE) drops it in the same
+			// transaction, or when a concurrent DROP commits. Nothing remains
+			// to collide with.
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				continue
+			}
+			return err
+		}
+		def := rel.GetTableDef(ctx)
+		// Physical partitions and index tables borrow their logical owner's
+		// identities. Only logical tables participate in the schema namespace.
+		if def == nil || features.IsPartition(def.FeatureFlag) || features.IsIndexTable(def.FeatureFlag) {
+			continue
+		}
+		checks, err := checkConstraintIdentities(ctx, def)
+		if err != nil {
+			return err
+		}
+		for _, check := range checks {
+			if check == nil {
+				continue
+			}
+			if _, dup := wanted[strings.ToLower(check.GetName())]; dup {
+				return moerr.NewDuplicateCheckConstraintName(ctx, check.GetName())
+			}
+		}
+	}
+	return nil
+}
+
+// validateRenamedCheckConstraintNames rejects a table rename whose CHECK
+// names would collide once generated <table>_chk_<n> names move with the
+// table. An intra-table duplicate (a rewritten generated name landing on an
+// explicit name of the same table) or a name already owned by a sibling
+// breaks per-schema uniqueness and mis-attributes information_schema
+// metadata, so the rename is refused with ER_CHECK_CONSTRAINT_DUP_NAME (3822)
+// before any alter request applies. oldName is passed as the sibling scan's
+// self reference because the catalog still stores the pre-rename name here.
+func (c *Compile) validateRenamedCheckConstraintNames(database, oldName, newName string, checks []*plan.CheckDef) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	renamed := plan2.RenameGeneratedCheckConstraintNames(checks, oldName, newName)
+	return c.validateIntroducedCheckConstraintNames(database, oldName, checks, renamed)
+}
+
+// composeCheckNamesAcrossAlterActions folds table-generated CHECK name moves
+// into the check definitions carried by a rename-column request. A combined
+// `ALTER TABLE t RENAME TO u, RENAME COLUMN a TO b` must present the final
+// names in one set: the rename-column request overwrites the catalog checks,
+// so carrying the pre-rename names would leave the renamed table owning
+// <t>_chk_<n> and block recreating `t`.
+func composeCheckNamesAcrossAlterActions(qry *plan.AlterTable, checks []*plan.CheckDef) []*plan.CheckDef {
+	if len(checks) == 0 {
+		return checks
+	}
+	composed := checks
+	for _, action := range qry.GetActions() {
+		if action == nil {
+			continue
+		}
+		if act, ok := action.Action.(*plan.AlterTable_Action_AlterName); ok {
+			composed = plan2.RenameGeneratedCheckConstraintNames(composed, act.AlterName.OldName, act.AlterName.NewName)
+		}
+	}
+	return composed
+}
+
 func isMissingTableByNameForDropDatabase(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
 }
@@ -1247,6 +1342,14 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					def.IsTemporary = true
 					indexNameMap[orig] = def.Name
 				}
+				stage := &temporaryDDLSession{Session: session, sessionID: c.proc.GetSessionInfo().SessionId,
+					aliases: make(map[temporaryTableAlias]string, len(indexNameMap))}
+				for alias, name := range indexNameMap {
+					stage.AddTempIndexTable(tmpDb, alias, name)
+				}
+				originalCtx := c.proc.Ctx
+				c.proc.Ctx = attachInternalExecutorSession(originalCtx, stage)
+				defer func() { c.proc.Ctx = originalCtx }()
 				for _, idx := range indexTableDef.Indexes {
 					if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
 						idx.IndexTableName = renamed
@@ -1335,6 +1438,11 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				}
 			}
 			oTableDef.Indexes = append(oTableDef.Indexes, indexTableDef.Indexes...)
+			if isTemp {
+				for _, def := range indexInfo.IndexTables {
+					addTemporaryIndexAlias(c.proc.GetSession(), dbName, def.Name, def.Name)
+				}
+			}
 		case *plan.AlterTable_Action_AlterIndex:
 			hasUpdateConstraints = true
 			tableAlterIndex := act.AlterIndex
@@ -1576,6 +1684,26 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				}
 				oldName = tblName
 				newName = physicalTemporaryTableName(c.proc, dbName, newName)
+			} else if trusted, _ := c.proc.Ctx.Value(defines.TrustedCheckConstraintNames{}).(bool); !trusted {
+				// Generated CHECK names follow the table; validate the
+				// resulting set before the rename commits. Temporary tables
+				// mirror CREATE TABLE's exemption, and their generated names
+				// are tied to a session-scoped physical name.
+				// A prior step of the same RENAME TABLE may already have moved
+				// this relation and its generated CHECK names. The logical plan
+				// still carries the original names; admit the transaction's current
+				// identities, which are the ones storage will actually rename.
+				currentDef := rel.GetTableDef(c.proc.Ctx)
+				if currentDef == nil {
+					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
+				catalogChecks, err := checkConstraintIdentities(c.proc.Ctx, currentDef)
+				if err != nil {
+					return err
+				}
+				if err := c.validateRenamedCheckConstraintNames(dbName, oldName, newName, catalogChecks); err != nil {
+					return err
+				}
 			}
 
 			reqs = append(reqs, api.NewRenameTableReq(
@@ -1585,15 +1713,21 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
-			if err := c.requireCheckRenameProtocol(qry.GetCopyTableDef().GetChecks()); err != nil {
+			checks := qry.GetCopyTableDef().GetChecks()
+			if err := c.requireCheckRenameProtocol(checks); err != nil {
 				return err
 			}
+			// When the same ALTER also renames the table, this request must
+			// already carry the final CHECK names; it overwrites the catalog
+			// checks below, so the separate rename-table rewrite must not be
+			// lost.
+			checks = composeCheckNamesAcrossAlterActions(qry, checks)
 			reqs = append(reqs, api.NewRenameColumnReqWithChecks(
 				did, tid,
 				act.AlterRenameColumn.OldName, // origin name
 				act.AlterRenameColumn.NewName, // origin name
 				uint32(act.AlterRenameColumn.SequenceNum),
-				qry.GetCopyTableDef().GetChecks(),
+				checks,
 			))
 
 		case *plan.AlterTable_Action_AlterReplaceDef:
@@ -1820,6 +1954,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
 		}
+		// Index initialization SQL runs before the staged aliases are
+		// published. Lend the schema transaction's owner to nested execution.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, session)
+		defer func() { c.proc.Ctx = originalCtx }()
 		if _, exists := session.GetTempTable(dbName, aliasName); exists {
 			if qry.GetIfNotExists() {
 				return nil
@@ -1949,6 +2088,25 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
 	}
 
+	// MySQL semantics: CHECK constraint names are unique per schema. The
+	// information_schema tables join constraints on
+	// (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) only, so a duplicate name would
+	// attribute another table's CHECK expression to the new table. Validate
+	// both explicit names and generated <table>_chk_<n> names against the
+	// sibling tables before creating.
+	//
+	// Internal recreations that keep an owned source's identity (ALTER ...
+	// COPY replica, partition backing tables, TRUNCATE's drop+create) carry
+	// defines.TrustedCheckConstraintNames and skip this scan: the source of
+	// their CHECK names is replaced or shares ownership, it is not an
+	// unrelated sibling.
+	trustedChecks, _ := c.proc.Ctx.Value(defines.TrustedCheckConstraintNames{}).(bool)
+	if !qry.GetTemporary() && !trustedChecks {
+		if err := c.validateIntroducedCheckConstraintNames(dbName, tblName, nil, qry.GetTableDef().GetChecks()); err != nil {
+			return err
+		}
+	}
+
 	if !c.disableLock && !c.createNamePinsAdmitted {
 		if err = lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
 			c.proc.Error(c.proc.Ctx, "createTable",
@@ -1997,12 +2155,16 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	}
 
 	rollbackTempAlias := false
+	tempIndexAliases := make(map[string]string)
 	if isTemp && session != nil {
 		session.AddTempTable(dbName, aliasName, tblName)
 		rollbackTempAlias = true
 		defer func() {
 			if rollbackTempAlias {
 				session.RemoveTempTable(dbName, aliasName)
+				for indexAlias := range tempIndexAliases {
+					session.RemoveTempTable(dbName, indexAlias)
+				}
 			}
 		}()
 	}
@@ -2270,6 +2432,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			return err
 		}
 
+		if isTemp && session != nil {
+			addTemporaryIndexAlias(session, dbName, def.Name, def.Name)
+			tempIndexAliases[def.Name] = def.Name
+		}
+
 		err = maybeCreateAutoIncrement(
 			c.proc.Ctx,
 			c.proc.GetService(),
@@ -2373,16 +2540,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
-				tableID := newRelation.GetTableID(c.proc.Ctx)
-				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
-				if err != nil {
-					return err
-				}
+				if !c.skipIndexTaskRegistration {
+					tableID := newRelation.GetTableID(c.proc.Ctx)
+					err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
+					if err != nil {
+						return err
+					}
 
-				// register index update for IVFFLAT
-				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
-				if err != nil {
-					return err
+					err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -2598,6 +2766,20 @@ func physicalTemporaryTableName(proc *process.Process, dbName, alias string) str
 		return names.TemporaryTableName(dbName, alias)
 	}
 	return defines.GenTempTableName(proc.Base.SessionInfo.SessionId, dbName, alias)
+}
+
+// temporaryIndexTableName keeps independently-created temporary indexes in
+// the same generated namespace as their root table. Session temporary DDL
+// roots include a generation component; reusing the root prefix lets missing
+// relation retirement discover those index aliases without a table definition.
+func temporaryIndexTableName(proc *process.Process, dbName, rootAlias, rootPhysical, alias string) string {
+	if rootPhysical != "" && strings.HasSuffix(rootPhysical, rootAlias) {
+		prefix := strings.TrimSuffix(rootPhysical, rootAlias)
+		if strings.HasPrefix(prefix, defines.TempTableNamePrefix) {
+			return prefix + alias
+		}
+	}
+	return physicalTemporaryTableName(proc, dbName, alias)
 }
 
 func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {
@@ -2975,7 +3157,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
-		// The nested DROP VIEW participates in lifecycle admission. Enter C/G/D
+		// View replacement participates in lifecycle admission. Enter C/G/D
 		// before taking the database lock; otherwise a fresh replacement appears
 		// to be a retained-lock transaction and spuriously FastFails on G.
 		// Admission still FastFails for locks retained by earlier statements.
@@ -3009,34 +3191,32 @@ func (s *Scope) CreateView(c *Compile) error {
 		return err
 	}
 	var oldRelationID, oldLogicalID uint64
-	if exists && qry.GetReplace() {
-		oldRelation, relationErr := dbSource.Relation(c.proc.Ctx, viewName, nil)
-		if relationErr != nil {
-			return relationErr
-		}
-		oldRelationID = oldRelation.GetTableID(c.proc.Ctx)
-		oldLogicalID = oldRelation.GetTableDef(c.proc.Ctx).GetLogicalId()
-	}
-
 	if exists {
 		if qry.GetIfNotExists() {
 			return nil
 		}
-
-		if qry.GetReplace() {
-			if err = c.runSqlWithOptions(
-				fmt.Sprintf("DROP VIEW IF EXISTS %s", quoteAlterCopyTableName(dbName, viewName)),
-				executor.StatementOption{}.WithDisableLog(),
-			); err != nil {
-				getLogger(s.Proc.GetService()).Error("drop existing view failed",
-					zap.String("databaseName", c.db),
-					zap.String("viewName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
+		if !qry.GetReplace() {
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
+		}
+		oldRelation, relationErr := dbSource.Relation(c.proc.Ctx, viewName, nil)
+		if relationErr != nil {
+			return relationErr
+		}
+		if oldRelation.GetTableDef(c.proc.Ctx).GetViewSql() == nil {
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
+		}
+		oldRelationID = oldRelation.GetTableID(c.proc.Ctx)
+		oldLogicalID = oldRelation.GetTableDef(c.proc.Ctx).GetLogicalId()
+		if oldLogicalID == 0 {
+			oldLogicalID = oldRelationID
+		}
+		// Preserve the lifecycle gate -> relation lock order used by DROP,
+		// while retaining grants and publication membership for replacement.
+		if c.proc.Base.IsFrontend && !c.ignorePublish && !needSkipDbs[dbName] &&
+			(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
+			if err = lockViewMetadataLifecycleGate(c.proc); err != nil {
 				return err
 			}
-		} else {
-			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
 		}
 	}
 
@@ -3049,7 +3229,16 @@ func (s *Scope) CreateView(c *Compile) error {
 		return err
 	}
 
-	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), viewName, append(exeCols, exeDefs...)); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	if exists {
+		// Like ALTER VIEW, replace only the physical catalog row. An ordinary
+		// DROP would revoke grants bound to the view's logical identity.
+		if err = dbSource.Delete(c.proc.Ctx, viewName); err != nil {
+			return err
+		}
+		createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
+	}
+	if err = dbSource.Create(createCtx, viewName, append(exeCols, exeDefs...)); err != nil {
 		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),
@@ -3098,7 +3287,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
 		}
-		if realName, ok := session.GetTempTable(qry.Database, qry.Table); ok {
+		// Index backfill runs internal SQL before the new index aliases are
+		// published. Keep the authenticated owner for both root and index
+		// resolution, as ALTER TABLE already does for its nested SQL.
+		rootAlias := qry.Table
+		rootPhysical := ""
+		if realName, ok := session.GetTempTable(qry.Database, rootAlias); ok {
+			rootPhysical = realName
 			qry.Table = realName
 			qry.TableDef.Name = realName
 		}
@@ -3106,7 +3301,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		for _, def := range qry.Index.IndexTables {
 			orig := def.Name
 			if !defines.IsTempTableName(orig) {
-				def.Name = defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, qry.Database, orig)
+				def.Name = temporaryIndexTableName(c.proc, qry.Database, rootAlias, rootPhysical, orig)
 			}
 			def.TableType = catalog.SystemTemporaryTable
 			def.IsTemporary = true
@@ -3117,6 +3312,14 @@ func (s *Scope) CreateIndex(c *Compile) error {
 				idx.IndexTableName = renamed
 			}
 		}
+		stage := &temporaryDDLSession{Session: session, sessionID: c.proc.GetSessionInfo().SessionId,
+			aliases: make(map[temporaryTableAlias]string, len(indexNameMap))}
+		for alias, name := range indexNameMap {
+			stage.AddTempIndexTable(qry.Database, alias, name)
+		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, stage)
+		defer func() { c.proc.Ctx = originalCtx }()
 		tempIndexNameMap = indexNameMap
 		tempTableSession = session
 	}
@@ -3912,28 +4115,6 @@ func reconcileRefChildTableID(
 	}
 }
 
-func AddFkeyToRelation(ctx context.Context, fkRelation engine.Relation, fkey *plan.ForeignKeyDef) error {
-	oldCt, err := GetConstraintDef(ctx, fkRelation)
-	if err != nil {
-		return err
-	}
-	var oldFkeys *engine.ForeignKeyDef
-	for _, ct := range oldCt.Cts {
-		if old, ok := ct.(*engine.ForeignKeyDef); ok {
-			oldFkeys = old
-		}
-	}
-	if oldFkeys == nil {
-		oldFkeys = &engine.ForeignKeyDef{}
-	}
-	oldFkeys.Fkeys = append(oldFkeys.Fkeys, fkey)
-	newCt, err := MakeNewCreateConstraint(oldCt, oldFkeys)
-	if err != nil {
-		return err
-	}
-	return fkRelation.UpdateConstraint(ctx, newCt)
-}
-
 // removeChildTblIdFromParentTable removes the tblId from the tableDef of fkRelation.
 // input the fkRelation as the parameter instead of retrieving it again
 // to embrace the fk self refer situation
@@ -4115,7 +4296,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		replacementAdmission = *scalarAdmission
 		replacementAdmission.createNames = map[plan2.FkReferKey]struct{}{{Db: db, Tbl: table}: {}}
 	} else if !isTemp && c.isLifecycleRC() {
-		replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil)
+		replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil, lock.WaitPolicy_FastFail)
 		if err != nil {
 			return err
 		}
@@ -4182,8 +4363,12 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		createOpts = createOpts.WithKeepLogicalId(oldLogicalId)
 	}
 	// Same reason as the ALTER ... COPY replica: the recreate goes through regenerated
-	// DDL, which cannot express relkind.
-	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType())
+	// DDL, which cannot express relkind. It also keeps the table's CHECK constraint
+	// names, so skip the 3822 sibling scan for this internal recreate, and it
+	// reinstalls the unchanged foreign-key layout, so keep it out of
+	// newly-authored-constraint validation (#30282: a legacy SET NULL over a NOT
+	// NULL column must stay truncatable).
+	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType()).WithTrustedCheckConstraintNames().WithTrustedForeignKeyLayout()
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {
@@ -4484,12 +4669,12 @@ type temporaryDropRetirement struct {
 }
 
 func (s *temporaryDropRetireStage) contains(db, alias string) bool {
-	_, ok := s.aliases[db+"."+alias]
+	_, ok := s.aliases[defines.TempTableAliasKey(db, alias)]
 	return ok
 }
 
 func (s *temporaryDropRetireStage) add(owner process.TemporaryTableDDL, db, alias, physical string, indexes []string) {
-	key := db + "." + alias
+	key := defines.TempTableAliasKey(db, alias)
 	if s.contains(db, alias) {
 		return
 	}
@@ -4704,6 +4889,22 @@ func (s *Scope) dropTableSingleResolved(
 			}
 		}
 	}
+	// A temporary alias is user-visible state even when its physical relation
+	// has already disappeared (for example, after another session drops the
+	// backing database). Forget only its logical ownership. Enqueuing a physical
+	// DROP here could delete a replacement that reuses a legacy physical name.
+	retireMissingTemporary := func() {
+		if !isTemp {
+			return
+		}
+		if session := c.proc.GetSession(); session != nil {
+			if owner, ok := session.(process.MissingTemporaryTableForgetter); ok {
+				owner.ForgetMissingTemporaryTable(dbName, originTableName, tblName)
+				return
+			}
+			session.RemoveTempTableByRealName(tblName)
+		}
+	}
 
 	// A plan built for a temporary table must not delete a same-named
 	// permanent table if the session alias disappears before execution.
@@ -4745,6 +4946,10 @@ func (s *Scope) dropTableSingleResolved(
 	if dbSource == nil {
 		dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 		if err != nil {
+			if isTemp && (moerr.IsMoErrCode(err, moerr.OkExpectedEOB) ||
+				moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+				retireMissingTemporary()
+			}
 			if qry.GetIfExists() {
 				return nil
 			}
@@ -4754,6 +4959,9 @@ func (s *Scope) dropTableSingleResolved(
 
 	if rel == nil {
 		if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
+			if isTemp && moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				retireMissingTemporary()
+			}
 			if qry.GetIfExists() {
 				return nil
 			}
@@ -5183,7 +5391,17 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return err
 	}
 
+	var bat *batch.Batch
+	var effDef plan2.AlterSequenceEffectiveDefinition
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
+		// The exclusive mo_tables catalog lock fences the row capture and the
+		// drop/recreate below against concurrent ALTER/DROP and allocators
+		// (design §4 D: catalog key before data row). The nested DROP SEQUENCE
+		// re-locks the same key inside this transaction; same-txn re-entry is
+		// compatible (lockservice tryHold re-entry).
+		if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+			return err
+		}
 		// ALTER SEQUENCE replaces the physical relation but preserves the logical
 		// privilege identity, like ALTER VIEW/TABLE replacement.
 		oldLogicalID = plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx))
@@ -5202,6 +5420,31 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		// get pre curval
 
 		curval = c.proc.GetSessionInfo().SeqCurValues[rel.GetTableID(c.proc.Ctx)]
+		// Compute the replacement row and the validated effective definition
+		// BEFORE the drop+create, so the catalog CREATE text below derives
+		// from the same computation that persists the row (#30679;
+		// v12-review F2). The plan-time synthesis only knows the clauses the
+		// ALTER itself named.
+		bat, effDef, err = makeSequenceAlterBatch(c.proc.Ctx, c.stmt.(*tree.AlterSequence), qry.GetTableDef(), c.proc, values, curval)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if bat != nil {
+				bat.Clean(c.proc.Mp())
+			}
+		}()
+		for _, def := range exeDefs {
+			props, ok := def.(*engine.PropertiesDef)
+			if !ok {
+				continue
+			}
+			for i := range props.Properties {
+				if props.Properties[i].Key == catalog.SystemRelAttr_CreateSQL {
+					props.Properties[i].Value = plan2.AlterSequenceEffectiveCreateSQL(dbName, tblName, effDef)
+				}
+			}
+		}
 		// dorp the pre sequence
 		if err = c.runSqlWithOptions(
 			fmt.Sprintf("DROP SEQUENCE %s", quoteAlterCopyTableName(dbName, tblName)),
@@ -5217,10 +5460,6 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		return moerr.NewInternalErrorf(c.proc.Ctx, "sequence %s not exists", tblName)
 	}
 
-	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
-		return err
-	}
-
 	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
 	createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
 	if err := dbSource.Create(createCtx, tblName, append(exeCols, exeDefs...)); err != nil {
@@ -5231,15 +5470,6 @@ func (s *Scope) AlterSequence(c *Compile) error {
 	if rel, err := dbSource.Relation(c.proc.Ctx, tblName, nil); err == nil {
 		if rel == nil {
 			return moerr.NewLockTableNotFound(c.proc.Ctx)
-		}
-		bat, err := makeSequenceAlterBatch(c.proc.Ctx, c.stmt.(*tree.AlterSequence), qry.GetTableDef(), c.proc, values, curval)
-		defer func() {
-			if bat != nil {
-				bat.Clean(c.proc.Mp())
-			}
-		}()
-		if err != nil {
-			return err
 		}
 		err = rel.Write(c.proc.Ctx, bat)
 		if err != nil {
@@ -5259,7 +5489,16 @@ func (s *Scope) TableClone(c *Compile) error {
 
 	if clonePlan.CreateTable != nil {
 		s.Plan = clonePlan.CreateTable
-		if err = s.createTable(c, func() { created = true }); err != nil {
+		originalCtx := c.proc.Ctx
+		marked := c.proc.GetSessionInfo() != nil && c.proc.GetSessionInfo().IsRestore
+		if plan2.IsCheckConstraintRestoreReplay(originalCtx, marked) {
+			c.proc.Ctx = context.WithValue(originalCtx, defines.TrustedCheckConstraintNames{}, true)
+		}
+		err = func() error {
+			defer func() { c.proc.Ctx = originalCtx }()
+			return s.createTable(c, func() { created = true })
+		}()
+		if err != nil {
 			return err
 		}
 		if !created {
@@ -5299,6 +5538,11 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table clone")
 		}
+		// Seed deletion and index restore SQL must use the destination's
+		// authenticated owner, just like the preceding CREATE phase.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, session)
+		defer func() { c.proc.Ctx = originalCtx }()
 		physicalName, ok := session.GetTempTable(dbName, tblName)
 		if !ok {
 			return moerr.NewInternalErrorf(c.proc.Ctx,
@@ -5342,6 +5586,13 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 	// 3. clone main table + index hidden tables (append onto empty).
 	logutil.Infof("[RestoreTable] clone (s.Run): %s.%s", dbName, tblName)
 	if err := s.Run(c); err != nil {
+		return err
+	}
+
+	// The block-level clone bypasses row-wise foreign-key checks. A historical
+	// clone (restore) must not commit child rows whose parent keys are not
+	// visible in this transaction.
+	if err := validateClonedTableFKIntegrity(c, clonePlan, dbName, tblName); err != nil {
 		return err
 	}
 
@@ -5403,7 +5654,36 @@ last_seq_num | min_value| max_value| start_value| increment_value| cycle| is_cal
 ------------------------------------------------------------------------------------
 */
 
-func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}, curval string) (*batch.Batch, error) {
+// makeAlterSequenceArm validates one typed ALTER arm against the stored row
+// and builds its replacement vectors. It returns the validated effective
+// definition in canonical-clause form — the same computation the persisted
+// row comes from, so the catalog CREATE text can never drift from the row
+// (#30679; v12-review F2).
+func makeAlterSequenceArm[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}, curval string,
+	vecs []*vector.Vector, typ types.Type, proc *process.Process) (plan2.AlterSequenceEffectiveDefinition, error) {
+	var def plan2.AlterSequenceEffectiveDefinition
+	lastV, incr, minV, maxV, startN, cycle, isCalled, err := makeAlterSequenceParam[T](ctx, stmt, result, curval)
+	if err != nil {
+		return def, err
+	}
+	maxV = alterEffectiveMaxBound(maxV)
+	if err := valueCheckOut(maxV, minV, startN, ctx); err != nil {
+		return def, err
+	}
+	if err := makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle, isCalled); err != nil {
+		return def, err
+	}
+	def.TypeSQL = strings.ToLower(typ.Oid.String())
+	def.Increment = incr
+	def.MinValue = fmt.Sprint(minV)
+	def.MaxValue = fmt.Sprint(maxV)
+	def.Start = fmt.Sprint(startN)
+	def.Cycle = cycle
+	return def, nil
+}
+
+func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, tableDef *plan.TableDef, proc *process.Process, result []interface{}, curval string) (*batch.Batch, plan2.AlterSequenceEffectiveDefinition, error) {
+	var def plan2.AlterSequenceEffectiveDefinition
 	var bat batch.Batch
 	bat.SetRowCount(1)
 	attrs := make([]string, len(plan2.Sequence_cols_name))
@@ -5416,99 +5696,28 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
 	vecs := make([]*vector.Vector, len(plan2.Sequence_cols_name))
 
+	var err error
 	switch typ.Oid {
 	case types.T_int16:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int16](ctx, stmt, result, curval)
-		if err != nil {
-			return nil, err
-		}
-		if maxV < 0 {
-			maxV = math.MaxInt16
-		}
-		err = valueCheckOut(maxV, minV, startN, ctx)
-		if err != nil {
-			return nil, err
-		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
-		if err != nil {
-			return nil, err
-		}
+		def, err = makeAlterSequenceArm[int16](ctx, stmt, result, curval, vecs, typ, proc)
 	case types.T_int32:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int32](ctx, stmt, result, curval)
-		if err != nil {
-			return nil, err
-		}
-		if maxV < 0 {
-			maxV = math.MaxInt32
-		}
-		err = valueCheckOut(maxV, minV, startN, ctx)
-		if err != nil {
-			return nil, err
-		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
-		if err != nil {
-			return nil, err
-		}
+		def, err = makeAlterSequenceArm[int32](ctx, stmt, result, curval, vecs, typ, proc)
 	case types.T_int64:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int64](ctx, stmt, result, curval)
-		if err != nil {
-			return nil, err
-		}
-		if maxV < 0 {
-			maxV = math.MaxInt64
-		}
-		err = valueCheckOut(maxV, minV, startN, ctx)
-		if err != nil {
-			return nil, err
-		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
-		if err != nil {
-			return nil, err
-		}
+		def, err = makeAlterSequenceArm[int64](ctx, stmt, result, curval, vecs, typ, proc)
 	case types.T_uint16:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint16](ctx, stmt, result, curval)
-		if err != nil {
-			return nil, err
-		}
-		err = valueCheckOut(maxV, minV, startN, ctx)
-		if err != nil {
-			return nil, err
-		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
-		if err != nil {
-			return nil, err
-		}
+		def, err = makeAlterSequenceArm[uint16](ctx, stmt, result, curval, vecs, typ, proc)
 	case types.T_uint32:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint32](ctx, stmt, result, curval)
-		if err != nil {
-			return nil, err
-		}
-		err = valueCheckOut(maxV, minV, startN, ctx)
-		if err != nil {
-			return nil, err
-		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
-		if err != nil {
-			return nil, err
-		}
+		def, err = makeAlterSequenceArm[uint32](ctx, stmt, result, curval, vecs, typ, proc)
 	case types.T_uint64:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint64](ctx, stmt, result, curval)
-		if err != nil {
-			return nil, err
-		}
-		err = valueCheckOut(maxV, minV, startN, ctx)
-		if err != nil {
-			return nil, err
-		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
-		if err != nil {
-			return nil, err
-		}
+		def, err = makeAlterSequenceArm[uint64](ctx, stmt, result, curval, vecs, typ, proc)
 	default:
-		return nil, moerr.NewNotSupported(ctx, "Unsupported type for sequence")
+		err = moerr.NewNotSupported(ctx, "Unsupported type for sequence")
+	}
+	if err != nil {
+		return nil, plan2.AlterSequenceEffectiveDefinition{}, err
 	}
 	bat.Vecs = vecs
-	return &bat, nil
+	return &bat, def, nil
 }
 
 func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, tableDef *plan.TableDef, proc *process.Process) (*batch.Batch, error) {
@@ -5740,7 +5949,7 @@ func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.C
 	return err
 }
 
-func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool) (err error) {
+func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool, isCalled bool) (err error) {
 	defer func() {
 		if err != nil {
 			for _, v := range vecs {
@@ -5769,7 +5978,7 @@ func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ typ
 	if vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), cycle, 1, proc.Mp()); err != nil {
 		return err
 	}
-	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), isCalled, 1, proc.Mp())
 	return err
 }
 
@@ -5821,10 +6030,11 @@ func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.Cr
 	return incrNum, minValue, maxValue, startNum, nil
 }
 
-func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}, curval string) (T, int64, T, T, T, bool, error) {
+func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}, curval string) (T, int64, T, T, T, bool, bool, error) {
 	var minValue, maxValue, startNum, lastNum T
 	var incrNum int64
 	var cycle bool
+	var isCalled bool
 
 	if incr, ok := result[4].(int64); ok {
 		incrNum = incr
@@ -5834,12 +6044,12 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	if stmt.IncrementBy != nil {
 		switch stmt.IncrementBy.Num.(type) {
 		case uint64:
-			return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
+			return 0, 0, 0, 0, 0, false, false, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
 		}
 		incrNum = getValue[int64](stmt.IncrementBy.Minus, stmt.IncrementBy.Num)
 	}
 	if incrNum == 0 {
-		return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
+		return 0, 0, 0, 0, 0, false, false, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
 	}
 
 	// if alter minValue of sequence
@@ -5858,28 +6068,9 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 		maxValue = getInterfaceValue[T](preMaxValue)
 	}
 
-	preLastSeq := result[0]
-	preLastSeqNum := getInterfaceValue[T](preLastSeq)
-	// if alter startWith value of sequence
-	preStartWith := preLastSeqNum
-	if stmt.StartWith != nil {
-		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
-		if startNum < preStartWith {
-			startNum = preStartWith
-		}
-	} else {
-		startNum = getInterfaceValue[T](preStartWith)
-	}
-	if len(curval) != 0 {
-		lastNum = preLastSeqNum + T(incrNum)
-		if lastNum < startNum+T(incrNum) {
-			lastNum = startNum + T(incrNum)
-		}
-	} else {
-		lastNum = preLastSeqNum
-	}
-
-	// if alter cycle state of sequence
+	// Cycle state of the final definition first: a declared override wins,
+	// otherwise the stored state is preserved. The never-issued guard below
+	// needs the final cycle state, so it is computed before the arms.
 	preCycle := result[5]
 	if preCycleVal, ok := preCycle.(bool); ok {
 		if stmt.Cycle != nil {
@@ -5889,7 +6080,105 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 		}
 	}
 
-	return lastNum, incrNum, minValue, maxValue, startNum, cycle, nil
+	preLastSeq := result[0]
+	preLastSeqNum := getInterfaceValue[T](preLastSeq)
+	preIsCalled, _ := result[6].(bool)
+	if stmt.StartWith != nil {
+		// START WITH follows a direction-aware restart rule (#30679): the
+		// effective increment (possibly replaced by this statement) fixes the
+		// direction, and a start strictly ahead of the stored position
+		// (ascending n > f, descending n < f) restarts the sequence. The
+		// restart is persisted in the row, so the next NEXTVAL in every
+		// session returns exactly n; the altering session's curval cache is
+		// irrelevant here.
+		startNum = getValue[T](stmt.StartWith.Minus, stmt.StartWith.Num)
+		if (incrNum > 0 && startNum > preLastSeqNum) || (incrNum < 0 && startNum < preLastSeqNum) {
+			lastNum = startNum
+			isCalled = false
+		} else {
+			// A start at or behind the stored position keeps the position;
+			// only the recorded start boundary moves, so a consumed range is
+			// never re-entered. For an issued sequence the boundary clamps to
+			// the direction-aware frontier (ascending max(n, f), descending
+			// min(n, f)). A never-issued sequence (is_called=false) has an
+			// empty consumed range, so the declared start itself is the
+			// boundary and is recorded unclamped; M2 then validates it
+			// against the final bounds. This keeps wholesale-redefinition
+			// ALTERs on fresh sequences (flip increment, tighten MIN/MAX and
+			// START WITH in one statement) legal instead of spuriously
+			// rejecting on the stale start (#27049 clone preserves them).
+			lastNum = preLastSeqNum
+			isCalled = preIsCalled
+			if preIsCalled {
+				if incrNum > 0 && startNum < preLastSeqNum {
+					startNum = preLastSeqNum
+				} else if incrNum < 0 && startNum > preLastSeqNum {
+					startNum = preLastSeqNum
+				}
+			} else if preLastSeqNum < minValue || preLastSeqNum > alterEffectiveMaxBound(maxValue) {
+				// The kept pending value lies outside the final bounds.
+				// An uncalled sequence emits the stored last value as-is
+				// (the uncalled arm of the emission engine applies no
+				// wrap), so keeping it would let the next NEXTVAL return a
+				// value the tightened definition no longer admits — for
+				// CYCLE too: the wrap only applies to emissions after the
+				// first one. Restart at the declared start instead, exactly
+				// as the NO CYCLE arm did. The declared start still passes
+				// the final-state validation below, which rejects the whole
+				// ALTER atomically when it is itself out of bounds, and
+				// wholesale-redefinition ALTERs (#27049 clone) stay legal
+				// because a legal definition supplies an in-range start.
+				lastNum = startNum
+				isCalled = false
+			}
+		}
+	} else if len(curval) != 0 {
+		// This session called NEXTVAL before, so its curval cache proves the
+		// sequence is issued; pre-advance keeps that behavior unchanged.
+		startNum = preLastSeqNum
+		lastNum = preLastSeqNum + T(incrNum)
+		if lastNum < startNum+T(incrNum) {
+			lastNum = startNum + T(incrNum)
+		}
+	} else {
+		// This session never called NEXTVAL for the sequence, so there is no
+		// curval cache to advance from. Preserve the issued state stored in
+		// the sequence row: forcing is_called back to false here would make
+		// the next NEXTVAL return the last already-issued value again, which
+		// breaks sequence-backed default inserts with a duplicate-key error
+		// (#30371).
+		startNum = preLastSeqNum
+		lastNum = preLastSeqNum
+		isCalled = preIsCalled
+	}
+
+	return lastNum, incrNum, minValue, maxValue, startNum, cycle, isCalled, nil
+}
+
+// alterEffectiveMaxBound mirrors the persisted-max normalization of
+// makeSequenceAlterBatch: a negative stored max on a signed sequence type
+// means the type's own maximum (the CREATE default), exactly as persisted;
+// unsigned kinds cannot be negative and never normalize.
+func alterEffectiveMaxBound[T constraints.Integer](maxV T) T {
+	if maxV >= 0 {
+		return maxV
+	}
+	// The kind maxima come from variables, not constant expressions:
+	// converting a constant to the type parameter T would require it to be
+	// representable in every integer kind of the constraint (int8 included),
+	// while a typed variable converts freely to any integer instantiation.
+	switch any(maxV).(type) {
+	case int16:
+		var v int16 = math.MaxInt16
+		return T(v)
+	case int32:
+		var v int32 = math.MaxInt32
+		return T(v)
+	case int64:
+		var v int64 = math.MaxInt64
+		return T(v)
+	}
+	return maxV
 }
 
 // Checkout values.
@@ -7118,31 +7407,21 @@ func getTaskKeysCount(
 	keys map[taskservice.CDCTaskKey]struct{},
 	ifExists bool,
 ) (cnt int64, err error) {
-	var (
-		rows *sql.Rows
-	)
-
 	querySQL := cdc.CDCSQLBuilder.GetTaskIdSQL(accountId, taskName)
-	if rows, err = tx.QueryContext(ctx, querySQL); err != nil {
-		return
-	}
-	defer rows.Close()
-
-	if rows.Err() != nil {
-		return 0, rows.Err()
-	}
-
-	for rows.Next() {
+	cnt, err = taskservice.ForeachQueriedRow(ctx, tx, querySQL, func(_ context.Context, rows *sql.Rows) (bool, error) {
 		var taskId string
-		if err = rows.Scan(&taskId); err != nil {
-			return
+		if err := rows.Scan(&taskId); err != nil {
+			return false, err
 		}
 		key := taskservice.CDCTaskKey{
 			AccountId: accountId,
 			TaskId:    taskId,
 		}
 		keys[key] = struct{}{}
-		cnt++
+		return true, nil
+	})
+	if err != nil {
+		return cnt, err
 	}
 
 	if cnt == 0 && taskName != "" && !ifExists {
@@ -7201,33 +7480,8 @@ func deleteManyWatermark(
 	return
 }
 
-const (
-	defaultCDCTaskMaxRetryTimes = 10
-	defaultCDCTaskRetryInterval = int64(time.Second * 10)
-)
-
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
-	executor := task.TaskCode_InitCdc
-	switch {
-	case cdc.UsesGenerationAwareProtocol(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcSourcePatternV1
-	case cdc.UsesSourcePatternProtocol(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcSourcePatternV1
-	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcLosslessStart
-	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
-		executor = task.TaskCode_InitCdcStableEpoch
-	}
-	return task.TaskMetadata{
-		ID:       opts.TaskId,
-		Executor: executor,
-		Options: task.TaskOptions{
-			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
-			RetryInterval: defaultCDCTaskRetryInterval,
-			DelayDuration: 0,
-			Concurrency:   0,
-		},
-	}
+	return cdc.BuildTaskMetadata(opts.TaskId, opts.ExtraOpts, opts.NoFull)
 }
 
 func ExecuteAndGetRowsAffected(
@@ -7236,36 +7490,12 @@ func ExecuteAndGetRowsAffected(
 	query string,
 	args ...interface{},
 ) (int64, error) {
-	exec, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	rows, err := exec.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return rows, nil
+	return taskservice.ExecRowsAffected(ctx, tx, query, args...)
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskDetails() (details *task.Details, err error) {
-	details = &task.Details{
-		AccountID: opts.UserInfo.AccountId,
-		Account:   opts.UserInfo.AccountName,
-		Username:  opts.UserInfo.UserName,
-		Details: &task.Details_CreateCdc{
-			CreateCdc: &task.CreateCdcDetails{
-				TaskName: opts.TaskName,
-				TaskId:   opts.TaskId,
-				Accounts: []*task.Account{
-					{
-						Id:   uint64(opts.UserInfo.AccountId),
-						Name: opts.UserInfo.AccountName,
-					},
-				},
-			},
-		},
-	}
-	return
+	return cdc.BuildTaskDetails(opts.UserInfo.AccountId, opts.UserInfo.AccountName,
+		opts.UserInfo.UserName, opts.TaskName, opts.TaskId), nil
 }
 
 var initAesKeyBySqlExecutor = func(
@@ -7311,37 +7541,7 @@ var initAesKeyBySqlExecutor = func(
 	return
 }
 
-var ForeachQueriedRow = func(
-	ctx context.Context,
-	tx taskservice.SqlExecutor,
-	query string,
-	onEachRow func(context.Context, *sql.Rows) (bool, error),
-) (cnt int64, err error) {
-	var (
-		ok   bool
-		rows *sql.Rows
-	)
-	if rows, err = tx.QueryContext(ctx, query); err != nil {
-		return
-	}
-	if rows.Err() != nil {
-		err = rows.Err()
-		return
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	for rows.Next() {
-		if ok, err = onEachRow(ctx, rows); err != nil {
-			return
-		}
-		if ok {
-			cnt++
-		}
-	}
-	return
-}
+var ForeachQueriedRow = taskservice.ForeachQueriedRow
 
 func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
 	ctx context.Context,
@@ -7705,21 +7905,8 @@ func validateLosslessNoFullStartCompileProtocol(ctx context.Context, c *Compile)
 	return cdc.ValidateLosslessNoFullStartProtocol(ctx, protocolVersion)
 }
 
-func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
-	if tsStr == "" {
-		return
-	}
-
-	if tz != nil {
-		if ts, err = time.ParseInLocation(
-			time.DateTime, tsStr, tz,
-		); err == nil {
-			return
-		}
-	}
-
-	ts, err = time.Parse(time.RFC3339, tsStr)
-	return
+func CDCStrToTime(tsStr string, tz *time.Location) (time.Time, error) {
+	return cdc.CDCStrToTime(tsStr, tz)
 }
 
 func (opts *CDCCreateTaskOptions) handleLevel(
@@ -7750,55 +7937,6 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 
 	opts.PitrTables, err = cdc.JsonEncode(patterTupples)
 	return
-}
-
-// only accept positive integers that end with m or h
-func isValidFrequency(freq string) bool {
-	if !strings.HasSuffix(freq, "m") && !strings.HasSuffix(freq, "h") {
-		return false
-	}
-
-	numPart := strings.TrimSuffix(strings.TrimSuffix(freq, "m"), "h")
-
-	matched, _ := regexp.MatchString(`^[1-9]\d*$`, numPart)
-	if !matched {
-		return false
-	}
-
-	num, err := strconv.Atoi(numPart)
-	if err != nil {
-		return false
-	}
-
-	if num < 0 {
-		return false
-	}
-
-	if num > 10000000 {
-		return false
-	}
-
-	return true
-}
-
-// call isValidFrequency before calling this function
-func transformIntoHours(freq string) int64 {
-	if strings.HasSuffix(freq, "h") {
-		hoursStr := strings.TrimSuffix(freq, "h")
-		hours, _ := strconv.Atoi(hoursStr)
-		return int64(hours)
-	}
-
-	if strings.HasSuffix(freq, "m") {
-		minStr := strings.TrimSuffix(freq, "m")
-		minutes, _ := strconv.Atoi(minStr)
-
-		hours := int(math.Ceil(float64(minutes) / 60.0))
-
-		return int64(hours)
-	}
-
-	return 0
 }
 
 func (c *Compile) checkPitrGranularity(
@@ -8060,11 +8198,11 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
-	if !isValidFrequency(frequency) {
+	if !cdc.IsValidFrequency(frequency) {
 		return moerr.NewInternalErrorf(ctx, "invalid frequency: %s", frequency)
 	}
 
-	normalized := transformIntoHours(frequency)
+	normalized := cdc.FrequencyHours(frequency)
 	var patterTupples *cdc.PatternTuples
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, tables,
@@ -8081,176 +8219,16 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	return nil
 }
 
-func CDCParsePitrGranularity(
-	ctx context.Context,
-	level string,
-	tables string,
-) (pts *cdc.PatternTuples, err error) {
-	pts = &cdc.PatternTuples{}
-
-	if level == cdc.CDCPitrGranularity_Account {
-		pts.Append(&cdc.PatternTuple{
-			Source: cdc.PatternTable{
-				Database: cdc.CDCPitrGranularity_All,
-				Table:    cdc.CDCPitrGranularity_All,
-			},
-			Sink: cdc.PatternTable{
-				Database: cdc.CDCPitrGranularity_All,
-				Table:    cdc.CDCPitrGranularity_All,
-			},
-		})
-		return
-	}
-
-	// split tables by ',' => table pair
-	var pt *cdc.PatternTuple
-	tablePairs := strings.Split(strings.TrimSpace(tables), ",")
-	dup := make(map[string]struct{})
-	for _, pair := range tablePairs {
-		if pt, err = CDCParseGranularityTuple(
-			ctx, level, pair, dup,
-		); err != nil {
-			return
-		}
-		pts.Append(pt)
-	}
-	return
+func CDCParsePitrGranularity(ctx context.Context, level string, tables string) (*cdc.PatternTuples, error) {
+	return cdc.CDCParsePitrGranularity(ctx, level, tables)
 }
 
-func CDCParseGranularityTuple(
-	ctx context.Context,
-	level string,
-	pattern string,
-	dup map[string]struct{},
-) (pt *cdc.PatternTuple, err error) {
-	splitRes := strings.Split(strings.TrimSpace(pattern), ":")
-	if len(splitRes) > 2 {
-		err = moerr.NewInternalErrorf(
-			ctx, "invalid pattern format: %s, must be `source` or `source:sink`.", pattern,
-		)
-		return
-	}
-
-	pt = &cdc.PatternTuple{OriginString: pattern}
-
-	// handle source part
-	if pt.Source.Database, pt.Source.Table, err = CDCParseTableInfo(
-		ctx, splitRes[0], level,
-	); err != nil {
-		return
-	}
-	key := cdc.GenDbTblKey(pt.Source.Database, pt.Source.Table)
-	if _, ok := dup[key]; ok {
-		err = moerr.NewInternalErrorf(
-			ctx, "one db/table: %s can't be used as multi sources in a cdc task", key,
-		)
-		return
-	}
-	dup[key] = struct{}{}
-
-	// handle sink part
-	if len(splitRes) > 1 {
-		if pt.Sink.Database, pt.Sink.Table, err = CDCParseTableInfo(
-			ctx, splitRes[1], level,
-		); err != nil {
-			return
-		}
-	} else {
-		// if not specify sink, then sink = source
-		pt.Sink.Database = pt.Source.Database
-		pt.Sink.Table = pt.Source.Table
-	}
-	return
+func CDCParseGranularityTuple(ctx context.Context, level string, pattern string, dup map[string]struct{}) (*cdc.PatternTuple, error) {
+	return cdc.CDCParseGranularityTuple(ctx, level, pattern, dup)
 }
 
-func CDCParseTableInfo(
-	ctx context.Context,
-	input string,
-	level string,
-) (db string, table string, err error) {
-	parts := strings.Split(strings.TrimSpace(input), ".")
-	if level == cdc.CDCPitrGranularity_DB && len(parts) != 1 {
-		err = moerr.NewInternalErrorf(ctx, "invalid databases format: %s", input)
-		return
-	} else if level == cdc.CDCPitrGranularity_Table && len(parts) != 2 {
-		err = moerr.NewInternalErrorf(ctx, "invalid tables format: %s", input)
-		return
-	}
-
-	db = strings.TrimSpace(parts[0])
-	if !dbNameIsLegal(db) {
-		err = moerr.NewInternalErrorf(ctx, "invalid database name: %s", db)
-		return
-	}
-
-	if level == cdc.CDCPitrGranularity_Table {
-		table = strings.TrimSpace(parts[1])
-		if !tableNameIsLegal(table) {
-			err = moerr.NewInternalErrorf(ctx, "invalid table name: %s", table)
-			return
-		}
-	} else {
-		table = cdc.CDCPitrGranularity_All
-	}
-	return
-}
-
-func dbNameIsLegal(name string) bool {
-	name = strings.TrimSpace(name)
-	if hasSpecialChars(name) {
-		return false
-	}
-	if name == cdc.CDCPitrGranularity_All {
-		return true
-	}
-
-	createDBSqls := []string{
-		"create database " + name,
-		"create database `" + name + "`",
-	}
-	return isLegal(name, createDBSqls)
-}
-
-func tableNameIsLegal(name string) bool {
-	name = strings.TrimSpace(name)
-	if hasSpecialChars(name) {
-		return false
-	}
-	if name == cdc.CDCPitrGranularity_All {
-		return true
-	}
-
-	createTableSqls := []string{
-		"create table " + name + "(a int)",
-		"create table `" + name + "`(a int)",
-	}
-	return isLegal(name, createTableSqls)
-}
-
-func hasSpecialChars(s string) bool {
-	return strings.ContainsAny(s, ",.:`")
-}
-
-func isLegal(name string, sqls []string) bool {
-	name = strings.TrimSpace(name)
-	if len(name) == 0 || len(sqls) == 0 {
-		return false
-	}
-	for _, sql := range sqls {
-		if len(sql) == 0 {
-			return false
-		}
-	}
-	yes := false
-	for _, sql := range sqls {
-		_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
-		if err != nil {
-			continue
-		}
-		yes = true
-		break
-	}
-	return yes
+func CDCParseTableInfo(ctx context.Context, input string, level string) (string, string, error) {
+	return cdc.CDCParseTableInfo(ctx, input, level)
 }
 
 // checkCCPRTableBeforeDrop checks if a table can be dropped based on CCPR rules.

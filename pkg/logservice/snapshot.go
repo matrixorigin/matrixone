@@ -29,32 +29,6 @@ const (
 	snapshotPathPattern    = "snapshot-%016X"
 )
 
-// ISnapshotManager is an interface that managers snapshots.
-type ISnapshotManager interface {
-	// Init initialize snapshots by loading exported snapshots.
-	Init(shardID uint64, replicaID uint64) error
-	// Count returns the number of snapshots in the manager.
-	Count(shardID uint64, replicaID uint64) int
-	// Add adds a new snapshot for specified shard.
-	Add(shardID uint64, replicaID uint64, index uint64) error
-	// Remove removes snapshots whose index is LE than index.
-	Remove(shardID uint64, replicaID uint64, index uint64) error
-	// EvalImportSnapshot returns the source directory and index of
-	// the biggest snapshot of the shard.
-	EvalImportSnapshot(shardID uint64, replicaID uint64, index uint64) (string, uint64)
-}
-
-// ISnapshotItem is an interface that represents a snapshot item.
-type ISnapshotItem interface {
-	// Exists returns if the snapshot item exists.
-	Exists() bool
-	// Remove removes the snapshot item.
-	Remove() error
-	// Valid check the legality of the snapshot item. Only the names of
-	// the files in it are checked.
-	Valid() (bool, error)
-}
-
 // snapshotIndex is type indicates the index of snapshot.
 type snapshotIndex uint64
 

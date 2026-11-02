@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	taeLogtail "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service"
 )
@@ -367,6 +368,9 @@ func (c *PushClient) runOwned(fn func()) bool {
 type connector struct {
 	first  atomic.Bool
 	signal chan struct{}
+	// Closed once by connect after the first successful catalog replay. A
+	// receiver paused during that replay must then request ordinary recovery.
+	firstReplayDone chan struct{}
 
 	client *PushClient
 	engine *Engine
@@ -374,9 +378,10 @@ type connector struct {
 
 func newConnector(c *PushClient, e *Engine) *connector {
 	co := &connector{
-		signal: make(chan struct{}, 10),
-		client: c,
-		engine: e,
+		signal:          make(chan struct{}, 10),
+		firstReplayDone: make(chan struct{}),
+		client:          c,
+		engine:          e,
 	}
 	co.first.Store(true)
 	return co
@@ -424,7 +429,6 @@ func (c *PushClient) init(
 	// lock all.
 	// release subscribed lock when init finished.
 	// release subscriber lock when we received enough response from service.
-	c.receivedLogTailTime.e = e
 	c.receivedLogTailTime.ready.Store(false)
 	c.dca = delayedCacheApply{}
 	c.subscriber.setNotReady()
@@ -462,7 +466,18 @@ func (c *PushClient) init(
 }
 
 func (c *PushClient) SetReconnectHandler(handler func()) {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	c.reconnectHandler = handler
+}
+
+func (c *PushClient) notifyReconnect() {
+	c.lifecycleMu.Lock()
+	handler := c.reconnectHandler
+	c.lifecycleMu.Unlock()
+	if handler != nil {
+		handler()
+	}
 }
 
 func (c *PushClient) validLogTailMustApplied(snapshotTS timestamp.Timestamp) {
@@ -896,16 +911,8 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
 
 		case s := <-c.pauseC:
 			logutil.Info("logtail.consumer.receiver.paused")
-			if s {
-				c.sendConnectSig(ctx)
-			}
-
-			// Wait for resuming logtail receiver.
-			select {
-			case <-ctx.Done():
+			if !c.waitForResume(ctx, s) {
 				return
-
-			case <-c.resumeC:
 			}
 			logutil.Info("logtail.consumer.receiver.resumed")
 
@@ -919,6 +926,40 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
 			}
 		}
 	}
+}
+
+func (c *PushClient) waitForResume(ctx context.Context, reconnect bool) bool {
+	var firstReplayDone <-chan struct{}
+	if reconnect {
+		c.sendConnectSig(ctx)
+	} else {
+		firstReplayDone = c.connector.firstReplayDone
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-c.resumeC:
+			return true
+		case <-firstReplayDone:
+			// First-connect retries own recovery until replay completes. After
+			// that handoff, even an earlier pause(false) needs a new connection.
+			c.sendConnectSig(ctx)
+			firstReplayDone = nil
+		}
+	}
+}
+
+func (c *PushClient) completeFirstConnect(e *Engine) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connector.first.Store(false)
+	// Serialize readiness with pause. A failed first connection must recover
+	// through connect's existing reconnect branch before admitting transactions.
+	if !c.mu.paused {
+		e.setPushClientStatus(true)
+	}
+	close(c.connector.firstReplayDone)
 }
 
 func (c *PushClient) startConsumers(ctx context.Context, e *Engine) {
@@ -1174,8 +1215,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				continue
 			}
 
-			e.setPushClientStatus(true)
-			c.connector.first.Store(false)
+			c.completeFirstConnect(e)
 			return
 		}
 	}
@@ -1206,9 +1246,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 		logutil.Infof("%s %s: client init finished", logTag, c.serviceID)
 
 		// This is only for test.
-		if c.reconnectHandler != nil {
-			c.reconnectHandler()
-		}
+		c.notifyReconnect()
 
 		// clean memory table.
 		err = e.init(ctx)
@@ -1993,7 +2031,6 @@ type syncLogTailTimestamp struct {
 	ready                  atomic.Bool
 	tList                  []atomic.Value
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
-	e                      *Engine
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
@@ -2044,7 +2081,6 @@ func (r *syncLogTailTimestamp) updateTimestamp(
 
 type logTailSubscriber struct {
 	sid           string
-	tnNodeID      int
 	transportMu   sync.Mutex
 	rpcClient     morpc.RPCClient
 	rpcStream     morpc.Stream
@@ -2130,8 +2166,6 @@ func (s *logTailSubscriber) init(
 	s.transportMu.Lock()
 	defer s.transportMu.Unlock()
 
-	// XXX we assume that we have only 1 tn now.
-	s.tnNodeID = 0
 	s.sid = sid
 
 	// clear the old status.
@@ -2526,7 +2560,7 @@ func dispatchSubscribeResponse(
 		e.pClient.subscribed.setTableSubscribed(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
-		recRoutines[routineIndex].sendSubscribeResponse(ctx, response, receiveAt)
+		recRoutines[routineIndex].sendSubscribeResponse(ctx, response, receiveAt, e.captureReplayClusterKey(&lt, *lt.Ts))
 	}
 	// no matter how we consume the response, should update all timestamp.
 	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts, receiveAt)
@@ -2598,6 +2632,7 @@ func dispatchUpdateResponse(
 			*response.To,
 			lastLogtailIndex[recIndex] == index,
 			receiveAt,
+			e.captureReplayClusterKey(&list[index], *response.To),
 		)
 	}
 	// should update all the timestamp.
@@ -2655,7 +2690,8 @@ type routineController struct {
 func (rc *routineController) sendSubscribeResponse(
 	_ context.Context,
 	r *logtail.SubscribeResponse,
-	receiveAt time.Time) {
+	receiveAt time.Time,
+	keys ...*readutil.ClusterKeyDescriptor) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Info(
@@ -2665,7 +2701,7 @@ func (rc *routineController) sendSubscribeResponse(
 		)
 	}
 
-	rc.send(&cmdToConsumeSub{log: r, receiveAt: receiveAt})
+	rc.send(&cmdToConsumeSub{log: r, receiveAt: receiveAt, clusterKey: firstReplayClusterKey(keys)})
 }
 
 func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt time.Time) {
@@ -2676,7 +2712,8 @@ func (rc *routineController) sendTableLogTailWithTimestamp(
 	r logtail.TableLogtail,
 	applied timestamp.Timestamp,
 	notifyApplied bool,
-	receiveAt time.Time) {
+	receiveAt time.Time,
+	keys ...*readutil.ClusterKeyDescriptor) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Info(
@@ -2691,11 +2728,13 @@ func (rc *routineController) sendTableLogTailWithTimestamp(
 	log.applied = applied
 	log.notifyApplied = notifyApplied
 	log.receiveAt = receiveAt
+	log.clusterKey = firstReplayClusterKey(keys)
 	if !rc.send(log) {
 		log.log = logtail.TableLogtail{}
 		log.applied = timestamp.Timestamp{}
 		log.notifyApplied = false
 		log.receiveAt = time.Time{}
+		log.clusterKey = nil
 		rc.cmdLogPool.Put(log)
 	}
 }
@@ -2839,10 +2878,12 @@ type routineControlCmd interface {
 }
 
 type cmdToConsumeSub struct {
-	log       *logtail.SubscribeResponse
-	receiveAt time.Time
+	clusterKey *readutil.ClusterKeyDescriptor
+	log        *logtail.SubscribeResponse
+	receiveAt  time.Time
 }
 type cmdToConsumeLog struct {
+	clusterKey    *readutil.ClusterKeyDescriptor
 	log           logtail.TableLogtail
 	applied       timestamp.Timestamp
 	notifyApplied bool
@@ -2859,7 +2900,7 @@ type cmdToConsumeUnSub struct {
 
 func (cmd *cmdToConsumeSub) action(ctx context.Context, e *Engine, ctrl *routineController) error {
 	response := cmd.log
-	if err := e.consumeSubscribeResponse(ctx, response, true, cmd.receiveAt); err != nil {
+	if err := e.consumeSubscribeResponse(ctx, response, true, cmd.receiveAt, cmd.clusterKey); err != nil {
 		return err
 	}
 	lt := response.GetLogtail()
@@ -2874,10 +2915,11 @@ func (cmd *cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routine
 		cmd.applied = timestamp.Timestamp{}
 		cmd.notifyApplied = false
 		cmd.receiveAt = time.Time{}
+		cmd.clusterKey = nil
 		ctrl.cmdLogPool.Put(cmd)
 	}()
 	response := cmd.log
-	if err := e.consumeUpdateLogTail(ctx, response, true, cmd.receiveAt, cmd.applied); err != nil {
+	if err := e.consumeUpdateLogTail(ctx, response, true, cmd.receiveAt, cmd.applied, cmd.clusterKey); err != nil {
 		return err
 	}
 	table := response.GetTable()
@@ -2907,13 +2949,14 @@ func (e *Engine) consumeSubscribeResponse(
 	ctx context.Context,
 	rp *logtail.SubscribeResponse,
 	lazyLoad bool,
-	receiveAt time.Time) error {
+	receiveAt time.Time,
+	keys ...*readutil.ClusterKeyDescriptor) error {
 	lt := rp.GetLogtail()
 	applied := timestamp.Timestamp{}
 	if lt.Ts != nil {
 		applied = *lt.Ts
 	}
-	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt, true, applied)
+	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt, true, applied, keys...)
 }
 
 func (e *Engine) consumeUpdateLogTail(
@@ -2921,8 +2964,9 @@ func (e *Engine) consumeUpdateLogTail(
 	rp logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time,
-	applied timestamp.Timestamp) error {
-	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt, false, applied)
+	applied timestamp.Timestamp,
+	keys ...*readutil.ClusterKeyDescriptor) error {
+	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt, false, applied, keys...)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
@@ -2933,7 +2977,8 @@ func updatePartitionOfPush(
 	lazyLoad bool,
 	receiveAt time.Time,
 	isSub bool,
-	applied timestamp.Timestamp) (err error) {
+	applied timestamp.Timestamp,
+	keys ...*readutil.ClusterKeyDescriptor) (err error) {
 	start := time.Now()
 	v2.LogTailApplyLatencyDurationHistogram.Observe(start.Sub(receiveAt).Seconds())
 	defer func() {
@@ -2992,6 +3037,7 @@ func updatePartitionOfPush(
 			state,
 			tl,
 			isSub,
+			keys...,
 		)
 		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
 
@@ -3003,7 +3049,7 @@ func updatePartitionOfPush(
 			v2.LogtailUpdatePartitonHandleCheckpointDurationHistogram.Observe(time.Since(t0).Seconds())
 		}
 		t0 = time.Now()
-		err = consumeCkpsAndLogTail(ctx, partition.TableInfo.PrimarySeqnum, e, state, tl, dbId, tblId, isSub)
+		err = consumeCkpsAndLogTail(ctx, partition.TableInfo.PrimarySeqnum, e, state, tl, dbId, tblId, isSub, keys...)
 		v2.LogtailUpdatePartitonConsumeLogtailDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 
@@ -3060,6 +3106,7 @@ func consumeLogTail(
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail,
 	isSub bool,
+	keys ...*readutil.ClusterKeyDescriptor,
 ) error {
 	// return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
 	if lt.Table.DbName == "" {
@@ -3068,7 +3115,7 @@ func consumeLogTail(
 	t0 := time.Now()
 	for i := 0; i < len(lt.Commands); i++ {
 		if err := consumeEntry(ctx, primarySeqnum,
-			engine, engine.GetLatestCatalogCache(), state, &lt.Commands[i], isSub); err != nil {
+			engine, engine.GetLatestCatalogCache(), state, &lt.Commands[i], isSub, keys...); err != nil {
 			return err
 		}
 	}
@@ -3108,6 +3155,7 @@ func consumeCkpsAndLogTail(
 	databaseId uint64,
 	tableId uint64,
 	isSub bool,
+	keys ...*readutil.ClusterKeyDescriptor,
 ) (err error) {
 	var closeCBs []func()
 	if err = taeLogtail.ConsumeCheckpointEntries(
@@ -3127,5 +3175,51 @@ func consumeCkpsAndLogTail(
 			}
 		}
 	}()
-	return consumeLogTail(ctx, primarySeqnum, engine, state, lt, isSub)
+	return consumeLogTail(ctx, primarySeqnum, engine, state, lt, isSub, keys...)
+}
+
+func firstReplayClusterKey(keys []*readutil.ClusterKeyDescriptor) *readutil.ClusterKeyDescriptor {
+	if len(keys) == 1 {
+		return keys[0]
+	}
+	return nil
+}
+
+// captureReplayClusterKey runs only at serialized dispatch, after catalog
+// application and before user work is enqueued. Worker lag cannot change it.
+func (e *Engine) captureReplayClusterKey(tail *logtail.TableLogtail, at timestamp.Timestamp) *readutil.ClusterKeyDescriptor {
+	if tail == nil || tail.Table == nil || at.IsEmpty() {
+		return nil
+	}
+	table := tail.Table
+	e.RLock()
+	partition := e.partitions[[2]uint64{table.DbId, table.TbId}]
+	e.RUnlock()
+	if partition != nil && !partition.Snapshot().WantsClusterKeyMetadata() {
+		return nil
+	}
+	candidate := false
+	for _, entry := range tail.Commands {
+		if entry.EntryType != api.Entry_Insert || entry.Bat == nil || logtailreplay.IsMetaEntry(entry.TableName) {
+			continue
+		}
+		for _, attr := range entry.Bat.Attrs {
+			if strings.HasPrefix(attr, catalog.PrefixCBColName) {
+				candidate = true
+				break
+			}
+		}
+		if candidate {
+			break
+		}
+	}
+	if !candidate {
+		return nil
+	}
+	e.pClient.dca.Lock()
+	defer e.pClient.dca.Unlock()
+	if !e.pClient.dca.replayed {
+		return nil
+	}
+	return e.GetLatestCatalogCache().ReplayClusterKey(uint32(table.AccId), table.DbId, table.TbId, table.TbName, at)
 }

@@ -1,0 +1,104 @@
+from harness import *
+import uuid, statistics
+
+outdir=root/'multicn';outdir.mkdir(exist_ok=True)
+sql='SELECT COUNT(DISTINCT SearchPhrase) FROM q6_10m'
+records=[]
+
+def snapshot(s,label):
+ s.execute('EXPLAIN PHYPLAN VERBOSE '+sql)
+ raw='\n'.join(str(x[0]) for x in s.fetchall())
+ (outdir/f'{label}-physical.txt').write_text(raw+'\n')
+ return {'groups':sorted({int(x) for x in re.findall(r'\bgroup\s*\(idx:(-?\d+)',raw)}),
+         'addresses':sorted(set(re.findall(r'addr:(127\.0\.0\.1:\d+)',raw)))}
+
+class Secondary:
+ def __init__(self,svc,phase):self.svc=svc;self.phase=phase;self.c=None;self.p=None
+ def __enter__(self):
+  data=outdir/f'cn2-{self.phase}';data.mkdir(exist_ok=True)
+  text=(root/'cn.toml').read_text()
+  text=text.replace('dd1dccb4-4d3c-41f8-b482-5251dc7a4183',str(uuid.uuid4()))
+  text=text.replace('port-base = 54200','port-base = 54500').replace('port = 55401','port = 55402')
+  text=text.replace(str(runtime/'data/local'),str(data/'local'))
+  text=text.replace(str(runtime/'data/cache'),str(data/'cache'))
+  text=text.replace(f'data-dir = "{runtime}/data"',f'data-dir = "{data}/data"')
+  text=text.replace(str(runtime/'mysql.sock'),str(data/'mysql.sock'))
+  cfg=outdir/f'cn2-{self.phase}.toml';cfg.write_text(text)
+  self.log=(outdir/f'cn2-{self.phase}.log').open('wb')
+  self.p=subprocess.Popen([str(self.svc.binary),'-cfg',str(cfg),'-debug-http','127.0.0.1:55461'],cwd=work,env=env,stdout=self.log,stderr=subprocess.STDOUT)
+  try:
+   deadline=time.monotonic()+90
+   while time.monotonic()<deadline:
+    if self.p.poll() is not None:raise RuntimeError(('CN2 startup exit',self.p.returncode))
+    try:
+     self.c=pymysql.connect(host='127.0.0.1',port=55402,user='root',password='111',database='q33_bench',autocommit=True,read_timeout=120)
+     with self.c.cursor() as s:run(s,'SELECT 1',((1,),))
+     return self
+    except pymysql.MySQLError:time.sleep(.1)
+   raise TimeoutError('CN2 SQL readiness')
+  except BaseException:self.__exit__(None,None,None);raise
+ def __exit__(self,*args):
+  if self.c:self.c.close()
+  if self.p and self.p.poll() is None:
+   self.p.send_signal(signal.SIGTERM)
+   try:self.p.wait(timeout=30)
+   except subprocess.TimeoutExpired:self.p.kill();self.p.wait();raise
+  self.log.close()
+
+def wait_topology(s,label,dual):
+ deadline=time.monotonic()+90;attempts=[]
+ while time.monotonic()<deadline:
+  try:r=snapshot(s,label)
+  except pymysql.MySQLError as e:
+   attempts.append({'observed_error':list(e.args)})
+   (outdir/f'{label}-observations.json').write_text(json.dumps(attempts,indent=2))
+   if dual:raise
+   time.sleep(.5);continue
+  attempts.append(r)
+  if ('127.0.0.1:54500' in r['addresses'])==dual:
+   (outdir/f'{label}-observations.json').write_text(json.dumps(attempts,indent=2))
+   r['observation_count']=len(attempts);r['transient_errors']=[a for a in attempts if 'observed_error' in a];return r
+  time.sleep(.2)
+ raise AssertionError(('topology not reached',label,attempts))
+
+def main():
+ for phase,variant in enumerate(['baseline','candidate']):
+  with Service(variant,f'multicn-{phase}-{variant}') as svc:
+   s=svc.s;s.execute('SET SESSION max_dop=4')
+   rec={'variant':variant,'phase':phase}
+   print('START_PHASE',variant,flush=True)
+   rec['single_before']=wait_topology(s,f'{phase}-single-before',False)
+   assert len(rec['single_before']['groups'])==(2 if variant=='candidate' else 3),rec
+   s.execute("PREPARE qa30982_topology FROM 'SELECT COUNT(DISTINCT SearchPhrase) FROM q6_10m'")
+   try:
+    run(s,'EXECUTE qa30982_topology',((5000000,),))
+    with Secondary(svc,phase) as cn2:
+     rec['dual']=wait_topology(s,f'{phase}-dual',True)
+     print('DUAL_REACHED',variant,rec['dual'],flush=True)
+     assert rec['dual']['addresses']==['127.0.0.1:54200','127.0.0.1:54500'],rec
+     assert len(rec['dual']['groups'])==3,('remote path omitted local dedup',rec)
+     rec['prepared_dual']=run(s,'EXECUTE qa30982_topology',((5000000,),))
+     run(s,sql,((5000000,),))
+     rec['dual_seconds']=[run(s,sql,((5000000,),))['seconds'] for _ in range(5)]
+     with cn2.c.cursor() as other:
+      other.execute('SET SESSION max_dop=4')
+      rec['from_second_cn']=run(other,sql,((5000000,),))
+      rec['second_cn_plan']=snapshot(other,f'{phase}-from-second-cn')
+      assert len(rec['second_cn_plan']['groups'])==3,rec
+     s.execute('SET SESSION agg_spill_mem=8388608')
+     rec['remote_spill_result']=run(s,sql,((5000000,),))
+     s.execute('EXPLAIN ANALYZE '+sql)
+     raw='\n'.join(str(x[0]) for x in s.fetchall());(outdir/f'{phase}-remote-spill-analyze.txt').write_text(raw+'\n')
+     rec['spill_lines']=[line.strip() for line in raw.splitlines() if 'SpillSize=' in line]
+     assert any(int(x)>0 for x in re.findall(r'SpillSize=(\d+)',raw)),('no spill observed',rec)
+     s.execute('SET SESSION agg_spill_mem=0')
+     (outdir/f'{phase}-before-stop.json').write_text(json.dumps(rec,indent=2,default=str))
+    rec['single_after']=wait_topology(s,f'{phase}-single-after',False)
+    assert len(rec['single_after']['groups'])==(2 if variant=='candidate' else 3),rec
+    rec['prepared_after']=run(s,'EXECUTE qa30982_topology',((5000000,),))
+   finally:s.execute('DEALLOCATE PREPARE qa30982_topology')
+   records.append(rec);(outdir/'results.json').write_text(json.dumps(records,indent=2,default=str))
+   print('TOPOLOGY_PASS',json.dumps(rec,default=str),flush=True)
+ print('MULTICN_PASS',flush=True)
+
+if __name__=='__main__':main()

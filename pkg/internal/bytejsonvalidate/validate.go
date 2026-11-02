@@ -49,8 +49,16 @@ const (
 
 // UvarintPayload accepts the exact, shortest uvarint-prefixed payload.
 func UvarintPayload(data []byte) ([]byte, bool) {
+	if len(data) > 0 && data[0] < 0x80 {
+		if int(data[0]) != len(data)-1 {
+			return nil, false
+		}
+		return data[1:], true
+	}
 	payloadLength, prefixLength := binary.Uvarint(data)
-	if prefixLength <= 0 || prefixLength != uvarintSize(payloadLength) ||
+	// A successful multi-byte unsigned varint is shortest exactly when its
+	// final group is nonzero. All one-byte encodings returned above.
+	if prefixLength <= 0 || data[prefixLength-1] == 0 ||
 		payloadLength != uint64(len(data)-prefixLength) {
 		return nil, false
 	}

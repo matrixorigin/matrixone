@@ -130,7 +130,9 @@ func TestReadBarrierResponseFollowsEarlierLogtailUpdate(t *testing.T) {
 			return frontier, nil
 		},
 	}
-	server := newUnitLogtailServer(t, logtailer)
+	server := newUnitLogtailServerWithStart(t, logtailer, false)
+	server.readBarrierSlots = make(chan struct{}, 1)
+	startUnitLogtailServer(t, server, logtailer)
 	transport := newCaptureSession()
 	stream := newCaptureStream(transport)
 	session, err := server.getSession(stream)
@@ -162,8 +164,16 @@ func TestReadBarrierResponseFollowsEarlierLogtailUpdate(t *testing.T) {
 	require.NotNil(t, barrier)
 	require.Equal(t, uint64(7), barrier.BarrierId)
 	require.Equal(t, frontier, *barrier.Timestamp)
-	require.Empty(t, server.readBarrierSlots,
-		"the end-to-end admission slot must be released after response hand-off")
+	// Receiving the response does not wait for the publisher's deferred release.
+	// Reacquire the sole slot to synchronize with release and detect a leak.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	select {
+	case server.readBarrierSlots <- struct{}{}:
+		<-server.readBarrierSlots
+	case <-ctx.Done():
+		t.Fatal("the end-to-end admission slot was not released after response hand-off")
+	}
 }
 
 func TestReadBarrierServerAdmissionHonorsCancellation(t *testing.T) {

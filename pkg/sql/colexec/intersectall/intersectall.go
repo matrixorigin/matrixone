@@ -18,8 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -50,17 +49,14 @@ func (intersectAll *IntersectAll) Prepare(proc *process.Process) error {
 		intersectAll.OpAnalyzer.Reset()
 	}
 
-	if intersectAll.ctr.hashTable, err = hashmap.NewStrHashMap(true, proc.Mp()); err != nil {
+	if intersectAll.ctr.hashTable, err = intersectAll.NewHashMap(proc); err != nil {
 		return err
 	}
 	intersectAll.ctr.iterator = intersectAll.ctr.hashTable.NewIterator()
-	if err = intersectAll.ctr.keyEvaluator.Prepare(proc, intersectAll.KeyExprs); err != nil {
+	if err = intersectAll.ctr.keyEvaluator.Prepare(proc, intersectAll.KeyExprs, intersectAll.ExpressionAllocation()); err != nil {
 		return err
 	}
-	if len(intersectAll.ctr.inserted) == 0 {
-		intersectAll.ctr.inserted = make([]uint8, hashmap.UnitLimit)
-		intersectAll.ctr.resetInserted = make([]uint8, hashmap.UnitLimit)
-	}
+
 	return nil
 }
 
@@ -76,8 +72,12 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 	for {
 		switch intersectAll.ctr.state {
 		case Build:
-			if err = intersectAll.build(proc, analyzer); err != nil {
+			done, err := intersectAll.build(proc, analyzer)
+			if err != nil {
 				return vm.CancelResult, err
+			}
+			if !done {
+				return vm.CallResult{Status: vm.ExecYield}, nil
 			}
 			if intersectAll.ctr.hashTable != nil {
 				analyzer.Alloc(intersectAll.ctr.hashTable.Size())
@@ -104,16 +104,19 @@ func (intersectAll *IntersectAll) Call(proc *process.Process) (vm.CallResult, er
 }
 
 // build use all batches from proc.Reg.MergeReceiver[1](right relation) to build the hash map.
-func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.Analyzer) error {
+func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.Analyzer) (bool, error) {
 	ctr := &intersectAll.ctr
 	child, err := vm.GetChild(intersectAll, 1)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for {
 		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
-			return err
+			return false, err
+		}
+		if input.Status == vm.ExecYield {
+			return false, nil
 		}
 
 		if input.Batch == nil {
@@ -127,7 +130,7 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 		{
 			keyVecs, err := ctr.keyEvaluator.Eval(proc, input.Batch)
 			if err != nil {
-				return err
+				return false, err
 			}
 			count := input.Batch.RowCount()
 			for i := 0; i < count; i += hashmap.UnitLimit {
@@ -138,11 +141,11 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 				}
 				vs, _, err := ctr.iterator.Insert(i, n, keyVecs)
 				if err != nil {
-					return err
+					return false, err
 				}
-				if uint64(len(ctr.counter)) < ctr.hashTable.GroupCount() {
-					gap := ctr.hashTable.GroupCount() - uint64(len(ctr.counter))
-					ctr.counter = append(ctr.counter, make([]uint64, gap)...)
+				ctr.counter, err = colexec.GrowSetOperationSlice(ctr.counter, int(ctr.hashTable.GroupCount()), proc.Mp(), &intersectAll.SetOperationAllocation)
+				if err != nil {
+					return false, err
 				}
 				for _, v := range vs {
 					if v == 0 {
@@ -154,7 +157,7 @@ func (intersectAll *IntersectAll) build(proc *process.Process, analyzer process.
 		}
 
 	}
-	return nil
+	return true, nil
 }
 
 // probe uses a batch from proc.Reg.MergeReceivers[0](left relation) to probe the hash map and update the counter.
@@ -173,6 +176,10 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 		if err != nil {
 			return false, err
 		}
+		if input.Status == vm.ExecYield {
+			*result = input
+			return false, nil
+		}
 		if input.Batch == nil {
 			return true, nil
 		}
@@ -189,9 +196,9 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 		//init output batch
 
 		if ctr.buf == nil {
-			ctr.buf = batch.NewWithSize(len(input.Batch.Vecs))
-			for i := range input.Batch.Vecs {
-				ctr.buf.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+			ctr.buf, err = intersectAll.NewBatch(proc, input.Batch)
+			if err != nil {
+				return false, err
 			}
 		}
 		ctr.buf.CleanOnlyData()
@@ -209,7 +216,8 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 					n = hashmap.UnitLimit
 				}
 
-				copy(ctr.inserted[:n], ctr.resetInserted[:n])
+				inserted, resetInserted := intersectAll.Scratch()
+				copy(inserted[:n], resetInserted[:n])
 				cnt = 0
 
 				vs, _, err := ctr.iterator.Find(i, n, keyVecs)
@@ -228,7 +236,7 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 						continue
 					}
 
-					ctr.inserted[j] = 1
+					inserted[j] = 1
 					ctr.counter[v-1]--
 					cnt++
 
@@ -237,7 +245,7 @@ func (intersectAll *IntersectAll) probe(proc *process.Process, analyzer process.
 
 				if cnt > 0 {
 					for colNum := range input.Batch.Vecs {
-						if err := ctr.buf.Vecs[colNum].UnionBatch(input.Batch.Vecs[colNum], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
+						if err := ctr.buf.Vecs[colNum].UnionBatch(input.Batch.Vecs[colNum], int64(i), cnt, inserted[:n], proc.Mp()); err != nil {
 							return false, err
 						}
 					}

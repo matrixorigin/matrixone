@@ -233,6 +233,9 @@ type CompilerContext interface {
 	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
 	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	// ResolveWithoutTemporaryAlias skips session aliases for standalone RENAME TABLE.
+	// It retains catalog visibility, temporary ownership and access checks.
+	ResolveWithoutTemporaryAlias(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get index table definition by an ObjectRef, will skip unnecessary subscription check
 	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get table definition by table id
@@ -368,6 +371,8 @@ type BaseOptimizer struct {
 
 type ViewData struct {
 	Stmt                string
+	Definition          string `json:"definition,omitempty"`
+	CheckOption         string `json:"check_option,omitempty"`
 	DefaultDatabase     string
 	SQLMode             *string          `json:"sql_mode,omitempty"`
 	SecurityType        string           `json:"security_type,omitempty"`
@@ -379,8 +384,23 @@ type ViewData struct {
 	RequiredProtocolVersion *int64 `json:"required_protocol_version,omitempty"`
 }
 
+// updateTargetScope borrows the existing target-side binding while UPDATE FROM
+// temporarily joins its separate read sources. It is local to one bindUpdate call.
+type updateTargetScope struct {
+	join    *tree.JoinTableExpr
+	context *BindContext
+}
+
 type QueryBuilder struct {
-	preparedBindingProof *bool
+	updateTargetScope *updateTargetScope
+
+	// DELETE owns these generated scan identities. Optimizer consumers must
+	// revalidate the binding and table after join rewrites.
+	deleteIndexScanTables map[int32]deleteIndexScan
+	integerPrecision      *integerPrecisionBuilder
+	correlationRouteNodes map[int32]bool
+	dependentRelations    map[int32]bool
+	preparedBindingProof  *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64
@@ -472,6 +492,10 @@ type QueryBuilder struct {
 	// carries the final physical decision after shuffle planning.
 	distinctKeyShuffleCols map[*plan.Node]int32
 
+	// base-table joins built by the fulltext rewrite whose driving search an outer score
+	// sort may bound like the implicit LIMIT, keyed by join node id.
+	fulltextBoundableJoins map[int32]fulltextBoundableJoin
+
 	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
 	// paired with the fulltext node producing each score. applyIndices recurses children
 	// first, so those scans already exist when the PROJECT above the join is visited -- but
@@ -506,20 +530,28 @@ type QueryBuilder struct {
 	// window, PREPARE) reads the same decision.
 	boolSumAvgCompat      bool
 	noUnsignedSubtraction bool
+	// matrixOneNativeMode is the statement's D11 MatrixOneNativeMode
+	// decision, resolved once by the same single resolver the BindContext and
+	// DDL expression carriers use. It is stored as the native-mode flag by
+	// itself (false by zero value) so literal QueryBuilder constructions -
+	// the stats re-planner - keep the MySQL-compatible default; GetContext
+	// attaches the resulting boolean-contracts scalar so builder-scoped DML
+	// assignment casts and projected rewrites bind with the statement's
+	// actual mode instead of the absent-scalar default.
+	matrixOneNativeMode   bool
 	divPrecisionIncrement int32
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
 	skipStats             bool
 	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
+	isODKU                bool             // INSERT ... ON DUPLICATE KEY UPDATE: retain action provenance
 	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
 	// Ordinary LOAD validates real primary keys while retaining the bulk-write plan.
 	checkLoadPrimaryKey bool
 
 	insertHasOnDuplicateUpdate bool // statement-local: keep pure INSERT IGNORE auto-increment handling out of ODKU
-	// Non-nil only on a discarded validation builder, never an executable plan.
-	odkuAdmission *odkuAdmissionState
 
 	// spill memory for aggregate function
 	// jsonProbeFtNodes marks the fulltext index-scan nodes built for a json
@@ -621,7 +653,6 @@ type QueryBuilder struct {
 	returningFilterPos int32
 	returningRequested bool
 	returningTableDef  *plan.TableDef
-	returningObjRef    *plan.ObjectRef
 	returningTableName string
 	returningAlias     string
 	returningColPos    map[string]int32
@@ -652,6 +683,20 @@ type QueryBuilder struct {
 	// semantics.
 	cteRefs []*CTERef
 
+	// Required CTE identity belongs to this builder, including validation-only builders.
+	boundCTEs        map[*CTERef]map[*BindContext]*boundCTE
+	semanticCTESinks map[int32]*boundCTE
+	// Finalize after the complete statement binds, before optimizer rewrites.
+	cteIdentityFinalized bool
+	// Completed stable CTE roots, valid only until the next binding rewrite.
+	stableCTERoots           map[int32]bool
+	cteRecursiveBindingDepth int
+	recursiveCTEOwners       map[int32]*CTERef
+
+	// cteSinkNodes owns shared CTE publication schemas. Unlike other users of
+	// CTESinkOption, all of their readers register for positional column remapping.
+	cteSinkNodes map[int32]struct{}
+
 	// localCTERoots identifies CTE boundaries before executable-column remapping.
 	// Correlated producers must be parameterized before their consumers flatten.
 	localCTERoots map[int32]bool
@@ -671,7 +716,6 @@ type irregularUpdateMaintenance struct {
 }
 
 type OptimizerHints struct {
-	vectorLocalDOP             int
 	pushDownLimitToScan        int
 	pushDownTopThroughLeftJoin int
 	pushDownSemiAntiJoins      int
@@ -697,6 +741,9 @@ type OptimizerHints struct {
 	printShuffle               int
 	skipDedup                  int
 	outerAntiPlanning          int
+	// rollupSort: 1 forces the sort rollup path, 2 forces the legacy hash/
+	// grouping-set path, and 0 selects using the ROLLUP cost model.
+	rollupSort int
 }
 
 type CTERef struct {
@@ -847,9 +894,13 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
-	odkuAdmission        *odkuAdmissionState // validation-only expression recovery
-	existentialBlock     uint64
-	subqueryNestingDepth uint32
+	// The grouping/window rewrite owns this exact generated source. Neither
+	// field is inherited by NewBindContext: genuine SQL boundaries stay real.
+	integerPrecisionGeneratedSource     *tree.Select
+	integerPrecisionTransparentBoundary bool
+	integerPrecision                    *integerPrecisionBuilder
+	existentialBlock                    uint64
+	subqueryNestingDepth                uint32
 
 	binder Binder
 
@@ -878,6 +929,29 @@ type BindContext struct {
 	// raw ENUM/SET sidecar in the query block's PROJECT. It is populated only
 	// for row-preserving View ORDER BY boundaries.
 	mysqlSpecialRawProjectPositions map[int32]int32
+	// mysqlSpecialGroupStorageSlots maps a visible GROUP BY slot whose group
+	// expression is an ENUM/SET display call to a hidden storage-identity group
+	// slot appended beside it. Grouping on (display, storage) gives the group
+	// key MySQL's ordinal/bitmask identity for declarations whose zero sentinel
+	// and a valid member display identically as text (an empty label member),
+	// and boolean-truth consumers above the GROUP BY read the hidden slot so
+	// stored truth, never display text, decides the outcome. Planner-local only.
+	mysqlSpecialGroupStorageSlots map[int32]int32
+
+	// mysqlConditionalBooleanContracts resolves the statement's compatibility
+	// scalar from the session flag (MatrixOneNativeMode) once per root context:
+	// true binds IF/CASE conditions and every boolean context with the MySQL
+	// storage-truth / in-domain JSON conditional semantics; false keeps the
+	// exact pre-contract behavior (D11 two-carrier design, one scalar carried
+	// on BindContext for the SELECT path and attached to contexts from
+	// ddlExpressionContext for the standalone DDL binders). Children inherit
+	// it; the hidden grouping sibling exists only when it is true.
+	// mysqlConditionalBooleanContractsValid marks that a root context (or a
+	// context with a resolved ancestor) resolved the session's decision - an
+	// unsettled value never gates behavior, because the default session is
+	// MySQL-compatible.
+	mysqlConditionalBooleanContracts      bool
+	mysqlConditionalBooleanContractsValid bool
 
 	//cteByName saves all cte definitions in the current stmt
 	cteByName map[string]*CTERef
@@ -886,6 +960,7 @@ type BindContext struct {
 	sliding                      bool
 	explicitSliding              bool
 	isDistinct                   bool
+	hasHaving                    bool // query-block ownership survives constant HAVING elimination
 	normalizeGroupingSetDistinct bool
 	// groupingSetOrderHiddenCount marks the generated ORDER BY projections at
 	// the tail of a grouping-set branch select list. They are qualified after
@@ -905,6 +980,9 @@ type BindContext struct {
 	hasSingleRow              bool
 	isGroupingSet             bool
 	groupingFuncAllowed       bool
+	// sortRollup is set only for the single-query-block ROLLUP fast path. The
+	// normal grouping-set rewrite remains available for all other forms.
+	sortRollup bool
 
 	//cteName denotes the alias of this BindContext.
 	//it may be from view name, cte name or subquery name
@@ -934,6 +1012,7 @@ type BindContext struct {
 	// expressions immediately after function binding, before a bind-time fold
 	// can erase the function from the persisted plan.
 	persistedExpressionProtocolRequirement *int64
+	ctasExecutionProtocolRequirement       *int64
 	// expandedSelectLists records the expanded output for each SELECT clause
 	// participating in a view definition, including UNION branches.
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
@@ -1010,7 +1089,7 @@ type BindContext struct {
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type
 	numericTableProjectionAmbiguous map[string][]bool
-	numericCteByName                map[string]*tree.CTE
+	numericCteByName                map[string]*CTERef
 
 	timeAsts []tree.Expr
 
@@ -1078,14 +1157,16 @@ type BindContext struct {
 // source expression's nullability.
 func (bc *BindContext) groupOutputType(groupPos int32) Type {
 	typ := bc.groups[groupPos].Typ
-	if groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos] {
+	if bc.sortRollup ||
+		(groupPos >= 0 && int(groupPos) < len(bc.groupingFlag) && !bc.groupingFlag[groupPos]) {
 		typ.NotNullable = false
 	}
 	return typ
 }
 
-func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32) Type {
-	if groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos] {
+func groupingFlagOutputType(typ Type, groupingFlag []bool, groupPos int32, sortRollup bool) Type {
+	if sortRollup ||
+		(groupPos >= 0 && int(groupPos) < len(groupingFlag) && !groupingFlag[groupPos]) {
 		typ.NotNullable = false
 	}
 	return typ
@@ -1315,7 +1396,6 @@ type Binding struct {
 	// outputColumnProvenance is aligned with cols and carries planner-local
 	// source or pure-NULL output identity. It is never serialized into the plan.
 	outputColumnProvenance []OutputColumnProvenance
-	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool

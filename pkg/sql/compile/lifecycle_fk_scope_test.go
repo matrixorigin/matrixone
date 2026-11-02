@@ -122,7 +122,7 @@ func TestDropLifecycleForeignKeyDomain(t *testing.T) {
 
 	// A temporary alias must not acquire or inspect the permanent table's FK
 	// domain. This also covers an absent DROP TEMPORARY IF EXISTS plan.
-	proc.Session = &trackingTempTableSession{tables: map[string]string{"middle.t": "temp_t"}}
+	proc.Session = &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey("middle", "t"): "temp_t"}}
 	names, after, err = c.loadDropLifecycleDomain(entries, "")
 	require.NoError(t, err)
 	require.Empty(t, names)

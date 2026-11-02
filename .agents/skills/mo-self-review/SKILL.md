@@ -34,6 +34,45 @@ or an objectively missing mandatory artifact/validation. Preferences, plausible
 concerns, maintainability suggestions, and micro-nits are non-blocking or
 omitted. Assign severity only after the finding is verified.
 
+MatrixOne upgrades by full-cluster shutdown only; old and new binaries never
+serve one cluster together. "An older CN/TN cannot decode or run this" is not a
+finding: never request, or block on the absence of, a per-feature
+`MORPCVersion`, `AllCNsSupportProtocol`/capability gate, or old-peer fallback.
+Compatibility findings must show a new binary misreading persisted state,
+backups, or an external-boundary protocol. See
+[upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md).
+
+## Design quality and delivery scope
+
+- Start from user behavior, real callers and existing responsibility owners.
+  Reuse authoritative state machines, validation, storage and execution paths.
+  An unused capability may be missing integration; establish intent before deletion.
+- Trace how new and existing logic fit together. Justify new branches, recheck
+  old assumptions, and remove superseded logic and compatibility paths when
+  their supported use ends, including configuration, state, wiring and docs.
+- Remove unreachable branches, unused fields, redundant computation and
+  abstractions without useful callers. Added complexity must earn its runtime
+  and maintenance cost through concrete functionality, correctness, robustness
+  or performance; avoid speculative generality and over-engineering.
+- Test real entry points, boundaries and reachable unhappy paths with independent
+  oracles and minimal fixtures. Reject duplicated setup, implementation-mirroring
+  assertions and test volume that adds no distinct behavioral proof.
+- Evaluate implementation, tests and documentation separately, then assess the
+  total maintained diff. Net growth is a negative that needs justified benefit;
+  genuine net reduction is a positive when behavior and coverage are preserved.
+  Moving files or externalizing logs is not product simplification. Never remove
+  necessary behavior, coverage or explanation merely to improve line counts.
+- Before delivery, exclude temporary files, raw logs/profiles/benchmark results,
+  per-run manifests, agent transcripts, review attestations and one-off proof
+  narratives. Retain maintained design docs, regression fixtures and reproduction
+  tools only where they have continuing value to the repository.
+
+Keep raw evidence outside tracked source. When reviewers need it, use CI
+artifacts, PR attachments or durable external links; do not require a raw-evidence
+commit to satisfy review. Keep the PR body concise: problem, resulting behavior,
+key validation/results and material limits. Link bulky details instead of pasting
+logs, repeated summaries or the experiment/review chronology.
+
 ## Resolve target and scope
 
 | Args | Target |
@@ -109,7 +148,7 @@ not “diff is small.”
 | Control/liveness | Can cancel/close/reject/timeout terminate independently of the work it controls? |
 | Resource lifecycle | Does each resource have one effective cleanup owner on success, partial failure, cancel, panic, reset, and reuse? |
 | Boundedness/scale | Are queues, retries, caches, retained state, logs/metrics, memory/disk/FDs, and work admission bounded? |
-| Compatibility/security | Are API/wire/disk/catalog/config, mixed-version/migration/rollback, auth, tenant, and trust boundaries preserved? |
+| Compatibility/security | Can a new binary read everything an old one persisted (disk/catalog/config/backup), do migrations and external protocols stay compatible, and are auth, tenant, and trust boundaries preserved? Upgrade is shutdown-only: never require in-cluster mixed-version gates or `MORPCVersion` bumps ([upgrade-compatibility.md](../mo-dev/references/upgrade-compatibility.md)). |
 | Performance/operations | Did hot-path work, allocations, I/O, synchronization, startup, capacity, rollout, observability, or blast radius change materially? |
 | Platform/delivery | Are build tags, OS/arch, CGo/native loading, generated files, packaging, and final committed artifacts correct? |
 | Test architecture | Do tests prove distinct contracts with minimum deterministic data/setup, correct UT/BVT layer, isolation, cleanup, and real selection? |
@@ -137,7 +176,7 @@ Trace only applicable arcs, but trace them to terminal nodes:
 | persistence/format | create/write -> read -> backup/restore -> upgrade/restart |
 | operator/pipeline | prepare -> call/send -> receive -> reset/cleanup -> error/cancel |
 | resource/state machine | create/admit -> transfer/transitions -> fail/retry -> close/reuse generation |
-| config/API/protocol | parse/default -> producer -> every consumer -> compatibility/fallback |
+| config/API/protocol | parse/default -> producer -> every consumer -> compatibility with persisted/external data (no in-cluster old-peer fallback) |
 | shared test fixture | create -> scenario admission -> cleanup after `FailNow` -> reset -> next scenario -> destroy |
 | BVT | clean/readiness -> public action -> positive/negative oracle -> restore/teardown -> same-instance rerun |
 

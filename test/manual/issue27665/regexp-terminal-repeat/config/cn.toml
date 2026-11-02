@@ -1,0 +1,60 @@
+service-type = "CN"
+data-dir = "./mo-data"
+
+# Opt into the checksum-free DISK-V2 backend. The cluster-wide default remains
+# DISK (CRC-framed) for backward compatibility with existing data dirs; this
+# config explicitly selects DISK-V2 for a fresh deployment.
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK-V2"
+data-dir = "./mo-data/local2"
+
+[[fileservice]]
+name = "SHARED"
+backend = "DISK-V2"
+data-dir = "./mo-data/shared2"
+
+[log]
+level = "info"
+
+# Fresh local/BVT cluster opt-in. Never enable during a mixed-version upgrade.
+[cn.auto-increment]
+enable-auto-id-cache = true
+
+[cn]
+uuid = "0b650142-e6e5-41cb-b797-d172828cf020"
+port-base = 29300
+
+[cn.Engine]
+# only prefetch the matched db.table
+prefetch-on-subscribed = [
+    '^mo_catalog\.mo_tables$',
+    '^mysql\..*$',
+    '^test1\..*$',
+    '^test2\.t1$',
+]
+
+[malloc]
+check-fraction = 65536
+enable-metrics = true
+
+[observability]
+trace-export-interval = 1
+disableMetric = true
+enable-metric-to-prom = false
+status-port = 17880
+
+[cn.frontend.iceberg]
+enable = true
+enable-write = true
+enable-delete = true
+enable-dml = true
+enable-maintenance = true
+
+[cn.frontend]
+port = 16879
+processLimitationSize = 4294967296
+processLimitationSpillSize = 4294967296
+
+[hakeeper-client]
+service-addresses = ["127.0.0.1:33301"]

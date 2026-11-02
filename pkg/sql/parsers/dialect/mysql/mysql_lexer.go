@@ -432,8 +432,15 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		*l.scanner = snapshot
 	}
 
+	if l.lastToken == FOR && (typ == UPDATE || typ == SHARE) {
+		str = l.scanLockModePhrase(str)
+		lval.pos = l.scanner.Pos
+		l.scanner.LastToken = str
+	}
+
 	switch typ {
 	case INTEGRAL:
+		lval.str = str // Preserve lexical precision independently of the integer value.
 		l.recordSyntaxToken(typ)
 		return l.toInt(lval, str)
 	case FLOAT:
@@ -460,12 +467,46 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if typ == ID && l.lastToken != int('.') && strings.EqualFold(str, "asof") && l.asofJoinPhraseAhead() {
 		typ = ASOF
 	}
+	// ADMIN is contextual to the role-grant clause `WITH ADMIN OPTION`
+	// (MySQL 8.0 GRANT role TO user WITH ADMIN OPTION). Everywhere else the
+	// word stays a plain identifier: users, roles, CTEs, tables and columns
+	// named admin keep parsing unchanged.
+	if typ == ID && l.lastToken == WITH && strings.EqualFold(str, "admin") && l.adminOptionAhead() {
+		typ = ADMIN
+	}
 
 	l.previousToken = l.lastToken
 	l.lastToken = typ
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
+}
+
+// scanLockModePhrase keeps modifiers contextual without new global keywords or
+// parser states. Failed speculation leaves the scanner in its original state;
+// shared parse-control accounting still charges the lookahead work.
+func (l *Lexer) scanLockModePhrase(mode string) string {
+	lookahead := *l.scanner
+	token, word := lookahead.Scan()
+	consumed := 1
+	switch {
+	case token == ID && strings.EqualFold(word, "nowait"):
+		mode += " nowait"
+	case token == CONFLICT_SKIP && strings.EqualFold(mode, "share"):
+		token, word = lookahead.Scan()
+		if token != ID || !strings.EqualFold(word, "locked") {
+			return mode
+		}
+		mode += " skip locked"
+		consumed++
+	default:
+		return mode
+	}
+	for range consumed {
+		lookahead.parseControl.token()
+	}
+	*l.scanner = lookahead
+	return mode
 }
 
 func (l *Lexer) alterAccountConfigPhraseAhead() bool {
@@ -508,6 +549,29 @@ func (l *Lexer) asofJoinPhraseAhead() bool {
 	}
 	next, _ = lookahead.Scan()
 	return next == JOIN
+}
+
+// adminOptionAhead reports whether the identifier `admin` currently follows
+// WITH and precedes OPTION, i.e. whether the phrase is the role-grant clause
+// `WITH ADMIN OPTION` rather than an identifier use such as a CTE named
+// admin (`WITH admin AS (...)`).
+func (l *Lexer) adminOptionAhead() bool {
+	// Peek from the LIVE scanner's lexical state. A freshly built Scanner{}
+	// drops the executable-comment context (CommentFlag and the comment end
+	// position), so inside `/*!80000 admin */ option` the peek would read the
+	// closing '*' instead of skipping '*/' to OPTION, and the clause would
+	// degenerate into a bare identifier. Copying the live scanner value is the
+	// same peek mechanism the other phrase lookaheads in this file use; the
+	// copy also detaches the MySQL special-comment sub-scanner so the peek can
+	// never move shared state, and a peek never commits the live scanner.
+	lookahead := *l.scanner
+	if lookahead.MysqlSpecialComment != nil {
+		sub := *lookahead.MysqlSpecialComment
+		lookahead.MysqlSpecialComment = &sub
+	}
+
+	next, _ := lookahead.Scan()
+	return next == OPTION
 }
 
 // hasAsofLeftFactorAlias follows the right edge of a table-reference chain,

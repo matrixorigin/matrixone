@@ -94,16 +94,15 @@ use drop_object_privileges_db;
 create or replace view v1 as select 2 as id;
 set @drop_priv_new_v1_id = (select rel_logical_id from mo_catalog.mo_tables
 where reldatabase = 'drop_object_privileges_db' and relname = 'v1');
-select @drop_priv_new_v1_id <> @drop_priv_v1_id as replaced_view_logical_id_changed;
-➤ replaced_view_logical_id_changed[-7,1,0]  𝄀
+select @drop_priv_new_v1_id = @drop_priv_v1_id as replaced_view_logical_id_preserved;
+➤ replaced_view_logical_id_preserved[-7,1,0]  𝄀
 1
-select count(*) as replaced_view_old_grants
+select count(*) as replaced_view_exact_grants
 from mo_catalog.mo_role_privs
 where role_name = 'drop_object_privileges_role'
 and obj_id = @drop_priv_v1_id;
-➤ replaced_view_old_grants[-5,64,0]  𝄀
-0
-grant select on view drop_object_privileges_db.v1 to drop_object_privileges_role;
+➤ replaced_view_exact_grants[-5,64,0]  𝄀
+1
 alter view v1 as select 3 as id;
 set @drop_priv_altered_v1_id = (select rel_logical_id from mo_catalog.mo_tables
 where reldatabase = 'drop_object_privileges_db' and relname = 'v1');

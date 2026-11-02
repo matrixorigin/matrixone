@@ -246,10 +246,10 @@ sirius_runtime_paths=
 sirius_tag_args=
 sirius_extld=
 if [ "${MO_SIRIUS:-}" = "1" ]; then
-    if [ "$goos/$goarch" != linux/amd64 ]; then
-        echo "MO_SIRIUS=1 CGo tests require linux/amd64, not $goos/$goarch" >&2
-        exit 1
-    fi
+    case "$goos/$goarch" in
+        linux/amd64|linux/arm64) ;;
+        *) echo "MO_SIRIUS=1 CGo tests require linux/amd64 or linux/arm64, not $goos/$goarch" >&2; exit 1 ;;
+    esac
     if [ -z "${SIRIUS_SDK:-}" ] || [ ! -f "$SIRIUS_SDK/link.json" ]; then
         echo "MO_SIRIUS=1 CGo tests require a generated SIRIUS_SDK" >&2
         exit 1

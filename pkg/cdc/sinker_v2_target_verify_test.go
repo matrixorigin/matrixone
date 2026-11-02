@@ -46,11 +46,13 @@ func TestCDCTargetGuardSQLRetryClassification(t *testing.T) {
 		{"production driver lost connection", &mysql.MySQLError{Number: 2013}, true},
 		{"production driver communication timeout", &mysql.MySQLError{Number: 1159}, true},
 		{"production driver MO RPC timeout", &mysql.MySQLError{Number: moerr.ErrRPCTimeout}, true},
+		{"production driver lock bind changed", &mysql.MySQLError{Number: moerr.ErrLockTableBindChanged}, true},
 		{"wrapped production driver timeout", fmt.Errorf("target: %w", &mysql.MySQLError{Number: 1161}), true},
 		{"production driver syntax error", &mysql.MySQLError{Number: 1064}, false},
 		{"production driver permission denied", &mysql.MySQLError{Number: 1142}, false},
 		{"release timeout with discarded connection", errors.Join(context.DeadlineExceeded, sql.ErrConnDone), true},
 		{"cancelled release timeout", errors.Join(context.Canceled, context.DeadlineExceeded), false},
+		{"cancelled lock bind change", errors.Join(context.Canceled, moerr.NewLockTableBindChangedNoCtx()), false},
 		{"MO RC definition changed over SQL wire", &gomysql.MySQLError{Number: moerr.ErrTxnNeedRetryWithDefChanged}, true},
 		{"missing SELECT privilege", &gomysql.MySQLError{Number: 1142}, false},
 		{"cancelled", context.Canceled, false},
@@ -78,6 +80,7 @@ func TestCDCBackendTransportEquivalence(t *testing.T) {
 		moerr.NewNoAvailableBackend(ctx), moerr.NewBackendCannotConnect(ctx),
 		moerr.NewTNShardNotFound(ctx, "shard", 1), moerr.NewRpcError(ctx, "temporary"),
 		moerr.NewTxnNeedRetryNoCtx(), moerr.NewTxnNeedRetryWithDefChangedNoCtx(),
+		moerr.NewLockTableBindChangedNoCtx(),
 		moerr.NewClientClosed(ctx), moerr.NewStreamClosed(ctx),
 	} {
 		t.Run(fmt.Sprint(cause.ErrorCode()), func(t *testing.T) {

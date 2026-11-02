@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -252,14 +251,6 @@ func WithTCPPacket(count bool) tracerProviderOption {
 func WithMaxLogMessageSize(size int) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.MaxLogMessageSize = size
-	}
-}
-
-func WithMaxStatementSize(service string) tracerProviderOption {
-	return func(cfg *tracerProviderConfig) {
-		if s, exist := runtime.ServiceRuntime(service).GetGlobalVariables(MaxStatementSize); exist {
-			cfg.MaxStatementSize = s.(int)
-		}
 	}
 }
 

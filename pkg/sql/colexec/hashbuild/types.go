@@ -478,6 +478,9 @@ func validateSpillFileSize(file *os.File, expected uint64) error {
 }
 
 type HashBuild struct {
+	// DirectInput consumes a same-lane batch-only build through ExecYield
+	// checkpoints. Hash and spill builds keep their existing pipeline contract.
+	DirectInput                   bool
 	ctr                           container
 	NeedHashMap                   bool
 	HashOnPK                      bool
@@ -500,6 +503,7 @@ type HashBuild struct {
 	OnDuplicateAction         plan.Node_OnDuplicateAction
 	DedupColName              string
 	DedupColTypes             []plan.Type
+	DedupKeyExprs             []*plan.Expr
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
 
@@ -983,10 +987,6 @@ func (hb *HashmapBuilder) DrainCopiedBatches(
 	hb.Batches.MemSize = 0
 	hb.retainedSpillTailSelected = 0
 	return nil
-}
-
-func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (ctr *container) setSpillThreshold(threshold int64) {

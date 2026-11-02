@@ -58,22 +58,6 @@ var newPartitionChangesHandle = func(
 	)
 }
 
-func GetPartitionStateStart(
-	ctx context.Context,
-	rel engine.Relation,
-) (types.TS, error) {
-	var tbl *txnTable
-	var ok bool
-	if tbl, ok = rel.(*txnTable); !ok {
-		tbl = rel.(*txnTableDelegate).origin
-	}
-	state, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return types.TS{}, err
-	}
-	return state.GetStart(), nil
-}
-
 func (tbl *txnTable) CollectChanges(
 	ctx context.Context,
 	from, to types.TS,

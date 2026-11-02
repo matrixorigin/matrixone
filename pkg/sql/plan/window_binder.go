@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -40,6 +41,7 @@ type windowFuncExprBinder interface {
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
 	mysqlSpecialOrderKey(*plan.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
+	GetProcess() *process.Process
 }
 
 const maxWindowsPerQueryBlock = 127
@@ -590,7 +592,6 @@ func cloneBindContextForWindowValidation(ctx *BindContext) *BindContext {
 }
 
 type windowValidationCTERefSnapshot struct {
-	ast          *tree.CTE
 	ref          *CTERef
 	isRecursive  bool
 	occurrences  []cteOccurrence
@@ -607,7 +608,7 @@ type windowValidationContextSnapshot struct {
 // publishing its node ids through the mutable CTE metadata shared by the real
 // query builder. CTE declaration contexts are included because binding a CTE
 // can also record view dependencies on the declaration root.
-func snapshotWindowValidationCTEState(ctx *BindContext, isolateAST ...bool) func() {
+func snapshotWindowValidationCTEState(ctx *BindContext) func() {
 	cteSnapshots := make(map[*CTERef]windowValidationCTERefSnapshot)
 	contextSnapshots := make(map[*BindContext]windowValidationContextSnapshot)
 
@@ -620,17 +621,11 @@ func snapshotWindowValidationCTEState(ctx *BindContext, isolateAST ...bool) func
 			return
 		}
 		cteSnapshots[ref] = windowValidationCTERefSnapshot{
-			ast:          ref.ast,
 			ref:          ref,
 			isRecursive:  ref.isRecursive,
 			occurrences:  append([]cteOccurrence(nil), ref.occurrences...),
 			hasNestedRef: ref.hasNestedRef,
 			hasNestedUse: ref.hasNestedUse,
-		}
-		if len(isolateAST) > 0 && isolateAST[0] && ref.ast != nil {
-			ref.ast = cloneTreeValue(reflect.ValueOf(ref.ast), make(map[treeClonePointer]reflect.Value)).Interface().(*tree.CTE)
-			ref.occurrences = nil // Node IDs belong to the real builder.
-			ref.hasNestedRef, ref.hasNestedUse = false, false
 		}
 		collectContext(ref.declarationCtx)
 	}
@@ -658,7 +653,6 @@ func snapshotWindowValidationCTEState(ctx *BindContext, isolateAST ...bool) func
 
 	return func() {
 		for _, snapshot := range cteSnapshots {
-			snapshot.ref.ast = snapshot.ast
 			snapshot.ref.isRecursive = snapshot.isRecursive
 			snapshot.ref.occurrences = snapshot.occurrences
 			snapshot.ref.hasNestedRef = snapshot.hasNestedRef
@@ -960,6 +954,32 @@ func bindWindowSpec(
 		}
 	}
 
+	if isLocalSlidingRankWindowFunction(funcName) {
+		// Decision D4 (#29947): the three local-rank operators derive every
+		// row's frame from their own arguments, so a user-written frame would
+		// create two conflicting window sources; refuse it, and do not
+		// synthesize a default frame on the window spec either: tmrank's
+		// width travels as its published (count, unit) function arguments and
+		// the operator derives each row's frame at evaluation time.
+		if ws.HasFrame {
+			return nil, moerr.NewInvalidInput(
+				b.GetContext(),
+				funcName+"'s window comes from its arguments and does not accept an explicit frame")
+		}
+		// Decision D21: tmrank resolves RANGE-interval membership through the
+		// shared RANGE-search resolver, whose temporal key domain is exactly
+		// DATE/TIME/DATETIME/TIMESTAMP (the switch has no T_year case even
+		// though IsTemporal() admits it), so restrict the ORDER BY key domain
+		// at binding time with a named diagnostic.
+		if funcName == "tmrank" &&
+			(len(w.OrderBy) != 1 || !isSupportedTmRankOrderKeyOid(w.OrderBy[0].Expr.Typ.Id)) {
+			return nil, moerr.NewParseError(
+				b.GetContext(),
+				"tmrank window order key requires exactly one ORDER BY expression of DATE, TIME, DATETIME or TIMESTAMP type")
+		}
+		return w, nil
+	}
+
 	switch ws.Frame.Start.Type {
 	case tree.Following:
 		if ws.Frame.Start.UnBounded {
@@ -1000,7 +1020,7 @@ func bindWindowSpec(
 		if len(w.OrderBy) == 0 {
 			break
 		}
-		typ = &w.OrderBy[0].Expr.Typ
+		typ = rangeFrameBoundType(w.OrderBy[0].Expr.Typ)
 		t := types.Type{Oid: types.T(typ.Id)}
 		if consumerSpecific && !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type")
@@ -1059,8 +1079,25 @@ func bindWindowSpec(
 	return w, nil
 }
 
+// rangeFrameBoundType returns the arithmetic domain used to fold and carry a
+// numeric RANGE offset. Narrow signed ORDER BY columns must not narrow the
+// offset itself: key +/- offset is evaluated in the signed 64-bit domain and
+// the window executor maps results outside the physical key domain to an
+// insertion boundary.
+func rangeFrameBoundType(orderType plan.Type) *plan.Type {
+	switch types.T(orderType.Id) {
+	case types.T_int8, types.T_int16, types.T_int32:
+		typ := types.T_int64.ToType().PlanType()
+		return &typ
+	default:
+		typ := orderType
+		return &typ
+	}
+}
+
 func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT &&
+		!strings.EqualFold(funcName, NameQuantileExactWeighted) {
 		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
 	}
 
@@ -1105,10 +1142,37 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		windowArgs = append(windowArgs, astExpr.Exprs...)
 	}
 
+	// The ewm shape rules (missing decay, explicit frame, ORDER BY
+	// presence) run BEFORE the registry bind so the §7 messages win over
+	// the generic wrong-parameters family.
+	if function.GetFunctionIsWinEwmFunByName(strings.ToLower(funcName)) {
+		if err := validateEwmWindowCallShape(b.GetContext(), funcName, astExpr, ws); err != nil {
+			return nil, err
+		}
+	}
+
 	// window function
 	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, windowArgs, depth)
 	if err != nil {
 		return nil, err
+	}
+	// quantileExactWeighted is the one DISTINCT window aggregate: the
+	// design contract admits the combination, and constructWindow reads
+	// the distinct bit out of the bound function exactly like the group
+	// aggregate path (having_binder.go) records it.
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+		if f := windowFunc.GetF(); f != nil {
+			f.Func.Obj = int64(uint64(f.Func.Obj) | function.Distinct)
+		}
+	}
+	if function.GetFunctionIsWinIndicatorFunByName(funcName) {
+		// Section-4 SQL surface of the technical-indicator kernels
+		// (issue #29949): required ORDER BY, explicit-frame rejection and
+		// the constant-integer period domain.
+		if err := validateIndicatorWindowSpec(
+			b.GetContext(), funcName, ws, windowFunc, b.GetProcess()); err != nil {
+			return nil, err
+		}
 	}
 	if orderedSet {
 		if err = applyOrderedSetAggregateDirection(
@@ -1126,6 +1190,14 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	w.WindowFunc = windowFunc
 	w.Name = funcName
 
+	// Post-bind on the resolved arguments: decay and policy constancy, the
+	// typed decay shape and the event-time ORDER BY rules (§7).
+	if function.GetFunctionIsWinEwmFunByName(strings.ToLower(funcName)) {
+		if err := validateEwmWindowCallSignatures(b.GetContext(), funcName, windowFunc, w); err != nil {
+			return nil, err
+		}
+	}
+
 	if colPos, ok := ctx.windowByAst[astStr]; ok {
 		return buildWindowColRefExpr(ctx, ctx.windows[colPos].Typ, colPos), nil
 	}
@@ -1138,6 +1210,113 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	ctx.windowByAst[astStr] = colPos
 
 	return buildWindowColRefExpr(ctx, w.WindowFunc.Typ, colPos), nil
+}
+
+// validateIndicatorWindowSpec enforces the section-4 SQL surface contract
+// of the technical-indicator window kernels (issue #29949; docs/design/
+// technical_indicator_window_kernels.md): ORDER BY inside OVER is required
+// (series order is part of the operator's mathematical definition),
+// explicit ROWS/RANGE/GROUPS frames are rejected (the period parameter
+// defines extent), and the period argument must fold to an integer constant
+// in [1, 1024].
+func validateIndicatorWindowSpec(
+	ctx context.Context,
+	funcName string,
+	ws *tree.WindowSpec,
+	bound *plan.Expr,
+	proc *process.Process,
+) error {
+	if len(ws.OrderBy) == 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"window function '%s' requires an ORDER BY expression: series order is part of the indicator's definition",
+			funcName)
+	}
+	if ws.HasFrame {
+		return moerr.NewInvalidInputf(ctx,
+			"window frame is not applicable to %s: the period is given by %s's parameter",
+			funcName, funcName)
+	}
+	fn := bound.GetF()
+	if fn == nil {
+		return moerr.NewInternalErrorf(ctx, "invalid bound window function %s", funcName)
+	}
+	if len(fn.Args) == 0 || !types.MustTypeFromPlan(fn.Args[0].Typ).IsNumeric() {
+		return moerr.NewInvalidInputf(ctx, "argument 1 of %s must be numeric", funcName)
+	}
+	if funcName == "cumpositivestreak" {
+		return nil
+	}
+	if len(fn.Args) != 2 {
+		return moerr.NewInvalidInputf(ctx, "%s takes exactly two arguments (x, n)", funcName)
+	}
+	period, ok := constantFoldedPeriod(fn.Args[1], proc)
+	if !ok || period < 1 || period > 1024 {
+		return moerr.NewInvalidInputf(ctx,
+			"period argument of %s must be a constant integer in [1, 1024]", funcName)
+	}
+	return nil
+}
+
+// constantFoldedPeriod evaluates a period expression through the package's
+// shared deterministic constant-expression evaluator - the same ConstantFold
+// used inside base binding and the optimizer - and reports the folded
+// integer. Section 4 admits any expression that folds to an integer
+// constant, including deterministic scalar functions outside the base
+// binder's automatic fold set (LENGTH('abc'), GREATEST(2,3)); the evaluator
+// itself refuses to fold volatile, real-time, aggregate or window
+// functions, expressions that evaluate only with warnings, and errors, so
+// every such form plus non-constant inputs, NULL and non-integer results
+// reports !ok and rejects with the pinned section-4 diagnostic. Without a
+// process (builder-less unit-test stubs) only a directly-bound integer
+// literal qualifies. The folded value decides admission only; the executed
+// period still flows through the argument expression's own evaluation and
+// the executor-side per-row validation.
+func constantFoldedPeriod(expr *plan.Expr, proc *process.Process) (int64, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	folded := expr
+	if proc != nil {
+		var err error
+		folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+		if err != nil {
+			return 0, false
+		}
+	} else if folded.GetLit() == nil {
+		return 0, false
+	}
+	if folded.Typ.Id == int32(types.T_any) {
+		return 0, false
+	}
+	if !types.T(folded.Typ.Id).IsInteger() {
+		return 0, false
+	}
+	lit := folded.GetLit()
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	switch val := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return int64(val.I8Val), true
+	case *plan.Literal_I16Val:
+		return int64(val.I16Val), true
+	case *plan.Literal_I32Val:
+		return int64(val.I32Val), true
+	case *plan.Literal_I64Val:
+		return val.I64Val, true
+	case *plan.Literal_U8Val:
+		return int64(val.U8Val), true
+	case *plan.Literal_U16Val:
+		return int64(val.U16Val), true
+	case *plan.Literal_U32Val:
+		return int64(val.U32Val), true
+	case *plan.Literal_U64Val:
+		if val.U64Val > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(val.U64Val), true
+	}
+	return 0, false
 }
 
 func isWindowFrameParam(expr tree.Expr) bool {
@@ -1291,6 +1470,103 @@ func buildWindowColRefExpr(ctx *BindContext, typ plan.Type, colPos int32) *plan.
 	}
 }
 
+// admitWindowIntervalBindSource is the shared pre-evaluation admission
+// boundary for every window-interval bind source (frame bounds and tmrank's
+// width alike). A bound is evaluated HERE at bind time -- before the
+// frontend's mo_ctl sys-admin gate runs on the built plan -- and the evaluated
+// bound is then replaced by a constant so the gate's plan scan can never see
+// it. A control function (mo_ctl / fault_inject) is never a legitimate
+// interval magnitude, so reject it outright rather than let its cluster-wide
+// side effect fire unauthenticated (#28985). The ctl execution-entry backstop
+// also blocks it, but this gives a precise error and refuses it for every
+// account, including sys-admin.
+func admitWindowIntervalBindSource(bindCtx context.Context, e *Expr) error {
+	if HasMoCtrl(e) {
+		return moerr.NewNotSupported(bindCtx, "mo_ctl or fault_inject is not allowed in a window frame bound")
+	}
+	return nil
+}
+
+// windowIntervalBindSourceAdmitted is the static shape admission for an
+// eagerly evaluated window-interval source: literal constants, the direct
+// prepared magnitude marker (the raw pair's retained source) and
+// deterministic constant-foldable spines -- the resolver's fold-switch
+// operators over literals plus functions the registry positively proves
+// pure -- are admitted. Every other shape -- a column reference, an indirect
+// prepared form (a marker inside arithmetic), a subquery, a window entry or
+// a volatile/effectful function such as rand() or sleep() whose foldable
+// argument shapes do not prove purity -- is refused BEFORE any eager
+// evaluation (tmrank's conversion routes through it; frame bounds keep their
+// established emergent rejection so their observable errors do not shift).
+func windowIntervalBindSourceAdmitted(e *Expr) bool {
+	switch item := e.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P:
+		// Only the direct whole-magnitude marker is admitted at the top
+		// level (D18's retained source); the spine walk below rejects a
+		// marker nested inside arithmetic as an indirect prepared form.
+		return true
+	case *plan.Expr_F:
+		return windowIntervalFunctionNodeAdmitted(item.F)
+	default:
+		return false
+	}
+}
+
+// windowIntervalFoldSpineAdmitted walks the argument spine of a function
+// source: literals (and the cast protocol's inert TargetType descriptor,
+// which carries no evaluated child) and function nodes admitted by
+// windowIntervalFunctionNodeAdmitted only. A prepared marker hidden inside
+// arithmetic is an indirect prepared form and must not reach the eager
+// executor.
+func windowIntervalFoldSpineAdmitted(e *Expr) bool {
+	switch item := e.Expr.(type) {
+	case *plan.Expr_Lit:
+		return true
+	case *plan.Expr_T:
+		// The base cast binder wraps a cast's target type as the function's
+		// second argument; a decimal literal binds as cast(literal, type), so
+		// the descriptor is part of every constant-foldable decimal source.
+		return item.T != nil
+	case *plan.Expr_F:
+		return windowIntervalFunctionNodeAdmitted(item.F)
+	default:
+		return false
+	}
+}
+
+// windowIntervalFunctionNodeAdmitted gates one function node of an eagerly
+// evaluated window-interval source. Argument shapes alone cannot admit a
+// function: rand() and sleep(0) take literal-shaped arguments, yet evaluating
+// rand() at bind time freezes a nondeterministic width into the plan (D22's
+// constant-foldable admission) and sleep() runs its side effect during
+// binding. The gate therefore mirrors the guarded fold of the geometry SRID
+// probe (isGeometrySRIDConstFoldSafe): the resolver's fold-switch operators
+// that the ordinary bind's own constant fold evaluates stay admitted by
+// name, and every other function is admitted only through the registry's
+// positively proven pure value set -- GetFunctionIsProvenPureFoldableById,
+// never through the absence of a flag, so rand/sleep-style volatility,
+// real-time overloads, internal machinery and unproven builtins are all
+// refused pre-evaluation. Every argument must pass the spine walk.
+func windowIntervalFunctionNodeAdmitted(f *plan.Function) bool {
+	if f == nil || f.Func == nil {
+		return false
+	}
+	switch f.Func.GetObjName() {
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_plus", "unary_minus",
+		"unary_tilde", "cast", "serial", "serial_full":
+	default:
+		if !function.GetFunctionIsProvenPureFoldableById(f.Func.GetObj()) {
+			return false
+		}
+	}
+	for _, arg := range f.Args {
+		if !windowIntervalFoldSpineAdmitted(arg) {
+			return false
+		}
+	}
+	return true
+}
+
 func makeWindowFrameConstValue(
 	baseBindExpr func(tree.Expr, int32, bool) (*Expr, error),
 	proc *process.Process,
@@ -1302,14 +1578,11 @@ func makeWindowFrameConstValue(
 	if err != nil {
 		return nil, err
 	}
-	// A window frame bound is evaluated HERE, at bind time -- before the frontend's mo_ctl
-	// sys-admin gate runs on the built plan, and the evaluated bound is then replaced by a
-	// constant so the gate's plan scan can never see it. A control function (mo_ctl / fault_inject)
-	// is never a legitimate frame offset, so reject it outright rather than let its cluster-wide
-	// side effect fire unauthenticated (#28985). The ctl execution-entry backstop also blocks it,
-	// but this gives a precise error and refuses it for every account, including sys-admin.
-	if HasMoCtrl(e) {
-		return nil, moerr.NewNotSupported(bindCtx, "mo_ctl or fault_inject is not allowed in a window frame bound")
+	// The shared admission boundary owns the #28985 control-function
+	// prohibition for every route that eagerly evaluates a window interval
+	// bind source (tmrank's conversion calls it too).
+	if err := admitWindowIntervalBindSource(bindCtx, e); err != nil {
+		return nil, err
 	}
 	if e.Typ.Id == int32(types.T_interval) {
 		return resetWindowIntervalExpr(bindCtx, proc, e)
@@ -1320,6 +1593,18 @@ func makeWindowFrameConstValue(
 	e, err = appendCastBeforeExpr(bindCtx, e, *typ)
 	if err != nil {
 		return nil, err
+	}
+	if defines.IsPublicationViewBinding(bindCtx) {
+		// Publication scope validation (#27767) binds a stored definition's
+		// window frame bound without evaluating it: the eager executor here
+		// executes every function of the bound expression at bind time. The
+		// bound expression itself proves the frame clause binds against the
+		// validating schema, the marker keeps the optimizer's rewrite
+		// pipeline from running at all, and the subscriber's own compile
+		// evaluates frame bounds as usual. Literal bounds - the only form a
+		// well-formed view's frame uses - are unaffected: they bind to
+		// literals and never needed the executor.
+		return e, nil
 	}
 
 	executor, err := colexec.NewExpressionExecutor(proc, e)
@@ -1357,6 +1642,13 @@ func makeWindowFrameConstValue(
 }
 
 func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *Expr) (*Expr, error) {
+	// Defense-in-depth for the shared admission boundary (#28985 / decision
+	// D22): the frame-bound gate already runs it, but this normalizer
+	// evaluates its source eagerly and is safe only when every caller admits
+	// first. A pure read-only re-check keeps any future route honest.
+	if err := admitWindowIntervalBindSource(bindCtx, e.Expr.(*plan.Expr_List).List.List[0]); err != nil {
+		return nil, err
+	}
 	e1 := e.Expr.(*plan.Expr_List).List.List[0]
 	e2 := e.Expr.(*plan.Expr_List).List.List[1]
 
@@ -1451,6 +1743,16 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 		return nil, err
 	}
 
+	if defines.IsPublicationViewBinding(bindCtx) {
+		// Validation binds a stored definition's interval frame bound without
+		// evaluating it (#27767): this executor executes every function of
+		// the bound value at bind time, while the probe needs only the fact
+		// that the interval binds. Normalization itself is pure literal
+		// rewriting done above; the subscriber's own compile evaluates and
+		// normalizes as usual.
+		return e, nil
+	}
+
 	executor, err := colexec.NewExpressionExecutor(proc, numberExpr)
 	if err != nil {
 		return nil, err
@@ -1492,10 +1794,326 @@ func setWindowIntervalValue(
 	return e, nil
 }
 
+// bindTmRankWidthArgument converts tmrank's bound T_interval width into the
+// internal (count, unit) function arguments the catalog registers (decisions
+// D14/D18/D22). The binder's name-keyed conversion case calls it BEFORE
+// overload resolution, so no raw T_interval is ever published.
+//
+//   - the #28985 control-function prohibition runs first (the shared
+//     admission boundary's tier 1, same message as the frame-bound gate);
+//   - a direct prepared magnitude retains the raw pair -- the marker source
+//     expression plus the unit-string literal -- exactly as prepared frame
+//     bounds retain theirs, materializing per execution through the shared
+//     raw pipeline;
+//   - every other source passes the static admission walk and then the window
+//     frame-bound normalization matrix (D14/D20), yielding the normalized
+//     pair (int64 count const -- possibly null-marked for the D15
+//     NULL-arithmetic outcome -- plus int64 unit code).
+//
+// Non-foldable magnitudes and indirect prepared forms are refused by the
+// admission walk ahead of the eager const-fold instead of relying on the
+// executor's emergent failure.
+func bindTmRankWidthArgument(
+	bindCtx context.Context,
+	proc *process.Process,
+	interval *Expr,
+	name string,
+) (count *Expr, unit *Expr, err error) {
+	listPair := interval.GetList()
+	if listPair == nil || len(listPair.List) != 2 ||
+		listPair.List[0] == nil || listPair.List[1] == nil {
+		return nil, nil, moerr.NewInvalidArg(bindCtx, name+" interval width", "malformed interval")
+	}
+	if err := admitWindowIntervalBindSource(bindCtx, listPair.List[0]); err != nil {
+		return nil, nil, err
+	}
+	if listPair.List[0].GetP() != nil {
+		return listPair.List[0], listPair.List[1], nil
+	}
+	if !windowIntervalBindSourceAdmitted(listPair.List[0]) {
+		return nil, nil, moerr.NewInvalidArg(bindCtx, name+" interval width",
+			"a constant, foldable expression or direct parameter")
+	}
+	if proc == nil {
+		return nil, nil, moerr.NewInvalidInput(bindCtx, name+" interval width must be a constant")
+	}
+	normalized, normErr := resetWindowIntervalExpr(bindCtx, proc, interval)
+	if normErr != nil {
+		return nil, nil, normErr
+	}
+	normList := normalized.GetList()
+	return normList.List[0], normList.List[1], nil
+}
+
+// isLocalSlidingRankWindowFunction reports the three argument-windowed
+// frame-local competition rank operators of issue #29947.
+func isLocalSlidingRankWindowFunction(name string) bool {
+	switch name {
+	case "mrank", "cumrank", "tmrank":
+		return true
+	}
+	return false
+}
+
+// isSupportedTmRankOrderKeyOid matches the shared RANGE-search resolver's
+// temporal key domain exactly: T_year is deliberately absent (decision D21).
+func isSupportedTmRankOrderKeyOid(id int32) bool {
+	switch types.T(id) {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		return true
+	}
+	return false
+}
+
 func newWindowFrameOrderError(ctx context.Context) error {
 	return moerr.NewParseError(ctx, "Window '<unnamed window>': frame start cannot be after frame end.")
 }
 
 func newWindowFrameIllegalError(ctx context.Context) error {
 	return moerr.NewParseError(ctx, "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
+}
+
+// ewmAstStringLiteral reads a SQL string literal from the AST (the
+// parser hands strings to the binder as P_char NumVal constants).
+func ewmAstStringLiteral(ast tree.Expr) (string, bool) {
+	nv, ok := ast.(*tree.NumVal)
+	if !ok || nv.ValType != tree.P_char {
+		return "", false
+	}
+	return nv.String(), true
+}
+
+// validateEwmWindowCallShape enforces the §7 signature-table rules that
+// need only the call shape: the declared decay argument itself (the
+// positional arity below the minimum), the explicit-frame rejection and
+// the required ORDER BY expression in the OVER clause.
+func validateEwmWindowCallShape(
+	ctx context.Context, funcName string, astExpr *tree.FuncExpr, ws *tree.WindowSpec,
+) error {
+	valueArgs := 1
+	switch funcName {
+	case NameEwmCov, NameEwmCorr:
+		valueArgs = 2
+	}
+	if len(astExpr.Exprs) < valueArgs+1 {
+		return moerr.NewInvalidInput(ctx,
+			"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+	}
+	// The 'halflife' tag declares its h at the next position and is never a
+	// policy argument. Its misuse must keep the specific halflife message
+	// even when the registry's generic arity/type checkpoint would otherwise
+	// fail first (§7 signature table).
+	tagAtDecay := false
+	if s, ok := ewmAstStringLiteral(astExpr.Exprs[valueArgs]); ok && s == NameEwmHalfLifeTag {
+		tagAtDecay = true
+		if len(astExpr.Exprs) < valueArgs+2 {
+			return moerr.NewInvalidInput(ctx,
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+		}
+		if _, isString := ewmAstStringLiteral(astExpr.Exprs[valueArgs+1]); isString {
+			return moerr.NewInvalidInput(ctx,
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+		}
+	}
+	for i := valueArgs + 1; i < len(astExpr.Exprs); i++ {
+		if s, ok := ewmAstStringLiteral(astExpr.Exprs[i]); ok && s == NameEwmHalfLifeTag {
+			if !(tagAtDecay && i == valueArgs+1) {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+			}
+		}
+	}
+	if astExpr.WindowSpec != nil && astExpr.WindowSpec.HasFrame {
+		return moerr.NewInvalidInput(ctx,
+			"ewm statistics do not support explicit window frames")
+	}
+	if ws == nil || len(ws.OrderBy) == 0 {
+		return moerr.NewInvalidInput(ctx,
+			"ewm statistics require an ORDER BY in the OVER clause")
+	}
+	return nil
+}
+
+// validateEwmWindowCallSignatures enforces the §7 rules that read the
+// resolved arguments: every decay/policy position is a constant or a
+// prepared marker (the composition boundary resolves values), and an
+// EVENT-TIME call — the decay position is the 'halflife' tag as a
+// string literal — requires exactly one ASC ORDER BY expression whose
+// key type is numeric or temporal. Marker-typed decay positions defer
+// the event-time verdict to the execution boundary (the resolved mode
+// passes the same checks there), so those calls keep the row-mode
+// ORDER BY latitude at bind time.
+func validateEwmWindowCallSignatures(
+	ctx context.Context, funcName string, windowFunc *plan.Expr, w *plan.WindowSpec,
+) error {
+	valueArgs := 1
+	switch funcName {
+	case NameEwmCov, NameEwmCorr:
+		valueArgs = 2
+	}
+	f := windowFunc.GetF()
+	if f == nil || len(f.Args) <= valueArgs {
+		return moerr.NewInvalidInput(ctx,
+			"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+	}
+	// §9: decay and policy arguments are constant per execution — a
+	// prepare-time marker, a session variable, a real-time expression
+	// (SECOND(CURRENT_TIMESTAMP()) and kin), and a statement-level
+	// constant expression (a constant CASE, or IFNULL which binding
+	// lowers to CASE) each resolve to one row-independent value at
+	// every execution, so admission is judged with runtime-constant
+	// semantics: function.IsRuntimeConstant reports input-row
+	// independence, while the foldability policy of IsConstant rejects
+	// every CASE node — including fully constant ones, which would
+	// never reach the per-execution configuration evaluation that
+	// already owns them. The prepared caches are gated
+	// (PreparedPlanHasEwmParams) so each execution rebuilds its
+	// configuration from a fresh evaluation; column-dependent
+	// expressions, volatile functions and nested aggregate/window calls
+	// are still rejected here.
+	for i := valueArgs; i < len(f.Args); i++ {
+		if !function.IsRuntimeConstant(f.Args[i]) {
+			return moerr.NewInvalidInput(ctx,
+				"ewm statistics require constant decay and policy arguments")
+		}
+	}
+	decay := f.Args[valueArgs]
+	// The event-time ORDER BY rules apply only when the decay resolves
+	// to the 'halflife' tag as a string LITERAL at planning time. A
+	// string-typed decay that is a prepare marker (a bare ? binds
+	// T_text) defers the mode verdict to the per-execution configuration
+	// boundary, which re-runs these same §7 checks on the resolved mode;
+	// at bind time such a call keeps the row-mode ORDER BY latitude. A
+	// string literal other than the tag falls through to the declared-
+	// decay rejection below instead of the event-time catalog.
+	if lit := decay.GetLit(); lit != nil && !lit.GetIsnull() {
+		switch types.T(decay.Typ.Id) {
+		case types.T_varchar, types.T_char, types.T_text:
+			if lit.GetSval() == NameEwmHalfLifeTag {
+				if len(w.OrderBy) != 1 {
+					return moerr.NewInvalidInput(ctx,
+						"invalid argument: event-time ewm statistics require exactly one ORDER BY expression")
+				}
+				flag := w.OrderBy[0].GetFlag()
+				if flag&plan.OrderBySpec_DESC != 0 {
+					return moerr.NewInvalidInput(ctx,
+						"invalid argument: event-time ewm statistics require ascending ORDER BY")
+				}
+				switch types.T(w.OrderBy[0].Expr.Typ.Id) {
+				case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+					types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+					types.T_float32, types.T_float64, types.T_decimal64,
+					types.T_decimal128, types.T_decimal256,
+					types.T_timestamp, types.T_datetime, types.T_date:
+				default:
+					return moerr.NewInvalidInput(ctx,
+						"event-time ewm statistics require a numeric or temporal ORDER BY key")
+				}
+			}
+		}
+	}
+	return validateEwmLiteralDecayValues(ctx, f, valueArgs)
+}
+
+// ewmLiteralNumericValue reads the float64 value of an integral or
+// floating literal. A boolean or string literal reports ok=false; a
+// parameter, folded expression or decimal-typed literal has no literal
+// value here and keeps the execution-boundary verdict.
+func ewmLiteralNumericValue(expr *plan.Expr, lit *plan.Literal) (float64, bool) {
+	switch types.T(expr.Typ.Id) {
+	case types.T_float64:
+		return lit.GetDval(), true
+	case types.T_float32:
+		return float64(lit.GetFval()), true
+	case types.T_int64:
+		return float64(lit.GetI64Val()), true
+	case types.T_int32:
+		return float64(lit.GetI32Val()), true
+	case types.T_int16:
+		return float64(lit.GetI16Val()), true
+	case types.T_int8:
+		return float64(lit.GetI8Val()), true
+	case types.T_uint64:
+		return float64(lit.GetU64Val()), true
+	case types.T_uint32:
+		return float64(lit.GetU32Val()), true
+	case types.T_uint16:
+		return float64(lit.GetU16Val()), true
+	case types.T_uint8:
+		return float64(lit.GetU8Val()), true
+	case types.T_decimal64:
+		d := lit.GetDecimal64Val()
+		if d == nil {
+			return 0, false
+		}
+		return types.Decimal64ToFloat64(types.Decimal64(d.A), expr.Typ.Scale), true
+	case types.T_decimal128:
+		d := lit.GetDecimal128Val()
+		if d == nil {
+			return 0, false
+		}
+		return types.Decimal128ToFloat64(types.Decimal128{
+			B0_63: uint64(d.A), B64_127: uint64(d.B)}, expr.Typ.Scale), true
+	}
+	return 0, false
+}
+
+// validateEwmLiteralDecayValues binds the §7 literal decay rows at
+// planning time: a literal alpha outside (0,1], a literal decay string
+// other than 'halflife', a 'halflife' tag without a numeric strictly
+// positive literal h, and the tag misplaced into a policy position.
+// Parameters, folded expressions and decimal literals are validated at
+// the per-execution configuration boundary instead.
+func validateEwmLiteralDecayValues(ctx context.Context, f *plan.Function, valueArgs int) error {
+	constant := func(arg *plan.Expr) (*plan.Literal, bool) {
+		lit := arg.GetLit()
+		return lit, lit != nil && !lit.GetIsnull()
+	}
+	decay := f.Args[valueArgs]
+	lit, ok := constant(decay)
+	if ok {
+		switch types.T(decay.Typ.Id) {
+		case types.T_varchar, types.T_char, types.T_text:
+			if lit.GetSval() != NameEwmHalfLifeTag {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+			}
+			if len(f.Args) < valueArgs+2 {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+			}
+			hLit, hOk := constant(f.Args[valueArgs+1])
+			if !hOk {
+				return nil
+			}
+			v, numeric := ewmLiteralNumericValue(f.Args[valueArgs+1], hLit)
+			if !numeric || !(v > 0) {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+			}
+		case types.T_float64, types.T_float32, types.T_int64, types.T_int32,
+			types.T_int16, types.T_int8, types.T_uint64, types.T_uint32,
+			types.T_uint16, types.T_uint8, types.T_decimal64, types.T_decimal128:
+			v, numeric := ewmLiteralNumericValue(decay, lit)
+			if numeric && !(v > 0.0 && v <= 1.0) {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm statistics require alpha in (0,1]")
+			}
+		}
+	}
+	// the 'halflife' tag is only valid at the decay position (§7)
+	for i := valueArgs + 1; i < len(f.Args); i++ {
+		argLit, argOk := constant(f.Args[i])
+		if !argOk {
+			continue
+		}
+		switch t := types.T(f.Args[i].Typ.Id); t {
+		case types.T_varchar, types.T_char, types.T_text:
+			if argLit.GetSval() == NameEwmHalfLifeTag {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+			}
+		}
+	}
+	return nil
 }

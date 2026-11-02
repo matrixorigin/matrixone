@@ -132,12 +132,18 @@ func TestEmbeddedSiriusEngineMapsRequestAndDelegates(t *testing.T) {
 	require.Equal(t, 1, producerCalls)
 }
 
-func TestEmbeddedSiriusStubFailsClosed(t *testing.T) {
-	if siriusbridge.Available() {
-		t.Skip("native Sirius build exercises the tagged launcher")
-	}
+func TestEmbeddedSiriusBuildEntryFailsClosed(t *testing.T) {
 	s := &service{}
-	require.ErrorContains(t, s.startEmbeddedSiriusRuntime(t.Context()), "not available")
+	if !siriusbridge.Available() {
+		require.ErrorContains(t, s.startEmbeddedSiriusRuntime(t.Context()), "not available")
+		return
+	}
+	// A native bridge must select the native CN entry too. A cancelled start
+	// must fail before allocating or publishing a runtime, even with no config.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, s.startEmbeddedSiriusRuntime(ctx), context.Canceled)
+	require.Nil(t, s.siriusRuntime)
 }
 
 type embeddedLeaseRecorder struct {

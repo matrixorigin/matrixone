@@ -62,6 +62,9 @@ var (
 )
 
 func handleCreateSQLTask(ctx context.Context, ses *Session, stmt *tree.CreateSQLTask) error {
+	if ses.GetDatabaseName() == "" {
+		return moerr.NewNoDB(ctx)
+	}
 	ts, err := getSQLTaskService(ctx, ses)
 	if err != nil {
 		return err

@@ -32,6 +32,11 @@ under that same Sirius Pixi environment with `SIRIUS_SDK` pointing there.
 The pinned Sirius commit must be available from the submodule's public remote
 before the MatrixOne commit is published.
 
+Embedded builds support native Linux amd64 and arm64. Sirius's `mo` feature
+selects the matching compiler packages; MO derives the matching CUDA target
+directory from the host. ARM hosts use this combined profile rather than MO's
+standalone amd64 GPU profile. See [ARM64 build design](sirius-arm64.md).
+
 Pixi resolves and locks CUDA 13.3, cuVS 26.08.01 and its C API, compatible
 cuDF/RMM, compilers, and packaging tools. Sirius has a dedicated MO profile;
 its ordinary CUDA 13.2 and CUDA 12 profiles remain unaffected. MO's own Pixi

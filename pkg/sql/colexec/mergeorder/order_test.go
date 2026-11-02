@@ -1033,13 +1033,11 @@ func TestSendSpillResultStopsAtChunkBoundary(t *testing.T) {
 		reader:    &testSpillReader{Reader: bufio.NewReader(firstEOF)},
 		batch:     firstBatch,
 		orderCols: []*vector.Vector{firstBatch.Vecs[0]},
-		heapIdx:   0,
 	}
 	secondReader := &spillRunReader{
 		reader:    &testSpillReader{Reader: bufio.NewReader(secondEOF)},
 		batch:     secondBatch,
 		orderCols: []*vector.Vector{secondBatch.Vecs[0]},
-		heapIdx:   1,
 	}
 	firstReader.refreshDrainProfile()
 	secondReader.refreshDrainProfile()
@@ -1751,7 +1749,6 @@ func TestMergeRunsToSpillWithStoredKeys(t *testing.T) {
 		require.NoError(t, err)
 
 		run.batchCount = 1
-		run.rowCount = int64(bat.RowCount())
 		bat.Clean(proc.Mp())
 		return run
 	}
@@ -1819,8 +1816,8 @@ func TestFixSpillHeapAfterAdvanceTwoReaders(t *testing.T) {
 	defer left.Clean(proc.Mp())
 	defer right.Clean(proc.Mp())
 
-	leftReader := &spillRunReader{batch: left, orderCols: []*vector.Vector{left.Vecs[0]}, heapIdx: 0}
-	rightReader := &spillRunReader{batch: right, orderCols: []*vector.Vector{right.Vecs[0]}, heapIdx: 1}
+	leftReader := &spillRunReader{batch: left, orderCols: []*vector.Vector{left.Vecs[0]}}
+	rightReader := &spillRunReader{batch: right, orderCols: []*vector.Vector{right.Vecs[0]}}
 	ctr := &container{
 		compares:     []compare.Compare{compare.New(types.T_int8.ToType(), false, false)},
 		spillReaders: []*spillRunReader{leftReader, rightReader},
@@ -1828,8 +1825,7 @@ func TestFixSpillHeapAfterAdvanceTwoReaders(t *testing.T) {
 
 	ctr.fixSpillHeapAfterAdvance(0)
 	require.Same(t, rightReader, ctr.spillReaders[0])
-	require.Equal(t, 0, rightReader.heapIdx)
-	require.Equal(t, 1, leftReader.heapIdx)
+	require.Same(t, leftReader, ctr.spillReaders[1])
 
 	ctr.spillReaders = ctr.spillReaders[:1]
 	ctr.fixSpillHeapAfterAdvance(0)
@@ -1842,7 +1838,7 @@ func TestSpillHeapPush(t *testing.T) {
 	reader := &spillRunReader{}
 	heap.Push(ctr, reader)
 	require.Len(t, ctr.spillReaders, 1)
-	require.Equal(t, 0, reader.heapIdx)
+	require.Same(t, reader, ctr.spillReaders[0])
 }
 
 func TestMergeOrderResetAndOpType(t *testing.T) {
@@ -2354,11 +2350,10 @@ func newCancellationTestSpillRunBatches(
 	writer := bufio.NewWriterSize(run.file, testSpillIOBufferSize)
 	for _, values := range valueBatches {
 		bat := newValuesBatch(proc, values)
-		rows, _, writeErr := writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, analyzer)
+		_, _, writeErr := writeSpillBatch(proc, bat, []*vector.Vector{bat.Vecs[0]}, writer, analyzer)
 		bat.Clean(proc.Mp())
 		require.NoError(t, writeErr)
 		run.batchCount++
-		run.rowCount += rows
 	}
 	require.NoError(t, writer.Flush())
 	_, err = run.file.Seek(0, io.SeekStart)

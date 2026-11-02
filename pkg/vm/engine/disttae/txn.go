@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/hex"
@@ -46,32 +47,12 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
-
-//func (txn *Transaction) getObjInfos(
-//	ctx context.Context,
-//	tbl *txnTable,
-//) (objs []logtailreplay.ObjectEntry, err error) {
-//	ts := types.TimestampToTS(txn.op.SnapshotTS())
-//	state, err := tbl.getPartitionState(ctx)
-//	if err != nil {
-//		return nil, err
-//	}
-//	iter, err := state.NewObjectsIter(ts)
-//	if err != nil {
-//		return nil, err
-//	}
-//	for iter.Next() {
-//		entry := iter.Entry()
-//		objs = append(objs, entry)
-//	}
-//	iter.Close()
-//	return
-//}
 
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
@@ -142,6 +123,209 @@ func (txn *Transaction) appendWorkspaceEntryLocked(entry Entry) {
 	txn.writes = append(txn.writes, entry)
 }
 
+// transferWorkspaceWritesForAlterLocked duplicates every live in-memory
+// write entry of the given table onto the table's post-ALTER identity (the
+// ALTER recreation drops the metadata rows of the in-txn creation, so the
+// writes must survive under the new name) and marks the originals fully
+// deleted for the statement-boundary shrink. The duplicate owns no key
+// index: it inherits neither the original's hydrated map nor its charged
+// bytes, and hydrates its own on first probe. Copying either would leave
+// two refund owners for one charge, so the first invalidation of either
+// copy would refund the same bytes twice and underflow the uint64 budget
+// totals.
+func (txn *Transaction) transferWorkspaceWritesForAlterLocked(
+	tableId uint64,
+	tableName string,
+	renameColMap map[string]string,
+) error {
+	for i, n := 0, len(txn.writes); i < n; i++ {
+		if cur := txn.writes[i]; cur.tableId == tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
+			if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
+				continue
+			}
+			var err error
+			transferred := cur
+			transferred.tableName = tableName // in case renaming
+			transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
+			transferred.accountedSize = 0
+			// Ownership of the key index and its budget bytes stays with the
+			// original entry until its rows are shrunk away: the duplicate
+			// starts unindexed and uncharged.
+			transferred.keyOffsets = nil
+			transferred.keyIndexAccountedSize = 0
+			if err != nil {
+				return err
+			}
+			if len(renameColMap) > 0 {
+				for i, attr := range transferred.bat.Attrs {
+					if newName, ok := renameColMap[attr]; ok {
+						transferred.bat.Attrs[i] = newName
+					}
+				}
+			}
+			txn.appendWorkspaceEntryLocked(transferred)
+			txn.selectAllBatchRowsLocked(cur.bat)
+		}
+	}
+	return nil
+}
+
+// computeInsertKeyRangeLocked encodes the entry's primary-key column once and
+// records the byte-wise min/max envelope on the entry, if it can be resolved.
+// Whenever anything prevents a sound envelope, the range stays unset and the
+// entry keeps the unpruned FilterVector path.
+//
+// The envelope shares one key space with MemPKFilter: EncodePrimaryKeyVector
+// is the same encoder readers run per batch, and both resolve the same
+// workspace-batch layout invariant (rowid prefixed, then schema-ordered
+// columns) that filterInMemUnCommittedInserts already depends on.
+func (txn *Transaction) computeInsertKeyRangeLocked(entry *Entry) {
+	if entry.typ != INSERT || !entry.pkCheckReady || entry.pkCheckPos < 0 ||
+		entry.bat == nil || txn.engine == nil || txn.engine.packerPool == nil {
+		return
+	}
+	if entry.pkCheckPos >= len(entry.bat.Vecs) {
+		return
+	}
+	pkVec := entry.bat.Vecs[entry.pkCheckPos]
+	if pkVec == nil || pkVec.Length() == 0 || pkVec.HasNull() {
+		return
+	}
+
+	var packer *types.Packer
+	put := txn.engine.packerPool.Get(&packer)
+	defer put.Put()
+
+	// EncodePrimaryKeyVector is the same encoder MemPKFilter.FilterVector
+	// runs per read, so envelope and filter share one key space.
+	keys := readutil.EncodePrimaryKeyVector(pkVec, packer)
+	if len(keys) == 0 {
+		return
+	}
+	minKey, maxKey := keys[0], keys[0]
+	for _, key := range keys[1:] {
+		if bytes.Compare(key, minKey) < 0 {
+			minKey = key
+		}
+		if bytes.Compare(key, maxKey) > 0 {
+			maxKey = key
+		}
+	}
+	entry.pkRange = insertKeyRange{
+		inited: true,
+		min:    bytes.Clone(minKey),
+		max:    bytes.Clone(maxKey),
+	}
+}
+
+// ensureInsertKeyOffsetsLocked returns the entry's exact-key probe index,
+// building it on first use. The map describes the entry's CURRENT batch
+// layout; every batching mutation must nil keyOffsets so stale layouts are
+// never answered. A false return keeps the caller on the FilterVector path.
+func (txn *Transaction) ensureInsertKeyOffsetsLocked(entry *Entry) (*insertKeyOffsets, bool) {
+	if entry.keyOffsets != nil {
+		return entry.keyOffsets, true
+	}
+	if !entry.pkRange.inited {
+		return nil, false
+	}
+	if entry.bat.RowCount() == 0 {
+		// A zero-row entry's index is provably empty: fail closed to the
+		// FilterVector path instead of charging a map that can never
+		// surface a row.
+		return nil, false
+	}
+	var packer *types.Packer
+	put := txn.engine.packerPool.Get(&packer)
+	defer put.Put()
+
+	keys := readutil.EncodePrimaryKeyVector(entry.bat.Vecs[entry.pkCheckPos], packer)
+	// Charge the retained-index estimate to the workspace budget BEFORE the
+	// map is allocated (issue 26796 review): the spill thresholds consuming
+	// workspaceSize and approximateInMemInsertSize must see the memory that
+	// construction is about to retain, and refunds on invalidation return
+	// exactly this many bytes, so the budget never drifts.
+	txn.accountInsertKeyOffsetsLocked(entry, insertKeyOffsetsEstimateSize(keys))
+	offsets := make(map[string][]uint32, len(keys))
+	for i, key := range keys {
+		offsets[string(key)] = append(offsets[string(key)], uint32(i))
+	}
+	entry.keyOffsets = &insertKeyOffsets{offsets: offsets}
+	readutil.RecordIndexBuildForTest()
+	return entry.keyOffsets, true
+}
+
+// insertKeyOffsetsEstimateSize is the deterministic upper-bound estimate of
+// the bytes an insertKeyOffsets retains for keys: one copied string key plus
+// one amortized map bucket per row (distinct keys never exceed the row count),
+// one uint32 offset slot per row, plus the map base. Charging and refunding
+// exactly this value keeps entry.keyIndexAccountedSize stable without walking
+// the built map.
+func insertKeyOffsetsEstimateSize(keys [][]byte) uint64 {
+	size := uint64(64) // map base
+	for _, key := range keys {
+		size += uint64(len(key)) + 48 // copied key bytes + amortized bucket
+		size += 4                     // one uint32 offset slot per row
+	}
+	return size
+}
+
+// accountInsertKeyOffsetsLocked charges retained key-index bytes to the
+// workspace budget so the spill thresholds see them. The approximate insert
+// size follows the same ownership rule as batch accounting: only in-memory
+// entries of user tables count toward the insert thresholds.
+func (txn *Transaction) accountInsertKeyOffsetsLocked(entry *Entry, size uint64) {
+	entry.keyIndexAccountedSize = size
+	txn.workspaceSize += size
+	if entry.fileName == "" && !catalog.IsSystemTable(entry.tableId) && entry.typ == INSERT {
+		txn.approximateInMemInsertSize += size
+	}
+}
+
+// unaccountInsertKeyOffsetsLocked invalidates an entry's exact-key probe
+// index: the hydrated map and its budget bytes retire together (refund plus
+// pointer drop) through this single choke point, used by batching mutations,
+// entry release, workspace truncation, ALTER transfer, and transaction
+// teardown, so no path can leave a hydrated map without its charge or a
+// refunded map reachable from its entry. It is a no-op for entries whose
+// index was never hydrated.
+func (txn *Transaction) unaccountInsertKeyOffsetsLocked(entry *Entry) {
+	entry.keyOffsets = nil
+	if entry.keyIndexAccountedSize == 0 {
+		return
+	}
+	size := entry.keyIndexAccountedSize
+	entry.keyIndexAccountedSize = 0
+	txn.workspaceSize -= size
+	if entry.fileName == "" && !catalog.IsSystemTable(entry.tableId) && entry.typ == INSERT {
+		txn.approximateInMemInsertSize -= size
+	}
+}
+
+// unionInsertKeyRange folds the merged-away entry's envelope into the
+// surviving batch entry. Merged rows span both envelopes, so the new envelope
+// is the byte-wise union. Losing either side's envelope disables pruning for
+// the merged batch.
+func unionInsertKeyRange(dst *Entry, src *Entry) {
+	if dst.typ != INSERT {
+		return
+	}
+	if !src.pkRange.inited {
+		// The merged rows are not known to stay inside dst's envelope.
+		dst.pkRange = insertKeyRange{}
+		return
+	}
+	if !dst.pkRange.inited {
+		return
+	}
+	if bytes.Compare(src.pkRange.min, dst.pkRange.min) < 0 {
+		dst.pkRange.min = src.pkRange.min
+	}
+	if bytes.Compare(src.pkRange.max, dst.pkRange.max) > 0 {
+		dst.pkRange.max = src.pkRange.max
+	}
+}
+
 func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
 	entry := &txn.writes[idx]
 	if entry.bat == nil {
@@ -152,7 +336,9 @@ func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
 
 	bat := entry.bat
 	txn.unaccountWorkspaceEntryLocked(entry)
+	txn.unaccountInsertKeyOffsetsLocked(entry)
 	delete(txn.batchSelectList, bat)
+	entry.pkRange = insertKeyRange{}
 	bat.Clean(txn.proc.GetMPool())
 	entry.bat = nil
 }
@@ -173,6 +359,7 @@ func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) {
 	slices.Sort(sels)
 	sels = slices.Compact(sels)
 	txn.unaccountWorkspaceEntryLocked(entry)
+	txn.unaccountInsertKeyOffsetsLocked(entry)
 	shrinkBatchWithRowids(bat, sels)
 	txn.accountWorkspaceEntryLocked(entry)
 	delete(txn.batchSelectList, bat)
@@ -187,18 +374,29 @@ func (txn *Transaction) mergeWorkspaceEntryBatchesLocked(
 	src := &txn.writes[srcIdx]
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
+	// The append below mutates the destination batch layout. Drop its stale
+	// key index (and refund its budget bytes) up front so the index can never
+	// answer offsets for a half-mutated layout, not even on the append error
+	// path.
+	txn.unaccountInsertKeyOffsetsLocked(dst)
 	txn.unaccountWorkspaceEntryLocked(dst)
 	txn.unaccountWorkspaceEntryLocked(src)
 
 	if _, err := dst.bat.Append(ctx, txn.proc.Mp(), src.bat); err != nil {
 		// Append may have mutated some destination vectors before failing.
-		// Restore accounting from the two batches' actual states.
+		// Restore accounting from the two batches' actual states, and stop
+		// trusting the destination envelope: a partially appended batch can
+		// hold rows outside the old envelope, so fail open to the unpruned
+		// path for the rest of this entry's life.
+		dst.pkRange = insertKeyRange{}
 		txn.accountWorkspaceEntryLocked(dst)
 		txn.accountWorkspaceEntryLocked(src)
 		return err
 	}
 
 	txn.accountWorkspaceEntryLocked(dst)
+	unionInsertKeyRange(dst, src)
+	txn.unaccountInsertKeyOffsetsLocked(src)
 	delete(txn.batchSelectList, src.bat)
 	src.bat.Clean(txn.proc.GetMPool())
 	src.bat = nil
@@ -216,19 +414,27 @@ func (txn *Transaction) checkWorkspaceAccountingLocked() error {
 			if entry.accountedSize != 0 {
 				return moerr.NewInternalErrorNoCtxf("entry %d: nil batch accounts %d bytes", i, entry.accountedSize)
 			}
+			if entry.keyIndexAccountedSize != 0 {
+				return moerr.NewInternalErrorNoCtxf("entry %d: nil batch accounts %d index bytes", i, entry.keyIndexAccountedSize)
+			}
 			continue
+		}
+		if (entry.keyOffsets != nil) != (entry.keyIndexAccountedSize != 0) {
+			return moerr.NewInternalErrorNoCtxf(
+				"entry %d: hydrated key index and its %d accounted bytes are inconsistent",
+				i, entry.keyIndexAccountedSize)
 		}
 		size := uint64(entry.bat.Size())
 		if entry.accountedSize != size {
 			return moerr.NewInternalErrorNoCtxf("entry %d: accounted size %d, batch size %d", i, entry.accountedSize, size)
 		}
-		workspaceSize += size
+		workspaceSize += size + entry.keyIndexAccountedSize
 		if entry.fileName != "" || catalog.IsSystemTable(entry.tableId) {
 			continue
 		}
 		switch entry.typ {
 		case INSERT:
-			insertSize += size
+			insertSize += size + entry.keyIndexAccountedSize
 			insertCnt += entry.bat.RowCount()
 		case DELETE:
 			deleteCnt += entry.bat.RowCount()
@@ -452,6 +658,7 @@ func (txn *Transaction) writeBatchWithAutoIncrEpochKnown(
 		pkCheckPos:         pkCheckPos,
 		pkCheckReady:       pkCheckReady,
 	}
+	txn.computeInsertKeyRangeLocked(&e)
 	txn.appendWorkspaceEntryLocked(e)
 	txn.pkCount += bat.RowCount()
 
@@ -852,6 +1059,37 @@ func (txn *Transaction) checkDup(ctx context.Context) error {
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
 // start from write offset.   Pass in offset -1 to dump all.   Note that dump all will
 // modify txn.writes, so it can only be called right before txn.commit.
+// clearVacatedWriteSlots drops the retired Entry references that forward
+// compaction leaves in the vacated tail of the writes backing array. The
+// compactions move live entries toward the front and the caller truncates
+// the slice; without this, the stale copies would keep refunded key indexes
+// and cleaned batches reachable until a later append happens to reuse the
+// slot. A caller may pass a slice already shortened to the kept prefix
+// (the dumpAll compaction's append target): the vacated slots live beyond
+// its length inside the shared backing array, which indexing a Go slice
+// cannot reach, so extend within capacity before clearing.
+func clearVacatedWriteSlots(writes []Entry, keep, oldLen int) {
+	if oldLen > len(writes) {
+		if oldLen > cap(writes) {
+			oldLen = cap(writes)
+		}
+		writes = writes[:oldLen]
+	}
+	for j := keep; j < oldLen; j++ {
+		writes[j] = Entry{}
+	}
+}
+
+// inMemEntryDataSize returns the workspace-memory bytes a live in-memory
+// entry occupies: its batch plus any hydrated key-index charge. Spill sizing
+// (scanInMemInsertSize), spill quota calculation, and per-table spill
+// selection must all see the same total the workspace budget charges, or a
+// workspace whose retained key indexes push it over a spill threshold can
+// stay below that threshold in every batching decision and never spill.
+func inMemEntryDataSize(entry *Entry) uint64 {
+	return uint64(entry.bat.Size()) + entry.keyIndexAccountedSize
+}
+
 // scanInMemInsertSize sums the in-memory INSERT batch sizes in writes[from:].
 func (txn *Transaction) scanInMemInsertSize(from int) uint64 {
 	var size uint64
@@ -863,7 +1101,7 @@ func (txn *Transaction) scanInMemInsertSize(from int) uint64 {
 			continue
 		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			size += uint64(txn.writes[i].bat.Size())
+			size += inMemEntryDataSize(&txn.writes[i])
 		}
 	}
 	return size
@@ -994,6 +1232,11 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 				writes = append(writes, txn.writes[i])
 			}
 		}
+		// Clear the vacated slots through the original full-length slice:
+		// the shortened append target writes cannot index past its own
+		// length (Go slices panic on len, not on cap) whenever this
+		// compaction dropped at least one entry.
+		clearVacatedWriteSlots(txn.writes, len(writes), len(txn.writes))
 		txn.writes = writes
 	} else {
 		txn.pkCount -= pkCount
@@ -1002,19 +1245,25 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	return nil
 }
 
-func (txn *Transaction) dumpInsertBatchLocked(
-	ctx context.Context,
-	fs fileservice.FileService,
+// dumpInsertTableSelectionLocked sizes every dumpable in-memory insert table
+// from writes[offset:], for per-table spill selection. The per-table size is
+// the same in-memory total the workspace budget charges (inMemEntryDataSize:
+// batch plus hydrated key-index bytes), so a table retained above the
+// spill thresholds cannot be selected as if it were small enough to stay.
+// Tables come back sorted ascending by size; skipTable holds the tables
+// small enough to stay in memory under the commit threshold, so the commit
+// dump spills only what thresholds demand.
+func (txn *Transaction) dumpInsertTableSelectionLocked(
 	offset int,
-	pkCount *int,
-) error {
-
-	// Check if force flush is enabled
-	forceFlush := objectio.CNWorkspaceForceFlushInjected()
-
-	tbSize := make(map[uint64]int)
-	tbCount := make(map[uint64]int)
-	skipTable := make(map[uint64]bool)
+	forceFlush bool,
+) (
+	tbSize map[uint64]int,
+	tbCount map[uint64]int,
+	skipTable map[uint64]bool,
+) {
+	tbSize = make(map[uint64]int)
+	tbCount = make(map[uint64]int)
+	skipTable = make(map[uint64]bool)
 
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
@@ -1024,7 +1273,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			continue
 		}
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			tbSize[txn.writes[i].tableId] += txn.writes[i].bat.Size()
+			tbSize[txn.writes[i].tableId] += int(inMemEntryDataSize(&txn.writes[i]))
 			tbCount[txn.writes[i].tableId] += txn.writes[i].bat.RowCount()
 		}
 	}
@@ -1051,6 +1300,20 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			skipTable[k] = true
 		}
 	}
+	return tbSize, tbCount, skipTable
+}
+
+func (txn *Transaction) dumpInsertBatchLocked(
+	ctx context.Context,
+	fs fileservice.FileService,
+	offset int,
+	pkCount *int,
+) error {
+
+	// Check if force flush is enabled
+	forceFlush := objectio.CNWorkspaceForceFlushInjected()
+
+	_, _, skipTable := txn.dumpInsertTableSelectionLocked(offset, forceFlush)
 
 	// Resolve every table that will be flushed BEFORE mutating txn.writes:
 	// getTable must never run while this goroutine holds the lock. See
@@ -1102,6 +1365,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			if _, ok := tables[tbKey.tableKey]; ok {
 				bat := txn.writes[i].bat
 				*pkCount += bat.RowCount()
+				txn.unaccountInsertKeyOffsetsLocked(&txn.writes[i])
 				txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
 				// skip rowid
 				newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
@@ -1121,6 +1385,7 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 	}
 
+	clearVacatedWriteSlots(writes, lastWriteIndex, len(writes))
 	txn.writes = writes[:lastWriteIndex]
 
 	var (
@@ -1242,6 +1507,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			if _, ok := tables[tbKey.tableKey]; ok {
 				bat := txn.writes[i].bat
 				deleteCnt += bat.RowCount()
+				txn.unaccountInsertKeyOffsetsLocked(&txn.writes[i])
 				txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
 
 				newBat := batch.NewWithSize(len(bat.Vecs))
@@ -1262,6 +1528,7 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		}
 	}
 
+	clearVacatedWriteSlots(writes, lastWriteIndex, len(writes))
 	txn.writes = writes[:lastWriteIndex]
 
 	var (
@@ -2195,6 +2462,7 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			n++
 		}
 
+		clearVacatedWriteSlots(txn.writes, n, len(txn.writes))
 		txn.writes = txn.writes[:n]
 
 		var sortBuf []int64
@@ -3019,6 +3287,7 @@ func (txn *Transaction) delTransaction() {
 		if txn.writes[i].bat == nil {
 			continue
 		}
+		txn.unaccountInsertKeyOffsetsLocked(&txn.writes[i])
 		txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
 		txn.writes[i].bat.Clean(txn.proc.Mp())
 	}

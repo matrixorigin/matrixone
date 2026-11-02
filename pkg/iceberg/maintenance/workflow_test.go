@@ -45,7 +45,7 @@ func TestCommitRunnerWritesObjectsAndCommits(t *testing.T) {
 	require.Equal(t, "dev", req.TargetRef)
 	require.Equal(t, "idem-1", req.IdempotencyKey)
 	require.Equal(t, []string{"rewrite-manifests", "set-snapshot-summary"}, commitUpdateTypes(req.Updates))
-	require.Equal(t, "rewrite_manifests", req.Summary["operation"])
+	require.Equal(t, "replace", req.Summary["operation"])
 }
 
 func TestCommitRunnerReturnsNoOpWithoutCommit(t *testing.T) {
@@ -266,9 +266,9 @@ func maintenanceCommitPlan() *CommitPlan {
 			Requirements: []api.CommitRequirement{{Type: "assert-ref-snapshot-id", Ref: "dev", SnapshotID: 100}},
 			Updates: []api.CommitUpdate{
 				{Type: "rewrite-manifests", FilePath: "s3://warehouse/orders/metadata/rewrite-manifest.avro"},
-				{Type: "set-snapshot-summary", Payload: map[string]string{"operation": "rewrite_manifests"}},
+				{Type: "set-snapshot-summary", Payload: map[string]string{"operation": "replace"}},
 			},
-			Summary:        map[string]string{"operation": "rewrite_manifests"},
+			Summary:        map[string]string{"operation": "replace"},
 			IdempotencyKey: "idem-1",
 			BaseSnapshotID: 100,
 			TargetRef:      "dev",

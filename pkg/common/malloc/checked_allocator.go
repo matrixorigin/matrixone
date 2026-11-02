@@ -34,7 +34,6 @@ type checkedAllocatorArgs struct {
 	allocatePCs []uintptr
 	size        uint64
 	ptr         unsafe.Pointer
-	goid        int64
 }
 
 func (checkedAllocatorArgs) As(Trait) bool {
@@ -95,7 +94,6 @@ func (c *CheckedAllocator[U]) Allocate(size uint64, hints Hints) ([]byte, Deallo
 			allocatePCs: pcs,
 			size:        size,
 			ptr:         unsafe.Pointer(unsafe.SliceData(ptr)),
-			goid:        goId,
 		}
 	})
 

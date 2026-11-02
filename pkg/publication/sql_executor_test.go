@@ -523,7 +523,20 @@ func TestUpstreamExecutor_ExecWithRetry(t *testing.T) {
 						require.Nil(t, result)
 						require.Nil(t, cleanup)
 						require.Equal(t, 1, calls)
-						require.ErrorIs(t, attemptCtx.Err(), wantErr)
+						require.ErrorIs(t, ctx.Err(), wantErr)
+						select {
+						case <-attemptCtx.Done():
+						default:
+							t.Fatal("attempt context remains live after failure")
+						}
+						if timeout == 0 {
+							require.Same(t, ctx, attemptCtx)
+							require.ErrorIs(t, attemptCtx.Err(), wantErr)
+						} else {
+							// Explicit cleanup can win before the parent's deadline
+							// reaches this child. Policy.Do owns the returned cause.
+							require.Contains(t, []error{context.Canceled, context.DeadlineExceeded}, attemptCtx.Err())
+						}
 					})
 				})
 			}

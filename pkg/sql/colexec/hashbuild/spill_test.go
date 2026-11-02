@@ -835,3 +835,39 @@ func TestWriteSpillPayloadCancellationStopsBeforeIO(t *testing.T) {
 	require.NoError(t, statErr)
 	require.Zero(t, info.Size())
 }
+
+func TestSpillAppendAdmissionAndTruncateFailure(t *testing.T) {
+	h := newSpillTestHarness(t, 1<<20)
+	t.Cleanup(func() { h.close(t) })
+	require.NoError(t, h.budget.SetSpillCaps(16, 4))
+	require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("original"), 1, nil))
+	entry := h.op.ctr.spillBundle.entries[0]
+	fs, err := h.op.ctr.getSpillFS(h.proc)
+	require.NoError(t, err)
+	f, err := fs.OpenFile(h.proc.Ctx, entry.name)
+	require.NoError(t, err)
+	defer f.Close()
+	// Rejected growth cannot extend the existing record.
+	err = h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("too-large"), 1, nil)
+	require.ErrorIs(t, err, process.ErrExecutionResourceAdmission)
+	got, err := io.ReadAll(f)
+	require.NoError(t, err)
+	require.Equal(t, "original", string(got))
+	require.Equal(t, uint64(8), h.generation.SpillDiskUsed())
+	// A truncate error after admission retains its charge until bundle cleanup.
+	ro, err := os.Open(f.Name())
+	require.NoError(t, err)
+	defer ro.Close()
+	_, err = ro.Seek(0, io.SeekEnd)
+	require.NoError(t, err)
+	err = h.op.ctr.writeOpenSpillPayload(h.proc, ro, 0, []byte("tail"), 1, nil)
+	require.Error(t, err)
+	require.Equal(t, uint64(12), h.generation.SpillDiskUsed())
+	require.Equal(t, uint64(8), entry.bytes)
+	require.Equal(t, int64(1), entry.rows)
+	require.NoError(t, ro.Close())
+	require.NoError(t, f.Close())
+	h.op.ctr.spillBundle.release()
+	require.Zero(t, h.generation.SpillDiskUsed())
+	require.Zero(t, h.generation.SpillFDUsed())
+}

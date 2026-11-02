@@ -30,6 +30,32 @@ their direct references; only expression parts acquire hidden generated values.
 Unique functional keys, directions, prefixes, INCLUDE columns and
 special index algorithms are unsupported.
 
+### Bounded JSON text eligibility extension
+
+The follow-up in #28274 only extends this DDL allowlist. An ordinary JSON
+column may feed `JSON_EXTRACT` with a constant, single-location path, followed
+by `JSON_UNQUOTE` and an explicit positive-width `CAST(... AS CHAR(n))`.
+The resulting key is ordinary bounded text; neither JSON columns nor
+JSON_EXTRACT results are admitted as physical JSON index keys. Dynamic paths,
+wildcards, oversized array offsets, generated JSON sources and arbitrary JSON
+producers remain outside this extension. The path must pass both the restricted
+grammar and the existing ByteJSON parser before metadata publication.
+
+The existing function registry, JSON execution, CAST semantics, hidden-column
+metadata and secondary-index maintenance remain unchanged. No MIN/MAX,
+ODKU result tracking, wire fields, JSON renderer, vector/batch state or new
+runtime conversion policy belongs to this extension. It uses existing function
+identities and the existing protocol-107 functional-index representation;
+the removed cumulative branch's JSON/ODKU protocol chain is not a dependency.
+Old coordinators retain their conservative DDL/metadata rejection of this
+expression. This does not claim mixed-binary upgrade or deployed QA acceptance.
+
+Equality matching may unwrap only the binder's value-preserving CHAR-to-VARCHAR
+comparison cast. The original predicate remains as a base-row residual. The
+validation matrix includes rejected raw JSON keys, existing arithmetic/LOWER
+controls, same-expression physical-index selection, write/update/rollback,
+LIKE/COPY replay and hidden-column cleanup.
+
 ## Ownership and execution
 
 Each expression part owns a hidden virtual generated column named from the
