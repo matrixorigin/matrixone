@@ -13,6 +13,7 @@ from sqlalchemy import cast, String
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.sql.expression import ColumnElement
+from sqlalchemy.sql.visitors import InternalTraversal
 
 from .json_functions import json_extract, json_extract_string
 
@@ -26,6 +27,12 @@ class JSONPathElement(ColumnElement):
     """
 
     __visit_name__ = 'json_path_element'
+    # Cloning and alias adaptation must visit the source expression. The full
+    # member path also distinguishes compiled statements for sibling keys.
+    _traverse_internals = [
+        ('column', InternalTraversal.dp_clauseelement),
+        ('_current_path', InternalTraversal.dp_string),
+    ]
     # SQLAlchemy uses expression identity for anonymous labels, even when
     # equality builds a SQL predicate.
     __hash__ = ColumnElement.__hash__
