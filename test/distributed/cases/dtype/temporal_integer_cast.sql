@@ -117,6 +117,31 @@ execute temporal_wrapper_param using @temporal_integer_dt, @temporal_wrapper_cho
 set @temporal_wrapper_null = null;
 execute temporal_wrapper_param using @temporal_wrapper_null, @temporal_wrapper_choice, @temporal_wrapper_null, @temporal_wrapper_null;
 deallocate prepare temporal_wrapper_param;
+
+-- A correlated scalar's WHERE match must guard integer evaluation and preserve NULL.
+select id, cast((select dt where id = 1) as signed) as filtered_dt,
+cast((select tm where id = 1) as unsigned) as filtered_tm,
+cast((select cast(dt as datetime(0)) where id = 1) as signed) as filtered_cast
+from temporal_values order by id;
+
+-- Compare temporal values first; only the selected LEAST/GREATEST result is converted.
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+select id, cast(least(dt,dt) as signed) as least_dt, cast(greatest(dt,dt) as signed) as greatest_dt,
+cast(least(tm,tm) as unsigned) as least_tm, cast(greatest(tm,tm) as unsigned) as greatest_tm
+from temporal_values order by id;
+select cast(least(cast('2024-02-29 23:59:59.500000' as datetime(6)),cast('2024-03-01 00:00:00' as datetime(6))) as signed) as least_dt,
+cast(greatest(cast('2024-02-29 23:59:59.500000' as datetime(6)),cast('2024-02-28 00:00:00' as datetime(6))) as signed) as greatest_dt,
+cast(least(cast('-00:00:00.500000' as time(6)),cast('00:00:00' as time(6))) as unsigned) as least_tm,
+cast(greatest(cast('-00:00:00.500000' as time(6)),cast('-00:00:01' as time(6))) as unsigned) as greatest_tm;
+set session sql_mode = '';
+prepare temporal_minmax_param from 'select cast(least(cast(? as datetime(6)),cast("2024-03-01 00:00:00" as datetime(6))) as signed) as least_dt, cast(greatest(cast(? as datetime(6)),cast("2024-02-28 00:00:00" as datetime(6))) as signed) as greatest_dt, cast(least(cast(? as time(6)),cast("00:00:00" as time(6))) as unsigned) as least_tm, cast(greatest(cast(? as time(6)),cast("-00:00:01" as time(6))) as unsigned) as greatest_tm';
+execute temporal_minmax_param using @temporal_integer_dt,@temporal_integer_dt,@temporal_integer_tm,@temporal_integer_tm;
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+execute temporal_minmax_param using @temporal_integer_dt,@temporal_integer_dt,@temporal_integer_tm,@temporal_integer_tm;
+set session sql_mode = '';
+execute temporal_minmax_param using @temporal_integer_dt,@temporal_integer_dt,@temporal_integer_tm,@temporal_integer_tm;
+execute temporal_minmax_param using @temporal_wrapper_null,@temporal_wrapper_null,@temporal_wrapper_null,@temporal_wrapper_null;
+deallocate prepare temporal_minmax_param;
 drop table temporal_text_values;
 
 drop database temporal_integer_cast;

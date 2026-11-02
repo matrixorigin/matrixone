@@ -349,6 +349,18 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 		// enclosing consumer bottom-up so its result nullability still matches
 		// the arguments that will reach execution.
 		preserveIfNullContract := isIfNullCase(exprImpl.F)
+		// An integer CAST over a correlated temporal scalar is deliberately
+		// lowered after its projection has been lifted into the nullable join.
+		// Inserting CAST9 into projects before that proof would change both its
+		// type contract and its conservative no-fold/diagnostic admission.
+		lowerTemporalScalarCast := false
+		if exprImpl.F.Func != nil && exprImpl.F.Func.ObjName == "cast" && len(exprImpl.F.Args) == 2 &&
+			temporalIntegerSource(exprImpl.F.Args[0]) && exprImpl.F.Args[0].GetSub() != nil &&
+			exprImpl.F.Args[0].GetSub().Typ == plan.SubqueryRef_SCALAR &&
+			(types.T(expr.Typ.Id) == types.T_int64 || types.T(expr.Typ.Id) == types.T_uint64) {
+			_, overload := function.DecodeOverloadID(exprImpl.F.Func.Obj)
+			lowerTemporalScalarCast = overload == 1
+		}
 		if consumer == existentialNegatedFilter && len(builder.pendingExistentials) != 0 {
 			// The caller admits only the direct NOT(EXISTS) WHERE conjunct.
 			sub := *exprImpl.F.Args[0].GetSub()
@@ -373,6 +385,13 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumerAndChange(
 				return 0, nil, false, err
 			}
 			affected = affected || childAffected
+		}
+		if affected && lowerTemporalScalarCast {
+			expr, err = appendTemporalIntegerCast(builder.GetContext(), exprImpl.F.Args[0], expr.Typ, nil)
+			if err != nil {
+				return 0, nil, false, err
+			}
+			break
 		}
 		if affected && exprImpl.F.Func != nil {
 			if preserveIfNullContract {

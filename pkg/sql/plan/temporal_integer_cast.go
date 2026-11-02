@@ -45,8 +45,16 @@ func appendTemporalIntegerCast(ctx context.Context, expr *Expr, target Type, bin
 	if sub := expr.GetSub(); sub != nil && sub.Typ == planpb.SubqueryRef_SCALAR && binder != nil {
 		node, subCtx := binder.subqueryNodeAndContext(expr)
 		if node != nil && len(node.ProjectList) > 0 && subCtx != nil && len(subCtx.results) > 0 && sub.RowSize == 1 {
-			// Flattening consumes both the root projection and ctx.results. Build the
-			// conversion first, then publish the same output contract to both readers.
+			// Correlated projections are lifted across a nullable join. Keep their
+			// projects/results/root contract intact until decorrelation has produced
+			// the match-guarded value; lower its integer policy at that boundary.
+			if len(subCtx.projects) > 0 && hasCorrCol(subCtx.projects[0]) {
+				return appendCastBeforeExprWithOverload(ctx, expr, target, 1)
+			}
+			// A final result projection above DISTINCT/SORT is a different owner
+			// from ctx.projects. Only synchronize the logical slot when it is the
+			// same producer, otherwise preserve that earlier materialization stage.
+			sameProject := len(subCtx.projects) > 0 && exprStructuralEqual(subCtx.projects[0], node.ProjectList[0])
 			converted, err := appendTemporalIntegerCast(ctx, node.ProjectList[0], target, binder)
 			if err != nil {
 				return nil, err
@@ -54,6 +62,10 @@ func appendTemporalIntegerCast(ctx context.Context, expr *Expr, target Type, bin
 			result := DeepCopyExpr(expr)
 			result.Typ = converted.Typ
 			result.Typ.NotNullable = false // an empty scalar subquery is NULL
+			if sameProject {
+				subCtx.projects = append([]*Expr(nil), subCtx.projects...)
+				subCtx.projects[0] = converted
+			}
 			node.ProjectList = append([]*Expr(nil), node.ProjectList...)
 			node.ProjectList[0] = converted
 			subCtx.results = append([]*Expr(nil), subCtx.results...)
@@ -73,7 +85,7 @@ func appendTemporalIntegerCast(ctx context.Context, expr *Expr, target Type, bin
 				return appendTemporalIntegerCast(ctx, source, target, binder)
 			}
 		}
-		if isExplicitPreparedCast(expr) || name == "coalesce" || expr.GetPreparedNumeric().GetIfnullCommonValue() {
+		if isExplicitPreparedCast(expr) || name == "coalesce" || name == "least" || name == "greatest" || expr.GetPreparedNumeric().GetIfnullCommonValue() {
 			return appendCastBeforeExprWithOverload(ctx, expr, target, function.TemporalCastIntegerOverload)
 		}
 		if name == "case" || name == "if" || name == "iff" {

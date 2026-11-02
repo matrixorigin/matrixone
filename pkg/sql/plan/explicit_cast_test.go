@@ -49,12 +49,29 @@ func TestTemporalIntegerCastWrapperPolicy(t *testing.T) {
 			require.Equal(t, int32(types.T_int64), converted.Typ.Id)
 		})
 	}
-	coal, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*Expr{column, cast})
-	require.NoError(t, err)
-	converted, err := appendExplicitCastBeforeExpr(ctx, coal, makePlan2Type(&target))
-	require.NoError(t, err)
-	_, id := function.DecodeOverloadID(converted.GetF().Func.Obj)
-	require.Equal(t, function.TemporalCastIntegerOverload, id)
+	for _, name := range []string{"coalesce", "least", "greatest"} {
+		source, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{column, cast})
+		require.NoError(t, err)
+		converted, err := appendExplicitCastBeforeExpr(ctx, source, makePlan2Type(&target))
+		require.NoError(t, err)
+		_, id := function.DecodeOverloadID(converted.GetF().Func.Obj)
+		require.Equal(t, function.TemporalCastIntegerOverload, id, name)
+	}
+}
+
+func TestTemporalIntegerCastFilteredCorrelation(t *testing.T) {
+	for _, projection := range []string{"l_shipdate", "cast(l_shipdate as datetime(6))", "least(l_shipdate,l_shipdate)", "if(l_orderkey=1,l_shipdate,cast(l_shipdate as datetime(6)))"} {
+		for _, target := range []string{"signed", "unsigned"} {
+			t.Run(projection+"/"+target, func(t *testing.T) {
+				opt := NewMockOptimizer(false, newPlanTestProcess(t))
+				ctx := opt.CurrentContext().(*MockCompilerContext)
+				col := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+				col.Typ.Id, col.Typ.Scale = int32(types.T_datetime), 6
+				_, err := runOneStmt(opt, t, "select cast((select "+projection+" where l_orderkey=1) as "+target+") from lineitem")
+				require.NoError(t, err, "filtered correlation must retain its projection contract before decorrelation")
+			})
+		}
+	}
 }
 
 func TestTemporalIntegerCastScalarProjectionPolicy(t *testing.T) {
