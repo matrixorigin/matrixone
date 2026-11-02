@@ -795,6 +795,11 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 	require.NotNil(t, result)
 	// baseNprobe is 10 (from probe_limit), compensation is 2, expected nProbe = 20
 	assert.Equal(t, int64(20), result.nProbe)
+	vecCtx.rankOption.Nprobe = 4
+	result, err = builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
+	require.NoError(t, err)
+	require.Equal(t, int64(8), result.nProbe)
+	vecCtx.rankOption.Nprobe = 0
 
 	// Case 2: Adaptive mode disabled because totalLists is missing
 	idxAlgoParamsNoLists := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`

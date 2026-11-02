@@ -151,6 +151,9 @@ pip install matrixone-python-sdk
 ```
 
 **Vector search:**
+
+See [IVF search parameters (Chinese)](docs/cn/vector_search.md) for probe settings and recall guidance.
+
 ```python
 from matrixone import Client
 from matrixone.orm import declarative_base
@@ -261,6 +264,7 @@ Ready to dive deeper? Explore our comprehensive collection of hands-on tutorials
 
 | Tutorial | Use Case | Related MatrixOne Features |
 |----------|----------|---------------------------|
+| [IVF Search Parameters (Chinese)](docs/cn/vector_search.md) | AI & Search | probe settings, session scope, recall |
 | [Pinecone-Compatible Vector Search](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/pinecone-vector-demo/) | AI & Search | vector search, Pinecone-compatible API |
 | [IVF Index Health Monitoring](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/ivf-index-health-demo/) | AI & Search | vector search, IVF index |
 | [HNSW Vector Index](https://docs.matrixorigin.cn/en/v25.3.0.2/MatrixOne/Tutorial/hnsw-vector-demo/) | AI & Search | vector search, HNSW index |

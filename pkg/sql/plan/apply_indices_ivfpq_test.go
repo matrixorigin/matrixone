@@ -391,7 +391,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 		},
 		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
 		resultLimit: makePlan2Uint64ConstExprWithType(10),
-		rankOption:  &plan.RankOption{Mode: "pre"},
+		rankOption:  &plan.RankOption{Mode: "pre", Nprobe: 3},
 	}
 	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
 	mti := &MultiTableIndex{
@@ -421,6 +421,7 @@ func TestApplyIndicesForSortUsingIvfpq_Success(t *testing.T) {
 	right := builder.qry.Nodes[join.Children[1]]
 	assert.Equal(t, plan.Node_FUNCTION_SCAN, right.NodeType)
 	assert.Equal(t, ivfpqplan.IVFPQSearchFuncName, right.TableDef.TblFunc.Name)
+	assert.Contains(t, right.TblFuncExprList[0].GetLit().GetSval(), `"nprobe": 3`)
 }
 
 // TestApplyIndicesForSortUsingIvfpq_RichPushdown drives the optimizer through
