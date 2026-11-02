@@ -1018,8 +1018,8 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 
 			if idx < len(query.MysqlSpecialResultTypes) && types.T(expr.Typ.Id).IsMySQLString() {
 				typ := &query.MysqlSpecialResultTypes[idx]
-				if isEnumOrSetPlanType(typ) {
-					columns[idx].MysqlSpecialResultType = DeepCopyType(typ)
+				if isEnumOrSetPlanType(&typ.Typ) {
+					columns[idx].MysqlSpecialResultType = DeepCopyMySQLSpecialResultType(typ)
 				}
 			}
 

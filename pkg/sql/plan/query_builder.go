@@ -6785,6 +6785,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			return
 		}
 	}
+	builder.captureMySQLSpecialBlockResultTypes(ctx)
+
 	// SELECT projection subqueries are flattened before this pagination is
 	// attached to their plan. The cloned CTE domain may otherwise evaluate a
 	// row that the final Top never consumes. Keep the demand scoped to this
@@ -14585,6 +14587,16 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				outputColumnProvenance = make([]OutputColumnProvenance, colLength)
 			}
 			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
+			if result := outputColumnProvenance[i].MySQLSpecialResultType; result != nil {
+				switch result.Kind {
+				case plan.MySQLSpecialResultType_AGGREGATE:
+					result = DeepCopyMySQLSpecialResultType(result)
+					result.Kind = plan.MySQLSpecialResultType_COLUMN
+					outputColumnProvenance[i].MySQLSpecialResultType = result
+				case plan.MySQLSpecialResultType_SCALAR_SUBQUERY:
+					outputColumnProvenance[i].MySQLSpecialResultType = nil
+				}
+			}
 			if id := outputColumnProvenance[i].IntegerPrecisionID; id != 0 && builder.integerPrecision != nil {
 				if subCtx.integerPrecision != nil && subCtx.integerPrecision != builder.integerPrecision {
 					id = builder.integerPrecision.importID(subCtx.integerPrecision.graph, id)

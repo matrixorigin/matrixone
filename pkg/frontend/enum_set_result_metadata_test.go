@@ -45,41 +45,55 @@ func TestEnumSetColumnDefinitionMetadata(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			def := &pb.ColDef{
 				Name: "label", Typ: pb.Type{Id: int32(tc.oid), Width: 3},
-				MysqlSpecialResultType: tc.source,
+			}
+			if tc.source != nil {
+				def.MysqlSpecialResultType = &pb.MySQLSpecialResultType{Typ: *tc.source}
+			}
+			kinds := []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_COLUMN}
+			if tc.source != nil {
+				kinds = append(kinds, pb.MySQLSpecialResultType_AGGREGATE, pb.MySQLSpecialResultType_SCALAR_SUBQUERY)
 			}
 			if tc.oid.IsMySQLString() {
 				def.Typ.Charset = uint32(types.CharsetUTF8)
 			}
-			for _, notNull := range []bool{false, true} {
-				def.Typ.NotNullable = notNull
-				before, err := def.Marshal()
-				require.NoError(t, err)
-				var restored pb.ColDef
-				require.NoError(t, restored.Unmarshal(before))
-				col, err := colDef2MysqlColumn(t.Context(), &restored)
-				require.NoError(t, err)
-				protocol := &MysqlProtocolImpl{io: NewIOPackage(true)}
-				cached, err := protocol.MakeColumnDefData(t.Context(), []*pb.ColDef{&restored})
-				require.NoError(t, err)
-				for _, cmd := range []CommandType{COM_QUERY, COM_STMT_PREPARE, COM_STMT_EXECUTE} {
-					packet := protocol.makeColumnDefinition41Payload(col, int(cmd))
-					require.Equal(t, cached[0], packet)
-					wire := parsePrepareColumnDefinition(t, packet[HeaderOffset:])
-					require.Equal(t, tc.wire, wire.typ)
-					require.Equal(t, tc.length, wire.length)
-					flags := uint16(tc.flag)
-					if notNull {
-						flags |= uint16(defines.NOT_NULL_FLAG)
-					}
-					require.Equal(t, flags, wire.flags)
-					if tc.oid.IsMySQLString() {
-						require.Equal(t, uint16(Utf8mb4CollationID), wire.charset)
-					}
-					require.Zero(t, wire.decimals)
+			for _, kind := range kinds {
+				if def.MysqlSpecialResultType != nil {
+					def.MysqlSpecialResultType.Kind = kind
 				}
-				after, err := def.Marshal()
-				require.NoError(t, err)
-				require.Equal(t, before, after)
+				for _, notNull := range []bool{false, true} {
+					def.Typ.NotNullable = notNull
+					before, err := def.Marshal()
+					require.NoError(t, err)
+					var restored pb.ColDef
+					require.NoError(t, restored.Unmarshal(before))
+					col, err := colDef2MysqlColumn(t.Context(), &restored)
+					require.NoError(t, err)
+					protocol := &MysqlProtocolImpl{io: NewIOPackage(true)}
+					cached, err := protocol.MakeColumnDefData(t.Context(), []*pb.ColDef{&restored})
+					require.NoError(t, err)
+					for _, cmd := range []CommandType{COM_QUERY, COM_STMT_PREPARE, COM_STMT_EXECUTE} {
+						packet := protocol.makeColumnDefinition41Payload(col, int(cmd))
+						require.Equal(t, cached[0], packet)
+						wire := parsePrepareColumnDefinition(t, packet[HeaderOffset:])
+						require.Equal(t, tc.wire, wire.typ)
+						require.Equal(t, tc.length, wire.length)
+						flags := uint16(tc.flag)
+						if kind != pb.MySQLSpecialResultType_COLUMN {
+							flags = 0
+						}
+						if notNull {
+							flags |= uint16(defines.NOT_NULL_FLAG)
+						}
+						require.Equal(t, flags, wire.flags)
+						if tc.oid.IsMySQLString() {
+							require.Equal(t, uint16(Utf8mb4CollationID), wire.charset)
+						}
+						require.Zero(t, wire.decimals)
+					}
+					after, err := def.Marshal()
+					require.NoError(t, err)
+					require.Equal(t, before, after)
+				}
 			}
 		})
 	}
@@ -97,7 +111,7 @@ func TestEnumSetResultMetadataPreservesCollation(t *testing.T) {
 	} {
 		col, err := colDef2MysqlColumn(t.Context(), &pb.ColDef{
 			Typ:                    pb.Type{Id: int32(types.T_varchar), Charset: uint32(tc.charset)},
-			MysqlSpecialResultType: &pb.Type{Id: int32(types.T_enum), Enumvalues: "甲乙"},
+			MysqlSpecialResultType: &pb.MySQLSpecialResultType{Typ: pb.Type{Id: int32(types.T_enum), Enumvalues: "甲乙"}},
 		})
 		require.NoError(t, err)
 		require.Equal(t, tc.wire, col.Charset())
@@ -106,12 +120,13 @@ func TestEnumSetResultMetadataPreservesCollation(t *testing.T) {
 }
 
 func TestEnumSetResultMetadataRejectsInvalidDomain(t *testing.T) {
-	for _, source := range []*pb.Type{
-		{Id: int32(types.T_varchar)},
-		{Id: int32(types.T_uint64)},
+	for _, presentation := range []*pb.MySQLSpecialResultType{
+		{Typ: pb.Type{Id: int32(types.T_varchar)}},
+		{Typ: pb.Type{Id: int32(types.T_uint64)}},
+		{Typ: pb.Type{Id: int32(types.T_enum)}, Kind: 999},
 	} {
 		_, err := colDef2MysqlColumn(t.Context(), &pb.ColDef{
-			Typ: pb.Type{Id: int32(types.T_varchar)}, MysqlSpecialResultType: source,
+			Typ: pb.Type{Id: int32(types.T_varchar)}, MysqlSpecialResultType: presentation,
 		})
 		require.Error(t, err)
 	}

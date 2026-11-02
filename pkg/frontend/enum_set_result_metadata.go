@@ -25,10 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-// MySQL publishes ENUM/SET labels as STRING with the corresponding flag, not
-// VARCHAR or their numeric storage types. Both text and binary row encoders
-// keep consuming the same string vectors; only their column metadata changes.
-func setEnumSetResultMetadata(ctx context.Context, source *plan.Type, displayCharset uint8, col *MysqlColumn) error {
+// MySQL publishes ENUM/SET labels as STRING, with field flags only for column
+// results. Both text and binary row encoders keep consuming the same string
+// vectors; only their column metadata changes.
+func setEnumSetResultMetadata(ctx context.Context, result *plan.MySQLSpecialResultType, displayCharset uint8, col *MysqlColumn) error {
+	source := &result.Typ
 	var width int32
 	var flag uint32
 	switch {
@@ -52,6 +53,13 @@ func setEnumSetResultMetadata(ctx context.Context, source *plan.Type, displayCha
 	col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	col.SetLength(mysqlStringColumnLength(width, mysqlTextMaxBytesPerCharacter(displayCharset)))
 	col.SetDecimal(0)
-	col.SetFlag(col.Flag() | uint16(flag))
+	switch result.Kind {
+	case plan.MySQLSpecialResultType_COLUMN:
+		col.SetFlag(col.Flag() | uint16(flag))
+	case plan.MySQLSpecialResultType_AGGREGATE, plan.MySQLSpecialResultType_SCALAR_SUBQUERY:
+		// Expression results retain CHAR and its width, but not field flags.
+	default:
+		return moerr.NewInternalError(ctx, "invalid ENUM/SET result presentation kind")
+	}
 	return nil
 }

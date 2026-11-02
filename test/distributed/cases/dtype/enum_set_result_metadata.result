@@ -1,6 +1,6 @@
 drop table if exists jdbc_enum_set_metadata;
 create table jdbc_enum_set_metadata (
-id int,
+id int primary key,
 e enum('a','bb',''),
 s set('x','yy'),
 c char(2),
@@ -26,4 +26,37 @@ select concat(e) as expr_e, cast(s as char) as expr_s from jdbc_enum_set_metadat
 select e, s from jdbc_enum_set_metadata where 1 = 0
 union all select e, s from jdbc_enum_set_metadata where 1 = 0;
 ➤ e[12,65535,0]  ¦  s[12,65535,0]
+select e, s from jdbc_enum_set_metadata group by id order by id;
+➤ e[1,2,0]  ¦  s[1,4,0]  𝄀
+a  ¦  x,yy  𝄀
+  ¦    𝄀
+null  ¦  null
+select min(e) as min_e, max(s) as max_s from jdbc_enum_set_metadata;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  𝄀
+  ¦  x,yy
+select min(e) as min_e, max(s) as max_s from jdbc_enum_set_metadata where 1 = 0;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  𝄀
+null  ¦  null
+select (select e from jdbc_enum_set_metadata where id = 1) as scalar_e,
+(select s from jdbc_enum_set_metadata where id = 1) as scalar_s;
+➤ scalar_e[1,2,0]  ¦  scalar_s[1,4,0]  𝄀
+a  ¦  x,yy
+select (select e from jdbc_enum_set_metadata where 1 = 0) as scalar_e,
+(select s from jdbc_enum_set_metadata where 1 = 0) as scalar_s;
+➤ scalar_e[1,2,0]  ¦  scalar_s[1,4,0]  𝄀
+null  ¦  null
+select (select b.e from jdbc_enum_set_metadata b where b.id = a.id) as scalar_e,
+(select b.s from jdbc_enum_set_metadata b where b.id = a.id) as scalar_s
+from jdbc_enum_set_metadata a order by id;
+➤ scalar_e[1,2,0]  ¦  scalar_s[1,4,0]  𝄀
+a  ¦  x,yy  𝄀
+  ¦    𝄀
+null  ¦  null
+select e, s from (select min(e) e, max(s) s from jdbc_enum_set_metadata) d;
+➤ e[1,2,0]  ¦  s[1,4,0]  𝄀
+  ¦  x,yy
+select e, s from (select (select e from jdbc_enum_set_metadata where id = 1) e,
+(select s from jdbc_enum_set_metadata where id = 1) s) d;
+➤ e[12,65535,0]  ¦  s[12,65535,0]  𝄀
+a  ¦  x,yy
 drop table jdbc_enum_set_metadata;

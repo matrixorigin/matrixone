@@ -2,7 +2,7 @@
 -- empty labels and NULL. Ordinary strings and computed expressions are controls.
 drop table if exists jdbc_enum_set_metadata;
 create table jdbc_enum_set_metadata (
-    id int,
+    id int primary key,
     e enum('a','bb',''),
     s set('x','yy'),
     c char(2),
@@ -22,4 +22,28 @@ select concat(e) as expr_e, cast(s as char) as expr_s from jdbc_enum_set_metadat
 -- @metacmp(true)
 select e, s from jdbc_enum_set_metadata where 1 = 0
 union all select e, s from jdbc_enum_set_metadata where 1 = 0;
+-- Functional dependency must retain field metadata across the internal aggregate rewrite.
+-- @metacmp(true)
+select e, s from jdbc_enum_set_metadata group by id order by id;
+-- MIN/MAX and scalar subqueries retain CHAR widths without source-column flags.
+-- @metacmp(true)
+select min(e) as min_e, max(s) as max_s from jdbc_enum_set_metadata;
+-- @metacmp(true)
+select min(e) as min_e, max(s) as max_s from jdbc_enum_set_metadata where 1 = 0;
+-- @metacmp(true)
+select (select e from jdbc_enum_set_metadata where id = 1) as scalar_e,
+       (select s from jdbc_enum_set_metadata where id = 1) as scalar_s;
+-- @metacmp(true)
+select (select e from jdbc_enum_set_metadata where 1 = 0) as scalar_e,
+       (select s from jdbc_enum_set_metadata where 1 = 0) as scalar_s;
+-- @metacmp(true)
+select (select b.e from jdbc_enum_set_metadata b where b.id = a.id) as scalar_e,
+       (select b.s from jdbc_enum_set_metadata b where b.id = a.id) as scalar_s
+from jdbc_enum_set_metadata a order by id;
+-- A derived aggregate exposes fields; a derived scalar subquery is an ordinary string.
+-- @metacmp(true)
+select e, s from (select min(e) e, max(s) s from jdbc_enum_set_metadata) d;
+-- @metacmp(true)
+select e, s from (select (select e from jdbc_enum_set_metadata where id = 1) e,
+                        (select s from jdbc_enum_set_metadata where id = 1) s) d;
 drop table jdbc_enum_set_metadata;

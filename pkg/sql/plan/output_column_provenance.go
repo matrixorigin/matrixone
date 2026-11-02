@@ -63,7 +63,9 @@ type SourceColumn struct {
 }
 
 type OutputColumnProvenance struct {
-	IntegerPrecisionID uint32
+	// Immutable result presentation, not evidence of schema/default identity.
+	MySQLSpecialResultType *plan.MySQLSpecialResultType
+	IntegerPrecisionID     uint32
 	// Planner-local display length of a DECIMAL DIV expression, captured before
 	// optimization and carried only across transparent query boundaries.
 	DecimalDivDisplayLength int32
@@ -258,7 +260,12 @@ func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) (result Ou
 	return binding.outputColumnProvenance[col.ColPos]
 }
 
-func (bc *BindContext) outputColumnProvenanceForProject(colPos int32) OutputColumnProvenance {
+func (bc *BindContext) outputColumnProvenanceForProject(colPos int32) (result OutputColumnProvenance) {
+	defer func() {
+		if presentation, captured := bc.mysqlSpecialResultTypes[colPos]; captured {
+			result.MySQLSpecialResultType = presentation
+		}
+	}()
 	if provenance, recorded := bc.outputColumnProvenance[colPos]; recorded {
 		return provenance
 	}
@@ -277,6 +284,7 @@ func (bc *BindContext) outputColumnProvenanceForBoundary() []OutputColumnProvena
 }
 
 func (bc *BindContext) clearOutputColumnProvenance() {
+	bc.mysqlSpecialResultTypes = nil
 	if len(bc.projects) == 0 || len(bc.headings) == 0 {
 		bc.outputColumnProvenance = nil
 		return

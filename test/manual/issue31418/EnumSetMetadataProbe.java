@@ -14,13 +14,18 @@ public final class EnumSetMetadataProbe {
             check(meta.getColumnType(i) == type,
                     phase + ": column " + i + " expected JDBC " + type + ", got " + meta.getColumnType(i));
             check("java.lang.String".equals(meta.getColumnClassName(i)), phase + ": not a String");
-            if (declared) {
+            if (type == Types.CHAR) {
                 check(meta.getPrecision(i) == (i == 1 ? 2 : 4), phase + ": wrong declared label width");
             }
+            com.mysql.cj.result.Field field =
+                    ((com.mysql.cj.jdbc.result.ResultSetMetaData) meta).getFields()[i - 1];
+            int flags = field.getFlags() & (0x100 | 0x800);
+            check(flags == (declared ? (i == 1 ? 0x100 : 0x800) : 0),
+                    phase + ": wrong ENUM/SET flags: " + flags);
         }
     }
 
-    private static void rows(ResultSet result, int type, boolean declared, int copies, String phase)
+    private static void rows(ResultSet result, int type, boolean declared, List<List<String>> expectedRows, String phase)
             throws SQLException {
         metadata(result.getMetaData(), type, declared, phase);
         Map<List<String>, Integer> actual = new HashMap<>();
@@ -28,21 +33,28 @@ public final class EnumSetMetadataProbe {
             actual.merge(Arrays.asList(result.getString(1), result.getString(2)), 1, Integer::sum);
         }
         Map<List<String>, Integer> expected = new HashMap<>();
-        if (copies > 0) {
-            expected.put(Arrays.asList("a", "x,yy"), copies);
-            expected.put(Arrays.asList("", ""), copies);
-            expected.put(Arrays.asList(null, null), copies);
-        }
+        for (List<String> row : expectedRows) expected.merge(row, 1, Integer::sum);
         check(actual.equals(expected), phase + ": expected " + expected + ", got " + actual);
     }
 
     private static void query(Connection connection, String mode, String sql, int type,
                               boolean declared, int copies) throws Exception {
+        List<List<String>> expectedRows = new ArrayList<>();
+        for (int i = 0; i < copies; i++) {
+            expectedRows.add(Arrays.asList("a", "x,yy"));
+            expectedRows.add(Arrays.asList("", ""));
+            expectedRows.add(Arrays.asList(null, null));
+        }
+        query(connection, mode, sql, type, declared, expectedRows);
+    }
+
+    private static void query(Connection connection, String mode, String sql, int type,
+                              boolean declared, List<List<String>> expectedRows) throws Exception {
         if (mode.equals("statement")) {
             try (Statement statement = connection.createStatement()) {
                 statement.setQueryTimeout(30);
                 try (ResultSet result = statement.executeQuery(sql)) {
-                    rows(result, type, declared, copies, mode + ": " + sql);
+                    rows(result, type, declared, expectedRows, mode + ": " + sql);
                 }
             }
         } else {
@@ -55,7 +67,7 @@ public final class EnumSetMetadataProbe {
                 metadata(statement.getMetaData(), type, declared, mode + " prepare: " + sql);
                 for (int i = 0; i < 2; i++) {
                     try (ResultSet result = statement.executeQuery()) {
-                        rows(result, type, declared, copies, mode + " execute: " + sql);
+                        rows(result, type, declared, expectedRows, mode + " execute: " + sql);
                     }
                 }
             }
@@ -80,18 +92,40 @@ public final class EnumSetMetadataProbe {
                 setup.execute("CREATE DATABASE " + db);
                 try {
                     setup.execute("USE " + db);
-                    setup.execute("CREATE TABLE t (e ENUM('a','bb',''), s SET('x','yy'))");
-                    setup.execute("INSERT INTO t VALUES ('a','x,yy'),('',''),(NULL,NULL)");
+                    setup.execute("CREATE TABLE t (id INT PRIMARY KEY, e ENUM('a','bb',''), s SET('x','yy'))");
+                    setup.execute("INSERT INTO t VALUES (1,'a','x,yy'),(2,'',''),(3,NULL,NULL)");
                     for (String sql : new String[]{
                             "SELECT e, s FROM t",
                             "SELECT e AS alias_e, s AS alias_s FROM t",
                             "SELECT DISTINCT e, s FROM t",
                             "SELECT e, s FROM t GROUP BY e, s",
+                            "SELECT e, s FROM t GROUP BY id",
+                            "SELECT e, s FROM (SELECT e, s FROM t GROUP BY id) d",
+                            "SELECT (SELECT e), (SELECT s) FROM t",
                             "SELECT e, s FROM (SELECT e, s FROM t LIMIT 3) d",
                             "WITH c AS (SELECT e, s FROM t) SELECT e, s FROM c"}) {
                         query(connection, mode, sql, Types.CHAR, true, 1);
                     }
                     query(connection, mode, "SELECT e, s FROM t WHERE 1=0", Types.CHAR, true, 0);
+                    query(connection, mode, "SELECT MIN(e), MAX(s) FROM t", Types.CHAR, false,
+                            Collections.singletonList(Arrays.asList("", "x,yy")));
+                    query(connection, mode, "SELECT MAX(e), MIN(s) FROM t", Types.CHAR, false,
+                            Collections.singletonList(Arrays.asList("a", "")));
+                    query(connection, mode, "SELECT e, s FROM (SELECT MIN(e) e, MAX(s) s FROM t) d",
+                            Types.CHAR, true, Collections.singletonList(Arrays.asList("", "x,yy")));
+                    query(connection, mode, "SELECT MIN(e), MAX(s) FROM t WHERE 1=0", Types.CHAR, false,
+                            Collections.singletonList(Arrays.asList(null, null)));
+                    query(connection, mode, "SELECT (SELECT e FROM t WHERE id=1), (SELECT s FROM t WHERE id=1)",
+                            Types.CHAR, false, Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    query(connection, mode, "SELECT (SELECT e FROM t WHERE 1=0), (SELECT s FROM t WHERE 1=0)",
+                            Types.CHAR, false, Collections.singletonList(Arrays.asList(null, null)));
+                    query(connection, mode, "SELECT (SELECT b.e FROM t b WHERE b.id=a.id), "
+                            + "(SELECT b.s FROM t b WHERE b.id=a.id) FROM t a", Types.CHAR, false, 1);
+                    query(connection, mode, "SELECT CONCAT(MIN(e)), CAST(MAX(s) AS CHAR) FROM t", Types.VARCHAR, false,
+                            Collections.singletonList(Arrays.asList("", "x,yy")));
+                    query(connection, mode, "SELECT e, s FROM (SELECT (SELECT e FROM t WHERE id=1) e, "
+                            + "(SELECT s FROM t WHERE id=1) s) d", Types.VARCHAR, false,
+                            Collections.singletonList(Arrays.asList("a", "x,yy")));
                     setup.execute("CREATE VIEW v AS SELECT e, s FROM t");
                     query(connection, mode, "SELECT e, s FROM v", Types.CHAR, true, 1);
                     query(connection, mode, "SELECT CONCAT(e), CAST(s AS CHAR) FROM t", Types.VARCHAR, false, 1);

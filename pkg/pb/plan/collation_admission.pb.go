@@ -170,6 +170,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkMongoColumnMapping(p)
 	case *MongoScan:
 		return true, v.walkMongoScan(p)
+	case *MySQLSpecialResultType:
+		return true, v.walkMySQLSpecialResultType(p)
 	case *Node:
 		return true, v.walkNode(p)
 	case *OnUpdate:
@@ -416,7 +418,7 @@ func (v *legacyCollationVisitor) walkColDef(p *ColDef) error {
 	if err := v.walkGeneratedCol(p.GeneratedCol); err != nil {
 		return err
 	}
-	if err := v.walkType(p.MysqlSpecialResultType); err != nil {
+	if err := v.walkMySQLSpecialResultType(p.MysqlSpecialResultType); err != nil {
 		return err
 	}
 	return nil
@@ -1093,6 +1095,15 @@ func (v *legacyCollationVisitor) walkMongoScan(p *MongoScan) error {
 	}
 	return nil
 }
+func (v *legacyCollationVisitor) walkMySQLSpecialResultType(p *MySQLSpecialResultType) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkType(&p.Typ); err != nil {
+		return err
+	}
+	return nil
+}
 func (v *legacyCollationVisitor) walkNode(p *Node) error {
 	if p == nil {
 		return nil
@@ -1446,7 +1457,7 @@ func (v *legacyCollationVisitor) walkQuery(p *Query) error {
 		return err
 	}
 	for _, item0 := range p.MysqlSpecialResultTypes {
-		if err := v.walkType(&item0); err != nil {
+		if err := v.walkMySQLSpecialResultType(&item0); err != nil {
 			return err
 		}
 	}

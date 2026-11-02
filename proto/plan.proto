@@ -474,7 +474,7 @@ message ColDef {
   IntegerResultPresentation integer_result_presentation = 24;
   // Result publication only: the declared ENUM/SET domain behind a label
   // projection. typ remains the executable string type.
-  Type mysql_special_result_type = 25;
+  MySQLSpecialResultType mysql_special_result_type = 25;
 }
 
 message Default {
@@ -1912,9 +1912,9 @@ message Query {
   IntegerPrecisionGraph integer_precision = 20;
   // Logical targets of exclusive SELECT locks, retained across optimization.
   repeated SelectLockReference select_lock_references = 21;
-  // Output-aligned ENUM/SET domains captured before optimization. Empty when
-  // none retain a declared domain; zero types mark ordinary output columns.
-  repeated Type mysql_special_result_types = 22 [(gogoproto.nullable) = false];
+  // Output-aligned ENUM/SET presentations captured before optimization. Empty
+  // when none apply; zero domain types mark ordinary output columns.
+  repeated MySQLSpecialResultType mysql_special_result_types = 22 [(gogoproto.nullable) = false];
 }
 
 message TransationControl {
@@ -2632,4 +2632,15 @@ message SelectLockReference {
   ObjectRef object_ref = 1;
   repeated ViewStep view_path = 2;
   bool is_cluster_table = 3;
+}
+
+// Result publication only, independent of executable types and schema lineage.
+message MySQLSpecialResultType {
+  enum Kind {
+    COLUMN = 0;
+    AGGREGATE = 1;
+    SCALAR_SUBQUERY = 2;
+  }
+  Type typ = 1 [(gogoproto.nullable) = false];
+  Kind kind = 2;
 }

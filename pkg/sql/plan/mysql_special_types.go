@@ -881,22 +881,89 @@ func mysqlSpecialTypeFromProvenance(provenance OutputColumnProvenance) *plan.Typ
 	return DeepCopyType(&provenance.Source.Metadata.Typ)
 }
 
-// Capture result presentation before optimization can replace a display call
-// with a projection or an empty scan. Execution still produces string labels.
-// Source provenance, unlike ordering provenance, deliberately ends at UNION
-// and semantic expressions: MySQL publishes those results as ordinary strings.
+// Result presentation is not schema lineage: MIN/MAX and scalar subqueries
+// retain CHAR publication but do not inherit a source default or field flags.
+func mysqlSpecialResultTypeFromProvenance(provenance OutputColumnProvenance) *plan.MySQLSpecialResultType {
+	if provenance.MySQLSpecialResultType != nil {
+		return DeepCopyMySQLSpecialResultType(provenance.MySQLSpecialResultType)
+	}
+	if typ := mysqlSpecialTypeFromProvenance(provenance); typ != nil {
+		return &plan.MySQLSpecialResultType{Typ: *typ}
+	}
+	return nil
+}
+
+func (builder *QueryBuilder) mysqlSpecialResultTypeForExpr(ctx *BindContext, expr *plan.Expr) *plan.MySQLSpecialResultType {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return nil
+	}
+	if isEnumOrSetDisplayValueExpr(expr) {
+		args := expr.GetF().Args
+		if len(args) == 2 && isEnumOrSetPlanType(&args[1].Typ) {
+			return &plan.MySQLSpecialResultType{Typ: *DeepCopyType(&args[1].Typ)}
+		}
+	}
+	if col := expr.GetCol(); col != nil && ctx.aggregateTag > 0 && col.RelPos == ctx.aggregateTag &&
+		col.ColPos >= 0 && int(col.ColPos) < len(ctx.aggregates) {
+		fn := ctx.aggregates[col.ColPos].GetF()
+		if fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+			(fn.Func.ObjName == "min" || fn.Func.ObjName == "max") {
+			if result := builder.mysqlSpecialResultTypeForExpr(ctx, fn.Args[0]); result != nil {
+				result.Kind = plan.MySQLSpecialResultType_AGGREGATE
+				return result
+			}
+		}
+		return nil
+	}
+	if sub := expr.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR &&
+		sub.NodeId >= 0 && int(sub.NodeId) < len(builder.ctxByNode) {
+		subCtx := builder.ctxByNode[sub.NodeId]
+		if subCtx != nil {
+			if result := mysqlSpecialResultTypeFromProvenance(subCtx.outputColumnProvenanceForProject(0)); result != nil {
+				// MySQL eliminates an unfiltered no-FROM scalar projection; it
+				// publishes the forwarded expression rather than a subquery item.
+				node := builder.qry.Nodes[sub.NodeId]
+				if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
+					input := builder.qry.Nodes[node.Children[0]]
+					if input.NodeType == plan.Node_VALUE_SCAN && input.TableDef == nil {
+						return result
+					}
+				}
+				result.Kind = plan.MySQLSpecialResultType_SCALAR_SUBQUERY
+				return result
+			}
+		}
+		return nil
+	}
+	return mysqlSpecialResultTypeFromProvenance(ctx.outputColumnProvenanceForExpr(expr))
+}
+
+// Freeze only presentation before ANY_VALUE, aggregate-input and subquery
+// rewrites. Schema/default provenance continues to follow the rewritten plan.
+func (builder *QueryBuilder) captureMySQLSpecialBlockResultTypes(ctx *BindContext) {
+	for i := range ctx.headings {
+		if result := builder.mysqlSpecialResultTypeForExpr(ctx, ctx.projects[i]); result != nil {
+			if ctx.mysqlSpecialResultTypes == nil {
+				ctx.mysqlSpecialResultTypes = make(map[int32]*plan.MySQLSpecialResultType)
+			}
+			ctx.mysqlSpecialResultTypes[int32(i)] = result
+		}
+	}
+}
+
+// Publish the completed root block, after set operations have cleared identity.
 func (builder *QueryBuilder) captureMySQLSpecialResultTypes(ctx *BindContext) {
 	if builder.qry.StmtType != plan.Query_SELECT {
 		return
 	}
 	builder.qry.MysqlSpecialResultTypes = nil
 	for i := range ctx.headings {
-		typ := mysqlSpecialTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
+		typ := mysqlSpecialResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
 		if typ == nil {
 			continue
 		}
 		if builder.qry.MysqlSpecialResultTypes == nil {
-			builder.qry.MysqlSpecialResultTypes = make([]plan.Type, len(ctx.headings))
+			builder.qry.MysqlSpecialResultTypes = make([]plan.MySQLSpecialResultType, len(ctx.headings))
 		}
 		builder.qry.MysqlSpecialResultTypes[i] = *typ
 	}
