@@ -182,8 +182,9 @@ class Vectorf32(TypeDecorator):
         return _vector_result(value)
 
     def bind_processor(self, dialect):
-        """Return a conversion function for processing bind values."""
-        return _vector_literal
+        if dialect is None:
+            return lambda value: self.process_bind_param(value, dialect)
+        return super().bind_processor(dialect)
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""
@@ -237,8 +238,9 @@ class Vectorf64(TypeDecorator):
         return _vector_result(value)
 
     def bind_processor(self, dialect):
-        """Return a conversion function for processing bind values."""
-        return _vector_literal
+        if dialect is None:
+            return lambda value: self.process_bind_param(value, dialect)
+        return super().bind_processor(dialect)
 
     def result_processor(self, dialect, coltype):
         """Return a conversion function for processing result values."""

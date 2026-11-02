@@ -45,7 +45,7 @@ type container struct {
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
 	filterActiveDuration      time.Duration
-	readerFilter              engine.ReaderFilter
+	readerFilter              *engine.ReaderFilterRequest
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
@@ -130,6 +130,9 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	tableScan.ctr.filterReadMetrics = false
 	tableScan.ctr.filterLateMaterialized = false
 	tableScan.ctr.filterActiveDuration = 0
+	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
+		tableScan.ctr.readerFilter.Exact.Close()
+	}
 	tableScan.ctr.readerFilter = nil
 	tableScan.RuntimeFilterExprs = nil
 	tableScan.ctr.maxAllocSize = 0
@@ -170,6 +173,9 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	tableScan.ctr.filterReadMetrics = false
 	tableScan.ctr.filterLateMaterialized = false
 	tableScan.ctr.filterActiveDuration = 0
+	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
+		tableScan.ctr.readerFilter.Exact.Close()
+	}
 	tableScan.ctr.readerFilter = nil
 	if tableScan.ctr.metricView != nil {
 		tableScan.ctr.metricView.Vecs = nil
