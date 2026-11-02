@@ -138,9 +138,15 @@ func run(ctx context.Context, db *sql.DB) error {
 
 	columnCount := 0
 	if err := func() error {
-		columnRows, err := tx.QueryContext(ctx, `select account_id, att_relname_id, att_database,
-			att_relname, attname, attnum, atttyp, attr_has_generated, attr_generated, attisdropped
-			from mo_catalog.mo_columns`)
+		// mo_tables hides temporary tables owned by other sessions. Keep
+		// ordinary orphan columns for the metadata audit, but omit columns
+		// belonging to invisible session temporary tables. Visible temporary
+		// tables still enter through the matching table row.
+		columnRows, err := tx.QueryContext(ctx, `select c.account_id, c.att_relname_id, c.att_database,
+			c.att_relname, c.attname, c.attnum, c.atttyp, c.attr_has_generated, c.attr_generated, c.attisdropped
+			from mo_catalog.mo_columns c
+			left join mo_catalog.mo_tables t on c.account_id = t.account_id and c.att_relname_id = t.rel_id
+			where t.rel_id is not null or not regexp_like(c.att_relname, '^__mo_tmp_[0-9a-f]{32}_')`)
 		if err != nil {
 			return fmt.Errorf("column inventory: %w", err)
 		}

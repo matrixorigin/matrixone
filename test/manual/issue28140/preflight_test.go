@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const columnInventoryQuery = `from mo_catalog[.]mo_columns c\s+left join mo_catalog[.]mo_tables t on c[.]account_id = t[.]account_id and c[.]att_relname_id = t[.]rel_id\s+where t[.]rel_id is not null or not regexp_like`
+
 func preflightMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
 	t.Helper()
 	db, mock, err := sqlmock.New()
@@ -40,7 +42,7 @@ func expectPreflightTable(mock sqlmock.Sqlmock, account, id int) {
 }
 
 func expectPreflightColumn(mock sqlmock.Sqlmock, typeBytes []byte, generated int, generatedBytes []byte) {
-	mock.ExpectQuery("from mo_catalog.mo_columns").WillReturnRows(sqlmock.NewRows([]string{
+	mock.ExpectQuery(columnInventoryQuery).WillReturnRows(sqlmock.NewRows([]string{
 		"account_id", "att_relname_id", "att_database", "att_relname", "attname",
 		"attnum", "atttyp", "attr_has_generated", "attr_generated", "attisdropped",
 	}).AddRow(0, 42, "db", "t", "c", 1, typeBytes, generated, generatedBytes, 0)).RowsWillBeClosed()
@@ -133,27 +135,27 @@ func TestPreflightRejectsIncompleteCatalogSnapshots(t *testing.T) {
 		{name: "column query error", setup: func(mock sqlmock.Sqlmock) {
 			expectPreflightAccounts(mock, 0)
 			expectPreflightTable(mock, 0, 42)
-			mock.ExpectQuery("from mo_catalog.mo_columns").WillReturnError(errors.New("catalog unavailable"))
+			mock.ExpectQuery(columnInventoryQuery).WillReturnError(errors.New("catalog unavailable"))
 		}, want: "column inventory: catalog unavailable"},
 		{name: "column without table", setup: func(mock sqlmock.Sqlmock) {
 			expectPreflightAccounts(mock, 0)
 			expectPreflightTable(mock, 0, 42)
-			mock.ExpectQuery("from mo_catalog.mo_columns").WillReturnRows(columnRows(43, 1, 0, nil)).RowsWillBeClosed()
+			mock.ExpectQuery(columnInventoryQuery).WillReturnRows(columnRows(43, 1, 0, nil)).RowsWillBeClosed()
 		}, want: "no matching table inventory row"},
 		{name: "invalid column ordinal", setup: func(mock sqlmock.Sqlmock) {
 			expectPreflightAccounts(mock, 0)
 			expectPreflightTable(mock, 0, 42)
-			mock.ExpectQuery("from mo_catalog.mo_columns").WillReturnRows(columnRows(42, 0, 0, nil)).RowsWillBeClosed()
+			mock.ExpectQuery(columnInventoryQuery).WillReturnRows(columnRows(42, 0, 0, nil)).RowsWillBeClosed()
 		}, want: "invalid, dropped, or duplicate column ordinal"},
 		{name: "invalid generated encoding", setup: func(mock sqlmock.Sqlmock) {
 			expectPreflightAccounts(mock, 0)
 			expectPreflightTable(mock, 0, 42)
-			mock.ExpectQuery("from mo_catalog.mo_columns").WillReturnRows(columnRows(42, 1, 1, []byte{0x80})).RowsWillBeClosed()
+			mock.ExpectQuery(columnInventoryQuery).WillReturnRows(columnRows(42, 1, 1, []byte{0x80})).RowsWillBeClosed()
 		}, want: "decode generated expression"},
 		{name: "generated expression omitted", setup: func(mock sqlmock.Sqlmock) {
 			expectPreflightAccounts(mock, 0)
 			expectPreflightTable(mock, 0, 42)
-			mock.ExpectQuery("from mo_catalog.mo_columns").WillReturnRows(columnRows(42, 1, 1, emptyGenerated)).RowsWillBeClosed()
+			mock.ExpectQuery(columnInventoryQuery).WillReturnRows(columnRows(42, 1, 1, emptyGenerated)).RowsWillBeClosed()
 		}, want: "empty generated expression"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,7 +227,7 @@ func TestPreflightReportsOversizedCatalogAsAdvisory(t *testing.T) {
 		require.NoError(t, encodeErr)
 		columns.AddRow(0, 42, "db", "t", fmt.Sprintf("g%d", level), level+2, integerType, 1, encoded, 0)
 	}
-	mock.ExpectQuery("from mo_catalog.mo_columns").WillReturnRows(columns).RowsWillBeClosed()
+	mock.ExpectQuery(columnInventoryQuery).WillReturnRows(columns).RowsWillBeClosed()
 	mock.ExpectCommit()
 	mock.ExpectClose()
 	read, write, err := os.Pipe()
