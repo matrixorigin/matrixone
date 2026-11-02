@@ -773,7 +773,14 @@ show count(*) warnings;
 0
 insert into temporal_join_left values (1, '00:00:00');
 execute temporal_join_cast using @temporal_join_value;
-invalid input: invalid time value bad
+➤ count(*)[-5,64,0]  𝄀
+0
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: 'bad'
 set @temporal_join_value = '00:00:00.000000';
 execute temporal_join_cast using @temporal_join_value;
 ➤ count(*)[-5,64,0]  𝄀

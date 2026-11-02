@@ -27,13 +27,14 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func jsonSearchProtocolExpr() *planpb.Expr {
 	return &planpb.Expr{
 		Typ: types.T_json.ToType().PlanType(),
 		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: 620 << 32, ObjName: "json_search"},
+			Func: &planpb.ObjectRef{Obj: int64(function.JSON_SEARCH) << 32, ObjName: "json_search"},
 		}},
 	}
 }

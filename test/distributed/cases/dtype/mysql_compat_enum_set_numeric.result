@@ -279,6 +279,7 @@ select id,e+0 as ordinal,s+0 as bitmap from special_single_empty_clone order by 
 insert into special_single_empty_copy(id,e,s,u) select 12,e,0,12 from (select distinct e from special_single_empty where id in (1,4)) d;
 insert into special_single_empty_copy(id,e,s,u) select 13,e,0,13 from special_single_empty where id=1 union select 13,e,0,13 from special_single_empty where id=4;
 insert into special_single_empty_copy(id,e) select 14,e from special_single_empty where id in (1,4) group by 2;
+Duplicate entry '14' for key 'id'
 insert into special_single_empty_copy(id,e) select 15,(e) from (select e from special_single_empty where id=4) d;
 insert into special_single_empty_copy(id,e) select 16,cast(e as char) from special_single_empty where id=4;
 insert into special_single_empty_copy(id,e) with d as (select e from special_single_empty where id=4) select 17,e from d;
@@ -286,7 +287,6 @@ select id,e+0 as ordinal from special_single_empty_copy where id>=12 order by id
 ➤ id[4,32,0]  ¦  ordinal[-5,64,0]  𝄀
 12  ¦  1  𝄀
 13  ¦  1  𝄀
-14  ¦  1  𝄀
 15  ¦  0  𝄀
 16  ¦  1  𝄀
 17  ¦  0
@@ -302,7 +302,6 @@ select id,e+0 as ordinal,s+0 as bitmap from special_single_empty_copy where id>=
 11  ¦  null  ¦  null  𝄀
 12  ¦  1  ¦  0  𝄀
 13  ¦  1  ¦  0  𝄀
-14  ¦  1  ¦  0  𝄀
 15  ¦  0  ¦  0  𝄀
 16  ¦  1  ¦  0  𝄀
 17  ¦  0  ¦  0

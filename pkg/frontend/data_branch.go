@@ -73,23 +73,6 @@ func isDataBranchWritableColumn(col *plan.ColDef) bool {
 	return isDataBranchUserVisibleColumn(col) && col.GeneratedCol == nil
 }
 
-func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	if left.IsStored != right.IsStored {
-		return false
-	}
-	if left.Expr != nil || right.Expr != nil {
-		leftExpr := proto.Clone(left.Expr).(*plan.Expr)
-		rightExpr := proto.Clone(right.Expr).(*plan.Expr)
-		return leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
-			rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
-			proto.Equal(leftExpr, rightExpr)
-	}
-	return left.OriginString != "" && left.OriginString == right.OriginString
-}
-
 func dataBranchGeneratedColumnsLogicallyEqual(
 	tarCol, baseCol *plan.ColDef,
 	tarDef, baseDef *plan.TableDef,
@@ -1743,15 +1726,6 @@ func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 
 type dataBranchEndpointColumnResolver func(*plan.ColDef) *plan.ColDef
 
-func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
-	return checkSchemaCompatibilityWithResolver(
-		tarDef, baseDef,
-		func(tarCol *plan.ColDef) *plan.ColDef {
-			return dataBranchColumnDefByLogicalName(baseDef, tarCol)
-		},
-	)
-}
-
 func checkSchemaCompatibilityWithResolver(
 	tarDef, baseDef *plan.TableDef,
 	resolveBaseColumn dataBranchEndpointColumnResolver,
@@ -2076,7 +2050,6 @@ func getRelations(
 		)
 		return
 	}
-	tarOperand.rel = tarRel
 	if err = validateDataBranchNamedSnapshotScope(
 		ctx, tarName.AtTsExpr, tarSnap, tarDBName, tarTblName, tarRel,
 	); err != nil {
@@ -2105,7 +2078,6 @@ func getRelations(
 		)
 		return
 	}
-	baseOperand.rel = baseRel
 	if err = validateDataBranchNamedSnapshotScope(
 		ctx, baseName.AtTsExpr, baseSnap, baseDBName, baseTblName, baseRel,
 	); err != nil {
@@ -2151,10 +2123,7 @@ func buildBranchOperand(
 		return nil, newBranchOperandOutsidePublicationScopeError(ctx, dbName, tblName)
 	}
 	operand = &branchOperand{
-		userDb:    dbName,
-		userTable: tblName,
-		tableName: tblName,
-		ctx:       ctx,
+		ctx: ctx,
 	}
 	if classified.local {
 		operand.physAccount = ses.GetAccountId()

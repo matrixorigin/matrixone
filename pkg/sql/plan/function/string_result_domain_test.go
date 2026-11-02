@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -982,37 +983,37 @@ func TestExpandingReturnTypeBounds(t *testing.T) {
 }
 
 func TestPadResultByteLengthEnforcesEncodedBudget(t *testing.T) {
-	length, rejected := padResultByteLength("😀", 2, "😀", 8)
+	length, rejected := padResultByteLengthWithCharacterWidth("😀", 2, "😀", 8, utf8.UTFMax)
 	require.False(t, rejected)
 	require.Equal(t, 8, length)
-	_, rejected = padResultByteLength("😀", int64(types.MaxBlobLen), "😀", int64(types.MaxBlobLen))
+	_, rejected = padResultByteLengthWithCharacterWidth("😀", int64(types.MaxBlobLen), "😀", int64(types.MaxBlobLen), utf8.UTFMax)
 	require.True(t, rejected)
 
-	length, rejected = padResultByteLength("a", 2, "", int64(types.MaxVarcharLen))
+	length, rejected = padResultByteLengthWithCharacterWidth("a", 2, "", int64(types.MaxVarcharLen), utf8.UTFMax)
 	require.False(t, rejected)
 	require.Zero(t, length)
 
-	length, rejected = padResultByteLength("abc", 2, "", int64(types.MaxVarcharLen))
+	length, rejected = padResultByteLengthWithCharacterWidth("abc", 2, "", int64(types.MaxVarcharLen), utf8.UTFMax)
 	require.False(t, rejected)
 	require.Equal(t, 2, length)
 
-	_, rejected = padResultByteLength("a", int64(types.MaxVarcharLen)+1, "", int64(types.MaxVarcharLen))
+	_, rejected = padResultByteLengthWithCharacterWidth("a", int64(types.MaxVarcharLen)+1, "", int64(types.MaxVarcharLen), utf8.UTFMax)
 	require.True(t, rejected)
 
 	const utf8mb4Boundary = int64(16_777_216)
-	length, rejected = padResultByteLength("a", utf8mb4Boundary, "a", int64(types.MaxBlobLen))
+	length, rejected = padResultByteLengthWithCharacterWidth("a", utf8mb4Boundary, "a", int64(types.MaxBlobLen), utf8.UTFMax)
 	require.False(t, rejected)
 	require.Equal(t, int(utf8mb4Boundary), length)
-	_, rejected = padResultByteLength("a", utf8mb4Boundary+1, "a", int64(types.MaxBlobLen))
+	_, rejected = padResultByteLengthWithCharacterWidth("a", utf8mb4Boundary+1, "a", int64(types.MaxBlobLen), utf8.UTFMax)
 	require.True(t, rejected)
-	_, rejected = padResultByteLength("a", utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	_, rejected = padResultByteLengthWithCharacterWidth("a", utf8mb4Boundary+1, "", int64(types.MaxBlobLen), utf8.UTFMax)
 	require.True(t, rejected)
-	length, rejected = padResultByteLength(strings.Repeat("a", 100), utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	length, rejected = padResultByteLengthWithCharacterWidth(strings.Repeat("a", 100), utf8mb4Boundary+1, "", int64(types.MaxBlobLen), utf8.UTFMax)
 	require.False(t, rejected)
 	require.Zero(t, length)
 
 	longSource := strings.Repeat("a", 17_000_000)
-	length, rejected = padResultByteLength(longSource, utf8mb4Boundary+1, "", int64(types.MaxBlobLen))
+	length, rejected = padResultByteLengthWithCharacterWidth(longSource, utf8mb4Boundary+1, "", int64(types.MaxBlobLen), utf8.UTFMax)
 	require.False(t, rejected)
 	require.Equal(t, int(utf8mb4Boundary+1), length)
 

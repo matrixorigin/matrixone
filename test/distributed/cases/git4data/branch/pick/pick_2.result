@@ -8,7 +8,7 @@ insert into t1 values (3,30);
 data branch create table t2 from t0;
 insert into t2 values (3,40);
 data branch pick t2 into t1 keys(3);
-internal error: conflict: t2 INSERT and t1 INSERT on pk(3) with different values
+conflict: t2 INSERT and t1 INSERT on pk(3) with different values
 data branch pick t2 into t1 keys(3) when conflict skip;
 select * from t1 order by a asc;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
@@ -29,7 +29,7 @@ insert into t1 values (1,10),(2,20);
 create table t2 (a int, b int, primary key(a));
 insert into t2 values (1,100),(3,30);
 data branch pick t2 into t1 keys(1);
-internal error: conflict: t2 INSERT and t1 INSERT on pk(1) with different values
+conflict: t2 INSERT and t1 INSERT on pk(1) with different values
 data branch pick t2 into t1 keys(1) when conflict skip;
 select * from t1 order by a asc;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
@@ -55,7 +55,7 @@ update t1 set b = 10 where a = 1;
 data branch create table t2 from t0;
 update t2 set b = 20 where a = 1;
 data branch pick t2 into t1 keys(1);
-internal error: conflict: t2 INSERT and t1 INSERT on pk(1) with different values
+conflict: t2 INSERT and t1 INSERT on pk(1) with different values
 data branch pick t2 into t1 keys(1) when conflict skip;
 select * from t1 order by a asc;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
@@ -78,7 +78,7 @@ data branch create table t2 from t0;
 insert into t1 values (4, 100, NULL);
 insert into t2 values (4, NULL, 'new');
 data branch pick t2 into t1 keys(4) when conflict fail;
-internal error: conflict: t2 INSERT and t1 INSERT on pk(4) with different values
+conflict: t2 INSERT and t1 INSERT on pk(4) with different values
 data branch pick t2 into t1 keys(4) when conflict skip;
 select * from t1 where a = 4;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,-1,0]  𝄀
@@ -120,7 +120,7 @@ delete from t1 where a = 1;
 data branch create table t2 from t0;
 update t2 set b = 111 where a = 1;
 data branch pick t2 into t1 keys(1) when conflict fail;
-internal error: conflict: t2 INSERT and t1 INSERT on pk(1) with different values
+conflict: t2 INSERT and t1 INSERT on pk(1) with different values
 data branch pick t2 into t1 keys(1) when conflict skip;
 select count(*) from t1 where a = 1;
 ➤ count(*)[-5,64,0]  𝄀
@@ -139,7 +139,7 @@ update t1 set b = 999 where a = 1;
 data branch create table t2 from t0;
 delete from t2 where a = 1;
 data branch pick t2 into t1 keys(1) when conflict fail;
-internal error: conflict: t2 INSERT and t1 INSERT on pk(1) with different values
+conflict: t2 INSERT and t1 INSERT on pk(1) with different values
 data branch pick t2 into t1 keys(1) when conflict skip;
 select * from t1 where a = 1;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀

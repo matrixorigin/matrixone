@@ -1544,11 +1544,38 @@ clean:
 fmt:
 	gofmt -l -s -w .
 
+# Official golangci-lint 2.14.0 binaries use Go 1.27. Prefer these verified
+# releases on cold caches; retain source installation for other toolchains or
+# unavailable artifacts.
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
-	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20261028130237-35bd4d9a4055
-	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
+	@set -eu; \
+	platform="$$(go env GOHOSTOS)-$$(go env GOHOSTARCH)"; \
+	case "$$platform/$$(go env GOVERSION)" in \
+	  linux-amd64/go1.27.*) sha=ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab ;; \
+	  linux-arm64/go1.27.*) sha=ee7ec5f3453d15ddf106fae5a4d6c71737712348a979d1fe9cd52ec7ea299bae ;; \
+	  darwin-amd64/go1.27.*) sha=a5667c1c3536be1740133213e1e822bfb8f0d98ea12903174d6d5f635e4ed68d ;; \
+	  darwin-arm64/go1.27.*) sha=5ef5f36a7147e91dc58ef9ef4d11bb7bad5ead0c76eb6c01327a73c641d1dcc3 ;; \
+	  *) sha= ;; \
+	esac; \
+	if [ -n "$$sha" ]; then \
+	  mkdir -p "$(GOPATH)/bin"; \
+	  stage=$$(mktemp -d "$(GOPATH)/bin/.golangci-lint.XXXXXX"); \
+	  trap 'rm -rf "$$stage"' EXIT; \
+	  trap 'exit 130' INT; trap 'exit 143' TERM; \
+	  archive="golangci-lint-2.14.0-$$platform"; \
+	  if MO_DOWNLOAD_ATTEMPTS=1 MO_DOWNLOAD_RETRY_ROUNDS=1 MO_DOWNLOAD_MAX_TIME_SECONDS=60 \
+	     thirdparties/download "https://github.com/golangci/golangci-lint/releases/download/v2.14.0/$$archive.tar.gz" "$$sha" "$$stage/archive.tar.gz" && \
+	     tar -xzf "$$stage/archive.tar.gz" -C "$$stage" "$$archive/golangci-lint"; then \
+	    chmod 0755 "$$stage/$$archive/golangci-lint"; \
+	    mv -f "$$stage/$$archive/golangci-lint" "$(GOPATH)/bin/golangci-lint"; \
+	    exit 0; \
+	  fi; \
+	  echo 'Prebuilt golangci-lint unavailable; installing the pinned version from source' >&2; \
+	fi; \
+	GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+	@GOBIN="$(GOPATH)/bin" go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20261028130237-35bd4d9a4055
+	@GOBIN="$(GOPATH)/bin" go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 FRONTEND_MOCKGEN = $(CGO_OPTS) CGO_LDFLAGS="-L$(THIRDPARTIES_INSTALL_DIR)/lib -L$(CGO_DIR) -Wl,-rpath,$(CGO_DIR) -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib" GOWORK=off $(GOPATH)/bin/mockgen -build_flags="$(GO_MODULE_MODE)"
 

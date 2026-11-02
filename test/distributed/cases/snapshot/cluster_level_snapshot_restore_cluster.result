@@ -707,9 +707,9 @@ drop view employee_with_department_view;
 drop database db03;
 use mo_catalog;
 drop table t1;
-no such table mo_catalog.t1
+Unknown table 'mo_catalog.t1'
 drop table t3;
-no such table mo_catalog.t3
+Unknown table 'mo_catalog.t3'
 drop database db02;
 drop publication pub02;
 drop database repub02;

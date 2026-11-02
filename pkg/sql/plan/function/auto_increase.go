@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -93,8 +94,11 @@ func getTableAutoIncrCol(engineDefs []engine.TableDef) string {
 			return ""
 		}
 
-		// Select the first column with the auto increment property; otherwise, a synthetic primary key(fake pk) may be selected, which can be confusing.
-		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement {
+		// Select the first user column with the auto increment property. The
+		// synthetic primary key (fake pk) of a table without a primary key is
+		// also auto-increment, but it is not the table's AUTO_INCREMENT column.
+		if attr, ok := def.(*engine.AttributeDef); ok && attr.Attr.AutoIncrement &&
+			(!catalog.IsFakePkName(attr.Attr.Name) || !attr.Attr.IsHidden) {
 			autoIncrCol = attr.Attr.Name
 			break
 		}

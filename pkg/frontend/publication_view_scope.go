@@ -554,7 +554,7 @@ func publicationSystemRelationAvailable(
 			// general account yet; relations the system account keeps to
 			// itself have no such evidence.
 			return hasGeneralRow ||
-				publicationSystemRelationProvisionedAtAccountCreation(bh.Service(), database, relation), nil
+				publicationSystemRelationProvisionedAtAccountCreation(database, relation), nil
 		}
 		if _, owned := ownedAccounts[uint64(target)]; !owned {
 			// The relation resolves inside the target's own catalog only;
@@ -583,14 +583,12 @@ var (
 // created after the publication, so availability of such relations follows
 // the contract rather than the accounts that happen to exist when the
 // publication is created; relations the system account keeps to itself are
-// provisioned for accounts it never creates and stay unavailable. service
-// selects the information_schema generation the session's own tenant
-// initialization installs.
+// provisioned for accounts it never creates and stay unavailable.
 func publicationSystemRelationProvisionedAtAccountCreation(
-	service, database, relation string,
+	database, relation string,
 ) bool {
 	publicationProvisionedSystemRelationsOnce.Do(func() {
-		publicationProvisionedSystemRelationsSet = buildPublicationProvisionedSystemRelations(service)
+		publicationProvisionedSystemRelationsSet = buildPublicationProvisionedSystemRelations()
 	})
 	key := publicationProvisionedSymbolKey(database, relation)
 	_, provisioned := publicationProvisionedSystemRelationsSet[key]
@@ -601,7 +599,7 @@ func publicationProvisionedSymbolKey(database, relation string) string {
 	return strings.ToLower(database) + "." + strings.ToLower(relation)
 }
 
-func buildPublicationProvisionedSystemRelations(service string) map[string]struct{} {
+func buildPublicationProvisionedSystemRelations() map[string]struct{} {
 	provisioned := make(map[string]struct{})
 	collect := func(sql string) {
 		statements, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 1)
@@ -644,17 +642,8 @@ func buildPublicationProvisionedSystemRelations(service string) map[string]struc
 	for _, sql := range mometric.GetSchemaForAccount(context.Background(), sysAccountName) {
 		collect(sql)
 	}
-	// information_schema and mysql: the views installed for each account.
-	// The account initializer probes peer CN capability through the creating
-	// session's process; this offline discovery has no session, so a nil proc
-	// makes the capability probe report unsupported and selects the same
-	// conservative predecessor generation CREATE ACCOUNT would fall back to.
-	// A failure keeps the minimum generation instead of broadening scope.
-	protocolVersion, err := protocolVersionForTenantInitialization(service, nil)
-	if err != nil {
-		protocolVersion = defines.MORPCMinVersion
-	}
-	for _, sql := range sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion) {
+	// Successful account creation always installs the current definition set.
+	for _, sql := range sysview.InitInformationSchemaSysTables {
 		collect(sql)
 	}
 	for _, sql := range sysview.InitMysqlSysTables {

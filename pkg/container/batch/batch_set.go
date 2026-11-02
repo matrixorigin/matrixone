@@ -280,6 +280,10 @@ func (bs *BatchSet) Union(mpool *mpool.MPool, inBatch *Batch, sels []int32, reus
 	}
 	firstSels := sels[:firstSelsLen]
 	for i := range lastBat.Vecs {
+		if lastBat.rowCount > 0 && len(firstSels) > 0 {
+			// Different input batches need not be ordered relative to one another.
+			lastBat.Vecs[i].SetSorted(false)
+		}
 		err := lastBat.Vecs[i].UnionInt32(inBatch.Vecs[i], firstSels, mpool)
 		if err != nil {
 			return consumed, err
@@ -446,6 +450,12 @@ func (bs *BatchSet) fillData(mpool *mpool.MPool, inBatch *Batch, reuseBuf *Batch
 		}
 
 		addRowCount := min(end-start, bs.batchMaxRow-tmpBat.RowCount())
+		if tmpBat.RowCount() > 0 && addRowCount > 0 {
+			// Appending another batch invalidates the inherited order guarantee.
+			for _, vec := range tmpBat.Vecs {
+				vec.SetSorted(false)
+			}
+		}
 		if err := tmpBat.UnionWindow(inBatch, start, addRowCount, mpool); err != nil {
 			return consumed, err
 		}

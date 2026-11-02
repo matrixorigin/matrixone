@@ -227,39 +227,16 @@ func BuildKeyExpr(spec *plan.RuntimeFilterSpec) *plan.Expr {
 	return spec.BuildExpr
 }
 
+func safeTupleNarrowingCast(source, target types.T) bool {
+	sourceWidth, sourceSigned, sourceOK := keycodec.RuntimeFilterIntegerWidth(source)
+	targetWidth, targetSigned, targetOK := keycodec.RuntimeFilterIntegerWidth(target)
+	return sourceOK && targetOK && sourceSigned == targetSigned && targetWidth <= sourceWidth
+}
+
 // TupleComponentSlot returns the HashBuild condition slot and its source type
 // for a serialized tuple component. A planner-generated narrowing cast is
 // allowed so a wider comparison key can be encoded in the probe column's
 // physical domain; evaluation failures remain an optional-filter PASS.
-func integerWidth(oid types.T) (int, bool, bool) {
-	switch oid {
-	case types.T_int8:
-		return 8, true, true
-	case types.T_int16:
-		return 16, true, true
-	case types.T_int32:
-		return 32, true, true
-	case types.T_int64:
-		return 64, true, true
-	case types.T_uint8:
-		return 8, false, true
-	case types.T_uint16:
-		return 16, false, true
-	case types.T_uint32:
-		return 32, false, true
-	case types.T_uint64:
-		return 64, false, true
-	default:
-		return 0, false, false
-	}
-}
-
-func safeTupleNarrowingCast(source, target types.T) bool {
-	sourceWidth, sourceSigned, sourceOK := integerWidth(source)
-	targetWidth, targetSigned, targetOK := integerWidth(target)
-	return sourceOK && targetOK && sourceSigned == targetSigned && targetWidth <= sourceWidth
-}
-
 func TupleComponentSlot(arg *plan.Expr) (int, types.Type, bool) {
 	if arg == nil {
 		return 0, types.Type{}, false

@@ -29,8 +29,8 @@ func NewRecursiveSearchPath() *Path {
 	return &Path{paths: []subPath{{tp: subPathDoubleStar}}}
 }
 
-// SearchStringPaths returns the complete locations of string values selected
-// by paths whose value satisfies match. Overlapping filters are deduplicated.
+// SearchStringPaths returns the complete locations of matching string values
+// in the subtrees selected by paths. Overlapping filters are deduplicated.
 // The callback receives a view into the source document which is valid only
 // during the call.
 //
@@ -50,7 +50,6 @@ func (bj ByteJson) SearchStringPaths(
 
 	result := make([]string, 0, min(len(paths), 8))
 	seen := make(map[string]struct{})
-	searchedSubtrees := make(map[string]struct{})
 	totalBytes := 0
 
 	var walk func(ByteJson, *Path, string) (bool, error)
@@ -86,15 +85,6 @@ func (bj ByteJson) SearchStringPaths(
 
 		sub, remaining := filter.step()
 		if sub.tp == subPathDoubleStar {
-			// A terminal recursive search visits the complete selected subtree.
-			// Overlapping filters can select it again; never rescan the same
-			// concrete subtree or let overlap multiply traversal cost.
-			if remaining.empty() {
-				if _, ok := searchedSubtrees[location]; ok {
-					return false, nil
-				}
-				searchedSubtrees[location] = struct{}{}
-			}
 			done, err := walk(current, &remaining, location)
 			if err != nil || done {
 				return done, err

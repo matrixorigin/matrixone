@@ -1,0 +1,22 @@
+select '1.5' between 1 and 20;
+invalid argument cast to int, bad value 1.5
+select 'abc' between 1 and 20;
+invalid argument cast to int, bad value abc
+select 1 where '1.5' between 1 and 20;
+invalid argument cast to int, bad value 1.5
+select '1.5' >= 1 and '1.5' <= 20;
+invalid argument cast to int, bad value 1.5
+select '1.5' not between 1 and 20;
+invalid argument cast to int, bad value 1.5
+select '12' between 1 and 20;
+➤ 12 between 1 and 20[-6,8,0]  𝄀
+1
+select 5 between 1 and 20, 30 between 1 and 20;
+➤ 5 between 1 and 20[-6,8,0]  ¦  30 between 1 and 20[-6,8,0]  𝄀
+1  ¦  0
+select 1 where 5 between 1 and 20;
+➤ 1[-5,64,0]  𝄀
+1
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
