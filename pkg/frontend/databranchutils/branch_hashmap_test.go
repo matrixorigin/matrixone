@@ -2260,6 +2260,146 @@ func TestEncodeRowCoversManyTypes(t *testing.T) {
 	}
 }
 
+// TestBindRowEncodersMatchEncodeRow pins the batch-loop encoder to the scalar
+// encodeRow path: identical bytes for every row, including null cells and a
+// constant column, so switching the Put/Get/Pop loops to bound encoders cannot
+// change key materialization.
+func TestBindRowEncodersMatchEncodeRow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	const rows = 4
+	const nullRow = 2
+
+	specs := []struct {
+		name string
+		typ  types.Type
+		fill func(vec *vector.Vector)
+	}{
+		{
+			name: "bool",
+			typ:  types.T_bool.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendFixed(vec, row%2 == 0, row == nullRow, mp))
+				}
+			},
+		},
+		{
+			name: "int64",
+			typ:  types.T_int64.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendFixed(vec, int64(row)*-7, row == nullRow, mp))
+				}
+			},
+		},
+		{
+			name: "float64",
+			typ:  types.T_float64.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendFixed(vec, float64(row)+0.5, row == nullRow, mp))
+				}
+			},
+		},
+		{
+			name: "decimal128",
+			typ:  types.T_decimal128.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: uint64(row), B64_127: 456}, row == nullRow, mp))
+				}
+			},
+		},
+		{
+			name: "timestamp",
+			typ:  types.T_timestamp.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendFixed(vec, types.Timestamp(row), row == nullRow, mp))
+				}
+			},
+		},
+		{
+			name: "uuid",
+			typ:  types.T_uuid.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendFixed(vec, types.Uuid{byte(row), 1, 2, 3}, row == nullRow, mp))
+				}
+			},
+		},
+		{
+			name: "char",
+			typ:  types.T_char.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendBytes(vec, []byte{byte('a' + row)}, row == nullRow, mp))
+				}
+			},
+		},
+		{
+			name: "varchar",
+			typ:  types.T_varchar.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendBytes(vec, []byte{byte('a' + row), byte('b' + row)}, row == nullRow, mp))
+				}
+			},
+		},
+		{
+			name: "array_float32",
+			typ:  types.T_array_float32.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendBytes(vec, []byte{byte(row), 0, 1, 2}, row == nullRow, mp))
+				}
+			},
+		},
+		{
+			name: "ts",
+			typ:  types.T_TS.ToType(),
+			fill: func(vec *vector.Vector) {
+				for row := 0; row < rows; row++ {
+					require.NoError(t, vector.AppendFixed(vec, types.TS{1, 2, 3, byte(row)}, row == nullRow, mp))
+				}
+			},
+		},
+	}
+
+	vecs := make([]*vector.Vector, 0, len(specs)+1)
+	indexes := make([]int, 0, len(specs)+1)
+	for i, spec := range specs {
+		vec := vector.NewVec(spec.typ)
+		spec.fill(vec)
+		vecs = append(vecs, vec)
+		indexes = append(indexes, i)
+		defer vec.Free(mp)
+	}
+
+	constVec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(7), rows, mp)
+	require.NoError(t, err)
+	defer constVec.Free(mp)
+	vecs = append(vecs, constVec)
+	indexes = append(indexes, len(vecs)-1)
+
+	bound := bindRowEncoders(vecs, indexes)
+
+	packer := types.NewPacker()
+	defer packer.Close()
+	reference := types.NewPacker()
+	defer reference.Close()
+
+	for row := 0; row < rows; row++ {
+		reference.Reset()
+		require.NoError(t, encodeRow(reference, vecs, indexes, row))
+		packer.Reset()
+		bound.encode(packer, row)
+		require.Equalf(t, reference.Bytes(), packer.Bytes(), "row %d encoding diverged", row)
+	}
+}
+
 func collectInt64EncodedKeys(t *testing.T, bh BranchHashmap) map[int64][]byte {
 	t.Helper()
 

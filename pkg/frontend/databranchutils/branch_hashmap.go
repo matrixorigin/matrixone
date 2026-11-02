@@ -339,6 +339,9 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 	defer bh.putPacker(keyPacker)
 	defer bh.putPacker(valuePacker)
 
+	keyEncoder := bindRowEncoders(vecs, keyCols)
+	valueEncoder := bindRowEncoders(vecs, valueCols)
+
 	batchSize := putBatchSize
 	if batchSize > rowCount {
 		batchSize = rowCount
@@ -352,15 +355,9 @@ func (bh *branchHashmap) PutByVectors(vecs []*vector.Vector, keyCols []int) erro
 		chunk := bh.getPreparedEntryBatch(batchEnd - batchStart)
 		for idx := batchStart; idx < batchEnd; idx++ {
 			keyPacker.Reset()
-			if err := encodeRow(keyPacker, vecs, keyCols, idx); err != nil {
-				bh.putPreparedEntryBatch(chunk)
-				return err
-			}
+			keyEncoder.encode(keyPacker, idx)
 			valuePacker.Reset()
-			if err := encodeRow(valuePacker, vecs, valueCols, idx); err != nil {
-				bh.putPreparedEntryBatch(chunk)
-				return err
-			}
+			valueEncoder.encode(valuePacker, idx)
 			chunk = append(chunk, preparedEntry{
 				key:   keyPacker.Bytes(),
 				value: valuePacker.Bytes(),
@@ -560,14 +557,14 @@ func (bh *branchHashmap) PopByVectorsStream(keyVecs []*vector.Vector, removeAll 
 		keyIndexes[i] = i
 	}
 
+	keyEncoder := bindRowEncoders(keyVecs, keyIndexes)
+
 	packer := bh.getPacker()
 	defer bh.putPacker(packer)
 	probesByShard := make(map[*hashShard][]*keyProbe, shardCount)
 	for idx := 0; idx < rowCount; idx++ {
 		packer.Reset()
-		if err := encodeRow(packer, keyVecs, keyIndexes, idx); err != nil {
-			return 0, err
-		}
+		keyEncoder.encode(packer, idx)
 		keyBytes := packer.Bytes()
 		keyCopy := make([]byte, len(keyBytes))
 		copy(keyCopy, keyBytes)
@@ -679,14 +676,14 @@ func (bh *branchHashmap) lookupByVectors(keyVecs []*vector.Vector, removeAll *bo
 		keyIndexes[i] = i
 	}
 
+	keyEncoder := bindRowEncoders(keyVecs, keyIndexes)
+
 	packer := bh.getPacker()
 	defer bh.putPacker(packer)
 	probesByShard := make(map[*hashShard][]*keyProbe, shardCount)
 	for idx := 0; idx < rowCount; idx++ {
 		packer.Reset()
-		if err := encodeRow(packer, keyVecs, keyIndexes, idx); err != nil {
-			return nil, err
-		}
+		keyEncoder.encode(packer, idx)
 		keyBytes := packer.Bytes()
 		keyCopy := make([]byte, len(keyBytes))
 		copy(keyCopy, keyBytes)
@@ -1816,6 +1813,38 @@ func encodeRow(p *types.Packer, vecs []*vector.Vector, cols []int, row int) erro
 		}
 	}
 	return nil
+}
+
+// rowEncoders binds one vector.RowEncoder per selected column so a batch loop
+// encodes rows without rebuilding the type-dispatch closure for every cell.
+// It borrows the vectors: keep them alive and unmodified while encoding, the
+// same contract encodeRow has for a single row.
+type rowEncoders struct {
+	vecs []*vector.Vector
+	encs []vector.RowEncoder
+}
+
+func bindRowEncoders(vecs []*vector.Vector, cols []int) rowEncoders {
+	bound := rowEncoders{
+		vecs: make([]*vector.Vector, len(cols)),
+		encs: make([]vector.RowEncoder, len(cols)),
+	}
+	for i, col := range cols {
+		bound.vecs[i] = vecs[col]
+		bound.encs[i] = vector.NewRowEncoder(vecs[col])
+	}
+	return bound
+}
+
+// encode writes one row with encodeRow's null handling and byte format.
+func (bound rowEncoders) encode(p *types.Packer, row int) {
+	for i, enc := range bound.encs {
+		if bound.vecs[i].IsNull(uint64(row)) {
+			p.EncodeNull()
+			continue
+		}
+		enc(p, row)
+	}
 }
 
 func encodeDecodedValue(p *types.Packer, typ types.Type, v any) error {
