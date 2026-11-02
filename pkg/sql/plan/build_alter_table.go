@@ -507,6 +507,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	if err := validateDefaultColumnDependencies(ctx, copyTableDef.Cols); err != nil {
 		return nil, err
 	}
+	if err := validateVirtualTimestampExpansion(ctx, copyTableDef); err != nil {
+		return nil, err
+	}
 	if hasAutoIncrementOption && !tableHasAutoIncrementColumn(copyTableDef) {
 		return nil, moerr.NewInvalidInputf(ctx,
 			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
