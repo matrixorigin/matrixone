@@ -457,6 +457,51 @@ select id from btw42 where n not between lo and hi order by id;
 select id, d between lo and hi as mj_inside, d not between lo and hi as mj_outside from btw42 order by id;
 drop table if exists btw42;
 drop table if exists btw41;
+-- prepared mixed JSON/numeric ranges (review round 5): SQL EXECUTE rebinding
+-- keeps the mixed BETWEEN ternary, so the prepared path, the static spelling
+-- and the lowered NOT BETWEEN form must answer from the same domain. The
+-- numeric/numeric leg keeps the DOUBLE coercion the ordinary BIGINT/DOUBLE
+-- comparison uses, so a BIGINT 2^53+1 subject rounds into the DOUBLE 2^53
+-- upper bound instead of being excluded by the exact big-integer taxonomy.
+drop table if exists btw43;
+create table btw43 (id int primary key, n bigint);
+insert into btw43 values (1,9007199254740993),(2,9007199254740992),(3,9007199254740991),(4,9007199254740995);
+select id, (cast('0' as json) <= abs(n)) and (abs(n) <= cast(9007199254740992 as double)) as inside_bin,
+       abs(n) between cast('0' as json) and cast(9007199254740992 as double) as inside_stat
+       from btw43 order by id;
+prepare pb43 from 'select id, abs(n) between cast(? as json) and cast(9007199254740992 as double) as inside_pre,
+       not(abs(n) between cast(? as json) and cast(9007199254740992 as double)) as outside_pre,
+       abs(n) not between cast(? as json) and cast(9007199254740992 as double) as outside_lower
+       from btw43 order by id';
+set @j43 = '0';
+execute pb43 using @j43, @j43, @j43;
+deallocate prepare pb43;
+drop table if exists btw43;
+-- SQL NULL bounds under the SQL AND tri-state (review round 5): a decisive
+-- false leg answers FALSE even beside an unknown leg, so the prepared
+-- ternary, the NOT-wrapped form and the lowered NOT BETWEEN form agree row
+-- for row while undecided rows stay NULL.
+drop table if exists btw44;
+create table btw44 (id int primary key, n bigint);
+insert into btw44 values (1,0),(2,5),(3,3),(4,null);
+select id, n between cast('1' as json) and null as inside_stat,
+       n not between cast('1' as json) and null as outside_stat from btw44 order by id;
+prepare pb44 from 'select id, n between cast(? as json) and cast(? as signed) as inside_pre,
+       not(n between cast(? as json) and cast(? as signed)) as outside_not,
+       n not between cast(? as json) and cast(? as signed) as outside_lower
+       from btw44 order by id';
+set @lo44 = '1';
+set @null44 = null;
+execute pb44 using @lo44, @null44, @lo44, @null44, @lo44, @null44;
+deallocate prepare pb44;
+-- the mirrored shape: a SQL NULL JSON lower bound beside a decisive upper leg
+prepare pb45 from 'select id, n between cast(? as json) and cast(? as signed) as inside_flip,
+       n not between cast(? as json) and cast(? as signed) as outside_flip
+       from btw44 order by id';
+set @one44 = 1;
+execute pb45 using @null44, @one44, @null44, @one44;
+deallocate prepare pb45;
+drop table if exists btw44;
 drop table if exists btw40;
 drop table if exists btw39;
 drop table if exists btw38;

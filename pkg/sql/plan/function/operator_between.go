@@ -177,8 +177,12 @@ func compareBetweenJSONBooleanOperands(
 // opBetweenJSONBoolean evaluates `x BETWEEN lo AND hi` as
 // `lo <= x AND x <= hi` with each leg in its own comparison domain, exactly
 // like the binary ordering operators the NOT BETWEEN lowering produces.
-// SQL NULL in any operand propagates NULL; a JSON literal null stays a
-// comparable value that ranks below the boolean peer.
+// The legs combine under SQL AND: a definitive false leg answers the row
+// FALSE even when the other leg is unknown, and only undecided rows stay
+// NULL, so `NOT (x BETWEEN lo AND hi)` and the lowered
+// `x < lo OR x > hi` agree on every row. A JSON literal null stays a
+// comparable value that ranks below the boolean peer; only the legacy
+// DUMP/LOAD fold keeps an unknown leg like a SQL NULL operand.
 func opBetweenJSONBoolean(
 	parameters []*vector.Vector,
 	result *vector.FunctionResult[bool],
@@ -247,29 +251,38 @@ func opBetweenJSONBoolean(
 			}
 			operands[index] = operand
 		}
-		if operands[0].sqlNull || operands[1].sqlNull || operands[2].sqlNull {
+		// Each leg is unknown when either operand is SQL NULL (or, in the
+		// legacy era, a folded JSON literal null); every decided leg reaches
+		// its own comparison kernel like the lowered comparison pair does.
+		lowerKnown := !operands[0].sqlNull && !operands[1].sqlNull
+		upperKnown := !operands[0].sqlNull && !operands[2].sqlNull
+		lowerIn, upperIn := false, false
+		if lowerKnown {
+			comparison, jsonNull, err := compareBetweenJSONBooleanOperands(proc, operands[1], operands[0])
+			if err != nil {
+				return err
+			}
+			lowerKnown = !jsonNull
+			lowerIn = comparison <= 0
+		}
+		if upperKnown {
+			comparison, jsonNull, err := compareBetweenJSONBooleanOperands(proc, operands[0], operands[2])
+			if err != nil {
+				return err
+			}
+			upperKnown = !jsonNull
+			upperIn = comparison <= 0
+		}
+		switch {
+		case lowerKnown && !lowerIn, upperKnown && !upperIn:
+			// SQL AND: FALSE dominates UNKNOWN, so one definitive leg
+			// answers the row FALSE instead of NULL, exactly like the
+			// `lo <= x AND x <= hi` lowered form.
+		case !lowerKnown || !upperKnown:
 			resultNulls.Add(uint64(row))
-			continue
+		default:
+			rss[row] = lowerIn && upperIn
 		}
-		comparison, jsonNull, err := compareBetweenJSONBooleanOperands(proc, operands[1], operands[0])
-		if err != nil {
-			return err
-		}
-		if jsonNull {
-			resultNulls.Add(uint64(row))
-			continue
-		}
-		lowerOK := comparison <= 0
-		comparison, jsonNull, err = compareBetweenJSONBooleanOperands(proc, operands[0], operands[2])
-		if err != nil {
-			return err
-		}
-		if jsonNull {
-			resultNulls.Add(uint64(row))
-			continue
-		}
-		upperOK := comparison <= 0
-		rss[row] = lowerOK && upperOK
 	}
 	return nil
 }
@@ -334,13 +347,27 @@ func readBetweenJSONNumericOperand(
 	return operand, nil
 }
 
+// jsonNumericPeerFloatCoercionDomain reports whether a numeric/numeric
+// BETWEEN leg with this peer must compare in the DOUBLE domain: the ordinary
+// comparison coercion folds a pair with a FLOAT operand (a prepared
+// float-kind ANY parameter included) to DOUBLE before comparing, and the
+// ternary leg follows the same coercion so every spelling of the range
+// agrees at the precision boundary.
+func jsonNumericPeerFloatCoercionDomain(peer *jsonNumericPeer) bool {
+	return peer.typ.IsFloat() || peer.typ == types.T_any && peer.kind == vector.PrepareParamFloat
+}
+
 // compareBetweenJSONNumericOperands returns the ordering of left against
 // right for the per-domain legs: JSON/JSON pairs rank by the trusted byte
 // ordering exactly like the binary JSON pair, JSON/numeric pairs by the
 // shared compareJSONNumeric kernel with the numeric peer built from the
-// numeric operand, and numeric/numeric pairs by the same exact numeric
-// taxonomy the ranking domain uses (JSON ranking already decides an encoded
-// number against an integer adapter through bytejson.CompareNumeric).
+// numeric operand, and numeric/numeric pairs in the comparison domain that
+// the ordinary binary operator binds for that pair - a float-typed peer keeps
+// the pair in the DOUBLE domain exactly like type_check.go's comparison
+// coercion (so a BIGINT 2^53+1 subject compares equal to the DOUBLE 2^53
+// bound), while every other pair keeps the same exact numeric taxonomy the
+// ranking domain uses (JSON ranking already decides an encoded number
+// against an integer adapter through bytejson.CompareNumeric).
 // A JSON scalar null-out (the legacy era fold) reports through jsonNull.
 func compareBetweenJSONNumericOperands(
 	proc *process.Process, left, right betweenJSONNumericOperand,
@@ -349,6 +376,20 @@ func compareBetweenJSONNumericOperands(
 		return bytejson.CompareByteJsonTrusted(left.json, right.json), false, nil
 	}
 	if !left.isJSON && !right.isJSON {
+		if jsonNumericPeerFloatCoercionDomain(&left.peer) ||
+			jsonNumericPeerFloatCoercionDomain(&right.peer) {
+			// The ordinary BIGINT/DOUBLE (or DECIMAL/float, or unsigned
+			// integer/float) comparison coerces both operands to DOUBLE, so
+			// the lowered `x <= hi` leg rounds the subject before comparing
+			// and this leg answers from the same domain.
+			leftFloat, _, ok := jsonToScalar(left.peer.value)
+			rightFloat, _, okRight := jsonToScalar(right.peer.value)
+			if !ok || !okRight {
+				return 0, false, moerr.NewInvalidInput(
+					proc.Ctx, "invalid encoded numeric BETWEEN operand")
+			}
+			return compareFloat64Total(leftFloat, rightFloat), false, nil
+		}
 		comparison, ok := bytejson.CompareNumeric(left.peer.value, right.peer.value)
 		if !ok {
 			// Only a malformed internal adapter payload reaches this path;
@@ -368,10 +409,12 @@ func compareBetweenJSONNumericOperands(
 // opBetweenJSONNumeric evaluates `x BETWEEN lo AND hi` as
 // `lo <= x AND x <= hi` with each leg in its own comparison domain, exactly
 // like the binary ordering operators the NOT BETWEEN lowering produces.
-// SQL NULL in any operand propagates NULL; a JSON literal null stays a
-// comparable value that ranks below the numeric peer, and only the legacy
-// DUMP/LOAD era folds it back into the SQL NULL contract so archived
-// persisted predecessor trees keep their historical values.
+// The legs combine under SQL AND: a definitive false leg answers the row
+// FALSE even when the other leg is unknown (a SQL NULL operand, or the
+// legacy DUMP/LOAD JSON literal null fold), and only undecided rows stay
+// NULL, so `NOT (x BETWEEN lo AND hi)` and the lowered `x < lo OR x > hi`
+// agree on every row. Otherwise a JSON literal null stays a comparable value
+// that ranks below the numeric peer.
 func opBetweenJSONNumeric(
 	parameters []*vector.Vector,
 	result *vector.FunctionResult[bool],
@@ -424,28 +467,38 @@ func opBetweenJSONNumeric(
 			}
 			operands[index] = operand
 		}
-		if operands[0].sqlNull || operands[1].sqlNull || operands[2].sqlNull {
+		// Each leg is unknown when either operand is SQL NULL (or, in the
+		// legacy era, a folded JSON literal null); every decided leg reaches
+		// its own comparison kernel like the lowered comparison pair does.
+		lowerKnown := !operands[0].sqlNull && !operands[1].sqlNull
+		upperKnown := !operands[0].sqlNull && !operands[2].sqlNull
+		lowerIn, upperIn := false, false
+		if lowerKnown {
+			comparison, jsonNull, err := compareBetweenJSONNumericOperands(proc, operands[1], operands[0])
+			if err != nil {
+				return err
+			}
+			lowerKnown = !jsonNull
+			lowerIn = comparison <= 0
+		}
+		if upperKnown {
+			comparison, jsonNull, err := compareBetweenJSONNumericOperands(proc, operands[0], operands[2])
+			if err != nil {
+				return err
+			}
+			upperKnown = !jsonNull
+			upperIn = comparison <= 0
+		}
+		switch {
+		case lowerKnown && !lowerIn, upperKnown && !upperIn:
+			// SQL AND: FALSE dominates UNKNOWN, so one definitive leg
+			// answers the row FALSE instead of NULL, exactly like the
+			// `lo <= x AND x <= hi` lowered form.
+		case !lowerKnown || !upperKnown:
 			resultNulls.Add(uint64(row))
-			continue
+		default:
+			rss[row] = lowerIn && upperIn
 		}
-		comparison, jsonNull, err := compareBetweenJSONNumericOperands(proc, operands[1], operands[0])
-		if err != nil {
-			return err
-		}
-		if jsonNull {
-			resultNulls.Add(uint64(row))
-			continue
-		}
-		lowerOK := comparison <= 0
-		comparison, jsonNull, err = compareBetweenJSONNumericOperands(proc, operands[0], operands[2])
-		if err != nil {
-			return err
-		}
-		if jsonNull {
-			resultNulls.Add(uint64(row))
-			continue
-		}
-		rss[row] = lowerOK && comparison <= 0
 	}
 	return nil
 }

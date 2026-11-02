@@ -93,11 +93,12 @@ func runBetweenJSONBooleanCase(t *testing.T, proc *process.Process, tc betweenJS
 	return result
 }
 
-// assertBetweenMatchesLoweredLegs proves the two invariants of the mixed
-// domain fix: the positive form equals its lowered legs
-// `lo <= x AND x <= hi`, and the negated form equals the complement of the
-// positive form on every non-null row, using the same binary kernels the
-// `x < lo OR x > hi` NOT BETWEEN rewrite binds.
+// assertBetweenJSONBooleanMatchesLoweredLegs proves the two invariants of the
+// mixed domain fix on every row including NULL rows: the positive form equals
+// the tri-state SQL AND of its lowered legs `lo <= x AND x <= hi`, and the
+// negated form equals the tri-state complement `x < lo OR x > hi`, using the
+// same binary kernels the NOT BETWEEN rewrite binds. SQL NULL operands leave
+// their leg unknown; a definitive leg decides the row.
 func assertBetweenJSONBooleanMatchesLoweredLegs(
 	t *testing.T, proc *process.Process, tc betweenJSONBooleanCase, between *vector.Vector,
 ) {
@@ -119,14 +120,41 @@ func assertBetweenJSONBooleanMatchesLoweredLegs(
 	negUpperValues := vector.MustFixedColNoTypeCheck[bool](negUpper)
 	betweenValues := vector.MustFixedColNoTypeCheck[bool](between)
 	for row := range tc.expected {
-		if between.IsNull(uint64(row)) {
-			continue
+		// Tri-state equality against the lowered SQL AND: a definitive leg
+		// decides the row even when the other leg is unknown, exactly what
+		// the BETWEEN executor must reproduce.
+		lowerUnknown := lower.IsNull(uint64(row))
+		upperUnknown := upper.IsNull(uint64(row))
+		switch {
+		case !lowerUnknown && !lowerValues[row], !upperUnknown && !upperValues[row]:
+			require.False(t, between.IsNull(uint64(row)),
+				"case %s row %d: a definitive false leg must answer the row FALSE", tc.name, row)
+			require.False(t, betweenValues[row],
+				"case %s row %d: BETWEEN must equal its lowered AND legs", tc.name, row)
+		case lowerUnknown || upperUnknown:
+			require.True(t, between.IsNull(uint64(row)),
+				"case %s row %d: undecided legs must leave the row NULL", tc.name, row)
+		default:
+			require.False(t, between.IsNull(uint64(row)), "case %s row %d", tc.name, row)
+			require.True(t, betweenValues[row],
+				"case %s row %d: BETWEEN must equal its lowered AND legs", tc.name, row)
 		}
-		require.Equal(t, lowerValues[row] && upperValues[row], betweenValues[row],
-			"case %s row %d: BETWEEN must equal its lowered AND legs", tc.name, row)
-		negated := negLowerValues[row] || negUpperValues[row]
-		require.Equal(t, negated, !betweenValues[row],
-			"case %s row %d: NOT BETWEEN must complement BETWEEN", tc.name, row)
+		// The tri-state complement through the NOT BETWEEN lowering.
+		negLowerUnknown := negLower.IsNull(uint64(row))
+		negUpperUnknown := negUpper.IsNull(uint64(row))
+		switch {
+		case !negLowerUnknown && negLowerValues[row], !negUpperUnknown && negUpperValues[row]:
+			require.False(t, between.IsNull(uint64(row)), "case %s row %d", tc.name, row)
+			require.False(t, betweenValues[row],
+				"case %s row %d: NOT BETWEEN must complement BETWEEN", tc.name, row)
+		case negLowerUnknown || negUpperUnknown:
+			require.True(t, between.IsNull(uint64(row)),
+				"case %s row %d: an unknown negated leg keeps the row NULL", tc.name, row)
+		default:
+			require.False(t, between.IsNull(uint64(row)), "case %s row %d", tc.name, row)
+			require.True(t, betweenValues[row],
+				"case %s row %d: NOT BETWEEN must complement BETWEEN", tc.name, row)
+		}
 	}
 }
 
@@ -261,6 +289,23 @@ func TestJSONBooleanBetweenExecutorContract(t *testing.T) {
 			},
 			expected: repeatBool(false, rowCount),
 			nulls:    repeatBool(true, rowCount),
+		},
+		{
+			// SQL NULL bounds keep the SQL AND tri-state beside a decisive
+			// FALSE upper leg (the same fixed prepared-range contract the
+			// numeric domain carries): the JSON true, the nonzero numbers 3
+			// and -1 and 0.5 all fold to TRUE and fail `x <= FALSE`, so
+			// those rows answer FALSE instead of NULL, while the rows whose
+			// upper leg can still hold stay NULL like the lowered legs.
+			name: "row between NULL and FALSE",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), jsonRows, jsonNulls),
+				NewFunctionTestInput(types.T_bool.ToType(), trues, repeatBool(true, rowCount)),
+				NewFunctionTestInput(types.T_bool.ToType(), falses, nil),
+			},
+			// Row order: 3, "str", true, false, literal null, -1, 0.5, SQL NULL.
+			expected: repeatBool(false, rowCount),
+			nulls:    []bool{false, true, false, true, true, false, false, true},
 		},
 	}
 	for _, tc := range cases {

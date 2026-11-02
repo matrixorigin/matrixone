@@ -100,52 +100,97 @@ func runBetweenJSONNumericCase(t *testing.T, proc *process.Process, tc betweenJS
 }
 
 // assertBetweenJSONNumericMatchesLoweredLegs proves the invariant of the fix
-// for pure {JSON, int64} leg triples: the positive form equals its lowered
-// legs `lo <= x AND x <= hi`, and the negated form equals the complement of
-// the positive form on every non-null row, using the same binary kernels
-// the `x < lo OR x > hi` NOT BETWEEN rewrite binds. The heterogeneous
-// numeric peer-width cases pin their row values directly instead, because
-// the raw binary kernel pair they would need also carries the binder's cast
-// alignment.
+// for legs whose binaries pair naturally: the positive form equals the tri-state
+// SQL AND of its lowered legs `lo <= x AND x <= hi`, and the negated form
+// equals the tri-state complement `x < lo OR x > hi`, on every row including
+// NULL rows (SQL NULL operands leave their leg unknown; a definitive leg
+// decides the row). JSON, int64 and float64 operands pair through the raw
+// kernels, with an int64 column beside a float64 operand widened to its
+// DOUBLE adapter column first - the coercion the ordinary comparison binds
+// for that pair. The heterogeneous decimal or unsigned peer-width cases pin
+// their row values directly instead, because the raw binary kernel pair
+// they would need also carries the binder's cast alignment.
 func assertBetweenJSONNumericMatchesLoweredLegs(
 	t *testing.T, proc *process.Process, tc betweenJSONNumericCase, between *vector.Vector,
 ) {
 	t.Helper()
-	int64Only := true
 	for _, input := range tc.inputs {
-		if oid := input.typ.Oid; oid != types.T_json && oid != types.T_int64 {
-			int64Only = false
-			break
+		if oid := input.typ.Oid; oid != types.T_json && oid != types.T_int64 && oid != types.T_float64 {
+			return
 		}
 	}
-	if !int64Only {
-		return
+	// widenBesideFloat mirrors the ordinary comparison's DOUBLE coercion: an
+	// int64 leg operand paired with a float64 operand compares as its
+	// float64 adapter, so a BIGINT subject at 2^53+1 equals the DOUBLE 2^53
+	// bound in both spellings.
+	widenBesideFloat := func(candidate, other FunctionTestInput) FunctionTestInput {
+		if candidate.typ.Oid != types.T_int64 || other.typ.Oid != types.T_float64 {
+			return candidate
+		}
+		rows, _ := candidate.values.([]int64)
+		widened := make([]float64, len(rows))
+		for i, value := range rows {
+			widened[i] = float64(value)
+		}
+		return NewFunctionTestInput(types.T_float64.ToType(), widened, candidate.nullList)
 	}
 	x, lo, hi := tc.inputs[0], tc.inputs[1], tc.inputs[2]
+	lowerLeft, lowerRight := widenBesideFloat(lo, x), widenBesideFloat(x, lo)
+	upperLeft, upperRight := widenBesideFloat(x, hi), widenBesideFloat(hi, x)
 	lower := runJsonFunctionWithSelectList(t, proc,
-		[]FunctionTestInput{lo, x}, types.T_bool.ToType(), lessEqualFn, nil)
+		[]FunctionTestInput{lowerLeft, lowerRight}, types.T_bool.ToType(), lessEqualFn, nil)
 	lowerValues := vector.MustFixedColNoTypeCheck[bool](lower)
 	upper := runJsonFunctionWithSelectList(t, proc,
-		[]FunctionTestInput{x, hi}, types.T_bool.ToType(), lessEqualFn, nil)
+		[]FunctionTestInput{upperLeft, upperRight}, types.T_bool.ToType(), lessEqualFn, nil)
 	upperValues := vector.MustFixedColNoTypeCheck[bool](upper)
 	// The NOT BETWEEN rewrite binds `x < lo OR x > hi`, so the negated legs
 	// take the expression column as their left operand.
 	negLower := runJsonFunctionWithSelectList(t, proc,
-		[]FunctionTestInput{x, lo}, types.T_bool.ToType(), lessThanFn, nil)
+		[]FunctionTestInput{lowerRight, lowerLeft}, types.T_bool.ToType(), lessThanFn, nil)
 	negLowerValues := vector.MustFixedColNoTypeCheck[bool](negLower)
 	negUpper := runJsonFunctionWithSelectList(t, proc,
-		[]FunctionTestInput{x, hi}, types.T_bool.ToType(), greatThanFn, nil)
+		[]FunctionTestInput{upperLeft, upperRight}, types.T_bool.ToType(), greatThanFn, nil)
 	negUpperValues := vector.MustFixedColNoTypeCheck[bool](negUpper)
 	betweenValues := vector.MustFixedColNoTypeCheck[bool](between)
 	for row := range tc.expected {
-		if between.IsNull(uint64(row)) {
-			continue
+		// Tri-state equality against the lowered SQL AND: a definitive leg
+		// decides the row even when the other leg is unknown, exactly what
+		// the BETWEEN executor must reproduce. This covers NULL rows too,
+		// not only non-null answers.
+		lowerUnknown := lower.IsNull(uint64(row))
+		upperUnknown := upper.IsNull(uint64(row))
+		switch {
+		case !lowerUnknown && !lowerValues[row], !upperUnknown && !upperValues[row]:
+			require.False(t, between.IsNull(uint64(row)),
+				"case %s row %d: a definitive false leg must answer the row FALSE", tc.name, row)
+			require.False(t, betweenValues[row],
+				"case %s row %d: BETWEEN must equal its lowered AND legs", tc.name, row)
+		case lowerUnknown || upperUnknown:
+			require.True(t, between.IsNull(uint64(row)),
+				"case %s row %d: undecided legs must leave the row NULL", tc.name, row)
+		default:
+			require.False(t, between.IsNull(uint64(row)), "case %s row %d", tc.name, row)
+			require.True(t, betweenValues[row],
+				"case %s row %d: BETWEEN must equal its lowered AND legs", tc.name, row)
 		}
-		require.Equal(t, lowerValues[row] && upperValues[row], betweenValues[row],
-			"case %s row %d: BETWEEN must equal its lowered AND legs", tc.name, row)
-		negated := negLowerValues[row] || negUpperValues[row]
-		require.Equal(t, negated, !betweenValues[row],
-			"case %s row %d: NOT BETWEEN must complement BETWEEN", tc.name, row)
+		// The tri-state complement through the NOT BETWEEN lowering: a true
+		// negated leg decides the row, an unknown otherwise unknown leg
+		// keeps it NULL.
+		negLowerUnknown := negLower.IsNull(uint64(row))
+		negUpperUnknown := negUpper.IsNull(uint64(row))
+		switch {
+		case !negLowerUnknown && negLowerValues[row], !negUpperUnknown && negUpperValues[row]:
+			require.False(t, between.IsNull(uint64(row)), "case %s row %d", tc.name, row)
+			require.False(t, betweenValues[row],
+				"case %s row %d: NOT BETWEEN must complement BETWEEN", tc.name, row)
+		case negLowerUnknown || negUpperUnknown:
+			require.True(t, between.IsNull(uint64(row)),
+				"case %s row %d: an unknown negated leg keeps the row NULL", tc.name, row)
+		default:
+			require.False(t, between.IsNull(uint64(row)), "case %s row %d", tc.name, row)
+			require.True(t, betweenValues[row],
+				"case %s row %d: NOT BETWEEN must complement BETWEEN", tc.name, row)
+		}
 	}
 }
 
@@ -226,8 +271,11 @@ func TestJSONNumericBetweenExecutorContract(t *testing.T) {
 			nulls:    caseNulls(),
 		},
 		{
-			// SQL NULL bounds propagate NULL through the strict operator,
-			// exactly like the lowered legs.
+			// A SQL NULL lower bound leaves its leg unknown while the other
+			// leg decides, exactly like the lowered AND: the "str" and the
+			// JSON boolean rows rank above the 3 upper bound, a definitive
+			// FALSE, so those rows answer FALSE instead of NULL, while the
+			// number rows whose upper leg can still hold stay NULL.
 			name: "row between NULL and 3",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_json.ToType(), jsonRows, jsonNulls),
@@ -235,7 +283,7 @@ func TestJSONNumericBetweenExecutorContract(t *testing.T) {
 				NewFunctionTestInput(types.T_int64.ToType(), upperThree, nil),
 			},
 			expected: repeatBool(false, rowCount),
-			nulls:    repeatBool(true, rowCount),
+			nulls:    []bool{true, false, false, false, true, true, true, true},
 		},
 		{
 			// Reversed orientation: an int64 expression column between the
@@ -279,6 +327,76 @@ func TestJSONNumericBetweenExecutorContract(t *testing.T) {
 			expected: []bool{false, false, false, false, false, true, true, false},
 			nulls:    caseNulls(),
 		},
+		{
+			// SQL NULL upper bounds keep the SQL AND tri-state (the review
+			// round 5 prepared-range fix): row 0's lower leg json(1) <= 0 is
+			// a decisive FALSE, so the row answers FALSE instead of NULL;
+			// row 3 keeps both legs undecided enough to stay NULL.
+			name: "int64 rows between JSON 1 and SQL NULL upper bounds",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 5, 3, 2}, nil),
+				NewFunctionTestInput(types.T_json.ToType(),
+					repeatString(mustJsonBinaryString(t, `1`), 4), nil),
+				NewFunctionTestInput(types.T_int64.ToType(), repeatInt64(9, 4),
+					[]bool{true, false, false, true}),
+			},
+			expected: []bool{false, true, true, false},
+			nulls:    []bool{false, false, false, true},
+		},
+		{
+			// The mirrored tri-state through the lower bound: row 1's upper
+			// leg 5 <= json(3) is a decisive FALSE beside an unknown lower
+			// leg, so the row answers FALSE instead of NULL.
+			name: "int64 rows between SQL NULL and JSON lower bounds",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 5, 1, 7}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), repeatInt64(1, 4),
+					[]bool{true, true, false, false}),
+				NewFunctionTestInput(types.T_json.ToType(),
+					repeatString(mustJsonBinaryString(t, `3`), 4), nil),
+			},
+			expected: []bool{false, false, true, false},
+			nulls:    []bool{true, false, false, false},
+		},
+		{
+			// The precision boundary of the DOUBLE coercion (the review
+			// round 5 prepared-range fix): the numeric/numeric leg compares
+			// in the DOUBLE domain exactly like the ordinary BIGINT/DOUBLE
+			// comparison it mirrors, so the BIGINT 2^53+1 subject rounds
+			// into the DOUBLE 2^53 upper bound and stays in range, while
+			// 2^53+3 rounds away. bytejson's exact taxonomy would have
+			// excluded the 2^53+1 row and disagreed with the lowered
+			// `x <= hi` leg.
+			name: "BIGINT rows keep the DOUBLE coercion beside a float64 upper bound",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{9007199254740992, 9007199254740993, 9007199254740991, 9007199254740995}, nil),
+				NewFunctionTestInput(types.T_json.ToType(),
+					repeatString(mustJsonBinaryString(t, `0`), 4), nil),
+				NewFunctionTestInput(types.T_float64.ToType(),
+					repeatFloat64(9007199254740992, 4), nil),
+			},
+			expected: []bool{true, true, true, false},
+			nulls:    nil,
+		},
+		{
+			// The DOUBLE coercion also holds for the unsigned peer: the
+			// uint64 lower bound 2^63+1 rounds down to the DOUBLE 2^63, so the
+			// 2^63 float64 subject passes the lower leg under the ordinary
+			// comparison's coercion while bytejson's exact taxonomy would
+			// exclude it and disagree with the lowered `lo <= x` leg.
+			name: "uint64 lower bound keeps the DOUBLE coercion beside a float64 subject",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{9223372036854775808.0, 2.0}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{9223372036854775809, 9223372036854775809}, nil),
+				NewFunctionTestInput(types.T_json.ToType(),
+					repeatString(mustJsonBinaryString(t, `1e30`), 2), nil),
+			},
+			expected: []bool{true, false},
+			nulls:    nil,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -290,7 +408,9 @@ func TestJSONNumericBetweenExecutorContract(t *testing.T) {
 	// The unsigned peer domain: a uint64 lower bound at its maximum carries
 	// the whole exact unsigned domain against an int64 expression, so no
 	// representable row can satisfy its lower leg - exactly like the lowered
-	// `x < lo` leg both forms share.
+	// `x < lo` leg both forms share. The decisive false lower leg also
+	// answers the SQL NULL JSON row FALSE instead of NULL under the SQL AND
+	// tri-state (the review round 5 fix).
 	t.Run("int64 rows cannot pass a uint64 maximum lower bound", func(t *testing.T) {
 		result := runJsonFunctionWithSelectList(t, proc,
 			[]FunctionTestInput{
@@ -302,7 +422,10 @@ func TestJSONNumericBetweenExecutorContract(t *testing.T) {
 			}, types.T_bool.ToType(), betweenImpl, nil)
 		values := vector.MustFixedColNoTypeCheck[bool](result)
 		require.Equal(t, repeatBool(false, rowCount), values, "the uint64 lower bound excludes every int64 row")
-		require.True(t, result.IsNull(uint64(rowCount-1)), "the SQL NULL JSON row stays NULL")
+		for row := 0; row < rowCount; row++ {
+			require.False(t, result.IsNull(uint64(row)),
+				"row %d: the decisive lower leg answers even beside the SQL NULL JSON row", row)
+		}
 	})
 }
 
@@ -417,6 +540,14 @@ func TestJSONNumericBetweenMetadataProjections(t *testing.T) {
 
 func repeatInt64(value int64, count int) []int64 {
 	rows := make([]int64, count)
+	for i := range rows {
+		rows[i] = value
+	}
+	return rows
+}
+
+func repeatFloat64(value float64, count int) []float64 {
+	rows := make([]float64, count)
 	for i := range rows {
 		rows[i] = value
 	}
