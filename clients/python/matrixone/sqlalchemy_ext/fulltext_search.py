@@ -713,7 +713,7 @@ class FulltextQueryBuilder:
 
         # Add additional WHERE conditions
         if where_conditions:
-            where_parts.extend(where_conditions)
+            where_parts.extend(f"({condition})" for condition in where_conditions)
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -1641,7 +1641,7 @@ class FulltextSearchBuilder:
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
-        where_parts.extend(self._where_conditions)
+        where_parts.extend(f"({condition})" for condition in self._where_conditions)
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
