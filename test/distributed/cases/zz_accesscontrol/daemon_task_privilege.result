@@ -1,0 +1,15 @@
+drop user if exists daemon_acl_public;
+create user daemon_acl_public identified by '111';
+pause daemon task 0;
+internal error: do not have privilege to execute the statement
+resume daemon task 0;
+internal error: do not have privilege to execute the statement
+cancel daemon task 0;
+internal error: do not have privilege to execute the statement
+pause daemon task 0;
+task with ID 0 not found
+resume daemon task 0;
+task with ID 0 not found
+cancel daemon task 0;
+task with ID 0 not found
+drop user daemon_acl_public;

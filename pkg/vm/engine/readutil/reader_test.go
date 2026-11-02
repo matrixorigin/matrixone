@@ -399,14 +399,14 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 					ctx,
 					[]string{"id", "payload"},
 					[]int{0},
-					func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 						require.Equal(t, []int{0}, loaded)
 						require.Equal(t, 8, bat.Vecs[0].Length())
 						require.Zero(t, bat.Vecs[1].Length())
 						bat.Vecs[0].CleanOnlyData()
 						bat.SetRowCount(0)
 						return engine.ReaderFilterResult{}, nil
-					},
+					}},
 					queryMP,
 					output,
 				)
@@ -464,7 +464,7 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 		ctx,
 		[]string{"id", "entry", "bucket"},
 		[]int{0, 2},
-		func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			require.Nil(t, loaded, "in-memory rows are already fully materialized")
 			buckets := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[2])
 			sels := make([]int64, 0, len(buckets))
@@ -475,7 +475,7 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 			}
 			bat.Shrink(sels, false)
 			return engine.ReaderFilterResult{Sels: sels}, nil
-		},
+		}},
 		testVectorTopKParam(1, 1),
 		queryMP,
 		output,
@@ -492,9 +492,9 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 		ctx,
 		[]string{"id", "entry", "bucket"},
 		[]int{0, 2},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			return engine.ReaderFilterResult{All: true}, nil
-		},
+		}},
 		testVectorTopKParam(1, 1),
 		queryMP,
 		output,
@@ -786,7 +786,7 @@ func (r *filteredTopKCountingReader) ReadWithFilterAndTopK(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
@@ -804,7 +804,7 @@ func (r *lateMaterializedCountingReader) ReadWithFilter(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (bool, error) {
@@ -846,14 +846,14 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		reader := NewMergeReader([]engine.Reader{child})
 
 		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.NoError(t, err)
 		require.False(t, isEnd)
 		require.True(t, topKApplied)
 
 		isEnd, topKApplied, err = reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.NoError(t, err)
 		require.True(t, isEnd)
@@ -868,7 +868,7 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		}
 		reader := NewMergeReader([]engine.Reader{child})
 		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.NoError(t, err)
 		require.False(t, isEnd)
@@ -881,7 +881,7 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		child := &countingReader{rows: 1, closeCount: &closeCount}
 		reader := NewMergeReader([]engine.Reader{child})
 		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.NoError(t, err)
 		require.False(t, isEnd)
@@ -896,7 +896,7 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		}
 		reader := NewMergeReader([]engine.Reader{child})
 		_, _, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.ErrorIs(t, err, readErr)
 		require.Equal(t, int32(1), atomic.LoadInt32(&closeCount))
