@@ -928,7 +928,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	if stmt.ColDefData == nil || len(stmt.ColDefData) != numColumns {
 		stmt.ColDefData = nil
 		for i := 0; i < numColumns; i++ {
-			column, err := colDef2MysqlColumn(ctx, columns[i])
+			column, err := colDef2MysqlColumn(ctx, columns[i], true)
 			if err != nil {
 				return err
 			}
@@ -2498,7 +2498,7 @@ func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*p
 	numColumns := len(columns)
 	colDefData := make([][]byte, 0, numColumns)
 	for i := 0; i < numColumns; i++ {
-		column, err := colDef2MysqlColumn(ctx, columns[i])
+		column, err := colDef2MysqlColumn(ctx, columns[i], true)
 		if err != nil {
 			return nil, err
 		}

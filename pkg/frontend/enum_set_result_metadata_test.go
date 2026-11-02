@@ -51,7 +51,7 @@ func TestEnumSetColumnDefinitionMetadata(t *testing.T) {
 			}
 			kinds := []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_COLUMN}
 			if tc.source != nil {
-				kinds = append(kinds, pb.MySQLSpecialResultType_AGGREGATE, pb.MySQLSpecialResultType_SCALAR_SUBQUERY)
+				kinds = append(kinds, pb.MySQLSpecialResultType_AGGREGATE, pb.MySQLSpecialResultType_SCALAR_SUBQUERY, pb.MySQLSpecialResultType_ROLLUP)
 			}
 			if tc.oid.IsMySQLString() {
 				def.Typ.Charset = uint32(types.CharsetUTF8)
@@ -95,6 +95,77 @@ func TestEnumSetColumnDefinitionMetadata(t *testing.T) {
 					require.Equal(t, before, after)
 				}
 			}
+		})
+	}
+}
+
+func TestEnumSetPrepareOnlyMetadataDoesNotLeakIntoExecute(t *testing.T) {
+	for _, kind := range []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_PREPARE_ONLY, pb.MySQLSpecialResultType_VARCHAR_LABEL} {
+		t.Run(kind.String(), func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			protocol, _, stmt := newBinaryPrepareProtocolTestCaseWithConn(t, "select min('a') over () e, max('x') over () s", conn)
+			protocol.capability &^= CLIENT_DEPRECATE_EOF
+			query := stmt.PreparePlan.GetDcl().GetPrepare().GetPlan().GetQuery()
+			query.MysqlSpecialResultTypes = []pb.MySQLSpecialResultType{
+				{Typ: pb.Type{Id: int32(types.T_enum), Enumvalues: "a,bb"}, Kind: kind},
+				{Typ: pb.Type{Id: int32(types.T_uint64), Enumvalues: "x,yy"}, Kind: kind},
+			}
+			before, err := query.Marshal()
+			require.NoError(t, err)
+			columns := getPreparedResultColumns(stmt, false)
+			cached, err := protocol.MakeColumnDefData(t.Context(), columns)
+			require.NoError(t, err)
+			for _, useCache := range []bool{false, true, false} {
+				conn.writes = nil
+				stmt.ColDefData = nil
+				if useCache {
+					stmt.ColDefData = cached
+				}
+				require.NoError(t, protocol.SendPrepareResponse(t.Context(), stmt))
+				packets := splitProtocolPackets(t, conn.writes)
+				for i, width := range []uint32{8, 16} {
+					prepare := parsePrepareColumnDefinition(t, packets[len(packets)-3+i])
+					want := defines.MYSQL_TYPE_STRING
+					if kind == pb.MySQLSpecialResultType_VARCHAR_LABEL {
+						want = defines.MYSQL_TYPE_VAR_STRING
+					}
+					require.Equal(t, want, prepare.typ)
+					require.Equal(t, width, prepare.length)
+					require.Zero(t, prepare.flags&uint16(defines.ENUM_FLAG|defines.SET_FLAG))
+					for _, cmd := range []CommandType{COM_QUERY, COM_STMT_EXECUTE} {
+						column, err := colDef2MysqlColumn(t.Context(), columns[i])
+						require.NoError(t, err)
+						packet := protocol.makeColumnDefinition41Payload(column, int(cmd))
+						execute := parsePrepareColumnDefinition(t, packet[HeaderOffset:])
+						require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, execute.typ)
+						require.Equal(t, width, execute.length)
+						require.Zero(t, execute.flags&uint16(defines.ENUM_FLAG|defines.SET_FLAG))
+					}
+				}
+			}
+			// Exercise the execute response owner too: its input cache is the
+			// statement's CHAR prepare packet, not an independently built packet.
+			conn.writes = nil
+			ses := protocol.GetSession()
+			ses.SetCmd(COM_STMT_EXECUTE)
+			ses.SetMysqlResultSet(&MysqlResultSet{})
+			ctx := &ExecCtx{reqCtx: t.Context(), prepareStmt: stmt, prepareColDef: cached}
+			wireColumns := make([]any, len(columns))
+			for i, column := range columns {
+				wireColumns[i], err = colDef2MysqlColumn(t.Context(), column)
+				require.NoError(t, err)
+			}
+			require.NoError(t, NewMysqlResp(protocol).writeColumnDefs(ses, ctx, wireColumns))
+			require.NoError(t, protocol.flush())
+			packets := splitProtocolPackets(t, conn.writes)
+			for i := range columns {
+				wire := parsePrepareColumnDefinition(t, packets[i+1])
+				require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, wire.typ)
+			}
+			require.Equal(t, cached, stmt.ColDefData, "execute must leave prepare metadata intact")
+			after, err := query.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after, "publication must not specialize the cached execution plan")
 		})
 	}
 }

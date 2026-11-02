@@ -2964,7 +2964,7 @@ func hashString(s string) string {
 	return hex.EncodeToString(hashBytes)
 }
 
-func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, error) {
+func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef, preparing ...bool) (*MysqlColumn, error) {
 	var err error
 	c := new(MysqlColumn)
 	c.SetName(col.Name)
@@ -3000,7 +3000,7 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		return nil, err
 	}
 	if col.MysqlSpecialResultType != nil && typ.Oid.IsMySQLString() {
-		if err = setEnumSetResultMetadata(ctx, col.MysqlSpecialResultType, typ.Charset, c); err != nil {
+		if err = setEnumSetResultMetadata(ctx, col.MysqlSpecialResultType, typ.Charset, c, len(preparing) > 0 && preparing[0]); err != nil {
 			return nil, err
 		}
 	}

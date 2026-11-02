@@ -46,4 +46,16 @@ select e, s from (select min(e) e, max(s) s from jdbc_enum_set_metadata) d;
 -- @metacmp(true)
 select e, s from (select (select e from jdbc_enum_set_metadata where id = 1) e,
                         (select s from jdbc_enum_set_metadata where id = 1) s) d;
+-- Internal grouping-set UNION ALL is not a user set-operation boundary.
+-- @metacmp(true)
+select e, s from jdbc_enum_set_metadata group by e, s with rollup order by e desc, s desc;
+-- @metacmp(true)
+select min(e) as min_e, max(s) as max_s from jdbc_enum_set_metadata group by id with rollup order by min_e, max_s;
+-- DISTINCT ROLLUP and window MIN/MAX materialize VARCHAR at execution.
+-- @metacmp(true)
+select distinct e, s from jdbc_enum_set_metadata group by e, s with rollup order by e, s;
+-- @metacmp(true)
+select min(e) over () as min_e, max(s) over () as max_s from jdbc_enum_set_metadata;
+-- @metacmp(true)
+select e, s from (select e, s from jdbc_enum_set_metadata group by e, s with rollup) d order by e desc, s desc;
 drop table jdbc_enum_set_metadata;

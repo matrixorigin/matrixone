@@ -28,7 +28,7 @@ import (
 // MySQL publishes ENUM/SET labels as STRING, with field flags only for column
 // results. Both text and binary row encoders keep consuming the same string
 // vectors; only their column metadata changes.
-func setEnumSetResultMetadata(ctx context.Context, result *plan.MySQLSpecialResultType, displayCharset uint8, col *MysqlColumn) error {
+func setEnumSetResultMetadata(ctx context.Context, result *plan.MySQLSpecialResultType, displayCharset uint8, col *MysqlColumn, preparing bool) error {
 	source := &result.Typ
 	var width int32
 	var flag uint32
@@ -50,14 +50,20 @@ func setEnumSetResultMetadata(ctx context.Context, result *plan.MySQLSpecialResu
 	}
 	// The display expression, not the ordinal/bitmap storage domain, owns the
 	// label encoding. Retain its charset and express the label width in bytes.
-	col.SetColumnType(defines.MYSQL_TYPE_STRING)
+	if result.Kind == plan.MySQLSpecialResultType_VARCHAR_LABEL ||
+		(result.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY && !preparing) {
+		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	} else {
+		col.SetColumnType(defines.MYSQL_TYPE_STRING)
+	}
 	col.SetLength(mysqlStringColumnLength(width, mysqlTextMaxBytesPerCharacter(displayCharset)))
 	col.SetDecimal(0)
 	switch result.Kind {
 	case plan.MySQLSpecialResultType_COLUMN:
 		col.SetFlag(col.Flag() | uint16(flag))
-	case plan.MySQLSpecialResultType_AGGREGATE, plan.MySQLSpecialResultType_SCALAR_SUBQUERY:
-		// Expression results retain CHAR and its width, but not field flags.
+	case plan.MySQLSpecialResultType_AGGREGATE, plan.MySQLSpecialResultType_SCALAR_SUBQUERY,
+		plan.MySQLSpecialResultType_ROLLUP, plan.MySQLSpecialResultType_PREPARE_ONLY, plan.MySQLSpecialResultType_VARCHAR_LABEL:
+		// Expression results retain label widths, but not field flags.
 	default:
 		return moerr.NewInternalError(ctx, "invalid ENUM/SET result presentation kind")
 	}

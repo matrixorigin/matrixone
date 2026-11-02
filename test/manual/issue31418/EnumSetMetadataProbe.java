@@ -25,6 +25,10 @@ public final class EnumSetMetadataProbe {
         }
     }
 
+    private static void labelWidths(ResultSetMetaData meta) throws SQLException {
+        check(meta.getPrecision(1) == 2 && meta.getPrecision(2) == 4, "wrong materialized label width");
+    }
+
     private static void rows(ResultSet result, int type, boolean declared, List<List<String>> expectedRows, String phase)
             throws SQLException {
         metadata(result.getMetaData(), type, declared, phase);
@@ -50,10 +54,16 @@ public final class EnumSetMetadataProbe {
 
     private static void query(Connection connection, String mode, String sql, int type,
                               boolean declared, List<List<String>> expectedRows) throws Exception {
+        query(connection, mode, sql, type, type, declared, expectedRows);
+    }
+
+    private static void query(Connection connection, String mode, String sql, int type, int prepareType,
+                              boolean declared, List<List<String>> expectedRows) throws Exception {
         if (mode.equals("statement")) {
             try (Statement statement = connection.createStatement()) {
                 statement.setQueryTimeout(30);
                 try (ResultSet result = statement.executeQuery(sql)) {
+                    if (type != prepareType) labelWidths(result.getMetaData());
                     rows(result, type, declared, expectedRows, mode + ": " + sql);
                 }
             }
@@ -64,9 +74,11 @@ public final class EnumSetMetadataProbe {
                     check(statement.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"),
                             "server prepare silently fell back");
                 }
-                metadata(statement.getMetaData(), type, declared, mode + " prepare: " + sql);
+                metadata(statement.getMetaData(), mode.equals("server-prepared") ? prepareType : type,
+                        declared, mode + " prepare: " + sql);
                 for (int i = 0; i < 2; i++) {
                     try (ResultSet result = statement.executeQuery()) {
+                        if (type != prepareType) labelWidths(result.getMetaData());
                         rows(result, type, declared, expectedRows, mode + " execute: " + sql);
                     }
                 }
@@ -126,6 +138,32 @@ public final class EnumSetMetadataProbe {
                     query(connection, mode, "SELECT e, s FROM (SELECT (SELECT e FROM t WHERE id=1) e, "
                             + "(SELECT s FROM t WHERE id=1) s) d", Types.VARCHAR, false,
                             Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    List<List<String>> rollup = Arrays.asList(
+                            Arrays.asList("a", "x,yy"), Arrays.asList("a", null),
+                            Arrays.asList("", ""), Arrays.asList("", null),
+                            Arrays.asList(null, null), Arrays.asList(null, null), Arrays.asList(null, null));
+                    query(connection, mode, "SELECT e, s FROM t GROUP BY e, s WITH ROLLUP",
+                            Types.CHAR, false, rollup);
+                    List<List<String>> rollupUnion = new ArrayList<>(rollup);
+                    rollupUnion.addAll(Arrays.asList(Arrays.asList("a", "x,yy"),
+                            Arrays.asList("", ""), Arrays.asList(null, null)));
+                    query(connection, mode, "SELECT e, s FROM t GROUP BY e, s WITH ROLLUP UNION ALL SELECT e, s FROM t",
+                            Types.CHAR, false, rollupUnion);
+                    query(connection, mode, "SELECT MIN(e), MAX(s) FROM t GROUP BY id WITH ROLLUP",
+                            Types.CHAR, false, Arrays.asList(Arrays.asList("a", "x,yy"),
+                                    Arrays.asList("", ""), Arrays.asList(null, null), Arrays.asList("", "x,yy")));
+                    query(connection, mode, "SELECT MIN(e) OVER (), MAX(s) OVER () FROM t",
+                            Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),
+                                    Arrays.asList("", "x,yy"), Arrays.asList("", "x,yy")));
+                    query(connection, mode, "SELECT DISTINCT e, s FROM t GROUP BY e, s WITH ROLLUP",
+                            Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("a", "x,yy"),
+                                    Arrays.asList("a", null), Arrays.asList("", ""),
+                                    Arrays.asList("", null), Arrays.asList(null, null)));
+                    query(connection, mode, "SELECT e, s FROM (SELECT e, s FROM t GROUP BY e, s WITH ROLLUP) d",
+                            Types.VARCHAR, false, rollup);
+                    query(connection, mode, "SELECT e, s FROM (SELECT MIN(e) OVER () e, MAX(s) OVER () s FROM t) d",
+                            Types.VARCHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),
+                                    Arrays.asList("", "x,yy"), Arrays.asList("", "x,yy")));
                     setup.execute("CREATE VIEW v AS SELECT e, s FROM t");
                     query(connection, mode, "SELECT e, s FROM v", Types.CHAR, true, 1);
                     query(connection, mode, "SELECT CONCAT(e), CAST(s AS CHAR) FROM t", Types.VARCHAR, false, 1);

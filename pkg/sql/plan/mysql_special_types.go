@@ -903,6 +903,21 @@ func (builder *QueryBuilder) mysqlSpecialResultTypeForExpr(ctx *BindContext, exp
 			return &plan.MySQLSpecialResultType{Typ: *DeepCopyType(&args[1].Typ)}
 		}
 	}
+	if col := expr.GetCol(); col != nil && ctx.windowTag > 0 && col.RelPos == ctx.windowTag &&
+		col.ColPos >= 0 && int(col.ColPos) < len(ctx.windows) {
+		window := ctx.windows[col.ColPos].GetW()
+		if window != nil {
+			fn := window.WindowFunc.GetF()
+			if fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+				(fn.Func.ObjName == "min" || fn.Func.ObjName == "max") {
+				if result := builder.mysqlSpecialResultTypeForExpr(ctx, fn.Args[0]); result != nil {
+					result.Kind = plan.MySQLSpecialResultType_PREPARE_ONLY
+					return result
+				}
+			}
+		}
+		return nil
+	}
 	if col := expr.GetCol(); col != nil && ctx.aggregateTag > 0 && col.RelPos == ctx.aggregateTag &&
 		col.ColPos >= 0 && int(col.ColPos) < len(ctx.aggregates) {
 		fn := ctx.aggregates[col.ColPos].GetF()
@@ -945,6 +960,9 @@ func (builder *QueryBuilder) captureMySQLSpecialBlockResultTypes(ctx *BindContex
 		if result := builder.mysqlSpecialResultTypeForExpr(ctx, ctx.projects[i]); result != nil {
 			if ctx.mysqlSpecialResultTypes == nil {
 				ctx.mysqlSpecialResultTypes = make(map[int32]*plan.MySQLSpecialResultType)
+			}
+			if ctx.sortRollup {
+				result.Kind = plan.MySQLSpecialResultType_ROLLUP
 			}
 			ctx.mysqlSpecialResultTypes[int32(i)] = result
 		}

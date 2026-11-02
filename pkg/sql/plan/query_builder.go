@@ -5237,6 +5237,45 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		})
 	}
 	ctx.clearOutputColumnProvenance()
+	{
+		// These branches may lower one SQL grouping query, not a user UNION.
+		// Capture label domains independently of schema lineage; rollup NULL
+		// branches are neutral and must not erase the non-NULL presentation.
+		for colIdx := range ctx.headings {
+			var candidate *plan.MySQLSpecialResultType
+			compatible := true
+			hasRollup := false
+			for branchIdx, branchCtx := range subCtxList {
+				result := mysqlSpecialResultTypeFromProvenance(branchCtx.outputColumnProvenanceForProject(int32(colIdx)))
+				if result == nil {
+					if !setBranchPureNull[branchIdx][colIdx] {
+						compatible = false
+						break
+					}
+					continue
+				}
+				if candidate != nil && !mysqlSpecialOrderTypesCompatible(&candidate.Typ, &result.Typ) {
+					compatible = false
+					break
+				}
+				hasRollup = hasRollup || result.Kind == plan.MySQLSpecialResultType_ROLLUP
+				candidate = result
+			}
+			if compatible && candidate != nil && (shareGroupingInput || hasRollup) {
+				// A user UNION normally clears ENUM/SET identity. An already
+				// rolled-up CHAR item is not an ENUM/SET field, however, and
+				// retains CHAR when the other non-NULL label domains agree.
+				candidate.Kind = plan.MySQLSpecialResultType_ROLLUP
+				if distinct {
+					candidate.Kind = plan.MySQLSpecialResultType_PREPARE_ONLY
+				}
+				if ctx.mysqlSpecialResultTypes == nil {
+					ctx.mysqlSpecialResultTypes = make(map[int32]*plan.MySQLSpecialResultType)
+				}
+				ctx.mysqlSpecialResultTypes[int32(colIdx)] = candidate
+			}
+		}
+	}
 	if g := builder.integerPrecision; g != nil {
 		for colIdx, output := range ctx.projects {
 			if !types.T(output.Typ.Id).IsInteger() {
@@ -14592,6 +14631,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				case plan.MySQLSpecialResultType_AGGREGATE:
 					result = DeepCopyMySQLSpecialResultType(result)
 					result.Kind = plan.MySQLSpecialResultType_COLUMN
+					outputColumnProvenance[i].MySQLSpecialResultType = result
+				case plan.MySQLSpecialResultType_ROLLUP, plan.MySQLSpecialResultType_PREPARE_ONLY:
+					result = DeepCopyMySQLSpecialResultType(result)
+					result.Kind = plan.MySQLSpecialResultType_VARCHAR_LABEL
 					outputColumnProvenance[i].MySQLSpecialResultType = result
 				case plan.MySQLSpecialResultType_SCALAR_SUBQUERY:
 					outputColumnProvenance[i].MySQLSpecialResultType = nil

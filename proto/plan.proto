@@ -2640,6 +2640,12 @@ message MySQLSpecialResultType {
     COLUMN = 0;
     AGGREGATE = 1;
     SCALAR_SUBQUERY = 2;
+    // Grouping-set fields have CHAR presentation but no ENUM/SET field flags.
+    ROLLUP = 3;
+    // Window MIN/MAX and DISTINCT ROLLUP materialize VARCHAR at execution.
+    PREPARE_ONLY = 4;
+    // Materialized expression fields retain label width, not ENUM/SET flags.
+    VARCHAR_LABEL = 5;
   }
   Type typ = 1 [(gogoproto.nullable) = false];
   Kind kind = 2;

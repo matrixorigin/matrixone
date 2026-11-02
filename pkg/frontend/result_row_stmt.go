@@ -714,6 +714,18 @@ func (resper *MysqlResp) writeColumnDefs(ses *Session, execCtx *ExecCtx, columns
 	if execCtx.prepareColDef != nil && len(columns) != len(execCtx.prepareColDef) {
 		execCtx.prepareColDef = nil
 	}
+	if execCtx.prepareColDef != nil && execCtx.prepareStmt != nil {
+		query := execCtx.prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan().GetQuery()
+		for _, result := range query.GetMysqlSpecialResultTypes() {
+			if result.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY {
+				// COM_STMT_PREPARE can publish CHAR before a window or DISTINCT
+				// materializes VARCHAR. Never reuse those packets for execution
+				// (including cursors), or mutate the statement's prepare cache.
+				execCtx.prepareColDef = nil
+				break
+			}
+		}
+	}
 
 	//send columns
 	//column_count * Protocol::ColumnDefinition packets

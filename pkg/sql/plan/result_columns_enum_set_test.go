@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
@@ -31,6 +32,13 @@ func TestEnumSetResultPresentation(t *testing.T) {
 		"scalar subquery":          pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
 		"empty subquery":           pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
 		"correlated subquery":      pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
+		"rollup columns":           pb.MySQLSpecialResultType_ROLLUP,
+		"rollup aggregate":         pb.MySQLSpecialResultType_ROLLUP,
+		"window min max":           pb.MySQLSpecialResultType_PREPARE_ONLY,
+		"distinct rollup":          pb.MySQLSpecialResultType_PREPARE_ONLY,
+		"derived rollup":           pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"rollup user union":        pb.MySQLSpecialResultType_ROLLUP,
+		"derived window":           pb.MySQLSpecialResultType_VARCHAR_LABEL,
 	}
 	for _, tc := range []struct {
 		name string
@@ -43,6 +51,12 @@ func TestEnumSetResultPresentation(t *testing.T) {
 		{"empty", "select e, s from enum_order_t where false", []types.T{types.T_enum, types.T_uint64}},
 		{"distinct", "select distinct e, s from enum_order_t", []types.T{types.T_enum, types.T_uint64}},
 		{"group key", "select e, s from enum_order_t group by e, s", []types.T{types.T_enum, types.T_uint64}},
+		{"rollup columns", "select e, s from enum_order_t group by e, s with rollup", []types.T{types.T_enum, types.T_uint64}},
+		{"distinct rollup", "select distinct e, s from enum_order_t group by e, s with rollup", []types.T{types.T_enum, types.T_uint64}},
+		{"derived rollup", "select e, s from (select e, s from enum_order_t group by e, s with rollup) d", []types.T{types.T_enum, types.T_uint64}},
+		{"derived window", "select e, s from (select min(e) over () e, max(s) over () s from enum_order_t) d", []types.T{types.T_enum, types.T_uint64}},
+		{"rollup user union", "select e, s from enum_order_t group by e, s with rollup union all select e, s from enum_order_t", []types.T{types.T_enum, types.T_uint64}},
+		{"rollup aggregate", "select min(e), max(s) from enum_order_t group by id with rollup", []types.T{types.T_enum, types.T_uint64}},
 		{"group by primary key", "select e, s from enum_order_t group by id", []types.T{types.T_enum, types.T_uint64}},
 		{"min max", "select min(e), max(s) from enum_order_t", []types.T{types.T_enum, types.T_uint64}},
 		{"scalar subquery", "select (select e from enum_order_t limit 1), (select s from enum_order_t limit 1)", []types.T{types.T_enum, types.T_uint64}},
@@ -55,7 +69,7 @@ func TestEnumSetResultPresentation(t *testing.T) {
 		{"derived grouped column", "select e, s from (select e, s from enum_order_t group by id) d", []types.T{types.T_enum, types.T_uint64}},
 		{"derived scalar", "select e, s from (select (select e from enum_order_t limit 1) e, (select s from enum_order_t limit 1) s) d", []types.T{types.T_any, types.T_any}},
 		{"aggregate expressions", "select min(concat(e)), concat(max(s)) from enum_order_t", []types.T{types.T_any, types.T_any}},
-		{"window min max", "select min(e) over (), max(s) over () from enum_order_t", []types.T{types.T_any, types.T_any}},
+		{"window min max", "select min(e) over (), max(s) over () from enum_order_t", []types.T{types.T_enum, types.T_uint64}},
 		{"aggregate union", "select min(e), max(s) from enum_order_t union all select min(e), max(s) from enum_order_t", []types.T{types.T_any, types.T_any}},
 		{"derived limit", "select s, e from (select e, s from enum_order_t limit 2) d", []types.T{types.T_uint64, types.T_enum}},
 		{"cte", "with c as (select e, s from enum_order_t) select s, e from c", []types.T{types.T_uint64, types.T_enum}},
@@ -106,6 +120,31 @@ func TestEnumSetResultPresentation(t *testing.T) {
 			require.NoError(t, decoded.Unmarshal(before))
 			require.Equal(t, cols, GetResultColumnsFromPlan(&decoded))
 			require.True(t, proto.Equal(snapshot, p), "extracting metadata must not mutate a cached plan")
+		})
+	}
+}
+
+func TestEnumSetRollupResultPresentationPlanModes(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	old, had := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if had {
+			rt.SetGlobalVariables("optimizer_hints", old)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	for _, hint := range []string{"rollupSort=1", "rollupSort=2"} {
+		t.Run(hint, func(t *testing.T) {
+			rt.SetGlobalVariables("optimizer_hints", hint)
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t,
+				"select min(e), max(s) from enum_order_t group by id with rollup")
+			require.NoError(t, err)
+			require.Equal(t, hint == "rollupSort=1", planHasSortRollup(p.GetQuery()))
+			for _, column := range GetResultColumnsFromPlan(p) {
+				require.NotNil(t, column.MysqlSpecialResultType)
+				require.Equal(t, pb.MySQLSpecialResultType_ROLLUP, column.MysqlSpecialResultType.Kind)
+			}
 		})
 	}
 }
