@@ -533,3 +533,23 @@ func NewVectorIndexSnapshotChangedNoCtx() *Error {
 func NewCantExecuteInReadOnlyTransactionNoCtx() *Error {
 	return newError(Context(), ErrCantExecuteInReadOnlyTransaction)
 }
+
+func NewIndexVectorDimensionNoCtx(detail string) *Error {
+	return newError(Context(), ErrIndexVectorDimension, detail)
+}
+
+func NewIndexVectorNonFiniteNoCtx() *Error {
+	return newError(Context(), ErrIndexVectorNonFinite)
+}
+
+func NewIndexVectorOutOfRangeNoCtx(detail string) *Error {
+	return newError(Context(), ErrIndexVectorOutOfRange, detail)
+}
+
+func NewIndexTooManyBadRecordsNoCtx(limit int64, pk string, detail string) *Error {
+	return newError(Context(), ErrIndexTooManyBadRecords, limit, pk, detail)
+}
+
+func NewIndexAllRowsBadNoCtx(rows int64, pk string, detail string) *Error {
+	return newError(Context(), ErrIndexAllRowsBad, rows, pk, detail)
+}
