@@ -619,13 +619,13 @@ func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
 			DataSource: &Source{
 				R:    reader,
 				Rel:  &mockRelationForMembershipFilter{},
-				node: &plan.Node{NodeType: plan.Node_TABLE_SCAN, SkipFullFilePreloads: skip},
+				node: &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip},
 			},
 		}
 		require.NoError(t, scope.Run(&Compile{proc: proc}))
 		want := fileservice.Policy(0)
 		if skip {
-			want = fileservice.SkipFullFilePreloads
+			want = fileservice.NarrowRead
 		}
 		require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
 	}

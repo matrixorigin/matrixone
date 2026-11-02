@@ -135,23 +135,23 @@ func hasJoinOnChild(nodes []*plan.Node, childID int32) bool {
 	return false
 }
 
-func TestIvfflatJoinBackScanSkipsFullFilePreloads(t *testing.T) {
+func TestIvfflatJoinBackScanIsNarrow(t *testing.T) {
 	builder, scanNode := rewriteIvfflatProjectingTitle(t, nil)
 	require.True(t, hasJoinOnChild(builder.qry.Nodes, scanNode.NodeId),
 		"a projected column outside the index must be read back from the base table")
-	require.True(t, scanNode.SkipFullFilePreloads)
+	require.True(t, scanNode.NarrowScan)
 }
 
-func TestIvfflatIndexOnlyLeavesBaseScanPreloadsUnchanged(t *testing.T) {
+func TestIvfflatIndexOnlyBaseScanIsNotNarrow(t *testing.T) {
 	builder, scanNode := rewriteIvfflatProjectingTitle(t, []string{"title"})
 	require.False(t, hasJoinOnChild(builder.qry.Nodes, scanNode.NodeId),
 		"an INCLUDE column is served by the index without reading the base table")
-	require.False(t, scanNode.SkipFullFilePreloads)
+	require.False(t, scanNode.NarrowScan)
 }
 
-func TestDeepCopyNodeKeepsSkipFullFilePreloads(t *testing.T) {
+func TestDeepCopyNodeKeepsNarrowScan(t *testing.T) {
 	for _, v := range []bool{false, true} {
-		node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, SkipFullFilePreloads: v}
-		require.Equal(t, v, DeepCopyNode(node).SkipFullFilePreloads)
+		node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: v}
+		require.Equal(t, v, DeepCopyNode(node).NarrowScan)
 	}
 }

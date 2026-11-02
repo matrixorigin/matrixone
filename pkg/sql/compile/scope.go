@@ -427,8 +427,8 @@ func (s *Scope) Run(c *Compile) (err error) {
 
 // scanReadPolicy returns the fileservice policy bits a table scan adds to its reads.
 func scanReadPolicy(node *plan.Node) fileservice.Policy {
-	if node.GetSkipFullFilePreloads() {
-		return fileservice.SkipFullFilePreloads
+	if node.GetNarrowScan() {
+		return fileservice.NarrowRead
 	}
 	return 0
 }
