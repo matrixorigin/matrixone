@@ -5610,3 +5610,59 @@ collection, the r57 claim matrix and the round-8 handoff recovery),
 the race leg of the new and affected families, vet/gofmt clean over
 the changed closure, and the external `pkg/vm/engine/test`
 issue-25590 drivers.
+
+## 10 design review record - round 62 (implementation follow-up): the gated deletion barrier's fail-path release is owned by the registered cleanup
+
+Finding (P2, test-fixture hardening; no production behavior changes):
+the run-7 review's gated deletion barrier — `issue25590PostPersistFailFS.Delete`
+parking at `<-gate` with no context branch, so only closing the gate can
+end a parked call — released its parked worker only through
+`TestIssue25590RollbackHandsOrphanCleanupToEngineGC`'s explicit body call,
+issued AFTER the synchronous assertions. A failing `require` between the
+arming and that call exits the body through `FailNow` and skips the
+release: the pooled GC worker stays parked forever (the registered
+`pool.Release()` cannot end a channel wait), and the test leaks its
+worker and storage fixture precisely on the regression path the
+barrier exists to diagnose. The fixture's sibling barriers already
+carried both protections — `armDeleteBlock` and `armDeleteIgnoreCtxBlock`
+return `sync.Once` releases and their arming sites register them through
+`t.Cleanup` (the round-10/round-11 carriers); the plain gate was the
+fixture's one omission.
+
+Decision (test delivery only; no invariant, ownership or settle
+semantics change):
+
+1. `gateDeletesAfter` closes through a `sync.Once`: the returned release
+   is idempotent, so the body's explicit release and the registered
+   cleanup may both fire without a double-close panic.
+2. The new `issue25590RegisterDeleteGateRelease` registers the
+   idempotent release immediately at the arming through `t.Cleanup`:
+   LIFO runs it FIRST, ahead of the test's pool and fixture teardown,
+   and after the release it joins the engine queue's drain, bounded
+   (5 seconds, on the same settle signal `issue25590QueuedNames` gives
+   the ordering tests), so a worker the release unparked finishes its
+   in-flight delete and the queue settles before anything downstream is
+   torn down. The explicit normal-path release stays in the ordering
+   test — still the ordering oracle — and the cleanup is a no-op
+   after it.
+3. `TestIssue25590DeleteGateCleanupReleasesParkedWorker` ends its body
+   at exactly the FailNow state — barrier armed, Rollback handed its
+   orphan to the engine queue, the worker at the barrier with no
+   delete performed — and a teardown-order witness registered BEFORE
+   the release (so it runs after it) requires exactly the one
+   handed-off delete by the parked worker, its orphan-target snapshot,
+   and no panic from the repeated closes.
+
+Deliberately unchanged, recorded for round completeness: the barrier's
+parking and ordering semantics (the run-7 ordering oracle with its
+round-15 delete-count proof), the queue's ownership, transfer and
+settle triggers (r57/r58/r60), the canceled-context round-12 carrier,
+and the round-10/round-11 block/ignore arming sites (already registered).
+
+Validation (maintained regressions; logs archived outside the tree —
+header, delivery maintenance): RED — this round's ownership removed
+(plain close, registration stripped) fails exactly the new witness
+with the leak signature (0 delete calls after teardown) while the
+ordering test and its canceled-context sibling still pass in the same
+run; GREEN — the fixed tree passes all three, and the same three pass
+the race leg; vet and gofmt clean over the changed package.

@@ -1530,13 +1530,19 @@ func (fs *issue25590PostPersistFailFS) armDeleteFailAfter(n int) {
 
 // gateDeletesAfter arcs the deletion barrier: once allow deletes have
 // been serviced, every further DELETE call parks until closeGate runs.
+// The parked call has no context branch, so closing the gate is owed on
+// every exit path: the returned release is idempotent — the body's
+// normal-path release and the registered cleanup may both fire without
+// a double-close panic — exactly like armDeleteBlock and
+// armDeleteIgnoreCtxBlock (issue #25590 round-62 review).
 func (fs *issue25590PostPersistFailFS) gateDeletesAfter(allow int) (closeGate func()) {
 	fs.mu.Lock()
 	gate := make(chan struct{})
 	fs.deleteGate = gate
 	fs.allowDeletesBeforeGate = allow
 	fs.mu.Unlock()
-	return func() { close(gate) }
+	var once sync.Once
+	return func() { once.Do(func() { close(gate) }) }
 }
 
 func (fs *issue25590PostPersistFailFS) persistedSnapshot() []string {
@@ -2294,6 +2300,31 @@ func TestIssue25590RollbackOrphanPurgeSurvivesCanceledContext(t *testing.T) {
 		"a successful drain empties the engine queue")
 }
 
+// issue25590RegisterDeleteGateRelease owns the deletion barrier's release
+// on every exit path: the parked DELETE has no context branch, and a
+// failing require between the arming and the test body's explicit release
+// ends the test through FailNow — exactly the path that otherwise leaves
+// the parked GC worker and the fixture behind. The idempotent close is
+// thus registered immediately; t.Cleanup runs it FIRST (LIFO), ahead of
+// the pool and the fixture teardown, and after closing the gate it joins
+// the engine queue's drain, bounded, so the unparked worker finishes its
+// in-flight delete and settles the queue before anything downstream is
+// torn down (issue #25590 round-62 review). The explicit normal-path
+// release stays the ordering oracle for the synchronous assertions.
+func issue25590RegisterDeleteGateRelease(
+	t *testing.T, releaseGate func(), engine *Engine,
+) {
+	t.Helper()
+	t.Cleanup(func() {
+		releaseGate()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) &&
+			len(issue25590QueuedNames(engine)) > 0 {
+			time.Sleep(2 * time.Millisecond)
+		}
+	})
+}
+
 // TestIssue25590RollbackHandsOrphanCleanupToEngineGC pins the second half
 // of the terminal-cleanup contract on its round-12 carrier: the dying
 // transaction transfers the names BEFORE any storage I/O — no terminal
@@ -2337,6 +2368,15 @@ func TestIssue25590RollbackHandsOrphanCleanupToEngineGC(t *testing.T) {
 	// assertions below are done, and only the gated final count is
 	// exact.
 	closeDeleteGate := failFS.gateDeletesAfter(0)
+	// The parked worker's release is owed even on this test's own
+	// regression path: a failing require below exits through FailNow and
+	// would otherwise skip the explicit release that follows the
+	// synchronous assertions. The registered idempotent release plus the
+	// bounded drain join therefore fires on every exit, first of this
+	// test's cleanups, ahead of the pool and the fixture teardown
+	// (round-62 review); it is a harmless no-op after the explicit
+	// release below, which still carries the ordering oracle.
+	issue25590RegisterDeleteGateRelease(t, closeDeleteGate, txn.engine)
 
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -2369,6 +2409,94 @@ func TestIssue25590RollbackHandsOrphanCleanupToEngineGC(t *testing.T) {
 		return len(issue25590QueuedNames(txn.engine)) == 0
 	}, 5*time.Second, 5*time.Millisecond,
 		"a successful drain empties the engine queue")
+}
+
+// TestIssue25590DeleteGateCleanupReleasesParkedWorker pins the round-62
+// review's failure-path cleanup contract as its own executable case: the
+// gated DELETE parks with no context branch, and a failing require past
+// the barrier's arming exits the body through FailNow WITHOUT the explicit
+// release. This test ends its body at exactly that point — the barrier is
+// armed, Rollback has handed its orphan to the engine queue, the worker
+// is parked at the gate — and the registered cleanup alone must release
+// the parked worker, boundedly join the queue's drain before the pool and
+// fixture teardown run, and keep the release firing again harmless. On
+// the pre-fix shape the worker parks at <-gate forever: the queued orphan
+// never drains and its single storage delete never happens, so the
+// teardown-order witness below must observe exactly that one handed-off
+// delete, and the double release must not panic.
+func TestIssue25590DeleteGateCleanupReleasesParkedWorker(t *testing.T) {
+	colexec.NewServer("")
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	issue25590InitDumpableFixture(t, txn)
+
+	ctx := context.Background()
+	failFS := issue25590SwapProcSharedFS(t, txn)
+	// The engine's own GC and the handoff flow through this file service.
+	txn.engine.fs = failFS
+	pool, err := ants.NewPool(2)
+	require.NoError(t, err)
+	t.Cleanup(func() { pool.Release() })
+	require.NoError(t, txn.engine.ResetGCWorkerPool(pool))
+
+	failFS.armPostPersistFailure(func() bool { return true })
+
+	batchB := issue25590AppendInsertEntry(t, txn, 13, 14, 15)
+	require.Len(t, txn.writes, 1)
+
+	txn.Lock()
+	require.ErrorContains(t, txn.dumpInsertBatchLocked(ctx, failFS, 0, new(int)),
+		"post-persist fs write failure")
+	txn.Unlock()
+	require.Len(t, txn.pendingObjectCleanup, 1)
+	failedOrphan := failFS.failedAtName()
+	require.Equal(t, failedOrphan, txn.pendingObjectCleanup[0].name)
+	require.Equal(t, 3, batchB.RowCount())
+
+	closeDeleteGate := failFS.gateDeletesAfter(0)
+
+	// Registered FIRST of the pair, runs LAST (LIFO): a witness behind
+	// the registered release — by the time it runs, the release+join
+	// cleanup must have let the parked worker finish the handed-off
+	// delete, emptied the queue's name, and proven the release repeatable.
+	t.Cleanup(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("the gate's release must be idempotent, second/third close panicked: %v", r)
+			}
+		}()
+		if calls := failFS.deleteCallCount(); calls != 1 {
+			t.Errorf("the registered release did not let the parked worker finish the handed-off delete: %d delete calls after teardown, want 1", calls)
+			return
+		}
+		if got := failFS.deletedSnapshot(); len(got) != 1 || got[0] != failedOrphan {
+			t.Errorf("the parked worker's single delete must target the handed-off orphan, got %v", got)
+			return
+		}
+		// The cleanup already closed the gate once; these extra closes
+		// must stay no-ops instead of panicking on the shared channel.
+		closeDeleteGate()
+		closeDeleteGate()
+	})
+
+	// Registered SECOND, runs FIRST (LIFO): the unconditional release the
+	// parked, context-blind delete waits for.
+	issue25590RegisterDeleteGateRelease(t, closeDeleteGate, txn.engine)
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	require.NoError(t, txn.Rollback(canceled))
+	require.Empty(t, txn.pendingObjectCleanup,
+		"the dying transaction handed every name over to the engine queue")
+	require.Len(t, issue25590QueuedNames(txn.engine), 1,
+		"the queue owns the handed-off orphan while its worker holds at the barrier")
+	require.Equal(t, 0, failFS.deleteCallCount(),
+		"the failed publication and the parked worker performed no deletion")
+
+	// The body ends here WITHOUT the explicit release — deliberately the
+	// state require.FailNow leaves this test in after a failing assertion
+	// below the arming — so the parked worker's rescue is owned wholly by
+	// the registered cleanup.
 }
 
 // issue25590ArmKeyedFault installs a fault point carrying explicit integer
