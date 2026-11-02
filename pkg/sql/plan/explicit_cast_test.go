@@ -26,6 +26,60 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTemporalIntegerCastWrapperPolicy(t *testing.T) {
+	ctx := context.Background()
+	temporal := types.T_datetime.ToTypeWithScale(6)
+	target := types.T_int64.ToType()
+	column := &Expr{Typ: makePlan2Type(&temporal), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1}}}
+	cast, err := appendSyntaxExplicitCastBeforeExpr(ctx, makePlan2StringConstExprWithType("2024-02-29 23:59:59.500000"), column.Typ)
+	require.NoError(t, err)
+	condition := &Expr{Typ: makeSimplePlan2Type(types.T_bool), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 2}}}
+	for _, name := range []string{"if", "case"} {
+		t.Run(name, func(t *testing.T) {
+			source, err := BindFuncExprImplByPlanExpr(ctx, name, []*Expr{condition, column, cast})
+			require.NoError(t, err)
+			converted, err := appendExplicitCastBeforeExpr(ctx, source, makePlan2Type(&target))
+			require.NoError(t, err)
+			require.Equal(t, source.GetF().Func.ObjName, converted.GetF().Func.ObjName)
+			require.Same(t, condition, converted.GetF().Args[0], "do not duplicate or convert the selector condition")
+			for i, want := range []int32{1, function.TemporalCastIntegerOverload} {
+				_, id := function.DecodeOverloadID(converted.GetF().Args[i+1].GetF().Func.Obj)
+				require.Equal(t, want, id, "the column branch must not inherit its CAST sibling's policy")
+			}
+			require.Equal(t, int32(types.T_int64), converted.Typ.Id)
+		})
+	}
+	coal, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*Expr{column, cast})
+	require.NoError(t, err)
+	converted, err := appendExplicitCastBeforeExpr(ctx, coal, makePlan2Type(&target))
+	require.NoError(t, err)
+	_, id := function.DecodeOverloadID(converted.GetF().Func.Obj)
+	require.Equal(t, function.TemporalCastIntegerOverload, id)
+}
+
+func TestTemporalIntegerCastScalarProjectionPolicy(t *testing.T) {
+	opt := NewMockOptimizer(false, newPlanTestProcess(t))
+	p, err := runOneStmt(opt, t, "select cast((select cast('2024-02-29 23:59:59.500000' as datetime(6))) as signed)")
+	require.NoError(t, err)
+	found := false
+	var visit func(*Expr)
+	visit = func(expr *Expr) {
+		if fn := expr.GetF(); fn != nil {
+			id, overload := function.DecodeOverloadID(fn.Func.Obj)
+			found = found || id == function.CAST && overload == function.TemporalCastIntegerOverload
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+	}
+	for _, node := range p.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			visit(expr)
+		}
+	}
+	require.True(t, found, "the scalar projection must retain the CAST result's integer protocol")
+}
+
 func TestTemporalIntegerCastPreservesNestedCastPolicy(t *testing.T) {
 	for _, temporal := range []types.T{types.T_datetime, types.T_time, types.T_timestamp} {
 		for _, target := range []types.T{types.T_int64, types.T_uint64} {

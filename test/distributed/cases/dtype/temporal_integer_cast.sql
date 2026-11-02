@@ -75,6 +75,48 @@ execute temporal_integer_param using @temporal_integer_dt, @temporal_integer_tm;
 set session sql_mode = '';
 execute temporal_integer_param using @temporal_integer_dt, @temporal_integer_tm;
 deallocate prepare temporal_integer_param;
+
+-- Common-value producers own their policy; IF/CASE forward the selected branch.
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+select cast(coalesce(cast('2024-02-29 23:59:59.500000' as datetime(6)), null) as signed) as coalesce_dt,
+cast(ifnull(cast('2024-02-29 23:59:59.500000' as datetime(6)), null) as signed) as ifnull_dt,
+cast(if(true, cast('2024-02-29 23:59:59.500000' as datetime(6)), null) as signed) as if_dt,
+cast(case when true then cast('-00:00:00.500000' as time(6)) else null end as unsigned) as case_tm;
+select id, cast(coalesce(dt, null) as signed) as common_dt,
+cast(ifnull(dt, null) as signed) as ifnull_dt,
+cast(if(id = 2, dt, cast('2024-02-29 23:59:59.500000' as datetime(6))) as signed) as mixed_if,
+cast(case when id = 2 then dt else cast('2024-02-29 23:59:59.500000' as datetime(6)) end as signed) as mixed_case,
+cast(if(id = 2, tm, cast('-00:00:00.500000' as time(6))) as unsigned) as mixed_tm
+from temporal_values where id in (2,3,4) order by id;
+select id, cast(coalesce(if(id = 2, dt, cast('2024-02-29 23:59:59.500000' as datetime(6))), null) as signed) as nested_dt
+from temporal_values where id in (2,3) order by id;
+
+select id, cast(coalesce(cast(dt as datetime(6)), null) as signed) as text_dt,
+cast(ifnull(cast(tm as time(6)), null) as unsigned) as text_tm
+from temporal_text_values order by id;
+
+-- Scalar output conversion must preserve empty, ordered, correlated and cardinality behavior.
+select cast((select cast('2024-02-29 23:59:59.500000' as datetime(6))) as signed) as scalar_dt,
+cast((select cast('-00:00:00.500000' as time(6))) as unsigned) as scalar_tm,
+cast((select cast(dt as datetime(6)) from temporal_values where id = 0) as signed) as empty_dt;
+select cast((select case when id = 2 then cast('2024-02-28 12:00:00.100000' as datetime(6)) else cast('2024-02-29 13:00:00.100000' as datetime(6)) end from temporal_values where id in (2,3) order by id desc limit 1) as signed) as ordered_dt;
+select id, cast((select if(temporal_values.id = 2, temporal_values.dt, cast('2024-02-29 23:59:59.500000' as datetime(6)))) as signed) as correlated_dt
+from temporal_values where id in (2,3) order by id;
+select cast((select distinct cast(dt as datetime(6)) from temporal_values where id in (1,2)) as signed) as distinct_scalar;
+
+set session sql_mode = '';
+prepare temporal_wrapper_param from 'select cast(coalesce(cast(? as datetime(6)), null) as signed) as common_dt, cast(if(?, dt, cast(? as datetime(6))) as signed) as mixed_dt, cast((select cast(? as datetime(6))) as signed) as scalar_dt from temporal_values where id = 2';
+set @temporal_wrapper_choice = 0;
+execute temporal_wrapper_param using @temporal_integer_dt, @temporal_wrapper_choice, @temporal_integer_dt, @temporal_integer_dt;
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+execute temporal_wrapper_param using @temporal_integer_dt, @temporal_wrapper_choice, @temporal_integer_dt, @temporal_integer_dt;
+set @temporal_wrapper_choice = 1;
+execute temporal_wrapper_param using @temporal_integer_dt, @temporal_wrapper_choice, @temporal_integer_dt, @temporal_integer_dt;
+set session sql_mode = '';
+execute temporal_wrapper_param using @temporal_integer_dt, @temporal_wrapper_choice, @temporal_integer_dt, @temporal_integer_dt;
+set @temporal_wrapper_null = null;
+execute temporal_wrapper_param using @temporal_wrapper_null, @temporal_wrapper_choice, @temporal_wrapper_null, @temporal_wrapper_null;
+deallocate prepare temporal_wrapper_param;
 drop table temporal_text_values;
 
 drop database temporal_integer_cast;
