@@ -193,7 +193,6 @@ func (idx *appendRangeIndex) visit(start, end types.TS, fn func(*AppendNode) boo
 			return true
 		})
 	}
-	return
 }
 
 func (idx *appendRangeIndex) clear() { *idx = appendRangeIndex{} }

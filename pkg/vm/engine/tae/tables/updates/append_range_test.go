@@ -208,6 +208,24 @@ func TestAppendRangeIndexIncludesReadySuffix(t *testing.T) {
 	head, rest, dense := h.rangeIndex.selectNodes(types.BuildTS(2, 0), types.BuildTS(3, 0), 16)
 	require.False(t, dense)
 	require.ElementsMatch(t, []*AppendNode{first, second}, append(rest, head))
+	// Removing a queued completion must survive the next index refresh.
+	h.Lock()
+	h.DeleteAppendNodeLocked(second)
+	h.rangeIndex.refresh(h.rows)
+	h.Unlock()
+	head, rest, dense = h.rangeIndex.selectNodes(types.BuildTS(2, 0), types.BuildTS(3, 0), 16)
+	require.False(t, dense)
+	require.Same(t, first, head)
+	require.Empty(t, rest)
+	h.Lock()
+	h.DeleteAppendNodeLocked(first)
+	h.Unlock()
+	head, rest, dense = h.rangeIndex.selectNodes(types.BuildTS(2, 0), types.BuildTS(3, 0), 16)
+	require.False(t, dense)
+	require.Nil(t, head)
+	require.Empty(t, rest)
+	h.ReleaseAppends()
+	require.Zero(t, h.EstimateMemSizeLocked())
 }
 
 func TestCollectAppendRangeConcurrentReaders(t *testing.T) {
