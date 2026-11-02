@@ -488,8 +488,7 @@ class Query:
 
     def first(self) -> Optional:
         """Execute query and return first result"""
-        self._limit_count = 1
-        results = self.all()
+        results = _first_query(self).all()
         return results[0] if results else None
 
     def one(self):

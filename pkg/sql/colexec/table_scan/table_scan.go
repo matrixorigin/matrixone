@@ -84,16 +84,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.runtimeFilterExecutors...)
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.filterExecutors...)
 	tableScan.configureLateMaterialization()
-	if len(tableScan.ctr.earlyColumns) > 0 {
-		tableScan.ctr.readerFilter = func(
-			bat *batch.Batch,
-			loadedColumns []int,
-		) (engine.ReaderFilterResult, error) {
-			return tableScan.applyReaderFilter(proc, bat, loadedColumns)
-		}
-	} else {
-		tableScan.ctr.readerFilter = nil
-	}
+	tableScan.prepareReaderFilter(proc)
 
 	err = tableScan.PrepareProjection(proc)
 	if err != nil {

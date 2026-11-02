@@ -1,0 +1,41 @@
+drop database if exists exact_cached_scan_filter;
+create database exact_cached_scan_filter;
+use exact_cached_scan_filter;
+create table t(id int, d date, q decimal(15,2));
+insert into t values (1,'1994-01-01',0.05),(2,'1994-06-30',null),(3,'1995-01-01',-0.03);
+select id from t where d >= date '1994-01-01' and d < date '1995-01-01' and q between 0.04 and 0.06 order by id;
+➤ id[4,32,0]  𝄀
+1
+select mo_ctl('dn','flush','exact_cached_scan_filter.t');
+➤ mo_ctl(dn, flush, exact_cached_scan_filter.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select id from t where d >= date '1994-01-01' and d < date '1995-01-01' and q between 0.04 and 0.06 order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from t where id >= 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from t where q < -1.00 order by id;
+➤ id[4,32,0]
+select id from t where q is null or q < 0.00 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+delete from t where id=1;
+select id from t where d >= date '1994-01-01' and d < date '1995-01-01' and q between 0.04 and 0.06 order by id;
+➤ id[4,32,0]
+select id from t where id >= 0 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+drop database exact_cached_scan_filter;

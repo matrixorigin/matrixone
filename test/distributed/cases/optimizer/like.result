@@ -81,6 +81,7 @@ Project
         Runtime Filter Build: #[-1,0]
         ->  Table Scan on d1.t1 [ForceOneCN]
               Filter Cond: (t1.c2 = '123')
+              Block Filter Cond: (t1.c2 = '123')
               Runtime Filter Probe: t1.c1
         ->  Index Table Scan on t1.c2 [ForceOneCN]
               Filter Cond: prefix_eq(__mo_index_idx_col)

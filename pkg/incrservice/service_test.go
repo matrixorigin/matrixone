@@ -2865,11 +2865,11 @@ func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerEpoch(t *testing.T) {
 }
 
 func TestInsertValuesBuilderCannotReviveCacheAfterReload(t *testing.T) {
-	testBlockedBuilderInvalidation(t, false)
+	testBlockedBuilderInvalidation(t, false, false)
 }
 
 func TestInsertValuesBuilderCannotReviveCacheAfterClose(t *testing.T) {
-	testBlockedBuilderInvalidation(t, true)
+	testBlockedBuilderInvalidation(t, true, false)
 }
 
 func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
@@ -3019,7 +3019,7 @@ func TestPreAllocateClearsStateWhenEnqueueFails(t *testing.T) {
 	require.False(t, allocating)
 }
 
-func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
+func testBlockedBuilderInvalidation(t *testing.T, closeService, pkRetry bool) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
 		defer cancel()
@@ -3033,6 +3033,9 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), op))
 		require.NoError(t, op.Commit(ctx))
 
+		if pkRetry {
+			require.NoError(t, s.Reload(ctx, 0))
+		}
 		started, release := store.blockNext()
 		defer release()
 		result := make(chan error, 1)
@@ -3065,7 +3068,13 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 			release()
 			<-closed
 		} else {
-			require.NoError(t, s.Reload(ctx, 0))
+			if pkRetry {
+				refreshed, err := s.ReloadForPKRetry(ctx, 0, 8, nil)
+				require.NoError(t, err)
+				require.True(t, refreshed)
+			} else {
+				require.NoError(t, s.Reload(ctx, 0))
+			}
 			require.True(t, moerr.IsMoErrCode(<-waiterResult, moerr.ErrTxnNeedRetryWithDefChanged))
 			release()
 		}
