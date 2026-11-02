@@ -3137,11 +3137,28 @@ func preparedExecutionBuildPlanFunc(
 			// let an EXECUTE-time USE leak into that retry, and always restore the
 			// session context even when planning fails.
 			currentDatabase := compilerCtx.GetDatabase()
+			if session, ok := ses.(*Session); ok {
+				restoreDatabase := bindSessionDatabaseForStatement(session, bindingDatabase)
+				defer restoreDatabase()
+			}
 			compilerCtx.SetDatabase(bindingDatabase)
 			defer compilerCtx.SetDatabase(currentDatabase)
 		}
-		return buildPlanForCompileRetry(
-			ctx, ses, compilerCtx, stmt, forcePrepare, preparedRetry)
+		p, err := buildPlanForCompileRetry(ctx, ses, compilerCtx, stmt, forcePrepare, preparedRetry)
+		if err != nil {
+			return nil, err
+		}
+		// A retry can bind a different view body. CTAS discards its source Query
+		// in ordinary plans, so it must use the source authorization/replanning
+		// path even when the rebuilt plan has no top-level lock references.
+		ctas, isCTAS := stmt.(*tree.CreateTable)
+		needsAuthorization := len(p.GetQuery().GetSelectLockReferences()) > 0 || (isCTAS && ctas.IsAsSelect)
+		if session, ok := ses.(*Session); ok && !session.IsBackgroundSession() && session.GetTenantInfo() != nil && needsAuthorization {
+			if _, err = authenticateCanExecuteStatementAndPlan(ctx, session, stmt, p); err != nil {
+				return nil, err
+			}
+		}
+		return p, nil
 	}
 }
 
