@@ -262,7 +262,7 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[pos]))
 	}
 	for pos, col := range tableDef.Cols {
-		oldColName2Idx[alias+"."+col.Name] = int32(pos)
+		oldColName2Idx[alias+"."+col.Name] = int32(columnCount + pos)
 	}
 
 	currentProjectList := selectNode.ProjectList
@@ -908,6 +908,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 				}
 			}
 			oldPos := oldColName2Idx[qualifiedName]
+			newPos := oldPos
+			if sequentialAssignments {
+				newPos = dmlCtx.tableDefs[i].Name2ColIndex[col.Name]
+			}
 			if changed := changedPredicates[alias]; changed != nil {
 				newDefExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
 					DeepCopyExpr(changed), newDefExpr, DeepCopyExpr(selectNode.ProjectList[oldPos]),
@@ -916,11 +920,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 					return 0, err
 				}
 			}
-			newColName2Idx[qualifiedName] = oldPos
-			automaticAssignments[qualifiedName] = oldPos
-			oldColName2Idx[qualifiedName] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
-			selectNode.ProjectList[oldPos] = newDefExpr
+			newColName2Idx[qualifiedName] = newPos
+			automaticAssignments[qualifiedName] = newPos
+			if !sequentialAssignments {
+				oldColName2Idx[qualifiedName] = int32(len(selectNode.ProjectList))
+				selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
+			}
+			selectNode.ProjectList[newPos] = newDefExpr
 		}
 	}
 	if err = guardAssignments(automaticAssignments, false); err != nil {
@@ -1117,14 +1123,22 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
-			newColName2Idx[alias+"."+col.Name] = oldPos
+			newPos := oldPos
+			if sequentialAssignments {
+				// The first half is the current row; the second half is the
+				// physical OLD image required by index maintenance.
+				newPos = tableDef.Name2ColIndex[col.Name]
+			}
+			newColName2Idx[alias+"."+col.Name] = newPos
 			if assignedColsByTarget[i] == nil {
 				assignedColsByTarget[i] = make(map[string]struct{})
 			}
 			assignedColsByTarget[i][col.Name] = struct{}{}
-			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
-			selectNode.ProjectList[oldPos] = genExpr
+			if !sequentialAssignments {
+				oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
+				selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
+			}
+			selectNode.ProjectList[newPos] = genExpr
 			if isMultiTargetUpdate {
 				targetSelected, buildErr := builder.buildTargetSelectedBelowAssignmentProject(
 					selectNode,

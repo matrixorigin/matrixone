@@ -25,6 +25,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -213,6 +214,30 @@ func TestVirtualTimestampHistoricalOversizeCatalogPlans(t *testing.T) {
 	require.Equal(t, 18, projectCount)
 	require.Less(t, exprNodes, 2000)
 
+	// The index stores the writer-time key. A staged reader-time value must
+	// never replace the physical OLD key used to find and maintain its row.
+	const indexTableName = "__mo_index_legacydag_g0"
+	table.Indexes = []*pb.IndexDef{{
+		IndexName: "idx_g0", IndexTableName: indexTableName,
+		IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+		Parts:     []string{"g0"}, TableExist: true,
+	}}
+	indexTable := &pb.TableDef{
+		Name: indexTableName, TblId: 12346,
+		Cols: []*pb.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: table.Cols[1].Typ},
+			{Name: catalog.IndexTablePrimaryColName, Typ: table.Cols[table.Name2ColIndex["id"]].Typ},
+			{Name: catalog.Row_ID, Typ: table.Cols[table.Name2ColIndex[catalog.Row_ID]].Typ},
+		},
+		Pkey: &pb.PrimaryKeyDef{Names: []string{catalog.IndexTablePrimaryColName}, PkeyColName: catalog.IndexTablePrimaryColName},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName: 0, catalog.IndexTablePrimaryColName: 1, catalog.Row_ID: 2,
+		},
+	}
+	compiler.tables[indexTableName] = indexTable
+	compiler.objects[indexTableName] = &pb.ObjectRef{SchemaName: "tpch", ObjName: indexTableName, Obj: 12346}
+	compiler.id2name[indexTable.TblId] = indexTableName
+
 	// A sequential UPDATE binds each RHS to the current row image. Re-stage
 	// the historical DAG for that image, including after a TIMESTAMP write.
 	compiler.isDml = true
@@ -233,6 +258,32 @@ func TestVirtualTimestampHistoricalOversizeCatalogPlans(t *testing.T) {
 				}
 			}
 			require.GreaterOrEqual(t, stages, 36, "sequential UPDATE must stage the current row beyond the scan")
+			// Inspect the binder plan before optimizer join rewrites change
+			// child ordering and collapse the OLD-key projection chain.
+			builder := NewQueryBuilder(pb.Query_UPDATE, compiler, false, true)
+			_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
+			require.NoError(t, err)
+			var join *pb.Node
+			for _, node := range builder.qry.Nodes {
+				if node == nil || node.NodeType != pb.Node_JOIN || len(node.Children) != 2 {
+					continue
+				}
+				right := builder.qry.Nodes[node.Children[1]]
+				if right.NodeType == pb.Node_TABLE_SCAN && right.TableDef != nil && right.TableDef.Name == indexTableName {
+					join = node
+				}
+			}
+			require.NotNil(t, join, "binder must retain index maintenance join")
+			require.NotEmpty(t, join.OnList)
+			oldG0Pos := int32(len(table.Cols) + 1)
+			foundOldKey := false
+			require.NoError(t, pb.VisitExprTree(join.OnList[0], func(expr *pb.Expr) error {
+				if col := expr.GetCol(); col != nil && col.ColPos == oldG0Pos {
+					foundOldKey = true
+				}
+				return nil
+			}))
+			require.True(t, foundOldKey, "index lookup must use the physical OLD g0 slot")
 		})
 	}
 }
