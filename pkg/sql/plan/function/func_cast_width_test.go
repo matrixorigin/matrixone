@@ -334,6 +334,29 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
 }
 
+func TestStrictBinaryAssignmentRejectsOverWidthValue(t *testing.T) {
+	for _, oid := range []types.T{types.T_binary, types.T_varbinary} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return "STRICT_TRANS_TABLES", nil
+				}
+				return nil, nil
+			})
+			source := testutil.MakeVarcharVector([]string{"ab"}, nil, proc.Mp())
+			defer source.Free(proc.Mp())
+			typ := types.New(oid, 1, 0)
+			target := vector.NewConstNull(typ, 1, proc.Mp())
+			defer target.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(typ, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.Error(t, NewAssignCast([]*vector.Vector{source, target}, result, proc, 1, nil))
+		})
+	}
+}
+
 func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -347,6 +370,8 @@ func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
 		{name: "varchar non-space overflow", target: types.T_varchar, input: "abcd", want: "abc", wantWarning: true},
 		{name: "varchar multibyte overflow", target: types.T_varchar, input: "你好世界", want: "你好世", wantWarning: true},
 		{name: "varchar trailing space overflow", target: types.T_varchar, input: "abc ", want: "abc", wantWarning: true},
+		{name: "binary byte overflow", target: types.T_binary, input: "abcd", want: "abc", wantWarning: true},
+		{name: "varbinary byte overflow", target: types.T_varbinary, input: "abcd", want: "abc", wantWarning: true},
 		{name: "char trailing space exemption", target: types.T_char, input: "abc ", want: "abc", wantWarning: false},
 	}
 

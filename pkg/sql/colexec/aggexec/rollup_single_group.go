@@ -231,3 +231,26 @@ func (exec *sumAvgExec[T, A]) appendSingleGroupResult(dst *vector.Vector) error 
 	exec.windowNonNullCount = 0
 	return nil
 }
+
+func (exec *sumAvgDecExec[A, S]) singleGroupReuseState() (*aggExec, bool) {
+	if exec == nil {
+		return nil, false
+	}
+	return &exec.aggExec, exec.isSum && exec.argTypes[0].Oid == types.T_int32
+}
+
+func (exec *sumAvgDecExec[A, S]) bulkFillSingleGroupRange(offset, rows int, vectors []*vector.Vector) error {
+	return exec.bulkFillSumRange(0, offset, rows, vectors)
+}
+
+func (exec *sumAvgDecExec[A, S]) appendSingleGroupResult(dst *vector.Vector) error {
+	sumVec := exec.state[0].vecs[0]
+	sums := vector.MustFixedColNoTypeCheck[S](sumVec)
+	if err := vector.AppendFixed(dst, sums[0], sumVec.IsNull(0), exec.mp); err != nil {
+		return err
+	}
+	var zero S
+	sums[0] = zero
+	sumVec.SetNull(0)
+	return nil
+}

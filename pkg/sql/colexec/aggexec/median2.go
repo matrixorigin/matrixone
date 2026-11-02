@@ -33,6 +33,9 @@ var MedianSupportedType = []types.T{
 
 func MedianReturnType(args []types.Type) types.Type {
 	if args[0].IsDecimal() {
+		if args[0].Width >= 38 {
+			return types.New(types.T_decimal256, 39, args[0].Scale+1)
+		}
 		return types.New(types.T_decimal128, 38, args[0].Scale+1)
 	}
 	return types.T_float64.ToType()
@@ -1611,14 +1614,14 @@ func newMedianColumnNumericExec[T numeric](mp *mpool.MPool, info singleAggInfo) 
 	}
 }
 
-type medianColumnDecimalExec[T types.Decimal64 | types.Decimal128] struct {
-	medianColumnExecSelf[T, types.Decimal128]
+type medianColumnDecimalExec[T types.Decimal64 | types.Decimal128, R types.Decimal128 | types.Decimal256] struct {
+	medianColumnExecSelf[T, R]
 }
 
-func (exec *medianColumnDecimalExec[T]) PreflightBatchMerge(
+func (exec *medianColumnDecimalExec[T, R]) PreflightBatchMerge(
 	next AggFuncExec, offset int, groups []uint64,
 ) error {
-	other, ok := next.(*medianColumnDecimalExec[T])
+	other, ok := next.(*medianColumnDecimalExec[T, R])
 	if !ok {
 		return mpool.ErrAllocationAccountMismatch
 	}
@@ -1626,9 +1629,9 @@ func (exec *medianColumnDecimalExec[T]) PreflightBatchMerge(
 		&other.medianColumnExecSelf, offset, groups)
 }
 
-func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128](mp *mpool.MPool, info singleAggInfo) AggFuncExec {
-	return &medianColumnDecimalExec[T]{
-		medianColumnExecSelf: newMedianColumnExecSelf[T, types.Decimal128](mp, info, types.Decimal128{}),
+func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128, R types.Decimal128 | types.Decimal256](mp *mpool.MPool, info singleAggInfo) AggFuncExec {
+	return &medianColumnDecimalExec[T, R]{
+		medianColumnExecSelf: newMedianColumnExecSelf[T, R](mp, info, *new(R)),
 	}
 }
 
@@ -1665,9 +1668,12 @@ func newMedianExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Ty
 	case types.T_float64:
 		return newMedianColumnNumericExec[float64](mp, info), nil
 	case types.T_decimal64:
-		return newMedianColumnDecimalExec[types.Decimal64](mp, info), nil
+		return newMedianColumnDecimalExec[types.Decimal64, types.Decimal128](mp, info), nil
 	case types.T_decimal128:
-		return newMedianColumnDecimalExec[types.Decimal128](mp, info), nil
+		if info.retType.Oid == types.T_decimal256 {
+			return newMedianColumnDecimalExec[types.Decimal128, types.Decimal256](mp, info), nil
+		}
+		return newMedianColumnDecimalExec[types.Decimal128, types.Decimal128](mp, info), nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("unsupported type for median()")
 	}
@@ -1715,22 +1721,21 @@ func (exec *medianColumnNumericExec[T]) Flush() ([]*vector.Vector, error) {
 	return exec.ret.flushAll(), nil
 }
 
-func (exec *medianColumnDecimalExec[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	other := next.(*medianColumnDecimalExec[T])
+func (exec *medianColumnDecimalExec[T, R]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*medianColumnDecimalExec[T, R])
 	return exec.medianColumnExecSelf.Merge(&other.medianColumnExecSelf, groupIdx1, groupIdx2)
 }
 
-func (exec *medianColumnDecimalExec[T]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
-	other := next.(*medianColumnDecimalExec[T])
+func (exec *medianColumnDecimalExec[T, R]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*medianColumnDecimalExec[T, R])
 	return exec.medianColumnExecSelf.BatchMerge(&other.medianColumnExecSelf, offset, groups)
 }
 
-func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
+func (exec *medianColumnDecimalExec[T, R]) Flush() ([]*vector.Vector, error) {
 	if exec.accounted != nil {
 		return flushAccountedMedianDecimal(exec)
 	}
 	vs := exec.ret.values
-	argIsDecimal128 := exec.singleAggInfo.argType.Oid == types.T_decimal128
 	groups := len(exec.groups)
 	lim := exec.ret.getChunkSize()
 	for i, x := 0, 0; i < groups; i += lim {
@@ -1747,14 +1752,10 @@ func (exec *medianColumnDecimalExec[T]) Flush() ([]*vector.Vector, error) {
 			}
 			markMedianGroupNotEmpty(&exec.ret, x, j)
 			var (
-				v   types.Decimal128
+				v   R
 				err error
 			)
-			if argIsDecimal128 {
-				v, err = MedianDecimal128(any(exec.groups[s]).(*Vectors[types.Decimal128]))
-			} else {
-				v, err = MedianDecimal64(any(exec.groups[s]).(*Vectors[types.Decimal64]))
-			}
+			v, err = medianDecimalValue[T, R](exec.groups[s])
 			if err != nil {
 				return nil, err
 			}
@@ -1836,8 +1837,8 @@ func flushAccountedMedianNumeric[T numeric](
 	return results, nil
 }
 
-func flushAccountedMedianDecimal[T types.Decimal64 | types.Decimal128](
-	exec *medianColumnDecimalExec[T],
+func flushAccountedMedianDecimal[T types.Decimal64 | types.Decimal128, R types.Decimal128 | types.Decimal256](
+	exec *medianColumnDecimalExec[T, R],
 ) (_ []*vector.Vector, retErr error) {
 	results := make([]*vector.Vector, len(exec.accounted.state))
 	defer freeAggregateResultsOnError(exec.mp, results, &retErr)
@@ -1856,7 +1857,7 @@ func flushAccountedMedianDecimal[T types.Decimal64 | types.Decimal128](
 			return nil, err
 		}
 		result.SetLength(int(state.length))
-		values := vector.MustFixedColNoTypeCheck[types.Decimal128](result)
+		values := vector.MustFixedColNoTypeCheck[R](result)
 		for row := uint16(0); row < uint16(state.length); row++ {
 			if exec.usesDenseAccountedState() {
 				group := exec.groups[groupBase+int(row)]
@@ -1864,16 +1865,7 @@ func flushAccountedMedianDecimal[T types.Decimal64 | types.Decimal128](
 					result.SetNull(uint64(row))
 					continue
 				}
-				switch typed := any(group).(type) {
-				case *Vectors[types.Decimal64]:
-					values[row], err = denseMedianDecimal64(
-						typed, exec.accounted.allocation, exec.mp)
-				case *Vectors[types.Decimal128]:
-					values[row], err = denseMedianDecimal128(
-						typed, exec.accounted.allocation, exec.mp)
-				default:
-					err = moerr.NewInternalErrorNoCtx("median decimal type mismatch")
-				}
+				values[row], err = denseMedianDecimalValue[T, R](group, exec.accounted.allocation, exec.mp)
 				if err != nil {
 					return nil, err
 				}
@@ -1902,14 +1894,7 @@ func flushAccountedMedianDecimal[T types.Decimal64 | types.Decimal128](
 				err = moerr.NewInternalErrorNoCtx("median retained argument count mismatch")
 			}
 			if err == nil {
-				switch vals := any(scratch).(type) {
-				case []types.Decimal64:
-					values[row], err = medianDecimal64Vals(vals)
-				case []types.Decimal128:
-					values[row], err = medianDecimal128Vals(vals)
-				default:
-					err = moerr.NewInternalErrorNoCtx("median decimal type mismatch")
-				}
+				values[row], err = medianDecimalVals[T, R](scratch)
 			}
 			mpool.FreeSlice(exec.mp, scratch)
 			if err != nil {
@@ -1973,6 +1958,46 @@ func MedianDecimal64(vs *Vectors[types.Decimal64]) (types.Decimal128, error) {
 func MedianDecimal128(vs *Vectors[types.Decimal128]) (types.Decimal128, error) {
 	vals := collectMedianValues(vs)
 	return medianDecimal128Vals(vals)
+}
+
+func medianDecimalVals[T types.Decimal64 | types.Decimal128, R types.Decimal128 | types.Decimal256](vals []T) (R, error) {
+	var zero R
+	switch typed := any(vals).(type) {
+	case []types.Decimal64:
+		value, err := medianDecimal64Vals(typed)
+		return any(value).(R), err
+	case []types.Decimal128:
+		if _, wide := any(zero).(types.Decimal256); wide {
+			value, err := medianDecimal128ValsWide(typed)
+			return any(value).(R), err
+		}
+		value, err := medianDecimal128Vals(typed)
+		return any(value).(R), err
+	}
+	return zero, moerr.NewInternalErrorNoCtx("median decimal type mismatch")
+}
+
+func medianDecimalValue[T types.Decimal64 | types.Decimal128, R types.Decimal128 | types.Decimal256](values *Vectors[T]) (R, error) {
+	return medianDecimalVals[T, R](collectMedianValues(values))
+}
+
+func denseMedianDecimalValue[T types.Decimal64 | types.Decimal128, R types.Decimal128 | types.Decimal256](
+	values *Vectors[T], allocation *AllocationAccount, mp *mpool.MPool,
+) (R, error) {
+	var zero R
+	switch typed := any(values).(type) {
+	case *Vectors[types.Decimal64]:
+		value, err := denseMedianDecimal64(typed, allocation, mp)
+		return any(value).(R), err
+	case *Vectors[types.Decimal128]:
+		if _, wide := any(zero).(types.Decimal256); wide {
+			value, err := denseMedianDecimal128Wide(typed, allocation, mp)
+			return any(value).(R), err
+		}
+		value, err := denseMedianDecimal128(typed, allocation, mp)
+		return any(value).(R), err
+	}
+	return zero, moerr.NewInternalErrorNoCtx("median decimal type mismatch")
 }
 
 func denseMedianNumeric[T numeric](
@@ -2056,6 +2081,27 @@ func denseMedianDecimal128(
 	return averageMedianDecimal(v1, v2)
 }
 
+func denseMedianDecimal128Wide(
+	values *Vectors[types.Decimal128], allocation *AllocationAccount, mp *mpool.MPool,
+) (types.Decimal256, error) {
+	if len(values.vecs) == 1 {
+		return medianDecimal128ValsWide(vector.MustFixedColNoTypeCheck[types.Decimal128](values.vecs[0]))
+	}
+	selector, err := newDenseMedianSelector(values, allocation, mp)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	defer selector.free()
+	rows := values.Length()
+	compare := func(a, b types.Decimal128) int { return a.Compare(b) }
+	if rows&1 == 1 {
+		return types.Decimal256FromDecimal128(selector.selectKth(rows>>1, compare)).Scale(1)
+	}
+	v1 := types.Decimal256FromDecimal128(selector.selectKth(rows>>1-1, compare))
+	v2 := types.Decimal256FromDecimal128(selector.selectKth(rows>>1, compare))
+	return averageMedianDecimalWide(v1, v2)
+}
+
 func averageMedianDecimal(
 	v1, v2 types.Decimal128,
 ) (types.Decimal128, error) {
@@ -2071,6 +2117,25 @@ func averageMedianDecimal(
 	}
 	if ret, err = ret.Scale(1); err != nil {
 		return types.Decimal128{}, err
+	}
+	return ret.Right(1), nil
+}
+
+func averageMedianDecimalWide(v1, v2 types.Decimal256) (types.Decimal256, error) {
+	ret, err := v1.Add256(v2)
+	if err != nil {
+		return types.Decimal256{}, err
+	}
+	if ret.Sign() {
+		ret, err = ret.Minus().Scale(1)
+		if err != nil {
+			return types.Decimal256{}, err
+		}
+		return ret.Right(1).Minus(), nil
+	}
+	ret, err = ret.Scale(1)
+	if err != nil {
+		return types.Decimal256{}, err
 	}
 	return ret.Right(1), nil
 }
@@ -2325,6 +2390,18 @@ func medianDecimal128Vals(vals []types.Decimal128) (types.Decimal128, error) {
 		return a.Compare(b)
 	})
 	return averageMedianDecimal(v1, v2)
+}
+
+func medianDecimal128ValsWide(vals []types.Decimal128) (types.Decimal256, error) {
+	rows := len(vals)
+	compare := func(a, b types.Decimal128) int { return a.Compare(b) }
+	if rows&1 == 1 {
+		value := selectKthFunc(vals, rows>>1, compare)
+		return types.Decimal256FromDecimal128(value).Scale(1)
+	}
+	v1 := types.Decimal256FromDecimal128(selectKthFunc(vals, rows>>1-1, compare))
+	v2 := types.Decimal256FromDecimal128(selectKthFunc(vals, rows>>1, compare))
+	return averageMedianDecimalWide(v1, v2)
 }
 
 func selectKthNumeric[T numeric](vals []T, k int) T {

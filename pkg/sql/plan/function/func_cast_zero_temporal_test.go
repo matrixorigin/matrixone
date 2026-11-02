@@ -349,6 +349,101 @@ func TestAssignmentDateCastRejectsInvalidStrings(t *testing.T) {
 	}
 }
 
+func TestDateAssignmentDiagnosesDatetimeNarrowing(t *testing.T) {
+	explicitProc := testutil.NewProcess(t)
+	explicit := runStringTemporalCast(t, explicitProc, NewExplicitCast,
+		"2026-10-21 10:20:30", types.T_date.ToType(), nil)
+	require.False(t, explicit.nulls[0])
+	for _, tc := range []struct {
+		name, mode string
+		ignore     bool
+		wantError  bool
+	}{
+		{"strict", "STRICT_TRANS_TABLES", false, true},
+		{"nonstrict", "", false, false},
+		{"ignore", "STRICT_TRANS_TABLES", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return tc.mode, nil
+				}
+				return nil, nil
+			})
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			input := testutil.MakeVarcharVector([]string{"2026-10-21 10:20:30"}, nil, proc.Mp())
+			defer input.Free(proc.Mp())
+			target := vector.NewConstNull(types.T_date.ToType(), 1, proc.Mp())
+			defer target.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			fn := NewAssignCast
+			if tc.ignore {
+				fn = NewAssignIgnoreCast
+			}
+			err := fn([]*vector.Vector{input, target}, result, proc, 1, nil)
+			if tc.wantError {
+				require.Error(t, err)
+				require.Empty(t, warnings.warnings)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, warnings.warnings, 1)
+			require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warnings.warnings[0].code)
+			require.Equal(t, types.DateFromCalendar(2026, 10, 21), vector.GetFixedAtNoTypeCheck[types.Date](result.GetResultVector(), 0))
+		})
+	}
+}
+
+func TestTypedDatetimeAssignmentDiagnosesDateNarrowing(t *testing.T) {
+	value := types.DatetimeFromClock(2026, 10, 21, 10, 20, 30, 0)
+	for _, tc := range []struct {
+		name, mode string
+		ignore     bool
+		wantError  bool
+	}{
+		{"strict", "STRICT_TRANS_TABLES", false, true},
+		{"nonstrict", "", false, false},
+		{"ignore", "STRICT_TRANS_TABLES", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return tc.mode, nil
+				}
+				return nil, nil
+			})
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			input := vector.NewVec(types.T_datetime.ToType())
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixed(input, value, false, proc.Mp()))
+			target := vector.NewConstNull(types.T_date.ToType(), 1, proc.Mp())
+			defer target.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_date.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			fn := NewAssignCast
+			if tc.ignore {
+				fn = NewAssignIgnoreCast
+			}
+			err := fn([]*vector.Vector{input, target}, result, proc, 1, nil)
+			if tc.wantError {
+				require.Error(t, err)
+				require.Empty(t, warnings.warnings)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, warnings.warnings, 1)
+			require.Equal(t, types.DateFromCalendar(2026, 10, 21), vector.GetFixedAtNoTypeCheck[types.Date](result.GetResultVector(), 0))
+		})
+	}
+}
+
 func TestDatetimeExpressionCastInvalidStrings(t *testing.T) {
 	for _, source := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob} {
 		for name, fn := range map[string]executeLogicOfOverload{"ordinary": NewCast, "explicit": NewExplicitCast} {

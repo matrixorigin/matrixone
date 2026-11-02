@@ -1074,6 +1074,13 @@ func isStrictSqlMode(proc *process.Process) bool {
 	return true
 }
 
+// StrictSqlModeForAssignment lets the planner defer only adjustment-eligible
+// literal writes to the runtime assignment cast, which owns SQL mode and row
+// warning diagnostics.
+func StrictSqlModeForAssignment(proc *process.Process) bool {
+	return isStrictSqlMode(proc)
+}
+
 func sqlModeIsStrict(mode string) bool {
 	for token := range strings.SplitSeq(mode, ",") {
 		switch strings.ToUpper(strings.TrimSpace(token)) {
@@ -1184,12 +1191,20 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		}
 	}
 	from := parameters[0]
+	if mode.isAssignment() && fromType.Oid == types.T_datetime && toType.Oid == types.T_date {
+		return datetimeToDateAssignment(proc, vector.GenerateFunctionFixedTypeParameter[types.Datetime](from),
+			vector.MustFunctionResult[types.Date](result), length, selectList, mode)
+	}
+	if (mode == castModeAssignment || mode == castModeAssignmentIgnore) &&
+		isStorageIntegerOid(fromType.Oid) && isStorageIntegerOid(toType.Oid) {
+		return clampIntegerAssignmentSource(proc, from, toType.Oid, result, length, selectList)
+	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
 		switch fromType.Oid {
 		case types.T_float32:
-			return floatToIntegerAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[float32](from), toType.Oid, result, length, selectList)
+			return floatToIntegerAssignment(proc, vector.GenerateFunctionFixedTypeParameter[float32](from), toType.Oid, result, length, selectList, mode)
 		case types.T_float64:
-			return floatToIntegerAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[float64](from), toType.Oid, result, length, selectList)
+			return floatToIntegerAssignment(proc, vector.GenerateFunctionFixedTypeParameter[float64](from), toType.Oid, result, length, selectList, mode)
 		}
 	}
 	if mode.isAssignment() && toType.Oid.IsUnsignedInt() {
@@ -1202,7 +1217,8 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), toType.Oid, result, length, selectList, decimal256RoundedIntegerString)
 		}
 	}
-	if mode == castModeExplicit && toType.IsDecimal() && (fromType.IsNumeric() || fromType.Oid == types.T_bool) {
+	if (mode == castModeExplicit || mode == castModeAssignment || mode == castModeAssignmentIgnore) &&
+		toType.IsDecimal() && (fromType.IsNumeric() || fromType.Oid == types.T_bool) {
 		if handled, err := explicitNumericToDecimal(from, *toType, result, length, proc, selectList); handled {
 			return err
 		}
@@ -2622,7 +2638,7 @@ func decimal64ToOthers(proc *process.Process,
 		// Reusing the physical values is safe only when the target preserves
 		// the source domain. A narrower precision must validate every value;
 		// merely relabeling it can manufacture an out-of-range DECIMAL.
-		if source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
+		if !mode.isAssignment() && source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
@@ -2715,7 +2731,7 @@ func decimal128ToOthers(proc *process.Process,
 		// Widening precision with an unchanged scale preserves the value
 		// domain. Narrowing must use the checked conversion below. Keep the
 		// source vector metadata immutable because it may have other consumers.
-		if source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
+		if !mode.isAssignment() && source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
@@ -2812,7 +2828,7 @@ func decimal256ToOthersWithContext(
 		return decimal256ToDecimal128(source, rs, length, selectList)
 	case types.T_decimal256:
 		rs := vector.MustFunctionResult[types.Decimal256](result)
-		if source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
+		if !mode.isAssignment() && source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
@@ -5696,6 +5712,30 @@ func datetimeToDate(
 	return nil
 }
 
+func datetimeToDateAssignment(proc *process.Process,
+	from vector.FunctionParameterWrapper[types.Datetime], to *vector.FunctionResult[types.Date],
+	length int, selectList *FunctionSelectList, mode castMode) error {
+	for row := 0; row < length; row++ {
+		value, isNull := from.GetValue(uint64(row))
+		if isNull || functionRowSkipped(selectList, uint64(row)) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if value.Hour() != 0 || value.Minute() != 0 || value.Sec() != 0 || value.MicroSec() != 0 {
+			if mode == castModeStrictStringWidth && !statementIgnore(proc) {
+				return moerr.NewTruncatedWrongValue(proc.Ctx, "date", value.String())
+			}
+			appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect date value", "", []byte(value.String()))
+		}
+		if err := to.Append(value.ToDate(), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func timestampToInt32(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
@@ -7553,7 +7593,8 @@ func strToSignedWithProc[T constraints.Signed](
 					r, err = parseSignedCastString(s, bitSize)
 				}
 				if err != nil {
-					if mode == castModeAssignmentIgnore && !isBinary && !isAssignmentSpecialNumericSyntax(s) {
+					if (mode == castModeAssignmentIgnore || (mode == castModeAssignment && !isStrictSqlMode(proc))) &&
+						!isBinary && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, hasPrefix, truncated, prefixErr := assignmentIntegerPrefix(s); hasPrefix {
 							if prefixErr == nil {
 								var prefixed int64
@@ -7568,6 +7609,17 @@ func strToSignedWithProc[T constraints.Signed](
 									}
 									continue
 								}
+							}
+							if errors.Is(prefixErr, strconv.ErrRange) && !strings.ContainsAny(s, ".eE") {
+								clipped := int64(maxBitValue(bitSize - 1))
+								if strings.HasPrefix(prefix, "-") {
+									clipped = -int64(uint64(1) << (bitSize - 1))
+								}
+								appendIntegerAssignmentRangeWarning(proc, to.GetType().Oid, i)
+								if err = to.Append(T(clipped), false); err != nil {
+									return err
+								}
+								continue
 							}
 							err = prefixErr
 						} else if isIntegerLexicalConversionError(err) {
@@ -8692,7 +8744,8 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				}
 			}
 			if tErr != nil {
-				if mode == castModeAssignmentIgnore && !isBinary && !isAssignmentSpecialNumericSyntax(*res) {
+				if (mode == castModeAssignmentIgnore || (mode == castModeAssignment && !isStrictSqlMode(proc))) &&
+					!isBinary && !isAssignmentSpecialNumericSyntax(*res) {
 					if prefix, hasPrefix, truncated, prefixErr := assignmentIntegerPrefix(*res); hasPrefix {
 						if prefixErr == nil {
 							var prefixed uint64
@@ -8706,6 +8759,17 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 								}
 								continue
 							}
+						}
+						if errors.Is(prefixErr, strconv.ErrRange) && !strings.ContainsAny(*res, ".eE") {
+							clipped := maxBitValue(bitSize)
+							if strings.HasPrefix(prefix, "-") {
+								clipped = 0
+							}
+							appendIntegerAssignmentRangeWarning(proc, to.GetType().Oid, i)
+							if err := to.Append(T(clipped), false); err != nil {
+								return err
+							}
+							continue
 						}
 						tErr = prefixErr
 					} else if isIntegerLexicalConversionError(tErr) {
@@ -8886,7 +8950,7 @@ func strToDecimal64(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal64
 				var err error
-				if isExplicit {
+				if isExplicit || mode == castModeAssignment || mode == castModeAssignmentIgnore {
 					var overflow bool
 					result, overflow, err = parseDecimal64CastStringWithOverflow(s, totype.Width, totype.Scale, true)
 					if err == nil && overflow {
@@ -8920,7 +8984,7 @@ func strToDecimal64(
 						}
 						continue
 					}
-					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
+					if (mode == castModeAssignment || mode == castModeAssignmentIgnore) && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, ok := assignmentDecimalPrefix(s); ok {
 							if prefixed, prefixErr := parseDecimal64CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
 								appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
@@ -9251,7 +9315,7 @@ func strToDecimal128(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal128
 				var err error
-				if isExplicit {
+				if isExplicit || mode == castModeAssignment || mode == castModeAssignmentIgnore {
 					var overflow bool
 					result, overflow, err = parseDecimal128CastStringWithOverflow(s, totype.Width, totype.Scale, true)
 					if err == nil && overflow {
@@ -9285,7 +9349,7 @@ func strToDecimal128(
 						}
 						continue
 					}
-					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
+					if (mode == castModeAssignment || mode == castModeAssignmentIgnore) && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, ok := assignmentDecimalPrefix(s); ok {
 							if prefixed, prefixErr := parseDecimal128CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
 								appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
@@ -9371,7 +9435,7 @@ func strToDecimal256(
 				isExplicit := mode == castModeExplicit
 				var result types.Decimal256
 				var err error
-				if isExplicit {
+				if isExplicit || mode == castModeAssignment || mode == castModeAssignmentIgnore {
 					var overflow bool
 					result, overflow, err = parseDecimal256CastStringWithOverflow(s, totype.Width, totype.Scale, true)
 					if err == nil && overflow {
@@ -9405,7 +9469,7 @@ func strToDecimal256(
 						}
 						continue
 					}
-					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
+					if (mode == castModeAssignment || mode == castModeAssignmentIgnore) && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, ok := assignmentDecimalPrefix(s); ok {
 							if prefixed, prefixErr := parseDecimal256CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
 								appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
@@ -9735,6 +9799,16 @@ func strToDate(proc *process.Process,
 					return err
 				}
 			} else {
+				if mode.isAssignment() {
+					if datetime, parseErr := types.ParseDatetime(s, 6); parseErr == nil &&
+						datetime.ToDate() == val &&
+						(datetime.Hour() != 0 || datetime.Minute() != 0 || datetime.Sec() != 0 || datetime.MicroSec() != 0) {
+						if mode.strictStringWidth() && !statementIgnore(proc) {
+							return moerr.NewTruncatedWrongValue(proc.Ctx, "date", s)
+						}
+						appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect date value", "", v)
+					}
+				}
 				if val == types.ZeroDate && !assignmentCast {
 					if !modeChecked {
 						nullifyZero, err = explicitZeroTemporalCastReturnsNull(proc)

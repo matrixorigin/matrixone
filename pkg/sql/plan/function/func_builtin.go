@@ -5090,10 +5090,11 @@ func builtInATan2(parameters []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
-func builtInDegrees(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixed[float64, float64](parameters, result, proc, length, func(v float64) float64 {
+func builtInDegrees(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
 		// Convert radians to degrees: degrees = radians * (180 / π)
-		return v * (180.0 / math.Pi)
+		degrees := v * (180.0 / math.Pi)
+		return degrees, math.IsInf(degrees, 0) && !math.IsInf(v, 0)
 	}, selectList)
 }
 

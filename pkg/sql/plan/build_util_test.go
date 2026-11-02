@@ -1260,7 +1260,7 @@ func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
 		plan.Type{Id: int32(types.T_date)},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "cast_strict", dateExpr.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast_assign", dateExpr.GetF().GetFunc().GetObjName())
 }
 
 func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
@@ -1608,7 +1608,7 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, test.want, blobCasted.GetF().GetFunc().GetObjName())
 	}
-	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
 	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, false, proc))

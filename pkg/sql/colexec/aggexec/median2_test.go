@@ -29,6 +29,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMedianDecimal38UsesWideExactResult(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scale int32
+		input []string
+		want  string
+	}{
+		{"large even", 0, []string{"99999999999999999999999999999999999997", "99999999999999999999999999999999999999"}, "99999999999999999999999999999999999998.0"},
+		{"large singleton", 0, []string{"99999999999999999999999999999999999999"}, "99999999999999999999999999999999999999.0"},
+		{"negative even", 0, []string{"-99999999999999999999999999999999999999", "-99999999999999999999999999999999999997"}, "-99999999999999999999999999999999999998.0"},
+		{"scale 6 even", 6, []string{"99999999999999999999999999999999.999997", "99999999999999999999999999999999.999999"}, "99999999999999999999999999999999.9999980"},
+		{"scale 38 even", 38, []string{"0.10000000000000000000000000000000000000", "0.20000000000000000000000000000000000000"}, "0.150000000000000000000000000000000000000"},
+		{"scale 38 singleton", 38, []string{"0.20000000000000000000000000000000000000"}, "0.200000000000000000000000000000000000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.New(types.T_decimal128, 38, tc.scale)
+			resultType := MedianReturnType([]types.Type{typ})
+			require.Equal(t, types.New(types.T_decimal256, 39, tc.scale+1), resultType)
+			mp := mpool.MustNewZero()
+			input := vector.NewVec(typ)
+			for _, value := range tc.input {
+				decimal, err := types.ParseDecimal128(value, 38, tc.scale)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(input, decimal, false, mp))
+			}
+			exec, err := MakeAgg(mp, AggIdOfMedian, false, typ)
+			require.NoError(t, err)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, resultType, *results[0].GetType())
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(resultType.Scale))
+			results[0].Free(mp)
+			exec.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestMedianExecAcrossSupportedTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
 
@@ -802,9 +843,11 @@ func TestAccountedMedianDenseDecimalTypes(t *testing.T) {
 			require.NoError(t, owner.SetAllocationAccount(allocation))
 			SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
 			switch typed := exec.(type) {
-			case *medianColumnDecimalExec[types.Decimal64]:
+			case *medianColumnDecimalExec[types.Decimal64, types.Decimal128]:
 				require.True(t, typed.usesDenseAccountedState())
-			case *medianColumnDecimalExec[types.Decimal128]:
+			case *medianColumnDecimalExec[types.Decimal128, types.Decimal128]:
+				require.True(t, typed.usesDenseAccountedState())
+			case *medianColumnDecimalExec[types.Decimal128, types.Decimal256]:
 				require.True(t, typed.usesDenseAccountedState())
 			default:
 				t.Fatalf("unexpected median type %T", exec)

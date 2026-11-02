@@ -1429,20 +1429,24 @@ func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, a
 		return astExpr, nil
 	}
 
-	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
-	boundExpr, err := binder.BindExpr(astExpr, 0, false)
-	if err != nil {
-		return nil, err
-	}
-
 	_, valueToIndex, indexValueToIndex, err := mysqlSpecialTypeFuncNames(&targetType)
 	if err != nil {
 		return nil, err
 	}
 
 	funcName := valueToIndex
-	if types.T(boundExpr.Typ.Id).IsInteger() {
-		funcName = indexValueToIndex
+	// The UPDATE assignment is first projected through a SELECT. A parameter
+	// marker must stay in that SELECT until its prepare context or execution
+	// binding is available; the standalone binder below has neither.
+	if _, marker := astExpr.(*tree.ParamExpr); !marker || preparedSourceBindings(ctx) != nil {
+		binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
+		boundExpr, bindErr := binder.BindExpr(astExpr, 0, false)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		if types.T(boundExpr.Typ.Id).IsInteger() {
+			funcName = indexValueToIndex
+		}
 	}
 
 	return &tree.FuncExpr{

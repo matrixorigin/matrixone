@@ -1098,7 +1098,8 @@ func TestPreparedSourceBindingPreservesUpdateDomains(t *testing.T) {
 	require.NoError(t, planpb.VisitExpressionsInOwner(p, func(root *Expr) error {
 		return planpb.VisitExprTree(root, func(e *Expr) error {
 			fn := e.GetF()
-			if fn != nil && fn.Func.GetObjName() == "cast" && e.Typ.Id == int32(types.T_decimal64) &&
+			if fn != nil && (fn.Func.GetObjName() == "cast" || fn.Func.GetObjName() == "cast_assign") &&
+				e.Typ.Id == int32(types.T_decimal64) &&
 				len(fn.Args) > 0 && fn.Args[0].GetP() != nil && fn.Args[0].GetP().Pos == 0 {
 				require.Equal(t, int32(types.T_float64), fn.Args[0].Typ.Id)
 				writeCast = true

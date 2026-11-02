@@ -27,6 +27,9 @@ INSERT INTO t1 VALUES (0), (PI()/2), (PI()), (2*PI()), (-PI());
 SELECT radians, DEGREES(radians) AS degrees FROM t1;
 DROP TABLE t1;
 
+# Finite DOUBLE input can overflow the degree result; the row is SQL NULL.
+SELECT DEGREES(1e308) IS NULL AS overflow_is_null, DEGREES(1e306) IS NOT NULL AS finite_control;
+
 # WHERE clause
 CREATE TABLE t1(radians FLOAT);
 INSERT INTO t1 VALUES (0), (PI()/2), (PI()), (2*PI()), (-PI());

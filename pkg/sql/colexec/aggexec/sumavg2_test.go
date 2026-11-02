@@ -257,6 +257,7 @@ func BenchmarkSumAvgScalarFill(b *testing.B) {
 }
 
 func TestSumDecimalReturnType(t *testing.T) {
+	require.Equal(t, types.New(types.T_decimal128, 32, 0), SumReturnType([]types.Type{types.T_int32.ToType()}))
 	for _, test := range []struct {
 		name  string
 		input types.Type
@@ -2461,7 +2462,7 @@ func testSumAvg(t *testing.T,
 		}
 	})
 
-	sumTypes := []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.New(types.T_decimal128, 38, 0), types.T_float64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal256, 40, 0), types.New(types.T_decimal256, 60, 0), types.New(types.T_decimal256, 65, 0)}
+	sumTypes := []types.Type{types.T_int64.ToType(), types.New(types.T_decimal128, 32, 0), types.New(types.T_decimal128, 38, 0), types.T_float64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal256, 40, 0), types.New(types.T_decimal256, 60, 0), types.New(types.T_decimal256, 65, 0)}
 	avgTypes := []types.Type{types.New(types.T_decimal128, 7, 4), types.New(types.T_decimal128, 14, 4), types.New(types.T_decimal128, 23, 4), types.T_float64.ToType(), types.T_float64.ToType(), types.New(types.T_decimal128, 22, 4), types.New(types.T_decimal256, 42, 4), types.New(types.T_decimal256, 65, 4)}
 	metadata := sumTypes
 	decimals := [3]string{"111", "53", "58"}
