@@ -1016,6 +1016,13 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				Typ:  expr.Typ,
 			}
 
+			if idx < len(query.MysqlSpecialResultTypes) && types.T(expr.Typ.Id).IsMySQLString() {
+				typ := &query.MysqlSpecialResultTypes[idx]
+				if isEnumOrSetPlanType(typ) {
+					columns[idx].MysqlSpecialResultType = DeepCopyType(typ)
+				}
+			}
+
 			if graph := query.IntegerPrecision; graph != nil && idx < len(graph.Outputs) {
 				out := graph.Outputs[idx]
 				if out.Node != 0 && graph.Nodes[out.Node-1].Arithmetic {

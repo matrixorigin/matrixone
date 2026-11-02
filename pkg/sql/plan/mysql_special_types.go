@@ -881,6 +881,27 @@ func mysqlSpecialTypeFromProvenance(provenance OutputColumnProvenance) *plan.Typ
 	return DeepCopyType(&provenance.Source.Metadata.Typ)
 }
 
+// Capture result presentation before optimization can replace a display call
+// with a projection or an empty scan. Execution still produces string labels.
+// Source provenance, unlike ordering provenance, deliberately ends at UNION
+// and semantic expressions: MySQL publishes those results as ordinary strings.
+func (builder *QueryBuilder) captureMySQLSpecialResultTypes(ctx *BindContext) {
+	if builder.qry.StmtType != plan.Query_SELECT {
+		return
+	}
+	builder.qry.MysqlSpecialResultTypes = nil
+	for i := range ctx.headings {
+		typ := mysqlSpecialTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
+		if typ == nil {
+			continue
+		}
+		if builder.qry.MysqlSpecialResultTypes == nil {
+			builder.qry.MysqlSpecialResultTypes = make([]plan.Type, len(ctx.headings))
+		}
+		builder.qry.MysqlSpecialResultTypes[i] = *typ
+	}
+}
+
 func mysqlSpecialOrderTypesCompatible(left, right *plan.Type) bool {
 	return left != nil && right != nil && left.Id == right.Id && left.Enumvalues == right.Enumvalues
 }

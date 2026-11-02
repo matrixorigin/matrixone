@@ -472,6 +472,9 @@ message ColDef {
   ResultColumnKind result_column_kind = 23;
   // Result publication only; never persisted as a table/view schema attribute.
   IntegerResultPresentation integer_result_presentation = 24;
+  // Result publication only: the declared ENUM/SET domain behind a label
+  // projection. typ remains the executable string type.
+  Type mysql_special_result_type = 25;
 }
 
 message Default {
@@ -1909,6 +1912,9 @@ message Query {
   IntegerPrecisionGraph integer_precision = 20;
   // Logical targets of exclusive SELECT locks, retained across optimization.
   repeated SelectLockReference select_lock_references = 21;
+  // Output-aligned ENUM/SET domains captured before optimization. Empty when
+  // none retain a declared domain; zero types mark ordinary output columns.
+  repeated Type mysql_special_result_types = 22 [(gogoproto.nullable) = false];
 }
 
 message TransationControl {

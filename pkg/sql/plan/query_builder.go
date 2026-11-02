@@ -6294,8 +6294,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		ctx.integerPrecisionTransparentBoundary = true
 	}
 	defer func() {
-		if err == nil && isRoot && builder.integerPrecision != nil {
-			builder.captureIntegerPrecisionOutputs(ctx)
+		if err == nil && isRoot {
+			builder.captureMySQLSpecialResultTypes(ctx)
+			if builder.integerPrecision != nil {
+				builder.captureIntegerPrecisionOutputs(ctx)
+			}
 		}
 	}()
 

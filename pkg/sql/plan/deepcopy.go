@@ -593,6 +593,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 	}
 	return &plan.ColDef{
 		IntegerResultPresentation: cloneIntegerResultPresentation(col.IntegerResultPresentation),
+		MysqlSpecialResultType:    DeepCopyType(col.MysqlSpecialResultType),
 		ColId:                     col.ColId,
 		Name:                      col.Name,
 		OriginName:                col.OriginName,
@@ -904,6 +905,12 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		CatalogDependencies:      make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
 		ViewMetadataDependsOnUdf: qry.ViewMetadataDependsOnUdf,
 		Correlation:              DeepCopyCorrelation(qry.Correlation),
+	}
+	if qry.MysqlSpecialResultTypes != nil {
+		newQry.MysqlSpecialResultTypes = make([]plan.Type, len(qry.MysqlSpecialResultTypes))
+		for i := range qry.MysqlSpecialResultTypes {
+			newQry.MysqlSpecialResultTypes[i] = *DeepCopyType(&qry.MysqlSpecialResultTypes[i])
+		}
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)

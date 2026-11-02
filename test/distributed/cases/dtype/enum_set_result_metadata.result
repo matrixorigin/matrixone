@@ -1,0 +1,29 @@
+drop table if exists jdbc_enum_set_metadata;
+create table jdbc_enum_set_metadata (
+id int,
+e enum('a','bb',''),
+s set('x','yy'),
+c char(2),
+v varchar(2)
+);
+insert into jdbc_enum_set_metadata values
+(1, 'a', 'x,yy', 'ab', 'ab'), (2, '', '', '', ''), (3, null, null, null, null);
+select e, s, c, v from jdbc_enum_set_metadata where 1 = 0;
+➤ e[1,2,0]  ¦  s[1,4,0]  ¦  c[1,2,0]  ¦  v[12,2,0]
+select e, s, c, v from jdbc_enum_set_metadata order by id;
+➤ e[1,2,0]  ¦  s[1,4,0]  ¦  c[1,2,0]  ¦  v[12,2,0]  𝄀
+a  ¦  x,yy  ¦  ab  ¦  ab  𝄀
+  ¦    ¦    ¦    𝄀
+null  ¦  null  ¦  null  ¦  null
+select e as enum_alias, s as set_alias
+from (select id, e, s from jdbc_enum_set_metadata order by id limit 3) d order by id;
+➤ enum_alias[1,2,0]  ¦  set_alias[1,4,0]  𝄀
+a  ¦  x,yy  𝄀
+  ¦    𝄀
+null  ¦  null
+select concat(e) as expr_e, cast(s as char) as expr_s from jdbc_enum_set_metadata where 1 = 0;
+➤ expr_e[12,65535,0]  ¦  expr_s[12,65535,0]
+select e, s from jdbc_enum_set_metadata where 1 = 0
+union all select e, s from jdbc_enum_set_metadata where 1 = 0;
+➤ e[12,65535,0]  ¦  s[12,65535,0]
+drop table jdbc_enum_set_metadata;
