@@ -855,6 +855,7 @@ func mergeWindowValidationDependencies(builder, validationBuilder *QueryBuilder)
 	}
 	builder.qry.CatalogDependencies = appendPrepareSchemas(builder.qry.CatalogDependencies, dependencies...)
 	builder.qry.ViewReferences = append(builder.qry.ViewReferences, validationBuilder.qry.ViewReferences...)
+	builder.qry.SelectLockReferences = append(builder.qry.SelectLockReferences, validationBuilder.qry.SelectLockReferences...)
 	return nil
 }
 

@@ -181,7 +181,7 @@ class MatrixOneLogger:
         Args:
             error: The exception object
             context: Optional context description (e.g., "Query execution", "Table creation")
-            include_traceback: If True, include full traceback in log
+            include_traceback: If True, include the supplied error's traceback in log
         """
         error_type = type(error).__name__
         message = str(error)
@@ -209,7 +209,7 @@ class MatrixOneLogger:
         if context:
             kwargs["context"] = context
 
-        exc_info = sys.exc_info() if include_traceback else None
+        exc_info = (type(error), error, error.__traceback__) if include_traceback else None
         self._emit(
             logging.ERROR,
             self._format_message(f"Error occurred: {error_type}", **kwargs),
