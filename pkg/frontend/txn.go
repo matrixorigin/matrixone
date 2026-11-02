@@ -307,6 +307,15 @@ type TxnHandler struct {
 	nextTxnIsolation       pbtxn.TxnIsolation
 	hasNextTxnIsolation    bool
 
+	// txnReadOnly is the access mode of the transaction owned by this
+	// handler. It is resolved when a new transaction is created: an explicit
+	// START TRANSACTION READ ONLY/READ WRITE mode wins; otherwise the
+	// transaction inherits the session transaction_read_only default,
+	// matching MySQL. The statement gate in executeStmtWithWorkspace rejects
+	// writes with ERROR 1792 while it is set. Do not confuse this with
+	// workspace.Readonly(), which is derived from actual write activity.
+	txnReadOnly bool
+
 	// lineageOwnerLifecycleValidation is set when an explicit user transaction
 	// mutates data-branch owner catalogs. Such a transaction cannot take the
 	// cluster-wide lifecycle row before doing its work: the client controls how
@@ -471,6 +480,68 @@ func transactionReadOnlyDefaultValue(
 	}
 }
 
+// TxnReadOnly reports the declared access mode of the transaction owned by
+// this handler. It differs from isReadOnlyTxnOp: the latter is derived from
+// actual write activity in the workspace, while this one comes from START
+// TRANSACTION READ ONLY/READ WRITE or the session transaction_read_only
+// default.
+func (th *TxnHandler) TxnReadOnly() bool {
+	if th == nil {
+		return false
+	}
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.txnReadOnly
+}
+
+// resolveTxnReadOnlyAccessMode computes the access mode for the transaction
+// being created. An explicit START TRANSACTION READ ONLY/READ WRITE mode
+// overrides the session default; a plain BEGIN and implicit or autocommit
+// transactions inherit the session transaction_read_only value, exactly like
+// MySQL. It must run before the new transaction is created so every
+// statement of the transaction observes the same mode.
+func resolveTxnReadOnlyAccessMode(execCtx *ExecCtx) (bool, error) {
+	if execCtx != nil && execCtx.txnOpt.byBegin {
+		if beginStmt, ok := execCtx.stmt.(*tree.BeginTransaction); ok {
+			switch beginStmt.Modes.RwMode {
+			case tree.READ_WRITE_MODE_READ_ONLY:
+				return true, nil
+			case tree.READ_WRITE_MODE_READ_WRITE:
+				return false, nil
+			}
+		}
+	}
+	return sessionTransactionReadOnly(execCtx)
+}
+
+// sessionTransactionReadOnly returns the session transaction_read_only
+// default. Sessions without an initialized variable map (internal executor
+// sessions) resolve to the registered default 0.
+func sessionTransactionReadOnly(execCtx *ExecCtx) (bool, error) {
+	if execCtx == nil || execCtx.ses == nil {
+		return false, nil
+	}
+	value, err := execCtx.ses.GetSessionSysVar(transactionReadOnlySystemVariable)
+	if err != nil {
+		return false, err
+	}
+	return transactionReadOnlyValueEnabled(value), nil
+}
+
+func transactionReadOnlyValueEnabled(value interface{}) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case int64:
+		return v != 0
+	case int32:
+		return v != 0
+	case int:
+		return v != 0
+	}
+	return false
+}
+
 func (th *TxnHandler) setSessionTxnIsolation(isolation pbtxn.TxnIsolation) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
@@ -592,6 +663,12 @@ func (th *TxnHandler) Create(execCtx *ExecCtx) error {
 	// keeping this condition here also makes the post-boundary transaction
 	// explicit and prevents TRUNCATE/RENAME from reusing a stale workspace.
 	if execCtx.txnOpt.byBegin || execCtx.txnOpt.implicitCommitBefore || !th.inActiveTxnUnsafe() {
+		// Resolve the access mode of the new transaction before it starts so
+		// the statement gate observes it from the first statement onward.
+		th.txnReadOnly, err = resolveTxnReadOnlyAccessMode(execCtx)
+		if err != nil {
+			return err
+		}
 		//commit existed txn anyway
 		err = th.createUnsafe(execCtx)
 		if err != nil {

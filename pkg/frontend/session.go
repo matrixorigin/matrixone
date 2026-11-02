@@ -2724,6 +2724,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 		be.backSes.cloneSnapshotUsesBackgroundTxn = opts[0].cloneSnapshotUsesBackgroundTxn
 		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
 		be.backSes.authorizationSnapshot = opts[0].authorizationSnapshot
+		be.internalExecution = opts[0].internalExecution
 	}
 	return be
 }

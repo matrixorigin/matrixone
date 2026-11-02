@@ -37,6 +37,7 @@ from .exceptions import (
     QueryError,
     RestoreError,
     SnapshotError,
+    SnapshotNotFound,
     VersionError,
 )
 from .load_data import (
@@ -124,6 +125,7 @@ __all__ = [
     "QueryError",
     "ConfigurationError",
     "SnapshotError",
+    "SnapshotNotFound",
     "CloneError",
     "BranchError",
     "MoCtlError",

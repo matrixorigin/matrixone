@@ -214,7 +214,7 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 		v2.CreatePubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -470,7 +470,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		dbType          string
 		sql             string
 	)
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -772,7 +772,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		v2.DropPubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -818,7 +818,7 @@ var invalidatePublicationViewMetadata = func(
 }
 
 func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcprSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -890,7 +890,7 @@ func doDropCcprSubscription(ctx context.Context, ses *Session, dcs *tree.DropCcp
 }
 
 func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.ResumeCcprSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -960,7 +960,7 @@ func doResumeCcprSubscription(ctx context.Context, ses *Session, rcs *tree.Resum
 }
 
 func doPauseCcprSubscription(ctx context.Context, ses *Session, pcs *tree.PauseCcprSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	accountId, err := defines.GetAccountId(ctx)
@@ -3578,7 +3578,7 @@ func checkUpstreamPublicationCoverage(
 }
 
 func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubscription) (err error) {
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()

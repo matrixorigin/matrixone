@@ -66,9 +66,13 @@ type remapDbContext struct {
 	err *error
 }
 
-func (remap remapDbContext) lookup(database string) (string, bool) {
-	target, ok := remap.databases[tree.NewCStr(database, remap.lowerCaseTableNames).Compare()]
+func lookupRemappedDatabase(databases map[string]string, database string, lowerCaseTableNames int64) (string, bool) {
+	target, ok := databases[tree.NewCStr(database, lowerCaseTableNames).Compare()]
 	return target, ok
+}
+
+func (remap remapDbContext) lookup(database string) (string, bool) {
+	return lookupRemappedDatabase(remap.databases, database, remap.lowerCaseTableNames)
 }
 
 func (remap remapDbContext) fail(err error) {

@@ -7189,3 +7189,90 @@ func TestBoolMinMax(t *testing.T) {
 		})
 	}
 }
+
+func TestCloneWindowToConstNullReuse(t *testing.T) {
+	for _, typ := range []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()} {
+		for _, nilMP := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/nilMP=%v", typ.Oid, nilMP), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				src := NewConstNull(typ, 2, mp)
+				t.Cleanup(func() { src.Free(mp) })
+				dst := NewOffHeapVecWithType(typ)
+				t.Cleanup(func() { dst.Free(mp) })
+				require.NoError(t, dst.PreExtend(2, mp))
+				if typ.IsVarlen() {
+					src.SetPrepareParamKind(PrepareParamInteger)
+					require.NoError(t, src.SetStringSource(types.StringSourceSQLPrepare))
+					dst.SetIsBinaryString(true)
+				}
+				backing := dst.GetData()
+				before := mp.CurrNB()
+				require.Positive(t, before)
+				cloneMP := mp
+				if nilMP {
+					cloneMP = nil
+				}
+				require.NoError(t, src.CloneWindowTo(dst, 0, 2, cloneMP))
+				require.True(t, dst.IsConstNull())
+				require.Equal(t, 2, dst.Length())
+				require.Empty(t, dst.GetData())
+				require.Equal(t, cap(backing), cap(dst.GetData()))
+				require.Equal(t, before, mp.CurrNB())
+				if typ.IsVarlen() {
+					require.Equal(t, PrepareParamInteger, dst.GetPrepareParamKind())
+					require.Equal(t, types.StringSourceSQLPrepare, dst.GetStringSource())
+					require.False(t, dst.HasBinaryStringMetadata(), "NULL cloning must clear stale binary provenance")
+				}
+				encoded, err := dst.MarshalBinary()
+				require.NoError(t, err)
+				decoded := NewVec(typ)
+				t.Cleanup(func() { decoded.Free(mp) })
+				require.NoError(t, decoded.UnmarshalBinary(encoded))
+				require.True(t, decoded.IsConstNull())
+				require.Equal(t, 2, decoded.Length())
+
+				dst.ResetWithNewType(&typ)
+				require.Equal(t, PrepareParamNone, dst.GetPrepareParamKind())
+				require.Equal(t, types.StringSourceExpression, dst.GetStringSource())
+				require.False(t, dst.HasBinaryStringMetadata())
+				if typ.IsVarlen() {
+					require.NoError(t, AppendBytes(dst, []byte("next"), false, mp))
+					require.Equal(t, []byte("next"), dst.GetBytesAt(0))
+				} else {
+					require.NoError(t, AppendFixed(dst, int64(7), false, mp))
+					require.Equal(t, int64(7), GetFixedAtNoTypeCheck[int64](dst, 0))
+				}
+				require.True(t, &backing[:cap(backing)][0] == &dst.GetData()[0])
+				dst.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
+func TestCloneWindowToConstNullBorrowedData(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_int64.ToType()
+	owner := NewOffHeapVecWithType(typ)
+	t.Cleanup(func() { owner.Free(mp) })
+	require.NoError(t, AppendFixed(owner, int64(9), false, mp))
+	dst, err := owner.Window(0, 1)
+	require.NoError(t, err)
+	t.Cleanup(func() { dst.Free(mp) })
+	src := NewConstNull(typ, 1, mp)
+	t.Cleanup(func() { src.Free(mp) })
+	before := mp.CurrNB()
+	require.NoError(t, src.CloneWindowTo(dst, 0, 1, mp))
+	require.True(t, dst.IsConstNull())
+	require.Nil(t, dst.GetData())
+	require.False(t, dst.cantFreeData)
+	require.True(t, dst.cantFreeArea, "data cleanup must preserve independent area ownership")
+	require.Equal(t, before, mp.CurrNB())
+	require.Equal(t, int64(9), GetFixedAtNoTypeCheck[int64](owner, 0))
+	dst.ResetWithNewType(&typ)
+	require.NoError(t, AppendFixed(dst, int64(4), false, mp))
+	require.Equal(t, int64(9), GetFixedAtNoTypeCheck[int64](owner, 0))
+	dst.Free(mp)
+	owner.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}

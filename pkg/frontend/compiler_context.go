@@ -299,8 +299,7 @@ func (tcc *TxnCompilerContext) DefaultDatabase() string {
 		if execCtx.ses != nil {
 			lowerCaseTableNames = parserLowerCaseTableNames(execCtx.ses)
 		}
-		databaseKey := tree.NewCStr(db, lowerCaseTableNames).Compare()
-		if dst, ok := execCtx.remapDb[databaseKey]; ok {
+		if dst, ok := lookupRemappedDatabase(execCtx.remapDb, db, lowerCaseTableNames); ok {
 			return dst
 		}
 	}
@@ -627,6 +626,9 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 		}
 		return sourceDef, nil
 	}); err != nil {
+		return err
+	}
+	if err := plan2.MigrateLegacyFloatStringTableDef(tcc, tableDef); err != nil {
 		return err
 	}
 	return plan2.MigrateLegacyCatalogTableDef(ctx, tcc.GetProcess(), tableDef)

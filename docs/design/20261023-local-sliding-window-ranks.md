@@ -1,48 +1,64 @@
 # Local Sliding-Window Ranks: `mrank`, `cumrank`, `tmrank`
 
-- Owning issue: matrixorigin/matrixone#29947 ("[Feature Request]: local sliding-window ranks
-  distinct from partition-wide RANK")
-- Status: revision 8, 2026-10-23, **approved design**. The design-only review of
-  this exact revision — file content SHA-256
-  `7bd5296382c677319455fc8fafc3ed63b4fdf3900e3ab36ff108f51f9ba52e76` at base
-  `f8c872001603fed3d23784e1ada26f9a2d8f4fba` — returned **PASS** on 2026-10-23
-  from the repository's independent feature-design gate reviewer of the owning
-  issue loop (review session `1792796064`, verdict preserved in the loop's
-  review artifact `pre-pr-review-1792781301952.json`; record in section 9).
-  The two advisory validation-plan corrections it left were both adopted by the
-  implementation. After that approval this file received only the record
-  bookkeeping the review contract requires — the section-9 approval record, the
-  implementation-PR link below, and the closed implementation-review deviation
-  noted in section 9 — so it is no longer byte-identical to the approved
-  snapshot; no design decision changed after approval.
-  Revision 1 was reviewed REQUEST_CHANGES on five findings (resolved in revision 2,
-  decisions D8-D12); revision 2 was reviewed REQUEST_CHANGES on one finding
-  (tmrank's public-to-internal binding contract), resolved in revision 3 (D13);
-  revision 3 was reviewed REQUEST_CHANGES on one finding (window frame-bound
-  normalization grammar), resolved in revision 4 (D14); revision 4 was reviewed
-  REQUEST_CHANGES on two findings (NULL-arithmetic vs error outcomes; prepared-width
-  validation), resolved in revision 5 (D15, D16); revision 5 was reviewed
-  REQUEST_CHANGES on three findings (NULL-key peers; raw-vs-normalized
-  representation; SQL-EXECUTE domain transfer), resolved in revision 6 (D17-D19);
-  revision 6 was reviewed REQUEST_CHANGES on two findings — foldable fractional
-  widths vs the actual RANGE conversion, and temporal keys outside the resolver's
-  supported domain — resolved in revision 7 (D20, D21); revision 7 was reviewed
-  REQUEST_CHANGES on one finding — tmrank's eager interval conversion missed the
-  pre-evaluation safety gate that protects frame bounds — resolved in this revision
-  and mapped to decision D22, verified against the repository at the same base
-  commit.
-- Implementation PR: [matrixorigin/matrixone#31020](https://github.com/matrixorigin/matrixone/pull/31020)
-  ("feat(sql): add local sliding-window ranks mrank, cumrank, tmrank"), which carries and
-  links this design; the PR base at review time was
-  `89462b162f7f35a90d68525b484a853b20989b11`.
-- Assigned base: `f8c872001603fed3d23784e1ada26f9a2d8f4fba` (worktree `issue-29947-main-a57124ee`,
-  Git base `origin/main`).
-- Design gate trigger: complexity triggers of
-  [.agents/skills/mo-dev/references/feature-design-review.md](../../.agents/skills/mo-dev/references/feature-design-review.md):
-  the change adds a new public SQL function surface ("changes a public API" class) and crosses
-  the planner/binder (`pkg/sql/plan`, `pkg/sql/plan/function`) and execution
-  (`pkg/sql/colexec/window`) ownership boundaries. Size (< 500 non-generated production lines
-  expected) does not waive the complexity trigger.
+## Performance amendment: cumulative and fixed-width ranks
+
+The original direct-scan contract remains the fallback. For a materialized
+partition, `cumrank` and `mrank` with a constant width may instead compress
+the non-NULL, non-NaN values of a demanded prefix into ordered ranks and
+maintain their frequencies in a Fenwick tree. The result remains one plus the count of values strictly
+less than the current value. NULL consumes a physical frame position but is
+never counted; a current NaN ranks 1, NaN inputs do not contribute, and signed
+zeros compare equal. Width validation still precedes NULL-result handling.
+
+The first index covers only the current output chunk. As consumption reaches
+its horizon, the indexed prefix grows geometrically, covering at most twice
+the currently requested prefix. Rebuilding seeds the tree with the already
+consumed active rows; fixed-width eviction continues to count physical rows.
+An initial short or all-NULL prefix can be reconsidered at the next horizon.
+This bounds the additional work before first output even when a LIMIT stops
+consumption early; the input partition itself remains materialized.
+
+The window container owns partition state across output chunks. It discards
+that state on partition completion/change, generation change, reset, free and
+partial setup error. Replacement releases the old index before admission.
+Scratch and retained arrays are charged to the existing analytic allocation
+account before allocation, using at most 24*n + O(1) bytes simultaneously for
+three 64-bit arrays, where n is the indexed prefix length. Size arithmetic is
+checked. A resource-capacity rejection
+releases partial reservations and falls back to the original scan; cancellation,
+closed-generation, account-invariant and other errors propagate. Every O(n)
+construction loop, seeding pass and sorting step has bounded cancellation checks. A
+nonsequential fallback invalidates state before any subsequent fast-path use.
+For fixed-width mrank, the first width is validated after the ordinary
+cancellation check and before index construction. A capacity rejection keeps
+the partition on the scan path, without repeated admission attempts. The
+fixed-width path adds the entering row and removes the leaving row. If required
+result growth is capacity-rejected after an index was admitted, the operator
+releases the optional index, retries the unpublished fixed-width append once,
+and scans subsequent rows. Cancellation and fatal account errors still
+propagate. This local fallback does not guarantee headroom for arbitrary
+downstream operators. A
+per-row width may move its frame start backwards and therefore uses the original
+scan; short partitions, all-NULL partitions and constant widths below 128 also
+use the scan. All-NULL detection polls for cancellation; `tmrank` retains the
+original resolver and scan, including disjoint
+DST spans. Unsupported types and nonsequential evaluation fall back safely.
+
+Geometric compression costs O(n log n) total time and O(n) memory per fully
+consumed partition, then each rank costs O(log n). First-output construction is
+bounded by the requested chunk. Rebuilding costs more than one eager sort and
+must be compared against the direct scan for first and full consumption at
+small and large partitions, several cardinalities and batch boundaries. Differential
+tests cover ties, NULL, NaN, signed zero, width overflow, partition/reuse,
+cancellation during construction, seeding and evaluation, capacity fallback,
+output pressure, early reset/reuse, and
+invariant-error propagation. The original reviewed design revision
+below remains historical and is not represented as approval of this amendment.
+
+- Owning issue: [matrixorigin/matrixone#29947](https://github.com/matrixorigin/matrixone/issues/29947).
+- Implementation: [matrixorigin/matrixone#31020](https://github.com/matrixorigin/matrixone/pull/31020).
+- Performance amendment: [matrixorigin/matrixone#31516](https://github.com/matrixorigin/matrixone/pull/31516).
+- Original design approval and review history are preserved in the [original review record](https://github.com/matrixorigin/matrixone/blob/df8bfd602ecc036424ff7897187565657366919d/docs/design/20261023-local-sliding-window-ranks.md#9-review-record). The performance amendment above is a subsequent change.
 
 ## 1. Problem, evidence, and current behavior
 
@@ -660,38 +676,21 @@ which are frame-relative through the same resolver `tmrank` reuses):
   NULL-arithmetic outcome is a successful empty-frame case, never an error. No partial
   results are emitted for a failed output chunk (the operator aborts the
   pipeline, preserving existing failure atomicity).
-- Evaluate per bounded output chunk as the operator already does (`processFuncRange(0, ..., start, end)`);
-  no per-row frame buffering: each row only scans its frame, so result scratch is one uint64 per
-  output row, same reservation shape as `processOrderFuncRange` uses. **Cancellation is checked
-  inside every frame scan, not only per output row**: like the aggregate frame-scan loops
-  (`window.go:649-671`), the counting loop calls `checkCanceled` once per frame-row iteration,
-  relying on its bounded 1024-iteration polling cadence (`window.go:53-62`), so a KILL QUERY
-  interrupts a `cumrank`/large-window scan promptly instead of after a full partition pass; the
-  acceptance tests include a deterministic cancellation-during-scan case.
+- Evaluate per bounded output chunk. Direct scans poll for cancellation inside
+  each frame. The cumulative and constant-width index path and its ownership,
+  cancellation, admission fallback, and sliding updates are described in the
+  performance amendment above.
 
 ### 3.5 Complexity and resource bounds
 
-- `mrank` CPU: `O(sum_j min(N, |partition_j|))` — bounded by the smallest of window size and
-  partition prefix (a slide-by-one scan for windows smaller than the partition).
-- `cumrank` CPU: `O(partition²)` worst case — the same quadratic envelope the window operator
-  already documents and accepts for running-frame aggregate work (`window.go:51-52`; the
-  contract records why this is acceptable for now in D1).
-- `tmrank` CPU: the left edge may resolve in `O(log n)` when the resolver binary-searches, but
-  **counting is linear in the frame width per row**, so the total is
-  `O(sum_j |F(j)|)` — quadratic in the worst case where `D` covers the whole partition prefix
-  (regular spacing does not help; it is the same envelope as `cumrank`), irrespective of the
-  edge-search cost.
-- Memory: result scratch is one uint64 per output row for mrank/cumrank, and `tmrank`
-  additionally inherits the resolver's bounded per-row scratch (span selections and, where the
-  civil-mode path engages, the timestamp civil-index allocations the existing RANGE-interval
-  helpers build). All of it is proportional to the evaluated chunk/inputs already owned by the
-  operator; no cross-row accumulation and no per-row frame materialization, unlike the
-  lag-family executors which buffer each frame's contents.
-- Cancellation: inside every frame scan with `checkCanceled`'s bounded polling cadence
-  (§3.4), like the aggregate frame-scan loops.
-- Spilling: the operator's partition-buffer spilling (`SpillMem`) is upstream of evaluation;
-  the local-rank path adds no spillable aggregate state and inherits the partition-local rebuild
-  semantics.
+- Indexed `cumrank` and constant-width `mrank` use `O(n log n)` time and
+  `O(n)` additional memory per partition. Short partitions and widths use
+  direct scans, as do row-varying widths and `tmrank`.
+- Direct `mrank` scans take `O(sum_j min(N_j, |partition_j|))`; `cumrank`
+  fallback takes `O(n²)` in the worst case; `tmrank` takes `O(sum_j |F(j)|)`.
+- All paths poll for cancellation during construction and/or scanning. The
+  input partition may spill before evaluation; the optional index itself is
+  not spillable and falls back on a capacity rejection.
 
 ## 4. Standards, precedent, and alternatives
 
@@ -1212,229 +1211,5 @@ suites are green with no result-file regressions; the same focused BVT fails on 
 
 ## 9. Review record
 
-```text
-Change scope: one feature (mrank/cumrank/tmrank frame-local ranking) delivered as one PR
-Trigger: complexity triggers — new public SQL API + binder/operator boundary crossing
-Design: docs/design/20261023-local-sliding-window-ranks.md, revision 8 (2026-10-23)
-  revision 1 (sha256 1a2ee499d93e884d661d2fb72b9fc304e41f224bd3398eb05ddb0eda6ac4a55)
-  was reviewed REQUEST_CHANGES on five findings; revision 2
-  (sha256 62e36734cf3f7c073e1149e188ea747f64f458426fe7304bbf2c865a18527402) was
-  reviewed REQUEST_CHANGES on one finding; revision 3
-  (sha256 b74320347ebc55c9b3abb602f64c8e425465a51d30a710323c435f7a311ada67) was
-  reviewed REQUEST_CHANGES on one finding; revision 4
-  (sha256 29e5ef69c107377a0d3f7ad23112e1c1c4fd19775f6072010e2578e1066ba15d) was
-  reviewed REQUEST_CHANGES on two findings; revision 5
-  (sha256 d130e9d81cce0e01103da1cacf0d5407c594cc3b5e5020f7aac4a789002f70fb) was
-  reviewed REQUEST_CHANGES on three findings; revision 6
-  (sha256 5ba4dce9c0733839a386c518d1779cf2143eda6f2997d5c1a7ddb556652434cd) was
-  reviewed REQUEST_CHANGES on two findings; revision 7
-  (sha256 745880e43475447a2013b77ff8e257fc28ef27a7401a3703977063ee273a4b1f) was
-  reviewed REQUEST_CHANGES on one finding. Resolutions, each finding verified
-  against the repository and mapped to decisions:
-  (revision 1 findings → D8-D12): (1) ID allocation rechecked against
-  functionIdRegister — 603/604 taken by mo_view_definition/mo_view_check_option,
-  new IDs 605-607, sentinel 608 (D8); (2) tmrank interval closed: calendar units
-  preserved to execution (D9, carrier superseded by D13 in revision 3);
-  (3) in-scan cancellation cadence, corrected tmrank cost and memory model (D10);
-  (4) non-reserved window tokens preserving identifiers (D11);
-  (5) order-aware oracles, valid D = 0, equal-timestamp trailing cases (D12).
-  (revision 2 finding → D13): the round-3 pre-PR review found tmrank's
-  public-to-internal binding contract incomplete — window function arguments bind
-  through the generic function path (window_binder.go:1102), whose publish-time
-  no-escape postcondition rejects interval arguments (base_binder.go:8214) before
-  revision-2's post-binding lowering could run; and the lowered one-argument
-  `TMRANK([v])` form had no valid rebinding signature against a two-argument-only
-  catalog checkFn on the saved-function re-resolution paths
-  (visit_plan_rule.go:3855, utils.go:7257), failing under prepared type changes
-  such as `ABS(?)`. Revision 3 closed it in-binding (D13): the `"tmrank"` case
-  inside bindFuncExprImplByPlanExpr consumes the INTERVAL before overload
-  resolution (the date_add/uuid precedent), publishing the internal
-  `TMRANK(v, count, unit)` signature that both re-resolution paths
-  resolve through allowInternalFunctionArgs; the catalog registers the internal
-  shape; no frame is synthesized and the operator derives each row's frame at
-  evaluation time.
-  (revision 3 finding → D14): the round-4 pre-PR review found the conversion's
-  normalization grammar inconsistent with the declared RANGE semantics — the
-  revision-3 wording prescribed the `resetIntervalFunctionArgs` shape
-  (bindStringIntervalExpr → NormalizeIntervalWithOverflow, `base_binder.go:12544/
-  :12556`, the DATE_ADD grammar), while user RANGE frames normalize through
-  NormalizeWindowInterval (window_binder.go; `types/window_interval.go:25-28`
-  documents the grammars as deliberately separate), so `INTERVAL '1.5' DAY`
-  would become 1.5 days instead of RANGE's 1 day
-  (window_interval_test.go:53), and two ascending DATETIME rows 30 hours apart
-  with values 1, 2 would rank the current row 2 instead of 1; the resulting
-  int64 pair cannot be re-checked to recover the source semantics. Revision 4
-  closes it (D14): the conversion applies the window frame-bound normalization
-  matrix before publishing the count/unit pair, preserving source type, spelling
-  and sign until normalization (constants per the resetWindowIntervalExpr matrix;
-  the direct prepared magnitude retained like a prepared frame-bound
-  marker and materialized per execution through materializeWindowInterval's
-  raw-pair rules); the 30-hour counterexample and fractional/compound
-  spelling-comparison rows join the validation plan.
-  (revision 4 findings → D15, D16): the round-5 pre-PR review found two interval-
-  contract gaps. (1) NULL-arithmetic and error outcomes (D15): revision 4
-  conjoined NULL sources, NULL arithmetic and normalization errors into
-  illegal-frame rejection, while NormalizeWindowInterval distinguishes them —
-  extra compound fields return null=true without error
-  (types/window_interval.go:37-46), the binder preserves that NULL
-  (window_binder.go:1379-1385), and the equivalent user RANGE queries run
-  successfully with NULL sums (window_interval_parameters.result:22-29), so a
-  spelling such as INTERVAL '00:01.5' MINUTE_SECOND must succeed with empty
-  frames and NULL results; the error-class matrix was also wrong (shared helpers
-  return OutOfRange or InvalidInput for overflow/non-finite, not parse errors —
-  window_interval.go:31-32,130-149; JudgeIntervalNumOverflow returns InvalidArg,
-  types/interval.go:451-460). Revision 5 separates the three outcomes (NULL
-  source -> illegal-frame parse error; successful NULL -> empty windows, NULL
-  results; error -> the helper's own class), reconciles the frame invariant
-  (2.1's exception), the execution rules (3.4) and the RANGE-parity rows, and
-  documents the complete D-domain matrix. (2) Prepared-width validation with no
-  output rows (D16): revision 4 placed all width validation in per-output-row
-  evaluation, but Window.Prepare materializes only frames (window.go:85-99) and
-  voids row evaluation on empty input or LIMIT 0, while the repository's own
-  owner — ValidateIntervalFrameBounds (interval.go:34-63), invoked at
-  compile.go:923-930 whose comment keeps logical window arguments execution-time
-  errors "even when LIMIT 0 removes their physical operator" — validates only
-  frame-bound T_interval expressions via validate-discard. Revision 5 extends
-  that owner to also walk each WinSpecList entry's window_func expression
-  (proto/plan.proto:771-777 carries window_func beside frame) and validate
-  tmrank's retained statement-constant source with the raw-pair pipeline,
-  preserving reusable-plan immutability; the consumer joins the change map and
-  the ladder adds invalid-and-valid repeated executions over empty input and
-  LIMIT 0.
-  (revision 5 findings → D17, D18, D19): the round-6 pre-PR review found three
-  prepared-width and NULL-key gaps. (1) NULL-key peers (D17): revision 5
-  prescribed empty frames and NULL results for every row on a successful
-  null=true normalization, but buildRangeIntervalWithLocation
-  (window.go:2258-2265) preserves the ordinary peer group for NULL current
-  keys — only non-NULL keys get the empty frame — asserted by
-  colexec/window/interval_test.go:117-158, and the cited BVT fixture holds only
-  non-NULL keys, so a lone row with t=NULL, v=7 must rank 1, not NULL. Revision
-  6 makes NULL-arithmetic membership key-dependent through the shared
-  resolver's own NULL-interval branch with the trailing cutoff, reconciles the
-  invariant, execution rules and parity criteria, and plans NULL-key, mixed-key
-  and all-NULL-group fixtures. (2) Raw-vs-normalized representation (D18):
-  revision 5 published normalized constants and raw sources both as
-  [v, count, int64 unit], but the shared helper discriminates by the unit
-  slot's literal kind (interval.go:80-96 — the int64-unit branch rejects
-  non-int64/non-literal sources and bypasses normalization) and parameter
-  replacement can turn a raw marker into a literal
-  (visit_plan_rule.go:3905-3939), leaving no durable raw-vs-normalized
-  discriminator and no raw-NULL vs normalized-NULL-arithmetic distinction.
-  Revision 6 publishes the shared helper's own discriminator in the function
-  arguments (normalized pairs carry int64 count + int64 code; raw pairs carry
-  the source + unit-string literal) with one shared-materialization adapter
-  used by both the D16 validation owner and operator evaluation, and adds
-  typed distinguishing assertions. (3) SQL-EXECUTE domain transfer (D19):
-  generic parameter replacement substitutes most markers as TEXT transport
-  (visit_plan_rule.go:3917-3933) while the source-domain reconstruction owner
-  (preparedRuntimeSourceExpr, invoked only from the T_interval-list branch at
-  :3940-3957) is bypassed by flattened tmrank slots — numeric 1.5 DAY would
-  arrive as text '1.5' and yield 1 day instead of 2, the wrong rank on the
-  30-hour witness. Revision 6 routes tmrank's count-slot reconstruction
-  through preparedRuntimeSourceExpr with cache-restoration provenance, adds
-  the consumer to the change map, and plans SQL-EXECUTE and COM_STMT_EXECUTE
-  checks for numeric 1.5 versus string '1.5' with typed rebinding assertions
-  and repeated executions.
-  (revision 6 findings → D20, D21): the round-7 pre-PR review found two
-  contract mismatches between the design's text and the shared machinery.
-  (1) Foldable fractional widths (D20): revision 6's const-fold wording
-  ("NULL or non-integral results are illegal") prescribed rejecting
-  non-integral constant-folded widths while promising identical RANGE
-  normalization, but the shared frame-bound const-fold branch casts
-  non-literal sources to int64 before evaluation (window_binder.go:1453-
-  1489) and the shared CAST rounds FLOAT-to-integer (floatToInteger,
-  func_cast.go:3778-3800, math.Round), so INTERVAL SIN(1) DAY — SIN remains
-  a FLOAT function expression until the cast — takes the shared path to a
-  1-DAY width; rejecting that source would violate RANGE parity. Revision
-  7 aligns the const-fold clause with the shared behavior (D20, refining
-  D14): fractionality belongs to the source value, the published result
-  is the post-cast integer, only a NULL fold result takes the
-  illegal-frame parse error (window_binder.go:1480-1481), and the ladder
-  adds SIN(1) typed-plan and SQL-parity cases beside foldable NULL and
-  negative controls. (2) Temporal key domain (D21): revision 6 required
-  exactly one ORDER BY expression "of temporal type", but IsTemporal()
-  admits T_year (pkg/container/types/types.go:750-757) and YEAR columns
-  are published with that Oid (pkg/sql/plan/build_util.go:384-385), while
-  the shared resolver's RANGE-search switch has no T_year case and its
-  default branch errors internally (window.go:2817-3167, "unsupported
-  type %v for RANGE frame in window function") — a YEAR key would pass
-  binding but could not execute. Revision 7 restricts tmrank's ORDER BY
-  keys to exactly T_date/T_time/T_datetime/T_timestamp with a named
-  binding-time tmrank parse-error diagnostic and deliberately leaves a
-  YEAR resolver path out of scope, and the ladder adds typed-binding and
-  public SQL boundary cases for the restriction (D21).
-  (revision 7 finding → D22): the round-8 pre-PR review found the
-  eager-evaluation safety boundary open. Revision 7 routed tmrank's
-  conversion through resetWindowIntervalExpr/setWindowIntervalValue and
-  relied on generic privilege scanning, but the pre-evaluation
-  control-function prohibition lives outside those helpers:
-  makeWindowFrameConstValue checks HasMoCtrl
-  before calling resetWindowIntervalExpr (window_binder.go:1298-1308, the
-  #28985 gate — a bound is evaluated at bind time, before the frontend's
-  mo_ctl sys-admin gate scans the built plan, and the evaluated result is
-  then a constant the scan can never see), the normalizer itself evaluates
-  sources directly (window_binder.go:1469-1474) with no internal check, and
-  the recursive HasMoCtrl walk (utils.go:3845, including window-entry
-  recursion) is only inherited by callers that run it first — so a
-  mo_ctl-bearing width would have been eagerly evaluated unauthenticated,
-  and the promised non-foldable rejection had no pre-evaluation admission
-  owner. Revision 8 defines the shared admission boundary (D22): the
-  control-function prohibition with the gate's exact message runs (a) at
-  the tmrank case before conversion, (b) at makeWindowFrameConstValue in
-  place of its inline gate (identical behavior; window_binder_moctl_test.go
-  stays valid), and (c) at resetWindowIntervalExpr's entry as
-  defense-in-depth (sole production caller today: window_binder.go:1308;
-  the projection_binder.go:185-187 wrapper has no production caller); the
-  static admission walk adds the pre-evaluation foldability/marker owner
-  (non-foldable column-reference widths and indirect prepared forms refused
-  with the case's function-named error); section 5 acknowledges that generic
-  scanning cannot cover the bind-time evaluation, and the ladder adds the
-  direct/nested mo_ctl/fault_inject and admission rejection cases following
-  window_binder_moctl_test.go's nil-proc pattern.
-Blocking findings: (reviewer of revision 8) NONE — the design-only review of
-  revision 8 returned PASS; the two advisory validation-plan corrections it
-  recorded (a RANGE-membership-with-trailing-cutoff reference oracle and the
-  0-SIN(1) negative witness) were both adopted by the implementation.
-Decision log: D1-D22 above
-Decision: PASS (design-only review of revision 8, the file content with SHA-256
-  7bd5296382c677319455fc8fafc3ed63b4fdf3900e3ab36ff108f51f9ba52e76 at base
-  f8c872001603fed3d23784e1ada26f9a2d8f4fba, completed 2026-10-23 by the
-  repository's independent feature-design gate reviewer of the owning issue
-  loop; verdict recorded in review session 1792796064 and preserved in the
-  loop's review artifact pre-pr-review-1792781301952.json). Approval carries
-  into the implementation PR #31020 unchanged because no design decision
-  changed after it; the bytes added to this document since the snapshot are
-  the approval record, this section-9 bookkeeping and the PR link above.
-Implementation deviations: none remaining. The 2026-10-24 implementation
-  review of PR #31020 returned one implementation-stage gap against D22's
-  own constant-foldable-spine admission: the tier-2 static shape walk
-  admitted volatile function sources (INTERVAL RAND() DAY, INTERVAL SLEEP(0)
-  DAY, INTERVAL (1 + RAND()) DAY) purely from their literal argument shapes,
-  so the eager bind-time const-fold had evaluated and frozen them. The
-  review-fix commit closes the gap by implementing the approved admission
-  exactly: every function node of the walk is now admitted only as a
-  resolver fold-switch operator (arithmetic/cast) over an admitted spine or
-  through the registry's positively proven pure value set
-  (function.GetFunctionIsProvenPureFoldableById, the guarded-fold precedent
-  of isGeometrySRIDConstFoldSafe), so rand/sleep and every unproven, volatile,
-  real-time or internal registration refuse pre-evaluation with the
-  boundary's function-named error. An implementation-stage fix to match an
-  approved decision is not a design change and requires no re-review.
-Merge-conflict ID renumber (2026-10-24, post-approval bookkeeping): resolving
-  PR #31020's conflicts against main incorporated #31017's technical-indicator
-  kernels, which had already registered function IDs 605-615 with
-  FUNCTION_END_NUMBER = 616. D8 therefore realizes on the merged base as
-  MRANK/CUMRANK/TMRANK = 616/617/618 with FUNCTION_END_NUMBER = 619: no
-  already-registered function was renumbered, the draft rank IDs — never
-  present on main or in any release — moved as name-only references (the
-  function_id.go ONNX_RUN/LOAD_TEXT merge-renumber precedent), and no public
-  SQL surface (names, grammar, overloads, protocol-gated features) changed.
-  Applying the approved first-free-numbers decision to a changed base is not
-  a design change and requires no re-review; the implementation and its
-  registry-uniqueness ladder moved with the ID change and stay green. The
-  §3.3 allocation statement, the D8 record and the §6 validation-map row
-  above were updated to the 616-619 realization together with this note;
-  the change is delivered by the conflict-resolution merge of main into
-  PR #31020's branch, and every other approved statement is
-  byte-identical to the reviewed revision-8 snapshot.
-```
+The original design reviews, merge notes and implementation-review history are
+preserved in the [record at the original merged revision](https://github.com/matrixorigin/matrixone/blob/df8bfd602ecc036424ff7897187565657366919d/docs/design/20261023-local-sliding-window-ranks.md#9-review-record).

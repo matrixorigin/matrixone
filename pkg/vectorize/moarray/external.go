@@ -439,7 +439,7 @@ func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error)
 /** Slice Array **/
 
 // SubArrayFromLeft Slice from left to right, starting from 0
-func SubArrayFromLeft[T types.RealNumbers](s []T, offset int64) []T {
+func SubArrayFromLeft[T types.ArrayElement](s []T, offset int64) []T {
 	totalLen := int64(len(s))
 	if offset > totalLen {
 		return []T{}
@@ -448,16 +448,17 @@ func SubArrayFromLeft[T types.RealNumbers](s []T, offset int64) []T {
 }
 
 // SubArrayFromRight Cut slices from right to left, starting from 1
-func SubArrayFromRight[T types.RealNumbers](s []T, offset int64) []T {
+func SubArrayFromRight[T types.ArrayElement](s []T, offset int64) []T {
 	totalLen := int64(len(s))
-	if offset > totalLen {
+	// offset < 0 only when the caller negated math.MinInt64
+	if offset < 0 || offset > totalLen {
 		return []T{}
 	}
 	return s[totalLen-offset:]
 }
 
 // SubArrayFromLeftWithLength Cut the slice with length from left to right, starting from 0
-func SubArrayFromLeftWithLength[T types.RealNumbers](s []T, offset int64, length int64) []T {
+func SubArrayFromLeftWithLength[T types.ArrayElement](s []T, offset int64, length int64) []T {
 	if offset < 0 {
 		return []T{}
 	}
@@ -465,11 +466,11 @@ func SubArrayFromLeftWithLength[T types.RealNumbers](s []T, offset int64, length
 }
 
 // SubArrayFromRightWithLength From right to left, cut the slice with length from 1
-func SubArrayFromRightWithLength[T types.RealNumbers](s []T, offset int64, length int64) []T {
+func SubArrayFromRightWithLength[T types.ArrayElement](s []T, offset int64, length int64) []T {
 	return subArrayOffsetLen(s, -offset, length)
 }
 
-func subArrayOffsetLen[T types.RealNumbers](s []T, offset int64, length int64) []T {
+func subArrayOffsetLen[T types.ArrayElement](s []T, offset int64, length int64) []T {
 	totalLen := int64(len(s))
 	if offset < 0 {
 		offset += totalLen
@@ -483,13 +484,12 @@ func subArrayOffsetLen[T types.RealNumbers](s []T, offset int64, length int64) [
 
 	if length <= 0 {
 		return []T{}
-	} else {
-		end := offset + length
-		if end > totalLen {
-			end = totalLen
-		}
-		return s[offset:end]
 	}
+	// compare with what remains, as offset + length can overflow
+	if length > totalLen-offset {
+		length = totalLen - offset
+	}
+	return s[offset : offset+length]
 }
 
 /* ------------ [END] mat.VecDense not supported functions ------- */

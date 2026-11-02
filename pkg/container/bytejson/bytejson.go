@@ -41,6 +41,16 @@ func (bj ByteJson) String() string {
 }
 
 func (bj ByteJson) Unquote() (string, error) {
+	return bj.unquote(false)
+}
+
+// UnquoteWithLegacyFloat reconstructs pre-MySQL-format folded catalog values.
+// Ordinary SQL and binary storage must continue using Unquote and Marshal.
+func (bj ByteJson) UnquoteWithLegacyFloat() (string, error) {
+	return bj.unquote(true)
+}
+
+func (bj ByteJson) unquote(legacyFloat bool) (string, error) {
 	if bj.Type == TpCodeBlob {
 		if _, encoded, ok := mysqlOpaqueValue(bj.GetString()); ok {
 			return string(appendMySQLOpaqueVisible(nil, bj.GetString(), encoded, false)), nil
@@ -62,7 +72,8 @@ func (bj ByteJson) Unquote() (string, error) {
 	if bj.Type != TpCodeDate &&
 		bj.Type != TpCodeTime &&
 		bj.Type != TpCodeDatetime {
-		return bj.String(), nil
+		data, _ := bj.marshalJSON(legacyFloat)
+		return string(data), nil
 	}
 	str := bj.GetString()
 	if len(str) < 2 || (str[0] != '"' || str[len(str)-1] != '"') {
@@ -101,8 +112,18 @@ func (bj ByteJson) Unquote() (string, error) {
 
 // MarshalJSON transform bytejson to []byte,for visible
 func (bj ByteJson) MarshalJSON() ([]byte, error) {
+	return bj.marshalJSON(false)
+}
+
+// MarshalJSONWithLegacyFloat is a proof-only rendering of historical catalog
+// constants. It preserves predecessor float spelling at every JSON depth.
+func (bj ByteJson) MarshalJSONWithLegacyFloat() ([]byte, error) {
+	return bj.marshalJSON(true)
+}
+
+func (bj ByteJson) marshalJSON(legacyFloat bool) ([]byte, error) {
 	ret := make([]byte, 0, len(bj.Data)*3/2)
-	return bj.to(ret)
+	return bj.toWithFloatFormat(ret, legacyFloat)
 }
 
 // Marshal transform bytejson to []byte,for storage
@@ -196,13 +217,13 @@ func (bj ByteJson) GetString() []byte {
 	return bj.Data[length : length+num]
 }
 
-func (bj ByteJson) to(buf []byte) ([]byte, error) {
+func (bj ByteJson) toWithFloatFormat(buf []byte, legacyFloat bool) ([]byte, error) {
 	var err error
 	switch bj.Type {
 	case TpCodeArray:
-		buf, err = bj.toArray(buf)
+		buf, err = bj.toArray(buf, legacyFloat)
 	case TpCodeObject:
-		buf, err = bj.toObject(buf)
+		buf, err = bj.toObject(buf, legacyFloat)
 	case TpCodeInt64:
 		buf = bj.toInt64(buf)
 	case TpCodeUint64:
@@ -210,7 +231,11 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeLiteral:
 		buf = bj.toLiteral(buf)
 	case TpCodeFloat64:
-		buf, err = bj.toFloat64(buf)
+		if legacyFloat {
+			buf, err = bj.toFloat64Token(buf)
+		} else {
+			buf, err = bj.toFloat64(buf)
+		}
 	case TpCodeString:
 		buf, err = bj.toString(buf)
 	case TpCodeDecimal:
@@ -247,7 +272,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	return buf, err
 }
 
-func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
+func (bj ByteJson) toArray(buf []byte, legacyFloat bool) ([]byte, error) {
 	cnt := bj.GetElemCnt()
 	buf = append(buf, '[')
 	var err error
@@ -255,7 +280,7 @@ func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
 		if i != 0 {
 			buf = append(buf, ", "...)
 		}
-		buf, err = bj.getArrayElem(i).to(buf)
+		buf, err = bj.getArrayElem(i).toWithFloatFormat(buf, legacyFloat)
 		if err != nil {
 			return nil, err
 		}
@@ -263,7 +288,7 @@ func (bj ByteJson) toArray(buf []byte) ([]byte, error) {
 	return append(buf, ']'), nil
 }
 
-func (bj ByteJson) toObject(buf []byte) ([]byte, error) {
+func (bj ByteJson) toObject(buf []byte, legacyFloat bool) ([]byte, error) {
 	cnt := bj.GetElemCnt()
 	buf = append(buf, '{')
 	for i := 0; i < cnt; i++ {
@@ -276,7 +301,7 @@ func (bj ByteJson) toObject(buf []byte) ([]byte, error) {
 			return nil, err
 		}
 		buf = append(buf, ": "...)
-		buf, err = bj.getObjectVal(i).to(buf)
+		buf, err = bj.getObjectVal(i).toWithFloatFormat(buf, legacyFloat)
 		if err != nil {
 			return nil, err
 		}
@@ -313,15 +338,12 @@ func (bj ByteJson) toFloat64(buf []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// https://github.com/golang/go/issues/14135
-	var format byte
-	abs := math.Abs(f)
-	if abs == 0 || 1e-6 <= abs && abs < 1e21 {
-		format = 'f'
-	} else {
-		format = 'e'
+	start := len(buf)
+	buf = util.AppendMySQLFloat(buf, f, 64)
+	// Keep DOUBLE distinguishable from integer JSON numbers when reparsed.
+	if !bytes.ContainsAny(buf[start:], ".e") {
+		buf = append(buf, '.', '0')
 	}
-	buf = strconv.AppendFloat(buf, f, format, -1, 64)
 	return buf, nil
 }
 

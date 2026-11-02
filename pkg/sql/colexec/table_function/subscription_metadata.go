@@ -156,6 +156,9 @@ var subscriptionColumnsConfig = subscriptionMetadataConfig{
 		"extra_info",
 		"rel_logical_id",
 		"table_owner",
+		// Read from the publisher's mo_columns: 1/3 for attributed DECIMAL
+		// columns, legacy boolean values otherwise. Code-only contract.
+		"att_is_unsigned",
 	},
 	columnTypes: []types.Type{
 		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ACCOUNT_ID_IDX],
@@ -183,6 +186,7 @@ var subscriptionColumnsConfig = subscriptionMetadataConfig{
 		catalog.MoTablesTypes[catalog.MO_TABLES_EXTRA_INFO_IDX],
 		catalog.MoTablesTypes[catalog.MO_TABLES_LOGICAL_ID_IDX],
 		catalog.MoTablesTypes[catalog.MO_TABLES_OWNER_IDX],
+		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_IS_UNSIGNED_IDX],
 	},
 	buildQuery: buildSubscriptionColumnsQuery,
 }
@@ -795,7 +799,8 @@ func buildSubscriptionColumnsQuery(candidate subscriptionCandidate, tableNames [
 		"mc.att_constraint_type, mc.att_is_auto_increment, mc.att_comment, mc.att_is_hidden, mc.attr_enum, " +
 		"mc.attr_has_generated, mc.attr_generated, CAST(mk.key_priority AS BIGINT) AS key_priority, " +
 		"mt.rel_id, mt.relkind, mt.rel_createsql, mt.partitioned, mt.extra_info, mt.rel_logical_id, " +
-		"CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) + " AS INT UNSIGNED) AS table_owner " +
+		"CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) + " AS INT UNSIGNED) AS table_owner, " +
+		"mc.att_is_unsigned " +
 		"FROM mo_catalog.mo_columns mc " +
 		"JOIN mo_catalog.mo_tables mt ON mt.account_id = mc.account_id " +
 		"AND mt.reldatabase = mc.att_database AND mt.relname = mc.att_relname " +

@@ -22,6 +22,38 @@ from unittest.mock import Mock, AsyncMock
 from matrixone.stage import StageManager, AsyncStageManager
 
 
+@pytest.mark.parametrize('asynchronous', [False, True])
+@pytest.mark.asyncio
+async def test_load_files_text_fallback_reuses_generic_stage_load(asynchronous):
+    import inspect
+    from matrixone import AsyncClient, Client
+    from matrixone.stage import Stage
+
+    client = AsyncClient() if asynchronous else Client()
+    acknowledged = object()
+
+    def execute(sql, *args, **kwargs):
+        if 'missing' in sql:
+            raise FileNotFoundError('missing input')
+        return acknowledged
+
+    client.execute = AsyncMock(side_effect=execute) if asynchronous else Mock(side_effect=execute)
+    stage = Stage(name='two words', url='file:///owned', _client=client)
+    results = stage.load_files({'data.csv': 'csv_target', 'data.txt': 'txt_target', 'missing.txt': 'empty_target'})
+    for path in ('data.csv', 'data.txt'):
+        result = results[path]
+        if asynchronous:
+            assert inspect.isawaitable(result)
+            result = await result
+        assert result is acknowledged
+    if asynchronous:
+        with pytest.raises(FileNotFoundError):
+            await results['missing.txt']
+    else:
+        assert 'missing input' in results['missing.txt']
+    assert any('stage:///two%20words/data.txt' in str(call) for call in client.execute.call_args_list)
+
+
 class TestStageSQLConsistency(unittest.TestCase):
     """Test SQL generation consistency across sync/async/session interfaces"""
 
@@ -172,7 +204,7 @@ class TestStageSQLConsistency(unittest.TestCase):
         self.session_manager.alter('test_stage', url='file:///new/path/', enable=True, comment='Updated')
         session_sql = self.session.execute.call_args_list[0][0][0]  # First call is ALTER
 
-        expected_sql = "ALTER STAGE test_stage SET URL='file:///new/path/' COMMENT='Updated' ENABLE=TRUE"
+        expected_sql = "ALTER STAGE test_stage SET URL='file:///new/path/' ENABLE=TRUE COMMENT='Updated'"
         self.assertEqual(sync_sql, expected_sql)
         self.assertEqual(session_sql, expected_sql)
 

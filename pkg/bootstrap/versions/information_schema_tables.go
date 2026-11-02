@@ -15,32 +15,12 @@
 package versions
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 // InformationSchemaTablesUpgradeEntry refreshes the current TABLES definition.
-// Historical and forward handlers share the same idempotent view repair; the
-// exact-equality CheckFunc makes the persisted definition the durable marker,
-// so a tenant already at the final version is repaired once and never
-// re-dropped afterwards.
+// Historical and forward handlers share the same idempotent view repair.
 func InformationSchemaTablesUpgradeEntry() UpgradeEntry {
-	return UpgradeEntry{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "TABLES",
-		UpgType:                 MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaTablesV118DDL,
-		RequiredProtocolVersion: defines.MORPCVersion118,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, definition, err := CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "TABLES")
-			if err == nil && !exists {
-				exists, definition, err = CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "tables")
-			}
-			return exists && definition == sysview.InformationSchemaTablesV118DDL, err
-		},
-		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.TABLES;", sysview.InformationDBConst),
-	}
+	return InformationSchemaViewUpgradeEntry("TABLES", sysview.InformationSchemaTablesV118DDL, defines.MORPCVersion118)
 }

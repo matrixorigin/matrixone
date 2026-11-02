@@ -13417,9 +13417,17 @@ func TestRollbackMergeInQueue(t *testing.T) {
 	tae.DB.Runtime.BigDeleteHinter.DeleteBigDel(rel.ID())
 	err = task.OnExec(context.Background())
 	require.NoError(t, err)
+	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	outputName := created.ObjectName().String()
+	_, err = tae.Runtime.Fs.StatFile(ctx, outputName)
+	require.NoError(t, err)
 
 	tae.DB.Runtime.BigDeleteHinter.RecordBigDel([]uint64{rel.ID()}, startTS.Next())
 	require.Error(t, txn.Commit(ctx)) // rollback
+	require.Eventually(t, func() bool {
+		_, err := tae.Runtime.Fs.StatFile(ctx, outputName)
+		return moerr.IsMoErrCode(err, moerr.ErrFileNotFound)
+	}, 30*time.Second, 20*time.Millisecond, "merge output %s survived rollback", outputName)
 
 	_, rel = tae.GetRelation()
 	objH, err := rel.GetObject(obj.ID(), false)
@@ -13592,6 +13600,11 @@ func TestRollbackMergeBeforeRegistrationCleansTransferState(t *testing.T) {
 	require.ErrorContains(t, task.OnExec(ctx), injectedErr)
 
 	created := objectio.ObjectStats(task.GetCommitEntry().CreatedObjs[0])
+	outputName := created.ObjectName().String()
+	require.Eventually(t, func() bool {
+		_, statErr := tae.Runtime.Fs.StatFile(ctx, outputName)
+		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
+	}, 30*time.Second, 20*time.Millisecond, "merge output %s survived failed task", outputName)
 	createdBlk := objectio.NewBlockidWithObjectID(created.ObjectName().ObjectId(), 0)
 	require.Nil(t, tae.Runtime.TransferDelsMap.GetDelsForBlk(createdBlk))
 

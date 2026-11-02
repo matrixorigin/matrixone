@@ -554,9 +554,18 @@ func TestTruncatePreservesMaterializedForeignKeyIdentity(t *testing.T) {
 			"select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database),
 			"query failed: selected referenced key after recreation")
 		require.Equal(t, "z", selected, "recreation must preserve the declared selected key")
-		requireSQLRejection(t, ctx, db, "drop index z on "+database+".parent") // engine FK protection must agree with the catalog key
-		require.NoErrorf(t, boundedExec(t, ctx, db, "drop index a on "+database+".parent"),
-			"new compatible key was not selected by the existing FK")
+		// The equivalent-key transition (issue #30342) allows dropping the
+		// recorded key when another covering key survives: the FK rebinds to
+		// the surviving key in the same transaction instead of rejecting, so
+		// identity is proven by the catalog tracking the recorded key and by
+		// the rebind, not by an unconditional rejection.
+		require.NoErrorf(t, boundedExec(t, ctx, db, "drop index z on "+database+".parent"),
+			"exec failed: drop recorded key with a compatible survivor")
+		require.NoErrorf(t, boundedQueryRow(t, ctx, db, &selected,
+			"select referenced_index_name from mo_catalog.mo_foreign_keys where db_name=? and table_name='child' and constraint_name='fk_selected'", database),
+			"query failed: selected referenced key after rebind")
+		require.Equal(t, "a", selected, "rebind must move the binding to the surviving compatible key")
+		requireSQLRejection(t, ctx, db, "drop index a on "+database+".parent") // the last covering key stays protected
 		requireSQLRejection(t, ctx, db, "insert into "+database+".child values(1,999)")
 		require.NoErrorf(t, boundedExec(t, ctx, db, "insert into "+database+".child values(1,7)"),
 			"exec failed: reinsert child")

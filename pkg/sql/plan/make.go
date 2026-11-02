@@ -972,9 +972,28 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 // preservation. DDL-specific error mapping is applied by the DDL validation
 // layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	return makePlan2AssignmentCastExprForColumn(ctx, expr, targetType, "")
+}
+
+// makePlan2AssignmentCastExprForColumn additionally carries the destination
+// column name, which the attributed-DECIMAL admission boundary reports in its
+// execution-time 1264 diagnostics. Callers without a name keep the legacy
+// type-label fallback.
+func makePlan2AssignmentCastExprForColumn(ctx context.Context, expr *Expr, targetType Type, columnName string) (*Expr, error) {
 	if isMediumIntPlanType(targetType) {
 		return forceAssignmentCastExprWithName(
 			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
+	}
+	if isAttributedDecimalPlanType(targetType) {
+		// Attributed DECIMAL targets persist the complete assignment boundary:
+		// the mode-resolved admission entry in front of cast_assign. DML replay
+		// re-polices BOTH layers to the statement policy (see
+		// rePoliceUnsignedDecimalAssignmentBoundary); the DDL constant
+		// validation uses a separate both-layers-strict composition. The
+		// authoring floor is enforced where the attributed type itself is
+		// declared or replayed (CREATE/ALTER/CTAS column sites and the DML
+		// assignment builders), mirroring the MEDIUMINT protocol gates.
+		return forceUnsignedDecimalAssignmentComposition(ctx, expr, targetType, "cast_assign", columnName)
 	}
 	if types.T(targetType.Id).IsArrayRelate() {
 		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。

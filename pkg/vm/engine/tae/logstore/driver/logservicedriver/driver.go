@@ -155,6 +155,10 @@ func (d *LogServiceDriver) GetMaxClient() int {
 	return d.config.ClientMaxCount
 }
 
+func (d *LogServiceDriver) MaxWALRecordSize() int {
+	return d.config.MaxWALRecordSize
+}
+
 func (d *LogServiceDriver) Close() error {
 	d.closeOnce.Do(func() {
 		close(d.closeC)

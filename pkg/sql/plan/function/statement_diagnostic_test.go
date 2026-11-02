@@ -31,6 +31,7 @@ func TestStatementParameterDiagnosticCapabilities(t *testing.T) {
 	}{
 		{"time", []types.T{types.T_varchar}, true},
 		{"date", []types.T{types.T_varchar}, true},
+		{"date_format", []types.T{types.T_varchar, types.T_varchar}, true},
 		{"maketime", []types.T{types.T_int64, types.T_int64, types.T_int64}, true},
 		{"sec_to_time", []types.T{types.T_int64}, true},
 		{"timestamp", []types.T{types.T_varchar, types.T_varchar}, true},

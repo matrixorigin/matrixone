@@ -755,6 +755,13 @@ type BackgroundExecOption struct {
 	// transactions whose request context owns a blocked TxnClient.New call.
 	cancelTxnCreateWithRequest bool
 	authorizationSnapshot      *client.SnapshotAdmission
+	// internalExecution marks the produced executor as running trusted
+	// implementation SQL (e.g. the catalog writes generated for SET GLOBAL)
+	// rather than caller-authored statements. It flows to the back session's
+	// isInternal so internal-execution exemptions apply — including the
+	// client-facing READ ONLY transaction gate, which must never observe
+	// generated catalog maintenance as user writes.
+	internalExecution bool
 }
 
 // BackgroundExec executes the sql in background session without network output.
@@ -1151,6 +1158,13 @@ type ExecCtx struct {
 	// transaction-boundary policy and later execution use the same prepared AST.
 	// The statement is borrowed from the computation wrapper or prepare cache.
 	effectiveTxnStatement tree.Statement
+	// deferReadOnlyOwnership marks that the pre-Create READ ONLY admission
+	// deferred an unqualified multi-source UPDATE verdict because no catalog
+	// transaction existed yet for owner resolution. executeStmtWithWorkspace
+	// re-runs the gate right after Create with the transaction attached.
+	// Only that call site consumes the flag; every other admission site
+	// already runs with an active transaction and never produces it.
+	deferReadOnlyOwnership bool
 	// implicitCommitBefore is the generation-level policy for a top-level
 	// implicit-commit statement. It is copied into txnOpt after admission.
 	implicitCommitBefore bool

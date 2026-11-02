@@ -23,7 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func BenchmarkDecimal64DistinctBatchUpdates(b *testing.B) {
+// BenchmarkDecimal64DistinctRepeatedBatchUpdates measures repeated hits in
+// already-populated DISTINCT sets; it does not measure their initial growth.
+func BenchmarkDecimal64DistinctRepeatedBatchUpdates(b *testing.B) {
 	for _, tc := range []struct {
 		name   string
 		groups int
@@ -31,7 +33,7 @@ func BenchmarkDecimal64DistinctBatchUpdates(b *testing.B) {
 	}{
 		{"one_group", 1, false},
 		{"four_groups", 4, false},
-		{"fixed_index", 1024, false},
+		{"1024_groups", 1024, false},
 		{"two_chunks", AggBatchSize + 2, false},
 		{"constant_null", 4, true},
 	} {
@@ -54,7 +56,7 @@ func BenchmarkDecimal64DistinctBatchUpdates(b *testing.B) {
 						b.Fatal(err)
 					}
 				}
-				groups[i] = uint64(i%min(tc.groups, 4) + 1)
+				groups[i] = uint64(i%min(tc.groups, AggBatchSize) + 1)
 				if tc.groups > AggBatchSize && i%2 == 0 {
 					groups[i] = uint64(tc.groups)
 				}
@@ -65,6 +67,11 @@ func BenchmarkDecimal64DistinctBatchUpdates(b *testing.B) {
 				b.Fatal(err)
 			}
 			vectors := []*vector.Vector{input}
+			for offset := 0; offset < len(groups); offset += hashmap.UnitLimit {
+				if err := exec.BatchFill(offset, groups[offset:min(offset+hashmap.UnitLimit, len(groups))], vectors); err != nil {
+					b.Fatal(err)
+				}
+			}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {

@@ -80,14 +80,14 @@ func TestCOMStmtPreparedTimeArithmeticRebindsDecodedNumericTypes(t *testing.T) {
 			packet: func() []byte {
 				return buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, "1.2345678901234")
 			},
-			wantType: types.T_decimal128, wantWidth: 38, wantScale: 13, wantValue: "1.2345678901234",
+			wantType: types.T_decimal128, wantWidth: 33, wantScale: 13, wantValue: "1.2345678901234",
 		},
 		{
 			name: "newdecimal lower scale",
 			packet: func() []byte {
 				return buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, "1.25")
 			},
-			wantType: types.T_decimal128, wantWidth: 38, wantScale: 2, wantValue: "1.25",
+			wantType: types.T_decimal128, wantWidth: 22, wantScale: 2, wantValue: "1.25",
 		},
 		{
 			name: "null resets to prepare domain",
@@ -193,7 +193,10 @@ func TestCOMStmtPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.
 			queryPlan := runtimePlan.GetQuery()
 			project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList[0]
 			require.Equal(t, types.T_decimal128, types.T(project.Typ.Id))
-			width := int32(38)
+			width := int32(20)
+			if tc.unsigned {
+				width = 21
+			}
 			if tc.op == "%" {
 				width = 19
 			}
@@ -280,7 +283,7 @@ func TestCOMStmtPreparedTimeArithmeticPreservesExplicitDecimalBoundary(t *testin
 			queryPlan := runtimePlan.GetQuery()
 			project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList[0]
 			require.Equal(t, types.T_decimal128, types.T(project.Typ.Id))
-			require.Equal(t, int32(38), project.Typ.Width)
+			require.Equal(t, int32(22), project.Typ.Width)
 			require.Equal(t, int32(2), project.Typ.Scale)
 			executor, err := colexec.NewExpressionExecutor(cw.proc, project)
 			require.NoError(t, err)
@@ -320,7 +323,7 @@ func TestCOMStmtPreparedTimeArithmeticPreservesExplicitDecimalBoundary(t *testin
 		queryPlan := runtimePlan.GetQuery()
 		project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList[0]
 		require.Equal(t, types.T_decimal128, types.T(project.Typ.Id))
-		require.Equal(t, int32(38), project.Typ.Width)
+		require.Equal(t, int32(21), project.Typ.Width)
 		require.Equal(t, int32(0), project.Typ.Scale)
 		executor, err := colexec.NewExpressionExecutor(cw.proc, project)
 		require.NoError(t, err)

@@ -82,7 +82,7 @@ parent_id int,
 constraint fk_drop_parent foreign key (parent_id) references drop_parent(id)
 );
 execute drop_table_stmt;
-internal error: can not drop table 'drop_parent' referenced by some foreign key constraint
+Cannot drop table 'drop_parent' referenced by a foreign key constraint 'fk_drop_parent' on table 'drop_child'.
 select column_name
 from information_schema.columns
 where table_schema = 'prepare_ddl_schema_change' and table_name = 'drop_parent'

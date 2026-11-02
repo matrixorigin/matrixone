@@ -292,8 +292,8 @@ func appendPickedBatchRows(
 			if userConflictOpt != nil {
 				switch userConflictOpt.Opt {
 				case tree.CONFLICT_FAIL:
-					return moerr.NewInternalErrorNoCtxf(
-						"conflict: %s %s and %s %s on pk(%v) with different values",
+					return moerr.NewDataBranchConflictNoCtxf(
+						"%s %s and %s %s on pk(%v) with different values",
 						tblStuff.tarRel.GetTableName(), diffInsert,
 						tblStuff.baseRel.GetTableName(), diffInsert,
 						pkKey,

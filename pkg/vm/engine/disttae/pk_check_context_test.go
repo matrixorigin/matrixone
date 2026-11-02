@@ -35,7 +35,7 @@ import (
 
 // Reuse the ready-subscription fixture and persist just one row. No cluster,
 // checkpoint replay, or concurrent DDL is needed to reach the persisted boundary.
-func newPersistedPKCheckTable(t *testing.T, oid types.T, tombstone bool) (*txnTable, *Engine, fileservice.FileService, *batch.Batch) {
+func newPersistedPKCheckTable(t testing.TB, oid types.T, tombstone bool) (*txnTable, *Engine, fileservice.FileService, *batch.Batch) {
 	t.Helper()
 	tbl, eng := newPrimaryKeyCheckTableForTest(t)
 	proc := tbl.proc.Load()
@@ -140,7 +140,7 @@ func TestPersistedPKCheckUsesCallerContext(t *testing.T) {
 						readCalled := false
 						var readContextErr error
 						eng.fs = tombstoneReadFS{FileService: fs, read: func(ioCtx context.Context, v *fileservice.IOVector) error {
-							if len(pkCheckSemaphore) > 0 {
+							if len(pkCheckSemaphore) > 0 && len(v.Entries) > 1 {
 								// Cancel only after admission at the actual block read,
 								// not during metadata selection or subscription readiness.
 								readCalled = true
@@ -169,7 +169,7 @@ func TestPersistedPKCheckUsesCallerContext(t *testing.T) {
 						finishingCtx, finishCancel := context.WithCancel(proc.Ctx)
 						defer finishCancel()
 						eng.fs = tombstoneReadFS{FileService: fs, read: func(ioCtx context.Context, v *fileservice.IOVector) error {
-							if len(pkCheckSemaphore) > 0 {
+							if len(pkCheckSemaphore) > 0 && len(v.Entries) > 1 {
 								finishCancel()
 							}
 							return fs.Read(context.WithoutCancel(ioCtx), v)

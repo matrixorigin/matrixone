@@ -576,9 +576,14 @@ func TestPreCallbackFailureCompletesAllGroupWaitersBeforeFailStop(t *testing.T) 
 		secondWait <- second.WaitDone()
 	}()
 
-	// Invoke the production group-intent callback with two accepted entries so
-	// LogEntryWriter.Finish executes the pre-callbacks before BackendClient.Append.
-	d.onCommitIntents(first, second)
+	// Invoke the production group-intent callback with two accepted entries.
+	// Preparation now runs in this callback, so it remains blocked at fail-stop
+	// until the test releases that handler.
+	intentsDone := make(chan struct{})
+	go func() {
+		defer close(intentsDone)
+		d.onCommitIntents(first, second)
+	}()
 	select {
 	case <-failStopEntered:
 	case <-time.After(time.Second):
@@ -598,6 +603,11 @@ func TestPreCallbackFailureCompletesAllGroupWaitersBeforeFailStop(t *testing.T) 
 		t.Fatal("second waiter was not notified before fail-stop release")
 	}
 	release()
+	select {
+	case <-intentsDone:
+	case <-time.After(time.Second):
+		t.Fatal("commit-intent callback did not return after fail-stop release")
+	}
 	require.Equal(t, int32(2), callbacks.Load())
 	require.Zero(t, client.appendCalls.Load())
 	require.Eventually(t, func() bool { return d.pendingWait.Load() == 0 }, time.Second, time.Millisecond)

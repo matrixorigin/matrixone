@@ -137,6 +137,37 @@ func TestLocalDisttaeDataSourceUsesTombstoneObjectIndex(t *testing.T) {
 	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
 }
 
+func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	commitTS := types.BuildTS(12, 0)
+	pState := newTestMaterializedSnapshotPartitionState(t, mp, []testMaterializedSnapshotRow{
+		{rowID: buildTestMaterializedSnapshotRowID(t, 3), ts: commitTS, id: 7, payload: 42},
+	})
+	ls := &LocalDisttaeDataSource{
+		ctx:             context.Background(),
+		pState:          pState,
+		snapshotTS:      types.BuildTS(13, 0),
+		tombstonePolicy: engine.Policy_SkipAll,
+		memPKFilter:     &readutil.MemPKFilter{},
+	}
+	defer ls.Close()
+	out := batch.NewWithSize(2)
+	out.SetAttributes([]string{"id", objectio.DefaultCommitTS_Attr})
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	out.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	defer out.Clean(mp)
+
+	require.NoError(t, ls.filterInMemCommittedInserts(
+		context.Background(),
+		[]types.Type{types.T_int64.ToType(), types.T_TS.ToType()},
+		[]uint16{0, objectio.SEQNUM_COMMITTS}, mp, out,
+	))
+	require.Equal(t, 1, out.RowCount())
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[0], 0))
+	require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[1], 0))
+}
+
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
 	location := objectio.NewRandomLocation(0, 0)
 	objID := location.ObjectId()
@@ -409,7 +440,7 @@ func TestIvfWorkspaceReaderPreservesPhysicalPK(t *testing.T) {
 			}
 			// NewReader consumes source and the membership filter on all paths.
 			r, err := readutil.NewReader(ctx, mp, pool, nil, tableDef,
-				types.MaxTs().ToTimestamp(), expr, source, 0, hint)
+				types.MaxTs().ToTimestamp(), expr, source, hint)
 			require.NoError(t, err)
 			defer r.Close()
 			end, err := r.Read(ctx, cols, nil, mp, out)

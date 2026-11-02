@@ -107,6 +107,7 @@ const (
 
 	CREATE_DATABASE
 	MODIFY_METADATA
+	RECONCILE_LEGACY_INFORMATION_SCHEMA_VIEW
 )
 
 // ColumnInfo Describe the detailed information of the table column
@@ -189,6 +190,10 @@ func (u *UpgradeEntry) upgrade(
 		if err := checkCommonProtocolVersion(txn, u.RequiredProtocolVersion); err != nil {
 			return err
 		}
+	}
+
+	if u.UpgType == RECONCILE_LEGACY_INFORMATION_SCHEMA_VIEW {
+		return u.reconcileLegacyInformationSchemaView(txn, accountId)
 	}
 
 	// 1. First, judge whether there is prefix sql

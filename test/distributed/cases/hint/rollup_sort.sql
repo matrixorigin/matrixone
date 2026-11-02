@@ -82,6 +82,40 @@ from t_rollup_sort group by a with rollup order by grouping_a, a;
 set session rollup_algorithm = 'SORT';
 truncate table t_rollup_sort;
 
+-- Tuple DISTINCT owns independent sets at every prefix. Include repeated
+-- tuples across detail groups and NULL tuple components. Planner UT injects
+-- high NDV statistics separately to exercise the tuple-pair rewrite gate.
+insert into t_rollup_sort values
+  (1, 7, 9), (2, 7, 9), (2, 7, 9), (2, 8, 10),
+  (2, 8, null), (null, 7, 9), (null, null, 9);
+select a, b, count(distinct b, amount) as cnt,
+       grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+select a, count(distinct amount, b) as cnt, grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+select a, count(distinct b, amount) as cnt, sum(distinct b) as total,
+       grouping(a) as grouping_a
+from t_rollup_sort group by a with rollup order by grouping_a, a;
+
+-- Direct aliases and reordered projections preserve the inner global order
+-- through a filter and another derived boundary.
+select d.x, d.y, cast(avg(d.v) as decimal(10,2)) as avg_v,
+       grouping(d.x) as grouping_x, grouping(d.y) as grouping_y
+from (select e.y, e.v, e.x from
+      (select amount as v, b as y, a as x from t_rollup_sort order by x, y) e
+      where e.y is not null) d
+group by d.x, d.y with rollup order by grouping_x, grouping_y, d.x, d.y;
+
+set session rollup_algorithm = 'HASH';
+select a, b, count(distinct b, amount) as cnt,
+       grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+
+set session rollup_algorithm = 'SORT';
+truncate table t_rollup_sort;
+
 select a, b, count(*) as cnt, sum(amount) as total,
        grouping(a) as grouping_a, grouping(b) as grouping_b
 from t_rollup_sort

@@ -571,7 +571,6 @@ func TestNewReaderAttachesClusterFilter(t *testing.T) {
 		ts,
 		expr,
 		source,
-		0,
 		engine.FilterHint{},
 	)
 	require.NoError(t, err)

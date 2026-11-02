@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"slices"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1247,11 +1248,9 @@ func literalVecMatchesType(vecType *types.Type, expectedType plan.Type) bool {
 }
 
 // decodeLiteralVec validates the minimum structural invariants needed before
-// reading a serialized literal vector. UnmarshalBinary is intentionally no-copy
-// and trusts encoded lengths, so an invalid plan must disable an optimization
-// rather than panic or allocate from an untrusted logical length. Callers own
-// the panic boundary because malformed varlen metadata can also fail while
-// materializing individual values after decoding.
+// reading a serialized literal vector. Checked UnmarshalBinary validates its
+// framing and payload; the planner additionally checks logical length and
+// provenance before using the no-copy vector or materializing its members.
 func decodeLiteralVec(literalVec *plan.LiteralVec) (vec vector.Vector, physicalLength int, ok bool) {
 	if literalVec == nil || literalVec.Len < 0 {
 		return vector.Vector{}, 0, false
@@ -2802,7 +2801,15 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 			continue
 		}
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) {
+		if fn != nil && fn.Func != nil && fn.Func.ObjName == "in" && len(fn.Args) == 2 &&
+			fn.Args[0] != nil && fn.Args[1] != nil && fn.Args[1].GetVec() != nil &&
+			!serializedIndexInUsable(builder.GetContext(), fn.Args[1], fn.Args[0].Typ) {
+			// A malformed or incompatible folded vector is not an executable
+			// scalar bound. Leave this optional rewrite entirely unchanged.
+			return filters
+		}
+		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) ||
+			lowerCompoundKey && numParts > 1 && !builder.compositeKeyComparisonUsable(fn, tableDef) {
 			continue
 		}
 
@@ -2898,7 +2905,8 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 				if subFn.Func.ObjName == "=" || subFn.Func.ObjName == "in" {
 					if numParts > 1 {
 						newArgs := builder.doMergeFiltersOnCompositeKey(lowerCompoundKey, tableDef, tableTag, subExpr)
-						if len(newArgs) == 0 {
+						if len(newArgs) != 1 {
+							// A candidate with residuals is not an equivalent OR arm.
 							newOrArgs = append(newOrArgs, subExpr)
 							continue
 						}
@@ -2909,10 +2917,11 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 					flattenLogicalExpressions(subExpr, "and", &andArgs)
 
 					newArgs := builder.doMergeFiltersOnCompositeKey(lowerCompoundKey, tableDef, tableTag, andArgs...)
-					if len(newArgs) == 1 {
-						subExpr = newArgs[0]
-					} else {
-						subFn.Args = newArgs
+					if len(newArgs) > 0 {
+						combined, err := combinePlanConjunction(builder.GetContext(), newArgs)
+						if err == nil {
+							subExpr = combined
+						}
 					}
 				}
 
@@ -3100,7 +3109,8 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 			continue
 		}
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) {
+		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) ||
+			lowerCompoundKey && numParts > 1 && !builder.compositeKeyComparisonUsable(fn, tableDef) {
 			continue
 		}
 		col, isLower := classifyRangeBound(fn)
@@ -3142,7 +3152,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 		upperOp := canonicalRangeOp(upperFn)
 		lowerVal := rangeFilterConstValue(lowerFn)
 		upperVal := rangeFilterConstValue(upperFn)
-		if lowerVal == nil || upperVal == nil {
+		if lowerVal == nil || upperVal == nil ||
+			!builder.compositeKeyComparisonUsable(lowerFn, tableDef) ||
+			!builder.compositeKeyComparisonUsable(upperFn, tableDef) {
 			continue
 		}
 
@@ -3151,20 +3163,15 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 			colExpr = lowerFn.Args[1]
 		}
 
-		lb := lowerVal
-		ub := upperVal
-
-		// Cast bounds to column type so between/in_range runtime gets uniform types.
-		colTyp := colExpr.Typ
-		if lb.Typ.Id != colTyp.Id || lb.Typ.Width != colTyp.Width || lb.Typ.Scale != colTyp.Scale {
-			if casted, err := appendCastBeforeExpr(builder.GetContext(), lb, colTyp); err == nil {
-				lb = casted
-			}
+		// Only proven lossless key-domain conversions may precede range
+		// coalescing. Assignment casts can round a bound or change timezones.
+		lb, err := normalizeIndexComparisonBound(builder.GetContext(), lowerVal, colExpr.Typ)
+		if err != nil {
+			continue
 		}
-		if ub.Typ.Id != colTyp.Id || ub.Typ.Width != colTyp.Width || ub.Typ.Scale != colTyp.Scale {
-			if casted, err := appendCastBeforeExpr(builder.GetContext(), ub, colTyp); err == nil {
-				ub = casted
-			}
+		ub, err := normalizeIndexComparisonBound(builder.GetContext(), upperVal, colExpr.Typ)
+		if err != nil {
+			continue
 		}
 
 		compositeFilterSel := filters[lowerIdx].Selectivity * filters[upperIdx].Selectivity
@@ -3201,7 +3208,8 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 		if fn == nil || fn.Func == nil {
 			return filters
 		}
-		if compositeKeyPredicateHasMixedJSONNumericArgs(fn) {
+		if compositeKeyPredicateHasMixedJSONNumericArgs(fn) ||
+			!builder.compositeKeyComparisonUsable(fn, tableDef) {
 			break
 		}
 		filterIdx = append(filterIdx, idx)
@@ -3217,6 +3225,21 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 		return filters
 	}
 
+	// Normalize copies only after selecting the safe prefix. Remaining SQL
+	// filters retain their original comparison overload and operand metadata.
+	lookupFilters := make([]*plan.Expr, len(filterIdx))
+	for i, pos := range filterIdx {
+		column := indexComparisonColumn(filters[pos].GetF())
+		if column == nil {
+			return filters
+		}
+		normalized, err := normalizeSerializedIndexComparison(builder.GetContext(), filters[pos], column.Typ)
+		if err != nil {
+			return filters
+		}
+		lookupFilters[i] = normalized
+	}
+
 	var compositePKFilter *plan.Expr
 	pkExpr := &plan.Expr{
 		Typ: tableDef.Cols[sortkeyIdx].Typ,
@@ -3230,10 +3253,10 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 
 	compositePKFilterSel := 1.0
 	for i := range filterIdx {
-		compositePKFilterSel *= (filters[filterIdx[i]]).Selectivity
+		compositePKFilterSel *= (lookupFilters[i]).Selectivity
 	}
 
-	lastFilter := filters[filterIdx[len(filterIdx)-1]]
+	lastFilter := lookupFilters[len(lookupFilters)-1]
 	lastFn := lastFilter.GetF()
 	if lastFn == nil || lastFn.Func == nil {
 		return filters
@@ -3254,7 +3277,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 
 		inArgs := make([]*plan.Expr, len(lastArgs))
@@ -3293,7 +3316,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 		}
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 
 		tmpSerialArgs := DeepCopyExprList(serialArgs)
@@ -3328,7 +3351,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 		}
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 
 		tmpSerialArgs := DeepCopyExprList(serialArgs)
@@ -3349,11 +3372,15 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 			funcName = "prefix_in_range"
 		}
 
+		flag := lastFn.Args[3]
+		if funcName == "prefix_in_range" && indexFunctionComparesByteStringColumn(lastFn) {
+			flag = closePrefixRangeLowerBound(flag)
+		}
 		compositePKFilter, ok = builder.bindCompositeKeyPredicate(funcName,
 			pkExpr,
 			leftArg,
 			rightArg,
-			lastFn.Args[3],
+			flag,
 		)
 		if !ok {
 			return filters
@@ -3364,7 +3391,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 		}
 		serialArgs := make([]*plan.Expr, len(filterIdx)-1)
 		for i := 0; i < len(filterIdx)-1; i++ {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 
 		tmpSerialArgs := append(DeepCopyExprList(serialArgs), lastFn.Args[1])
@@ -3399,6 +3426,12 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 			flag = 0 // both closed
 		}
 
+		// Prefix comparison treats an escaped embedded NUL as equality
+		// with the shorter endpoint. Widen an open string lower bound and
+		// retain the original SQL predicate below for exact filtering.
+		if indexFunctionComparesByteStringColumn(lastFn) {
+			flag &^= 1
+		}
 		flagExpr := makePlan2Uint8ConstExprWithType(flag)
 
 		compositePKFilter, ok = builder.bindCompositeKeyPredicate("prefix_in_range",
@@ -3413,7 +3446,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 	} else {
 		serialArgs := make([]*plan.Expr, len(filterIdx))
 		for i := range filterIdx {
-			serialArgs[i] = filters[filterIdx[i]].GetF().Args[1]
+			serialArgs[i] = lookupFilters[i].GetF().Args[1]
 		}
 		rightArg, ok := builder.bindCompositeKeySerial(serialArgs)
 		if !ok {
@@ -3443,11 +3476,22 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool,
 		hitFilterSet[filterIdx[i]] = true
 	}
 
-	newFilterList := make([]*plan.Expr, 0, len(filters)-len(filterIdx)+1)
+	leadingPos := make([]int32, len(filterIdx))
+	for i, pos := range filterIdx {
+		leadingPos[i] = int32(pos)
+	}
+	residualPos := serializedLookupResidualLeadingFilterPositions(tableDef, filters, leadingPos,
+		indexLookupUsesPrefixComparison(compositePKFilter),
+		tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name))
+	newFilterList := make([]*plan.Expr, 0, len(filters)-len(filterIdx)+1+len(residualPos))
 	newFilterList = append(newFilterList, compositePKFilter)
 	for i, filter := range filters {
 		if !hitFilterSet[i] {
 			newFilterList = append(newFilterList, filter)
+		} else if slices.Contains(residualPos, int32(i)) {
+			residual := DeepCopyExpr(filter)
+			residual.Selectivity = 1 // The candidate already carries SQL selectivity.
+			newFilterList = append(newFilterList, residual)
 		}
 	}
 

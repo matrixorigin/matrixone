@@ -100,6 +100,10 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		for iter.Next() {
 			n++
 			entry := iter.Entry()
+			require.Zero(t, entry.Batch.Vecs[0].Length())
+			require.Zero(t, entry.Batch.Vecs[1].Length())
+			require.Zero(t, entry.Batch.Vecs[0].Allocated())
+			require.Zero(t, entry.Batch.Vecs[1].Allocated())
 			rowIDs[entry.RowID] = true
 			// RowExists
 			require.True(t, state.RowExists(entry.RowID, ts))

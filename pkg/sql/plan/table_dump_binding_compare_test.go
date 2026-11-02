@@ -18,14 +18,47 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 	"sync"
 	"testing"
 )
 
+func referenceTableDumpBoundExpressionNeedsNormalization(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.Typ.Table != "" || (expr.Typ.Id == int32(types.T_time) && expr.Typ.Width != 0 && expr.Typ.Width == expr.Typ.Scale) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if referenceTableDumpBoundExpressionNeedsNormalization(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, entry := range list.List {
+			if referenceTableDumpBoundExpressionNeedsNormalization(entry) {
+				return true
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return referenceTableDumpBoundExpressionNeedsNormalization(lit.Src)
+	}
+	return false
+}
+
 func referenceTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	if a == nil || b == nil {
 		return a == b
+	}
+	// Canonical trees need no compatibility rewrite. Avoid copying both
+	// complete trees for each speculative binding in the witness search.
+	if !referenceTableDumpBoundExpressionNeedsNormalization(a) && !referenceTableDumpBoundExpressionNeedsNormalization(b) {
+		return proto.Equal(a, b)
 	}
 	left := proto.Clone(a).(*planpb.Expr)
 	right := proto.Clone(b).(*planpb.Expr)
@@ -61,6 +94,62 @@ func referenceTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	normalize(left)
 	normalize(right)
 	return proto.Equal(left, right)
+}
+
+func referenceSameHistoricalFloatBoundExpression(stored, candidate *planpb.Expr) bool {
+	right := proto.Clone(candidate).(*planpb.Expr)
+	var project func(*planpb.Expr, *planpb.Expr)
+	project = func(a, b *planpb.Expr) {
+		if a == nil || b == nil {
+			return
+		}
+		omitHistoricalFloatCoercibility(a, b)
+		if x, y := a.GetF(), b.GetF(); x != nil && y != nil {
+			for i := 0; i < len(x.Args) && i < len(y.Args); i++ {
+				project(x.Args[i], y.Args[i])
+			}
+		}
+		if x, y := a.GetList(), b.GetList(); x != nil && y != nil {
+			for i := 0; i < len(x.List) && i < len(y.List); i++ {
+				project(x.List[i], y.List[i])
+			}
+		}
+		if x, y := a.GetLit(), b.GetLit(); x != nil && y != nil {
+			project(x.Src, y.Src)
+		}
+	}
+	project(stored, right)
+	return referenceTableDumpBoundExpression(stored, right)
+}
+
+func referenceSameLegacyFloatOrigin(stored, candidate *planpb.Expr) bool {
+	right := proto.Clone(candidate).(*planpb.Expr)
+	var recoverMissingMarkers func(*planpb.Expr, *planpb.Expr)
+	recoverMissingMarkers = func(old, bound *planpb.Expr) {
+		if old == nil || bound == nil {
+			return
+		}
+		omitHistoricalFloatCoercibility(old, bound)
+		if a, b := old.GetF(), bound.GetF(); a != nil && b != nil && b.Func != nil {
+			id, overload := function.DecodeOverloadID(b.Func.Obj)
+			if id == function.CAST && overload == 0 && !a.SyntaxExplicitCast {
+				b.SyntaxExplicitCast = false
+			}
+			for i := 0; i < len(a.Args) && i < len(b.Args); i++ {
+				recoverMissingMarkers(a.Args[i], b.Args[i])
+			}
+		}
+		if a, b := old.GetList(), bound.GetList(); a != nil && b != nil {
+			for i := 0; i < len(a.List) && i < len(b.List); i++ {
+				recoverMissingMarkers(a.List[i], b.List[i])
+			}
+		}
+		if a, b := old.GetLit(), bound.GetLit(); a != nil && b != nil {
+			recoverMissingMarkers(a.Src, b.Src)
+		}
+	}
+	recoverMissingMarkers(stored, right)
+	return referenceTableDumpBoundExpression(stored, right)
 }
 
 func TestTableDumpBoundComparisonPreservesNormalization(t *testing.T) {

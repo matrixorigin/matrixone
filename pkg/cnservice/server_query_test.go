@@ -1465,12 +1465,19 @@ func Test_service_handleMigrateConnTo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &service{mo: tt.fields.mo}
+			s.viewMetadataIngressReady.Store(true)
 			err := s.handleMigrateConnTo(tt.args.ctx, tt.args.req, tt.args.resp, nil)
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
 				"handleMigrateConnTo(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
 		})
 	}
+	t.Run("not admitted", func(t *testing.T) {
+		server := mock_moserver.NewMockServer(gomock.NewController(t))
+		s := &service{mo: server}
+		err := s.handleMigrateConnTo(ctx, &query.Request{MigrateConnToRequest: &query.MigrateConnToRequest{}}, &query.Response{}, nil)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrServiceUnavailable))
+	})
 }
 
 func Test_service_handleGetReplicaCount(t *testing.T) {

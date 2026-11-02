@@ -1400,6 +1400,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
+	if executor.RequiresLocalExecution(c.proc.Ctx) && c.execType == plan2.ExecTypeAP_MULTICN {
+		c.execType = plan2.ExecTypeAP_ONECN
+	}
 
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
@@ -7705,6 +7708,9 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 		return c.compileOrder(node, ss)
 
 	case node.Limit != nil && node.Offset != nil && len(node.OrderBy) > 0:
+		if topN, ok := c.preparedPaginationTop(node); ok {
+			return c.compileOffset(node, c.compileTop(node, plan2.MakePlan2Uint64ConstExprWithType(topN), ss))
+		}
 		if function.IsConstant(node.Limit, false) && function.IsConstant(node.Offset, false) {
 			// get limit
 			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)

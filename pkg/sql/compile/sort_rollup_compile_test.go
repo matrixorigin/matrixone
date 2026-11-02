@@ -15,18 +15,92 @@
 package compile
 
 import (
+	"context"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCompileSortRollupThroughProjectedOrderedSQL(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+	c := newCompileForShuffleGroupTest(t)
+	c.addr = "127.0.0.1:18000"
+	c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 4}}
+	t.Cleanup(c.proc.Free)
+	ctx := plan2.NewMockCompilerContext(true, c.proc)
+	stmts, err := mysql.Parse(context.Background(), `select d.x,d.y,avg(d.v) from
+		(select e.y,e.v,e.x from
+		 (select c as v,b as y,a as x from select_test.bind_select order by x,y) e
+		 where e.y > 0) d group by d.x,d.y with rollup`, 1)
+	require.NoError(t, err)
+	p, err := plan2.BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+	plan2.CalcQueryDOP(p, 4, 1, plan2.ExecTypeAP_ONECN)
+	q := p.GetQuery()
+	marked, sorts := 0, 0
+	for _, n := range q.Nodes {
+		if n.NodeType == planpb.Node_AGG && plan2.IsSortRollupOption(n.ExtraOptions) {
+			marked++
+		}
+		if n.NodeType == planpb.Node_SORT {
+			sorts++
+		}
+		if n.NodeType == planpb.Node_TABLE_SCAN {
+			// Retain the optimized SQL plan and replace only physical storage.
+			n.NodeType = planpb.Node_VALUE_SCAN
+		}
+	}
+	require.Equal(t, 1, marked)
+	require.Equal(t, 1, sorts)
+	scopes, err := c.compilePlanScope(0, q.Steps[0], q.Nodes)
+	require.NoError(t, err)
+	t.Cleanup(func() { ReleaseScopes(scopes) })
+	require.Len(t, scopes, 1)
+	groups, orderedInputs := 0, 0
+	var visit func(*Scope)
+	visit = func(s *Scope) {
+		require.False(t, s.HasPartialResults)
+		require.NoError(t, vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			require.NotEqual(t, vm.MergeGroup, op.OpType())
+			if g, ok := op.(*group.Group); ok {
+				groups++
+				require.True(t, g.SortRollup)
+				require.NoError(t, vm.HandleAllOp(g.GetChildren(0), func(_ vm.Operator, child vm.Operator) error {
+					if child.OpType() == vm.Order || child.OpType() == vm.MergeOrder {
+						orderedInputs++
+					}
+					return nil
+				}))
+			}
+			return nil
+		}))
+		for _, pre := range s.PreScopes {
+			visit(pre)
+		}
+	}
+	visit(scopes[0])
+	require.Equal(t, 1, groups)
+	require.Positive(t, orderedInputs)
+}
 
 func TestCompileSortRollupUsesOneCoordinatorAggregate(t *testing.T) {
 	c := NewMockCompile(t)

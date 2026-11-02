@@ -131,9 +131,9 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   fs.writeFileSync(event, JSON.stringify({ pull_request: { base: { sha: base }, head: { sha: head } } }));
   const realGo = execFileSync('which', ['go'], { encoding: 'utf8' }).trim();
   const tools = {
-    go: '#!/bin/sh\nif [ "$1" = vet ]; then printf "vet %s\\n" "$*" >> "$COMMAND_LOG"; exit "${FAIL_VET:-0}"; fi\nexec "$REAL_GO" "$@"\n',
+    go: '#!/bin/sh\nexec "$REAL_GO" "$@"\n',
     'golangci-lint': '#!/bin/sh\nprintf "lint %s\\n" "$*" >> "$COMMAND_LOG"\nexit "${FAIL_LINT:-0}"\n',
-    molint: '#!/bin/sh\nexit 0\n',
+    molint: '#!/bin/sh\nprintf "molint %s\\n" "$*" >> "$COMMAND_LOG"\nexit "${FAIL_MOLINT:-0}"\n',
   };
   for (const [name, contents] of Object.entries(tools)) fs.writeFileSync(path.join(bin, name), contents, { mode: 0o755 });
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, REAL_GO: realGo, COMMAND_LOG: log,
@@ -148,6 +148,7 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   const first = run();
   assert.equal(first.result.status, 0, first.result.stderr + first.result.stdout);
   assert.equal(first.commands.length, 2);
+  assert.ok(first.commands[0].startsWith('molint check -mod=readonly '));
   assert.match(first.result.stderr, /SCA selection: 3\/8 packages/);
   for (const command of first.commands) assert.ok(command.endsWith('./pkg/a ./pkg/b ./pkg/c'), command);
   assert.ok(first.commands[1].includes('--concurrency 1'));
@@ -163,9 +164,9 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   assert.equal(full.result.status, 0, full.result.stderr);
   assert.match(full.result.stderr, /SCA_FULL=1/);
   assert.ok(full.commands.every(command => command.endsWith('./...')));
-  const vetFailure = run({ FAIL_VET: '7' });
-  assert.notEqual(vetFailure.result.status, 0);
-  assert.equal(vetFailure.commands.length, 1);
+  const molintFailure = run({ FAIL_MOLINT: '7' });
+  assert.notEqual(molintFailure.result.status, 0);
+  assert.equal(molintFailure.commands.length, 1);
   assert.notEqual(run({ FAIL_LINT: '9' }).result.status, 0);
   const noNode = path.join(dir, 'without-node');
   fs.mkdirSync(noNode);
@@ -179,9 +180,9 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   assert.match(missingNode.result.stderr, /full graph \(Node unavailable on PATH in CI\)/);
   assert.equal(missingNode.commands.length, 2);
   assert.ok(missingNode.commands.every(command => command.endsWith('./...')));
-  const missingNodeVetFailure = run({ PATH: noNode, FAIL_VET: '7' });
-  assert.notEqual(missingNodeVetFailure.result.status, 0);
-  assert.equal(missingNodeVetFailure.commands.length, 1);
+  const missingNodeMolintFailure = run({ PATH: noNode, FAIL_MOLINT: '7' });
+  assert.notEqual(missingNodeMolintFailure.result.status, 0);
+  assert.equal(missingNodeMolintFailure.commands.length, 1);
   const missingNodeLintFailure = run({ PATH: noNode, FAIL_LINT: '9' });
   assert.notEqual(missingNodeLintFailure.result.status, 0);
   assert.equal(missingNodeLintFailure.commands.length, 2);

@@ -130,3 +130,34 @@ func TestDeferredJoinDiagnosticResetDiscardsLateBuildWarnings(t *testing.T) {
 	require.Zero(t, session.warningCount)
 	owner.Reset()
 }
+
+func TestDeferredJoinTemporalWarningActivation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	src := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "bad"}}}}
+	expr := bindTestCast(t, proc, 0, src, types.T_time.ToType())
+	owner := new(DeferredJoinDiagnostic)
+	owner.Prepare(proc)
+	execs, err := NewJoinBuildExpressionExecutors(proc, []*plan.Expr{expr}, nil, owner)
+	require.NoError(t, err)
+	defer execs[0].Free()
+	b := batch.New(nil)
+	b.SetRowCount(2)
+	_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Zero(t, sink.warningCount)
+	owner.Reset()
+	require.Zero(t, sink.warningCount)
+	execs[0].ResetForNextQuery()
+	owner.Prepare(proc)
+	_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Zero(t, sink.warningCount)
+	require.NoError(t, owner.Activate(proc))
+	require.NoError(t, owner.Activate(proc))
+	require.Equal(t, 1, sink.warningCount)
+	owner.Reset()
+}

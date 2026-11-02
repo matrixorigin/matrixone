@@ -943,3 +943,23 @@ func TestMixedSequenceOperationsSerializeStatePublication(t *testing.T) {
 	state.Unlock()
 	require.Equal(t, "10", parent.GetSessionInfo().SeqLastValue[0])
 }
+
+func TestSequenceMutationHonorsReadOnlyStamp(t *testing.T) {
+	// Unstamped and explicitly read-write contexts pass the mutation
+	// boundary unchanged; a stamped read-only mode is rejected with
+	// ERROR 1792 before any engine or counter work happens.
+	require.NoError(t, rejectSequenceMutationInReadOnly(nil))
+
+	proc := testutil.NewProcess(t)
+	require.NoError(t, rejectSequenceMutationInReadOnly(proc))
+
+	rwProc := testutil.NewProcess(t)
+	rwProc.SetReadOnlyTxnAccessMode(false)
+	require.NoError(t, rejectSequenceMutationInReadOnly(rwProc))
+
+	roProc := testutil.NewProcess(t)
+	roProc.SetReadOnlyTxnAccessMode(true)
+	err := rejectSequenceMutationInReadOnly(roProc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction))
+}

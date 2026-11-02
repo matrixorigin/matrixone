@@ -66,6 +66,7 @@ _RESERVED = MySQLIdentifierPreparer.reserved_words
 def sql_identifier(name, qualified=False, *, force=False) -> str:
     if not isinstance(name, str):
         raise TypeError('SQL identifier must be a string')
+    force = force or getattr(name, 'quote', None) is True
     parts = name.split('.') if qualified else [name]
     quoted = []
     for part in parts:
@@ -78,12 +79,15 @@ def sql_identifier(name, qualified=False, *, force=False) -> str:
     return '.'.join(quoted)
 
 
-def identifier_parts(name, qualified=False):
+def identifier_parts(name, qualified=False, *, preserve_quoting=False):
     """Normalize complete legacy quoted names, never trailing SQL fragments."""
     if not isinstance(name, str):
         raise TypeError('SQL identifier must be a string')
     if not name or len(name) > (261 if qualified else 130):
         raise ValueError('Invalid SQL object name')
+    if getattr(name, 'quote', None) is True:
+        sql_identifier(name)
+        return (name if preserve_quoting else str(name),)
     parts = []
     offset = 0
     while offset < len(name):
@@ -96,6 +100,10 @@ def identifier_parts(name, qualified=False):
             offset += match.end()
             if offset < len(name) and name[offset] != '.':
                 raise ValueError('Unexpected SQL after quoted identifier')
+            if preserve_quoting:
+                from sqlalchemy.sql.elements import quoted_name
+
+                part = quoted_name(part, True)
         else:
             end = name.find('.', offset) if qualified else -1
             if end < 0:
@@ -111,9 +119,9 @@ def identifier_parts(name, qualified=False):
     return tuple(parts)
 
 
-def sql_object_name(name, qualified=False):
+def sql_object_name(name, qualified=False, force=False):
     """Render a manager name, including complete legacy backtick quoting."""
-    return '.'.join(sql_identifier(part) for part in identifier_parts(name, qualified))
+    return '.'.join(sql_identifier(part, force=force) for part in identifier_parts(name, qualified))
 
 
 def sql_literal(value):
@@ -296,8 +304,8 @@ def sql_string_token(value, *, context='LOAD') -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def fulltext_term_token(value):
-    """Render AGAINST's STRING grammar, independent of sql_mode.
+def string_grammar_token(value):
+    """Render a STRING token for AGAINST/SHOW LIKE, independent of sql_mode.
 
     NUL and combined backslash/dollar input cannot be represented safely by
     the supported server lexer and are rejected before query execution.

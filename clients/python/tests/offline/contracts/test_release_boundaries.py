@@ -349,8 +349,9 @@ def test_admin_string_authority_and_consumers(engine):
     with engine.connect() as connection:
         assert connection.exec_driver_sql('SELECT ' + client._escape_string(value)).scalar() == value
     assert client._escape_identifier('plain') == '`plain`'
-    stage = client.stage._build_create_stage_sql('dash-name', 'file:///tmp/data', comment=value)
-    assert "CREATE STAGE `dash-name` URL='file:///tmp/data' COMMENT='O''Reilly 漢字'" == stage
+    stage = client.stage._build_create_stage_sql("quoted 'name' {space}", 'file:///tmp/data', comment=value)
+    assert "CREATE STAGE `quoted 'name' {space}`" in stage
+    assert "COMMENT='O''Reilly 漢字'" in stage
     user = BaseAccountManager(client)._build_create_user_sql('someone', value)
     assert "IDENTIFIED BY 'O''Reilly 漢字'" in user
     cdc = BaseCDCManager(client)
@@ -774,3 +775,29 @@ async def test_moctl_public_facades_share_literal_and_source(async_mode):
         if async_mode:
             await result
     assert raised.value.__cause__ is source
+
+
+@pytest.mark.parametrize('owner', ['client', 'session', 'legacy_session'])
+def test_explicit_driver_binding_uses_existing_owner_without_sdk_rewriting(mysql_transport, owner):
+    engine, wire, formatter = mysql_transport
+    client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    sql = 'SELECT %s AS value'
+    params = ("literal ? :name %(other)s 100% O'Reilly",)
+    expected = formatter.mogrify(sql, params)
+    if owner == 'client':
+        assert client.execute_driver(sql, params).scalar() == 1
+        assert wire[-1] == expected
+        assert client.execute_driver("SELECT '100%' AS value").scalar() == 1
+        assert wire[-1] == "SELECT '100%' AS value"
+    else:
+        from matrixone.client import Session as LegacySession
+
+        session_type = Session if owner == 'session' else LegacySession
+        with session_type(bind=engine, client=client) as session:
+            assert session.execute_driver(sql, params).scalar() == 1
+            assert wire[-1] == expected
+            assert session.execute_driver("SELECT '100%' AS value").scalar() == 1
+            assert wire[-1] == "SELECT '100%' AS value"
+    # Native-driver opt-in must not change existing SDK parameter semantics.
+    assert client.execute('SELECT ? AS value', ("marker %s :name",)).scalar() == 1
+    assert wire[-1] == "SELECT 'marker %s :name' AS value"

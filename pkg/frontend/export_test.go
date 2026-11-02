@@ -182,7 +182,7 @@ func Test_formatOutputString(t *testing.T) {
 			mrs: &MysqlResultSet{},
 		}
 		buffer := &bytes.Buffer{}
-		convey.So(formatOutputString(ep, nil, nil, '\n', true, buffer), convey.ShouldBeNil)
+		convey.So(formatOutputString(ep, nil, nil, '\n', true, true, buffer), convey.ShouldBeNil)
 	})
 }
 
@@ -328,14 +328,8 @@ func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataFromResultSetToCSVFile succ", t, func() {
 		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
 			userConfig: &tree.ExportParam{
-				Lines: &tree.Lines{
-					TerminatedBy: &tree.Terminated{},
-				},
-				Fields: &tree.Fields{
-					Terminated: &tree.Terminated{},
-					EnclosedBy: &tree.EnclosedBy{},
-					EscapedBy:  &tree.EscapedBy{},
-				},
+				Lines:    tree.NewLines("", "\n"),
+				Fields:   tree.NewFields(",", false, '"', '\\'),
 				Header:   true,
 				FilePath: "test/export.csv",
 			},
@@ -384,8 +378,9 @@ func Test_exportDataToCSVFile(t *testing.T) {
 
 		ep.mrs.AddRow(data)
 
-		ep.Symbol = make([][]byte, len(col))
-		ep.ColumnFlag = make([]bool, len(col))
+		// Exercise real field/record boundaries rather than fifteen fields
+		// concatenated without delimiters, which cannot round-trip NULLs.
+		initExportFileParam(ep, ep.mrs)
 
 		stubs := gostub.StubFunc(&Close, nil)
 		defer stubs.Reset()

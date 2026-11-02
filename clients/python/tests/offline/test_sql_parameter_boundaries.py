@@ -136,6 +136,18 @@ def test_legacy_identifiers_cannot_change_statement_structure():
         builder._build_insert_sql('bad\x00name', {'v': 1})
 
 
+def test_analytics_identifier_contract():
+    from matrixone.analytics import _driver_identifier, _identifier, _table_name
+
+    assert _identifier('db.table') == '`db.table`'
+    assert _identifier('a`b') == '`a``b`'
+    assert _table_name('db.table') == '`db`.`table`'
+    assert _driver_identifier('rate%') == '`rate%%`'
+    for invalid in (None, '', 'a\x00b', 'a' * 65):
+        with pytest.raises(ValueError, match='SQL identifiers must contain'):
+            _identifier(invalid)
+
+
 @pytest.mark.parametrize(
     'sql,params,expected',
     [

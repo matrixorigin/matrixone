@@ -1,5 +1,7 @@
-select enable_fault_injection();
-select add_fault_point('fj/cn/recv/err', ':::', 'echo', 5, 'mo_tables');
+-- These ordered DDL cases require successful transactions. Logtail reconnect
+-- can abort an entire transaction; its rollback and fresh retry are covered by
+-- TestPKCheckReconnectRollsBackAndFreshTxnSucceeds, with deterministic barriers.
+drop database if exists db1;
 create database db1;
 use db1;
 begin;
@@ -145,4 +147,4 @@ alter table t2 drop foreign key fk_t2_t1;
 -- @session}
 commit;
 
-select disable_fault_injection();
+drop database db1;

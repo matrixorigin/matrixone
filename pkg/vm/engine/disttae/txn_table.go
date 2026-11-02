@@ -446,6 +446,26 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	return v + rows, nil
 }
 
+func replayRowColumnSize(entry *logtailreplay.RowEntry, neededCols map[string]*plan.ColDef) uint64 {
+	var size uint64
+	for i, name := range entry.Batch.Attrs {
+		if _, ok := neededCols[name]; !ok {
+			continue
+		}
+		vec := entry.Batch.Vecs[i]
+		if vec.Length() == 0 {
+			// Replayed rows keep the physical RowID on RowEntry rather than
+			// duplicating it in the retained batch. Size("*") includes it.
+			if name == catalog.Row_ID {
+				size += types.RowidSize
+			}
+			continue
+		}
+		size += uint64(vec.Size() / vec.Length())
+	}
+	return size
+}
+
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
@@ -499,11 +519,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 			continue
 		}
 
-		for i, s := range entry.Batch.Attrs {
-			if _, ok := neededCols[s]; ok {
-				szInPart += uint64(entry.Batch.Vecs[i].Size() / entry.Batch.Vecs[i].Length())
-			}
-		}
+		szInPart += replayRowColumnSize(entry, neededCols)
 	}
 
 	s, _ := tbl.getPublishedStats(ctx, true)
@@ -1733,15 +1749,16 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					Name:       name,
 					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
-						Id:               int32(attr.Attr.Type.Oid),
-						Width:            attr.Attr.Type.Width,
-						Scale:            attr.Attr.Type.Scale,
-						AutoIncr:         attr.Attr.AutoIncrement,
-						Table:            tbl.tableName,
-						NotNullable:      attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-						Enumvalues:       attr.Attr.EnumVlaues,
-						Charset:          uint32(attr.Attr.Type.Charset),
-						CollationVersion: uint32(attr.Attr.Type.CollationVersion),
+						Id:                int32(attr.Attr.Type.Oid),
+						Width:             attr.Attr.Type.Width,
+						Scale:             attr.Attr.Type.Scale,
+						AutoIncr:          attr.Attr.AutoIncrement,
+						Table:             tbl.tableName,
+						NotNullable:       attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:        attr.Attr.EnumVlaues,
+						Charset:           uint32(attr.Attr.Type.Charset),
+						CollationVersion:  uint32(attr.Attr.Type.CollationVersion),
+						NumericAttributes: uint32(attr.Attr.NumericAttributes),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -2757,7 +2774,6 @@ func (tbl *txnTable) BuildReaders(
 			tbl.db.op.SnapshotTS(),
 			expr,
 			ds,
-			readutil.GetThresholdForReader(newNum),
 			hint,
 		)
 		if err != nil {
@@ -2921,6 +2937,21 @@ func (tbl *txnTable) PKPersistedBetween(
 	keys *vector.Vector,
 	checkTombstone bool,
 ) (changed bool, err error) {
+	// A generated component of a composite primary key is not the stored
+	// primary-key vector. Keep the existing conservative policy until that
+	// caller can identify the component across the sharding boundary.
+	if !checkTombstone {
+		def := tbl.GetTableDef(ctx)
+		if def != nil && def.Pkey != nil &&
+			def.Pkey.PkeyColName != catalog.CPrimaryKeyColName &&
+			def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName &&
+			tbl.primaryIdx >= 0 && tbl.primaryIdx < len(def.Cols) &&
+			def.Cols[tbl.primaryIdx] != nil &&
+			types.T(def.Cols[tbl.primaryIdx].Typ.Id).IsInteger() &&
+			types.T(def.Cols[tbl.primaryIdx].Typ.Id) == keys.GetType().Oid {
+			return tbl.pkUpsertPersistedBetween(ctx, p, from, to, keys)
+		}
+	}
 
 	start := time.Now()
 	reason := ""

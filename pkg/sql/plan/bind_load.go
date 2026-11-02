@@ -342,10 +342,14 @@ func (builder *QueryBuilder) applyLoadAssignmentCasts(
 	for _, col := range tableDef.Cols {
 		expr, ok := insertColToExpr[col.Name]
 		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
-			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
+			col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ) &&
+			!isAttributedDecimalPlanType(col.Typ)) {
 			continue
 		}
-		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)
+		// Attributed DECIMAL staged text takes the same admission -> assignment
+		// composition as DML; loadAssignmentIgnore keeps its LOCAL/IGNORE
+		// mapping on the statement-policy axis.
+		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore, col.Name)
 		if err != nil {
 			return err
 		}

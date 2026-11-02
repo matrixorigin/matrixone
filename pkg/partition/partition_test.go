@@ -363,3 +363,50 @@ func TestPartitionAccumulatesDiffs(t *testing.T) {
 		require.Equal(t, []int64{0, 1, 2}, ps)
 	})
 }
+
+func TestPartitionJSONValueIdentity(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	jsonVec := func(values ...any) *vector.Vector {
+		vec := vector.NewVec(types.T_json.ToType())
+		for _, v := range values {
+			if s, ok := v.(string); ok {
+				bj, err := types.ParseStringToByteJson(s)
+				require.NoError(t, err)
+				data, err := bj.Marshal()
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendBytes(vec, data, false, mp))
+			} else {
+				require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+			}
+		}
+		return vec
+	}
+
+	run := func(vec *vector.Vector, n int) []int64 {
+		sels := make([]int64, n)
+		for i := range sels {
+			sels[i] = int64(i)
+		}
+		diffs := make([]bool, n)
+		partitions := make([]int64, 0, n)
+		return Partition(sels, diffs, partitions, vec)
+	}
+
+	// JSON value identity: 1, 1.0 and a repeated 1 are one partition;
+	// 2, 2.0 one partition; NULL forms its own trailing group.
+	vec := jsonVec("1", "1.0", "1", "2", "2.0", nil)
+	require.Equal(t, []int64{0, 3, 5}, run(vec, 6))
+
+	// Objects compare by member semantics, arrays by element semantics:
+	// {"a":1} equals {"a":1.0} and [1] equals [1.0], but an object never
+	// equals an array.
+	vec2 := jsonVec(`{"a":1}`, `{"a":1.0}`, `[1]`, `[1.0]`)
+	require.Equal(t, []int64{0, 2}, run(vec2, 4))
+
+	// Scoped change: non-JSON strings keep byte-identity partitioning.
+	sv := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(sv, []byte("1"), false, mp))
+	require.NoError(t, vector.AppendBytes(sv, []byte("1.0"), false, mp))
+	require.Equal(t, []int64{0, 1}, run(sv, 2))
+}

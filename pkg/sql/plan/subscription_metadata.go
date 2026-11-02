@@ -705,6 +705,10 @@ func init() {
 			"extra_info",
 			"rel_logical_id",
 			"table_owner",
+			// code-only contract: no shipped view definition references this
+			// field yet; a later gated template generation consumes it for
+			// the attributed-DECIMAL rendering.
+			"att_is_unsigned",
 		},
 		[]types.Type{
 			catalog.MoColumnsTypes[catalog.MO_COLUMNS_ACCOUNT_ID_IDX],
@@ -732,6 +736,7 @@ func init() {
 			catalog.MoTablesTypes[catalog.MO_TABLES_EXTRA_INFO_IDX],
 			catalog.MoTablesTypes[catalog.MO_TABLES_LOGICAL_ID_IDX],
 			catalog.MoTablesTypes[catalog.MO_TABLES_OWNER_IDX],
+			catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_IS_UNSIGNED_IDX],
 		},
 	)
 }

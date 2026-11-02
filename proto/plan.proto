@@ -48,6 +48,11 @@ message Type {
   bool collation_merge_conflict = 12;
   // Zero retains the historical meaning of charset. New semantics stay gated.
   uint32 collation_version = 13;
+  // Numeric type attribute bitmask; bit 0 = UNSIGNED, bit 1 = ZEROFILL.
+  // Legal only on T_decimal64/128/256 OIDs; every other OID must carry 0.
+  // Declared ZEROFILL is normalized to 3 at authoring (unsigned is implied),
+  // so bit 1 never appears without bit 0 in persisted metadata.
+  uint32 numeric_attributes = 14;
 }
 
 message msgHeader {

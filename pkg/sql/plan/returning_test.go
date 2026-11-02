@@ -309,6 +309,6 @@ func TestDMLReturningRejectsSynchronousFulltextPrimaryKeyUpdate(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 	builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
-	_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+	_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil), NewDMLContext())
 	require.ErrorContains(t, err, "primary-key UPDATE on synchronous full-text/vector index")
 }

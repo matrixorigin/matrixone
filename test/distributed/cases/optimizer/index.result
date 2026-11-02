@@ -313,9 +313,8 @@ INSERT INTO t14 (pseudo,pseudo1,same) VALUES ('joce', 'testtt', 1),('joce', 'tse
 explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
-  ->  Index Table Scan on t14.pseudo  𝄀
-        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, CHAR)) = 'joce')  𝄀
-        Block Filter Cond: prefix_eq(__mo_index_idx_col)
+  ->  Table Scan on d1.t14  𝄀
+        Filter Cond: (t14.pseudo = 'joce')
 SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ pseudo1[1,35,0]  𝄀
 testtt  𝄀

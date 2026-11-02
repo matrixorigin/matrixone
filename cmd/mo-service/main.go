@@ -31,6 +31,7 @@ import (
 	"go.uber.org/automaxprocs/maxprocs"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
@@ -62,16 +63,17 @@ import (
 )
 
 var (
-	configFile        = flag.String("cfg", "", "toml configuration used to start mo-service")
-	launchFile        = flag.String("launch", "", "toml configuration used to launch mo cluster")
-	versionFlag       = flag.Bool("version", false, "print version information")
-	daemon            = flag.Bool("daemon", false, "run mo-service in daemon mode")
-	withProxy         = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
-	maxProcessor      = flag.Int("max-processor", 0, "set max processor for go runtime")
-	globalEtlFS       fileservice.FileService
-	globalServiceType string
-	globalNodeId      string
-	serviceLifecycle  *serviceSupervisor
+	configFile           = flag.String("cfg", "", "toml configuration used to start mo-service")
+	launchFile           = flag.String("launch", "", "toml configuration used to launch mo cluster")
+	catalogDecisionsFile = flag.String("catalog-upgrade-decisions", "", "publish a catalog snapshot decision file using the CN -cfg; stop all CNs first")
+	versionFlag          = flag.Bool("version", false, "print version information")
+	daemon               = flag.Bool("daemon", false, "run mo-service in daemon mode")
+	withProxy            = flag.Bool("with-proxy", false, "run mo-service with proxy module started")
+	maxProcessor         = flag.Int("max-processor", 0, "set max processor for go runtime")
+	globalEtlFS          fileservice.FileService
+	globalServiceType    string
+	globalNodeId         string
+	serviceLifecycle     *serviceSupervisor
 )
 
 func init() {
@@ -85,6 +87,18 @@ func main() {
 
 	flag.Parse()
 	maybePrintVersion()
+	if *catalogDecisionsFile != "" {
+		if *configFile == "" || *launchFile != "" {
+			fmt.Fprintln(os.Stderr, "catalog-upgrade-decisions requires a CN -cfg and cannot be combined with -launch")
+			os.Exit(1)
+		}
+		if err := publishCatalogUpgradeDecisions(context.Background(), *configFile, *catalogDecisionsFile); err != nil {
+			fmt.Fprintln(os.Stderr, "publish catalog upgrade decisions:", err)
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stdout, "published catalog upgrade decisions to", bootstrap.SnapshotUpgradeDecisionPath)
+		return
+	}
 	maybeRunInDaemonMode()
 	// Connection tracking is optional debug instrumentation. Start it only
 	// after command-line handling so image validation with -h does not require
@@ -182,6 +196,7 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 
 	detail := "Starting shutdown..."
 	fatal := false
+	var fatalCause error
 	select {
 	case sig := <-sigchan:
 		detail += "signal: " + sig.String()
@@ -206,7 +221,7 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 		// shutdown cmd from ha keeper
 		launchSleep(time.Second * 5)
 		detail += "ha keeper issues shutdown command"
-	case <-serviceFailureC():
+	case fatalCause = <-serviceFailureC():
 		detail += "service task failed"
 		fatal = true
 	}
@@ -223,7 +238,7 @@ func waitSignalToStop(stopper *stopper.Stopper, shutdownC chan struct{}) error {
 		// stopper now only releases observability and other process-level tasks.
 		stopper.Stop()
 	}
-	return err
+	return errors.Join(fatalCause, err)
 }
 
 func startService(
@@ -377,7 +392,11 @@ func startCNService(
 	}
 	err := stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		var closeErr error
-		defer func() { finishTask(closeErr) }()
+		var startupErr error
+		defer func() {
+			finishTask(closeErr)
+			serviceLifecycle.notifyFatal(startupErr)
+		}()
 		roleCtx, cancelRole := serviceLifecycle.roleContext(ctx, serviceRoleCN)
 		defer cancelRole()
 		cfg.initMetaCache()
@@ -394,11 +413,19 @@ func startCNService(
 			cnservice.WithConfigData(commonConfigKVMap),
 		)
 		if err != nil {
-			panic(err)
+			startupErr = err
+			if published != nil {
+				closeErr = published.Close()
+			}
+			return
 		}
-		if err := s.Start(); err != nil {
-			closeErr = errors.Join(err, published.Close())
-			panic(err)
+		if err := s.StartContext(roleCtx); err != nil {
+			closeErr = published.Close()
+			if roleCtx.Err() != nil && errors.Is(err, context.Canceled) {
+				return
+			}
+			startupErr = err
+			return
 		}
 
 		<-roleCtx.Done()

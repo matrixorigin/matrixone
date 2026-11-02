@@ -44,10 +44,16 @@ const (
 )
 
 // Textual LOAD keeps TIME fields intact until the shared assignment cast owns
-// syntax, precision and range policy. The scan's TableDef retains the target
-// type for field preprocessing; only its physical column references are text.
+// syntax, precision and range policy; attributed DECIMAL stages text on every
+// format (CSV raw field text, Parquet/Arrow mapper-rendered text) so the
+// shared admission boundary classifies the raw source. The scan's TableDef
+// retains the target type for field preprocessing; only its physical column
+// references are text.
 func loadTimeInputType(format string, typ plan.Type) plan.Type {
 	if typ.Id == int32(types.T_time) && format != tree.PARQUET && format != tree.ARROW {
+		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
+	}
+	if isAttributedDecimalPlanType(typ) {
 		return makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
 	}
 	return typ
@@ -131,63 +137,7 @@ func getExternalProject(stmt *tree.Load, ctx CompilerContext, tableDef *TableDef
 }
 
 func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvparser.CSVParser, error) {
-	fieldsTerminatedBy := "\t"
-	fieldsEnclosedBy := "\""
-	fieldsEscapedBy := "\\"
-
-	linesTerminatedBy := "\n"
-	linesStartingBy := ""
-
-	if param.Tail.Fields != nil {
-		if terminated := param.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
-			fieldsTerminatedBy = terminated.Value
-		}
-		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
-			fieldsEnclosedBy = string(enclosed.Value)
-		}
-		if escaped := param.Tail.Fields.EscapedBy; escaped != nil {
-			if escaped.Value == 0 {
-				fieldsEscapedBy = ""
-			} else {
-				fieldsEscapedBy = string(escaped.Value)
-			}
-		}
-	}
-
-	if param.Tail.Lines != nil {
-		if terminated := param.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
-			linesTerminatedBy = param.Tail.Lines.TerminatedBy.Value
-		}
-		if param.Tail.Lines.StartingBy != "" {
-			linesStartingBy = param.Tail.Lines.StartingBy
-		}
-	}
-
-	if param.Format == tree.JSONLINE {
-		fieldsTerminatedBy = "\t"
-		fieldsEscapedBy = ""
-	}
-
-	config := csvparser.CSVConfig{
-		FieldsTerminatedBy: fieldsTerminatedBy,
-		FieldsEnclosedBy:   fieldsEnclosedBy,
-		FieldsEscapedBy:    fieldsEscapedBy,
-		LinesTerminatedBy:  linesTerminatedBy,
-		LinesStartingBy:    linesStartingBy,
-		NotNull:            false,
-		Null:               []string{`\N`},
-		UnescapedQuote:     true,
-		// Comment defaults to 0 (no comment marker): every line is data, matching
-		// MySQL LOAD DATA, which does not treat '#' lines as comments.
-		Comment: "",
-	}
-
-	if param.Format == tree.JSONLINE {
-		config.SkipWhitespaceRecords = true
-		config.Context = param.Ctx
-	}
-
-	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false)
+	return csvparser.NewCSVParser(CSVConfigForLoad(param), bufio.NewReader(reader), csvparser.ReadBlockSize, false)
 }
 
 func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
@@ -788,15 +738,17 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, colToIndex)
 	}
-	// Enforce payload, TIME and MEDIUMINT assignment limits before defaults read
-	// assigned values, including parallel CSV staging and the FK fallback.
+	// Enforce payload, TIME, MEDIUMINT and attributed DECIMAL assignment
+	// limits before defaults read assigned values, including parallel CSV
+	// staging and the FK fallback.
 	for i, col := range originTableDef.Cols {
 		if _, supplied := colToIndex[col.Name]; !supplied ||
 			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) &&
-				col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ)) {
+				col.Typ.Id != int32(types.T_time) && !isMediumIntPlanType(col.Typ) &&
+				!isAttributedDecimalPlanType(col.Typ)) {
 			continue
 		}
-		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
+		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt), col.Name)
 		if err != nil {
 			return nil, err
 		}
