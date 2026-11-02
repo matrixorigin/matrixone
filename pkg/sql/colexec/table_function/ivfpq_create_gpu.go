@@ -122,6 +122,9 @@ type ivfpqCreateState struct {
 	// at init time returned zero — nothing to build, nothing to CDC.
 	srcEmpty bool
 
+	// ignoredRows leaves out the rows the index cannot store; nil without an ignored table.
+	ignoredRows *cuvsIgnoredRows
+
 	// holding one call batch, ivfpqCreateState owns it.
 	batch *batch.Batch
 }
@@ -130,6 +133,12 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// A parallel instance that received no rows never created a builder.
 	if u.srcEmpty || u.builder == nil {
 		return nil
+	}
+	if u.ignoredRows != nil {
+		if err := u.ignoredRows.allBad(); err != nil {
+			return err
+		}
+		u.cdcTail = append(u.cdcTail, u.ignoredRows.tail()...)
 	}
 
 	var (
@@ -218,12 +227,18 @@ func (u *ivfpqCreateState) end(tf *TableFunction, proc *process.Process) error {
 				return err
 			}
 		}
-		for _, sql := range sqls {
+		run := func(sql string) error {
 			res, err := exec.Exec(sql, stmt)
 			res.Close()
-			if err != nil {
+			return err
+		}
+		for _, sql := range sqls {
+			if err := run(sql); err != nil {
 				return err
 			}
+		}
+		if u.ignoredRows != nil {
+			return u.ignoredRows.sqls(u.tblcfg, buildSnapshotTS(proc), run)
 		}
 		return nil
 	})
@@ -250,6 +265,7 @@ func (u *ivfpqCreateState) free(tf *TableFunction, proc *process.Process, pipeli
 	if u.builder != nil {
 		u.builder.Destroy()
 	}
+	u.ignoredRows.close()
 }
 
 func ivfpqCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -632,6 +648,11 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if spillDir == "" {
 			logutil.Infof("IVFPQ create: no LOCAL fileservice; index tars will use $TMPDIR")
 		}
+		u.ignoredRows = newCuvsIgnoredRows(u.tblcfg, spillDir,
+			u.baseOid == types.T_array_float32 && qt == metric.Quantization_F16)
+		if u.ignoredRows != nil {
+			u.ignoredRows.setPlan(plan.Capacity, threshold)
+		}
 
 		// ---- create builder ----
 		// One real [B, Q] builder keyed on (base column type, storage qtype).
@@ -696,8 +717,8 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 	// Build-stream position over indexable (non-NULL) rows only — matches the
 	// COUNT(... WHERE vec IS NOT NULL) basis that cdcCutoff was derived from.
+	// A row the index cannot store does not advance it, like a NULL vector.
 	srcPos := u.rowsSeen
-	u.rowsSeen++
 
 	id := vector.GetFixedAtNoTypeCheck[int64](tf.ctr.argVecs[1], nthRow)
 
@@ -706,9 +727,10 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	// direct (half-storage) add; the CDC tail still transports f32 (exact widen)
 	// until the CDC pipeline is made native (step 5).
 	var fa []float32
+	var h []types.Float16
 	var hf []cuvs.Float16
 	if u.baseOid == types.T_array_float16 {
-		h := types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
+		h = types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
 		if uint(len(h)) != u.idxcfg.CuvsIvfpq.Dimensions {
 			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
 		}
@@ -722,6 +744,19 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
 		}
 	}
+
+	if u.ignoredRows != nil {
+		var skip bool
+		if u.baseOid == types.T_array_float16 {
+			skip, err = checkCuvsRow(u.ignoredRows, id, h)
+		} else {
+			skip, err = checkCuvsRow(u.ignoredRows, id, fa)
+		}
+		if err != nil || skip {
+			return err
+		}
+	}
+	u.rowsSeen++
 
 	// Trailing rows below the cuvs k-means threshold (lists) route to
 	// the CDC tail (search-side brute-force replay) instead of the
@@ -757,6 +792,15 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	if u.baseOid == types.T_array_float16 {
 		vecBytes = util.UnsafeSliceToBytes(hf)
 	}
+	if u.ignoredRows != nil && u.ignoredRows.holding() {
+		var incBytes []byte
+		if len(u.filterCols) > 0 {
+			if incBytes, err = encodeIncludeRowFromArgVecs(u.filterCols, tf.ctr.argVecs, 3, nthRow); err != nil {
+				return err
+			}
+		}
+		return u.ignoredRows.hold(u.builder, u.filterCols, id, vecBytes, incBytes)
+	}
 	if err = u.builder.AddRow(id, vecBytes); err != nil {
 		return err
 	}
@@ -765,6 +809,9 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if err = appendFilterRow(u.builder, u.filterCols, tf.ctr.argVecs, 3, nthRow); err != nil {
 			return err
 		}
+	}
+	if u.ignoredRows != nil {
+		u.ignoredRows.added()
 	}
 	return nil
 }

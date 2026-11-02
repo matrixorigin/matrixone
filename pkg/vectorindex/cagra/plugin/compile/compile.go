@@ -137,7 +137,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		}
 	}
 
-	if len(indexDefs) != 2 {
+	if len(indexDefs) < 2 || len(indexDefs) > 3 {
 		return moerr.NewInternalErrorNoCtx("invalid cagra index table definition")
 	}
 	metaDef, ok := indexDefs[catalog.Cagra_TblType_Metadata]
@@ -267,6 +267,7 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	merged, err := compileplugin.MergeReindexParams(old, alter, "cagra",
 		catalog.IndexAlgoParamMaxIndexCapacity,
 		catalog.IndexAlgoParamQuantizerTrainLimit,
+		catalog.IndexAlgoParamMaxBadRecords,
 		catalog.IntermediateGraphDegree,
 		catalog.GraphDegree,
 		catalog.ITopkSize,
@@ -335,10 +336,14 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("cagra_index index definition not found")
 	}
-	return []string{
+	sqls := []string{
 		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
 		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
-	}, nil
+	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, ignored.IndexTableName)))
+	}
+	return sqls, nil
 }
 
 // genBuildSQL is lifted from pkg/sql/compile/util.go:688.
@@ -365,6 +370,14 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 		PKey:          srcAlias + "." + pkCol,
 		KeyPart:       idx.Parts[0],
 	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		cfg.IgnoredTable = ignored.IndexTableName
+	}
+	maxBadRecords, err := catalog.IndexParamMaxBadRecords(idx.IndexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+	cfg.MaxBadRecords = maxBadRecords
 
 	threads, err := ctx.ResolveVariable("cagra_threads_build", true, false)
 	if err != nil {
