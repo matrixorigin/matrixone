@@ -449,6 +449,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		}
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
+	newNode.NarrowScan = node.NarrowScan
 
 	for idx, target := range node.LockTargets {
 		newNode.LockTargets[idx] = DeepCopyLockTarget(target)

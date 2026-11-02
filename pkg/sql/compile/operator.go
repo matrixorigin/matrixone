@@ -632,6 +632,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
+		op.ReadPolicy = t.ReadPolicy
 		op.SetInfo(&info)
 		return op
 	case vm.ValueScan:

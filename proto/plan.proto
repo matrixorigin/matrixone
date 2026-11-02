@@ -1419,11 +1419,15 @@ message Node {
   // at bind time (ScanReadRole). Additive field; see the enum: rev 14
   // narrows the zero value to "unset" for above-gate plans (a lost mark is
   // declined by the execution-read closure check; legacy decode unchanged).
-  // Field 97: upstream main claimed Node field 96 (mark_existence_only)
-  // while this change sat on its branch, so this additive field moved to the
-  // next free number; nothing persisted field 96 as scan_read_role.
-  ScanReadRole scan_read_role = 97;
+  // Field 98 provenance: upstream main claimed Node fields 96
+  // (mark_existence_only) and then 97 (narrow_scan) while this change sat on
+  // its branch, so this additive field moved to each next free number;
+  // nothing ever persisted 96 or 97 as scan_read_role, and no tagged
+  // encoding of this unmerged field exists outside this branch.
+  ScanReadRole scan_read_role = 98;
 
+  // TABLE_SCAN only: the scan reads a small share of each object it touches.
+  bool narrow_scan = 97;
 }
 
 message SnapshotExtraInfo {

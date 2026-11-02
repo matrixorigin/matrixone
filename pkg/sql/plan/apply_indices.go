@@ -725,7 +725,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 		masterIndexes := make([]*plan.IndexDef, 0)
 		for _, indexDef := range node.TableDef.Indexes {
 			if indexDef != nil && indexDef.TableExist && !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) &&
-				!indexUsesUnicodeCollation(indexDef, node.TableDef) {
+				!indexUnsafeForRead(indexDef, node.TableDef) {
 				masterIndexes = append(masterIndexes, indexDef)
 			}
 		}
@@ -1225,6 +1225,10 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 }
 
 func containsVolatileFunction(expr *plan.Expr) bool {
+	return containsVolatileFunctionImpl(expr, false)
+}
+
+func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bool) bool {
 	if expr == nil {
 		return true
 	}
@@ -1237,11 +1241,16 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 			return true
 		}
 		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
-		if !ok || overload.CannotFold() || function.IsTemporalTextDiagnosticCall(expr) {
+		stablePolicy := false
+		if ok && allowTemporalIntegerPolicy && isTemporalIntegerPolicyCast(expr) {
+			unstable, known := function.GetFunctionValueUnstableByID(exprImpl.F.Func.Obj)
+			stablePolicy = known && !unstable && !overload.HasRowScopedDiagnostics() && !overload.IsRealTimeRelated()
+		}
+		if !ok || (overload.CannotFold() && !stablePolicy) || function.IsTemporalTextDiagnosticCall(expr) {
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
-			if containsVolatileFunction(arg) {
+			if containsVolatileFunctionImpl(arg, allowTemporalIntegerPolicy) {
 				return true
 			}
 		}
@@ -1250,7 +1259,7 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 			return true
 		}
 		for _, item := range exprImpl.List.List {
-			if containsVolatileFunction(item) {
+			if containsVolatileFunctionImpl(item, allowTemporalIntegerPolicy) {
 				return true
 			}
 		}
@@ -1458,7 +1467,7 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		}
 		indexes := filterIndexesByHintScope(scanNode.TableDef.Indexes, scope)
 		for _, idxDef := range indexes {
-			if !usableRegularHintIndex(idxDef) ||
+			if !usableRegularHintIndex(idxDef) || indexUnsafeForRead(idxDef, scanNode.TableDef) ||
 				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) {
 				continue
 			}
@@ -1518,7 +1527,7 @@ func (builder *QueryBuilder) applyForcedHintAccessToScan(scanNode *plan.Node, sc
 		return scanNode.NodeId, nil
 	}
 	for _, idxDef := range filterIndexesByHintScope(scanNode.TableDef.Indexes, scope) {
-		if !usableRegularHintIndex(idxDef) {
+		if !usableRegularHintIndex(idxDef) || indexUnsafeForRead(idxDef, scanNode.TableDef) {
 			continue
 		}
 		accessNodeID, _, _, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
@@ -1539,7 +1548,7 @@ func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *p
 	// The current index-table reader still probes serialized Unicode keys as
 	// raw bytes. Do not turn an explicit hint into a wrong-result plan while
 	// the physical probe path is being kept separate from generic SERIAL.
-	if node != nil && indexUsesUnicodeCollation(idxDef, node.TableDef) {
+	if node != nil && indexUnsafeForRead(idxDef, node.TableDef) {
 		return -1, -1, false, nil
 	}
 	idxNodeID, err := builder.tryHintedCoveringIndexScan(idxDef, node, colRefCnt, idxColMap)
@@ -1557,7 +1566,7 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 || !hintedIndexContainsQualifyingRows(idxDef, node) {
 		return -1, -1, nil
 	}
-	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
+	if indexUnsafeForRead(idxDef, node.TableDef) {
 		return -1, -1, nil
 	}
 	snapshot := node.ScanSnapshot
@@ -1623,7 +1632,7 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	// Serialized secondary-index keys contain UCA weights for native Unicode
 	// collations. serial_extract cannot reconstruct the original text, so an
 	// index-only/covering plan must keep the base-table row as the value source.
-	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
+	if indexUnsafeForRead(idxDef, node.TableDef) {
 		return -1, nil
 	}
 	for i, col := range node.TableDef.Cols {
@@ -2436,11 +2445,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		if node.TableDef.Indexes[i] == nil || !node.TableDef.Indexes[i].TableExist || !catalog.IsRegularIndexAlgo(node.TableDef.Indexes[i].IndexAlgo) {
 			continue
 		}
+		if indexUsesVirtualTimestamp(node.TableDef.Indexes[i], node.TableDef) {
+			continue
+		}
 		if isSpatialIndexDef(node.TableDef.Indexes[i]) {
 			spatialIndexes = append(spatialIndexes, node.TableDef.Indexes[i])
 			continue
 		}
-		if indexUsesUnicodeCollation(node.TableDef.Indexes[i], node.TableDef) {
+		if indexUnsafeForRead(node.TableDef.Indexes[i], node.TableDef) {
 			// The physical key is in the tagged UCA domain, while the current
 			// regular-index lookup builders still construct raw SERIAL probes.
 			// Keep the base scan as the correctness-preserving fallback.
@@ -4534,7 +4546,7 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 	if idxDef == nil || len(idxDef.Parts) == 0 || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 		return nil, false
 	}
-	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
+	if indexUnsafeForRead(idxDef, node.TableDef) {
 		return nil, false
 	}
 	if regularIndexHasDeclaredPrefix(idxDef) {
@@ -5094,6 +5106,12 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 }
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+	if node == nil {
+		return -1, -1
+	}
+	if indexUsesVirtualTimestamp(idxDef, node.TableDef) {
+		return node.NodeId, -1
+	}
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if err != nil {
@@ -5292,7 +5310,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		if idxDef == nil || !idxDef.TableExist ||
 			!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
 			isSpatialIndexDef(idxDef) ||
-			indexUsesUnicodeCollation(idxDef, leftChild.TableDef) ||
+			indexUnsafeForRead(idxDef, leftChild.TableDef) ||
 			!regularIndexPrefixMetadataUsable(idxDef) ||
 			regularIndexHasDeclaredPrefix(idxDef) {
 			continue
@@ -5568,7 +5586,7 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 	}
 	indexes := builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes)
 	for _, idxDef := range indexes {
-		if !usableRegularHintIndex(idxDef) {
+		if !usableRegularHintIndex(idxDef) || indexUnsafeForRead(idxDef, scan.TableDef) {
 			continue
 		}
 		if builder.indexAccessUsesIndex(accessID, idxDef.IndexName) {
@@ -5581,7 +5599,7 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 		return scan.NodeId, nil
 	}
 	for _, idxDef := range indexes {
-		if !usableRegularHintIndex(idxDef) {
+		if !usableRegularHintIndex(idxDef) || indexUnsafeForRead(idxDef, scan.TableDef) {
 			continue
 		}
 		forcedID, _, err := builder.buildHintedIndexBackfillJoin(idxDef, scan)
