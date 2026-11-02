@@ -6478,6 +6478,18 @@ func (v *Vector) remapPrepareParamKindsAfterShuffle(
 	v.normalizePrepareParamKinds()
 }
 
+// preserveSortedAfterShuffle retains the ordering proof only for a stable selection.
+func (v *Vector) preserveSortedAfterShuffle(sels []int64) {
+	if v.sorted {
+		for i := 1; i < len(sels); i++ {
+			if sels[i] < sels[i-1] {
+				v.sorted = false
+				return
+			}
+		}
+	}
+}
+
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
@@ -6577,6 +6589,7 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		}
 		return err
 	}
+	v.preserveSortedAfterShuffle(sels)
 	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
 	releaseRemappedSources = false
@@ -6694,6 +6707,7 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	}
 
 	if err == nil {
+		v.preserveSortedAfterShuffle(sels)
 		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
 		v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
 		releaseRemappedSources = false

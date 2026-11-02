@@ -2707,31 +2707,41 @@ func TestVectorAllocationAccountConstNullCloneReuse(t *testing.T) {
 }
 
 func TestAccountedShuffleGrowingBitmapsFailurePreservesState(t *testing.T) {
-	for _, slots := range []int{3, 4, 5} {
-		t.Run(fmt.Sprintf("slots=%d", slots), func(t *testing.T) {
-			state := newTestVectorAllocationAccount(t, 1<<20, uint64(slots))
-			mp := mpool.MustNewZero()
-			vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
-			require.NoError(t, vec.PreExtend(2, mp))
-			require.NoError(t, vec.PreExtendBitmap(2, mp))
-			require.NoError(t, AppendFixedList(vec, []int64{1, 2}, nil, mp))
-			vec.SetNull(0)
-			vec.GetGrouping().Add(1)
-			before := state.account.Snapshot().Used
-			sels := make([]int64, 65)
-			for i := range sels {
-				sels[i] = int64(i % 2)
-			}
-			err := vec.Shuffle(sels, mp)
-			require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
-			require.Equal(t, before, state.account.Snapshot().Used)
-			require.Equal(t, []int64{1, 2}, MustFixedColWithTypeCheck[int64](vec))
-			require.True(t, vec.IsNull(0))
-			require.True(t, vec.GetGrouping().Contains(1))
-			vec.Free(mp)
-			finalizeTestVectorAllocationAccount(t, state)
-			require.Zero(t, mp.CurrNB())
-		})
+	for _, buffered := range []bool{false, true} {
+		for _, slots := range []int{3, 4, 5} {
+			t.Run(fmt.Sprintf("buffered=%v/slots=%d", buffered, slots), func(t *testing.T) {
+				state := newTestVectorAllocationAccount(t, 1<<20, uint64(slots))
+				mp := mpool.MustNewZero()
+				vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+				require.NoError(t, vec.PreExtend(2, mp))
+				require.NoError(t, vec.PreExtendBitmap(2, mp))
+				require.NoError(t, AppendFixedList(vec, []int64{1, 2}, nil, mp))
+				vec.SetNull(0)
+				vec.GetGrouping().Add(1)
+				vec.SetSorted(true)
+				before := state.account.Snapshot().Used
+				sels := make([]int64, 65)
+				for i := range sels {
+					sels[i] = int64(i % 2)
+				}
+				var err error
+				if buffered {
+					var buf []byte
+					err = vec.ShuffleWithBuf(sels, mp, &buf)
+				} else {
+					err = vec.Shuffle(sels, mp)
+				}
+				require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+				require.True(t, vec.GetSorted())
+				require.Equal(t, before, state.account.Snapshot().Used)
+				require.Equal(t, []int64{1, 2}, MustFixedColWithTypeCheck[int64](vec))
+				require.True(t, vec.IsNull(0))
+				require.True(t, vec.GetGrouping().Contains(1))
+				vec.Free(mp)
+				finalizeTestVectorAllocationAccount(t, state)
+				require.Zero(t, mp.CurrNB())
+			})
+		}
 	}
 }
 
