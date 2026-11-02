@@ -7608,6 +7608,7 @@ func addTablePrivilegeResultsForRole(
 	privTypes := []PrivilegeType{
 		PrivilegeTypeSelect,
 		PrivilegeTypeInsert,
+		PrivilegeTypeUpdate,
 		PrivilegeTypeDelete,
 		PrivilegeTypeTableAll,
 		PrivilegeTypeTableOwnership,
@@ -14386,9 +14387,12 @@ func TestDetermineUserHasPrivilegeSetPublishesRoleGrantOnlyAfterCommit(t *testin
 			defer backgroundExecStub.Reset()
 
 			priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
-			_, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
+			valid, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
 			require.ErrorIs(t, err, commitErr)
-			require.Contains(t, bh.executedSQLs, "rollback;")
+			require.Equal(t, []string{"begin;", roleGrantSQL, "commit;", "rollback;"}, bh.executedSQLs)
+			if tc.rows == nil {
+				require.False(t, valid)
+			}
 			_, cached := cache.getActiveRoleGrant(2, 3)
 			require.False(t, cached)
 		})
@@ -14406,13 +14410,16 @@ func TestDetermineUserHasPrivilegeSetPublishesRoleGrantAfterSuccessfulCommit(t *
 	defer cacheHitStub.Reset()
 
 	for _, tc := range []struct {
-		name      string
-		rows      [][]interface{}
-		wantValid bool
-		wantError bool
+		name       string
+		rows       [][]interface{}
+		wantValid  bool
+		wantError  bool
+		invalidate bool
 	}{
 		{name: "granted", rows: [][]interface{}{{int64(3), int64(2), false}}, wantValid: true},
 		{name: "revoked", wantError: true},
+		{name: "granted invalidated during commit", rows: [][]interface{}{{int64(3), int64(2), false}}, wantValid: true, invalidate: true},
+		{name: "revoked invalidated during commit", wantError: true, invalidate: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cache := &privilegeCache{}
@@ -14433,6 +14440,9 @@ func TestDetermineUserHasPrivilegeSetPublishesRoleGrantAfterSuccessfulCommit(t *
 				if sql == "commit;" {
 					_, cached := cache.getActiveRoleGrant(2, 3)
 					require.False(t, cached)
+					if tc.invalidate {
+						cache.invalidate()
+					}
 				}
 			}
 			backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
@@ -14441,14 +14451,18 @@ func TestDetermineUserHasPrivilegeSetPublishesRoleGrantAfterSuccessfulCommit(t *
 			priv := determinePrivilegeSetOfStatement(&tree.ShowDatabases{})
 			valid, _, err := determineUserHasPrivilegeSet(context.Background(), ses, priv)
 			if tc.wantError {
-				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+				require.EqualError(t, err, "internal error: do not have privilege to execute the statement")
 			} else {
 				require.NoError(t, err)
 			}
 			require.Equal(t, tc.wantValid, valid)
 			cachedValid, cached := cache.getActiveRoleGrant(2, 3)
-			require.True(t, cached)
-			require.Equal(t, tc.wantValid, cachedValid)
+			require.Equal(t, []string{"begin;", roleGrantSQL, "commit;"}, bh.executedSQLs)
+			require.Equal(t, !tc.invalidate, cached)
+			if cached {
+				require.Equal(t, tc.wantValid, cachedValid)
+			}
 		})
 	}
 }
