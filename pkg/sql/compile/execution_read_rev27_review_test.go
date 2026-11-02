@@ -302,7 +302,7 @@ func TestCompileLockOmitsCoveredRowTargetAndDeclines(t *testing.T) {
 	require.Equal(t, uint64(42), kept[0].GetTableId())
 	require.False(t, kept[0].GetLockTable(),
 		"the kept occurrence is a row target with per-occurrence resolution")
-	ss, err = c.compileLock(promoted, ss)
+	_, err = c.compileLock(promoted, ss)
 	require.NoError(t, err)
 	require.Contains(t, c.lockTables, uint64(42))
 	require.Equal(t, map[uint64]struct{}{42: {}},
@@ -476,7 +476,7 @@ func TestNestedStagedLockKeepsLegacyAcquisitionForCoveredRowOccurrence(t *testin
 					kept := ss[0].RootOp.(*lockop.LockOp).CopyToPipelineTarget()
 					require.Len(t, kept, 1,
 						"the row-first order keeps the historical row occurrence physically")
-					ss, err = reversed.compileLock(reversedInner, ss)
+					_, err = reversed.compileLock(reversedInner, ss)
 					require.NoError(t, err)
 					require.Contains(t, reversed.lockTables, uint64(42))
 					require.Empty(t, reversed.markedPrePipelineLockTables(),
