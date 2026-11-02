@@ -976,11 +976,12 @@ func (builder *QueryBuilder) captureMySQLSpecialBlockResultTypes(ctx *BindContex
 }
 
 // Publish the completed root block, after set operations have cleared identity.
-func (builder *QueryBuilder) captureMySQLSpecialResultTypes(ctx *BindContext) {
+func (builder *QueryBuilder) captureMySQLSpecialResultTypes(ctx *BindContext, root int32) {
 	if builder.qry.StmtType != plan.Query_SELECT {
 		return
 	}
 	builder.qry.MysqlSpecialResultTypes = nil
+	var materializationElided *bool
 	for i := range ctx.headings {
 		typ := mysqlSpecialResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
 		if typ == nil {
@@ -988,6 +989,13 @@ func (builder *QueryBuilder) captureMySQLSpecialResultTypes(ctx *BindContext) {
 		}
 		if builder.qry.MysqlSpecialResultTypes == nil {
 			builder.qry.MysqlSpecialResultTypes = make([]plan.MySQLSpecialResultType, len(ctx.headings))
+		}
+		if typ.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY {
+			if materializationElided == nil {
+				elided := resultMaterializationElided(builder.qry, root, nil)
+				materializationElided = &elided
+			}
+			typ.MaterializationElided = *materializationElided
 		}
 		builder.qry.MysqlSpecialResultTypes[i] = *typ
 	}

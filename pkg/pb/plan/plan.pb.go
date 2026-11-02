@@ -1727,7 +1727,7 @@ const (
 	MySQLSpecialResultType_SCALAR_SUBQUERY MySQLSpecialResultType_Kind = 2
 	// Grouping-set fields have CHAR presentation but no ENUM/SET field flags.
 	MySQLSpecialResultType_ROLLUP MySQLSpecialResultType_Kind = 3
-	// Window MIN/MAX and DISTINCT ROLLUP materialize VARCHAR at execution.
+	// Window MIN/MAX and DISTINCT ROLLUP use VARCHAR only when materialized.
 	MySQLSpecialResultType_PREPARE_ONLY MySQLSpecialResultType_Kind = 4
 	// Materialized expression fields retain label width, not ENUM/SET flags.
 	MySQLSpecialResultType_VARCHAR_LABEL MySQLSpecialResultType_Kind = 5
@@ -17850,8 +17850,9 @@ func (m *SelectLockReference) GetIsClusterTable() bool {
 type MySQLSpecialResultType struct {
 	Typ  Type                        `protobuf:"bytes,1,opt,name=typ,proto3" json:"typ"`
 	Kind MySQLSpecialResultType_Kind `protobuf:"varint,2,opt,name=kind,proto3,enum=plan.MySQLSpecialResultType_Kind" json:"kind,omitempty"`
-	// Result publication only: the completed plan proves no rows can reach
-	// materialization. Cursor execution still materializes its result schema.
+	// Result publication only: MySQL can omit materialization for this result.
+	// Empty paths and constant/implicit-group window inputs are distinct proofs.
+	// Cursor execution still materializes its result schema.
 	MaterializationElided bool     `protobuf:"varint,3,opt,name=materialization_elided,json=materializationElided,proto3" json:"materialization_elided,omitempty"`
 	XXX_NoUnkeyedLiteral  struct{} `json:"-"`
 	XXX_unrecognized      []byte   `json:"-"`

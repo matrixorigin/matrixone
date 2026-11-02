@@ -51,7 +51,7 @@ select e, s from (select (select e from jdbc_enum_set_metadata where id = 1) e,
 select e, s from jdbc_enum_set_metadata group by e, s with rollup order by e desc, s desc;
 -- @metacmp(true)
 select min(e) as min_e, max(s) as max_s from jdbc_enum_set_metadata group by id with rollup order by min_e, max_s;
--- DISTINCT ROLLUP and window MIN/MAX materialize VARCHAR at execution.
+-- DISTINCT ROLLUP and nonconstant window inputs materialize VARCHAR at execution.
 -- @metacmp(true)
 select distinct e, s from jdbc_enum_set_metadata group by e, s with rollup order by e, s;
 -- @metacmp(true)
@@ -81,4 +81,26 @@ select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadat
 -- @metacmp(true)
 select min(e) over() as min_e, max(s) over() as max_s
 from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d limit 0;
+-- A global group emits one row even on empty input, without window materialization.
+-- @metacmp(true)
+select min(min(e)) over() as min_e, max(max(s)) over() as max_s from jdbc_enum_set_metadata where false;
+-- @metacmp(true)
+select min(min(e)) over() as min_e, max(max(s)) over() as max_s from jdbc_enum_set_metadata;
+-- Constant window inputs differ from a final result truncated to one row.
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where id=1;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s
+from (select e,s from jdbc_enum_set_metadata order by id limit 1) d;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata limit 1;
+-- NULL rejection and join emptiness must respect the join's preserved side.
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where null;
+-- @metacmp(true)
+select min(l.e) over() as min_e, max(l.s) over() as max_s
+from jdbc_enum_set_metadata l join jdbc_enum_set_metadata r on false;
+-- @metacmp(true)
+select min(l.e) over() as min_e, max(l.s) over() as max_s
+from jdbc_enum_set_metadata l left join jdbc_enum_set_metadata r on false;
 drop table jdbc_enum_set_metadata;

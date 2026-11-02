@@ -2642,14 +2642,15 @@ message MySQLSpecialResultType {
     SCALAR_SUBQUERY = 2;
     // Grouping-set fields have CHAR presentation but no ENUM/SET field flags.
     ROLLUP = 3;
-    // Window MIN/MAX and DISTINCT ROLLUP materialize VARCHAR at execution.
+    // Window MIN/MAX and DISTINCT ROLLUP use VARCHAR only when materialized.
     PREPARE_ONLY = 4;
     // Materialized expression fields retain label width, not ENUM/SET flags.
     VARCHAR_LABEL = 5;
   }
   Type typ = 1 [(gogoproto.nullable) = false];
   Kind kind = 2;
-  // Result publication only: the completed plan proves no rows can reach
-  // materialization. Cursor execution still materializes its result schema.
+  // Result publication only: MySQL can omit materialization for this result.
+  // Empty paths and constant/implicit-group window inputs are distinct proofs.
+  // Cursor execution still materializes its result schema.
   bool materialization_elided = 3;
 }

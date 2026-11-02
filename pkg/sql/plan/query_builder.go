@@ -6353,7 +6353,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 	defer func() {
 		if err == nil && isRoot {
-			builder.captureMySQLSpecialResultTypes(ctx)
+			builder.captureMySQLSpecialResultTypes(ctx, nodeID)
 			if builder.integerPrecision != nil {
 				builder.captureIntegerPrecisionOutputs(ctx)
 			}

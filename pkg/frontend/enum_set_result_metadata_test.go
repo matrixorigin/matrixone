@@ -106,7 +106,7 @@ func TestEnumSetPrepareOnlyMetadataDoesNotLeakIntoExecute(t *testing.T) {
 	for _, kind := range []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_PREPARE_ONLY, pb.MySQLSpecialResultType_VARCHAR_LABEL} {
 		t.Run(kind.String(), func(t *testing.T) {
 			conn := &prepareResponseCaptureConn{}
-			protocol, _, stmt := newBinaryPrepareProtocolTestCaseWithConn(t, "select min('a') over () e, max('x') over () s", conn)
+			protocol, _, stmt := newBinaryPrepareProtocolTestCaseWithConn(t, "select min('a') over () e, max('x') over () s from (select 1 n union all select 2 n) d", conn)
 			protocol.capability &^= CLIENT_DEPRECATE_EOF
 			query := stmt.PreparePlan.GetDcl().GetPrepare().GetPlan().GetQuery()
 			query.MysqlSpecialResultTypes = []pb.MySQLSpecialResultType{
@@ -174,7 +174,7 @@ func TestEnumSetPrepareOnlyMetadataDoesNotLeakIntoExecute(t *testing.T) {
 }
 
 func TestEnumSetExecutionParametersReachMetadataOwner(t *testing.T) {
-	_, _, prepared := newBinaryPrepareProtocolTestCase(t, "select min('a') over(),max('x') over() limit ?")
+	_, _, prepared := newBinaryPrepareProtocolTestCase(t, "select min('a') over(),max('x') over() from (select 1 n union all select 2 n) d limit ?")
 	p := prepared.PreparePlan.GetDcl().GetPrepare().GetPlan()
 	p.GetQuery().MysqlSpecialResultTypes = []pb.MySQLSpecialResultType{
 		{Typ: pb.Type{Id: int32(types.T_enum), Enumvalues: "a,bb"}, Kind: pb.MySQLSpecialResultType_PREPARE_ONLY},
@@ -182,20 +182,25 @@ func TestEnumSetExecutionParametersReachMetadataOwner(t *testing.T) {
 	}
 	snapshot := proto.Clone(p)
 	wrapper := &TxnComputationWrapper{stmt: prepared.PrepareStmt, plan: p}
-	for _, value := range []string{"0", "1", "0"} {
-		wrapper.paramVals = []any{plan2.ParamValue{Value: value, IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}}
+	for _, value := range []any{"0", "1", nil, false, true, "0"} {
+		kind := vector.PrepareParamInteger
+		if _, boolean := value.(bool); boolean {
+			kind = vector.PrepareParamBoolean
+		}
+		wrapper.paramVals = []any{plan2.ParamValue{Value: value, IsBinaryProtocol: true, PrepareParamKind: kind}}
+		zero := value == "0" || value == nil || value == false
 		columns, defs, err := wrapper.getColumnsWithResultColumns(t.Context())
 		require.NoError(t, err)
 		legacy, err := wrapper.GetColumns(t.Context())
 		require.NoError(t, err)
 		want := defines.MYSQL_TYPE_VAR_STRING
-		if value == "0" {
+		if zero {
 			want = defines.MYSQL_TYPE_STRING
 		}
 		for i := range columns {
 			require.Equal(t, want, columns[i].(*MysqlColumn).ColumnType())
 			require.Equal(t, want, legacy[i].(*MysqlColumn).ColumnType())
-			require.Equal(t, value == "0", defs[i].MysqlSpecialResultType.MaterializationElided)
+			require.Equal(t, zero, defs[i].MysqlSpecialResultType.MaterializationElided)
 		}
 		require.True(t, proto.Equal(snapshot, p))
 	}

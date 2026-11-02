@@ -199,12 +199,42 @@ public final class EnumSetMetadataProbe {
                     for (String sql : new String[]{
                             "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t LIMIT 0",
                             "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t WHERE FALSE",
+                            "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t WHERE NULL",
+                            "SELECT MIN(l.e) OVER (),MAX(l.s) OVER () FROM t l JOIN t r ON FALSE",
+                            "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t WHERE id=100",
                             "SELECT MIN(MIN(e)) OVER (),MAX(MAX(s)) OVER () FROM t WHERE FALSE HAVING COUNT(*)>0",
                             "SELECT DISTINCT e,s FROM t WHERE FALSE GROUP BY e,s WITH ROLLUP",
                             "SELECT DISTINCT e,s FROM t GROUP BY e,s WITH ROLLUP LIMIT 0"}) {
                         query(connection, mode, sql, mode.equals("cursor") ? Types.VARCHAR : Types.CHAR,
                                 Types.CHAR, false, Collections.<List<String>>emptyList());
                     }
+                    int constantWindowType = mode.equals("cursor") ? Types.VARCHAR : Types.CHAR;
+                    query(connection, mode, "SELECT MIN(MIN(e)) OVER (),MAX(MAX(s)) OVER () FROM t WHERE FALSE",
+                            constantWindowType, Types.CHAR, false, Collections.singletonList(Arrays.asList(null, null)));
+                    query(connection, mode, "SELECT MIN(MIN(e)) OVER (),MAX(MAX(s)) OVER () FROM t",
+                            constantWindowType, Types.CHAR, false, Collections.singletonList(Arrays.asList("", "x,yy")));
+                    for (String sql : new String[]{
+                            "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t WHERE id=1",
+                            "SELECT MIN(e) OVER (),MAX(s) OVER () FROM (SELECT e,s FROM t ORDER BY id LIMIT 1) d",
+                            "SELECT MIN(l.e) OVER (),MAX(l.s) OVER () FROM t l LEFT JOIN t r ON FALSE WHERE l.id=1"}) {
+                        query(connection, mode, sql, constantWindowType, Types.CHAR, false,
+                                Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    }
+                    query(connection, mode, "SELECT MIN(l.e) OVER (),MAX(l.s) OVER () FROM t l WHERE l.id=1 "
+                            + "AND EXISTS(SELECT 1 FROM t r WHERE r.id%2=l.id)", Types.VARCHAR, Types.CHAR, false,
+                            Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    query(connection, mode, "SELECT MIN(l.e) OVER (),MAX(l.s) OVER () FROM t l WHERE l.id=1 "
+                            + "AND NOT EXISTS(SELECT 1 FROM t r WHERE r.id%2=l.id)", Types.VARCHAR, Types.CHAR, false,
+                            Collections.<List<String>>emptyList());
+                    query(connection, mode, "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t LIMIT 1",
+                            Types.VARCHAR, Types.CHAR, false, Collections.singletonList(Arrays.asList("", "x,yy")));
+                    query(connection, mode, "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t WHERE id<2",
+                            Types.VARCHAR, Types.CHAR, false, Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    query(connection, mode, "SELECT MIN(e) OVER (),MAX(s) OVER () FROM (SELECT e,s FROM t ORDER BY id LIMIT 2) d",
+                            Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"), Arrays.asList("", "x,yy")));
+                    query(connection, mode, "SELECT MIN(l.e) OVER (),MAX(l.s) OVER () FROM t l LEFT JOIN t r ON FALSE",
+                            Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),
+                                    Arrays.asList("", "x,yy"), Arrays.asList("", "x,yy")));
                     if (mode.equals("server-prepared") || mode.equals("cursor")) {
                         try (PreparedStatement limit = connection.prepareStatement("SELECT MIN(e) OVER (),MAX(s) OVER () FROM t LIMIT ?")) {
                             limit.setQueryTimeout(30);
@@ -212,12 +242,15 @@ public final class EnumSetMetadataProbe {
                                     "parameterized prepare silently fell back");
                             if (mode.equals("cursor")) limit.setFetchSize(1);
                             metadata(limit.getMetaData(), Types.CHAR, false, mode + " parameterized prepare");
-                            for (int count : new int[]{0,1,0}) {
-                                limit.setInt(1,count);
+                            for (Object count : new Object[]{0, 1, null, false, true, 0}) {
+                                if (count == null) limit.setNull(1, Types.INTEGER);
+                                else if (count instanceof Boolean) limit.setBoolean(1, (Boolean) count);
+                                else limit.setInt(1, (Integer) count);
+                                boolean zero = count == null || Boolean.FALSE.equals(count) || Integer.valueOf(0).equals(count);
                                 try (ResultSet result = limit.executeQuery()) {
-                                    int expectedType = count==0 && !mode.equals("cursor") ? Types.CHAR : Types.VARCHAR;
+                                    int expectedType = zero && !mode.equals("cursor") ? Types.CHAR : Types.VARCHAR;
                                     labelWidths(result.getMetaData());
-                                    rows(result,expectedType,false,count==0 ? Collections.<List<String>>emptyList()
+                                    rows(result,expectedType,false,zero ? Collections.<List<String>>emptyList()
                                             : Collections.singletonList(Arrays.asList("", "x,yy")), mode+" LIMIT "+count);
                                 }
                             }

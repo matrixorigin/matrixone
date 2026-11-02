@@ -142,7 +142,7 @@ func TestEnumSetResultPresentation(t *testing.T) {
 	}
 }
 
-func TestEnumSetConstantEmptyPublicationPlan(t *testing.T) {
+func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 	for _, tc := range []struct {
 		sql    string
 		elided bool
@@ -152,12 +152,29 @@ func TestEnumSetConstantEmptyPublicationPlan(t *testing.T) {
 		{"select distinct e,s from enum_order_t where false group by e,s with rollup", true},
 		{"select distinct e,s from enum_order_t group by e,s with rollup limit 0", true},
 		{"select min(e) over(),max(s) over() from enum_order_t where id>100", false},
-		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false", false},
+		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false", true},
+		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=1", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=100", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id<2", false},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and exists(select 1 from enum_order_t r where r.id%2=l.id)", false},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and not exists(select 1 from enum_order_t r where r.id%2=l.id)", false},
+		{"select min(e) over(),max(s) over() from (select e,s from enum_order_t limit 1) d", true},
+		{"select min(e) over(),max(s) over() from (select e,s from enum_order_t limit 2) d", false},
+		{"select min(e) over(),max(s) over() from enum_order_t limit 1", false},
+		{"select min(e) over(),max(s) over() from enum_order_t where null", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l join enum_order_t r on false", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l left join enum_order_t r on false", false},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l left join enum_order_t r on false where l.id=1", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l right join enum_order_t r on false", false},
+		{"select distinct e,s from enum_order_t where id=1 group by e,s with rollup", false},
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false having count(*)>0", true},
 		{"select min(e) over(),max(s) over() from (select e,s from enum_order_t group by e,s with rollup) d limit 0", false},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
-			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
+			mock := newMySQLSpecialOrderMock(t)
+			mock.ctxt.tables["enum_order_t"].Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+			p, err := runOneStmt(mock, t, tc.sql)
 			require.NoError(t, err)
 			snapshot := proto.Clone(p)
 			for _, def := range GetResultColumnsFromPlan(p) {
@@ -186,15 +203,45 @@ func TestEnumSetParameterizedEmptyPublication(t *testing.T) {
 			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: source.ToType()}}, []any{ParamValue{Value: "0", IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}})
 			require.NoError(t, err)
 			snapshot := proto.Clone(bound.Plan)
-			for _, count := range []int64{0, 1, 0} {
+			for _, count := range []any{int64(0), int64(1), nil, false, true, int64(0)} {
 				for _, col := range GetResultColumnsFromPlanWithParams(bound.Plan, []any{count}) {
-					require.Equal(t, count == 0, col.MysqlSpecialResultType.MaterializationElided)
+					require.Equal(t, count == nil || count == false || count == int64(0), col.MysqlSpecialResultType.MaterializationElided)
 				}
 				require.True(t, proto.Equal(snapshot, bound.Plan), "execution parameters must not specialize shared metadata")
 				for _, col := range GetResultColumnsFromPlan(bound.Plan) {
 					require.False(t, col.MysqlSpecialResultType.MaterializationElided, "unbound PREPARE remains value-independent")
 				}
 			}
+		})
+	}
+}
+
+func TestEnumSetPaginationTransportMaterialization(t *testing.T) {
+	stmt, err := mysql.ParseOne(t.Context(), "select min(e) over(),max(s) over() from enum_order_t limit ?", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	mock := newMySQLSpecialOrderMock(t)
+	for _, tc := range []struct {
+		name   string
+		source types.T
+		value  any
+		kind   vector.PrepareParamKind
+		elided bool
+	}{
+		{"null", types.T_any, nil, vector.PrepareParamNone, true},
+		{"false", types.T_bool, false, vector.PrepareParamBoolean, true},
+		{"true", types.T_bool, true, vector.PrepareParamBoolean, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values := []any{ParamValue{Value: tc.value, IsBinaryProtocol: true, PrepareParamKind: tc.kind}}
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{{Position: 0, Type: tc.source.ToType()}}, values)
+			require.NoError(t, err)
+			snapshot := proto.Clone(bound.Plan)
+			for _, col := range GetResultColumnsFromPlanWithParams(bound.Plan, values) {
+				require.Equal(t, tc.elided, col.MysqlSpecialResultType.MaterializationElided)
+			}
+			require.True(t, proto.Equal(snapshot, bound.Plan))
 		})
 	}
 }
