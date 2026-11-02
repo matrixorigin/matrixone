@@ -182,6 +182,9 @@ func TestCollectUpdatePkMoveLinkRowsInt32Pk(t *testing.T) {
 		catalog.DataBranchUpdateLinkColNewRow,
 		catalog.DataBranchUpdateLinkColWriteTS,
 		catalog.DataBranchUpdateLinkColTxnID,
+		catalog.DataBranchUpdateLinkColCommitTS,
+		catalog.DataBranchUpdateLinkColSuccLinkID,
+		catalog.DataBranchUpdateLinkColStmtSeq,
 	}, linkBat.Attrs)
 
 	// The stored old/new pk bytes must equal the branch-hashmap key encoding
@@ -232,6 +235,16 @@ func TestCollectUpdatePkMoveLinkRowsInt32Pk(t *testing.T) {
 	for i := 0; i < linkBat.RowCount(); i++ {
 		require.Equal(t, testPkMoveLinkTxnID, linkBat.Vecs[9].GetBytesAt(i))
 	}
+	// commit_ts and succ_link_id stage NULL: the commit-completion hook and
+	// the pairing fixup stamp them once TN assigns the commit instant.
+	// stmt_seq stages 0: the workspace fill hook stamps the staging
+	// statement's ordinal when this write is staged.
+	for i := 0; i < linkBat.RowCount(); i++ {
+		require.True(t, linkBat.Vecs[10].IsNull(uint64(i)))
+		require.True(t, linkBat.Vecs[11].IsNull(uint64(i)))
+	}
+	require.Equal(t, []uint64{0, 0, 0},
+		vector.MustFixedColWithTypeCheck[uint64](linkBat.Vecs[12]))
 	// Cross-check the dispatch against the direct scalar encoding.
 	require.Equal(t, packerEncodeInt32(2), old2)
 }
