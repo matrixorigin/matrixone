@@ -662,7 +662,11 @@ func TestCallReadPolicy(t *testing.T) {
 			_, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 			require.Equal(t, []fileservice.Policy{tc.want}, seen)
-			require.Equal(t, []uint64{42}, groups)
+			wantGroup := uint64(0)
+			if tc.readPolicy != 0 {
+				wantGroup = 42
+			}
+			require.Equal(t, []uint64{wantGroup}, groups, "only scans with a read policy are grouped")
 			require.Equal(t, fileservice.Policy(fileservice.SkipMemoryCacheWrites), fileservice.GetFileServicePolicy(proc.Ctx))
 
 			arg.Free(proc, false, nil)

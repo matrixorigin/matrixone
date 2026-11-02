@@ -193,6 +193,23 @@ func TestPreloadUsageExplicitDeleteIsNotEviction(t *testing.T) {
 	require.False(t, p.narrowRead("/cache/x", 1))
 }
 
+func TestPreloadUsageNoGroup(t *testing.T) {
+	p, _ := newTestPreloadUsage()
+	for i := 0; i < 20; i++ {
+		evict(p, 0, i, 0, 100)
+	}
+	require.Empty(t, p.objects, "reads of no group are not mapped")
+	require.Empty(t, p.groups)
+	require.False(t, p.narrowRead("/cache/x", 0))
+}
+
+func TestPreloadUsageEvictionForgetsTheObject(t *testing.T) {
+	p, _ := newTestPreloadUsage()
+	evict(p, 1, 0, 0, 100)
+	require.Empty(t, p.objects, "an evicted file is mapped again by its next narrow read")
+	require.Equal(t, 1, p.groups[1].samples)
+}
+
 func TestPreloadUsageObjectsAreBounded(t *testing.T) {
 	p, _ := newTestPreloadUsage()
 	for i := 0; i <= preloadObjectsMax; i++ {
@@ -300,4 +317,18 @@ func TestS3FSWholeObjectPreloadSkippedByGroup(t *testing.T) {
 	require.True(t, s.WholeObjectPreloadSkipped("foo", 1))
 	require.False(t, s.WholeObjectPreloadSkipped("foo", 2))
 	require.False(t, s.WholeObjectPreloadSkipped("other:foo", 1), "a path of another service")
+
+	// A narrow read of a thrashing table caches ranges; other reads keep whole objects.
+	require.NoError(t, s.Write(ctx, IOVector{FilePath: "foo", Entries: []IOEntry{{Size: 3, Data: []byte("abc")}}}))
+	read := func(ctx context.Context, policy Policy) Policy {
+		vec := &IOVector{FilePath: "foo", Policy: policy, Entries: []IOEntry{{Offset: 1, Size: 1}}}
+		require.NoError(t, s.Read(ctx, vec))
+		require.Equal(t, []byte("b"), vec.Entries[0].Data)
+		return vec.Policy
+	}
+	thrashing := WithPreloadGroup(ctx, 1)
+	require.Equal(t, Policy(NarrowRead|SkipFullFilePreloads), read(thrashing, NarrowRead))
+	require.Equal(t, Policy(NarrowRead), read(WithPreloadGroup(ctx, 2), NarrowRead))
+	require.Equal(t, Policy(NarrowRead), read(ctx, NarrowRead), "a read of no group")
+	require.Equal(t, Policy(0), read(thrashing, 0), "a scan")
 }

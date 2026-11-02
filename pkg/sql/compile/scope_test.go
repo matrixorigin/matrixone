@@ -637,7 +637,11 @@ func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
 				want = fileservice.NarrowRead
 			}
 			require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
-			require.Equal(t, []uint64{42}, reader.readGroups, "reads are grouped by their table")
+			wantGroup := uint64(0)
+			if skip {
+				wantGroup = 42
+			}
+			require.Equal(t, []uint64{wantGroup}, reader.readGroups, "narrow reads are grouped by their table")
 		}
 	}
 }

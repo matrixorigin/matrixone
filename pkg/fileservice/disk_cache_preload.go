@@ -54,7 +54,7 @@ func WithPreloadGroup(ctx context.Context, group uint64) context.Context {
 	return context.WithValue(ctx, contextKeyPreloadGroup{}, group)
 }
 
-// GetPreloadGroup returns the group stored in ctx, or 0 if none.
+// GetPreloadGroup returns the group stored in ctx, or 0, no group, if none.
 func GetPreloadGroup(ctx context.Context) uint64 {
 	if g, ok := ctx.Value(contextKeyPreloadGroup{}).(uint64); ok {
 		return g
@@ -150,6 +150,7 @@ func (p *preloadUsage) removed(diskPath string, size int64) {
 	}
 	delete(p.served, diskPath)
 	group, ok := p.objects[diskPath]
+	delete(p.objects, diskPath)
 	if !ok || size <= 0 {
 		return
 	}
@@ -184,9 +185,9 @@ func (p *preloadUsage) removed(diskPath string, size int64) {
 }
 
 // narrowRead maps diskPath to group and reports whether group's whole-object
-// files are evicted before most of their bytes are read.
+// files are evicted before most of their bytes are read. Group 0 is no group.
 func (p *preloadUsage) narrowRead(diskPath string, group uint64) bool {
-	if p == nil {
+	if p == nil || group == 0 {
 		return false
 	}
 	p.mu.Lock()

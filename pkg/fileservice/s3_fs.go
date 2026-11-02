@@ -688,6 +688,10 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	if vector.Policy.Any(NarrowRead) && !vector.Policy.Any(SkipFullFilePreloads) &&
+		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {
+		vector.Policy |= SkipFullFilePreloads
+	}
 	var finishDecode func()
 	var decodePrepared bool
 	var fillTicket *decodedFillTicket
