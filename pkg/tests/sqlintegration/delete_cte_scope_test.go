@@ -100,6 +100,7 @@ func TestDeleteCTETargetScope(t *testing.T) {
 				require.Equal(t, 3, count)
 			})
 		}
+		runInsertUpdateCTETargetCases(t, ctx, db)
 		t.Run("read only resolves the actual source", func(t *testing.T) {
 			for _, statement := range []string{
 				"create database delete_cte_other", "create table delete_cte_other.t(id int primary key)",
@@ -114,6 +115,8 @@ func TestDeleteCTETargetScope(t *testing.T) {
 			for _, statement := range []string{
 				"delete t from delete_cte_other.t where t.id=1",
 				"delete x from (delete_cte_other.t as x) where x.id=1",
+				"with t as (select 1 id) update delete_cte_other.t set id=7 where id=1",
+				"with t as (select 1 id) update delete_cte_other.t as x set x.id=7 where x.id=1",
 			} {
 				_, err := tx.ExecContext(ctx, statement)
 				var sqlErr *mysql.MySQLError
@@ -122,6 +125,13 @@ func TestDeleteCTETargetScope(t *testing.T) {
 			}
 			var count int
 			require.NoError(t, tx.QueryRowContext(ctx, "select count(*) from delete_cte_other.t where id=1").Scan(&count))
+			require.Equal(t, 1, count)
+
+			_, err = tx.ExecContext(ctx, "with t as (select 1 id) update t set id=7")
+			var cteErr *mysql.MySQLError
+			require.ErrorAs(t, err, &cteErr)
+			require.NotContains(t, cteErr.Message, "panic")
+			require.NoError(t, tx.QueryRowContext(ctx, "select count(*) from t where id=1").Scan(&count))
 			require.Equal(t, 1, count)
 			result, err := tx.ExecContext(ctx, "delete x from (t as x) where x.id=1")
 			require.NoError(t, err)
@@ -132,4 +142,92 @@ func TestDeleteCTETargetScope(t *testing.T) {
 		})
 
 	})
+}
+
+// Share the existing database/cluster lifecycle with the DELETE scope controls.
+func runInsertUpdateCTETargetCases(t *testing.T, ctx context.Context, db *sql.DB) {
+	execSQLRequire(t, ctx, db, "create table dml_target(id int primary key, v int)")
+	execSQLRequire(t, ctx, db, "insert into dml_target values(1,10),(2,20)")
+	for _, tc := range []struct {
+		name, statement string
+		rejected        bool
+		rows            [][2]int
+	}{
+		{"insert prefix WITH", "with dml_target as (select 99 id) insert into dml_target values(3,30)", false, [][2]int{{1, 10}, {2, 20}, {3, 30}}},
+		{"insert source WITH", "insert into dml_target with dml_target as (select 3 id,30 v) select * from dml_target", false, [][2]int{{1, 10}, {2, 20}, {3, 30}}},
+		{"insert prefix CTE source", "with dml_target as (select 3 id,30 v) insert into dml_target select * from dml_target", false, [][2]int{{1, 10}, {2, 20}, {3, 30}}},
+		{"insert nested WITH reference", "with outer_cte as (select 3 id,30 v) insert into dml_target with inner_cte as (select * from outer_cte) select * from inner_cte", false, [][2]int{{1, 10}, {2, 20}, {3, 30}}},
+		{"insert nested WITH shadow", "with q as (select 99 id,990 v) insert into dml_target with q as (select 3 id,30 v) select * from q", false, [][2]int{{1, 10}, {2, 20}, {3, 30}}},
+		{"insert nested numeric WITH", "with outer_cte as (select cast(3 as decimal(10,0)) id,30 v) insert into dml_target with inner_cte as (select * from outer_cte) select * from inner_cte", false, [][2]int{{1, 10}, {2, 20}, {3, 30}}},
+		{"insert recursive outer WITH", "with recursive q(id,v) as (select 3,30 union all select id+1,v+10 from q where id<4) insert into dml_target select * from q", false, [][2]int{{1, 10}, {2, 20}, {3, 30}, {4, 40}}},
+		{"insert VALUES reads outer WITH", "with q as (select 3 id,30 v) insert into dml_target values((select id from q),(select v from q))", false, [][2]int{{1, 10}, {2, 20}, {3, 30}}},
+		{"update CTE is read only", "with dml_target as (select 1 id,99 v) update dml_target set v=17", true, nil},
+		{"update qualified base", "with dml_target as (select 1 id,99 v) update delete_cte_scope.dml_target set v=17 where id=1", false, [][2]int{{1, 17}, {2, 20}}},
+		{"update alias collision", "with q as (select 1 id,99 v) update dml_target as q set q.v=17 where q.id=1", false, [][2]int{{1, 17}, {2, 20}}},
+		{"update qualified target reads CTE", "with q as (select 1 id,99 v) update dml_target join q using(id) set dml_target.v=17", false, [][2]int{{1, 17}, {2, 20}}},
+		{"update ambiguous assignment", "with q as (select 1 id,99 v) update dml_target join q using(id) set v=17", true, nil},
+		{"update unique assignment", "with q as (select 1 id) update dml_target join q using(id) set v=17", false, [][2]int{{1, 17}, {2, 20}}},
+		{"update CTE assignment", "with q as (select 1 id,99 v) update dml_target join q using(id) set q.v=17", true, nil},
+		{"update aliased CTE target", "with q as (select 1 id,99 v) update q as x set x.v=17", true, nil},
+		{"FROM keeps target namespace", "update dml_target set v=17 from (select 1 id,99 v) as r where dml_target.id=r.id", false, [][2]int{{1, 17}, {2, 20}}},
+		{"target JOIN plus FROM ambiguity", "with q as (select 1 id,99 v) update dml_target join q on dml_target.id=q.id set v=17 from (select 1 id) as r where dml_target.id=r.id", true, nil},
+		{"target JOIN plus FROM unique", "with q as (select 1 id) update dml_target join q on dml_target.id=q.id set v=17 from (select 1 id,99 v) as r where dml_target.id=r.id", false, [][2]int{{1, 17}, {2, 20}}},
+		{"target USING plus FROM read only", "with q as (select 1 id) update dml_target right join q using(id) set id=3 from (select 1 id) as r where dml_target.id=r.id", true, nil},
+		{"update wrong schema", "update dml_target set wrong.dml_target.v=17", true, nil},
+		{"update USING read only right", "with q as (select 1 id) update dml_target right join q using(id) set id=3", true, nil},
+		{"update USING physical right", "with q as (select 1 id) update q right join dml_target using(id) set id=3 where dml_target.id=1", false, [][2]int{{2, 20}, {3, 10}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx, err := db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer tx.Rollback()
+			_, err = tx.ExecContext(ctx, tc.statement)
+			want := tc.rows
+			if tc.rejected {
+				var sqlErr *mysql.MySQLError
+				require.ErrorAs(t, err, &sqlErr)
+				require.NotContains(t, sqlErr.Message, "panic")
+				want = [][2]int{{1, 10}, {2, 20}}
+			} else {
+				require.NoError(t, err)
+			}
+			read := func(query func(context.Context, string, ...any) (*sql.Rows, error)) [][2]int {
+				rows, err := query(ctx, "select id,v from dml_target order by id")
+				require.NoError(t, err)
+				defer rows.Close()
+				var values [][2]int
+				for rows.Next() {
+					var value [2]int
+					require.NoError(t, rows.Scan(&value[0], &value[1]))
+					values = append(values, value)
+				}
+				require.NoError(t, rows.Err())
+				return values
+			}
+			require.Equal(t, want, read(tx.QueryContext))
+			require.NoError(t, tx.Rollback())
+			require.Equal(t, [][2]int{{1, 10}, {2, 20}}, read(db.QueryContext))
+		})
+	}
+	t.Run("generated DEFAULT remains valid", func(t *testing.T) {
+		execSQLRequire(t, ctx, db, "create table dml_generated(a int,b int,c int generated always as (a+b) stored)")
+		execSQLRequire(t, ctx, db, "insert into dml_generated(a,b) values(1,2)")
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer tx.Rollback()
+		_, err = tx.ExecContext(ctx, "update dml_generated set a=10,c=default")
+		require.NoError(t, err)
+		var a, b, c int
+		require.NoError(t, tx.QueryRowContext(ctx, "select a,b,c from dml_generated").Scan(&a, &b, &c))
+		require.Equal(t, []int{10, 2, 12}, []int{a, b, c})
+		_, err = tx.ExecContext(ctx, "update dml_generated set c=99")
+		var sqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &sqlErr)
+		require.NoError(t, tx.QueryRowContext(ctx, "select a,b,c from dml_generated").Scan(&a, &b, &c))
+		require.Equal(t, []int{10, 2, 12}, []int{a, b, c})
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, db.QueryRowContext(ctx, "select a,b,c from dml_generated").Scan(&a, &b, &c))
+		require.Equal(t, []int{1, 2, 3}, []int{a, b, c})
+	})
+
 }

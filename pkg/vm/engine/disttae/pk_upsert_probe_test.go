@@ -21,12 +21,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
@@ -63,10 +65,10 @@ func TestUpsertProbeManyChangedObjects(t *testing.T) {
 		require.Equal(t, baseline, proc.Mp().CurrNB())
 		require.Empty(t, pkCheckSemaphore)
 	}
-	// Modified keeps its conservative object-count policy.
+	// Modified also prunes history whose summaries prove no matching key.
 	changed, err := tbl.PKPersistedBetween(proc.Ctx, state, types.BuildTS(10, 0), types.BuildTS(50, 0), keys.Vecs[0], true)
 	require.NoError(t, err)
-	require.True(t, changed)
+	require.False(t, changed)
 
 	// The matching object follows every unrelated event in the time index.
 	require.NoError(t, state.HandleObjectEntry(proc.Ctx, fs, objectio.ObjectEntry{
@@ -207,14 +209,14 @@ func TestUpsertProbeManyCandidateBlocks(t *testing.T) {
 	data.Vecs[2] = vector.NewVec(types.T_bool.ToType())
 	defer data.Clean(mp)
 	writer := ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}, 0, true, false, fs)
-	for i := 0; i < 34; i++ {
+	for i := 0; i < 32; i++ {
 		commit := types.BuildTS(5, 0)
-		if i >= 32 {
+		if i >= 30 {
 			commit = types.BuildTS(20, 0)
 		}
 		require.NoError(t, vector.AppendFixed(data.Vecs[0], int64(7), false, mp))
 		require.NoError(t, vector.AppendFixed(data.Vecs[1], commit, false, mp))
-		require.NoError(t, vector.AppendFixed(data.Vecs[2], i == 32, false, mp))
+		require.NoError(t, vector.AppendFixed(data.Vecs[2], i == 30, false, mp))
 		data.SetRowCount(1)
 		_, err := writer.WriteBatch(data)
 		require.NoError(t, err)
@@ -223,8 +225,8 @@ func TestUpsertProbeManyCandidateBlocks(t *testing.T) {
 	_, _, err := writer.Sync(proc.Ctx)
 	require.NoError(t, err)
 	stats := writer.GetObjectStats()
-	require.EqualValues(t, 34, stats.BlkCnt())
-	for _, count := range []uint32{32, 33, 34} {
+	require.EqualValues(t, 32, stats.BlkCnt())
+	for _, count := range []uint32{30, 31, 32} {
 		state := logtailreplay.NewPartitionState("", false, 0, false)
 		selected := stats
 		require.NoError(t, objectio.SetObjectStatsBlkCnt(&selected, count))
@@ -236,7 +238,7 @@ func TestUpsertProbeManyCandidateBlocks(t *testing.T) {
 			baseline := mp.CurrNB()
 			changed, err := tbl.PKPersistedBetween(proc.Ctx, state, types.BuildTS(10, 0), types.BuildTS(to, 0), keys.Vecs[0], false)
 			require.NoError(t, err)
-			require.Equal(t, count == 34 && to == 20, changed, "blocks=%d to=%d", count, to)
+			require.Equal(t, count == 32 && to == 20, changed, "blocks=%d to=%d", count, to)
 			require.Equal(t, baseline, mp.CurrNB())
 			require.Empty(t, pkCheckSemaphore)
 		}
@@ -418,6 +420,55 @@ func BenchmarkUpsertProbe(b *testing.B) {
 			}
 			b.StopTimer()
 			b.ReportMetric(float64(reads)/float64(b.N), "fs-reads/op")
+		})
+	}
+}
+
+func TestUpsertProbeClusterSummaryIsNotPKSummary(t *testing.T) {
+	tbl, eng, fs, keys := newPersistedPKCheckTable(t, types.T_int64, false)
+	ctx := tbl.proc.Load().Ctx
+	part := eng.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId)
+	iter, err := part.Snapshot().NewObjectsIter(types.MaxTs(), false, false)
+	require.NoError(t, err)
+	require.True(t, iter.Next())
+	entry := iter.Entry()
+	require.NoError(t, iter.Close())
+	zm := index.NewZM(types.T_int64, 0)
+	require.NoError(t, zm.Update(int64(1000)))
+	require.NoError(t, objectio.SetObjectStatsSortKeyZoneMap(&entry.ObjectStats, zm))
+	state := logtailreplay.NewPartitionState("", false, 0, false)
+	require.NoError(t, state.HandleObjectEntry(ctx, fs, entry, false))
+	tbl.tableDef.ClusterBy = &plan.ClusterByDef{Name: "other"}
+	changed, err := tbl.PKPersistedBetween(ctx, state, types.BuildTS(10, 0), types.BuildTS(50, 0), keys.Vecs[0], false)
+	require.NoError(t, err)
+	require.True(t, changed, "disjoint cluster summary must not hide the actual primary key")
+	require.Empty(t, pkCheckSemaphore)
+}
+
+func TestUpsertProbeObsoleteMissingCancellation(t *testing.T) {
+	for _, block := range []bool{false, true} {
+		name := "metadata"
+		if block {
+			name = "block"
+		}
+		t.Run(name, func(t *testing.T) {
+			tbl, eng, fs, keys := newPersistedPKCheckTableBlocks(t, types.T_int64, false, 1, true)
+			ctx, cancel := context.WithCancel(tbl.proc.Load().Ctx)
+			defer cancel()
+			called := false
+			eng.fs = tombstoneReadFS{FileService: fs, read: func(ctx context.Context, v *fileservice.IOVector) error {
+				if !block || len(v.Entries) > 1 {
+					called = true
+					cancel()
+					return moerr.NewFileNotFoundNoCtx(v.FilePath)
+				}
+				return fs.Read(ctx, v)
+			}}
+			changed, err := tbl.PrimaryKeysMayBeUpserted(ctx, types.BuildTS(10, 0), types.BuildTS(50, 0), keys, 0)
+			require.True(t, called)
+			require.ErrorIs(t, err, context.Canceled)
+			require.False(t, changed)
+			require.Empty(t, pkCheckSemaphore)
 		})
 	}
 }

@@ -34,23 +34,6 @@ func validateRuntimeWriteFormatVersion(ctx context.Context, table string, format
 	}))
 }
 
-func resolveRuntimeCatalogRequestPrefix(ctx context.Context, client api.CatalogClient, req api.CatalogRequest) (api.CatalogRequest, error) {
-	if client == nil || strings.TrimSpace(req.Prefix) != "" {
-		return req, nil
-	}
-	resp, err := client.GetConfig(ctx, api.GetConfigRequest{
-		CatalogRequest: req,
-		Warehouse:      req.Catalog.Warehouse,
-	})
-	if err != nil {
-		return req, err
-	}
-	if resp != nil && strings.TrimSpace(resp.Prefix) != "" {
-		req.Prefix = strings.TrimSpace(resp.Prefix)
-	}
-	return req, nil
-}
-
 func resolveRuntimeCatalogRequestPrefixForWriteRef(ctx context.Context, client api.CatalogClient, req api.CatalogRequest, rawRef string, caps api.CatalogCapabilities, allowTagMove bool) (api.CatalogRequest, string, string, error) {
 	if client == nil || strings.TrimSpace(req.Prefix) != "" {
 		return req, "", "", nil
@@ -65,7 +48,7 @@ func resolveRuntimeCatalogRequestPrefixForWriteRef(ctx context.Context, client a
 	if resp != nil && strings.TrimSpace(resp.Prefix) != "" {
 		req.Prefix = strings.TrimSpace(resp.Prefix)
 	}
-	if isRuntimeNessieCatalogConfig(resp) {
+	if resp.IsNessieCatalog() {
 		targetRef, _, err := normalizeRuntimeWriteRef(rawRef, caps, allowTagMove)
 		if err != nil {
 			return req, "", "", err
@@ -93,21 +76,6 @@ func normalizeRuntimeWriteRef(rawRef string, caps api.CatalogCapabilities, allow
 		return "", "", err
 	}
 	return spec.Name, string(spec.Type), nil
-}
-
-func isRuntimeNessieCatalogConfig(resp *api.ConfigResponse) bool {
-	if resp == nil {
-		return false
-	}
-	for _, cfg := range []map[string]string{resp.Overrides, resp.Defaults} {
-		for key, value := range cfg {
-			if strings.EqualFold(strings.TrimSpace(key), "nessie.is-nessie-catalog") &&
-				strings.EqualFold(strings.TrimSpace(value), "true") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func rewriteRuntimeNessiePrefix(prefix, refName string) (string, bool) {

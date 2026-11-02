@@ -1069,6 +1069,36 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
 	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// JSON conditions retain their in-domain truth and compatibility checks below.
+	if len(vecs) == 3 && vecs[0].GetType().Oid == types.T_bool && vecs[2].IsConstNull() {
+		cond := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
+		value := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
+		rs := vector.MustFunctionResult[T](result)
+		var zero T
+		nullStart := uint64(0)
+		inNull := false
+		for i := uint64(0); i < uint64(length); i++ {
+			if c, n := cond.GetValue(i); !n && c {
+				if v, n := value.GetValue(i); !n {
+					if inNull {
+						rs.AddNullRange(nullStart, i)
+						inNull = false
+					}
+					rs.AppendMustValue(v)
+					continue
+				}
+			}
+			if !inNull {
+				nullStart = i
+				inNull = true
+			}
+			rs.AppendMustValue(zero)
+		}
+		if inNull {
+			rs.AddNullRange(nullStart, uint64(length))
+		}
+		return nil
+	}
 	// case Xn then Yn else Z
 	mode := CompatibilityModeFromProcess(proc)
 	xs := make([]caseConditionTruth, 0, len(vecs)/2)
@@ -1664,12 +1694,13 @@ func operatorUnaryMinusDecimal256(parameters []*vector.Vector, result vector.Fun
 }
 
 func funcBitInversion[T constraints.Integer](x T) uint64 {
-	if x > 0 {
-		n := uint64(x)
-		return ^n
-	} else {
-		return uint64(^x)
-	}
+	// The numeric unary bit inversion is evaluated in the unsigned 64-bit
+	// domain, so widen first and complement once. Complementing at the storage
+	// width of T leaked that width for unsigned zero values: ~tinyint_unsigned
+	// 0 returned 255 instead of 18446744073709551615 (issue #31905). For
+	// signed x the two's-complement sign extension makes ^uint64(x) equal to
+	// the old uint64(^x), so their behavior is unchanged.
+	return ^uint64(x)
 }
 
 func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

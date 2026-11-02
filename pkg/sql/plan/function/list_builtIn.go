@@ -8214,7 +8214,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ABS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8304,7 +8304,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SQRT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8344,7 +8344,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SIGN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8867,7 +8867,7 @@ var supportedMathBuiltIns = []FuncNew{
 		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatch,
+		checkFn:           ceilFloorTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9095,7 +9095,7 @@ var supportedMathBuiltIns = []FuncNew{
 		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatch,
+		checkFn:           ceilFloorTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9837,7 +9837,7 @@ var supportedMathBuiltIns = []FuncNew{
 		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatchWithBoolNumericCast,
+		checkFn:           fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{
@@ -9969,7 +9969,7 @@ var supportedMathBuiltIns = []FuncNew{
 		class:             plan.Function_STRICT,
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatchWithBoolNumericCast,
+		checkFn:           fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{
@@ -15191,6 +15191,32 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_index_sub_part`
+	{
+		functionId: MO_INDEX_SUB_PART,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			// Retained prefix length of one index part from
+			// mo_catalog.mo_indexes.algo_params; SQL NULL without a
+			// retained prefix.
+			{
+				overloadId:      0,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalIndexSubPart
+				},
+			},
+		},
+	},
+
 	// function `internal_char_length`
 	{
 		functionId: INTERNAL_CHAR_LENGTH,
@@ -15204,6 +15230,20 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				executionStable: true,
 				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalCharLength
+				},
+			},
+			// Declared ENUM/SET labels derive the label-aware character
+			// metadata of information_schema.COLUMNS.
+			{
+				overloadId:      1,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -15227,6 +15267,20 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				executionStable: true,
 				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalCharSize
+				},
+			},
+			// Declared ENUM/SET labels derive the label-aware octet metadata
+			// of information_schema.COLUMNS.
+			{
+				overloadId:      1,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -15319,6 +15373,20 @@ var supportedOthersBuiltIns = []FuncNew{
 					return builtInInternalNumericPrecision
 				},
 			},
+			// Declared ENUM/SET labels suppress SET's bitmap backing-store
+			// numeric identity.
+			{
+				overloadId:      1,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalNumericPrecision
+				},
+			},
 		},
 	},
 
@@ -15335,6 +15403,20 @@ var supportedOthersBuiltIns = []FuncNew{
 				volatile:        true,
 				executionStable: true,
 				args:            []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInInternalNumericScale
+				},
+			},
+			// Declared ENUM/SET labels suppress SET's bitmap backing-store
+			// numeric identity.
+			{
+				overloadId:      1,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},

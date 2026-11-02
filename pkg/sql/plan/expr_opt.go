@@ -307,36 +307,51 @@ func (builder *QueryBuilder) rewriteUniqueDecimalFloatComparison(node *plan.Node
 	return expr
 }
 
-// A small peer alone cannot authorize removing a lossy conversion of the column.
-func implicitIntegerPromotionIsExact(expr *plan.Expr) bool {
-	column := comparisonCastSource(expr)
-	if column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsInteger() || expr.GetF().GetSyntaxExplicitCast() {
-		return false
+// integerComparisonCastColumn proves every conversion, not just the chain's
+// endpoints. A small peer cannot authorize removing a lossy column conversion.
+// Explicit integer casts are transparent only in this predicate-local proof;
+// projection metadata and explicitly selected non-integer domains stay intact.
+func integerComparisonCastColumn(expr *plan.Expr) *plan.Expr {
+	for {
+		source := comparisonCastSource(expr)
+		if source == nil || !types.T(source.Typ.Id).IsInteger() || isEnumOrSetPlanType(&source.Typ) {
+			return nil
+		}
+		fn := expr.GetF()
+		castID, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if castID != function.CAST || overload < 0 || overload > 1 {
+			return nil
+		}
+		target := fn.Args[1]
+		if target == nil || target.GetT() == nil || target.Typ.Id != expr.Typ.Id ||
+			target.Typ.Width != expr.Typ.Width || target.Typ.Scale != expr.Typ.Scale {
+			return nil
+		}
+		sourceID, targetID := types.T(source.Typ.Id), types.T(expr.Typ.Id)
+		if targetID.IsInteger() {
+			if !integerDomainFits(sourceID, targetID) {
+				return nil
+			}
+		} else {
+			if !targetID.IsDecimal() || fn.SyntaxExplicitCast || overload != 0 {
+				return nil
+			}
+			precision := expr.Typ.Width
+			capacity := targetID.ToType().Width
+			if precision == 0 {
+				// Width=0 still has the physical carrier's precision bound.
+				precision = capacity
+			}
+			if precision <= 0 || precision > capacity || expr.Typ.Scale < 0 ||
+				integerDecimalDigits(sourceID) > precision-expr.Typ.Scale {
+				return nil
+			}
+		}
+		if source.GetCol() != nil {
+			return source
+		}
+		expr = source
 	}
-	castID, overload := function.DecodeOverloadID(expr.GetF().Func.Obj)
-	if castID != function.CAST || overload != 0 {
-		return false
-	}
-	target := expr.GetF().Args[1]
-	if target.GetT() == nil || target.Typ.Id != expr.Typ.Id || target.Typ.Width != expr.Typ.Width || target.Typ.Scale != expr.Typ.Scale {
-		return false
-	}
-	sourceID, targetID := types.T(column.Typ.Id), types.T(expr.Typ.Id)
-	if targetID.IsInteger() {
-		return integerDomainFits(sourceID, targetID)
-	}
-	if !targetID.IsDecimal() {
-		return false
-	}
-	precision := expr.Typ.Width
-	capacity := targetID.ToType().Width
-	if precision == 0 {
-		// Integer-to-decimal execution scales into the physical carrier. Width=0
-		// does not imply safety; the entire scaled source domain must still fit.
-		precision = capacity
-	}
-	return precision > 0 && precision <= capacity && expr.Typ.Scale >= 0 &&
-		integerDecimalDigits(sourceID) <= precision-expr.Typ.Scale
 }
 
 // Folded literals can retain their executable source in Src. Do not use an
@@ -373,7 +388,7 @@ func (builder *QueryBuilder) rewriteNativeIntegerComparison(expr *plan.Expr) *pl
 		return expr
 	}
 	name := fn.Func.ObjName
-	isList := (name == "in" || name == "not_in") && len(fn.Args) == 2 && fn.Args[1].GetList() != nil
+	isList := (name == "in" || name == "not_in") && len(fn.Args) == 2
 	isBetween := name == "between" && len(fn.Args) == 3
 	if !isList && !isBetween && (!isDecimalComparisonOperator(name) || len(fn.Args) != 2) {
 		return expr
@@ -382,13 +397,17 @@ func (builder *QueryBuilder) rewriteNativeIntegerComparison(expr *plan.Expr) *pl
 		if (isList || isBetween) && side != 0 {
 			break
 		}
-		if !implicitIntegerPromotionIsExact(castColumn) {
+		column := integerComparisonCastColumn(castColumn)
+		if column == nil {
 			continue
 		}
-		column := comparisonCastSource(castColumn)
 		peers := []*plan.Expr{fn.Args[1-side]}
 		if isList {
-			peers = fn.Args[1].GetList().List
+			var ok bool
+			peers, ok = inRHSValues(fn.Args[1], castColumn.Typ)
+			if !ok {
+				continue
+			}
 		} else if isBetween {
 			peers = fn.Args[1:]
 		}
@@ -418,7 +437,7 @@ func (builder *QueryBuilder) rewriteNativeIntegerComparison(expr *plan.Expr) *pl
 		args[side] = DeepCopyExpr(column)
 		if isList {
 			args[1].Typ = column.Typ
-			args[1].GetList().List = converted
+			args[1].Expr = &plan.Expr_List{List: &plan.ExprList{List: converted}}
 		} else if isBetween {
 			copy(args[1:], converted)
 		} else {
@@ -501,11 +520,10 @@ func (builder *QueryBuilder) rewritePreparedIntegerComparison(node *plan.Node, e
 	state := preparedBindingState(builder.GetContext())
 	fn := expr.GetF()
 	if state != nil && state.selectStatement && fn != nil && fn.Func != nil && fn.Func.ObjName == "between" && len(fn.Args) == 3 {
-		column := comparisonCastSource(fn.Args[0])
+		column := preparedIntegerComparisonCastColumn(fn.Args[0])
 		_, lowerOK := builder.preparedIntegerPeerWitness(node, fn.Args[1])
 		_, upperOK := builder.preparedIntegerPeerWitness(node, fn.Args[2])
-		if column != nil && column.GetCol() != nil && types.T(column.Typ.Id).IsInteger() && !isExplicitPreparedCast(fn.Args[0]) &&
-			lowerOK && upperOK {
+		if column != nil && lowerOK && upperOK {
 			// BETWEEN may survive folding as one function. Reuse its existing
 			// comparison lowering so each bound has the same domain proof.
 			lowered, err := bindBetweenAsComparisons(builder.GetContext(), []*plan.Expr{DeepCopyExpr(fn.Args[0]), DeepCopyExpr(fn.Args[1]), DeepCopyExpr(fn.Args[2])})
@@ -533,12 +551,10 @@ func (builder *QueryBuilder) rewritePreparedIntegerComparison(node *plan.Node, e
 		return expr, nil
 	}
 	for side, castColumn := range fn.Args {
-		column := comparisonCastSource(castColumn)
+		column := preparedIntegerComparisonCastColumn(castColumn)
 		peer := fn.Args[1-side]
 		witness, admitted := builder.preparedIntegerPeerWitness(node, peer)
-		if isExplicitPreparedCast(castColumn) || column == nil || column.GetCol() == nil ||
-			!types.T(column.Typ.Id).IsInteger() || !makeTypeByPlan2Expr(peer).IsNumeric() ||
-			!admitted {
+		if column == nil || !makeTypeByPlan2Expr(peer).IsNumeric() || !admitted {
 			continue
 		}
 		state.valueDependent = true
@@ -582,6 +598,19 @@ func (builder *QueryBuilder) rewritePreparedIntegerComparison(node *plan.Node, e
 		return rewritten, err
 	}
 	return expr, nil
+}
+
+// Retain the existing value-dependent implicit DOUBLE/DECIMAL proof, while
+// admitting explicit integer chains only through the full-domain proof above.
+func preparedIntegerComparisonCastColumn(expr *plan.Expr) *plan.Expr {
+	if column := integerComparisonCastColumn(expr); column != nil {
+		return column
+	}
+	column := comparisonCastSource(expr)
+	if isExplicitPreparedCast(expr) || column == nil || column.GetCol() == nil || !types.T(column.Typ.Id).IsInteger() {
+		return nil
+	}
+	return column
 }
 
 // The comparison conversion must preserve the column domain independently of

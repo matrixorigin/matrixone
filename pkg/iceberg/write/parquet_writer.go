@@ -232,7 +232,7 @@ func (w *ParquetDataWriter) Close(ctx context.Context) (api.DataFile, error) {
 		Content:           api.DataFileContentData,
 		FilePath:          w.cfg.FilePath,
 		FileFormat:        "parquet",
-		Partition:         clonePartition(w.partition),
+		Partition:         api.CloneNonEmptyMap(w.partition),
 		PartitionFieldIDs: partitionFieldIDs(w.cfg.PartitionSpec),
 		RecordCount:       w.rows,
 		FileSizeInBytes:   w.out.n,
@@ -307,7 +307,7 @@ func (w *ParquetDataWriter) observePartition(ctx context.Context, partition map[
 	if !w.partitionSet {
 		w.partitionSet = true
 		w.partitionKey = key
-		w.partition = clonePartition(partition)
+		w.partition = api.CloneNonEmptyMap(partition)
 		return nil
 	}
 	if key != w.partitionKey {
@@ -509,7 +509,7 @@ func (m *columnMetrics) observeNull() {
 }
 
 func (m *columnMetrics) observe(ctx context.Context, typ api.IcebergType, value any) error {
-	if isNaN(value) {
+	if IsMetricNaN(value) {
 		m.nanCount = saturatingWriterAdd(m.nanCount, 1)
 		return nil
 	}
@@ -538,11 +538,11 @@ func (m *columnMetrics) observe(ctx context.Context, typ api.IcebergType, value 
 		m.upper = append([]byte(nil), encoded...)
 		return nil
 	}
-	if compareMetricValue(cmp, m.compare) < 0 {
+	if CompareMetricValues(cmp, m.compare) < 0 {
 		m.compare = cmp
 		m.lower = encoded
 	}
-	if compareMetricValue(cmp, decodeMetricValue(typ, m.upper)) > 0 {
+	if CompareMetricValues(cmp, DecodeMetricValue(typ, m.upper)) > 0 {
 		m.upper = encoded
 	}
 	return nil
@@ -603,7 +603,8 @@ func decimalInt64BoundBytes(value int64) []byte {
 	return append([]byte(nil), buf[start:]...)
 }
 
-func decodeMetricValue(typ api.IcebergType, data []byte) any {
+// DecodeMetricValue decodes an Iceberg metric bound into its comparable value.
+func DecodeMetricValue(typ api.IcebergType, data []byte) any {
 	switch typ.Kind {
 	case api.TypeBoolean:
 		return len(data) > 0 && data[0] != 0
@@ -641,7 +642,8 @@ func decimalInt64FromBoundBytes(data []byte) int64 {
 	return int64(binary.BigEndian.Uint64(buf[:]))
 }
 
-func compareMetricValue(left, right any) int {
+// CompareMetricValues orders decoded Iceberg metric values of the same type.
+func CompareMetricValues(left, right any) int {
 	switch l := left.(type) {
 	case bool:
 		r := right.(bool)
@@ -677,7 +679,8 @@ func compareMetricValue(left, right any) int {
 	}
 }
 
-func isNaN(value any) bool {
+// IsMetricNaN reports whether a metric value is a floating-point NaN.
+func IsMetricNaN(value any) bool {
 	switch v := value.(type) {
 	case float32:
 		return math.IsNaN(float64(v))
@@ -863,17 +866,6 @@ func partitionValueString(value any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(v))
 	}
-}
-
-func clonePartition(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
 
 type countingWriter struct {

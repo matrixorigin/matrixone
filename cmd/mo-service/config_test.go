@@ -310,7 +310,7 @@ func TestResolveGossipSeedAddresses(t *testing.T) {
 				GossipSeedAddresses: tt.addrs,
 			},
 		}
-		err := cfg.resolveGossipSeedAddresses()
+		err := cfg.LogService.ResolveGossipSeedAddresses()
 		if err != tt.err {
 			t.Errorf("expected %v, got %v", tt.err, err)
 		}
@@ -354,7 +354,7 @@ service-addresses = [
 	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
 	assert.NoError(t, cfg.validate())
-	assert.NoError(t, cfg.resolveGossipSeedAddresses())
+	assert.NoError(t, cfg.LogService.ResolveGossipSeedAddresses())
 	assert.Equal(t, 1, len(cfg.LogService.GossipSeedAddresses))
 	assert.Equal(t, "127.0.0.1:32002", cfg.LogService.GossipSeedAddresses[0])
 }
