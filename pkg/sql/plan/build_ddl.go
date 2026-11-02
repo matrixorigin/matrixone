@@ -2277,7 +2277,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	createView.TableDef.ViewSql = tableDef.ViewSql
 	createView.TableDef.Defs = tableDef.Defs
 	if stmt.Materialized {
-		if err := buildMaterializedViewDefinition(ctx, stmt, createView); err != nil {
+		if err := buildMaterializedViewDefinition(creationContext, stmt, createView); err != nil {
 			return nil, err
 		}
 	}

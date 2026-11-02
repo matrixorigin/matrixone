@@ -512,6 +512,15 @@ func materializedViewCanFallback(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
 	}
+	// SQL execution can reject a delta at a shared memory budget boundary.
+	// Retrying the entire source under the same limit amplifies that pressure.
+	var resourceErr *moerr.Error
+	if errors.As(err, &resourceErr) {
+		switch resourceErr.ErrorCode() {
+		case moerr.ErrOOM, moerr.ErrMPoolCapacity, moerr.ErrCteMemoryQuotaExceeded:
+			return false
+		}
+	}
 	var invalid *mvdefinition.InvalidDefinition
 	var terminal *materializedViewNoFallback
 	var cas *iscpStatusCASLostError

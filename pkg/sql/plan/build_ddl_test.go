@@ -2146,6 +2146,39 @@ func TestBuildMaterializedViewRefreshModes(t *testing.T) {
 	require.ErrorContains(t, err, "only supported")
 }
 
+func TestRestoredMaterializedViewUsesCreationDatabaseForSources(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	for _, source := range []struct {
+		database string
+		id       uint64
+	}{
+		{database: "srcdb", id: 101},
+		{database: "dstdb", id: 202},
+	} {
+		compiler.dbs[source.database] = true
+		key := mockQualifiedTableName(source.database, "t")
+		compiler.tablesByQualifiedName[key] = &plan.TableDef{
+			DbName: source.database, Name: "t", DbId: source.id + 1, TblId: source.id, TableType: "r",
+			Cols: []*plan.ColDef{{Name: "id", Typ: types.T_int64.ToType().PlanType()}},
+		}
+		compiler.objectsByQualifiedName[key] = &plan.ObjectRef{SchemaName: source.database, ObjName: "t", Obj: int64(source.id)}
+	}
+	compiler.SetContext(WithRestoredViewDefinition(t.Context(), "dstdb", "mv", `{"DefaultDatabase":"srcdb"}`, ""))
+	ctx := &viewRegenerationContext{CompilerContext: compiler, defaultDatabase: "dstdb"}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create materialized view dstdb.mv refresh complete on demand as select id from t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	viewPlan, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	def, err := mvdefinition.Decode(mvdefinition.PropertyValue(viewPlan.GetDdl().GetCreateView().GetTableDef(), mvdefinition.Property), false)
+	require.NoError(t, err)
+	require.Len(t, def.Sources, 1)
+	require.Equal(t, "srcdb", def.Sources[0].Database)
+	require.Equal(t, uint64(101), def.Sources[0].ID)
+	require.Contains(t, def.RefreshSQL, "`srcdb`.`t`")
+}
+
 func TestMaterializedViewAdmissionTracksAllInputs(t *testing.T) {
 	for _, tc := range []struct {
 		query string

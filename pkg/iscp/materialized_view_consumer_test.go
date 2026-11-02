@@ -19,12 +19,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -693,8 +695,89 @@ func TestMaterializedViewRowVisitorBoundsCancellationAndErrors(t *testing.T) {
 	require.Equal(t, 1, visits)
 }
 func TestMaterializedViewTerminalFailuresNeverFallback(t *testing.T) {
-	for _, err := range []error{context.Canceled, context.DeadlineExceeded, engine.ErrRowIDReadLimit, errMaterializedViewDeltaSQLTooLarge, mvdefinition.Invalid("replaced source"), &materializedViewNoFallback{error: errors.New("rollback failed")}} {
+	for _, err := range []error{
+		context.Canceled, context.DeadlineExceeded, engine.ErrRowIDReadLimit,
+		errMaterializedViewDeltaSQLTooLarge, mvdefinition.Invalid("replaced source"),
+		&materializedViewNoFallback{error: errors.New("rollback failed")},
+		fmt.Errorf("delta SQL: %w", moerr.NewResourceExhaustedf(t.Context(), "group budget")),
+		errors.Join(moerr.NewMPoolCapacityNoCtxf("allocator cap"), nil),
+		moerr.NewCteMemoryQuotaExceeded(t.Context(), 2, 1),
+	} {
 		require.False(t, materializedViewCanFallback(t.Context(), err), err)
 	}
 	require.True(t, materializedViewCanFallback(t.Context(), errors.New("recoverable delta SQL failure")))
+}
+
+func TestMaterializedViewForceResourceFailureDoesNotFullRefresh(t *testing.T) {
+	stubTxn := stubIndexConsumerTxnRunner()
+	t.Cleanup(stubTxn.Reset)
+	desc := incrementalDescription{
+		Version: 2, Strategy: "direct-delta", SourceAlias: "e", SourceColumns: []string{"service"},
+		Groups:         []incrementalGroup{{Expression: "e.service", OutputColumn: "service", NotNullable: true}},
+		Aggregates:     []incrementalAggregate{{Kind: "count_star", OutputColumn: "requests"}},
+		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
+		StateColumns: []string{"__row_count", "__group_key"},
+	}
+	for _, tc := range []struct {
+		name         string
+		failure      error
+		wantFallback bool
+	}{
+		{"resource budget", moerr.NewResourceExhaustedf(t.Context(), "group budget"), false},
+		{"recoverable SQL error", errors.New("delta SQL failed"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service := "mv-force-budget-" + strings.ReplaceAll(tc.name, " ", "-")
+			runtime := moruntime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop())
+			moruntime.SetupServiceBasedRuntime(service, runtime)
+			deltaSQLCalls := 0
+			runtime.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(string) (executor.Result, error) {
+				deltaSQLCalls++
+				return executor.Result{}, tc.failure
+			}))
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() {
+				require.Zero(t, mp.CurrNB())
+				mpool.DeleteMPool(mp)
+			})
+			var blockID types.Blockid
+			rowID := types.NewRowid(&blockID, 1)
+			insertBat := testutil.NewBatchWithVectors([]*vector.Vector{
+				testutil.NewVector(1, types.T_Rowid.ToType(), mp, false, []types.Rowid{rowID}),
+				testutil.NewVector(1, types.T_varchar.ToType(), mp, false, []string{"api"}),
+			}, nil)
+			insertBat.Attrs = []string{catalog.Row_ID, "service"}
+			t.Cleanup(func() { insertBat.Clean(mp) })
+			atomicInsert := NewAtomicBatch(mp)
+			atomicInsert.Batches = []*batch.Batch{insertBat}
+			atomicInsert.Rows.Set(AtomicBatchRow{Pk: []byte("api"), Src: insertBat})
+			info := &ConsumerInfo{
+				DBName: "db", TableName: "mv", Columns: []string{"service", "requests"},
+				RefreshSQL:    "select service, count(*) requests from events group by service",
+				RefreshMethod: "force", SrcTables: []TableInfo{{DBName: "db", TableName: "events"}},
+				IncrementalSpec: encodeMaterializedViewIncrementalDescription(t, desc),
+			}
+			catalog := newMVTestCatalog(t, info, &planpb.TableDef{
+				DbName: "db", Name: "events", DbId: 2, TblId: 11, TableType: "r",
+				Cols: []*planpb.ColDef{{Name: "service", Typ: types.T_varchar.ToType().PlanType()}},
+			})
+			catalog.stubTransactions(t)
+			consumer := &MaterializedViewConsumer{
+				cnUUID: service, cnEngine: catalog, jobID: JobID{DBName: "db", TableName: "events"}, info: info,
+			}
+			r := &materializedViewBoundaryRetriever{
+				MockRetriever: MockRetriever{dtype: ISCPDataType_Tail, insertBatch: atomicInsert},
+				from:          types.BuildTS(10, 0), to: types.BuildTS(20, 0),
+			}
+			err := consumer.Consume(t.Context(), r)
+			require.Equal(t, 1, deltaSQLCalls)
+			if tc.wantFallback {
+				require.NoError(t, err)
+				require.Len(t, catalog.sqls, 2, "recoverable delta error must start full refresh")
+			} else {
+				require.ErrorIs(t, err, tc.failure)
+				require.Empty(t, catalog.sqls, "budget rejection must not start full refresh")
+			}
+		})
+	}
 }
