@@ -30,7 +30,6 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		"Node":             {"dedup_key_exprs": 95, "mark_existence_only": 96},
 		"PreInsertUkCtx":   {"key_diagnostic_exprs": 19},
 		"Query":            {"correlation": 19, "integer_precision": 20, "execution_dependent_access": 22, "select_lock_references": 21, "routine_dependencies": 23},
-		"Type":             {"numeric_attributes": 14},
 		"Expr":             {"candidate_filter": 27},
 		"CreateDatabase":   {"defaults": 5},
 		"AlterDatabase":    {"defaults": 3},
@@ -64,6 +63,10 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 
 func TestMergedQueryMetadataRoundTrip(t *testing.T) {
 	original := validIntegerPrecisionQuery()
+	original.SelectLockReferences = []*SelectLockReference{{
+		ObjectRef: &ObjectRef{SchemaName: "db", ObjName: "locked"},
+		ViewPath:  []*ViewStep{{DatabaseName: "db", ViewName: "v"}},
+	}}
 	original.RoutineDependencies = []*RoutinePlanDependency{{
 		FunctionRef: &FunctionRef{FunctionId: 3, Revision: 7},
 		Language:    "SQL", NamespaceFingerprint: "namespace",
@@ -74,6 +77,7 @@ func TestMergedQueryMetadataRoundTrip(t *testing.T) {
 	var decoded Query
 	require.NoError(t, decoded.Unmarshal(encoded))
 	require.Equal(t, original.IntegerPrecision, decoded.IntegerPrecision)
+	require.Equal(t, original.SelectLockReferences, decoded.SelectLockReferences)
 	require.Equal(t, original.RoutineDependencies, decoded.RoutineDependencies)
 }
 

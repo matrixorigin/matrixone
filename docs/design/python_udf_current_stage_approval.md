@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r40-2026-10-31`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r41-2026-11-02`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -859,3 +859,20 @@ as completion of its predecessor. Re-entering the migration therefore does not
 recreate and drop the retired index; the shared validator checks both the full
 index definition and physical catalog state. Released-shape replay checks require
 zero repeated schema DDL.
+
+
+## r41: preserve official SELECT-lock authorization metadata (2026-11-02)
+
+The governing proposal is `python-udf-current-stage-r41-2026-11-02`. Official
+main `ea184ad90624ae3dba8ced628ac019271a6c309c` allocates Query field 21 to
+`select_lock_references`. Preserve that field and its authorization, retry and
+deep-copy consumers; move the unmerged routine dependency envelope to field 22.
+Regenerate the merged descriptor and verify simultaneous lock/routine metadata
+round trips and independent deep-copy ownership. Earlier unmerged routine tags
+are not supported persisted or mixed-binary inputs on shutdown upgrade.
+
+This mechanical conflict repair preserves r40's pending catalog 4.0.7/50,
+released 4.0.6 effects, artifact admission budget and opt-in development scope.
+It adds no Python MORPC gate; official latest remains 134. Independent
+Architecture and SQL/Planner approval of r41 remains pending; this maintenance
+does not supply it or extend production scope.
