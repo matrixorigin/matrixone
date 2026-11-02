@@ -4550,7 +4550,7 @@ func TestDropIndexIfExistsMissingIndex(t *testing.T) {
 
 	_, err = runOneStmt(mock, t, "drop index nonexist on test_idx")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not found index: nonexist")
+	require.Contains(t, err.Error(), "Can't DROP 'nonexist'")
 }
 
 func TestUpdatePgStyleFromDedupsDuplicateSourceMatchesOnNewPath(t *testing.T) {

@@ -208,7 +208,9 @@ func (tableScan *TableScan) applyReaderFilter(
 		tableScan.ctr.filterActiveDuration += time.Since(start)
 	}()
 	tableScan.recordFilterInput(bat, loadedColumns)
-	tableScan.ctr.filterLateMaterialized = loadedColumns != nil
+	// A fallback can load the entire schema through this callback. Only a
+	// proper subset leaves late-column bytes to account for after filtering.
+	tableScan.ctr.filterLateMaterialized = loadedColumns != nil && len(loadedColumns) < len(tableScan.Types)
 	return tableScan.evalFilter(proc, bat, loadedColumns)
 }
 

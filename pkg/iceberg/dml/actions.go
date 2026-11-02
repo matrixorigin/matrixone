@@ -411,7 +411,7 @@ func BuildCommitIntent(stream ActionStream) (*CommitIntent, error) {
 			return nil, api.NewError(api.ErrUnsupportedFeature, "Iceberg DML action kind is unsupported", map[string]string{"action": string(action.Kind)})
 		}
 	}
-	summary := cloneStringMap(stream.Base.Summary)
+	summary := api.CloneNonEmptyMap(stream.Base.Summary)
 	if summary == nil {
 		summary = make(map[string]string)
 	}
@@ -576,18 +576,7 @@ func cloneDataFiles(in []api.DataFile) []api.DataFile {
 	out := make([]api.DataFile, len(in))
 	copy(out, in)
 	for i := range out {
-		out[i].PartitionFieldIDs = cloneStringIntMap(in[i].PartitionFieldIDs)
-	}
-	return out
-}
-
-func cloneStringIntMap(in map[string]int) map[string]int {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]int, len(in))
-	for key, value := range in {
-		out[key] = value
+		out[i].PartitionFieldIDs = api.CloneNonEmptyMap(in[i].PartitionFieldIDs)
 	}
 	return out
 }
@@ -597,15 +586,4 @@ func firstNonEmptyFiles(a, b []api.DataFile) []api.DataFile {
 		return a
 	}
 	return b
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }

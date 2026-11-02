@@ -44,7 +44,6 @@ func newExecutionReadTestTable(t *testing.T, op client.TxnOperator) (*txnDatabas
 		db:            db,
 		primaryIdx:    -1,
 		primarySeqnum: -1,
-		clusterByIdx:  -1,
 		viewdef:       "",
 		comment:       "",
 		partitioned:   0,

@@ -176,7 +176,7 @@ func (c *DMLUpdateCoordinator) Commit(ctx context.Context) error {
 	req := DMLUpdateActionStreamRequest{
 		DMLDeleteActionStreamRequest: DMLDeleteActionStreamRequest{
 			Schema:             c.spec.Schema,
-			Base:               c.commitBase(),
+			Base:               resolveDMLCommitBase(c.spec.Base, c.writeReq),
 			DeleteSchemaID:     c.spec.DeleteSchemaID,
 			ObjectWriter:       c.spec.ObjectWriter,
 			Targets:            targets,
@@ -195,28 +195,27 @@ func (c *DMLUpdateCoordinator) Abort(ctx context.Context, cause error) error {
 	return nil
 }
 
-func (c *DMLUpdateCoordinator) commitBase() dml.CommitBase {
-	base := c.spec.Base
-	if len(base.Namespace) == 0 && c.writeReq.Namespace != "" {
-		base.Namespace = dottedNamespace(c.writeReq.Namespace)
+func resolveDMLCommitBase(base dml.CommitBase, req icebergwrite.AppendRequest) dml.CommitBase {
+	if len(base.Namespace) == 0 && req.Namespace != "" {
+		base.Namespace = dottedNamespace(req.Namespace)
 	}
 	if base.Table == "" {
-		base.Table = c.writeReq.Table
+		base.Table = req.Table
 	}
 	if base.TargetRef == "" {
-		base.TargetRef = firstNonEmpty(c.writeReq.DMLScan.Ref, c.writeReq.DefaultRef, "main")
+		base.TargetRef = api.FirstNonBlankPreserveWhitespace(req.DMLScan.Ref, req.DefaultRef, "main")
 	}
 	if base.IdempotencyKey == "" {
-		base.IdempotencyKey = firstNonEmpty(c.writeReq.IdempotencyKey, c.writeReq.StatementID)
+		base.IdempotencyKey = api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.StatementID)
 	}
 	if base.StatementID == "" {
-		base.StatementID = firstNonEmpty(c.writeReq.StatementID, c.writeReq.IdempotencyKey)
+		base.StatementID = api.FirstNonBlankPreserveWhitespace(req.StatementID, req.IdempotencyKey)
 	}
 	if base.BaseSnapshotID == 0 {
-		base.BaseSnapshotID = c.writeReq.DMLScan.BaseSnapshotID
+		base.BaseSnapshotID = req.DMLScan.BaseSnapshotID
 	}
 	if base.BaseSchemaID == 0 {
-		base.BaseSchemaID = c.writeReq.DMLScan.BaseSchemaID
+		base.BaseSchemaID = req.DMLScan.BaseSchemaID
 	}
 	return base
 }

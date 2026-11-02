@@ -37,7 +37,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -3097,56 +3096,6 @@ func accountNameIsLegal(name string) bool {
 		"create account `" + name + "` ADMIN_NAME 'admin' IDENTIFIED BY '111'",
 	}
 	return isLegal(name, createAccountSqls)
-}
-
-/*
-dbNameIsLegal checks the database name legal or not.
-rule:
-
-	if create database name or create database `name` can succeed,
-	it is legal.
-
-	it means all most all string can be legal.
-*/
-func dbNameIsLegal(name string) bool {
-	name = strings.TrimSpace(name)
-	if hasSpecialChars(name) {
-		return false
-	}
-	if name == cdc.CDCPitrGranularity_All {
-		return true
-	}
-
-	createDBSqls := []string{
-		"create database " + name,
-		"create database `" + name + "`",
-	}
-	return isLegal(name, createDBSqls)
-}
-
-/*
-tableNameIsLegal checks the table name legal or not.
-rule:
-
-	if create table name or create table `name` can succeed,
-	it is legal.
-
-	it means all most all string can be legal.
-*/
-func tableNameIsLegal(name string) bool {
-	name = strings.TrimSpace(name)
-	if hasSpecialChars(name) {
-		return false
-	}
-	if name == cdc.CDCPitrGranularity_All {
-		return true
-	}
-
-	createTableSqls := []string{
-		"create table " + name + "(a int)",
-		"create table `" + name + "`(a int)",
-	}
-	return isLegal(name, createTableSqls)
 }
 
 // replaceStr replaces s[start:end] by s2

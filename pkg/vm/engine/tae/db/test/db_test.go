@@ -6922,13 +6922,17 @@ func TestAlterFakePk(t *testing.T) {
 		var view *containers.Batch
 		blkID := objectio.NewBlockidWithObjectID(obj.GetID(), 0)
 		err = tables.HybridScanByBlock(ctx, tbl, txn, &view, newSchema.(*catalog.Schema), []int{1}, &blkID, common.DefaultAllocator)
-		view.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
-			assert.True(t, true)
+		require.NoError(t, err)
+		require.NotNil(t, view)
+		defer view.Close()
+		require.Len(t, view.Vecs, 1)
+		err = view.Vecs[0].Foreach(func(v any, isNull bool, row int) error {
+			assert.True(t, isNull)
 			rows = append(rows, row)
 			return nil
 		}, sels)
+		require.NoError(t, err)
 		assert.Equal(t, []int{1, 3}, rows)
-		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 

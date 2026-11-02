@@ -83,7 +83,7 @@ no such table kafka_exttab.kt_like
 select * from kt_like;
 SQL parser error: table "kt_like" does not exist
 drop table kt_like;
-no such table kafka_exttab.kt_like
+Unknown table 'kafka_exttab.kt_like'
 create table plain_t (a int) engine = kafka;
 drop table plain_t;
 create table kafka (kafka int);

@@ -4573,3 +4573,37 @@ func TestWindowIntervalValidationPrecedesSourceInitialization(t *testing.T) {
 	require.False(t, started)
 	require.Nil(t, c.scopes[0].DataSource.R)
 }
+
+func TestCompileODKUSourceOrderBoundaries(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local-cn:6001"
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.anal = &AnalyzeModule{}
+	t.Cleanup(c.proc.Free)
+	input := func(addr string, mcpu int) *Scope {
+		s := newScope(Remote)
+		s.NodeInfo = engine.Node{Addr: addr, Mcpu: mcpu}
+		s.Proc = c.proc.NewNoContextChildProc(0)
+		s.setRootOperator(colexec.NewMockOperator())
+		return s
+	}
+	numbered := c.compileWin(newRowNumberWindowNodeForTest(), []*Scope{input("remote-cn-a:6001", 2), input("remote-cn-b:6001", 2)})
+	t.Cleanup(func() { ReleaseScopes(numbered) })
+	require.Len(t, numbered, 1)
+	require.Equal(t, 1, numbered[0].NodeInfo.Mcpu)
+	require.Equal(t, vm.Window, numbered[0].RootOp.OpType())
+	// Lookup joins may repartition the numbered input. The following global
+	// order must merge every such scope before the stateful arbiter is attached.
+	key := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	ordered := c.compileSort(&plan.Node{NodeType: plan.Node_SORT, OrderBy: []*plan.OrderBySpec{{Expr: key, Flag: plan.OrderBySpec_ASC}}}, []*Scope{input("remote-cn-a:6001", 2), input("remote-cn-b:6001", 2)})
+	require.Len(t, ordered, 1)
+	require.Equal(t, 1, ordered[0].NodeInfo.Mcpu)
+	require.Equal(t, vm.MergeOrder, ordered[0].RootOp.OpType())
+	sorted := ordered[0].RootOp
+	result := c.compilePreInsertUk(&plan.Node{PreInsertUkCtx: &plan.PreInsertUkCtx{OdkuTargetArbitration: true}}, ordered)
+	t.Cleanup(func() { ReleaseScopes(result) })
+	require.Len(t, result, 1)
+	require.Same(t, ordered[0], result[0])
+	require.Equal(t, vm.PreInsertUnique, result[0].RootOp.OpType())
+	require.Same(t, sorted, result[0].RootOp.GetOperatorBase().GetChildren(0))
+}

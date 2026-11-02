@@ -133,7 +133,6 @@ func init() {
 }
 
 type service struct {
-	sid     string
 	logger  *log.MOLogger
 	lock    Locker
 	clock   clock.Clock
@@ -176,7 +175,6 @@ func NewService(
 	opts ...Option,
 ) Service {
 	s := &service{
-		sid:     sid,
 		clock:   clock,
 		exec:    exec,
 		lock:    lock,

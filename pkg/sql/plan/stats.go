@@ -1082,11 +1082,6 @@ type rangeSelectivityKey struct {
 	colFnName string
 }
 
-type rangeSelectivityGroup struct {
-	key   rangeSelectivityKey
-	exprs []*plan.Expr
-}
-
 // estimateAndSelectivity treats constant ranges on the same column as one
 // interval. Multiplying nested predicates such as x >= 35, x >= 36, x <= 45,
 // x <= 50 counts the same restriction four times and makes estimates depend on
@@ -1096,7 +1091,7 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 	for _, arg := range args {
 		flattenAndConjuncts(arg, &conjuncts)
 	}
-	groups := make([]rangeSelectivityGroup, 0)
+	groups := make([][]*plan.Expr, 0)
 	groupByKey := make(map[rangeSelectivityKey]int)
 	groupForConjunct := make([]int, len(conjuncts))
 	for i := range groupForConjunct {
@@ -1111,9 +1106,9 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 		if !exists {
 			groupIndex = len(groups)
 			groupByKey[key] = groupIndex
-			groups = append(groups, rangeSelectivityGroup{key: key})
+			groups = append(groups, nil)
 		}
-		groups[groupIndex].exprs = append(groups[groupIndex].exprs, conjunct)
+		groups[groupIndex] = append(groups[groupIndex], conjunct)
 		groupForConjunct[i] = groupIndex
 	}
 
@@ -1121,7 +1116,7 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 	emitted := make([]bool, len(groups))
 	for i, conjunct := range conjuncts {
 		groupIndex := groupForConjunct[i]
-		if groupIndex < 0 || len(groups[groupIndex].exprs) == 1 {
+		if groupIndex < 0 || len(groups[groupIndex]) == 1 {
 			ret = andSelectivity(ret, estimateExprSelectivity(conjunct, builder, s))
 			continue
 		}
@@ -1130,9 +1125,9 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 		}
 		emitted[groupIndex] = true
 		groupSelectivity, ok := estimateConjunctiveRangeSelectivity(
-			groups[groupIndex].exprs, builder)
+			groups[groupIndex], builder)
 		if !ok {
-			for _, grouped := range groups[groupIndex].exprs {
+			for _, grouped := range groups[groupIndex] {
 				ret = andSelectivity(ret, estimateExprSelectivity(grouped, builder, s))
 			}
 			continue
@@ -1216,10 +1211,7 @@ func estimateConjunctiveRangeSelectivity(
 		if fn == nil {
 			return 0, false
 		}
-		first, ok := rangeLiteralAsFloat64(fn.Args[1], types.T(typeID))
-		if colFnName == "year" {
-			first, ok = rangeLiteralAsFloat64(fn.Args[1], typ)
-		}
+		first, ok := rangeLiteralAsFloat64(fn.Args[1], typ)
 		if !ok {
 			return 0, false
 		}
@@ -1241,10 +1233,7 @@ func estimateConjunctiveRangeSelectivity(
 				upperInclusive = false
 			}
 		case "between":
-			second, secondOK := rangeLiteralAsFloat64(fn.Args[2], types.T(typeID))
-			if colFnName == "year" {
-				second, secondOK = rangeLiteralAsFloat64(fn.Args[2], typ)
-			}
+			second, secondOK := rangeLiteralAsFloat64(fn.Args[2], typ)
 			if !secondOK {
 				return 0, false
 			}
@@ -1374,9 +1363,9 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 		return 1
 	}
 	col := extractColRefInFilter(expr)
-	if col != nil {
+	if col != nil && col.ColPos >= 0 && int(col.ColPos) < len(tableDef.Cols) {
 		sortOrder := GetSortOrder(tableDef, col.ColPos)
-		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s, tableDef.Cols[col.ColPos].Name, expr)
 		switch sortOrder {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -2242,7 +2231,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
 				node.BlockFilterList = nil
 			} else {
-				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) || logicalPrefixOnTable(node.FilterList[i].GetF(), node.TableDef) {
 					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
 						copyOfExpr := DeepCopyExpr(node.FilterList[i])
 						copyOfExpr.Selectivity = currentBlockSel
@@ -2251,7 +2240,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 				}
 			}
 		} else {
-			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
+			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) || logicalPrefixOnTable(node.FilterList[i].GetF(), node.TableDef) {
 				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
 					copyOfExpr := DeepCopyExpr(node.FilterList[i])
 					copyOfExpr.Selectivity = currentBlockSel

@@ -233,6 +233,9 @@ type CompilerContext interface {
 	DatabaseExists(name string, snapshot *Snapshot) bool
 	// get table definition by database/schema
 	Resolve(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
+	// ResolveWithoutTemporaryAlias skips session aliases for standalone RENAME TABLE.
+	// It retains catalog visibility, temporary ownership and access checks.
+	ResolveWithoutTemporaryAlias(schemaName string, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get index table definition by an ObjectRef, will skip unnecessary subscription check
 	ResolveIndexTableByRef(ref *ObjectRef, tblName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error)
 	// get table definition by table id

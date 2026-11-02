@@ -20,13 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"strconv"
 	"strings"
 	"time"
 
 	gomysql "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/common/backoff"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
@@ -604,39 +604,7 @@ type ExponentialBackoff struct {
 
 // Next implements BackoffStrategy.
 func (b ExponentialBackoff) Next(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-
-	base := b.Base
-	if base <= 0 {
-		base = time.Millisecond * 100
-	}
-
-	factor := b.Factor
-	if factor <= 1 {
-		factor = 2
-	}
-
-	delay := float64(base) * math.Pow(factor, float64(attempt-1))
-	result := time.Duration(delay)
-	if b.Max > 0 && result > b.Max {
-		result = b.Max
-	}
-
-	if b.Jitter > 0 {
-		randFn := b.randFn
-		if randFn == nil {
-			randFn = func(max time.Duration) time.Duration {
-				if max <= 0 {
-					return 0
-				}
-				return time.Duration(time.Now().UnixNano() % int64(max))
-			}
-		}
-		result += randFn(b.Jitter)
-	}
-	return result
+	return backoff.Exponential(attempt, b.Base, b.Factor, b.Max, b.Jitter, b.randFn)
 }
 
 // MultiClassifier chains multiple classifiers; returns true if any classifier deems the error retryable.
