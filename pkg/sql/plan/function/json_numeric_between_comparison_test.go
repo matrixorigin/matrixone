@@ -429,6 +429,79 @@ func TestJSONNumericBetweenExecutorContract(t *testing.T) {
 	})
 }
 
+// TestJSONNumericBetweenDecimalDoubleCoercion pins the DECIMAL boundary of
+// the DOUBLE-coercion leg: a DECIMAL operand in a mixed JSON/numeric range
+// with a float-typed peer converts through the ordinary per-type cast
+// (Decimal64/128/256ToFloat64 - the cast the binary `x <= hi` leg binds),
+// never through a ParseFloat reparse of the adapter's formatted text. At the
+// DECIMAL(39,2) subject 90071992547409.93 beside the DOUBLE bound
+// 90071992547409.92, the ordinary channel rounds the subject into the bound
+// (per-type cast == bound) while the text reparse rounds it one ULP above,
+// so the BETWEEN ternary answered false where the equivalent binary
+// comparisons answered true, and NOT(BETWEEN) disagreed with lowered
+// NOT BETWEEN. Rows pin one boundary, one neighbor below and one above.
+func TestJSONNumericBetweenDecimalDoubleCoercion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()); proc.Free() })
+
+	const bound = 90071992547409.92
+	// Unscaled coefficients at scale 2: the hard boundary subject, a neighbor
+	// below it, and a neighbor above it.
+	coefficients := []int64{9007199254740993, 9007199254740991, 9007199254740994}
+	expected := []bool{true, true, false}
+	rows64 := make([]types.Decimal64, len(coefficients))
+	rows128 := make([]types.Decimal128, len(coefficients))
+	rows256 := make([]types.Decimal256, len(coefficients))
+	for i, coefficient := range coefficients {
+		rows64[i] = types.Decimal64(uint64(coefficient))
+		rows128[i] = types.Decimal128FromInt64(coefficient)
+		rows256[i] = types.Decimal256FromInt64(coefficient)
+	}
+	// The ordinary channel's own conversion is the oracle for the boundary
+	// row: the subject equals the DOUBLE bound after its per-type cast.
+	require.EqualValues(t, bound, types.Decimal64ToFloat64(rows64[0], 2))
+	require.EqualValues(t, bound, types.Decimal128ToFloat64(rows128[0], 2))
+	require.EqualValues(t, bound, types.Decimal256ToFloat64(rows256[0], 2))
+
+	cases := []betweenJSONNumericCase{
+		{
+			name: "decimal64 rows between JSON 0 and the DOUBLE boundary",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal64, types.T_decimal64.ToType().Width, 2), rows64, nil),
+				NewFunctionTestInput(types.T_json.ToType(),
+					repeatString(mustJsonBinaryString(t, `0`), len(coefficients)), nil),
+				NewFunctionTestInput(types.T_float64.ToType(), repeatFloat64(bound, len(coefficients)), nil),
+			},
+			expected: expected,
+		},
+		{
+			name: "decimal128 rows between JSON 0 and the DOUBLE boundary",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal128, types.T_decimal128.ToType().Width, 2), rows128, nil),
+				NewFunctionTestInput(types.T_json.ToType(),
+					repeatString(mustJsonBinaryString(t, `0`), len(coefficients)), nil),
+				NewFunctionTestInput(types.T_float64.ToType(), repeatFloat64(bound, len(coefficients)), nil),
+			},
+			expected: expected,
+		},
+		{
+			name: "decimal256 rows between JSON 0 and the DOUBLE boundary",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.New(types.T_decimal256, 39, 2), rows256, nil),
+				NewFunctionTestInput(types.T_json.ToType(),
+					repeatString(mustJsonBinaryString(t, `0`), len(coefficients)), nil),
+				NewFunctionTestInput(types.T_float64.ToType(), repeatFloat64(bound, len(coefficients)), nil),
+			},
+			expected: expected,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runBetweenJSONNumericCase(t, proc, tc)
+		})
+	}
+}
+
 // TestJSONNumericBetweenLegacyEraFold pins the DUMP era restoration for the
 // mixed JSON/numeric range: a JSON literal null folds back into the SQL NULL
 // contract in the era (compareJSONNumeric's legacy out), so an archived

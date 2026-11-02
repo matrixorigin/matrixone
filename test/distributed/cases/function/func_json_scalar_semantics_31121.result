@@ -884,6 +884,28 @@ execute pb45 using @null44, @one44, @null44, @one44;
 3  ¦  0  ¦  1  𝄀
 4  ¦  null  ¦  null
 deallocate prepare pb45;
+drop table if exists btw46;
+create table btw46 (id int primary key, d decimal(39,2));
+insert into btw46 values (1,90071992547409.93),(2,90071992547409.91),(3,90071992547409.94);
+select id, (cast('0' as json) <= abs(d)) and (abs(d) <= cast(90071992547409.92 as double)) as inside_bin,
+abs(d) between cast('0' as json) and cast(90071992547409.92 as double) as inside_stat
+from btw46 order by id;
+➤ id[4,32,0]  ¦  inside_bin[-6,8,0]  ¦  inside_stat[-6,8,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1  𝄀
+3  ¦  0  ¦  0
+prepare pb46 from 'select id, abs(d) between cast(? as json) and cast(90071992547409.92 as double) as inside_pre,
+not(abs(d) between cast(? as json) and cast(90071992547409.92 as double)) as outside_not,
+abs(d) not between cast(? as json) and cast(90071992547409.92 as double) as outside_lower
+from btw46 order by id';
+set @j46 = '0';
+execute pb46 using @j46, @j46, @j46;
+➤ id[4,32,0]  ¦  inside_pre[-6,8,0]  ¦  outside_not[-6,8,0]  ¦  outside_lower[-6,8,0]  𝄀
+1  ¦  1  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  0  ¦  0  𝄀
+3  ¦  0  ¦  1  ¦  1
+deallocate prepare pb46;
+drop table if exists btw46;
 drop table if exists btw44;
 drop table if exists btw40;
 drop table if exists btw39;

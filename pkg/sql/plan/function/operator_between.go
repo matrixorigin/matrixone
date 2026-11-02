@@ -312,13 +312,28 @@ func mixedJSONNumericBetweenVectors(parameters []*vector.Vector) bool {
 // scalar domain, invocation-owned. JSON bytes are borrowed from the input
 // vector or comparisonJSONAt's decode; a numeric operand keeps only its
 // validated adapter peer, whose scratch bytes the peer's own slice keeps
-// reachable.
+// reachable, plus its typed DECIMAL value when the DOUBLE-coercion leg has
+// to convert through the ordinary per-type cast.
 type betweenJSONNumericOperand struct {
 	isJSON  bool
 	sqlNull bool
 	json    bytejson.ByteJson
 	peer    jsonNumericPeer
 	scratch [8]byte
+	decimal betweenJSONNumericDecimal
+}
+
+// betweenJSONNumericDecimal keeps a DECIMAL operand's exact typed value and
+// scale. The adapter's encoded peer renders a decimal as formatted text for
+// the exact numeric taxonomy; that text re-parsed with ParseFloat can round
+// a hard decimal one ULP away from the ordinary comparison channel, whose
+// DECIMAL->DOUBLE leg converts through Decimal64/128/256ToFloat64.
+type betweenJSONNumericDecimal struct {
+	present bool
+	scale   int32
+	d64     types.Decimal64
+	d128    types.Decimal128
+	d256    types.Decimal256
 }
 
 func readBetweenJSONNumericOperand(
@@ -338,6 +353,26 @@ func readBetweenJSONNumericOperand(
 		return betweenJSONNumericOperand{sqlNull: true}, nil
 	}
 	operand := betweenJSONNumericOperand{}
+	switch oid {
+	case types.T_decimal64:
+		operand.decimal = betweenJSONNumericDecimal{
+			present: true,
+			scale:   vec.GetType().Scale,
+			d64:     vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, row),
+		}
+	case types.T_decimal128:
+		operand.decimal = betweenJSONNumericDecimal{
+			present: true,
+			scale:   vec.GetType().Scale,
+			d128:    vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, row),
+		}
+	case types.T_decimal256:
+		operand.decimal = betweenJSONNumericDecimal{
+			present: true,
+			scale:   vec.GetType().Scale,
+			d256:    vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, row),
+		}
+	}
 	adapter := comparisonNumericAt(vec, row, &operand.scratch)
 	peer, err := makeJSONNumericPeer(proc.Ctx, adapter, oid, vector.PrepareParamNone)
 	if err != nil {
@@ -355,6 +390,32 @@ func readBetweenJSONNumericOperand(
 // agrees at the precision boundary.
 func jsonNumericPeerFloatCoercionDomain(peer *jsonNumericPeer) bool {
 	return peer.typ.IsFloat() || peer.typ == types.T_any && peer.kind == vector.PrepareParamFloat
+}
+
+// betweenJSONDoubleCoercion returns the DOUBLE-domain value of a numeric
+// BETWEEN operand exactly the way the ordinary comparison casts it there:
+// a DECIMAL-typed operand converts through its per-type cast
+// (Decimal64/128/256ToFloat64, the cast the binary `x <= hi` leg binds),
+// while every other operand keeps the scalar decode the ranked domain uses.
+// The receiver underpins mixed JSON/numeric and unmixable-lower leg parity:
+// a formatted-text reparse of DECIMAL data (ParseFloat of the adapter's
+// rendering) can agree on most rows yet disagree on hard decimal boundaries
+// like DECIMAL(39,2) 90071992547409.93 beside the DOUBLE 90071992547409.92,
+// where the ordinary channel rounds the subject into the bound and the
+// reparse rounds it one ULP above.
+func betweenJSONDoubleCoercion(operand *betweenJSONNumericOperand) (float64, bool) {
+	if operand.decimal.present {
+		switch operand.peer.typ {
+		case types.T_decimal64:
+			return types.Decimal64ToFloat64(operand.decimal.d64, operand.decimal.scale), true
+		case types.T_decimal128:
+			return types.Decimal128ToFloat64(operand.decimal.d128, operand.decimal.scale), true
+		case types.T_decimal256:
+			return types.Decimal256ToFloat64(operand.decimal.d256, operand.decimal.scale), true
+		}
+	}
+	value, _, ok := jsonToScalar(operand.peer.value)
+	return value, ok
 }
 
 // compareBetweenJSONNumericOperands returns the ordering of left against
@@ -381,9 +442,13 @@ func compareBetweenJSONNumericOperands(
 			// The ordinary BIGINT/DOUBLE (or DECIMAL/float, or unsigned
 			// integer/float) comparison coerces both operands to DOUBLE, so
 			// the lowered `x <= hi` leg rounds the subject before comparing
-			// and this leg answers from the same domain.
-			leftFloat, _, ok := jsonToScalar(left.peer.value)
-			rightFloat, _, okRight := jsonToScalar(right.peer.value)
+			// and this leg answers from the same domain. A DECIMAL operand
+			// converts through its ordinary per-type cast instead of
+			// re-parsing the adapter's formatted text, whose ParseFloat
+			// reparse can round a hard decimal one ULP away from the
+			// ordinary channel at the DOUBLE boundary.
+			leftFloat, ok := betweenJSONDoubleCoercion(&left)
+			rightFloat, okRight := betweenJSONDoubleCoercion(&right)
 			if !ok || !okRight {
 				return 0, false, moerr.NewInvalidInput(
 					proc.Ctx, "invalid encoded numeric BETWEEN operand")
