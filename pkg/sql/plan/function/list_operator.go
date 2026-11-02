@@ -2783,6 +2783,13 @@ var supportedOperators = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
 				newOp:      func() executeLogicOfOverload { return NewTemporalIntegerArgumentCast },
 			},
+			{
+				overloadId:      int(TemporalCastIntegerOverload),
+				volatile:        true,
+				executionStable: true,
+				retType:         func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:           func() executeLogicOfOverload { return NewTemporalCastInteger },
+			},
 		},
 	},
 

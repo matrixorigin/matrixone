@@ -924,6 +924,18 @@ func (bc *BindContext) isAliasExpansion(expr tree.Expr) (*tree.ParenExpr, int32,
 	return wrapper, projectPos, ok
 }
 
+// DeepCopyExpr does not detach the query/program graph behind a scalar call.
+// Rebind such aliases from their AST before a consumer can lower their output
+// or decorrelate them; the published projection must retain its own graph.
+func aliasProjectionNeedsRebind(expr *plan.Expr) bool {
+	needsRebind := false
+	_ = plan.VisitExprTree(expr, func(e *plan.Expr) error {
+		needsRebind = needsRebind || e.GetSub() != nil || e.GetDependent() != nil
+		return nil
+	})
+	return needsRebind
+}
+
 func (bc *BindContext) projectedExprPosition(expr tree.Expr) int32 {
 	if bc == nil {
 		return -1
