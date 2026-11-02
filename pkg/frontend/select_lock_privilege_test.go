@@ -441,7 +441,7 @@ func newSelectLockBatchCatalog(t *testing.T, security string, targets int) *sele
 }
 
 func TestSelectLockAuthorizationBatchBoundaries(t *testing.T) {
-	for _, tc := range []string{"success", "sibling lacks write", "definer cannot rescue invoker", "eligibility changes", "boundary error", "metadata error", "cancel between targets"} {
+	for _, tc := range []string{"success", "sibling lacks write", "definer cannot rescue invoker", "eligibility changes", "boundary error", "metadata error", "cancel between targets", "cancel with eligibility loss"} {
 		t.Run(tc, func(t *testing.T) {
 			f := newSelectLockBatchCatalog(t, viewSecurityDefiner, 2)
 			roles := &btree.Set[int64]{}
@@ -514,18 +514,18 @@ func TestSelectLockAuthorizationBatchBoundaries(t *testing.T) {
 				require.NoError(t, err)
 				f.fail[selectLockCatalogKey{9, meta}] = failure
 				wantChecked, wantOK = 0, false
-			case "cancel between targets":
+			case "cancel between targets", "cancel with eligibility loss":
 				ctx, cancel := context.WithCancel(f.ctx)
 				t.Cleanup(cancel)
 				f.ctx = ctx
-				beforeNext = func() (bool, error) { cancel(); return true, nil }
+				beforeNext = func() (bool, error) { cancel(); return tc != "cancel with eligibility loss", nil }
 				wantChecked, wantOK = 1, false
 			}
 			batch := &selectLockAuthorizationBatch{items: f.items}
 			ok, err := batch.check(f.ctx, f.bh, f.ses, roles, beforeNext)
 			if tc == "boundary error" || tc == "metadata error" {
 				require.ErrorIs(t, err, failure)
-			} else if tc == "cancel between targets" {
+			} else if tc == "cancel between targets" || tc == "cancel with eligibility loss" {
 				require.ErrorIs(t, err, context.Canceled)
 			} else {
 				require.NoError(t, err)

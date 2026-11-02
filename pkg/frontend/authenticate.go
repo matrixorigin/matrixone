@@ -8016,6 +8016,9 @@ func (b *selectLockAuthorizationBatch) check(ctx context.Context, bh BackgroundE
 			if err != nil {
 				return false, err
 			}
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
 			if !eligible {
 				return true, nil // commit this prefix, then resume independent reads
 			}
@@ -8621,17 +8624,18 @@ func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *S
 	roleSetOfKthIteration.Insert((int64)(tenant.GetDefaultRoleID()))
 
 	err = bh.Exec(ctx, "begin;")
-	txnFinished := false
 	publishRoleGrant := false
 	defer func() {
-		if txnFinished {
-			return
-		}
 		err = finishTxn(ctx, bh, err)
-		if err == nil && publishRoleGrant && enableCache && cache != nil {
-			cache.setActiveRoleGrantForGeneration(
-				tenant.GetUserID(), tenant.GetDefaultRoleID(), roleGrantValid,
-				roleGrantCacheGeneration)
+		if err == nil && publishRoleGrant {
+			if enableCache && cache != nil {
+				cache.setActiveRoleGrantForGeneration(
+					tenant.GetUserID(), tenant.GetDefaultRoleID(), roleGrantValid,
+					roleGrantCacheGeneration)
+			}
+			if !roleGrantValid {
+				err = activeRoleGrantAuthorizationError(ctx)
+			}
 		}
 	}()
 	if err != nil {
@@ -8648,20 +8652,9 @@ func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *S
 		}
 		publishRoleGrant = true
 		if !roleGrantValid {
-			// A negative membership result is a successful catalog transaction,
-			// even though it denies the statement. Commit that read before caching
-			// it, then return the authorization error to the caller.
-			err = finishTxn(ctx, bh, nil)
-			txnFinished = true
-			if err != nil {
-				return false, stats, err
-			}
-			if enableCache && cache != nil {
-				cache.setActiveRoleGrantForGeneration(
-					tenant.GetUserID(), tenant.GetDefaultRoleID(), false,
-					roleGrantCacheGeneration)
-			}
-			return false, stats, activeRoleGrantAuthorizationError(ctx)
+			// Logical denial still commits the catalog read. The deferred owner
+			// publishes membership after commit, then returns the typed denial.
+			return false, stats, nil
 		}
 
 		// This is the first authorization in the cache generation. Reuse any
@@ -8698,8 +8691,6 @@ func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *S
 				if _, _, err = statementCatalogVersion(ctx, ses, sessionCatalogEngine(ses)); err != nil {
 					return false, stats, err
 				}
-				// A boundary failure belongs to the next target. Finish the prior
-				// successful read before returning it, matching independent reads.
 				beforeNext := func() (bool, error) {
 					if err := ses.refreshPrivilegeCache(ctx); err != nil {
 						return false, err
@@ -8730,21 +8721,7 @@ func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *S
 					}
 					return cache.getActiveRoleGrantGeneration() == batchGeneration, ctx.Err()
 				}
-				// Separate a boundary error from target work so cleanup retains
-				// the legacy commit-before-next-target error precedence.
-				var boundaryErr error
-				ret, err = batch.check(ctx, bh, ses, roleSetOfKthIteration, func() (bool, error) {
-					eligible, e := beforeNext()
-					boundaryErr = e
-					return eligible, e
-				})
-				if boundaryErr != nil {
-					err = finishTxn(ctx, bh, nil)
-					txnFinished = true
-					if err == nil {
-						err = boundaryErr
-					}
-				}
+				ret, err = batch.check(ctx, bh, ses, roleSetOfKthIteration, beforeNext)
 				return ret, stats, err
 			}
 			ret, err = determineSelectLockViewPrivilege(ctx, bh, ses, roleSetOfKthIteration, item)

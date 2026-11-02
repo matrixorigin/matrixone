@@ -150,7 +150,7 @@ func TestSelectLockCTASRetry(t *testing.T) {
 				require.True(t, ok)
 				require.Equal(t, 2, checked, "both targets must use the admitted batch, not fallback")
 			})
-			for _, scenario := range []string{"boundary error and commit failure", "target error and rollback failure", "denial and commit failure", "begin failure"} {
+			for _, scenario := range []string{"boundary error", "boundary error and rollback failure", "prefix success and commit failure", "target error and rollback failure", "denial and commit failure", "begin failure"} {
 				t.Run(scenario, func(t *testing.T) {
 					withNativeViewSchemaRead(t, readerCtx, cn, svc, database, reader, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
 						p, err := plan.BuildPlan(compiler, statement, false)

@@ -358,7 +358,7 @@ func (f *nativeSelectLockFailureExec) Exec(ctx context.Context, sql string) erro
 		if err := f.BackgroundExec.Exec(ctx, sql); err != nil {
 			return err
 		}
-		if f.scenario == "target error and rollback failure" {
+		if f.scenario == "target error and rollback failure" || f.scenario == "boundary error and rollback failure" {
 			return f.rollbackErr
 		}
 		return nil
@@ -383,10 +383,13 @@ func (f *nativeSelectLockFailureExec) Exec(ctx context.Context, sql string) erro
 		}
 		if first || second || strings.Contains(sql, "'v'") {
 			f.result = newMrsForWithGrantOptionPrivilege([][]interface{}{{PrivilegeTypeUpdate, true}})
-			if first && f.scenario == "boundary error and commit failure" {
+			if first && strings.HasPrefix(f.scenario, "boundary error") {
+				f.session.GetPrivilegeCache().invalidate()
 				f.epoch.mu.Lock()
 				f.epoch.err = f.workErr
 				f.epoch.mu.Unlock()
+			} else if first && f.scenario == "prefix success and commit failure" {
+				f.session.GetPrivilegeCache().invalidate()
 			}
 		}
 	}
@@ -425,7 +428,9 @@ func AssertNativeSelectLockFinalizationForTest(t *testing.T, ctx context.Context
 		commitErr: moerr.NewTxnNeedRetryNoCtx(), rollbackErr: moerr.NewInternalErrorNoCtx("injected rollback failure")}
 	ok, _, err = authenticateSelectLockReferences(context.WithValue(ctx, nativeSelectLockFailureKey{}, f), ses, q)
 	require.Error(t, err)
-	require.False(t, ok)
+	if scenario != "prefix success and commit failure" {
+		require.False(t, ok)
+	}
 	require.Equal(t, 1, f.created)
 	require.Equal(t, 1, f.closed)
 	require.Equal(t, 1, f.commands["begin;"])
@@ -441,12 +446,19 @@ func AssertNativeSelectLockFinalizationForTest(t *testing.T, ctx context.Context
 		require.ErrorIs(t, err, f.rollbackErr)
 		require.Zero(t, f.commands["commit;"])
 		require.Equal(t, 2, f.metadata, "must reach the second target in the batch")
+	case "boundary error", "boundary error and rollback failure":
+		require.ErrorIs(t, err, f.workErr)
+		require.NotErrorIs(t, err, f.commitErr, "boundary errors must roll back without attempting commit")
+		if scenario == "boundary error and rollback failure" {
+			require.ErrorIs(t, err, f.rollbackErr)
+		}
+		require.Zero(t, f.commands["commit;"])
+		require.Equal(t, 1, f.metadata, "must stop before the second target or fallback")
 	default:
 		require.ErrorIs(t, err, f.commitErr)
-		require.NotErrorIs(t, err, f.workErr, "prefix commit error takes precedence over the next boundary error")
 		require.Equal(t, 1, f.commands["commit;"])
-		if scenario == "boundary error and commit failure" {
-			require.Equal(t, 1, f.metadata)
+		if scenario == "prefix success and commit failure" {
+			require.Equal(t, 1, f.metadata, "failed prefix commit must prevent fallback")
 		} else {
 			require.Equal(t, 2, f.metadata)
 		}
