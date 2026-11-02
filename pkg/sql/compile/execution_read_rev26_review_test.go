@@ -185,10 +185,13 @@ func TestSameTablePromotedJoinDeclinesMarkedStagedLockFromCollapsedOccurrences(t
 	require.NotContains(t, marked, uint64(43),
 		"the acquisition whose collapsed occurrence is historical keeps the legacy options")
 
-	// (7) A ROW occurrence never participates in the staged declination:
+	// (7) A ROW occurrence of a table with NO staged entry never
+	// participates in the staged declination (rev 27 narrows this universe:
 	// the engaging-historical occurrence that stayed a row target keeps its
-	// own per-occurrence resolution in the lock operator, so the promoted
-	// current occurrence's acquisition still carries its marked contract.
+	// own per-occurrence resolution in the lock operator only while no other
+	// LOCK_OP of the statement stages its table), so the promoted current
+	// occurrence's acquisition here carries its marked contract. The covered
+	// variants live in execution_read_rev27_review_test.go.
 	c.pn = occurrenceTargetsPlan(
 		[]*plan.Node{currentScan, engagingScan},
 		promotedCurrentTarget(42),

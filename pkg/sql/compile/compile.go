@@ -1459,6 +1459,13 @@ func (c *Compile) lockTable() error {
 		// collapsed historical or nested occurrence conservatively leaves the
 		// acquisition on today's terminal path, retaining today's outcome for
 		// the whole shape.
+		// PR-review P2 (XuPeng-SH, gen 2): the covered class extends to the
+		// ROW occurrence whose table the same statement already staged — a
+		// nested locking block compiles first and can stage the table while
+		// the enclosing historical occurrence stays a row target, which
+		// compileLock then omits from the physical row operator — so
+		// executionReadStagedLegacyObligations resolves the contract from
+		// every occurrence the acquisition covers, in either tree order.
 		if _, marked := markedLocks[tbl.TableId]; marked {
 			if err := lockop.LockTableWithModeMarked(
 				c.e,
@@ -1521,7 +1528,15 @@ func (c *Compile) lockTable() error {
 // the same physical table — conservatively declines the whole acquisition
 // to today's legacy options (G3 lock acquisition unchanged; G4 one
 // acquisition never mixes contracts), exactly as the round-10 exemption
-// already demands for any historical-only occurrence.
+// already demands for any historical-only occurrence. PR-review P2 round 2
+// (XuPeng-SH): the covered class includes the ROW occurrence of a table
+// the same statement stages — compileLock omits that row target once the
+// table is staged (nested locking blocks compile children first), and the
+// staged-later order still decides the occurrence's wait-resolved
+// conflict at the acquisition — so a covered historical/nested ROW
+// occurrence vetoes the marked options through the same declination, while
+// an UNSTAGED row occurrence keeps the lock operator's per-occurrence
+// resolution.
 func (c *Compile) markedPrePipelineLockTables() map[uint64]struct{} {
 	if c.execReadDisabled {
 		return nil
@@ -1624,26 +1639,40 @@ func (c *Compile) executionReadAdmittedLockTables(qry *plan.Query) map[uint64]st
 }
 
 // executionReadStagedLegacyObligations reports the physical tables at least
-// one of whose PROMOTED lock occurrences — the occurrences compileLock
-// collapses into that table's single staged pre-pipeline acquisition
-// (c.lockTables[TableId]; the same-table row targets are dropped from the
-// lock operator) — must keep today's legacy contract for this execution:
-// a promoted occurrence WITHOUT locking-current-read presence (a
-// nested-block/locked-without-mark occurrence, the promoted variant of the
-// same-table shape of round 10 finding 2) or WITH a stored explicit snapshot
-// that ENGAGES the historical cohort for the executing SnapshotTS (the same
-// nonzero-and-strictly-older predicate the scan admission and the row
+// one of whose lock occurrences covered by that table's single staged
+// pre-pipeline acquisition (c.lockTables[TableId]) must keep today's legacy
+// contract for this execution. The covered class is every occurrence whose
+// LOCK contract physically resolves through the staged table lock, compiled
+// in either tree order:
+//   - a PROMOTED occurrence (the occurrences compileLock collapses into
+//     c.lockTables[TableId]; the same-table row targets are dropped from the
+//     lock operator when they compile after the staging), and
+//   - a ROW occurrence of a table the same statement stages, in BOTH
+//     orders. Children compile before the enclosing LOCK_OP
+//     (compilePlanScope), so a nested locking block can stage the table
+//     first and compileLock then omits the enclosing occurrence's row
+//     target from the physical row list (the pre-existing
+//     c.lockTables[TableId] filter); the staged-later order keeps the row
+//     target in the lock operator, but the pre-pipeline acquisition still
+//     grants the WHOLE table before any row lock can wait, so the
+//     occurrence's wait-resolved conflict is decided by the acquisition, not
+//     the operator.
+//
+// A covered occurrence keeps legacy when it has no locking-current-read
+// presence (a nested-block/locked-without-mark occurrence, the same-table
+// shape of round 10 finding 2 in its row form) or its stored explicit
+// snapshot ENGAGES the historical cohort for the executing SnapshotTS (the
+// same nonzero-and-strictly-older predicate the scan admission and the row
 // operator's per-target stamp resolve with). One acquisition carrying the
 // marked current-read contract would suppress the legacy SI wait-resolved
-// conflict for the WHOLE table — silently turning a collapsed historical or
-// nested occurrence's exemption off just because a current alias of the same
-// physical table was also promoted — and no per-occurrence validation
-// remains after the collapse, so such a table conservatively keeps the
-// legacy acquisition (G3: lock acquisition unchanged for the exempted
-// occurrence class; G4: never a mixture across one acquisition). Row
-// occurrences of the same table are irrelevant here: they never collapse
-// into the staged acquisition and keep their own per-occurrence resolution
-// in the lock operator (rev 24 round 11).
+// conflict for the WHOLE table — silently turning a covered historical or
+// nested occurrence's exemption off because a current alias of the same
+// physical table was also promoted, and no per-occurrence validation remains
+// where the row target was omitted — so such a table conservatively keeps
+// the legacy acquisition (G3: lock acquisition unchanged for the exempted
+// occurrence class; G4: never a mixture across one acquisition). A row
+// occurrence whose table acquires NO staged entry is NOT covered: it keeps
+// its own per-occurrence resolution in the lock operator (rev 24 round 11).
 func (c *Compile) executionReadStagedLegacyObligations(qry *plan.Query) map[uint64]struct{} {
 	if qry == nil {
 		return nil
@@ -1656,11 +1685,21 @@ func (c *Compile) executionReadStagedLegacyObligations(qry *plan.Query) map[uint
 	var legacy map[uint64]struct{}
 	for _, node := range qry.GetNodes() {
 		for _, target := range node.GetLockTargets() {
-			// Only a promoted target reaches the staged acquisition; every
-			// other occurrence keeps the lock operator's per-occurrence
-			// contract.
-			if target == nil || !target.GetLockTable() {
+			if target == nil {
 				continue
+			}
+			// A promoted target reaches the acquisition through the
+			// collapse; a ROW target reaches it exactly the same way once
+			// the same statement staged its table (PR review P2, XuPeng-SH
+			// generation 2: compileLock omits a row target whose table is
+			// already staged, and a staged-later acquisition still decides
+			// the occurrence's wait-resolved conflict), so the final
+			// staged set — not the target's own LockTable flag — names the
+			// occurrences this acquisition serves.
+			if !target.GetLockTable() {
+				if _, staged := c.lockTables[target.GetTableId()]; !staged {
+					continue
+				}
 			}
 			keepsLegacy := !target.GetLockingRead() ||
 				stagedSnapshotEngagesCohort(target, execSnapshotTS)
