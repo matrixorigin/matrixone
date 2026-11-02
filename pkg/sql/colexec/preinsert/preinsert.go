@@ -766,6 +766,15 @@ retryInsertValues:
 					return moerr.NewTxnNeedRetry(proc.Ctx)
 				}
 			} else {
+				if moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) {
+					refreshed, refreshErr := proc.GetIncrService().ReloadForPKRetry(proc.Ctx, tableID, preInsert.TableDef.AutoIncrEpoch, currentTxn)
+					if refreshErr != nil {
+						return refreshErr
+					}
+					if !refreshed {
+						return moerr.NewInternalError(proc.Ctx, "AUTO_INCREMENT PK history is unavailable for transaction-private state; roll back and retry the transaction")
+					}
+				}
 				return err
 			}
 		}

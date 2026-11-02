@@ -110,19 +110,36 @@ class TestIVFConfigOffline:
         assert status["probe_limit"] == 5
         assert status["error"] is None
 
-    def test_is_ivf_supported(self):
+    @pytest.mark.parametrize("row,expected", [
+        (None, False),
+        (("experimental_ivf_index", "0"), True),
+        (("experimental_ivf_index", "1"), True),
+    ])
+    def test_is_ivf_supported(self, row, expected):
         """Test checking if IVF is supported."""
         mock_conn = Mock()
         mock_engine = self._create_mock_engine_with_conn(mock_conn)
 
+        cursor = mock_conn.exec_driver_sql.return_value
+        cursor.fetchone.return_value = row
         config = IVFConfig(mock_engine)
         result = config.is_ivf_supported()
 
-        assert result is True
+        assert result is expected
+        cursor.close.assert_called_once_with()
         # Check that execute was called with the correct SQL
         mock_conn.exec_driver_sql.assert_called_once()
         call_args = mock_conn.exec_driver_sql.call_args[0][0]
         assert call_args == "SHOW VARIABLES LIKE 'experimental_ivf_index'"
+
+    def test_is_ivf_supported_fetch_failure(self):
+        mock_conn = Mock()
+        mock_engine = self._create_mock_engine_with_conn(mock_conn)
+        cursor = mock_conn.exec_driver_sql.return_value
+        cursor.fetchone.side_effect = RuntimeError("read failed")
+
+        assert IVFConfig(mock_engine).is_ivf_supported() is False
+        cursor.close.assert_called_once_with()
 
     def test_is_ivf_supported_failure(self):
         """Test checking if IVF is supported when it fails."""

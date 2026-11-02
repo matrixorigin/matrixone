@@ -89,7 +89,6 @@ type s3WriterDelegate struct {
 	segmentMap    map[string]int32
 
 	action             actionType
-	isRemote           bool
 	rejectZeroTemporal bool
 
 	updateCtxs     []*MultiUpdateCtx
@@ -148,7 +147,6 @@ func newS3Writer(
 		insertBlockRowCount: make([]uint64, tableCount),
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
-		isRemote:            update.IsRemote,
 		rejectZeroTemporal:  update.RejectZeroTemporal,
 		addAffectedRows:     update.addAffectedRowsFunc,
 		takeAffectedRows:    update.takeS3AffectedRowsFunc,

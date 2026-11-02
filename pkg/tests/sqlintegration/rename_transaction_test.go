@@ -213,3 +213,183 @@ func TestRenameTableImplicitCommit(t *testing.T) {
 		}
 	})
 }
+
+// Standalone RENAME uses persisted names at both ends, while ordinary SQL and
+// ALTER continue to see the pinned session's temporary aliases (#31085).
+func TestRenameTableIgnoresTemporaryAliases(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists rename_shadow")
+		owner, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer owner.Close()
+		observer, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer observer.Close()
+		exec := func(s string) { t.Helper(); _, err := owner.ExecContext(ctx, s); require.NoError(t, err, s) }
+		value := func(conn *sql.Conn, s string, want int) {
+			t.Helper()
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx, s).Scan(&got), s)
+			require.Equal(t, want, got, s)
+		}
+		fails := func(conn *sql.Conn, s string, code uint16) {
+			t.Helper()
+			_, err := conn.ExecContext(ctx, s)
+			var sqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &sqlErr, s)
+			require.Equal(t, code, sqlErr.Number, s)
+		}
+		identity := func(name string) uint64 {
+			t.Helper()
+			var id uint64
+			require.NoError(t, observer.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='rename_shadow' and relname=?", name).Scan(&id))
+			return id
+		}
+		exec("create database rename_shadow")
+		exec("use rename_shadow")
+		_, err = observer.ExecContext(ctx, "use rename_shadow")
+		require.NoError(t, err)
+		exec("create table src(x int)")
+		exec("insert into src values(11)")
+		id := identity("src")
+		exec("create temporary table src(y int)")
+		exec("insert into src values(22)")
+		exec("rename table rename_shadow.src to rename_shadow.dst")
+		value(owner, "select y from src", 22)
+		value(owner, "select x from dst", 11)
+		value(observer, "select x from dst", 11)
+		require.Equal(t, id, identity("dst"))
+		fails(observer, "select * from src", 1146)
+		fails(owner, "rename table src to absent", 1146)
+		value(owner, "select y from src", 22)
+
+		// Target aliases do not occupy the persisted namespace.
+		exec("create temporary table target(z int)")
+		exec("insert into target values(44)")
+		exec("rename table dst to target")
+		value(owner, "select z from target", 44)
+		value(observer, "select x from target", 11)
+		exec("drop temporary table target")
+		value(owner, "select x from target", 11)
+		require.Equal(t, id, identity("target"))
+		exec("create table occupied(x int)")
+		exec("insert into occupied values(55)")
+		occupiedID := identity("occupied")
+		exec("create temporary table occupied(y int)")
+		exec("insert into occupied values(66)")
+		fails(owner, "rename table target to occupied", 1050)
+		value(owner, "select y from occupied", 66)
+		value(observer, "select x from occupied", 55)
+		require.Equal(t, occupiedID, identity("occupied"))
+		require.Equal(t, id, identity("target"))
+
+		// A later pair's planning failure cannot publish the earlier rename.
+		exec("create temporary table target(y int)")
+		exec("insert into target values(123)")
+		for _, tail := range []string{"missing to another", "occupied to moved"} {
+			code := uint16(1146)
+			if strings.HasPrefix(tail, "occupied") {
+				code = 1050
+			}
+			fails(owner, "rename table target to moved, "+tail, code)
+			require.Equal(t, id, identity("target"))
+			fails(observer, "select * from moved", 1146)
+		}
+		exec("create temporary table intermediate(y int)")
+		exec("insert into intermediate values(77)")
+		exec("rename table target to intermediate, intermediate to final_name")
+		value(owner, "select y from intermediate", 77)
+		value(observer, "select x from final_name", 11)
+		require.Equal(t, id, identity("final_name"))
+
+		// PREPARE before and after alias creation must select the persisted source.
+		exec("prepare before_shadow from 'rename table final_name to prepared_name'")
+		exec("create temporary table final_name(y int)")
+		exec("insert into final_name values(88)")
+		exec("execute before_shadow")
+		exec("deallocate prepare before_shadow")
+		value(owner, "select y from final_name", 88)
+		exec("create temporary table prepared_name(y int)")
+		exec("insert into prepared_name values(99)")
+		exec("prepare after_shadow from 'rename table prepared_name to final_base'")
+		exec("execute after_shadow")
+		exec("deallocate prepare after_shadow")
+		value(owner, "select y from prepared_name", 99)
+		value(observer, "select x from final_base", 11)
+		require.Equal(t, id, identity("final_base"))
+
+		// A prepared rename must track the persisted source, not its temporary
+		// shadow, when another session replaces that source with a view.
+		exec("create table replaced_src(x int)")
+		exec("create temporary table replaced_src(y int)")
+		exec("insert into replaced_src values(101)")
+		exec("prepare replaced_source from 'rename table replaced_src to replaced_dst'")
+		_, err = observer.ExecContext(ctx, "drop table replaced_src")
+		require.NoError(t, err)
+		_, err = observer.ExecContext(ctx, "create view replaced_src as select 202 as x")
+		require.NoError(t, err)
+		_, preparedErr := owner.ExecContext(ctx, "execute replaced_source")
+		var preparedSQL *mysql.MySQLError
+		require.ErrorAs(t, preparedErr, &preparedSQL)
+		_, freshErr := owner.ExecContext(ctx, "rename table replaced_src to replaced_dst")
+		var freshSQL *mysql.MySQLError
+		require.ErrorAs(t, freshErr, &freshSQL)
+		require.Contains(t, freshSQL.Message, "alter view")
+		require.Equal(t, freshSQL.Number, preparedSQL.Number)
+		require.Equal(t, freshSQL.Message, preparedSQL.Message)
+		exec("deallocate prepare replaced_source")
+		value(owner, "select y from replaced_src", 101)
+		value(observer, "select x from replaced_src", 202)
+		fails(observer, "select * from replaced_dst", 1146)
+		exec("drop temporary table replaced_src")
+
+		// A temporary-only destination is captured as absent in the persisted
+		// namespace; creating a persisted destination invalidates the plan too.
+		exec("create table prepared_src(x int)")
+		exec("insert into prepared_src values(303)")
+		preparedSourceID := identity("prepared_src")
+		exec("create temporary table prepared_dst(y int)")
+		exec("insert into prepared_dst values(404)")
+		exec("prepare occupied_target from 'rename table prepared_src to prepared_dst'")
+		_, err = observer.ExecContext(ctx, "create table prepared_dst(x int)")
+		require.NoError(t, err)
+		_, err = observer.ExecContext(ctx, "insert into prepared_dst values(505)")
+		require.NoError(t, err)
+		preparedTargetID := identity("prepared_dst")
+		fails(owner, "execute occupied_target", 1050)
+		exec("deallocate prepare occupied_target")
+		value(owner, "select y from prepared_dst", 404)
+		value(observer, "select x from prepared_src", 303)
+		value(observer, "select x from prepared_dst", 505)
+		require.Equal(t, preparedSourceID, identity("prepared_src"))
+		require.Equal(t, preparedTargetID, identity("prepared_dst"))
+		exec("drop temporary table prepared_dst")
+
+		exec("alter table src add column extra int default 7")
+		value(owner, "select extra from src", 7)
+		exec("alter table src rename to a")
+		value(owner, "select y from a", 22)
+
+		// The new operation must not turn owned physical temporary roots into
+		// ordinary tables or expose another session's physical root. The short
+		// ALTER alias also keeps the physical name within the destination identifier limit.
+		var physical string
+		require.NoError(t, owner.QueryRowContext(ctx, "select relname from mo_catalog.mo_tables where reldatabase='rename_shadow' and relkind='temporary_table' and relname like '%_a'").Scan(&physical))
+		qualified := "`rename_shadow`.`" + physical + "`"
+		fails(owner, "rename table "+qualified+" to illicit", 20102)
+		fails(observer, "rename table "+qualified+" to illicit", 1146)
+		fails(owner, "rename table final_base to "+qualified, 1050)
+		value(observer, "select x from final_base", 11)
+		value(owner, "select y from a", 22)
+		for _, name := range []string{"a", "occupied", "target", "intermediate", "final_name", "prepared_name"} {
+			exec("drop temporary table " + name)
+		}
+	})
+}

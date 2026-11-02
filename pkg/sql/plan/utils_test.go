@@ -1714,6 +1714,43 @@ func TestPreparedPlanHasDirectResultParamsBoundaries(t *testing.T) {
 	}
 }
 
+func TestCheckNoNeedCastIntegerLiteralEncodings(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		expr   *plan.Expr
+		target types.T
+		fits   bool
+	}{
+		{"I8 minimum widens", makePlan2Int8ConstExprWithType(math.MinInt8), types.T_int16, true},
+		{"I8 negative to unsigned", makePlan2Int8ConstExprWithType(-1), types.T_uint8, false},
+		{"I16 at I8 minimum", makePlan2Int16ConstExprWithType(math.MinInt8), types.T_int8, true},
+		{"I16 below I8 minimum", makePlan2Int16ConstExprWithType(math.MinInt8 - 1), types.T_int8, false},
+		{"I16 at I8 maximum", makePlan2Int16ConstExprWithType(math.MaxInt8), types.T_int8, true},
+		{"I16 above I8 maximum", makePlan2Int16ConstExprWithType(math.MaxInt8 + 1), types.T_int8, false},
+		{"I16 positive to unsigned", makePlan2Int16ConstExprWithType(math.MaxUint8), types.T_uint8, true},
+		{"I32 at I16 maximum", makePlan2Int32ConstExprWithType(math.MaxInt16), types.T_int16, true},
+		{"I32 above I16 maximum", makePlan2Int32ConstExprWithType(math.MaxInt16 + 1), types.T_int16, false},
+		{"I32 at I16 minimum", makePlan2Int32ConstExprWithType(math.MinInt16), types.T_int16, true},
+		{"I32 below I16 minimum", makePlan2Int32ConstExprWithType(math.MinInt16 - 1), types.T_int16, false},
+		{"I64 minimum to unsigned", makePlan2Int64ConstExprWithType(math.MinInt64), types.T_uint64, false},
+		{"I64 maximum narrows", makePlan2Int64ConstExprWithType(math.MaxInt64), types.T_int32, false},
+		{"U8 widens to signed", makePlan2Uint8ConstExprWithType(math.MaxUint8), types.T_int16, true},
+		{"U8 exceeds signed", makePlan2Uint8ConstExprWithType(math.MaxUint8), types.T_int8, false},
+		{"U16 at I16 maximum", makePlan2Uint16ConstExprWithType(math.MaxInt16), types.T_int16, true},
+		{"U16 exceeds signed", makePlan2Uint16ConstExprWithType(math.MaxInt16 + 1), types.T_int16, false},
+		{"U32 at U16 maximum", makePlan2Uint32ConstExprWithType(math.MaxUint16), types.T_uint16, true},
+		{"U32 exceeds unsigned", makePlan2Uint32ConstExprWithType(math.MaxUint16 + 1), types.T_uint16, false},
+		{"U64 at I64 maximum", makePlan2Uint64ConstExprWithType(math.MaxInt64), types.T_int64, true},
+		{"U64 exceeds signed", makePlan2Uint64ConstExprWithType(math.MaxInt64 + 1), types.T_int64, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := DeepCopyExpr(tc.expr)
+			require.Equal(t, tc.fits, checkNoNeedCast(context.Background(), makeTypeByPlan2Expr(tc.expr), tc.target.ToType(), tc.expr))
+			require.Equal(t, before, tc.expr, "range proof must not mutate the literal")
+		})
+	}
+}
+
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
 	tests := []struct {
 		name         string

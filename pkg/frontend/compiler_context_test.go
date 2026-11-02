@@ -89,7 +89,11 @@ func TestDropPlanForgetsOnlyConfirmedMissingTemporaryTable(t *testing.T) {
 					} else if failure == "database" {
 						require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadDB), "%v", err)
 					} else {
-						require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable), "%v", err)
+						// meow-31451 contract: a confirmed-missing DROP TABLE fails
+						// with the public 1051/42S02 error now. The alias-forget
+						// side effect above keys on the resolver-level error, so
+						// this change does not affect the forget semantics below.
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropNonExistsTable), "%v", err)
 					}
 					_, exists = ses.GetTempTable("mo_catalog", "stale")
 					require.Equal(t, failure == "lookup_error", exists)
@@ -895,4 +899,68 @@ func TestGetConfig(t *testing.T) {
 			require.True(t, len(tcc.GetAccountName()) > 0)
 		})
 	}
+}
+
+func TestResolveWithoutTemporaryAliasPreservesOwnership(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	storage := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	storage.EXPECT().Database(gomock.Any(), "mo_catalog", txnOp).Return(db, nil).AnyTimes()
+	ses, _ := newObservedProtocolSession()
+	ses.tempTables, ses.tempTablesRev = make(map[string]string), make(map[string]string)
+	ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
+	const physical = "__mo_tmp_00112233445566778899aabbccddeeff_mo_catalog_t"
+	ses.AddTempTable("mo_catalog", "t", physical)
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: ses, proc: proc}}
+	for i, tc := range []struct {
+		name   string
+		kind   string
+		column string
+	}{
+		{"t", catalog.SystemOrdinaryRel, "base_column"},
+		{physical, catalog.SystemTemporaryTable, "temp_column"},
+		{"foreign_physical", catalog.SystemTemporaryTable, "hidden"},
+		{"__mo_tmp_ffeeddccbbaa99887766554433221100_mo_catalog_permanent", catalog.SystemOrdinaryRel, "permanent"},
+	} {
+		relation := mock_frontend.NewMockRelation(ctrl)
+		def := &pbplan.TableDef{Name: tc.name, TblId: uint64(i + 11), TableType: tc.kind, Cols: []*pbplan.ColDef{{Name: tc.column, Typ: pbplan.Type{Id: int32(types.T_int32)}}}}
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+		relation.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+		if tc.kind == catalog.SystemOrdinaryRel && defines.IsTempTableName(tc.name) {
+			relation.EXPECT().GetExtraInfo().Return(nil).AnyTimes()
+		}
+		db.EXPECT().Relation(gomock.Any(), tc.name, nil).Return(relation, nil).AnyTimes()
+	}
+	for _, skipAlias := range []bool{false, true, false} {
+		resolve := tcc.Resolve
+		if skipAlias {
+			resolve = tcc.ResolveWithoutTemporaryAlias
+		}
+		obj, def, err := resolve("mo_catalog", "t", nil)
+		require.NoError(t, err)
+		require.Equal(t, !skipAlias, def.IsTemporary)
+		require.Equal(t, !skipAlias, obj.NotLockMeta)
+		if skipAlias {
+			require.Equal(t, uint64(11), def.TblId)
+			require.Equal(t, "base_column", def.Cols[0].Name)
+		} else {
+			require.Equal(t, uint64(12), def.TblId)
+		}
+	}
+	obj, def, err := tcc.ResolveWithoutTemporaryAlias("mo_catalog", physical, nil)
+	require.NoError(t, err)
+	require.True(t, def.IsTemporary)
+	require.True(t, obj.NotLockMeta)
+	obj, def, err = tcc.ResolveWithoutTemporaryAlias("mo_catalog", "foreign_physical", nil)
+	require.NoError(t, err)
+	require.Nil(t, obj)
+	require.Nil(t, def)
+	_, def, err = tcc.ResolveWithoutTemporaryAlias("mo_catalog", "__mo_tmp_ffeeddccbbaa99887766554433221100_mo_catalog_permanent", nil)
+	require.NoError(t, err)
+	require.False(t, def.IsTemporary)
+	_, _, err = (&viewSchemaCompilerContext{TxnCompilerContext: tcc}).ResolveWithoutTemporaryAlias("mo_catalog", "t", nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 }

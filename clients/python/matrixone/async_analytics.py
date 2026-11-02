@@ -16,6 +16,8 @@ from ._analytics_workers import AnalyticsWorkers
 from .analytics import (
     AnalyticsCleanupError,
     AnalyticsCommitUnknownError,
+    AnalyticsCommitRejectedError,
+    _commit_was_rejected,
     _arrow,
     _ddl_columns,
     _identifier,
@@ -118,6 +120,7 @@ async def _write_transaction_impl(manager, rows=None):
         execution_phase = 'execute'
         yield connection
         commit_started = True
+        committed = None
         try:
             with phase('commit'):
                 await transaction.commit()
@@ -125,7 +128,9 @@ async def _write_transaction_impl(manager, rows=None):
             committed = None
             raise
         except Exception as error:
-            committed = None
+            if _commit_was_rejected(error):
+                committed = False
+                raise AnalyticsCommitRejectedError('Server rejected COMMIT: duplicate key', rows=rows) from error
             raise AnalyticsCommitUnknownError(
                 'COMMIT did not return acknowledgement; reconcile before retrying', rows=rows
             ) from error
@@ -136,7 +141,7 @@ async def _write_transaction_impl(manager, rows=None):
             primary,
             phase='commit' if commit_started else execution_phase,
             rows=rows,
-            committed=None if commit_started else False,
+            committed=committed,
         )
         if isinstance(primary, asyncio.CancelledError) or commit_started:
             _abort(connection)
@@ -336,6 +341,12 @@ class AsyncArrowStream:
         # drains unread rows. Conversion may continue but owns detached rows only.
         if self._driver is not None and not self._complete:
             self._driver.close()
+            if self._cursor is not None and self._cursor._result is not None:
+                # An unfinished aiomysql result retains its connection, while
+                # the connection retains the result. The transport is closed;
+                # sever that cycle without draining unread rows.
+                self._cursor._result.unbuffered_active = False
+                self._cursor._result.connection = None
         if self._lease is not None:
             self._lease.release()
         self._manager._streams.discard(self)

@@ -343,7 +343,6 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		root:     &scopeContext{},
 		parent:   &scopeContext{},
 		children: nil,
-		pipe:     nil,
 		regs:     nil,
 	}
 
@@ -363,7 +362,6 @@ func Test_convertToVmInstruction(t *testing.T) {
 		root:     &scopeContext{},
 		parent:   &scopeContext{},
 		children: nil,
-		pipe:     nil,
 		regs:     nil,
 	}
 	instructions := []*pipeline.Instruction{
@@ -5144,7 +5142,6 @@ func TestDeletionCanTruncateSerializationRoundtrip(t *testing.T) {
 		root:     &scopeContext{},
 		parent:   nil,
 		children: nil,
-		pipe:     nil,
 		regs:     make(map[*process.WaitRegister]int32),
 	}
 	ctx.root = ctx

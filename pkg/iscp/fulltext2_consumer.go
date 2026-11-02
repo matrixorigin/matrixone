@@ -81,8 +81,13 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	nevents := 0
 
 	for {
+		if err := ctx.Err(); err != nil {
+			reportIndexConsumerErr(errch, err)
+			return
+		}
 		select {
 		case <-ctx.Done():
+			reportIndexConsumerErr(errch, ctx.Err())
 			return
 		case e := <-errch:
 			errch <- e

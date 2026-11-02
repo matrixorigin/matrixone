@@ -21,6 +21,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand"
 	"net"
@@ -737,17 +738,6 @@ type mysqlProtocolSessionState struct {
 	connectAttrs  map[string]string
 }
 
-func cloneProtocolStringMap(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
-	return dst
-}
-
 func (mp *MysqlProtocolImpl) snapshotSessionState() mysqlProtocolSessionState {
 	mp.m.Lock()
 	defer mp.m.Unlock()
@@ -760,7 +750,7 @@ func (mp *MysqlProtocolImpl) snapshotSessionState() mysqlProtocolSessionState {
 		collationID:   mp.collationID,
 		collationName: mp.collationName,
 		charset:       mp.charset,
-		connectAttrs:  cloneProtocolStringMap(mp.connectAttrs),
+		connectAttrs:  maps.Clone(mp.connectAttrs),
 	}
 }
 
@@ -778,7 +768,7 @@ func (mp *MysqlProtocolImpl) setSessionState(state mysqlProtocolSessionState) {
 	mp.collationID = state.collationID
 	mp.collationName = state.collationName
 	mp.charset = state.charset
-	mp.connectAttrs = cloneProtocolStringMap(state.connectAttrs)
+	mp.connectAttrs = maps.Clone(state.connectAttrs)
 }
 
 func (mp *MysqlProtocolImpl) setChangeUserState(ses *Session, req changeUserRequest) {

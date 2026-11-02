@@ -162,7 +162,7 @@ qualified negative target for native Arrow LOAD and the new Stage literal cases.
 ## Validation and compatibility
 
 Core Python 3.8 remains available without Arrow. Analytics requires Python 3.9+.
-SQLAlchemy >=1.4.24 is the supported floor; 2.1 requires Python >=3.11. Driver-bound
+SQLAlchemy >=1.4.54 is the supported floor; 2.1 requires Python >=3.11. Driver-bound
 execution is explicit and does not reinterpret existing SDK text placeholders.
 
 Validation maps shared compilation to real SQLAlchemy controls, async ownership

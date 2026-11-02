@@ -268,6 +268,7 @@ func TestNewReaderConsumesSourceAndFilterOnConstructionError(t *testing.T) {
 		timestamp.Timestamp{},
 		expr,
 		source,
+		0,
 		engine.FilterHint{BF: filter},
 	)
 	require.Error(t, err)
@@ -302,6 +303,7 @@ func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
 		timestamp.Timestamp{},
 		nil,
 		source,
+		0,
 		engine.FilterHint{BF: filter},
 	)
 	require.NoError(t, err)
@@ -313,6 +315,13 @@ func TestNewReaderTransfersSourceAndFilterToReader(t *testing.T) {
 }
 
 func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
+	for _, tc := range []struct {
+		readers int
+		want    uint64
+	}{{1, 1024}, {3, 341}, {8, 128}, {9, 128}} {
+		require.Equal(t, tc.want, GetThresholdForReader(tc.readers), "readers=%d", tc.readers)
+	}
+
 	for _, skipWrites := range []bool{false, true} {
 		t.Run(map[bool]string{false: "normal_admission", true: "explicit_skip"}[skipWrites], func(t *testing.T) {
 			policy := fileservice.Policy(fileservice.SkipFullFilePreloads | fileservice.SkipDiskCacheWrites)
@@ -366,9 +375,11 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 				timestamp.Timestamp{},
 				nil,
 				source,
+				GetThresholdForReader(8),
 				engine.FilterHint{},
 			)
 			require.NoError(t, err)
+			r.readBlockCnt = r.threshHold
 			observed := &policyObservingFS{FileService: fs}
 			r.fs = observed
 			mr := NewMergeReader([]engine.Reader{r})
@@ -381,20 +392,21 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 			t.Cleanup(func() { output.Clean(queryMP) })
 			output.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
 			output.Vecs[1] = vector.NewOffHeapVecWithType(types.T_text.ToType())
-			for read := 0; read < 130; read++ {
+			for read := 0; read < 2; read++ {
 				source.emitted = false
+				observed.policies = nil
 				isEnd, err := mr.ReadWithFilter(
 					ctx,
 					[]string{"id", "payload"},
 					[]int{0},
-					func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+					&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 						require.Equal(t, []int{0}, loaded)
 						require.Equal(t, 8, bat.Vecs[0].Length())
 						require.Zero(t, bat.Vecs[1].Length())
 						bat.Vecs[0].CleanOnlyData()
 						bat.SetRowCount(0)
 						return engine.ReaderFilterResult{}, nil
-					},
+					}},
 					queryMP,
 					output,
 				)
@@ -403,16 +415,21 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 				require.Zero(t, output.RowCount())
 				require.Zero(t, output.Vecs[0].Length())
 				require.Zero(t, output.Vecs[1].Length())
-			}
 
-			columnReads := 0
-			for _, got := range observed.policies {
-				// Metadata reads use their own policy; count inherited column reads.
-				if got == policy {
-					columnReads++
+				want := policy
+				if read > 0 {
+					want |= fileservice.SkipMemoryCacheWrites
 				}
+				columnReads := 0
+				for _, got := range observed.policies {
+					// Metadata has its own policy; column reads inherit this caller bit.
+					if got&fileservice.SkipDiskCacheWrites != 0 {
+						require.Equal(t, want, got, "read=%d", read)
+						columnReads++
+					}
+				}
+				require.Positive(t, columnReads)
 			}
-			require.GreaterOrEqual(t, columnReads, 130)
 		})
 	}
 }
@@ -433,7 +450,7 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 	}
 	source := &singleInMemoryVectorSource{}
 	r, err := NewReader(
-		ctx, queryMP, nil, nil, tableDef, timestamp.Timestamp{}, nil, source, engine.FilterHint{},
+		ctx, queryMP, nil, nil, tableDef, timestamp.Timestamp{}, nil, source, 0, engine.FilterHint{},
 	)
 	require.NoError(t, err)
 
@@ -447,7 +464,7 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 		ctx,
 		[]string{"id", "entry", "bucket"},
 		[]int{0, 2},
-		func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
 			require.Nil(t, loaded, "in-memory rows are already fully materialized")
 			buckets := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[2])
 			sels := make([]int64, 0, len(buckets))
@@ -458,7 +475,7 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 			}
 			bat.Shrink(sels, false)
 			return engine.ReaderFilterResult{Sels: sels}, nil
-		},
+		}},
 		testVectorTopKParam(1, 1),
 		queryMP,
 		output,
@@ -475,9 +492,9 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 		ctx,
 		[]string{"id", "entry", "bucket"},
 		[]int{0, 2},
-		func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
+		&engine.ReaderFilterRequest{Apply: func(bat *batch.Batch, _ []int) (engine.ReaderFilterResult, error) {
 			return engine.ReaderFilterResult{All: true}, nil
-		},
+		}},
 		testVectorTopKParam(1, 1),
 		queryMP,
 		output,
@@ -769,7 +786,7 @@ func (r *filteredTopKCountingReader) ReadWithFilterAndTopK(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
@@ -787,7 +804,7 @@ func (r *lateMaterializedCountingReader) ReadWithFilter(
 	ctx context.Context,
 	cols []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	outBatch *batch.Batch,
 ) (bool, error) {
@@ -829,14 +846,14 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		reader := NewMergeReader([]engine.Reader{child})
 
 		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.NoError(t, err)
 		require.False(t, isEnd)
 		require.True(t, topKApplied)
 
 		isEnd, topKApplied, err = reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.NoError(t, err)
 		require.True(t, isEnd)
@@ -851,7 +868,7 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		}
 		reader := NewMergeReader([]engine.Reader{child})
 		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.NoError(t, err)
 		require.False(t, isEnd)
@@ -864,7 +881,7 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		child := &countingReader{rows: 1, closeCount: &closeCount}
 		reader := NewMergeReader([]engine.Reader{child})
 		isEnd, topKApplied, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.NoError(t, err)
 		require.False(t, isEnd)
@@ -879,7 +896,7 @@ func TestMergeReaderReadWithFilterAndTopKDelegatesAndFallsBack(t *testing.T) {
 		}
 		reader := NewMergeReader([]engine.Reader{child})
 		_, _, err := reader.ReadWithFilterAndTopK(
-			context.Background(), nil, nil, filter, nil, nil, batch.New(nil),
+			context.Background(), nil, nil, &engine.ReaderFilterRequest{Apply: filter}, nil, nil, batch.New(nil),
 		)
 		require.ErrorIs(t, err, readErr)
 		require.Equal(t, int32(1), atomic.LoadInt32(&closeCount))

@@ -88,7 +88,7 @@ func TestLegacyFloatStringCatalogExecution(t *testing.T) {
 			var expr *planpb.Expr
 			var err error
 			if tc.name == "default" {
-				expr, err = getDefaultExprForAssignment(compiler.GetContext(), execution.Cols[1], compiler.GetProcess(), false)
+				expr, err = getDefaultExprForAssignment(compiler.GetContext(), execution.Cols[1], execution.DbName, compiler.GetProcess(), false)
 			} else {
 				expr, err = builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(execution.Cols[1].GeneratedCol.Expr), false)
 			}
