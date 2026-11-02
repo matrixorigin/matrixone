@@ -170,6 +170,35 @@ func TestTemporalIntegerCastMaterializedCorrelation(t *testing.T) {
 	require.True(t, found, "DISTINCT must retain the original temporal domain before integer conversion")
 }
 
+func TestTemporalIntegerCastAliasPreservesScalarOutput(t *testing.T) {
+	for _, tc := range []struct{ name, sql string }{
+		{"literal", "select (select cast('2024-02-29 23:59:59.500000' as datetime(6))) as d order by cast(d as signed)"},
+		{"correlated", "select (select cast(l_shipdate as datetime(6))) as d from lineitem order by cast(d as signed)"},
+		{"dependent", "select (select (select cast(l_shipdate as datetime(6)))) as d from lineitem order by cast(d as signed)"},
+		{"wrapped", "select coalesce((select cast(l_shipdate as datetime(6))),null) as d from lineitem order by cast(d as signed)"},
+		{"consumers", "select (select cast(l_shipdate as datetime(6))) as d from lineitem order by cast(d as signed),cast(d as unsigned)"},
+		{"having", "select (select cast(l_shipdate as datetime(6))) as d from lineitem having cast(d as signed)>0 order by cast(d as unsigned)"},
+		{"having_wrapped", "select coalesce((select cast(l_shipdate as datetime(6))),null) as d from lineitem having cast(d as signed)>0 order by cast(d as unsigned)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := opt.CurrentContext().(*MockCompilerContext)
+			col := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+			col.Typ.Id, col.Typ.Scale = int32(types.T_datetime), 6
+			ctx.SetSqlModeOverride("")
+			p, err := runOneStmt(opt, t, tc.sql)
+			require.NoError(t, err)
+			q := p.GetQuery()
+			result := q.Nodes[q.Steps[0]].ProjectList[0]
+			require.Equal(t, int32(types.T_datetime), result.Typ.Id, "sort/filter consumers must not rewrite a published scalar producer")
+			require.Equal(t, int32(6), result.Typ.Scale)
+			if q.Correlation != nil {
+				require.NoError(t, q.ValidateCorrelation())
+			}
+		})
+	}
+}
+
 func TestTemporalIntegerCastScalarProjectionPolicy(t *testing.T) {
 	opt := NewMockOptimizer(false, newPlanTestProcess(t))
 	p, err := runOneStmt(opt, t, "select cast((select cast('2024-02-29 23:59:59.500000' as datetime(6))) as signed)")

@@ -174,6 +174,22 @@ execute temporal_exit_param using @temporal_exit_id;
 set @temporal_exit_id = 4;
 execute temporal_exit_param using @temporal_exit_id;
 deallocate prepare temporal_exit_param;
+
+-- Alias consumers must not rewrite the selected scalar's value or datetime metadata.
+select (select cast('2024-02-29 23:59:59.500000' as datetime(6))) as d order by cast(d as signed);
+select id,(select cast(dt as datetime(6))) as scalar_d from temporal_values
+where id in (1,2,4) order by cast(scalar_d as signed),cast(scalar_d as unsigned),id desc;
+select id,coalesce((select cast(dt as datetime(6))),null) as scalar_d from temporal_values
+where id in (2,3,4) having cast(scalar_d as signed)>20240229235959 order by cast(scalar_d as unsigned),id;
+prepare temporal_alias_order from 'select id,(select (select cast(dt as datetime(6)))) as scalar_d from temporal_values where id in (1,2,4) order by cast(scalar_d as signed),id desc';
+execute temporal_alias_order;
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+execute temporal_alias_order;
+select id,coalesce((select cast(dt as datetime(6))),null) as scalar_d from temporal_values
+where id in (2,3,4) having cast(scalar_d as signed)>20240229235959 order by cast(scalar_d as unsigned),id;
+set session sql_mode = '';
+execute temporal_alias_order;
+deallocate prepare temporal_alias_order;
 drop table temporal_text_values;
 
 drop database temporal_integer_cast;

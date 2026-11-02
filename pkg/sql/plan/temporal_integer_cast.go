@@ -34,8 +34,10 @@ func temporalIntegerSource(expr *Expr) bool {
 	}
 }
 
-// A bound dependent call is still private to this expression while binding.
-// Its program is the value owner, not the opaque call returned to the consumer.
+// A freshly bound scalar call owns its graph while its output is lowered.
+// Alias expansion must rebind graph references rather than shallow-copy their
+// identities (see aliasProjectionNeedsRebind). The program is the value owner,
+// not the opaque dependent call returned to the consumer.
 func temporalIntegerScalarOutput(expr *Expr, binder *baseBinder) (*planpb.Node, *BindContext, *planpb.CorrelationProgram) {
 	if binder == nil || binder.builder == nil {
 		return nil, nil, nil
