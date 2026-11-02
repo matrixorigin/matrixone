@@ -28087,5 +28087,6844 @@
     "sql_mode": "NO_BACKSLASH_ESCAPES",
     "sql": "SELECT 1 AS /*!80411 N 'a' */",
     "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t AS \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) AS \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t `a`",
+    "text": "SELECT * FROM `t` `a`",
+    "digest": "df6ef3a3d3ffd7967c96c69cc87fb5a070db5b09f5fd4e4913b4780af53ff468"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) `a`",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ `a`",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t AS `a`",
+    "text": "SELECT * FROM `t` AS `a`",
+    "digest": "b9ad756bcad3aeddd857f6f563e472a00ae7d6dcceda625ea374393ccfe8a86e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) AS `a`",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS `a`",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t AS ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) AS ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t a",
+    "text": "SELECT * FROM `t` `a`",
+    "digest": "df6ef3a3d3ffd7967c96c69cc87fb5a070db5b09f5fd4e4913b4780af53ff468"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) a",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ a",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t AS a",
+    "text": "SELECT * FROM `t` AS `a`",
+    "digest": "b9ad756bcad3aeddd857f6f563e472a00ae7d6dcceda625ea374393ccfe8a86e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) AS a",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS a",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'FF' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'61' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'C080'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'C080' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'F09F9880' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'E5908D'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'E5908D' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'00FF' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'00'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'00' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'F4908080'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'F4908080' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'EDA080'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'EDA080' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'E2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'E2' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary X'FF' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT X'FF'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT X'FF' AS 'a'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 X'FF' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t \"a\"",
+    "text": "SELECT * FROM `t` `a`",
+    "digest": "df6ef3a3d3ffd7967c96c69cc87fb5a070db5b09f5fd4e4913b4780af53ff468"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) \"a\"",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ \"a\"",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t AS \"a\"",
+    "text": "SELECT * FROM `t` AS `a`",
+    "digest": "b9ad756bcad3aeddd857f6f563e472a00ae7d6dcceda625ea374393ccfe8a86e"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) AS \"a\"",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS \"a\"",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t `a`",
+    "text": "SELECT * FROM `t` `a`",
+    "digest": "df6ef3a3d3ffd7967c96c69cc87fb5a070db5b09f5fd4e4913b4780af53ff468"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) `a`",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ `a`",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t AS `a`",
+    "text": "SELECT * FROM `t` AS `a`",
+    "digest": "b9ad756bcad3aeddd857f6f563e472a00ae7d6dcceda625ea374393ccfe8a86e"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) AS `a`",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS `a`",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t AS ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) AS ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t a",
+    "text": "SELECT * FROM `t` `a`",
+    "digest": "df6ef3a3d3ffd7967c96c69cc87fb5a070db5b09f5fd4e4913b4780af53ff468"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) a",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ a",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM t AS a",
+    "text": "SELECT * FROM `t` AS `a`",
+    "digest": "b9ad756bcad3aeddd857f6f563e472a00ae7d6dcceda625ea374393ccfe8a86e"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) AS a",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS a",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'FF' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'61' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'C080'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'C080' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'F09F9880' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'E5908D'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'E5908D' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'00FF' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'00'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'00' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'F4908080'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'F4908080' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'EDA080'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'EDA080' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'E2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'E2' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary X'FF' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT X'FF'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT X'FF' AS 'a'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 X'FF' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t AS \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) AS \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t `a`",
+    "text": "SELECT * FROM `t` `a`",
+    "digest": "df6ef3a3d3ffd7967c96c69cc87fb5a070db5b09f5fd4e4913b4780af53ff468"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) `a`",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ `a`",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t AS `a`",
+    "text": "SELECT * FROM `t` AS `a`",
+    "digest": "b9ad756bcad3aeddd857f6f563e472a00ae7d6dcceda625ea374393ccfe8a86e"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) AS `a`",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS `a`",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t AS ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) AS ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS ''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t a",
+    "text": "SELECT * FROM `t` `a`",
+    "digest": "df6ef3a3d3ffd7967c96c69cc87fb5a070db5b09f5fd4e4913b4780af53ff468"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) a",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ a",
+    "text": "SELECT * FROM ( SELECT ? ) `a`",
+    "digest": "532a40408830dadeffd3a2eda884a12fce75441c853a5d3afe6cb7910807e190"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM t AS a",
+    "text": "SELECT * FROM `t` AS `a`",
+    "digest": "b9ad756bcad3aeddd857f6f563e472a00ae7d6dcceda625ea374393ccfe8a86e"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) AS a",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1) /*gap*/ AS a",
+    "text": "SELECT * FROM ( SELECT ? ) AS `a`",
+    "digest": "ae11482aa8c6e0e3a14cb46fef7ef3525a77fe2ddb10a9b0f98b8096e91e0658"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'FF' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'61' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'C080'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'C080' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'F09F9880' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'E5908D'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'E5908D' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'00FF' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'00'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'00' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'F4908080'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'F4908080' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'EDA080'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'EDA080' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'E2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'E2' AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary X'FF' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT X'FF'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT X'FF' AS 'a'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 X'FF' AS 'a'",
+    "text": "SELECT (_charset) ? AS ?",
+    "digest": "635e266159a132b3f4dac9a2675fb76f0addc8290a3a8257ac97af3134e652fd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(30))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (?) )",
+    "digest": "62ec04526c3a906d31d835f1ef8cb84676dcdb156846e6e4805ce7a7d0209171"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(31))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (?) )",
+    "digest": "62ec04526c3a906d31d835f1ef8cb84676dcdb156846e6e4805ce7a7d0209171"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(64))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (?) )",
+    "digest": "62ec04526c3a906d31d835f1ef8cb84676dcdb156846e6e4805ce7a7d0209171"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(65))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (?) )",
+    "digest": "62ec04526c3a906d31d835f1ef8cb84676dcdb156846e6e4805ce7a7d0209171"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(30,30))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (...) )",
+    "digest": "bf38061f27d8036df78479e4b22fdfeb4014f56a4b7a84e04b0650991027cdae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(65,30))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (...) )",
+    "digest": "bf38061f27d8036df78479e4b22fdfeb4014f56a4b7a84e04b0650991027cdae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DECIMAL(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(30))",
+    "text": "CREATE TABLE `t` ( `a` NUMERIC (?) )",
+    "digest": "77cb63ecf5d25f3b6c98b862aa369c65d9f347cf55cad22aca0b6ecb859ab2e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(31))",
+    "text": "CREATE TABLE `t` ( `a` NUMERIC (?) )",
+    "digest": "77cb63ecf5d25f3b6c98b862aa369c65d9f347cf55cad22aca0b6ecb859ab2e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(64))",
+    "text": "CREATE TABLE `t` ( `a` NUMERIC (?) )",
+    "digest": "77cb63ecf5d25f3b6c98b862aa369c65d9f347cf55cad22aca0b6ecb859ab2e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(65))",
+    "text": "CREATE TABLE `t` ( `a` NUMERIC (?) )",
+    "digest": "77cb63ecf5d25f3b6c98b862aa369c65d9f347cf55cad22aca0b6ecb859ab2e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(30,30))",
+    "text": "CREATE TABLE `t` ( `a` NUMERIC (...) )",
+    "digest": "5fcc3627700c4c460f33a090ade1412f1e02849d12a1eab5e5cef1862273754c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(65,30))",
+    "text": "CREATE TABLE `t` ( `a` NUMERIC (...) )",
+    "digest": "5fcc3627700c4c460f33a090ade1412f1e02849d12a1eab5e5cef1862273754c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NUMERIC(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(30))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (?) )",
+    "digest": "62ec04526c3a906d31d835f1ef8cb84676dcdb156846e6e4805ce7a7d0209171"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(31))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (?) )",
+    "digest": "62ec04526c3a906d31d835f1ef8cb84676dcdb156846e6e4805ce7a7d0209171"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(64))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (?) )",
+    "digest": "62ec04526c3a906d31d835f1ef8cb84676dcdb156846e6e4805ce7a7d0209171"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(65))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (?) )",
+    "digest": "62ec04526c3a906d31d835f1ef8cb84676dcdb156846e6e4805ce7a7d0209171"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(30,30))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (...) )",
+    "digest": "bf38061f27d8036df78479e4b22fdfeb4014f56a4b7a84e04b0650991027cdae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(65,30))",
+    "text": "CREATE TABLE `t` ( `a` DECIMAL (...) )",
+    "digest": "bf38061f27d8036df78479e4b22fdfeb4014f56a4b7a84e04b0650991027cdae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DEC(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT)",
+    "text": "CREATE TABLE `t` ( `a` BIT )",
+    "digest": "6c3d7fa8c4799af59f421eb711c075ec9b1034cf6f256e4c427ca32ed67aa4d9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(1))",
+    "text": "CREATE TABLE `t` ( `a` BIT (?) )",
+    "digest": "9e8103f81be90422dac24e5cb6c8a265a15d2ffde0d1c14ba90f2f72be9ac355"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(30))",
+    "text": "CREATE TABLE `t` ( `a` BIT (?) )",
+    "digest": "9e8103f81be90422dac24e5cb6c8a265a15d2ffde0d1c14ba90f2f72be9ac355"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(31))",
+    "text": "CREATE TABLE `t` ( `a` BIT (?) )",
+    "digest": "9e8103f81be90422dac24e5cb6c8a265a15d2ffde0d1c14ba90f2f72be9ac355"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(64))",
+    "text": "CREATE TABLE `t` ( `a` BIT (?) )",
+    "digest": "9e8103f81be90422dac24e5cb6c8a265a15d2ffde0d1c14ba90f2f72be9ac355"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(65))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(30,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BIT(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR)",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER )",
+    "digest": "3bebd59fc5a2a97a338fdb06dafe5112fde9e0b285a4a552e3ed848dcc40efbf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(0))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(1))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(30))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(31))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(64))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(65))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(255))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(30,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHAR(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER)",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER )",
+    "digest": "3bebd59fc5a2a97a338fdb06dafe5112fde9e0b285a4a552e3ed848dcc40efbf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(0))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(1))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(30))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(31))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(64))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(65))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(255))",
+    "text": "CREATE TABLE `t` ( `a` CHARACTER (?) )",
+    "digest": "c3fa3967877fb16db0dd9217a64ef8b2f3b69fc4f497816e729bbf2e9d004c17"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(30,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a CHARACTER(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR)",
+    "text": "CREATE TABLE `t` ( `a` NCHAR )",
+    "digest": "bc66a990771db228af7240a8a25fac524d7249437ac1c229f45e079f6f5c42ad"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(0))",
+    "text": "CREATE TABLE `t` ( `a` NCHAR (?) )",
+    "digest": "d6ead012bb9ee991cbcc8ed9b56eed65789bc8cff189e3145a4bbd66d42c52be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(1))",
+    "text": "CREATE TABLE `t` ( `a` NCHAR (?) )",
+    "digest": "d6ead012bb9ee991cbcc8ed9b56eed65789bc8cff189e3145a4bbd66d42c52be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(30))",
+    "text": "CREATE TABLE `t` ( `a` NCHAR (?) )",
+    "digest": "d6ead012bb9ee991cbcc8ed9b56eed65789bc8cff189e3145a4bbd66d42c52be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(31))",
+    "text": "CREATE TABLE `t` ( `a` NCHAR (?) )",
+    "digest": "d6ead012bb9ee991cbcc8ed9b56eed65789bc8cff189e3145a4bbd66d42c52be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(64))",
+    "text": "CREATE TABLE `t` ( `a` NCHAR (?) )",
+    "digest": "d6ead012bb9ee991cbcc8ed9b56eed65789bc8cff189e3145a4bbd66d42c52be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(65))",
+    "text": "CREATE TABLE `t` ( `a` NCHAR (?) )",
+    "digest": "d6ead012bb9ee991cbcc8ed9b56eed65789bc8cff189e3145a4bbd66d42c52be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(255))",
+    "text": "CREATE TABLE `t` ( `a` NCHAR (?) )",
+    "digest": "d6ead012bb9ee991cbcc8ed9b56eed65789bc8cff189e3145a4bbd66d42c52be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(30,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NCHAR(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR)",
+    "text": "CREATE TABLE `t` ( `a` NATIONAL CHARACTER )",
+    "digest": "78cfa9f1a21a394a7e968d9a60be3333d7f207ab6eda5bf60bb8d457b3cae10c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(0))",
+    "text": "CREATE TABLE `t` ( `a` NATIONAL CHARACTER (?) )",
+    "digest": "92bb5b5c11b0481443146243d088ab613f741498b3e29f6ea521a7a7cc6ed3d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(1))",
+    "text": "CREATE TABLE `t` ( `a` NATIONAL CHARACTER (?) )",
+    "digest": "92bb5b5c11b0481443146243d088ab613f741498b3e29f6ea521a7a7cc6ed3d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(30))",
+    "text": "CREATE TABLE `t` ( `a` NATIONAL CHARACTER (?) )",
+    "digest": "92bb5b5c11b0481443146243d088ab613f741498b3e29f6ea521a7a7cc6ed3d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(31))",
+    "text": "CREATE TABLE `t` ( `a` NATIONAL CHARACTER (?) )",
+    "digest": "92bb5b5c11b0481443146243d088ab613f741498b3e29f6ea521a7a7cc6ed3d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(64))",
+    "text": "CREATE TABLE `t` ( `a` NATIONAL CHARACTER (?) )",
+    "digest": "92bb5b5c11b0481443146243d088ab613f741498b3e29f6ea521a7a7cc6ed3d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(65))",
+    "text": "CREATE TABLE `t` ( `a` NATIONAL CHARACTER (?) )",
+    "digest": "92bb5b5c11b0481443146243d088ab613f741498b3e29f6ea521a7a7cc6ed3d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(255))",
+    "text": "CREATE TABLE `t` ( `a` NATIONAL CHARACTER (?) )",
+    "digest": "92bb5b5c11b0481443146243d088ab613f741498b3e29f6ea521a7a7cc6ed3d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(30,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHAR(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY)",
+    "text": "CREATE TABLE `t` ( `a` BINARY )",
+    "digest": "b0ee6851f7e2584019a14429e754cdd40a2ce6d7b540bf9a61453da155d7b4f3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(0))",
+    "text": "CREATE TABLE `t` ( `a` BINARY (?) )",
+    "digest": "fd9e50da8f02bbe47c23e737f391361ee79473b0b99c99adcf445cbe8a7348f2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(1))",
+    "text": "CREATE TABLE `t` ( `a` BINARY (?) )",
+    "digest": "fd9e50da8f02bbe47c23e737f391361ee79473b0b99c99adcf445cbe8a7348f2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(30))",
+    "text": "CREATE TABLE `t` ( `a` BINARY (?) )",
+    "digest": "fd9e50da8f02bbe47c23e737f391361ee79473b0b99c99adcf445cbe8a7348f2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(31))",
+    "text": "CREATE TABLE `t` ( `a` BINARY (?) )",
+    "digest": "fd9e50da8f02bbe47c23e737f391361ee79473b0b99c99adcf445cbe8a7348f2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(64))",
+    "text": "CREATE TABLE `t` ( `a` BINARY (?) )",
+    "digest": "fd9e50da8f02bbe47c23e737f391361ee79473b0b99c99adcf445cbe8a7348f2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(65))",
+    "text": "CREATE TABLE `t` ( `a` BINARY (?) )",
+    "digest": "fd9e50da8f02bbe47c23e737f391361ee79473b0b99c99adcf445cbe8a7348f2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(255))",
+    "text": "CREATE TABLE `t` ( `a` BINARY (?) )",
+    "digest": "fd9e50da8f02bbe47c23e737f391361ee79473b0b99c99adcf445cbe8a7348f2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(30,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a BINARY(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(0))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) )",
+    "digest": "c6c17ef60e7e68fb1fbfea2980a7a1eff44e77cb9c32ac8e2c8319c127c838e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(1))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) )",
+    "digest": "c6c17ef60e7e68fb1fbfea2980a7a1eff44e77cb9c32ac8e2c8319c127c838e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(30))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) )",
+    "digest": "c6c17ef60e7e68fb1fbfea2980a7a1eff44e77cb9c32ac8e2c8319c127c838e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(31))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) )",
+    "digest": "c6c17ef60e7e68fb1fbfea2980a7a1eff44e77cb9c32ac8e2c8319c127c838e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(64))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) )",
+    "digest": "c6c17ef60e7e68fb1fbfea2980a7a1eff44e77cb9c32ac8e2c8319c127c838e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(65))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) )",
+    "digest": "c6c17ef60e7e68fb1fbfea2980a7a1eff44e77cb9c32ac8e2c8319c127c838e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(255))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) )",
+    "digest": "c6c17ef60e7e68fb1fbfea2980a7a1eff44e77cb9c32ac8e2c8319c127c838e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(256))",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) )",
+    "digest": "c6c17ef60e7e68fb1fbfea2980a7a1eff44e77cb9c32ac8e2c8319c127c838e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(30,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARCHAR(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(0))",
+    "text": "CREATE TABLE `t` ( `a` VARBINARY (?) )",
+    "digest": "914e5b01b19300cd2f948bf787b914e7c9a3f2820c953b66ebe688433d595666"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(1))",
+    "text": "CREATE TABLE `t` ( `a` VARBINARY (?) )",
+    "digest": "914e5b01b19300cd2f948bf787b914e7c9a3f2820c953b66ebe688433d595666"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(30))",
+    "text": "CREATE TABLE `t` ( `a` VARBINARY (?) )",
+    "digest": "914e5b01b19300cd2f948bf787b914e7c9a3f2820c953b66ebe688433d595666"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(31))",
+    "text": "CREATE TABLE `t` ( `a` VARBINARY (?) )",
+    "digest": "914e5b01b19300cd2f948bf787b914e7c9a3f2820c953b66ebe688433d595666"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(64))",
+    "text": "CREATE TABLE `t` ( `a` VARBINARY (?) )",
+    "digest": "914e5b01b19300cd2f948bf787b914e7c9a3f2820c953b66ebe688433d595666"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(65))",
+    "text": "CREATE TABLE `t` ( `a` VARBINARY (?) )",
+    "digest": "914e5b01b19300cd2f948bf787b914e7c9a3f2820c953b66ebe688433d595666"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(255))",
+    "text": "CREATE TABLE `t` ( `a` VARBINARY (?) )",
+    "digest": "914e5b01b19300cd2f948bf787b914e7c9a3f2820c953b66ebe688433d595666"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(256))",
+    "text": "CREATE TABLE `t` ( `a` VARBINARY (?) )",
+    "digest": "914e5b01b19300cd2f948bf787b914e7c9a3f2820c953b66ebe688433d595666"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(30,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(66,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a VARBINARY(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT)",
+    "text": "SELECT CAST ( ? AS FLOAT4 )",
+    "digest": "91d2e2c98ccda53115f46a92cc1717ff66d11258c30319659c62c4e2222ae485"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(0))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(1))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(24))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(53))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4)",
+    "text": "SELECT CAST ( ? AS FLOAT4 )",
+    "digest": "91d2e2c98ccda53115f46a92cc1717ff66d11258c30319659c62c4e2222ae485"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(0))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(1))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(24))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(53))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT4(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE)",
+    "text": "SELECT CAST ( ? AS FLOAT8 )",
+    "digest": "8d45c382fd2ae9410ffd743c46914447bf5bfe7e08153bf5b5a8b5ef5c4494c6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION)",
+    "text": "SELECT CAST ( ? AS FLOAT8 PRECISION )",
+    "digest": "6059fc6b13a9368a0c36ff31fdb544ab29483a9882c47eb59bf628525b880932"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DOUBLE PRECISION(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8)",
+    "text": "SELECT CAST ( ? AS FLOAT8 )",
+    "digest": "8d45c382fd2ae9410ffd743c46914447bf5bfe7e08153bf5b5a8b5ef5c4494c6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FLOAT8(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL)",
+    "text": "SELECT CAST ( ? AS REAL )",
+    "digest": "49d82984a00d52c925eb6c62e6b2aca2e601fa85acb0fc1ae495ed5a1c63caae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS REAL(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL)",
+    "text": "SELECT CAST ( ? AS DECIMAL )",
+    "digest": "d784d446fcb2c0862663d45695ee0a3954d4963f320c1cebf9a8569e6d656d4b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(0))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(1))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(24))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(53))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(54))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(65,30))",
+    "text": "SELECT CAST ( ? AS DECIMAL (...) )",
+    "digest": "d9d52db68ea025a3205903777e2a85824953442676702dbf733f56a6f5c5f402"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NUMERIC(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC)",
+    "text": "SELECT CAST ( ? AS DECIMAL )",
+    "digest": "d784d446fcb2c0862663d45695ee0a3954d4963f320c1cebf9a8569e6d656d4b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(0))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(1))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(24))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(53))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(54))",
+    "text": "SELECT CAST ( ? AS DECIMAL (?) )",
+    "digest": "af3524b3d6775acd7c1b37172952191d3f4fbb8ac02a815fb9f8af7eb90f3c13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(10,2))",
+    "text": "SELECT CAST ( ? AS DECIMAL (...) )",
+    "digest": "d9d52db68ea025a3205903777e2a85824953442676702dbf733f56a6f5c5f402"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(65,30))",
+    "text": "SELECT CAST ( ? AS DECIMAL (...) )",
+    "digest": "d9d52db68ea025a3205903777e2a85824953442676702dbf733f56a6f5c5f402"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DEC(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BIT(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR)",
+    "text": "SELECT CAST ( ? AS CHARACTER )",
+    "digest": "80cb3bba49ecd08e306ba22eda45e8059e1404de4ea04584f7d604404365befe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(0))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(1))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(24))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(53))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(54))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(255))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHAR(256))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY)",
+    "text": "SELECT CAST ( ? AS BINARY )",
+    "digest": "455dd83f05d8358e0cebb7b1385739c41d2c279dfa16927ef2d2b06e304fd72e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(0))",
+    "text": "SELECT CAST ( ? AS BINARY (?) )",
+    "digest": "e0e9d835b2b97a6a036887561c438c66253e8556ade9e162932a9a542f02c89a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(1))",
+    "text": "SELECT CAST ( ? AS BINARY (?) )",
+    "digest": "e0e9d835b2b97a6a036887561c438c66253e8556ade9e162932a9a542f02c89a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(24))",
+    "text": "SELECT CAST ( ? AS BINARY (?) )",
+    "digest": "e0e9d835b2b97a6a036887561c438c66253e8556ade9e162932a9a542f02c89a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(53))",
+    "text": "SELECT CAST ( ? AS BINARY (?) )",
+    "digest": "e0e9d835b2b97a6a036887561c438c66253e8556ade9e162932a9a542f02c89a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(54))",
+    "text": "SELECT CAST ( ? AS BINARY (?) )",
+    "digest": "e0e9d835b2b97a6a036887561c438c66253e8556ade9e162932a9a542f02c89a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(255))",
+    "text": "SELECT CAST ( ? AS BINARY (?) )",
+    "digest": "e0e9d835b2b97a6a036887561c438c66253e8556ade9e162932a9a542f02c89a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS BINARY(256))",
+    "text": "SELECT CAST ( ? AS BINARY (?) )",
+    "digest": "e0e9d835b2b97a6a036887561c438c66253e8556ade9e162932a9a542f02c89a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS VARCHAR(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR)",
+    "text": "SELECT CAST ( ? AS YEAR )",
+    "digest": "1721dedd22845f45e69002a3c3a31cf0ecefd985a0168badbdbc7688cc9db2e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME)",
+    "text": "SELECT CAST ( ? AS DATETIME )",
+    "digest": "a4437e22ee721ff1406b2834da7c2e29214c45e3e2960a16613d0bfa190ece1b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(0))",
+    "text": "SELECT CAST ( ? AS DATETIME (?) )",
+    "digest": "5060c960f028020cb348ddd38249b2a00966fb5e5d786e35d20bc6be4d630264"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(1))",
+    "text": "SELECT CAST ( ? AS DATETIME (?) )",
+    "digest": "5060c960f028020cb348ddd38249b2a00966fb5e5d786e35d20bc6be4d630264"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME)",
+    "text": "SELECT CAST ( ? AS TIME )",
+    "digest": "128fce95dc8dee772fb1fb5bbef3aed095b2abcb9157b556a91c1e04282905f5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(0))",
+    "text": "SELECT CAST ( ? AS TIME (?) )",
+    "digest": "6e432be3a0d88e92fa09eb3ee23bbd1991666a361535281af3d3a2eb10919c49"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(1))",
+    "text": "SELECT CAST ( ? AS TIME (?) )",
+    "digest": "6e432be3a0d88e92fa09eb3ee23bbd1991666a361535281af3d3a2eb10919c49"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(65,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a DECIMAL(31,31)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a DECIMAL(31,31)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b DECIMAL(31,31)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a BIT(65)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a BIT(65)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b BIT(65)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a CHAR(256)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a CHAR(256)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b CHAR(256)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a DECIMAL(65,30)",
+    "text": "ALTER TABLE `t` ADD `a` DECIMAL (...)",
+    "digest": "2f5dc72d6e18efdd119c0fd1a9bcb7065428b7268704e973a7ce003fa3ad1f52"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a DECIMAL(65,30)",
+    "text": "ALTER TABLE `t` MODIFY `a` DECIMAL (...)",
+    "digest": "3790393988d01e7a7896d7934a142a97ce06c81a373b3b92a2d12189e0610bea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b DECIMAL(65,30)",
+    "text": "ALTER TABLE `t` CHANGE `a` `b` DECIMAL (...)",
+    "digest": "42c748b90949847c3e1402fc3415ffec3ad0bae626e3102675668a58ccf6cace"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a BIT(64)",
+    "text": "ALTER TABLE `t` ADD `a` BIT (?)",
+    "digest": "7b1c04762edb3256cdd4716771628f225a3bec3fee6715dc4a57d74fc6d00bbd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a BIT(64)",
+    "text": "ALTER TABLE `t` MODIFY `a` BIT (?)",
+    "digest": "9cd0665511d55c228e8aabfcc2612f26ca0f7572b1c40a65c235b9601e6d5607"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b BIT(64)",
+    "text": "ALTER TABLE `t` CHANGE `a` `b` BIT (?)",
+    "digest": "9ddb65a2d6d5ecbb32098d5640c403f4da3d6111a48a72080af22506987df824"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a CHAR(255)",
+    "text": "ALTER TABLE `t` ADD `a` CHARACTER (?)",
+    "digest": "e8296e795e0a90697b8e606c7cd7bda824fefbb4fb4c77732ddad3f89fdce92b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a CHAR(255)",
+    "text": "ALTER TABLE `t` MODIFY `a` CHARACTER (?)",
+    "digest": "9b55c1181168138395311867006b0764bc75459225f78f0a4a22a82ce65fa70d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b CHAR(255)",
+    "text": "ALTER TABLE `t` CHANGE `a` `b` CHARACTER (?)",
+    "digest": "6b3fa42b9967f48eaf7b3105bd4880126715e2f672153a47f9841aeb97aa3a6e"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "SELECT CAST(1 AS FLOAT(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "SELECT CAST(1 AS FLOAT(53))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "SELECT CAST(1 AS FLOAT(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "SELECT CAST(1 AS REAL(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "SELECT CAST(1 AS DECIMAL(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "SELECT CAST(1 AS CHAR(256))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT CAST(1 AS FLOAT(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT CAST(1 AS FLOAT(53))",
+    "text": "SELECT CAST ( ? AS FLOAT4 (?) )",
+    "digest": "78487243ecd69b5d2abd79fd2b2f08f299b661a19ec673ae59d90f1cb362ec10"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT CAST(1 AS FLOAT(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT CAST(1 AS REAL(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT CAST(1 AS DECIMAL(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT CAST(1 AS CHAR(256))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS LIKE 'a'",
+    "text": "SHOW TABLE STATUS LIKE ?",
+    "digest": "cb62f9bcae58a460fc985bfa6ed940c7d815b1a94c7fd7dd768819f9fd18a8fa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW TABLE STATUS WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "ca45d76fa2ad96bf453498a9b6f254c3983868c6a1d9c2709a30b77f0610f4ee"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLES LIKE 'a'",
+    "text": "SHOW TABLES LIKE ?",
+    "digest": "a72b965922848d2b5f697f9c499411910581b77921bbc4deaa2dc2e9473e937f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLES WHERE 1=1",
+    "text": "SHOW TABLES WHERE ? = ?",
+    "digest": "ec7a1e5ed380100ca07912aee09e73733e212aec1e26efd5f859222bc0a64e02"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLES LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLES WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW TABLES WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "e374bc9a4d8df7a019c0b791ecefaa501c2290d6d32bc51d007d08b672b84a9d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLES LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW OPEN TABLES LIKE 'a'",
+    "text": "SHOW OPEN TABLES LIKE ?",
+    "digest": "9ca4fa2bde52da3601d870c6929b9674aca2370a748ab8949029d98ecf782508"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW OPEN TABLES WHERE 1=1",
+    "text": "SHOW OPEN TABLES WHERE ? = ?",
+    "digest": "cafb2fb8839b648afa0c4a51d2648a90b9eb9cd62523cea81ac11f69c719f7d0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW OPEN TABLES LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW OPEN TABLES WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW OPEN TABLES WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "821c13263de17c13f897eb57284b0c3dfdcd11ffcc696aba0c4ac6320c837e11"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW OPEN TABLES LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW DATABASES",
+    "text": "SHOW SCHEMAS",
+    "digest": "dbea8921b559b8cdd4976d57d70304daa8a242fbbfe6df94427006b54ead6b0f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW DATABASES LIKE 'a'",
+    "text": "SHOW SCHEMAS LIKE ?",
+    "digest": "0bd52df5a6e81880a88240d0ee10dc4b5216af65873f704072a88b2db08af010"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW DATABASES WHERE 1=1",
+    "text": "SHOW SCHEMAS WHERE ? = ?",
+    "digest": "da7451f3ca31b60e9a75387357b41a8ceb0bf1cca2cefa92ad8358ce397d2f43"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW DATABASES LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW DATABASES WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW SCHEMAS WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "51fff99db8ad1ca813d37c9c2eb26198652f99d13156c085a00d6857a5534ebb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW DATABASES LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SCHEMAS",
+    "text": "SHOW SCHEMAS",
+    "digest": "dbea8921b559b8cdd4976d57d70304daa8a242fbbfe6df94427006b54ead6b0f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SCHEMAS LIKE 'a'",
+    "text": "SHOW SCHEMAS LIKE ?",
+    "digest": "0bd52df5a6e81880a88240d0ee10dc4b5216af65873f704072a88b2db08af010"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SCHEMAS WHERE 1=1",
+    "text": "SHOW SCHEMAS WHERE ? = ?",
+    "digest": "da7451f3ca31b60e9a75387357b41a8ceb0bf1cca2cefa92ad8358ce397d2f43"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SCHEMAS LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SCHEMAS WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW SCHEMAS WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "51fff99db8ad1ca813d37c9c2eb26198652f99d13156c085a00d6857a5534ebb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SCHEMAS LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM t LIKE 'a'",
+    "text": "SHOW FIELDS FROM `t` LIKE ?",
+    "digest": "2cdf7bdc237d9d6baabd054f48e97545255dc7d0863a128385abee9667503f2d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM t WHERE 1=1",
+    "text": "SHOW FIELDS FROM `t` WHERE ? = ?",
+    "digest": "60b75cda5a21dfaace61afca49ff398993531587b422644090efe09c9ad0fd54"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM t LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM t WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW FIELDS FROM `t` WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "62b1fa2adf68dddd3d0a9fa2b99d9ff74fc20f433c0d73164ba10d5ee1f2ba5b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM t LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM t LIKE 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM t WHERE 1=1",
+    "text": "SHOW INDEX FROM `t` WHERE ? = ?",
+    "digest": "a690dd40b813b06297e98b330d233913d4c4e7d628e98d8d7e5b18b32d442dea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM t LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM t WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW INDEX FROM `t` WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "4e394107d040d11874c43513cfc645e0daec34e55dd6d0cabef460c07f3fe64e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM t LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLLATION",
+    "text": "SHOW COLLATION",
+    "digest": "f547ffac4814e362ef0421e4a45a6137d4be89fbb5ba419e1813d13647bcb53a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLLATION LIKE 'a'",
+    "text": "SHOW COLLATION LIKE ?",
+    "digest": "eb35f53bdc10ebdc6c520d437d0a6cbc62c85d38cf5ac0e315b58332fb219a9f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLLATION WHERE 1=1",
+    "text": "SHOW COLLATION WHERE ? = ?",
+    "digest": "ca031014a2f3b354cda051391d3044b228f159a002105cbc74a39bb2ee33bffd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLLATION LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLLATION WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW COLLATION WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "d8959ddde09019948c646e57b0d90f70f10655c7eadcfd50df7021a72276c165"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLLATION LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET",
+    "text": "SHOW CHARSET",
+    "digest": "1856574834be14252580820873d7125ede9315d91bf93a4a4525fac56ee51b6f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET LIKE 'a'",
+    "text": "SHOW CHARSET LIKE ?",
+    "digest": "5b49679b2a9b1ee8c4df8b95fcbbf09dccce1284875ee3d42084cda82a015019"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET WHERE 1=1",
+    "text": "SHOW CHARSET WHERE ? = ?",
+    "digest": "bfefec3adbcb476a559e2762400ed9a6e4c7eadea37085d8ea2a8bbc0a4f81fa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW CHARSET WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "1fb4bb1eea46099dd929cc5d2625cee2e6f114d4386cb766dedbfffc2bfe5e88"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARACTER SET",
+    "text": "SHOW CHARACTER SET",
+    "digest": "7854ff702b72290d53e19b2de3512c65d565cf1f9a1d1b31c4c8cb3c4f065e20"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARACTER SET LIKE 'a'",
+    "text": "SHOW CHARACTER SET LIKE ?",
+    "digest": "a1d43ef7ac657402a736c742ddc2cc28a7bee2288ebed11e5ecc8ffa8be3a06a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARACTER SET WHERE 1=1",
+    "text": "SHOW CHARACTER SET WHERE ? = ?",
+    "digest": "0217d84b237d8b876f9fe76acee5cf4e274456720dda467601de812001f060b1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARACTER SET LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARACTER SET WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW CHARACTER SET WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "972c402d2bdc3feff7350cf41d4fa81f68355d28138ab5fef8efd22d2535904f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARACTER SET LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FUNCTION STATUS",
+    "text": "SHOW FUNCTION STATUS",
+    "digest": "1784417845d6f148f6c48a0746fc97a90790ba13b281462211c76f508a97145a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FUNCTION STATUS LIKE 'a'",
+    "text": "SHOW FUNCTION STATUS LIKE ?",
+    "digest": "24820cfb2b16eef898081c89ae84fe0420fc113bb912ff8c00650dbbc67d6a2a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FUNCTION STATUS WHERE 1=1",
+    "text": "SHOW FUNCTION STATUS WHERE ? = ?",
+    "digest": "bd3b597985379b5102a77fc9e2f1a17c6f67b145fbfdec3d1d460d7fbeabbf39"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FUNCTION STATUS LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FUNCTION STATUS WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW FUNCTION STATUS WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "3c76531a4e7b8b054b48ba787561fb825dc7be208bcd80b9a3726a248fd3819e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FUNCTION STATUS LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROCEDURE STATUS",
+    "text": "SHOW PROCEDURE STATUS",
+    "digest": "63a366cebabe606d76ab4bf7e8c25b493f977b40be4f22c0ae6623bd9c07fda2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROCEDURE STATUS LIKE 'a'",
+    "text": "SHOW PROCEDURE STATUS LIKE ?",
+    "digest": "d15fce0bf4a77f1f23280fe8646d706298af0baf5da5505709ea98ad7b5edc46"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROCEDURE STATUS WHERE 1=1",
+    "text": "SHOW PROCEDURE STATUS WHERE ? = ?",
+    "digest": "abaa8544251bdf84ace3d2b42ccd83abfad95ee94d75bff469e3646db1fefcbd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROCEDURE STATUS LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROCEDURE STATUS WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW PROCEDURE STATUS WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "1f13925e2177ab768e58e2370fb3801cc9e0315993fc1090a612fcb58505f782"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROCEDURE STATUS LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW VARIABLES",
+    "text": "SHOW VARIABLES",
+    "digest": "9959c56ef11ca3c143a80d199705b5128cb5dfbbdc967225c4bd603595738aab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW VARIABLES LIKE 'a'",
+    "text": "SHOW VARIABLES LIKE ?",
+    "digest": "230e50b71157a47e34c64f86d958d304e42cc8bad0d5a345f7f60672da38222c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW VARIABLES WHERE 1=1",
+    "text": "SHOW VARIABLES WHERE ? = ?",
+    "digest": "e8d23ed55443ab08b92bb33728c6114080daf64a4a782f11a55898b8e1d1dfc2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW VARIABLES LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW VARIABLES WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW VARIABLES WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "cd6fec621ea362892aba72133b14467af41c2dd5ab41e95a002ef2b02280e176"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW VARIABLES LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW STATUS",
+    "text": "SHOW STATUS",
+    "digest": "5b22cb99afb7229f7af732c4708b4811e14df98c1d8326ce65822a0af5e0fd2d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW STATUS LIKE 'a'",
+    "text": "SHOW STATUS LIKE ?",
+    "digest": "93b5023feaf24c737fb4e33b5f2d4851cd166d96e5c4934d67d902bc68d94052"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW STATUS WHERE 1=1",
+    "text": "SHOW STATUS WHERE ? = ?",
+    "digest": "9fca078fe86dfa88854ec3bbf0307850e5fc5352bab32b7dc40d4161e8d63ddd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW STATUS LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW STATUS WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW STATUS WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "1d61b016559c581ffe5f9a378673bd13bf882841eff7f5a21d8a91015b3946cb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW STATUS LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL STATUS",
+    "text": "SHOW GLOBAL STATUS",
+    "digest": "070e38632eb4444e50cdcbf0b17474ba801e203add89783a24584951442a2317"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL STATUS LIKE 'a'",
+    "text": "SHOW GLOBAL STATUS LIKE ?",
+    "digest": "14752b67eb0925e19d522324c1b60b1b6c338794da0a912a92d5cab2f37821da"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL STATUS WHERE 1=1",
+    "text": "SHOW GLOBAL STATUS WHERE ? = ?",
+    "digest": "cd92450d96c4fd3f990e6297f91ebbad64c278b41f726ab08337c106ddbad910"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL STATUS LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL STATUS WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW GLOBAL STATUS WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "38df564527355ddab438cc40cd866ffaf23f4f6d9f9b473bbe1520b9712b9eff"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL STATUS LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS LIKE 'a'",
+    "text": "SHOW TRIGGERS LIKE ?",
+    "digest": "cedd5f585fb51f50a552f4684b1e025bc5e2cb06fd808fa3a6d1cd547cc507e5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW TRIGGERS WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "09c2125b38024b96560ec1322926e3e0c19902f8261c4e319da414c4b886ac50"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS LIKE 'a'",
+    "text": "SHOW EVENTS LIKE ?",
+    "digest": "39bcf23a17949c105562b9efd4577a8a3d84471729d8f618918de25c157436cc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "text": "SHOW EVENTS WHERE EXISTS ( SELECT ? FROM `t` WHERE `a` = ? )",
+    "digest": "ea0c26df422a49b3c61cc5b19e485436ae172e10c93a353e92616aaafdcfef2b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES",
+    "text": "SHOW ENGINES",
+    "digest": "694ce669f6158c6e62190a80036873cd7a95b81566f32b7f979f9624b10f564a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES LIKE 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS",
+    "text": "SHOW PLUGINS",
+    "digest": "8181054918915fc138d84fa7a6901fadcd699767bc70fb4090001619a68dd04b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS LIKE 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES",
+    "text": "SHOW PRIVILEGES",
+    "digest": "239f1bf9a2180e7cb1baa71c05159a5326147330286b043ab6e672e142628370"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES LIKE 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES",
+    "text": "SHOW PROFILES",
+    "digest": "87dcf3475fa7434827aa2162a19544264c4eabed39259d6e9fd129e91df7ae5e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES LIKE 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CONFIG",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CONFIG LIKE 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CONFIG WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CONFIG LIKE 'a' WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CONFIG WHERE EXISTS (SELECT 1 FROM t WHERE a=1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CONFIG LIKE 'a' /*gap*/ WHERE 1=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4\nX'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4\nX'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4\nX'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4\nX'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3\nX'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3\nX'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3\nX'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3\nX'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8\nX'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8\nX'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8\nX'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8\nX'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary\nX'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary\nX'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary\nX'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary\nX'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1\nX'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1\nX'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1\nX'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1\nX'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*gap*/ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*gap*/ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*gap*/ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*gap*/ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*gap*/ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*gap*/ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*gap*/ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*gap*/ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*gap*/ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*gap*/ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*gap*/ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*gap*/ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*!80411 */ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*!80411 */ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*!80411 */ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*!80411 */ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*!80411 */ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*!80411 */ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*!80411 */ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*!80411 */ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*!80411 */ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*!80411 */ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*!80411 */ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*!80411 */ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _latin1 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80411 _utf8mb4 X'FF' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80411 _utf8mb4 X'61' */",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*!80411 _utf8mb4 X'F09F9880' */",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4\nX'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4\nX'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4\nX'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4\nX'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3\nX'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3\nX'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3\nX'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3\nX'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8\nX'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8\nX'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8\nX'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8\nX'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary\nX'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary\nX'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary\nX'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary\nX'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1\nX'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1\nX'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1\nX'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1\nX'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*gap*/ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*gap*/ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*gap*/ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*gap*/ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*gap*/ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*gap*/ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*gap*/ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*gap*/ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*gap*/ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*gap*/ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*gap*/ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*gap*/ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*!80411 */ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*!80411 */ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*!80411 */ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*!80411 */ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*!80411 */ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*!80411 */ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*!80411 */ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*!80411 */ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*!80411 */ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*!80411 */ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*!80411 */ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*!80411 */ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _latin1 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*!80411 _utf8mb4 X'FF' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*!80411 _utf8mb4 X'61' */",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*!80411 _utf8mb4 X'F09F9880' */",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4\nX'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4\nX'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4\nX'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4\nX'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3\nX'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3\nX'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3\nX'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3\nX'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8\nX'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8\nX'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8\nX'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8\nX'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary\nX'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary\nX'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary\nX'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary\nX'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1\nX'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1\nX'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1\nX'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1\nX'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1\nX'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1\nX'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1\nX''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*gap*/ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*gap*/ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*gap*/ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*gap*/ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*gap*/ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*gap*/ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*gap*/ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*gap*/ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*gap*/ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*gap*/ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*gap*/ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*gap*/ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*gap*/ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*gap*/ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*gap*/ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb3 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*!80411 */ X'FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*!80411 */ X'F09F9880'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*!80411 */ X'00FF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*!80411 */ X'EDBFBF'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*!80411 */ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*!80411 */ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*!80411 */ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*!80411 */ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*!80411 */ X'FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*!80411 */ X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*!80411 */ X'F09F9880'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*!80411 */ X'00FF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*!80411 */ X'EFBFBD'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*!80411 */ X'EDBFBF'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _latin1 /*!80411 */ X''",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT /*!80411 _utf8mb4 X'FF' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT /*!80411 _utf8mb4 X'61' */",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT /*!80411 _utf8mb4 X'F09F9880' */",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, FLOAT(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, FLOAT(53))",
+    "text": "SELECT CONVERT ( ? , FLOAT4 (?) )",
+    "digest": "2c38b929c5e85c683670fa3881ef62f4622515134590bb92367d1e12110b094e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, FLOAT)",
+    "text": "SELECT CONVERT ( ? , FLOAT4 )",
+    "digest": "bd768ffd578da0ff8c7571e0006ae40f1e3f42a0ed5d8364fc63dedb5a6a8261"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, DOUBLE(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, DOUBLE)",
+    "text": "SELECT CONVERT ( ? , FLOAT8 )",
+    "digest": "057626aa5c8c3dbed73fdac321c51ac452e02fd5f1ec3c1886844f30749a2521"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, REAL(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, REAL)",
+    "text": "SELECT CONVERT ( ? , REAL )",
+    "digest": "39eaa4940e1dbb4b87a21b74aaa527c8ccdf21ddc2272b1622e6d316a72a5b40"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, DECIMAL(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DECIMAL(30,30))",
+    "text": "SELECT CAST ( ? AS DECIMAL (...) )",
+    "digest": "d9d52db68ea025a3205903777e2a85824953442676702dbf733f56a6f5c5f402"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, DECIMAL(30,30))",
+    "text": "SELECT CONVERT ( ? , DECIMAL (...) )",
+    "digest": "1fb3a171bacb3479dc163715dd294c5f4e93459589977565ea339c015d369e02"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, NUMERIC(10,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, BIT(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, CHAR(256))",
+    "text": "SELECT CONVERT ( ? , CHARACTER (?) )",
+    "digest": "016b65f6499d3d761d7504fb25b6859ae763f1e80c826e808b38fa54b87eb936"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, BINARY(256))",
+    "text": "SELECT CONVERT ( ? , BINARY (?) )",
+    "digest": "e605c14063db4eba3c47f1688829a8df43ba72d5f23629c066813d2bf0d13cf5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS YEAR(4))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, YEAR(4))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, YEAR)",
+    "text": "SELECT CONVERT ( ? , YEAR )",
+    "digest": "89b25ded8e3e31f9f3b3943714e58cbad87e1fac949d2600774c806c429a9819"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHARACTER(256))",
+    "text": "SELECT CAST ( ? AS CHARACTER (?) )",
+    "digest": "dcb345c495255795d37d037f7a5dd06ac7125e1dc8c90c5a2b49675e256a073c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, CHARACTER(256))",
+    "text": "SELECT CONVERT ( ? , CHARACTER (?) )",
+    "digest": "016b65f6499d3d761d7504fb25b6859ae763f1e80c826e808b38fa54b87eb936"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NCHAR(255))",
+    "text": "SELECT CAST ( ? AS NCHAR (?) )",
+    "digest": "ee388a34cd84bc5ce74d61d02e319e695d06feb61951b16606b920fb35027cd5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, NCHAR(255))",
+    "text": "SELECT CONVERT ( ? , NCHAR (?) )",
+    "digest": "c6ef51f567aa8b953967017c31536a386b13096eec6f5c2f4f0bab4024e51c26"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NATIONAL CHAR(256))",
+    "text": "SELECT CAST ( ? AS NATIONAL CHARACTER (?) )",
+    "digest": "0f7a06f7df1fd2f89831faeed92b87af4d91c0d1eb6ee9506b4588ce1be3cb9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, NATIONAL CHAR(256))",
+    "text": "SELECT CONVERT ( ? , NATIONAL CHARACTER (?) )",
+    "digest": "0fa7af3590eccf66bd2691001688f0b786133a6eff7159f9018bd8e216047f12"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t JOIN u AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE t AS 'a' SET a=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE FROM t AS 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t JOIN u AS `a`",
+    "text": "SELECT * FROM `t` JOIN `u` AS `a`",
+    "digest": "4948de0942af1fec6e9470fb79963c8fa874cb8f9a1fce0cfb6c7fff2a414f30"
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE t AS `a` SET a=1",
+    "text": "UPDATE `t` AS `a` SET `a` = ?",
+    "digest": "1d8f4cadffde9120ac301a5751bded9811eb0a7d8d1c512216371faa37a72f3c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE FROM t AS `a`",
+    "text": "DELETE FROM `t` AS `a`",
+    "digest": "f6cde61efca985fe3d6565956d06325218056de33da2c9eaac0e581d216f17dd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM t JOIN u AS \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE t AS \"a\" SET a=1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "DELETE FROM t AS \"a\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL TABLES LIKE '%'",
+    "text": "SHOW FULL TABLES LIKE ?",
+    "digest": "0eb47a8c8a76b9fac40e2753f942b831c02260c4951b0cba7746abf5415d596b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL TABLES WHERE 1",
+    "text": "SHOW FULL TABLES WHERE ?",
+    "digest": "7b9d8197d4f3a6044175d32f68af80bedcc34e4b01b5725c631f36f5faa6e890"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL TABLES LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL TABLES WHERE 'a' LIKE '%'",
+    "text": "SHOW FULL TABLES WHERE ? LIKE ?",
+    "digest": "fcfff5eba758baa6a406b88ba2b6368f92f5b6eb471d47350f4f94ee19ecf660"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL TABLES WHERE EXISTS (SELECT 1 WHERE 1)",
+    "text": "SHOW FULL TABLES WHERE EXISTS ( SELECT ? WHERE ? )",
+    "digest": "c7d22179e48754cd283df508b609dbc68deac818ebab1b1a2762e78b4bba2348"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL COLUMNS FROM t LIKE '%'",
+    "text": "SHOW FULL FIELDS FROM `t` LIKE ?",
+    "digest": "4173212052f56ee4b54760443f95712bfe9376bde27d371e0bfe16b4ba5ae7ed"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL COLUMNS FROM t WHERE 1",
+    "text": "SHOW FULL FIELDS FROM `t` WHERE ?",
+    "digest": "6e7e633214c54b1575e8e2dd7b81d01f56c29db1189a9fd40332f21529862d0e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL COLUMNS FROM t LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL COLUMNS FROM t WHERE 'a' LIKE '%'",
+    "text": "SHOW FULL FIELDS FROM `t` WHERE ? LIKE ?",
+    "digest": "e6e6b75932f40152057796882123ba991091aeef97eadb052e7e8c4763549264"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW FULL COLUMNS FROM t WHERE EXISTS (SELECT 1 WHERE 1)",
+    "text": "SHOW FULL FIELDS FROM `t` WHERE EXISTS ( SELECT ? WHERE ? )",
+    "digest": "e05f3b6ab6c5fb1539545d65dc09b8643d057620c5fc5a96080d51159f3d06e9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL VARIABLES LIKE '%'",
+    "text": "SHOW GLOBAL VARIABLES LIKE ?",
+    "digest": "1fe7aba925a48c9ab55b7b197d166da67a92d13a24185cf5d8e659052fc893d1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL VARIABLES WHERE 1",
+    "text": "SHOW GLOBAL VARIABLES WHERE ?",
+    "digest": "2f22f37714ab46eff40105c1afc6c9206091d9052b6b5a15b04b38af168ae6cd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL VARIABLES LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL VARIABLES WHERE 'a' LIKE '%'",
+    "text": "SHOW GLOBAL VARIABLES WHERE ? LIKE ?",
+    "digest": "da88a0d9220414b5139e86b09c8dde0c45e6cad8dc0c55fec2a736b09b46d932"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW GLOBAL VARIABLES WHERE EXISTS (SELECT 1 WHERE 1)",
+    "text": "SHOW GLOBAL VARIABLES WHERE EXISTS ( SELECT ? WHERE ? )",
+    "digest": "31a551a04b676c57376bf878ff5bebdbef302d913dde82ea3034c00ed71e8507"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW LOCAL STATUS LIKE '%'",
+    "text": "SHOW LOCAL STATUS LIKE ?",
+    "digest": "3ed4f4e0f9d0ff8c974e2b61725c78b1fef313230ef0b9fdae0a4e2e70d414c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW LOCAL STATUS WHERE 1",
+    "text": "SHOW LOCAL STATUS WHERE ?",
+    "digest": "30db6da6517294ca04350d013127c42c4d9ea13e3505950a3b9219e5eb2a1467"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW LOCAL STATUS LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW LOCAL STATUS WHERE 'a' LIKE '%'",
+    "text": "SHOW LOCAL STATUS WHERE ? LIKE ?",
+    "digest": "b712834fc726778260ebfe5958a7589e187c0a48e40da9871ebecb1929e91106"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW LOCAL STATUS WHERE EXISTS (SELECT 1 WHERE 1)",
+    "text": "SHOW LOCAL STATUS WHERE EXISTS ( SELECT ? WHERE ? )",
+    "digest": "a93abcbfc3d99f8575575bc249bfd5b1ad28c543f17470bbc4d121203847f852"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SESSION STATUS LIKE '%'",
+    "text": "SHOW SESSION STATUS LIKE ?",
+    "digest": "a6d9f012d38e1935c116c75354d30af403211c7d7a130d43e103838581b78717"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SESSION STATUS WHERE 1",
+    "text": "SHOW SESSION STATUS WHERE ?",
+    "digest": "482cc318ddd3dc1c1358e03cf157730ea94b6818d72712c57104a9edaf2be888"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SESSION STATUS LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SESSION STATUS WHERE 'a' LIKE '%'",
+    "text": "SHOW SESSION STATUS WHERE ? LIKE ?",
+    "digest": "fda771e61a2d9e0d01d40bad39f80488a445f00398349d99ea19ceb24a9f64f0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW SESSION STATUS WHERE EXISTS (SELECT 1 WHERE 1)",
+    "text": "SHOW SESSION STATUS WHERE EXISTS ( SELECT ? WHERE ? )",
+    "digest": "283e1dfe1a637ac40b361e78b4280998bfcb056468354f6491649376f696f58a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EXTENDED COLUMNS FROM t LIKE '%'",
+    "text": "SHOW EXTENDED FIELDS FROM `t` LIKE ?",
+    "digest": "c2f966cd031bce7a34f7a8740bad1affb014f31599c35cd5016030b0edfae2ea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EXTENDED COLUMNS FROM t WHERE 1",
+    "text": "SHOW EXTENDED FIELDS FROM `t` WHERE ?",
+    "digest": "70159a8ace4950b4f149d97ddf5f8372abc4f6cdc0b4529eda222570d89d6a32"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EXTENDED COLUMNS FROM t LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EXTENDED COLUMNS FROM t WHERE 'a' LIKE '%'",
+    "text": "SHOW EXTENDED FIELDS FROM `t` WHERE ? LIKE ?",
+    "digest": "ff308072b96a6c494e701d1bd0e725aa0666de3f8ae2e8e0658181459c057a01"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EXTENDED COLUMNS FROM t WHERE EXISTS (SELECT 1 WHERE 1)",
+    "text": "SHOW EXTENDED FIELDS FROM `t` WHERE EXISTS ( SELECT ? WHERE ? )",
+    "digest": "49661c3393bded05c5a6966fa9434254eec49c0df2d06950059708d7a1f9c26b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES LIKE '%'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES WHERE 'a' LIKE '%'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW ENGINES WHERE EXISTS (SELECT 1 WHERE 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS LIKE '%'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS WHERE 'a' LIKE '%'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PLUGINS WHERE EXISTS (SELECT 1 WHERE 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES LIKE '%'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES WHERE 'a' LIKE '%'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PRIVILEGES WHERE EXISTS (SELECT 1 WHERE 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES LIKE '%'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES WHERE 'a' LIKE '%'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW PROFILES WHERE EXISTS (SELECT 1 WHERE 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET LIKE '%'",
+    "text": "SHOW CHARSET LIKE ?",
+    "digest": "5b49679b2a9b1ee8c4df8b95fcbbf09dccce1284875ee3d42084cda82a015019"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET WHERE 1",
+    "text": "SHOW CHARSET WHERE ?",
+    "digest": "e154eb11f810ad36b2f5f367fe837d81a2dda4721294988ef1b6c99e231a8ec4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET WHERE 'a' LIKE '%'",
+    "text": "SHOW CHARSET WHERE ? LIKE ?",
+    "digest": "1d430be75947cfba27a5f5cd74da2ad9afe64e6b4a8345b5c66a9ab7652f9d6b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW CHARSET WHERE EXISTS (SELECT 1 WHERE 1)",
+    "text": "SHOW CHARSET WHERE EXISTS ( SELECT ? WHERE ? )",
+    "digest": "cce84226f89116b78f42bc88bac4e37a2a768ef172fca7b33ac1d333fa4b8ab3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS LIKE '%'",
+    "text": "SHOW EVENTS LIKE ?",
+    "digest": "39bcf23a17949c105562b9efd4577a8a3d84471729d8f618918de25c157436cc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS WHERE 1",
+    "text": "SHOW EVENTS WHERE ?",
+    "digest": "4e35745d6db86f22328f2b0ae48c25c7307fb06b6ec032daca05ab9abc470be0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS LIKE '%' WHERE 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS WHERE 'a' LIKE '%'",
+    "text": "SHOW EVENTS WHERE ? LIKE ?",
+    "digest": "3bb201d24226671def94a2cd83ce3540e7bc3e2f2bfc4550886df7fba79f3cf6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS WHERE EXISTS (SELECT 1 WHERE 1)",
+    "text": "SHOW EVENTS WHERE EXISTS ( SELECT ? WHERE ? )",
+    "digest": "2ef1824ecd2893e6915099d82e7aa0fa7947caf31d6110d5c514773d59ce5c78"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, TIME(0))",
+    "text": "SELECT CONVERT ( ? , TIME (?) )",
+    "digest": "68ceaea388e2e09daf6f2a5d93fb82505dbe8ac95ce8cefe4cd34f4dc1b0994c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(6))",
+    "text": "SELECT CAST ( ? AS TIME (?) )",
+    "digest": "6e432be3a0d88e92fa09eb3ee23bbd1991666a361535281af3d3a2eb10919c49"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, TIME(6))",
+    "text": "SELECT CONVERT ( ? , TIME (?) )",
+    "digest": "68ceaea388e2e09daf6f2a5d93fb82505dbe8ac95ce8cefe4cd34f4dc1b0994c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS TIME(7))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, TIME(7))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, DATETIME(0))",
+    "text": "SELECT CONVERT ( ? , DATETIME (?) )",
+    "digest": "83d987323c68c78124514f9d9a1795d632cde31c924c5efc349b20dae4a5d3f3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(6))",
+    "text": "SELECT CAST ( ? AS DATETIME (?) )",
+    "digest": "5060c960f028020cb348ddd38249b2a00966fb5e5d786e35d20bc6be4d630264"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, DATETIME(6))",
+    "text": "SELECT CONVERT ( ? , DATETIME (?) )",
+    "digest": "83d987323c68c78124514f9d9a1795d632cde31c924c5efc349b20dae4a5d3f3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS DATETIME(7))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, DATETIME(7))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, YEAR(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS CHARACTER)",
+    "text": "SELECT CAST ( ? AS CHARACTER )",
+    "digest": "80cb3bba49ecd08e306ba22eda45e8059e1404de4ea04584f7d604404365befe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, CHARACTER)",
+    "text": "SELECT CONVERT ( ? , CHARACTER )",
+    "digest": "0c4ccc60e5b1e5d77a47cef9f8cc6bab8f6d99b4a3ff2c1b2cd2cf7352f705c2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NCHAR)",
+    "text": "SELECT CAST ( ? AS NCHAR )",
+    "digest": "74ffa5c6a2c574c2226857f647cd440d9d749ed9a56952fbb465b18ba10739f5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, NCHAR)",
+    "text": "SELECT CONVERT ( ? , NCHAR )",
+    "digest": "3393e21598110d78e191fa31f81b3186d04959b09fa3c69e1c7f431cde5d59d6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS NATIONAL CHARACTER)",
+    "text": "SELECT CAST ( ? AS NATIONAL CHARACTER )",
+    "digest": "9dea531db9a84442455272e3d9c5aaba8c61a548a3cc4de799795b2eef47e8b4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, NATIONAL CHARACTER)",
+    "text": "SELECT CONVERT ( ? , NATIONAL CHARACTER )",
+    "digest": "72b57e18bfdf625d2e027682960e7e98735e1fdee7eccd2c8442725d1b58fe4a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, DOUBLE PRECISION)",
+    "text": "SELECT CONVERT ( ? , FLOAT8 PRECISION )",
+    "digest": "543fab7113737e4bf6089b181dffb5bfa823d307be129e7e2a79b7c240610cd3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(1 AS FIXED)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CONVERT(1, FIXED)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NCHAR(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NCHAR FROM t",
+    "text": "SELECT NCHAR FROM `t`",
+    "digest": "064944040af1d0ece16cfaffa9210359abfdb96228d98462abbdd9f757ac5bb9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t.NCHAR FROM t",
+    "text": "SELECT `t` . `NCHAR` FROM `t`",
+    "digest": "4f97ebd42e606ab70588da43351669f31f287cdd673538a71324ef8651669910"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NCHAR.a FROM t",
+    "text": "SELECT `NCHAR` . `a` FROM `t`",
+    "digest": "910c8c77ca8e61d69221caff9162468d8cbf5213c720fa247d74b2270bc02496"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NATIONAL CHAR(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NATIONAL CHAR FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t.NATIONAL CHAR FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NATIONAL CHAR.a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NATIONAL CHARACTER(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NATIONAL CHARACTER FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t.NATIONAL CHARACTER FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NATIONAL CHARACTER.a FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a NATIONAL CHARACTER(255))",
+    "text": "CREATE TABLE `t` ( `a` NATIONAL CHARACTER (?) )",
+    "digest": "92bb5b5c11b0481443146243d088ab613f741498b3e29f6ea521a7a7cc6ed3d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CHARACTER(1)",
+    "text": "SELECT CHARACTER (?)",
+    "digest": "3beb6c942b403e52ff96730c18872f7b2b5ad322a7b14f49890668f463bf53a0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CHARACTER FROM t",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t.CHARACTER FROM t",
+    "text": "SELECT `t` . `CHARACTER` FROM `t`",
+    "digest": "6f4d276101f1dc757df2afb705d2c81e953d9487bcd67d92c035b378a1aa817d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CHARACTER.a FROM t",
+    "text": "SELECT `CHARACTER` . `a` FROM `t`",
+    "digest": "f5f2539ce6cd2496e26afa0e37fb8e038e689c6c36b4f5088e0974cea93fb18c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT national(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT national FROM t",
+    "text": "SELECT NATIONAL FROM `t`",
+    "digest": "29f945dfe0a27fde545e8cb74cff78ea60d52a4698d5d080ea9e632c17334c25"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT t.national FROM t",
+    "text": "SELECT `t` . `national` FROM `t`",
+    "digest": "5bf354a942b8462024e6d6c48cd59d78281724dd6c224eb5e5e55eedb74dbc5a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT national.a FROM t",
+    "text": "SELECT `national` . `a` FROM `t`",
+    "digest": "407a92784bd9ea60a4c6dfb43adf9de755df2d60264791f13abc7594fd5b161d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a national(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a INT) ENGINE='InnoDB'",
+    "text": "CREATE TABLE `t` ( `a` INTEGER ) ENGINE = ?",
+    "digest": "87626c72576b30489b5859be431e9ed1369865f5ec82317971bb0ff03dc25bdf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a INT) ENGINE=\"InnoDB\"",
+    "text": "CREATE TABLE `t` ( `a` INTEGER ) ENGINE = ?",
+    "digest": "87626c72576b30489b5859be431e9ed1369865f5ec82317971bb0ff03dc25bdf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a INT) ENGINE=InnoDB",
+    "text": "CREATE TABLE `t` ( `a` INTEGER ) ENGINE = `InnoDB`",
+    "digest": "486f11e24bc3b2ef2af9db79bf86f2900508d7212786c867ba6f6a26e2698052"
   }
 ]

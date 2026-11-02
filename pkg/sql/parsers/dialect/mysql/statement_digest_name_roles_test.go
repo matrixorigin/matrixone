@@ -180,6 +180,92 @@ func TestDigestGrammarAdmissionAndReuse(t *testing.T) {
 	}
 }
 
+func TestDigestRoleBoundariesAndReuse(t *testing.T) {
+	for _, test := range []struct {
+		name, sql, mode string
+		reject          bool
+	}{
+		{"derived-string-alias", "SELECT * FROM (SELECT 1) AS 'a'", "", true},
+		{"table-string-alias", "SELECT * FROM t 'a'", "", true},
+		{"engine-string-not-alias", "CREATE TABLE t (a INT) ENGINE='InnoDB'", "", false},
+		{"engine-double-string", "CREATE TABLE t (a INT) ENGINE=\"InnoDB\"", "", false},
+		{"derived-name", "SELECT * FROM (SELECT 1) AS `a`", "", false},
+		{"ansi-name", "SELECT * FROM (SELECT 1) AS \"a\"", "ANSI_QUOTES", false},
+		{"utf8-hex-invalid", "SELECT _utf8mb4 X'FF'", "", true},
+		{"utf8-hex-valid", "SELECT _utf8mb4 X'F09F9880'", "", false},
+		{"utf8-hex-comment-invalid", "SELECT _utf8mb4 /*gap*/ X'FF'", "", true},
+		{"utf8-hex-comment-valid", "SELECT _utf8mb4 /*gap*/ X'61'", "", false},
+		{"utf8-hex-executable-comment", "SELECT /*!80411 _utf8mb4 X'FF' */", "", true},
+		{"binary-hex", "SELECT _binary X'FF'", "", false},
+		{"utf8mb3-supplementary", "SELECT _utf8mb3 X'F09F9880'", "", true},
+		{"utf8mb3-bmp", "SELECT _utf8mb3 X'E5908D'", "", false},
+		{"decimal-scale", "CREATE TABLE t (a DECIMAL(31,31))", "", true},
+		{"decimal-boundary", "CREATE TABLE t (a DECIMAL(65,30))", "", false},
+		{"bit-zero", "CREATE TABLE t (a BIT(0))", "", true},
+		{"bit-width", "CREATE TABLE t (a BIT(65))", "", true},
+		{"bit-boundary", "CREATE TABLE t (a BIT(64), b BIT)", "", false},
+		{"char-width", "CREATE TABLE t (a CHAR(256))", "", true},
+		{"char-boundary", "CREATE TABLE t (a CHAR(255), b CHAR(0))", "", false},
+		{"character-synonym", "CREATE TABLE t (a CHARACTER(255), b NCHAR(255), c NATIONAL CHAR(255))", "", false},
+		{"nchar-not-function", "SELECT NCHAR(1)", "", true},
+		{"national-not-function", "SELECT national(1)", "", true},
+		{"national-type-not-function", "SELECT NATIONAL CHAR(1)", "", true},
+		{"national-name", "SELECT national FROM t", "", false},
+		{"cast-float-pair", "SELECT CAST(1 AS FLOAT(10,2))", "", true},
+		{"convert-float-pair", "SELECT CONVERT(1, FLOAT(10,2))", "", true},
+		{"cast-float-single", "SELECT CAST(1 AS FLOAT(53))", "", false},
+		{"ddl-float-pair", "CREATE TABLE t (a FLOAT(10,2))", "", false},
+		{"cast-char-long", "SELECT CAST(1 AS CHAR(256))", "", false},
+		{"cast-numeric", "SELECT CAST(1 AS NUMERIC(10,2))", "", true},
+		{"cast-year-length", "SELECT CONVERT(1, YEAR(4))", "", true},
+		{"convert-time-zero", "SELECT CONVERT(1, TIME(0))", "", false},
+		{"convert-time-boundary", "SELECT CONVERT(1, TIME(6))", "", false},
+		{"convert-time-overflow", "SELECT CONVERT(1, TIME(7))", "", true},
+		{"convert-datetime-zero", "SELECT CONVERT(1, DATETIME(0))", "", false},
+		{"convert-datetime-boundary", "SELECT CONVERT(1, DATETIME(6))", "", false},
+		{"convert-datetime-overflow", "SELECT CONVERT(1, DATETIME(7))", "", true},
+		{"show-both", "SHOW TABLES LIKE '%' WHERE 1", "", true},
+		{"show-no-filter-target", "SHOW ENGINES WHERE 1", "", true},
+		{"show-like-expression", "SHOW TABLES WHERE 'a' LIKE '%'", "", false},
+		{"show-subquery", "SHOW TABLES WHERE EXISTS (SELECT 1 WHERE 1)", "", false},
+		{"show-like-only", "SHOW TABLES LIKE '%'", "", false},
+		{"show-engines", "SHOW ENGINES", "", false},
+		{"show-local", "SHOW LOCAL STATUS WHERE 1", "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for range 3 {
+				_, _, err := StatementDigest(t.Context(), test.sql, test.mode)
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				text, hash, err := StatementDigest(t.Context(), "SELECT 1", "")
+				require.NoError(t, err)
+				require.Equal(t, "SELECT ?", text)
+				require.Equal(t, "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae", hash)
+			}
+		})
+	}
+	// These are digest-only gates, not an ordinary parser policy change.
+	for _, sql := range []string{
+		"SELECT * FROM (SELECT 1) AS 'a'", "SELECT _utf8mb4 X'FF'",
+		"CREATE TABLE t (a DECIMAL(31,31))", "CREATE TABLE t (a BIT(65))",
+		"CREATE TABLE t (a CHAR(256))", "SELECT CAST(1 AS FLOAT(10,2))",
+		"SHOW TABLES LIKE '%' WHERE 1", "SHOW ENGINES WHERE 1",
+	} {
+		func() {
+			statements, err := Parse(t.Context(), sql, 0)
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+			require.NoError(t, err, sql)
+		}()
+	}
+}
+
 func TestDigestHintCompactionOwnsBytes(t *testing.T) {
 	for _, test := range []struct {
 		input string

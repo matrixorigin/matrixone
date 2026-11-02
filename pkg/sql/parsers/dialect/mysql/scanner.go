@@ -302,7 +302,7 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 					return token, value
 				}
 				decoded, err := hex.DecodeString(value[2:])
-				if err != nil {
+				if err != nil || s.digestMode && !utf8.Valid(decoded) {
 					return LEX_ERROR, value
 				}
 				return STRING, string(decoded)

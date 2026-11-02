@@ -370,6 +370,28 @@ func digestRowConstructorValid(parent *Scanner) bool {
 
 func digestSyntaxValid(statement tree.Statement) bool {
 	switch stmt := statement.(type) {
+	case *tree.ShowColumns:
+		return digestShowFilterValid(stmt.Like, stmt.Where, true)
+	case *tree.ShowDatabases:
+		return digestShowFilterValid(stmt.Like, stmt.Where, true)
+	case *tree.ShowTables:
+		return digestShowFilterValid(stmt.Like, stmt.Where, true)
+	case *tree.ShowTableStatus:
+		return digestShowFilterValid(stmt.Like, stmt.Where, true)
+	case *tree.ShowCollation:
+		return digestShowFilterValid(stmt.Like, stmt.Where, true)
+	case *tree.ShowVariables:
+		return digestShowFilterValid(stmt.Like, stmt.Where, true)
+	case *tree.ShowStatus:
+		return digestShowFilterValid(stmt.Like, stmt.Where, true)
+	case *tree.ShowFunctionOrProcedureStatus:
+		return digestShowFilterValid(stmt.Like, stmt.Where, true)
+	case *tree.ShowTarget:
+		if stmt.Type == tree.ShowConfig {
+			return false // MO-only target, not MySQL SHOW syntax.
+		}
+		allowed := stmt.Type == tree.ShowCharset || stmt.Type == tree.ShowTriggers || stmt.Type == tree.ShowEvents
+		return digestShowFilterValid(stmt.Like, stmt.Where, allowed)
 	case *tree.CreateTable:
 		for _, definition := range stmt.Defs {
 			if column, ok := definition.(*tree.ColumnTableDef); ok && !digestColumnValid(column, true) {
@@ -405,6 +427,12 @@ func digestSyntaxValid(statement tree.Statement) bool {
 	return true
 }
 
+// Only the SHOW root's filters participate. A WHERE inside a filter subquery
+// is not another SHOW filter, and LIKE alone is not the same as LIKE+WHERE.
+func digestShowFilterValid(like *tree.ComparisonExpr, where *tree.Where, allowed bool) bool {
+	return like == nil && where == nil || allowed && (like == nil || where == nil)
+}
+
 func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 	// Mirror column-attribute contextualization, not DDL execution. Attribute
 	// order matters; a table-level primary key is not applied here. New column
@@ -420,6 +448,15 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 		(typ.InternalType.Family == tree.TimestampFamily || typ.InternalType.Family == tree.TimeFamily) &&
 		(typ.InternalType.Scale < 0 || typ.InternalType.Scale > 6) {
 		return false
+	}
+	if typ, ok := column.Type.(*tree.T); ok {
+		t := typ.InternalType
+		switch digestKeywordUpper(t.FamilyString) {
+		case "CHAR", "CHARACTER", "NCHAR", "BINARY":
+			if t.DisplayWith > 255 {
+				return false
+			}
+		}
 	}
 	notNull, nullDefault, hasDefault, autoIncrement, generated := false, false, false, false, false
 	generatedDisallowedAttribute, hasCollation := false, false

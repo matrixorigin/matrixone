@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v18，2026-11-02。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v19，2026-11-02。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -95,6 +95,11 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - SHOW TABLES（不含OPEN）、TABLE STATUS、TRIGGERS、EVENTS及COLUMNS/INDEX的显式FROM数据库检查名称；SHOW OPEN TABLES及SHOW CREATE DATABASE不在相同解析阶段检查。语法语义值保留“省略/显式空数据库”的区别，不能只用空字符串代表二者。SQL quoted名称中的NUL在digest词法域拒绝，不污染普通SQL或hint的独立词法域。
 - SHOW TABLE STATUS/TRIGGERS/EVENTS共享数据库子句语法归约：FROM/IN和数据库名必须同时出现或同时省略，随后才进行既有数据库名称校验。存在性分别来自两个可选产生式，不能用空字符串值判断；该配对约束仅用于digest，普通执行parser的准入保持不变。
 - 固定MySQL保留词事实同样约束裸名称：MO的not_keyword/non_reserved_keyword归约不能让INTEGER等原生保留词成为普通标识符。真正紧邻点号的词法限定名、quoted名称、原生类型和函数产生式不套裸名称禁令；AS后的MO宽松别名适配也不得绕过检查。DUAL仍由自己的完整FROM语法消费。DEC/FLOAT4/FLOAT8/MIDDLEINT/VARCHARACTER通过共享MySQL token身份选择已有类型grammar所有者，不能把digest展示拼写（它本身也可能是别名）当作MO token名。VARCHAR/VARBINARY声明保留必需长度；FLOAT(p)仅允许0..53的二进制精度；FLOAT/DOUBLE/REAL(M,D)采用M≤255、D≤30、M≥D及非零M的十进制展示约束；REAL_AS_FLOAT也不放宽REAL声明限制。所有浮点类型产生式共享digest-only检查，普通执行parser保留原有限制/诊断。DOUBLE/REAL不接受单精度参数（DOUBLE PRECISION相同），DECIMAL/NUMERIC的显式零精度不与缺省宽度哨兵混淆。额外语法事实位于本次yacc语义栈，非池化scanner或持久AST状态。
+- 表别名必须使用identifier，不能沿用SELECT字符串别名规则。共享table_alias产生式也供ENGINE=消费，后者允许STRING；因此table_alias只在yacc临时stringTableAlias事实中保存来源，由真正别名消费者as_opt_id拒绝STRING，不能全局拒绝共享归约。普通MO parser保留原准入。ANSI_QUOTES改变双引号的词法角色，不改变单引号。
+- UTF8字符集引导的HEX字符串必须校验解码后的内容：相邻_utf8mb4由既有scanner解码路径验证；跨注释或_utf8/utf8mb3由literal产生式按引导符验证。后者还拒绝四字节字符；_binary/latin1与无引导HEX保留不同的字节域。无目录查询、无新全局状态；普通parser不增加这些检查。
+- DDL列定义的CHAR/CHARACTER/NCHAR长度不超过255字符、BINARY宽度不超过255字节；BIT显式长度为1..64，省略不等于显式0。原length_opt/length的展示宽度可能把0映射为默认值，因此yacc语义栈保留原始typeLength（空产生式-1）供BIT检查，不在持久AST或池状态加字段。DECIMAL/NUMERIC/DEC的小数位上限30在共同decimal_length_opt归约检查，精度65及M≥D规则继续沿用。
+- CAST/CONVERT重用类型构造但不重用DDL准入：浮点目标只允许无参数或FLOAT单参数形式，不接受(M,D)；NUMERIC、BIT、VARCHAR等不是MySQL CAST目标，YEAR也不带长度。CHAR/BINARY在CAST中不套DDL的255限制。共同digestCastTypeValid在mo_cast_type改写无长度CHAR之前验证，CONVERT的decimal_type入口同样消费；其TIME/DATETIME独立产生式也检查0..6精度，TIME使用原始typeLength而非把显式0映射后的DisplayWith作为判据。有符号目标仍由独立产生式构造。CHARACTER只在digest词法适配并保留CHARACTER SET角色；NCHAR与NATIONAL CHAR由类型产生式所有，不能全局折叠成CHAR使SELECT NCHAR(1)/NATIONAL CHAR(1)误成为函数。digest-only NATIONAL token也可按非保留词作为普通名字，但不进入ID泛型函数产生式；类型上下文后接CHAR时采用显式shift优先级，生成零冲突。独立编码扫描不改原生token身份。
+- SHOW根节点的LIKE/WHERE至多一个；CHARSET/TRIGGERS/EVENTS等支持单一过滤，ENGINES/PLUGINS/PRIVILEGES/PROFILES不接受过滤，MO专有CONFIG不属于MySQL语法。共同纯检查只检查根SHOW AST字段，不统计过滤子查询的WHERE或LIKE表达式。LOCAL在SHOW STATUS/VARIABLES中是SESSION同义词，仅digest加入该准入。
 - 生成 parser 必须零冲突且可复现。
 - 裸时间默认值须来自原生 keyword 语法域；复用 FuncExpr.IsGeneric 保存普通 identifier 函数身份，digest-only 解析额外标记被引号包裹的原生时间 keyword。IGNORE_SPACE 仅放宽函数名和左括号之间的空白，不跨注释；括号表达式也不接受这些伪装的原生函数。普通执行 parser 契约不变。
 - 摘要 lexer 的 ROW 构造器适配不能吞掉窗口 frame 的 CURRENT ROW；该 native frame token 保持原样。窗口跳过的是列 itemization，不跳过 parser、资源预算或摘要编码。

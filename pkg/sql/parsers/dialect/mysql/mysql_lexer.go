@@ -16,11 +16,13 @@ package mysql
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -450,6 +452,61 @@ func digestFloatTypeValid(yylex yyLexer, size tree.LengthScaleOpt, single, allow
 	return valid
 }
 
+// The scanner folds adjacent utf8mb4 hex strings; grammar retains introducers
+// separated by comments and other charsets. Both paths must validate decoded
+// content, not the ASCII spelling of its hex digits.
+func digestCharsetLiteralValid(yylex yyLexer, charset, value string, hexadecimal bool) bool {
+	if yylex.(*Lexer).digest == nil {
+		return true
+	}
+	charset = strings.ToLower(charset)
+	if charset != "_utf8mb4" && charset != "_utf8mb3" && charset != "_utf8" {
+		return true
+	}
+	if hexadecimal {
+		decoded, err := hex.DecodeString(value[2:])
+		if err != nil {
+			yylex.Error("Invalid character string")
+			return false
+		}
+		value = string(decoded)
+	}
+	valid := utf8.ValidString(value)
+	if charset != "_utf8mb4" {
+		valid = digestSystemCharsetValid(value)
+	}
+	if !valid {
+		yylex.Error("Invalid character string")
+	}
+	return valid
+}
+
+// CAST and DDL share type construction, not admissible target syntax. Inspect
+// the grammar-owned type before mo_cast_type rewrites CHAR into VARCHAR.
+func digestCastTypeValid(yylex yyLexer, typ *tree.T) bool {
+	if yylex.(*Lexer).digest == nil {
+		return true
+	}
+	t := typ.InternalType
+	valid := false
+	switch digestKeywordUpper(t.FamilyString) {
+	case "CHAR", "CHARACTER", "NCHAR", "BINARY", "DATE", "JSON":
+		valid = true
+	case "DECIMAL", "DEC":
+		valid = t.Scale <= 30
+	case "FLOAT", "FLOAT4", "DOUBLE", "DOUBLE PRECISION", "FLOAT8", "REAL":
+		valid = t.Scale == tree.NotDefineDec
+	case "DATETIME", "TIME":
+		valid = t.Scale <= 6
+	case "YEAR":
+		valid = t.DisplayWith == 0
+	}
+	if !valid {
+		yylex.Error("Invalid CAST target type or parameters")
+	}
+	return valid
+}
+
 func digestShowDatabaseValid(yylex yyLexer, name string, explicit bool) bool {
 	if yylex.(*Lexer).digest == nil || !explicit || tree.ValidMySQLTableName(name) {
 		return true
@@ -491,6 +548,16 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		if typ == STRING {
 			raw := strings.TrimLeft(l.scanner.buf[l.scanner.PrePos:l.scanner.Pos], " \t\r\n")
 			lval.introducedString = strings.HasPrefix(raw, "_")
+		}
+		if typ == CHARACTER {
+			// CHARACTER is also the charset clause keyword. Only its type
+			// synonym role adapts to CHAR; CHARACTER SET must remain intact.
+			lookahead := *l.scanner
+			if next, _ := lookahead.Scan(); next != SET {
+				typ = CHAR
+			}
+		} else if typ == ID && !l.scanner.qualifiedIdentifier && strings.EqualFold(str, "national") {
+			typ = DIGEST_NATIONAL
 		}
 		if typ == ROW && l.lastToken != CURRENT {
 			// CURRENT ROW is a window-frame bound, not a ROW constructor.

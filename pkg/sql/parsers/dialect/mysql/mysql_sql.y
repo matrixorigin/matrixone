@@ -196,6 +196,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     quotedIdentifier bool
     singleTypePrecision bool
     introducedString bool
+    typeLength int32
+    stringTableAlias bool
 }
 
 %union {
@@ -559,7 +561,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> BIT TINYINT SMALLINT MEDIUMINT INT INTEGER BIGINT INTNUM
 %token <str> REAL DOUBLE FLOAT_TYPE DECIMAL NUMERIC DECIMAL_VALUE PRECISION
 %token <str> TIME TIMESTAMP DATETIME YEAR
-%token <str> CHAR
+// NATIONAL is a name unless CHAR follows in a type context.
+%nonassoc LOWER_THAN_NATIONAL_CHAR
+%nonassoc <str> CHAR
 %nonassoc <str> VARCHAR
 %token <str> BOOL CHARACTER
 %nonassoc <str> VARBINARY
@@ -751,7 +755,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
 // DUAL is reserved only in MySQL digest syntax; ordinary MO identifiers keep
 // their existing grammar. Its only unqualified form is the entire FROM clause.
-%token <str> DIGEST_DUAL
+%token <str> DIGEST_DUAL DIGEST_NATIONAL
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
 %token <str> DATASTREAM ESQL KAFKA
 
@@ -899,6 +903,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <tableNames> table_name_list alter_publication_table_opt
 %type <columnTableDef> column_def
 %type <columnType> mo_cast_type mysql_cast_type
+%type <str> char_type_name
 %type <columnType> column_type char_type spatial_type time_type numeric_type decimal_type int_type as_datatype_opt
 %type <str> integer_opt spatial_type_name
 %type <columnAttribute> column_attribute_elem keys
@@ -5670,6 +5675,11 @@ global_scope:
     {
         $$ = false
     }
+|   LOCAL
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = false
+    }
 
 show_warnings_stmt:
     SHOW WARNINGS limit_opt
@@ -8728,21 +8738,27 @@ as_opt_id:
     }
 |   table_alias
     {
+        if yylex.(*Lexer).digest != nil && $<stringTableAlias>1 { yylex.Error("Table aliases require identifiers"); goto ret1 }
         $$ = $1
     }
 |   AS table_alias
     {
+        if yylex.(*Lexer).digest != nil && $<stringTableAlias>2 { yylex.Error("Table aliases require identifiers"); goto ret1 }
         $$ = $2
     }
 
+// This value is also used by ENGINE=, where a STRING is legal. Only the
+// actual alias consumer as_opt_id rejects its STRING form in digest mode.
 table_alias:
     ident
     {
 	    $$ = yylex.(*Lexer).GetDbOrTblName($1.Origin())
+        $<stringTableAlias>$ = false
     }
 |   STRING
     {
 	    $$ = yylex.(*Lexer).GetDbOrTblName($1)
+        $<stringTableAlias>$ = true
     }
 
 as_name_opt:
@@ -13397,7 +13413,7 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   CAST '(' expression AS CHAR length_option_opt CHARACTER SET charset_name ')'
+|   CAST '(' expression AS char_type_name length_option_opt CHARACTER SET charset_name ')'
     {
         $$ = tree.NewCastExpr($3, makeCharsetCastCharType($6, $9))
     }
@@ -13898,6 +13914,7 @@ mo_cast_type:
     column_type
 {
    t := $$
+   if !digestCastTypeValid(yylex, t) { goto ret1 }
    str := strings.ToLower(t.InternalType.FamilyString)
    if str == "binary" {
         t.InternalType.Scale = -1
@@ -13942,6 +13959,10 @@ mo_cast_type:
 
 mysql_cast_type:
     decimal_type
+    {
+        if !digestCastTypeValid(yylex, $1) { goto ret1 }
+        $$ = $1
+    }
 |   JSON
     {
         locale := ""
@@ -13968,7 +13989,7 @@ mysql_cast_type:
             },
         }
     }
-|   CHAR length_option_opt
+|   char_type_name length_option_opt
     {
         locale := ""
         oid := uint32(defines.MYSQL_TYPE_STRING)
@@ -13987,7 +14008,7 @@ mysql_cast_type:
             },
         }
     }
-|   CHAR length_option_opt CHARACTER SET charset_name
+|   char_type_name length_option_opt CHARACTER SET charset_name
     {
         $$ = makeCharsetCastCharType($2, $5)
     }
@@ -14016,9 +14037,11 @@ mysql_cast_type:
                 Oid:    uint32(defines.MYSQL_TYPE_YEAR),
             },
         }
+        if yylex.(*Lexer).digest != nil && $<typeLength>2 >= 0 { yylex.Error("CAST YEAR does not take a length"); goto ret1 }
     }
 |   DATETIME timestamp_option_opt
     {
+        if yylex.(*Lexer).digest != nil && $2 > 6 { yylex.Error("Invalid CAST datetime precision"); goto ret1 }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -14034,6 +14057,7 @@ mysql_cast_type:
     }
 |   TIME length_opt
     {
+        if yylex.(*Lexer).digest != nil && $<typeLength>2 > 6 { yylex.Error("Invalid CAST time precision"); goto ret1 }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -15596,6 +15620,7 @@ literal:
     }
 |   UNDERSCORE_BINARY HEXNUM
     {
+        if !digestCharsetLiteralValid(yylex, $1, $2, true) { goto ret1 }
         $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinaryHexnum)
     }
 |   DECIMAL_VALUE
@@ -15612,6 +15637,7 @@ literal:
     }
 |   UNDERSCORE_BINARY STRING
     {
+        if !digestCharsetLiteralValid(yylex, $1, $2, false) { goto ret1 }
         $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinary)
     }
 
@@ -15642,6 +15668,10 @@ column_type:
 numeric_type:
     int_type length_opt
     {
+        if yylex.(*Lexer).digest != nil && $1.InternalType.Family == tree.BitFamily &&
+            ($<typeLength>2 == 0 || $<typeLength>2 > 64) {
+            yylex.Error("BIT length must be between 1 and 64"); goto ret1
+        }
         $$ = $1
         $$.InternalType.DisplayWith = $2
     }
@@ -16139,8 +16169,20 @@ time_type:
         }
     }
 
+char_type_name:
+    CHAR
+|   NCHAR
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = $1
+    }
+|   DIGEST_NATIONAL CHAR
+    {
+        $$ = $2
+    }
+
 char_type:
-    CHAR length_option_opt
+    char_type_name length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -16557,8 +16599,13 @@ length_opt:
     /* EMPTY */
     {
         $$ = 0
+        $<typeLength>$ = -1
     }
 |    length
+    {
+        $$ = $1
+        $<typeLength>$ = $<typeLength>1
+    }
 
 timestamp_option_opt:
     /* EMPTY */
@@ -16589,6 +16636,7 @@ length:
         value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
         $$ = tree.GetDisplayWith(value)
+        $<typeLength>$ = value
     }
 
 float_length_opt:
@@ -16652,7 +16700,10 @@ decimal_length_opt:
             DisplayWith: tree.GetDisplayWith(width),
             Scale: scale,
         }
-        if yylex.(*Lexer).digest != nil && width == 0 && scale == 0 { $$.DisplayWith = 0 }
+        if yylex.(*Lexer).digest != nil {
+            if scale > 30 { yylex.Error("DECIMAL scale exceeds 30"); goto ret1 }
+            if width == 0 && scale == 0 { $$.DisplayWith = 0 }
+        }
     }
 
 unsigned_opt:
@@ -16884,7 +16935,8 @@ equal_opt:
 //|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
-    ACCOUNT
+    DIGEST_NATIONAL %prec LOWER_THAN_NATIONAL_CHAR
+|   ACCOUNT
 |   JSON_TABLE_PATH
 |   JSON_TABLE_NESTED
 |   JSON_TABLE_ORDINALITY
