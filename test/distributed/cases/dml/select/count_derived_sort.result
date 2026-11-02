@@ -32,7 +32,7 @@ select count(distinct name) as total from (select name from items order by name)
 ➤ total[-5,64,0]  𝄀
 3
 select count(*), sum(n) from (select n from items order by n) s;
-➤ count(*)[-5,64,0]  ¦  sum(n)[-5,64,0]  𝄀
+➤ count(*)[-5,64,0]  ¦  sum(n)[3,32,0]  𝄀
 5  ¦  30
 select count(*), count(n) from (select n from items where id < 0 order by id) s;
 ➤ count(*)[-5,64,0]  ¦  count(n)[-5,64,0]  𝄀

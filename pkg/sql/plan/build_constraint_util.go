@@ -1538,6 +1538,11 @@ func alterCopyBinaryAssignment(ctx context.Context, target Type) bool {
 }
 
 func assignmentCastFunctionNameForSource(ctx context.Context, expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+	// Numeric-to-DATE is unsupported by the cast registry. Keep the legacy
+	// strict-cast diagnostic instead of exposing the new assignment-cast name.
+	if targetType.Id == int32(types.T_date) && types.T(expr.Typ.Id).IsInteger() {
+		return "cast_strict"
+	}
 	if alterCopyBinaryAssignment(ctx, targetType) {
 		return "cast_strict"
 	}
@@ -1610,7 +1615,7 @@ func integerLiteralFitsAssignmentTarget(expr *Expr, targetType Type) bool {
 		return false
 	}
 	var bits uint
-	signed := true
+	signed := types.T(targetType.Id).IsSignedInt()
 	switch types.T(targetType.Id) {
 	case types.T_int8, types.T_uint8:
 		bits = 8
@@ -1623,7 +1628,6 @@ func integerLiteralFitsAssignmentTarget(expr *Expr, targetType Type) bool {
 	default:
 		return false
 	}
-	signed = types.T(targetType.Id).IsSignedInt()
 	if signed {
 		limit := uint64(1) << (bits - 1)
 		if negative {

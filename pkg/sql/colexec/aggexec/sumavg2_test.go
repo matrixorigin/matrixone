@@ -174,6 +174,11 @@ func TestSumAvgScalarFillBoundaries(t *testing.T) {
 			}, false},
 	} {
 		for _, isSum := range []bool{true, false} {
+			// SUM(INT32) uses a DECIMAL128 accumulator; only AVG can reach
+			// this native int64 overflow path.
+			if tc.name == "signed overflow" && isSum {
+				continue
+			}
 			t.Run(fmt.Sprintf("%s/sum=%t", tc.name, isSum), func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				defer mpool.DeleteMPool(mp)
@@ -1541,7 +1546,7 @@ func TestWindowSlidingSumRemoveRestoresNull(t *testing.T) {
 	require.NoError(t, err)
 	defer results[0].Free(mp)
 	require.True(t, results[0].IsNull(0))
-	require.Equal(t, int64(0), vector.MustFixedColNoTypeCheck[int64](results[0])[0])
+	require.Equal(t, types.Decimal128FromInt64(0), vector.MustFixedColNoTypeCheck[types.Decimal128](results[0])[0])
 }
 
 func TestWindowSlidingSumConstantInputAndEmptyRemoval(t *testing.T) {

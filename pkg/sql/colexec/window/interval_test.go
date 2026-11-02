@@ -199,8 +199,8 @@ func BenchmarkNullIntervalRangePeers(b *testing.B) {
 						require.NoError(b, err)
 						defer result.Free(proc.Mp())
 						require.Equal(b, rows, result.Length())
-						for row, value := range vector.MustFixedColWithTypeCheck[int64](result) {
-							if result.IsNull(uint64(row)) || value != int64(rows) {
+						for row, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](result) {
+							if result.IsNull(uint64(row)) || value != types.Decimal128FromInt64(int64(rows)) {
 								b.Fatalf("row %d: sum %v (NULL=%t), want %d", row, value, result.IsNull(uint64(row)), rows)
 							}
 						}
@@ -323,7 +323,7 @@ func TestNullIntervalSlidingAggregates(t *testing.T) {
 											want += 6
 										}
 										if name == "sum" {
-											require.Equal(t, want, vector.MustFixedColWithTypeCheck[int64](result)[i])
+											require.Equal(t, types.Decimal128FromInt64(want), vector.MustFixedColWithTypeCheck[types.Decimal128](result)[i])
 										} else {
 											require.Equal(t, float64(want)/2, types.Decimal128ToFloat64(vector.MustFixedColWithTypeCheck[types.Decimal128](result)[i], result.GetType().Scale))
 										}
@@ -374,6 +374,6 @@ func TestNullIntervalSlidingCancellationAndReuse(t *testing.T) {
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 3)
 	require.NoError(t, err)
 	defer result.Free(proc.Mp())
-	require.Equal(t, []int64{6, 6, 6}, vector.MustFixedColWithTypeCheck[int64](result))
+	require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(6), types.Decimal128FromInt64(6), types.Decimal128FromInt64(6)}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
 	require.Nil(t, ctr.runningAgg)
 }

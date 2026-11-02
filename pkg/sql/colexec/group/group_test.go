@@ -1634,11 +1634,11 @@ func TestSortRollupProducesGroupingSentinelsAndAggregates(t *testing.T) {
 		a, b         int32
 		aRoll, bRoll bool
 	}
-	actual := make(map[resultKey]int64)
+	actual := make(map[resultKey]types.Decimal128)
 	for _, result := range results {
 		as := vector.MustFixedColNoTypeCheck[int32](result.Vecs[0])
 		bs := vector.MustFixedColNoTypeCheck[int32](result.Vecs[1])
-		sums := vector.MustFixedColNoTypeCheck[int64](result.Vecs[2])
+		sums := vector.MustFixedColNoTypeCheck[types.Decimal128](result.Vecs[2])
 		for row := 0; row < result.RowCount(); row++ {
 			actual[resultKey{
 				a:     as[row],
@@ -1649,14 +1649,14 @@ func TestSortRollupProducesGroupingSentinelsAndAggregates(t *testing.T) {
 		}
 	}
 
-	want := map[resultKey]int64{
-		{a: 1, b: 10}:              1,
-		{a: 1, b: 20}:              5,
-		{a: 2, b: 10}:              4,
-		{a: 2, b: 20}:              5,
-		{a: 1, bRoll: true}:        6,
-		{a: 2, bRoll: true}:        9,
-		{aRoll: true, bRoll: true}: 15,
+	want := map[resultKey]types.Decimal128{
+		{a: 1, b: 10}:              types.Decimal128FromInt64(1),
+		{a: 1, b: 20}:              types.Decimal128FromInt64(5),
+		{a: 2, b: 10}:              types.Decimal128FromInt64(4),
+		{a: 2, b: 20}:              types.Decimal128FromInt64(5),
+		{a: 1, bRoll: true}:        types.Decimal128FromInt64(6),
+		{a: 2, bRoll: true}:        types.Decimal128FromInt64(9),
+		{aRoll: true, bRoll: true}: types.Decimal128FromInt64(15),
 	}
 	require.Equal(t, want, actual)
 	for _, result := range results {
@@ -2056,20 +2056,20 @@ func TestSortRollupDistinguishesInputNullFromRollupNull(t *testing.T) {
 	for _, result := range results {
 		as := result.Vecs[0]
 		bs := vector.MustFixedColNoTypeCheck[int32](result.Vecs[1])
-		sums := vector.MustFixedColNoTypeCheck[int64](result.Vecs[2])
+		sums := vector.MustFixedColNoTypeCheck[types.Decimal128](result.Vecs[2])
 		for row := 0; row < result.RowCount(); row++ {
 			aRoll := as.GetGrouping().Contains(uint64(row))
 			bRoll := result.Vecs[1].GetGrouping().Contains(uint64(row))
 			if as.IsNull(uint64(row)) && !aRoll && !bRoll && bs[row] == 1 {
-				require.Equal(t, int64(2), sums[row])
+				require.Equal(t, types.Decimal128FromInt64(2), sums[row])
 				inputNullDetail = true
 			}
 			if as.IsNull(uint64(row)) && !aRoll && bRoll {
-				require.Equal(t, int64(5), sums[row])
+				require.Equal(t, types.Decimal128FromInt64(5), sums[row])
 				inputNullSubtotal = true
 			}
 			if aRoll && bRoll {
-				require.Equal(t, int64(10), sums[row])
+				require.Equal(t, types.Decimal128FromInt64(10), sums[row])
 				grandTotal = true
 			}
 		}

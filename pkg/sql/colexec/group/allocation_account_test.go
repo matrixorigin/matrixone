@@ -3592,7 +3592,7 @@ func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
 					require.Equal(t, int64(len(want[key].distinct)), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], row), key)
 					require.Equal(t, len(want[key].distinct) == 0, result.Batch.Vecs[2].IsNull(uint64(row)), key)
 					if len(want[key].distinct) != 0 {
-						require.Equal(t, want[key].sum, vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[2], row), key)
+						require.Equal(t, types.Decimal128FromInt64(want[key].sum), vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[2], row), key)
 					}
 				}
 			}

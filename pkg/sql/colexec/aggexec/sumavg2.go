@@ -2128,7 +2128,13 @@ func newSumAvgExec[T float64 | int64 | uint64, A types.Ints | types.UInts | type
 	if isSum {
 		exec.aggInfo.stateTypes = []types.Type{sumTyp}
 	} else {
-		exec.aggInfo.stateTypes = []types.Type{sumTyp, types.T_int64.ToType()}
+		// AVG keeps its native integer accumulator even when SUM of the same
+		// argument exposes a DECIMAL result.
+		stateType := sumTyp
+		if param.Oid == types.T_int32 {
+			stateType = types.T_int64.ToType()
+		}
+		exec.aggInfo.stateTypes = []types.Type{stateType, types.T_int64.ToType()}
 	}
 	return &exec
 }

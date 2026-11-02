@@ -154,7 +154,7 @@ func decimal256RoundedIntegerString(value types.Decimal256, scale int32) string 
 func numericToDecimalExplicit[S, D types.FixedSizeTExceptStrType](
 	from vector.FunctionParameterWrapper[S], to *vector.FunctionResult[D], length int, proc *process.Process, selectList *FunctionSelectList,
 	convert func(S) (D, error), negative func(S) bool, clampable func(S) bool,
-	clamp func(bool) (D, error),
+	clamp func(bool) (D, error), strict bool,
 ) error {
 	var zero D
 	for i := uint64(0); i < uint64(length); i++ {
@@ -173,6 +173,9 @@ func numericToDecimalExplicit[S, D types.FixedSizeTExceptStrType](
 		}
 		converted, err := convert(value)
 		if err != nil {
+			if strict {
+				return err
+			}
 			if clampable != nil && !clampable(value) {
 				return err
 			}
@@ -192,7 +195,7 @@ func numericToDecimalExplicit[S, D types.FixedSizeTExceptStrType](
 func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
 	from *vector.Vector, to *vector.FunctionResult[D], length int, proc *process.Process, selectList *FunctionSelectList,
 	parseString func(string) (D, error), fromFloat func(float64) (D, error),
-	clamp func(bool) (D, error),
+	clamp func(bool) (D, error), strict bool,
 ) (bool, error) {
 	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 	switch from.GetType().Oid {
@@ -208,82 +211,82 @@ func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
 				}
 				return parseString("0")
 			},
-			func(bool) bool { return false }, nil, clamp)
+			func(bool) bool { return false }, nil, clamp, strict)
 	case types.T_bit, types.T_uint64:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[uint64](from), to, length, proc, selectList,
 			func(value uint64) (D, error) { return parseString(strconv.FormatUint(value, 10)) },
-			func(uint64) bool { return false }, nil, clamp)
+			func(uint64) bool { return false }, nil, clamp, strict)
 	case types.T_uint8:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[uint8](from), to, length, proc, selectList,
 			func(value uint8) (D, error) { return parseString(strconv.FormatUint(uint64(value), 10)) },
-			func(uint8) bool { return false }, nil, clamp)
+			func(uint8) bool { return false }, nil, clamp, strict)
 	case types.T_uint16:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[uint16](from), to, length, proc, selectList,
 			func(value uint16) (D, error) { return parseString(strconv.FormatUint(uint64(value), 10)) },
-			func(uint16) bool { return false }, nil, clamp)
+			func(uint16) bool { return false }, nil, clamp, strict)
 	case types.T_uint32:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[uint32](from), to, length, proc, selectList,
 			func(value uint32) (D, error) { return parseString(strconv.FormatUint(uint64(value), 10)) },
-			func(uint32) bool { return false }, nil, clamp)
+			func(uint32) bool { return false }, nil, clamp, strict)
 	case types.T_int8:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[int8](from), to, length, proc, selectList,
 			func(value int8) (D, error) { return parseString(strconv.FormatInt(int64(value), 10)) },
-			func(value int8) bool { return value < 0 }, nil, clamp)
+			func(value int8) bool { return value < 0 }, nil, clamp, strict)
 	case types.T_int16:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[int16](from), to, length, proc, selectList,
 			func(value int16) (D, error) { return parseString(strconv.FormatInt(int64(value), 10)) },
-			func(value int16) bool { return value < 0 }, nil, clamp)
+			func(value int16) bool { return value < 0 }, nil, clamp, strict)
 	case types.T_int32:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[int32](from), to, length, proc, selectList,
 			func(value int32) (D, error) { return parseString(strconv.FormatInt(int64(value), 10)) },
-			func(value int32) bool { return value < 0 }, nil, clamp)
+			func(value int32) bool { return value < 0 }, nil, clamp, strict)
 	case types.T_int64:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[int64](from), to, length, proc, selectList,
 			func(value int64) (D, error) { return parseString(strconv.FormatInt(value, 10)) },
-			func(value int64) bool { return value < 0 }, nil, clamp)
+			func(value int64) bool { return value < 0 }, nil, clamp, strict)
 	case types.T_float32:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[float32](from), to, length, proc, selectList,
 			func(value float32) (D, error) { return fromFloat(float64(value)) },
 			func(value float32) bool { return value < 0 },
-			func(value float32) bool { return finite(float64(value)) }, clamp)
+			func(value float32) bool { return finite(float64(value)) }, clamp, strict)
 	case types.T_float64:
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[float64](from), to, length, proc, selectList,
-			fromFloat, func(value float64) bool { return value < 0 }, finite, clamp)
+			fromFloat, func(value float64) bool { return value < 0 }, finite, clamp, strict)
 	case types.T_decimal64:
 		scale := from.GetType().Scale
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), to, length, proc, selectList,
 			func(value types.Decimal64) (D, error) { return parseString(value.Format(scale)) },
-			func(value types.Decimal64) bool { return value.Sign() }, nil, clamp)
+			func(value types.Decimal64) bool { return value.Sign() }, nil, clamp, strict)
 	case types.T_decimal128:
 		scale := from.GetType().Scale
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), to, length, proc, selectList,
 			func(value types.Decimal128) (D, error) { return parseString(value.Format(scale)) },
-			func(value types.Decimal128) bool { return value.Sign() }, nil, clamp)
+			func(value types.Decimal128) bool { return value.Sign() }, nil, clamp, strict)
 	case types.T_decimal256:
 		scale := from.GetType().Scale
 		return true, numericToDecimalExplicit(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), to, length, proc, selectList,
 			func(value types.Decimal256) (D, error) { return parseString(value.Format(scale)) },
-			func(value types.Decimal256) bool { return value.Sign() }, nil, clamp)
+			func(value types.Decimal256) bool { return value.Sign() }, nil, clamp, strict)
 	default:
 		return false, nil
 	}
 }
 
 func explicitNumericToDecimal(
-	from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int, proc *process.Process, selectList *FunctionSelectList,
+	from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int, proc *process.Process, selectList *FunctionSelectList, strict bool,
 ) (bool, error) {
 	switch toType.Oid {
 	case types.T_decimal64:
@@ -302,7 +305,7 @@ func explicitNumericToDecimal(
 			},
 			func(negative bool) (types.Decimal64, error) {
 				return clampDecimal64Value(negative, toType.Width, toType.Scale)
-			})
+			}, strict)
 	case types.T_decimal128:
 		return explicitNumericToDecimalTarget(
 			from, vector.MustFunctionResult[types.Decimal128](result), length, proc, selectList,
@@ -319,7 +322,7 @@ func explicitNumericToDecimal(
 			},
 			func(negative bool) (types.Decimal128, error) {
 				return clampDecimal128Value(negative, toType.Width, toType.Scale)
-			})
+			}, strict)
 	case types.T_decimal256:
 		return explicitNumericToDecimalTarget(
 			from, vector.MustFunctionResult[types.Decimal256](result), length, proc, selectList,
@@ -336,7 +339,7 @@ func explicitNumericToDecimal(
 			},
 			func(negative bool) (types.Decimal256, error) {
 				return clampDecimal256Value(negative, toType.Width, toType.Scale)
-			})
+			}, strict)
 	default:
 		return false, nil
 	}
@@ -1217,9 +1220,9 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), toType.Oid, result, length, selectList, decimal256RoundedIntegerString)
 		}
 	}
-	if (mode == castModeExplicit || mode == castModeAssignment || mode == castModeAssignmentIgnore) &&
+	if (mode == castModeExplicit || mode.isAssignment()) &&
 		toType.IsDecimal() && (fromType.IsNumeric() || fromType.Oid == types.T_bool) {
-		if handled, err := explicitNumericToDecimal(from, *toType, result, length, proc, selectList); handled {
+		if handled, err := explicitNumericToDecimal(from, *toType, result, length, proc, selectList, mode == castModeStrictStringWidth); handled {
 			return err
 		}
 	}
@@ -5724,7 +5727,8 @@ func datetimeToDateAssignment(proc *process.Process,
 			continue
 		}
 		if value.Hour() != 0 || value.Minute() != 0 || value.Sec() != 0 || value.MicroSec() != 0 {
-			if mode == castModeStrictStringWidth && !statementIgnore(proc) {
+			if mode == castModeStrictStringWidth && !statementIgnore(proc) &&
+				(proc == nil || proc.Ctx == nil || proc.Ctx.Value(defines.AlterCopyOpt{}) == nil) {
 				return moerr.NewTruncatedWrongValue(proc.Ctx, "date", value.String())
 			}
 			appendStrToDateWarning(proc, moerr.ER_TRUNCATED_WRONG_VALUE, "Incorrect date value", "", []byte(value.String()))
@@ -9745,7 +9749,7 @@ func strToDate(proc *process.Process,
 	var l = uint64(length)
 	var dft types.Date
 	isBinary := from.GetSourceVector().GetIsBin()
-	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
+	assignmentCast := mode == castModeStrictStringWidth || mode.isAssignment()
 	modeChecked := false
 	nullifyZero := false
 	for i = 0; i < l; i++ {
@@ -10385,7 +10389,11 @@ func strToStr(
 				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
-			if toType.Oid == types.T_binary && len(v) < int(toType.Width) {
+			// A typed BINARY value can carry short raw bytes (LOAD DATA,
+			// serialized values and DATA BRANCH replay). Check its width above,
+			// then preserve those bytes on assignment.
+			if toType.Oid == types.T_binary && len(v) < int(toType.Width) &&
+				!(mode.isAssignment() && from.GetType().Oid == types.T_binary) {
 				add0 := int(toType.Width) - len(v)
 				for ; add0 != 0; add0-- {
 					v = append(v, 0)

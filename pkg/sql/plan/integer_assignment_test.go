@@ -75,6 +75,25 @@ func TestIntegerAssignmentSourceCastSelection(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestIntegerDateAssignmentKeepsStrictDiagnostic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.T_date.ToType()
+	dst := makePlan2Type(&target)
+	source := makePlan2Int64ConstExprWithType(20220102)
+	for _, build := range []func() (*Expr, error){
+		func() (*Expr, error) {
+			return forceAssignmentCastExprWithProcess(t.Context(), source, dst, false, proc)
+		},
+		func() (*Expr, error) {
+			return forceCastExpr2WithProcess(t.Context(), source, target,
+				&Expr{Typ: dst, Expr: &pb.Expr_T{T: &pb.TargetType{}}}, false, proc)
+		},
+	} {
+		_, err := build()
+		require.ErrorContains(t, err, "invalid argument operator cast_strict")
+	}
+}
+
 func TestMediumIntAssignmentRequiresClusterProtocolFence(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
