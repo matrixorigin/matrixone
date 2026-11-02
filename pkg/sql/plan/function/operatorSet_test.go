@@ -31,18 +31,167 @@ import (
 
 func Test_Operator_Unary_Tilde(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	tc := tcTemp{
-		info: "select unary_tilde(num) with num = 5, -5, null",
-		inputs: []FunctionTestInput{
-			NewFunctionTestInput(types.T_int64.ToType(),
-				[]int64{5, -5, 0}, []bool{false, false, true}),
-		},
-		expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-			[]uint64{18446744073709551610, 4, 0}, []bool{false, false, true}),
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(num) with num = 5, -5, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{5, -5, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{18446744073709551610, 4, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int64])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
 	}
-	tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int64])
-	succeed, info := tcc.RunAndFree()
-	require.True(t, succeed, tc.info, info)
+	{
+		// issue #31905: ~ on an unsigned column must be taken in the unsigned
+		// 64-bit numeric domain, whatever the storage width is. zero is the
+		// discriminating row: a width-typed complement would return 255 here.
+		tc := tcTemp{
+			info: "select unary_tilde(tinyint unsigned) with num = 0, 1, 255, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(),
+					[]uint8{0, 1, 255, 0}, []bool{false, false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, math.MaxUint64 - 1, 18446744073709551360, 0}, []bool{false, false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint8])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(smallint unsigned) with num = 0, 65535, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint16.ToType(),
+					[]uint16{0, 65535, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, 18446744073709486080, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint16])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(int unsigned) with num = 0, 1, 4294967295, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint32.ToType(),
+					[]uint32{0, 1, 4294967295, 0}, []bool{false, false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, math.MaxUint64 - 1, 18446744069414584320, 0}, []bool{false, false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint32])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		// bigint unsigned already complemented in the 64-bit domain, keep it.
+		tc := tcTemp{
+			info: "select unary_tilde(bigint unsigned) with num = 0, max, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(),
+					[]uint64{0, math.MaxUint64, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, 0, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint64])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		// signed neighbors must keep the sign-extension complement behavior.
+		tc := tcTemp{
+			info: "select unary_tilde(tinyint) with num = -1, -128, 127, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int8.ToType(),
+					[]int8{-1, -128, 127, 0}, []bool{false, false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0, 127, 18446744073709551488, 0}, []bool{false, false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int8])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(smallint) with num = -32768, 32767, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int16.ToType(),
+					[]int16{-32768, 32767, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{32767, 18446744073709518848, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int16])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(int) with num = -2147483648, 2147483647, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int32.ToType(),
+					[]int32{-2147483648, 2147483647, 0}, []bool{false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{2147483647, 18446744071562067968, 0}, []bool{false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int32])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		tc := tcTemp{
+			info: "select unary_tilde(bigint) with num = min, max, 0, null",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{math.MinInt64, math.MaxInt64, 0, 0}, []bool{false, false, false, true}),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{9223372036854775807, 9223372036854775808, math.MaxUint64, 0}, []bool{false, false, false, true}),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[int64])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		// constant input column takes the same numeric-domain path.
+		tc := tcTemp{
+			info: "select unary_tilde(const tinyint unsigned zero)",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_uint8.ToType(), []uint8{0}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint8])
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
+	{
+		// selective evaluation mask must not change the emitted rows.
+		tc := tcTemp{
+			info: "select unary_tilde(tinyint unsigned) with select list",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint8.ToType(),
+					[]uint8{0, 1, 255}, nil),
+			},
+			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{math.MaxUint64, math.MaxUint64 - 1, 18446744073709551360}, nil),
+		}
+		tcc := NewFunctionTestCase(proc, tc.inputs, tc.expect, operatorUnaryTilde[uint8]).
+			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}})
+		succeed, info := tcc.RunAndFree()
+		require.True(t, succeed, tc.info, info)
+	}
 }
 
 func Test_Operator_Unary_Minus(t *testing.T) {
