@@ -119,7 +119,6 @@ func BackupData(
 	}
 
 	// Setup backup protection manager
-	//exec, opts = getSQLExecutor(sid)
 	protectionMgr := newBackupProtectionManager(ctx, exec, opts)
 	defer protectionMgr.cleanup()
 
@@ -131,14 +130,17 @@ func getParallelCount(count int) int {
 	if count > 0 && count < 512 {
 		return count
 	}
-	cupNum := runtime2.NumCPU()
-	if cupNum < 8 {
+	return defaultBackupParallelCount(runtime2.NumCPU())
+}
+
+func defaultBackupParallelCount(cpuNum int) int {
+	if cpuNum < 8 {
 		return 50
-	} else if cupNum < 16 {
+	} else if cpuNum < 16 {
 		return 80
-	} else if cupNum < 32 {
+	} else if cpuNum < 32 {
 		return 128
-	} else if cupNum < 64 {
+	} else if cpuNum < 64 {
 		return 256
 	}
 	return 512
@@ -1057,16 +1059,6 @@ func streamCopyFile(
 	}
 	return hasher.Sum(nil), nil
 }
-
-// getSQLExecutor tries to get SQL executor from runtime
-// Returns (executor, opts) if available, (nil, empty opts) otherwise
-//func getSQLExecutor(sid string) (executor.SQLExecutor, executor.Options) {
-//	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
-//	if !ok {
-//		return nil, executor.Options{}
-//	}
-//	return v.(executor.SQLExecutor), executor.Options{}
-//}
 
 // buildBackupProtectionSQL builds the SQL command for backup protection
 func buildBackupProtectionSQL(protectedTS types.TS) string {

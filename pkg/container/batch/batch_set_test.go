@@ -27,6 +27,53 @@ const (
 	TestBatchMaxRow = 8192
 )
 
+func TestBatchSetSortedMetadataAfterAppend(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sels []int32
+		vals []int64
+		push bool
+	}{
+		{name: "extend", vals: []int64{1, 2}},
+		{name: "partial union", vals: []int64{1, 2, 3}, sels: []int32{0, 1}},
+		{name: "push overflow", vals: []int64{1, 2, 3, 4, 5, 6, 7}, push: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			queue := NewBatchSet(8)
+			t.Cleanup(func() { queue.Clean(mp); require.Zero(t, mp.CurrNB()) })
+			newInput := func(values []int64) *Batch {
+				bat := NewWithSize(1)
+				bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+				t.Cleanup(func() { bat.Clean(mp) })
+				require.NoError(t, vector.AppendFixedList(bat.Vecs[0], values, nil, mp))
+				bat.SetRowCount(len(values))
+				bat.Vecs[0].SetSorted(true)
+				return bat
+			}
+			first := newInput([]int64{10, 11})
+			_, err := queue.Extend(mp, first, nil)
+			require.NoError(t, err)
+			require.True(t, queue.Get(0).Vecs[0].GetSorted(), "uncombined clone preserves sorted metadata")
+			second := newInput(tc.vals)
+			if tc.push {
+				err = queue.Push(mp, second)
+			} else if tc.sels == nil {
+				_, err = queue.Extend(mp, second, nil)
+			} else {
+				_, err = queue.Union(mp, second, tc.sels, nil)
+			}
+			require.NoError(t, err)
+			want := []int64{10, 11, 1, 2}
+			if tc.push {
+				want = []int64{10, 11, 1, 2, 3, 4, 5, 6}
+			}
+			require.Equal(t, want, vector.MustFixedColNoTypeCheck[int64](queue.Get(0).Vecs[0]))
+			require.False(t, queue.Get(0).Vecs[0].GetSorted(), "concatenation has no cross-batch order guarantee")
+		})
+	}
+}
+
 func TestBatchSetPush(t *testing.T) {
 	var err error
 	var bat1, bat2 *Batch

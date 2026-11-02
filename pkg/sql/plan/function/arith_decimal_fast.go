@@ -3444,11 +3444,11 @@ func d256DivBig(
 		return nil
 	}
 
-	divisor := d256MagnitudeBigInt(b)
+	divisor := b.MagnitudeBigInt()
 	if divisor.Sign() == 0 {
 		return moerr.NewDivByZeroNoCtx()
 	}
-	numerator := d256MagnitudeBigInt(a)
+	numerator := a.MagnitudeBigInt()
 	if scaleAdj >= 0 {
 		multiplier := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleAdj)), nil)
 		numerator.Mul(numerator, multiplier)
@@ -3935,20 +3935,6 @@ func d256IntDivKernel(proc *process.Process, selectList *FunctionSelectList) fun
 	}
 }
 
-func d256MagnitudeBigInt(x types.Decimal256) *big.Int {
-	if x.Sign() {
-		x = x.Minus()
-	}
-	value := new(big.Int).SetUint64(x.B192_255)
-	value.Lsh(value, 64)
-	value.Or(value, new(big.Int).SetUint64(x.B128_191))
-	value.Lsh(value, 64)
-	value.Or(value, new(big.Int).SetUint64(x.B64_127))
-	value.Lsh(value, 64)
-	value.Or(value, new(big.Int).SetUint64(x.B0_63))
-	return value
-}
-
 // d256IntDivScaleUpOverflow computes the final quotient only when the usual
 // fixed-width numerator scaling overflows. Decimal scales are bounded by SQL,
 // and the exponent guard keeps direct callers with extreme scale metadata
@@ -3968,12 +3954,12 @@ func d256IntDivScaleUpOverflow(
 		// BIGINT, so no exact quotient needs to be materialized.
 		return moerr.NewOutOfRangeNoCtx("BIGINT", "")
 	}
-	divisor := d256MagnitudeBigInt(b)
+	divisor := b.MagnitudeBigInt()
 	if divisor.Sign() == 0 {
 		return moerr.NewDivByZeroNoCtx()
 	}
 	multiplier := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleAdj)), nil)
-	numerator := d256MagnitudeBigInt(a)
+	numerator := a.MagnitudeBigInt()
 	numerator.Mul(numerator, multiplier)
 	quotient := new(big.Int).Quo(numerator, divisor)
 	if negative {

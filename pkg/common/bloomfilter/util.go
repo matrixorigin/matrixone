@@ -80,22 +80,15 @@ func encodeHashKeys(keys [][]byte, vec *vector.Vector, start, count int) {
 }
 
 func computeMemAndHashCount(rowCount int64, probability float64) (int64, int) {
-	k := 1
-	if rowCount < 10001 {
+	var k int
+	switch {
+	case rowCount < 1_000_001:
 		k = 1
-	} else if rowCount < 10_0001 {
-		k = 1
-	} else if rowCount < 100_0001 {
-		k = 1
-	} else if rowCount < 1000_0001 {
+	case rowCount < 10_000_001:
 		k = 2
-	} else if rowCount < 1_0000_0001 {
+	case rowCount < 10_000_000_001:
 		k = 3
-	} else if rowCount < 10_0000_0001 {
-		k = 3
-	} else if rowCount < 100_0000_0001 {
-		k = 3
-	} else {
+	default:
 		panic("unsupport rowCount")
 	}
 	hashCount := k * 3

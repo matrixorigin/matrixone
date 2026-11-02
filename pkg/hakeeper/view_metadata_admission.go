@@ -343,8 +343,9 @@ func (s *stateMachine) tryPromoteViewMetadataAdmissions(
 
 	pending := false
 	for uuid, store := range s.state.CNState.Stores {
-		if s.cnViewMetadataAdmitted(uuid, store) && store.ViewMetadataIngressReady {
-			store.ViewMetadataAdmissionReady = true
+		if s.cnViewMetadataAdmitted(uuid, store) {
+			// Admission permits local bootstrap before public ingress is ready.
+			store.ViewMetadataAdmissionReady = store.ViewMetadataIngressReady
 			s.state.CNState.Stores[uuid] = store
 		} else if store.ViewMetadataAdmissionSupported &&
 			store.ViewMetadataAdmissionGeneration != 0 &&

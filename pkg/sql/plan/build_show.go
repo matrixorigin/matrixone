@@ -395,8 +395,8 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and relkind != '%s' and (%s)",
-		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
+	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and relname != '%s' and relkind != '%s' and (%s)",
+		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
 
 	// Historical rows cannot be matched against current object grants. A
 	// subscription is admitted by subscriber-local broad authorization and keeps
@@ -471,8 +471,8 @@ func buildShowTableNumber(stmt *tree.ShowTableNumber, ctx CompilerContext) (*Pla
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	clusterTable := fmt.Sprintf(" or relkind = '%s'", catalog.SystemClusterRel)
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and (%s)",
-		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause)
+	sql := fmt.Sprintf("SELECT count(relname) `Number of tables in %s` FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s' and not startswith(relname, '%s') and %s and relname != '%s' and (%s)",
+		subName, MO_CATALOG_DB_NAME, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, accountClause)
 
 	// Do not show views in sub-db
 	if sub != nil {
@@ -875,10 +875,11 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				reldatabase = '%s'
 				and relkind != '%s'
 				and relname != '%s'
-				and relname not like '%s'
+				and not startswith(relname, '%s')
 				and relname != '%s'
-				and (%s)`
-	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
+				and (%s)
+				and %s`
+	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix, catalog.MO_ACCOUNT_LOCK, accountClause, catalog.NonTemporaryTableSQLPredicate(""))
 	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
 		sql = strings.Replace(sql, "'utf8mb4_bin' as 'Collation'", "internal_table_collation(extra_info) as 'Collation'", 1)
 	}
@@ -1051,7 +1052,10 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 		"`idx`.`ordinal_position` as `Seq_in_index`, " +
 		"if(`tcl`.`att_is_hidden` = 1 and `tcl`.`attr_has_generated` = 1, NULL, `idx`.`column_name`) as `Column_name`, " +
 		"'A' as `Collation`, 0 as `Cardinality`, " +
-		"'NULL' as `Sub_part`, " +
+		// Retained prefix lengths come from the canonical index metadata:
+		// the number of indexed characters when the part carries a prefix,
+		// actual SQL NULL for whole-column index parts (#30935).
+		"mo_index_sub_part(`idx`.`algo_params`, `idx`.`column_name`) as `Sub_part`, " +
 		"'NULL' as `Packed`, " +
 		"if(`tcl`.`attnotnull` = 0, 'YES', '') as `Null`, " +
 		"coalesce(nullif(`idx`.`algo`, ''), 'BTREE') as 'Index_type', " +

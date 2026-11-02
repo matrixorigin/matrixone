@@ -16,6 +16,8 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -27,6 +29,78 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+// These complete TableDefs were authored and self-verified by the unmodified
+// planner at 861a2c4cb68961d8b6b01f18e0aa6ac52a3a505f, before either correction.
+func TestLegacyFloatAndDecimalPrecisionCatalogComposition(t *testing.T) {
+	data, err := os.ReadFile("testdata/legacy_float_decimal_861a2c.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 3)
+	for name, wire := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			compiler := floatCatalogCompiler(t)
+			var source planpb.TableDef
+			require.NoError(t, source.Unmarshal(wire))
+			before := proto.Clone(&source)
+			expression := tableDumpExpressions(&source)[0].expr
+			require.Equal(t, name != "folded_default", hasLegacyFloatStringCast(expression))
+			_, err := AnalyzeTableDumpBindings(compiler, &source, &source)
+			require.NoError(t, err, "DUMP must verify both historical policies together")
+			owned := CloneTableDefForPlan(&source, true)
+			migrate := func() {
+				require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, owned))
+				require.NoError(t, MigrateLegacyCatalogTableDef(compiler.GetContext(), compiler.GetProcess(), owned))
+			}
+			migrate()
+			require.False(t, hasLegacyFloatStringCast(tableDumpExpressions(owned)[0].expr), "mixed decimal precision must not silently skip float repair")
+			if name == "folded_default" {
+				require.True(t, proto.Equal(before, owned), "stored folded values must remain unchanged")
+			} else {
+				proc := compiler.GetProcess()
+				executor, err := colexec.NewExpressionExecutor(proc, tableDumpExpressions(owned)[0].expr)
+				require.NoError(t, err)
+				t.Cleanup(executor.Free)
+				input := batch.NewWithSize(2)
+				t.Cleanup(func() { input.Clean(proc.Mp()) })
+				input.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 15, 2))
+				input.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(125), false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], -1.2345678901234567e-15, false, proc.Mp()))
+				input.SetRowCount(1)
+				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, "1.5625-0.0000000000000012345678901234568", result.GetStringAt(0))
+			}
+			require.True(t, proto.Equal(before, &source), "migration must preserve shared catalog bytes")
+			once := proto.Clone(owned)
+			migrate()
+			require.True(t, proto.Equal(once, owned), "migration must be idempotent")
+			_, err = AnalyzeTableDumpBindings(compiler, owned, &source)
+			require.NoError(t, err, "LOAD must verify the historical payload against migrated bindings")
+			_, err = AnalyzeTableDumpBindings(compiler, owned, owned)
+			require.NoError(t, err, "migrated catalog must remain independently verifiable")
+			for _, target := range []*planpb.TableDef{&source, owned} {
+				if name == "folded_default" {
+					continue
+				}
+				forged := DeepCopyTableDef(target, true)
+				changed := false
+				require.NoError(t, planpb.VisitExprTree(tableDumpExpressions(forged)[0].expr, func(e *planpb.Expr) error {
+					if fn := e.GetF(); fn != nil && fn.Func.GetObjName() == "*" {
+						e.Typ.Width = 37
+						changed = true
+					}
+					return nil
+				}))
+				require.True(t, changed)
+				_, err = AnalyzeTableDumpBindings(compiler, target, forged)
+				require.Error(t, err, "float repair must not authorize forged decimal precision")
+			}
+		})
+	}
+}
 
 func TestLegacyFloatAndIntegerDecimalCatalogComposition(t *testing.T) {
 	for _, declaration := range []string{

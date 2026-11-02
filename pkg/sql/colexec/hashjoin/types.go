@@ -219,7 +219,10 @@ type asofBuildLeftGroup struct {
 }
 
 type HashJoin struct {
-	ctr container
+	// ExistenceOnly emits a Boolean marker for a proven EXISTS consumer.
+	// Ordinary MARK retains its three-valued comparison contract.
+	ExistenceOnly bool
+	ctr           container
 
 	JoinType    plan.Node_JoinType
 	IsRightJoin bool

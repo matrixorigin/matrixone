@@ -507,27 +507,6 @@ func collectCloneRoutineReferences(
 	return references, cloneRoutineDependenciesInspected, nil
 }
 
-// filterCloneDatabaseRoutines keeps independent routine families and omits
-// families whose direct or transitive dependencies cannot exist in the target.
-// SQL routines whose bodies cannot be inspected are omitted when the source
-// has an omitted relation. Supported non-SQL UDFs are opaque but cloneable and
-// are preserved after validateCloneUserDefinedFunctions rejects imported
-// package bodies. UDF overloads are one family here: call sites do not carry
-// enough resolved type information for this metadata pass to distinguish
-// overloads safely.
-func filterCloneDatabaseRoutines(
-	ctx context.Context,
-	source cloneDatabaseSource,
-	lowerCaseTableNames int64,
-) ([]userDefinedFunctionDefinition, []storedProcedureDefinition, error) {
-	omissions, err := collectCloneDatabaseOmissionSet(ctx, source, lowerCaseTableNames)
-	if err != nil {
-		return nil, nil, err
-	}
-	applyCloneDatabaseOmissionSet(&source, omissions, lowerCaseTableNames)
-	return source.userDefinedFuncs, source.storedProcedures, nil
-}
-
 func collectCloneDatabaseSource(
 	ctx context.Context,
 	ses *Session,

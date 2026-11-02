@@ -39,7 +39,6 @@ type txnDB struct {
 	entry       *catalog.DBEntry
 	createEntry txnif.TxnEntry
 	dropEntry   txnif.TxnEntry
-	ddlCSN      uint32
 	idx         int
 }
 
@@ -432,20 +431,10 @@ func (db *txnDB) NeedRollback() bool {
 	return db.createEntry != nil && db.dropEntry != nil
 }
 func (db *txnDB) ApplyRollback() (err error) {
-	if db.createEntry != nil {
-		if err = db.createEntry.ApplyRollback(); err != nil {
-			return
-		}
-	}
+	// PrepareRollback has already removed the database MVCC node. Applying it
+	// again can dereference a detached node when WAL rejects a prepared txn.
 	for _, table := range db.tables {
-		if err = table.ApplyRollback(); err != nil {
-			break
-		}
-	}
-	if db.dropEntry != nil {
-		if err = db.dropEntry.ApplyRollback(); err != nil {
-			return
-		}
+		err = combineTxnLifecycleErrors(err, table.ApplyRollback())
 	}
 	return
 }
@@ -625,7 +614,6 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 			panic(err)
 		}
 		cmdMgr.AddCmd(cmd)
-		db.ddlCSN = csn
 	}
 	tables := make([]*txnTable, len(db.tables))
 	for _, table := range db.tables {
@@ -643,7 +631,6 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 			panic(err)
 		}
 		cmdMgr.AddCmd(cmd)
-		db.ddlCSN = csn
 	}
 	return
 }

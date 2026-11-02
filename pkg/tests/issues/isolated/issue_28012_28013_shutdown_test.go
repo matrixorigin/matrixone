@@ -109,6 +109,16 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	dbName := fmt.Sprintf("issue_28012_28013_%d", time.Now().UnixNano())
 	mustExecIssue28012And28013(t, ctx, db, "create database "+dbName)
 	mustExecIssue28012And28013(t, ctx, db, "create table "+dbName+".probe (id int primary key)")
+	// Admit the independent control connection before the target transaction
+	// owns DDL state or any fault barrier is armed. Its query deadline must
+	// measure the control commit, rather than a new connection's authentication.
+	probeConn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer func() {
+		if probeConn != nil {
+			require.NoError(t, probeConn.Close())
+		}
+	}()
 	txn, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	_, err = txn.ExecContext(ctx, "create table "+dbName+".t (id int primary key, v int)")
@@ -152,7 +162,7 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	// Exercise the previously ambiguous tenant-only selector with a real commit
 	// on another connection. It must finish without consuming the target's WAIT.
 	probeCtx, probeCancel := context.WithTimeout(ctx, 10*time.Second)
-	_, probeErr := db.ExecContext(probeCtx, "insert into "+dbName+".probe values (1)")
+	_, probeErr := probeConn.ExecContext(probeCtx, "insert into "+dbName+".probe values (1)")
 	probeCancel()
 	if probeErr != nil {
 		waiters, _, _ := fault.TriggerFault(commitWaiters)
@@ -165,6 +175,10 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	waiters, _, triggered := fault.TriggerFault(commitWaiters)
 	require.True(t, triggered)
 	require.Zero(t, waiters, "only the intended commit may register a waiter")
+	// Return the control connection before stopping this cluster generation.
+	err = probeConn.Close()
+	probeConn = nil
+	require.NoError(t, err)
 
 	commitResult := make(chan error, 1)
 	goroutines.Add(1)

@@ -145,6 +145,11 @@ func (c *viewSchemaCompiler) CheckViewDatabase(name string, snapshot *Snapshot) 
 	return err == nil, err
 }
 
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *viewSchemaCompiler) ResolveWithoutTemporaryAlias(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
+}
+
 func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err

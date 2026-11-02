@@ -187,13 +187,25 @@ Load from Local Stage
    
    client.disconnect()
 
-Transactional Stage Operations (Recommended)
----------------------------------------------
+Transactions Using Existing Stages
+---------------------------------
 
-Use ``session()`` for atomic stage operations:
+Create/configure stages before beginning data transactions. Stage manager
+availability on a Session does not make catalog DDL transactional. In particular,
+``ALTER STAGE`` is not supported inside an explicit transaction; the SDK rejects
+it before dispatch. Use ``client.stage.alter(...)`` outside the Session. The
+included server correction preserves quoted names and comments in catalog SQL;
+upgrade every CN before relying on it. Stage STRING inputs containing backslash
+or NUL remain explicitly rejected before dispatch.
 
-Atomic Stage Creation and Data Loading
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Names which are not URL hostnames use ``stage:///percent-encoded-name/file``.
+Stage convenience load/export methods construct this URI automatically. The
+encoded first segment is decoded once; dot-only names use the existing host
+form. Credential keys/values cannot contain commas, keys cannot contain equals
+signs, and duplicate keys after case folding reject before mutation.
+
+Atomic Data Loading From Existing Stages
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: python
 
@@ -216,11 +228,11 @@ Atomic Stage Creation and Data Loading
    client = Client()
    client.connect(database='test')
    
-   # Atomic multi-stage operations
+   client.stage.create_local('import_stage', '/data/imports/')
+   client.stage.create_s3('export_stage', 'backup-bucket', 'exports/', 'key', 'secret')
+
+   # Data changes share one transaction; stage provisioning is separate.
    with client.session() as session:
-       # Create stages
-       session.stage.create_local('import_stage', '/data/imports/')
-       session.stage.create_s3('export_stage', 'backup-bucket', 'exports/', 'key', 'secret')
        
        # Load data from stages atomically
        session.load_data.read_csv_stage('import_stage', 'users.csv', table=User)
@@ -229,7 +241,7 @@ Atomic Stage Creation and Data Loading
        # Insert additional data in same transaction
        session.execute(insert(User).values(name='Admin', email='admin@example.com'))
        
-       # All operations commit together or rollback on error
+       # Data changes commit together or rollback on error
    
    client.disconnect()
 
@@ -244,10 +256,8 @@ Complex Transaction with Multiple Stages
    client = Client()
    client.connect(database='test')
    
-   # Complex atomic operation
+   client.stage.create_local('daily_import', '/data/daily/')
    with client.session() as session:
-       # Create import stage
-       session.stage.create_local('daily_import', '/data/daily/')
        
        # Load data
        session.load_data.read_csv_stage('daily_import', 'users.csv', table=User)
@@ -262,14 +272,12 @@ Complex Transaction with Multiple Stages
        
        print(f"Loaded {user_count} users and {order_count} orders")
        
-       # Create snapshot after successful load
-       session.snapshots.create(
-           name='post_import_snapshot',
-           level=SnapshotLevel.DATABASE,
-           database='test'
-       )
-       
-       # All operations succeed or fail together
+   # Create the snapshot after the data transaction commits successfully.
+   client.snapshots.create(
+       name='post_import_snapshot',
+       level=SnapshotLevel.DATABASE,
+       database='test'
+   )
    
    client.disconnect()
 
@@ -355,10 +363,8 @@ Async Transaction with Stages
        client = AsyncClient()
        await client.connect(database='test')
        
-       # Async transaction
+       await client.stage.create_local('import_stage', '/data/')
        async with client.session() as session:
-           # Create stage
-           await session.stage.create_local('import_stage', '/data/')
            
            # Load data
            await session.load_data.read_csv_stage('import_stage', 'users.csv', table=User)
@@ -411,9 +417,9 @@ Common Use Cases
 
 .. code-block:: python
 
+   client.stage.create_s3('source_stage', 'data-lake', 'raw/', 'key', 'secret')
    with client.session() as session:
-       # Extract from S3
-       session.stage.create_s3('source_stage', 'data-lake', 'raw/', 'key', 'secret')
+       # Extract from the existing S3 stage
        session.load_data.read_csv_stage('source_stage', 'data.csv', table=RawData)
        
        # Transform
@@ -430,23 +436,17 @@ Common Use Cases
 
 .. code-block:: python
 
-   with client.session() as session:
-       # Create backup stage
-       session.stage.create_s3('backup_stage', 'backups', 'daily/', 'key', 'secret')
-       
-       # Create snapshot
-       session.snapshots.create(name='daily_backup', level=SnapshotLevel.DATABASE, database='prod')
-       
-       # Both operations atomic
+   client.stage.create_s3('backup_stage', 'backups', 'daily/', 'key', 'secret')
+   # These acknowledged administrative operations are independent steps.
+   client.snapshots.create(name='daily_backup', level=SnapshotLevel.DATABASE, database='prod')
 
 **Multi-Source Data Integration**
 
 .. code-block:: python
 
+   client.stage.create_s3('source_a', 'bucket-a', 'data/', 'key', 'secret')
+   client.stage.create_local('source_b', '/local/data/')
    with client.session() as session:
-       # Multiple sources
-       session.stage.create_s3('source_a', 'bucket-a', 'data/', 'key', 'secret')
-       session.stage.create_local('source_b', '/local/data/')
        
        # Load from all sources atomically
        session.load_data.read_csv_stage('source_a', 'users.csv', table=User)

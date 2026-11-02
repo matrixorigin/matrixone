@@ -168,62 +168,14 @@ func omitHistoricalFloatCoercibility(stored, candidate *planpb.Expr) {
 }
 
 func sameHistoricalFloatBoundExpression(stored, candidate *planpb.Expr) bool {
-	right := proto.Clone(candidate).(*planpb.Expr)
-	var project func(*planpb.Expr, *planpb.Expr)
-	project = func(a, b *planpb.Expr) {
-		if a == nil || b == nil {
-			return
-		}
-		omitHistoricalFloatCoercibility(a, b)
-		if x, y := a.GetF(), b.GetF(); x != nil && y != nil {
-			for i := 0; i < len(x.Args) && i < len(y.Args); i++ {
-				project(x.Args[i], y.Args[i])
-			}
-		}
-		if x, y := a.GetList(), b.GetList(); x != nil && y != nil {
-			for i := 0; i < len(x.List) && i < len(y.List); i++ {
-				project(x.List[i], y.List[i])
-			}
-		}
-		if x, y := a.GetLit(), b.GetLit(); x != nil && y != nil {
-			project(x.Src, y.Src)
-		}
-	}
-	project(stored, right)
-	return sameTableDumpBoundExpression(stored, right)
+	return sameProjectedBoundExpression(stored, candidate, boundExpressionHistorical)
 }
 
 // SQL-origin proof also recovers missing explicit-cast syntax markers from the
 // AST before rewriting. DUMP uses only the coercibility-only historical candidate
 // and continues to require exact syntax provenance.
 func sameLegacyFloatOrigin(stored, candidate *planpb.Expr) bool {
-	right := proto.Clone(candidate).(*planpb.Expr)
-	var recoverMissingMarkers func(*planpb.Expr, *planpb.Expr)
-	recoverMissingMarkers = func(old, bound *planpb.Expr) {
-		if old == nil || bound == nil {
-			return
-		}
-		omitHistoricalFloatCoercibility(old, bound)
-		if a, b := old.GetF(), bound.GetF(); a != nil && b != nil && b.Func != nil {
-			id, overload := function.DecodeOverloadID(b.Func.Obj)
-			if id == function.CAST && overload == 0 && !a.SyntaxExplicitCast {
-				b.SyntaxExplicitCast = false
-			}
-			for i := 0; i < len(a.Args) && i < len(b.Args); i++ {
-				recoverMissingMarkers(a.Args[i], b.Args[i])
-			}
-		}
-		if a, b := old.GetList(), bound.GetList(); a != nil && b != nil {
-			for i := 0; i < len(a.List) && i < len(b.List); i++ {
-				recoverMissingMarkers(a.List[i], b.List[i])
-			}
-		}
-		if a, b := old.GetLit(), bound.GetLit(); a != nil && b != nil {
-			recoverMissingMarkers(a.Src, b.Src)
-		}
-	}
-	recoverMissingMarkers(stored, right)
-	return sameTableDumpBoundExpression(stored, right)
+	return sameProjectedBoundExpression(stored, candidate, boundExpressionLegacyOrigin)
 }
 
 func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, budget *tableDumpBindingBudget) (*planpb.Expr, error) {
@@ -233,6 +185,7 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	}
 	ddlScope := tableDumpDDLColumnScope(def)
 	integerDecimal := tableDumpHasIntegerDecimalCoercion(item.expr)
+	decimalPrecision := tableDumpHasLegacyDecimalPrecision(item.expr)
 	for _, parserMode := range tableDumpParserModesForOrigin(item.origin) {
 		if err := ctx.GetContext().Err(); err != nil {
 			return nil, err
@@ -307,9 +260,19 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 						modes = append(modes, mode|tableDumpBindingDDLColumnScope)
 					}
 				}
-				if integerDecimal {
-					for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
-						modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
+				if decimalPrecision || integerDecimal {
+					baseModes := append([]tableDumpBindingMode(nil), modes...)
+					if decimalPrecision {
+						for _, mode := range baseModes {
+							modes = append(modes, mode|tableDumpBindingPreDecimalPrecision)
+						}
+					}
+					if integerDecimal {
+						// The pre-integer era already includes old precision;
+						// do not charge duplicate combinations to the budget.
+						for _, mode := range baseModes {
+							modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
+						}
 					}
 				}
 				for _, mode := range modes {
@@ -508,6 +471,9 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	}
 	expected := DeepCopyExpr(old)
 	rebindCtx := function.WithDivPrecisionIncrement(proofCtx.GetContext(), int32(increment))
+	if mode&tableDumpBindingPreDecimalPrecision != 0 {
+		rebindCtx = function.WithLegacyDecimalIntermediatePrecision(rebindCtx)
+	}
 	if mode&tableDumpBindingPreIntegerDecimal != 0 {
 		rebindCtx = function.WithLegacyIntegerDecimalCoercions(rebindCtx)
 	}
@@ -550,7 +516,7 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	if budget.visits > tableDumpMaxCandidateVisits {
 		return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
 	}
-	mode &= tableDumpBindingPreJSONFolding | tableDumpBindingPreIntegerDecimal
+	mode &= tableDumpBindingPreJSONFolding | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision
 	if legacySpecial {
 		mode |= tableDumpBindingLegacySpecial
 	}

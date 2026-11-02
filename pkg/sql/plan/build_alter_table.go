@@ -507,6 +507,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	if err := validateDefaultColumnDependencies(ctx, copyTableDef.Cols); err != nil {
 		return nil, err
 	}
+	if err := validateVirtualTimestampExpansion(ctx, copyTableDef); err != nil {
+		return nil, err
+	}
 	if hasAutoIncrementOption && !tableHasAutoIncrementColumn(copyTableDef) {
 		return nil, moerr.NewInvalidInputf(ctx,
 			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
@@ -586,6 +589,12 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 		if pluginIndexName != "" {
 			newPluginIndexes[pluginIndexName] = true
 		}
+	}
+	// A dropped PRIMARY rebinds only once the COPY's final key set exists, so a
+	// same-statement ADD UNIQUE on the same columns can supply the surviving
+	// key regardless of SQL clause order (review 5691776262).
+	if err = applyAlterCopyPrimaryRebind(cctx, copyTableDef, alterTableCtx); err != nil {
+		return nil, err
 	}
 	// Foreign keys bind to the final index set. Materialize every pending index
 	// first so a self-reference can use a UNIQUE index added by the same ALTER,
@@ -1051,6 +1060,9 @@ type AlterTableContext struct {
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
 	UpdateSqls     []string
+	// pendingPrimaryRebind holds a DROP PRIMARY KEY's key columns until the
+	// COPY's final key set is assembled (see applyAlterCopyPrimaryRebind).
+	pendingPrimaryRebind []string
 }
 
 // originalAlterSourceColumn resolves the original source column currently
@@ -2040,7 +2052,12 @@ func storageAgnosticType(
 		oTy.Enumvalues != nTy.Enumvalues ||
 		oTy.AutoIncr != nTy.AutoIncr ||
 		oTy.Charset != nTy.Charset ||
-		oTy.CollationVersion != nTy.CollationVersion {
+		oTy.CollationVersion != nTy.CollationVersion ||
+		oTy.GetNumericAttributes() != nTy.GetNumericAttributes() {
+		// A DECIMAL UNSIGNED/ZEROFILL mask change re-domains the stored values
+		// without changing their storage layout: it must take the COPY path so
+		// every existing row re-enters through the write-side assignment
+		// admission instead of publishing metadata over unchecked data.
 		return
 	}
 

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -271,7 +272,8 @@ func (external *External) Prepare(proc *process.Process) error {
 		for i, attr := range param.Attrs {
 			colIndex := int(attr.ColIndex)
 			colType := &param.Cols[colIndex].Typ
-			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)))
+			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)) ||
+				loadAttributedDecimalTextInput(param, colType))
 			if external.OutputAllocation != nil {
 				vec, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, external.OutputAllocation)
 				if err != nil {
@@ -455,129 +457,19 @@ func (external *External) finishCurrentFile(param *ExternalParam) {
 }
 
 func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
-	if node == nil || node.TableDef == nil || node.ExternScan == nil || col == nil {
-		return false
-	}
-
-	colPos := int(col.ColPos)
-	if colPos < 0 || colPos >= len(node.TableDef.Cols) || colPos != len(node.TableDef.Cols)-1 {
-		return false
-	}
-	// Two hidden trailing columns exist: __mo_filepath on ordinary external
-	// tables and __mo_query on ESQL/SQL foreign tables. Either one is the
-	// "file-level" column of its scan (the query text plays the file-name
-	// role for foreign tables).
-	switch node.TableDef.Cols[colPos].Name {
-	case catalog.ExternalFilePath:
-		return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
-	case catalog.ExternalQuery:
-		return node.TableDef.Cols[colPos].ColId == catalog.ExternalQueryColId
-	}
-	return false
+	return colexec.FileLevelExecution.IsFileLevelColumn(node, col)
 }
 
 func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
-	if ref == nil {
-		return false
-	}
-	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
-	if !exists {
-		return false
-	}
-	// last_kafka_message_id is realTimeRelated (never constant-folded into a
-	// cached plan) but is deterministic WITHIN one compile on the session CN —
-	// it reads session state. Allowing it here is what makes server-side
-	// gap-free chaining work:
-	//   where __mo_read_start_id = last_kafka_message_id()
-	functionID, _ := function.DecodeOverloadID(ref.Obj)
-	if functionID == function.LAST_KAFKA_MESSAGE_ID {
-		return true
-	}
-	if overload.IsRealTimeRelated() {
-		return false
-	}
-	if !overload.CannotFold() {
-		return true
-	}
-
-	// mo_log_date is marked volatile to prevent ordinary constant folding, but
-	// it is a deterministic transform of __mo_filepath and is the established
-	// file-pruning primitive. Other volatile functions (for example rand) are
-	// row-dependent and must remain at row level.
-	return functionID == function.MO_LOG_DATE
+	return colexec.FileLevelExecution.IsSafeFileLevelFunction(ref)
 }
 
-func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (hasFileLevelColumn, hasUnsupportedColumn bool) {
-	if expr == nil {
-		return false, false
-	}
-
-	switch typedExpr := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if typedExpr.Col == nil {
-			return false, true
-		}
-		if isFileLevelColumn(node, typedExpr.Col) {
-			return true, false
-		}
-		return false, true
-	case *plan.Expr_F:
-		if typedExpr.F == nil || typedExpr.F.Func == nil {
-			return false, true
-		}
-		if !isSafeFileLevelFunction(typedExpr.F.Func) {
-			return false, true
-		}
-		for _, arg := range typedExpr.F.Args {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, arg)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_List:
-		if typedExpr.List == nil {
-			return false, false
-		}
-		for _, item := range typedExpr.List.List {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, item)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T,
-		*plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
-		return false, false
-	default:
-		return false, true
-	}
+func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (bool, bool) {
+	return colexec.FileLevelExecution.ClassifyFileLevelColumns(node, expr)
 }
 
 func isFileLevelFilter(node *plan.Node, expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-
-	functionExpr, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || functionExpr.F == nil || functionExpr.F.Func == nil {
-		return false
-	}
-	if !isSafeFileLevelFunction(functionExpr.F.Func) {
-		return false
-	}
-	if functionExpr.F.Func.ObjName == "or" {
-		if len(functionExpr.F.Args) == 0 {
-			return false
-		}
-		for _, arg := range functionExpr.F.Args {
-			if !isFileLevelFilter(node, arg) {
-				return false
-			}
-		}
-		return true
-	}
-
-	hasFileLevelColumn, hasUnsupportedColumn := classifyFileLevelColumns(node, expr)
-	return hasFileLevelColumn && !hasUnsupportedColumn
+	return colexec.FileLevelExecution.IsFileLevelFilter(node, expr)
 }
 
 func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) (bat *batch.Batch, err error) {
@@ -726,10 +618,14 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 	offsets = append(offsets, param.FileStartOff)
 	batchSize := (fileSize - param.FileStartOff) / int64(mcpu)
 	legacyBoundary := param.Format != tree.CSV
+	requiresVerifiedBoundaries := false
 
 	for i := 1; i < mcpu; i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if param.Strict && batchSize > 0 && offsets[i-1] > math.MaxInt64-batchSize {
+			break
 		}
 		guess := offsets[i-1] + batchSize
 		if guess >= fileSize {
@@ -761,11 +657,17 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 			offsets = append(offsets, boundary)
 			continue
 		}
+		cfg := strictCSVConfig(param)
+		limit, ok := strictProbeInputLimit(&cfg, csvparser.BufferSizeScale)
+		if !ok {
+			break
+		}
+		attempt := &strictProbeAttempt{remaining: limit}
 		vec.Entries[0].Offset = guess
 		if err = fs.Read(ctx, &vec); err != nil {
 			return nil, err
 		}
-		tailSize, err := getTailSize(param, visibleCols, r)
+		tailSize, err := getTailSizeStrictAttempt(param, visibleCols, r, &cfg, attempt)
 		closeErr := r.Close()
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
@@ -780,9 +682,42 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 			// Strict scanning retains its existing parser-resynchronization fallback.
 			break
 		}
-		next := vec.Entries[0].Offset + tailSize
-		if next >= fileSize {
+		if tailSize <= 0 || guess < 0 || guess > math.MaxInt64-tailSize {
 			break
+		}
+		next := guess + tailSize
+		if next <= offsets[i-1] || next >= fileSize {
+			break
+		}
+		// At the old cap, discovering real EOF can admit a candidate where
+		// the capped reader failed. Verify equality too, then keep verifying
+		// subsequent ranges even when their suffix probes consume less.
+		requiresVerifiedBoundaries = requiresVerifiedBoundaries || limit-attempt.remaining >= strictProbeSoftBytes
+		if requiresVerifiedBoundaries {
+			if param.FileStartOff < 0 || next-param.FileStartOff > attempt.remaining {
+				break
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			vec.Entries[0].Offset = param.FileStartOff
+			if err := fs.Read(ctx, &vec); err != nil {
+				return nil, err
+			}
+			err := verifyStrictTarget(param, &cfg, r, next-param.FileStartOff, attempt)
+			closeErr := r.Close()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
+			if closeErr != nil {
+				return nil, closeErr
+			}
+			if err != nil {
+				break
+			}
 		}
 		offsets = append(offsets, next)
 	}
@@ -1029,50 +964,119 @@ func getNonStrictFallbackBoundary(param *tree.ExternParam, fs fileservice.ETLFil
 }
 
 const (
-	strictProbeMaxBytes   = 256 * 1024
+	strictProbeSoftBytes  = 256 * 1024
 	strictProbeMaxRecords = 256
 	// CSVParser multiplies its requested block size by BufferSizeScale (5).
-	// Keep physical reads below the budget so a large valid file can split.
-	strictProbeBlockSize = 16 * 1024
+	// Keep reads small even when the record-size-derived hard cap is large.
+	strictProbeBlockSize  = 16 * 1024
+	strictProbeBufferSize = 4096
 )
 
 var errStrictProbeBudgetExceeded = moerr.NewInternalError(moerr.NoReportContext(), "strict CSV boundary probe budget exceeded")
+
+// strictCSVConfig freezes the execution parser's effective record weight for
+// both streams of one attempt. Ordinary execution keeps its existing defaults.
+func strictCSVConfig(param *tree.ExternParam) csvparser.CSVConfig {
+	cfg := *CSVConfigForLoad(param)
+	if cfg.MaxRecordSize <= 0 {
+		cfg.MaxRecordSize = int64(config.LargestEntryLimit)
+	}
+	return cfg
+}
+
+// strictProbeInputLimit bounds one initial fragment, one complete candidate,
+// skipped input and parser read-ahead. Record weight prices content and each
+// field, but not field delimiters or enclosing quotes. For C content bytes and
+// F fields, C+F <= W and physical bytes <= C+(F-1)*D+2*F*Q+L.
+// Thus R=W*max(1,D+2*Q)+L+P+4 also covers STARTING BY and an entry BOM.
+// H=2*R+S+2*(B+U), with one explicitly sized bufio buffer U, is a consumption
+// bound, never an allocation size. Infinite skipped input still stops at H.
+// cfg must carry the effective MaxRecordSize resolved by strictCSVConfig.
+func strictProbeInputLimit(cfg *csvparser.CSVConfig, scale int64) (int64, bool) {
+	weight := cfg.MaxRecordSize
+	if weight <= 0 || scale <= 0 || len(cfg.FieldsTerminatedBy) == 0 {
+		return 0, false
+	}
+	field, quote := int64(len(cfg.FieldsTerminatedBy)), int64(len(cfg.FieldsEnclosedBy))
+	if quote > (math.MaxInt64-field)/2 {
+		return 0, false
+	}
+	factor := max(int64(1), field+2*quote)
+	if weight > math.MaxInt64/factor {
+		return 0, false
+	}
+	record := weight * factor
+	for _, extra := range []int64{max(int64(2), int64(len(cfg.LinesTerminatedBy))), int64(len(cfg.LinesStartingBy)), 4} {
+		if record > math.MaxInt64-extra {
+			return 0, false
+		}
+		record += extra
+	}
+	if scale > math.MaxInt64/strictProbeBlockSize {
+		return 0, false
+	}
+	block := strictProbeBlockSize * scale
+	if block > int64(^uint(0)>>1) || block > (math.MaxInt64-strictProbeSoftBytes)/2-strictProbeBufferSize {
+		return 0, false
+	}
+	overhead := int64(strictProbeSoftBytes) + 2*(block+strictProbeBufferSize)
+	if record > (math.MaxInt64-overhead)/2 {
+		return 0, false
+	}
+	return 2*record + overhead, true
+}
 
 // strictProbeReader borrows the stream. A non-EOF error prevents the parser
 // from accepting an artificially truncated record as a complete final row.
 type strictProbeReader struct {
 	io.Reader
-	remaining int
+	remaining int64
 }
 
 func (r *strictProbeReader) Read(p []byte) (int, error) {
 	if r.remaining == 0 {
 		return 0, errStrictProbeBudgetExceeded
 	}
-	if len(p) > r.remaining {
-		p = p[:r.remaining]
+	if int64(len(p)) > r.remaining {
+		p = p[:int(r.remaining)]
 	}
 	n, err := r.Reader.Read(p)
-	r.remaining -= n
+	r.remaining -= int64(n)
 	return n, err
 }
 
 func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {
+	cfg := strictCSVConfig(param)
+	limit, ok := strictProbeInputLimit(&cfg, csvparser.BufferSizeScale)
+	if !ok {
+		return 0, errStrictProbeBudgetExceeded
+	}
+	return getTailSizeStrictWithLimit(param, cols, r, &cfg, limit)
+}
+
+func getTailSizeStrictWithLimit(param *tree.ExternParam, cols []*plan.ColDef, r io.Reader, cfg *csvparser.CSVConfig, limit int64) (int64, error) {
+	return getTailSizeStrictAttempt(param, cols, r, cfg, &strictProbeAttempt{remaining: limit})
+}
+
+func getTailSizeStrictAttempt(param *tree.ExternParam, cols []*plan.ColDef, r io.Reader, cfg *csvparser.CSVConfig, attempt *strictProbeAttempt) (int64, error) {
+	limit := attempt.remaining
 	ctx := param.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	quietCtx := errutil.ContextWithNoReport(ctx, true)
-	bufR := bufio.NewReader(boundaryContextReader{ctx: ctx, Reader: &strictProbeReader{Reader: r, remaining: strictProbeMaxBytes}})
-	// ensure the first character is not field quote symbol
-	quoteByte := byte('"')
-	if param.Tail.Fields != nil {
-		if enclosed := param.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
-			quoteByte = enclosed.Value
-		}
+	if err := ctx.Err(); err != nil {
+		return 0, err
 	}
+	if limit <= 0 {
+		return 0, errStrictProbeBudgetExceeded
+	}
+	quietCtx := errutil.ContextWithNoReport(ctx, true)
+	limited := &strictProbeReader{Reader: r, remaining: limit}
+	defer func() { attempt.remaining = limited.remaining }()
+	bufR := bufio.NewReaderSize(boundaryContextReader{ctx: ctx, Reader: limited}, strictProbeBufferSize)
+	// ensure the first character is not field quote symbol
 	skipCount := int64(0)
-	for {
+	for len(cfg.FieldsEnclosedBy) > 0 {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
@@ -1080,7 +1084,7 @@ func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCl
 		if err != nil {
 			return 0, err
 		}
-		if ch != quoteByte {
+		if ch != cfg.FieldsEnclosedBy[0] {
 			err = bufR.UnreadByte()
 			if err != nil {
 				return 0, err
@@ -1088,14 +1092,26 @@ func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCl
 			break
 		}
 		skipCount++
+		if skipCount == strictProbeSoftBytes {
+			return 0, errStrictProbeBudgetExceeded
+		}
 	}
-	csvReader, err := newCSVParserFromReaderWithBlockSize(param, bufR, strictProbeBlockSize)
+	csvReader, err := csvparser.NewCSVParser(cfg, bufR, strictProbeBlockSize, false)
 	if err != nil {
 		return 0, err
 	}
 	var fields []csvparser.Field
 	for attempts := 0; attempts < strictProbeMaxRecords; attempts++ {
 		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		// Allow an initial fragment and the following complete candidate to
+		// finish, even for long records. Stop between subsequent candidates
+		// once physical reads (including read-ahead) reach the soft budget.
+		if attempts >= 2 && limit-limited.remaining >= strictProbeSoftBytes {
+			return 0, errStrictProbeBudgetExceeded
+		}
+		if err := attempt.nextRecord(); err != nil {
 			return 0, err
 		}
 		fields, err = csvReader.Read(fields)
@@ -1991,6 +2007,27 @@ func loadTimeTextInput(param *ExternalParam, id types.T) bool {
 		param.Extern.Format != tree.PARQUET && param.Extern.Format != tree.ARROW
 }
 
+// isAttributedDecimalStagingTarget reports a decimal target carrying the
+// unsigned attribute mask — the type contract the text-staging decisions
+// read at allocation, field decoding and mapper rendering.
+func isAttributedDecimalStagingTarget(typ *plan.Type) bool {
+	return typ != nil && types.T(typ.Id).IsDecimal() &&
+		typ.NumericAttributes&types.NumericAttributeUnsigned != 0
+}
+
+// loadAttributedDecimalTextInput is the attributed DECIMAL text staging
+// predicate: the shared admission boundary classifies raw field text
+// (CSV/JSONLINE) or mapper-rendered text (Parquet/Arrow) for LOAD targets
+// carrying the unsigned attribute. Unlike TIME's textual input, this covers
+// every physical format.
+func loadAttributedDecimalTextInput(param *ExternalParam, typ *plan.Type) bool {
+	if param == nil || param.Extern == nil ||
+		param.Extern.ExternType != int32(plan.ExternType_LOAD) {
+		return false
+	}
+	return isAttributedDecimalStagingTarget(typ)
+}
+
 // parseCSVInt preserves the integer fast path and LOAD conversion policy. Only
 // unquoted external CSV decimal text uses exact assignment rounding.
 // An initial integer overflow can precede an exponent that scales into range;
@@ -2088,7 +2125,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	if loadDataNonStrictAdjustments {
 		switch {
 		case isLoadNumericAdjustedValueType(id) && !isSet:
-			if !field.HasStringQuote {
+			// Attributed DECIMAL targets stage raw trimmed field bytes
+			// unmodified (raw-field preservation boundary): the source sign and
+			// every truncation/invalid-input diagnostic belong to the shared
+			// admission boundary. Unattributed types keep today's rewrite.
+			if !field.HasStringQuote && !isAttributedDecimalStagingTarget(&col.Typ) {
 				field.Val = loadDataNonStrictNumericPrefix(field.Val)
 			}
 		case id == types.T_date || id == types.T_datetime || id == types.T_timestamp:
@@ -2107,7 +2148,8 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
-	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) {
+	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) ||
+		loadAttributedDecimalTextInput(param, &col.Typ) {
 		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
 		if err != nil {
 			return err

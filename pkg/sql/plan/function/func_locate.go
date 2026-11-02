@@ -135,12 +135,3 @@ func runeByteOffset(value string, runeIndex int64) (int, bool) {
 	}
 	return offset, true
 }
-
-// getSubstring returns a suffix whose start is measured in characters.
-func getSubstring(str string, start int) string {
-	offset, ok := runeByteOffset(str, int64(start))
-	if !ok {
-		return ""
-	}
-	return str[offset:]
-}

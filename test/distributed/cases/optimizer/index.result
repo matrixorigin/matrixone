@@ -246,7 +246,7 @@ select * from t1 where c2=1;
 1  ¦  1  ¦  1
 explain select * from t1 where c3<2000;
 -- @regex("Index", true)
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -254,6 +254,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
               Filter Cond: (t1.c3 < 2000)  𝄀
+              Block Filter Cond: (t1.c3 < 2000)  𝄀
               Runtime Filter Probe: t1.__mo_fake_pk_col  𝄀
         ->  Index Table Scan on t1.id1 [ForceOneCN]  𝄀
               Filter Cond: (__mo_index_idx_col < 2000)  𝄀
@@ -313,9 +314,8 @@ INSERT INTO t14 (pseudo,pseudo1,same) VALUES ('joce', 'testtt', 1),('joce', 'tse
 explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
-  ->  Index Table Scan on t14.pseudo  𝄀
-        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, CHAR)) = 'joce')  𝄀
-        Block Filter Cond: prefix_eq(__mo_index_idx_col)
+  ->  Table Scan on d1.t14  𝄀
+        Filter Cond: (t14.pseudo = 'joce')
 SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ pseudo1[1,35,0]  𝄀
 testtt  𝄀
@@ -327,7 +327,7 @@ delete from t1 where b = 1;
 drop table t1;
 create table t1(c1 int, c2 int, c3 int, key(c1));
 explain select * from t1 where c1=1;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -335,9 +335,11 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
               Filter Cond: (t1.c1 = 1)  𝄀
+              Block Filter Cond: (t1.c1 = 1)  𝄀
               Runtime Filter Probe: t1.__mo_fake_pk_col  𝄀
         ->  Index Table Scan on t1.c1 [ForceOneCN]  𝄀
-              Filter Cond: prefix_eq(__mo_index_idx_col)
+              Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              Block Filter Cond: prefix_eq(__mo_index_idx_col)
 drop table if exists t_repro;
 create table t_repro (id varchar(32) primary key, uid varchar(64) not null, typ varchar(20) not null, flag smallint not null default 1, index idx_uid_typ_flag (uid, typ, flag));
 insert into t_repro values ('id1', 'alice', 'semantic', 1);

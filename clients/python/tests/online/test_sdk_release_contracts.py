@@ -6,6 +6,8 @@ import uuid
 from pathlib import Path
 
 import pymysql
+from matrixone import with_snapshot
+
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import declarative_base
@@ -63,7 +65,7 @@ def historical_join(client, server):
 @pytest.mark.parametrize('owner', ['client', 'async_client', 'session', 'exported_session', 'async_session'])
 async def test_cached_snapshot_select_public_owners(client, async_client, historical_join, owner):
     model, b, live, snapshots = historical_join
-    a, second = [live.with_snapshot(snapshot) for snapshot in snapshots]
+    a, second = [with_snapshot(live, snapshot) for snapshot in snapshots]
 
     async def check(executor):
         for statement, expected in ((live, 3), (a, 1), (second, 2), (a, 1), (live, 3)):
@@ -71,7 +73,7 @@ async def test_cached_snapshot_select_public_owners(client, async_client, histor
                 (expected,)
             ]
         if owner in ('session', 'exported_session', 'async_session'):
-            statement = select(model).join(b, model.id == b.c.ref).with_snapshot(snapshots[0])
+            statement = with_snapshot(select(model).join(b, model.id == b.c.ref), snapshots[0])
             result = await resolve(executor.execute(statement))
             objects = result.scalars().all()
             assert len(objects) == 1 and isinstance(objects[0], model) and objects[0].id == 1
@@ -98,7 +100,7 @@ def test_snapshot_statement_export_preserves_history(client, historical_join):
     local = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR']) / filename
     try:
         client.export.to_jsonl(
-            os.environ['MO_SDK_EXPORT_DIR'].rstrip('/') + '/' + filename, live.with_snapshot(snapshots[0])
+            os.environ['MO_SDK_EXPORT_DIR'].rstrip('/') + '/' + filename, with_snapshot(live, snapshots[0])
         )
         assert [json.loads(line) for line in local.read_text().splitlines()] == [{'id': 1}]
     finally:
@@ -283,7 +285,7 @@ async def test_external_cache_warmed_before_adoption(client, server, historical_
     from sqlalchemy.ext.asyncio import create_async_engine
 
     _, _, live, snapshots = historical_join
-    historical = live.with_snapshot(snapshots[0])
+    historical = with_snapshot(live, snapshots[0])
     nested = select(historical.subquery())
     cache = {}
     url = sa.engine.URL.create(
@@ -312,7 +314,7 @@ async def test_external_cache_warmed_before_adoption(client, server, historical_
         for statement, expected in (
             (historical, 1),
             (live, 3),
-            (live.with_snapshot(snapshots[1]), 2),
+            (with_snapshot(live, snapshots[1]), 2),
             (historical, 1),
             (historical.where(sa.literal(0) == 1), None),
         ):
@@ -545,3 +547,318 @@ async def test_clone_snapshot_convenience_single_connection_pool(client, server,
         client.snapshots.delete(snapshot)
         client.execute('DROP TABLE IF EXISTS ' + target)
         client.execute('DROP TABLE ' + source)
+
+
+def test_fulltext_reserved_and_atomic_column_names(client):
+    from matrixone.sqlalchemy_ext import boolean_match
+
+    table = name('quoted_fulltext_')
+    client.execute('SET experimental_fulltext_index=1')
+    client.execute(f'CREATE TABLE {table}(id INT PRIMARY KEY, `order` TEXT, `fulltext2` TEXT)')
+    try:
+        client.execute(f"INSERT INTO {table} VALUES(1,'alpha','alpha'),(2,'beta','beta')")
+        client.execute(f'CREATE FULLTEXT INDEX ft ON {table}(`order`,`fulltext2`)')
+        columns = [sa.Column('order'), sa.Column('fulltext2')]
+        quoted = '`order`, `fulltext2`'
+        expected = client.execute(
+            f"SELECT id FROM {table} WHERE MATCH({quoted}) AGAINST('+alpha' IN BOOLEAN MODE)"
+        ).rows
+        assert expected == [(1,)]
+        sqls = [
+            FulltextQueryBuilder()
+            .must('alpha')
+            .as_sql(table, columns, select_columns=['id'], include_score=True, offset=0),
+            FulltextSearchBuilder(None)
+            .table(table)
+            .columns(columns)
+            .with_mode('boolean mode')
+            .query('alpha')
+            .with_score()
+            .select(['id'])
+            .offset(0)
+            .explain(),
+            IndexSearch(table, columns)
+            .search('+alpha')
+            .set_mode('boolean mode')
+            .set_with_score()
+            .offset(0)
+            .build_sql(),
+        ]
+        for sql in sqls:
+            assert [row[0] for row in client.execute(sql).rows] == [1]
+        mapped = sa.Table(table, sa.MetaData(), sa.Column('id'), *(sa.Column(column.name) for column in columns))
+        statement = select(mapped.c.id).where(
+            boolean_match(*[mapped.c[column.name] for column in columns]).must('alpha')
+        )
+        assert client.execute(statement).rows == expected
+        assert client.execute(FulltextQueryBuilder().must('alpha').as_sql(table, columns, limit=0, offset=0)).rows == []
+        for term, token in [('alpha?', "'alpha?'"), (r'alpha\path', r'$sdk$alpha\path$sdk$')]:
+            expected = client.execute(f"SELECT * FROM {table} WHERE MATCH({quoted}) AGAINST({token})").rows
+            sql = IndexSearch(table, columns).search(term).build_sql()
+            assert client.execute(sql).rows == expected
+
+    finally:
+        client.execute('DROP TABLE IF EXISTS ' + table)
+
+
+@pytest.mark.parametrize('kind', ['ivfflat', 'hnsw'])
+def test_vector_quoted_create_drop_and_native_failure(client, server, kind):
+    from matrixone.sqlalchemy_ext import IVFVectorIndex, HnswVectorIndex
+
+    table = name('quoted_vector_')
+    client.execute(f'CREATE TABLE {table}(id BIGINT PRIMARY KEY, `fulltext2` VECF32(2))')
+    try:
+        client.execute(f"INSERT INTO {table} VALUES(1,'[1,0]'),(2,'[0,1]')")
+        index = (
+            IVFVectorIndex('ix`name', 'fulltext2', lists=1)
+            if kind == 'ivfflat'
+            else HnswVectorIndex('ix`name', 'fulltext2', m=4, ef_construction=8, ef_search=4)
+        )
+        target = server['database'] + '.' + table
+        assert index.create(client._engine, target) is True
+        assert index.drop(client._engine, target) is True
+        assert client.execute('SELECT id FROM ' + table + ' ORDER BY id').rows == [(1,), (2,)]
+        with pytest.raises(sa.exc.DBAPIError):
+            index.drop(client._engine, target)
+        assert client._engine.pool.checkedout() == 0
+    finally:
+        client.execute('DROP TABLE IF EXISTS ' + table)
+
+
+def test_bm25_mode_preserves_native_search(client):
+    table = name('bm25_mode_')
+    client.execute('SET experimental_fulltext2_index=1')
+    client.execute(f'CREATE TABLE {table}(id BIGINT PRIMARY KEY, body TEXT)')
+    try:
+        client.execute(f"INSERT INTO {table} VALUES(1,'alpha engine'),(2,'beta engine')")
+        client.execute(f'CREATE FULLTEXT2 INDEX ft ON {table}(body)')
+        native = client.execute(f"SELECT id FROM {table} WHERE MATCH(body) AGAINST('alpha' IN BM25 MODE)").rows
+        assert native == [(1,)]
+        generated = [
+            FulltextQueryBuilder().encourage('alpha').as_sql(table, ['body'], mode='bm25 mode', select_columns=['id']),
+            FulltextSearchBuilder(None)
+            .table(table)
+            .columns(['body'])
+            .query('alpha')
+            .with_mode('BM25 MODE')
+            .select(['id'])
+            .explain(),
+        ]
+        for sql in generated:
+            assert client.execute(sql).rows == native
+    finally:
+        client.execute('DROP TABLE IF EXISTS ' + table)
+
+
+@pytest.mark.asyncio
+async def test_show_accounts_native_metadata_sync_async(client, async_client):
+    account, admin = name('metadata_account_'), 'sdk_admin'
+    comment = 'SDK metadata sentinel'
+    owned = False
+    try:
+        client.execute(
+            f"CREATE ACCOUNT {account} ADMIN_NAME = '{admin}' IDENTIFIED BY 'sdk-test-only-password' COMMENT '{comment}'"
+        )
+        owned = True
+        created = client.account.get_account(account)
+        for owner in (client, async_client):
+            fetched = await resolve(owner.account.get_account(account))
+            listed = await resolve(owner.account.list_accounts())
+            listed = next(item for item in listed if item.name == account)
+            for actual in (created, fetched, listed):
+                assert actual.name == account and actual.admin_name == admin
+                assert actual.comment == comment and actual.suspended_time is None
+        raw = client.execute('SHOW ACCOUNTS')
+        records = [dict(zip([column.casefold() for column in raw.columns], row)) for row in raw.rows]
+        record = next(item for item in records if item['account_name'] == account)
+        assert record['admin_name'] == admin and record['comments'] == comment
+    finally:
+        if owned:
+            client.account.drop_account(account)
+
+
+@pytest.mark.parametrize('mode', ['', 'NO_BACKSLASH_ESCAPES'])
+def test_public_sql_builder_lexical_typed_and_modulo_roundtrip(client, mode):
+    from datetime import date
+    from matrixone.sql_builder import (
+        MatrixOneSQLBuilder,
+        build_select_query,
+        build_insert_query,
+        build_update_query,
+        build_delete_query,
+        build_vector_similarity_query,
+    )
+
+    table = name('builder_values_')
+    client.execute(
+        f'CREATE TABLE {table}(id INT PRIMARY KEY, day DATE, payload VARBINARY(10), note VARCHAR(100), s INT, scol INT, v VECF32(2))'
+    )
+    try:
+        with client.session() as session:
+            previous = session.execute('SELECT @@sql_mode').scalar()
+            try:
+                session.execute('SET sql_mode=?', (mode,))
+                value = "O'Reilly ? :id2 \\N 中文\x00"
+                session.execute(
+                    build_insert_query(
+                        table,
+                        {
+                            'id': 1,
+                            'day': date(2024, 1, 2),
+                            'payload': b'abc',
+                            'note': value,
+                            's': 3,
+                            'scol': 3,
+                            'v': '[1,2]',
+                        },
+                        use_parameter_substitution=True,
+                    )
+                )
+                expected = rows(
+                    session.execute(
+                        f'SELECT id FROM {table} WHERE day=? AND payload=? AND note=?',
+                        (date(2024, 1, 2), b'abc', value),
+                    )
+                )
+                assert expected == [(1,)]
+                builder = (
+                    MatrixOneSQLBuilder()
+                    .select("'?' AS marker", 'id')
+                    .from_table(table)
+                    .where('day=? AND payload=? AND note=? /* ? ignored */', date(2024, 1, 2), b'abc', value)
+                )
+                for sql in (
+                    builder.build_with_parameter_substitution(),
+                    str(builder),
+                    build_select_query(
+                        table,
+                        ["'?' AS marker", 'id'],
+                        ['day=? AND payload=? AND note=? /* ? ignored */'],
+                        [date(2024, 1, 2), b'abc', value],
+                    ),
+                ):
+                    assert rows(session.execute(sql)) == [('?', 1)]
+                vector_sql = build_vector_similarity_query(
+                    table, 'v', [1, 2], where_conditions=['id=?'], where_params=[1]
+                )
+                vector_rows = rows(session.execute(vector_sql))
+                assert len(vector_rows) == 1 and vector_rows[0][0] == 1 and vector_rows[0][-1] == 0
+                for column in ('s', 'scol'):
+                    sql = (
+                        MatrixOneSQLBuilder()
+                        .select('7%' + column)
+                        .from_table(table)
+                        .where('id=?', 1)
+                        .build_with_parameter_substitution()
+                    )
+                    assert rows(session.execute(sql)) == [(1,)]
+                for condition, parameters in [('id=?', []), ('id=?', [1, 2])]:
+                    with pytest.raises(ValueError, match='SQL parameters'):
+                        build_select_query(table, where_conditions=[condition], where_params=parameters)
+                session.execute(
+                    build_update_query(
+                        table, {'note': 'changed ?'}, ['id=? AND note=?'], [1, value], use_parameter_substitution=True
+                    )
+                )
+                assert rows(session.execute('SELECT note FROM ' + table)) == [('changed ?',)]
+                session.execute(
+                    build_delete_query(table, ['id=? AND note=?'], [1, 'changed ?'], use_parameter_substitution=True)
+                )
+                assert session.execute('SELECT COUNT(*) FROM ' + table).scalar() == 0
+            finally:
+                session.execute('SET sql_mode=?', (previous,))
+    finally:
+        client.execute('DROP TABLE IF EXISTS ' + table)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['', 'NO_BACKSLASH_ESCAPES'])
+@pytest.mark.parametrize('owner', ['managed', 'warm_adopted'])
+async def test_async_orm_binary_and_pre_ping(client, server, mode, owner):
+    charset = 'utf8mb4'
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    table = name('async_binary_')
+    base = declarative_base()
+    model = type(
+        'BinaryRecord',
+        (base,),
+        dict(__tablename__=table, id=sa.Column(sa.Integer, primary_key=True), payload=sa.Column(sa.LargeBinary)),
+    )
+    client.execute(f'CREATE TABLE {table}(id INT PRIMARY KEY,payload VARBINARY(20))')
+    engine = None
+    c = None
+    try:
+        if owner == 'managed':
+            c = AsyncClient(pool_size=1, max_overflow=0, sql_log_mode='off')
+            await c.connect(**server, charset=charset)
+            engine = c._engine
+        else:
+            url = sa.engine.URL.create(
+                'mysql+aiomysql',
+                username=server['user'],
+                password=server['password'],
+                host=server['host'],
+                port=server['port'],
+                database=server['database'],
+                query={'charset': charset},
+            )
+            engine = create_async_engine(url, pool_size=1, max_overflow=0, pool_pre_ping=True)
+            async with engine.connect() as connection:
+                assert (await connection.exec_driver_sql('SELECT 11')).scalar() == 11
+            c = AsyncClient.from_engine(engine, sql_log_mode='off')
+        async with c.session() as session:
+            await session.execute('SET sql_mode=?', (mode,))
+            session.add_all(
+                [model(id=1, payload=b'\x00\xff'), model(id=2, payload=b'\xff\x00'), model(id=3, payload=None)]
+            )
+            await session.flush()
+        assert client.execute('SELECT id,payload FROM ' + table + ' ORDER BY id').rows == [
+            (1, b'\x00\xff'),
+            (2, b'\xff\x00'),
+            (3, None),
+        ]
+        for _ in range(10):
+            assert (await c.execute('SELECT 1')).rows == [(1,)]
+        assert engine.pool.checkedout() == 0
+    finally:
+        try:
+            if c is not None:
+                await c.disconnect()
+        finally:
+            try:
+                if engine is not None:
+                    await engine.dispose()
+            finally:
+                client.execute('DROP TABLE IF EXISTS ' + table)
+
+
+@pytest.mark.parametrize('source_schema', ['logical', None])
+def test_compiled_vector_ddl_routes_schema_and_preserves_percent_names(client, source_schema):
+    from matrixone._sql_literals import sql_identifier
+    from matrixone.sqlalchemy_ext import IVFVectorIndex
+
+    database = name('ddl_schema_') + '%db'
+    physical_table = sql_identifier(database, force=True) + '.`fulltext2`'
+    owned = False
+    try:
+        client.execute('CREATE DATABASE ' + sql_identifier(database, force=True))
+        owned = True
+        client.execute('CREATE TABLE ' + physical_table + '(id INT PRIMARY KEY, `v%` VECF32(2))')
+        client.execute('INSERT INTO ' + physical_table + " VALUES(1,'[1,0]'),(2,'[0,1]')")
+        table = sa.Table('fulltext2', sa.MetaData(), sa.Column('v%', sa.Integer), schema=source_schema)
+        for index_name in ('ix%name', 'ix%s', 'ix%%name'):
+            index = IVFVectorIndex(index_name, table.c['v%'], lists=1)
+            with client._engine.begin() as connection:
+                connection.execution_options(schema_translate_map={source_schema: database}).execute(
+                    sa.schema.CreateIndex(index)
+                )
+            result = client.execute('SHOW INDEX FROM ' + physical_table)
+            name_column = [str(column).casefold() for column in result.columns].index('key_name')
+            assert index_name in {row[name_column] for row in result.rows}
+            assert index.drop(client._engine, physical_table) is True
+            assert client.execute('SELECT id FROM ' + physical_table + ' ORDER BY id').rows == [(1,), (2,)]
+        assert table.name == 'fulltext2' and table.schema == source_schema
+    finally:
+        if owned:
+            client.execute('DROP DATABASE ' + sql_identifier(database, force=True))

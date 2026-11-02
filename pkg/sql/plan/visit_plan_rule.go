@@ -465,7 +465,7 @@ type ResetParamRefRule struct {
 	// consumes these expressions positionally; rebuilding the outer function
 	// can change its assignment-cast contract even when the predicate needs a
 	// different execute-time overload.
-	preserveRoots map[*plan.Expr]struct{}
+	preserveRoots map[*plan.Expr]plan.Type
 	// specialized is set when execute-time rebinding changes the cached plan's
 	// execution semantics, including value-only rewrites whose overload and
 	// result type remain stable.
@@ -1800,7 +1800,11 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 				}
 			}
 		}
-		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
+		var originalBoundExpr *Expr
+		if name == "+" || name == "-" || name == "*" {
+			originalBoundExpr = expr
+		}
+		bound, err := bindFuncExprImplByPlanExpr(rule.ctx, nil, name, copy.GetF().Args, true, nil, originalBoundExpr, false)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1941,21 +1945,29 @@ func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
 }
 
 func preparedTemporalNumericPeer(expr *Expr) (types.Type, bool) {
-	if expr == nil {
+	if expr == nil || !types.T(expr.Typ.Id).IsDecimal() {
 		return types.Type{}, false
 	}
-	if metadata := expr.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() &&
-		metadata.GetProvisionalResultPeerTypeId() == int32(types.T_time) {
-		return makeTypeByPlan2Expr(expr), true
-	}
-	if literal := expr.GetLit(); literal != nil && literal.Src != nil &&
-		types.T(literal.Src.Typ.Id) == types.T_time {
-		return makeTypeByPlan2Expr(expr), true
-	}
-	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
-		strings.EqualFold(fn.Func.GetObjName(), "cast") && !isExplicitPreparedCast(expr) && len(fn.Args) > 0 &&
-		types.T(fn.Args[0].Typ.Id) == types.T_time {
-		return makeTypeByPlan2Expr(expr), true
+	for current := expr; current != nil; {
+		if metadata := current.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() {
+			if metadata.GetProvisionalResultPeerTypeId() == int32(types.T_time) {
+				return types.New(types.T_decimal64, 18, metadata.GetProvisionalResultPeerScale()), true
+			}
+			// An explicit numeric peer owns its domain, even if its source was TIME.
+			return types.Type{}, false
+		}
+		if types.T(current.Typ.Id) == types.T_time {
+			return types.New(types.T_decimal64, 18, current.Typ.Scale), true
+		}
+		if literal := current.GetLit(); literal != nil {
+			current = literal.Src
+			continue
+		}
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || isExplicitPreparedCast(current) || len(fn.Args) == 0 {
+			break
+		}
+		current = fn.Args[0]
 	}
 	return types.Type{}, false
 }
@@ -2195,21 +2207,15 @@ func (rule *ResetParamRefRule) preparedTemporalNullEnvelopeType(
 	argTypes := make([]types.Type, len(originalArgs))
 	for i, arg := range originalArgs {
 		if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
-			argTypes[i] = peer
+			argTypes[i] = types.New(types.T_time, 0, peer.Scale)
 			continue
 		}
 		typ, ok, err := rule.inferPreparedTemporalNullExpr(arg)
 		if err != nil || !ok {
 			return plan.Type{}, false, err
 		}
-		// Reproduce the executable TIME/integer boundary without narrowing the
-		// declared integer domain, including explicit SIGNED/UNSIGNED casts.
-		if types.T(typ.Oid).IsInteger() {
-			typ, err = rule.preparedTemporalIntegerTarget(functionName, temporalPeer, typ)
-			if err != nil {
-				return plan.Type{}, false, err
-			}
-		}
+		// Infer from the original integer domain, just as executable lookup
+		// does before the synthesized boundary cast is applied.
 		argTypes[i] = typ
 	}
 	resolved, err := planfunction.GetFunctionByName(rule.ctx, functionName, argTypes)
@@ -2575,6 +2581,28 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		if exprImpl.F == nil {
 			return e, nil
 		}
+		if _, _, generated := preparedCalendarResultCast(e); generated {
+			rewritten, err := rule.applyExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			if target := rule.preserveRoots[e]; target.Id != 0 {
+				return appendCastBeforeExpr(rule.ctx, rewritten, target)
+			}
+			return rewritten, nil
+		}
+		if exprImpl.F.Func != nil && strings.EqualFold(exprImpl.F.Func.GetObjName(), "from_unixtime") &&
+			len(exprImpl.F.Args) == 1 && temporalDirectMarker(exprImpl.F.Args[0]) {
+			// FSP6 can make the consumer itself a positional write root, with
+			// no surrounding assignment cast. Rebind its numeric input anyway;
+			// preserving the PREPARE-time INT64 cast rejects decimal parameters.
+			target := e.Typ
+			rewritten, err := rule.applyExpr(e)
+			if err != nil {
+				return nil, err
+			}
+			return appendCastBeforeExpr(rule.ctx, rewritten, target)
+		}
 		if exprImpl.F.Func != nil && strings.EqualFold(exprImpl.F.Func.GetObjName(), "inet_ntoa") &&
 			len(exprImpl.F.Args) == 1 {
 			// INET_NTOA owns the source-domain contract for a direct marker. A
@@ -2920,13 +2948,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_Dependent:
 		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
-		var originalTemporalExpr *Expr
-		if exprImpl.F.Func != nil {
-			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
-			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd":
-				originalTemporalExpr = DeepCopyExpr(e)
-			}
-		}
+		calendarPosition, calendarOnly, calendarCast := preparedCalendarResultCast(e)
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
@@ -3876,6 +3898,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 
+		if calendarCast {
+			// Generic COM_STMT strings intentionally have no concrete runtime
+			// type metadata. They still carry a known text source and value.
+			source, known, sourceErr := rule.preparedRuntimeSourceExpr(calendarPosition, true)
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
+			if known {
+				target := inferPreparedCalendarResult(makeTypeByPlan2Expr(source), true, temporalParamValue(rule.paramValues[calendarPosition]), calendarOnly)
+				rule.specialized = true
+				return appendCastBeforeExpr(rule.ctx, boundArgs[0], makePlan2Type(&target))
+			}
+		}
+
 		// reset function
 		if needResetFunction {
 			restorePreparedIntegerArithmeticOperands(functionName, boundArgs)
@@ -3889,9 +3925,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rewritten, err = rebindExplicitPreparedCast(rule.ctx, e, boundArgs)
 				rule.specialized = true
 			} else {
+				var originalBoundExpr *Expr
+				switch functionName {
+				case "+", "-", "*", "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd", "from_unixtime":
+					// The saved operands already own immutable provenance. Share
+					// them only when rebinding, without copying the tree again.
+					originalFunction := *exprImpl.F
+					originalFunction.Args = originalArgs
+					original := *e
+					original.Typ = originalTyp
+					original.Expr = &plan.Expr_F{F: &originalFunction}
+					originalBoundExpr = &original
+				}
 				rewritten, err = bindPreparedFuncExprImplByPlanExpr(
 					rule.ctx,
-					originalTemporalExpr,
+					originalBoundExpr,
 					exprImpl.F.Func.GetObjName(),
 					boundArgs,
 					stringDomainModes,

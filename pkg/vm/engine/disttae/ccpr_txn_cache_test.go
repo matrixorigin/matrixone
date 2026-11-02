@@ -32,7 +32,6 @@ import (
 type mockIteration struct {
 	txnID       []byte
 	objectNames []string
-	commit      bool // true for commit, false for rollback
 }
 
 // newCleanFS creates a new clean memory file service for testing
@@ -92,17 +91,14 @@ func TestCCPRTxnCache_Iterations(t *testing.T) {
 		{
 			txnID:       []byte("txn1"),
 			objectNames: []string{"obj1"},
-			commit:      false, // rollback
 		},
 		{
 			txnID:       []byte("txn2"),
 			objectNames: []string{"obj1"},
-			commit:      true, // commit
 		},
 		{
 			txnID:       []byte("txn3"),
 			objectNames: []string{"obj1"},
-			commit:      true, // commit
 		},
 	}
 

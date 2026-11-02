@@ -106,6 +106,31 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				return
 			}
 
+			// NOT evaluates its operand with MySQL numeric truth, so the
+			// stored ENUM ordinal or SET bitmap must survive both the display
+			// wrapper and the display-typed reference a GROUP BY flattening
+			// leaves behind. Unrelated operands pass through unchanged.
+			expr, err = b.mysqlSpecialBooleanTruthyOperand(b.GetContext(), expr)
+			if err != nil {
+				return
+			}
+			// NOT binds through the expression-plan entry, whose checker only
+			// consults the general implicit-cast table - base keeps no
+			// ENUM -> BOOL row there, and the contract must not add one
+			// (it would leak admission into native mode). Normalize the
+			// recovered ENUM operand through the explicit storage-truth BOOL
+			// cast, the same wrap the boolean-truth recovery loop applies for
+			// AND/OR/XOR; a native-mode statement skips this and keeps the
+			// base checker failure byte-identically.
+			if function.MySQLConditionalBooleanContracts(b.GetContext()) &&
+				isEnumPlanType(&expr.Typ) {
+				expr, err = makePlan2CastExpr(b.GetContext(), expr,
+					plan.Type{Id: int32(types.T_bool)})
+				if err != nil {
+					return
+				}
+			}
+
 			expr, err = BindFuncExprImplByPlanExpr(b.GetContext(), "not", []*plan.Expr{expr})
 		}
 
@@ -180,6 +205,17 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			err = moerr.NewNYI(b.GetContext(), "CAST to MEDIUMINT is not supported")
 			return
 		}
+		if typ, ok := exprImpl.Type.(*tree.T); ok &&
+			defines.MysqlType(typ.InternalType.Oid) == defines.MYSQL_TYPE_DECIMAL &&
+			(typ.InternalType.Unsigned || typ.InternalType.Zerofill) {
+			// MySQL's restricted cast_type grammar admits no UNSIGNED/ZEROFILL
+			// modifiers on a DECIMAL CAST target and rejects the spelling at
+			// parse time (1064). Column declarations keep the attribute; only
+			// the user-written CAST target is refused here.
+			err = moerr.NewParseErrorf(b.GetContext(),
+				"UNSIGNED/ZEROFILL attribute is not allowed in DECIMAL CAST target")
+			return
+		}
 		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
@@ -239,6 +275,22 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		// must start from the stored ordinal/bitmap instead of that string.
 		if makeTypeByPlan2Type(typ).IsNumeric() {
 			expr, _ = storedMySQLSpecialTypeExpr(expr)
+		} else if types.T(typ.Id) == types.T_bool {
+			// The explicit CAST ... AS BOOL shares the boolean-truth storage
+			// contract: a projected display label (GROUP BY / DISTINCT /
+			// derived boundary) resolves through the same provenance-aware
+			// recovery as IF/CASE and the logical consumers, so the pending
+			// cast converts the recovered stored ordinal/bitmap instead of
+			// re-parsing the label text. The recovery carries its own D11 gate
+			// and D10 zone semantics: a native-mode statement keeps the
+			// pre-contract display bind untouched, and an ambiguous
+			// declaration fails closed across a display-decoding boundary.
+			recovered, recoveryErr := b.mysqlSpecialBooleanTruthyOperand(b.GetContext(), expr)
+			if recoveryErr != nil {
+				err = recoveryErr
+				return
+			}
+			expr = recovered
 		}
 		if b.builder != nil {
 			var rewritten bool
@@ -251,7 +303,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			}
 		}
 		if useExplicitCastOverload(exprImpl.Type) {
-			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+			expr, err = appendTemporalIntegerCast(b.GetContext(), expr, typ, b)
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
@@ -472,10 +524,14 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 	typ := types.T_text.ToType()
 	var boundStringDomain uint32
 	var nonStringNull bool
+	// Integer system variables resolve their registry-declared type here; a
+	// system variable keeps the historical TEXT envelope whenever the context
+	// resolves nothing for it, unchanged from before a declared resolution
+	// existed.
+	if resolved, ok := b.resolveUserVariableType(astExpr); ok {
+		typ = makeTypeByPlan2Type(resolved)
+	}
 	if !astExpr.System {
-		if resolved, ok := b.resolveUserVariableType(astExpr); ok {
-			typ = makeTypeByPlan2Type(resolved)
-		}
 		if typ.Oid == types.T_any {
 			if preparedBindingState(b.GetContext()) == nil {
 				stringResult := false
@@ -652,11 +708,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	relPos := NotFound
 	colPos := NotFound
 	var typ *plan.Type
+	var resolvedBinding *Binding
 	localErrCtx := errutil.ContextWithNoReport(b.GetContext(), true)
 
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
 			if binding != nil {
+				resolvedBinding = binding
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = DeepCopyType(binding.types[colPos])
@@ -703,6 +761,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	} else {
 		binding := b.resolveTableBinding(b.ctx, db, table)
 		if binding != nil {
+			resolvedBinding = binding
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -743,6 +802,21 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			columnPos: colPos,
 		})
 	}
+	var virtualRead *plan.Expr
+	_, physicalGeneratedRef := b.ctx.physicalGeneratedRefs[astExpr]
+	if colPos != NotFound {
+		if !physicalGeneratedRef {
+			virtualRead, _, err = b.ctx.bindVirtualTimestampRead(resolvedBinding, colPos, depth)
+			if err != nil {
+				return nil, err
+			}
+		} else if resolvedBinding != nil && resolvedBinding.virtualTimestampStaged {
+			// The staged read value occupies the ordinary column position; the
+			// passthrough half of the projection retains the writer-time OLD
+			// value needed for secondary-index maintenance.
+			colPos += int32(len(resolvedBinding.types))
+		}
+	}
 
 	preserveSpecialValue := typ != nil && b.mysqlSpecialTargetType != nil &&
 		typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues &&
@@ -751,7 +825,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	// ENUM and SET have distinct storage and display representations. Keep their
 	// display value by default. Numeric and bitwise expression binders explicitly
 	// enable raw storage binding so they follow MySQL's numeric semantics.
-	if !b.bindRawMySQLSpecialType && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
+	_, physicalMySQLSpecialRef := b.ctx.physicalMySQLSpecialRefs[astExpr]
+	if !b.bindRawMySQLSpecialType && !physicalMySQLSpecialRef && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
@@ -786,11 +861,17 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				},
 			},
 		}
+		if virtualRead != nil {
+			args[len(args)-1] = virtualRead
+		}
 
 		return BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
 	}
 
 	if colPos != NotFound {
+		if virtualRead != nil {
+			return virtualRead, nil
+		}
 		expr = &plan.Expr{
 			Typ: *typ,
 		}
@@ -3075,10 +3156,10 @@ func (b *baseBinder) mysqlSpecialTypeNumericContext(expr tree.Expr) bool {
 		return mysqlSpecialTypeNumericLiteral(value)
 	case *tree.UnresolvedName:
 		typ, ok := b.numericColumnType(value)
-		return ok && makeTypeByPlan2Type(typ).IsNumeric()
+		return ok && !isEnumOrSetPlanType(&typ) && makeTypeByPlan2Type(typ).IsNumeric()
 	case *tree.UnaryExpr:
 		return (value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) &&
-			b.mysqlSpecialTypeNumericContext(value.Expr)
+			(b.mysqlSpecialTypeNumericContext(value.Expr) || b.mysqlSpecialTypeAst(value.Expr))
 	case *tree.BinaryExpr:
 		return isNumericBinaryOp(value.Op) || isBitwiseBinaryOp(value.Op)
 	case *tree.CastExpr:
@@ -4906,6 +4987,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
+			// Materialize temporal constants before relocation checks see their
+			// diagnostic flag, without folding unrelated enclosing functions.
+			// PREPARE retains sources for EXECUTE-time zero-date policy.
+			if !b.builder.isPrepareStatement && !defines.IsPublicationViewBinding(b.GetContext()) {
+				proc := b.builder.compCtx.GetProcess()
+				e = foldTemporalTextConstant(proc, e)
+				if fn := e.GetF(); fn != nil {
+					for i, arg := range fn.Args {
+						fn.Args[i] = foldTemporalTextConstant(proc, arg)
+					}
+				}
+			}
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -5661,6 +5754,25 @@ func rewriteFindInSetSetProvenance(
 	return rewritten, true, nil
 }
 
+// Children were already bound; only the temporal call itself and casts added
+// by the current overload resolver need a warning-free materialization proof.
+func foldTemporalTextConstant(proc *process.Process, expr *Expr) *Expr {
+	// The enclosing integer consumer has not bound yet. Preserve an explicit
+	// temporal CAST's value owner through IF/CASE argument binding; ordinary
+	// optimizer folding can run after its integer policy has been lowered.
+	if temporalIntegerSource(expr) && isExplicitPreparedCast(expr) {
+		return expr
+	}
+	if !function.IsTemporalTextDiagnosticCall(expr) {
+		return expr
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+	if err != nil || folded == nil {
+		return expr
+	}
+	return folded
+}
+
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
 	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, true, false, nil)
 }
@@ -5845,7 +5957,13 @@ func bindFuncExprAndConstFoldInternal(
 			}
 		}
 
-		retExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		// The final fold can fail (e.g. '1.5' BETWEEN 1 AND 20 casts the
+		// string operand to INT). Surface the error like the >=/<= form does;
+		// discarding it would bind a nil expression.
+		retExpr, err = ConstantFold(batch.EmptyForConstFoldBatch, retExpr, proc, false, true)
+		if err != nil {
+			return nil, err
+		}
 
 	case "in_range":
 		if proc == nil {
@@ -7480,7 +7598,17 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
-	preparedCalendarResult := preparedRawCalendarResult(name, args)
+	// The unsigned-DECIMAL admission entries exist only for the plan-composed
+	// assignment boundary. Their retType mirrors the source type, so a public
+	// call with an ANY-typed source (for example a bare NULL) would publish an
+	// ANY result node and panic executor result allocation in
+	// vector/functionTools.go. Persisted-boundary rebinding carries
+	// allowInternalFunctionArgs and must keep resolving these names.
+	if isUnsignedDecimalAdmissionName(name) && !allowInternalFunctionArgs {
+		return nil, moerr.NewInvalidInputf(
+			ctx, "function %s is plan-internal and cannot be called directly", name)
+	}
+	preparedCalendarResult := preparedRawCalendarResult(ctx, name, args)
 	// Validate before rewriting or converting argument metadata. Checked public
 	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
 	for _, arg := range args {
@@ -7722,6 +7850,12 @@ func bindFuncExprImplByPlanExpr(
 			// before returning to raw arithmetic and the template's result cast.
 			if rawPreparedCalendarMarker(originalBoundExpr.GetF().Args[0]) {
 				source := unwrapPreparedImplicitCast(args[0], true)
+				// Runtime DATE/DATETIME casts materialize a typed source, not
+				// a provisional marker cast. Keep that domain when selecting
+				// the calendar consumer, especially for DATE plus HOUR.
+				if args[0].Typ.Id == int32(types.T_date) || args[0].Typ.Id == int32(types.T_datetime) {
+					source = args[0]
+				}
 				oid := types.T(source.Typ.Id)
 				if oid != types.T_any && !oid.IsMySQLString() {
 					value, e := bindTemporalMarkerConsumer(ctx, source, types.New(types.T_datetime, 6, 6))
@@ -7886,10 +8020,17 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_datetime) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if args[0].Typ.Id == int32(types.T_time) && args[1].Typ.Id == int32(types.T_interval) {
+			// TIME +/- INTERVAL is DATE_ADD/DATE_SUB(TIME, ...), as in MySQL.
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_varchar) {
+		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_time) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
+		} else if intervalArithmeticTextOperand(args[0]) && args[1].Typ.Id == int32(types.T_interval) {
+			name = "date_add"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if args[0].Typ.Id == int32(types.T_interval) && intervalArithmeticTextOperand(args[1]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
@@ -7931,7 +8072,10 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_timestamp) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
-		} else if args[0].Typ.Id == int32(types.T_varchar) && args[1].Typ.Id == int32(types.T_interval) {
+		} else if args[0].Typ.Id == int32(types.T_time) && args[1].Typ.Id == int32(types.T_interval) {
+			name = "date_sub"
+			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
+		} else if intervalArithmeticTextOperand(args[0]) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
 			args, err = resetDateFunctionArgs(ctx, args[0], args[1])
 		} else if args[0].Typ.Id == int32(types.T_int32) && args[1].Typ.Id == int32(types.T_interval) && intervalUnitIsDayOrLarger(args[1]) {
@@ -8311,10 +8455,53 @@ func bindFuncExprImplByPlanExpr(
 				types.T_varchar, 0, 0, types.CharsetUTF8)}
 		}
 	}
+	// A prepared TIME boundary may already be represented by a decimal cast.
+	// Resolve from its existing TIME provenance, as the ordinary binder does;
+	// that envelope is not a genuine DECIMAL arithmetic domain.
+	if isPreparedTemporalIntegerArithmetic(name) {
+		hasTemporalPeer := false
+		for i, arg := range args {
+			if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
+				// Copy once before changing a TIME lookup; argsType describes
+				// the unchanged executable operands used later in this binder.
+				if &lookupTypes[0] == &argsType[0] {
+					lookupTypes = append([]types.Type(nil), lookupTypes...)
+				}
+				lookupTypes[i] = types.New(types.T_time, 0, peer.Scale)
+				hasTemporalPeer = true
+			}
+		}
+		if hasTemporalPeer {
+			for i, arg := range args {
+				cast := arg.GetF()
+				if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" ||
+					isExplicitPreparedCast(arg) || len(cast.Args) == 0 ||
+					!types.T(cast.Args[0].Typ.Id).IsInteger() {
+					continue
+				}
+				// The boundary cast executes the complete integer operand, but
+				// overload lookup must retain that operand's original domain.
+				lookupTypes[i] = makeTypeByPlan2Expr(cast.Args[0])
+			}
+		}
+	}
 	// MOD literal refinement is metadata-only; its existing casts must retain
 	// the integer's full storage domain.
-	if name != "mod" && name != "%" {
+	if name == "+" || name == "-" || name == "*" {
+		// Refinement is copy-on-write: keep argsType and the original lookup
+		// immutable so runtime parameters can restore their declared domains.
+		originalLookup := lookupTypes
 		lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
+		if original := originalBoundExpr.GetF(); original != nil && original.Func != nil &&
+			strings.EqualFold(original.Func.ObjName, name) && len(original.Args) == len(args) {
+			// EXECUTE values keep their declared domains; a materialized marker
+			// is not a weak SQL literal even when it has no retained ParamRef.
+			for i, original := range original.Args {
+				if lookupTypes[i] != originalLookup[i] && (isExplicitPreparedCast(original) || len(preparedNumericValueParamPositions(original)) > 0) {
+					lookupTypes[i] = originalLookup[i]
+				}
+			}
+		}
 	}
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
@@ -8518,7 +8705,7 @@ func bindFuncExprImplByPlanExpr(
 		}
 	}
 
-	refineDecimalRoundingReturnType(name, args, argsType, &returnType)
+	refineDecimalRoundingReturnType(name, args, argsType, &returnType, function.LegacyDecimalIntermediatePrecision(ctx))
 
 	// Geometry constructors with an explicit SRID argument record the SRID in
 	// the result type's Width (geometry cells store bare WKB, so SRID lives in
@@ -8762,6 +8949,11 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 		returnType.Width = returnType.Scale
+
+	case "from_unixtime":
+		if len(args) == 1 && temporalDirectMarkerArgument(args, originalBoundExpr, 0) {
+			returnType.Width, returnType.Scale = 6, 6
+		}
 
 	case "sec_to_time":
 		returnType.Width = returnType.Scale
@@ -9059,6 +9251,11 @@ func bindFuncExprImplByPlanExpr(
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
+				} else if (isDecimalComparisonOperator(name) || name == "between") &&
+					argsType[idx].Oid.IsMySQLString() && castType.Oid == types.T_time {
+					// A TIME column's string boundary retains comparison policy;
+					// expression CAST's invalid-to-NULL behavior does not apply.
+					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
 				} else if name == "char" &&
 					(argsType[idx].Oid == types.T_float32 || argsType[idx].Oid == types.T_float64) &&
 					castType.Oid == types.T_int64 {
@@ -9327,12 +9524,24 @@ func sameFunctionArgumentTypes(left, right []types.Type) bool {
 // refineDecimalRoundingReturnType applies the exact-numeric metadata rules
 // which depend on a constant digits argument and therefore cannot be expressed
 // by an overload's type-only return callback.
-func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []types.Type, returnType *types.Type) {
+func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []types.Type, returnType *types.Type, legacyPrecision bool) {
 	if len(argsType) == 0 || !argsType[0].IsDecimal() {
 		return
 	}
 	input := argsType[0]
 	integerDigits := input.Width - input.Scale
+	if !legacyPrecision && len(args) == 2 && args[1].GetLit() == nil {
+		switch name {
+		case "round":
+			// Nearest rounding can grow the coefficient by one digit.
+			returnType.Width = min(input.Width+1, maxDecimalPrecisionForRounding(input.Oid))
+		case "ceil", "ceiling", "floor":
+			// Directed rounding can reach any supported position. Until the
+			// runtime constant is known, retain the full family bound and scale.
+			returnType.Width = maxDecimalPrecisionForRounding(input.Oid)
+		}
+		return
+	}
 
 	switch name {
 	case "ceil", "ceiling", "floor":
@@ -9362,6 +9571,13 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 			resultScale = int32(digits)
 		}
 		precision := integerDigits + resultScale + 1 // reserve a carry digit
+		if digits < 0 && !legacyPrecision {
+			// CEIL(1, -35) is 10^35 regardless of the input precision.
+			// Bound the position before negating, including INT64_MIN. The
+			// existing execution guards still reject unsupported positions.
+			position := max(digits, -int64(maxDecimalPrecisionForRounding(input.Oid)))
+			precision = max(precision, 1-int32(position))
+		}
 		if precision < 1 {
 			precision = 1
 		}
@@ -9389,10 +9605,13 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 			return
 		}
 
-		// Preserve the established conservative width for negative D. MySQL
-		// exposes inconsistent metadata for that case between CTAS and views;
-		// the compatibility contract here is the unambiguous nonnegative case.
+		// Keep the conservative negative-D envelope, but reserve an integer
+		// carry for ROUND: e.g. a precision-30 product can round to 10^30.
+		// TRUNCATE cannot carry. Retain the existing decimal family and cap.
 		if digits < 0 {
+			if name == "round" && !legacyPrecision {
+				returnType.Width = max(input.Width, min(integerDigits+1, maxDecimalPrecisionForRounding(input.Oid)))
+			}
 			returnType.Scale = 0
 			return
 		}
@@ -10631,7 +10850,7 @@ func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type
 func decimalIntegerWidth(expr *Expr, typ types.Type, zeroWithoutIntegerDigit ...bool) (int32, bool) {
 	lit := expr.GetLit()
 	if lit == nil || lit.Isnull {
-		return integerMetadataWidth(typ.Oid), false
+		return integerDecimalDigits(typ.Oid), false
 	}
 
 	decimalDigits := func(value string) int32 {
@@ -10659,7 +10878,7 @@ func decimalIntegerWidth(expr *Expr, typ types.Type, zeroWithoutIntegerDigit ...
 	case *plan.Literal_U64Val:
 		return decimalDigits(strconv.FormatUint(value.U64Val, 10)), true
 	default:
-		return integerMetadataWidth(typ.Oid), false
+		return integerDecimalDigits(typ.Oid), false
 	}
 }
 
@@ -10701,7 +10920,7 @@ func controlFlowStringWidth(expr *Expr, typ types.Type) (int32, bool) {
 		}
 	}
 	if typ.Oid.IsInteger() {
-		width := integerMetadataWidth(typ.Oid)
+		width := integerDecimalDigits(typ.Oid)
 		if typ.Oid.IsSignedInt() {
 			width++
 		}
@@ -10742,7 +10961,7 @@ func signedIntegerLiteralWidth(value int64) int32 {
 	return width
 }
 
-func integerMetadataWidth(oid types.T) int32 {
+func integerDecimalDigits(oid types.T) int32 {
 	switch oid {
 	case types.T_int8, types.T_uint8:
 		return 3
@@ -11166,7 +11385,15 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 			if isExplicitPreparedCast(current) {
 				break
 			}
-			if lit = current.GetLit(); lit != nil {
+			if value := current.GetLit(); value != nil {
+				// A folded runtime value keeps its source domain. Follow the
+				// source before deciding it is a direct numeric literal;
+				// parameters and explicit casts are not weak literals.
+				if value.Src != nil {
+					current = value.Src
+					continue
+				}
+				lit = value
 				literalExpr = current
 				break
 			}
@@ -11179,13 +11406,9 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 		if lit == nil || lit.Isnull {
 			continue
 		}
-		// Integer literal precision matters for multiplication and MOD because the
-		// declared integer type's full domain can otherwise make a small factor
-		// spuriously widen the result. MOD uses this bound only for metadata.
-		// Addition and subtraction already derive
-		// their safe result precision from the integer domain; retaining their
-		// established Decimal128 coercion also avoids changing outer-join decimal
-		// expression execution paths.
+		// Multiplication and MOD use the exact bound of a direct integer literal.
+		// Addition/subtraction retain the established integer-domain coercion.
+		// Columns and syntax-explicit casts retain their declared domains.
 		if (name == "*" || name == "mod" || name == "%") && hasDecimalInput && inputs[i].IsIntOrUint() {
 			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
 			if !exact || width <= 0 {
@@ -11845,7 +12068,18 @@ func (b *baseBinder) bindInetNtoaBinaryLiteral(astExpr *tree.NumVal, typ Type) (
 	return expr, nil
 }
 
-func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
+// GetContext returns the binder's owning context with the D11 statement
+// compatibility scalar attached, so the condition admission sites (IF/CASE
+// typing, the boolean-context rewrites) see the same one-scalar decision the
+// BindContext resolved. A resolved scalar overrides anything inherited on
+// sysCtx; contexts without the scalar (tests, DUMP origin validation) keep
+// the MySQL-compatible default, matching the resolver's default.
+func (b *baseBinder) GetContext() context.Context {
+	if b.ctx != nil && b.ctx.mysqlConditionalBooleanContractsValid {
+		return function.WithMySQLConditionalBooleanContracts(b.sysCtx, b.ctx.mysqlConditionalBooleanContracts)
+	}
+	return b.sysCtx
+}
 
 // GetProcess exposes the compile session's process to the window-function
 // binder surface so constant-expression folding uses the same deterministic
@@ -11887,9 +12121,11 @@ func appendBitwiseAggregateCastBeforeExpr(ctx context.Context, expr *Expr, toTyp
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
 	if expr != nil && types.T(expr.Typ.Id).IsDateRelate() &&
-		(types.T(toType.Id) == types.T_decimal256 || types.T(toType.Id).IsFloat()) {
-		// Temporal arithmetic already has exact casts to Decimal128. Preserve
-		// packed values and fractional seconds before widening or float conversion.
+		(types.T(toType.Id) == types.T_decimal256 ||
+			(types.T(toType.Id).IsFloat() && !function.IfTypeCastSupported(types.T(expr.Typ.Id), types.T(toType.Id)))) {
+		// Bridge widening and unsupported floating targets through Decimal128.
+		// Supported direct casts already preserve packed temporal values and
+		// fractions, without an intermediate vector or decimal text conversion.
 		intermediate := types.New(types.T_decimal128, 38, max(expr.Typ.Scale, 0))
 		var err error
 		expr, err = appendCastBeforeExprWithOverload(ctx, expr, makePlan2Type(&intermediate), 0)
@@ -11901,7 +12137,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
-	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+	return appendTemporalIntegerCast(ctx, expr, toType, nil)
 }
 
 // appendSyntaxExplicitCastBeforeExpr records syntax provenance while retaining
@@ -12120,6 +12356,42 @@ func rewriteMySQLSpecialTypeDisplayCast(ctx context.Context, expr *Expr, toType 
 		// and lossy for SET definitions that contain an empty member.
 		if bitmap, ok := storedSetBitmapExpr(expr); ok {
 			return bitmap, false, nil
+		}
+	}
+	if types.T(toType.Id) == types.T_bool && function.MySQLConditionalBooleanContracts(ctx) {
+		// D11 gate: this whole BOOL-target block binds with the MySQL
+		// storage-truth contracts; a native-mode statement falls through to the
+		// pre-contract behavior below, so explicit CAST ... AS BOOL keeps the
+		// base bind/execute outcome byte-identically.
+		// MySQL BIT (b'..') and HEX (x'..' / 0x..) literals are numeric bit
+		// strings: a boolean context evaluates their payload numerically instead
+		// of re-parsing the raw bytes as text. Fold the constant so logical
+		// operators, CASE WHEN and predicates match the numeric semantics
+		// arithmetic already gives these literals. Binary introducer strings are
+		// excluded on purpose; they keep ordinary string truthiness.
+		if isBinaryNumericLiteral(expr) {
+			if literal := expr.GetLit(); literal != nil && !literal.Isnull {
+				nonzero := false
+				for _, b := range []byte(literal.GetSval()) {
+					if b != 0 {
+						nonzero = true
+						break
+					}
+				}
+				// The folded BOOL constant is already the boolean value; the
+				// pending cast must not wrap it again.
+				return makePlan2BoolConstExprWithType(nonzero), true, nil
+			}
+		}
+		// Boolean contracts (WHERE/HAVING/ON predicates, AND/OR/NOT, CASE WHEN,
+		// IS TRUE/FALSE) follow MySQL numeric truth: the stored ENUM ordinal or
+		// SET bitmap is the number that decides truthiness. Casting the display
+		// label would fail parsing valid nonzero rows' text labels. Hand the
+		// storage value to the pending BOOL cast instead.
+		if isEnumOrSetDisplayValueExpr(expr) {
+			if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+				return raw, false, nil
+			}
 		}
 	}
 	if toType.Id != int32(types.T_json) {
@@ -12515,13 +12787,10 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	}
 	markerDate := temporalDirectMarker(dateExpr)
 	if markerDate {
-		target := types.New(types.T_datetime, 6, 6)
-		if timestampAddDateUnit(intervalType) || intervalType == types.Year_Month {
-			target = types.T_date.ToType()
-		}
 		if rawPreparedCalendarMarker(dateExpr) {
 			dateExpr, err = appendCastBeforeExpr(ctx, unwrapPreparedImplicitCast(dateExpr, true), plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
 		} else {
+			target := preparedCalendarMarkerResult(ctx, dateExpr, timestampAddDateUnit(intervalType) || intervalType == types.Year_Month)
 			dateExpr, err = bindTemporalMarkerConsumer(ctx, dateExpr, target)
 		}
 		if err != nil {
@@ -12944,6 +13213,16 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 		numberExpr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),
 	}, nil
+}
+
+// intervalArithmeticTextOperand reports whether the non-INTERVAL operand of
+// `expr +/- INTERVAL n unit` is evaluated like DATE_ADD/DATE_SUB's first
+// argument: any MySQL string type (CHAR, VARCHAR, TEXT, BINARY, BLOB...) or a
+// prepared-statement parameter marker, whose value is only known at EXECUTE.
+// DATE_ADD/DATE_SUB already accept all of these; the operator spelling must
+// not depend on which string type or protocol supplied the value.
+func intervalArithmeticTextOperand(expr *Expr) bool {
+	return types.T(expr.Typ.Id).IsMySQLString() || temporalDirectMarker(expr)
 }
 
 func intervalUnitIsDayOrLarger(intervalExpr *Expr) bool {

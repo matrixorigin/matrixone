@@ -269,6 +269,52 @@ func (v *Vector) releaseBorrowedBacking() {
 	v.releaseBorrowedData()
 }
 
+// CopyWithReadonlyArea replaces an empty varlen destination with a private
+// materialization of source. Only the newly copied area becomes leased; neither
+// source storage nor a previously published destination backing is shared.
+// The destination's type, allocation mode and account are preserved. Failure
+// leaves both source and destination unchanged.
+func (v *Vector) CopyWithReadonlyArea(source *Vector, mp *mpool.MPool) error {
+	if v == nil || source == nil || mp == nil || v == source ||
+		v.length != 0 || v.IsConst() || !v.typ.IsVarlen() || v.typ.Oid != source.typ.Oid {
+		return moerr.NewInvalidInputNoCtx("readonly area copy requires an empty compatible varlen destination")
+	}
+	private := NewVec(v.typ)
+	private.offHeap = v.offHeap
+	private.sorted = v.sorted
+	private.isBin = v.isBin
+	private.prepareParamType = v.prepareParamType
+	if err := private.SetAllocationAccount(v.allocationAccount); err != nil {
+		private.Free(mp)
+		return err
+	}
+	if err := private.UnionBatch(source, 0, source.length, nil, mp); err != nil {
+		private.Free(mp)
+		return err
+	}
+	if len(private.area) > 0 {
+		buffer := DetachedBuffer{
+			data:      private.area,
+			selection: private.allocationAccount,
+			kind:      DetachedAreaBuffer,
+		}
+		lease, err := NewRefCountedBufferLease(private.area, int64(buffer.Capacity()), func() {
+			buffer.Free(mp)
+		})
+		if err != nil {
+			private.Free(mp)
+			return err
+		}
+		// The initial reference moves to this unpublished Vector. The callback
+		// captures only the physical allocation, not the Vector or its lease.
+		private.areaLease = lease
+		private.cantFreeArea = true
+	}
+	v.Free(mp)
+	*v = *private
+	return nil
+}
+
 // MaterializeOwned performs copy-on-write transactionally. Allocation failure
 // leaves the borrowed Vector unchanged and readable.
 func (v *Vector) MaterializeOwned(mp *mpool.MPool) error {

@@ -27,7 +27,7 @@ drop table if exists enum01;
 create table enum01(col1 enum(132142,'*&*',6278131));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 36 near "132142,'*&*',6278131));";
 drop table enum02;
-no such table enum.enum02
+Unknown table 'enum.enum02'
 drop table if exists enum02;
 create table enum02(col1 enum('123214','*&*(234','database数据库'));
 insert into enum02 values('1232145');

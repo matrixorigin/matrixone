@@ -395,6 +395,9 @@ func RunCuvs(c *IndexConsumer, ctx context.Context, errch chan error, r DataRetr
 					if e := sync.Save(sqlproc); e != nil {
 						return e
 					}
+					if e := c.flushIgnored(sqlproc); e != nil {
+						return e
+					}
 					if datatype == ISCPDataType_Tail {
 						if objectio.ISCPIndexWatermarkErrInjected() {
 							return injectedISCPIndexErr("watermark")
