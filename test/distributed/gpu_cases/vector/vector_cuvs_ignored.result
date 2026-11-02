@@ -239,3 +239,54 @@ show index status from bc;
 ➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,171,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
 ib  ¦  bc  ¦  stopped  ¦  the index cannot store more than max_bad_records = 0 rows; row 9999: vector element is out of the range the index stores: vector element 100000 cannot be stored as float16  ¦  0  ¦  0  ¦  null
 drop database ivfpq_ignored;
+
+drop database if exists cuvs_ignored_more;
+create database cuvs_ignored_more;
+use cuvs_ignored_more;
+create table d(id bigint primary key, v vecf32(8));
+insert into d select result, cast(concat('[', result%17, ',', result%13, ',', result%11, ',', result%7, ',', result%5, ',', result%3, ',', result%19, ',', result%23, ']') as vecf32(8)) from generate_series(1,63) g;
+insert into d values (5001,'[100000,1,1,1,1,1,1,1]'),(5002,'[100000,2,1,1,1,1,1,1]'),(5003,'[100000,3,1,1,1,1,1,1]');
+create table e like d;
+insert into e select * from d;
+SET gpu_multi_simulation = 2;
+create index ic using cagra on d(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32 quantization 'float16' max_bad_records 3 distribution_mode 'sharded';
+show index ignored from d;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+ic  ¦  5001  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-02 16:15:17  𝄀
+ic  ¦  5002  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-02 16:15:17  𝄀
+ic  ¦  5003  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-02 16:15:17
+select id from d order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+create index ip using ivfpq on e(v) op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8 quantization 'float16' max_bad_records 3 distribution_mode 'sharded';
+show index ignored from e;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+ip  ¦  5001  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-02 16:15:18  𝄀
+ip  ¦  5002  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-02 16:15:18  𝄀
+ip  ¦  5003  ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-02 16:15:18
+select id from e order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+SET gpu_multi_simulation = 0;
+drop index ic on d;
+drop index ip on e;
+delete from d where id > 5000;
+delete from e where id > 5000;
+create index ic using cagra on d(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32 quantization 'float16';
+select id from d order by l2_distance(v, '[100000,1,1,1,1,1,1,1]') limit 1;
+vector element is out of the range the index stores: vector element 100000 cannot be stored as float16
+drop index ic on d;
+create index ic using cagra on d(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+select count(*) from (select id from d order by l2_distance(v, '[100000,1,1,1,1,1,1,1]') limit 1) x;
+➤ count(*)[-5,64,0]  𝄀
+1
+select id from d order by l2_distance(v, '[1e20,1,1,1,1,1,1,1]') limit 1;
+vector element is out of the range the index stores: the squared L2 norm 1.0000000400817551e+40 exceeds 8.5070586659632215e+37
+create index ip using ivfpq on e(v) op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8 quantization 'float16';
+select id from e order by l2_distance(v, '[100000,1,1,1,1,1,1,1]') limit 1;
+vector element is out of the range the index stores: vector element 100000 cannot be stored as float16
+drop index ip on e;
+create index ip using ivfpq on e(v) op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8;
+select id from e order by l2_distance(v, '[1e20,1,1,1,1,1,1,1]') limit 1;
+vector element is out of the range the index stores: the squared L2 norm 1.0000000400817551e+40 exceeds 8.5070586659632215e+37
+drop database cuvs_ignored_more;

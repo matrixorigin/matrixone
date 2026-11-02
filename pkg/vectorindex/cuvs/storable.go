@@ -20,11 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
-
-// float16Overflow is the smallest float32 magnitude that rounds to infinity as float16: the
-// midpoint above the largest finite value, which rounds to even, away from it.
-const float16Overflow = float32(65520)
 
 // MaxSquaredNorm is the largest squared L2 norm a CAGRA or IVF-PQ index stores. The index
 // computes L2 distances in float32; the squared distance of two such vectors is at most
@@ -49,7 +46,7 @@ func CheckStorable[T float32 | types.Float16](vec []T, toFloat16 bool) error {
 		if math.IsNaN(float64(f)) || math.IsInf(float64(f), 0) {
 			return moerr.NewIndexVectorNonFiniteNoCtx()
 		}
-		if toFloat16 && (f >= float16Overflow || f <= -float16Overflow) {
+		if toFloat16 && (f >= vectorindex.Float16Overflow || f <= -vectorindex.Float16Overflow) {
 			return moerr.NewIndexVectorOutOfRangeNoCtx(fmt.Sprintf("vector element %v cannot be stored as float16", f))
 		}
 		sum += float64(f) * float64(f)
@@ -58,4 +55,14 @@ func CheckStorable[T float32 | types.Float16](vec []T, toFloat16 bool) error {
 		return moerr.NewIndexVectorOutOfRangeNoCtx(fmt.Sprintf("the squared L2 norm %g exceeds %g", sum, MaxSquaredNorm))
 	}
 	return nil
+}
+
+// CheckQuery returns the reason a CAGRA or IVF-PQ index cannot search for query, the bytes of a
+// vector of the base type base, or nil. toFloat16 reports that the index stores a vecf32 base as
+// float16.
+func CheckQuery(query []byte, base types.T, toFloat16 bool) error {
+	if base == types.T_array_float16 {
+		return CheckStorable(types.BytesToArray[types.Float16](query), false)
+	}
+	return CheckStorable(types.BytesToArray[float32](query), toFloat16)
 }

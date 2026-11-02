@@ -59,12 +59,7 @@ func feed(t *testing.T, g *cuvsIgnoredRows, b *recordingBuilder, ids []int64) {
 		skip, err := checkCuvsRow(g, id, vec)
 		require.NoError(t, err)
 		require.False(t, skip)
-		if g.holding() {
-			require.NoError(t, g.hold(b, nil, id, types.ArrayToBytes(vec), nil))
-			continue
-		}
-		require.NoError(t, b.AddRow(id, types.ArrayToBytes(vec)))
-		g.added()
+		require.NoError(t, g.route(b, nil, nil, 0, id, types.ArrayToBytes(vec)))
 	}
 }
 
@@ -110,6 +105,8 @@ func TestCuvsIgnoredRowsHoldsShortSubIndex(t *testing.T) {
 	feed(t, g, b, seq(1, 13))
 	require.Equal(t, [][]int64{seq(1, 5), seq(6, 10), seq(11, 13)}, b.subs)
 	require.Empty(t, g.tail())
+	// a flush releases the vectors it held
+	require.Nil(t, g.held[:cap(g.held)][0].Vec)
 
 	// capacity 0 is one sub-index
 	g = newTestCuvsIgnoredRows(t, 0, 0, 3)

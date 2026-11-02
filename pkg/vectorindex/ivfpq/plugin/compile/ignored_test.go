@@ -47,7 +47,7 @@ func TestIvfpqGenDeleteSQL_Ignored(t *testing.T) {
 	sqls, err := genDeleteSQL(withIgnored(ivfpqIndexDefs(), `{"op_type":"vector_l2_ops"}`), "db1")
 	require.NoError(t, err)
 	require.Len(t, sqls, 3)
-	require.Equal(t, "DELETE FROM `db1`.`__mo_ignored_001`", sqls[2])
+	require.Equal(t, "DELETE FROM `db1`.`__mo_ignored_001` WHERE TRUE", sqls[2])
 }
 
 // The build learns the ignored table and the limit of the index.

@@ -57,3 +57,13 @@ func TestCheckStorable(t *testing.T) {
 	require.NoError(t, CheckStorable([]types.Float16{types.Float16FromFloat32(65504), types.Float16FromFloat32(-65504)}, false))
 	requireCode(t, CheckStorable([]types.Float16{types.Float16FromFloat32(float32(math.Inf(1)))}, false), moerr.ErrIndexVectorNonFinite)
 }
+
+// A query vector the index cannot store is rejected.
+func TestCheckQuery(t *testing.T) {
+	require.NoError(t, CheckQuery(types.ArrayToBytes([]float32{1, 2}), types.T_array_float32, true))
+	requireCode(t, CheckQuery(types.ArrayToBytes([]float32{100000, 2}), types.T_array_float32, true), moerr.ErrIndexVectorOutOfRange)
+	require.NoError(t, CheckQuery(types.ArrayToBytes([]float32{100000, 2}), types.T_array_float32, false))
+	requireCode(t, CheckQuery(types.ArrayToBytes([]float32{1e20, 2}), types.T_array_float32, false), moerr.ErrIndexVectorOutOfRange)
+	require.NoError(t, CheckQuery(types.ArrayToBytes([]types.Float16{types.Float16FromFloat32(65504)}), types.T_array_float16, false))
+	requireCode(t, CheckQuery(nil, types.T_array_float32, false), moerr.ErrIndexVectorDimension)
+}

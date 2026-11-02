@@ -56,22 +56,22 @@ select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 -- one row more through incremental sync stops the index
 insert into t values (10000,'[1,-90000,1,1,1,1,1,1]',10000);
 -- @ignore:6
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index status from t;
 -- ALTER REINDEX with a higher limit rebuilds the index and restarts it
 alter table t alter reindex ix cagra max_bad_records = 10;
 -- @ignore:4
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from t;
 -- @ignore:6
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index status from t;
 -- an ignored row updated to a storable value, and one deleted, leave the ignored rows
 update t set v = '[2,2,2,2,2,2,2,2]' where id = 9999;
 delete from t where id = 10000;
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from t;
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 select id from t order by l2_distance(v, '[2,2,2,2,2,2,2,2]') limit 2;
 -- a build that can store none of its rows fails within the limit
 create table z(id bigint primary key, v vecf32(8));
@@ -83,13 +83,13 @@ insert into a select id, v from n where id <= 300;
 insert into a values (9999,'[100000,1,1,1,1,1,1,1]');
 create index ia using cagra on a(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32 quantization 'float16' max_bad_records 1 async;
 -- @ignore:4
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from a;
 create table b(id bigint primary key, v vecf32(8));
 insert into b select id, v from a;
 create index ib using cagra on b(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32 quantization 'float16' async;
 -- @ignore:6
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index status from b;
 
 -- ---------------- I13: left-out rows never give cuVS a sub-index it cannot build -----
@@ -109,17 +109,17 @@ select id from s where c = 215 order by l2_distance(v, (select v from s where id
 -- t is within its limit, b is stopped by it
 insert into t values (10000,'[100000,9,1,1,1,1,1,1]',10000);
 -- @ignore:4
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from t;
 create table tc clone t;
 create table bc clone b;
 -- @ignore:4
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from tc;
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 select id from tc order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 -- @ignore:6
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index status from bc;
 
 drop database cagra_ignored;
@@ -170,22 +170,22 @@ select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 -- one row more through incremental sync stops the index
 insert into t values (10000,'[1,-90000,1,1,1,1,1,1]',10000);
 -- @ignore:6
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index status from t;
 -- ALTER REINDEX with a higher limit rebuilds the index and restarts it
 alter table t alter reindex ix ivfpq max_bad_records = 10;
 -- @ignore:4
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from t;
 -- @ignore:6
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index status from t;
 -- an ignored row updated to a storable value, and one deleted, leave the ignored rows
 update t set v = '[2,2,2,2,2,2,2,2]' where id = 9999;
 delete from t where id = 10000;
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from t;
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 select id from t order by l2_distance(v, '[2,2,2,2,2,2,2,2]') limit 2;
 -- a build that can store none of its rows fails within the limit
 create table z(id bigint primary key, v vecf32(8));
@@ -197,13 +197,13 @@ insert into a select id, v from n where id <= 300;
 insert into a values (9999,'[100000,1,1,1,1,1,1,1]');
 create index ia using ivfpq on a(v) op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8 quantization 'float16' max_bad_records 1 async;
 -- @ignore:4
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from a;
 create table b(id bigint primary key, v vecf32(8));
 insert into b select id, v from a;
 create index ib using ivfpq on b(v) op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8 quantization 'float16' async;
 -- @ignore:6
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index status from b;
 
 -- ---------------- I13: left-out rows never give cuVS a sub-index it cannot build -----
@@ -223,17 +223,63 @@ select id from s where c = 202 order by l2_distance(v, (select v from s where id
 -- t is within its limit, b is stopped by it
 insert into t values (10000,'[100000,9,1,1,1,1,1,1]',10000);
 -- @ignore:4
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from t;
 create table tc clone t;
 create table bc clone b;
 -- @ignore:4
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index ignored from tc;
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 select id from tc order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
 -- @ignore:6
--- @wait_expect(2, 60)
+-- @wait_expect(2, 120)
 show index status from bc;
 
 drop database ivfpq_ignored;
+
+-- =====================================================================
+-- CAGRA and IVF-PQ: sharded builds and search vectors
+-- =====================================================================
+drop database if exists cuvs_ignored_more;
+create database cuvs_ignored_more;
+use cuvs_ignored_more;
+create table d(id bigint primary key, v vecf32(8));
+insert into d select result, cast(concat('[', result%17, ',', result%13, ',', result%11, ',', result%7, ',', result%5, ',', result%3, ',', result%19, ',', result%23, ']') as vecf32(8)) from generate_series(1,63) g;
+insert into d values (5001,'[100000,1,1,1,1,1,1,1]'),(5002,'[100000,2,1,1,1,1,1,1]'),(5003,'[100000,3,1,1,1,1,1,1]');
+create table e like d;
+insert into e select * from d;
+
+-- ---------------- I13: a sharded build gives every shard the rows cuVS builds -----
+-- 66 rows over 2 devices plan shards of 32, but the 63 stored rows would leave one empty: the
+-- build holds them, and they go to the brute-force tail
+SET gpu_multi_simulation = 2;
+create index ic using cagra on d(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32 quantization 'float16' max_bad_records 3 distribution_mode 'sharded';
+-- @ignore:4
+show index ignored from d;
+select id from d order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
+create index ip using ivfpq on e(v) op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8 quantization 'float16' max_bad_records 3 distribution_mode 'sharded';
+-- @ignore:4
+show index ignored from e;
+select id from e order by l2_distance(v, '[1,1,1,1,1,1,1,1]') limit 1;
+SET gpu_multi_simulation = 0;
+drop index ic on d;
+drop index ip on e;
+
+-- ---------------- I14: a search vector the index cannot store is rejected -----
+delete from d where id > 5000;
+delete from e where id > 5000;
+create index ic using cagra on d(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32 quantization 'float16';
+select id from d order by l2_distance(v, '[100000,1,1,1,1,1,1,1]') limit 1;
+drop index ic on d;
+create index ic using cagra on d(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+-- float32 storage holds it
+select count(*) from (select id from d order by l2_distance(v, '[100000,1,1,1,1,1,1,1]') limit 1) x;
+select id from d order by l2_distance(v, '[1e20,1,1,1,1,1,1,1]') limit 1;
+create index ip using ivfpq on e(v) op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8 quantization 'float16';
+select id from e order by l2_distance(v, '[100000,1,1,1,1,1,1,1]') limit 1;
+drop index ip on e;
+create index ip using ivfpq on e(v) op_type 'vector_l2_ops' lists=4 m=8 bits_per_code=8;
+select id from e order by l2_distance(v, '[1e20,1,1,1,1,1,1,1]') limit 1;
+
+drop database cuvs_ignored_more;

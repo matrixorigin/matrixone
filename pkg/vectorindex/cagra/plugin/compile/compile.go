@@ -341,7 +341,7 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
 	}
 	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
-		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, ignored.IndexTableName)))
+		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, ignored.IndexTableName)))
 	}
 	return sqls, nil
 }

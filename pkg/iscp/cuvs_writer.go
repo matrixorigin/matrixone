@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"strings"
-
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -149,7 +147,7 @@ func NewCuvsCdcWriter(algoName, dbName, tblName, indexName string,
 	w.dimension = vecTyp.Width
 	w.vecBytesPer = int(vecTyp.Width) * baseElemSize
 	w.toFloat16 = w.baseType == types.T_array_float32 &&
-		strings.EqualFold(stringFromAlgoParams(idxdef.IndexAlgoParams, catalog.Quantization), metric.Quantization_F16_Str)
+		stringFromAlgoParams(idxdef.IndexAlgoParams, catalog.Quantization) == metric.Quantization_F16_Str
 
 	// Resolve INCLUDE columns from indexAlgoParams. Returns zero
 	// values when no INCLUDE columns are configured.

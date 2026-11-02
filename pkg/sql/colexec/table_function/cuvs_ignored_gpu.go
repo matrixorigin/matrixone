@@ -20,15 +20,16 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	cuvsfilter "github.com/matrixorigin/matrixone/pkg/cuvs/filter"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
-	"go.uber.org/zap"
 )
+
+// heldRowOverhead is the Go bytes of a held row beside its vector and INCLUDE bytes.
+const heldRowOverhead = 64
 
 // cuvsRowBuilder is the part of a CAGRA or IVF-PQ build that takes rows.
 type cuvsRowBuilder interface {
@@ -36,24 +37,17 @@ type cuvsRowBuilder interface {
 	filterColumnBuilder
 }
 
-// cuvsIgnoredRows leaves out of a CAGRA or IVF-PQ build the rows the index cannot store, up to
-// the index's limit, and keeps them in a spill file until end writes them to the ignored table.
+// cuvsIgnoredRows leaves out of a CAGRA or IVF-PQ build the rows the index cannot store.
 //
 // The build plans its sub-indexes from the count of non-NULL rows, and the builder starts a new
-// sub-index every capacity rows, so a left-out row shortens the last sub-index, which cuVS cannot
-// build below threshold rows. The first threshold rows of each sub-index are therefore held until
-// all of them arrive; rows still held at the end go to the CDC tail.
+// sub-index every capacity rows, so a left-out row shortens the last sub-index, which cuVS
+// cannot build below holdRows rows (minSubIndexRows). The first holdRows rows of each sub-index
+// are therefore held until all of them arrive; rows still held at the end go to the CDC tail.
 type cuvsIgnoredRows struct {
-	limit     int64
+	*ignoredBuild
 	toFloat16 bool
-	spill     *vectorindex.IgnoredSpill
-	// left counts the rows the index cannot store, and kept the rows it stores.
-	left, kept int64
-	// firstPk and firstErr are the key and the error of the first row the index cannot store.
-	firstPk  string
-	firstErr error
 
-	threshold, capacity int64
+	holdRows, capacity int64
 	// inSub counts the rows of the builder's current sub-index; 0 means rows are held.
 	inSub int64
 	held  []cuvscdc.PendingRecord
@@ -62,19 +56,16 @@ type cuvsIgnoredRows struct {
 // newCuvsIgnoredRows returns the tracker of a build whose index has an ignored table, or nil.
 // toFloat16 reports that the index stores a vecf32 base as float16.
 func newCuvsIgnoredRows(tblcfg vectorindex.IndexTableConfig, spillDir string, toFloat16 bool) *cuvsIgnoredRows {
-	if tblcfg.IgnoredTable == "" {
+	b := newIgnoredBuild(tblcfg, spillDir)
+	if b == nil {
 		return nil
 	}
-	return &cuvsIgnoredRows{
-		limit:     tblcfg.MaxBadRecords,
-		toFloat16: toFloat16,
-		spill:     vectorindex.NewIgnoredSpill(spillDir),
-	}
+	return &cuvsIgnoredRows{ignoredBuild: b, toFloat16: toFloat16}
 }
 
-// setPlan sets the rows per sub-index (0 is one sub-index) and the fewest rows cuVS builds.
-func (g *cuvsIgnoredRows) setPlan(capacity, threshold int64) {
-	g.capacity, g.threshold = capacity, threshold
+// setPlan sets the rows per sub-index (0 is one sub-index) and the fewest rows cuVS builds one of.
+func (g *cuvsIgnoredRows) setPlan(capacity, holdRows int64) {
+	g.capacity, g.holdRows = capacity, holdRows
 }
 
 // checkCuvsRow reports whether the build leaves out the row with key id and vector vec; one row
@@ -82,33 +73,42 @@ func (g *cuvsIgnoredRows) setPlan(capacity, threshold int64) {
 func checkCuvsRow[T float32 | types.Float16](g *cuvsIgnoredRows, id int64, vec []T) (bool, error) {
 	err := cuvscdc.CheckStorable(vec, g.toFloat16)
 	if err == nil {
-		g.kept++
+		g.stored()
 		return false, nil
 	}
-	code, ok := vectorindex.UnstorableCode(err)
-	if !ok {
-		return false, err
-	}
-	g.left++
-	pk := strconv.FormatInt(id, 10)
-	if g.firstErr == nil {
-		g.firstPk, g.firstErr = pk, err
-	}
-	if g.spill.Len() >= g.limit {
-		return false, moerr.NewIndexTooManyBadRecordsNoCtx(g.limit, pk, err.Error())
-	}
-	return true, g.spill.Add(pk, code)
+	return true, g.leaveOut(strconv.FormatInt(id, 10), err)
 }
 
-// holding reports whether the next row is held: the builder has no row of a sub-index yet.
-func (g *cuvsIgnoredRows) holding() bool {
-	return g.inSub == 0
+// route gives the builder the row nthRow of argVecs, with key id and vector vec, or holds it
+// while the builder's sub-index has no row yet.
+func (g *cuvsIgnoredRows) route(b cuvsRowBuilder, cols []cuvsfilter.ColumnMeta, argVecs []*vector.Vector, nthRow int, id int64, vec []byte) error {
+	if g.inSub == 0 {
+		var include []byte
+		if len(cols) > 0 {
+			var err error
+			if include, err = encodeIncludeRowFromArgVecs(cols, argVecs, 3, nthRow); err != nil {
+				return err
+			}
+		}
+		return g.hold(b, cols, id, vec, include)
+	}
+	if err := b.AddRow(id, vec); err != nil {
+		return err
+	}
+	if len(cols) > 0 {
+		if err := appendFilterRow(b, cols, argVecs, 3, nthRow); err != nil {
+			return err
+		}
+	}
+	g.inSub++
+	g.nextSub()
+	return nil
 }
 
-// hold keeps a row, copying vec; once threshold rows are held it gives them to the builder.
+// hold keeps a row, copying vec; once holdRows rows are held it gives them to the builder.
 func (g *cuvsIgnoredRows) hold(b cuvsRowBuilder, cols []cuvsfilter.ColumnMeta, id int64, vec, include []byte) error {
 	g.held = append(g.held, cuvscdc.PendingRecord{Pkid: id, Vec: append([]byte(nil), vec...), Include: include})
-	if int64(len(g.held)) < g.threshold {
+	if int64(len(g.held)) < g.holdRows {
 		return nil
 	}
 	for _, r := range g.held {
@@ -119,16 +119,11 @@ func (g *cuvsIgnoredRows) hold(b cuvsRowBuilder, cols []cuvsfilter.ColumnMeta, i
 			return err
 		}
 	}
+	clear(g.held)
 	g.held = g.held[:0]
-	g.inSub = g.threshold
+	g.inSub = g.holdRows
 	g.nextSub()
 	return nil
-}
-
-// added counts a row given to the builder directly.
-func (g *cuvsIgnoredRows) added() {
-	g.inSub++
-	g.nextSub()
 }
 
 func (g *cuvsIgnoredRows) nextSub() {
@@ -142,30 +137,10 @@ func (g *cuvsIgnoredRows) tail() []cuvscdc.PendingRecord {
 	return g.held
 }
 
-// allBad fails a build that can store none of the rows it reads.
-func (g *cuvsIgnoredRows) allBad() error {
-	if g.left > 0 && g.kept == 0 {
-		return moerr.NewIndexAllRowsBadNoCtx(g.left, g.firstPk, g.firstErr.Error())
-	}
-	return nil
-}
-
-// sqls passes to exec the statements that record the left-out rows with commit time ts.
-func (g *cuvsIgnoredRows) sqls(tblcfg vectorindex.IndexTableConfig, ts int64, exec func(string) error) error {
-	if g.left > 0 {
-		logutil.Warn("cuvs create ignored rows",
-			zap.String("db", tblcfg.DbName),
-			zap.String("table", tblcfg.SrcTable),
-			zap.Int64("ignored", g.left),
-			zap.String("first", g.firstPk+": "+g.firstErr.Error()))
-	}
-	cols := vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Ts: catalog.IndexIgnored_TblCol_Ts}
-	return g.spill.Sqls(tblcfg.DbName, tblcfg.IgnoredTable, cols, ts, exec)
-}
-
+// close removes the spill file; g may be nil.
 func (g *cuvsIgnoredRows) close() {
 	if g != nil {
-		g.spill.Close()
+		g.ignoredBuild.close()
 	}
 }
 

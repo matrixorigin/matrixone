@@ -151,8 +151,19 @@ non-NULL rows before it reads them, and cuVS builds no sub-index of fewer rows t
 vector, does not take a place in the plan, so it shortens the last sub-index. The build therefore
 holds the first minimum rows of each sub-index until all of them arrive, and the rows still held
 at the end go to the brute-force tail with the rows the plan puts there, where they are
-searched. Without an ignored table a build holds no rows and checks none. Rejected: a new SQL
+searched. A sharded build is one sub-index split across its devices, each shard
+`(rows / devices) &^ 31` rows, so it holds devices × the minimum rounded up to a multiple of 32.
+The held rows are charged to the host memory the build plans with. Without an ignored table a build holds no rows and checks none. Rejected: a new SQL
 function making the count exclude the rows (a second home of the rule), and failing such a build.
+
+**Search vectors.** A query vector either rule rejects is rejected with the same error, by every
+CAGRA and IVF-PQ index, with an ignored table or without one; before this change the search
+returned no row.
+
+**Incremental sync cost** (decision log). The sync records a removal for every row it indexes
+while the ignored table has a row, so a large insert into such a table issues one `DELETE ... IN`
+per 1024 rows in its commit. This is the tracker HNSW uses (`pkg/iscp/index_ignored.go`); a
+change that skips plain inserts would apply to every index and is not made here.
 
 ## Scope
 
@@ -177,9 +188,10 @@ CAGRA and IVF-PQ claims, and I9 for them, head sections of
 | I5 | A search vector the index cannot store is rejected. | `TestToStorage` |
 | I6 | `SHOW INDEX IGNORED` lists the ignored rows of every index and partition of a table with their code and message, and `WHERE` filters them. | `TestShowIndexIgnored`, `TestIgnoredReasonSql` |
 | I7 | `SHOW INDEX IGNORED` requires `SELECT` on the table. | `TestShowIndexIgnored` |
-| I8 | An index without an ignored table keeps its previous behaviour. | `TestNewIgnoredRowsWithoutTable`, `TestHnswCreateIgnoresUnstorableRows`, `TestShowIndexIgnored`, `TestCuvsWriterWithoutIgnoredTable`, `TestCuvsIgnoredRowsWithoutTable` |
+| I8 | An index without an ignored table builds and syncs as before. | `TestNewIgnoredRowsWithoutTable`, `TestHnswCreateIgnoresUnstorableRows`, `TestShowIndexIgnored`, `TestCuvsWriterWithoutIgnoredTable`, `TestCuvsIgnoredRowsWithoutTable` |
 | I9 | A restore follows the limit of the index it restores: an index within its limit is restored with the same ignored rows, and one stopped by the limit is restored stopped. | `TestPermanentErrorCause`, `TestHnswCreateIgnoresUnstorableRows` |
 | I10 | `SHOW INDEX STATUS` shows, in any account, whether each index of a table is in sync or stopped, with its error, its ignored rows and its limit; it requires `SELECT` on the table. | `TestShowIndexStatus`, `TestShowIndexStatusSql`, `TestStoppedJobState` |
 | I11 | A CAGRA or IVF-PQ index cannot store a vecf32 element beyond the float16 range when it stores float16, or a vector whose squared L2 norm exceeds float32 max / 4; float32 and int8 storage, and a vecf16 column, store the float16 case. | `TestCheckStorable`, `TestCuvsWriterIgnoresUnstorableVectors`, `TestCuvsWriterFloat16OnlyNarrowsVecf32` |
 | I12 | CAGRA and IVF-PQ apply the limit as HNSW does (I1–I4): a synchronous build fails past it, or when it can store none of its rows; an asynchronous build or incremental sync stops past it; ALTER REINDEX with a higher limit restarts it; an update to a storable value, or a delete, removes a row. | `TestCuvsIgnoredRowsLimit`, `TestCuvsIgnoredRowsAllBad`, `TestCagraValidateReindexParams_MaxBadRecords`, `TestIvfpqValidateReindexParams_MaxBadRecords`, `TestCagraGenBuildSQL_Ignored`, `TestIvfpqGenBuildSQL_Ignored` |
-| I13 | Left-out rows never give cuVS a sub-index smaller than it builds; the rows of such a sub-index go to the brute-force tail and are found by a search, with their INCLUDE values. | `TestCuvsIgnoredRowsHoldsShortSubIndex`, `TestAppendFilterRowFromInclude` |
+| I13 | Left-out rows never give cuVS a sub-index, or a shard of a sharded build, smaller than it builds; the rows of such a sub-index go to the brute-force tail and are found by a search, with their INCLUDE values. | `TestCuvsIgnoredRowsHoldsShortSubIndex`, `TestAppendFilterRowFromInclude`, `TestMinSubIndexRows`, `TestReserveHeldRows` |
+| I14 | A search vector a CAGRA or IVF-PQ index cannot store is rejected. | `TestCheckQuery`, `TestNewSearchRejectsUnstorableQuery` |

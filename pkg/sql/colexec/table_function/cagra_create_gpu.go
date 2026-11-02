@@ -552,8 +552,23 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// per-card capacity -- is applied by rows_fitting() in C++, which knows
 		// the distribution mode and the distinct device count. Scaling again here
 		// would double it.
+		// A build that leaves out rows holds the first holdRows rows of each sub-index in Go.
+		sharded := u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED)
+		holdRows := minSubIndexRows(threshold, sharded, len(u.devices))
+		if u.tblcfg.IgnoredTable != "" {
+			baseElem := uint64(4)
+			if u.baseOid == types.T_array_float16 {
+				baseElem = 2
+			}
+			heldRowBytes := uint64(u.idxcfg.CuvsCagra.Dimensions)*baseElem +
+				uint64(includeBytesPerRowFromCols(u.filterCols)) + heldRowOverhead
+			if hostRowsFit, err = reserveHeldRows(hostRowsFit, holdRows, heldRowBytes, hostPerRow, "cagra"); err != nil {
+				return err
+			}
+		}
+
 		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
-			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
+			sharded,
 			len(u.devices), "cagra", "max_index_capacity")
 		if err != nil {
 			return err
@@ -579,7 +594,7 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		u.ignoredRows = newCuvsIgnoredRows(u.tblcfg, spillDir,
 			u.baseOid == types.T_array_float32 && qt == metric.Quantization_F16)
 		if u.ignoredRows != nil {
-			u.ignoredRows.setPlan(plan.Capacity, threshold)
+			u.ignoredRows.setPlan(plan.Capacity, holdRows)
 		}
 
 		// ---- create builder ----
@@ -643,6 +658,11 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		return nil
 	}
 
+	// Build-stream position over indexable (non-NULL) rows only — matches the
+	// COUNT(... WHERE vec IS NOT NULL) basis that cdcCutoff was derived from.
+	// A row the index cannot store does not advance it, like a NULL vector.
+	srcPos := u.rowsSeen
+
 	id := vector.GetFixedAtNoTypeCheck[int64](tf.ctr.argVecs[1], nthRow)
 
 	// Decode the base vector to its native type (see ivfpq_create_gpu.go for the
@@ -664,8 +684,6 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 	}
 
-	// A row the index cannot store is left out, like a NULL vector, and does not advance the
-	// build cursor.
 	if u.ignoredRows != nil {
 		var skip bool
 		if u.baseOid == types.T_array_float16 {
@@ -678,9 +696,6 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		}
 	}
 
-	// Build-stream position over indexable (non-NULL) rows only — matches the
-	// COUNT(... WHERE vec IS NOT NULL) basis that cdcCutoff was derived from.
-	srcPos := u.rowsSeen
 	u.rowsSeen++
 
 	// Trailing rows below the cuvs threshold route to the CDC tail
@@ -716,14 +731,8 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	if u.baseOid == types.T_array_float16 {
 		vecBytes = util.UnsafeSliceToBytes(hf)
 	}
-	if u.ignoredRows != nil && u.ignoredRows.holding() {
-		var incBytes []byte
-		if len(u.filterCols) > 0 {
-			if incBytes, err = encodeIncludeRowFromArgVecs(u.filterCols, tf.ctr.argVecs, 3, nthRow); err != nil {
-				return err
-			}
-		}
-		return u.ignoredRows.hold(u.builder, u.filterCols, id, vecBytes, incBytes)
+	if u.ignoredRows != nil {
+		return u.ignoredRows.route(u.builder, u.filterCols, tf.ctr.argVecs, nthRow, id, vecBytes)
 	}
 	if err = u.builder.AddRow(id, vecBytes); err != nil {
 		return err
@@ -734,9 +743,6 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if err = appendFilterRow(u.builder, u.filterCols, tf.ctr.argVecs, 3, nthRow); err != nil {
 			return err
 		}
-	}
-	if u.ignoredRows != nil {
-		u.ignoredRows.added()
 	}
 	return nil
 }
