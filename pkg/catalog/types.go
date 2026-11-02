@@ -356,6 +356,9 @@ const (
 	MO_CCPR_DBS    = "mo_ccpr_dbs"
 )
 
+// MoISCPJobStateError is the job_state of mo_iscp_log of a job stopped by a permanent error.
+const MoISCPJobStateError int8 = 4
+
 func IsSystemTable(id uint64) bool {
 	return id == MO_DATABASE_ID || id == MO_TABLES_ID || id == MO_COLUMNS_ID || id == MO_TABLES_LOGICAL_ID_INDEX_ID
 }
@@ -672,6 +675,15 @@ const (
 	IndexMetadata_TblCol_Filesize  = "filesize"
 	IndexMetadata_TblCol_Nrow      = "nrow"
 	IndexMetadata_TblCol_Build_Ts  = "build_ts"
+
+	// Ignored rows - a table of an index holding the source rows the index cannot store,
+	// keyed by the source primary key, with the error code, an optional message and the
+	// commit time of the change.
+	IndexIgnored_TblType       = "ignored"
+	IndexIgnored_TblCol_Pk     = "__mo_index_pk"
+	IndexIgnored_TblCol_Code   = "__mo_index_code"
+	IndexIgnored_TblCol_Reason = "__mo_index_reason"
+	IndexIgnored_TblCol_Ts     = "__mo_index_ts"
 
 	/************ 4. HNSW Index *************/
 
