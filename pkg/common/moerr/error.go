@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 
 	moerrpb "github.com/matrixorigin/matrixone/pkg/pb/moerr"
@@ -174,6 +175,12 @@ const (
 	// (1051, "Unknown table") when DROP TABLE targets an absent table,
 	// keeping ErrNoSuchTable (1146) for query/DML lookups.
 	ErrDropNonExistsTable uint16 = 20345
+	// Reasons an index cannot store a row, and the limits on ignored rows.
+	ErrIndexVectorDimension   uint16 = 20346
+	ErrIndexVectorNonFinite   uint16 = 20347
+	ErrIndexVectorOutOfRange  uint16 = 20348
+	ErrIndexTooManyBadRecords uint16 = 20349
+	ErrIndexAllRowsBad        uint16 = 20350
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -538,6 +545,11 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrParseError:                   {ER_PARSE_ERROR, []string{"42000"}, "SQL parser error: %s"},
 	ErrConstraintViolation:          {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
 	ErrDuplicateCheckConstraintName: {ER_CHECK_CONSTRAINT_DUP_NAME, []string{MySQLDefaultSqlState}, "Duplicate check constraint name '%-.192s'"},
+	ErrIndexVectorDimension:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector dimension does not match the index: %s"},
+	ErrIndexVectorNonFinite:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector has a NaN or infinite element"},
+	ErrIndexVectorOutOfRange:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector element is out of the range the index stores: %s"},
+	ErrIndexTooManyBadRecords:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot store more than max_bad_records = %d rows; row %s: %s"},
+	ErrIndexAllRowsBad:              {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the index cannot store any of the %d rows; row %s: %s"},
 	// Truncating/dropping an FK-referenced parent is a defined user error, not
 	// an internal failure. Texts, SQLSTATEs and MySQL numbers mirror the
 	// upstream table in mysql_error_define.go (ER_TRUNCATE_ILLEGAL_FK 1701
@@ -902,6 +914,15 @@ func (e *Error) Display() string {
 		return e.message
 	}
 	return fmt.Sprintf("%s: %s", e.message, e.detail)
+}
+
+// MessageOf returns the message of code without its details.
+func MessageOf(code uint16) string {
+	item, ok := errorMsgRefer[code]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSuffix(item.errorMsgOrFormat, ": %s")
 }
 
 func (e *Error) ErrorCode() uint16 {
