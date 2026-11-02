@@ -499,6 +499,7 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err != nil {
 				return err
 			}
+			applyCursorEnumSetResultMetadata(columns, colDefs)
 			ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 			freezeResultMetadata(execCtx.runner)
 			// A cursor must retain its metadata before the pipeline starts so

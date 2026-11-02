@@ -303,7 +303,7 @@ func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef, directInte
 }
 
 func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Context) ([]interface{}, []*plan2.ColDef, error) {
-	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	cols := plan2.GetResultColumnsFromPlanWithParams(cwft.plan, cwft.paramVals)
 	if cwft.preparedStmt != nil {
 		overlayPreparedGroupConcatResultMetadata(
 			cwft.plan.GetQuery(), cols, cwft.preparedStmt.groupConcatMaxLenFloor)
@@ -313,7 +313,7 @@ func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Conte
 }
 
 func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{}, error) {
-	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	cols := plan2.GetResultColumnsFromPlanWithParams(cwft.plan, cwft.paramVals)
 	switch cwft.GetAst().(type) {
 	case *tree.ShowColumns:
 		if len(cols) == 7 {

@@ -893,6 +893,15 @@ func mysqlSpecialResultTypeFromProvenance(provenance OutputColumnProvenance) *pl
 	return nil
 }
 
+// Materializing a label as VARCHAR irreversibly loses CHAR identity. Later
+// value-preserving operators may retain its width, but cannot recreate it.
+func withMySQLSpecialResultKind(result *plan.MySQLSpecialResultType, kind plan.MySQLSpecialResultType_Kind) *plan.MySQLSpecialResultType {
+	if result.Kind != plan.MySQLSpecialResultType_VARCHAR_LABEL {
+		result.Kind = kind
+	}
+	return result
+}
+
 func (builder *QueryBuilder) mysqlSpecialResultTypeForExpr(ctx *BindContext, expr *plan.Expr) *plan.MySQLSpecialResultType {
 	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
 		return nil
@@ -911,8 +920,7 @@ func (builder *QueryBuilder) mysqlSpecialResultTypeForExpr(ctx *BindContext, exp
 			if fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
 				(fn.Func.ObjName == "min" || fn.Func.ObjName == "max") {
 				if result := builder.mysqlSpecialResultTypeForExpr(ctx, fn.Args[0]); result != nil {
-					result.Kind = plan.MySQLSpecialResultType_PREPARE_ONLY
-					return result
+					return withMySQLSpecialResultKind(result, plan.MySQLSpecialResultType_PREPARE_ONLY)
 				}
 			}
 		}
@@ -924,8 +932,7 @@ func (builder *QueryBuilder) mysqlSpecialResultTypeForExpr(ctx *BindContext, exp
 		if fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
 			(fn.Func.ObjName == "min" || fn.Func.ObjName == "max") {
 			if result := builder.mysqlSpecialResultTypeForExpr(ctx, fn.Args[0]); result != nil {
-				result.Kind = plan.MySQLSpecialResultType_AGGREGATE
-				return result
+				return withMySQLSpecialResultKind(result, plan.MySQLSpecialResultType_AGGREGATE)
 			}
 		}
 		return nil
@@ -944,8 +951,7 @@ func (builder *QueryBuilder) mysqlSpecialResultTypeForExpr(ctx *BindContext, exp
 						return result
 					}
 				}
-				result.Kind = plan.MySQLSpecialResultType_SCALAR_SUBQUERY
-				return result
+				return withMySQLSpecialResultKind(result, plan.MySQLSpecialResultType_SCALAR_SUBQUERY)
 			}
 		}
 		return nil
@@ -962,7 +968,7 @@ func (builder *QueryBuilder) captureMySQLSpecialBlockResultTypes(ctx *BindContex
 				ctx.mysqlSpecialResultTypes = make(map[int32]*plan.MySQLSpecialResultType)
 			}
 			if ctx.sortRollup {
-				result.Kind = plan.MySQLSpecialResultType_ROLLUP
+				withMySQLSpecialResultKind(result, plan.MySQLSpecialResultType_ROLLUP)
 			}
 			ctx.mysqlSpecialResultTypes[int32(i)] = result
 		}

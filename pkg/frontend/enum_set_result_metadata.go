@@ -25,6 +25,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+// A cursor materializes its schema even when a static empty plan lets ordinary
+// execution publish unmaterialized CHAR metadata. Do not change the ColDefs or
+// the statement's prepare packets: those remain valid for subsequent executes.
+func applyCursorEnumSetResultMetadata(columns []any, defs []*plan.ColDef) {
+	for i, def := range defs {
+		result := def.MysqlSpecialResultType
+		if result != nil && result.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY && result.MaterializationElided {
+			columns[i].(*MysqlColumn).SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+		}
+	}
+}
+
 // MySQL publishes ENUM/SET labels as STRING, with field flags only for column
 // results. Both text and binary row encoders keep consuming the same string
 // vectors; only their column metadata changes.
@@ -51,7 +63,7 @@ func setEnumSetResultMetadata(ctx context.Context, result *plan.MySQLSpecialResu
 	// The display expression, not the ordinal/bitmap storage domain, owns the
 	// label encoding. Retain its charset and express the label width in bytes.
 	if result.Kind == plan.MySQLSpecialResultType_VARCHAR_LABEL ||
-		(result.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY && !preparing) {
+		(result.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY && !preparing && !result.MaterializationElided) {
 		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	} else {
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)

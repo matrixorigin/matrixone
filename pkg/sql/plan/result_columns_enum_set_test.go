@@ -20,31 +20,49 @@ import (
 	"github.com/gogo/protobuf/proto"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
 func TestEnumSetResultPresentation(t *testing.T) {
 	expressionKinds := map[string]pb.MySQLSpecialResultType_Kind{
-		"min max":                  pb.MySQLSpecialResultType_AGGREGATE,
-		"empty aggregate":          pb.MySQLSpecialResultType_AGGREGATE,
-		"aggregate subquery input": pb.MySQLSpecialResultType_AGGREGATE,
-		"scalar subquery":          pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
-		"empty subquery":           pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
-		"correlated subquery":      pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
-		"rollup columns":           pb.MySQLSpecialResultType_ROLLUP,
-		"rollup aggregate":         pb.MySQLSpecialResultType_ROLLUP,
-		"window min max":           pb.MySQLSpecialResultType_PREPARE_ONLY,
-		"distinct rollup":          pb.MySQLSpecialResultType_PREPARE_ONLY,
-		"derived rollup":           pb.MySQLSpecialResultType_VARCHAR_LABEL,
-		"rollup user union":        pb.MySQLSpecialResultType_ROLLUP,
-		"derived window":           pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"min max":                   pb.MySQLSpecialResultType_AGGREGATE,
+		"empty aggregate":           pb.MySQLSpecialResultType_AGGREGATE,
+		"aggregate subquery input":  pb.MySQLSpecialResultType_AGGREGATE,
+		"scalar subquery":           pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
+		"empty subquery":            pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
+		"correlated subquery":       pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
+		"rollup columns":            pb.MySQLSpecialResultType_ROLLUP,
+		"rollup aggregate":          pb.MySQLSpecialResultType_ROLLUP,
+		"window min max":            pb.MySQLSpecialResultType_PREPARE_ONLY,
+		"distinct rollup":           pb.MySQLSpecialResultType_PREPARE_ONLY,
+		"derived rollup":            pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"rollup user union":         pb.MySQLSpecialResultType_ROLLUP,
+		"derived window":            pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"widthonly aggregate":       pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"widthonly scalar":          pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"widthonly window":          pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"widthonly collapsed union": pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"widthonly union":           pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"widthonly rollup":          pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"collapsed rollup union":    pb.MySQLSpecialResultType_ROLLUP,
+		"noncollapsed rollup union": pb.MySQLSpecialResultType_ROLLUP,
 	}
 	for _, tc := range []struct {
 		name string
 		sql  string
 		want []types.T
 	}{
+		{"widthonly aggregate", "select min(e),max(s) from (select e,s from enum_order_t group by e,s with rollup) d", []types.T{types.T_enum, types.T_uint64}},
+		{"widthonly scalar", "select (select e from (select e,s from enum_order_t group by e,s with rollup) d limit 1), (select s from (select e,s from enum_order_t group by e,s with rollup) d limit 1)", []types.T{types.T_enum, types.T_uint64}},
+		{"widthonly window", "select min(e) over(),max(s) over() from (select e,s from enum_order_t group by e,s with rollup) d", []types.T{types.T_enum, types.T_uint64}},
+		{"widthonly collapsed union", "select e,s from (select e,s from enum_order_t group by e,s with rollup) d union select e,s from (select e,s from enum_order_t group by e,s with rollup) d", []types.T{types.T_enum, types.T_uint64}},
+		{"widthonly union", "select e,s from (select e,s from enum_order_t group by e,s with rollup) d union all select e,s from enum_order_t group by e,s with rollup", []types.T{types.T_enum, types.T_uint64}},
+		{"widthonly rollup", "select e,s from (select e,s from enum_order_t group by e,s with rollup) d group by e,s with rollup", []types.T{types.T_enum, types.T_uint64}},
+		{"collapsed rollup union", "select e,s from enum_order_t group by e,s with rollup union select e,s from enum_order_t group by e,s with rollup", []types.T{types.T_enum, types.T_uint64}},
+		{"noncollapsed rollup union", "select e,s from enum_order_t group by e,s with rollup union select e,s from enum_order_t where true group by e,s with rollup", []types.T{types.T_enum, types.T_uint64}},
 		{"direct", "select e, s, v from enum_order_t", []types.T{types.T_enum, types.T_uint64, types.T_any}},
 		{"ordinary first", "select v, e, s from enum_order_t", []types.T{types.T_any, types.T_enum, types.T_uint64}},
 		{"reordered aliases", "select s as x, v, e as y, s from enum_order_t", []types.T{types.T_uint64, types.T_any, types.T_enum, types.T_uint64}},
@@ -120,6 +138,63 @@ func TestEnumSetResultPresentation(t *testing.T) {
 			require.NoError(t, decoded.Unmarshal(before))
 			require.Equal(t, cols, GetResultColumnsFromPlan(&decoded))
 			require.True(t, proto.Equal(snapshot, p), "extracting metadata must not mutate a cached plan")
+		})
+	}
+}
+
+func TestEnumSetConstantEmptyPublicationPlan(t *testing.T) {
+	for _, tc := range []struct {
+		sql    string
+		elided bool
+	}{
+		{"select min(e) over(),max(s) over() from enum_order_t limit 0", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where false", true},
+		{"select distinct e,s from enum_order_t where false group by e,s with rollup", true},
+		{"select distinct e,s from enum_order_t group by e,s with rollup limit 0", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id>100", false},
+		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false", false},
+		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false having count(*)>0", true},
+		{"select min(e) over(),max(s) over() from (select e,s from enum_order_t group by e,s with rollup) d limit 0", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, tc.sql)
+			require.NoError(t, err)
+			snapshot := proto.Clone(p)
+			for _, def := range GetResultColumnsFromPlan(p) {
+				require.NotNil(t, def.MysqlSpecialResultType)
+				require.Equal(t, tc.elided, def.MysqlSpecialResultType.MaterializationElided)
+				cloned := DeepCopyColDef(def)
+				require.Equal(t, def.MysqlSpecialResultType, cloned.MysqlSpecialResultType)
+				data, err := def.Marshal()
+				require.NoError(t, err)
+				var restored pb.ColDef
+				require.NoError(t, restored.Unmarshal(data))
+				require.Equal(t, def.MysqlSpecialResultType, restored.MysqlSpecialResultType)
+			}
+			require.True(t, proto.Equal(snapshot, p), "metadata extraction must not mutate plan maps")
+		})
+	}
+}
+
+func TestEnumSetParameterizedEmptyPublication(t *testing.T) {
+	stmt, err := mysql.ParseOne(t.Context(), "select min(e) over(),max(s) over() from enum_order_t limit ?", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	mock := newMySQLSpecialOrderMock(t)
+	for _, source := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint64} {
+		t.Run(source.String(), func(t *testing.T) {
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: source.ToType()}}, []any{ParamValue{Value: "0", IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}})
+			require.NoError(t, err)
+			snapshot := proto.Clone(bound.Plan)
+			for _, count := range []int64{0, 1, 0} {
+				for _, col := range GetResultColumnsFromPlanWithParams(bound.Plan, []any{count}) {
+					require.Equal(t, count == 0, col.MysqlSpecialResultType.MaterializationElided)
+				}
+				require.True(t, proto.Equal(snapshot, bound.Plan), "execution parameters must not specialize shared metadata")
+				for _, col := range GetResultColumnsFromPlan(bound.Plan) {
+					require.False(t, col.MysqlSpecialResultType.MaterializationElided, "unbound PREPARE remains value-independent")
+				}
+			}
 		})
 	}
 }

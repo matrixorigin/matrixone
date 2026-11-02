@@ -2649,4 +2649,7 @@ message MySQLSpecialResultType {
   }
   Type typ = 1 [(gogoproto.nullable) = false];
   Kind kind = 2;
+  // Result publication only: the completed plan proves no rows can reach
+  // materialization. Cursor execution still materializes its result schema.
+  bool materialization_elided = 3;
 }

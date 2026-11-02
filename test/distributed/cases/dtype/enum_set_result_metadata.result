@@ -95,4 +95,37 @@ a  ¦  null  𝄀
 null  ¦  null  𝄀
 null  ¦  null  𝄀
 null  ¦  null
+select min(e) as min_e, max(s) as max_s
+from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+  ¦  x,yy
+select min(e) over() as min_e, max(s) over() as max_s
+from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy
+select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union select e,s from jdbc_enum_set_metadata group by e,s with rollup order by e desc,s desc;
+➤ e[1,2,0]  ¦  s[1,4,0]  𝄀
+  ¦    𝄀
+  ¦  null  𝄀
+a  ¦  x,yy  𝄀
+a  ¦  null  𝄀
+null  ¦  null
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata limit 0;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where false;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]
+select distinct e,s from jdbc_enum_set_metadata where false group by e,s with rollup;
+➤ e[1,2,0]  ¦  s[1,4,0]
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where id > 100;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]
+select min(e) over() as min_e, max(s) over() as max_s
+from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d limit 0;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]
 drop table jdbc_enum_set_metadata;

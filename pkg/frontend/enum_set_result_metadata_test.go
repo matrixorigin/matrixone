@@ -17,9 +17,12 @@ package frontend
 import (
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -167,6 +170,63 @@ func TestEnumSetPrepareOnlyMetadataDoesNotLeakIntoExecute(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, before, after, "publication must not specialize the cached execution plan")
 		})
+	}
+}
+
+func TestEnumSetExecutionParametersReachMetadataOwner(t *testing.T) {
+	_, _, prepared := newBinaryPrepareProtocolTestCase(t, "select min('a') over(),max('x') over() limit ?")
+	p := prepared.PreparePlan.GetDcl().GetPrepare().GetPlan()
+	p.GetQuery().MysqlSpecialResultTypes = []pb.MySQLSpecialResultType{
+		{Typ: pb.Type{Id: int32(types.T_enum), Enumvalues: "a,bb"}, Kind: pb.MySQLSpecialResultType_PREPARE_ONLY},
+		{Typ: pb.Type{Id: int32(types.T_uint64), Enumvalues: "x,yy"}, Kind: pb.MySQLSpecialResultType_PREPARE_ONLY},
+	}
+	snapshot := proto.Clone(p)
+	wrapper := &TxnComputationWrapper{stmt: prepared.PrepareStmt, plan: p}
+	for _, value := range []string{"0", "1", "0"} {
+		wrapper.paramVals = []any{plan2.ParamValue{Value: value, IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}}
+		columns, defs, err := wrapper.getColumnsWithResultColumns(t.Context())
+		require.NoError(t, err)
+		legacy, err := wrapper.GetColumns(t.Context())
+		require.NoError(t, err)
+		want := defines.MYSQL_TYPE_VAR_STRING
+		if value == "0" {
+			want = defines.MYSQL_TYPE_STRING
+		}
+		for i := range columns {
+			require.Equal(t, want, columns[i].(*MysqlColumn).ColumnType())
+			require.Equal(t, want, legacy[i].(*MysqlColumn).ColumnType())
+			require.Equal(t, value == "0", defs[i].MysqlSpecialResultType.MaterializationElided)
+		}
+		require.True(t, proto.Equal(snapshot, p))
+	}
+}
+
+func TestEnumSetConstantEmptyAndCursorMetadata(t *testing.T) {
+	for _, kind := range []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_PREPARE_ONLY, pb.MySQLSpecialResultType_VARCHAR_LABEL} {
+		for _, elided := range []bool{false, true} {
+			def := &pb.ColDef{Typ: pb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)},
+				MysqlSpecialResultType: &pb.MySQLSpecialResultType{Typ: pb.Type{Id: int32(types.T_enum), Enumvalues: "a,bb"}, Kind: kind, MaterializationElided: elided}}
+			before, err := def.Marshal()
+			require.NoError(t, err)
+			for _, preparing := range []bool{false, true, false} {
+				column, err := colDef2MysqlColumn(t.Context(), def, preparing)
+				require.NoError(t, err)
+				want := defines.MYSQL_TYPE_VAR_STRING
+				if kind == pb.MySQLSpecialResultType_PREPARE_ONLY && (preparing || elided) {
+					want = defines.MYSQL_TYPE_STRING
+				}
+				require.Equal(t, want, column.ColumnType())
+				require.Equal(t, uint32(8), column.Length())
+				require.Zero(t, column.Flag()&uint16(defines.ENUM_FLAG|defines.SET_FLAG))
+				if !preparing {
+					applyCursorEnumSetResultMetadata([]any{column}, []*pb.ColDef{def})
+					require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, column.ColumnType())
+				}
+			}
+			after, err := def.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		}
 	}
 }
 

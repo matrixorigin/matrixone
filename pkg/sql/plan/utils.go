@@ -1664,6 +1664,22 @@ func getNumOfCharacters(str string) int {
 	return len(strRune)
 }
 
+// SELECT DISTINCT is not a transparent replacement for identical grouping-set
+// UNION branches: DISTINCT can materialize their CHAR labels as VARCHAR.
+func unionBranchDistinctTransparent(stmt tree.Statement) bool {
+	switch s := stmt.(type) {
+	case *tree.Select:
+		return unionBranchDistinctTransparent(s.Select)
+	case *tree.ParenSelect:
+		return unionBranchDistinctTransparent(s.Select)
+	case *tree.SelectClause:
+		group := s.GroupBy
+		return group == nil || (!group.Rollup && !group.Cube && len(group.GroupByExprsList) <= 1)
+	default:
+		return true
+	}
+}
+
 func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tree.Statement, unionTypes *[]plan.Node_NodeType) error {
 	switch leftStmt := stmt.Left.(type) {
 	case *tree.UnionClause:
@@ -1686,7 +1702,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	case *tree.SelectClause:
 		if stmt.Type == tree.UNION && !stmt.All {
 			rightStr := tree.String(rightStmt, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
+			if len(*selects) == 1 && unionBranchDistinctTransparent(rightStmt) && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
 				return nil
 			}
 		}
@@ -1697,7 +1713,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	case *tree.ParenSelect:
 		if stmt.Type == tree.UNION && !stmt.All {
 			rightStr := tree.String(rightStmt.Select, dialect.MYSQL)
-			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
+			if len(*selects) == 1 && unionBranchDistinctTransparent(rightStmt.Select) && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
 				return nil
 			}
 		}

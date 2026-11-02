@@ -4760,12 +4760,27 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					integerIDs[i] = ctx.outputColumnProvenanceForProject(int32(i)).IntegerPrecisionID
 				}
 			}
+			var labelWidths map[int32]*plan.MySQLSpecialResultType
+			for i := range ctx.headings {
+				result := mysqlSpecialResultTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i)))
+				if result != nil && result.Kind == plan.MySQLSpecialResultType_VARCHAR_LABEL {
+					if labelWidths == nil {
+						labelWidths = make(map[int32]*plan.MySQLSpecialResultType)
+					}
+					labelWidths[int32(i)] = result
+				}
+			}
 			ctx.clearOutputColumnProvenance()
 			for i, id := range integerIDs {
 				if !shareGroupingInput {
 					id = builder.integerPrecision.reference(id)
 				}
 				ctx.setOutputColumnProvenance(int32(i), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
+			}
+			for i, result := range labelWidths {
+				provenance := ctx.outputColumnProvenanceForProject(i)
+				provenance.MySQLSpecialResultType = result
+				ctx.setOutputColumnProvenance(i, provenance)
 			}
 		}
 		return nodeID, err
@@ -5244,7 +5259,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		for colIdx := range ctx.headings {
 			var candidate *plan.MySQLSpecialResultType
 			compatible := true
-			hasRollup := false
+			hasRollup, widthOnly := false, false
 			for branchIdx, branchCtx := range subCtxList {
 				result := mysqlSpecialResultTypeFromProvenance(branchCtx.outputColumnProvenanceForProject(int32(colIdx)))
 				if result == nil {
@@ -5259,15 +5274,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					break
 				}
 				hasRollup = hasRollup || result.Kind == plan.MySQLSpecialResultType_ROLLUP
+				widthOnly = widthOnly || result.Kind == plan.MySQLSpecialResultType_VARCHAR_LABEL
 				candidate = result
 			}
-			if compatible && candidate != nil && (shareGroupingInput || hasRollup) {
+			if compatible && candidate != nil && (shareGroupingInput || hasRollup || widthOnly) {
 				// A user UNION normally clears ENUM/SET identity. An already
 				// rolled-up CHAR item is not an ENUM/SET field, however, and
 				// retains CHAR when the other non-NULL label domains agree.
 				candidate.Kind = plan.MySQLSpecialResultType_ROLLUP
 				if distinct {
 					candidate.Kind = plan.MySQLSpecialResultType_PREPARE_ONLY
+				}
+				if widthOnly {
+					candidate.Kind = plan.MySQLSpecialResultType_VARCHAR_LABEL
 				}
 				if ctx.mysqlSpecialResultTypes == nil {
 					ctx.mysqlSpecialResultTypes = make(map[int32]*plan.MySQLSpecialResultType)

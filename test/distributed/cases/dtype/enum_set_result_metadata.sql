@@ -58,4 +58,27 @@ select distinct e, s from jdbc_enum_set_metadata group by e, s with rollup order
 select min(e) over () as min_e, max(s) over () as max_s from jdbc_enum_set_metadata;
 -- @metacmp(true)
 select e, s from (select e, s from jdbc_enum_set_metadata group by e, s with rollup) d order by e desc, s desc;
+-- Materialized labels retain width but cannot regain CHAR identity.
+-- @metacmp(true)
+select min(e) as min_e, max(s) as max_s
+from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s
+from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d;
+-- Identical branches must not be rewritten into DISTINCT ROLLUP metadata.
+-- @metacmp(true)
+select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union select e,s from jdbc_enum_set_metadata group by e,s with rollup order by e desc,s desc;
+-- Static emptiness elides non-cursor materialization; runtime emptiness does not.
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata limit 0;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where false;
+-- @metacmp(true)
+select distinct e,s from jdbc_enum_set_metadata where false group by e,s with rollup;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s from jdbc_enum_set_metadata where id > 100;
+-- @metacmp(true)
+select min(e) over() as min_e, max(s) over() as max_s
+from (select e,s from jdbc_enum_set_metadata group by e,s with rollup) d limit 0;
 drop table jdbc_enum_set_metadata;

@@ -591,7 +591,9 @@ func DeepCopyMySQLSpecialResultType(result *plan.MySQLSpecialResultType) *plan.M
 	if result == nil {
 		return nil
 	}
-	return &plan.MySQLSpecialResultType{Typ: *DeepCopyType(&result.Typ), Kind: result.Kind}
+	return &plan.MySQLSpecialResultType{
+		Typ: *DeepCopyType(&result.Typ), Kind: result.Kind, MaterializationElided: result.MaterializationElided,
+	}
 }
 
 func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {

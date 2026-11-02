@@ -70,11 +70,12 @@ public final class EnumSetMetadataProbe {
         } else {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setQueryTimeout(30);
-                if (mode.equals("server-prepared")) {
+                if (mode.equals("server-prepared") || mode.equals("cursor")) {
                     check(statement.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"),
                             "server prepare silently fell back");
                 }
-                metadata(statement.getMetaData(), mode.equals("server-prepared") ? prepareType : type,
+                if (mode.equals("cursor")) statement.setFetchSize(1);
+                metadata(statement.getMetaData(), mode.equals("server-prepared") || mode.equals("cursor") ? prepareType : type,
                         declared, mode + " prepare: " + sql);
                 for (int i = 0; i < 2; i++) {
                     try (ResultSet result = statement.executeQuery()) {
@@ -88,11 +89,12 @@ public final class EnumSetMetadataProbe {
 
     public static void main(String[] args) throws Exception {
         if (args.length != 3) throw new IllegalArgumentException("JDBC_URL USER PASSWORD");
-        for (String mode : new String[]{"statement", "client-prepared", "server-prepared"}) {
+        for (String mode : new String[]{"statement", "client-prepared", "server-prepared", "cursor"}) {
             Properties properties = new Properties();
             properties.setProperty("user", args[1]);
             properties.setProperty("password", args[2]);
-            properties.setProperty("useServerPrepStmts", String.valueOf(mode.equals("server-prepared")));
+            properties.setProperty("useServerPrepStmts", String.valueOf(mode.equals("server-prepared") || mode.equals("cursor")));
+            properties.setProperty("useCursorFetch", String.valueOf(mode.equals("cursor")));
             properties.setProperty("emulateUnsupportedPstmts", "false");
             properties.setProperty("socketTimeout", "30000");
             properties.setProperty("useSSL", "false");
@@ -106,6 +108,13 @@ public final class EnumSetMetadataProbe {
                     setup.execute("USE " + db);
                     setup.execute("CREATE TABLE t (id INT PRIMARY KEY, e ENUM('a','bb',''), s SET('x','yy'))");
                     setup.execute("INSERT INTO t VALUES (1,'a','x,yy'),(2,'',''),(3,NULL,NULL)");
+                    List<List<String>> rollup = Arrays.asList(
+                            Arrays.asList("a", "x,yy"), Arrays.asList("a", null),
+                            Arrays.asList("", ""), Arrays.asList("", null),
+                            Arrays.asList(null, null), Arrays.asList(null, null), Arrays.asList(null, null));
+                    // Cursor coverage below uses its own phase oracle; the earlier
+                    // non-cursor scalar-expression cases are not cursor contracts.
+                    if (!mode.equals("cursor")) {
                     for (String sql : new String[]{
                             "SELECT e, s FROM t",
                             "SELECT e AS alias_e, s AS alias_s FROM t",
@@ -138,10 +147,6 @@ public final class EnumSetMetadataProbe {
                     query(connection, mode, "SELECT e, s FROM (SELECT (SELECT e FROM t WHERE id=1) e, "
                             + "(SELECT s FROM t WHERE id=1) s) d", Types.VARCHAR, false,
                             Collections.singletonList(Arrays.asList("a", "x,yy")));
-                    List<List<String>> rollup = Arrays.asList(
-                            Arrays.asList("a", "x,yy"), Arrays.asList("a", null),
-                            Arrays.asList("", ""), Arrays.asList("", null),
-                            Arrays.asList(null, null), Arrays.asList(null, null), Arrays.asList(null, null));
                     query(connection, mode, "SELECT e, s FROM t GROUP BY e, s WITH ROLLUP",
                             Types.CHAR, false, rollup);
                     List<List<String>> rollupUnion = new ArrayList<>(rollup);
@@ -164,10 +169,71 @@ public final class EnumSetMetadataProbe {
                     query(connection, mode, "SELECT e, s FROM (SELECT MIN(e) OVER () e, MAX(s) OVER () s FROM t) d",
                             Types.VARCHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),
                                     Arrays.asList("", "x,yy"), Arrays.asList("", "x,yy")));
+                    }
+                    query(connection, mode, "SELECT MIN(e),MAX(s) FROM (SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d",
+                            Types.VARCHAR, false, Collections.singletonList(Arrays.asList("", "x,yy")));
+                    query(connection, mode, "SELECT (SELECT e FROM (SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d "
+                            + "WHERE e='a' AND s IS NOT NULL LIMIT 1), (SELECT s FROM (SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d "
+                            + "WHERE e='a' AND s IS NOT NULL LIMIT 1)", Types.VARCHAR, false,
+                            Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    List<List<String>> widthOnlyWindow = new ArrayList<>();
+                    for (int i=0;i<rollup.size();i++) widthOnlyWindow.add(Arrays.asList("", "x,yy"));
+                    query(connection, mode, "SELECT MIN(e) OVER (),MAX(s) OVER () FROM "
+                            + "(SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d", Types.VARCHAR, false, widthOnlyWindow);
+                    List<List<String>> widthOnlyUnion = new ArrayList<>(rollup);
+                    widthOnlyUnion.addAll(rollup);
+                    query(connection, mode, "SELECT e,s FROM (SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d "
+                            + "UNION ALL SELECT e,s FROM t GROUP BY e,s WITH ROLLUP", Types.VARCHAR, false, widthOnlyUnion);
+                    List<List<String>> doubleRollup = new ArrayList<>(rollup);
+                    doubleRollup.add(Arrays.asList("a", null)); doubleRollup.add(Arrays.asList("", null));
+                    query(connection, mode, "SELECT e,s FROM (SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d "
+                            + "GROUP BY e,s WITH ROLLUP", Types.VARCHAR, false, doubleRollup);
+                    List<List<String>> distinctRollup = Arrays.asList(Arrays.asList("a", "x,yy"),
+                            Arrays.asList("a", null), Arrays.asList("", ""), Arrays.asList("", null), Arrays.asList(null, null));
+                    query(connection, mode, "SELECT e,s FROM (SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d UNION "
+                            + "SELECT e,s FROM (SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d", Types.VARCHAR, false, distinctRollup);
+                    for (String predicate : new String[]{"", " WHERE TRUE"}) {
+                        query(connection, mode, "SELECT e,s FROM t GROUP BY e,s WITH ROLLUP UNION "
+                                + "SELECT e,s FROM t"+predicate+" GROUP BY e,s WITH ROLLUP", Types.CHAR, false, distinctRollup);
+                    }
+                    for (String sql : new String[]{
+                            "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t LIMIT 0",
+                            "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t WHERE FALSE",
+                            "SELECT MIN(MIN(e)) OVER (),MAX(MAX(s)) OVER () FROM t WHERE FALSE HAVING COUNT(*)>0",
+                            "SELECT DISTINCT e,s FROM t WHERE FALSE GROUP BY e,s WITH ROLLUP",
+                            "SELECT DISTINCT e,s FROM t GROUP BY e,s WITH ROLLUP LIMIT 0"}) {
+                        query(connection, mode, sql, mode.equals("cursor") ? Types.VARCHAR : Types.CHAR,
+                                Types.CHAR, false, Collections.<List<String>>emptyList());
+                    }
+                    if (mode.equals("server-prepared") || mode.equals("cursor")) {
+                        try (PreparedStatement limit = connection.prepareStatement("SELECT MIN(e) OVER (),MAX(s) OVER () FROM t LIMIT ?")) {
+                            limit.setQueryTimeout(30);
+                            check(limit.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"),
+                                    "parameterized prepare silently fell back");
+                            if (mode.equals("cursor")) limit.setFetchSize(1);
+                            metadata(limit.getMetaData(), Types.CHAR, false, mode + " parameterized prepare");
+                            for (int count : new int[]{0,1,0}) {
+                                limit.setInt(1,count);
+                                try (ResultSet result = limit.executeQuery()) {
+                                    int expectedType = count==0 && !mode.equals("cursor") ? Types.CHAR : Types.VARCHAR;
+                                    labelWidths(result.getMetaData());
+                                    rows(result,expectedType,false,count==0 ? Collections.<List<String>>emptyList()
+                                            : Collections.singletonList(Arrays.asList("", "x,yy")), mode+" LIMIT "+count);
+                                }
+                            }
+                        }
+                    }
+                    query(connection, mode, "SELECT MIN(e) OVER (),MAX(s) OVER () FROM t WHERE id>100",
+                            Types.VARCHAR, Types.CHAR, false, Collections.<List<String>>emptyList());
+                    query(connection, mode, "SELECT MIN(e) OVER (),MAX(s) OVER () FROM "
+                            + "(SELECT e,s FROM t GROUP BY e,s WITH ROLLUP) d LIMIT 0", Types.VARCHAR, false,
+                            Collections.<List<String>>emptyList());
+                    if (!mode.equals("cursor")) {
                     setup.execute("CREATE VIEW v AS SELECT e, s FROM t");
                     query(connection, mode, "SELECT e, s FROM v", Types.CHAR, true, 1);
                     query(connection, mode, "SELECT CONCAT(e), CAST(s AS CHAR) FROM t", Types.VARCHAR, false, 1);
                     query(connection, mode, "SELECT e, s FROM t UNION ALL SELECT e, s FROM t", Types.VARCHAR, false, 2);
+                    }
                 } finally {
                     setup.execute("DROP DATABASE " + db);
                 }
