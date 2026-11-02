@@ -1017,6 +1017,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[1] = childID
 
 	case plan.Node_PROJECT:
+		// A predecessor catalog can have a compact generated-column DAG whose
+		// expansion is exponential. Keep predicates above its staged evaluation;
+		// rewriting through every projection would recreate the oversized tree.
+		if node.ExtraOptions == virtualTimestampStageOption {
+			cantPushdown = append(cantPushdown, filters...)
+			break
+		}
 		child := builder.qry.Nodes[node.Children[0]]
 		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
 			cantPushdown = append(cantPushdown, filters...)
