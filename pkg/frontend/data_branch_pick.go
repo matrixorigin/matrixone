@@ -286,9 +286,11 @@ func appendPickedBatchRows(
 
 	row := make([]any, len(tblStuff.def.colNames))
 	var depKeyPacker *types.Packer
+	var depKeyEnc vector.RowEncoder
 	if depKeys != nil {
 		depKeyPacker = types.NewPacker()
 		defer depKeyPacker.Close()
+		depKeyEnc = vector.NewRowEncoder(wrapped.batch.Vecs[tblStuff.def.pkColIdx])
 	}
 
 	for rowIdx := range wrapped.batch.RowCount() {
@@ -308,11 +310,7 @@ func appendPickedBatchRows(
 		// claimed by a key-moving fold are not part of the selection.
 		if depKeyPacker != nil {
 			depKeyPacker.Reset()
-			if err2 = vector.EncodeRowToPacker(
-				depKeyPacker, wrapped.batch.Vecs[tblStuff.def.pkColIdx], rowIdx,
-			); err2 != nil {
-				return err2
-			}
+			depKeyEnc(depKeyPacker, rowIdx)
 			if _, depOnly := depKeys[string(depKeyPacker.Bytes())]; depOnly {
 				if wrapped.side == diffSideBase {
 					// A conflict victim at a dependency key may still be

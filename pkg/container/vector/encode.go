@@ -19,94 +19,134 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// EncodeRowToPacker encodes one non-null vector cell with the same
-// type-directed Packer encoding that data-branch hash maps use for key
-// materialization, so bytes produced here can be compared byte-wise against
-// such keys (for example by mo_data_branch_update_link readers and writers).
+// RowEncoder encodes one non-null row of its bound vector into a types.Packer
+// with the same type-directed Packer encoding that data-branch hash maps use
+// for key materialization, so bytes produced here can be compared byte-wise
+// against such keys (for example by mo_data_branch_update_link readers and
+// writers).
+//
+// A RowEncoder borrows the vector's type resolution and backing storage:
+// create it once per vector with NewRowEncoder, keep the vector alive and
+// unmodified while the encoder is in use, and skip (or reject) null rows
+// before calling — both rules match EncodeRowToPacker.
+type RowEncoder func(p *types.Packer, row int)
+
+// NewRowEncoder binds a RowEncoder to vec, resolving vec's type and column
+// layout once so a row loop pays one type dispatch per vector instead of one
+// per row. The produced bytes are identical to EncodeRowToPacker on the same
+// vector.
+func NewRowEncoder(vec *Vector) RowEncoder {
+	enc := newRowEncoder(vec)
+	if vec.IsConst() {
+		// A constant vector repeats row 0's payload at every logical row.
+		return func(p *types.Packer, _ int) { enc(p, 0) }
+	}
+	return enc
+}
+
+// EncodeRowToPacker encodes one non-null vector cell with the same encoding
+// as NewRowEncoder. Single-row uses keep this entry point; loops over rows
+// should bind a RowEncoder once instead of re-dispatching per row.
 func EncodeRowToPacker(p *types.Packer, vec *Vector, row int) error {
+	NewRowEncoder(vec)(p, row)
+	return nil
+}
+
+// newRowEncoder is NewRowEncoder's dispatch core. Each arm captures the typed
+// column (a length-1 slice for a constant vector, whose only reachable index
+// is 0 through the NewRowEncoder wrapper).
+func newRowEncoder(vec *Vector) RowEncoder {
 	switch vec.GetType().Oid {
 	case types.T_bool:
-		v := GetFixedAtNoTypeCheck[bool](vec, row)
-		p.EncodeBool(v)
+		col := MustFixedColNoTypeCheck[bool](vec)
+		return func(p *types.Packer, row int) { p.EncodeBool(col[row]) }
 	case types.T_int8:
-		v := GetFixedAtNoTypeCheck[int8](vec, row)
-		p.EncodeInt8(v)
+		col := MustFixedColNoTypeCheck[int8](vec)
+		return func(p *types.Packer, row int) { p.EncodeInt8(col[row]) }
 	case types.T_int16:
-		v := GetFixedAtNoTypeCheck[int16](vec, row)
-		p.EncodeInt16(v)
+		col := MustFixedColNoTypeCheck[int16](vec)
+		return func(p *types.Packer, row int) { p.EncodeInt16(col[row]) }
 	case types.T_int32:
-		v := GetFixedAtNoTypeCheck[int32](vec, row)
-		p.EncodeInt32(v)
+		col := MustFixedColNoTypeCheck[int32](vec)
+		return func(p *types.Packer, row int) { p.EncodeInt32(col[row]) }
 	case types.T_int64:
-		v := GetFixedAtNoTypeCheck[int64](vec, row)
-		p.EncodeInt64(v)
+		col := MustFixedColNoTypeCheck[int64](vec)
+		return func(p *types.Packer, row int) { p.EncodeInt64(col[row]) }
 	case types.T_uint8:
-		v := GetFixedAtNoTypeCheck[uint8](vec, row)
-		p.EncodeUint8(v)
+		col := MustFixedColNoTypeCheck[uint8](vec)
+		return func(p *types.Packer, row int) { p.EncodeUint8(col[row]) }
 	case types.T_uint16:
-		v := GetFixedAtNoTypeCheck[uint16](vec, row)
-		p.EncodeUint16(v)
+		col := MustFixedColNoTypeCheck[uint16](vec)
+		return func(p *types.Packer, row int) { p.EncodeUint16(col[row]) }
 	case types.T_uint32:
-		v := GetFixedAtNoTypeCheck[uint32](vec, row)
-		p.EncodeUint32(v)
+		col := MustFixedColNoTypeCheck[uint32](vec)
+		return func(p *types.Packer, row int) { p.EncodeUint32(col[row]) }
 	case types.T_uint64:
-		v := GetFixedAtNoTypeCheck[uint64](vec, row)
-		p.EncodeUint64(v)
+		col := MustFixedColNoTypeCheck[uint64](vec)
+		return func(p *types.Packer, row int) { p.EncodeUint64(col[row]) }
 	case types.T_float32:
-		v := GetFixedAtNoTypeCheck[float32](vec, row)
-		p.EncodeFloat32(v)
+		col := MustFixedColNoTypeCheck[float32](vec)
+		return func(p *types.Packer, row int) { p.EncodeFloat32(col[row]) }
 	case types.T_float64:
-		v := GetFixedAtNoTypeCheck[float64](vec, row)
-		p.EncodeFloat64(v)
+		col := MustFixedColNoTypeCheck[float64](vec)
+		return func(p *types.Packer, row int) { p.EncodeFloat64(col[row]) }
 	case types.T_date:
-		v := GetFixedAtNoTypeCheck[types.Date](vec, row)
-		p.EncodeDate(v)
+		col := MustFixedColNoTypeCheck[types.Date](vec)
+		return func(p *types.Packer, row int) { p.EncodeDate(col[row]) }
 	case types.T_time:
-		v := GetFixedAtNoTypeCheck[types.Time](vec, row)
-		p.EncodeTime(v)
+		col := MustFixedColNoTypeCheck[types.Time](vec)
+		return func(p *types.Packer, row int) { p.EncodeTime(col[row]) }
 	case types.T_datetime:
-		v := GetFixedAtNoTypeCheck[types.Datetime](vec, row)
-		p.EncodeDatetime(v)
+		col := MustFixedColNoTypeCheck[types.Datetime](vec)
+		return func(p *types.Packer, row int) { p.EncodeDatetime(col[row]) }
 	case types.T_timestamp:
-		v := GetFixedAtNoTypeCheck[types.Timestamp](vec, row)
-		p.EncodeTimestamp(v)
+		col := MustFixedColNoTypeCheck[types.Timestamp](vec)
+		return func(p *types.Packer, row int) { p.EncodeTimestamp(col[row]) }
 	case types.T_year:
-		v := GetFixedAtNoTypeCheck[types.MoYear](vec, row)
-		p.EncodeMoYear(v)
+		col := MustFixedColNoTypeCheck[types.MoYear](vec)
+		return func(p *types.Packer, row int) { p.EncodeMoYear(col[row]) }
 	case types.T_decimal64:
-		v := GetFixedAtNoTypeCheck[types.Decimal64](vec, row)
-		p.EncodeDecimal64(v)
+		col := MustFixedColNoTypeCheck[types.Decimal64](vec)
+		return func(p *types.Packer, row int) { p.EncodeDecimal64(col[row]) }
 	case types.T_decimal128:
-		v := GetFixedAtNoTypeCheck[types.Decimal128](vec, row)
-		p.EncodeDecimal128(v)
+		col := MustFixedColNoTypeCheck[types.Decimal128](vec)
+		return func(p *types.Packer, row int) { p.EncodeDecimal128(col[row]) }
 	case types.T_decimal256:
-		raw := vec.GetRawBytesAt(row)
-		tmp := make([]byte, len(raw))
-		copy(tmp, raw)
-		p.EncodeStringType(tmp)
+		return encodeRawRowAsStringType(vec)
 	case types.T_uuid:
-		v := GetFixedAtNoTypeCheck[types.Uuid](vec, row)
-		p.EncodeUuid(v)
+		col := MustFixedColNoTypeCheck[types.Uuid](vec)
+		return func(p *types.Packer, row int) { p.EncodeUuid(col[row]) }
 	case types.T_bit:
-		v := GetFixedAtNoTypeCheck[uint64](vec, row)
-		p.EncodeBit(v)
+		col := MustFixedColNoTypeCheck[uint64](vec)
+		return func(p *types.Packer, row int) { p.EncodeBit(col[row]) }
 	case types.T_enum:
-		v := GetFixedAtNoTypeCheck[types.Enum](vec, row)
-		p.EncodeEnum(v)
+		col := MustFixedColNoTypeCheck[types.Enum](vec)
+		return func(p *types.Packer, row int) { p.EncodeEnum(col[row]) }
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_array_float32, types.T_array_float64:
-		p.EncodeStringType(vec.GetBytesAt(row))
+		data, area := MustVarlenaRawData(vec)
+		return func(p *types.Packer, row int) {
+			p.EncodeStringType(data[row].GetByteSlice(area))
+		}
 	case types.T_TS:
-		v := GetFixedAtNoTypeCheck[types.TS](vec, row)
-		p.EncodeStringType(v[:])
+		col := MustFixedColNoTypeCheck[types.TS](vec)
+		return func(p *types.Packer, row int) { p.EncodeStringType(col[row][:]) }
 	default:
+		return encodeRawRowAsStringType(vec)
+	}
+}
+
+// encodeRawRowAsStringType binds the raw-bytes fallback for decimal256 and
+// the types without a dedicated Packer primitive. The copy keeps the encoded
+// bytes stable if vec's backing storage is reused after the call.
+func encodeRawRowAsStringType(vec *Vector) RowEncoder {
+	return func(p *types.Packer, row int) {
 		raw := vec.GetRawBytesAt(row)
 		tmp := make([]byte, len(raw))
 		copy(tmp, raw)
 		p.EncodeStringType(tmp)
 	}
-	return nil
 }
 
 // EncodeDecodedValueToPacker is the Go-value counterpart of

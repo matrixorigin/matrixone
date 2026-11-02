@@ -409,6 +409,8 @@ func collectUpdatePkMoveLinkRows(
 
 	packer := types.NewPacker()
 	defer packer.Close()
+	oldPKEnc := vector.NewRowEncoder(oldPKVec)
+	newPKEnc := vector.NewRowEncoder(newPKVec)
 
 	rowCount := contextBatch.RowCount()
 	for i := 0; i < rowCount; i++ {
@@ -416,14 +418,10 @@ func collectUpdatePkMoveLinkRows(
 			continue
 		}
 		packer.Reset()
-		if err = vector.EncodeRowToPacker(packer, oldPKVec, i); err != nil {
-			return nil, err
-		}
+		oldPKEnc(packer, i)
 		oldBytes := append([]byte(nil), packer.Bytes()...)
 		packer.Reset()
-		if err = vector.EncodeRowToPacker(packer, newPKVec, i); err != nil {
-			return nil, err
-		}
+		newPKEnc(packer, i)
 		newBytes := append([]byte(nil), packer.Bytes()...)
 		rowID := vector.GetFixedAtNoTypeCheck[types.Rowid](oldRowIDVec, i)
 		// Same-key replacement (a non-key UPDATE, or SET id = id): no

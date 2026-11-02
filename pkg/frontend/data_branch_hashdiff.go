@@ -1316,6 +1316,7 @@ func hashDiffIfHasLCA(
 			}
 			packer := types.NewPacker()
 			defer packer.Close()
+			pkEnc := vector.NewRowEncoder(bat.Vecs[tblStuff.def.pkColIdx])
 			for rowIdx := range bat.RowCount() {
 				key, keyErr := extractPKAsString(ses, tblStuff, bat, rowIdx)
 				if keyErr != nil {
@@ -1326,11 +1327,7 @@ func hashDiffIfHasLCA(
 				}
 				authorized := rowIdx < len(victimAuth) && victimAuth[rowIdx]
 				packer.Reset()
-				if err := vector.EncodeRowToPacker(
-					packer, bat.Vecs[tblStuff.def.pkColIdx], rowIdx,
-				); err != nil {
-					return nil, err
-				}
+				pkEnc(packer, rowIdx)
 				ret, gerr := baseDataHashmap.GetByEncodedKey(packer.Bytes())
 				if gerr != nil {
 					return nil, gerr
@@ -2598,18 +2595,13 @@ func findDeleteAndUpdateBat(
 				// left alone — in any chunk or shard order.
 				if pkMovePlan != nil {
 					seenPacker := types.NewPacker()
+					seenEnc := vector.NewRowEncoder(dBat.Vecs[tblStuff.def.pkColIdx])
 					for i := 0; i < dBat.RowCount(); i++ {
 						if dBat.Vecs[tblStuff.def.pkColIdx].IsNull(uint64(i)) {
 							continue
 						}
 						seenPacker.Reset()
-						if err2 = vector.EncodeRowToPacker(
-							seenPacker, dBat.Vecs[tblStuff.def.pkColIdx], i,
-						); err2 != nil {
-							seenPacker.Close()
-							releaseWithStreamPk()
-							return err2
-						}
+						seenEnc(seenPacker, i)
 						kb := seenPacker.Bytes()
 						if _, anchor := pkMovePlan.anchorKeys[string(kb)]; anchor {
 							seen[i] = true
@@ -3205,16 +3197,13 @@ func resolveAndBuildPkMoveFolds(
 				resolvedKeys[string(c.key)] = struct{}{}
 			}
 		}
+		pkEnc := vector.NewRowEncoder(dBat.Vecs[tblStuff.def.pkColIdx])
 		for i := 0; i < dBat.RowCount(); i++ {
 			if dBat.Vecs[tblStuff.def.pkColIdx].IsNull(uint64(i)) {
 				continue
 			}
 			packer.Reset()
-			if err = vector.EncodeRowToPacker(packer, dBat.Vecs[tblStuff.def.pkColIdx], i); err != nil {
-				tblStuff.retPool.releaseRetBatch(dBat, false)
-				releaseKept()
-				return nil, err
-			}
+			pkEnc(packer, i)
 			ks := string(packer.Bytes())
 			chunkHits[ks] = struct{}{}
 			if _, keep := resolvedKeys[ks]; keep {
@@ -3316,14 +3305,13 @@ func assemblePkMoveFoldPlan(
 	hitIdxByKey := make(map[string]int, dBatAll.RowCount())
 	packer := types.NewPacker()
 	defer packer.Close()
+	pkEnc := vector.NewRowEncoder(dBatAll.Vecs[tblStuff.def.pkColIdx])
 	for i := 0; i < dBatAll.RowCount(); i++ {
 		if dBatAll.Vecs[tblStuff.def.pkColIdx].IsNull(uint64(i)) {
 			continue
 		}
 		packer.Reset()
-		if err = vector.EncodeRowToPacker(packer, dBatAll.Vecs[tblStuff.def.pkColIdx], i); err != nil {
-			return nil, err
-		}
+		pkEnc(packer, i)
 		ks := string(packer.Bytes())
 		if _, dup := hitIdxByKey[ks]; !dup {
 			hitIdxByKey[ks] = i
@@ -3715,12 +3703,10 @@ func probeDstOccupancyAtFoldKeys(
 					"unexpected pk-move occupancy probe width %d", len(cols))
 				return false
 			}
+			colEnc := vector.NewRowEncoder(cols[0])
 			for i := 0; i < rowCnt; i++ {
 				packer.Reset()
-				if e := vector.EncodeRowToPacker(packer, cols[0], i); e != nil {
-					readErr = e
-					return false
-				}
+				colEnc(packer, i)
 				occupied[string(append([]byte(nil), packer.Bytes()...))] = true
 			}
 			return true

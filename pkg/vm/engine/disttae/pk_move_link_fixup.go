@@ -1506,15 +1506,14 @@ func pkMoveFoldDeleteEntries(
 			continue
 		}
 		pkVec := we.bat.Vecs[pos]
+		pkEnc := vector.NewRowEncoder(pkVec)
 		n := min(we.bat.RowCount(), pkVec.Length())
 		for r := 0; r < n; r++ {
 			if pkVec.IsNull(uint64(r)) {
 				continue
 			}
 			packer.Reset()
-			if err := vector.EncodeRowToPacker(packer, pkVec, r); err != nil {
-				return nil, false
-			}
+			pkEnc(packer, r)
 			if out == nil {
 				out = make(map[string]int)
 			}
@@ -1579,6 +1578,7 @@ func pkMoveFoldHarvestEntries(
 			continue
 		}
 		pkVec := bat.Vecs[pos]
+		pkEnc := vector.NewRowEncoder(pkVec)
 		rowIDVec := bat.Vecs[0]
 		n := min(bat.RowCount(), pkVec.Length())
 		if rowIDVec.Length() < n {
@@ -1600,11 +1600,7 @@ func pkMoveFoldHarvestEntries(
 				continue
 			}
 			packer.Reset()
-			if err := vector.EncodeRowToPacker(packer, pkVec, r); err != nil {
-				// Encoding must never fail for a pk column vector; if it
-				// does, provenance for this table is unusable (fail closed).
-				return nil, false
-			}
+			pkEnc(packer, r)
 			if out == nil {
 				out = make(map[string]types.Rowid, n)
 			}
@@ -2642,6 +2638,7 @@ func (txn *Transaction) recordPkMoveDumpShadowLocked(
 			len(hits), we.databaseName, we.tableName, pos)
 	}
 	pkVec := bat.Vecs[pos]
+	pkEnc := vector.NewRowEncoder(pkVec)
 	packer := types.NewPacker()
 	defer packer.Close()
 	if shadows == nil {
@@ -2660,9 +2657,7 @@ func (txn *Transaction) recordPkMoveDumpShadowLocked(
 				we.databaseName, we.tableName, r)
 		}
 		packer.Reset()
-		if err := vector.EncodeRowToPacker(packer, pkVec, r); err != nil {
-			return shadows, err
-		}
+		pkEnc(packer, r)
 		rows = append(rows, pkMoveDumpShadowRow{
 			pk: string(packer.Bytes()),
 			ws: vector.GetFixedAtNoTypeCheck[types.Rowid](rowIDVec, r),
@@ -2787,15 +2782,13 @@ func resolvePkMoveDumpShadow(
 					"pk-move dump shadow: pk column read-back decoded to a non-vector")
 			}
 			blkID := objectio.NewBlockidWithObjectID(objID, blkIdx)
+			pkEnc := vector.NewRowEncoder(pkVec)
 			for r := 0; r < pkVec.Length(); r++ {
 				if pkVec.IsNull(uint64(r)) {
 					continue
 				}
 				packer.Reset()
-				if encErr := vector.EncodeRowToPacker(packer, pkVec, r); encErr != nil {
-					ioVec.Release()
-					return nil, encErr
-				}
+				pkEnc(packer, r)
 				key := string(packer.Bytes())
 				ws, hit := want[key]
 				if !hit {
@@ -2979,6 +2972,7 @@ func recordPkMoveRewriteShadow(
 			return nil, moerr.NewInternalErrorNoCtx(
 				"pk-move rewrite shadow: pk column read decoded to a non-vector")
 		}
+		pkEnc := vector.NewRowEncoder(pkVec)
 		for r := 0; r < pkVec.Length(); r++ {
 			if pkVec.IsNull(uint64(r)) {
 				continue
@@ -2991,10 +2985,7 @@ func recordPkMoveRewriteShadow(
 				continue
 			}
 			packer.Reset()
-			if encErr := vector.EncodeRowToPacker(packer, pkVec, r); encErr != nil {
-				ioVec.Release()
-				return nil, encErr
-			}
+			pkEnc(packer, r)
 			rows = append(rows, pkMoveDumpShadowRow{
 				pk: string(packer.Bytes()),
 				ws: oldID,
@@ -3320,11 +3311,10 @@ func pkMoveTransferRekeyPairs(
 	byPK := make(map[string]slot, stagedRows)
 	resIDs := result.Vecs[0]
 	resPKs := result.Vecs[1]
+	resEnc := vector.NewRowEncoder(resPKs)
 	for r := 0; r < result.RowCount() && r < resIDs.Length() && r < resPKs.Length(); r++ {
 		packer.Reset()
-		if err := vector.EncodeRowToPacker(packer, resPKs, r); err != nil {
-			return nil, nil, err
-		}
+		resEnc(packer, r)
 		k := string(packer.Bytes())
 		if s, ok := byPK[k]; ok {
 			s.dup = true
@@ -3336,12 +3326,11 @@ func pkMoveTransferRekeyPairs(
 
 	oldIDs := staged.Vecs[0]
 	oldPKs := staged.Vecs[1]
+	oldEnc := vector.NewRowEncoder(oldPKs)
 	var oldList, newList []types.Rowid
 	for r := 0; r < stagedRows && r < oldIDs.Length() && r < oldPKs.Length(); r++ {
 		packer.Reset()
-		if err := vector.EncodeRowToPacker(packer, oldPKs, r); err != nil {
-			return nil, nil, err
-		}
+		oldEnc(packer, r)
 		s, ok := byPK[string(packer.Bytes())]
 		if !ok {
 			return nil, nil, moerr.NewInternalErrorNoCtxf(
