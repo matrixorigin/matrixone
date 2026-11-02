@@ -1162,7 +1162,10 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		// Lifting any visible volatile result across the join can change both
 		// its evaluation count and DISTINCT cardinality.  Keep this shape
 		// fail-closed until it can be decorrelated without moving evaluation.
-		if containsVolatileFunction(ctx.projects[i]) ||
+		// CAST9 is a pure, execution-stable conversion even though SQL-mode
+		// sensitivity forbids folding. Only this nullable, match-guarded lift
+		// may use that proof; diagnostic/unstable inputs remain inadmissible.
+		if containsVolatileFunctionImpl(ctx.projects[i], true) ||
 			(hasCorrCol(ctx.projects[i]) && !builder.casePreservesType(ctx.projects[i])) {
 			return unsafe()
 		}

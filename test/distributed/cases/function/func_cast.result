@@ -702,7 +702,8 @@ SELECT f1 AS double_val, CAST(f1 AS SIGNED INT) AS cast_val FROM t1;
 Data truncation: data out of range: data type int64, value '-1e+30'
 DROP TABLE t1;
 SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
-invalid argument operator cast, bad value [DATE BIGINT UNSIGNED]
+➤ cast(cast(01-01-01 as date) as unsigned)[-5,64,0]  𝄀
+20010101
 SELECT CAST(cast('01-01-01' as date) AS SIGNED);
 ➤ cast(cast(01-01-01 as date) as signed)[-5,64,0]  𝄀
 20010101
