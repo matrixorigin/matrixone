@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	moerr "github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -64,6 +65,11 @@ func (shuffle *Shuffle) PrepareChildrenProcess(proc *process.Process) *process.P
 }
 
 func (shuffle *Shuffle) Prepare(proc *process.Process) error {
+	if len(shuffle.ShuffleKeyColumns) > 0 &&
+		(!shuffle.DrainAllBuckets || shuffle.ShuffleExpr != nil ||
+			shuffle.ShuffleType != int32(plan.ShuffleType_Hash) || shuffle.BucketNum < 1) {
+		return moerr.NewInternalError(proc.Ctx, "complete-key shuffle requires synchronous hash routing")
+	}
 	if shuffle.OpAnalyzer == nil {
 		shuffle.OpAnalyzer = process.NewAnalyzer(shuffle.GetIdx(), shuffle.IsFirst, shuffle.IsLast, opName)
 	} else {
@@ -201,7 +207,9 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 		} else if bat.Last() {
 			return result, nil
 		} else if !bat.IsEmpty() {
-			if shuffle.ctr.exprExec != nil {
+			if len(shuffle.ShuffleKeyColumns) > 0 {
+				bat, err = shuffle.shuffleCompleteKey(bat, proc)
+			} else if shuffle.ctr.exprExec != nil {
 				bat, err = shuffle.evalAndShuffle(bat, proc)
 			} else if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
 				bat, err = hashShuffle(shuffle, bat, proc)
@@ -434,6 +442,44 @@ func (shuffle *Shuffle) enqueueBySels(bat *batch.Batch, proc *process.Process) e
 	shuffle.ctr.pendingOffset = 0
 	_, _, err := shuffle.flushPending(proc)
 	return err
+}
+
+// shuffleCompleteKey uses the same canonical partition hash as Group spill.
+// Hash collisions only co-locate tuples: the receiving Group still compares
+// every equality key. Borrowed vectors never outlive the call.
+func (shuffle *Shuffle) shuffleCompleteKey(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
+	if len(shuffle.ctr.keyVectors) != len(shuffle.ShuffleKeyColumns) {
+		shuffle.ctr.keyVectors = make([]*vector.Vector, len(shuffle.ShuffleKeyColumns))
+	}
+	defer clear(shuffle.ctr.keyVectors)
+	for i, col := range shuffle.ShuffleKeyColumns {
+		if col < 0 || int(col) >= len(bat.Vecs) || bat.Vecs[col] == nil ||
+			bat.Vecs[col].Length() != bat.RowCount() {
+			return nil, moerr.NewInternalError(proc.Ctx, "invalid complete-key shuffle column")
+		}
+		shuffle.ctr.keyVectors[i] = bat.Vecs[col]
+	}
+	if shuffle.ctr.keyHashes == nil {
+		// NewVec defaults to Go-heap storage, which bypasses mpool capacity.
+		shuffle.ctr.keyHashes = vector.NewOffHeapVecWithType(types.T_uint64.ToType())
+	}
+	if err := shuffle.ctr.keyHashes.PreExtend(bat.RowCount(), proc.Mp()); err != nil {
+		return nil, err
+	}
+	shuffle.ctr.keyHashes.SetLength(bat.RowCount())
+	hashes := vector.MustFixedColNoTypeCheck[uint64](shuffle.ctr.keyHashes)
+	keycodec.ComputeXXHash(shuffle.ctr.keyVectors, hashes, 0)
+	sels := shuffle.clearSels()
+	for row, hash := range hashes {
+		idx := hash % uint64(shuffle.BucketNum)
+		sels[idx] = append(sels[idx], int32(row))
+	}
+	for bucket, rows := range sels {
+		if len(rows) == bat.RowCount() {
+			return shuffle.routeSingleBucket(bat, int32(bucket), proc)
+		}
+	}
+	return nil, shuffle.enqueueBySels(bat, proc)
 }
 
 // evalAndShuffle evaluates the ShuffleExpr on the batch, computes shuffle bucket assignments,
