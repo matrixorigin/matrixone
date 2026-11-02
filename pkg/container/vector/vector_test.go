@@ -5520,26 +5520,40 @@ func TestPrepareParamKindReordersWithoutSidecarAllocation(t *testing.T) {
 
 func TestConstSetFunctionCopiesSelectedPrepareParamKind(t *testing.T) {
 	mp := mpool.MustNewZero()
+	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 	source := NewVec(types.T_text.ToType())
+	t.Cleanup(func() { source.Free(mp) })
 	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
 	require.NoError(t, AppendBytes(source, []byte("5"), false, mp))
 	require.NoError(t, source.SetPrepareParamKindsWithMP(
 		[]PrepareParamKind{PrepareParamInteger, PrepareParamFloat}, mp))
 	destination := NewVec(types.T_text.ToType())
+	t.Cleanup(func() { destination.Free(mp) })
 	set := GetConstSetFunction(types.T_text.ToType(), mp)
 	require.NoError(t, set(destination, source, 1, 3))
 	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(0))
 	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(2))
 
 	nullSource := NewVec(types.T_text.ToType())
+	t.Cleanup(func() { nullSource.Free(mp) })
 	require.NoError(t, AppendBytes(nullSource, nil, true, mp))
 	require.NoError(t, set(destination, nullSource, 0, 2))
 	require.False(t, destination.HasPrepareParamKind())
 
-	destination.Free(mp)
-	nullSource.Free(mp)
-	source.Free(mp)
-	require.Zero(t, mp.CurrNB())
+	source.GetGrouping().Add(1)
+	source.SetIsBinaryString(true)
+	require.NoError(t, source.SetStringSource(types.StringSourceSQLPrepare))
+	require.NoError(t, set(destination, source, 1, 3))
+	require.True(t, destination.HasGrouping())
+	require.True(t, destination.GetIsBinaryString())
+	require.Equal(t, PrepareParamFloat, destination.GetPrepareParamKindAt(0))
+	require.Equal(t, types.StringSourceSQLPrepare, destination.GetStringSource())
+	require.NoError(t, set(destination, source, 1, 0))
+	require.Zero(t, destination.Length())
+	require.False(t, destination.HasPrepareParamKind())
+	require.False(t, destination.HasGrouping())
+	require.False(t, destination.GetIsBinaryString())
+	require.Equal(t, types.StringSourceExpression, destination.GetStringSource())
 }
 
 func TestPrepareParamKindCheckpointRollbackRetainsSidecarOwnership(t *testing.T) {
@@ -7480,4 +7494,58 @@ func TestCloneWindowToConstNullBorrowedData(t *testing.T) {
 	dst.Free(mp)
 	owner.Free(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func BenchmarkConstSetSelection(b *testing.B) {
+	for _, shape := range []string{"flat", "flat_null", "constant", "constant_null", "borrowed_null", "text", "zero"} {
+		b.Run(shape, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			b.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(b, mp.CurrNB()) })
+			typ := types.T_int64.ToType()
+			if shape == "text" {
+				typ = types.T_text.ToType()
+			}
+			source := NewVec(typ)
+			var err error
+			switch shape {
+			case "constant":
+				source.Free(mp)
+				source, err = NewConstFixed(typ, int64(7), 2, mp)
+			case "constant_null":
+				source.Free(mp)
+				source = NewConstNull(typ, 2, mp)
+			case "text":
+				err = AppendBytesList(source, [][]byte{[]byte("first"), []byte("second")}, nil, mp)
+			default:
+				err = AppendFixedList(source, []int64{7, 8}, nil, mp)
+			}
+			require.NoError(b, err)
+			b.Cleanup(func() { source.Free(mp) })
+			if shape == "flat_null" {
+				source.GetNulls().Add(1)
+			}
+			if shape == "borrowed_null" {
+				validity := []byte{1}
+				lease, err := NewRefCountedBufferLease(validity, 1, nil)
+				require.NoError(b, err)
+				b.Cleanup(lease.Release)
+				require.NoError(b, source.GetNulls().InstallBorrowedValidity(validity, 0, 2, 1, lease))
+			}
+			destination := NewConstNull(typ, 0, mp)
+			b.Cleanup(func() { destination.Free(mp) })
+			set := GetConstSetFunction(typ, mp)
+			length := 1
+			if shape == "zero" {
+				length = 0
+			}
+			require.NoError(b, set(destination, source, 1, length))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := set(destination, source, 1, length); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }

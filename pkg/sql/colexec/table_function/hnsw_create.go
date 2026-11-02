@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,15 +30,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	hnswrt "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
+	vimemory "github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	usearch "github.com/unum-cloud/usearch/golang"
+	"go.uber.org/zap"
 )
 
 // hnswCatalogHooks is the shared (stateless) catalog-hooks instance used for
@@ -55,6 +60,13 @@ type hnswCreateState struct {
 	idxcfg vectorindex.IndexConfig
 	// bounds is the range of an int8/uint8 index, written to its dict table by end.
 	bounds hnsw.QuantizeBounds
+	// ignored holds the rows the index cannot store, written to its ignored table by end.
+	ignored *vectorindex.IgnoredSpill
+	// left counts the rows the index cannot store, and added the rows it stores.
+	left, added int
+	// firstPk and firstErr are the key and the error of the first row the index cannot store.
+	firstPk  string
+	firstErr error
 
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -68,6 +80,9 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// invalid), so skip rather than run malformed SQL.
 	if u.tblcfg.MetadataTable == "" || u.tblcfg.IndexTable == "" {
 		return nil
+	}
+	if u.left > 0 && u.added == 0 {
+		return moerr.NewIndexAllRowsBadNoCtx(int64(u.left), u.firstPk, u.firstErr.Error())
 	}
 
 	// Clear the old index unconditionally — even when nothing was built (REBUILD to zero docs must
@@ -89,6 +104,14 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	if u.tblcfg.DictTable != "" && u.bounds.Set {
 		sqls = append(sqls, hnsw.DictBoundsSql(u.tblcfg.DbName, u.tblcfg.DictTable, u.bounds))
 	}
+	buildTs := buildSnapshotTS(proc)
+	if u.left > 0 {
+		logutil.Warn("hnsw_create ignored rows",
+			zap.String("db", u.tblcfg.DbName),
+			zap.String("table", u.tblcfg.SrcTable),
+			zap.Int("ignored", u.left),
+			zap.String("first", u.firstPk+": "+u.firstErr.Error()))
+	}
 
 	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
 		stmt := sqlproc.StatementOption()
@@ -108,12 +131,19 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 				return err
 			}
 		}
-		for _, sql := range sqls {
+		run := func(sql string) error {
 			res, err := exec.Exec(sql, stmt)
 			res.Close()
-			if err != nil {
+			return err
+		}
+		for _, sql := range sqls {
+			if err := run(sql); err != nil {
 				return err
 			}
+		}
+		if u.ignored != nil {
+			cols := vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Ts: catalog.IndexIgnored_TblCol_Ts}
+			return u.ignored.Sqls(u.tblcfg.DbName, u.tblcfg.IgnoredTable, cols, buildTs, run)
 		}
 		return nil
 	})
@@ -144,6 +174,9 @@ func (u *hnswCreateState) free(tf *TableFunction, proc *process.Process, pipelin
 
 	if u.build != nil {
 		u.build.Destroy()
+	}
+	if u.ignored != nil {
+		u.ignored.Close()
 	}
 }
 
@@ -267,6 +300,9 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		return nil
 	}
 
+	if u.tblcfg.IgnoredTable != "" {
+		u.ignored = vectorindex.NewIgnoredSpill(vimemory.HostSpillDir(proc.GetTopContext(), proc.Base.FileService, proc.GetService()))
+	}
 	uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
 	u.build, err = newHnswBuilder(sqlexec.NewSqlProcess(proc), uid, partType, u.idxcfg, u.tblcfg)
 	if err == nil {
@@ -347,7 +383,25 @@ func (u *hnswCreateState) addResult(res executor.Result) error {
 			if idVec.IsNull(uint64(i)) || faVec.IsNull(uint64(i)) {
 				continue
 			}
-			if err := u.build.addBytes(vector.GetFixedAtNoTypeCheck[int64](idVec, i), faVec.GetBytesAt(i)); err != nil {
+			id := vector.GetFixedAtNoTypeCheck[int64](idVec, i)
+			err := u.build.addBytes(id, faVec.GetBytesAt(i))
+			if err == nil {
+				u.added++
+				continue
+			}
+			code, ok := vectorindex.UnstorableCode(err)
+			if !ok || u.tblcfg.IgnoredTable == "" {
+				return err
+			}
+			u.left++
+			pk := strconv.FormatInt(id, 10)
+			if u.firstErr == nil {
+				u.firstPk, u.firstErr = pk, err
+			}
+			if u.ignored.Len() >= u.tblcfg.MaxBadRecords {
+				return moerr.NewIndexTooManyBadRecordsNoCtx(u.tblcfg.MaxBadRecords, pk, err.Error())
+			}
+			if err := u.ignored.Add(pk, code); err != nil {
 				return err
 			}
 		}
@@ -362,19 +416,24 @@ type hnswBuilder interface {
 	PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error)
 	PersistChunks(*sqlexec.ChunkInserter) error
 	Destroy() error
-	// addBytes adds a vector given in the column's encoding.
+	// addBytes adds a vector given in the column's encoding; an error with an unstorable code
+	// tells why the index cannot store it.
 	addBytes(id int64, data []byte) error
 }
 
 type typedHnswBuilder[T types.ArrayElement] struct {
 	*hnsw.HnswBuild[T]
-	dim uint
+	dim  uint
+	kind usearch.Quantization
 }
 
 func (b typedHnswBuilder[T]) addBytes(id int64, data []byte) error {
 	vec := types.BytesToArray[T](data)
 	if uint(len(vec)) != b.dim {
-		return moerr.NewInternalErrorNoCtx("vector dimension mismatch")
+		return moerr.NewIndexVectorDimensionNoCtx(fmt.Sprintf("%d, the index has %d", len(vec), b.dim))
+	}
+	if err := hnsw.CheckStorable(vec, b.kind); err != nil {
+		return err
 	}
 	return b.Add(id, vec)
 }
@@ -385,7 +444,7 @@ func newTypedHnswBuilder[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, uid 
 	if err != nil {
 		return nil, err
 	}
-	return typedHnswBuilder[T]{HnswBuild: build, dim: idxcfg.Usearch.Dimensions}, nil
+	return typedHnswBuilder[T]{HnswBuild: build, dim: idxcfg.Usearch.Dimensions, kind: idxcfg.Usearch.Quantization}, nil
 }
 
 // newHnswBuilder returns a build that takes vectors of the column type partType as they are.

@@ -629,12 +629,48 @@ func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type
 	return newCheckResultWithCast(matched.idx, finalTypes)
 }
 
+// isTemporalContextSource deliberately excludes YEAR: its numeric coercions
+// have their own existing rules.
+func isTemporalContextSource(oid types.T) bool {
+	return oid == types.T_date || oid == types.T_datetime || oid == types.T_time || oid == types.T_timestamp
+}
+
+// fixedTypeMatchWithTemporalNumericCast opts the value argument of selected
+// mathematical functions into MySQL's DOUBLE temporal domain. Do not add these
+// conversions to the global implicit table: value branches and unrelated
+// overload sets must retain their existing resolution. Control arguments keep
+// their ordinary integer-argument rules, including the BOOL adapter.
+func fixedTypeMatchWithTemporalNumericCast(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 0 || !isTemporalContextSource(inputs[0].Oid) {
+		return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
+	}
+	return temporalNumericTypeMatch(overloads, inputs)
+}
+
+// CEIL/FLOOR retain their historical non-temporal (including BOOL) fallback.
+func ceilFloorTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 0 || !isTemporalContextSource(inputs[0].Oid) {
+		return fixedTypeMatch(overloads, inputs)
+	}
+	return temporalNumericTypeMatch(overloads, inputs)
+}
+
+func temporalNumericTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	normalized := append([]types.Type(nil), inputs...)
+	normalized[0] = types.New(types.T_float64, 0, inputs[0].Scale)
+	matched := fixedTypeMatchWithBoolNumericCast(overloads, normalized)
+	if matched.status == succeedMatched {
+		return newCheckResultWithCast(matched.idx, normalized)
+	}
+	return matched
+}
+
 // isLogicalBoolOperand reports whether one type can serve as an operand of the
 // logical operators AND/OR/XOR/NOT, whose arguments are a boolean context. It
 // accepts every type the fixed implicit-cast table converts to BOOL and,
-// additionally, BIT: MySQL evaluates BIT as a number in a boolean context
-// (non-zero is TRUE, zero is FALSE, NULL stays NULL), and the execution layer
-// already provides the bit->bool cast for every bit width.
+// additionally, BIT and temporal values: MySQL evaluates their numeric value
+// in a boolean context (non-zero is TRUE, zero is FALSE, NULL stays NULL).
+// Execution casts preserve fractional TIME truthiness and zero-date sentinels.
 //
 // The BIT acceptance is deliberately kept inside these boolean argument
 // positions: adding BIT->BOOL to the global implicit-cast table would also
@@ -642,7 +678,7 @@ func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type
 // is the only type reachable from both BIT and BOOL (BOOL has no implicit
 // numeric target), so a non-zero BIT value would silently collapse to TRUE.
 func isLogicalBoolOperand(t types.Type) bool {
-	if t.Oid == types.T_bool || t.Oid == types.T_bit {
+	if t.Oid == types.T_bool || t.Oid == types.T_bit || isTemporalContextSource(t.Oid) {
 		return true
 	}
 	can, _ := fixedImplicitTypeCast(t, types.T_bool)
@@ -651,9 +687,8 @@ func isLogicalBoolOperand(t types.Type) bool {
 
 // logicalOperatorTypeCheck is the shared checker for the multiary logical
 // operators AND/OR: every argument must be a boolean-context operand (see
-// isLogicalBoolOperand), and non-BOOL arguments are cast to BOOL. Non-BIT
-// inputs resolve exactly as before; BIT inputs are the only newly accepted
-// domain.
+// isLogicalBoolOperand), and non-BOOL arguments are cast to BOOL. Temporal
+// and BIT acceptance stays local to these boolean argument positions.
 func logicalOperatorTypeCheck(overloads []overload, inputs []types.Type) checkResult {
 	cost := 0
 	for _, source := range inputs {
@@ -677,28 +712,36 @@ func logicalOperatorTypeCheck(overloads []overload, inputs []types.Type) checkRe
 	return newCheckResultWithCast(0, castTypes)
 }
 
-// logicalFixedTypeMatch resolves the fixed-arity logical operators NOT and
-// XOR through the ordinary fixed matcher, normalizing BIT arguments to BOOL
-// first so a BIT operand uses the existing boolean overload with a real
-// bit->bool cast at execution. For every non-BIT input the resolution, cost
-// mechanics, arity handling, and overload selection are exactly those of
-// fixedTypeMatch; only BIT operands are newly accepted (see
-// isLogicalBoolOperand for why BIT stays out of the global cast table).
+// logicalFixedTypeMatch accepts BIT and temporal arguments only at logical
+// argument positions. Arity and all other domains still use the fixed matcher.
 func logicalFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	hasBit := false
+	return logicalContextTypeMatch(overloads, inputs, true)
+}
+
+// IS predicates opt in only temporal inputs, preserving their existing BIT
+// behavior independently from NOT/XOR.
+func temporalPredicateTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return logicalContextTypeMatch(overloads, inputs, false)
+}
+
+func logicalContextTypeMatch(overloads []overload, inputs []types.Type, acceptBit bool) checkResult {
+	needsContextCast := func(oid types.T) bool {
+		return isTemporalContextSource(oid) || (acceptBit && oid == types.T_bit)
+	}
+	hasContextSource := false
 	for _, input := range inputs {
-		if input.Oid == types.T_bit {
-			hasBit = true
+		if needsContextCast(input.Oid) {
+			hasContextSource = true
 			break
 		}
 	}
-	if !hasBit {
+	if !hasContextSource {
 		return fixedTypeMatch(overloads, inputs)
 	}
 
 	normalized := append([]types.Type(nil), inputs...)
 	for i := range normalized {
-		if normalized[i].Oid == types.T_bit {
+		if needsContextCast(normalized[i].Oid) {
 			normalized[i] = types.T_bool.ToType()
 		}
 	}
@@ -711,7 +754,7 @@ func logicalFixedTypeMatch(overloads []overload, inputs []types.Type) checkResul
 	if matched.status == succeedWithCast {
 		finalTypes := append([]types.Type(nil), matched.finalType...)
 		for i, input := range inputs {
-			if input.Oid == types.T_bit {
+			if needsContextCast(input.Oid) {
 				finalTypes[i] = boolType
 			}
 		}
@@ -721,7 +764,7 @@ func logicalFixedTypeMatch(overloads []overload, inputs []types.Type) checkResul
 	finalTypes := make([]types.Type, len(inputs))
 	for i, input := range inputs {
 		finalTypes[i] = input
-		if input.Oid == types.T_bit {
+		if needsContextCast(input.Oid) {
 			finalTypes[i] = boolType
 		}
 	}

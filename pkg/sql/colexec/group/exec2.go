@@ -309,6 +309,12 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
+			for i, arg := range ag.GetArgExpressions() {
+				// Most aggregate arguments need no specialization discovery.
+				if f := arg.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "*" && types.T(arg.Typ.Id) == types.T_decimal128 {
+					e.Executor[i] = colexec.FuseDecimalAggregateArgument(arg, e.Executor[i])
+				}
+			}
 			group.ctr.aggArgEvaluate = append(group.ctr.aggArgEvaluate, e)
 		}
 	}

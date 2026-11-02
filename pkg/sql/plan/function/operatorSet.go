@@ -1799,12 +1799,13 @@ func operatorUnaryMinusDecimal256(parameters []*vector.Vector, result vector.Fun
 }
 
 func funcBitInversion[T constraints.Integer](x T) uint64 {
-	if x > 0 {
-		n := uint64(x)
-		return ^n
-	} else {
-		return uint64(^x)
-	}
+	// The numeric unary bit inversion is evaluated in the unsigned 64-bit
+	// domain, so widen first and complement once. Complementing at the storage
+	// width of T leaked that width for unsigned zero values: ~tinyint_unsigned
+	// 0 returned 255 instead of 18446744073709551615 (issue #31905). For
+	// signed x the two's-complement sign extension makes ^uint64(x) equal to
+	// the old uint64(^x), so their behavior is unchanged.
+	return ^uint64(x)
 }
 
 func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

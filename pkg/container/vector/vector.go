@@ -8087,13 +8087,31 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return err
 			}
 		}
+		if length == 0 {
+			if err := set(v, w, sel, length); err != nil {
+				return err
+			}
+			v.resetPrepareParamKind()
+			v.resetBinaryString()
+			v.resetStringSource()
+			v.gsp.Reset()
+			return nil
+		}
+		// The selected source row is stable through set: aliases were cloned above.
+		// Compute NULL once for both provenance admission and publication.
+		var sourceNull bool
+		if w.IsConst() {
+			sourceNull = w.IsConstNull()
+		} else {
+			sourceNull = w.nsp.Contains(uint64(sel))
+		}
 		domain := types.RuntimeStringInherit
-		if length > 0 && !w.IsConstNull() && !w.IsNull(uint64(sel)) {
+		if !sourceNull {
 			domain = w.GetRuntimeStringDomainAt(int(sel))
 		}
 		// Admit the only fallible provenance allocation before SetConst*
 		// publishes the new payload, const state, and logical length.
-		if domain == types.RuntimeStringText && length > 0 {
+		if domain == types.RuntimeStringText {
 			if err := v.ensureBinaryStringCapacity(1, mp); err != nil {
 				return err
 			}
@@ -8105,7 +8123,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		// constant value.  The value and its prepared-parameter provenance are
 		// one state: copy only the selected row's category, never the source
 		// sidecar's whole row layout. NULL retains its independent source.
-		if length == 0 || w.IsConstNull() || w.IsNull(uint64(sel)) {
+		if sourceNull {
 			v.resetPrepareParamKind()
 			v.resetBinaryString()
 		} else {
@@ -8114,13 +8132,11 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return err
 			}
 		}
-		if length == 0 {
-			v.resetStringSource()
-		} else if err := v.SetStringSource(w.GetStringSourceAt(int(sel))); err != nil {
+		if err := v.SetStringSource(w.GetStringSourceAt(int(sel))); err != nil {
 			return err
 		}
 		v.gsp.Reset()
-		if grouping && length > 0 {
+		if grouping {
 			v.gsp.AddRange(0, uint64(length))
 		}
 		return nil
@@ -8174,6 +8190,92 @@ func pregrowVarlenaArea(vec *Vector, totalBytes int, mp *mpool.MPool) error {
 
 func (v *Vector) UnionNull(mp *mpool.MPool) error {
 	return appendOneFixed(v, 0, true, mp)
+}
+
+// FixedSourceRow identifies an immutable source for a single append call.
+type FixedSourceRow struct {
+	Vec *Vector
+	Row int64
+}
+
+// TryUnionFlatFixedRows copies rows across source vectors without changing their
+// order. A false result leaves v untouched, allowing the caller to use UnionOne.
+// A true result transfers no source ownership; v owns every copied payload.
+func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
+	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() ||
+		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() ||
+		v.preflightStringSourceReady {
+		return false, nil
+	}
+	size := v.typ.TypeSize()
+	if size <= 0 || rows[0].Vec == nil {
+		return false, nil
+	}
+	source := rows[0].Vec.stringSource
+	if v.length != 0 && v.stringSource != source {
+		return false, nil
+	}
+
+	hasNulls, hasValues := false, false
+	for _, row := range rows {
+		w := row.Vec
+		if w == nil || w == v || w.class != FLAT || w.typ != v.typ ||
+			w.DataBackingKind() != OwnedMPoolUnique || row.Row < 0 || row.Row >= int64(w.length) ||
+			!w.gsp.EmptyByFlag() || !w.hasPlainFixedMetadata() || w.stringSource != source {
+			return false, nil
+		}
+		isNull := !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(row.Row))
+		hasNulls = hasNulls || isNull
+		hasValues = hasValues || !isNull
+	}
+	oldLen := v.length
+	if err := extendWithBitmaps(v, len(rows), mp, hasNulls && v.allocationAccount != nil, false); err != nil {
+		return true, err
+	}
+	// Keep the nullable path separate: ordinary fixed columns need neither
+	// row-by-row NULL checks nor scalar append/admission work in the gather loop.
+	if hasNulls {
+		for i, row := range rows {
+			if !row.Vec.nsp.EmptyByFlag() && nulls.Contains(&row.Vec.nsp, uint64(row.Row)) {
+				nulls.Add(&v.nsp, uint64(oldLen+i))
+				continue
+			}
+			dst, src := (oldLen+i)*size, int(row.Row)*size
+			copy(v.data[dst:dst+size], row.Vec.data[src:src+size])
+		}
+	} else {
+		switch size {
+		case 8:
+			for i, row := range rows {
+				*(*uint64)(unsafe.Pointer(&v.data[(oldLen+i)*8])) =
+					*(*uint64)(unsafe.Pointer(&row.Vec.data[row.Row*8]))
+			}
+		case 4:
+			for i, row := range rows {
+				*(*uint32)(unsafe.Pointer(&v.data[(oldLen+i)*4])) =
+					*(*uint32)(unsafe.Pointer(&row.Vec.data[row.Row*4]))
+			}
+		default:
+			for i, row := range rows {
+				dst, src := (oldLen+i)*size, int(row.Row)*size
+				copy(v.data[dst:dst+size], row.Vec.data[src:src+size])
+			}
+		}
+	}
+	v.length = oldLen + len(rows)
+	v.stringSource = source
+	if hasValues {
+		if !v.nsp.EmptyByFlag() {
+			v.prepareParamKindAppendStart(oldLen)
+		}
+		v.prepareParamKindSeen = true
+	}
+	return true, nil
+}
+
+func (v *Vector) hasPlainFixedMetadata() bool {
+	return v.prepareParamKinds == nil && v.prepareParamKind == PrepareParamNone &&
+		!v.binaryStringRowsActive && !v.binaryString && v.stringSources == nil
 }
 
 // It is simply append. the purpose of retention is ease of use
