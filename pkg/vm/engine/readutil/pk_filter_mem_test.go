@@ -452,6 +452,28 @@ func TestMemPKFilter_FilterVector(t *testing.T) {
 	}
 }
 
+func TestMemPKFilterINWorkspaceRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	vec := vector.NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { vec.Free(mp) })
+	for _, value := range []int64{9, -1, 3, 7, 3, 10} {
+		require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+	}
+	packer := types.NewPacker()
+	t.Cleanup(packer.Close)
+	var filter MemPKFilter
+	filter.SetFullData(function.IN, true,
+		EncodePrimaryKey(int64(7), packer), EncodePrimaryKey(int64(3), packer),
+		EncodePrimaryKey(int64(-1), packer), EncodePrimaryKey(int64(3), packer))
+	skip := objectio.GetReusableBitmap()
+	t.Cleanup(skip.Release)
+	filter.FilterVector(vec, packer, &skip)
+	for row, wantSkip := range []bool{true, false, false, false, false, true} {
+		require.Equal(t, wantSkip, skip.Contains(uint64(row)), "row %d", row)
+	}
+}
+
 func TestMemPKFilterPrefixInScales(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	defer func() { require.Zero(t, mp.CurrNB()) }()

@@ -109,6 +109,9 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 	if vec.IsConstNull() {
 		return make([][]byte, vec.Length())
 	}
+	if vec.Length() > 0 {
+		ret = make([][]byte, 0, vec.Length())
+	}
 
 	switch vec.GetType().Oid {
 

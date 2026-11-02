@@ -44,7 +44,6 @@ type MemPKFilterSpec struct {
 type MemPKFilter struct {
 	op        int
 	packed    [][]byte
-	inSet     map[string]struct{}
 	prefixes  [][]byte
 	disjuncts []MemPKFilter
 	isVec     bool
@@ -460,7 +459,6 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
-	f.inSet = nil
 	f.prefixes = nil
 	f.disjuncts = nil
 
@@ -468,12 +466,6 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 		sort.Slice(f.packed, func(i, j int) bool {
 			return bytes.Compare(f.packed[i], f.packed[j]) < 0
 		})
-	}
-	if op == function.IN {
-		f.inSet = make(map[string]struct{}, len(f.packed))
-		for _, key := range f.packed {
-			f.inSet[string(key)] = struct{}{}
-		}
 	}
 	if op == function.PREFIX_IN {
 		f.prefixes = make([][]byte, 0, len(f.packed))
@@ -502,8 +494,10 @@ func (f *MemPKFilter) matches(key []byte) bool {
 	case function.PREFIX_EQ:
 		return len(f.packed) == 1 && bytes.HasPrefix(key, f.packed[0])
 	case function.IN:
-		_, ok := f.inSet[string(key)]
-		return ok
+		idx := sort.Search(len(f.packed), func(i int) bool {
+			return bytes.Compare(f.packed[i], key) >= 0
+		})
+		return idx < len(f.packed) && bytes.Equal(f.packed[idx], key)
 	case function.PREFIX_IN:
 		idx := sort.Search(len(f.prefixes), func(idx int) bool {
 			return bytes.Compare(f.prefixes[idx], key) > 0
