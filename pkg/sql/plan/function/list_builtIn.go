@@ -8230,7 +8230,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: ABS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8320,7 +8320,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SQRT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8360,7 +8360,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: SIGN,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		checkFn:    fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{
@@ -8883,7 +8883,7 @@ var supportedMathBuiltIns = []FuncNew{
 		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatch,
+		checkFn:           ceilFloorTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9111,7 +9111,7 @@ var supportedMathBuiltIns = []FuncNew{
 		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatch,
+		checkFn:           ceilFloorTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9853,7 +9853,7 @@ var supportedMathBuiltIns = []FuncNew{
 		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatchWithBoolNumericCast,
+		checkFn:           fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{
@@ -9985,7 +9985,7 @@ var supportedMathBuiltIns = []FuncNew{
 		class:             plan.Function_STRICT,
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatchWithBoolNumericCast,
+		checkFn:           fixedTypeMatchWithTemporalNumericCast,
 
 		Overloads: []overload{
 			{

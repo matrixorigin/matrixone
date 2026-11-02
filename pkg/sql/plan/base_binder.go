@@ -12509,9 +12509,11 @@ func appendBitwiseAggregateCastBeforeExpr(ctx context.Context, expr *Expr, toTyp
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
 	if expr != nil && types.T(expr.Typ.Id).IsDateRelate() &&
-		(types.T(toType.Id) == types.T_decimal256 || types.T(toType.Id).IsFloat()) {
-		// Temporal arithmetic already has exact casts to Decimal128. Preserve
-		// packed values and fractional seconds before widening or float conversion.
+		(types.T(toType.Id) == types.T_decimal256 ||
+			(types.T(toType.Id).IsFloat() && !function.IfTypeCastSupported(types.T(expr.Typ.Id), types.T(toType.Id)))) {
+		// Bridge widening and unsupported floating targets through Decimal128.
+		// Supported direct casts already preserve packed temporal values and
+		// fractions, without an intermediate vector or decimal text conversion.
 		intermediate := types.New(types.T_decimal128, 38, max(expr.Typ.Scale, 0))
 		var err error
 		expr, err = appendCastBeforeExprWithOverload(ctx, expr, makePlan2Type(&intermediate), 0)
