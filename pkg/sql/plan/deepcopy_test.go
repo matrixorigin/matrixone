@@ -479,6 +479,10 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 
 func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	source := &planpb.Query{
+		SelectLockReferences: []*planpb.SelectLockReference{{
+			ObjectRef: &planpb.ObjectRef{SchemaName: "db", ObjName: "locked"},
+			ViewPath:  []*planpb.ViewStep{{DatabaseName: "db", ViewName: "lock_view"}},
+		}, nil},
 		ViewReferences: []*planpb.ViewReference{{
 			ViewPath: []*planpb.ViewStep{{DatabaseName: "db", ViewName: "inner", SubscriptionName: "sub",
 				Snapshot: &planpb.Snapshot{
@@ -531,6 +535,11 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	require.Equal(t, source.ViewReferences, decoded.ViewReferences)
 	cloned := DeepCopyQuery(source)
 	require.True(t, proto.Equal(source, cloned))
+	cloned.SelectLockReferences[0].ObjectRef.ObjName = "changed"
+	cloned.SelectLockReferences[0].ViewPath[0].ViewName = "changed"
+	require.Equal(t, "locked", source.SelectLockReferences[0].ObjectRef.ObjName)
+	require.Equal(t, "lock_view", source.SelectLockReferences[0].ViewPath[0].ViewName)
+	require.Nil(t, cloned.SelectLockReferences[1])
 	require.Equal(t, source.ViewReferences, cloned.ViewReferences)
 	cloned.ViewReferences[0].ViewPath[0].ViewName = "changed"
 	cloned.ViewReferences[0].ViewPath[0].Snapshot.TS.PhysicalTime = 99
