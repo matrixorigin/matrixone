@@ -662,6 +662,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_date: {
+		types.T_bool, types.T_float64,
 		types.T_int32, types.T_int64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime,
@@ -671,6 +672,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_datetime: {
+		types.T_bool, types.T_float64,
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp, types.T_year,
@@ -680,6 +682,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_timestamp: {
+		types.T_bool, types.T_float64,
 		types.T_int32, types.T_int64,
 		types.T_date, types.T_datetime, types.T_time,
 		types.T_timestamp, types.T_year,
@@ -689,6 +692,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_time: {
+		types.T_bool, types.T_float64,
 		types.T_date, types.T_datetime,
 		types.T_time,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -1265,6 +1269,9 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		(proc == nil || proc.Ctx == nil || proc.Ctx.Value(defines.AlterCopyOpt{}) == nil)
 	if toType.Oid == types.T_decimal256 {
 		return castToDecimal256(proc, from, *toType, result, length, selectList, mode)
+	}
+	if isTemporalContextSource(fromType.Oid) && (toType.Oid == types.T_bool || toType.Oid == types.T_float64) {
+		return castTemporalContext(parameters, result, proc, length, selectList)
 	}
 	switch fromType.Oid {
 	case types.T_any: // scalar null
