@@ -154,24 +154,73 @@ func (q *safeQueue) Enqueue(item any) (any, error) {
 			q.pending.Add(-1)
 			return item, ErrClose
 		}
-		// A blocking send intentionally has no cancellation branch: Stop waits for
-		// pending to reach zero before canceling q.ctx, and this producer contributes
-		// to pending until its item has been handled. Adding q.ctx.Done() here would
-		// therefore not unblock a sender and would obscure that shutdown contract.
+		// Keep the established background-producer hot path exact: unlike a
+		// request-scoped enqueue it has no context checks and no select. Stop
+		// waits for pending to reach zero, so the receiver remains alive until
+		// this send is handled.
 		q.queue <- item
 		return item, nil
-	} else {
+	}
+
+	q.pending.Add(1)
+	if q.state.Load() != Running {
+		q.pending.Add(-1)
+		return item, ErrClose
+	}
+	select {
+	case q.queue <- item:
+		return item, nil
+	default:
+		q.pending.Add(-1)
+		return item, ErrFull
+	}
+}
+
+func (q *safeQueue) EnqueueWithContext(ctx context.Context, item any) (any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return item, context.Cause(ctx)
+	}
+	if q.state.Load() != Running {
+		return item, ErrClose
+	}
+
+	if q.blocking {
 		q.pending.Add(1)
+		// Stop may begin after the first state check. Register before the
+		// second check so Stop keeps the receiver alive until this producer
+		// either sends or withdraws its pending item.
 		if q.state.Load() != Running {
 			q.pending.Add(-1)
 			return item, ErrClose
 		}
+		// Stop waits for pending to reach zero before canceling q.ctx. Caller
+		// cancellation is different: this producer can withdraw its own pending
+		// item before it has transferred ownership to the receiver.
 		select {
 		case q.queue <- item:
 			return item, nil
-		default:
+		case <-ctx.Done():
 			q.pending.Add(-1)
-			return item, ErrFull
+			return item, context.Cause(ctx)
 		}
+	}
+
+	q.pending.Add(1)
+	if q.state.Load() != Running {
+		q.pending.Add(-1)
+		return item, ErrClose
+	}
+	select {
+	case q.queue <- item:
+		return item, nil
+	case <-ctx.Done():
+		q.pending.Add(-1)
+		return item, context.Cause(ctx)
+	default:
+		q.pending.Add(-1)
+		return item, ErrFull
 	}
 }

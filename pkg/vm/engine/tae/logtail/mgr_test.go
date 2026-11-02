@@ -24,7 +24,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 )
@@ -36,6 +38,33 @@ func goSubmit(fn func()) { go fn() }
 // syncSubmit runs fn synchronously; exercises the degenerate case where
 // collect effectively runs on the caller.
 func syncSubmit(fn func()) { fn() }
+
+type captureContextQueue struct {
+	items      chan any
+	enqueueErr error
+}
+
+func (q *captureContextQueue) Start() {}
+func (q *captureContextQueue) Stop()  {}
+
+func (q *captureContextQueue) Enqueue(item any) (any, error) {
+	return q.EnqueueWithContext(context.Background(), item)
+}
+
+func (q *captureContextQueue) EnqueueWithContext(
+	ctx context.Context,
+	item any,
+) (any, error) {
+	if q.enqueueErr != nil {
+		return item, q.enqueueErr
+	}
+	select {
+	case q.items <- item:
+		return item, nil
+	case <-ctx.Done():
+		return item, context.Cause(ctx)
+	}
+}
 
 func TestManagerTruncateTSConcurrentAccess(t *testing.T) {
 	mgr := &Manager{
@@ -68,6 +97,150 @@ func TestManagerTruncateTSConcurrentAccess(t *testing.T) {
 	close(start)
 	wg.Wait()
 	require.Equal(t, types.BuildTS(iterations, 0), mgr.GetTruncateTS())
+}
+
+func TestManagerReadBarrierReturnsPublishedFrontier(t *testing.T) {
+	want := types.BuildTS(42, 7)
+	mgr := &Manager{
+		previousSaveTS:   want,
+		readBarrierSlots: make(chan struct{}, maxPendingReadBarriers),
+	}
+	mgr.logtailQueue = sm.NewSafeQueue(4, 4, mgr.onTxnLogTails)
+	require.NoError(t, mgr.RegisterCallback(func(
+		timestamp.Timestamp, timestamp.Timestamp, func(), ...logtail.TableLogtail,
+	) error {
+		return nil
+	}))
+	mgr.logtailQueue.Start()
+	defer mgr.logtailQueue.Stop()
+
+	got, err := mgr.ReadBarrier(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, want.ToTimestamp(), got)
+}
+
+func TestManagerReadBarrierMarkerOwnsAdmissionAfterCallerCancel(t *testing.T) {
+	queue := &captureContextQueue{items: make(chan any, 2)}
+	mgr := &Manager{
+		logtailQueue:     queue,
+		readBarrierSlots: make(chan struct{}, 1),
+	}
+	require.NoError(t, mgr.RegisterCallback(func(
+		timestamp.Timestamp, timestamp.Timestamp, func(), ...logtail.TableLogtail,
+	) error {
+		return nil
+	}))
+
+	firstCtx, cancelFirst := context.WithCancel(t.Context())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := mgr.ReadBarrier(firstCtx)
+		firstDone <- err
+	}()
+	first := (<-queue.items).(*readBarrier)
+	cancelFirst()
+	require.ErrorIs(t, <-firstDone, context.Canceled)
+	require.Equal(t, int64(1), mgr.pendingReadBarriers.Load())
+	require.Len(t, mgr.readBarrierSlots, 1)
+
+	blockedCtx, cancelBlocked := context.WithCancel(t.Context())
+	blockedDone := make(chan error, 1)
+	go func() {
+		_, err := mgr.ReadBarrier(blockedCtx)
+		blockedDone <- err
+	}()
+	cancelBlocked()
+	require.ErrorIs(t, <-blockedDone, context.Canceled)
+	select {
+	case unexpected := <-queue.items:
+		t.Fatalf("barrier admission exceeded its bound: %T", unexpected)
+	default:
+	}
+
+	first.complete(timestamp.Timestamp{PhysicalTime: 1})
+	require.Zero(t, mgr.pendingReadBarriers.Load())
+	require.Empty(t, mgr.readBarrierSlots)
+
+	type barrierResult struct {
+		ts  timestamp.Timestamp
+		err error
+	}
+	lastDone := make(chan barrierResult, 1)
+	go func() {
+		ts, err := mgr.ReadBarrier(t.Context())
+		lastDone <- barrierResult{ts: ts, err: err}
+	}()
+	last := (<-queue.items).(*readBarrier)
+	want := timestamp.Timestamp{PhysicalTime: 2, LogicalTime: 3}
+	last.complete(want)
+	result := <-lastDone
+	require.NoError(t, result.err)
+	require.Equal(t, want, result.ts)
+	require.Zero(t, mgr.pendingReadBarriers.Load())
+	require.Empty(t, mgr.readBarrierSlots)
+}
+
+func TestManagerReadBarrierQueueRejectionReleasesAdmission(t *testing.T) {
+	mgr := &Manager{
+		logtailQueue: &captureContextQueue{
+			enqueueErr: sm.ErrClose,
+		},
+		readBarrierSlots: make(chan struct{}, 1),
+	}
+	require.NoError(t, mgr.RegisterCallback(func(
+		timestamp.Timestamp, timestamp.Timestamp, func(), ...logtail.TableLogtail,
+	) error {
+		return nil
+	}))
+
+	_, err := mgr.ReadBarrier(t.Context())
+	require.ErrorIs(t, err, sm.ErrClose)
+	require.Zero(t, mgr.pendingReadBarriers.Load())
+	require.Empty(t, mgr.readBarrierSlots)
+}
+
+func TestManagerReadBarrierCoalescesAdjacentMarkerFrontier(t *testing.T) {
+	want := types.BuildTS(42, 7).ToTimestamp()
+	mgr := &Manager{
+		previousSaveTS:   types.TimestampToTS(want),
+		readBarrierSlots: make(chan struct{}, 2),
+	}
+
+	newAdmittedBarrier := func() *readBarrier {
+		mgr.readBarrierSlots <- struct{}{}
+		mgr.pendingReadBarriers.Add(1)
+		return newReadBarrier(func() {
+			mgr.pendingReadBarriers.Add(-1)
+			<-mgr.readBarrierSlots
+		})
+	}
+	first := newAdmittedBarrier()
+	second := newAdmittedBarrier()
+
+	mgr.onTxnLogTails(first, second)
+	require.Equal(t, want, <-first.done)
+	require.Equal(t, want, <-second.done)
+	require.Zero(t, mgr.pendingReadBarriers.Load())
+	require.Empty(t, mgr.readBarrierSlots)
+}
+
+func TestManagerReadBarrierRequiresPublisher(t *testing.T) {
+	mgr := &Manager{}
+	_, err := mgr.ReadBarrier(t.Context())
+	require.ErrorContains(t, err, "publisher is not registered")
+}
+
+func TestManagerReadBarrierHonorsCanceledContext(t *testing.T) {
+	mgr := &Manager{}
+	require.NoError(t, mgr.RegisterCallback(func(
+		timestamp.Timestamp, timestamp.Timestamp, func(), ...logtail.TableLogtail,
+	) error {
+		return nil
+	}))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := mgr.ReadBarrier(ctx)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestOrderedCollectAndPublish_Empty(t *testing.T) {

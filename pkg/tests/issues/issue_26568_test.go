@@ -30,7 +30,7 @@ import (
 
 const (
 	issue26568Rows                = 130_000
-	issue26568TPPlanTitle         = "TP QUERY PLAN"
+	issue26568OneCNPlanTitle      = "AP QUERY PLAN ON ONE CN("
 	issue26568MultiCNPlanTitle    = "AP QUERY PLAN ON MULTICN("
 	issue26568MultiCNPhyPlanTitle = "AP QUERY PHYPLAN ON MULTICN("
 )
@@ -77,10 +77,12 @@ func TestIssue26568ExplainMultiCNHashJoin(t *testing.T) {
 
 		attacks := []issue26568ExplainAttack{
 			{
-				name:                "minimal stats replacement",
+				// The hint lowers estimates but preserves the selected shuffle.
+				// GetExecType keeps shuffle joins in AP mode even at TP-sized costs.
+				name:                "minimal estimates preserve shuffle",
 				hint:                "execType=1",
 				statement:           "explain " + issue26568JoinSQL,
-				wantPlanTitlePrefix: issue26568TPPlanTitle,
+				wantPlanTitlePrefix: issue26568OneCNPlanTitle,
 			},
 			{
 				name:                "big stats verbose renderer",

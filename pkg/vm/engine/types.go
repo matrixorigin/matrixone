@@ -1328,6 +1328,13 @@ type Engine interface {
 	LatestLogtailAppliedTime() timestamp.Timestamp
 }
 
+// LogtailReadBarrier is an optional engine capability that establishes a
+// linearizable read boundary against the TN commit/logtail publication order.
+// On success, all commits completed before the boundary are visible through
+// this local engine instance and frontier is the exact applied logtail target.
+type LogtailReadBarrier interface {
+	AcquireLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, err error)
+}
 type VectorPool interface {
 	PutBatch(bat *batch.Batch)
 	GetVector(typ types.Type) *vector.Vector

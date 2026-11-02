@@ -4723,6 +4723,22 @@ var lockTable = func(
 	return doLockTable(eng, proc, rel, defChanged)
 }
 
+var lockTableForSnapshotRefresh = func(
+	ctx context.Context, eng engine.Engine, proc *process.Process,
+	rel engine.Relation, _ string, defChanged bool,
+) error {
+	id := rel.GetTableID(ctx)
+	defs, err := rel.GetPrimaryKeys(ctx)
+	if err != nil {
+		return err
+	}
+	if len(defs) != 1 {
+		return moerr.NewInternalError(ctx, "catalog table requires one primary key")
+	}
+	return lockop.LockTableForSnapshotRefreshWithContext(
+		ctx, eng, proc, id, defs[0].Type, lock.LockMode_Exclusive, defChanged)
+}
+
 // lockIndexTable
 var lockIndexTable = func(ctx context.Context, dbSource engine.Database, eng engine.Engine, proc *process.Process, tableName string, defChanged bool) error {
 	rel, err := dbSource.Relation(ctx, tableName, nil)

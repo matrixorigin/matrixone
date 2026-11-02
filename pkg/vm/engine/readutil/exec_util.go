@@ -70,25 +70,25 @@ func StreamBatchProcess(
 }
 
 func ForeachObjectsExecute(
-	onObject func(*objectio.ObjectStats) error,
+	onObject func(obj *objectio.ObjectStats, isCommitted bool) error,
 	nextObjectFn func() (objectio.ObjectStats, error),
-	latestObjects []objectio.ObjectStats,
-	extraObjects []objectio.ObjectStats,
+	uncommittedObjects []objectio.ObjectStats,
+	extraCommittedObjects []objectio.ObjectStats,
 ) (err error) {
-	for _, obj := range latestObjects {
-		if err = onObject(&obj); err != nil {
+	for _, obj := range uncommittedObjects {
+		if err = onObject(&obj, false); err != nil {
 			return
 		}
 	}
-	for _, obj := range extraObjects {
-		if err = onObject(&obj); err != nil {
+	for _, obj := range extraCommittedObjects {
+		if err = onObject(&obj, true); err != nil {
 			return
 		}
 	}
 	if nextObjectFn != nil {
 		var obj objectio.ObjectStats
 		for obj, err = nextObjectFn(); err == nil; obj, err = nextObjectFn() {
-			if err = onObject(&obj); err != nil {
+			if err = onObject(&obj, true); err != nil {
 				return
 			}
 		}
@@ -108,8 +108,8 @@ func FilterObjects(
 	blockFilterOp BlockFilterOp,
 	seekOp SeekFirstBlockOp,
 	nextObjectFn func() (objectio.ObjectStats, error),
-	latestObjects []objectio.ObjectStats,
-	extraObjects []objectio.ObjectStats,
+	uncommittedObjects []objectio.ObjectStats,
+	extraCommittedObjects []objectio.ObjectStats,
 	outBlocks *objectio.BlockInfoSlice,
 	highSelectivityHint bool,
 	metaPrefetcher func(context.Context) bool,
@@ -138,9 +138,9 @@ func FilterObjects(
 			threshold = time.Second * 10
 		}
 	}
-	onObject := func(objStats *objectio.ObjectStats) (err error) {
-		//if need to shuffle objects
-		if plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, objStats) {
+	onObject := func(objStats *objectio.ObjectStats, isCommitted bool) (err error) {
+		// Only the local workspace enumerates uncommitted objects; remote CNs cannot take ownership.
+		if isCommitted && plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, objStats) {
 			return
 		}
 		var ok bool
@@ -236,8 +236,8 @@ func FilterObjects(
 	err = ForeachObjectsExecute(
 		onObject,
 		nextObjectFn,
-		latestObjects,
-		extraObjects,
+		uncommittedObjects,
+		extraCommittedObjects,
 	)
 	return
 }

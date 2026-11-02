@@ -57,6 +57,8 @@ type backExec struct {
 	statsArray *statistic.StatsArray
 }
 
+type backExecProcessHook func(context.Context, *process.Process) error
+
 type backgroundExecRowCount interface {
 	GetLastAffectedRows() int64
 	SetLastAffectedRows(int64)
@@ -126,6 +128,16 @@ func installBackExecStatsInfo(
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
+	return back.exec(ctx, sql, "", false)
+}
+
+func (back *backExec) execWithProcessHook(ctx context.Context, sql string, hook backExecProcessHook) error {
+	if back == nil || back.backSes == nil {
+		return moerr.NewInternalError(ctx, "background executor is closed")
+	}
+	previous := back.backSes.processHook
+	back.backSes.processHook = hook
+	defer func() { back.backSes.processHook = previous }()
 	return back.exec(ctx, sql, "", false)
 }
 
@@ -1045,6 +1057,7 @@ type backSession struct {
 	effectiveMatrixOneNativeMode    bool
 	hasEffectiveMatrixOneNativeMode bool
 	forcePessimisticRC              bool
+	processHook                     backExecProcessHook
 	readSnapshot                    timestamp.Timestamp
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.

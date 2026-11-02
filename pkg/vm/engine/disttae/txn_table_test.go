@@ -327,7 +327,7 @@ func TestReusableRelationHandleRejectsNonDisttaeWorkspace(t *testing.T) {
 	require.ErrorContains(t, handle.Reset(op), "disttae transaction workspace")
 }
 
-func newPrimaryKeyCheckTableForTest(t *testing.T) (*txnTable, *Engine) {
+func newPrimaryKeyCheckTableForTest(t testing.TB) (*txnTable, *Engine) {
 	t.Helper()
 
 	eng := &Engine{

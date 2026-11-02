@@ -4587,7 +4587,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -4596,6 +4596,9 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -5833,7 +5836,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -5848,6 +5851,9 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -5993,7 +5999,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6014,6 +6020,9 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
 		return err
 	}
 
