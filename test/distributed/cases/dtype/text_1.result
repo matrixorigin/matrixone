@@ -11,7 +11,7 @@ b text primary key
 );
 not supported: text type in primary key
 drop table t2;
-no such table text_1.t2
+Unknown table 'text_1.t2'
 drop table if exists t3;
 create table t3 (
 col1 bigint,

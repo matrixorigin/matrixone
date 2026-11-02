@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -143,6 +144,60 @@ func BenchmarkUnionOneVarlenaCopy(b *testing.B) {
 				for row := range rows {
 					require.Equal(b, value, destination.GetBytesAt(row))
 				}
+			})
+		}
+	}
+}
+
+func TestUnionInlineVarlenaAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		charset uint8
+		value   []byte
+		bad     bool
+		area    bool
+	}{
+		{"legacy bytes", types.CharsetLegacy, []byte{0xff, 0x00}, false, false},
+		{"legacy empty area", types.CharsetLegacy, []byte{}, false, true},
+		{"mb4 valid", types.CharsetUTF8MB4UnicodeCI, []byte("😀"), false, false},
+		{"mb4 invalid", types.CharsetUTF8MB4UnicodeCI, []byte{0xff}, true, false},
+		{"mb3 non BMP", types.CharsetUTF8MB3UnicodeCI, []byte("😀"), true, false},
+	} {
+		for _, nullable := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/nullable=%t", tc.name, nullable), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+				source := NewVec(types.T_varchar.ToType())
+				t.Cleanup(func() { source.Free(mp) })
+				rows := []int64{0}
+				valueRow := 0
+				if nullable {
+					require.NoError(t, AppendBytes(source, nil, true, mp))
+					rows = append(rows, 1)
+					valueRow = 1
+				}
+				require.NoError(t, AppendBytes(source, tc.value, false, mp))
+				if tc.area {
+					values, _ := MustVarlenaRawData(source)
+					values[valueRow].SetOffsetLen(0, 0)
+				}
+				// Inject invalid Unicode bytes at this copy boundary, bypassing
+				// AppendBytes admission. The fast path must still reject them.
+				source.typ.Charset = tc.charset
+				destination := NewVec(source.typ)
+				t.Cleanup(func() { destination.Free(mp) })
+				err := destination.Union(source, rows, mp)
+				if tc.bad {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, nullable, destination.GetNulls().Contains(0))
+				require.True(t, bytes.Equal(tc.value, destination.GetBytesAt(valueRow)))
+				if len(tc.value) > 0 {
+					source.GetBytesAt(valueRow)[0] ^= 0xff
+				}
+				require.True(t, bytes.Equal(tc.value, destination.GetBytesAt(valueRow)))
 			})
 		}
 	}

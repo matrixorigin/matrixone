@@ -5815,3 +5815,134 @@ func TestJSONMinMaxFinalGroupPhysicalSpillReload(t *testing.T) {
 	require.Len(t, seen, 64)
 	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows, "final group must physically spill")
 }
+
+// TestGroupJointGroupingFlagsPreserveStorageTruthOnActiveArms pins the D6
+// joint activation contract at the operator seam (review repair, finding 1):
+// the rollup replacement nulls every flag-false group-by vector, so an arm
+// whose visible display key is active but whose hidden storage sibling is
+// flag-false loses the storage truth on EVERY active group. The planner side
+// must therefore activate both slots together; this test records the operator
+// consequence of each flag shape: joint activation keeps both key vectors
+// real, an inactive arm nulls both, and a display-only activation nulls the
+// storage sibling (the pre-fix symptom the planner repair removes).
+func TestGroupJointGroupingFlagsPreserveStorageTruthOnActiveArms(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		flags           []bool
+		wantRows        int
+		wantStorageKept bool
+	}{
+		{name: "joint active display and storage keep truth", flags: []bool{true, true}, wantRows: 3, wantStorageKept: true},
+		{name: "inactive arm nulls both key vectors", flags: []bool{false, false}, wantRows: 1, wantStorageKept: false},
+		{name: "display-only activation nulls the storage sibling", flags: []bool{true, false}, wantRows: 2, wantStorageKept: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := batch.NewWithSize(3)
+			input.Vecs[0] = testutil.MakeVarcharVector([]string{"a", "a", "b"}, nil, proc.Mp())
+			input.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 2}, nil, proc.Mp())
+			input.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 1, 1}, nil, proc.Mp())
+			input.SetRowCount(3)
+
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			partial := newGroupOp(proc, []*plan.Expr{
+				colExpr(0, types.T_varchar), colExpr(1, types.T_int32),
+			}, []aggexec.AggFuncExecExpression{sumAgg(2)})
+			partial.NeedEval = false
+			partial.GroupingFlag = tc.flags
+			partial.AppendChild(child)
+			require.NoError(t, partial.Prepare(proc))
+			partialOutputs := collectBatches(t, partial, proc)
+			partials := make([]*batch.Batch, len(partialOutputs))
+			for i := range partialOutputs {
+				partials[i] = cloneBatch(t, proc, partialOutputs[i])
+			}
+
+			partial.Free(proc, false, nil)
+			child.Free(proc, false, nil)
+
+			mergeChild := colexec.NewMockOperator().WithBatchs(partials)
+			merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{sumAgg(2)})
+			merge.GroupingAware = true
+			merge.AppendChild(mergeChild)
+			require.NoError(t, merge.Prepare(proc))
+			outputs := collectBatches(t, merge, proc)
+
+			rows := 0
+			storageNulls := 0
+			for _, output := range outputs {
+				rows += output.RowCount()
+				wrapper := vector.GenerateFunctionFixedTypeParameter[int32](output.Vecs[1])
+				for row := uint64(0); row < uint64(output.RowCount()); row++ {
+					_, isNull := wrapper.GetValue(row)
+					if isNull {
+						storageNulls++
+					}
+				}
+			}
+			require.Equal(t, tc.wantRows, rows)
+			if tc.wantStorageKept {
+				require.Zero(t, storageNulls,
+					"an activated arm keeps the storage sibling's truth on every group")
+			} else {
+				require.Equal(t, rows, storageNulls,
+					"every flag-false storage slot is a rollup NULL on every arm")
+			}
+
+			merge.Free(proc, false, nil)
+			mergeChild.Free(proc, false, nil)
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestGroupDecimalAggregateArgumentFusion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	narrow := types.New(types.T_decimal64, 15, 2)
+	wide := types.New(types.T_decimal128, 15, 2)
+	call := func(name string, args ...*plan.Expr) *plan.Expr {
+		ts := make([]types.Type, len(args))
+		for i, arg := range args {
+			ts[i] = types.MustTypeFromPlan(arg.Typ)
+		}
+		f, err := function.GetFunctionByName(proc.Ctx, name, ts)
+		require.NoError(t, err)
+		return &plan.Expr{Typ: f.GetReturnType().PlanType(), Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name, Obj: f.GetEncodedOverloadID()}, Args: args}}}
+	}
+	cast := func(col int32) *plan.Expr {
+		e := call("cast", colExprWithType(col, narrow), &plan.Expr{Typ: wide.PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}})
+		e.Typ = wide.PlanType()
+		return e
+	}
+	one := &plan.Expr{Typ: types.New(types.T_decimal128, 19, 0).PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: 1}}}}}
+	revenue := call("*", cast(0), call("-", one, cast(1)))
+	sum, err := function.GetFunctionByName(proc.Ctx, "sum", []types.Type{types.MustTypeFromPlan(revenue.Typ)})
+	require.NoError(t, err)
+	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(sum.GetEncodedOverloadID(), false, []*plan.Expr{revenue}, nil), countStarLiteralAgg(),
+	})
+	child := colexec.NewMockOperator()
+	g.AppendChild(child)
+	defer func() { g.Free(proc, false, nil); child.Free(proc, false, nil); require.Zero(t, proc.Mp().CurrNB()) }()
+	input := batch.NewWithSize(2)
+	for i, values := range [][]types.Decimal64{{10000, 20000, 30000}, {5, 10, 20}} {
+		input.Vecs[i] = vector.NewVec(narrow)
+		require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
+	}
+	input.SetRowCount(3)
+	child.WithBatchs([]*batch.Batch{input})
+	require.NoError(t, g.Prepare(proc))
+	require.Equal(t, "decimal multiply/subtract", g.ctr.aggArgEvaluate[0].Executor[0].TypeName())
+	require.IsType(t, &colexec.FixedVectorExpressionExecutor{}, g.ctr.aggArgEvaluate[1].Executor[0])
+	results := collectBatches(t, g, proc)
+	require.Len(t, results, 1)
+	// SUM uses its existing Decimal256 carrier; the fused argument remains Decimal128.
+	require.Equal(t, types.T_decimal128, g.ctr.aggArgEvaluate[0].Typ[0].Oid)
+	sumResult := results[0].Vecs[0]
+	require.Equal(t, types.T_decimal256, sumResult.GetType().Oid)
+	require.Equal(t, int32(4), sumResult.GetType().Scale)
+	require.Equal(t, "515.0000", vector.GetFixedAtWithTypeCheck[types.Decimal256](sumResult, 0).Format(4))
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](results[0].Vecs[1], 0))
+}

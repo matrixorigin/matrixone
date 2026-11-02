@@ -81,12 +81,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	_, err = r.ReadLine()
 	require.Nil(t, err)
 
-	// read index
-	for _, bbs := range r.bs {
-		_, err = r.blockReader.LoadZoneMaps(context.Background(),
-			r.idxs, bbs.GetID(), mp)
-		require.Nil(t, err)
-	}
+	checkTAEZoneMaps(t, ctx, r, mp, len(batchs))
 
 	readCnt := 0
 	for batIDX, bat := range batchs {
@@ -217,6 +212,18 @@ func TestTAEWriter_WriteRow(t *testing.T) {
 	}
 }
 
+func checkTAEZoneMaps(t *testing.T, ctx context.Context, r *TAEReader, mp *mpool.MPool, batchCount int) {
+	t.Helper()
+	blocks, err := r.blockReader.LoadAllBlocks(ctx, mp)
+	require.NoError(t, err)
+	require.Len(t, blocks, batchCount)
+	for _, block := range blocks {
+		maps, err := r.blockReader.LoadZoneMaps(ctx, r.idxs, block.GetID(), mp)
+		require.NoError(t, err)
+		require.Len(t, maps, len(r.idxs))
+	}
+}
+
 func TestTaeReadFile(t *testing.T) {
 	filePath := "rawlog.tae"
 
@@ -242,12 +249,7 @@ func TestTaeReadFile(t *testing.T) {
 	batchs, err := r.ReadAll(ctx)
 	require.Nil(t, err)
 
-	// read index
-	for _, bbs := range r.bs {
-		_, err = r.blockReader.LoadZoneMaps(context.Background(),
-			r.idxs, bbs.GetID(), mp)
-		require.Nil(t, err)
-	}
+	checkTAEZoneMaps(t, ctx, r, mp, len(batchs))
 
 	readCnt := 0
 	for batIDX, bat := range batchs {
@@ -301,12 +303,7 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 		batchs, err := r.ReadAll(ctx)
 		require.Nil(t, err)
 
-		// read index
-		for _, bbs := range r.bs {
-			_, err = r.blockReader.LoadZoneMaps(context.Background(),
-				r.idxs, bbs.GetID(), mp)
-			require.Nil(t, err)
-		}
+		checkTAEZoneMaps(t, ctx, r, mp, len(batchs))
 
 		for batIDX, bat := range batchs {
 			for _, vec := range bat.Vecs {

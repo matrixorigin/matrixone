@@ -1181,6 +1181,36 @@ func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch
 	return nil
 }
 
+// discardPreparedCursorRetryOutput releases everything a failed statement
+// generation retained for a prepared cursor before the compiler's retry
+// transition replays the statement: the captured row set (its session byte
+// reservation returns via preparedStmtCursor.resetAttempt) and any staged
+// saved-result blocks. The rows never reached the wire, so discarding them
+// loses nothing delivered. Statement-lifetime state the retry cannot
+// re-create survives the discard: the cursor shell and its frozen column
+// metadata (production installs it exactly once per EXECUTE before the
+// pipeline starts and internal retries do not repeat the installation) and
+// the session's authorized statement plan (installed once before Run; the
+// retried generation's publication re-serializes its Plan/Tables
+// provenance — abortPreparedCursorAttemptStaging keeps it). The retried
+// generation captures a fresh, complete row set into the kept cursor shell
+// (#30359 review). The hook is invoked by Compile.prepareRetryTransition
+// only after the failed generation's running SQL has quiesced, so no
+// pipeline can still append to the discarded set.
+func discardPreparedCursorRetryOutput(execCtx *ExecCtx) error {
+	if execCtx == nil {
+		return nil
+	}
+	if execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil {
+		execCtx.prepareStmt.cursor.resetAttempt()
+	}
+	// Attempt-cleanup failures are reported, not hidden (#30359 review):
+	// the retry transition surfaces the error and abandons the replay, and
+	// the failed staging cleanup keeps its owner (cursorResultSaver) so
+	// terminal statement cleanup can still reach the surviving files.
+	return abortPreparedCursorAttemptStaging(execCtx)
+}
+
 func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	defer RecordStatementTxnID(ctx, ses)
 
@@ -5386,15 +5416,7 @@ var (
 type loadLocalDrainCapable interface {
 	InterruptLoadLocalIO()
 	ClearLoadLocalIOInterrupt()
-	// LoadLocalFramingBroken reports that an upload read failed mid-frame
-	// (partial header, a header whose payload was never read, or a partial
-	// payload), so the connection's packet boundary is unknown: the bytes a
-	// drain would re-frame as the next packet still belong to the interrupted
-	// frame. The drain must then refuse to resync — accepting a re-framed
-	// empty packet as the upload EOF would leave the true frame remainder to
-	// be decoded as commands — and the caller retires the connection.
-	LoadLocalFramingBroken() bool
-	ReadLoadLocalPacketWithTimeout(time.Duration, time.Time) ([]byte, error)
+	DiscardLoadLocalPacket(time.Duration, time.Time, int64) (discarded int64, eof bool, err error)
 }
 
 // The production protocol behind ses.GetResponser().MysqlRrWr() must satisfy
@@ -5477,9 +5499,8 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 	}
 	// The client has accepted the upload; a later cancellation or failure
 	// drains its finite remainder before the command boundary is answered —
-	// provided the upload can still be re-framed at a known packet boundary:
-	// if the upload read died mid-frame, the boundary is unknown and the
-	// connection is retired instead (see loadLocalDrainCapable/drain).
+	// including an interrupted frame whose exact progress was preserved. A
+	// fatal framing/transport error still requires connection retirement.
 	requestAccepted := true
 	// drainOnExit requests the bounded post-failure drain below for an ordinary
 	// (non-cancellation) error, so the SQL error — not 2013 — answers the
@@ -5622,25 +5643,15 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 // within its budgets. The empty upload packet is the protocol EOF marker (see
 // readThenWrite).
 func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrainCapable) bool {
-	// A read interrupted mid-frame (partial header, a complete header whose
-	// payload was never read, or a partial payload) consumed bytes without
-	// reaching the frame end: the next byte on the wire is NOT a packet
-	// boundary, so a fresh packet read here could re-frame file bytes as an
-	// empty upload packet (a fake EOF authorizing reuse) and leave the true
-	// remainder to be decoded as commands. Only a clean boundary may drain;
-	// an unknown one retires the connection.
-	if drainer.LoadLocalFramingBroken() {
-		ses.Errorf(execCtx.reqCtx, "load local upload interrupted mid-packet: packet boundary unknown, retiring connection")
-		return false
-	}
 	deadline := time.Now().Add(loadLocalDrainMaxWait)
 	var drainedBytes int64
 	for {
 		// The absolute deadline is installed on every network read of this
 		// packet, so a trickled header or payload cannot outlive the drain's
 		// total budget one byte at a time.
-		payload, err := drainer.ReadLoadLocalPacketWithTimeout(loadLocalDrainReadTimeout, deadline)
-		if err == nil && len(payload) == 0 {
+		discarded, eof, err := drainer.DiscardLoadLocalPacket(loadLocalDrainReadTimeout, deadline, loadLocalDrainMaxBytes-drainedBytes)
+		ses.CountPayload(int(discarded))
+		if err == nil && eof {
 			return true
 		}
 		if err != nil {
@@ -5651,8 +5662,7 @@ func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrai
 			}
 			return false
 		}
-		drainedBytes += int64(len(payload))
-		ses.CountPayload(len(payload))
+		drainedBytes += discarded
 		switch {
 		case drainedBytes > loadLocalDrainMaxBytes:
 			ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drained %d bytes over budget %d, retiring connection", drainedBytes, loadLocalDrainMaxBytes)

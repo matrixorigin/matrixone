@@ -154,6 +154,11 @@ func GenColumnsFromDefs(accountId uint32, tableName, databaseName string,
 		}
 		if attrDef.Attr.Type.IsUInt() {
 			col.IsUnsigned = 1
+		} else if attrDef.Attr.Type.Oid.IsDecimal() && attrDef.Attr.NumericAttributes != 0 {
+			// att_is_unsigned is a legacy boolean for unsigned integers; for
+			// DECIMAL columns it carries the UNSIGNED(bit 0)/ZEROFILL(bit 1)
+			// attribute mask (values 1 or 3 after authoring normalization).
+			col.IsUnsigned = int8(uint32(attrDef.Attr.NumericAttributes) & types.NumericAttributeMask)
 		}
 		attrDef.Attr.ID = uint64(num)
 		attrDef.Attr.Seqnum = uint16(num - 1)

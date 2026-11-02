@@ -33,6 +33,11 @@ import (
 )
 
 func TestConsolidatedTenantEntriesKeepWriterProtocolGates(t *testing.T) {
+	require.Equal(t, "4.0.7", Handler.Metadata().Version)
+	require.Equal(t, uint32(41), Handler.Metadata().VersionOffset)
+	require.Len(t, tenantUpgEntries, 27)
+	require.Len(t, clusterUpgEntries, 14)
+	require.Contains(t, upgradeInformationSchemaStatistics().UpgSql, "sub_part")
 	for _, tc := range []struct {
 		table   string
 		minimum int64
@@ -244,6 +249,23 @@ func TestDaemonClaimPrecisionCheckUsesStoredType(t *testing.T) {
 	}
 }
 
+func TestColumnsAndTablesAreIncludedInTenantUpgrade(t *testing.T) {
+	want := map[string]string{
+		"COLUMNS": sysview.InformationSchemaColumnsDDL,
+		"TABLES":  sysview.InformationSchemaTablesV118DDL,
+	}
+	for _, entry := range tenantUpgEntries {
+		ddl, ok := want[entry.TableName]
+		if !ok || entry.Schema != sysview.InformationDBConst {
+			continue
+		}
+		require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
+		require.Equal(t, strings.Replace(ddl, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), entry.UpgSql)
+		delete(want, entry.TableName)
+	}
+	require.Empty(t, want, "the tenant upgrade must refresh both persisted views")
+}
+
 func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 	views := []struct {
 		entry versions.UpgradeEntry
@@ -251,7 +273,7 @@ func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {
 	}{
 		{versions.InformationSchemaTablesUpgradeEntry(), sysview.InformationSchemaTablesV118DDL},
 		{versions.InformationSchemaColumnsUpgradeEntry(), sysview.InformationSchemaColumnsDDL},
-		{upgradeInformationSchemaStatistics(), sysview.InformationSchemaStatisticsDDL},
+		{upgradeInformationSchemaStatistics(), sysview.InformationSchemaStatisticsPrefixSubPartDDL},
 		{upgradeInformationSchemaTableConstraints(), sysview.InformationSchemaTableConstraintsDDL},
 		{upgradeInformationSchemaKeyColumnUsage(), sysview.InformationSchemaKeyColumnUsageDDL},
 		{upgradeInformationSchemaReferentialConstraints(), sysview.InformationSchemaReferentialConstraintsDDL},

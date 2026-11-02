@@ -1965,28 +1965,6 @@ func markMedianGroupNotEmpty[T types.FixedSizeTExceptStrType](ret *aggResultWith
 	}
 }
 
-func medianDecimal64FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {
-	vals := make([]types.Decimal64, 0, st.argCnt[idx])
-	if err := st.iterWithValue(idx, func(k, stored []byte) error {
-		vals = append(vals, types.DecodeDecimal64(aggPayloadFromKeyValue(info, k, stored)))
-		return nil
-	}); err != nil {
-		return types.Decimal128{}, err
-	}
-	return medianDecimal64Vals(vals)
-}
-
-func medianDecimal128FromState(st aggState, idx uint16, info *aggInfo) (types.Decimal128, error) {
-	vals := make([]types.Decimal128, 0, st.argCnt[idx])
-	if err := st.iterWithValue(idx, func(k, stored []byte) error {
-		vals = append(vals, types.DecodeDecimal128(aggPayloadFromKeyValue(info, k, stored)))
-		return nil
-	}); err != nil {
-		return types.Decimal128{}, err
-	}
-	return medianDecimal128Vals(vals)
-}
-
 func MedianDecimal64(vs *Vectors[types.Decimal64]) (types.Decimal128, error) {
 	vals := collectMedianValues(vs)
 	return medianDecimal64Vals(vals)

@@ -930,8 +930,35 @@ const (
 	// renumbering is safe.
 	QUANTILE_EXACT_WEIGHTED = 619
 
+	// Unsigned DECIMAL domain admission (issue #30940/#30941). Plan-composed
+	// identity step evaluated on the raw source value before the assignment
+	// cast quantizes to the target scale. The mode-resolved entry answers
+	// sql_mode at execution time (volatile, like cast_assign); the strict
+	// entry is built only by authoring-time DEFAULT validation; the ignore
+	// entry is chosen at build time for INSERT/UPDATE IGNORE. All are internal
+	// plan functions, never user-callable.
+	UNSIGNED_DECIMAL_ADMISSION        = 620
+	UNSIGNED_DECIMAL_ADMISSION_STRICT = 621
+	UNSIGNED_DECIMAL_ADMISSION_IGNORE = 622
+
+	// Retained index prefix length of one index part, read from
+	// mo_catalog.mo_indexes.algo_params and reported by information_schema
+	// STATISTICS SUB_PART and SHOW INDEX Sub_part. Upstream #31739 allocated
+	// 620..622 first; the id is internal plan wiring only and every reference
+	// is by name, so this entry renumbers to 623 (design D13-5).
+	MO_INDEX_SUB_PART = 623
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 620
+	// Exponentially weighted window statistics (issue #29945). Renumbered
+	// from 605..609 when main's #31017/#31020/#31000/#31739 claimed 605..623;
+	// every reference is by name, so renumbering is safe.
+	EWM_MEAN = 624
+	EWM_VAR  = 625
+	EWM_STD  = 626
+	EWM_COV  = 627
+	EWM_CORR = 628
+
+	FUNCTION_END_NUMBER = 629
 )
 
 // functionIdRegister is what function we have registered already.
@@ -946,62 +973,66 @@ var functionIdRegister = map[string]int32{
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,
 	// operators
-	"=":            EQUAL,
-	"<=>":          NULL_SAFE_EQUAL,
-	">":            GREAT_THAN,
-	">=":           GREAT_EQUAL,
-	"<":            LESS_THAN,
-	"<=":           LESS_EQUAL,
-	"<>":           NOT_EQUAL,
-	"!=":           NOT_EQUAL,
-	"not":          NOT,
-	"and":          AND,
-	"or":           OR,
-	"xor":          XOR,
-	"like":         LIKE,
-	"between":      BETWEEN,
-	"in":           IN,
-	"not_in":       NOT_IN,
-	"in_range":     IN_RANGE,
-	"+":            PLUS,
-	"-":            MINUS,
-	"*":            MULTI,
-	"/":            DIV,
-	"div":          INTEGER_DIV,
-	"%":            MOD,
-	"mod":          MOD,
-	"unary_plus":   UNARY_PLUS,
-	"unary_minus":  UNARY_MINUS,
-	"unary_tilde":  UNARY_TILDE,
-	"unary_mark":   NOT,
-	"case":         CASE,
-	"coalesce":     COALESCE,
-	"cast":         CAST,
-	"cast_strict":  CAST_STRICT,
-	"cast_assign":  CAST_ASSIGN,
-	"cast_ignore":  CAST_IGNORE,
-	"bit_cast":     BIT_CAST,
-	"is":           IS,
-	"is_not":       ISNOT,
-	"isnot":        ISNOT,
-	"is_null":      ISNULL,
-	"isnull":       ISNULL,
-	"ifnull":       ISNULL,
-	"ilike":        ILIKE,
-	"is_not_null":  ISNOTNULL,
-	"isnotnull":    ISNOTNULL,
-	"isunknown":    ISNULL,
-	"isnotunknown": ISNOTNULL,
-	"istrue":       ISTRUE,
-	"isnottrue":    ISNOTTRUE,
-	"isfalse":      ISFALSE,
-	"isnotfalse":   ISNOTFALSE,
-	"&":            OP_BIT_AND,
-	"|":            OP_BIT_OR,
-	"^":            OP_BIT_XOR,
-	"<<":           OP_BIT_SHIFT_LEFT,
-	">>":           OP_BIT_SHIFT_RIGHT,
-	"decode":       DECODE,
+	"=":           EQUAL,
+	"<=>":         NULL_SAFE_EQUAL,
+	">":           GREAT_THAN,
+	">=":          GREAT_EQUAL,
+	"<":           LESS_THAN,
+	"<=":          LESS_EQUAL,
+	"<>":          NOT_EQUAL,
+	"!=":          NOT_EQUAL,
+	"not":         NOT,
+	"and":         AND,
+	"or":          OR,
+	"xor":         XOR,
+	"like":        LIKE,
+	"between":     BETWEEN,
+	"in":          IN,
+	"not_in":      NOT_IN,
+	"in_range":    IN_RANGE,
+	"+":           PLUS,
+	"-":           MINUS,
+	"*":           MULTI,
+	"/":           DIV,
+	"div":         INTEGER_DIV,
+	"%":           MOD,
+	"mod":         MOD,
+	"unary_plus":  UNARY_PLUS,
+	"unary_minus": UNARY_MINUS,
+	"unary_tilde": UNARY_TILDE,
+	"unary_mark":  NOT,
+	"case":        CASE,
+	"coalesce":    COALESCE,
+	"cast":        CAST,
+	"cast_strict": CAST_STRICT,
+	"cast_assign": CAST_ASSIGN,
+	"cast_ignore": CAST_IGNORE,
+
+	"unsigned_decimal_admission":        UNSIGNED_DECIMAL_ADMISSION,
+	"unsigned_decimal_admission_strict": UNSIGNED_DECIMAL_ADMISSION_STRICT,
+	"unsigned_decimal_admission_ignore": UNSIGNED_DECIMAL_ADMISSION_IGNORE,
+	"bit_cast":                          BIT_CAST,
+	"is":                                IS,
+	"is_not":                            ISNOT,
+	"isnot":                             ISNOT,
+	"is_null":                           ISNULL,
+	"isnull":                            ISNULL,
+	"ifnull":                            ISNULL,
+	"ilike":                             ILIKE,
+	"is_not_null":                       ISNOTNULL,
+	"isnotnull":                         ISNOTNULL,
+	"isunknown":                         ISNULL,
+	"isnotunknown":                      ISNOTNULL,
+	"istrue":                            ISTRUE,
+	"isnottrue":                         ISNOTTRUE,
+	"isfalse":                           ISFALSE,
+	"isnotfalse":                        ISNOTFALSE,
+	"&":                                 OP_BIT_AND,
+	"|":                                 OP_BIT_OR,
+	"^":                                 OP_BIT_XOR,
+	"<<":                                OP_BIT_SHIFT_LEFT,
+	">>":                                OP_BIT_SHIFT_RIGHT,
+	"decode":                            DECODE,
 
 	"prefix_eq":       PREFIX_EQ,
 	"prefix_in":       PREFIX_IN,
@@ -1039,6 +1070,11 @@ var functionIdRegister = map[string]int32{
 	"any_value":                    ANY_VALUE,
 	"median":                       MEDIAN,
 	"approx_percentile":            APPROX_PERCENTILE,
+	"ewmmean":                      EWM_MEAN,
+	"ewmvar":                       EWM_VAR,
+	"ewmstd":                       EWM_STD,
+	"ewmcov":                       EWM_COV,
+	"ewmcorr":                      EWM_CORR,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
 	"mo_view_definition":           MO_VIEW_DEFINITION,
 	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
@@ -1344,6 +1380,7 @@ var functionIdRegister = map[string]int32{
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
 	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
+	"mo_index_sub_part":              MO_INDEX_SUB_PART,
 	"mo_show_col_unique":             MO_SHOW_COL_UNIQUE,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,

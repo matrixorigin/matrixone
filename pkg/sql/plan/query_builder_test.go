@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 	"time"
@@ -580,6 +579,9 @@ func TestBuildTableRejectsOutOfScopeSnapshot(t *testing.T) {
 		nil,
 	)
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	// The BindContext resolves the statement's boolean-contract mode from the
+	// session/process at build entry (MySQL default when nil).
+	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
 	bindCtx := NewBindContext(builder, nil)
@@ -3774,6 +3776,34 @@ func TestQueryBuilderTimeWindowMicrosecondBoundaryTypes(t *testing.T) {
 			require.Equal(t, int32(tt.typ.Oid), timeWindowNode.GroupBy[0].Typ.Id)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Scale)
 			require.Equal(t, int32(6), timeWindowNode.GroupBy[0].Typ.Width)
+		})
+	}
+}
+
+func TestPreparedGapFillPreservesLiteralTemporalBounds(t *testing.T) {
+	for _, oid := range []types.T{types.T_date, types.T_datetime} {
+		t.Run(oid.String(), func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			mockTimeWindowScaleTable(t, mock, oid.ToType())
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"select _wstart, sum(v) from tw_scale where ts >= '2026-01-01' and ts < '2026-01-04' interval(ts, 1, day) gapfill(partition) fill(null)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			logicPlan, err := BuildPlan(mock.CurrentContext(), stmt, true)
+			require.NoError(t, err)
+			var window *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_TIME_WINDOW {
+					window = node
+					break
+				}
+			}
+			require.NotNil(t, window)
+			for _, bound := range []*plan.Expr{window.GapFillStart, window.GapFillEnd} {
+				require.NotNil(t, bound)
+				require.True(t, function.IsRuntimeConstant(bound))
+				require.True(t, ContainsVolatileFunction(bound), "diagnostic relocation stays conservative")
+			}
 		})
 	}
 }
@@ -8421,48 +8451,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 }
 
 func TestBaseBinderBindUnaryMinusMinInt64Literal(t *testing.T) {
-	builder, bindCtx := genBuilderAndCtx(t)
-	whereBinder := NewWhereBinder(builder, bindCtx)
-
-	testCases := []struct {
-		name       string
-		sql        string
-		checkValue func(t *testing.T, expr *plan.Expr)
-	}{
-		{
-			name: "min int64 boundary",
-			sql:  "-9223372036854775808",
-			checkValue: func(t *testing.T, expr *plan.Expr) {
-				require.Equal(t, int32(types.T_int64), expr.Typ.Id)
-				require.Equal(t, int64(math.MinInt64), expr.GetLit().GetI64Val())
-			},
-		},
-		{
-			name: "below min int64 keeps decimal",
-			sql:  "-9223372036854775809",
-			checkValue: func(t *testing.T, expr *plan.Expr) {
-				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
-				require.NotNil(t, expr.GetLit().GetDecimal128Val())
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, "select "+tc.sql+" from bind_select", 1)
-			require.NoError(t, err)
-
-			selectStmt := stmts[0].(*tree.Select)
-			selectClause := selectStmt.Select.(*tree.SelectClause)
-			unaryExpr, ok := selectClause.Exprs[0].Expr.(*tree.UnaryExpr)
-			require.True(t, ok)
-
-			expr, err := whereBinder.bindUnaryExpr(unaryExpr, 0, false)
-			require.NoError(t, err)
-			require.NotNil(t, expr.GetLit())
-			tc.checkValue(t, expr)
-		})
-	}
+	testBindUnaryMinusMinInt64Boundary(t)
 }
 
 // TestBaseBinder_bindUnaryExpr tests bindUnaryExpr with various unary operators

@@ -17,6 +17,8 @@ package compile
 import (
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -33,7 +35,7 @@ func TestMergeDistinctSetScopesAddsGlobalDedup(t *testing.T) {
 	c := newDistinctSetTestCompile(t)
 	left := newDistinctSetTestScope(c)
 	right := newDistinctSetTestScope(c)
-	node := &plan.Node{ProjectList: []*plan.Expr{
+	node := &plan.Node{SpillMem: 1 << 20, ProjectList: []*plan.Expr{
 		plan2.MakePlan2Int64ConstExprWithType(1),
 		plan2.MakePlan2NullTextConstExprWithType(""),
 	}}
@@ -45,6 +47,7 @@ func TestMergeDistinctSetScopesAddsGlobalDedup(t *testing.T) {
 	require.False(t, c.anal.isFirst)
 
 	groupOp := result[0].RootOp.(*group.Group)
+	require.Equal(t, node.SpillMem, groupOp.SpillMem)
 	require.Len(t, groupOp.GroupBy, 2)
 	for i := range groupOp.GroupBy {
 		require.NotSame(t, node.ProjectList[i], groupOp.GroupBy[i])
@@ -68,6 +71,7 @@ func TestCompileUnionRetainsGlobalDistinctMerge(t *testing.T) {
 	require.Len(t, result, 1)
 	require.Len(t, result[0].PreScopes, 2)
 	require.IsType(t, &group.Group{}, result[0].RootOp)
+	require.Zero(t, result[0].RootOp.(*group.Group).SpillMem)
 	require.False(t, c.anal.isFirst)
 
 	result[0].FreeOperator(c)
@@ -75,11 +79,59 @@ func TestCompileUnionRetainsGlobalDistinctMerge(t *testing.T) {
 	c.proc.Free()
 }
 
+func TestMergeDistinctSetScopesCompactsEqualityKeys(t *testing.T) {
+	for _, mixed := range []bool{false, true} {
+		name := "reuse-visible"
+		if mixed {
+			name = "retain-distinct-domain"
+		}
+		t.Run(name, func(t *testing.T) {
+			c := newDistinctSetTestCompile(t)
+			t.Cleanup(c.proc.Free)
+			typ := types.T_varchar.ToType().PlanType()
+			visible := []*plan.Expr{plan2.GetColExpr(typ, 0, 0), plan2.GetColExpr(typ, 0, 1)}
+			physical := plan2.DeepCopyExprList(visible)
+			// The merge factory makes retained keys nullable. This metadata
+			// difference must not create another copy of the same physical key.
+			visible[0].Typ.NotNullable = true
+			if mixed {
+				physical[1].Typ.PadSpace = true
+			}
+			node := &plan.Node{ProjectList: visible, PhysicalEqualityKeyList: physical}
+			before := proto.Clone(node)
+			result := c.mergeDistinctSetScopes(node, newDistinctSetTestScopes(c, 2), true)
+			t.Cleanup(func() {
+				result[0].FreeOperator(c)
+				result[0].release()
+			})
+
+			groupOp := result[0].RootOp.(*group.Group)
+			if mixed {
+				require.Len(t, groupOp.GroupBy, 3)
+				require.Equal(t, []int32{0, 2}, groupOp.GroupByHashKey)
+				require.True(t, proto.Equal(physical[1], groupOp.GroupBy[2]))
+			} else {
+				require.Len(t, groupOp.GroupBy, 2)
+				require.Empty(t, groupOp.GroupByHashKey)
+			}
+			require.Len(t, groupOp.ProjectList, 2)
+			for i, expr := range visible {
+				require.NotSame(t, expr, groupOp.GroupBy[i])
+				require.False(t, groupOp.GroupBy[i].Typ.NotNullable)
+				require.Equal(t, int32(i), groupOp.ProjectList[i].GetCol().ColPos)
+				require.Equal(t, expr.Typ, groupOp.ProjectList[i].Typ)
+			}
+			require.True(t, proto.Equal(before, node), "set operators still need the complete, unchanged key tuple")
+		})
+	}
+}
+
 func TestCompileParallelDistinctSetMergesWorkerResults(t *testing.T) {
 	for _, nodeType := range []plan.Node_NodeType{plan.Node_INTERSECT, plan.Node_MINUS} {
 		t.Run(nodeType.String(), func(t *testing.T) {
 			c := newDistinctSetTestCompile(t)
 			node := newParallelDistinctSetTestNode(nodeType)
+			node.SpillMem = 1 << 20
 			node.Stats.HashmapStats.Shuffle = true
 
 			result := c.compileMinusAndIntersect(
@@ -91,6 +143,7 @@ func TestCompileParallelDistinctSetMergesWorkerResults(t *testing.T) {
 			require.Len(t, result, 1)
 			require.Len(t, result[0].PreScopes, 2)
 			require.IsType(t, &group.Group{}, result[0].RootOp)
+			require.Equal(t, node.SpillMem, result[0].RootOp.(*group.Group).SpillMem)
 			require.False(t, c.anal.isFirst)
 
 			result[0].FreeOperator(c)

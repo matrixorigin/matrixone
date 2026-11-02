@@ -123,7 +123,7 @@ update t1 set c = NULL where b = 2;
 delete from t1 where b = 2;
 Cannot delete or update a parent row: a foreign key constraint fails
 drop table if exists p1;
-internal error: can not drop table 'p1' referenced by some foreign key constraint
+Cannot drop table 'p1' referenced by a foreign key constraint 'c3' on table 't1'.
 create table t1(a int primary key,b int,constraint `c1` foreign key fk1(b) references t1(a));
 table t1 already exists
 show tables;

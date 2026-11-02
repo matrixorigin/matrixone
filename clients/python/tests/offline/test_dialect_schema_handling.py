@@ -595,3 +595,19 @@ class TestMatrixOneDialectIntegration:
             # Verify that the parent method was called
             mock_parent_get_columns.assert_called_once_with(mock_connection, "test_table", "test", **{})
             assert result == [{"name": "id", "type": "INT"}]
+
+
+@pytest.mark.parametrize('kind', ['vecf16', 'vecbf16', 'vecint8', 'vecuint8', 'vecf32', 'vecf64'])
+@pytest.mark.parametrize('uppercase', [False, True])
+def test_native_vector_show_create_uses_registered_type(kind, uppercase):
+    from sqlalchemy.dialects.mysql.reflection import MySQLTableDefinitionParser
+
+    dialect = MatrixOneDialect()
+    parser = MySQLTableDefinitionParser(dialect, dialect.identifier_preparer)
+    emitted = kind.upper() if uppercase else kind
+    state = parser.parse(
+        'CREATE TABLE `docs` (\n  `id` int NOT NULL,\n  `v` ' + emitted + '(4) DEFAULT NULL\n)', 'utf8mb4'
+    )
+    assert [column['name'] for column in state.columns] == ['id', 'v']
+    dtype = state.columns[1]['type']
+    assert dtype.dimension == 4 and dtype.precision == kind[3:]

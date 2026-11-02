@@ -1441,7 +1441,7 @@ func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount in
 			keyType.NotNullable, nullType.NotNullable, resultType.NotNullable = false, false, false
 			if probeID == function.GROUPING && proto.Equal(&keyType, &nullType) && proto.Equal(&keyType, &resultType) &&
 				containsTag(key, groupTag) && groupingFilterHasOnlyActiveKeys(key, groupTag, groupCount, flags) &&
-				exprCanRemoveProject(key) && !function.ContainsRowScopedConversion(key) {
+				exprCanRemoveProject(key) && !function.ContainsRowScopedConversion(key) && !function.ContainsTemporalTextDiagnostic(key) {
 				return key
 			}
 		}

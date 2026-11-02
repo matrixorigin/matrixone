@@ -1760,9 +1760,9 @@ func TestPublicationSystemRelationProvisionedForFutureAccounts(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("the classification follows the account-initialization contract", func(t *testing.T) {
-		require.True(t, publicationSystemRelationProvisionedAtAccountCreation("", "mo_catalog", "mo_user"),
+		require.True(t, publicationSystemRelationProvisionedAtAccountCreation("mo_catalog", "mo_user"),
 			"CREATE ACCOUNT provisions mo_user for every account it creates")
-		require.False(t, publicationSystemRelationProvisionedAtAccountCreation("", "mo_catalog", "mo_account"),
+		require.False(t, publicationSystemRelationProvisionedAtAccountCreation("mo_catalog", "mo_account"),
 			"mo_account stays with the system account")
 	})
 
