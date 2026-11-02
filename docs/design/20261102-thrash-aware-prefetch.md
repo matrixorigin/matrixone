@@ -2,7 +2,7 @@
 
 - Status: draft
 - Issue: #32033
-- Implementation PRs: #32034, issue_32033_remain
+- Implementation PRs: #32034, #32040
 - Last updated: 2026-11-02
 
 ## Problem
