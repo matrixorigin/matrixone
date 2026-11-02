@@ -115,7 +115,7 @@ func StatementDigest(ctx context.Context, sql, sqlMode string) (string, string, 
 			}
 			// Conversion errors suppress the entire displayed identifier, not
 			// its stored bytes. This includes valid supplementary utf8mb4.
-			if token.name == "" || !utf8.ValidString(token.name) || strings.ContainsFunc(token.name, func(r rune) bool { return r > 0xffff }) {
+			if token.name == "" || !digestSystemCharsetValid(token.name) {
 				continue
 			}
 			formatted.WriteByte('`')

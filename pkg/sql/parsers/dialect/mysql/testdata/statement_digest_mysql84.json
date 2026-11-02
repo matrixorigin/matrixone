@@ -24794,5 +24794,3298 @@
     "sql_mode": "",
     "sql": "CREATE VIEW v AS SELECT 1 AS 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\u0000b'",
     "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS ''",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 ''",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS \"\"",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 \"\"",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 ``",
+    "text": "SELECT ?",
+    "digest": "645e6adc82d38f7294521b6b8aa4742f25e2acf3ff77ed91a6c2a3f4b4169ea0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS 'a'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 'a'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS \"a\"",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 \"a\"",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `a`",
+    "text": "SELECT ? AS `a`",
+    "digest": "4baaa63c79c5af74120c19395b66eeda214e14332e6af9e2c7abe65efc2e486d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 `a`",
+    "text": "SELECT ? `a`",
+    "digest": "67d874c2f5e413c9782820ee2bb85642bba61fbc1767831302fb5177d3683b9a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS '名'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 '名'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS \"名\"",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 \"名\"",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `名`",
+    "text": "SELECT ? AS `名`",
+    "digest": "a6bc08fcac88fef5b51fe2c115dfeee64dbf0fcb0168b7a6bf31f5d8282c66af"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 `名`",
+    "text": "SELECT ? `名`",
+    "digest": "a318a5eacb34bcb38830b11cb13a667e8513d41be3c43bf07013fdf5681bc6ea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS \"😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 \"😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 `😀`",
+    "text": "SELECT ?",
+    "digest": "0bdb59e4cfa9cf6f6b0716caca74a8d51d826eaac8b8e809a4e8c5601c1e2be5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS 'a😀b'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 'a😀b'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS \"a😀b\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 \"a😀b\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 `a😀b`",
+    "text": "SELECT ?",
+    "digest": "9e187b983b0b6714f807e32285318354ff5988a61121af6557f9ee5bb4260933"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS 'a\u0000😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 'a\u0000😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS \"a\u0000😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 \"a\u0000😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `a\u0000😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 `a\u0000😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS 'a\u0000名'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 'a\u0000名'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS \"a\u0000名\"",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 \"a\u0000名\"",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `a\u0000名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 `a\u0000名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS 'a''😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 'a''😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS \"a'😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 \"a'😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `a'😀`",
+    "text": "SELECT ? AS",
+    "digest": "a641ac207efef2e2ee47201a3e821d4fad9ee6d61fa26dcfbb1871b05e86c9a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 `a'😀`",
+    "text": "SELECT ?",
+    "digest": "bebbb74c09cd8db17ed715f3d7201085b22bda7faea58b5339eb1217e347f039"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS 'a\"😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 'a\"😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS \"a\"\"😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 \"a\"\"😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS `a\"😀`",
+    "text": "SELECT ? AS",
+    "digest": "85e3f6847e8f4962562b4df961f1d42a1a1a09ace3c683f8cb462c73f9880aab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 `a\"😀`",
+    "text": "SELECT ?",
+    "digest": "e54f17377bb61a76cfeaa313ee65c381bdda73c81cf61eb08b45914b83d26269"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT '😀'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT \"😀\"",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT /*+ QB_NAME('😀') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1 AS '😀') SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT 1 AS '😀') SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT * FROM (SELECT 1 AS '😀') d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS SELECT 1 AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS _utf8mb4'😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS ''",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 ''",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS \"\"",
+    "text": "SELECT ? AS",
+    "digest": "7225d683d0fa668695ef2798793e1ea77f4b10a0ce55cf998fd84649c55bc3df"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 \"\"",
+    "text": "SELECT ?",
+    "digest": "645e6adc82d38f7294521b6b8aa4742f25e2acf3ff77ed91a6c2a3f4b4169ea0"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS ``",
+    "text": "SELECT ? AS",
+    "digest": "7225d683d0fa668695ef2798793e1ea77f4b10a0ce55cf998fd84649c55bc3df"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 ``",
+    "text": "SELECT ?",
+    "digest": "645e6adc82d38f7294521b6b8aa4742f25e2acf3ff77ed91a6c2a3f4b4169ea0"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS 'a'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 'a'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS \"a\"",
+    "text": "SELECT ? AS `a`",
+    "digest": "4baaa63c79c5af74120c19395b66eeda214e14332e6af9e2c7abe65efc2e486d"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 \"a\"",
+    "text": "SELECT ? `a`",
+    "digest": "67d874c2f5e413c9782820ee2bb85642bba61fbc1767831302fb5177d3683b9a"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS `a`",
+    "text": "SELECT ? AS `a`",
+    "digest": "4baaa63c79c5af74120c19395b66eeda214e14332e6af9e2c7abe65efc2e486d"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 `a`",
+    "text": "SELECT ? `a`",
+    "digest": "67d874c2f5e413c9782820ee2bb85642bba61fbc1767831302fb5177d3683b9a"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS '名'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 '名'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS \"名\"",
+    "text": "SELECT ? AS `名`",
+    "digest": "a6bc08fcac88fef5b51fe2c115dfeee64dbf0fcb0168b7a6bf31f5d8282c66af"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 \"名\"",
+    "text": "SELECT ? `名`",
+    "digest": "a318a5eacb34bcb38830b11cb13a667e8513d41be3c43bf07013fdf5681bc6ea"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS `名`",
+    "text": "SELECT ? AS `名`",
+    "digest": "a6bc08fcac88fef5b51fe2c115dfeee64dbf0fcb0168b7a6bf31f5d8282c66af"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 `名`",
+    "text": "SELECT ? `名`",
+    "digest": "a318a5eacb34bcb38830b11cb13a667e8513d41be3c43bf07013fdf5681bc6ea"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS \"😀\"",
+    "text": "SELECT ? AS",
+    "digest": "9c2a4191e5dfbc1c529f86e5ed9c350c075083542511b8594c7ab6b56ad8e125"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 \"😀\"",
+    "text": "SELECT ?",
+    "digest": "0bdb59e4cfa9cf6f6b0716caca74a8d51d826eaac8b8e809a4e8c5601c1e2be5"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS `😀`",
+    "text": "SELECT ? AS",
+    "digest": "9c2a4191e5dfbc1c529f86e5ed9c350c075083542511b8594c7ab6b56ad8e125"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 `😀`",
+    "text": "SELECT ?",
+    "digest": "0bdb59e4cfa9cf6f6b0716caca74a8d51d826eaac8b8e809a4e8c5601c1e2be5"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS 'a😀b'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 'a😀b'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS \"a😀b\"",
+    "text": "SELECT ? AS",
+    "digest": "021f18bc669b25194d4c5b834b6cb981ef3a4a99173bd071542a8af3bc01c0a6"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 \"a😀b\"",
+    "text": "SELECT ?",
+    "digest": "9e187b983b0b6714f807e32285318354ff5988a61121af6557f9ee5bb4260933"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS `a😀b`",
+    "text": "SELECT ? AS",
+    "digest": "021f18bc669b25194d4c5b834b6cb981ef3a4a99173bd071542a8af3bc01c0a6"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 `a😀b`",
+    "text": "SELECT ?",
+    "digest": "9e187b983b0b6714f807e32285318354ff5988a61121af6557f9ee5bb4260933"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS 'a\u0000😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 'a\u0000😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS \"a\u0000😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 \"a\u0000😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS `a\u0000😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 `a\u0000😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS 'a\u0000名'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 'a\u0000名'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS \"a\u0000名\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 \"a\u0000名\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS `a\u0000名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 `a\u0000名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS 'a''😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 'a''😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS \"a'😀\"",
+    "text": "SELECT ? AS",
+    "digest": "a641ac207efef2e2ee47201a3e821d4fad9ee6d61fa26dcfbb1871b05e86c9a6"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 \"a'😀\"",
+    "text": "SELECT ?",
+    "digest": "bebbb74c09cd8db17ed715f3d7201085b22bda7faea58b5339eb1217e347f039"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS `a'😀`",
+    "text": "SELECT ? AS",
+    "digest": "a641ac207efef2e2ee47201a3e821d4fad9ee6d61fa26dcfbb1871b05e86c9a6"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 `a'😀`",
+    "text": "SELECT ?",
+    "digest": "bebbb74c09cd8db17ed715f3d7201085b22bda7faea58b5339eb1217e347f039"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS 'a\"😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 'a\"😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS \"a\"\"😀\"",
+    "text": "SELECT ? AS",
+    "digest": "85e3f6847e8f4962562b4df961f1d42a1a1a09ace3c683f8cb462c73f9880aab"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 \"a\"\"😀\"",
+    "text": "SELECT ?",
+    "digest": "e54f17377bb61a76cfeaa313ee65c381bdda73c81cf61eb08b45914b83d26269"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS `a\"😀`",
+    "text": "SELECT ? AS",
+    "digest": "85e3f6847e8f4962562b4df961f1d42a1a1a09ace3c683f8cb462c73f9880aab"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 `a\"😀`",
+    "text": "SELECT ?",
+    "digest": "e54f17377bb61a76cfeaa313ee65c381bdda73c81cf61eb08b45914b83d26269"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT '😀'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT \"😀\"",
+    "text": "SELECT",
+    "digest": "e9301b7d3fe7a19cc66a9482ba65165de5eef24bfb934f695516e8bc199e8dd1"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME('😀') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT /*+ QB_NAME(`😀`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `?` ) */ ?",
+    "digest": "6439393ff3102022b973206a9bc13503e86d8c707a6e12fabe5298c7b3326328"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "WITH c AS (SELECT 1 AS '😀') SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "WITH c AS (SELECT 1 AS '😀') SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT * FROM (SELECT 1 AS '😀') d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "CREATE VIEW v AS SELECT 1 AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS _utf8mb4'😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS ''",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 ''",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS \"\"",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 \"\"",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS ``",
+    "text": "SELECT ? AS",
+    "digest": "7225d683d0fa668695ef2798793e1ea77f4b10a0ce55cf998fd84649c55bc3df"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 ``",
+    "text": "SELECT ?",
+    "digest": "645e6adc82d38f7294521b6b8aa4742f25e2acf3ff77ed91a6c2a3f4b4169ea0"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS 'a'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 'a'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS \"a\"",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 \"a\"",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS `a`",
+    "text": "SELECT ? AS `a`",
+    "digest": "4baaa63c79c5af74120c19395b66eeda214e14332e6af9e2c7abe65efc2e486d"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 `a`",
+    "text": "SELECT ? `a`",
+    "digest": "67d874c2f5e413c9782820ee2bb85642bba61fbc1767831302fb5177d3683b9a"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS '名'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 '名'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS \"名\"",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 \"名\"",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS `名`",
+    "text": "SELECT ? AS `名`",
+    "digest": "a6bc08fcac88fef5b51fe2c115dfeee64dbf0fcb0168b7a6bf31f5d8282c66af"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 `名`",
+    "text": "SELECT ? `名`",
+    "digest": "a318a5eacb34bcb38830b11cb13a667e8513d41be3c43bf07013fdf5681bc6ea"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS \"😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 \"😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS `😀`",
+    "text": "SELECT ? AS",
+    "digest": "9c2a4191e5dfbc1c529f86e5ed9c350c075083542511b8594c7ab6b56ad8e125"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 `😀`",
+    "text": "SELECT ?",
+    "digest": "0bdb59e4cfa9cf6f6b0716caca74a8d51d826eaac8b8e809a4e8c5601c1e2be5"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS 'a😀b'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 'a😀b'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS \"a😀b\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 \"a😀b\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS `a😀b`",
+    "text": "SELECT ? AS",
+    "digest": "021f18bc669b25194d4c5b834b6cb981ef3a4a99173bd071542a8af3bc01c0a6"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 `a😀b`",
+    "text": "SELECT ?",
+    "digest": "9e187b983b0b6714f807e32285318354ff5988a61121af6557f9ee5bb4260933"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS 'a\u0000😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 'a\u0000😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS \"a\u0000😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 \"a\u0000😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS `a\u0000😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 `a\u0000😀`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS 'a\u0000名'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 'a\u0000名'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS \"a\u0000名\"",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 \"a\u0000名\"",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS `a\u0000名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 `a\u0000名`",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS 'a''😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 'a''😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS \"a'😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 \"a'😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS `a'😀`",
+    "text": "SELECT ? AS",
+    "digest": "a641ac207efef2e2ee47201a3e821d4fad9ee6d61fa26dcfbb1871b05e86c9a6"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 `a'😀`",
+    "text": "SELECT ?",
+    "digest": "bebbb74c09cd8db17ed715f3d7201085b22bda7faea58b5339eb1217e347f039"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS 'a\"😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 'a\"😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS \"a\"\"😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 \"a\"\"😀\"",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS `a\"😀`",
+    "text": "SELECT ? AS",
+    "digest": "85e3f6847e8f4962562b4df961f1d42a1a1a09ace3c683f8cb462c73f9880aab"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 `a\"😀`",
+    "text": "SELECT ?",
+    "digest": "e54f17377bb61a76cfeaa313ee65c381bdda73c81cf61eb08b45914b83d26269"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT '😀'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT \"😀\"",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT /*+ QB_NAME('😀') */ 1",
+    "text": "SELECT /*+ QB_NAME (?) */ ?",
+    "digest": "6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT /*+ QB_NAME(`😀`) */ 1",
+    "text": "SELECT /*+ QB_NAME ( `?` ) */ ?",
+    "digest": "6439393ff3102022b973206a9bc13503e86d8c707a6e12fabe5298c7b3326328"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "WITH c AS (SELECT 1 AS '😀') SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "WITH c AS (SELECT 1 AS '😀') SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT * FROM (SELECT 1 AS '😀') d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "CREATE VIEW v AS SELECT 1 AS '😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS _utf8mb4'😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(24))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(25))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(53))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (...) )",
+    "digest": "aa5c2fd74631e451dd84b87e86f78e9b7c233d48c556b6e885f20c88fa254bb2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (...) )",
+    "digest": "aa5c2fd74631e451dd84b87e86f78e9b7c233d48c556b6e885f20c88fa254bb2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(24))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(25))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(53))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (...) )",
+    "digest": "aa5c2fd74631e451dd84b87e86f78e9b7c233d48c556b6e885f20c88fa254bb2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (...) )",
+    "digest": "aa5c2fd74631e451dd84b87e86f78e9b7c233d48c556b6e885f20c88fa254bb2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT4(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(25))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 (...) )",
+    "digest": "7af65bc7be8cdd482666c0e83a9a4e3823f184236286814e04423c46a41e34bb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 (...) )",
+    "digest": "7af65bc7be8cdd482666c0e83a9a4e3823f184236286814e04423c46a41e34bb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(25))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 PRECISION (...) )",
+    "digest": "b572df6b86ebdcce7875e3318f7e5600d90c1cbca666505e17489c58fcdf0b80"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 PRECISION (...) )",
+    "digest": "b572df6b86ebdcce7875e3318f7e5600d90c1cbca666505e17489c58fcdf0b80"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(25))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 (...) )",
+    "digest": "7af65bc7be8cdd482666c0e83a9a4e3823f184236286814e04423c46a41e34bb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 (...) )",
+    "digest": "7af65bc7be8cdd482666c0e83a9a4e3823f184236286814e04423c46a41e34bb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT8(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(25))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(30,30))",
+    "text": "CREATE TABLE `t` ( `a` REAL (...) )",
+    "digest": "f2178bcaacca9e8359b4d05aa5b8b1c299985edd49e8e8db7a84d8ee75742eaa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(255,30))",
+    "text": "CREATE TABLE `t` ( `a` REAL (...) )",
+    "digest": "f2178bcaacca9e8359b4d05aa5b8b1c299985edd49e8e8db7a84d8ee75742eaa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a FLOAT(53)",
+    "text": "ALTER TABLE `t` ADD `a` FLOAT4 (?)",
+    "digest": "1f1ccfa3c194a42b2812ef066cbd445ea15d2a38459a4640961e81e3d6bb1ad8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a FLOAT(53)",
+    "text": "ALTER TABLE `t` MODIFY `a` FLOAT4 (?)",
+    "digest": "ee1e1826d6166385eff8460e01c247c7cc5b6ea2dbd3fb6294c779fa0f66cc71"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b FLOAT(53)",
+    "text": "ALTER TABLE `t` CHANGE `a` `b` FLOAT4 (?)",
+    "digest": "2656a55a8f346f548c7b3020639a48c3be507a4a2fa187d88f278a5bdf2055bf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a FLOAT(54)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a FLOAT(54)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b FLOAT(54)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a REAL(255,30)",
+    "text": "ALTER TABLE `t` ADD `a` REAL (...)",
+    "digest": "e7f605da73b161339d66d7ac939466f0a390c57bb83ff638df40f10215600b80"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a REAL(255,30)",
+    "text": "ALTER TABLE `t` MODIFY `a` REAL (...)",
+    "digest": "1d34d154a89d6beef4c750f6225212c4e25d33c5569115a26fe45a704e8b9772"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b REAL(255,30)",
+    "text": "ALTER TABLE `t` CHANGE `a` `b` REAL (...)",
+    "digest": "74f8364758e05ebc813a4b1237cdde7906871d4e1eeb212ce617b86c009d0931"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a REAL(256,30)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a REAL(256,30)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b REAL(256,30)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD a REAL(255,31)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY a REAL(255,31)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE a b REAL(255,31)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(24))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(25))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(53))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (...) )",
+    "digest": "aa5c2fd74631e451dd84b87e86f78e9b7c233d48c556b6e885f20c88fa254bb2"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (...) )",
+    "digest": "aa5c2fd74631e451dd84b87e86f78e9b7c233d48c556b6e885f20c88fa254bb2"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(24))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(25))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(53))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (?) )",
+    "digest": "afbee792db0325918903a218b8241c318f515f5f442ca6623071e022cf0e6038"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (...) )",
+    "digest": "aa5c2fd74631e451dd84b87e86f78e9b7c233d48c556b6e885f20c88fa254bb2"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT4 (...) )",
+    "digest": "aa5c2fd74631e451dd84b87e86f78e9b7c233d48c556b6e885f20c88fa254bb2"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT4(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(25))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 (...) )",
+    "digest": "7af65bc7be8cdd482666c0e83a9a4e3823f184236286814e04423c46a41e34bb"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 (...) )",
+    "digest": "7af65bc7be8cdd482666c0e83a9a4e3823f184236286814e04423c46a41e34bb"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(25))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 PRECISION (...) )",
+    "digest": "b572df6b86ebdcce7875e3318f7e5600d90c1cbca666505e17489c58fcdf0b80"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 PRECISION (...) )",
+    "digest": "b572df6b86ebdcce7875e3318f7e5600d90c1cbca666505e17489c58fcdf0b80"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a DOUBLE PRECISION(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(25))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(30,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 (...) )",
+    "digest": "7af65bc7be8cdd482666c0e83a9a4e3823f184236286814e04423c46a41e34bb"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(255,30))",
+    "text": "CREATE TABLE `t` ( `a` FLOAT8 (...) )",
+    "digest": "7af65bc7be8cdd482666c0e83a9a4e3823f184236286814e04423c46a41e34bb"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a FLOAT8(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(24))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(25))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(53))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(54))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(255))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(256))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(30,30))",
+    "text": "CREATE TABLE `t` ( `a` REAL (...) )",
+    "digest": "f2178bcaacca9e8359b4d05aa5b8b1c299985edd49e8e8db7a84d8ee75742eaa"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(31,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(255,30))",
+    "text": "CREATE TABLE `t` ( `a` REAL (...) )",
+    "digest": "f2178bcaacca9e8359b4d05aa5b8b1c299985edd49e8e8db7a84d8ee75742eaa"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(256,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "CREATE TABLE t (a REAL(255,31))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t ADD a FLOAT(53)",
+    "text": "ALTER TABLE `t` ADD `a` FLOAT4 (?)",
+    "digest": "1f1ccfa3c194a42b2812ef066cbd445ea15d2a38459a4640961e81e3d6bb1ad8"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t MODIFY a FLOAT(53)",
+    "text": "ALTER TABLE `t` MODIFY `a` FLOAT4 (?)",
+    "digest": "ee1e1826d6166385eff8460e01c247c7cc5b6ea2dbd3fb6294c779fa0f66cc71"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t CHANGE a b FLOAT(53)",
+    "text": "ALTER TABLE `t` CHANGE `a` `b` FLOAT4 (?)",
+    "digest": "2656a55a8f346f548c7b3020639a48c3be507a4a2fa187d88f278a5bdf2055bf"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t ADD a FLOAT(54)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t MODIFY a FLOAT(54)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t CHANGE a b FLOAT(54)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t ADD a REAL(255,30)",
+    "text": "ALTER TABLE `t` ADD `a` REAL (...)",
+    "digest": "e7f605da73b161339d66d7ac939466f0a390c57bb83ff638df40f10215600b80"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t MODIFY a REAL(255,30)",
+    "text": "ALTER TABLE `t` MODIFY `a` REAL (...)",
+    "digest": "1d34d154a89d6beef4c750f6225212c4e25d33c5569115a26fe45a704e8b9772"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t CHANGE a b REAL(255,30)",
+    "text": "ALTER TABLE `t` CHANGE `a` `b` REAL (...)",
+    "digest": "74f8364758e05ebc813a4b1237cdde7906871d4e1eeb212ce617b86c009d0931"
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t ADD a REAL(256,30)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t MODIFY a REAL(256,30)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t CHANGE a b REAL(256,30)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t ADD a REAL(255,31)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t MODIFY a REAL(255,31)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "REAL_AS_FLOAT",
+    "sql": "ALTER TABLE t CHANGE a b REAL(255,31)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS FROM",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS IN",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS db",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS FROM db",
+    "text": "SHOW TABLE STATUS FROM `db`",
+    "digest": "da6abfab27d9304d431835c97c8f9a8e12e6babf03a15430d45572ba682f4be9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS IN db",
+    "text": "SHOW TABLE STATUS IN `db`",
+    "digest": "751963d9060399d0bea79355dad686c2414a707a28a707aefa075a249d31c192"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS IN ``",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS FROM /*gap*/",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS IN /*gap*/",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS FROM LIKE 'x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS LIKE 'x'",
+    "text": "SHOW TABLE STATUS LIKE ?",
+    "digest": "cb62f9bcae58a460fc985bfa6ed940c7d815b1a94c7fd7dd768819f9fd18a8fa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS WHERE 1=1",
+    "text": "SHOW TABLE STATUS WHERE ? = ?",
+    "digest": "aadfcdc112019d3d2f9cd0447798eaff8252e17c7ed7eabec6133ee35ae326d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS FROM db WHERE 1=1",
+    "text": "SHOW TABLE STATUS FROM `db` WHERE ? = ?",
+    "digest": "f51b3e27ad2e284ae1a09ad73cd5123d75d10c20a1ac6860cc5e63a422f348f1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS FROM db extra",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS FROM IN db",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS FROM",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS IN",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS db",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS FROM db",
+    "text": "SHOW TRIGGERS FROM `db`",
+    "digest": "eb5683faecb568ca4259bc3d73990f1519e7501fca860485654ff6e0126c2d7f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS IN db",
+    "text": "SHOW TRIGGERS IN `db`",
+    "digest": "2c12b87962dc552c1aa74a14c88221cd29965f692a7ffd5b86d8986f9200599d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS IN ``",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS FROM /*gap*/",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS IN /*gap*/",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS FROM LIKE 'x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS LIKE 'x'",
+    "text": "SHOW TRIGGERS LIKE ?",
+    "digest": "cedd5f585fb51f50a552f4684b1e025bc5e2cb06fd808fa3a6d1cd547cc507e5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS WHERE 1=1",
+    "text": "SHOW TRIGGERS WHERE ? = ?",
+    "digest": "cc3b34687f30f3d99c3a0a46e69338b78ba77b986d60447ac416127371543ae3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS FROM db WHERE 1=1",
+    "text": "SHOW TRIGGERS FROM `db` WHERE ? = ?",
+    "digest": "bf52d898460423fbf5eb1c2259d1bcf284e5f5ed4c811fc8f2cc8c6b1bcc5067"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS FROM db extra",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS FROM IN db",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS FROM",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS IN",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS db",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS FROM db",
+    "text": "SHOW EVENTS FROM `db`",
+    "digest": "8ec59ae8bff78ecae33102710e564b22e2c6fa81a7abbd184d71ea925cc32a0f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS IN db",
+    "text": "SHOW EVENTS IN `db`",
+    "digest": "dab9bd6f606816be9c7afc022b1212a7aa112872028344fb1ebac8edccee2a61"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS IN ``",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS FROM /*gap*/",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS IN /*gap*/",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS FROM LIKE 'x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS LIKE 'x'",
+    "text": "SHOW EVENTS LIKE ?",
+    "digest": "39bcf23a17949c105562b9efd4577a8a3d84471729d8f618918de25c157436cc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS WHERE 1=1",
+    "text": "SHOW EVENTS WHERE ? = ?",
+    "digest": "2e4857bab4fa03e964d46b92173d5883c6d560d4a28dc2873f83a28f6f4322d5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS FROM db WHERE 1=1",
+    "text": "SHOW EVENTS FROM `db` WHERE ? = ?",
+    "digest": "183938afc89c5ee849547db34e5de1430b50e0bd84499f581e50addc41943885"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS FROM db extra",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS FROM IN db",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLES FROM",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLES FROM db",
+    "text": "SHOW TABLES FROM `db`",
+    "digest": "63217cb42ad9b105e826372698d23be16923f0c2eb4a939547b88cf135c3c1ba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW OPEN TABLES FROM",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW OPEN TABLES FROM db",
+    "text": "SHOW OPEN TABLES FROM `db`",
+    "digest": "182638cabf57b10e5479f1a8d2280c707b11f51d6c2cf384b6ab73c9c46cedd8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM t FROM",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW COLUMNS FROM t FROM db",
+    "text": "SHOW FIELDS FROM `t` FROM `db`",
+    "digest": "2b650af9158dbaed9870e1d32f5f97b389fdf5facac67d48f54b982a6807a72c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM t FROM",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW INDEX FROM t FROM db",
+    "text": "SHOW INDEX FROM `t` FROM `db`",
+    "digest": "169be02966eba619674c05282352ab350bd6d17bcf504758403d0964d1866e02"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TABLE STATUS /*!80411 FROM */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW TRIGGERS /*!99999 FROM */ db",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SHOW EVENTS FROM `😀`",
+    "text": "SHOW EVENTS FROM",
+    "digest": "a2d74ade397e498fb76d3323d5cfce4505070a5569797e3b59d8399f81a647a8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(4294967552,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(255,4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(18446744073709551615))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(18446744073709551615,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(-1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a FLOAT(1,-1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(4294967552,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(255,4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(18446744073709551615))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(18446744073709551615,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(-1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a REAL(1,-1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(4294967552,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(255,4294967296))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(18446744073709551615))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(18446744073709551615,30))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(-1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DOUBLE(1,-1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS _utf8mb4'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS N'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS N'😀'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS '名' '字'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4'a'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 _utf8mb4'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS _utf8mb4 '名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 _utf8mb4 '名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 '名'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ _utf8mb4 '名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 _utf8mb4 '名' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS _utf8mb4 X'61'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 _utf8mb4 X'61'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _utf8mb4 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ _utf8mb4 X'61'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 _utf8mb4 X'61' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT N'a'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 N'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS n'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 n'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT n'名'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ n'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 n'名' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS _utf8'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 _utf8'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ _utf8'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 _utf8'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS _binary'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 _binary'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT _binary'a'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ _binary'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 _binary'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 'a'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ 'a'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 'a' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS '_utf8mb4'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 '_utf8mb4'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ '_utf8mb4'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 '_utf8mb4' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS 'N'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 'N'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 'N'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ 'N'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 'N' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS 'a''b'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 'a''b'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 'a''b'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ 'a''b'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 'a''b' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS N 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 N 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT N 'a'",
+    "text": "SELECT `N` ?",
+    "digest": "3a63055fa8ee286aad09993268bc651291d622d5699461d292d493624ee508db"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*gap*/ N 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 AS /*!80411 N 'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4'a'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 _utf8mb4'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS _utf8mb4 '名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 _utf8mb4 '名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 '名'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ _utf8mb4 '名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 _utf8mb4 '名' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS _utf8mb4 X'61'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 _utf8mb4 X'61'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8mb4 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ _utf8mb4 X'61'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 _utf8mb4 X'61' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT N'a'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 N'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS n'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 n'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT n'名'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ n'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 n'名' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS _utf8'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 _utf8'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _utf8'a'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ _utf8'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 _utf8'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS _binary'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 _binary'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT _binary'a'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ _binary'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 _binary'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 'a'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ 'a'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 'a' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS '_utf8mb4'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 '_utf8mb4'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT '_utf8mb4'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ '_utf8mb4'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 '_utf8mb4' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS 'N'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 'N'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 'N'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ 'N'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 'N' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS 'a''b'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 'a''b'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 'a''b'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ 'a''b'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 'a''b' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS N 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 N 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT N 'a'",
+    "text": "SELECT `N` ?",
+    "digest": "3a63055fa8ee286aad09993268bc651291d622d5699461d292d493624ee508db"
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*gap*/ N 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ANSI_QUOTES",
+    "sql": "SELECT 1 AS /*!80411 N 'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4'a'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ _utf8mb4'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 _utf8mb4'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS _utf8mb4 '名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 _utf8mb4 '名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 '名'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ _utf8mb4 '名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 _utf8mb4 '名' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS _utf8mb4 X'61'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 _utf8mb4 X'61'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8mb4 X'61'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ _utf8mb4 X'61'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 _utf8mb4 X'61' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT N'a'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ N'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 N'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS n'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 n'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT n'名'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ n'名'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 n'名' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS _utf8'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 _utf8'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _utf8'a'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ _utf8'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 _utf8'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS _binary'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 _binary'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT _binary'a'",
+    "text": "SELECT (_charset) ?",
+    "digest": "04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ _binary'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 _binary'a' */",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 'a'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ 'a'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 'a' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS '_utf8mb4'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 '_utf8mb4'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT '_utf8mb4'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ '_utf8mb4'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 '_utf8mb4' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS 'N'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 'N'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 'N'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ 'N'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 'N' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS 'a''b'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 'a''b'",
+    "text": "SELECT ? ?",
+    "digest": "330b0454d6423fbb864f3707655da47d815faa8923bdaa068e8e9365e6c97a55"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 'a''b'",
+    "text": "SELECT ?",
+    "digest": "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ 'a''b'",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 'a''b' */",
+    "text": "SELECT ? AS ?",
+    "digest": "c85a4720ba6416c38c18d2650f9535f02f4759fc906b57a484b822566b1107e7"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS N 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 N 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT N 'a'",
+    "text": "SELECT `N` ?",
+    "digest": "3a63055fa8ee286aad09993268bc651291d622d5699461d292d493624ee508db"
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*gap*/ N 'a'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_BACKSLASH_ESCAPES",
+    "sql": "SELECT 1 AS /*!80411 N 'a' */",
+    "error_code": 3677
   }
 ]

@@ -69,6 +69,12 @@ func digestIdentifierKey(name string) string {
 	return name
 }
 
+// Lossless utf8mb4 -> system utf8mb3 conversion. Empty strings and NUL are
+// representable; contextual name rules decide whether they are admissible.
+func digestSystemCharsetValid(value string) bool {
+	return utf8.ValidString(value) && !strings.ContainsFunc(value, func(r rune) bool { return r > 0xffff })
+}
+
 // digestSystemIdentifier converts quoted names for MySQL's system-charset
 // consumers. SQL digest storage still owns the original lexical bytes; quoted
 // hints use it only without doubled delimiters (compaction owns that byte path).

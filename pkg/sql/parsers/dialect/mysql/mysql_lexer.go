@@ -421,6 +421,35 @@ func rejectDigestReservedKeyword(yylex yyLexer, name string) bool {
 	return true
 }
 
+// TEXT_STRING_validated rejects lossy conversion to MySQL's system charset.
+// This is a grammar-time check, including unused CTEs and bytes after NUL;
+// quoted identifiers and ordinary string expressions have different contracts.
+func digestStringAliasValid(yylex yyLexer, alias string, introduced bool) bool {
+	if yylex.(*Lexer).digest == nil || !introduced && digestSystemCharsetValid(alias) {
+		return true
+	}
+	yylex.Error("Invalid string alias.")
+	return false
+}
+
+// Digest admission shares one floating-type rule. Ordinary parsing retains its
+// existing limits/diagnostics below the grammar guards. FLOAT(p) is binary
+// precision; FLOAT/DOUBLE/REAL(M,D) use display width and decimal scale instead.
+func digestFloatTypeValid(yylex yyLexer, size tree.LengthScaleOpt, single, allowSingle bool) bool {
+	if yylex.(*Lexer).digest == nil {
+		return true
+	}
+	valid := size.DisplayWith <= 255 && size.Scale <= 30 &&
+		(size.Scale == tree.NotDefineDec || size.DisplayWith > 0 && size.Scale <= size.DisplayWith)
+	if single {
+		valid = allowSingle && size.DisplayWith <= 53
+	}
+	if !valid {
+		yylex.Error("Invalid floating-point precision/scale.")
+	}
+	return valid
+}
+
 func digestShowDatabaseValid(yylex yyLexer, name string, explicit bool) bool {
 	if yylex.(*Lexer).digest == nil || !explicit || tree.ValidMySQLTableName(name) {
 		return true
@@ -435,6 +464,7 @@ func (l *Lexer) GetParamIndex() int {
 }
 
 func (l *Lexer) Lex(lval *yySymType) int {
+	lval.introducedString = false
 	l.scanner.parseControl.token()
 	if l.stopLexing {
 		return 0
@@ -456,6 +486,12 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// ROW constructor and quoted user-variable names without changing ordinary
 	// SQL execution syntax. The independent digest scanner keeps their tokens.
 	if l.digest != nil {
+		// Scanner folds _utf8mb4 literals to STRING. Preserve the token's
+		// introducer role without changing ordinary or expression parsing.
+		if typ == STRING {
+			raw := strings.TrimLeft(l.scanner.buf[l.scanner.PrePos:l.scanner.Pos], " \t\r\n")
+			lval.introducedString = strings.HasPrefix(raw, "_")
+		}
 		if typ == ROW && l.lastToken != CURRENT {
 			// CURRENT ROW is a window-frame bound, not a ROW constructor.
 			if !digestRowConstructorValid(l.scanner) {
@@ -482,6 +518,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			}
 		} else if typ == ID && l.lastToken != '.' && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
 			// National strings are one literal, not an identifier plus alias.
+			lval.introducedString = true
 			typ, str = l.scanner.Scan()
 		} else if typ == ID && strings.EqualFold(str, "dual") && !l.scanner.qualifiedIdentifier {
 			typ = DIGEST_DUAL

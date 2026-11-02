@@ -195,6 +195,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     pos int
     quotedIdentifier bool
     singleTypePrecision bool
+    introducedString bool
 }
 
 %union {
@@ -960,7 +961,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 %type <unresolvedName> column_name column_name_unresolved normal_ident
 %type <strs> enum_values force_quote_opt force_quote_list infile_or_s3_param infile_or_s3_params credentialsparams credentialsparam create_cdc_opt create_cdc_opts
-%type <str> charset_keyword db_name db_name_opt
+%type <str> charset_keyword db_name db_name_opt show_database_clause_opt
+%type <boolVal> from_or_in_opt
 %type <str> backup_type_opt backup_timestamp_opt
 %type <str> not_keyword func_not_keyword
 %type <str> non_reserved_keyword
@@ -5481,15 +5483,26 @@ using_roles_opt:
     }
 
 show_table_status_stmt:
-    SHOW TABLE STATUS from_or_in_opt db_name_opt like_opt where_expression_opt
+    SHOW TABLE STATUS show_database_clause_opt like_opt where_expression_opt
     {
-        if !digestShowDatabaseValid(yylex, $5, $<boolVal>5) { goto ret1 }
-        $$ = &tree.ShowTableStatus{DbName: $5, Like: $6, Where: $7}
+        $$ = &tree.ShowTableStatus{DbName: $4, Like: $5, Where: $6}
+    }
+
+// Preserve ordinary admission; digest requires both clause keyword and name.
+show_database_clause_opt:
+    from_or_in_opt db_name_opt
+    {
+        if yylex.(*Lexer).digest != nil && $1 != $<boolVal>2 {
+            yylex.Error("SHOW database clause requires both FROM/IN and a database name"); goto ret1
+        }
+        if !digestShowDatabaseValid(yylex, $2, $<boolVal>2) { goto ret1 }
+        $$ = $2
     }
 
 from_or_in_opt:
-    {}
+    { $$ = false }
 |    from_or_in
+    { $$ = true }
 
 // boolVal distinguishes an omitted database from an explicitly quoted empty one.
 db_name_opt:
@@ -5583,15 +5596,13 @@ show_target:
     {
         $$ = &tree.ShowTarget{Type: tree.ShowEngines}
     }
-|    TRIGGERS from_or_in_opt db_name_opt
+|    TRIGGERS show_database_clause_opt
     {
-        if !digestShowDatabaseValid(yylex, $3, $<boolVal>3) { goto ret1 }
-        $$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowTriggers}
+        $$ = &tree.ShowTarget{DbName: $2, Type: tree.ShowTriggers}
     }
-|    EVENTS from_or_in_opt db_name_opt
+|    EVENTS show_database_clause_opt
     {
-        if !digestShowDatabaseValid(yylex, $3, $<boolVal>3) { goto ret1 }
-        $$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowEvents}
+        $$ = &tree.ShowTarget{DbName: $2, Type: tree.ShowEvents}
     }
 |    PLUGINS
     {
@@ -8749,11 +8760,13 @@ as_name_opt:
     }
 |   STRING
     {
+        if !digestStringAliasValid(yylex, $1, $<introducedString>1) { goto ret1 }
         $$ = tree.NewCStr($1, 1)
         $$.Quoted = yylex.(*Lexer).digest != nil
     }
 |   AS STRING
     {
+        if !digestStringAliasValid(yylex, $2, $<introducedString>2) { goto ret1 }
         $$ = tree.NewCStr($2, 1)
         $$.Quoted = yylex.(*Lexer).digest != nil
     }
@@ -15821,7 +15834,7 @@ int_type:
 decimal_type:
     DOUBLE float_length_opt
     {
-        if yylex.(*Lexer).digest != nil && $<singleTypePrecision>2 { yylex.Error("DOUBLE requires a precision/scale pair"); goto ret1 }
+        if !digestFloatTypeValid(yylex, $2, $<singleTypePrecision>2, false) { goto ret1 }
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for double out of range (max = 255)")
@@ -15850,7 +15863,7 @@ decimal_type:
 |   DOUBLE PRECISION float_length_opt
     {
         // DOUBLE PRECISION is the SQL-standard synonym for DOUBLE (float64).
-        if yylex.(*Lexer).digest != nil && $<singleTypePrecision>3 { yylex.Error("DOUBLE requires a precision/scale pair"); goto ret1 }
+        if !digestFloatTypeValid(yylex, $3, $<singleTypePrecision>3, false) { goto ret1 }
         locale := ""
         if $3.DisplayWith > 255 {
             yylex.Error("Display width for double out of range (max = 255)")
@@ -15878,6 +15891,7 @@ decimal_type:
     }
 |   FLOAT_TYPE float_length_opt
     {
+        if !digestFloatTypeValid(yylex, $2, $<singleTypePrecision>2, true) { goto ret1 }
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for float out of range (max = 255)")
@@ -16016,10 +16030,7 @@ decimal_type:
     }
 |   REAL float_length_opt
     {
-        if yylex.(*Lexer).digest != nil && ($<singleTypePrecision>2 ||
-            $2.Scale != tree.NotDefineDec && ($2.DisplayWith <= 0 || $2.Scale > $2.DisplayWith)) {
-            yylex.Error("invalid REAL precision/scale"); goto ret1
-        }
+        if !digestFloatTypeValid(yylex, $2, $<singleTypePrecision>2, false) { goto ret1 }
         locale := ""
         width := int32(64)
         oid := uint32(defines.MYSQL_TYPE_DOUBLE)

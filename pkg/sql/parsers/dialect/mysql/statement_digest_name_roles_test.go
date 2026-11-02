@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
@@ -106,6 +107,76 @@ func TestDigestReservedTypeNameRoles(t *testing.T) {
 	require.NoError(t, err)
 	for _, statement := range statements {
 		statement.Free()
+	}
+}
+
+// The oracle fixture checks exact MySQL text/hash/error. This test additionally
+// proves ordinary-parser ownership and token/grammar reuse after rejection.
+func TestDigestGrammarAdmissionAndReuse(t *testing.T) {
+	for _, test := range []struct {
+		name, sql, mode string
+		reject          bool
+	}{
+		{"string-alias", "SELECT 1 AS '😀'", "", true},
+		{"implicit-alias", "SELECT 1 '😀'", "", true},
+		{"alias-after-nul", "SELECT 1 AS 'a\x00😀'", "", true},
+		{"invalid-utf8-alias", "SELECT 1 AS '\xff'", "", true},
+		{"bmp-alias", "SELECT 1 AS '名'", "", false},
+		{"empty-alias", "SELECT 1 AS ''", "", false},
+		{"quoted-name", "SELECT 1 AS `😀`", "", false},
+		{"double-string-alias", "SELECT 1 AS \"😀\"", "", true},
+		{"ansi-name", "SELECT 1 AS \"😀\"", "ANSI_QUOTES", false},
+		{"string-value", "SELECT '😀'", "", false},
+		{"introduced-alias", "SELECT 1 AS _utf8mb4'a'", "", true},
+		{"introduced-implicit-alias", "SELECT 1 _utf8mb4'a'", "", true},
+		{"introduced-value", "SELECT _utf8mb4'a' AS 'b'", "", false},
+		{"national-alias", "SELECT 1 AS N'a'", "", true},
+		{"national-value", "SELECT N'a' AS 'b'", "", false},
+		{"float-binary-boundary", "CREATE TABLE t (a FLOAT(53))", "", false},
+		{"float-binary-overflow", "CREATE TABLE t (a FLOAT(54))", "", true},
+		{"float-decimal-boundary", "CREATE TABLE t (a FLOAT(255,30))", "", false},
+		{"real-boundary", "CREATE TABLE t (a REAL(255,30))", "", false},
+		{"real-width-overflow", "CREATE TABLE t (a REAL(256,30))", "", true},
+		{"real-scale-overflow", "CREATE TABLE t (a REAL(255,31))", "", true},
+		{"real-float-boundary", "CREATE TABLE t (a REAL(255,30))", "REAL_AS_FLOAT", false},
+		{"real-float-overflow", "CREATE TABLE t (a REAL(256,30))", "REAL_AS_FLOAT", true},
+		{"show-absent", "SHOW TABLE STATUS", "", false},
+		{"show-from-only", "SHOW TABLE STATUS FROM", "", true},
+		{"show-name-only", "SHOW TABLE STATUS db", "", true},
+		{"show-paired", "SHOW TABLE STATUS FROM db", "", false},
+		{"trigger-in-only", "SHOW TRIGGERS IN", "", true},
+		{"event-name-only", "SHOW EVENTS db", "", true},
+		{"event-paired", "SHOW EVENTS IN db", "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for range 3 {
+				_, _, err := StatementDigest(t.Context(), test.sql, test.mode)
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				func() {
+					statements, err := ParseWithSQLMode(t.Context(), test.sql, 0, test.mode)
+					defer func() {
+						for _, statement := range statements {
+							statement.Free()
+						}
+					}()
+					if test.name == "national-alias" || test.name == "national-value" {
+						// Ordinary MO parsing does not admit these national-string
+						// forms; digest compatibility must not change that boundary.
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+					}
+				}()
+				text, hash, err := StatementDigest(t.Context(), "SELECT 1", "")
+				require.NoError(t, err)
+				require.Equal(t, "SELECT ?", text)
+				require.Equal(t, "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae", hash)
+			}
+		})
 	}
 }
 
