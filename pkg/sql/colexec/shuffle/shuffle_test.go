@@ -44,6 +44,136 @@ const (
 	Rows = 8192 // default rows
 )
 
+func TestCompleteKeyShufflePreservesEqualityAndReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	t.Cleanup(proc.Free)
+	arg := NewArgument()
+	t.Cleanup(func() { arg.Reset(proc, true, context.Canceled); arg.Free(proc, false, nil); arg.Release() })
+	arg.BucketNum, arg.ShuffleType = 4, int32(plan.ShuffleType_Hash)
+	arg.ShuffleKeyColumns, arg.DrainAllBuckets = []int32{0, 1}, true
+	for round := 0; round < 2; round++ {
+		func() {
+			inputs := make([]*batch.Batch, 2)
+			want := make(map[string]int)
+			tuple := func(b *batch.Batch, row int) string {
+				first := "null"
+				if b.Vecs[0].GetGrouping().Contains(uint64(row)) {
+					first = "grouping"
+				}
+				return fmt.Sprintf("%s/%d", first, vector.GetFixedAtNoTypeCheck[int64](b.Vecs[1], row))
+			}
+			for i := range inputs {
+				b := batch.NewWithSize(2)
+				inputs[i] = b
+				defer b.Clean(mp)
+				b.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 32, mp)
+				b.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+				for row := 0; row < 32; row++ {
+					require.NoError(t, vector.AppendFixed(b.Vecs[1], int64(row%16), false, mp))
+					if row%8 == 0 {
+						b.Vecs[0].GetGrouping().Add(uint64(row))
+					}
+				}
+				b.SetRowCount(32)
+				for row := 0; row < 32; row++ {
+					want[tuple(b, row)]++
+				}
+			}
+			source := colexec.NewMockOperator().WithBatchs(inputs)
+			defer source.ResetBatchs()
+			arg.ResetChildren()
+			arg.AppendChild(source)
+			require.NoError(t, vm.Prepare(arg, proc))
+			got, owners := make(map[string]int), make(map[string]int32)
+			buckets := make(map[int32]bool)
+			for {
+				res, err := vm.Exec(arg, proc)
+				require.NoError(t, err)
+				if res.Batch == nil || res.Status == vm.ExecStop {
+					break
+				}
+				b := res.Batch
+				if b.RowCount() == 0 {
+					continue
+				}
+				buckets[b.ShuffleIDX] = true
+				for row := 0; row < b.RowCount(); row++ {
+					key := tuple(b, row)
+					if prev, exists := owners[key]; exists {
+						require.Equal(t, prev, b.ShuffleIDX)
+					}
+					owners[key] = b.ShuffleIDX
+					got[key]++
+				}
+			}
+			require.Equal(t, want, got)
+			require.Greater(t, len(buckets), 1, "a constant first column must not collapse complete-key routing")
+			for _, v := range arg.ctr.keyVectors {
+				require.Nil(t, v)
+			}
+			arg.Reset(proc, false, nil)
+			require.Nil(t, arg.ctr.keyHashes)
+			arg.Free(proc, false, nil)
+		}()
+		require.Zero(t, mp.CurrNB())
+	}
+}
+
+func TestCompleteKeyShuffleRejectsInvalidMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	arg := NewArgument()
+	defer arg.Release()
+	defer arg.Free(proc, true, context.Canceled)
+	defer arg.Reset(proc, true, context.Canceled)
+	arg.ShuffleKeyColumns, arg.BucketNum = []int32{1}, 2
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	require.Error(t, arg.Prepare(proc), "fixed-bucket mode is outside the local complete-key contract")
+	arg.DrainAllBuckets = true
+	require.NoError(t, arg.Prepare(proc))
+	b := batch.NewWithSize(1)
+	defer b.Clean(proc.Mp())
+	b.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
+	b.SetRowCount(1)
+	_, err := arg.shuffleCompleteKey(b, proc)
+	require.Error(t, err)
+	require.Nil(t, arg.ctr.keyVectors[0])
+}
+
+func TestCompleteKeyShuffleScratchFailureAndAbort(t *testing.T) {
+	mp, err := mpool.NewMPool(t.Name(), mpool.MB, mpool.NoFixed)
+	require.NoError(t, err)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	t.Cleanup(proc.Free)
+	arg := NewArgument()
+	t.Cleanup(func() { arg.Reset(proc, true, context.Canceled); arg.Free(proc, true, context.Canceled); arg.Release() })
+	arg.BucketNum, arg.ShuffleType = 4, int32(plan.ShuffleType_Hash)
+	arg.ShuffleKeyColumns, arg.DrainAllBuckets = []int32{0}, true
+	b := batch.NewWithSize(1)
+	t.Cleanup(func() { b.Clean(mp) })
+	b.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1<<18, mp)
+	b.SetRowCount(1 << 18)
+	require.NoError(t, arg.Prepare(proc))
+	_, err = arg.shuffleCompleteKey(b, proc)
+	require.Error(t, err, "2 MiB hash scratch cannot fit the 1 MiB pool")
+	require.Nil(t, arg.ctr.keyVectors[0])
+	arg.Reset(proc, true, err)
+	require.Zero(t, mp.CurrNB())
+
+	// The next generation can allocate normally and release live scratch on abort.
+	b.Vecs[0].SetLength(16)
+	b.SetRowCount(16)
+	require.NoError(t, arg.Prepare(proc))
+	_, err = arg.shuffleCompleteKey(b, proc)
+	require.NoError(t, err)
+	require.Positive(t, mp.CurrNB())
+	arg.Reset(proc, true, context.Canceled)
+	arg.Free(proc, true, context.Canceled)
+	require.Nil(t, arg.ctr.keyHashes)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestShufflePreparePreservesEarlierAbortCause(t *testing.T) {
 	for _, drainAll := range []bool{false, true} {
 		for _, cause := range []error{context.Canceled, context.DeadlineExceeded, errors.New("upstream execution failure")} {
