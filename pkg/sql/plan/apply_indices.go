@@ -1225,6 +1225,10 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 }
 
 func containsVolatileFunction(expr *plan.Expr) bool {
+	return containsVolatileFunctionImpl(expr, false)
+}
+
+func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bool) bool {
 	if expr == nil {
 		return true
 	}
@@ -1237,11 +1241,16 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 			return true
 		}
 		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
-		if !ok || overload.CannotFold() || function.IsTemporalTextDiagnosticCall(expr) {
+		stablePolicy := false
+		if ok && allowTemporalIntegerPolicy && isTemporalIntegerPolicyCast(expr) {
+			unstable, known := function.GetFunctionValueUnstableByID(exprImpl.F.Func.Obj)
+			stablePolicy = known && !unstable && !overload.HasRowScopedDiagnostics() && !overload.IsRealTimeRelated()
+		}
+		if !ok || (overload.CannotFold() && !stablePolicy) || function.IsTemporalTextDiagnosticCall(expr) {
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
-			if containsVolatileFunction(arg) {
+			if containsVolatileFunctionImpl(arg, allowTemporalIntegerPolicy) {
 				return true
 			}
 		}
@@ -1250,7 +1259,7 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 			return true
 		}
 		for _, item := range exprImpl.List.List {
-			if containsVolatileFunction(item) {
+			if containsVolatileFunctionImpl(item, allowTemporalIntegerPolicy) {
 				return true
 			}
 		}

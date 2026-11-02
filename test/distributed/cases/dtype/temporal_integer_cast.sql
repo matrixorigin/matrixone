@@ -142,6 +142,38 @@ set session sql_mode = '';
 execute temporal_minmax_param using @temporal_integer_dt,@temporal_integer_dt,@temporal_integer_tm,@temporal_integer_tm;
 execute temporal_minmax_param using @temporal_wrapper_null,@temporal_wrapper_null,@temporal_wrapper_null,@temporal_wrapper_null;
 deallocate prepare temporal_minmax_param;
+
+-- Every scalar exit retains its value owner, including outer ON and dependent programs.
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+select id, cast(cast(dt as datetime(6)) as signed) as direct_dt,
+cast((select cast(dt as datetime(6))) as signed) as scalar_dt,
+(select (select cast(dt as datetime(6)))) as original_dt,
+cast((select (select cast(dt as datetime(6)))) as signed) as deep_dt
+from temporal_values where id in (2,4) order by id;
+select v.id,m.n from temporal_values v join (select 20240229235959 as n) m
+on cast((select cast(v.dt as datetime(6))) as signed)=m.n where v.id in (2,4) order by v.id;
+select v.id,m.n from temporal_values v left join (select 20240229235959 as n) m
+on cast((select cast(v.dt as datetime(6))) as signed)=m.n where v.id in (2,4) order by v.id;
+select v.id,m.n from (select 20240229235959 as n) m right join temporal_values v
+on m.n=cast((select cast(v.dt as datetime(6))) as signed) where v.id in (2,4) order by v.id;
+select id, cast((select (select if(id=2,dt,cast(dt as datetime(6))))) as signed) as deep_mixed,
+cast((select (select cast(tm as time(6)))) as unsigned) as deep_tm
+from temporal_values where id in (2,3,4) order by id;
+-- Distinct temporal inputs must not collapse merely because their integers coincide.
+select cast((select distinct if(t.id=1,v.dt,cast('2024-02-29 23:59:59.100000' as datetime(6)))
+from temporal_values t where t.id in (1,2)) as signed) as correlated_distinct
+from temporal_values v where v.id=1;
+set session sql_mode = '';
+prepare temporal_exit_param from 'select v.id, cast((select (select cast(v.dt as datetime(6)))) as signed) as deep_dt,m.n from temporal_values v left join (select 20240229235959 as n) m on cast((select cast(v.dt as datetime(6))) as signed)=m.n where v.id=?';
+set @temporal_exit_id = 2;
+execute temporal_exit_param using @temporal_exit_id;
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+execute temporal_exit_param using @temporal_exit_id;
+set session sql_mode = '';
+execute temporal_exit_param using @temporal_exit_id;
+set @temporal_exit_id = 4;
+execute temporal_exit_param using @temporal_exit_id;
+deallocate prepare temporal_exit_param;
 drop table temporal_text_values;
 
 drop database temporal_integer_cast;

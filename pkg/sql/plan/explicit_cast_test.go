@@ -59,6 +59,38 @@ func TestTemporalIntegerCastWrapperPolicy(t *testing.T) {
 	}
 }
 
+func TestTemporalIntegerCastGuardedLiftProof(t *testing.T) {
+	ctx := context.Background()
+	temporal := types.T_datetime.ToTypeWithScale(6)
+	target := types.T_int64.ToType()
+	column := &Expr{Typ: makePlan2Type(&temporal), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1}}}
+	random, err := BindFuncExprImplByPlanExpr(ctx, "rand", nil)
+	require.NoError(t, err)
+	condition, err := BindFuncExprImplByPlanExpr(ctx, "<", []*Expr{random, makePlan2Float64ConstExprWithType(0.5)})
+	require.NoError(t, err)
+	unstable, err := BindFuncExprImplByPlanExpr(ctx, "if", []*Expr{condition, column, column})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		source *Expr
+		unsafe bool
+	}{
+		{"stored_input", column, false},
+		{"volatile_input", unstable, true},
+		{"diagnostic_input", makePlan2StringConstExprWithType("2024-02-29 23:59:59.500000"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source, err := appendSyntaxExplicitCastBeforeExpr(ctx, tc.source, column.Typ)
+			require.NoError(t, err)
+			converted, err := appendExplicitCastBeforeExpr(ctx, source, makePlan2Type(&target))
+			require.NoError(t, err)
+			require.True(t, isTemporalIntegerPolicyCast(converted))
+			require.True(t, containsVolatileFunction(converted), "folding/index admission must remain conservative")
+			require.Equal(t, tc.unsafe, containsVolatileFunctionImpl(converted, true), "guarded lifting must still reject effects in inputs")
+		})
+	}
+}
+
 func TestTemporalIntegerCastFilteredCorrelation(t *testing.T) {
 	for _, projection := range []string{"l_shipdate", "cast(l_shipdate as datetime(6))", "least(l_shipdate,l_shipdate)", "if(l_orderkey=1,l_shipdate,cast(l_shipdate as datetime(6)))"} {
 		for _, target := range []string{"signed", "unsigned"} {
@@ -72,6 +104,70 @@ func TestTemporalIntegerCastFilteredCorrelation(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestTemporalIntegerCastDecorrelationExits(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		dependent bool
+	}{
+		{"direct", "select cast(cast(l_shipdate as datetime(6)) as signed) from lineitem", false},
+		{"scalar", "select cast((select cast(l_shipdate as datetime(6))) as signed) from lineitem", false},
+		{"inner_on", "select a.l_orderkey from lineitem a join lineitem b on cast((select cast(a.l_shipdate as datetime(6))) as signed)=b.l_orderkey", false},
+		{"left_on", "select b.l_orderkey from lineitem a left join lineitem b on cast((select cast(a.l_shipdate as datetime(6))) as signed)=b.l_orderkey", false},
+		{"right_on", "select a.l_orderkey from lineitem a right join lineitem b on a.l_orderkey=cast((select cast(b.l_shipdate as datetime(6))) as signed)", false},
+		{"deep", "select cast((select (select cast(l_shipdate as datetime(6)))) as signed) from lineitem", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opt := NewMockOptimizer(false, newPlanTestProcess(t))
+			ctx := opt.CurrentContext().(*MockCompilerContext)
+			col := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+			col.Typ.Id, col.Typ.Scale = int32(types.T_datetime), 6
+			p, err := runOneStmt(opt, t, tc.sql)
+			require.NoError(t, err)
+			found := false
+			require.NoError(t, planpb.WalkQueryNodes(p.GetQuery(), func(_ int32, n *planpb.Node) error {
+				return planpb.VisitExpressionsInOwner(n, func(e *Expr) error {
+					return planpb.VisitExprTree(e, func(e *Expr) error {
+						if f := e.GetF(); f != nil && f.Func != nil {
+							id, overload := function.DecodeOverloadID(f.Func.Obj)
+							found = found || id == function.CAST && overload == function.TemporalCastIntegerOverload
+						}
+						return nil
+					})
+				})
+			}))
+			require.True(t, found, "every decorrelation exit must retain the producer's integer protocol")
+			if tc.dependent {
+				require.NotNil(t, p.GetQuery().Correlation)
+				require.NoError(t, p.GetQuery().ValidateCorrelation())
+				for _, program := range p.GetQuery().Correlation.Programs {
+					require.Equal(t, int32(types.T_int64), program.OutputTypes[0].Id)
+				}
+			}
+		})
+	}
+}
+
+func TestTemporalIntegerCastMaterializedCorrelation(t *testing.T) {
+	opt := NewMockOptimizer(false, newPlanTestProcess(t))
+	ctx := opt.CurrentContext().(*MockCompilerContext)
+	col := ctx.tables["lineitem"].Cols[ctx.tables["lineitem"].Name2ColIndex["l_shipdate"]]
+	col.Typ.Id, col.Typ.Scale = int32(types.T_datetime), 6
+	p, err := runOneStmt(opt, t, "select cast((select distinct cast(l_shipdate as datetime(6))) as signed) from lineitem")
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation, "the final integer projection must not be lost during lifting")
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
+	for _, program := range p.GetQuery().Correlation.Programs {
+		require.Equal(t, int32(types.T_int64), program.OutputTypes[0].Id)
+	}
+	found := false
+	for _, node := range p.GetQuery().Nodes {
+		for _, key := range node.GroupBy {
+			found = found || key.Typ.Id == int32(types.T_datetime)
+		}
+	}
+	require.True(t, found, "DISTINCT must retain the original temporal domain before integer conversion")
 }
 
 func TestTemporalIntegerCastScalarProjectionPolicy(t *testing.T) {
