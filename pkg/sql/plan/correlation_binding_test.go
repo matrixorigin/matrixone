@@ -29,6 +29,7 @@ func TestDependentPreparedTypeEdges(t *testing.T) {
 		`SELECT (SELECT (SELECT ? + n1.N_NATIONKEY) FROM NATION n2 WHERE n2.N_NATIONKEY=n1.N_NATIONKEY) FROM NATION n1`,
 		`SELECT (SELECT (SELECT n1.x)) FROM (SELECT ? AS x) n1`,
 		`SELECT (SELECT (? + n1.N_NATIONKEY) IN (SELECT n1.N_NATIONKEY FROM NATION n2)) FROM NATION n1`,
+		`INSERT INTO constraint_test.t1(a,b) VALUES(1,'incoming') ON DUPLICATE KEY UPDATE b=(SELECT (SELECT concat(t1.b, ?)))`,
 	} {
 		t.Run(sql, func(t *testing.T) {
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))
