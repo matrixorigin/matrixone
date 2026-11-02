@@ -241,3 +241,142 @@ async def test_canceling_async_connection_startup_closes_the_constructed_driver(
         if not task.done():
             task.cancel()
         await engine.dispose()
+
+
+@pytest.fixture
+def disabled_cyclic_gc():
+    import gc
+
+    enabled = gc.isenabled()
+    gc.collect()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('phase', ['install', 'read', 'unwind'])
+async def test_guard_releases_physical_driver_without_cyclic_gc(driver_kind, phase, disabled_cyclic_gc, monkeypatch):
+    import asyncio
+    import weakref
+    from pymysql.connections import Connection
+    from aiomysql.connection import Connection as AsyncConnection
+
+    connection_type = Connection if driver_kind == 'pymysql' else AsyncConnection
+    failure = RuntimeError if driver_kind == 'pymysql' else asyncio.CancelledError
+
+    def packet(driver, *args, **kwargs):
+        if phase == 'unwind':
+            raise failure('interrupted result')
+        return MysqlPacket(b'\x00\x00\x00\x02\x00\x00\x00', 'utf8')
+
+    async def async_packet(driver, *args, **kwargs):
+        return packet(driver, *args, **kwargs)
+
+    # Patch the inherited method, not the instance: monkeypatch's undo record
+    # must not keep a bound method or the physical connection alive.
+    monkeypatch.setattr(connection_type, '_read_packet', packet if driver_kind == 'pymysql' else async_packet)
+
+    async def exercise():
+        driver = Connection(defer_connect=True) if driver_kind == 'pymysql' else AsyncConnection()
+        reference = weakref.ref(driver)
+        install_guard(driver)
+        if phase != 'install':
+
+            async def read():
+                result = driver._read_query_result()
+                if driver_kind == 'aiomysql':
+                    await result
+
+            if phase == 'unwind':
+                with pytest.raises(failure, match='interrupted result'):
+                    await read()
+            else:
+                await read()
+            assert '_read_packet' not in vars(driver)
+            assert not driver._matrixone_local_guard.reading and not driver._local_infile
+        return reference
+
+    reference = await exercise()
+    assert reference() is None, 'guard must not retain a physical connection until cyclic GC'
+
+
+@pytest.mark.asyncio
+async def test_unfinished_arrow_stream_releases_real_driver_without_draining(
+    driver_kind, disabled_cyclic_gc, monkeypatch
+):
+    import weakref
+    import pymysql.connections as sync
+    import aiomysql.connection as native_async
+    from matrixone.analytics import ArrowStream
+    from matrixone.async_analytics import AsyncArrowStream
+
+    module = sync if driver_kind == 'pymysql' else native_async
+    events = []
+
+    def forbid_drain(*args, **kwargs):
+        pytest.fail('early stream cleanup must not consume unread rows')
+
+    monkeypatch.setattr(module.MySQLResult, '_finish_unbuffered_query', forbid_drain)
+
+    class SyncLease:
+        def __init__(self, driver):
+            self.driver = driver
+
+        def invalidate(self):
+            events.append('invalidate')
+            self.driver._force_close()
+
+        def close(self):
+            events.append('close')
+            self.driver = None
+
+    class AsyncLease:
+        async def invalidate(self):
+            events.append('invalidate')
+
+        async def close(self):
+            events.append('close')
+
+    async def exercise():
+        driver = sync.Connection(defer_connect=True) if driver_kind == 'pymysql' else native_async.Connection()
+        reference = weakref.ref(driver)
+        install_guard(driver)
+        result = module.MySQLResult(driver)
+        result.unbuffered_active = True
+        driver._result = result
+        cursor_type = __import__(
+            'pymysql.cursors' if driver_kind == 'pymysql' else 'aiomysql.cursors', fromlist=['SSCursor']
+        ).SSCursor
+        cursor = cursor_type(driver)
+        cursor._result = result
+        if driver_kind == 'pymysql':
+            stream = ArrowStream.__new__(ArrowStream)
+            stream._closed = stream._complete = False
+            stream._driver, stream._cursor, stream._raw = driver, cursor, SyncLease(driver)
+            stream._old_timeouts = (driver._read_timeout, driver._write_timeout)
+            stream.close()
+            stream.close()
+        else:
+
+            async def cleanup(awaitable, primary):
+                await awaitable
+
+            stream = AsyncArrowStream.__new__(AsyncArrowStream)
+            stream._closed = stream._complete = False
+            stream._driver, stream._cursor, stream._connection = driver, cursor, AsyncLease()
+            stream._lease = SimpleNamespace(release=lambda: events.append('release'))
+            stream._manager = SimpleNamespace(_streams={stream}, _cleanup=cleanup)
+            await stream.close()
+            await stream.close()
+            assert not stream._manager._streams
+            assert driver._writer is None
+        assert not result.unbuffered_active
+        return reference
+
+    reference = await exercise()
+    assert events == (['invalidate', 'close'] if driver_kind == 'pymysql' else ['release', 'invalidate', 'close'])
+    assert reference() is None, 'returning a pool lease must also release the physical driver'

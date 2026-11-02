@@ -1,21 +1,6 @@
 name: Warm SCA caches
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - go.mod
-      - go.sum
-      - .golangci.yml
-      - Makefile
-      - cgo/*.c
-      - cgo/*.h
-      - cgo/Makefile
-      - thirdparties/Makefile
-      - thirdparties/*.tar.gz
-      - thirdparties/download
-      - .github/workflows/sca-go-module-cache.yaml
   schedule:
     # Keep the pre-existing module/native/tool caches inside the configured
     # retention window. The expensive analysis below runs only on a cache miss,
@@ -135,6 +120,40 @@ jobs:
           # action IDs. Keep this path identical to the PR consumer instead of
           # moving it into a fresh mktemp directory on every job.
           test "$(go env GOMODCACHE)" = "$GITHUB_WORKSPACE/.sca-go-module-cache"
+      # Publish the small tool bundle before native/analysis work can fail.
+      - name: Resolve static-check tool cache metadata
+        id: static-check-tool-cache-metadata
+        run: |
+          set -euo pipefail
+          recipe_hash="$(sed -n '/^install-static-check-tools:/,/^$/p' Makefile | sha256sum | awk '{print $1}')"
+          test -n "$recipe_hash"
+          echo "recipe-hash=$recipe_hash" >> "$GITHUB_OUTPUT"
+      - name: Restore static-check tools
+        id: static-check-tool-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .sca-static-check-tools
+          key: matrixone-sca-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-module-cache-metadata.outputs.version }}-${{ steps.static-check-tool-cache-metadata.outputs.recipe-hash }}
+      - name: Install static-check tools
+        if: steps.static-check-tool-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          make install-static-check-tools
+          mkdir .sca-static-check-tools
+          tool_bin="$(go env GOPATH)/bin"
+          cp "$tool_bin/golangci-lint" "$tool_bin/molint" "$tool_bin/license-eye" .sca-static-check-tools/
+      - name: Verify static-check tools
+        run: |
+          set -euo pipefail
+          test -x .sca-static-check-tools/golangci-lint
+          test -x .sca-static-check-tools/molint
+          test -x .sca-static-check-tools/license-eye
+      - name: Save static-check tools
+        if: steps.static-check-tool-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .sca-static-check-tools
+          key: ${{ steps.static-check-tool-cache.outputs.cache-primary-key }}
       - name: Restore golangci-lint analysis cache
         id: golangci-analysis-cache
         uses: matrixorigin/CI/actions/restore-sca-analysis-cache@main
@@ -245,39 +264,6 @@ jobs:
             cgo/libmo.a
             cgo/libmo.so
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
-      - name: Resolve static-check tool cache metadata
-        id: static-check-tool-cache-metadata
-        run: |
-          set -euo pipefail
-          recipe_hash="$(sed -n '/^install-static-check-tools:/,/^$/p' Makefile | sha256sum | awk '{print $1}')"
-          test -n "$recipe_hash"
-          echo "recipe-hash=$recipe_hash" >> "$GITHUB_OUTPUT"
-      - name: Restore static-check tools
-        id: static-check-tool-cache
-        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-        with:
-          path: .sca-static-check-tools
-          key: matrixone-sca-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.go-module-cache-metadata.outputs.version }}-${{ steps.static-check-tool-cache-metadata.outputs.recipe-hash }}
-      - name: Install static-check tools
-        if: steps.static-check-tool-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          make install-static-check-tools
-          mkdir .sca-static-check-tools
-          tool_bin="$(go env GOPATH)/bin"
-          cp "$tool_bin/golangci-lint" "$tool_bin/molint" "$tool_bin/license-eye" .sca-static-check-tools/
-      - name: Verify static-check tools
-        run: |
-          set -euo pipefail
-          test -x .sca-static-check-tools/golangci-lint
-          test -x .sca-static-check-tools/molint
-          test -x .sca-static-check-tools/license-eye
-      - name: Save static-check tools
-        if: steps.static-check-tool-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-        with:
-          path: .sca-static-check-tools
-          key: ${{ steps.static-check-tool-cache.outputs.cache-primary-key }}
       - name: Prepare SCA environment
         run: |
           set -euo pipefail

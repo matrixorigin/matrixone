@@ -57,6 +57,7 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Sequence
+from urllib.parse import quote
 
 from dateutil.parser import isoparse
 
@@ -114,10 +115,11 @@ def build_mysql_uri(host: str, port: int, user: str, password: str = "", account
     if not user:
         raise ValueError("user is required")
 
-    netloc = f"{user}:{password or ''}@{host}:{port}"
-    if account:
-        return f"mysql://{account}#{netloc}"
-    return f"mysql://{netloc}"
+    identity = f"{account}#{user}" if account else user
+    # The server splits credentials at the last colon and URL-decodes them.
+    identity = quote(identity, safe=":#")
+    password = quote(password or "", safe="")
+    return f"mysql://{identity}:{password}@{host}:{port}"
 
 
 _FREQUENCY_PATTERN = re.compile(r"^(?P<value>\d+)(?P<unit>ms|s|m|h)$", re.IGNORECASE)

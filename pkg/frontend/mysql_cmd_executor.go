@@ -1181,6 +1181,36 @@ func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch
 	return nil
 }
 
+// discardPreparedCursorRetryOutput releases everything a failed statement
+// generation retained for a prepared cursor before the compiler's retry
+// transition replays the statement: the captured row set (its session byte
+// reservation returns via preparedStmtCursor.resetAttempt) and any staged
+// saved-result blocks. The rows never reached the wire, so discarding them
+// loses nothing delivered. Statement-lifetime state the retry cannot
+// re-create survives the discard: the cursor shell and its frozen column
+// metadata (production installs it exactly once per EXECUTE before the
+// pipeline starts and internal retries do not repeat the installation) and
+// the session's authorized statement plan (installed once before Run; the
+// retried generation's publication re-serializes its Plan/Tables
+// provenance — abortPreparedCursorAttemptStaging keeps it). The retried
+// generation captures a fresh, complete row set into the kept cursor shell
+// (#30359 review). The hook is invoked by Compile.prepareRetryTransition
+// only after the failed generation's running SQL has quiesced, so no
+// pipeline can still append to the discarded set.
+func discardPreparedCursorRetryOutput(execCtx *ExecCtx) error {
+	if execCtx == nil {
+		return nil
+	}
+	if execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil {
+		execCtx.prepareStmt.cursor.resetAttempt()
+	}
+	// Attempt-cleanup failures are reported, not hidden (#30359 review):
+	// the retry transition surfaces the error and abandons the replay, and
+	// the failed staging cleanup keeps its owner (cursorResultSaver) so
+	// terminal statement cleanup can still reach the surviving files.
+	return abortPreparedCursorAttemptStaging(execCtx)
+}
+
 func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	defer RecordStatementTxnID(ctx, ses)
 

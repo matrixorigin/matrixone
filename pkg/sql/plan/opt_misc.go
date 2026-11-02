@@ -922,6 +922,11 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 		return nil
 	}
 
+	// This proof belongs to the current inputs and predicates. Rewriters may
+	// have changed them since a previous invocation, including for a trial.
+	if node.Stats != nil && node.Stats.HashmapStats != nil {
+		node.Stats.HashmapStats.HashOnPK = false
+	}
 	leftColMap := determineHashOnPK(node.Children[0], builder)
 	rightColMap := determineHashOnPK(node.Children[1], builder)
 	if rightColMap == nil {
@@ -2019,10 +2024,12 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	if isSameColumnType(source, target) {
 		return !sourceID.IsDecimal() || validDecimalPlanType(source)
 	}
-	// CHAR comparison binding casts text operands to the fixed CHAR domain.
-	// With the same charset and a target at least as wide as the declared
-	// source, that cast cannot reject or truncate any source value.
-	if targetID == types.T_char &&
+	// Text widening is total in the same collation: strToStr checks character
+	// width without transcoding, and every value fits a target at least as wide
+	// as its bounded source. Keep the cast itself (including comparison-key
+	// trimming); this only proves that skipping its evaluation cannot hide an
+	// input-dependent error or warning.
+	if (targetID == types.T_char || targetID == types.T_varchar) &&
 		(sourceID == types.T_char || sourceID == types.T_varchar) &&
 		source.SameCollation(target) && source.Width > 0 &&
 		target.Width >= source.Width {
@@ -2112,23 +2119,6 @@ func integerTypeDomain(oid types.T) (bits int, signed bool) {
 		return 64, false
 	default:
 		return 0, false
-	}
-}
-
-func integerDecimalDigits(oid types.T) int32 {
-	switch oid {
-	case types.T_int8, types.T_uint8:
-		return 3
-	case types.T_int16, types.T_uint16:
-		return 5
-	case types.T_int32, types.T_uint32:
-		return 10
-	case types.T_int64:
-		return 19
-	case types.T_uint64:
-		return 20
-	default:
-		return 0
 	}
 }
 

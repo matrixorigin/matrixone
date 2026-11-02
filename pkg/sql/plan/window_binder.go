@@ -1142,6 +1142,15 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 		windowArgs = append(windowArgs, astExpr.Exprs...)
 	}
 
+	// The ewm shape rules (missing decay, explicit frame, ORDER BY
+	// presence) run BEFORE the registry bind so the §7 messages win over
+	// the generic wrong-parameters family.
+	if function.GetFunctionIsWinEwmFunByName(strings.ToLower(funcName)) {
+		if err := validateEwmWindowCallShape(b.GetContext(), funcName, astExpr, ws); err != nil {
+			return nil, err
+		}
+	}
+
 	// window function
 	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, windowArgs, depth)
 	if err != nil {
@@ -1180,6 +1189,14 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	}
 	w.WindowFunc = windowFunc
 	w.Name = funcName
+
+	// Post-bind on the resolved arguments: decay and policy constancy, the
+	// typed decay shape and the event-time ORDER BY rules (§7).
+	if function.GetFunctionIsWinEwmFunByName(strings.ToLower(funcName)) {
+		if err := validateEwmWindowCallSignatures(b.GetContext(), funcName, windowFunc, w); err != nil {
+			return nil, err
+		}
+	}
 
 	if colPos, ok := ctx.windowByAst[astStr]; ok {
 		return buildWindowColRefExpr(ctx, ctx.windows[colPos].Typ, colPos), nil
@@ -1854,4 +1871,249 @@ func newWindowFrameOrderError(ctx context.Context) error {
 
 func newWindowFrameIllegalError(ctx context.Context) error {
 	return moerr.NewParseError(ctx, "Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type")
+}
+
+// ewmAstStringLiteral reads a SQL string literal from the AST (the
+// parser hands strings to the binder as P_char NumVal constants).
+func ewmAstStringLiteral(ast tree.Expr) (string, bool) {
+	nv, ok := ast.(*tree.NumVal)
+	if !ok || nv.ValType != tree.P_char {
+		return "", false
+	}
+	return nv.String(), true
+}
+
+// validateEwmWindowCallShape enforces the §7 signature-table rules that
+// need only the call shape: the declared decay argument itself (the
+// positional arity below the minimum), the explicit-frame rejection and
+// the required ORDER BY expression in the OVER clause.
+func validateEwmWindowCallShape(
+	ctx context.Context, funcName string, astExpr *tree.FuncExpr, ws *tree.WindowSpec,
+) error {
+	valueArgs := 1
+	switch funcName {
+	case NameEwmCov, NameEwmCorr:
+		valueArgs = 2
+	}
+	if len(astExpr.Exprs) < valueArgs+1 {
+		return moerr.NewInvalidInput(ctx,
+			"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+	}
+	// The 'halflife' tag declares its h at the next position and is never a
+	// policy argument. Its misuse must keep the specific halflife message
+	// even when the registry's generic arity/type checkpoint would otherwise
+	// fail first (§7 signature table).
+	tagAtDecay := false
+	if s, ok := ewmAstStringLiteral(astExpr.Exprs[valueArgs]); ok && s == NameEwmHalfLifeTag {
+		tagAtDecay = true
+		if len(astExpr.Exprs) < valueArgs+2 {
+			return moerr.NewInvalidInput(ctx,
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+		}
+		if _, isString := ewmAstStringLiteral(astExpr.Exprs[valueArgs+1]); isString {
+			return moerr.NewInvalidInput(ctx,
+				"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+		}
+	}
+	for i := valueArgs + 1; i < len(astExpr.Exprs); i++ {
+		if s, ok := ewmAstStringLiteral(astExpr.Exprs[i]); ok && s == NameEwmHalfLifeTag {
+			if !(tagAtDecay && i == valueArgs+1) {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+			}
+		}
+	}
+	if astExpr.WindowSpec != nil && astExpr.WindowSpec.HasFrame {
+		return moerr.NewInvalidInput(ctx,
+			"ewm statistics do not support explicit window frames")
+	}
+	if ws == nil || len(ws.OrderBy) == 0 {
+		return moerr.NewInvalidInput(ctx,
+			"ewm statistics require an ORDER BY in the OVER clause")
+	}
+	return nil
+}
+
+// validateEwmWindowCallSignatures enforces the §7 rules that read the
+// resolved arguments: every decay/policy position is a constant or a
+// prepared marker (the composition boundary resolves values), and an
+// EVENT-TIME call — the decay position is the 'halflife' tag as a
+// string literal — requires exactly one ASC ORDER BY expression whose
+// key type is numeric or temporal. Marker-typed decay positions defer
+// the event-time verdict to the execution boundary (the resolved mode
+// passes the same checks there), so those calls keep the row-mode
+// ORDER BY latitude at bind time.
+func validateEwmWindowCallSignatures(
+	ctx context.Context, funcName string, windowFunc *plan.Expr, w *plan.WindowSpec,
+) error {
+	valueArgs := 1
+	switch funcName {
+	case NameEwmCov, NameEwmCorr:
+		valueArgs = 2
+	}
+	f := windowFunc.GetF()
+	if f == nil || len(f.Args) <= valueArgs {
+		return moerr.NewInvalidInput(ctx,
+			"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+	}
+	// §9: decay and policy arguments are constant per execution — a
+	// prepare-time marker, a session variable, a real-time expression
+	// (SECOND(CURRENT_TIMESTAMP()) and kin), and a statement-level
+	// constant expression (a constant CASE, or IFNULL which binding
+	// lowers to CASE) each resolve to one row-independent value at
+	// every execution, so admission is judged with runtime-constant
+	// semantics: function.IsRuntimeConstant reports input-row
+	// independence, while the foldability policy of IsConstant rejects
+	// every CASE node — including fully constant ones, which would
+	// never reach the per-execution configuration evaluation that
+	// already owns them. The prepared caches are gated
+	// (PreparedPlanHasEwmParams) so each execution rebuilds its
+	// configuration from a fresh evaluation; column-dependent
+	// expressions, volatile functions and nested aggregate/window calls
+	// are still rejected here.
+	for i := valueArgs; i < len(f.Args); i++ {
+		if !function.IsRuntimeConstant(f.Args[i]) {
+			return moerr.NewInvalidInput(ctx,
+				"ewm statistics require constant decay and policy arguments")
+		}
+	}
+	decay := f.Args[valueArgs]
+	// The event-time ORDER BY rules apply only when the decay resolves
+	// to the 'halflife' tag as a string LITERAL at planning time. A
+	// string-typed decay that is a prepare marker (a bare ? binds
+	// T_text) defers the mode verdict to the per-execution configuration
+	// boundary, which re-runs these same §7 checks on the resolved mode;
+	// at bind time such a call keeps the row-mode ORDER BY latitude. A
+	// string literal other than the tag falls through to the declared-
+	// decay rejection below instead of the event-time catalog.
+	if lit := decay.GetLit(); lit != nil && !lit.GetIsnull() {
+		switch types.T(decay.Typ.Id) {
+		case types.T_varchar, types.T_char, types.T_text:
+			if lit.GetSval() == NameEwmHalfLifeTag {
+				if len(w.OrderBy) != 1 {
+					return moerr.NewInvalidInput(ctx,
+						"invalid argument: event-time ewm statistics require exactly one ORDER BY expression")
+				}
+				flag := w.OrderBy[0].GetFlag()
+				if flag&plan.OrderBySpec_DESC != 0 {
+					return moerr.NewInvalidInput(ctx,
+						"invalid argument: event-time ewm statistics require ascending ORDER BY")
+				}
+				switch types.T(w.OrderBy[0].Expr.Typ.Id) {
+				case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+					types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+					types.T_float32, types.T_float64, types.T_decimal64,
+					types.T_decimal128, types.T_decimal256,
+					types.T_timestamp, types.T_datetime, types.T_date:
+				default:
+					return moerr.NewInvalidInput(ctx,
+						"event-time ewm statistics require a numeric or temporal ORDER BY key")
+				}
+			}
+		}
+	}
+	return validateEwmLiteralDecayValues(ctx, f, valueArgs)
+}
+
+// ewmLiteralNumericValue reads the float64 value of an integral or
+// floating literal. A boolean or string literal reports ok=false; a
+// parameter, folded expression or decimal-typed literal has no literal
+// value here and keeps the execution-boundary verdict.
+func ewmLiteralNumericValue(expr *plan.Expr, lit *plan.Literal) (float64, bool) {
+	switch types.T(expr.Typ.Id) {
+	case types.T_float64:
+		return lit.GetDval(), true
+	case types.T_float32:
+		return float64(lit.GetFval()), true
+	case types.T_int64:
+		return float64(lit.GetI64Val()), true
+	case types.T_int32:
+		return float64(lit.GetI32Val()), true
+	case types.T_int16:
+		return float64(lit.GetI16Val()), true
+	case types.T_int8:
+		return float64(lit.GetI8Val()), true
+	case types.T_uint64:
+		return float64(lit.GetU64Val()), true
+	case types.T_uint32:
+		return float64(lit.GetU32Val()), true
+	case types.T_uint16:
+		return float64(lit.GetU16Val()), true
+	case types.T_uint8:
+		return float64(lit.GetU8Val()), true
+	case types.T_decimal64:
+		d := lit.GetDecimal64Val()
+		if d == nil {
+			return 0, false
+		}
+		return types.Decimal64ToFloat64(types.Decimal64(d.A), expr.Typ.Scale), true
+	case types.T_decimal128:
+		d := lit.GetDecimal128Val()
+		if d == nil {
+			return 0, false
+		}
+		return types.Decimal128ToFloat64(types.Decimal128{
+			B0_63: uint64(d.A), B64_127: uint64(d.B)}, expr.Typ.Scale), true
+	}
+	return 0, false
+}
+
+// validateEwmLiteralDecayValues binds the §7 literal decay rows at
+// planning time: a literal alpha outside (0,1], a literal decay string
+// other than 'halflife', a 'halflife' tag without a numeric strictly
+// positive literal h, and the tag misplaced into a policy position.
+// Parameters, folded expressions and decimal literals are validated at
+// the per-execution configuration boundary instead.
+func validateEwmLiteralDecayValues(ctx context.Context, f *plan.Function, valueArgs int) error {
+	constant := func(arg *plan.Expr) (*plan.Literal, bool) {
+		lit := arg.GetLit()
+		return lit, lit != nil && !lit.GetIsnull()
+	}
+	decay := f.Args[valueArgs]
+	lit, ok := constant(decay)
+	if ok {
+		switch types.T(decay.Typ.Id) {
+		case types.T_varchar, types.T_char, types.T_text:
+			if lit.GetSval() != NameEwmHalfLifeTag {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm statistics require a declared decay (alpha or 'halflife' half-life)")
+			}
+			if len(f.Args) < valueArgs+2 {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+			}
+			hLit, hOk := constant(f.Args[valueArgs+1])
+			if !hOk {
+				return nil
+			}
+			v, numeric := ewmLiteralNumericValue(f.Args[valueArgs+1], hLit)
+			if !numeric || !(v > 0) {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+			}
+		case types.T_float64, types.T_float32, types.T_int64, types.T_int32,
+			types.T_int16, types.T_int8, types.T_uint64, types.T_uint32,
+			types.T_uint16, types.T_uint8, types.T_decimal64, types.T_decimal128:
+			v, numeric := ewmLiteralNumericValue(decay, lit)
+			if numeric && !(v > 0.0 && v <= 1.0) {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm statistics require alpha in (0,1]")
+			}
+		}
+	}
+	// the 'halflife' tag is only valid at the decay position (§7)
+	for i := valueArgs + 1; i < len(f.Args); i++ {
+		argLit, argOk := constant(f.Args[i])
+		if !argOk {
+			continue
+		}
+		switch t := types.T(f.Args[i].Typ.Id); t {
+		case types.T_varchar, types.T_char, types.T_text:
+			if argLit.GetSval() == NameEwmHalfLifeTag {
+				return moerr.NewInvalidInput(ctx,
+					"invalid argument: ewm halflife decay requires a strictly positive half-life constant")
+			}
+		}
+	}
+	return nil
 }

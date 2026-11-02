@@ -1141,6 +1141,9 @@ func (th *TxnHandler) commitUnsafe(execCtx *ExecCtx) error {
 	if err := th.validateLineageOwnerLifecycleBeforeCommitUnsafe(execCtx); err != nil {
 		return err
 	}
+	if err := th.applySequenceObligationsBeforeCommitUnsafe(execCtx); err != nil {
+		return err
+	}
 	if th.txnOp != nil {
 		execCtx.ses.EnterFPrint(FPCommitUnsafeBeforeCommitWithTxn)
 		defer execCtx.ses.ExitFPrint(FPCommitUnsafeBeforeCommitWithTxn)
@@ -1265,6 +1268,15 @@ func (th *TxnHandler) rollback(
 			if err != nil || hasRecovered {
 				err4 := th.rollbackUnsafe(execCtx, operationCtx)
 				return errors.Join(err, err4)
+			}
+			if sess, ok := execCtx.ses.(*Session); ok {
+				// The statement rollback rewound the failed statement's
+				// workspace writes, including a SETVAL/restart reposition
+				// the statement may have staged: that boundary never
+				// persisted, so restore the issued-value protection the
+				// staged removal hid (J2). Transaction rollback instead
+				// discards both maps via clearSequenceObligations.
+				sess.restoreStagedSequenceObligations()
 			}
 			if owner := upstreamUserSession(execCtx.ses); owner != nil {
 				owner.rollbackTempTableStatement(
@@ -1469,6 +1481,11 @@ func (th *TxnHandler) rollbackUnsafe(
 		if owner := upstreamUserSession(execCtx.ses); owner != nil {
 			owner.rollbackTempTableTransaction(tempTxnKey)
 		}
+	}
+	if sess, ok := execCtx.ses.(*Session); ok {
+		// Issued-value obligations of transaction-local sequence generations
+		// belong to the dying transaction; never let them stamp a later one.
+		sess.clearSequenceObligations()
 	}
 	th.invalidateTxnUnsafe()
 	execCtx.ses.SetTxnId(dumpUUID[:])

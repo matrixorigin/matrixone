@@ -34,8 +34,8 @@ type remapDbContext struct {
 	// control-flow branches, and assigning one database to every unqualified
 	// reference would risk both false omission and an unsafe persisted body.
 	rejectUseStateChanges bool
-	// cteNames is populated only while dependency collection/remapping walks a
-	// SELECT. It prevents an unqualified CTE reference from being collected as
+	// cteNames is populated while dependency collection/remapping walks a
+	// WITH-bearing statement. It prevents an unqualified CTE reference from being collected as
 	// a source table while preserving qualified references such as db.cte.
 	cteNames             map[string]struct{}
 	collectTableName     func(*tree.TableName)
@@ -109,7 +109,7 @@ func (remap remapDbContext) isVisibleCTE(name string) bool {
 	return ok
 }
 
-// applyRemapDb substitutes the database of qualified table and column
+// applyRemapDbByStatement substitutes the database of qualified table and column
 // references in parsed statements (db.table -> remap[db].table and
 // db.table.column -> remap[db].table.column). It runs after parsing and before
 // privilege checks / planning, which otherwise resolve the original database
@@ -127,29 +127,6 @@ func (remap remapDbContext) isVisibleCTE(name string) bool {
 // Sub-selects nested in
 // expressions (e.g. WHERE id IN (SELECT ... FROM dbx.t), EXISTS (...), join ON, projections,
 // GROUP/HAVING) are also walked so their qualified references are remapped.
-func applyRemapDb(
-	ctx context.Context,
-	stmts []tree.Statement,
-	remap map[string]string,
-	lowerCaseTableNames int64,
-) error {
-	if len(remap) == 0 {
-		return nil
-	}
-	normalized, err := parsers.NormalizeAndValidateRemapDb(ctx, remap, lowerCaseTableNames)
-	if err != nil {
-		return err
-	}
-	var walkErr error
-	remapCtx := remapDbContext{
-		ctx: ctx, databases: normalized, lowerCaseTableNames: lowerCaseTableNames, err: &walkErr,
-	}
-	for _, stmt := range stmts {
-		remapDbInStmt(stmt, remapCtx)
-	}
-	return walkErr
-}
-
 func applyRemapDbByStatement(
 	ctx context.Context,
 	stmts []tree.Statement,
@@ -279,8 +256,11 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		remapDbInSelect(s.Select, remap)
 	case *tree.Insert:
 		scoped := remapDbInWithScope(s.With, remap)
-		remapDbInTableExpr(s.Table, scoped)
-		remapInsertTarget(s.ColumnNames, &s.TargetDatabaseName, scoped)
+		// INTO is a physical target; only the read side can name a CTE.
+		targetScope := scoped
+		targetScope.cteNames = nil
+		remapDbInTableExpr(s.Table, targetScope)
+		remapInsertTarget(s.ColumnNames, &s.TargetDatabaseName, targetScope)
 		if s.Rows != nil {
 			remapDbInSelect(s.Rows, scoped)
 		}
@@ -288,9 +268,11 @@ func remapDbInStmt(stmt tree.Statement, remap remapDbContext) bool {
 		remapDbInSelectExprs(s.Returning, scoped)
 	case *tree.MultiInsert:
 		scoped := remapDbInWithScope(s.With, remap)
+		targetScope := scoped
+		targetScope.cteNames = nil
 		for _, target := range s.AllTargets() {
-			remapDbInTableExpr(target.Table, scoped)
-			remapInsertTarget(target.ColumnNames, nil, scoped)
+			remapDbInTableExpr(target.Table, targetScope)
+			remapInsertTarget(target.ColumnNames, nil, targetScope)
 			remapDbInExprs(target.Values, scoped)
 		}
 		for _, when := range s.Whens {

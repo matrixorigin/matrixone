@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -34,8 +35,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// pkUpsertPersistedBetween checks changed objects without treating the amount
-// of history as a conflict. The key vector is owned by the caller of this
+// pkUpsertPersistedBetween prunes disjoint history before bounding candidate I/O. The key vector is owned by the caller of this
 // helper, and can be sorted before any zone-map pruning.
 func (tbl *txnTable) pkUpsertPersistedBetween(
 	ctx context.Context, p *logtailreplay.PartitionState,
@@ -76,7 +76,7 @@ func (tbl *txnTable) pkUpsertPersistedBetween(
 	// A zone map is only an absence proof if its type and ordering match the
 	// query keys. Missing/uninitialized maps deliberately fail open.
 	usableZM := func(zm objectio.ZoneMap) bool {
-		return keys.GetSorted() && zm.IsInited() && zm.GetType() == keys.GetType().Oid
+		return keys.GetSorted() && pkCheckZoneMapUsable(zm, keys.GetType())
 	}
 
 	var filter objectio.BlockReadFilter
@@ -111,6 +111,11 @@ func (tbl *txnTable) pkUpsertPersistedBetween(
 	cacheVectors := containers.NewVectors(3)
 	ioCounted := false
 
+	type objectCandidate struct {
+		entry        objectio.ObjectEntry
+		statsChecked bool
+	}
+	objects := make([]objectCandidate, 0, maxChangedObjectsForIO)
 	err = p.VisitChangedDataObjects(ctx, from, types.MaxTs(), func(obj objectio.ObjectEntry, isDelete bool) (bool, error) {
 		if isDelete {
 			deleted++
@@ -131,83 +136,146 @@ func (tbl *txnTable) pkUpsertPersistedBetween(
 			}
 		}
 
-		// Include metadata and Bloom reads in the same global budget as block
-		// reads. One object owns one permit; it never nests another admission.
-		if err := acquirePKCheckSemaphore(ctx); err != nil {
-			return false, err
+		if pkCheckBailoutOnChangedObjects(len(objects) + 1) {
+			changed, reason = true, "too_many_objects"
+			return false, nil
 		}
-		defer releasePKCheckSemaphore()
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		location := obj.Location()
-		objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
-		if err != nil {
-			reason = "data_object_check_error"
-			return false, err
-		}
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		meta := objMeta.MustDataMeta()
-		if !statsChecked {
-			zm := meta.MustGetColumn(pkSeq).ZoneMap()
-			if usableZM(zm) && !zm.AnyIn(keys) {
-				return true, nil
+		objects = append(objects, objectCandidate{obj, statsChecked})
+		return true, nil
+	})
+	if err != nil || changed {
+		return changed, err
+	}
+
+	type blockCandidate struct {
+		block objectio.BlockInfo
+		owner objectio.ObjectEntry
+	}
+	blocks := make([]blockCandidate, 0, maxCandidateBlksForIO)
+	historyError := func(obj objectio.ObjectEntry, err error) error {
+		if pkCheckObsoleteObjectMissing(obj, to, err) {
+			if canceled := ctx.Err(); canceled != nil {
+				return canceled
 			}
+			reason = "data_history_unavailable"
+			return moerr.NewTxnNeedRetry(ctx)
 		}
-		var bf objectio.BloomFilter
-		if !isFakePK && meta.BlockHeader().BFExtent().Length() > 0 {
-			bf, err = objectio.LoadBFWithMeta(ctx, meta, location, fs)
+		return err
+	}
+	// Select every candidate before reading rows, so a late budget bailout
+	// never incurs column I/O for earlier blocks.
+	for _, candidate := range objects {
+		obj, statsChecked := candidate.entry, candidate.statsChecked
+		err = func() error {
+
+			// Include metadata and Bloom reads in the same global budget as block
+			// reads. One object owns one permit; it never nests another admission.
+			if err := acquirePKCheckSemaphore(ctx); err != nil {
+				return err
+			}
+			defer releasePKCheckSemaphore()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			location := obj.Location()
+			objMeta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 			if err != nil {
 				reason = "data_object_check_error"
-				return false, err
+				return err
 			}
 			if err := ctx.Err(); err != nil {
-				return false, err
+				return err
 			}
-		}
-
-		var matched bool
-		objectio.ForeachBlkInObjStatsList(false, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-			if err = ctx.Err(); err != nil {
-				return false
-			}
-			var blockZM objectio.ZoneMap
-			if !blkMeta.IsEmpty() {
-				blockZM = blkMeta.MustGetColumn(pkSeq).ZoneMap()
-			}
-			if usableZM(blockZM) && !blockZM.AnyIn(keys) {
-				return true
-			}
-			if len(bf) > 0 {
-				blkBF := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
-				// The BF index can be present while an individual block has no
-				// filter. An absent filter cannot prove absence of a key.
-				if len(blkBF) > 0 {
-					bfIndex := index.NewEmptyBloomFilter()
-					if err = index.DecodeBloomFilter(bfIndex, blkBF); err != nil {
-						reason = "data_object_check_error"
-						return false
-					}
-					lower, upper := 0, keys.Length()
-					if usableZM(blockZM) {
-						lower, upper = blockZM.SubVecIn(keys)
-					}
-					if !bfIndex.MayContainsAny(keys, lower, upper) {
-						return true
-					}
+			meta := objMeta.MustDataMeta()
+			if !statsChecked {
+				zm := meta.MustGetColumn(pkSeq).ZoneMap()
+				if usableZM(zm) && !zm.AnyIn(keys) {
+					return nil
 				}
 			}
-			candidates++
-			if err = prepareFilter(); err != nil {
-				return false
+			var bf objectio.BloomFilter
+			if !isFakePK && meta.BlockHeader().BFExtent().Length() > 0 {
+				bf, err = objectio.LoadBFWithMeta(ctx, meta, location, fs)
+				if err != nil {
+					reason = "data_object_check_error"
+					return err
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 			}
+
+			objectio.ForeachBlkInObjStatsList(false, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+				if err = ctx.Err(); err != nil {
+					return false
+				}
+				var blockZM objectio.ZoneMap
+				if !blkMeta.IsEmpty() {
+					blockZM = blkMeta.MustGetColumn(pkSeq).ZoneMap()
+				}
+				if usableZM(blockZM) && !blockZM.AnyIn(keys) {
+					return true
+				}
+				if len(bf) > 0 {
+					blkBF := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+					// The BF index can be present while an individual block has no
+					// filter. An absent filter cannot prove absence of a key.
+					if len(blkBF) > 0 {
+						bfIndex := index.NewEmptyBloomFilter()
+						if err = index.DecodeBloomFilter(bfIndex, blkBF); err != nil {
+							reason = "data_object_check_error"
+							return false
+						}
+						lower, upper := 0, keys.Length()
+						if usableZM(blockZM) {
+							lower, upper = blockZM.SubVecIn(keys)
+						}
+						if !bfIndex.MayContainsAny(keys, lower, upper) {
+							return true
+						}
+					}
+				}
+				candidates++
+				if pkCheckBailoutOnCandidateBlocks(candidates) {
+					changed, reason = true, "too_many_candidate_blocks"
+					return false
+				}
+				blk.SetFlagByObjStats(&obj.ObjectStats)
+				blocks = append(blocks, blockCandidate{blk, obj})
+				return true
+			}, obj.ObjectStats)
+			return err
+		}()
+		if err != nil {
+			err = historyError(obj, err)
+			return moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), err
+		}
+		if changed {
+			return true, nil
+		}
+	}
+	if len(blocks) == 0 {
+		return false, ctx.Err()
+	}
+	if err = prepareFilter(); err != nil {
+		return false, err
+	}
+	for _, candidate := range blocks {
+		blk := candidate.block
+		matched := false
+		err = func() error {
+			if err := acquirePKCheckSemaphore(ctx); err != nil {
+				return err
+			}
+			defer releasePKCheckSemaphore()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			if !ioCounted {
 				ioCounted = true
 				v2.TxnPKChangeCheckIOCounter.Inc()
 			}
-			blk.SetFlagByObjStats(&obj.ObjectStats)
 			search := filter.DecideSearchFunc(blk.IsSorted())
 			if search == nil {
 				if linearSearch == nil {
@@ -246,10 +314,10 @@ func (tbl *txnTable) pkUpsertPersistedBetween(
 			}
 			if err != nil {
 				reason = "data_block_read_error"
-				return false
+				return err
 			}
 			if err = ctx.Err(); err != nil {
-				return false
+				return err
 			}
 			if !usable {
 				matched = true
@@ -257,16 +325,15 @@ func (tbl *txnTable) pkUpsertPersistedBetween(
 			} else if matched {
 				reason = "data_commit_ts_hit"
 			}
-			return !matched
-		}, obj.ObjectStats)
+			return nil
+		}()
 		if err != nil {
-			return false, err
+			err = historyError(candidate.owner, err)
+			return moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), err
 		}
 		if matched {
-			changed = true
-			return false, nil
+			return true, nil
 		}
-		return true, nil
-	})
-	return changed, err
+	}
+	return false, ctx.Err()
 }

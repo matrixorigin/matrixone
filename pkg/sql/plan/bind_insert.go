@@ -65,7 +65,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// existence via DetectSqls generated in bindAndOptimizeInsertQuery.
 	origCtx := builder.GetContext()
 	builder.compCtx.SetContext(context.WithValue(origCtx, defines.IgnoreForeignKey{}, true))
-	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, stmt.With, nil, true)
+	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
 	builder.compCtx.SetContext(origCtx)
 	if err != nil {
 		return 0, err
@@ -79,6 +79,9 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	}
 	if targetDB == "" {
 		targetDB = builder.compCtx.DefaultDatabase()
+	}
+	if len(dmlCtx.tableDefs) != 1 {
+		return 0, moerr.NewInvalidInput(builder.GetContext(), "INSERT requires one physical target table")
 	}
 	tableDef := dmlCtx.tableDefs[0]
 	if (IsMaterializedViewTableDef(tableDef) || IsMaterializedViewStateTableDef(tableDef)) &&
@@ -110,15 +113,10 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		}()
 	}
 
-	// Pass WITH clause from INSERT to SELECT if present. The parsed AST can be
-	// retained by PREPARE, so keep the binding-specific rewrite off that shared
-	// wrapper.
-	rowsForBinding := stmt.Rows
-	if stmt.With != nil && stmt.Rows != nil && stmt.Rows.With == nil {
-		rowsCopy := *stmt.Rows
-		rowsCopy.With = stmt.With
-		rowsForBinding = &rowsCopy
+	if err = builder.prepareInsertSourceScope(stmt, bindCtx); err != nil {
+		return 0, err
 	}
+	rowsForBinding := stmt.Rows
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan (which only covers the base
@@ -1454,6 +1452,34 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 	pkTyp := tableDef.Cols[pkColIdx].Typ
 	incomingPkPos := colName2Idx[tableDef.Name+"."+pkName]
 
+	// Lookup joins may reorder rows, including across batches. Assign one ordinal
+	// on the converted input before any probe and restore it globally before the
+	// statement-local arbiter observes or publishes a key.
+	rowNumberFunc, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", nil)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	ordinalTag := builder.genNewBindTag()
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_WINDOW,
+		Children: []int32{lastNodeID},
+		WinSpecList: []*plan.Expr{{
+			Typ: rowNumberFunc.Typ,
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				WindowFunc: rowNumberFunc,
+				Name:       "row_number",
+				Frame: &plan.FrameClause{
+					Type:  plan.FrameClause_ROWS,
+					Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+					End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true},
+				},
+			}},
+		}},
+		WindowIdx:   0,
+		BindingTags: []int32{ordinalTag},
+		SpillMem:    builder.sortSpillMem,
+	}, bindCtx)
+
 	keyExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 	targetExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 
@@ -1613,6 +1639,20 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 		targetColumns[i] = int32(len(projectList))
 		projectList = append(projectList, targetExprs[i])
 	}
+	// SORT compiles to Order plus a global MergeOrder, so the arbiter receives
+	// one ordered stream even when the lookup joins introduce multiple scopes.
+	// Keep the ordinal private to this sort: the projection and arbiter retain
+	// their original column positions and the resolved identity stays last.
+	lastNodeID = builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{lastNodeID},
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{Typ: rowNumberFunc.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: ordinalTag, ColPos: 0}}},
+			Flag: plan.OrderBySpec_ASC | plan.OrderBySpec_INTERNAL,
+		}},
+		SpillMem: builder.sortSpillMem,
+	}, bindCtx)
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: projectList,
@@ -2820,7 +2860,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
 				}
 
-				updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), colDef, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+				updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), colDef, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 				if err != nil {
 					return 0, err
 				}
@@ -2971,6 +3011,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				builder.isInsertIgnore,
 			)
 			if err != nil {
+				return 0, err
+			}
+			// Same cross-mode consumption boundary as the plain insert path:
+			// a native-mode ODKU statement must fail closed on a persisted
+			// definition that needs the conditional boolean contracts.
+			if err := RequireMySQLConditionalBooleanConsumption(
+				builder.GetContext(), builder.compCtx.GetProcess(), genExpr); err != nil {
 				return 0, err
 			}
 			replaceColRefTag(genExpr, 0, scanTag)
@@ -5552,7 +5599,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			projList2 = append(projList2, nil)
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else {
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), assignmentIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), assignmentIgnore)
 			if err != nil {
 				return 0, nil, nil, -1, err
 			}
@@ -5592,6 +5639,15 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			assignmentIgnore,
 		)
 		if err != nil {
+			return 0, nil, nil, -1, err
+		}
+		// The copied catalog expression is rebound against THIS statement: a
+		// definition that needs the conditional boolean contracts evaluates
+		// with those kernels only on a MySQL-mode session, and a native-mode
+		// DML statement must fail closed at plan time instead of pushing a
+		// persisted JSON condition into the pre-contract BOOL decoding.
+		if err := RequireMySQLConditionalBooleanConsumption(
+			builder.GetContext(), builder.compCtx.GetProcess(), genExpr); err != nil {
 			return 0, nil, nil, -1, err
 		}
 		proj1Pos := genColIdxToProj1Pos[i]
@@ -5909,7 +5965,7 @@ func (builder *QueryBuilder) buildValueScan(
 		}
 		var defExpr *plan.Expr
 		if isAllDefault {
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -5986,7 +6042,7 @@ func (builder *QueryBuilder) buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
-					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
 						return 0, nil, err
 					}
@@ -6150,7 +6206,7 @@ func (builder *QueryBuilder) buildValueScan(
 			col := tableDef.Cols[colIdx]
 			colTyp := makeTypeByPlan2Type(col.Typ)
 			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, tableDef.DbName, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -6432,4 +6488,18 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 		Children:    []int32{orderedID},
 		BindingTags: []int32{outputTag},
 	}, outputCtx), nil
+}
+
+// prepareInsertSourceScope registers INSERT's outer WITH using the existing
+// SELECT declaration owner. The source SELECT binds in its normal child context,
+// retaining its own WITH and normal lexical shadowing without changing the AST.
+func (builder *QueryBuilder) prepareInsertSourceScope(stmt *tree.Insert, bindCtx *BindContext) error {
+	if stmt.With == nil {
+		return nil
+	}
+	declarations := &tree.Select{With: stmt.With}
+	if registerNumericCteDefinitions(declarations, bindCtx) {
+		seedNumericCteProjectionTypes(builder, bindCtx)
+	}
+	return builder.preprocessCte(declarations, bindCtx)
 }

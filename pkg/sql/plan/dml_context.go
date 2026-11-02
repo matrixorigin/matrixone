@@ -425,7 +425,7 @@ func (dmlCtx *DMLContext) resolveSingleTable(
 		return moerr.NewUnsupportedDML(ctx.GetContext(), "unsupported table type")
 	}
 
-	if withMap[tblName] {
+	if dbName == "" && withMap[tblName] {
 		if allowReadOnlySources {
 			dmlCtx.hasReadOnlySource = true
 		}

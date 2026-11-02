@@ -1,14 +1,6 @@
 name: Warm jstfu Maven cache
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - xtool/jstfu/pom.xml
-      - xtool/jstfu/mvnw
-      - xtool/jstfu/.mvn/wrapper/maven-wrapper.properties
-      - .github/workflows/jstfu-maven-cache.yaml
   schedule:
     # GitHub evicts caches that have not been accessed for seven days. A daily
     # trusted refresh also validates the Java tests independently of PR events.

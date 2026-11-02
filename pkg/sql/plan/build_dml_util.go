@@ -112,7 +112,6 @@ type dmlPlanCtx struct {
 	updateColPosMap       map[string]int
 	allDelTableIDs        map[uint64]struct{}
 	skipForeignKeyActions map[*ForeignKeyDef]struct{}
-	allDelTables          map[FkReferKey]struct{}
 	isFkRecursionCall     bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
 	lockTable             bool //we need lock table in stmt: delete from tbl
 	updatePkCol           bool //if update stmt will update the primary key or one of pks
@@ -5620,9 +5619,7 @@ type sinkMeta struct {
 }
 
 type sinkScanMeta struct {
-	step           int
 	nodeId         int32
-	sinkNodeId     int32
 	sourceIdx      int
 	preNodeId      int32
 	preNodeIsUnion bool //if preNode is Union, one sinkScan to one sink is fine
@@ -5716,9 +5713,7 @@ func collectSinkAndSinkScanMeta(
 			}
 
 			meta := &sinkScanMeta{
-				step:           oldStep,
 				nodeId:         nodeId,
-				sinkNodeId:     sinkNodeId,
 				sourceIdx:      sourceIdx,
 				preNodeId:      preNodeId,
 				preNodeIsUnion: qry.Nodes[preNodeId].NodeType == plan.Node_UNION,

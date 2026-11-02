@@ -4806,6 +4806,9 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	if err = lockRoleRuleLifecycleInBackground(ctx, bh); err != nil {
 		return err
 	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
+		return err
+	}
 
 	// step1: check roles exists or not.
 	// handle "IF EXISTS"
@@ -6111,6 +6114,9 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	if err != nil {
 		return err
 	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
+		return err
+	}
 
 	// handle "IF EXISTS"
 	// step1 : check Users are real Users or Roles,  exists or not
@@ -6254,7 +6260,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6275,6 +6281,9 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -6873,7 +6882,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers, *tree.ShowStages,
-		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
+		*tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.CheckTableStmt, *tree.ShowProfileStmt,
 		*tree.CreateExtension, *tree.LoadExtension,
@@ -6888,6 +6897,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		special = specialTagAdmin
 		canExecInRestricted = true
 	case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
+	case *tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
@@ -10604,6 +10618,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
 			yes, err := checkSQLTaskPrivilege()
 			return yes, stats, err
+		case *tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
+			return tenant.IsAdminRole(), stats, nil
 		case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog,
 			*tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
 			yes, err := checkIcebergCatalogPrivilege()
