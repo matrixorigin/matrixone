@@ -639,10 +639,12 @@ func TestCallReadPolicy(t *testing.T) {
 			proc.Ctx = callerCtx
 
 			var seen []fileservice.Policy
+			var groups []uint64
 			reader := mock_frontend.NewMockReader(ctrl)
 			reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 				func(ctx context.Context, _ []string, _ *plan.Expr, _ interface{}, _ *batch.Batch) (bool, error) {
 					seen = append(seen, fileservice.GetFileServicePolicy(ctx))
+					groups = append(groups, fileservice.GetPreloadGroup(ctx))
 					return true, nil
 				}).AnyTimes()
 			reader.EXPECT().Close().Return(nil).AnyTimes()
@@ -654,11 +656,13 @@ func TestCallReadPolicy(t *testing.T) {
 				Attrs:      []string{"int_col"},
 				Types:      []plan.Type{plan.MakePlan2Type(&typ)},
 				ReadPolicy: tc.readPolicy,
+				TableID:    42,
 			}
 			require.NoError(t, arg.Prepare(proc))
 			_, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 			require.Equal(t, []fileservice.Policy{tc.want}, seen)
+			require.Equal(t, []uint64{42}, groups)
 			require.Equal(t, fileservice.Policy(fileservice.SkipMemoryCacheWrites), fileservice.GetFileServicePolicy(proc.Ctx))
 
 			arg.Free(proc, false, nil)

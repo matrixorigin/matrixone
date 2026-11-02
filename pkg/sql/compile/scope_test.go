@@ -610,24 +610,35 @@ func TestPreparedScopeRunReleasesCompletedReader(t *testing.T) {
 
 func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
 	for _, skip := range []bool{false, true} {
-		proc := testutil.NewProcess(t)
-		proc.BuildPipelineContext(context.Background())
-		reader := &mockReaderForParallelOrderBy{}
-		scope := &Scope{
-			RootOp: table_scan.NewArgument(),
-			Proc:   proc,
-			DataSource: &Source{
-				R:    reader,
-				Rel:  &mockRelationForMembershipFilter{},
-				node: &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip},
-			},
+		for _, fromObjRef := range []bool{false, true} {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			reader := &mockReaderForParallelOrderBy{}
+			node := &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip}
+			tableDef := &plan.TableDef{TblId: 42}
+			if fromObjRef {
+				// A rewritten scan can carry its table only in the object reference.
+				tableDef.TblId = 0
+				node.ObjRef = &plan.ObjectRef{Obj: 42}
+			}
+			scope := &Scope{
+				RootOp: table_scan.NewArgument(),
+				Proc:   proc,
+				DataSource: &Source{
+					R:        reader,
+					Rel:      &mockRelationForMembershipFilter{},
+					TableDef: tableDef,
+					node:     node,
+				},
+			}
+			require.NoError(t, scope.Run(&Compile{proc: proc}))
+			want := fileservice.Policy(0)
+			if skip {
+				want = fileservice.NarrowRead
+			}
+			require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
+			require.Equal(t, []uint64{42}, reader.readGroups, "reads are grouped by their table")
 		}
-		require.NoError(t, scope.Run(&Compile{proc: proc}))
-		want := fileservice.Policy(0)
-		if skip {
-			want = fileservice.NarrowRead
-		}
-		require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
 	}
 }
 
@@ -3202,6 +3213,7 @@ type mockReaderForParallelOrderBy struct {
 	onRead       func()
 	readErr      error
 	readPolicies []fileservice.Policy
+	readGroups   []uint64
 }
 
 func (m *mockReaderForParallelOrderBy) Close() error {
@@ -3211,6 +3223,7 @@ func (m *mockReaderForParallelOrderBy) Close() error {
 
 func (m *mockReaderForParallelOrderBy) Read(ctx context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
 	m.readPolicies = append(m.readPolicies, fileservice.GetFileServicePolicy(ctx))
+	m.readGroups = append(m.readGroups, fileservice.GetPreloadGroup(ctx))
 	if m.onRead != nil {
 		m.onRead()
 	}

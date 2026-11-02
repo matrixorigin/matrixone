@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -1030,6 +1031,9 @@ func (r *reader) read(
 	}
 
 	policy := fileservice.GetFileServicePolicy(ctx)
+	if ioutil.PrefetchSkipped(ctx, r.fs, policy, blkInfo) {
+		policy |= fileservice.SkipFullFilePreloads
+	}
 
 	if r.readBlockCnt > r.threshHold {
 		policy |= fileservice.SkipMemoryCacheWrites
