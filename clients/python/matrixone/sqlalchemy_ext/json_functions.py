@@ -6,7 +6,7 @@ JSON support. Path values use SQLAlchemy's string binding and literal rendering
 instead of being interpolated as raw SQL.
 """
 
-from sqlalchemy import literal
+from sqlalchemy import String, literal
 from sqlalchemy.sql.expression import ColumnElement
 from sqlalchemy.sql import functions
 
@@ -76,7 +76,7 @@ class json_extract_string(functions.GenericFunction):
         >>> stmt = select(json_extract_string(Product.specs, '$.name'))
     """
 
-    type = None
+    type = String()
     name = 'json_extract_string'
     inherit_cache = True
 
@@ -248,7 +248,7 @@ class json_unquote(functions.GenericFunction):
         >>> stmt = select(json_unquote('"Hello"'))
     """
 
-    type = None
+    type = String()
     name = 'json_unquote'
     inherit_cache = True
 

@@ -2705,3 +2705,220 @@ func TestVectorAllocationAccountConstNullCloneReuse(t *testing.T) {
 	require.Zero(t, state.registry.LiveAllocationMetadata())
 	require.Zero(t, mp.CurrNB())
 }
+
+func TestAccountedShuffleGrowingBitmapsFailurePreservesState(t *testing.T) {
+	for _, buffered := range []bool{false, true} {
+		for _, slots := range []int{3, 4, 5} {
+			t.Run(fmt.Sprintf("buffered=%v/slots=%d", buffered, slots), func(t *testing.T) {
+				state := newTestVectorAllocationAccount(t, 1<<20, uint64(slots))
+				t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
+				mp := mpool.MustNewZero()
+				vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+				t.Cleanup(func() { vec.Free(mp) })
+				require.NoError(t, vec.PreExtend(2, mp))
+				require.NoError(t, vec.PreExtendBitmap(2, mp))
+				require.NoError(t, AppendFixedList(vec, []int64{1, 2}, nil, mp))
+				vec.SetNull(0)
+				vec.GetGrouping().Add(1)
+				vec.SetSorted(true)
+				before := state.account.Snapshot().Used
+				sels := make([]int64, 65)
+				for i := range sels {
+					sels[i] = int64(i % 2)
+				}
+				var err error
+				if buffered {
+					var buf []byte
+					err = vec.ShuffleWithBuf(sels, mp, &buf)
+				} else {
+					err = vec.Shuffle(sels, mp)
+				}
+				require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+				require.True(t, vec.GetSorted())
+				require.Equal(t, before, state.account.Snapshot().Used)
+				require.Equal(t, []int64{1, 2}, MustFixedColWithTypeCheck[int64](vec))
+				require.True(t, vec.IsNull(0))
+				require.True(t, vec.GetGrouping().Contains(1))
+				vec.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
+
+func TestAccountedMixedStringShuffleThenSort(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 32)
+	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	t.Cleanup(func() { vec.Free(mp) })
+	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("z"), []byte("a")}, nil, mp))
+	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
+	vec.GetGrouping().Add(0)
+	sels := make([]int64, 65)
+	for i := range sels {
+		sels[i] = int64(i % 2)
+	}
+	require.NoError(t, vec.Shuffle(sels, mp))
+	require.NotPanics(t, vec.InplaceSort)
+	for i := range 65 {
+		value := string(vec.GetBytesAt(i))
+		if i < 32 {
+			require.Equal(t, "a", value)
+		} else {
+			require.Equal(t, "z", value)
+		}
+		require.Equal(t, value == "z", vec.GetIsBinaryStringAt(i))
+		require.Equal(t, value == "z", vec.GetGrouping().Contains(uint64(i)))
+		require.False(t, vec.IsNull(uint64(i)))
+	}
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedShuffleFailureRetainsBorrowedValidity(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 5)
+	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
+	mp := mpool.MustNewZero()
+	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	t.Cleanup(func() { vec.Free(mp) })
+	require.NoError(t, AppendFixedList(vec, []int64{1, 2}, nil, mp))
+	require.NoError(t, vec.PreExtendBitmap(2, mp))
+	vec.GetGrouping().Add(1)
+	validity := []byte{0b10}
+	releases := 0
+	lease, err := NewRefCountedBufferLease(validity, int64(cap(validity)), func() { releases++ })
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if lease != nil {
+			lease.Release()
+		}
+	})
+	require.NoError(t, vec.GetNulls().InstallBorrowedValidity(validity, 0, 2, 1, lease))
+	lease.Release()
+	lease = nil
+	before := state.account.Snapshot().Used
+	sels := make([]int64, 65)
+	for i := range sels {
+		sels[i] = int64(i % 2)
+	}
+	require.ErrorIs(t, vec.Shuffle(sels, mp), mpool.ErrAllocationMetadataSlots)
+	require.Equal(t, before, state.account.Snapshot().Used)
+	require.True(t, vec.GetNulls().HasBorrowedValidity())
+	require.True(t, vec.IsNull(0))
+	require.Zero(t, releases)
+	vec.Free(mp)
+	require.Equal(t, 1, releases)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
+	for fail := 1; fail <= 8; fail++ {
+		t.Run(fmt.Sprintf("admission=%d", fail), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			controller := &rejectNextVectorAllocation{}
+			account, err := registry.OpenWithController(1<<20, controller)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Seal().Used)
+				require.Zero(t, registry.LiveAllocationMetadata())
+				_, err := registry.Finalize(account)
+				require.NoError(t, err)
+			})
+			selection, err := NewAllocationAccountSelection(account, testVectorAllocationOwner, testVectorDataAllocationSite, testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite)
+			require.NoError(t, err)
+			v := newAccountedTestVector(t, types.T_text.ToType(), selection)
+			t.Cleanup(func() { v.Free(mp) })
+			require.NoError(t, AppendBytesList(v, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, nil, mp))
+			require.NoError(t, v.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
+			require.NoError(t, v.SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, mp))
+			require.NoError(t, v.SetStringSourcesWithMP([]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt, types.StringSourceExpression}, mp))
+			require.NoError(t, v.SetPrepareParamKindsWithMP([]PrepareParamKind{PrepareParamInteger, PrepareParamFloat, PrepareParamDecimal}, mp))
+			v.SetNull(2)
+			v.GetGrouping().Add(1)
+			v.SetSorted(true)
+			before, beforeMP := account.Snapshot().Used, mp.CurrNB()
+			controller.failAt = controller.calls + fail
+			sels := make([]int64, 65)
+			for i := range sels {
+				sels[i] = int64(i % 3)
+			}
+			err = v.Shuffle(sels, mp)
+			require.Equal(t, fail <= 7, controller.rejected, "each reachable admission must be exercised")
+			if controller.rejected {
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.Equal(t, before, account.Snapshot().Used)
+				require.Equal(t, beforeMP, mp.CurrNB())
+				require.Equal(t, 3, v.Length())
+				require.True(t, v.GetSorted())
+				for i, value := range []string{"a", "b", "c"} {
+					require.Equal(t, value, v.GetStringAt(i))
+				}
+				require.True(t, v.IsNull(2))
+				require.True(t, v.GetGrouping().Contains(1))
+				require.Equal(t, types.RuntimeStringBinary, v.GetRuntimeStringDomainAt(0))
+				require.Equal(t, types.RuntimeStringText, v.GetRuntimeStringDomainAt(1))
+				require.Equal(t, types.StringSourceLiteral, v.GetStringSourceAt(0))
+				require.Equal(t, types.StringSourceCOMStmt, v.GetStringSourceAt(1))
+				require.Equal(t, PrepareParamInteger, v.GetPrepareParamKinds()[0])
+				require.Equal(t, PrepareParamFloat, v.GetPrepareParamKinds()[1])
+			} else {
+				require.NoError(t, err)
+				for i := range sels {
+					src := i % 3
+					require.Equal(t, []string{"a", "b", "c"}[src], v.GetStringAt(i))
+					require.Equal(t, src == 2, v.IsNull(uint64(i)))
+					require.Equal(t, src == 1, v.GetGrouping().Contains(uint64(i)))
+					if src < 2 {
+						require.Equal(t, []types.RuntimeStringDomain{types.RuntimeStringBinary, types.RuntimeStringText}[src], v.GetRuntimeStringDomainAt(i))
+						require.Equal(t, []types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt}[src], v.GetStringSourceAt(i))
+						require.Equal(t, []PrepareParamKind{PrepareParamInteger, PrepareParamFloat}[src], v.GetPrepareParamKinds()[i])
+					}
+				}
+			}
+			v.Free(mp)
+			require.Zero(t, account.Seal().Used)
+			require.Zero(t, registry.LiveAllocationMetadata())
+			require.Zero(t, controller.used)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestAccountedShuffleFailureRetainsBorrowedArea(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 1)
+	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
+	mp := mpool.MustNewZero()
+	v := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	t.Cleanup(func() { v.Free(mp) })
+	require.NoError(t, v.PreExtend(2, mp))
+	v.SetLength(2)
+	first, second := "first payload longer than twenty three bytes", "second payload longer than twenty three bytes"
+	area := []byte(first + second)
+	desc := MustFixedColNoTypeCheck[types.Varlena](v)
+	desc[0].SetOffsetLen(0, uint32(len(first)))
+	desc[1].SetOffsetLen(uint32(len(first)), uint32(len(second)))
+	releases := 0
+	lease, err := NewRefCountedBufferLease(area, int64(cap(area)), func() { releases++ })
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if lease != nil {
+			lease.Release()
+		}
+	})
+	require.NoError(t, v.InstallBorrowedArea(area, lease))
+	lease.Release()
+	lease = nil
+	before := state.account.Snapshot().Used
+	err = v.Shuffle([]int64{1, 0}, mp)
+	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
+	require.Equal(t, before, state.account.Snapshot().Used)
+	require.Equal(t, first, v.GetStringAt(0))
+	require.Equal(t, second, v.GetStringAt(1))
+	require.Zero(t, releases)
+	v.Free(mp)
+	require.Equal(t, 1, releases)
+	require.Zero(t, mp.CurrNB())
+}

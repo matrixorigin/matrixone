@@ -505,6 +505,25 @@ func TestSortColumnsByIndexWithBuf(t *testing.T) {
 		require.GreaterOrEqual(t, cap(idxBuf), 50)
 	})
 
+	t.Run("key and companion ordering", func(t *testing.T) {
+		vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_int32.ToType())}
+		t.Cleanup(func() {
+			for _, v := range vecs {
+				v.Free(mp)
+			}
+		})
+		require.NoError(t, vector.AppendFixedList(vecs[0], []int32{3, 1, 2}, nil, mp))
+		require.NoError(t, vector.AppendFixedList(vecs[1], []int32{30, 10, 20}, nil, mp))
+		vecs[1].SetSorted(true)
+		var idxBuf []int64
+		var shuffleBuf []byte
+		require.NoError(t, SortColumnsByIndexWithBuf(vecs, 0, mp, &idxBuf, &shuffleBuf))
+		require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColNoTypeCheck[int32](vecs[0]))
+		require.Equal(t, []int32{10, 20, 30}, vector.MustFixedColNoTypeCheck[int32](vecs[1]))
+		require.True(t, vecs[0].GetSorted())
+		require.False(t, vecs[1].GetSorted())
+	})
+
 	t.Run("single element", func(t *testing.T) {
 		vecs := []*vector.Vector{vector.NewVec(types.T_int32.ToType())}
 		require.NoError(t, vector.AppendFixed[int32](vecs[0], int32(42), false, mp))
