@@ -2281,6 +2281,9 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 		return ddl.SubscriptionOption != nil
 	case *tree.CreatePitr, *tree.DropDatabase, *tree.CloneTable:
 		return true
+	case *tree.ShowIndexIgnored, *tree.ShowIndexStatus:
+		// their plans hold the state of the index jobs when they were built
+		return true
 	default:
 		return false
 	}

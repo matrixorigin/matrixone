@@ -198,7 +198,13 @@ func TestCompositeKeyFilterMergePhases(t *testing.T) {
 				require.Empty(t, node.BlockFilterList)
 			} else {
 				requireFuncNames(t, node.BlockFilterList, "prefix_eq", "=")
-				require.Len(t, node.BlockFilterList, 2, "compound and consumed component pruning survive without duplicates")
+				wantFilters := 2
+				if !tc.indexed {
+					// 非延迟路径重算统计时，也应保留普通列 c 的范围裁剪。
+					wantFilters++
+					requireFuncNames(t, node.BlockFilterList, ">")
+				}
+				require.Len(t, node.BlockFilterList, wantFilters, "compound and consumed component pruning survive without duplicates")
 			}
 			refs := make(map[[2]int32]int)
 			builder.countColRefs(0, refs)
