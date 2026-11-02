@@ -71,7 +71,8 @@ func digestIdentifierKey(name string) string {
 
 // digestSystemIdentifier converts quoted names for MySQL's system-charset
 // consumers. SQL digest storage still owns the original lexical bytes; quoted
-// hints instead store the converted name. Keep this separate from case folding.
+// hints use it only without doubled delimiters (compaction owns that byte path).
+// Keep this separate from case folding.
 func digestSystemIdentifier(name string) string {
 	var result strings.Builder
 	start := 0

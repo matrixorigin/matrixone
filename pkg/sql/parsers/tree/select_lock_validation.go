@@ -62,17 +62,19 @@ func validateDigestShowTableName(table *UnresolvedObjectName, database string) s
 // so a WITH encountered in the body remains effective for later operands and
 // ORDER BY. A true nested query gets a new frame and cannot mutate its parent.
 type selectLockScope struct {
-	outer           *selectLockScope
-	with            *selectLockWith
-	limit           int
-	nameKey         func(string) string
-	checkLocks      bool
-	checkTableNames bool
+	outer            *selectLockScope
+	with             *selectLockWith
+	limit            int
+	nameKey          func(string) string
+	checkLocks       bool
+	checkTableNames  bool
+	checkViewColumns bool
 }
 
 func (scope *selectLockScope) child() *selectLockScope {
 	return &selectLockScope{outer: scope, nameKey: scope.nameKey,
-		checkLocks: scope.checkLocks, checkTableNames: scope.checkTableNames}
+		checkLocks: scope.checkLocks, checkTableNames: scope.checkTableNames,
+		checkViewColumns: scope.checkViewColumns}
 }
 
 func validateExplainTableNames(stmt Statement, scope *selectLockScope) string {
@@ -145,6 +147,10 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 		}
 		if value.CanInterface() {
 			switch node := value.Interface().(type) {
+			case *CreateView:
+				return validateDigestViewNames(value.Elem(), node.ColNames, scope)
+			case *AlterView:
+				return validateDigestViewNames(value.Elem(), node.ColNames, scope)
 			case *ExplainStmt:
 				return validateExplainTableNames(node.Statement, scope)
 			case *ExplainAnalyze:
@@ -209,9 +215,14 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 	switch value.Kind() {
 	case reflect.Struct:
 		if value.CanInterface() {
+			node := value.Interface()
+			if column, ok := node.(SelectExpr); ok && scope.checkViewColumns &&
+				column.As != nil && (column.As.Origin() != "" || column.As.Quoted) && !validDigestViewColumnName(column.As.Origin()) {
+				return "Invalid view column name."
+			}
 			// Empty unquoted nodes represent implicit no-FROM inputs and
 			// unset optional DDL names. A real empty quoted name is distinct.
-			if name, ok := value.Interface().(TableName); ok &&
+			if name, ok := node.(TableName); ok &&
 				(name.ObjectName != "" || name.IsQuoted || name.ExplicitSchema || name.ExplicitCatalog) {
 				if scope.checkTableNames {
 					if err := validateDigestTableName(&name, false); err != "" {
@@ -242,6 +253,28 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 		}
 	}
 	return ""
+}
+
+func validDigestViewColumnName(name string) bool {
+	// A view's STRING alias can contain NUL even though SQL quoted
+	// identifiers cannot. MySQL checks only its C-string name prefix.
+	name, _, _ = strings.Cut(name, "\x00")
+	return ValidMySQLTableName(name)
+}
+
+func validateDigestViewNames(value reflect.Value, columns IdentifierList, scope *selectLockScope) string {
+	inner := *scope
+	if scope.checkTableNames {
+		for _, column := range columns {
+			if !validDigestViewColumnName(string(column)) {
+				return "Invalid view column name."
+			}
+		}
+		// Like table references, SELECT aliases inside CTE definitions are
+		// checked only when itemized. The explicit view list is checked above.
+		inner.checkViewColumns = true
+	}
+	return validateSelectLockValue(value, &inner)
 }
 
 func validateSelectLockDML(value reflect.Value, with *With, outer *selectLockScope, deleteAliases bool) string {

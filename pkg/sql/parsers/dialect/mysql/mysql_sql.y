@@ -194,6 +194,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     item interface{}
     pos int
     quotedIdentifier bool
+    singleTypePrecision bool
 }
 
 %union {
@@ -5482,6 +5483,7 @@ using_roles_opt:
 show_table_status_stmt:
     SHOW TABLE STATUS from_or_in_opt db_name_opt like_opt where_expression_opt
     {
+        if !digestShowDatabaseValid(yylex, $5, $<boolVal>5) { goto ret1 }
         $$ = &tree.ShowTableStatus{DbName: $5, Like: $6, Where: $7}
     }
 
@@ -5489,9 +5491,11 @@ from_or_in_opt:
     {}
 |    from_or_in
 
+// boolVal distinguishes an omitted database from an explicitly quoted empty one.
 db_name_opt:
-    {}
+    { $$ = ""; $<boolVal>$ = false }
 |    db_name
+    { $$ = $1; $<boolVal>$ = true }
 
 show_function_status_stmt:
     SHOW FUNCTION STATUS like_opt where_expression_opt
@@ -5581,10 +5585,12 @@ show_target:
     }
 |    TRIGGERS from_or_in_opt db_name_opt
     {
+        if !digestShowDatabaseValid(yylex, $3, $<boolVal>3) { goto ret1 }
         $$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowTriggers}
     }
 |    EVENTS from_or_in_opt db_name_opt
     {
+        if !digestShowDatabaseValid(yylex, $3, $<boolVal>3) { goto ret1 }
         $$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowEvents}
     }
 |    PLUGINS
@@ -5603,6 +5609,7 @@ show_target:
 show_index_stmt:
     SHOW extended_opt index_kwd table_column_name database_name_opt where_expression_opt
     {
+        if !digestShowDatabaseValid(yylex, $5, $<boolVal>5) { goto ret1 }
         $$ = &tree.ShowIndex{
             TableName: $4,
             DbName: $5,
@@ -5691,6 +5698,7 @@ show_sequences_stmt:
 show_tables_stmt:
     SHOW full_opt TABLES database_name_opt like_opt where_expression_opt table_snapshot_opt
     {
+        if !digestShowDatabaseValid(yylex, $4, $<boolVal>4) { goto ret1 }
         $$ = &tree.ShowTables{
             Open: false,
             Full: $2,
@@ -5728,6 +5736,7 @@ show_databases_stmt:
 show_columns_stmt:
     SHOW full_opt fields_or_columns table_column_name database_name_opt like_opt where_expression_opt
     {
+        if !digestShowDatabaseValid(yylex, $5, $<boolVal>5) { goto ret1 }
         $$ = &tree.ShowColumns{
             Ext: false,
             Full: $2,
@@ -5740,6 +5749,7 @@ show_columns_stmt:
     }
 |   SHOW EXTENDED full_opt fields_or_columns table_column_name database_name_opt like_opt where_expression_opt
     {
+        if !digestShowDatabaseValid(yylex, $6, $<boolVal>6) { goto ret1 }
         $$ = &tree.ShowColumns{
             Ext: true,
             Full: $3,
@@ -5811,10 +5821,12 @@ like_opt:
 database_name_opt:
     {
         $$ = ""
+        $<boolVal>$ = false
     }
 |   from_or_in ident
     {
         $$ = $2.Compare()
+        $<boolVal>$ = true
     }
 
 table_column_name:
@@ -8738,10 +8750,12 @@ as_name_opt:
 |   STRING
     {
         $$ = tree.NewCStr($1, 1)
+        $$.Quoted = yylex.(*Lexer).digest != nil
     }
 |   AS STRING
     {
         $$ = tree.NewCStr($2, 1)
+        $$.Quoted = yylex.(*Lexer).digest != nil
     }
 
 stmt_name:
@@ -12234,6 +12248,10 @@ charset_name:
 collate_name:
     name_string
 |   BINARY
+    {
+        if rejectDigestReservedKeyword(yylex, $1) { goto ret1 }
+        $$ = $1
+    }
 
 table_name_list:
     table_name
@@ -12722,11 +12740,11 @@ ident:
     }
 |   not_keyword
 	{
-		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
+		if rejectDigestReservedKeyword(yylex, $1) || rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 |   non_reserved_keyword
 	{
-		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
+		if rejectDigestReservedKeyword(yylex, $1) || rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 
 db_name_ident:
@@ -15803,6 +15821,7 @@ int_type:
 decimal_type:
     DOUBLE float_length_opt
     {
+        if yylex.(*Lexer).digest != nil && $<singleTypePrecision>2 { yylex.Error("DOUBLE requires a precision/scale pair"); goto ret1 }
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for double out of range (max = 255)")
@@ -15831,6 +15850,7 @@ decimal_type:
 |   DOUBLE PRECISION float_length_opt
     {
         // DOUBLE PRECISION is the SQL-standard synonym for DOUBLE (float64).
+        if yylex.(*Lexer).digest != nil && $<singleTypePrecision>3 { yylex.Error("DOUBLE requires a precision/scale pair"); goto ret1 }
         locale := ""
         if $3.DisplayWith > 255 {
             yylex.Error("Display width for double out of range (max = 255)")
@@ -15996,6 +16016,10 @@ decimal_type:
     }
 |   REAL float_length_opt
     {
+        if yylex.(*Lexer).digest != nil && ($<singleTypePrecision>2 ||
+            $2.Scale != tree.NotDefineDec && ($2.DisplayWith <= 0 || $2.Scale > $2.DisplayWith)) {
+            yylex.Error("invalid REAL precision/scale"); goto ret1
+        }
         locale := ""
         width := int32(64)
         oid := uint32(defines.MYSQL_TYPE_DOUBLE)
@@ -16120,6 +16144,7 @@ char_type:
     }
 |   VARCHAR length_option_opt
     {
+        if yylex.(*Lexer).digest != nil && $2 < 0 { yylex.Error("VARCHAR requires a length"); goto ret1 }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -16146,6 +16171,7 @@ char_type:
     }
 |   VARBINARY length_option_opt
     {
+        if yylex.(*Lexer).digest != nil && $2 < 0 { yylex.Error("VARBINARY requires a length"); goto ret1 }
         locale := ""
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -16561,6 +16587,7 @@ float_length_opt:
             DisplayWith: tree.NotDefineDisplayWidth,
             Scale: tree.NotDefineDec,
         }
+        $<singleTypePrecision>$ = false
     }
 |   '(' INTEGRAL ')'
     {
@@ -16570,6 +16597,7 @@ float_length_opt:
             DisplayWith: tree.GetDisplayWith(value),
             Scale: tree.NotDefineDec,
         }
+        $<singleTypePrecision>$ = true
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
@@ -16581,6 +16609,7 @@ float_length_opt:
             DisplayWith: tree.GetDisplayWith(width),
             Scale: scale,
         }
+        $<singleTypePrecision>$ = false
     }
 
 decimal_length_opt:
@@ -16595,8 +16624,10 @@ decimal_length_opt:
     {
         value, ok := typeLengthIntegral(yylex, $2)
         if !ok { goto ret1 }
+        width := tree.GetDisplayWith(value)
+        if yylex.(*Lexer).digest != nil && value == 0 { width = 0 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(value),
+            DisplayWith: width,
             Scale: 0,
         }
     }
@@ -16610,6 +16641,7 @@ decimal_length_opt:
             DisplayWith: tree.GetDisplayWith(width),
             Scale: scale,
         }
+        if yylex.(*Lexer).digest != nil && width == 0 && scale == 0 { $$.DisplayWith = 0 }
     }
 
 unsigned_opt:

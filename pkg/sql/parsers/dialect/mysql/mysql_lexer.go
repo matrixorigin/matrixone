@@ -409,6 +409,26 @@ func rejectSQLModeReservedFunctionName(yylex yyLexer, name string) bool {
 	return true
 }
 
+// Guard keyword-to-name reductions and MO-only lexer adaptations. Quoted and
+// lexically qualified tokens bypass this guard; type/function productions keep
+// their own grammar. Ordinary execution parsing retains its existing policy.
+func rejectDigestReservedKeyword(yylex yyLexer, name string) bool {
+	lexer := yylex.(*Lexer)
+	if lexer.digest == nil || !digestSymbols[digestKeywordUpper(name)].reserved {
+		return false
+	}
+	lexer.Error("reserved keyword cannot be used as an identifier")
+	return true
+}
+
+func digestShowDatabaseValid(yylex yyLexer, name string, explicit bool) bool {
+	if yylex.(*Lexer).digest == nil || !explicit || tree.ValidMySQLTableName(name) {
+		return true
+	}
+	yylex.Error("Invalid database name.")
+	return false
+}
+
 func (l *Lexer) GetParamIndex() int {
 	l.paramIndex = l.paramIndex + 1
 	return l.paramIndex
@@ -465,8 +485,14 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			typ, str = l.scanner.Scan()
 		} else if typ == ID && strings.EqualFold(str, "dual") && !l.scanner.qualifiedIdentifier {
 			typ = DIGEST_DUAL
+		} else if typ == ID && !l.scanner.qualifiedIdentifier && rejectDigestReservedKeyword(l, str) {
+			typ = LEX_ERROR
 		} else if typ == QUOTE_ID {
-			typ, str = ID, digestSystemIdentifier(str)
+			if strings.IndexByte(str, 0) >= 0 {
+				typ = LEX_ERROR
+			} else {
+				typ, str = ID, digestSystemIdentifier(str)
+			}
 		} else if typ == ID && l.lastToken != '.' && digestCharsetIntroducer(str) {
 			typ = UNDERSCORE_BINARY
 		} else if typ == ASSIGNMENT && l.lastToken == AT_ID {
@@ -528,11 +554,14 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		return l.toFloat(lval, str)
 	}
 
-	// Allow reserved keywords as aliases after AS.
-	// MySQL treats most keywords as identifiers in alias context, e.g.:
-	//   SELECT NOW() AS current_time, COUNT(*) AS rows FROM t
+	// Preserve MO's permissive ordinary AS aliases, but digest parsing must
+	// retain MySQL's reserved-word restrictions (including ROWS/CURRENT_TIME).
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
-		typ = ID
+		if rejectDigestReservedKeyword(l, str) {
+			typ = LEX_ERROR
+		} else {
+			typ = ID
+		}
 	}
 	// CONFIG is a MatrixOne contextual keyword used by SHOW CONFIG and ALTER
 	// ACCOUNT CONFIG. MySQL otherwise treats it as a non-reserved identifier.
@@ -883,6 +912,14 @@ func validateSelectIntoStatements(lexer *Lexer) error {
 		// WITH/CTE scope is complete only at this boundary. Avoid a query-tree
 		// walk on the ordinary zero/single-lock path.
 		checkNames := lexer.digest != nil && lexer.digest.checkTableNames
+		if lexer.digest != nil {
+			switch stmt.(type) {
+			case *tree.CreateView, *tree.AlterView:
+				// View aliases can be STRING tokens, and their stricter name
+				// policy applies even in nested referenced query expressions.
+				checkNames = true
+			}
+		}
 		if lexer.selectLockClauses > 1 || checkNames {
 			nameKey := strings.ToLower
 			if lexer.digest != nil {

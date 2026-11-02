@@ -604,6 +604,84 @@ SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME("a😀b") */ 1'), STATEMENT_DIG
 ➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME("a😀b") */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME("a😀b") */ 1)[12,64,0]  𝄀
 SELECT /*+ QB_NAME ( `a?b` ) */ ?  ¦  ababa4f14df26b316e891beb9aff9b5fffc2bc8171ddd6df98fe9139ba24d1eb
 SET sql_mode = '';
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t (`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` INT)');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t (`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` INT)');
+➤ STATEMENT_DIGEST_TEXT(CREATE TABLE t (`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` INT))[-1,536870911,0]  𝄀
+CREATE TABLE `t` ( `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` INTEGER )
+SELECT STATEMENT_DIGEST_TEXT('ALTER TABLE t MODIFY `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` INT');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('ALTER TABLE t CHANGE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` a INT');
+➤ STATEMENT_DIGEST_TEXT(ALTER TABLE t CHANGE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` a INT)[-1,536870911,0]  𝄀
+ALTER TABLE `t` CHANGE ...`a` INTEGER
+SELECT STATEMENT_DIGEST_TEXT('CREATE VIEW v (`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) AS SELECT 1');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('ALTER VIEW v (`aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) AS SELECT 1');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('CREATE VIEW v AS WITH c AS (SELECT 1 AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT 1');
+➤ STATEMENT_DIGEST_TEXT(CREATE VIEW v AS WITH c AS (SELECT 1 AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT 1)[-1,536870911,0]  𝄀
+CREATE VIEW `v` AS WITH `c` AS ( SELECT ? AS ...) SELECT ?
+SELECT STATEMENT_DIGEST_TEXT('CREATE VIEW v AS WITH c AS (SELECT 1 AS `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`) SELECT * FROM c');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('CREATE VIEW v AS SELECT 1 AS ''''');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT(CONCAT('CREATE VIEW v AS SELECT 1 AS ''a', CHAR(0), REPEAT('b', 65), ''''));
+➤ STATEMENT_DIGEST_TEXT(CONCAT(CREATE VIEW v AS SELECT 1 AS 'a, CHAR(0), REPEAT(b, 65), '))[-1,536870911,0]  𝄀
+CREATE VIEW `v` AS SELECT ? AS ?
+SELECT STATEMENT_DIGEST_TEXT(CONCAT('CREATE VIEW v AS SELECT 1 AS ''', CHAR(0), ''''));
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SHOW TABLES FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SHOW TABLE STATUS FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SHOW TRIGGERS FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SHOW EVENTS FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SHOW OPEN TABLES FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+➤ STATEMENT_DIGEST_TEXT(SHOW OPEN TABLES FROM `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`)[-1,536870911,0]  𝄀
+SHOW OPEN TABLES FROM ...
+SELECT STATEMENT_DIGEST_TEXT('SHOW CREATE DATABASE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`');
+➤ STATEMENT_DIGEST_TEXT(SHOW CREATE DATABASE `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`)[-1,536870911,0]  𝄀
+SHOW CREATE SCHEMA ...
+SELECT STATEMENT_DIGEST_TEXT('SHOW COLUMNS FROM t FROM ``');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SHOW INDEX FROM t FROM ``');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SELECT integer FROM t');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SELECT t.integer FROM t'), STATEMENT_DIGEST('SELECT t.integer FROM t');
+➤ STATEMENT_DIGEST_TEXT(SELECT t.integer FROM t)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT t.integer FROM t)[12,64,0]  𝄀
+SELECT `t` . `integer` FROM `t`  ¦  1750019b018ed067b487862ae4b013154ccf9f5ee928902cbeaaf819465b6395
+SELECT STATEMENT_DIGEST_TEXT('SELECT `integer` FROM t'), STATEMENT_DIGEST('SELECT `integer` FROM t');
+➤ STATEMENT_DIGEST_TEXT(SELECT `integer` FROM t)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT `integer` FROM t)[12,64,0]  𝄀
+SELECT `integer` FROM `t`  ¦  9a702d5565986f70da155584fbc7aa8df7bbdf1f40b1b86c723963b559e41588
+SELECT STATEMENT_DIGEST_TEXT('SELECT date, text, signed FROM t');
+➤ STATEMENT_DIGEST_TEXT(SELECT date, text, signed FROM t)[-1,536870911,0]  𝄀
+SELECT DATE , TEXT , SIGNED FROM `t`
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t (a INTEGER, b DEC(0), c FLOAT4, d FLOAT8, e MIDDLEINT, f VARCHARACTER(0))');
+➤ STATEMENT_DIGEST_TEXT(CREATE TABLE t (a INTEGER, b DEC(0), c FLOAT4, d FLOAT8, e MIDDLEINT, f VARCHARACTER(0)))[-1,536870911,0]  𝄀
+CREATE TABLE `t` ( `a` INTEGER , `b` DECIMAL (?) , `c` FLOAT4 , `d` FLOAT8 , `e` MIDDLEINT , `f` VARCHARACTER (?) )
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t (a DOUBLE(1))');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME(`a😀b```) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME(`a😀b```) */ 1');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME(`a😀b```) */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME(`a😀b```) */ 1)[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( ) */ ?  ¦  c3ab319ece7b992ec51f33f4a9862fbd14f0ed0c316a1a21ad66e7b755dc0f9d
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME(```a😀b`) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME(```a😀b`) */ 1');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME(```a😀b`) */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME(```a😀b`) */ 1)[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( ) */ ?  ¦  dd7e2c5113ed1d681da4b87308c3fb16db112aa9a9d4c445e35391455ce474bb
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ INDEX(t@`a``😀b` i) */ 1 FROM t'), STATEMENT_DIGEST('SELECT /*+ INDEX(t@`a``😀b` i) */ 1 FROM t');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ INDEX(t@`a``😀b` i) */ 1 FROM t)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ INDEX(t@`a``😀b` i) */ 1 FROM t)[12,64,0]  𝄀
+SELECT /*+ INDEX ( `t`@`i` ) */ ? FROM `t`  ¦  959dd6490e6ad59e1777927e697eb54d33406349158e12d022ae18067c0a24ff
+SET sql_mode = 'ANSI_QUOTES';
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME("a😀b""") */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME("a😀b""") */ 1');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME("a😀b""") */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME("a😀b""") */ 1)[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( ) */ ?  ¦  80127159ee3de772227d4317c7b0295b1f0ca5b71a382be8a86389b288e93210
+SET sql_mode = 'NO_BACKSLASH_ESCAPES';
+SELECT STATEMENT_DIGEST_TEXT('SELECT /*+ QB_NAME(`a😀b```) */ 1'), STATEMENT_DIGEST('SELECT /*+ QB_NAME(`a😀b```) */ 1');
+➤ STATEMENT_DIGEST_TEXT(SELECT /*+ QB_NAME(`a😀b```) */ 1)[-1,536870911,0]  ¦  STATEMENT_DIGEST(SELECT /*+ QB_NAME(`a😀b```) */ 1)[12,64,0]  𝄀
+SELECT /*+ QB_NAME ( ) */ ?  ¦  c3ab319ece7b992ec51f33f4a9862fbd14f0ed0c316a1a21ad66e7b755dc0f9d
+SET sql_mode = '';
 SET sql_mode = @digest_saved_sql_mode;
 DROP TABLE IF EXISTS statement_digest_metadata;
 CREATE TABLE statement_digest_metadata AS SELECT STATEMENT_DIGEST('SELECT 1') AS digest, STATEMENT_DIGEST_TEXT('SELECT 1') AS normalized;

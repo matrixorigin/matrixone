@@ -40,6 +40,29 @@ func BenchmarkDigestTableNameContext(b *testing.B) {
 	}
 }
 
+// View aliases require contextualization even without a suspicious identifier.
+// Compare identical query bodies with and without the view-only policy/walk.
+func BenchmarkDigestViewNameContext(b *testing.B) {
+	for _, depth := range []int{128, 512, 1536} {
+		body := strings.Repeat("SELECT 1 UNION (", depth) + "SELECT 1 AS a" + strings.Repeat(")", depth)
+		for _, view := range []bool{false, true} {
+			sql := body
+			if view {
+				sql = "CREATE VIEW v AS " + body
+			}
+			b.Run(fmt.Sprintf("depth=%d/view=%t", depth, view), func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(len(sql)))
+				for b.Loop() {
+					if _, _, err := StatementDigest(b.Context(), sql, ""); err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkNestedSetQueryContext(b *testing.B) {
 	for _, depth := range []int{128, 512, 1536} {
 		sql := strings.Repeat("SELECT 1 UNION (", depth) + "SELECT 1" + strings.Repeat(")", depth)

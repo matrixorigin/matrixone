@@ -1117,6 +1117,22 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 		lower = strings.ToLower(keywordName)
 	}
 	if keywordID, found := keywords[lower]; found {
+		if s.digestMode && keywordID == UNUSED {
+			// Native synonyms (DEC/DECIMAL, for example) share one encoded
+			// token. Reuse an available grammar token without changing ordinary
+			// execution keywords or the digest's original spelling/identity.
+			if symbol, ok := digestSymbols[digestKeywordUpper(keywordName)]; ok {
+				// Digest display spellings may themselves be unsupported
+				// aliases (FLOAT4/MIDDLEINT/VARCHARACTER). Select the grammar
+				// owner by shared native token identity, not display text.
+				for _, name := range [...]string{"DECIMAL", "FLOAT", "DOUBLE", "MEDIUMINT", "VARCHAR"} {
+					if symbol.id == digestSymbols[name].id {
+						keywordID = keywords[strings.ToLower(name)]
+						break
+					}
+				}
+			}
+		}
 		if isSQLModeSensitiveFunctionName(lower) && (!s.sqlMode.Has(SQLModeIgnoreSpace) || s.digestMode) {
 			pos := s.skipBlankAndCommentsFrom(s.Pos)
 			if pos != s.Pos && pos < len(s.buf) && s.buf[pos] == '(' {

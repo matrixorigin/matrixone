@@ -407,7 +407,15 @@ func digestSyntaxValid(statement tree.Statement) bool {
 
 func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 	// Mirror column-attribute contextualization, not DDL execution. Attribute
-	// order matters; a table-level primary key is not applied here.
+	// order matters; a table-level primary key is not applied here. New column
+	// definitions check character length, not execution-time empty/trailing-
+	// space rules. Old names in CHANGE/DROP/RENAME have a different contract.
+	if column.Name.NumParts != 1 {
+		return false
+	}
+	if name := column.Name.ColNameOrigin(); len(name) > 64 && utf8.RuneCountInString(name) > 64 {
+		return false
+	}
 	if typ, ok := column.Type.(*tree.T); ok &&
 		(typ.InternalType.Family == tree.TimestampFamily || typ.InternalType.Family == tree.TimeFamily) &&
 		(typ.InternalType.Scale < 0 || typ.InternalType.Scale > 6) {
@@ -697,13 +705,17 @@ func scanDigestHintQuoted(s *Scanner) (int, string) {
 	if s.cur() == quote && s.peek(1) != quote {
 		return LEX_ERROR, ""
 	}
+	start := s.Pos
 	kind, value := s.scanLiteralIdentifierWithDelim(quote)
 	if kind == LEX_ERROR || !utf8.ValidString(value) {
 		return LEX_ERROR, ""
 	}
-	// Quoted hints are converted to the system charset before digest storage;
-	// unquoted names retain their client bytes and convert only for display.
-	value = digestSystemIdentifier(value)
+	// MySQL's hint compact() rewrites from the original client bytes when
+	// doubled delimiters occur, overriding the earlier charset conversion.
+	// Without doubling, the system-charset conversion owns stored bytes.
+	if s.Pos-start-1 == len(value) {
+		value = digestSystemIdentifier(value)
+	}
 	if quote == '\'' || quote == '"' && !s.sqlMode.Has(SQLModeANSIQuotes) {
 		kind = STRING
 	}
