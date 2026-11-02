@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,6 +26,73 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+// Column inputs keep constant folding from hiding an unnecessary cast chain.
+func TestTemporalMathBinderUsesDirectDoubleCast(t *testing.T) {
+	for _, oid := range []types.T{types.T_date, types.T_datetime, types.T_time, types.T_timestamp} {
+		for _, name := range []string{"abs", "sign", "sqrt", "floor", "ceil", "ceiling", "round", "truncate"} {
+			t.Run(oid.String()+"/"+name, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				source := oid.ToType()
+				if oid != types.T_date {
+					source.Scale = 6
+				}
+				mock.ctxt.tables["nation"].Cols[0].Typ = source.PlanType()
+				args := "n_nationkey"
+				if name == "round" || name == "truncate" {
+					args += ", 2"
+				}
+				p, err := runOneStmt(mock, t, fmt.Sprintf("select %s(%s) from nation", name, args))
+				require.NoError(t, err)
+				q := p.GetQuery()
+				math := q.Nodes[q.Steps[0]].ProjectList[0].GetF()
+				require.NotNil(t, math)
+				require.NotEmpty(t, math.Args)
+				converted := math.Args[0]
+				require.Equal(t, int32(types.T_float64), converted.Typ.Id)
+				cast := converted.GetF()
+				require.NotNil(t, cast)
+				require.Equal(t, "cast", cast.Func.ObjName)
+				require.Len(t, cast.Args, 2)
+				require.NotNil(t, cast.Args[0].GetCol(), "DOUBLE must consume the temporal column directly, not a DECIMAL cast")
+				require.Equal(t, int32(oid), cast.Args[0].Typ.Id)
+				require.Equal(t, source.Scale, cast.Args[0].Typ.Scale)
+			})
+		}
+	}
+}
+
+func TestTemporalCastBridgeOnlyForUnsupportedTargets(t *testing.T) {
+	for _, oid := range []types.T{types.T_date, types.T_datetime, types.T_time, types.T_timestamp} {
+		for _, target := range []struct {
+			typ    types.Type
+			bridge bool
+		}{
+			{types.T_float64.ToType(), false},
+			{types.T_float32.ToType(), true},
+			{types.New(types.T_decimal256, 50, 6), true},
+		} {
+			t.Run(oid.String()+"/"+target.typ.String(), func(t *testing.T) {
+				sourceType := oid.ToType()
+				if oid != types.T_date {
+					sourceType.Scale = 6
+				}
+				source := GetColExpr(sourceType.PlanType(), 0, 0)
+				converted, err := appendCastBeforeExpr(context.Background(), source, target.typ.PlanType())
+				require.NoError(t, err)
+				require.Equal(t, int32(target.typ.Oid), converted.Typ.Id)
+				input := converted.GetF().Args[0]
+				if target.bridge {
+					require.Equal(t, int32(types.T_decimal128), input.Typ.Id)
+					require.Equal(t, int32(38), input.Typ.Width)
+					require.Equal(t, sourceType.Scale, input.Typ.Scale)
+					input = input.GetF().Args[0]
+				}
+				require.Same(t, source, input)
+			})
+		}
+	}
+}
 
 func TestTemporalContextSQLExpressions(t *testing.T) {
 	for _, tc := range []struct {
