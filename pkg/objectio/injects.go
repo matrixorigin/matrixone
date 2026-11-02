@@ -171,6 +171,16 @@ const (
 	// cap keeps its production value.
 	FJ_CNDataBranchPkMoveLinkProbeBudget = "fj/cn/data_branch_pk_move_link_probe_budget"
 
+	// FJ_CNDataBranchPkMoveLinkStampFailed is a test-only fault that makes
+	// the commit-completion stamping of staged pk-move link rows skip its
+	// work, leaving every staged link's commit_ts NULL. BVT fixtures arm it
+	// to prove the D227 stamp-pending recovery channel: MERGE/PICK applies
+	// must resolve the exact cascade through the outcome table even when
+	// the best-effort stamping never ran. The sarg optionally scopes the
+	// skip to one account (name or numeric id); an empty sarg arms every
+	// account.
+	FJ_CNDataBranchPkMoveLinkStampFailed = "fj/cn/data_branch_pk_move_link_stamp_fails"
+
 	// FJ_ArrowLoadRolloutWait is a test-only post-admission/pre-publication
 	// barrier. Arrow's reader triggers it after a range has been admitted and
 	// converted, but before the batch is published to the LOAD pipeline, so a
@@ -454,6 +464,21 @@ func CNDataBranchPkMoveLinkProbeBudgetInjected(tableID uint64) (int64, bool) {
 		return 0, false
 	}
 	return iarg, true
+}
+
+// CNDataBranchPkMoveLinkStampFailedInjected reports whether the test-only
+// FJ_CNDataBranchPkMoveLinkStampFailed kill switch is armed for accountID;
+// the sarg selects the account whose stamping must be skipped (empty sarg
+// arms every account).
+func CNDataBranchPkMoveLinkStampFailedInjected(accountID uint32) bool {
+	_, sarg, injected := fault.TriggerFault(FJ_CNDataBranchPkMoveLinkStampFailed)
+	if !injected {
+		return false
+	}
+	if sarg == "" {
+		return true
+	}
+	return sarg == strconv.FormatUint(uint64(accountID), 10)
 }
 
 // CNReenterSnapshotOffsetOnGetTableInjected reports whether the

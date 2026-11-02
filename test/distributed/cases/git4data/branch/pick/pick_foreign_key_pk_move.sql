@@ -2572,14 +2572,22 @@ data branch pick stail_s into stail_p keys(3) when conflict accept;
 select id, v from stail_p order by id;
 select id, pid from stail_c order by id;
 
--- r59 review F1 (issue #28026): a truncated foreign arrival must fail
--- the tail fold CLOSED at commit time, never at creation time. A moves
--- 1->2 in its own transaction; one later transaction (creation instant
--- distinct from its commit instant) deletes A's landed row at 2 and
--- moves B through 3->4->...->42->2 in forty hops, so B's origin's
--- grounding tombstone commits in-window beyond the attribution hop cap.
--- Picking A's old key (1) must reject the unresolved evidence
--- atomically, leaving every destination parent/child row unchanged.
+-- r59 review F1 (issue #28026), expectation updated at r115: a foreign
+-- lineage's arrival at the death key never clouds the lineage's own
+-- attributable death. A moves 1->2 in its own transaction; one later
+-- transaction (creation instant distinct from its commit instant)
+-- deletes A's landed row at 2 and moves B through 3->4->...->42->2 in
+-- forty hops. The departed-birth-pinned pairing index serves A's death
+-- at 2 directly (the departed birth equals the running certificate), so
+-- B's chain is never walked and its length is irrelevant: picking A's
+-- old key (1) applies A's proven deletion as an exact DELETE cascade,
+-- leaving B's destination rows untouched -- the same verdict the stail
+-- short-chain sibling above already produced. (Before r115 the
+-- key-chained walk could only ground B's arrival by walking B's chain,
+-- so this fixture exceeded the attribution hop cap and asserted the
+-- conservative abort; the hop-cap fail-closed posture itself stays
+-- covered by the injected probe-budget case above and by
+-- TestPkMoveLinkProbeBudgetAndBounds.)
 create table tc_p (id int primary key, v varchar(16));
 create table tc_c (id int primary key, pid int,
     constraint fk_tc foreign key (pid) references tc_p(id) on update cascade on delete cascade);
@@ -2630,7 +2638,6 @@ update tc_s set id=41 where id=40;
 update tc_s set id=42 where id=41;
 update tc_s set id=2 where id=42;
 commit;
--- @regex("could not be resolved completely", true)
 data branch pick tc_s into tc_p keys(1) when conflict accept;
 select id, v from tc_p order by id;
 select id, pid from tc_c order by id;
@@ -2698,6 +2705,239 @@ delete from sn_src where id = 3;
 update sn_src set id = 3 where id = 2;
 data branch pick sn_src into sn_t keys(2,3) when conflict accept;
 select id, pid, v from sn_t order by id;
+
+-- r106 review (issue #28026): PICK flavor of the cross-fork straddler.
+-- Transaction X begins on the parent BEFORE the source fork exists,
+-- moves the inherited row on the parent, and commits AFTER the source
+-- forked: its link stays visible to the probe (write_ts is X's create
+-- instant), but X's commit instant lies outside the parent segment of
+-- the source's lineage, so windowed commit-exact admission excludes it.
+-- The source's own in-window move still applies as one native UPDATE and
+-- the child cascades.
+set session transaction isolation level read committed;
+create table pfs_p (id int primary key, v varchar(16));
+insert into pfs_p values (1, 'one');
+data branch create table pfs_d from pfs_p;
+create table pfs_c (id int primary key, pid int,
+    constraint fk_pfs foreign key (pid) references pfs_d(id) on update cascade
+);
+insert into pfs_c values (900, 1);
+-- @session:id=2{
+use branch_pick_fk_pk_move;
+begin;
+update pfs_p set id = 2, v = 'oneP' where id = 1;
+-- @session}
+data branch create table pfs_s from pfs_p;
+-- @session:id=2{
+commit;
+-- @session}
+update pfs_s set id = 3, v = 'oneS' where id = 1;
+set @pfsp = (select rel_id from mo_catalog.mo_tables where relname = 'pfs_p' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @pfsp and commit_ts is not null;
+set @pfss = (select rel_id from mo_catalog.mo_tables where relname = 'pfs_s' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @pfss and commit_ts is not null;
+data branch pick pfs_s into pfs_d keys(1) when conflict accept;
+select id, v from pfs_d order by id;
+select id, pid from pfs_c order by id;
+
+-- r109 review (issue #28026): the same cross-fork straddler with its
+-- commit stamping suppressed resolves through the recovery outcome
+-- table: the straddler's stream-bound identity has no in-window death on
+-- the complete retained stream, so the link is excluded as proven window
+-- absence — never loudly — and the in-window child move still applies as
+-- one native UPDATE with the cascade.
+create table pfu_p (id int primary key, v varchar(16));
+insert into pfu_p values (1, 'one');
+data branch create table pfu_d from pfu_p;
+create table pfu_c (id int primary key, pid int,
+    constraint fk_pfu foreign key (pid) references pfu_d(id) on update cascade
+);
+insert into pfu_c values (900, 1);
+-- @session:id=2{
+use branch_pick_fk_pk_move;
+begin;
+update pfu_p set id = 2, v = 'oneP' where id = 1;
+-- @session}
+data branch create table pfu_s from pfu_p;
+select enable_fault_injection();
+select add_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails',':::','echo',0,'0');
+-- @session:id=2{
+commit;
+-- @session}
+select remove_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails');
+select disable_fault_injection();
+update pfu_s set id = 3, v = 'oneS' where id = 1;
+set @pfup = (select rel_id from mo_catalog.mo_tables where relname = 'pfu_p' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @pfup and commit_ts is null;
+set @pfus = (select rel_id from mo_catalog.mo_tables where relname = 'pfu_s' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @pfus and commit_ts is not null;
+data branch pick pfu_s into pfu_d keys(1) when conflict accept;
+select id, v from pfu_d order by id;
+select id, pid from pfu_c order by id;
+
+-- r107 review (issue #28026): the same cross-fork straddler must not turn
+-- a sibling branch's independent DELETE/INSERT into an update cascade.
+-- The source's same-key delete+insert names the inherited row identity
+-- the straddler's out-of-window link also names; with the candidate
+-- excluded (the probe below shows the straddler's link on pfd_p and zero
+-- links on pfd_s), zero admissible links is proven absence, so the pick
+-- keeps plain legacy delete+insert replay: the destination accepts the
+-- sibling's replacement parent row at key 1, the child keeps referencing
+-- key 1 (now held by the replacement row), and there is no UPDATE
+-- cascade to key 2 and no provenance abort. The pre-fix probe poisoned
+-- the shared identity and aborted this schedule. An earlier revision of
+-- this fixture asserted a RESTRICT rejection instead, but legacy
+-- same-key delete+insert apply succeeds on the post-apply foreign-key
+-- state (control-proven with no links at all).
+create table pfd_p (id int primary key, v varchar(16));
+insert into pfd_p values (1, 'one');
+data branch create table pfd_d from pfd_p;
+create table pfd_c (id int primary key, pid int,
+    constraint fk_pfd foreign key (pid) references pfd_d(id) on update cascade
+);
+insert into pfd_c values (900, 1);
+-- @session:id=2{
+use branch_pick_fk_pk_move;
+begin;
+update pfd_p set id = 2, v = 'oneP' where id = 1;
+-- @session}
+data branch create table pfd_s from pfd_p;
+-- @session:id=2{
+commit;
+-- @session}
+begin;
+delete from pfd_s where id = 1;
+insert into pfd_s values (1, 'oneS');
+commit;
+set @pfdp = (select rel_id from mo_catalog.mo_tables where relname = 'pfd_p' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @pfdp;
+set @pfds = (select rel_id from mo_catalog.mo_tables where relname = 'pfd_s' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @pfds;
+data branch pick pfd_s into pfd_d keys(1) when conflict accept;
+select id, v from pfd_d order by id;
+select id, pid from pfd_c order by id;
+
+-- r108 review (issue #28026): the harder shape — ONE transaction begun
+-- before the fork performs BOTH the ancestor move and the sibling's
+-- independent DELETE/INSERT in a single commit, so the candidate link's
+-- commit instant EQUALS the departure instant yet lies outside its own
+-- attributed window. Windowed admission still excludes it (the probe
+-- below shows the link on pfo_p and zero links on pfo_s): the pick
+-- keeps plain legacy delete+insert replay — the destination accepts the
+-- sibling's replacement parent row at key 1, the child keeps referencing
+-- key 1, and there is no UPDATE cascade to key 2 and no provenance
+-- abort. See the pfd case above for the RESTRICT-rejection correction.
+create table pfo_p (id int primary key, v varchar(16));
+insert into pfo_p values (1, 'one');
+data branch create table pfo_d from pfo_p;
+create table pfo_c (id int primary key, pid int,
+    constraint fk_pfo foreign key (pid) references pfo_d(id) on update cascade
+);
+insert into pfo_c values (900, 1);
+-- @session:id=2{
+use branch_pick_fk_pk_move;
+begin;
+-- @session}
+data branch create table pfo_s from pfo_p;
+-- @session:id=2{
+update pfo_p set id = 2, v = 'oneP' where id = 1;
+delete from pfo_s where id = 1;
+insert into pfo_s values (1, 'oneS');
+commit;
+-- @session}
+set @pfop = (select rel_id from mo_catalog.mo_tables where relname = 'pfo_p' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @pfop;
+set @pfos = (select rel_id from mo_catalog.mo_tables where relname = 'pfo_s' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @pfos;
+data branch pick pfo_s into pfo_d keys(1) when conflict accept;
+select id, v from pfo_d order by id;
+select id, pid from pfo_c order by id;
+
+-- r113 review (issue #28026): PICK KEYS(2) of an attributable
+-- cross-transaction return to an INTERMEDIATE vacated key (2->3->4->3
+-- through three separately committed moves, the destination anchor
+-- holding key 2) is ALWAYS one native UPDATE 2->3 — the primary key
+-- itself changes even when the non-key payload is unchanged, so the
+-- no-op shape is reserved for a return to the ORIGINAL key. Changed
+-- payload first: the destination gains the exact parent key-3 row and
+-- the child cascades to pid=3.
+create table l4c_p (id int primary key, v varchar(16));
+create table l4c_c (id int primary key, pid int,
+    constraint fk_l4c foreign key (pid) references l4c_p(id) on update cascade
+);
+insert into l4c_p values (2, 'two');
+insert into l4c_c values (900, 2);
+data branch create table l4c_s from l4c_p;
+update l4c_s set id = 3 where id = 2;
+update l4c_s set id = 4 where id = 3;
+update l4c_s set id = 3, v = 'twoX' where id = 4;
+set @l4cl = (select rel_id from mo_catalog.mo_tables where relname = 'l4c_s' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @l4cl and commit_ts is not null;
+data branch pick l4c_s into l4c_p keys(2) when conflict accept;
+select id, v from l4c_p order by id;
+select id, pid from l4c_c order by id;
+
+-- Unchanged-payload twin: the complete image returns to the intermediate
+-- key byte-identical, and the fold is STILL one native UPDATE 2->3.
+create table l4u_p (id int primary key, v varchar(16));
+create table l4u_c (id int primary key, pid int,
+    constraint fk_l4u foreign key (pid) references l4u_p(id) on update cascade
+);
+insert into l4u_p values (2, 'two');
+insert into l4u_c values (900, 2);
+data branch create table l4u_s from l4u_p;
+update l4u_s set id = 3 where id = 2;
+update l4u_s set id = 4 where id = 3;
+update l4u_s set id = 3 where id = 4;
+set @l4ul = (select rel_id from mo_catalog.mo_tables where relname = 'l4u_s' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @l4ul and commit_ts is not null;
+data branch pick l4u_s into l4u_p keys(2) when conflict accept;
+select id, v from l4u_p order by id;
+select id, pid from l4u_c order by id;
+
+-- Stamp-pending forms: every link of the chain is left NULL-stamped
+-- (stamping-failure injection), each hop heals from the protected
+-- stream's unique in-window death, and the fold is the same one native
+-- UPDATE 2->3 in both payload forms.
+create table l4cf_p (id int primary key, v varchar(16));
+create table l4cf_c (id int primary key, pid int,
+    constraint fk_l4cf foreign key (pid) references l4cf_p(id) on update cascade
+);
+insert into l4cf_p values (2, 'two');
+insert into l4cf_c values (900, 2);
+data branch create table l4cf_s from l4cf_p;
+select enable_fault_injection();
+select add_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails',':::','echo',0,'0');
+update l4cf_s set id = 3 where id = 2;
+update l4cf_s set id = 4 where id = 3;
+update l4cf_s set id = 3, v = 'twoX' where id = 4;
+select remove_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails');
+select disable_fault_injection();
+set @l4cfl = (select rel_id from mo_catalog.mo_tables where relname = 'l4cf_s' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @l4cfl and commit_ts is null;
+data branch pick l4cf_s into l4cf_p keys(2) when conflict accept;
+select id, v from l4cf_p order by id;
+select id, pid from l4cf_c order by id;
+
+create table l4uf_p (id int primary key, v varchar(16));
+create table l4uf_c (id int primary key, pid int,
+    constraint fk_l4uf foreign key (pid) references l4uf_p(id) on update cascade
+);
+insert into l4uf_p values (2, 'two');
+insert into l4uf_c values (900, 2);
+data branch create table l4uf_s from l4uf_p;
+select enable_fault_injection();
+select add_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails',':::','echo',0,'0');
+update l4uf_s set id = 3 where id = 2;
+update l4uf_s set id = 4 where id = 3;
+update l4uf_s set id = 3 where id = 4;
+select remove_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails');
+select disable_fault_injection();
+set @l4ufl = (select rel_id from mo_catalog.mo_tables where relname = 'l4uf_s' and reldatabase = 'branch_pick_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @l4ufl and commit_ts is null;
+data branch pick l4uf_s into l4uf_p keys(2) when conflict accept;
+select id, v from l4uf_p order by id;
+select id, pid from l4uf_c order by id;
 
 drop database branch_pick_fk_pk_move;
 

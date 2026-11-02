@@ -394,6 +394,28 @@ const (
 	// the recorder always has its operator id) and falls back to the
 	// create-timestamp namespace.
 	DataBranchUpdateLinkColTxnID = "txn_id"
+	// DataBranchUpdateLinkTSBytes is the fixed width of a stored full
+	// precision transaction timestamp (types.TS: 8-byte physical plus
+	// 4-byte logical), so two commits inside one physical instant stay
+	// distinguishable.
+	DataBranchUpdateLinkTSBytes = 12
+	// DataBranchUpdateLinkColCommitTS is the recording transaction's
+	// commit instant, stamped best-effort by a CN commit-completion hook
+	// after TN assigns it. NULL marks durable stamp-pending intent; the
+	// consumer recovers it from the protected change stream or the
+	// transaction's own recorded continuity.
+	DataBranchUpdateLinkColCommitTS = "commit_ts"
+	// DataBranchUpdateLinkColSuccLinkID is the commit-time fixup's
+	// recorded same-transaction continuation credential: the link id of
+	// the same transaction's retained link departing this link's new_pk
+	// at the smallest later statement ordinal, or NULL when the
+	// generation is terminal. The walk follows ONLY this pairing and
+	// never falls back to a bare timestamp claim.
+	DataBranchUpdateLinkColSuccLinkID = "succ_link_id"
+	// DataBranchUpdateLinkColStmtSeq is the staging statement's ordinal
+	// inside the recording transaction; the pairing picks the smallest
+	// strictly greater ordinal departing the arrived key.
+	DataBranchUpdateLinkColStmtSeq = "stmt_seq"
 
 	// MO_DATA_BRANCH_LINK_RETENTION records, per table id, the catalog
 	// identity of every retained dead table whose pk-move links a

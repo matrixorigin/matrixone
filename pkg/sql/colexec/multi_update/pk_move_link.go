@@ -488,6 +488,26 @@ func collectUpdatePkMoveLinkRows(
 			bat.Clean(proc.Mp())
 			return nil, err
 		}
+		// commit_ts: stamped best-effort by the CN commit-completion hook
+		// once TN assigns the commit instant; NULL is durable stamp-pending
+		// intent the consumer recovers from the protected change stream or
+		// the transaction's own recorded continuity.
+		if err = vector.AppendBytes(bat.Vecs[10], nil, true, proc.Mp()); err != nil {
+			bat.Clean(proc.Mp())
+			return nil, err
+		}
+		// succ_link_id: recorded by the commit-time pairing fixup over the
+		// converged post-prune link set; NULL means terminal generation.
+		if err = vector.AppendBytes(bat.Vecs[11], nil, true, proc.Mp()); err != nil {
+			bat.Clean(proc.Mp())
+			return nil, err
+		}
+		// stmt_seq placeholder: the workspace fill hook stamps the staging
+		// statement's ordinal when this write is staged.
+		if err = vector.AppendFixed[uint64](bat.Vecs[12], 0, false, proc.Mp()); err != nil {
+			bat.Clean(proc.Mp())
+			return nil, err
+		}
 	}
 	if bat != nil {
 		bat.SetRowCount(bat.Vecs[0].Length())

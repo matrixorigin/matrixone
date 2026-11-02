@@ -240,48 +240,6 @@ func TestPkMoveProviderReadsRunUnderOwnerCtx(t *testing.T) {
 	})
 }
 
-// TestPkMoveCaptureStreamsUnderOwnerCtx pins D220 (B.2) on the D156
-// scope-to-commit capture path: the capture context handed to the stream
-// hook (and, through the same derivation, to relation resolution and the
-// CollectChanges call) carries the window's physical owner.
-func TestPkMoveCaptureStreamsUnderOwnerCtx(t *testing.T) {
-	base := defines.AttachAccountId(context.Background(), 100)
-
-	build := func(window pkMoveLinkTableWindow, got *[]uint32) *pkMoveLinkProvider {
-		p := pkMoveWalkTestProvider(pkMoveWalkTestLink(2, 30, 3, 31, 10))
-		p.ctx = base
-		p.windows = []pkMoveLinkTableWindow{window}
-		p.streamLinkCommits = func(
-			ctx context.Context, _ pkMoveLinkTableWindow, _, _ types.TS,
-			accept func(scope pkMoveTxnScope, cts types.TS) error,
-		) error {
-			account, err := defines.GetAccountId(ctx)
-			require.NoError(t, err)
-			*got = append(*got, account)
-			return accept(pkMoveTxnScope{writeTS: types.BuildTS(10, 0)}, types.BuildTS(20, 0))
-		}
-		return p
-	}
-
-	var got []uint32
-	p := build(pkMoveLinkTableWindow{
-		tableID: 1,
-		ident:   branchIdentity{account: 200, ctx: base},
-	}, &got)
-	p.captureArrivalCommitsLocked()
-	require.Equal(t, []uint32{200}, got,
-		"the capture streams the publisher's link relation, not the subscriber's")
-	require.NotNil(t, p.arrivalCommitIdx,
-		"the admitted scope still lands in the captured index")
-
-	got = nil
-	p2 := build(pkMoveLinkTableWindow{tableID: 1}, &got)
-	p2.captureArrivalCommitsLocked()
-	require.Equal(t, []uint32{100}, got,
-		"a zero-identity window captures under the caller account")
-	require.NotNil(t, p2.arrivalCommitIdx)
-}
-
 // TestPkMoveWindowsWithCatalogDegradesPerAccount pins D220 (B.4): the
 // catalog existence probe runs once per owner account under that account,
 // and a pre-upgrade owner's absence drops exactly its own windows while

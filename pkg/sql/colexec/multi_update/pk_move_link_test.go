@@ -62,6 +62,9 @@ func newTestPkMoveLinkCtx(ownerIdx int) *MultiUpdateCtx {
 		{Name: catalog.DataBranchUpdateLinkColNewRow, Typ: plan.Type{Id: int32(types.T_binary), Width: 24}},
 		{Name: catalog.DataBranchUpdateLinkColWriteTS, Typ: plan.Type{Id: int32(types.T_uint64)}},
 		{Name: catalog.DataBranchUpdateLinkColTxnID, Typ: plan.Type{Id: int32(types.T_binary), Width: catalog.DataBranchUpdateLinkTxnIDBytes}},
+		{Name: catalog.DataBranchUpdateLinkColCommitTS, Typ: plan.Type{Id: int32(types.T_binary), Width: catalog.DataBranchUpdateLinkTSBytes}},
+		{Name: catalog.DataBranchUpdateLinkColSuccLinkID, Typ: plan.Type{Id: int32(types.T_binary), Width: catalog.DataBranchUpdateLinkIDBytes}},
+		{Name: catalog.DataBranchUpdateLinkColStmtSeq, Typ: plan.Type{Id: int32(types.T_uint64)}},
 		{Name: catalog.Row_ID, Typ: rowIdTyp},
 	}
 	for i := range linkCols[:len(linkCols)-1] {

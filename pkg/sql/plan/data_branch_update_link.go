@@ -60,7 +60,7 @@ func buildUpdatePkMoveLinkTableDef() *TableDef {
 	binaryType := func(width int32) Type {
 		return Type{Id: int32(types.T_binary), Width: width}
 	}
-	cols := make([]*ColDef, 0, 12)
+	cols := make([]*ColDef, 0, 14)
 	cols = append(cols,
 		&ColDef{
 			Name:  catalog.DataBranchUpdateLinkColLinkID,
@@ -102,6 +102,18 @@ func buildUpdatePkMoveLinkTableDef() *TableDef {
 		&ColDef{
 			Name: catalog.DataBranchUpdateLinkColTxnID,
 			Typ:  binaryType(catalog.DataBranchUpdateLinkTxnIDBytes),
+		},
+		&ColDef{
+			Name: catalog.DataBranchUpdateLinkColCommitTS,
+			Typ:  binaryType(catalog.DataBranchUpdateLinkTSBytes),
+		},
+		&ColDef{
+			Name: catalog.DataBranchUpdateLinkColSuccLinkID,
+			Typ:  binaryType(catalog.DataBranchUpdateLinkIDBytes),
+		},
+		&ColDef{
+			Name: catalog.DataBranchUpdateLinkColStmtSeq,
+			Typ:  Type{Id: int32(types.T_uint64)},
 		},
 	)
 	// Dense, unique seqnums are load-bearing: a sinker built from this

@@ -20,12 +20,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 )
 
@@ -156,11 +154,11 @@ type pkMoveLinkTableWindow struct {
 	startPhys uint64
 	endPhys   uint64
 	// from and end carry the collector's per-generation full-types.TS
-	// bounds for the D156 capture (r51 F2): two timestamps with equal
-	// physical and different logical parts are distinct commit instants
-	// with different boundary membership, which the truncated probe
-	// values above cannot express. The physical view keeps its
-	// probe-budget role and is never used to derive capture bounds.
+	// bounds for the D226 windowed admission gate: two timestamps with
+	// equal physical and different logical parts are distinct commit
+	// instants with different boundary membership, which the truncated
+	// probe values above cannot express. The physical view keeps its
+	// probe-budget role and is never used to derive membership bounds.
 	from types.TS
 	end  types.TS
 	// ident carries the routing layer's authorized physical owner of this
@@ -179,24 +177,30 @@ func (w pkMoveLinkTableWindow) readCtx(base context.Context) context.Context {
 	return identityCtx(base, w.ident)
 }
 
-// captureBounds projects this window to the inclusive [from, end] the
-// link commit capture reads, applying the r52 zero-start normalization:
-// a whole-history window's empty lower bound would route the engine to
-// the end-stamping checkpoint state reader, so [MinTs(), end] reads as
-// [MinTs().Next(), end] — identical real commits, exact stamps. The
-// unit-fixture fallback (an endPhys of math.MaxInt64 with no recorded
-// full-type bound) reads as unbounded upper.
-func (w pkMoveLinkTableWindow) captureBounds() (from, end types.TS) {
-	from = w.from
-	if from.IsEmpty() {
-		zero := types.MinTs()
-		from = zero.Next()
+// commitBounds projects this window to the (lo, hi] commit-membership
+// interval the windowed admission gate applies (D226): the
+// change-collection range semantics are from-exclusive/end-inclusive, so
+// a commit at exactly the fork instant belongs to the parent window
+// only. An empty lower bound reads as MinTs (whole history), an empty
+// upper bound as MaxTs (the unit-fixture posture: an endPhys of
+// math.MaxInt64 with no recorded full-type bound reads unbounded).
+func (w pkMoveLinkTableWindow) commitBounds() (lo, hi types.TS) {
+	lo = w.from
+	if lo.IsEmpty() {
+		lo = types.MinTs()
 	}
-	end = w.end
-	if end.IsEmpty() {
-		end = types.MaxTs()
+	hi = w.end
+	if hi.IsEmpty() {
+		hi = types.MaxTs()
 	}
-	return from, end
+	return lo, hi
+}
+
+// containsCommit reports whether commit instant c falls inside this
+// window's (lo, hi] membership interval (D226 condition (i)).
+func (w pkMoveLinkTableWindow) containsCommit(c types.TS) bool {
+	lo, hi := w.commitBounds()
+	return lo.LT(&c) && !hi.LT(&c)
 }
 
 // appendPkMoveLinkWindow registers tableID's closure window bounded by
@@ -344,6 +348,35 @@ type pkMoveLink struct {
 	// (a defensive fallback keeps matching on the write timestamp then).
 	txnID    [catalog.DataBranchUpdateLinkTxnIDBytes]byte
 	hasTxnID bool
+	// linkID is the link row's durable primary key; hasLinkID is false
+	// only for rows decoded by a probe projection that does not select
+	// it (the 4-column PICK closure probe, which never feeds a walk).
+	linkID    [catalog.DataBranchUpdateLinkIDBytes]byte
+	hasLinkID bool
+	// commitTS is the recording transaction's commit instant stamped by
+	// the commit-completion hook (D225); hasCommitTS is false while the
+	// stamp is pending (stamping failure, cancellation, CN crash, lost
+	// commit response, or restart), which the D227 recovery outcome
+	// table resolves on read.
+	commitTS    types.TS
+	hasCommitTS bool
+	// succLinkID is the recorded same-transaction continuation
+	// credential (D228): the exact link departing this link's landed key
+	// at the smallest later statement ordinal of the same committing
+	// transaction. hasSuccLinkID=false is TERMINAL by construction —
+	// never "unrecorded".
+	succLinkID    [catalog.DataBranchUpdateLinkIDBytes]byte
+	hasSuccLinkID bool
+	// stmtSeq is the recording statement's ordinal inside its
+	// transaction; pairings order strictly by it (D228).
+	stmtSeq uint64
+	// window is the per-(table, window) attribution this link was
+	// probed under (D226): a candidate is admitted only when its commit
+	// instant falls inside THIS window. hasWindow is false for
+	// fixture-loaded links without attribution, which then answer
+	// membership as always-in-window.
+	window    pkMoveLinkTableWindow
+	hasWindow bool
 }
 
 // pkMoveTxnScope is the transaction identity the walk currently stands
@@ -370,8 +403,11 @@ func pkMoveLinkTxnScope(link *pkMoveLink) pkMoveTxnScope {
 }
 
 // samePkMoveLinkIdentity reports whether two links describe the exact same
-// move; idempotent probe merges rely on it to skip duplicates, while two
-// DIFFERENT links claiming one (row id, old pk) pair must poison that key.
+// move; idempotent probe merges rely on it to skip duplicates. Two
+// DIFFERENT links claiming one (row id, old pk) pair are NOT poisoned
+// anymore (D226): they stay side by side as candidates, each admitted or
+// excluded by its own commit instant under its own attributed window
+// before any anchor binds.
 func samePkMoveLinkIdentity(a, b pkMoveLink) bool {
 	if a.hasTxnID && b.hasTxnID && a.txnID != b.txnID {
 		return false
@@ -468,11 +504,19 @@ type pkMoveLinkProvider struct {
 	bh      BackgroundExec
 	windows []pkMoveLinkTableWindow
 
-	mu       sync.Mutex
-	byRow    map[string]pkMoveLink
-	byPK     map[string][]pkMoveLink
-	probed   map[string]struct{}
-	poisoned map[string]struct{}
+	mu sync.Mutex
+	// byRow holds EVERY probed candidate claiming one (row id, old pk)
+	// pair, keeping each link's per-window attribution (D226): anchor
+	// binding admits a candidate only when its resolved commit instant
+	// equals the anchor tombstone's instant AND falls inside the
+	// candidate's own attributed window, so an out-of-window ancestor
+	// commit can neither bind nor poison a sibling/descendant anchor.
+	byRow map[string][]pkMoveLink
+	byPK  map[string][]pkMoveLink
+	// byID serves the D232 recorded-continuation point probe by exact
+	// link_id; only links decoded with their primary key join it.
+	byID   map[[catalog.DataBranchUpdateLinkIDBytes]byte]pkMoveLink
+	probed map[string]struct{}
 	// fullWindows marks a table generation whose whole link_id range has
 	// been scanned into the caches: every later key of that window —
 	// anchors, continuation hops, successors — resolves without more SQL.
@@ -525,79 +569,16 @@ type pkMoveLinkProvider struct {
 	// consulted candidates — never a full byPK bucket rescan per hop.
 	depBuilds uint64
 	depScans  uint64
-	// arrivalCommitIdx is the D156 scope->commit capture index built
-	// with the arrival evidence: a scope present names the exact instant
-	// its chain committed in-window, and a scope absent names nothing
-	// (r50 (B)). arrivalCapFailed marks a poisoned build (engine error,
-	// truncation, corruption, cancellation): every tie query of that
-	// build answers Incomplete (r50 (C), D157), never a silent absence.
-	arrivalCommitIdx *pkMoveLinkCommitIndex
-	arrivalCapFailed bool
-	// streamLinkCommits, when non-nil (unit-test fabric), replaces the
-	// engine capture for one window: it feeds (scope, commit instant)
-	// records through the same admission fold the engine path uses.
-	streamLinkCommits func(
-		ctx context.Context,
-		w pkMoveLinkTableWindow,
-		from, end types.TS,
-		accept func(scope pkMoveTxnScope, cts types.TS) error,
-	) error
-}
-
-// pkMoveLinkCommitIndex records, per transaction scope, the exact commit
-// instant the D156 capture observed for it inside the apply windows.
-// The two lanes replicate pkMoveTxnScope.matches' asymmetry: byTxn holds
-// only durable-txn scopes, byTSNone only unknown-transaction scopes
-// keyed by create timestamp. One transaction commits once, so a lane
-// re-observing a scope at a DIFFERENT instant is corruption and poisons
-// the build (r50 (C)); a boundary commit shared by adjacent generations
-// dedupes to the one true instant (r51 (F)).
-type pkMoveLinkCommitIndex struct {
-	byTxn    map[[catalog.DataBranchUpdateLinkTxnIDBytes]byte]types.TS
-	byTSNone map[types.TS]types.TS
-}
-
-// add folds one captured scope->commit record; it reports a conflict
-// when a lane already bound the scope to a different instant.
-func (idx *pkMoveLinkCommitIndex) add(scope pkMoveTxnScope, cts types.TS) (conflict bool) {
-	if scope.hasTxn {
-		if prev, ok := idx.byTxn[scope.txnID]; ok {
-			if !prev.EQ(&cts) {
-				return true
-			}
-		} else {
-			idx.byTxn[scope.txnID] = cts
-		}
-		return false
-	}
-	if prev, ok := idx.byTSNone[scope.writeTS]; ok {
-		if !prev.EQ(&cts) {
-			return true
-		}
-	} else {
-		idx.byTSNone[scope.writeTS] = cts
-	}
-	return false
-}
-
-// commits names the in-window commit instant(s) a FAILED chain scope can
-// still resolve to: the txn lane the scope's durable identity binds,
-// plus the unknown-transaction lane its create timestamp binds — the
-// same asymmetric pairing pkMoveTxnScope.matches applies to links. A
-// scope present in neither lane committed outside the apply windows and
-// names nothing.
-func (idx *pkMoveLinkCommitIndex) commits(scope pkMoveTxnScope, out map[types.TS]struct{}) {
-	if idx == nil || out == nil {
-		return
-	}
-	if scope.hasTxn {
-		if cts, ok := idx.byTxn[scope.txnID]; ok {
-			out[cts] = struct{}{}
-		}
-	}
-	if cts, ok := idx.byTSNone[scope.writeTS]; ok {
-		out[cts] = struct{}{}
-	}
+	// arrivalIdxFailed marks an arrival-evidence build that aborted
+	// (context cancellation): every tie query answers Incomplete, never
+	// a silent absence.
+	arrivalIdxFailed bool
+	// restamps queues the D227(e) best-effort re-stamps: a link whose
+	// NULL commit instant was healed from the protected stream (or
+	// inherited across its transaction's own netted generations) is
+	// re-persisted by exact link_id set, so later diffs read the stamp
+	// directly. Failures are harmless (the next read re-derives).
+	restamps map[[catalog.DataBranchUpdateLinkIDBytes]byte]types.TS
 }
 
 // pkMoveArrivalVerdict is the continuity tie's answer to "did a RECORDED
@@ -623,15 +604,26 @@ const (
 	pkMoveArrivalIncomplete
 )
 
-// pkMoveArrivalEntry records, for one landed key, every grounded commit
-// instant at which a recorded arrival chain reached it, plus the
-// instants whose arrival evidence is unattributable (r58 review F2:
-// scoping replaces the former key-wide incomplete flag — attribution
-// evidence is instant-shaped, so a failure deciding one commit instant
-// must not poison verdicts for instants the evidence never touches).
+// pkMoveArrivalEntry records, for one landed key, the commit instants at
+// which a recorded arrival chain reached it. instants counts the
+// DISTINCT recording transactions justifying each instant: one committed
+// image per key per commit instant makes two distinct justifiers of one
+// instant corrupt, failing the tie closed. undecidable marks the
+// instants a FAILED chain attribution can still answer (the competing
+// tombstone instants of a corrupt grounding, plus every commit instant
+// the failed chain's own transaction could still have committed at under
+// the D227 outcome table): the tie fails closed for exactly those
+// instants while instants the evidence cannot decide keep their verdict.
+// unresolved marks a landed chain whose commit instant could not be
+// attributed at all (an unprovable NULL stamp under the D227 outcome
+// table, or one scope grounding at two instants): the evidence cannot
+// prove that chain did NOT commit at the queried instant either, so the
+// tie fails closed for this key (D227: genuinely incomplete or ambiguous
+// retained evidence aborts loudly).
 type pkMoveArrivalEntry struct {
-	instants    map[types.TS]struct{}
+	instants    map[types.TS]int
 	undecidable map[types.TS]struct{}
+	unresolved  bool
 }
 
 // newPkMoveLinkProvider returns nil when the link source is unusable for
@@ -665,13 +657,14 @@ func newPkMoveLinkProvider(
 		ses:             ses,
 		bh:              bh,
 		windows:         append([]pkMoveLinkTableWindow(nil), usable...),
-		byRow:           make(map[string]pkMoveLink),
+		byRow:           make(map[string][]pkMoveLink),
 		byPK:            make(map[string][]pkMoveLink),
+		byID:            make(map[[catalog.DataBranchUpdateLinkIDBytes]byte]pkMoveLink),
 		probed:          make(map[string]struct{}),
-		poisoned:        make(map[string]struct{}),
 		fullWindows:     make(map[uint64][2]uint64),
 		overflowWindows: make(map[uint64][2]uint64),
 		overflowKeys:    make(map[string]struct{}),
+		restamps:        make(map[[catalog.DataBranchUpdateLinkIDBytes]byte]types.TS),
 	}
 }
 
@@ -692,10 +685,10 @@ func (p *pkMoveLinkProvider) disableLocked(reason string) {
 		return
 	}
 	p.disabled = true
-	p.byRow = make(map[string]pkMoveLink)
+	p.byRow = make(map[string][]pkMoveLink)
 	p.byPK = make(map[string][]pkMoveLink)
+	p.byID = make(map[[catalog.DataBranchUpdateLinkIDBytes]byte]pkMoveLink)
 	p.probed = make(map[string]struct{})
-	p.poisoned = make(map[string]struct{})
 	p.fullWindows = make(map[uint64][2]uint64)
 	p.overflowWindows = make(map[uint64][2]uint64)
 	p.overflowKeys = make(map[string]struct{})
@@ -985,7 +978,7 @@ func (p *pkMoveLinkProvider) probeOldPKs(window pkMoveLinkTableWindow, keys [][]
 	if p.disabled {
 		return nil
 	}
-	p.mergeProbedLinksLocked(links)
+	p.mergeProbedLinksLocked(window, links)
 	if p.rows > pkMoveLinkMaxCachedRows || len(p.probed)+len(todo) > pkMoveLinkMaxCachedRows {
 		p.disableLocked(fmt.Sprintf("cached link rows exceed %d", pkMoveLinkMaxCachedRows))
 		return nil
@@ -1011,7 +1004,7 @@ func (p *pkMoveLinkProvider) probeOldPKs(window pkMoveLinkTableWindow, keys [][]
 // walk, so the wider scan only adds provable evidence.
 func pkMoveLinkProbeSQL(lo, hi []byte, endPhys uint64, limit int) string {
 	return fmt.Sprintf(
-		"select %s, %s, %s, %s, %s, %s, %s from %s.%s where %s >= x'%x' and %s < x'%x' and %s <= %d order by %s limit %d",
+		"select %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s from %s.%s where %s >= x'%x' and %s < x'%x' and %s <= %d order by %s limit %d",
 		catalog.DataBranchUpdateLinkColOldRow,
 		catalog.DataBranchUpdateLinkColNewRow,
 		catalog.DataBranchUpdateLinkColOldPK,
@@ -1019,6 +1012,10 @@ func pkMoveLinkProbeSQL(lo, hi []byte, endPhys uint64, limit int) string {
 		catalog.DataBranchUpdateLinkColWriteTS,
 		catalog.DataBranchUpdateLinkColTxnID,
 		catalog.DataBranchUpdateLinkColTableID,
+		catalog.DataBranchUpdateLinkColLinkID,
+		catalog.DataBranchUpdateLinkColCommitTS,
+		catalog.DataBranchUpdateLinkColSuccLinkID,
+		catalog.DataBranchUpdateLinkColStmtSeq,
 		catalog.MO_CATALOG, catalog.MO_DATA_BRANCH_UPDATE_LINK,
 		catalog.DataBranchUpdateLinkColLinkID, lo,
 		catalog.DataBranchUpdateLinkColLinkID, hi,
@@ -1039,7 +1036,7 @@ func (p *pkMoveLinkProvider) runProbeSQL(ctx context.Context, sql string) ([]pkM
 	var links []pkMoveLink
 	var loadErr error
 	ret.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
-		if len(cols) != 7 {
+		if len(cols) != 11 {
 			loadErr = moerr.NewInternalErrorNoCtxf(
 				"unexpected pk-move link probe width %d", len(cols))
 			return false
@@ -1059,28 +1056,49 @@ func (p *pkMoveLinkProvider) runProbeSQL(ctx context.Context, sql string) ([]pkM
 	return links, nil
 }
 
-// mergeProbedLinksLocked folds one decoded probe page into the caches:
-// duplicate (row id, old pk) rows claiming different lineage poison the
-// anchor; every row joins the by-old-pk successor list. The merge is
-// idempotent for identical rows so concurrent probes of one window —
-// whole-range scans and per-key fallback pages alike — fold cleanly.
-func (p *pkMoveLinkProvider) mergeProbedLinksLocked(links []pkMoveLink) {
+// mergeProbedLinksLocked folds one decoded probe page into the caches,
+// stamping every row with the window it was probed under (D226's
+// per-(table, window) attribution). Rows claiming one (row id, old pk)
+// pair accumulate as candidates: admission is decided at bind time by
+// each candidate's own commit instant under its own window, so an
+// out-of-window ancestor commit is excluded BEFORE it can bind or
+// poison a sibling/descendant anchor. The merge is idempotent for
+// identical rows so concurrent probes of one window — whole-range scans
+// and per-key fallback pages alike — fold cleanly.
+func (p *pkMoveLinkProvider) mergeProbedLinksLocked(
+	window pkMoveLinkTableWindow, links []pkMoveLink,
+) {
 	for _, link := range links {
-		rowKey := pkMoveLinkRowKey(link.oldRowID, link.oldPK)
-		if prev, dup := p.byRow[rowKey]; dup {
-			if !samePkMoveLinkIdentity(prev, link) {
-				// Two tables claim different lineage for the same
-				// (row id, old pk): the stream row this key pairs with is
-				// not attributable, so the anchor poisons (fail closed).
-				delete(p.byRow, rowKey)
-				p.poisoned[rowKey] = struct{}{}
-			}
-		} else if _, bad := p.poisoned[rowKey]; !bad {
-			p.byRow[rowKey] = link
-		}
-		p.byPK[string(link.oldPK)] = append(p.byPK[string(link.oldPK)], link)
-		p.rows++
+		link.window = window
+		link.hasWindow = true
+		p.cacheLinkLocked(link)
 	}
+}
+
+// cacheLinkLocked folds one attributed link into the caches: the byRow
+// candidate list dedupes identical re-probes, the by-old-pk successor
+// list keeps every row, and the by-id index serves the D232
+// recorded-continuation point probe.
+func (p *pkMoveLinkProvider) cacheLinkLocked(link pkMoveLink) {
+	rowKey := pkMoveLinkRowKey(link.oldRowID, link.oldPK)
+	lst := p.byRow[rowKey]
+	dup := false
+	for i := range lst {
+		if samePkMoveLinkIdentity(lst[i], link) {
+			dup = true
+			break
+		}
+	}
+	if !dup {
+		p.byRow[rowKey] = append(lst, link)
+	}
+	p.byPK[string(link.oldPK)] = append(p.byPK[string(link.oldPK)], link)
+	if link.hasLinkID {
+		if _, ok := p.byID[link.linkID]; !ok {
+			p.byID[link.linkID] = link
+		}
+	}
+	p.rows++
 }
 
 // probeKeysIndividually loads the requested keys' links one key at a time
@@ -1162,7 +1180,7 @@ func (p *pkMoveLinkProvider) probeKeysIndividually(
 			)
 			continue
 		}
-		p.mergeProbedLinksLocked(links)
+		p.mergeProbedLinksLocked(window, links)
 		p.probed[probedKey] = struct{}{}
 		p.mu.Unlock()
 	}
@@ -1246,7 +1264,8 @@ func (p *pkMoveLinkProvider) probeAnyLinkInWindow(window pkMoveLinkTableWindow) 
 }
 
 // decodeRow parses one link row of the probe projection
-// (old_row_id, new_row_id, old_pk, new_pk, write_ts, txn_id, table_id),
+// (old_row_id, new_row_id, old_pk, new_pk, write_ts, txn_id, table_id,
+// link_id, commit_ts, succ_link_id, stmt_seq),
 // verifying the row-id and transaction-id widths; new_row_id may be NULL
 // (identity unrecorded), which the walk treats as unprovable, and an
 // all-zero txn_id marks "identity unknown", degrading same-transaction
@@ -1285,15 +1304,36 @@ func (p *pkMoveLinkProvider) decodeRow(
 	}
 	copy(link.txnID[:], txnBytes)
 	link.hasTxnID = link.txnID != [catalog.DataBranchUpdateLinkTxnIDBytes]byte{}
+	linkIDBytes := cols[7].GetBytesAt(i)
+	if len(linkIDBytes) != catalog.DataBranchUpdateLinkIDBytes {
+		*loadErr = moerr.NewInternalErrorNoCtxf(
+			"unexpected pk-move link link-id width %d", len(linkIDBytes))
+		return link, false
+	}
+	copy(link.linkID[:], linkIDBytes)
+	link.hasLinkID = true
+	if !cols[8].IsNull(uint64(i)) {
+		ctsBytes := cols[8].GetBytesAt(i)
+		if len(ctsBytes) != catalog.DataBranchUpdateLinkTSBytes {
+			*loadErr = moerr.NewInternalErrorNoCtxf(
+				"unexpected pk-move link commit-ts width %d", len(ctsBytes))
+			return link, false
+		}
+		copy(link.commitTS[:], ctsBytes)
+		link.hasCommitTS = true
+	}
+	if !cols[9].IsNull(uint64(i)) {
+		succBytes := cols[9].GetBytesAt(i)
+		if len(succBytes) != catalog.DataBranchUpdateLinkIDBytes {
+			*loadErr = moerr.NewInternalErrorNoCtxf(
+				"unexpected pk-move link succ-link-id width %d", len(succBytes))
+			return link, false
+		}
+		copy(link.succLinkID[:], succBytes)
+		link.hasSuccLinkID = true
+	}
+	link.stmtSeq = vector.MustFixedColNoTypeCheck[uint64](cols[10])[i]
 	return link, true
-}
-
-// byRowProbe resolves the exact hop-1 link for one anchor. A poisoned key
-// (two tables claiming different lineage for one (row id, old pk)) and a
-// disabled provider both resolve as unproven.
-func (p *pkMoveLinkProvider) byRowProbe(oldPK []byte, rowID types.Rowid) (pkMoveLink, bool) {
-	link, hit, _ := p.byRowProbeVerdict(oldPK, rowID)
-	return link, hit
 }
 
 // keyCompleteLocked reports whether the probe space of one old-pk key is
@@ -1319,31 +1359,61 @@ func (p *pkMoveLinkProvider) keyCompleteLocked(key []byte) bool {
 	return true
 }
 
-// byRowProbeVerdict is byRowProbe plus the probe-space completeness the
-// apply-level taxonomy needs: a disabled provider, a poisoned key, or a
-// key whose own evidence could not be fully read means the answer must
-// NOT be treated as "no update intent" — recorded provenance may exist
-// that the probe could not see.
-func (p *pkMoveLinkProvider) byRowProbeVerdict(
+// anchorCandidates returns EVERY probed candidate claiming the
+// (row id, old pk) pair, unadmitted: the D226 windowed admission gate
+// the caller applies decides which candidate — if any — may bind this
+// anchor, so an out-of-window ancestor commit is excluded before it can
+// bind or poison a sibling/descendant anchor. Complete evidence with
+// zero candidates is a proven link-less row for this window.
+func (p *pkMoveLinkProvider) anchorCandidates(
 	oldPK []byte, rowID types.Rowid,
-) (link pkMoveLink, hit bool, complete bool) {
+) (cands []pkMoveLink, complete bool, err error) {
 	if p == nil {
-		return pkMoveLink{}, false, true
+		return nil, true, nil
+	}
+	if err = p.ensureProbedForKey(oldPK); err != nil {
+		return nil, false, err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.disabled {
-		return pkMoveLink{}, false, false
-	}
-	rowKey := pkMoveLinkRowKey(rowID, oldPK)
-	if _, bad := p.poisoned[rowKey]; bad {
-		return pkMoveLink{}, false, false
+		return nil, false, nil
 	}
 	if !p.keyCompleteLocked(oldPK) {
-		return pkMoveLink{}, false, false
+		return nil, false, nil
 	}
-	link, ok := p.byRow[rowKey]
-	return link, ok, true
+	cands = append(cands, p.byRow[pkMoveLinkRowKey(rowID, oldPK)]...)
+	return cands, true, nil
+}
+
+// pkMoveLinkDedupKey identifies one physical link for admission
+// deduplication: the durable link_id when the probe recorded it, else
+// the full move identity unit fixtures load. Two admitted candidates
+// with DISTINCT keys are the genuinely ambiguous catalog evidence that
+// fails closed; two with one key are one link re-probed.
+func pkMoveLinkDedupKey(link *pkMoveLink) string {
+	if link.hasLinkID {
+		return "id:" + string(link.linkID[:])
+	}
+	return "fx:" + string(link.txnID[:]) + "|" + string(link.writeTS[:]) +
+		"|" + string(link.oldRowID[:]) + "|" + string(link.oldPK) +
+		"|" + string(link.newPK)
+}
+
+// resolveLinkCommit is the unlocked entry to the D227 outcome table for
+// callers outside the provider lock (anchor admission, gated successor
+// closures, recorded-continuation hops).
+func (p *pkMoveLinkProvider) resolveLinkCommit(
+	view pkMoveStreamView,
+	link *pkMoveLink,
+	txLocalInst *types.TS,
+) (types.TS, pkMoveCommitOutcome) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.disabled {
+		return types.TS{}, pkMoveCommitUnprovable
+	}
+	return p.resolveLinkCommitLocked(view, link, txLocalInst)
 }
 
 // anchorArrivalVerdict reports whether recorded provenance shows a pk
@@ -1363,11 +1433,15 @@ func (p *pkMoveLinkProvider) byRowProbeVerdict(
 // committed image per key per instant makes the (key, instant) pairing
 // exact — the anchor version IS the landed version, and its actual LCA
 // lineage continues at the arrival's origin, whose own anchor walks
-// through this very point. Chain hops bind the recorded workspace
-// identity (new_row_id of the predecessor == old_row_id of the
-// successor), which one committed image per key per commit keeps
-// unambiguous; a link without a staged replacement identity (the S3
-// route) binds by (key, scope) alone, unique under the same rule. A
+// through this very point. Chain hops bind through the recorded
+// same-transaction pairing (D228): the predecessor's succ_link_id names
+// the hop's own link, verified by scope equality and strictly
+// increasing statement ordinal, and a staged workspace replacement
+// identity serves as a cross-check (new_row_id of the predecessor ==
+// old_row_id of the successor). An identity-less (S3-route) hop binds
+// by the recorded pairing alone — one netted temporary key can host
+// several lineages in one transaction, so (key, scope) inference can
+// never substitute for the credential. A
 // chain whose origin never committed a tombstone here — a
 // same-transaction insert-then-move — stays the D87-approximated case
 // the stream cannot attribute (fail same as the unrecorded
@@ -1382,14 +1456,36 @@ func (p *pkMoveLinkProvider) byRowProbeVerdict(
 // direction only), so a cache miss cannot prove the tie's absence:
 // arrivalWindowsCompleteLocked fails the check closed instead
 // (r54 review F1). Ambiguous, contradictory, cyclic, or
-// over-long evidence marks the in-window instants its recording
-// transaction could still have committed at — derived from committed
-// tombstones at the chain's own recorded departure keys (r59 review F1:
-// the recorded write_ts is a creation time, never a commit instant) —
-// and, for corrupt grounding, the competing tombstone instants as well
-// (r58 review F2) — undecidable, failing
+// stamp-pending over-long evidence marks the in-window instants its
+// recording transaction could still have committed at — derived from
+// committed tombstones at the chain's own recorded departure keys
+// (r59 review F1: the recorded write_ts is a creation time, never a
+// commit instant) — and, for corrupt grounding, the competing
+// tombstone instants as well (r58 review F2) — undecidable, failing
 // that tie closed while instants the evidence cannot decide keep their
 // verdict; attribution never guesses.
+//
+// Attribution resolves each landed link's commit instant through the
+// preserved provenance (D225/D227). Every landing walks its chain
+// BACKWARD through the recorded same-transaction links: the
+// predecessor-consistency checks (ambiguous or contradicted
+// predecessor, a rotation cycle) stand for stamped and stamp-pending
+// landings alike, because corrupt catalog evidence never justifies a
+// tie. A stamp-pending landing is healed by grounding the chain at the
+// origin's committed deleting tombstone: that tombstone's instant is
+// the whole chain's commit instant (one transaction commits once — the
+// grounding IS the D227 stream heal for the whole chain). Every D225
+// stamp a walked chain carries serves as a consistency check against
+// the grounded instant — a disagreeing stamp undecides both instants —
+// and the D226 windowed gate on the landed link excludes an
+// out-of-window commit before it can justify the tie. A landing whose
+// stamp is recorded needs no heal: when the walk cannot ground the
+// instant (an origin staged inside the transaction, or a chain longer
+// than the walk cap) the stamp attributes the arrival directly — chain
+// length never truncates a recorded instant (r59 review F1). A chain
+// whose attribution fails undecides exactly the instants its recording
+// transaction could still have committed at, resolved through the D227
+// outcome table; an unprovable scope fails the key closed outright.
 func (p *pkMoveLinkProvider) anchorArrivalVerdict(view pkMoveStreamView, anchorPK []byte, anchorBirth types.TS) pkMoveArrivalVerdict {
 	if p == nil {
 		return pkMoveArrivalNone
@@ -1411,23 +1507,33 @@ func (p *pkMoveLinkProvider) anchorArrivalVerdict(view pkMoveStreamView, anchorP
 		return pkMoveArrivalIncomplete
 	}
 	p.ensureArrivalIndexLocked(view)
-	if p.arrivalCapFailed {
-		// The scope->commit capture behind this build could not be
-		// certified complete (engine error, truncation, corruption, or
-		// cancellation): poisoning is build-wholesale (r50 (C)) — never
-		// a silent downgrade to absence.
+	if p.arrivalIdxFailed {
+		// The evidence build aborted (context cancellation): never a
+		// silent downgrade to absence.
 		return pkMoveArrivalIncomplete
 	}
 	ent, ok := p.arrivals[string(anchorPK)]
 	if !ok {
 		return pkMoveArrivalNone
 	}
-	if _, und := ent.undecidable[anchorBirth]; und {
-		// Evidence at exactly the queried instant could not be
-		// attributed: fail closed for this instant alone (r58 F2).
+	if ent.unresolved {
+		// Some landed chain's commit instant could not be attributed:
+		// the evidence cannot prove that chain did NOT commit at the
+		// queried instant either, so fail closed.
 		return pkMoveArrivalIncomplete
 	}
-	if _, hit := ent.instants[anchorBirth]; hit {
+	if _, hit := ent.undecidable[anchorBirth]; hit {
+		// A failed chain attribution can still answer this instant:
+		// fail closed rather than accept or reject the tie.
+		return pkMoveArrivalIncomplete
+	}
+	if n, hit := ent.instants[anchorBirth]; hit {
+		if n > 1 {
+			// Two DISTINCT recording transactions justify an arrival at
+			// one (key, instant): one committed image per key per commit
+			// instant makes that corrupt, so fail closed.
+			return pkMoveArrivalIncomplete
+		}
 		return pkMoveArrivalRecorded
 	}
 	return pkMoveArrivalNone
@@ -1495,62 +1601,54 @@ type pkMoveArrivalBuild struct {
 	lands   map[string][]pkMoveLink
 	predIdx map[string]*pkMoveArrivalPredIndex
 	tombs   map[string]map[types.Rowid][]types.TS
-	// failedArrivals memoizes each failed chain scope's feasible commit
+	// scopeCommits memoizes each failed chain scope's feasible commit
 	// instants for the build's lifetime: the link cache and stream view
-	// are immutable while the build stands (r59 review F1).
-	failedArrivals map[pkMoveTxnScope]map[types.TS]struct{}
+	// are immutable while the build stands.
+	scopeCommits map[pkMoveTxnScope]pkMoveArrivalScopeCommits
 }
 
-// pkMoveArrivalPredIndex subdivides each landed key's predecessor
-// candidates by transaction scope lane AND by exact replacement identity
-// (r55 review F1): the three lanes replicate pkMoveTxnScope.matches'
-// asymmetry (txnIdx holds only durable-txn links, tsNoTxnIdx only
-// unknown-transaction links, tsAllIdx every link of one timestamp), and
-// inside a lane the predecessor lookup binds by the hop's exact consumed
-// identity, while the ambiguous and contradicted verdicts read
-// precomputed counts — never a per-chain scan of a shared scratch key's
-// whole scope bucket.
+// pkMoveArrivalPredIndex inverts each landed key's recorded
+// same-transaction pairings: bySucc maps a successor link's durable id
+// to the positions (into the build's lands slice for that key) of every
+// landed link whose recorded succ_link_id names it. The backward chain
+// walk binds each hop's predecessor through this recorded credential
+// alone — never by (key, scope) inference, which cannot distinguish two
+// lineages that shared one netted temporary key in one transaction: an
+// identity-less (S3-route) landing records no replacement identity, so
+// two such landings at one key in one scope are indistinguishable
+// without the pairing (era-26 regression: lineages A and C both passed
+// through the netted key 4 in one transaction, and (key, scope)
+// binding read A's recorded predecessor as ambiguous and poisoned a
+// valid arrival).
 type pkMoveArrivalPredIndex struct {
-	txnIdx     map[[catalog.DataBranchUpdateLinkTxnIDBytes]byte]*pkMoveArrivalScopeBucket
-	tsAllIdx   map[types.TS]*pkMoveArrivalScopeBucket
-	tsNoTxnIdx map[types.TS]*pkMoveArrivalScopeBucket
+	bySucc map[[catalog.DataBranchUpdateLinkIDBytes]byte][]int
 }
 
-// pkMoveArrivalScopeBucket indexes one scope lane's landed links by their
-// staged replacement identity, preserving the classification inputs of
-// the raw candidate scan: identity-less (S3-route) candidates separately,
-// and the lane's total identity-carrying count for the contradicted
-// verdict. Duplicates land side by side, so competing exact recordings
-// stay visible and fail closed.
-type pkMoveArrivalScopeBucket struct {
-	byID      map[types.Rowid][]int
-	idless    []int
-	carryingN int
-}
-
-func (bk *pkMoveArrivalScopeBucket) add(pos int, link *pkMoveLink) {
-	if !link.hasNewRowID {
-		bk.idless = append(bk.idless, pos)
-		return
-	}
-	bk.carryingN++
-	if bk.byID == nil {
-		bk.byID = make(map[types.Rowid][]int)
-	}
-	bk.byID[link.newRowID] = append(bk.byID[link.newRowID], pos)
+// pkMoveArrivalScopeCommits memoizes one failed chain scope's feasible
+// commit instants for a build's lifetime: every instant one of the
+// scope's recorded links resolves to under the D227 outcome table, plus
+// whether any of its links is unprovable (which fails the landed key
+// closed outright rather than naming instants).
+type pkMoveArrivalScopeCommits struct {
+	instants     map[types.TS]struct{}
+	unresolvable bool
 }
 
 // ensureArrivalIndexLocked builds (or reuses) the per-key arrival
 // evidence index. One linear pass groups cached links by landed key;
 // each landed key's candidates are then attributed backward through
-// their recorded same-transaction chains. Historical links unrelated to
-// any anchor cost one comparison each here, once per cache state —
-// never another full pass per anchor (r53 F2). The index is rebuilt only
-// when a probe merge changed the cache or the stream view differs.
+// their recorded same-transaction chains and grounded at the origin's
+// committed deleting tombstone — the tombstone instant is the whole
+// chain's commit instant under one-transaction-one-commit (the D227
+// stream heal for the whole chain, D225 stamps serving as consistency
+// checks). Historical links unrelated to any anchor cost one comparison
+// each here, once per cache state — never another full pass per anchor
+// (r53 F2). The index is rebuilt only when a probe merge changed the
+// cache or the stream view differs.
 // arrivalBuildCtxErr observes provider-context cancellation at the
 // arrival-build iteration boundaries D157 (A) names: the per-key grouping
-// walk, the failed-scope attribution loop, and the chain hops inside one
-// attribution.
+// walk, the per-candidate attribution loop, and the chain hops inside
+// one attribution.
 func (p *pkMoveLinkProvider) arrivalBuildCtxErr() error {
 	if p.ctx == nil {
 		return nil
@@ -1568,14 +1666,13 @@ func (p *pkMoveLinkProvider) ensureArrivalIndexLocked(view pkMoveStreamView) {
 		return
 	}
 	p.arrivalBuilds++
-	p.captureArrivalCommitsLocked()
+	p.arrivalIdxFailed = false
 	abandonCancelledBuild := func() {
 		// D157 (A): a cancelled build aborts fail-safe and adopts NO
-		// partial verdict state — nothing publishes, the build-owned
-		// state dies with this frame, and a live-context retry rebuilds
-		// wholesale (capture re-arms and clears the poison).
-		p.arrivalCommitIdx = nil
-		p.arrivalCapFailed = true
+		// partial verdict state — nothing publishes, and a live-context
+		// retry rebuilds wholesale.
+		p.arrivals = nil
+		p.arrivalIdxFailed = true
 	}
 	b := &pkMoveArrivalBuild{
 		lands:   make(map[string][]pkMoveLink, len(p.byPK)),
@@ -1598,33 +1695,13 @@ func (p *pkMoveLinkProvider) ensureArrivalIndexLocked(view pkMoveStreamView) {
 			pi := b.predIdx[k]
 			if pi == nil {
 				pi = &pkMoveArrivalPredIndex{
-					txnIdx:     make(map[[catalog.DataBranchUpdateLinkTxnIDBytes]byte]*pkMoveArrivalScopeBucket),
-					tsAllIdx:   make(map[types.TS]*pkMoveArrivalScopeBucket),
-					tsNoTxnIdx: make(map[types.TS]*pkMoveArrivalScopeBucket),
+					bySucc: make(map[[catalog.DataBranchUpdateLinkIDBytes]byte][]int),
 				}
 				b.predIdx[k] = pi
 			}
 			pos := len(b.lands[k]) - 1
-			all := pi.tsAllIdx[link.writeTS]
-			if all == nil {
-				all = &pkMoveArrivalScopeBucket{}
-				pi.tsAllIdx[link.writeTS] = all
-			}
-			all.add(pos, &link)
-			if link.hasTxnID {
-				tb := pi.txnIdx[link.txnID]
-				if tb == nil {
-					tb = &pkMoveArrivalScopeBucket{}
-					pi.txnIdx[link.txnID] = tb
-				}
-				tb.add(pos, &link)
-			} else {
-				nb := pi.tsNoTxnIdx[link.writeTS]
-				if nb == nil {
-					nb = &pkMoveArrivalScopeBucket{}
-					pi.tsNoTxnIdx[link.writeTS] = nb
-				}
-				nb.add(pos, &link)
+			if link.hasSuccLinkID {
+				pi.bySucc[link.succLinkID] = append(pi.bySucc[link.succLinkID], pos)
 			}
 		}
 	}
@@ -1635,293 +1712,29 @@ func (p *pkMoveLinkProvider) ensureArrivalIndexLocked(view pkMoveStreamView) {
 			return
 		}
 		ent := &pkMoveArrivalEntry{
-			instants:    make(map[types.TS]struct{}),
+			instants:    make(map[types.TS]int),
 			undecidable: make(map[types.TS]struct{}),
 		}
+		// seenScopes dedupes one transaction's several links landing at
+		// this key (a netted middle hop plus the final landing of a
+		// vacate-before-arrival chain): the chain is ONE justifier of
+		// its commit instant. One transaction commits once, so the same
+		// scope grounding at two instants is corrupt and fails closed.
+		seenScopes := make(map[pkMoveTxnScope]types.TS)
 		for i := range cands {
-			if err := p.attributeArrivalLocked(view, b, key, i, ent); err != nil {
+			if err := p.attributeArrivalLocked(view, b, key, i, ent, seenScopes); err != nil {
 				abandonCancelledBuild()
 				return
 			}
 		}
-		if len(ent.instants) == 0 && len(ent.undecidable) == 0 {
+		if len(ent.instants) == 0 && len(ent.undecidable) == 0 && !ent.unresolved {
 			// Only ungrounded approximations reached this key: nothing
 			// the tie may consult.
 			continue
 		}
 		idx[key] = ent
 	}
-	if p.arrivalCapFailed {
-		// A poisoned capture leaves no usable scope->commit evidence: an
-		// engine error, truncation, corruption, or cancellation cannot
-		// silently downgrade to absence either (r50 (C)).
-		p.arrivalCommitIdx = nil
-	}
 	p.arrivals, p.arrivalsRows, p.arrivalsView = idx, p.rows, view
-}
-
-// captureArrivalCommitsLocked builds the D156 scope->commit index for
-// this arrival build: every registered window's exact [from, end] is
-// streamed once from the link relation's own committed change capture
-// (or the unit-test fabric), admitted records fold INCREMENTALLY into
-// the per-scope lanes, and the retained state is bounded by relevant
-// scopes rather than relation-wide history (r51 (G)). Producer lanes:
-// a provider with no capture source (no windows, or no engine and no
-// fabric — the walk fixtures) adopts a complete EMPTY index whose
-// absence is silence (r50 (D)); an engine error, ctx cancellation, or
-// a scope observed committing twice poisons the build wholesale; a
-// capacity-class error closes the capture and disables the provider
-// with the capacity reason, taking the approved D51/D56 lane (r53
-// amendment of (G)(v)). Cancellation or failure releases both the
-// capture handle and the partial index; nothing survives the build.
-func (p *pkMoveLinkProvider) captureArrivalCommitsLocked() {
-	p.arrivalCommitIdx = nil
-	p.arrivalCapFailed = false
-	poison := func() {
-		p.arrivalCommitIdx = nil
-		p.arrivalCapFailed = true
-	}
-	// The capture context must serve recorded commit timestamps (r51
-	// (E)): no snapshot-policy override resolves to the checkpoint
-	// replay default, and no recovery resources may be attached. A
-	// caller-side policy change cannot reintroduce substitution — the
-	// dirty context is rejected outright (defense in depth).
-	if engine.SnapshotReadPolicyFromContext(p.ctx) != engine.SnapshotReadPolicyCheckpointReplay ||
-		engine.VisibleStateRecoveryResourcesFromContext(p.ctx) != nil {
-		poison()
-		return
-	}
-	idx := &pkMoveLinkCommitIndex{
-		byTxn:    make(map[[catalog.DataBranchUpdateLinkTxnIDBytes]byte]types.TS),
-		byTSNone: make(map[types.TS]types.TS),
-	}
-	scopes := make(map[pkMoveTxnScope]struct{}, len(p.byPK))
-	for _, links := range p.byPK {
-		for i := range links {
-			scopes[pkMoveLinkTxnScope(&links[i])] = struct{}{}
-		}
-	}
-	seenCtxCheck := func() error {
-		if p.ctx == nil {
-			return nil
-		}
-		select {
-		case <-p.ctx.Done():
-			return p.ctx.Err()
-		default:
-			return nil
-		}
-	}
-	for _, w := range p.windows {
-		from, end := w.captureBounds()
-		accept := func(scope pkMoveTxnScope, cts types.TS) error {
-			if err := seenCtxCheck(); err != nil {
-				return err
-			}
-			if _, relevant := scopes[scope]; !relevant {
-				return nil
-			}
-			if idx.add(scope, cts) {
-				return moerr.NewInternalErrorNoCtxf(
-					"pk-move link scope commits at two instants in-window")
-			}
-			return nil
-		}
-		var err error
-		if p.streamLinkCommits != nil {
-			err = p.streamLinkCommits(w.readCtx(p.ctx), w, from, end, accept)
-		} else {
-			err = p.captureWindowCommitsLocked(w, from, end, accept)
-		}
-		if err != nil {
-			if engine.IsChangeRangeCapacityError(err) {
-				p.disableLocked(fmt.Sprintf(
-					"pk-move link commit capture exceeded its attached bound: %v", err))
-				return
-			}
-			poison()
-			return
-		}
-	}
-	if err := seenCtxCheck(); err != nil {
-		poison()
-		return
-	}
-	p.arrivalCommitIdx = idx
-}
-
-// pkMoveLinkCaptureLimit returns the attached engine bound one capture
-// rides: the provenance cache budget of I6's family, both fields set
-// because persisted replay rejects rows without bytes for the link
-// table's variable-width columns (r51 (G)(i)).
-func pkMoveLinkCaptureLimit() engine.ChangeRangeLimit {
-	return engine.ChangeRangeLimit{
-		MaxInMemoryRows:  pkMoveLinkMaxCachedRows,
-		MaxInMemoryBytes: pkMoveLinkMaxCachedRows * 512,
-	}
-}
-
-// captureWindowCommitsLocked streams one window's link rows through the
-// link relation's own committed change capture and feeds each admitted
-// (scope, commit instant) pair to accept. The engine call is direct —
-// databranchutils.CollectChanges is expressly unsuitable here because it
-// forces the visible-state snapshot policy (r51 (E)).
-func (p *pkMoveLinkProvider) captureWindowCommitsLocked(
-	w pkMoveLinkTableWindow,
-	from, end types.TS,
-	accept func(scope pkMoveTxnScope, cts types.TS) error,
-) error {
-	if p.ctx == nil || p.ses == nil || p.bh == nil {
-		// No engine to capture through: the walk-fixture posture, a
-		// complete absence (no link rows exist for this build).
-		return nil
-	}
-	// The capture runs under the window's resolved owner context (D220
-	// (B.2)): relation resolution and the change-range read both target
-	// the physical account that wrote this segment's links.
-	rctx := w.readCtx(p.ctx)
-	rel, err := resolvePkMoveLinkRelation(rctx, p.ses, p.bh)
-	if err != nil {
-		return err
-	}
-	if rel == nil {
-		return nil
-	}
-	capCtx := engine.WithChangeRangeLimit(rctx, pkMoveLinkCaptureLimit())
-	mp := p.ses.proc.Mp()
-	handle, err := rel.CollectChanges(capCtx, from, end, true, mp)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = handle.Close() }()
-	return drainPkMoveLinkCaptureHandle(capCtx, handle, mp, func(data *batch.Batch) error {
-		return foldPkMoveLinkCaptureBatch(w, data, accept)
-	})
-}
-
-// drainPkMoveLinkCaptureHandle streams one opened link-relation capture
-// handle to TRUE exhaustion: a page is live while EITHER side carries
-// rows. The engine legitimately serves standalone tombstone pages before
-// later data — a size-bounded tombstone page (logtailreplay
-// ChangeHandler.Next), a range whose next sub-handle opens with
-// tombstones (PartitionChangesHandle.nextReplay returns on either
-// batch), or link reclamation rows from an unrelated dropped generation
-// — and skipDeletes only steers net-effect merging; it never suppresses
-// the tombstone stream. data == nil alone is therefore NOT the end of
-// the capture: stopping there would certify a later scope's absence
-// that the stream still carries. Both returned batches are caller-owned
-// and released on every path, success or failure, and a read failure
-// propagates unchanged so the caller keeps its incomplete (fail-closed)
-// classification.
-func drainPkMoveLinkCaptureHandle(
-	ctx context.Context,
-	handle engine.ChangesHandle,
-	mp *mpool.MPool,
-	fold func(data *batch.Batch) error,
-) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		data, tombstone, _, nextErr := handle.Next(ctx, mp)
-		if nextErr != nil {
-			if data != nil {
-				data.Clean(mp)
-			}
-			if tombstone != nil {
-				tombstone.Clean(mp)
-			}
-			return nextErr
-		}
-		if data != nil {
-			err := fold(data)
-			data.Clean(mp)
-			if err != nil {
-				if tombstone != nil {
-					tombstone.Clean(mp)
-				}
-				return err
-			}
-		}
-		if tombstone != nil {
-			tombstone.Clean(mp)
-		}
-		if data == nil && tombstone == nil {
-			return nil
-		}
-	}
-}
-
-// foldPkMoveLinkCaptureBatch decodes one capture batch positionally by
-// the link table's DDL order (link_id, table_id, old_pk_sha, old_row_id,
-// old_pk, new_pk_sha, new_pk, new_row_id, write_ts, txn_id, commit-ts
-// appended last) and admits only rows of this window's relation: every
-// other table's history streams through the bounded engine
-// materialization without being retained (r51 (G)(ii)). Wrong widths or
-// counts are corruption and fail the capture.
-func foldPkMoveLinkCaptureBatch(
-	w pkMoveLinkTableWindow,
-	data *batch.Batch,
-	accept func(scope pkMoveTxnScope, cts types.TS) error,
-) error {
-	if len(data.Vecs) != 11 {
-		return moerr.NewInternalErrorNoCtxf(
-			"unexpected pk-move link capture width %d", len(data.Vecs))
-	}
-	if data.RowCount() == 0 {
-		return nil
-	}
-	tableIDs := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[1])
-	writeTSs := vector.MustFixedColNoTypeCheck[uint64](data.Vecs[8])
-	commitTSs := vector.MustFixedColNoTypeCheck[types.TS](data.Vecs[10])
-	for i := 0; i < data.RowCount(); i++ {
-		if tableIDs[i] != w.tableID {
-			continue
-		}
-		txnBytes := data.Vecs[9].GetBytesAt(i)
-		if len(txnBytes) != catalog.DataBranchUpdateLinkTxnIDBytes {
-			return moerr.NewInternalErrorNoCtxf(
-				"unexpected pk-move link capture txn-id width %d", len(txnBytes))
-		}
-		scope := pkMoveTxnScope{writeTS: types.BuildTS(int64(writeTSs[i]), 0)}
-		copy(scope.txnID[:], txnBytes)
-		scope.hasTxn = scope.txnID != [catalog.DataBranchUpdateLinkTxnIDBytes]byte{}
-		if err := accept(scope, commitTSs[i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// resolvePkMoveLinkRelation resolves the account's link relation for the
-// engine capture; an account created before the link table existed
-// resolves to nil, which the capture records as complete absence (D5).
-func resolvePkMoveLinkRelation(
-	ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-) (engine.Relation, error) {
-	probe, err := runSql(ctx, ses, bh, fmt.Sprintf(
-		"select rel_id from mo_catalog.mo_tables where reldatabase = '%s' and relname = '%s'",
-		catalog.MO_CATALOG, catalog.MO_DATA_BRANCH_UPDATE_LINK,
-	), nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	var relid uint64
-	probe.ReadRows(func(rowCnt int, cols []*vector.Vector) bool {
-		if rowCnt > 0 && len(cols) == 1 {
-			relid = vector.MustFixedColNoTypeCheck[uint64](cols[0])[0]
-		}
-		return false
-	})
-	probe.Close()
-	if relid == 0 {
-		return nil, nil
-	}
-	return getRelationById(ctx, ses, bh, relid, nil)
 }
 
 // groundTombstoneLocked answers the committed tombstone instant(s)
@@ -1971,111 +1784,152 @@ const (
 )
 
 // arrivalPredecessorLocked finds the recorded predecessor of one chain
-// hop inside the landed link's transaction scope. The scope sub-indexes
-// keep the work proportional to the hop's OWN scope rather than every
-// move that ever landed at this key (r54 review F3). Identity binds by
-// the exact replacement the hop consumed: other generations a
-// same-transaction link staged at the same (netted, temporary) key are
-// neither predecessors nor contradictions once the hop's own generation
-// is found (r54 review F2). The fail-closed lanes stay: competing EXACT
-// identities, a different attributed identity when the hop's own is
-// missing, or several identity-less candidates all leave the evidence
-// unusable.
+// hop inside the landed link's transaction scope. The hop binds through
+// the recorded same-transaction pairing ALONE (D228, inverted): the
+// predecessor is the landed link whose succ_link_id names cur, verified
+// against the chain scope and the statement ordinals exactly as the
+// forward walk verifies its continuation (scope equality, strictly
+// increasing ordinal) — never by (key, scope) inference, which cannot
+// distinguish two lineages that shared one netted temporary key in one
+// transaction (era-26 regression). The fail-closed lanes stay: several
+// recorded predecessors of one hop, or pairing evidence contradicting
+// the chain scope, the ordinal order, or the consumed workspace
+// identity, all leave the evidence unusable. No recorded predecessor
+// names cur: cur is its chain's origin, and attribution grounds the
+// chain at the origin's committed deleting tombstone.
 func (p *pkMoveLinkProvider) arrivalPredecessorLocked(
 	b *pkMoveArrivalBuild,
 	scope pkMoveTxnScope,
 	cur pkMoveLink,
 ) (pred *pkMoveLink, outcome pkMovePredOutcome) {
+	if !cur.hasLinkID {
+		return nil, pkMovePredMissing
+	}
 	pi := b.predIdx[string(cur.oldPK)]
 	if pi == nil {
 		return nil, pkMovePredMissing
 	}
 	links := b.lands[string(cur.oldPK)]
-	// The scope lanes reproduce pkMoveTxnScope.matches exactly: a durable
-	// transaction matches its own txn-id links plus the unknown-
-	// transaction links created at its timestamp; an unknown-transaction
-	// scope matches every link of its timestamp lane. Identity binding,
-	// ambiguity, and contradiction read the lane's precomputed buckets —
-	// only the matching candidates themselves are examined (r55 F1).
-	var b1, b2 *pkMoveArrivalScopeBucket
-	if scope.hasTxn {
-		b1 = pi.txnIdx[scope.txnID]
-		b2 = pi.tsNoTxnIdx[scope.writeTS]
-	} else {
-		b1 = pi.tsAllIdx[scope.writeTS]
+	cands := pi.bySucc[cur.linkID]
+	p.arrivalScans += uint64(len(cands))
+	verified := -1
+	verifiedN := 0
+	for _, pos := range cands {
+		cand := &links[pos]
+		if !scope.matches(cand) || cand.stmtSeq >= cur.stmtSeq {
+			// The recorded pairing names cur, but the candidate
+			// contradicts the chain scope or the ordinal order:
+			// corrupt catalog evidence.
+			return nil, pkMovePredAmbiguous
+		}
+		verified = pos
+		verifiedN++
 	}
-	exactN, looseN, carrying := 0, 0, 0
-	exactPos, loosePos := -1, -1
-	consult := func(bk *pkMoveArrivalScopeBucket) {
-		if bk == nil {
-			return
-		}
-		hits := bk.byID[cur.oldRowID]
-		p.arrivalScans += uint64(len(hits))
-		exactN += len(hits)
-		if len(hits) == 1 {
-			exactPos = hits[0]
-		}
-		carrying += bk.carryingN
-		// Identity-less candidates are examined only when the hop's own
-		// generation is unrecorded AND nothing contradicts it: the
-		// loose classification's actual input (below).
-		if exactN == 0 && carrying == 0 {
-			p.arrivalScans += uint64(len(bk.idless))
-			looseN += len(bk.idless)
-			if len(bk.idless) == 1 {
-				loosePos = bk.idless[0]
-			}
-		}
-	}
-	consult(b1)
-	consult(b2)
 	switch {
-	case exactN > 1:
+	case verifiedN > 1:
+		// Two distinct landings both record cur as their successor:
+		// one transaction commits each generation once, so competing
+		// recordings are corrupt.
 		return nil, pkMovePredAmbiguous
-	case exactN == 1:
-		// The hop's own generation is recorded: identity-less candidates
-		// can only be duplicate recordings of the same landing (one
-		// committed image per key per scope), so the exact binding wins.
-		return &links[exactPos], pkMovePredFound
-	case carrying > 0:
-		return nil, pkMovePredContradicted
-	case looseN > 1:
-		return nil, pkMovePredAmbiguous
-	case looseN == 1:
-		return &links[loosePos], pkMovePredFound
+	case verifiedN == 0:
+		return nil, pkMovePredMissing
 	}
-	return nil, pkMovePredMissing
+	cand := &links[verified]
+	if cand.hasNewRowID && cand.newRowID != cur.oldRowID {
+		// The pairing claims continuity, but the candidate's staged
+		// replacement identity is not the identity cur consumed:
+		// contradictory retained evidence.
+		return nil, pkMovePredContradicted
+	}
+	return cand, pkMovePredFound
 }
 
-// attributeArrivalLocked walks one candidate landing link BACKWARD
-// through its recorded same-transaction chain and records the chain's
-// grounded commit instant — the origin's deleting tombstone — into ent.
-// Ungrounded chains (a same-transaction insert-then-move) record
-// nothing and keep the D87 approximation lane. A chain that fails to
-// attribute (ambiguous or contradicted predecessor, cycle, or more
-// hops than the walk's own cap) undecides exactly the instants its
-// evidence can still answer: the landed chain's feasible IN-WINDOW
-// commit instants, derived from committed-stream evidence (r59 review
-// F1 — write_ts is the transaction's creation time, a strict lower
-// bound of its commit, so keying undecidability on it never answers
-// the commit-shaped queries the tie and the tail issue) — and, for
-// corrupt grounding, the competing tombstone instants (r58 review F2).
+// attributeArrivalLocked attributes one candidate landing link's commit
+// instant into ent. Every landing walks its chain BACKWARD through the
+// recorded same-transaction links: the walk's predecessor consistency
+// checks (ambiguous or contradicted predecessor, a rotation cycle) stand
+// for stamped and stamp-pending landings alike, because corrupt catalog
+// evidence never justifies a tie. A stamp-pending landing is healed by
+// grounding the chain at the origin's committed deleting tombstone —
+// one transaction commits once, so that tombstone's instant commits the
+// whole chain (the grounding IS the D227 stream heal for every hop;
+// D225 stamps on a walked chain serve as consistency checks — a stamp
+// disagreeing with the grounded instant undecides both instants), and
+// the landed link faces the D226 windowed gate before its instant may
+// justify a tie. A landing carrying its D225 commit stamp needs no
+// heal: when the walk cannot ground the instant (an origin staged
+// inside the transaction, or a chain longer than the walk cap) the
+// recorded stamp attributes the arrival directly — one transaction
+// commits once, and chain length never truncates a recorded instant
+// (r59 review F1). Ungrounded stamp-pending chains (a same-transaction
+// insert-then-move) record nothing and keep the D87 approximation lane.
+// A chain that fails to attribute (ambiguous or contradicted
+// predecessor, cycle, an over-cap stamp-pending chain, or a corrupt or
+// tainted grounding) undecides exactly the instants its evidence can
+// still answer: the competing tombstone instants of a corrupt grounding
+// (r58 review F2) plus every commit instant the failed chain's own
+// transaction could still have committed at under the D227 outcome
+// table; a scope whose commit is unprovable fails the landed key closed
+// outright.
 func (p *pkMoveLinkProvider) attributeArrivalLocked(
 	view pkMoveStreamView,
 	b *pkMoveArrivalBuild,
 	landedKey string,
 	landedIdx int,
 	ent *pkMoveArrivalEntry,
+	seenScopes map[pkMoveTxnScope]types.TS,
 ) error {
 	landed := b.lands[landedKey][landedIdx]
 	scope := pkMoveLinkTxnScope(&landed)
 	poison := func() {
-		for cts := range p.failedArrivalCommitsLocked(view, b, scope) {
+		instants, unresolvable := p.arrivalScopeCommitsLocked(view, b, scope)
+		for cts := range instants {
 			ent.undecidable[cts] = struct{}{}
 		}
+		if unresolvable || len(instants) > 1 {
+			// The scope's own commit is unprovable, or its links resolve
+			// to two instants (one transaction commits once: corrupt):
+			// the evidence cannot prove this chain did NOT commit at the
+			// queried instant either, so the key fails closed outright.
+			ent.unresolved = true
+		}
+	}
+	if err := p.arrivalBuildCtxErr(); err != nil {
+		// D157 (A): cancellation aborts the whole build, not just this
+		// candidate; the caller discards every partial attribution.
+		return err
+	}
+	// attribute records one justified arrival instant for this scope,
+	// deduplicating a transaction's several landings at this key (the
+	// chain is ONE justifier of its commit instant). One transaction
+	// commits once, so the same scope attributing two instants is
+	// corrupt and fails the key closed.
+	attribute := func(cts types.TS) {
+		if prev, ok := seenScopes[scope]; ok {
+			if !prev.EQ(&cts) {
+				ent.unresolved = true
+			}
+			return
+		}
+		seenScopes[scope] = cts
+		ent.instants[cts]++
+	}
+	// stampedAttribute attributes a stamped landing whose chain evidence
+	// cannot ground the instant — an origin staged inside the
+	// transaction, or a chain longer than the walk cap: the recorded
+	// stamp IS the arrival's commit instant (one transaction commits
+	// once), so no heal is needed and chain length never truncates a
+	// recorded instant (r59 review F1). The D226 windowed gate still
+	// excludes an out-of-window stamp before it can justify the tie,
+	// never loud.
+	stampedAttribute := func() {
+		if landed.hasWindow && !landed.window.containsCommit(landed.commitTS) {
+			return
+		}
+		attribute(landed.commitTS)
 	}
 	cur := landed
+	chain := []pkMoveLink{landed}
 	seen := map[string]struct{}{pkMoveLinkRowKey(cur.oldRowID, cur.oldPK): {}}
 	for hops := 0; hops <= pkMoveLinkMaxChain; hops++ {
 		if err := p.arrivalBuildCtxErr(); err != nil {
@@ -2088,9 +1942,9 @@ func (p *pkMoveLinkProvider) attributeArrivalLocked(
 			// Two committed tombstones deleting one version: corrupt
 			// stream, fail closed like the verdict walk does — scoped
 			// to the only instants this evidence can answer: the
-			// competing tombstone instants plus every in-window instant
-			// the chain's transaction could still have committed at
-			// (r58 review F2, r59 review F1).
+			// competing tombstone instants plus every instant the
+			// chain's transaction could still have committed at (r58
+			// review F2).
 			for _, cts := range refs {
 				ent.undecidable[cts] = struct{}{}
 			}
@@ -2108,10 +1962,36 @@ func (p *pkMoveLinkProvider) attributeArrivalLocked(
 				poison()
 				return nil
 			}
+			// D225 consistency: every stamp the chain carries must agree
+			// with the grounded instant — one transaction commits once,
+			// so a disagreeing stamp contradicts the stream and both
+			// instants fail closed.
+			consistent := true
+			for i := range chain {
+				if chain[i].hasCommitTS && !chain[i].commitTS.EQ(&refs[0]) {
+					ent.undecidable[chain[i].commitTS] = struct{}{}
+					consistent = false
+				}
+			}
+			if !consistent {
+				ent.undecidable[refs[0]] = struct{}{}
+				return nil
+			}
+			// D226 condition (i): the instant must fall inside the
+			// landed candidate's own attributed window. An out-of-window
+			// commit is excluded before it can justify the tie.
+			if landed.hasWindow && !landed.window.containsCommit(refs[0]) {
+				return nil
+			}
 			// Grounded: the version the chain moved out of the origin
 			// key was a committed stream image, so the whole chain is a
 			// recorded arrival committed at this tombstone's instant.
-			ent.instants[refs[0]] = struct{}{}
+			attribute(refs[0])
+			if !landed.hasCommitTS {
+				// The grounding healed the chain's commit instant:
+				// queue the D227(e) best-effort re-stamp.
+				p.queueRestampLocked(&landed, refs[0])
+			}
 			return nil
 		}
 		pred, outcome := p.arrivalPredecessorLocked(b, scope, cur)
@@ -2119,12 +1999,18 @@ func (p *pkMoveLinkProvider) attributeArrivalLocked(
 		case pkMovePredMissing:
 			// The chain's origin staged its old version inside the
 			// transaction (insert-then-move) and never committed a
-			// tombstone the stream can attribute.
+			// tombstone the stream can attribute. A stamp-pending
+			// landing records nothing and keeps the D87 approximation
+			// lane; a stamped landing needs no grounding — the recorded
+			// stamp attributes the arrival directly (D225).
+			if landed.hasCommitTS {
+				stampedAttribute()
+			}
 			return nil
 		case pkMovePredAmbiguous, pkMovePredContradicted:
-			// Scoped: only the in-window instants the chain's
-			// transaction could still have committed at depend on this
-			// evidence (r58 review F2, r59 review F1).
+			// Scoped: only the instants the chain's transaction could
+			// still have committed at depend on this evidence (r58
+			// review F2).
 			poison()
 			return nil
 		}
@@ -2132,57 +2018,326 @@ func (p *pkMoveLinkProvider) attributeArrivalLocked(
 		if _, cyc := seen[rowKey]; cyc {
 			// A rotation returned to a generation this attribution
 			// already visited: unbounded by construction, fail closed
-			// for the in-window instants the chain's transaction could
-			// still have committed at (r59 review F1).
+			// for the instants the chain's transaction could still have
+			// committed at.
 			poison()
 			return nil
 		}
 		seen[rowKey] = struct{}{}
 		cur = *pred
+		chain = append(chain, cur)
 	}
 	// More hops than the walk itself would follow: no verdict may rest
-	// on an attribution the fold could never replay. Scoped to the
-	// in-window instants the chain's transaction could still have
-	// committed at (r59 review F1): the hit-free prefix cannot pin the
-	// origin's grounding tombstone when it lies past the cap — or the
-	// truncated closure allowed through — but the transaction's own
-	// recorded links still bound when it could have committed through
-	// their own departure and collision tombstones; creation time
-	// never substitutes for commit time.
+	// on an attribution the fold could never replay. A stamped landing
+	// needs no walk — chain length never truncates its recorded instant
+	// (r59 review F1) — so only a stamp-pending landing poisons, scoped
+	// to the instants the chain's transaction could still have committed
+	// at: the hit-free prefix cannot pin the origin's grounding
+	// tombstone when it lies past the cap, but the transaction's own
+	// recorded links still bound when it could have committed under the
+	// D227 outcome table.
+	if landed.hasCommitTS {
+		stampedAttribute()
+		return nil
+	}
 	poison()
 	return nil
 }
 
-// failedArrivalCommitsLocked answers one failed chain scope's feasible
-// in-window commit instants, memoized per scope for the build's
-// lifetime (r59 review F1) and resolved by the D156 scope->commit
-// capture index: a scope present names exactly the captured instant, a
-// scope absent names nothing (r50 (B)). The r49 approximation channels
-// — origin-departure tombstones and arrival-key collision deaths — are
-// deleted: unrecorded-commit evidence can only approximate, and an
-// approximation both over-poisons (an unrelated same-window removal
-// mistaken for the chain's commit) and under-poisons (the r60
-// absence-mistaken-for-resolution hole).
-func (p *pkMoveLinkProvider) failedArrivalCommitsLocked(
+// arrivalScopeCommitsLocked answers one failed chain scope's feasible
+// commit instants, memoized per scope for the build's lifetime. Each of
+// the scope's recorded links resolves through the D227 outcome table: a
+// resolved instant is one the transaction could still have committed
+// at, proven window absence contributes nothing (never loud), and an
+// unprovable link leaves the scope's commit undecidable outright — the
+// caller then fails the landed key closed rather than naming instants.
+func (p *pkMoveLinkProvider) arrivalScopeCommitsLocked(
 	view pkMoveStreamView,
 	b *pkMoveArrivalBuild,
 	scope pkMoveTxnScope,
-) map[types.TS]struct{} {
-	if b.failedArrivals == nil {
-		b.failedArrivals = make(map[pkMoveTxnScope]map[types.TS]struct{})
+) (map[types.TS]struct{}, bool) {
+	if b.scopeCommits == nil {
+		b.scopeCommits = make(map[pkMoveTxnScope]pkMoveArrivalScopeCommits)
 	}
-	if m, ok := b.failedArrivals[scope]; ok {
-		return m
+	if sc, ok := b.scopeCommits[scope]; ok {
+		return sc.instants, sc.unresolvable
 	}
-	m := make(map[types.TS]struct{})
-	p.arrivalCommitIdx.commits(scope, m)
-	b.failedArrivals[scope] = m
-	return m
+	sc := pkMoveArrivalScopeCommits{instants: make(map[types.TS]struct{})}
+	for _, links := range p.byPK {
+		for i := range links {
+			p.arrivalScans++
+			if !scope.matches(&links[i]) {
+				continue
+			}
+			cts, outcome := p.resolveLinkCommitLocked(view, &links[i], nil)
+			switch outcome {
+			case pkMoveCommitResolved:
+				sc.instants[cts] = struct{}{}
+			case pkMoveCommitUnprovable:
+				sc.unresolvable = true
+			case pkMoveCommitExcluded:
+				// Proven window absence: contributes nothing, never loud.
+			}
+		}
+	}
+	b.scopeCommits[scope] = sc
+	return sc.instants, sc.unresolvable
 }
 
-// (The r49 approximation scan of scanFailedArrivalCommitsLocked — two
-// committed-tombstone channels with an unpaired-names-nothing lane — is
-// deleted under D156: exact capture evidence replaces approximation.)
+// pkMoveCommitOutcome is the D227 recovery outcome table's answer for one
+// NULL-stamped link: the commit instant is resolved (stamped, healed from
+// the protected stream, or inherited across the transaction's own netted
+// generations), the link is EXCLUDED as proven window absence (a
+// stream-bound identity with no in-window death on a complete retained
+// stream — never loud), or the retained evidence is genuinely incomplete
+// or ambiguous and the apply aborts loudly.
+type pkMoveCommitOutcome int
+
+const (
+	pkMoveCommitResolved pkMoveCommitOutcome = iota
+	pkMoveCommitExcluded
+	pkMoveCommitUnprovable
+)
+
+// resolveLinkCommitLocked settles one link's commit instant (D225/D227).
+// A stamped link answers directly. A NULL stamp resolves by identity
+// class:
+//
+//   - TRANSACTION-LOCAL (a workspace placeholder, an uncommitted S3
+//     object identity reached through the persisted pairing, or any hop
+//     the running chain reached through a verified pairing): the
+//     transaction's diverted deletes publish no tombstones, so a missing
+//     death carries no window information. The instant is INHERITED from
+//     the running chain's own binding when txLocalInst is non-nil (D232:
+//     one transaction one commit instant — the netted hop commits with
+//     its anchor), else from any admitted same-transaction sibling
+//     (stamped or healed) found by siblingCommitLocked. No bound
+//     inheritance source is unprovable provenance: abort loudly.
+//   - STREAM-BOUND (a durable committed row identity): the move and its
+//     link commit atomically, so the linked row version dies exactly
+//     once. Exactly one untainted death of old_row_id HEALS the instant;
+//     zero deaths on the complete retained stream is proven window
+//     absence (EXCLUDED, never loud); two or more deaths, or a synthetic
+//     (tainted) instant among them, is corrupt retained evidence and
+//     aborts loudly.
+//
+// The caller applies the D226 gate to a resolved instant: it must equal
+// the required departure instant AND fall inside the link's own
+// attributed window. Healed and inherited instants are queued for the
+// D227(e) best-effort re-stamp; a re-stamp failure is harmless (the next
+// read re-derives).
+func (p *pkMoveLinkProvider) resolveLinkCommitLocked(
+	view pkMoveStreamView,
+	link *pkMoveLink,
+	txLocalInst *types.TS,
+) (types.TS, pkMoveCommitOutcome) {
+	if link.hasCommitTS {
+		return link.commitTS, pkMoveCommitResolved
+	}
+	if txLocalInst != nil {
+		// A hop the running chain reached through a verified pairing
+		// inherits the chain's binding outright: one transaction commits
+		// once, so the netted hop's commit equals the anchor's.
+		p.queueRestampLocked(link, *txLocalInst)
+		return *txLocalInst, pkMoveCommitResolved
+	}
+	if pkMoveIsWorkspaceRowid(&link.oldRowID) {
+		// Transaction-local identity with no running chain: inherit from
+		// an admitted same-transaction sibling if one resolves.
+		if inst, ok := p.siblingCommitLocked(view, link); ok {
+			p.queueRestampLocked(link, inst)
+			return inst, pkMoveCommitResolved
+		}
+		return types.TS{}, pkMoveCommitUnprovable
+	}
+	// Stream-bound: the linked row version's deaths in the protected
+	// stream decide. The stream is complete by the time any walk reads
+	// it (a stream-collection failure aborts the apply upstream).
+	var heal []types.TS
+	tainted := false
+	for _, ref := range view.deathRefsOf(link.oldPK, link.oldRowID) {
+		if pkMoveViewInstantTainted(view, ref.cts) {
+			// A synthetic window-end instant is a serving-handle stamp,
+			// never a recorded commit: it can neither heal nor prove
+			// absence.
+			tainted = true
+			continue
+		}
+		heal = append(heal, ref.cts)
+	}
+	if tainted {
+		return types.TS{}, pkMoveCommitUnprovable
+	}
+	if len(heal) > 1 {
+		// The linked version died twice in-window: corrupt retained
+		// evidence, abort loudly.
+		return types.TS{}, pkMoveCommitUnprovable
+	}
+	if len(heal) == 1 {
+		p.queueRestampLocked(link, heal[0])
+		return heal[0], pkMoveCommitResolved
+	}
+	// Complete stream, no in-window death: proven window absence.
+	return types.TS{}, pkMoveCommitExcluded
+}
+
+// siblingCommitLocked finds an admitted same-transaction sibling link
+// whose resolved commit instant a transaction-local NULL-stamped link
+// may inherit (D227 (b)): one transaction commits once, so any sibling
+// whose own instant resolves — stamped, or healed from the protected
+// stream — binds the whole transaction. The inherited instant still
+// faces the D226 gate against the inheriting link's own window.
+func (p *pkMoveLinkProvider) siblingCommitLocked(
+	view pkMoveStreamView,
+	link *pkMoveLink,
+) (types.TS, bool) {
+	scope := pkMoveLinkTxnScope(link)
+	for _, links := range p.byPK {
+		for i := range links {
+			sib := &links[i]
+			if sib == link || !scope.matches(sib) {
+				continue
+			}
+			if sib.hasCommitTS {
+				return sib.commitTS, true
+			}
+			if pkMoveIsWorkspaceRowid(&sib.oldRowID) {
+				// Another transaction-local sibling cannot bind the
+				// transaction (its diverted delete publishes no
+				// tombstone either); only a stream-bound sibling heals.
+				continue
+			}
+			var heal []types.TS
+			tainted := false
+			for _, ref := range view.deathRefsOf(sib.oldPK, sib.oldRowID) {
+				if pkMoveViewInstantTainted(view, ref.cts) {
+					tainted = true
+					continue
+				}
+				heal = append(heal, ref.cts)
+			}
+			if tainted || len(heal) != 1 {
+				continue
+			}
+			p.queueRestampLocked(sib, heal[0])
+			return heal[0], true
+		}
+	}
+	return types.TS{}, false
+}
+
+// queueRestampLocked records one D227(e) best-effort re-stamp by exact
+// link_id; fixture links without a durable id have nothing to persist.
+func (p *pkMoveLinkProvider) queueRestampLocked(link *pkMoveLink, cts types.TS) {
+	if !link.hasLinkID || p.restamps == nil {
+		return
+	}
+	p.restamps[link.linkID] = cts
+}
+
+// flushRestamps persists the queued D227(e) re-stamps through one
+// chunked autocommit UPDATE per account, under each link window's
+// resolved owner context (D220 (B.2)). Best-effort: every error is
+// logged and swallowed — a failed re-stamp leaves the NULL stamp the
+// next read re-derives from the same protected evidence.
+func (p *pkMoveLinkProvider) flushRestamps() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	if len(p.restamps) == 0 || p.bh == nil {
+		p.restamps = make(map[[catalog.DataBranchUpdateLinkIDBytes]byte]types.TS)
+		p.mu.Unlock()
+		return
+	}
+	pending := p.restamps
+	p.restamps = make(map[[catalog.DataBranchUpdateLinkIDBytes]byte]types.TS)
+	p.mu.Unlock()
+
+	byAccount := make(map[uint32][][catalog.DataBranchUpdateLinkIDBytes]byte)
+	instant := make(map[[catalog.DataBranchUpdateLinkIDBytes]byte]types.TS, len(pending))
+	for id, cts := range pending {
+		link, ok := p.byID[id]
+		var account uint32
+		if ok && link.hasWindow {
+			if acc, err := defines.GetAccountId(link.window.readCtx(p.ctx)); err == nil {
+				account = acc
+			}
+		}
+		byAccount[account] = append(byAccount[account], id)
+		instant[id] = cts
+	}
+	for account, ids := range byAccount {
+		for start := 0; start < len(ids); start += pkMoveLinkRestampChunk {
+			end := start + pkMoveLinkRestampChunk
+			if end > len(ids) {
+				end = len(ids)
+			}
+			var sb strings.Builder
+			sb.WriteString("update mo_catalog.")
+			sb.WriteString(catalog.MO_DATA_BRANCH_UPDATE_LINK)
+			sb.WriteString(" set ")
+			sb.WriteString(catalog.DataBranchUpdateLinkColCommitTS)
+			sb.WriteString(" = case ")
+			sb.WriteString(catalog.DataBranchUpdateLinkColLinkID)
+			for _, id := range ids[start:end] {
+				cts := instant[id]
+				fmt.Fprintf(&sb, " when x'%x' then x'%x'", id[:], cts[:])
+			}
+			sb.WriteString(" end where ")
+			sb.WriteString(catalog.DataBranchUpdateLinkColLinkID)
+			sb.WriteString(" in (")
+			for i, id := range ids[start:end] {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				fmt.Fprintf(&sb, "x'%x'", id[:])
+			}
+			sb.WriteString(")")
+			execCtx := p.ctx
+			if account != 0 {
+				execCtx = defines.AttachAccountId(p.ctx, account)
+			}
+			if err := p.bh.Exec(execCtx, sb.String()); err != nil {
+				logutil.Warn(
+					"DataBranch-PkMoveLink-RestampFailed",
+					zap.Uint32("account", account),
+					zap.Int("links", end-start),
+					zap.Error(err),
+				)
+			}
+		}
+	}
+}
+
+// pkMoveLinkRestampChunk bounds one re-stamp UPDATE's link_id set.
+const pkMoveLinkRestampChunk = 256
+
+// linkByID serves the D232 recorded-continuation point probe: the
+// recorded continuation's old key is the running key, so ensuring that
+// key's probe completeness makes the by-id cache complete for the
+// lookup; a missing id under complete evidence is contradictory pairing
+// evidence (fail closed), never a fall-through.
+func (p *pkMoveLinkProvider) linkByID(
+	oldKey []byte, id [catalog.DataBranchUpdateLinkIDBytes]byte,
+) (link pkMoveLink, found bool, complete bool, err error) {
+	if p == nil {
+		return pkMoveLink{}, false, true, nil
+	}
+	if err = p.ensureProbedForKey(oldKey); err != nil {
+		return pkMoveLink{}, false, false, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.disabled {
+		return pkMoveLink{}, false, false, nil
+	}
+	if !p.keyCompleteLocked(oldKey) {
+		return pkMoveLink{}, false, false, nil
+	}
+	link, found = p.byID[id]
+	return link, found, true, nil
+}
 
 // pkMoveDepKeyIndex is one old-pk key's departure links prepared for
 // repeated successor lookups (r55 review F2). byRow binds the exact
@@ -2270,144 +2425,76 @@ func (p *pkMoveLinkProvider) departIndexLocked(key []byte) *pkMoveDepKeyIndex {
 	return idx
 }
 
-// successorOf returns the unique link that departs key by moving the row
-// whose identity is inhabitant. The identity pin is what makes the walk
-// sound: occupants of the same key belonging to other rows never match.
-// count reports how many links name (key, inhabitant): exactly one is a
-// usable successor; several is ambiguous evidence and callers must fail
-// closed just like incomplete evidence. complete=false means the probe
-// space could not be fully read (provider over budget).
-//
-// The transaction scope namespaces transaction-local identities:
-// workspace-stage row ids restart at the same values in every transaction,
-// so a link committed by a DIFFERENT transaction that names the same (key,
-// workspace inhabitant) pair is a namesake coincidence, not this lineage's
-// departure. Such cross-transaction coincidences are excluded BEFORE
-// counting; same-transaction duplicates still count (genuine within-txn
-// ambiguity), and durable inhabitants stay unscoped because their identity
-// is globally unique already. The scope matches by durable transaction id
-// when both sides carry one, with the create timestamp as fallback — the
-// timestamp alone is not a namespace (two transactions created inside one
-// physical instant share it).
-func (p *pkMoveLinkProvider) successorOf(
-	key []byte, inhabitant types.Rowid, scope pkMoveTxnScope,
-) (succ pkMoveLink, count int, complete bool, err error) {
-	if p == nil {
-		return pkMoveLink{}, 0, true, nil
-	}
-	if err = p.ensureProbedForKey(key); err != nil {
-		return pkMoveLink{}, 0, false, err
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.disabled {
-		return pkMoveLink{}, 0, false, nil
-	}
-	if !p.keyCompleteLocked(key) {
-		// The key's own evidence could not be fully read (overflow or a
-		// probe gap on a non-cached window): count zero here would read
-		// as a proven lineage end, so report incomplete and fail closed.
-		return pkMoveLink{}, 0, false, nil
-	}
-	isWS := pkMoveIsWorkspaceRowid(&inhabitant)
-	idx := p.departIndexLocked(key)
-	links := p.byPK[string(key)]
-	// A transaction-local identity is bound INSIDE its applicable scope
-	// lanes (r56 review F1): the durable-transaction links of this exact
-	// transaction plus the unknown-transaction links minted at its
-	// timestamp, or — for an unknown-transaction scope — every link of
-	// its timestamp lane. The lanes replicate pkMoveTxnScope.matches'
-	// asymmetry exactly, so cross-transaction namesakes of the bare
-	// workspace id are never scanned; the scope guard below stays the
-	// defensive check it was. A durable inhabitant stays on the raw row
-	// lane: its identity is globally unique, so the raw lane names only
-	// genuine duplicates, which must keep counting as ambiguity.
-	var candIdx []int
-	switch {
-	case !isWS:
-		candIdx = idx.byRow[inhabitant]
-	case scope.hasTxn:
-		candIdx = append(candIdx, idx.byTxnRow[scope.txnID][inhabitant]...)
-		candIdx = append(candIdx, idx.byTSNoneRow[scope.writeTS][inhabitant]...)
-	default:
-		candIdx = idx.byTSAllRow[scope.writeTS][inhabitant]
-	}
-	for _, i := range candIdx {
-		p.depScans++
-		link := &links[i]
-		if isWS && !scope.matches(link) {
-			// Unreachable through the lanes above; keep the guard so a
-			// lane change can never silently widen the match set.
-			continue
-		}
-		count++
-		succ = *link
-	}
-	// Zero means the lineage vanished without a recorded departure; several
-	// means reincarnation made the continuation ambiguous.
-	return succ, count, true, nil
-}
-
-// successorOfCommitted finds the link moving a COMMITTED stream identity:
-// a version the diff itself observed (a live row, or a tombstone paired
-// with its captured birth). Unlike transaction-local identities a
-// committed (key, row id, birth, death) tuple is unique in the stream —
-// the recording transaction had to read that exact committed image to
-// move it — so no write-timestamp namespace applies here: the successor
-// of a committed departure legitimately belongs to a LATER transaction.
-// Several links naming the same committed (key, row id) pair are cross-
-// transaction namesakes of one raw workspace id and remain ambiguous:
-// callers fail closed on count > 1 just like incomplete evidence.
-func (p *pkMoveLinkProvider) successorOfCommitted(
+// successorsOfCommitted returns every recorded link departing key by
+// moving the COMMITTED stream identity inhabitant: a version the diff
+// itself observed (a live row, or a tombstone paired with its captured
+// birth). Unlike transaction-local identities a committed (key, row id,
+// birth, death) tuple is unique in the stream — the recording
+// transaction had to read that exact committed image to move it — so no
+// write-timestamp namespace applies here: the successor of a committed
+// departure legitimately belongs to a LATER transaction. Callers apply
+// the D226/D230 admission gate per candidate (resolved commit instant
+// equal to the departure instant and inside the candidate's attributed
+// window); several DISTINCT admitted links naming the same committed
+// pair are cross-transaction namesakes of one raw workspace id and
+// remain ambiguous evidence that fails closed.
+func (p *pkMoveLinkProvider) successorsOfCommitted(
 	key []byte, inhabitant types.Rowid,
-) (succ pkMoveLink, count int, complete bool, err error) {
+) (cands []pkMoveLink, complete bool, err error) {
 	if p == nil {
-		return pkMoveLink{}, 0, true, nil
+		return nil, true, nil
 	}
 	if err = p.ensureProbedForKey(key); err != nil {
-		return pkMoveLink{}, 0, false, err
+		return nil, false, err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.disabled {
-		return pkMoveLink{}, 0, false, nil
+		return nil, false, nil
 	}
 	if !p.keyCompleteLocked(key) {
 		// The key's own evidence could not be fully read (overflow or a
-		// probe gap on a non-cached window): count zero here would read
-		// as a proven lineage end, so report incomplete and fail closed.
-		return pkMoveLink{}, 0, false, nil
+		// probe gap on a non-cached window): an empty answer here would
+		// read as a proven lineage end, so report incomplete and fail
+		// closed.
+		return nil, false, nil
 	}
 	idx := p.departIndexLocked(key)
 	links := p.byPK[string(key)]
 	for _, i := range idx.byRow[inhabitant] {
 		p.depScans++
-		count++
-		succ = links[i]
+		cands = append(cands, links[i])
 	}
-	return succ, count, true, nil
+	return cands, true, nil
 }
 
-// successorOfSameTxnKey returns the recorded link(s) departing key inside
-// the walk's current transaction (the scope matches by durable
-// transaction id when both sides carry one, create timestamp otherwise).
-// Unlike successorOf it matches by KEY alone: S3-route links carry no
-// replacement identity, so a NULL-identity lineage landing at key cannot
-// pin its continuation by row id. The commit-time prune already resolved
-// that ambiguity the same way: the death-ledger rescue keeps a NULL link
-// exactly when an ALIVE same-transaction link departs its new key
-// (continuers group by old key). Following that departure reproduces the
-// prune's own chain decision at the diff side — but only when the
-// departure did NOT consume a committed pre-image visible in the window
-// (a tombstone at key naming the departure's old row id): such a
-// departure vacated an older generation of the key, not the landed one,
-// and following it would adopt a foreign lineage. Callers perform that
-// tombstone screen before hopping. A bare commit-timestamp claim at an
-// intermediate key would as happily adopt an unrelated same-instant
-// reincarnation. Several departures under one key in one transaction are
-// ambiguous evidence: callers fail closed on count > 1.
+// successorOfCommitted keeps the claim qualifier's count semantics over
+// successorsOfCommitted: exactly one recorded departure defers the
+// claimed candidate to the departure steps, several is ambiguous
+// evidence, and zero with complete evidence proves the lineage end.
+func (p *pkMoveLinkProvider) successorOfCommitted(
+	key []byte, inhabitant types.Rowid,
+) (succ pkMoveLink, count int, complete bool, err error) {
+	cands, complete, err := p.successorsOfCommitted(key, inhabitant)
+	if err != nil || !complete {
+		return pkMoveLink{}, 0, complete, err
+	}
+	if len(cands) > 0 {
+		succ = cands[len(cands)-1]
+	}
+	return succ, len(cands), true, nil
+}
+
+// successorOfSameTxnKey serves the D232 NULL-terminal cross-check: it
+// counts the recorded links departing key inside the walk's current
+// transaction (the scope matches by durable transaction id when both
+// sides carry one, create timestamp otherwise) at a statement ordinal
+// STRICTLY greater than stmtSeqAfter. A recorded NULL continuation is
+// TERMINAL by construction (D228), so any such retained departure
+// contradicts it and the caller fails closed; zero with complete
+// evidence lets the walk proceed to the timestamp claim.
 func (p *pkMoveLinkProvider) successorOfSameTxnKey(
-	key []byte, scope pkMoveTxnScope,
+	key []byte, scope pkMoveTxnScope, stmtSeqAfter uint64,
 ) (succ pkMoveLink, count int, complete bool, err error) {
 	if p == nil {
 		return pkMoveLink{}, 0, true, nil
@@ -2423,7 +2510,7 @@ func (p *pkMoveLinkProvider) successorOfSameTxnKey(
 	if !p.keyCompleteLocked(key) {
 		// The key's own evidence could not be fully read (overflow or a
 		// probe gap on a non-cached window): count zero here would read
-		// as a proven lineage end, so report incomplete and fail closed.
+		// as a proven terminal, so report incomplete and fail closed.
 		return pkMoveLink{}, 0, false, nil
 	}
 	idx := p.departIndexLocked(key)
@@ -2445,6 +2532,11 @@ func (p *pkMoveLinkProvider) successorOfSameTxnKey(
 		if !scope.matches(link) {
 			// Unreachable through the lanes above; keep the guard so a
 			// lane change can never silently widen the match set.
+			continue
+		}
+		if link.stmtSeq <= stmtSeqAfter {
+			// Only a departure at a strictly greater statement ordinal
+			// can continue the incoming link (D228).
 			continue
 		}
 		count++
@@ -2619,12 +2711,15 @@ type pkMoveStreamView interface {
 	// fail-closed meaning, while valid departures and tails are served
 	// indexed by departed birth and commit instant instead of a
 	// full-bucket rescan per anchor (r56 review F2). succOf counts one
-	// deleted identity's committed successor links exactly as the walk's
-	// per-reference lookup did; linksLen reports the provider's current
-	// departure-link count at key so a stale index is rebuilt.
+	// deleted identity's ADMITTED committed successor links under the
+	// D226/D230 windowed gate (resolved commit instant equal to the
+	// departure tombstone's own instant and inside the successor's
+	// attributed window), exactly as the walk's per-reference lookup
+	// did; linksLen reports the provider's current departure-link count
+	// at key so a stale index is rebuilt.
 	pairingAt(
 		key []byte, chainTS types.TS,
-		succOf func(types.Rowid) (pkMoveLink, int, bool, error),
+		succOf func(types.Rowid, types.TS) (pkMoveLink, int, bool, error),
 		linksLen func() int,
 	) pkMovePairing
 }
@@ -2647,6 +2742,12 @@ type pkMoveTombKeyIndex struct {
 	// instant (only references with a recorded birth) for the
 	// born-in-the-deleting-instant reincarnation screen.
 	byBorn map[types.TS][]int
+	// byRowMemo memoizes each served row identity's exact reference
+	// list: the first serve counts its positions once, repeats serve
+	// free — the anchor-death check, the commit-instant heal, and the
+	// departure closure all consult the SAME (key, row) pair for one
+	// lineage, and the index snapshot is immutable while it is cached.
+	byRowMemo map[types.Rowid][]pkMoveTombRef
 }
 
 // pkMoveTombIndexCache lazily builds one tombstone index per key per
@@ -2699,13 +2800,24 @@ func buildPkMoveTombKeyIndex(
 	return idx
 }
 
-// deathRefsOf serves the exact row identity's references from the index.
+// deathRefsOf serves the exact row identity's references from the index,
+// memoized per (index, row): the first serve counts its positions, and
+// later serves of the same pair — the anchor-death check, the D227
+// commit heal, and the departure closure of one lineage all ask for the
+// same identity — reuse the list without rescanning.
 func (c *pkMoveTombIndexCache) deathRefsOf(idx *pkMoveTombKeyIndex, rowID types.Rowid) (out []pkMoveTombRef) {
+	if memo, ok := idx.byRowMemo[rowID]; ok {
+		return memo
+	}
 	pos := idx.byRow[rowID]
 	c.scans += uint64(len(pos))
 	for _, i := range pos {
 		out = append(out, idx.refs[i])
 	}
+	if idx.byRowMemo == nil {
+		idx.byRowMemo = make(map[types.Rowid][]pkMoveTombRef)
+	}
+	idx.byRowMemo[rowID] = out
 	return out
 }
 
@@ -2837,7 +2949,7 @@ func (c *pkMovePairingIndexCache) pairingFor(
 	key []byte,
 	refs []pkMoveTombRef,
 	departed func(types.Rowid, types.TS) (types.TS, bool),
-	succOf func(types.Rowid) (pkMoveLink, int, bool, error),
+	succOf func(types.Rowid, types.TS) (pkMoveLink, int, bool, error),
 	linksLen func() int,
 	chainTS types.TS,
 ) pkMovePairing {
@@ -2862,9 +2974,11 @@ func (c *pkMovePairingIndexCache) pairingFor(
 		// genuine cross-transaction continuation belongs to a LATER
 		// transaction than the hop that landed here: the successor comes
 		// without a write-timestamp namespace (the walk's closure widens
-		// it). Several links naming the same committed pair stay
-		// ambiguous and fail closed — for the whole key at once.
-		succ, count, complete, err := succOf(ref.rowID)
+		// it) but under the D226/D230 admission gate keyed on this
+		// reference's own death instant. Several DISTINCT admitted links
+		// naming the same committed pair stay ambiguous and fail closed
+		// — for the whole key at once.
+		succ, count, complete, err := succOf(ref.rowID, ref.cts)
 		if err != nil || !complete {
 			return pkMovePairing{verdict: pkMovePairingIncomplete}
 		}
@@ -3047,13 +3161,15 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 	anchorPK []byte,
 	anchorRowID types.Rowid,
 ) (finalPK []byte, finalRow []byte, verdict pkMoveResolution) {
-	anchor, hit, probeComplete := p.byRowProbeVerdict(anchorPK, anchorRowID)
-	if !hit {
-		if !probeComplete {
-			// The anchor probe itself could not be fully read: update
-			// intent is UNPROVEN, not absent.
-			return nil, nil, pkMoveUnresolved
-		}
+	cands, probeComplete, probeErr := p.anchorCandidates(anchorPK, anchorRowID)
+	if probeErr != nil || !probeComplete {
+		// The anchor probe itself could not be fully read: update
+		// intent is UNPROVEN, not absent.
+		return nil, nil, pkMoveUnresolved
+	}
+	if len(cands) == 0 {
+		// Complete evidence carries no update intent for this tombstone
+		// row: an independent delete, whose own semantics stand.
 		return nil, nil, pkMoveProvenNone
 	}
 	// The anchor tombstone's commit timestamp seeds the chain's birth
@@ -3072,6 +3188,50 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 		// stamped by the serving handle, never a recorded commit: no
 		// birth certificate may bind it (r53 D156(E) amendment).
 		return nil, nil, pkMoveUnresolved
+	}
+
+	// D226 windowed admission gate: a candidate binds this anchor only
+	// when its resolved commit instant (the D225 stamp, else the D227
+	// recovery outcome table) equals the anchor tombstone's instant AND
+	// falls inside the candidate's own attributed (table, window)
+	// segment. An out-of-window ancestor commit — a transaction created
+	// before its lineage window ended but committed after it — is
+	// excluded BEFORE it can bind or poison this shared row identity;
+	// zero admitted candidates is proven link-less for this window,
+	// and two DISTINCT admitted links on one row identity are genuinely
+	// ambiguous catalog evidence that fails closed loudly.
+	admitted := make(map[string]pkMoveLink)
+	unprovable := false
+	for i := range cands {
+		cts, outcome := p.resolveLinkCommit(view, &cands[i], nil)
+		switch outcome {
+		case pkMoveCommitUnprovable:
+			unprovable = true
+			continue
+		case pkMoveCommitExcluded:
+			continue
+		}
+		if cands[i].hasWindow && !cands[i].window.containsCommit(cts) {
+			// Out-of-window: neither binds nor poisons this anchor.
+			continue
+		}
+		if !cts.EQ(&chainTS) {
+			continue
+		}
+		admitted[pkMoveLinkDedupKey(&cands[i])] = cands[i]
+	}
+	if len(admitted) > 1 {
+		return nil, nil, pkMoveUnresolved
+	}
+	if len(admitted) == 0 {
+		if unprovable {
+			return nil, nil, pkMoveUnresolved
+		}
+		return nil, nil, pkMoveProvenNone
+	}
+	var anchor pkMoveLink
+	for _, a := range admitted {
+		anchor = a
 	}
 
 	// Anchor-vs-LCA continuity: the anchor row must descend from the image
@@ -3145,21 +3305,28 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 	k := anchor.newPK
 	scope := pkMoveLinkTxnScope(&anchor)
 	inhabitant, hasInhabitant := anchor.newRowID, anchor.hasNewRowID
+	// cur is the link whose arrival landed the walk at the current key:
+	// the recorded-continuation channel (D232) is settled from ITS
+	// persisted pairing before any timestamp claim at that key. hasCur
+	// drops only when a same-key tail consumes the landed version — the
+	// re-birthing transaction recorded no links, so no pairing channel
+	// remains to settle.
+	cur, hasCur := anchor, true
 	// visited records the newest birth certificate the walk has stood on
 	// at each key. A revisit with a LATER certificate is a lineage
 	// returning to a vacated key through a cross-transaction departure
 	// (the commit instant strictly increases at every stream hop and at
 	// every same-key tail). A revisit at the SAME instant is reachable
-	// only through a recorded same-transaction hop — the exact workspace
-	// identity probe or the tombstone-screened same-transaction key
-	// probe — and recorded hops cannot switch rows: the probe binds the
-	// lineage's own replacement identity, so the lineage itself returned
-	// home within one commit and the claim below resolves it (or the
-	// downstream checks fail closed). A true rotation CYCLE consists of
-	// distinct rows exchanging keys; each row's own walk resolves, and
-	// the fold planner rejects the exchange as a rotation cycle. Monotone
-	// certificates plus pkMoveLinkMaxChain bound the walk regardless:
-	// each recorded hop consumes a distinct link of one transaction.
+	// only through a recorded same-transaction hop — the persisted
+	// pairing credential — and recorded hops cannot switch rows: the
+	// verified pairing binds the lineage's own continuation, so the
+	// lineage itself returned home within one commit and the claim
+	// below resolves it (or the downstream checks fail closed). A true
+	// rotation CYCLE consists of distinct rows exchanging keys; each
+	// row's own walk resolves, and the fold planner rejects the
+	// exchange as a rotation cycle. Monotone certificates plus
+	// pkMoveLinkMaxChain bound the walk regardless: each recorded hop
+	// consumes a distinct link of one transaction.
 	visited := map[string]types.TS{string(anchorPK): chainTS}
 	// tailTaken records that the walk consumed the landed version's own
 	// link-less death (a same-key tail) and has not yet found any
@@ -3180,59 +3347,102 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 		}
 		visited[ks] = chainTS
 
-		// Recorded same-transaction continuity outranks a bare timestamp
-		// claim: when the incoming link's replacement identity is a
-		// workspace-stage row, an outgoing link chained on that identity
-		// names the lineage's next generation directly, while a live row
-		// born here at the same commit instant may be an unrelated
-		// reincarnation of the vacated intermediate key. Follow the
-		// recorded continuation first; fall through to the claim only
-		// when no continuation exists (the chain truly ends here).
-		if hasInhabitant && pkMoveIsWorkspaceRowid(&inhabitant) {
-			cand, count, complete, err := p.successorOf(k, inhabitant, scope)
-			if err != nil || !complete || count > 1 {
+		// D232: settle the incoming link's recorded continuation channel
+		// FIRST, before any timestamp claim at the current key — a live
+		// row born here at the same commit instant may be an unrelated
+		// reincarnation of a vacated intermediate key, never the lineage
+		// end while the incoming link's pairing is unsettled. A NON-NULL
+		// pairing is point-probed by exact link_id, verified (presence;
+		// scope equality; old_pk equal to the running key; strictly
+		// greater statement ordinal; one commit instant), and followed;
+		// missing or contradictory pairing evidence aborts loudly
+		// WITHOUT falling through to a claim. A NULL pairing is TERMINAL
+		// by construction (D228), subject to the loud cross-check: a
+		// retained same-transaction departure of this key at a greater
+		// statement ordinal contradicts it.
+		if hasCur && cur.hasSuccLinkID {
+			fetched, found, complete, ferr := p.linkByID(k, cur.succLinkID)
+			if ferr != nil || !complete {
 				return nil, nil, pkMoveUnresolved
 			}
-			if count == 1 {
-				if !scope.matches(&cand) {
+			if !found {
+				// The recorded continuation is absent under complete
+				// evidence: contradictory pairing, fail closed.
+				return nil, nil, pkMoveUnresolved
+			}
+			if !scope.matches(&fetched) ||
+				!bytes.Equal(fetched.oldPK, k) ||
+				fetched.stmtSeq <= cur.stmtSeq {
+				// Scope, key, or ordinal mismatch: the fetched link is
+				// not this lineage's recorded continuation.
+				return nil, nil, pkMoveUnresolved
+			}
+			// Demoted cross-checks (D232): when the incoming link staged
+			// a workspace replacement identity the continuation must
+			// chain off exactly that identity, and the continuation must
+			// not consume a committed pre-image of this key: either
+			// shape is contradictory retained evidence.
+			if hasInhabitant && pkMoveIsWorkspaceRowid(&inhabitant) &&
+				fetched.oldRowID != inhabitant {
+				return nil, nil, pkMoveUnresolved
+			}
+			for _, ref := range view.deathRefsOf(k, fetched.oldRowID) {
+				// Namesake-aware pre-image screen: pin the departed
+				// version's birth, then classify. A version born AND
+				// deleted inside this very transaction is the lineage's
+				// own netted intermediate (workspace identities are
+				// unique within one transaction, so the raw id names
+				// exactly the continuation's own generation), and a
+				// version born and deleted OUTSIDE this transaction is
+				// another transaction's generation of the same raw
+				// workspace id (allocation restarts per transaction, so
+				// same-shaped moves pile namesakes onto one raw id):
+				// neither is a committed pre-image of this key in this
+				// transaction, and the continuation's own commit check
+				// below already binds its genuine death.
+				birth, pinned := view.departedBirth(ref.rowID, ref.cts)
+				if !pinned {
+					// A tombstone whose departed birth was never
+					// captured cannot be classified: incomplete
+					// retained evidence, fail closed.
 					return nil, nil, pkMoveUnresolved
 				}
-				k = cand.newPK
-				inhabitant, hasInhabitant = cand.newRowID, cand.hasNewRowID
-				tailTaken = false
-				continue
-			}
-		}
-		if !hasInhabitant || !pkMoveIsWorkspaceRowid(&inhabitant) {
-			// The incoming link names no usable replacement identity (the
-			// S3 route cannot stage one). Its survival through the commit
-			// prune meant an ALIVE same-transaction link departs this key
-			// (the death-ledger continuer groups by old key); that
-			// departure is the lineage's own continuation — UNLESS the
-			// departure consumed a committed pre-image of this key (the
-			// in-window stream tombstone naming its old row id): then it
-			// vacated an older generation, not the landed one, and
-			// following it would adopt a foreign lineage (the
-			// vacate-before-arrival shape). Follow a clean departure
-			// before touching the bare timestamp claim: the claim would
-			// as happily adopt an unrelated same-instant reincarnation
-			// of the intermediate key, and the diverted delete that hid
-			// the real continuation left no stream trace. No departure
-			// here — or a departure the tombstone screen proves foreign —
-			// means the claim below sees the single landed generation and
-			// stays sound.
-			cand, count, complete, err := p.successorOfSameTxnKey(k, scope)
-			if err != nil || !complete || count > 1 {
-				return nil, nil, pkMoveUnresolved
-			}
-			if count == 1 {
-				vacatedCommitted := len(view.deathRefsOf(k, cand.oldRowID)) > 0
-				if !vacatedCommitted {
-					k = cand.newPK
-					inhabitant, hasInhabitant = cand.newRowID, cand.hasNewRowID
-					tailTaken = false
+				bornHere := birth.EQ(&chainTS)
+				diedHere := ref.cts.EQ(&chainTS)
+				if bornHere == diedHere {
 					continue
 				}
+				// A committed pre-image handed off inside this
+				// transaction (born earlier, died here), or a version
+				// born here that died elsewhere (the continuation
+				// could never have consumed it): contradictory
+				// retained evidence, fail closed.
+				return nil, nil, pkMoveUnresolved
+			}
+			// One transaction commits once: the continuation's commit
+			// instant must equal the running chain's (a NULL stamp
+			// inherits it across the pairing, D227).
+			hopCTS, outcome := p.resolveLinkCommit(view, &fetched, &chainTS)
+			if outcome != pkMoveCommitResolved || !hopCTS.EQ(&chainTS) {
+				return nil, nil, pkMoveUnresolved
+			}
+			k = fetched.newPK
+			inhabitant, hasInhabitant = fetched.newRowID, fetched.hasNewRowID
+			cur = fetched
+			tailTaken = false
+			continue
+		}
+		if hasCur {
+			// NULL pairing: TERMINAL, subject to the loud cross-check.
+			_, cnt, complete, serr := p.successorOfSameTxnKey(k, scope, cur.stmtSeq)
+			if serr != nil || !complete {
+				return nil, nil, pkMoveUnresolved
+			}
+			if cnt > 0 {
+				// A retained same-transaction departure of the landed
+				// key at a greater statement ordinal contradicts the
+				// recorded terminal NULL.
+				return nil, nil, pkMoveUnresolved
 			}
 		}
 
@@ -3348,14 +3558,72 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 		{
 			pk := k
 			pair := view.pairingAt(pk, chainTS,
-				func(rid types.Rowid) (pkMoveLink, int, bool, error) {
+				func(rid types.Rowid, depCTS types.TS) (pkMoveLink, int, bool, error) {
 					// The tombstone's row id names a committed version,
-					// and a genuine cross-transaction continuation belongs
-					// to a LATER transaction than the hop that landed
-					// here: the successor is looked up without a
-					// write-timestamp namespace. several links naming the
-					// same committed pair stay ambiguous and fail closed.
-					return p.successorOfCommitted(pk, rid)
+					// and a genuine cross-transaction continuation
+					// belongs to a LATER transaction than the hop that
+					// landed here: candidates are looked up without a
+					// write-timestamp namespace, then admitted under the
+					// D226/D230 gate — the resolved commit instant must
+					// equal THIS departure's instant and fall inside the
+					// candidate's own attributed window. An excluded
+					// candidate neither binds nor poisons (an
+					// out-of-window straddler leaves the tail candidate
+					// intact); two DISTINCT admitted links stay
+					// ambiguous and fail closed; an unresolvable commit
+					// instant fails the pairing as incomplete.
+					cands, complete, cerr := p.successorsOfCommitted(pk, rid)
+					if cerr != nil || !complete {
+						return pkMoveLink{}, 0, false, cerr
+					}
+					admitted := make(map[string]pkMoveLink)
+					for i := range cands {
+						// The departure tombstone at depCTS names the
+						// exact version this candidate consumes, and the
+						// move commits atomically with that death: a
+						// stamped candidate must agree with the
+						// tombstone (a disagreeing stamp simply belongs
+						// to another departure), while a NULL stamp
+						// heals to depCTS exactly when the candidate's
+						// own stream evidence pins that same instant —
+						// no tainted reference, exactly one untainted
+						// death, equal to depCTS: the D227 stream-heal
+						// lane directed by the tombstone the walk
+						// already bound. Every other shape (a tainted
+						// reference, zero or several untainted deaths)
+						// is incomplete or contradictory retained
+						// evidence and fails the pairing closed.
+						if cands[i].hasCommitTS {
+							if !cands[i].commitTS.EQ(&depCTS) {
+								continue
+							}
+						} else {
+							var heal []types.TS
+							tainted := false
+							for _, ref := range view.deathRefsOf(cands[i].oldPK, cands[i].oldRowID) {
+								if pkMoveViewInstantTainted(view, ref.cts) {
+									tainted = true
+									continue
+								}
+								heal = append(heal, ref.cts)
+							}
+							if tainted || len(heal) != 1 || !heal[0].EQ(&depCTS) {
+								return pkMoveLink{}, 0, false, nil
+							}
+							p.mu.Lock()
+							p.queueRestampLocked(&cands[i], depCTS)
+							p.mu.Unlock()
+						}
+						if cands[i].hasWindow && !cands[i].window.containsCommit(depCTS) {
+							continue
+						}
+						admitted[pkMoveLinkDedupKey(&cands[i])] = cands[i]
+					}
+					var succ pkMoveLink
+					for _, a := range admitted {
+						succ = a
+					}
+					return succ, len(admitted), true, nil
 				},
 				func() int { return p.departureLinkCount(pk) })
 			switch pair.verdict {
@@ -3389,6 +3657,7 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 			chainTS = succTS
 			scope = pkMoveLinkTxnScope(&succ)
 			inhabitant, hasInhabitant = succ.newRowID, succ.hasNewRowID
+			cur, hasCur = succ, true
 			tailTaken = false
 			continue
 		}
@@ -3430,34 +3699,23 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 			chainTS = tailTS
 			scope = pkMoveTxnScope{}
 			inhabitant, hasInhabitant = types.Rowid{}, false
+			cur, hasCur = pkMoveLink{}, false
 			tailTaken = true
 			continue
 		}
 
-		// Same-transaction netted generation: the only link that may
-		// continue the walk chains off the workspace-stage identity the
-		// previous link recorded, from the same transaction. The birth
-		// timestamp carries over because the whole netted chain commits
-		// as one transaction.
-		if !hasInhabitant || !pkMoveIsWorkspaceRowid(&inhabitant) {
-			if tailTaken {
-				// The landed row died with no recorded successor, the
-				// deleting transaction rebirthed no generation the claim
-				// could adopt, and nothing departs past the tail: complete
-				// evidence proves the lineage ENDED in this deletion.
-				return nil, nil, pkMoveProvenDeleted
-			}
-			return nil, nil, pkMoveUnresolved
+		// Every continuation channel settled empty at this key: the
+		// recorded pairing was terminal (and cross-checked), no live
+		// generation was claimable, no admitted cross-transaction
+		// departure or same-key tail paired.
+		if tailTaken {
+			// The landed row died with no recorded successor, the
+			// deleting transaction rebirthed no generation the claim
+			// could adopt, and nothing departs past the tail: complete
+			// evidence proves the lineage ENDED in this deletion.
+			return nil, nil, pkMoveProvenDeleted
 		}
-		cand, count, complete, err := p.successorOf(k, inhabitant, scope)
-		if err != nil || !complete || count != 1 {
-			return nil, nil, pkMoveUnresolved
-		}
-		if !scope.matches(&cand) {
-			return nil, nil, pkMoveUnresolved
-		}
-		k = cand.newPK
-		inhabitant, hasInhabitant = cand.newRowID, cand.hasNewRowID
+		return nil, nil, pkMoveUnresolved
 	}
 	return nil, nil, pkMoveUnresolved
 }
@@ -3574,7 +3832,7 @@ func (v *pkMoveHashmapView) bornDiedRefs(key []byte, birthCTS types.TS) []pkMove
 
 func (v *pkMoveHashmapView) pairingAt(
 	key []byte, chainTS types.TS,
-	succOf func(types.Rowid) (pkMoveLink, int, bool, error),
+	succOf func(types.Rowid, types.TS) (pkMoveLink, int, bool, error),
 	linksLen func() int,
 ) pkMovePairing {
 	return v.pairCache.pairingFor(

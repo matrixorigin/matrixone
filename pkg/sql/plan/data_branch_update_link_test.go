@@ -178,6 +178,9 @@ func TestUpdatePkMoveLinkTableDefMatchesDDLColumns(t *testing.T) {
 		{catalog.DataBranchUpdateLinkColNewRow, false},
 		{catalog.DataBranchUpdateLinkColWriteTS, false},
 		{catalog.DataBranchUpdateLinkColTxnID, false},
+		{catalog.DataBranchUpdateLinkColCommitTS, false},
+		{catalog.DataBranchUpdateLinkColSuccLinkID, false},
+		{catalog.DataBranchUpdateLinkColStmtSeq, false},
 	}
 	for i, w := range want {
 		require.Equal(t, w.name, def.Cols[i].Name)

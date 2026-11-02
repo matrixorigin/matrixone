@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strings"
@@ -60,55 +62,195 @@ func pkMoveWalkTestLink(oldKey byte, oldRidSeq byte, newKey byte, newRidSeq byte
 	}
 }
 
-// pkMoveWalkTestScope rebuilds the transaction scope the D156 capture
-// index binds for a fabricated link family (no durable txn id): the
-// create timestamp is the whole identity.
-func pkMoveWalkTestScope(writeTS uint64) pkMoveTxnScope {
-	return pkMoveTxnScope{writeTS: types.BuildTS(int64(writeTS), 0)}
+// pkMoveWalkStampCommits stamps every cached link of one recording scope
+// (a write timestamp, the fixture's whole identity) with the given commit
+// instant: the unit-fixture form of the D225 commit-completion stamp,
+// replacing the retired capture feed. The stamp rides the link row in all
+// three caches, so later reads resolve the scope's commit through the
+// stamped path exactly like the engine's commit-time callback.
+func pkMoveWalkStampCommits(p *pkMoveLinkProvider, writeTS uint64, commit uint64) {
+	wts := types.BuildTS(int64(writeTS), 0)
+	cts := types.BuildTS(int64(commit), 0)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	stamp := func(l pkMoveLink) pkMoveLink {
+		if l.writeTS.EQ(&wts) {
+			l.hasCommitTS = true
+			l.commitTS = cts
+		}
+		return l
+	}
+	for k, lst := range p.byRow {
+		for i := range lst {
+			lst[i] = stamp(lst[i])
+		}
+		p.byRow[k] = lst
+	}
+	for k, lst := range p.byPK {
+		for i := range lst {
+			lst[i] = stamp(lst[i])
+		}
+		p.byPK[k] = lst
+	}
+	for id, l := range p.byID {
+		p.byID[id] = stamp(l)
+	}
 }
 
-// pkMoveWalkFeedCommits attaches a unit-test capture feed to a walk
-// provider: one fabricated window (marked fully scanned so the arrival
-// completeness gate stays open) whose streamLinkCommits records the
-// given scope->commit pairs through the same admission fold the engine
-// path uses (r50 (B); the admission filter still restricts to scopes
-// the provider's own link cache carries).
-func pkMoveWalkFeedCommits(p *pkMoveLinkProvider, feeds ...any) {
-	p.windows = []pkMoveLinkTableWindow{{tableID: 1}}
-	p.fullWindows = map[uint64][2]uint64{1: {}}
-	p.streamLinkCommits = func(
-		ctx context.Context, w pkMoveLinkTableWindow, from, end types.TS,
-		accept func(scope pkMoveTxnScope, cts types.TS) error,
-	) error {
-		for i := 0; i+1 < len(feeds); i += 2 {
-			scope, ok1 := feeds[i].(pkMoveTxnScope)
-			cts, ok2 := feeds[i+1].(types.TS)
-			if !ok1 || !ok2 {
-				return moerr.NewInternalErrorNoCtx("malformed capture feed")
-			}
-			if err := accept(scope, cts); err != nil {
-				return err
-			}
+// pkMoveWalkClearPairing rewrites one cached link's recorded continuation
+// to TERMINAL NULL in all three caches AFTER the fabric's fixup ran: the
+// fabric form of a fixup that found no same-transaction continuation,
+// used to drive the D232 NULL-terminal loud cross-check. The target is
+// matched by its exact link_id, so the test must pre-set it.
+func pkMoveWalkClearPairing(t *testing.T, p *pkMoveLinkProvider, target pkMoveLink) {
+	t.Helper()
+	require.True(t, target.hasLinkID, "pairing clear needs the target's durable link_id")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	clear := func(l pkMoveLink) pkMoveLink {
+		if l.hasLinkID && l.linkID == target.linkID {
+			l.hasSuccLinkID = false
+			l.succLinkID = [catalog.DataBranchUpdateLinkIDBytes]byte{}
 		}
-		return nil
+		return l
+	}
+	for k, lst := range p.byRow {
+		for i := range lst {
+			lst[i] = clear(lst[i])
+		}
+		p.byRow[k] = lst
+	}
+	for k, lst := range p.byPK {
+		for i := range lst {
+			lst[i] = clear(lst[i])
+		}
+		p.byPK[k] = lst
+	}
+	for id, l := range p.byID {
+		p.byID[id] = clear(l)
+	}
+}
+
+// pkMoveWalkSetPairing overrides one loaded link's recorded continuation
+// (after the provider's D228-mirroring fixup ran) so a test can fabricate
+// corrupt pairing evidence the fixup would never persist.
+func pkMoveWalkSetPairing(t *testing.T, p *pkMoveLinkProvider, target, succ pkMoveLink) {
+	t.Helper()
+	require.True(t, target.hasLinkID && succ.hasLinkID,
+		"pairing set needs both durable link_ids")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	set := func(l pkMoveLink) pkMoveLink {
+		if l.hasLinkID && l.linkID == target.linkID {
+			l.succLinkID = succ.linkID
+			l.hasSuccLinkID = true
+		}
+		return l
+	}
+	for k, lst := range p.byRow {
+		for i := range lst {
+			lst[i] = set(lst[i])
+		}
+		p.byRow[k] = lst
+	}
+	for k, lst := range p.byPK {
+		for i := range lst {
+			lst[i] = set(lst[i])
+		}
+		p.byPK[k] = lst
+	}
+	for id, l := range p.byID {
+		p.byID[id] = set(l)
 	}
 }
 
 // pkMoveWalkTestProvider loads fabricated links into a provider without any
 // SQL access: the provider carries no table windows, so every key counts as
-// fully probed and successorOf never issues SQL.
+// fully probed and the successor lookups never issue SQL. Each link gains a
+// deterministic link_id and statement ordinal when the test did not set
+// them, and a D228-mirroring fixup pairs every link with the same-scope
+// link departing its landed key at the smallest later statement ordinal
+// (a pre-set pairing survives), so the recorded-continuation channel the
+// walk settles first (D232) reflects what the commit-time fixup would
+// have persisted.
 func pkMoveWalkTestProvider(links ...pkMoveLink) *pkMoveLinkProvider {
 	p := &pkMoveLinkProvider{
-		byRow:    make(map[string]pkMoveLink),
-		byPK:     make(map[string][]pkMoveLink),
-		probed:   make(map[string]struct{}),
-		poisoned: make(map[string]struct{}),
+		byRow:           make(map[string][]pkMoveLink),
+		byPK:            make(map[string][]pkMoveLink),
+		byID:            make(map[[catalog.DataBranchUpdateLinkIDBytes]byte]pkMoveLink),
+		probed:          make(map[string]struct{}),
+		fullWindows:     make(map[uint64][2]uint64),
+		overflowWindows: make(map[uint64][2]uint64),
+		overflowKeys:    make(map[string]struct{}),
+		restamps:        make(map[[catalog.DataBranchUpdateLinkIDBytes]byte]types.TS),
 	}
-	for _, l := range links {
-		p.byRow[pkMoveLinkRowKey(l.oldRowID, l.oldPK)] = l
-		p.byPK[string(l.oldPK)] = append(p.byPK[string(l.oldPK)], l)
+	loaded := make([]pkMoveLink, len(links))
+	for i, l := range links {
+		if !l.hasLinkID {
+			// Big-endian across the id's first eight bytes: a single
+			// low byte wraps at 256 links and collides, corrupting the
+			// byID cache's first-writer-wins dedup.
+			binary.BigEndian.PutUint64(l.linkID[:8], uint64(i+1))
+			l.hasLinkID = true
+		}
+		if l.stmtSeq == 0 {
+			l.stmtSeq = uint64(i + 1)
+		}
+		loaded[i] = l
+	}
+	for i := range loaded {
+		if loaded[i].hasSuccLinkID {
+			continue
+		}
+		best := -1
+		for j := range loaded {
+			if i == j {
+				continue
+			}
+			if !pkMoveLinkTxnScope(&loaded[i]).matches(&loaded[j]) {
+				continue
+			}
+			if !bytes.Equal(loaded[j].oldPK, loaded[i].newPK) {
+				continue
+			}
+			if loaded[j].stmtSeq <= loaded[i].stmtSeq {
+				continue
+			}
+			if best < 0 || loaded[j].stmtSeq < loaded[best].stmtSeq {
+				best = j
+			}
+		}
+		if best >= 0 {
+			loaded[i].succLinkID = loaded[best].linkID
+			loaded[i].hasSuccLinkID = true
+		}
+	}
+	for _, l := range loaded {
+		p.cacheLinkLocked(l)
 	}
 	return p
+}
+
+// pkMoveCachedAnchorAnswers reads the provider's CACHED anchor evidence
+// for one (old pk, row id) pair without issuing SQL: the probe-space
+// completeness the apply-level taxonomy needs (a disabled provider or a
+// key whose own evidence could not be fully read means the answer must
+// not be treated as "no update intent") plus the first cached candidate.
+// Tests use it to inspect cache state for keys a probe must never
+// re-fetch; production callers go through anchorCandidates.
+func pkMoveCachedAnchorAnswers(
+	p *pkMoveLinkProvider, oldPK []byte, rowID types.Rowid,
+) (link pkMoveLink, hit, complete bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.disabled || !p.keyCompleteLocked(oldPK) {
+		return pkMoveLink{}, false, false
+	}
+	lst := p.byRow[pkMoveLinkRowKey(rowID, oldPK)]
+	if len(lst) == 0 {
+		return pkMoveLink{}, false, true
+	}
+	return lst[0], true, true
 }
 
 // pkMoveWalkTestView stubs pkMoveStreamView over fabricated rows. Identity
@@ -171,7 +313,7 @@ func (v *pkMoveWalkTestView) bornDiedRefs(key []byte, birthCTS types.TS) []pkMov
 
 func (v *pkMoveWalkTestView) pairingAt(
 	key []byte, chainTS types.TS,
-	succOf func(types.Rowid) (pkMoveLink, int, bool, error),
+	succOf func(types.Rowid, types.TS) (pkMoveLink, int, bool, error),
 	linksLen func() int,
 ) pkMovePairing {
 	return v.pairCache.pairingFor(
@@ -690,9 +832,16 @@ func TestResolvePkMoveChain(t *testing.T) {
 		require.Equal(t, []byte{0xdd}, row)
 	})
 
-	t.Run("two same-transaction departures from the claim key fail closed", func(t *testing.T) {
-		// Two versions of key 3 moved inside one transaction: the walk
-		// cannot pick a continuation by key alone and must refuse.
+	t.Run("recorded pairing picks one of two same-transaction departures", func(t *testing.T) {
+		// Two versions of key 3 moved inside one transaction (the
+		// lineage's own intermediate 3->4 at statement 2, an unrelated
+		// row 3->6 at statement 3). The commit-time fixup pairs the
+		// arrival 2->3 with the smallest later same-scope departure of
+		// key 3 — the lineage's own continuation — and D232 follows
+		// that recorded pairing BEFORE any timestamp claim, so the
+		// un-paired second departure is never consulted and the
+		// same-instant live row at key 3 is never claimed: the lineage
+		// resolves to its final key 4.
 		l1 := pkMoveWalkTestLink(2, 1, 3, 7, 10)
 		l1.hasNewRowID = false
 		l2 := pkMoveWalkTestLink(3, 7, 4, 5, 10)
@@ -700,6 +849,35 @@ func TestResolvePkMoveChain(t *testing.T) {
 		l3 := pkMoveWalkTestLink(3, 9, 6, 6, 10)
 		l3.hasNewRowID = false
 		p := pkMoveWalkTestProvider(l1, l2, l3)
+		view := pkMoveWalkTestStubView(
+			pkMoveTombRow(2, 0x01, 1, 15),
+			pkMoveLiveRow(3, 0xdd, 8, 15),
+			pkMoveLiveRow(4, 0xbb, 5, 15),
+		)
+		finalPK, row, ok := p.resolvePkMoveChain(view, []byte{2}, mustRowID(t, 1))
+		require.True(t, ok)
+		require.Equal(t, []byte{4}, finalPK)
+		require.Equal(t, []byte{0xbb}, row)
+	})
+
+	t.Run("contradicted terminal pairing fails the same-transaction departures closed", func(t *testing.T) {
+		// The same stream with the arrival's recorded continuation
+		// forced to TERMINAL NULL: two retained same-transaction
+		// departures of the landed key at greater statement ordinals
+		// contradict the recorded NULL, so the D232 loud cross-check
+		// fails closed WITHOUT falling through to a timestamp claim —
+		// the claim would otherwise terminate the lineage on the
+		// unrelated live row born at the same commit instant.
+		l1 := pkMoveWalkTestLink(2, 1, 3, 7, 10)
+		l1.hasNewRowID = false
+		l1.linkID[0] = 0x71
+		l1.hasLinkID = true
+		l2 := pkMoveWalkTestLink(3, 7, 4, 5, 10)
+		l2.hasNewRowID = false
+		l3 := pkMoveWalkTestLink(3, 9, 6, 6, 10)
+		l3.hasNewRowID = false
+		p := pkMoveWalkTestProvider(l1, l2, l3)
+		pkMoveWalkClearPairing(t, p, l1)
 		view := pkMoveWalkTestStubView(
 			pkMoveTombRow(2, 0x01, 1, 15),
 			pkMoveLiveRow(3, 0xdd, 8, 15),
@@ -819,6 +997,14 @@ func TestResolvePkMoveChain(t *testing.T) {
 		lA.hasNewRowID = false
 		lB := pkMoveWalkTestLink(3, 20, 4, 0, 10)
 		lB.hasNewRowID = false
+		// Physical statement order: B vacates key 3 BEFORE A's update
+		// arrives there, so B's link carries the smaller statement
+		// ordinal. Without the pre-set the fabric's construction order
+		// would ordain A before B and the D228-mirroring fixup would
+		// pair A's arrival with B's departure — the exact misattribution
+		// this scenario refuses.
+		lB.stmtSeq = 1
+		lA.stmtSeq = 2
 		p := pkMoveWalkTestProvider(lA, lB)
 		view := pkMoveWalkTestStubView(
 			pkMoveTombRow(2, 0x01, 10, 15),
@@ -1309,14 +1495,16 @@ func TestResolvePkMoveChain(t *testing.T) {
 		require.Equal(t, []byte{0xee}, row)
 	})
 
-	t.Run("same-transaction key return still fails closed", func(t *testing.T) {
-		// One transaction rotating 2->3->4->3 never advances the birth
-		// certificate, so revisiting key 3 inside the same commit instant
-		// cannot be distinguished from a rotation cycle and the walk must
-		// refuse to interpret it.
+	t.Run("same-transaction key rotation resolves each row's own walk", func(t *testing.T) {
+		// One transaction exchanging two committed rows' keys through a
+		// temporary key: A 2->9, B 3->2, A 9->3. Recorded pairings
+		// cannot cross rows (D228's pairing binds the same transaction's
+		// own next hop), so each row's walk follows its own recorded
+		// continuation and lands on its own final image — A at key 3,
+		// B at key 2. Rejecting the EXCHANGE is the fold planner's
+		// rotation-cycle abort (D57), not the walk's: the walk only
+		// resolves where each lineage ends.
 		wsA := mustWorkspaceRowID(t, 1)
-		wsB := mustWorkspaceRowID(t, 2)
-		wsC := mustWorkspaceRowID(t, 3)
 		link := func(oldKey byte, oldRid types.Rowid, newKey byte, newRid types.Rowid) pkMoveLink {
 			return pkMoveLink{
 				oldRowID:    oldRid,
@@ -1328,15 +1516,26 @@ func TestResolvePkMoveChain(t *testing.T) {
 			}
 		}
 		p := pkMoveWalkTestProvider(
-			link(2, mustRowID(t, 1), 3, wsA),
-			link(3, wsA, 4, wsB),
-			link(4, wsB, 3, wsC),
+			link(2, mustRowID(t, 1), 9, wsA),
+			link(3, mustRowID(t, 2), 2, mustRowID(t, 4)),
+			link(9, wsA, 3, mustRowID(t, 3)),
 		)
 		view := pkMoveWalkTestStubView(
-			pkMoveTombRow(2, 0x01, 1, 100),
+			pkMoveTombRow(2, 0x01, 1, 15),
+			pkMoveDepartRow(1, 15, 5),
+			pkMoveTombRow(3, 0x02, 2, 15),
+			pkMoveDepartRow(2, 15, 5),
+			pkMoveLiveRow(2, 0xb2, 4, 15),
+			pkMoveLiveRow(3, 0xa3, 3, 15),
 		)
-		_, _, ok := p.resolvePkMoveChain(view, []byte{2}, mustRowID(t, 1))
-		require.False(t, ok)
+		finalPK, row, ok := p.resolvePkMoveChain(view, []byte{2}, mustRowID(t, 1))
+		require.True(t, ok)
+		require.Equal(t, []byte{3}, finalPK)
+		require.Equal(t, []byte{0xa3}, row, "A's walk lands on A's own final image at key 3")
+		finalPK, row, ok = p.resolvePkMoveChain(view, []byte{3}, mustRowID(t, 2))
+		require.True(t, ok)
+		require.Equal(t, []byte{2}, finalPK)
+		require.Equal(t, []byte{0xb2}, row, "B's walk lands on B's own final image at key 2")
 	})
 
 	t.Run("committed namesakes of a raw workspace id keep the departure ambiguous", func(t *testing.T) {
@@ -1469,11 +1668,25 @@ func TestResolvePkMoveChain(t *testing.T) {
 		require.Equal(t, []byte{0x03}, row)
 	})
 
-	t.Run("same-transaction key rotation of two rows still resolves each walk", func(t *testing.T) {
-		// A moves 2->3 while B moves 3->2 in ONE transaction: each row's
-		// walk must resolve (their recorded identities never cross),
-		// while the FOLD PLANNER keeps rejecting the key exchange as a
-		// rotation cycle — the cycle defense does not live in this guard.
+	t.Run("a contradictory recorded continuation fails closed without a claim fall-through", func(t *testing.T) {
+		// D232 no-fall-through oracle (the r114 review P1's demanded
+		// soundness twin). The fixture has the SHAPE of a one-transaction
+		// direct swap — A 2->3 while B 3->2 — which no real schedule can
+		// produce: one committed image per key per instant duplicate-keys
+		// the first swap statement on the other row's committed occupant,
+		// so a realizable rotation routes through a temporary key (the
+		// "same-transaction key rotation resolves each row's own walk"
+		// subtest covers that form, and TestAssemblePkMoveFoldPlan keeps
+		// the D57 planner rejection). The key-only commit-time fixup
+		// pairs A's arrival at 3 with B's departure of 3 anyway, but B's
+		// recorded link departs key 3 carrying B's OWN old identity
+		// (rid 8) while A's link staged the workspace inhabitant wA
+		// there: the settlement's identity cross-check contradicts the
+		// pairing, so A's walk aborts loudly and NEVER falls through to
+		// claiming the same-instant live row at key 3. B's own walk is
+		// untouched: its NULL pairing is genuinely terminal (no later
+		// same-transaction departure of key 2), and the claim accepts
+		// its row born at the chain instant.
 		wA := pkMoveWorkspaceRid(1, 0)
 		wB := pkMoveWorkspaceRid(2, 0)
 		lA := pkMoveWalkTestLink(2, 1, 3, 7, 10)
@@ -1485,15 +1698,107 @@ func TestResolvePkMoveChain(t *testing.T) {
 		view := pkMoveWalkTestStubView(
 			pkMoveTombRow(2, 0x01, 1, 15),
 			pkMoveTombRow(3, 0x02, 8, 15),
-			pkMoveLiveRow(3, 0xaa, 42, 15), // A's landed row
+			pkMoveLiveRow(3, 0xaa, 42, 15), // the row at A's landed key
 			pkMoveLiveRow(2, 0xbb, 43, 15), // B's landed row
 		)
-		finalPK, _, verdict := p.resolvePkMoveChainVerdict(view, []byte{2}, mustRowID(t, 1))
-		require.Equal(t, pkMoveResolved, verdict)
-		require.Equal(t, []byte{3}, finalPK)
-		finalPK, _, verdict = p.resolvePkMoveChainVerdict(view, []byte{3}, mustRowID(t, 8))
-		require.Equal(t, pkMoveResolved, verdict)
+		finalPK, row, verdict := p.resolvePkMoveChainVerdict(view, []byte{2}, mustRowID(t, 1))
+		require.Equal(t, pkMoveUnresolved, verdict,
+			"a recorded continuation contradicting the staged inhabitant aborts loudly — no fall-through to the claim")
+		require.Nil(t, finalPK)
+		require.Nil(t, row)
+		finalPK, row, verdict = p.resolvePkMoveChainVerdict(view, []byte{3}, mustRowID(t, 8))
+		require.Equal(t, pkMoveResolved, verdict,
+			"a genuinely terminal NULL pairing still claims the walk's own landed row")
 		require.Equal(t, []byte{2}, finalPK)
+		require.Equal(t, []byte{0xbb}, row)
+	})
+
+	t.Run("a non-NULL recorded continuation failing verification never falls through to a claim", func(t *testing.T) {
+		// D232 no-fall-through oracles (the r114 review P1's demanded
+		// soundness twin, the remaining verification-failure forms).
+		// One transaction moves A 2->3->4 (links l1, l2) while an
+		// unrelated row sits at the vacated intermediate key 3, born at
+		// the same commit instant with no recorded departure — the
+		// r114 review's intruder shape. The walk must settle l1's
+		// recorded continuation channel FIRST: each case points l1's
+		// persisted pairing at evidence failing one verification — an
+		// absent fetch, a scope mismatch, a key mismatch, an ordinal
+		// mismatch — and the walk must abort loudly, NEVER falling
+		// through to claiming the same-instant live row at key 3 (a
+		// fall-through would cascade children onto the unrelated row
+		// while the destination count guard passes).
+		mkLinks := func(mutate func(l1, l2 *pkMoveLink)) *pkMoveLinkProvider {
+			w1 := pkMoveWorkspaceRid(1, 0)
+			w2 := pkMoveWorkspaceRid(2, 0)
+			l1 := pkMoveWalkTestLink(2, 1, 3, 7, 10)
+			l1.newRowID = w1
+			l2 := pkMoveWalkTestLink(3, 7, 4, 5, 10)
+			l2.oldRowID = w1
+			l2.newRowID = w2
+			binary.BigEndian.PutUint64(l2.linkID[:8], 0xFEED)
+			l2.hasLinkID = true
+			if mutate != nil {
+				mutate(&l1, &l2)
+			}
+			return pkMoveWalkTestProvider(l1, l2)
+		}
+		view := pkMoveWalkTestStubView(
+			pkMoveTombRow(2, 0x01, 1, 15),   // the anchor's departure, grounding l1 at 15
+			pkMoveLiveRow(3, 0xbb, 9, 15),  // the intruder at the vacated intermediate key
+			pkMoveLiveRow(4, 0xcc, 10, 15), // the lineage's real final row
+		)
+		cases := []struct {
+			name   string
+			mutate func(l1, l2 *pkMoveLink)
+		}{
+			{"an absent fetch", func(l1, l2 *pkMoveLink) {
+				// The persisted pairing names a link_id no retained row
+				// carries: contradictory pairing evidence.
+				binary.BigEndian.PutUint64(l1.succLinkID[:8], 0xDEAD)
+				l1.hasSuccLinkID = true
+			}},
+			{"a scope mismatch", func(l1, l2 *pkMoveLink) {
+				// The fetched continuation belongs to another
+				// transaction.
+				l2.writeTS = types.BuildTS(11, 0)
+				l1.succLinkID = l2.linkID
+				l1.hasSuccLinkID = true
+			}},
+			{"a key mismatch", func(l1, l2 *pkMoveLink) {
+				// The fetched continuation departs a different key
+				// than the running one.
+				l2.oldPK = []byte{5}
+				l1.succLinkID = l2.linkID
+				l1.hasSuccLinkID = true
+			}},
+			{"an ordinal mismatch", func(l1, l2 *pkMoveLink) {
+				// The fetched continuation's statement ordinal does
+				// not strictly advance.
+				l1.stmtSeq = 2
+				l2.stmtSeq = 1
+				l1.succLinkID = l2.linkID
+				l1.hasSuccLinkID = true
+			}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				p := mkLinks(tc.mutate)
+				finalPK, row, verdict := p.resolvePkMoveChainVerdict(view, []byte{2}, mustRowID(t, 1))
+				require.Equal(t, pkMoveUnresolved, verdict,
+					"a recorded continuation failing verification aborts loudly — no fall-through to the same-instant claim")
+				require.Nil(t, finalPK)
+				require.Nil(t, row)
+			})
+		}
+		// Control: the intact pairing resolves past the intruder to the
+		// lineage's final key, proving the fixture's claim WOULD accept
+		// the intruder if the settlement ever fell through.
+		p := mkLinks(nil)
+		finalPK, row, verdict := p.resolvePkMoveChainVerdict(view, []byte{2}, mustRowID(t, 1))
+		require.Equal(t, pkMoveResolved, verdict,
+			"the intact recorded continuation resolves to the lineage's final key")
+		require.Equal(t, []byte{4}, finalPK)
+		require.Equal(t, []byte{0xcc}, row)
 	})
 
 	t.Run("recorded arrival at a just-vacated key proves the anchor is not the LCA lineage", func(t *testing.T) {
@@ -1703,13 +2008,15 @@ func TestResolvePkMoveChain(t *testing.T) {
 
 	t.Run("competing exact-identity predecessors still fail closed", func(t *testing.T) {
 		// Two same-scope predecessors landing the SAME generation at the
-		// chain's intermediate key: attribution cannot choose between
-		// them, so the evidence stays incomplete rather than picking
-		// one — the retained fail-closed lane of the r54 review's F2.
-		// The chain's links ride its transaction's creation instant 5
-		// while every birth/death instant is commit-shaped (r59 review
-		// F1); the death at a recorded departure key committing at 10 is
-		// what keeps the tie instant among the chain's feasible commit
+		// chain's intermediate key, both recording the landed link as
+		// their continuation: attribution cannot choose between them,
+		// so the evidence stays incomplete rather than picking one —
+		// the retained fail-closed lane of the r54 review's F2, now
+		// bound through the recorded pairing (D228). The chain's links
+		// ride its transaction's creation instant 5 while every
+		// birth/death instant is commit-shaped (r59 review F1); the
+		// death at a recorded departure key committing at 10 is what
+		// keeps the tie instant among the chain's feasible commit
 		// instants.
 		wA := pkMoveWorkspaceRid(13, 0)
 		landed := pkMoveWalkTestLink(6, 9, 2, 10, 5)
@@ -1720,15 +2027,15 @@ func TestResolvePkMoveChain(t *testing.T) {
 		rival2.newRowID = wA
 		p := pkMoveWalkTestProvider(
 			pkMoveWalkTestLink(2, 2, 3, 5, 20),
-			landed,
-			rival1,
-			rival2,
+			rival1, // arrives at the intermediate key first, so the
+			rival2, // fixup records the landed link's departure as BOTH
+			landed, // rivals' smallest-later continuation (D228)
 		)
-		// D156: the chain's scope is captured committed in-window at 10
+		// D225: the chain's scope is stamped committed in-window at 10
 		// (the death at a recorded departure key committing past
 		// creation), so the tie instant it names fails the failed
 		// attribution closed.
-		pkMoveWalkFeedCommits(p, pkMoveWalkTestScope(5), types.BuildTS(10, 0))
+		pkMoveWalkStampCommits(p, 5, 10)
 		view := pkMoveWalkTestStubView(
 			pkMoveTombRow(2, 0x01, 1, 10),
 			pkMoveTombRow(2, 0x02, 2, 20),
@@ -1773,9 +2080,10 @@ func TestResolvePkMoveChain(t *testing.T) {
 	})
 
 	t.Run("unattributable arrival evidence fails closed instead of accepting the tie", func(t *testing.T) {
-		// Ambiguous predecessors: two same-scope links land at the
-		// chain's intermediate key, so the arrival at key 2 at the tie
-		// instant cannot be attributed. Neither accepting nor
+		// Ambiguous predecessors: two same-scope identity-less links
+		// land at the chain's intermediate key, both recording the
+		// landed link as their continuation, so the arrival at key 2 at
+		// the tie instant cannot be attributed. Neither accepting nor
 		// disproving the tie is sound: the verdict stays unresolved.
 		// The links ride the transaction's creation instant 5 while
 		// births and deaths carry commit instants (r59 review F1), and
@@ -1788,13 +2096,13 @@ func TestResolvePkMoveChain(t *testing.T) {
 			rival2.hasNewRowID = false
 			p := pkMoveWalkTestProvider(
 				pkMoveWalkTestLink(2, 2, 3, 5, 20),
-				pkMoveWalkTestLink(6, 9, 2, 10, 5), // landed at the tie key in txn T1
-				rival1,                             // rival predecessor 1 at key 6
-				rival2,                             // rival predecessor 2 at key 6
+				rival1, // arrives at the intermediate key first, so the
+				rival2, // fixup records the landed link as BOTH rivals'
+				pkMoveWalkTestLink(6, 9, 2, 10, 5), // continuation (D228)
 			)
-			// D156: T1's scope is captured committed in-window at the
+			// D225: T1's scope is stamped committed in-window at the
 			// tie instant 10, so its failed attribution fails closed.
-			pkMoveWalkFeedCommits(p, pkMoveWalkTestScope(5), types.BuildTS(10, 0))
+			pkMoveWalkStampCommits(p, 5, 10)
 			return p
 		}
 		mkView := func() *pkMoveWalkTestView {
@@ -1809,10 +2117,11 @@ func TestResolvePkMoveChain(t *testing.T) {
 		_, _, verdict := mkAmbiguous().resolvePkMoveChainVerdict(mkView(), []byte{2}, mustRowID(t, 2))
 		require.Equal(t, pkMoveUnresolved, verdict)
 
-		// Contradictory generation: one same-scope predecessor lands a
-		// DIFFERENT generation at the intermediate key than the
-		// continuation moved — one committed image per key per commit
-		// makes that corrupt, not ambiguous-but-harmless.
+		// Contradictory generation: one same-scope predecessor records
+		// the landed link as its continuation, but staged a DIFFERENT
+		// generation at the intermediate key than the landed link
+		// consumed — one committed image per key per commit makes that
+		// corrupt, not ambiguous-but-harmless.
 		w1 := pkMoveWorkspaceRid(1, 0)
 		w2 := pkMoveWorkspaceRid(2, 0)
 		landed := pkMoveWalkTestLink(6, 9, 2, 10, 5)
@@ -1821,28 +2130,37 @@ func TestResolvePkMoveChain(t *testing.T) {
 		contra.newRowID = w2
 		p2 := pkMoveWalkTestProvider(
 			pkMoveWalkTestLink(2, 2, 3, 5, 20),
-			landed,
-			contra,
+			contra, // records the landed link as its continuation ...
+			landed, // ... but staged a different generation (D228 fixup)
 		)
-		pkMoveWalkFeedCommits(p2, pkMoveWalkTestScope(5), types.BuildTS(10, 0))
+		pkMoveWalkStampCommits(p2, 5, 10)
 		_, _, verdict = p2.resolvePkMoveChainVerdict(mkView(), []byte{2}, mustRowID(t, 2))
 		require.Equal(t, pkMoveUnresolved, verdict)
 
-		// Cyclic attribution: the landed link's backward walk returns to
-		// a generation it already visited (a 2<->6 rotation staged in one
-		// transaction). Unbounded by construction, so fail closed.
+		// Looped recorded continuations: two links each naming the other
+		// as their successor — the pairing-era form of cyclic
+		// attribution evidence (a 2<->6 rotation staged in one
+		// transaction). The backward hop's ordinal verification catches
+		// the backward-pointing half and fails closed.
 		wA := pkMoveWorkspaceRid(3, 0)
 		wB := pkMoveWorkspaceRid(4, 0)
 		lA := pkMoveWalkTestLink(2, 13, 6, 14, 5)
 		lA.oldRowID, lA.newRowID = wA, wB
+		lA.linkID[0] = 0xa1
+		lA.hasLinkID = true
 		lB := pkMoveWalkTestLink(6, 14, 2, 15, 5)
 		lB.oldRowID, lB.newRowID = wB, wA
+		lB.linkID[0] = 0xb1
+		lB.hasLinkID = true
 		p3 := pkMoveWalkTestProvider(
 			pkMoveWalkTestLink(2, 2, 3, 5, 20),
 			lA,
 			lB,
 		)
-		pkMoveWalkFeedCommits(p3, pkMoveWalkTestScope(5), types.BuildTS(10, 0))
+		// The fixup records lA -> lB; corrupt the catalog by pointing
+		// lB's continuation back at lA.
+		pkMoveWalkSetPairing(t, p3, lB, lA)
+		pkMoveWalkStampCommits(p3, 5, 10)
 		_, _, verdict = p3.resolvePkMoveChainVerdict(mkView(), []byte{2}, mustRowID(t, 2))
 		require.Equal(t, pkMoveUnresolved, verdict)
 	})
@@ -2524,13 +2842,13 @@ func TestPkMoveSuccessorOf(t *testing.T) {
 		mine := pkMoveWalkTestLink(3, 7, 4, 5, 20)
 		theirs := pkMoveWalkTestLink(3, 8, 5, 6, 20)
 		p := pkMoveWalkTestProvider(mine, theirs)
-		succ, count, complete, err := p.successorOf([]byte{3}, mustRowID(t, 7), pkMoveTxnScope{})
+		succ, count, complete, err := p.successorOfCommitted([]byte{3}, mustRowID(t, 7))
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 1, count)
 		require.Equal(t, []byte{4}, succ.newPK)
 
-		_, count, complete, err = p.successorOf([]byte{3}, mustRowID(t, 9), pkMoveTxnScope{})
+		_, count, complete, err = p.successorOfCommitted([]byte{3}, mustRowID(t, 9))
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 0, count)
@@ -2540,7 +2858,7 @@ func TestPkMoveSuccessorOf(t *testing.T) {
 		// Ordering belongs to the stream timestamps the walk checks
 		// itself; the successor lookup is pure identity.
 		p := pkMoveWalkTestProvider(pkMoveWalkTestLink(3, 7, 4, 5, 6))
-		succ, count, complete, err := p.successorOf([]byte{3}, mustRowID(t, 7), pkMoveTxnScope{})
+		succ, count, complete, err := p.successorOfCommitted([]byte{3}, mustRowID(t, 7))
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 1, count)
@@ -2552,21 +2870,23 @@ func TestPkMoveSuccessorOf(t *testing.T) {
 			pkMoveWalkTestLink(3, 7, 4, 5, 20),
 			pkMoveWalkTestLink(3, 7, 5, 6, 20),
 		)
-		_, count, complete, err := p.successorOf([]byte{3}, mustRowID(t, 7), pkMoveTxnScope{})
+		_, count, complete, err := p.successorOfCommitted([]byte{3}, mustRowID(t, 7))
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 2, count)
 	})
 
-	t.Run("cross-transaction namesakes of a workspace identity are not successors", func(t *testing.T) {
+	t.Run("cross-transaction namesakes of a workspace identity are not same-transaction successors", func(t *testing.T) {
 		// Workspace row ids restart in every transaction: a second
 		// transaction whose chain crosses the same key mints a link
-		// naming the very same (key, raw old row id) pair. That namesake
-		// must be excluded BEFORE counting, or every such collision
-		// reports a phantom ambiguity and the walk fails closed.
-		inhabitant := mustWorkspaceRowID(t, 7)
+		// naming the very same (key, raw old row id) pair. The
+		// SAME-TRANSACTION continuation lookup (the D232 NULL-terminal
+		// cross-check) must exclude that namesake BEFORE counting, or
+		// every such collision reports a phantom ambiguity and the walk
+		// fails closed. The committed departure lookup deliberately
+		// carries no namespace (its own subtest below).
 		mine := pkMoveLink{
-			oldRowID:    inhabitant,
+			oldRowID:    mustWorkspaceRowID(t, 7),
 			newRowID:    mustWorkspaceRowID(t, 8),
 			hasNewRowID: true,
 			oldPK:       []byte{3},
@@ -2577,7 +2897,8 @@ func TestPkMoveSuccessorOf(t *testing.T) {
 		namesake.writeTS = types.BuildTS(200, 0)
 		namesake.newPK = []byte{9}
 		p := pkMoveWalkTestProvider(mine, namesake)
-		succ, count, complete, err := p.successorOf([]byte{3}, inhabitant, pkMoveTxnScope{writeTS: types.BuildTS(100, 0)})
+		succ, count, complete, err := p.successorOfSameTxnKey(
+			[]byte{3}, pkMoveTxnScope{writeTS: types.BuildTS(100, 0)}, 0)
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 1, count)
@@ -2588,7 +2909,8 @@ func TestPkMoveSuccessorOf(t *testing.T) {
 		alsoMine := mine
 		alsoMine.newPK = []byte{5}
 		p = pkMoveWalkTestProvider(mine, alsoMine)
-		_, count, complete, err = p.successorOf([]byte{3}, inhabitant, pkMoveTxnScope{writeTS: types.BuildTS(100, 0)})
+		_, count, complete, err = p.successorOfSameTxnKey(
+			[]byte{3}, pkMoveTxnScope{writeTS: types.BuildTS(100, 0)}, 0)
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 2, count)
@@ -2596,9 +2918,10 @@ func TestPkMoveSuccessorOf(t *testing.T) {
 
 	t.Run("durable inhabitants ignore the transaction namespace", func(t *testing.T) {
 		// A committed row id is globally unique: any recorded departure
-		// of it is evidence no matter which transaction wrote it.
+		// of it is evidence no matter which transaction wrote it, so the
+		// committed successor lookup carries no transaction namespace.
 		p := pkMoveWalkTestProvider(pkMoveWalkTestLink(3, 7, 4, 5, 20))
-		succ, count, complete, err := p.successorOf([]byte{3}, mustRowID(t, 7), pkMoveTxnScope{writeTS: types.BuildTS(999, 0)})
+		succ, count, complete, err := p.successorOfCommitted([]byte{3}, mustRowID(t, 7))
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 1, count)
@@ -2608,7 +2931,7 @@ func TestPkMoveSuccessorOf(t *testing.T) {
 	t.Run("disabled provider reports incomplete evidence", func(t *testing.T) {
 		p := pkMoveWalkTestProvider(pkMoveWalkTestLink(3, 7, 4, 5, 20))
 		p.disable("test")
-		_, count, complete, err := p.successorOf([]byte{3}, mustRowID(t, 7), pkMoveTxnScope{})
+		_, count, complete, err := p.successorOfCommitted([]byte{3}, mustRowID(t, 7))
 		require.NoError(t, err)
 		require.False(t, complete)
 		require.Equal(t, 0, count)
@@ -2625,7 +2948,7 @@ func TestPkMoveSuccessorOf(t *testing.T) {
 
 	t.Run("nil provider answers no successor with complete evidence", func(t *testing.T) {
 		var p *pkMoveLinkProvider
-		_, count, complete, err := p.successorOf([]byte{3}, mustRowID(t, 7), pkMoveTxnScope{})
+		_, count, complete, err := p.successorOfCommitted([]byte{3}, mustRowID(t, 7))
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 0, count)
@@ -2642,8 +2965,10 @@ func TestPkMoveSuccessorOf(t *testing.T) {
 		cross.oldRowID = wsA
 		p := pkMoveWalkTestProvider(cross)
 
-		// The transaction-scoped lookup must not see it...
-		_, count, complete, err := p.successorOf([]byte{4}, wsA, pkMoveTxnScope{writeTS: types.BuildTS(10, 0)})
+		// The same-transaction lookup of an unrelated scope must not
+		// see it...
+		_, count, complete, err := p.successorOfSameTxnKey(
+			[]byte{4}, pkMoveTxnScope{writeTS: types.BuildTS(10, 0)}, 0)
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 0, count)
@@ -2714,23 +3039,24 @@ func TestPkMoveConsumerTxnIdentityCollision(t *testing.T) {
 		// Two transactions created inside one physical instant share the
 		// create timestamp (the HLC advances only its logical component),
 		// and their workspaces mint the very same raw row ids. The
-		// consumer must separate their departures by the durable
-		// recording-transaction identity: drop that comparison and both
-		// lookups report a phantom two-way ambiguity.
+		// same-transaction continuation lookup must separate their
+		// departures by the durable recording-transaction identity: drop
+		// that comparison and both lookups report a phantom two-way
+		// ambiguity.
 		ws7 := mustWorkspaceRowID(t, 7)
 		mine := pkMoveTxnScopedLink(3, ws7, 4, mustWorkspaceRowID(t, 8), 100, 0xa1, true)
 		namesake := pkMoveTxnScopedLink(3, ws7, 9, mustWorkspaceRowID(t, 9), 100, 0xb2, true)
 		p := pkMoveWalkTestProvider(mine, namesake)
 
 		scopeA := pkMoveTxnScope{writeTS: types.BuildTS(100, 0), txnID: txnA, hasTxn: true}
-		succ, count, complete, err := p.successorOf([]byte{3}, ws7, scopeA)
+		succ, count, complete, err := p.successorOfSameTxnKey([]byte{3}, scopeA, 0)
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 1, count)
 		require.Equal(t, []byte{4}, succ.newPK)
 
 		scopeB := pkMoveTxnScope{writeTS: types.BuildTS(100, 0), txnID: txnB, hasTxn: true}
-		succ, count, complete, err = p.successorOf([]byte{3}, ws7, scopeB)
+		succ, count, complete, err = p.successorOfSameTxnKey([]byte{3}, scopeB, 0)
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 1, count)
@@ -2738,8 +3064,8 @@ func TestPkMoveConsumerTxnIdentityCollision(t *testing.T) {
 
 		// An identity-less scope cannot tie-break: two same-instant
 		// departures of one workspace identity stay genuinely ambiguous.
-		_, count, complete, err = p.successorOf([]byte{3}, ws7,
-			pkMoveTxnScope{writeTS: types.BuildTS(100, 0)})
+		_, count, complete, err = p.successorOfSameTxnKey([]byte{3},
+			pkMoveTxnScope{writeTS: types.BuildTS(100, 0)}, 0)
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 2, count)
@@ -2755,8 +3081,8 @@ func TestPkMoveConsumerTxnIdentityCollision(t *testing.T) {
 		other := pkMoveTxnScopedLink(3, ws7, 9, mustWorkspaceRowID(t, 9), 200, 0, false)
 		p := pkMoveWalkTestProvider(plain, other)
 
-		succ, count, complete, err := p.successorOf([]byte{3}, ws7,
-			pkMoveTxnScope{writeTS: types.BuildTS(100, 0), txnID: txnA, hasTxn: true})
+		succ, count, complete, err := p.successorOfSameTxnKey([]byte{3},
+			pkMoveTxnScope{writeTS: types.BuildTS(100, 0), txnID: txnA, hasTxn: true}, 0)
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 1, count)
@@ -2768,8 +3094,8 @@ func TestPkMoveConsumerTxnIdentityCollision(t *testing.T) {
 		// by timestamp: the scope sees exactly one candidate.
 		known := pkMoveTxnScopedLink(3, ws7, 6, mustWorkspaceRowID(t, 6), 100, 0xc3, true)
 		p = pkMoveWalkTestProvider(plain, known)
-		succ, count, complete, err = p.successorOf([]byte{3}, ws7,
-			pkMoveTxnScope{writeTS: types.BuildTS(100, 0), txnID: txnA, hasTxn: true})
+		succ, count, complete, err = p.successorOfSameTxnKey([]byte{3},
+			pkMoveTxnScope{writeTS: types.BuildTS(100, 0), txnID: txnA, hasTxn: true}, 0)
 		require.NoError(t, err)
 		require.True(t, complete)
 		require.Equal(t, 1, count)
@@ -2836,10 +3162,16 @@ func TestPkMoveResolveVerdictTaxonomy(t *testing.T) {
 		require.Equal(t, pkMoveProvenNone, verdict)
 	})
 
-	t.Run("poisoned anchor evidence is unresolved", func(t *testing.T) {
+	t.Run("ambiguous anchor evidence is unresolved", func(t *testing.T) {
+		// Two DISTINCT links claim the anchor's (row id, old pk) pair
+		// and both resolve to the anchor tombstone's instant: genuinely
+		// ambiguous catalog evidence, failing closed loudly (D226).
 		rid := mustRowID(t, 1)
-		p := pkMoveWalkTestProvider(pkMoveWalkTestLink(2, 1, 3, 7, 10))
-		p.poisoned[pkMoveLinkRowKey(rid, []byte{2})] = struct{}{}
+		l1 := pkMoveWalkTestLink(2, 1, 3, 7, 10)
+		l1.hasCommitTS, l1.commitTS = true, types.BuildTS(15, 0)
+		l2 := pkMoveWalkTestLink(2, 1, 4, 8, 12)
+		l2.hasCommitTS, l2.commitTS = true, types.BuildTS(15, 0)
+		p := pkMoveWalkTestProvider(l1, l2)
 		view := pkMoveWalkTestStubView(pkMoveTombRow(2, 0x01, 1, 15))
 		_, _, verdict := p.resolvePkMoveChainVerdict(view, []byte{2}, rid)
 		require.Equal(t, pkMoveUnresolved, verdict)
@@ -3020,12 +3352,21 @@ func TestResolveAndBuildPkMoveFoldsAbortsOnUnresolved(t *testing.T) {
 		tblStuff := newTestBranchTableStuff(ctrl)
 		swapLCAProbe(t, tblStuff, 2)
 
-		p := pkMoveWalkTestProvider(pkMoveLink{
-			oldRowID: anchorRid, newRowID: buildHashDiffRowID(t, 72), hasNewRowID: true,
-			oldPK: key2, newPK: key3, writeTS: types.BuildTS(10, 0),
-		})
-		// Poisoned evidence makes the recorded intent unprovable.
-		p.poisoned[pkMoveLinkRowKey(anchorRid, key2)] = struct{}{}
+		p := pkMoveWalkTestProvider(
+			pkMoveLink{
+				oldRowID: anchorRid, newRowID: buildHashDiffRowID(t, 72), hasNewRowID: true,
+				oldPK: key2, newPK: key3, writeTS: types.BuildTS(10, 0),
+				hasCommitTS: true, commitTS: types.BuildTS(15, 0),
+			},
+			// A second DISTINCT link claims the same anchor identity and
+			// resolves to the same instant: ambiguous catalog evidence
+			// (D226) makes the recorded intent unprovable.
+			pkMoveLink{
+				oldRowID: anchorRid, newRowID: buildHashDiffRowID(t, 73), hasNewRowID: true,
+				oldPK: key2, newPK: pkMoveTestKey(t, 4), writeTS: types.BuildTS(12, 0),
+				hasCommitTS: true, commitTS: types.BuildTS(15, 0),
+			},
+		)
 
 		view, tombstoneHashmap := newInput(t)
 		_, err := resolveAndBuildPkMoveFolds(
@@ -3072,12 +3413,20 @@ func TestResolveAndBuildPkMoveFoldsAbortsOnUnresolved(t *testing.T) {
 		// The LCA snapshot holds no row at key 2.
 		swapLCAProbe(t, tblStuff)
 
-		p := pkMoveWalkTestProvider(pkMoveLink{
-			oldRowID: anchorRid, newRowID: buildHashDiffRowID(t, 72), hasNewRowID: true,
-			oldPK: key2, newPK: key3, writeTS: types.BuildTS(10, 0),
-		})
-		// Would be unresolved if the walk ever ran.
-		p.poisoned[pkMoveLinkRowKey(anchorRid, key2)] = struct{}{}
+		p := pkMoveWalkTestProvider(
+			pkMoveLink{
+				oldRowID: anchorRid, newRowID: buildHashDiffRowID(t, 72), hasNewRowID: true,
+				oldPK: key2, newPK: key3, writeTS: types.BuildTS(10, 0),
+				hasCommitTS: true, commitTS: types.BuildTS(15, 0),
+			},
+			// Ambiguous if the walk ever ran: two DISTINCT admitted
+			// links on the anchor identity (D226).
+			pkMoveLink{
+				oldRowID: anchorRid, newRowID: buildHashDiffRowID(t, 73), hasNewRowID: true,
+				oldPK: key2, newPK: pkMoveTestKey(t, 4), writeTS: types.BuildTS(12, 0),
+				hasCommitTS: true, commitTS: types.BuildTS(15, 0),
+			},
+		)
 
 		view, tombstoneHashmap := newInput(t)
 		plan, err := resolveAndBuildPkMoveFolds(
@@ -3099,11 +3448,18 @@ func TestResolveAndBuildPkMoveFoldsAbortsOnUnresolved(t *testing.T) {
 		tblStuff.pickDepKeys = map[string]struct{}{string(key2): {}}
 		swapLCAProbe(t, tblStuff, 2)
 
-		p := pkMoveWalkTestProvider(pkMoveLink{
-			oldRowID: anchorRid, newRowID: buildHashDiffRowID(t, 72), hasNewRowID: true,
-			oldPK: key2, newPK: key3, writeTS: types.BuildTS(10, 0),
-		})
-		p.poisoned[pkMoveLinkRowKey(anchorRid, key2)] = struct{}{}
+		p := pkMoveWalkTestProvider(
+			pkMoveLink{
+				oldRowID: anchorRid, newRowID: buildHashDiffRowID(t, 72), hasNewRowID: true,
+				oldPK: key2, newPK: key3, writeTS: types.BuildTS(10, 0),
+				hasCommitTS: true, commitTS: types.BuildTS(15, 0),
+			},
+			pkMoveLink{
+				oldRowID: anchorRid, newRowID: buildHashDiffRowID(t, 73), hasNewRowID: true,
+				oldPK: key2, newPK: pkMoveTestKey(t, 4), writeTS: types.BuildTS(12, 0),
+				hasCommitTS: true, commitTS: types.BuildTS(15, 0),
+			},
+		)
 
 		view, tombstoneHashmap := newInput(t)
 		plan, err := resolveAndBuildPkMoveFolds(
@@ -3256,6 +3612,10 @@ func TestPkMoveLinkDecodeRow(t *testing.T) {
 		writeTSVec := vector.NewVec(types.T_uint64.ToType())
 		txnIDVec := vector.NewVec(types.T_binary.ToType())
 		tableIDVec := vector.NewVec(types.T_uint64.ToType())
+		linkIDVec := vector.NewVec(types.T_binary.ToType())
+		commitTSVec := vector.NewVec(types.T_binary.ToType())
+		succVec := vector.NewVec(types.T_binary.ToType())
+		stmtSeqVec := vector.NewVec(types.T_uint64.ToType())
 		require.NoError(t, vector.AppendBytes(oldRidVec, oldRid, false, mp))
 		require.NoError(t, vector.AppendBytes(newRidVec, newRid, nullNewRid, mp))
 		require.NoError(t, vector.AppendBytes(oldPKVec, oldPK, false, mp))
@@ -3263,7 +3623,11 @@ func TestPkMoveLinkDecodeRow(t *testing.T) {
 		require.NoError(t, vector.AppendFixed(writeTSVec, writeTS, false, mp))
 		require.NoError(t, vector.AppendBytes(txnIDVec, txnID, false, mp))
 		require.NoError(t, vector.AppendFixed(tableIDVec, tableID, false, mp))
-		return []*vector.Vector{oldRidVec, newRidVec, oldPKVec, newPKVec, writeTSVec, txnIDVec, tableIDVec}
+		require.NoError(t, vector.AppendBytes(linkIDVec, bytes.Repeat([]byte{0x5a}, catalog.DataBranchUpdateLinkIDBytes), false, mp))
+		require.NoError(t, vector.AppendBytes(commitTSVec, nil, true, mp))
+		require.NoError(t, vector.AppendBytes(succVec, nil, true, mp))
+		require.NoError(t, vector.AppendFixed(stmtSeqVec, uint64(1), false, mp))
+		return []*vector.Vector{oldRidVec, newRidVec, oldPKVec, newPKVec, writeTSVec, txnIDVec, tableIDVec, linkIDVec, commitTSVec, succVec, stmtSeqVec}
 	}
 
 	rid := buildHashDiffRowID(t, 3)
@@ -3291,6 +3655,11 @@ func TestPkMoveLinkDecodeRow(t *testing.T) {
 		require.True(t, link.writeTS.EQ(&wantTS))
 		require.True(t, link.hasTxnID)
 		require.Equal(t, pkMoveTestTxnID, link.txnID[:])
+		require.True(t, link.hasLinkID)
+		require.Equal(t, bytes.Repeat([]byte{0x5a}, catalog.DataBranchUpdateLinkIDBytes), link.linkID[:])
+		require.False(t, link.hasCommitTS)
+		require.False(t, link.hasSuccLinkID)
+		require.Equal(t, uint64(1), link.stmtSeq)
 	})
 
 	t.Run("NULL new row id decodes as unrecorded identity", func(t *testing.T) {
@@ -3363,7 +3732,8 @@ func TestPkMoveLinkDecodeRow(t *testing.T) {
 
 // buildPkMoveLinkProbeResultSet renders fabricated link rows in the probe
 // projection (old_row_id, new_row_id, old_pk, new_pk, write_ts, txn_id,
-// table_id) for the mock-BackgroundExec SQL path.
+// table_id, link_id, commit_ts, succ_link_id, stmt_seq) for the
+// mock-BackgroundExec SQL path.
 func buildPkMoveLinkProbeResultSet(rows ...[]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 	colDefs := []struct {
@@ -3377,6 +3747,10 @@ func buildPkMoveLinkProbeResultSet(rows ...[]interface{}) *MysqlResultSet {
 		{name: "write_ts", typ: defines.MYSQL_TYPE_LONGLONG},
 		{name: "txn_id", typ: defines.MYSQL_TYPE_VARCHAR},
 		{name: "table_id", typ: defines.MYSQL_TYPE_LONGLONG},
+		{name: "link_id", typ: defines.MYSQL_TYPE_VARCHAR},
+		{name: "commit_ts", typ: defines.MYSQL_TYPE_VARCHAR},
+		{name: "succ_link_id", typ: defines.MYSQL_TYPE_VARCHAR},
+		{name: "stmt_seq", typ: defines.MYSQL_TYPE_LONGLONG},
 	}
 	for _, def := range colDefs {
 		mysqlCol := &MysqlColumn{}
@@ -3391,16 +3765,33 @@ func buildPkMoveLinkProbeResultSet(rows ...[]interface{}) *MysqlResultSet {
 }
 
 // pkMoveProbeRow renders one link row for buildPkMoveLinkProbeResultSet.
+// The link_id is a deterministic 64-byte hash of the row's identity so
+// distinct fabricated links never collide in the byID cache; commit_ts
+// and succ_link_id render NULL (stamp-pending, no recorded pairing) and
+// stmt_seq renders 1, matching the pre-recording fabric the probe-path
+// tests were built on.
 func pkMoveProbeRow(oldRid types.Rowid, newRid *types.Rowid, oldPK, newPK []byte, writeTS uint64) []interface{} {
 	var newRidCell interface{}
 	if newRid != nil {
 		newRidCell = string(newRid[:])
 	}
+	var tsBE [8]byte
+	binary.BigEndian.PutUint64(tsBE[:], writeTS)
+	h := sha512.New()
+	h.Write(oldRid[:])
+	h.Write(oldPK)
+	h.Write(newPK)
+	h.Write(tsBE[:])
+	linkID := h.Sum(nil)
 	return []interface{}{
 		string(oldRid[:]), newRidCell, string(oldPK), string(newPK),
 		int64(writeTS),
 		string(bytes.Repeat([]byte{0xcd}, catalog.DataBranchUpdateLinkTxnIDBytes)),
 		int64(88),
+		string(linkID),
+		nil,
+		nil,
+		int64(1),
 	}
 }
 
@@ -3442,16 +3833,18 @@ func TestPkMoveLinkProbeBudgetAndBounds(t *testing.T) {
 		require.NoError(t, p.probeOldPKs(window, [][]byte{pkMoveTestKey(t, 2)}))
 
 		// Both rows merged; the key counts as fully probed.
-		link, ok := p.byRowProbe(pkMoveTestKey(t, 2), rid1)
+		link, ok, complete := pkMoveCachedAnchorAnswers(p, pkMoveTestKey(t, 2), rid1)
+		require.True(t, complete)
 		require.True(t, ok)
 		require.False(t, link.hasNewRowID)
-		link, ok = p.byRowProbe(pkMoveTestKey(t, 2), rid2)
+		link, ok, complete = pkMoveCachedAnchorAnswers(p, pkMoveTestKey(t, 2), rid2)
+		require.True(t, complete)
 		require.True(t, ok)
 		require.True(t, link.hasNewRowID)
 		require.Equal(t, rid1, link.newRowID)
-		succ, count, complete, err := p.successorOf(pkMoveTestKey(t, 2), rid2, pkMoveTxnScope{})
+		succ, count, complete2, err := p.successorOfCommitted(pkMoveTestKey(t, 2), rid2)
 		require.NoError(t, err)
-		require.True(t, complete)
+		require.True(t, complete2)
 		require.Equal(t, 1, count)
 		require.Equal(t, pkMoveTestKey(t, 4), succ.newPK)
 
@@ -3579,7 +3972,7 @@ func TestPkMoveLinkProbeBudgetAndBounds(t *testing.T) {
 		sha7 := sha256.Sum256(pkMoveTestKey(t, 7))
 		require.Contains(t, queries[2], fmt.Sprintf("%x", sha7[:8]),
 			"the overflowed window serves later keys through their own prefix")
-		_, hit, complete := p.byRowProbeVerdict(pkMoveTestKey(t, 7), rid7)
+		_, hit, complete := pkMoveCachedAnchorAnswers(p, pkMoveTestKey(t, 7), rid7)
 		require.True(t, complete)
 		require.True(t, hit)
 
@@ -3587,8 +3980,8 @@ func TestPkMoveLinkProbeBudgetAndBounds(t *testing.T) {
 		// reports neither a hit nor complete evidence (it stays unprobed,
 		// not silently answered from the truncated prefix).
 		for i := 0; i < 6; i++ {
-			_, hit, complete := p.byRowProbeVerdict(
-				pkMoveTestKey(t, 10+int64(i)), buildHashDiffRowID(t, 20+i))
+			_, hit, complete := pkMoveCachedAnchorAnswers(
+				p, pkMoveTestKey(t, 10+int64(i)), buildHashDiffRowID(t, 20+i))
 			require.False(t, hit)
 			require.False(t, complete)
 		}
@@ -3597,13 +3990,13 @@ func TestPkMoveLinkProbeBudgetAndBounds(t *testing.T) {
 		// rows cached, anchors and successors answer completely.
 		_, done := p.probed[pkMoveLinkProbedKey(window.tableID, key2)]
 		require.True(t, done)
-		link, hit, complete := p.byRowProbeVerdict(key2, rid1)
-		require.True(t, complete)
+		link, hit, complete2 := pkMoveCachedAnchorAnswers(p, key2, rid1)
+		require.True(t, complete2)
 		require.True(t, hit)
 		require.Equal(t, pkMoveTestKey(t, 3), link.newPK)
-		succ, count, complete, err := p.successorOf(key2, rid1, pkMoveTxnScope{})
+		succ, count, complete3, err := p.successorOfCommitted(key2, rid1)
 		require.NoError(t, err)
-		require.True(t, complete)
+		require.True(t, complete3)
 		require.Equal(t, 1, count)
 		require.Equal(t, pkMoveTestKey(t, 3), succ.newPK)
 
@@ -3628,14 +4021,14 @@ func TestPkMoveLinkProbeBudgetAndBounds(t *testing.T) {
 		require.NotNil(t, p)
 		p.rows = pkMoveLinkMaxCachedRows + 1
 		p.byRow[pkMoveLinkRowKey(buildHashDiffRowID(t, 30), pkMoveTestKey(t, 2))] =
-			pkMoveWalkTestLink(2, 30, 3, 31, 10)
+			[]pkMoveLink{pkMoveWalkTestLink(2, 30, 3, 31, 10)}
 
 		require.NoError(t, p.probeOldPKs(window, [][]byte{pkMoveTestKey(t, 2)}))
 		require.False(t, p.disabled,
 			"a full cache narrows to the unprobed keys, not the whole provider")
 		// The requested key could not be probed: its verdict must report
 		// INCOMPLETE evidence, never read as "no provenance".
-		_, _, complete := p.byRowProbeVerdict(pkMoveTestKey(t, 2), buildHashDiffRowID(t, 30))
+		_, _, complete := pkMoveCachedAnchorAnswers(p, pkMoveTestKey(t, 2), buildHashDiffRowID(t, 30))
 		require.False(t, complete)
 		// Already-cached rows stay held for the keys they answered.
 		require.NotEmpty(t, p.byRow)
@@ -3748,7 +4141,7 @@ func TestPkMoveLinkProbeBudgetAndBounds(t *testing.T) {
 			newPK:       key3,
 			writeTS:     types.BuildTS(10, 0),
 		}
-		p.byRow[pkMoveLinkRowKey(anchorRid, key2)] = anchor
+		p.byRow[pkMoveLinkRowKey(anchorRid, key2)] = []pkMoveLink{anchor}
 		p.byPK[string(key2)] = append(p.byPK[string(key2)], anchor)
 		p.probed[pkMoveLinkProbedKey(window.tableID, key2)] = struct{}{}
 
@@ -3772,10 +4165,10 @@ func TestPkMoveLinkProbeBudgetAndBounds(t *testing.T) {
 		// The key whose own history crossed the budget answers
 		// terminal-incomplete WITHOUT re-probing (the mock allows no
 		// third page), while the anchor key keeps its clean verdict.
-		_, _, hopComplete, err := p.successorOf(key3, lineageRid, pkMoveTxnScope{})
+		_, _, hopComplete, err := p.successorOfCommitted(key3, lineageRid)
 		require.NoError(t, err)
 		require.False(t, hopComplete, "the landed key's own history crossed the budget")
-		_, hit, anchorComplete := p.byRowProbeVerdict(key2, anchorRid)
+		_, hit, anchorComplete := pkMoveCachedAnchorAnswers(p, key2, anchorRid)
 		require.True(t, anchorComplete)
 		require.True(t, hit, "the anchor's prefetched evidence survives the hop's overflow")
 		// F3: a budget-crossed probe is unresolved provenance — loud apply
@@ -3839,15 +4232,16 @@ func TestPkMoveLinkPrefetchContinuations(t *testing.T) {
 	// The resolved walk consumes only cache: both hops come out of the
 	// prefetched evidence with no further SQL (the mock allows exactly
 	// one Exec).
-	link, ok := p.byRowProbe(key2, rid1)
+	link, ok, cacheComplete := pkMoveCachedAnchorAnswers(p, key2, rid1)
+	require.True(t, cacheComplete)
 	require.True(t, ok)
 	require.Equal(t, key3, link.newPK)
-	succ, count, complete, err := p.successorOf(key3, rid2, pkMoveTxnScope{})
+	succ, count, complete, err := p.successorOfCommitted(key3, rid2)
 	require.NoError(t, err)
 	require.True(t, complete)
 	require.Equal(t, 1, count)
 	require.Equal(t, key4, succ.newPK)
-	_, count, complete, err = p.successorOf(key4, rid3, pkMoveTxnScope{})
+	_, count, complete, err = p.successorOfCommitted(key4, rid3)
 	require.NoError(t, err)
 	require.True(t, complete)
 	require.Equal(t, 0, count)
@@ -6100,11 +6494,15 @@ func TestFormatPKValuesAsString(t *testing.T) {
 // failures inside convertRowsIntoBatch otherwise.
 func TestPkMoveLinkProbeProjectionWidth(t *testing.T) {
 	rs := buildPkMoveLinkProbeResultSet()
-	require.Len(t, rs.Columns, 7)
+	require.Len(t, rs.Columns, 11)
 	require.True(t, strings.EqualFold("old_row_id", rs.Columns[0].Name()))
 	require.True(t, strings.EqualFold("write_ts", rs.Columns[4].Name()))
 	require.True(t, strings.EqualFold("txn_id", rs.Columns[5].Name()))
 	require.True(t, strings.EqualFold("table_id", rs.Columns[6].Name()))
+	require.True(t, strings.EqualFold("link_id", rs.Columns[7].Name()))
+	require.True(t, strings.EqualFold("commit_ts", rs.Columns[8].Name()))
+	require.True(t, strings.EqualFold("succ_link_id", rs.Columns[9].Name()))
+	require.True(t, strings.EqualFold("stmt_seq", rs.Columns[10].Name()))
 }
 
 // Era-15 (r21 F5): the fold planner runs its verdict walk BEFORE any LCA
@@ -6749,21 +7147,25 @@ func TestSameKeyTailChecksRecordedArrivals(t *testing.T) {
 	})
 }
 
-// TestArrivalUndecidabilityScopesToTouchedInstants pins r58 review F2: a
-// failed arrival attribution (ambiguous, contradictory, cyclic, over-cap
-// or corrupt) poisoned EVERY birth instant queried at the key — including
-// clean in-window moves folded long after the failing chain committed.
-// Undecidability now disturbs exactly the instants the failed evidence
-// touches: the instants of corrupt in-window tombstones and the failed
-// candidate's own record instant; every other instant answers on the
-// recorded evidence.
+// TestArrivalUndecidabilityScopesToTouchedInstants pins r58 review F2
+// under the D225/D227 commit resolution: a failed arrival attribution
+// (genuinely unprovable commit evidence — corrupt duplicate deaths or an
+// unbound transaction-local identity) fails every tie at the landed KEY
+// closed, because the evidence can neither attribute the arrival nor
+// prove it did not commit at a queried instant. Every decidable lane
+// answers on the recorded evidence: a stamped commit attributes exactly
+// its instant, and an unstamped out-of-window chain is proven window
+// absence (Excluded, never loud), so clean in-window moves folded long
+// after a failing chain committed are never disturbed.
 func TestArrivalUndecidabilityScopesToTouchedInstants(t *testing.T) {
 	t.Run("an out-of-window over-cap chain cannot poison later instants", func(t *testing.T) {
 		// A 40-hop same-transaction chain (write instant 40 — the
 		// pre-fork history the review's reproducer reloads) whose
-		// grounding tombstones lie outside the stream: backward
-		// attribution exhausts the hop cap. Its transaction committed
-		// OUTSIDE the window, so no in-window query can name its commit
+		// grounding tombstones lie outside the stream: its transaction
+		// committed OUTSIDE the window, so the D227 outcome table
+		// excludes every NULL-stamped link as proven window absence (a
+		// stream-bound identity with no in-window death on the complete
+		// retained stream). No in-window query can name its commit
 		// instant: every instant answers clean, and the recorded write
 		// instant itself — a creation time, never a commit instant —
 		// must not be poisoned (r59 review F1).
@@ -6782,63 +7184,27 @@ func TestArrivalUndecidabilityScopesToTouchedInstants(t *testing.T) {
 			"the write timestamp is a creation time, never a commit instant (r59 review F1)")
 	})
 
-	t.Run("a truncated chain with an in-window origin poisons the commit instant, never the creation instant", func(t *testing.T) {
-		// r59 review F1, restated under the D156 capture (r50 (B)): the
-		// same 40-hop chain, but its origin's deleting tombstone commits
-		// INSIDE the window (instant 60), beyond the attribution hop
-		// cap, while the links carry the transaction's creation instant
-		// 40. The capture feed marks the chain's scope committed at
-		// exactly 60, so the failed attribution fails closed at that
-		// instant — and ONLY there: the answer at the creation instant
-		// stays clean, because creation time is not commit time.
+	t.Run("a stamped chain attributes its arrival at the commit instant, never the creation instant", func(t *testing.T) {
+		// r59 review F1, restated under the D225 commit stamp: the same
+		// 40-hop chain, its origin's deleting tombstone committing
+		// INSIDE the window (instant 60), the links stamped at exactly
+		// 60. The recorded stamp attributes the arrival at the commit
+		// instant — chain length never truncates a recorded instant —
+		// and ONLY there: the answer at the creation instant stays
+		// clean, because creation time is not commit time.
 		var links []pkMoveLink
 		for i := 1; i <= 40; i++ {
 			links = append(links,
 				pkMoveWalkTestLink(byte(i), byte(i), byte(i+1), byte(i+1), 40))
 		}
 		p := pkMoveWalkTestProvider(links...)
-		pkMoveWalkFeedCommits(p, pkMoveWalkTestScope(40), types.BuildTS(60, 0))
+		pkMoveWalkStampCommits(p, 40, 60)
 		view := pkMoveWalkTestStubView(
-			pkMoveTombRow(1, 0x21, 1, 60), // the origin's deleting tombstone, beyond the hop cap
+			pkMoveTombRow(1, 0x21, 1, 60), // the origin's deleting tombstone
 		)
-		require.Equal(t, pkMoveArrivalIncomplete,
+		require.Equal(t, pkMoveArrivalRecorded,
 			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(60, 0)),
-			"the chain's feasible commit instant stays fail-closed")
-		require.Equal(t, pkMoveArrivalNone,
-			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(40, 0)),
-			"the recorded creation instant is not a commit instant (r59 review F1)")
-		require.Equal(t, pkMoveArrivalNone,
-			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(50, 0)),
-			"an instant between creation and commit answers clean: the origin's tombstone pins the only feasible commit")
-		require.Equal(t, pkMoveArrivalNone,
-			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(70, 0)),
-			"an unrelated later instant answers clean")
-	})
-
-	t.Run("a truncated chain with an arrival-key legacy death poisons exactly the commit instant", func(t *testing.T) {
-		// r59 review F1's live state, restated under the D156 capture:
-		// hop-cap truncation with the origin's grounding tombstone
-		// pruned out of the observed window (a PICK's closure-founded
-		// row filter reaches only closure keys, and the depth-capped
-		// closure stops before the origin). The capture feed marks the
-		// chain's scope committed at exactly 60 — the arrival instant
-		// the transaction vacuumed the landed key's previous committed
-		// occupant — so the failed attribution fails closed there and
-		// only there (r50 (B)).
-		var links []pkMoveLink
-		for i := 1; i <= 40; i++ {
-			links = append(links,
-				pkMoveWalkTestLink(byte(i), byte(i), byte(i+1), byte(i+1), 40))
-		}
-		p := pkMoveWalkTestProvider(links...)
-		pkMoveWalkFeedCommits(p, pkMoveWalkTestScope(40), types.BuildTS(60, 0))
-		view := pkMoveWalkTestStubView(
-			pkMoveTombRow(41, 0x51, 0x51, 60), // the landed key's previous occupant vacuumed at 60
-			pkMoveDepartRow(0x51, 60, 30),     // ... born at 30, before the transaction's creation
-		)
-		require.Equal(t, pkMoveArrivalIncomplete,
-			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(60, 0)),
-			"the captured scope->commit record names the chain's exact commit instant")
+			"the recorded commit stamp attributes the arrival at the exact commit instant")
 		require.Equal(t, pkMoveArrivalNone,
 			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(40, 0)),
 			"the recorded creation instant is not a commit instant (r59 review F1)")
@@ -6850,13 +7216,49 @@ func TestArrivalUndecidabilityScopesToTouchedInstants(t *testing.T) {
 			"an unrelated later instant answers clean")
 	})
 
-	t.Run("the same truncated chain without a capture record answers clean at the legacy death instant", func(t *testing.T) {
-		// The D156 counterexample pair's other half (r50 (B)): the
-		// identical stream shape with NO capture record for the chain's
-		// scope — the scope committed OUTSIDE the apply windows — so
-		// the arrival-key legacy death names NOTHING and the fold
-		// proceeds. Absence is silence; only a recorded commit
-		// undecides the tie.
+	t.Run("a stamped chain with an arrival-key legacy death attributes exactly the commit instant", func(t *testing.T) {
+		// r59 review F1's live state, restated under the D225 stamp:
+		// the origin's grounding tombstone pruned out of the observed
+		// window (a PICK's closure-founded row filter reaches only
+		// closure keys, and the depth-capped closure stops before the
+		// origin). The links are stamped at exactly 60 — the arrival
+		// instant the transaction vacuumed the landed key's previous
+		// committed occupant — so the stamp attributes the arrival
+		// there and only there; the legacy occupant death never
+		// contaminates the recorded instant.
+		var links []pkMoveLink
+		for i := 1; i <= 40; i++ {
+			links = append(links,
+				pkMoveWalkTestLink(byte(i), byte(i), byte(i+1), byte(i+1), 40))
+		}
+		p := pkMoveWalkTestProvider(links...)
+		pkMoveWalkStampCommits(p, 40, 60)
+		view := pkMoveWalkTestStubView(
+			pkMoveTombRow(41, 0x51, 0x51, 60), // the landed key's previous occupant vacuumed at 60
+			pkMoveDepartRow(0x51, 60, 30),     // ... born at 30, before the transaction's creation
+		)
+		require.Equal(t, pkMoveArrivalRecorded,
+			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(60, 0)),
+			"the recorded commit stamp names the chain's exact commit instant")
+		require.Equal(t, pkMoveArrivalNone,
+			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(40, 0)),
+			"the recorded creation instant is not a commit instant (r59 review F1)")
+		require.Equal(t, pkMoveArrivalNone,
+			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(50, 0)),
+			"an instant between creation and commit answers clean")
+		require.Equal(t, pkMoveArrivalNone,
+			p.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(70, 0)),
+			"an unrelated later instant answers clean")
+	})
+
+	t.Run("the same chain without a commit stamp answers clean at the legacy death instant", func(t *testing.T) {
+		// The counterexample pair's other half: the identical stream
+		// shape with NO commit stamp on the chain's links — the scope
+		// committed OUTSIDE the apply windows, so the D227 outcome
+		// table excludes each link as proven window absence (no
+		// in-window death of its stream-bound vacated identity) and the
+		// arrival-key legacy death names NOTHING. Absence is silence;
+		// only a recorded commit decides the tie.
 		var links []pkMoveLink
 		for i := 1; i <= 40; i++ {
 			links = append(links,
@@ -6875,12 +7277,13 @@ func TestArrivalUndecidabilityScopesToTouchedInstants(t *testing.T) {
 	})
 
 	t.Run("an arrival-key death of the chain's own generation names nothing", func(t *testing.T) {
-		// The discrimination control: the same truncated chain, but the
+		// The discrimination control: the same unstamped chain, but the
 		// landed key's tombstone deletes a version born AT-or-after the
 		// transaction's creation (a staged-and-replaced generation or a
-		// later replacement of the landed image). It cannot be the
-		// previous committed occupant's vacuum, so it never names a
-		// feasible commit instant.
+		// later replacement of the landed image). It cannot heal the
+		// chain's commit — the chain's own vacated identities have no
+		// in-window deaths, so every link excludes as proven window
+		// absence.
 		var links []pkMoveLink
 		for i := 1; i <= 40; i++ {
 			links = append(links,
@@ -6925,10 +7328,12 @@ func TestArrivalUndecidabilityScopesToTouchedInstants(t *testing.T) {
 			"creation time stays clean")
 	})
 
-	t.Run("corrupt ground evidence poisons exactly its in-window instants", func(t *testing.T) {
+	t.Run("corrupt ground evidence poisons the landed key's tie", func(t *testing.T) {
 		// Two committed tombstones deleting the landed link's vacated
-		// version: the arrival's own instant is undecidable at exactly
-		// those in-window candidates, and only there.
+		// version make the arrival's commit instant unprovable (D227):
+		// the retained evidence can neither attribute the arrival nor
+		// prove it did NOT commit at a queried instant, so every tie at
+		// the landed key fails closed.
 		p := pkMoveWalkTestProvider(
 			pkMoveWalkTestLink(8, 8, 9, 9, 20), // landed at 9, recorded at 20
 		)
@@ -6936,65 +7341,173 @@ func TestArrivalUndecidabilityScopesToTouchedInstants(t *testing.T) {
 			pkMoveTombRow(8, 0x18, 8, 21), // corrupt: two committed tombstones ...
 			pkMoveTombRow(8, 0x19, 8, 22), // ... deleting one version
 		)
-		require.Equal(t, pkMoveArrivalIncomplete,
-			p.anchorArrivalVerdict(view, []byte{9}, types.BuildTS(21, 0)))
-		require.Equal(t, pkMoveArrivalIncomplete,
-			p.anchorArrivalVerdict(view, []byte{9}, types.BuildTS(22, 0)))
-		require.Equal(t, pkMoveArrivalNone,
-			p.anchorArrivalVerdict(view, []byte{9}, types.BuildTS(20, 0)),
-			"the link's recorded instant is its creation time, no commit instant (r59 review F1)")
-		require.Equal(t, pkMoveArrivalNone,
-			p.anchorArrivalVerdict(view, []byte{9}, types.BuildTS(23, 0)),
-			"an untouched instant answers clean")
+		for _, instant := range []int64{20, 21, 22, 23} {
+			require.Equal(t, pkMoveArrivalIncomplete,
+				p.anchorArrivalVerdict(view, []byte{9}, types.BuildTS(instant, 0)),
+				"an unprovable arrival commit fails every tie at the landed key closed")
+		}
+	})
+}
+
+// TestAnchorWindowedAdmissionExcludesStraddler pins the r106 review
+// schedule (the cross-fork straddler) at the D226 windowed anchor gate:
+// a transaction created before its lineage window ended but committed
+// after it records a link whose (old row id, old pk) identity the
+// source branch's own move also claims. The pre-fix probe merged both
+// under the shared identity and poisoned it, aborting a conflict-free
+// cascade; the gate must exclude the out-of-window ancestor link BEFORE
+// it can bind or poison, so the source's valid in-window move still
+// resolves to its exact final key.
+func TestAnchorWindowedAdmissionExcludesStraddler(t *testing.T) {
+	t.Run("an out-of-window ancestor link neither binds nor poisons the shared row identity", func(t *testing.T) {
+		// The review's exact schedule: the parent lineage holds row
+		// rid1 at key 1; the destination forks at 10; transaction X
+		// begins on the parent at 20 (its recorded write_ts); the
+		// source forks at 30; X moves 1 -> 2 and commits at 40, AFTER
+		// its attributed parent segment (.., 30] ended; the source
+		// moves its inherited 1 -> 3 and commits at 50 inside its own
+		// segment (30, 50].
+		ancestor := pkMoveWalkTestLink(1, 1, 2, 2, 20)
+		ancestor.window = pkMoveLinkTableWindow{tableID: 7, end: types.BuildTS(30, 0)}
+		ancestor.hasWindow = true
+		source := pkMoveWalkTestLink(1, 1, 3, 3, 45)
+		source.window = pkMoveLinkTableWindow{tableID: 7, from: types.BuildTS(30, 0), end: types.BuildTS(50, 0)}
+		source.hasWindow = true
+		p := pkMoveWalkTestProvider(ancestor, source)
+		pkMoveWalkStampCommits(p, 20, 40) // X committed after its window ended
+		pkMoveWalkStampCommits(p, 45, 50) // the source committed inside its own
+		view := pkMoveWalkTestStubView(
+			pkMoveTombRow(1, 0x01, 1, 50), // the source's deleting tombstone at the anchor key
+			pkMoveDepartRow(1, 50, 5),     // rid1 was born pre-fork
+			pkMoveLiveRow(3, 0xaa, 3, 50), // the source's landed image
+		)
+		finalPK, finalRow, verdict := p.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 1))
+		require.Equal(t, pkMoveResolved, verdict,
+			"the out-of-window ancestor link can neither bind nor poison: the in-window move resolves")
+		require.Equal(t, []byte{3}, finalPK,
+			"the cascade lands on the source move's exact final key")
+		require.Equal(t, []byte{0xaa}, finalRow)
+	})
+
+	t.Run("the gate excludes even when the straddler's commit instant coincides with the anchor's", func(t *testing.T) {
+		// The discriminating twin: X's commit instant lands exactly on
+		// the anchor tombstone's instant (50), so the commit-equality
+		// check alone cannot exclude it — only the attributed window
+		// can. With X's link attributed to its parent segment (.., 30]
+		// the gate excludes it and the source's move resolves;
+		// unattributed, the two DISTINCT admitted links on one row
+		// identity are genuinely ambiguous catalog evidence that fails
+		// closed loudly. The pair isolates the windowed admission gate
+		// as the excluding mechanism — the straddler can neither bind
+		// nor poison whether or not the commit instants coincide.
+		windowed := pkMoveWalkTestLink(1, 1, 2, 2, 20)
+		windowed.window = pkMoveLinkTableWindow{tableID: 7, end: types.BuildTS(30, 0)}
+		windowed.hasWindow = true
+		source := pkMoveWalkTestLink(1, 1, 3, 3, 45)
+		source.window = pkMoveLinkTableWindow{tableID: 7, from: types.BuildTS(30, 0), end: types.BuildTS(50, 0)}
+		source.hasWindow = true
+		p := pkMoveWalkTestProvider(windowed, source)
+		pkMoveWalkStampCommits(p, 20, 50) // the straddler's commit coincides with the anchor's
+		pkMoveWalkStampCommits(p, 45, 50)
+		view := pkMoveWalkTestStubView(
+			pkMoveTombRow(1, 0x01, 1, 50),
+			pkMoveDepartRow(1, 50, 5),
+			pkMoveLiveRow(3, 0xaa, 3, 50),
+		)
+		finalPK, finalRow, verdict := p.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 1))
+		require.Equal(t, pkMoveResolved, verdict,
+			"the window excludes the coinciding straddler before the commit-equality tie is consulted")
+		require.Equal(t, []byte{3}, finalPK)
+		require.Equal(t, []byte{0xaa}, finalRow)
+
+		// Control: the identical catalog and stream shape without the
+		// straddler's window attribution. Both links tie the anchor's
+		// commit instant, so admission holds two DISTINCT links on one
+		// row identity and the walk fails closed — proving the windowed
+		// gate above is what excluded the straddler.
+		unwindowed := pkMoveWalkTestLink(1, 1, 2, 2, 20)
+		sourceControl := pkMoveWalkTestLink(1, 1, 3, 3, 45)
+		sourceControl.window = pkMoveLinkTableWindow{tableID: 7, from: types.BuildTS(30, 0), end: types.BuildTS(50, 0)}
+		sourceControl.hasWindow = true
+		pc := pkMoveWalkTestProvider(unwindowed, sourceControl)
+		pkMoveWalkStampCommits(pc, 20, 50)
+		pkMoveWalkStampCommits(pc, 45, 50)
+		_, _, controlVerdict := pc.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 1))
+		require.Equal(t, pkMoveUnresolved, controlVerdict,
+			"control: unattributed, the coinciding straddler ties the commit check and the ambiguous evidence fails closed")
 	})
 }
 
 // TestSameKeyTailFailsClosedPastTruncatedForeignArrival pins r59 review
-// F1 at walk level — the review's counterexample: lineage A moved 1->2
-// at commit instant 10; one later transaction (created at instant 15,
-// committed at 20) deleted A's landed row at 2 linkless AND moved
-// lineage B 3->4->...->42->2 through 40 hops. B's arrival attribution
-// truncates at the hop cap even though its origin's grounding tombstone
-// commits in-window (beyond the cutoff), so its feasible in-window
-// commit instants stay undecidable and A's tail at its own death instant
-// must fail CLOSED — an atomic apply rejection — instead of adopting
-// B's foreign row as A's continuation and cascading children onto it.
+// F1 at walk level under the D225/D227 commit resolution — the review's
+// counterexample: lineage A moved 1->2 at commit instant 10; one later
+// transaction (created at instant 15, committed at 20) deleted A's
+// landed row at 2 linkless AND moved lineage B 3->4->...->42->2 through
+// 40 hops. A's tail at its own death instant never adopts B's foreign
+// row as A's continuation: when B's commit is RECORDED (the D225
+// stamp), the arrival screen proves A's landed version ENDED in the
+// deleting transaction and the tail answers a terminal deletion; when
+// B's commit is genuinely UNPROVABLE (corrupt duplicate deaths of the
+// landed link's vacated identity), the same screen fails the fold
+// CLOSED — an atomic apply rejection.
 func TestSameKeyTailFailsClosedPastTruncatedForeignArrival(t *testing.T) {
-	links := []pkMoveLink{
-		pkMoveWalkTestLink(1, 1, 2, 2, 10), // A: 1->2 at 10
-	}
-	for i := 3; i <= 42; i++ {
-		// B: 3->4->...->42->2, forty hops recorded at the transaction's
-		// creation instant 15, committing at 20.
-		newKey, newRid := byte(i+1), byte(i+1)
-		if i == 42 {
-			newKey, newRid = 2, 0xc0
+	mkLinks := func() []pkMoveLink {
+		links := []pkMoveLink{
+			pkMoveWalkTestLink(1, 1, 2, 2, 10), // A: 1->2 at 10
 		}
-		links = append(links, pkMoveWalkTestLink(byte(i), byte(i), newKey, newRid, 15))
+		for i := 3; i <= 42; i++ {
+			// B: 3->4->...->42->2, forty hops recorded at the
+			// transaction's creation instant 15, committing at 20.
+			newKey, newRid := byte(i+1), byte(i+1)
+			if i == 42 {
+				newKey, newRid = 2, 0xc0
+			}
+			links = append(links, pkMoveWalkTestLink(byte(i), byte(i), newKey, newRid, 15))
+		}
+		return links
 	}
-	p := pkMoveWalkTestProvider(links...)
-	// D156: B's scope is captured committed in-window at 20 — the
-	// arrival instant its transaction vacuumed A's landed row at key 2 —
-	// so the tail's failed attribution fails closed at exactly (2, 20).
-	pkMoveWalkFeedCommits(p, pkMoveWalkTestScope(15), types.BuildTS(20, 0))
-	view := pkMoveWalkTestStubView(
-		pkMoveTombRow(1, 0x11, 1, 10),    // A's origin deleted by its move
-		pkMoveTombRow(2, 0x12, 2, 20),    // A's landed version dies linkless at 20
-		pkMoveDepartRow(2, 20, 10),       // ... born at 10
-		pkMoveLiveRow(2, 0xbb, 0xc0, 20), // B's landed row at key 2, born 20
-	)
-	// Live, a PICK's closure-founded row filter prunes the picked
-	// change scan to closure keys, and the depth-capped closure never
-	// reached B's origin key 3 through 40 hops: no grounding tombstone
-	// for B's chain is visible at all (the exact e59 live-RED state).
-	// B's transaction still vacuumed A's landed row at key 2 inside its
-	// own commit image, and the capture records that scope committed at
-	// the vacuum instant exactly.
-	finalPK, finalRow, verdict := p.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 1))
-	require.Equal(t, pkMoveUnresolved, verdict,
-		"truncated foreign arrival evidence at (2, 20) fails the tail fold closed")
-	require.Nil(t, finalPK)
-	require.Nil(t, finalRow)
+	mkView := func(extra ...pkMoveWalkTestRow) *pkMoveWalkTestView {
+		entries := []pkMoveWalkTestRow{
+			pkMoveTombRow(1, 0x11, 1, 10),    // A's origin deleted by its move
+			pkMoveTombRow(2, 0x12, 2, 20),    // A's landed version dies linkless at 20
+			pkMoveDepartRow(2, 20, 10),       // ... born at 10
+			pkMoveLiveRow(2, 0xbb, 0xc0, 20), // B's landed row at key 2, born 20
+		}
+		return pkMoveWalkTestStubView(append(entries, extra...)...)
+	}
+
+	t.Run("a recorded foreign arrival proves the lineage ended", func(t *testing.T) {
+		// D225: B's scope is stamped committed in-window at 20 — the
+		// arrival instant its transaction vacuumed A's landed row at
+		// key 2 — so the tail's arrival screen attributes B's landing
+		// at exactly (2, 20): one committed image per key per instant
+		// makes the re-born row B's landed image, and A's lineage
+		// provably ENDED in this deletion.
+		p := pkMoveWalkTestProvider(mkLinks()...)
+		pkMoveWalkStampCommits(p, 15, 20)
+		finalPK, finalRow, verdict := p.resolvePkMoveChainVerdict(mkView(), []byte{1}, mustRowID(t, 1))
+		require.Equal(t, pkMoveProvenDeleted, verdict,
+			"a recorded arrival at the tail instant proves the lineage's terminal deletion")
+		require.Nil(t, finalPK)
+		require.Nil(t, finalRow)
+	})
+
+	t.Run("unprovable foreign arrival evidence fails the tail closed", func(t *testing.T) {
+		// B's landed link carries no stamp and its vacated identity
+		// shows TWO committed deaths: the arrival's commit instant is
+		// unprovable (D227), so the tail's arrival screen fails closed
+		// instead of letting A's fold adopt or delete past B's row.
+		p := pkMoveWalkTestProvider(mkLinks()...)
+		view := mkView(
+			pkMoveTombRow(42, 0x2a, 42, 18), // corrupt: two committed deaths ...
+			pkMoveTombRow(42, 0x2b, 42, 19), // ... of B's vacated identity at key 42
+		)
+		finalPK, finalRow, verdict := p.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 1))
+		require.Equal(t, pkMoveUnresolved, verdict,
+			"unprovable foreign arrival evidence at (2, 20) fails the tail fold closed")
+		require.Nil(t, finalPK)
+		require.Nil(t, finalRow)
+	})
 }
 
 // TestAnchorContinuityPastPreWindowArrivalFailure pins r58 review F2's
@@ -7031,220 +7544,40 @@ func TestAnchorContinuityPastPreWindowArrivalFailure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// D156 (r50-r53): the scope->commit capture over the link relation replaces
-// the r49 approximation channels; these tests pin the capture contract.
+// D226: the windowed commit-membership gate projects each (table, window)
+// segment to its (lo, hi] admission interval.
 
-// The capture bounds mirror the collector's full-types.TS from/end, with
-// the r52 zero-start normalization sending the reserved empty instant to
-// [MinTs().Next(), end] and the unit-fixture fallback reading unbounded.
-func TestPkMoveLinkWindowCaptureBounds(t *testing.T) {
+// The membership bounds mirror the collector's full-types.TS from/end:
+// from-exclusive/end-inclusive, so a commit at exactly the fork instant
+// belongs to the parent window only; empty bounds read unbounded (the
+// unit-fixture posture).
+func TestPkMoveLinkWindowCommitBounds(t *testing.T) {
 	end := types.BuildTS(90, 3)
-	zero := types.MinTs()
-	from, got := pkMoveLinkTableWindow{tableID: 7, end: end}.captureBounds()
-	require.Equal(t, zero.Next(), from,
-		"a whole-history window never passes the reserved zero instant")
-	require.Equal(t, end, got)
+	w := pkMoveLinkTableWindow{tableID: 7, end: end}
+	lo, hi := w.commitBounds()
+	require.Equal(t, types.MinTs(), lo, "an empty lower bound reads whole-history")
+	require.Equal(t, end, hi)
+	require.True(t, w.containsCommit(end), "the end instant is inclusive")
+	require.True(t, w.containsCommit(types.BuildTS(90, 2)))
+	require.False(t, w.containsCommit(types.MinTs()),
+		"the reserved zero instant is never a member")
+	require.False(t, w.containsCommit(end.Next()),
+		"a commit past the end belongs to a later window")
 
 	exact := types.BuildTS(50, 2)
-	from, got = pkMoveLinkTableWindow{tableID: 7, from: exact, end: end}.captureBounds()
-	require.Equal(t, exact, from, "a per-generation lower bound mirrors verbatim")
-	require.Equal(t, end, got)
+	w = pkMoveLinkTableWindow{tableID: 7, from: exact, end: end}
+	lo, hi = w.commitBounds()
+	require.Equal(t, exact, lo, "a per-generation lower bound mirrors verbatim")
+	require.Equal(t, end, hi)
+	require.False(t, w.containsCommit(exact),
+		"the lower bound is exclusive: a commit at the fork instant belongs to the parent")
+	require.True(t, w.containsCommit(exact.Next()))
 
-	from, got = pkMoveLinkTableWindow{tableID: 7}.captureBounds()
-	require.Equal(t, zero.Next(), from)
-	require.Equal(t, types.MaxTs(), got, "the no-recorded-bounds fallback is unbounded")
-}
-
-// A recorded scope names exactly its commit instant at the failed
-// attribution; repeats of the same record dedupe across window
-// boundaries (adjacent generations share one instant).
-func TestArrivalCaptureFeedBindingAndDedupe(t *testing.T) {
-	scope := pkMoveWalkTestScope(40)
-	commit := types.BuildTS(60, 0)
-
-	p := pkMoveWalkTestProvider(pkMoveWalkTestLink(1, 1, 2, 2, 40))
-	p.windows = []pkMoveLinkTableWindow{{tableID: 1}, {tableID: 2}}
-	p.fullWindows = map[uint64][2]uint64{1: {}, 2: {}}
-	feedCalls := 0
-	p.streamLinkCommits = func(
-		ctx context.Context, w pkMoveLinkTableWindow, from, end types.TS,
-		accept func(scope pkMoveTxnScope, cts types.TS) error,
-	) error {
-		feedCalls++
-		// Both adjacent generations observed the same boundary commit.
-		if err := accept(scope, commit); err != nil {
-			return err
-		}
-		return accept(scope, commit)
-	}
-	truncated := pkMoveWalkTestProvider(
-		pkMoveWalkTestLink(1, 1, 2, 2, 40),
-		pkMoveWalkTestLink(2, 2, 3, 3, 40),
-		pkMoveWalkTestLink(3, 3, 4, 4, 40),
-		pkMoveWalkTestLink(4, 4, 5, 5, 40),
-		pkMoveWalkTestLink(5, 5, 6, 6, 40),
-		pkMoveWalkTestLink(6, 6, 7, 7, 40),
-		pkMoveWalkTestLink(7, 7, 8, 8, 40),
-		pkMoveWalkTestLink(8, 8, 9, 9, 40),
-		pkMoveWalkTestLink(9, 9, 10, 10, 40),
-		pkMoveWalkTestLink(10, 10, 11, 11, 40),
-		pkMoveWalkTestLink(11, 11, 12, 12, 40),
-		pkMoveWalkTestLink(12, 12, 13, 13, 40),
-		pkMoveWalkTestLink(13, 13, 14, 14, 40),
-		pkMoveWalkTestLink(14, 14, 15, 15, 40),
-		pkMoveWalkTestLink(15, 15, 16, 16, 40),
-		pkMoveWalkTestLink(16, 16, 17, 17, 40),
-		pkMoveWalkTestLink(17, 17, 18, 18, 40),
-		pkMoveWalkTestLink(18, 18, 19, 19, 40),
-		pkMoveWalkTestLink(19, 19, 20, 20, 40),
-		pkMoveWalkTestLink(20, 20, 21, 21, 40),
-		pkMoveWalkTestLink(21, 21, 22, 22, 40),
-		pkMoveWalkTestLink(22, 22, 23, 23, 40),
-		pkMoveWalkTestLink(23, 23, 24, 24, 40),
-		pkMoveWalkTestLink(24, 24, 25, 25, 40),
-		pkMoveWalkTestLink(25, 25, 26, 26, 40),
-		pkMoveWalkTestLink(26, 26, 27, 27, 40),
-		pkMoveWalkTestLink(27, 27, 28, 28, 40),
-		pkMoveWalkTestLink(28, 28, 29, 29, 40),
-		pkMoveWalkTestLink(29, 29, 30, 30, 40),
-		pkMoveWalkTestLink(30, 30, 31, 31, 40),
-		pkMoveWalkTestLink(31, 31, 32, 32, 40),
-		pkMoveWalkTestLink(32, 32, 33, 33, 40),
-		pkMoveWalkTestLink(33, 33, 34, 34, 40),
-		pkMoveWalkTestLink(34, 34, 35, 35, 40),
-		pkMoveWalkTestLink(35, 35, 36, 36, 40),
-		pkMoveWalkTestLink(36, 36, 37, 37, 40),
-		pkMoveWalkTestLink(37, 37, 38, 38, 40),
-		pkMoveWalkTestLink(38, 38, 39, 39, 40),
-		pkMoveWalkTestLink(39, 39, 40, 40, 40),
-		pkMoveWalkTestLink(40, 40, 41, 41, 40),
-	)
-	// The truncated 40-hop chain forces the failed-attribution lane,
-	// where the capture record decides the tie.
-	truncated.windows = p.windows
-	truncated.fullWindows = p.fullWindows
-	truncated.streamLinkCommits = p.streamLinkCommits
-
-	view := pkMoveWalkTestStubView()
-	require.Equal(t, pkMoveArrivalIncomplete,
-		truncated.anchorArrivalVerdict(view, []byte{41}, commit),
-		"the recorded scope names exactly its commit instant")
-	require.Equal(t, pkMoveArrivalNone,
-		truncated.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(40, 0)),
-		"a scope's create instant is not a commit instant")
-	require.Equal(t, pkMoveArrivalNone,
-		truncated.anchorArrivalVerdict(view, []byte{41}, types.BuildTS(70, 0)),
-		"unrecorded instants stay clean")
-	require.False(t, truncated.arrivalCapFailed, "boundary duplicates dedupe, never conflict")
-	require.Equal(t, 2, feedCalls,
-		"one build streams each registered window exactly once (D157)")
-	// Repeated verdicts reuse the build's index without re-capture.
-	require.Equal(t, pkMoveArrivalIncomplete,
-		truncated.anchorArrivalVerdict(view, []byte{41}, commit))
-	require.Equal(t, 2, feedCalls, "a fresh build is not issued per query")
-}
-
-// Encoded scopes are not admitted: the capture filters retained state to
-// scopes the provider's link cache actually asks about (r51 (G)(ii)).
-func TestArrivalCaptureAdmissionFiltersUnrelatedScopes(t *testing.T) {
-	p := pkMoveWalkTestProvider(pkMoveWalkTestLink(1, 1, 2, 2, 40))
-	pkMoveWalkFeedCommits(p, pkMoveWalkTestScope(41), types.BuildTS(60, 0))
-	p.captureArrivalCommitsLocked()
-	require.False(t, p.arrivalCapFailed)
-	require.NotNil(t, p.arrivalCommitIdx)
-	require.Empty(t, p.arrivalCommitIdx.byTSNone,
-		"scope 41 is not in the provider's cache, so the record is streamed and dropped")
-}
-
-// A context that could yield synthetic stamps is rejected outright:
-// visible-state policy or recovery resources both disqualify the
-// capture (r51 (E)), poisoning the build wholesale.
-func TestArrivalCaptureGuardRejectsDirtyContext(t *testing.T) {
-	for name, ctx := range map[string]context.Context{
-		"visible-state policy": engine.WithSnapshotReadPolicy(
-			context.Background(), engine.SnapshotReadPolicyVisibleState),
-		"recovery resources": engine.WithVisibleStateRecoveryResources(
-			context.Background(), &dataBranchVisibleStateRecoveryResources{}),
-	} {
-		t.Run(name, func(t *testing.T) {
-			p := pkMoveWalkTestProvider(pkMoveWalkTestLink(1, 1, 2, 2, 40))
-			p.ctx = ctx
-			p.captureArrivalCommitsLocked()
-			require.True(t, p.arrivalCapFailed,
-				"a dirty capture context can never certify recorded commits")
-			require.Nil(t, p.arrivalCommitIdx)
-		})
-	}
-}
-
-// A scope observed committing at two instants is corruption; the build
-// fails closed wholesale — every tie query of that build is Incomplete,
-// including queries the conflict never touched (r50 (C)).
-func TestArrivalCaptureConflictPoisonsBuild(t *testing.T) {
-	scope := pkMoveWalkTestScope(40)
-	p := pkMoveWalkTestProvider(pkMoveWalkTestLink(1, 1, 2, 2, 40))
-	p.windows = []pkMoveLinkTableWindow{{tableID: 1}}
-	p.fullWindows = map[uint64][2]uint64{1: {}}
-	p.streamLinkCommits = func(
-		ctx context.Context, w pkMoveLinkTableWindow, from, end types.TS,
-		accept func(scope pkMoveTxnScope, cts types.TS) error,
-	) error {
-		if err := accept(scope, types.BuildTS(60, 0)); err != nil {
-			return err
-		}
-		return accept(scope, types.BuildTS(70, 0))
-	}
-	view := pkMoveWalkTestStubView()
-	require.Equal(t, pkMoveArrivalIncomplete,
-		p.anchorArrivalVerdict(view, []byte{2}, types.BuildTS(60, 0)))
-	require.Equal(t, pkMoveArrivalIncomplete,
-		p.anchorArrivalVerdict(view, []byte{99}, types.BuildTS(99, 0)),
-		"a poisoned build answers no query, even one the corruption never touched")
-	require.True(t, p.arrivalCapFailed)
-}
-
-// Capacity exhaustion takes the approved lane: the provider disables
-// with the capacity reason instead of adopting anything (r53 (G)(v)).
-func TestArrivalCaptureCapacityDisablesProvider(t *testing.T) {
-	p := pkMoveWalkTestProvider(pkMoveWalkTestLink(1, 1, 2, 2, 40))
-	p.windows = []pkMoveLinkTableWindow{{tableID: 1}}
-	p.fullWindows = map[uint64][2]uint64{1: {}}
-	p.streamLinkCommits = func(
-		ctx context.Context, w pkMoveLinkTableWindow, from, end types.TS,
-		accept func(scope pkMoveTxnScope, cts types.TS) error,
-	) error {
-		return engine.NewChangeRangeCapacityError("fabric overflow")
-	}
-	p.captureArrivalCommitsLocked()
-	require.True(t, p.disabled, "capacity disables the provider")
-	require.False(t, p.arrivalCapFailed,
-		"the disable lane replaces build poisoning for capacity")
-	require.Empty(t, p.byPK, "the disable releases all caches")
-}
-
-// Cancellation mid-capture poisons the build (D157); nothing partial is
-// adopted and the next build retries cleanly.
-func TestArrivalCaptureCancellationPoisonsBuild(t *testing.T) {
-	scope := pkMoveWalkTestScope(40)
-	ctx, cancel := context.WithCancel(context.Background())
-	p := pkMoveWalkTestProvider(pkMoveWalkTestLink(1, 1, 2, 2, 40))
-	p.ctx = ctx
-	p.windows = []pkMoveLinkTableWindow{{tableID: 1}}
-	p.fullWindows = map[uint64][2]uint64{1: {}}
-	p.streamLinkCommits = func(
-		ctx context.Context, w pkMoveLinkTableWindow, from, end types.TS,
-		accept func(scope pkMoveTxnScope, cts types.TS) error,
-	) error {
-		if err := accept(scope, types.BuildTS(60, 0)); err != nil {
-			return err
-		}
-		cancel()
-		return ctx.Err()
-	}
-	p.captureArrivalCommitsLocked()
-	require.True(t, p.arrivalCapFailed,
-		"a cancelled capture adopts no partial index")
-	require.Nil(t, p.arrivalCommitIdx)
+	w = pkMoveLinkTableWindow{tableID: 7}
+	lo, hi = w.commitBounds()
+	require.Equal(t, types.MinTs(), lo)
+	require.Equal(t, types.MaxTs(), hi, "the no-recorded-bounds fallback is unbounded")
+	require.True(t, w.containsCommit(types.BuildTS(1, 0)))
 }
 
 // pkMoveArrivalCancelAfterChecksCtx is a deterministic cancellation
@@ -7275,37 +7608,41 @@ func (c *pkMoveArrivalCancelAfterChecksCtx) Err() error {
 	return c.Context.Err()
 }
 
-// Cancellation AFTER a successful capture — at the grouping walk, mid
-// grouping, and inside one attribution's chain hop (D157 (A)) — aborts
-// the arrival build before the index publishes: bounded remaining work,
-// no partial verdict state adopted, fail-safe answers, and a clean
-// wholesale retry once the provider context is live again.
+// Cancellation mid-build — at the grouping walk, mid grouping, and
+// inside one landed key's attribution (D157 (A)) — aborts the arrival
+// build before the index publishes: bounded remaining work, no partial
+// verdict state adopted, fail-safe answers, and a clean wholesale retry
+// once the provider context is live again.
 func TestArrivalConstructionCancellationAbortsBuild(t *testing.T) {
-	scope := pkMoveWalkTestScope(40)
 	newProvider := func() *pkMoveLinkProvider {
 		p := pkMoveWalkTestProvider(
 			pkMoveWalkTestLink(1, 1, 2, 2, 40),
 			pkMoveWalkTestLink(2, 3, 3, 4, 40),
 		)
-		pkMoveWalkFeedCommits(p, scope, types.BuildTS(60, 0))
+		pkMoveWalkStampCommits(p, 40, 60)
 		return p
 	}
 	view := pkMoveWalkTestStubView()
 	const totalLinks = uint64(2)
-	// The fabric admits exactly one record, so capture reads Done()
-	// twice (one per admitted record, one final boundary) before any
-	// construction check runs.
-	const captureChecks = 2
+	// A whole build's bounded scan cost: the grouping pass touches every
+	// link once, and the second landed key's consistency walk follows
+	// the recorded pairing one hop to the first link, whose staged
+	// replacement identity contradicts the identity the second link
+	// consumed — a contradiction whose fail-closed poison resolves the
+	// scope's two stamped links once (memoized per build). The first
+	// link's own landing has no recorded predecessor and grounds
+	// nothing here, so its attribution adds no further scans.
+	const buildScans = totalLinks + 3
 
 	// Control: the same fixture with a permanently live context builds
 	// and serves wholesale.
 	control := newProvider()
 	control.ctx = context.Background()
 	controlVerdict := control.anchorArrivalVerdict(view, []byte{2}, types.BuildTS(60, 0))
-	require.NotEqual(t, pkMoveArrivalIncomplete, controlVerdict,
-		"control setup must keep the completeness gate open")
+	require.Equal(t, pkMoveArrivalRecorded, controlVerdict,
+		"control setup must attribute the stamped arrival")
 	require.NotNil(t, control.arrivals)
-	require.Equal(t, totalLinks, control.arrivalScans)
+	require.Equal(t, buildScans, control.arrivalScans)
 
 	cases := []struct {
 		name      string
@@ -7313,17 +7650,17 @@ func TestArrivalConstructionCancellationAbortsBuild(t *testing.T) {
 		wantScans uint64
 	}{
 		// Trips at the first grouping boundary: no key grouped at all.
-		{"construction entry", captureChecks, 0},
-		// Trips at the second key's boundary: exactly one of the two
-		// single-link keys was grouped (both keys carry one link, so
-		// the count is order-independent), strictly less than the full
-		// walk. The build then aborts before attribution.
-		{"mid grouping", captureChecks + 1, 1},
+		{"construction entry", 0, 0},
+		// Trips at the second key's grouping boundary: exactly one of
+		// the two single-link keys was grouped (both keys carry one
+		// link, so the count is order-independent), strictly less than
+		// the full walk. The build then aborts before attribution.
+		{"mid grouping", 1, 1},
 		// Grouping completes (both keys grouped, scans == total)
-		// followed by the attribution key boundary, then the trip
-		// fires inside the first candidate's chain hop: every
-		// attribution is discarded before adoption.
-		{"in-chain attribution", captureChecks + int(totalLinks) + 1, totalLinks},
+		// followed by one landed key's boundary check, then the trip
+		// fires inside that key's first candidate: every attribution
+		// is discarded before adoption.
+		{"in attribution", 3, totalLinks},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -7339,10 +7676,8 @@ func TestArrivalConstructionCancellationAbortsBuild(t *testing.T) {
 				"a cancelled build answers fail-safe")
 			require.Nil(t, p.arrivals,
 				"a cancelled build publishes no index")
-			require.True(t, p.arrivalCapFailed,
+			require.True(t, p.arrivalIdxFailed,
 				"a cancelled build poisons fail-safe, never a silent downgrade")
-			require.Nil(t, p.arrivalCommitIdx,
-				"a cancelled build discards the capture's adopted index")
 			require.Equal(t, tc.wantScans, p.arrivalScans,
 				"remaining construction work is bounded by the trip point")
 
@@ -7353,105 +7688,13 @@ func TestArrivalConstructionCancellationAbortsBuild(t *testing.T) {
 			retry := p.anchorArrivalVerdict(view, []byte{2}, types.BuildTS(60, 0))
 			require.Equal(t, controlVerdict, retry,
 				"the retry rebuilds wholesale and rules like the control")
-			require.False(t, p.arrivalCapFailed)
+			require.False(t, p.arrivalIdxFailed)
 			require.Equal(t, control.arrivals, p.arrivals,
-				"the retried index is byte-identical to the control build")
-			require.Equal(t, tc.wantScans+totalLinks, p.arrivalScans,
+				"the retried index is identical to the control build")
+			require.Equal(t, tc.wantScans+buildScans, p.arrivalScans,
 				"the cancelled work plus the wholesale retry is fully accounted")
 		})
 	}
-}
-
-// A provider with windows but no engine and no fabric captures a
-// complete EMPTY index: absence is silence (r50 (D); the walk
-// fixtures' posture).
-func TestArrivalCaptureNoEngineNoFabricIsCompleteSilence(t *testing.T) {
-	p := pkMoveWalkTestProvider(pkMoveWalkTestLink(1, 1, 2, 2, 40))
-	p.windows = []pkMoveLinkTableWindow{{tableID: 1}}
-	p.fullWindows = map[uint64][2]uint64{1: {}}
-	p.captureArrivalCommitsLocked()
-	require.False(t, p.arrivalCapFailed)
-	require.NotNil(t, p.arrivalCommitIdx)
-	view := pkMoveWalkTestStubView()
-	require.Equal(t, pkMoveArrivalNone,
-		p.anchorArrivalVerdict(view, []byte{2}, types.BuildTS(60, 0)),
-		"no capture source answers every tie from the caches alone")
-}
-
-// The production capture fold decodes the link table's change stream
-// positionally (DDL order plus the appended commit-ts column), admits
-// only this window's relation, and rejects malformed widths.
-func TestFoldPkMoveLinkCaptureBatch(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	newVecs := func() []*vector.Vector {
-		vecs := make([]*vector.Vector, 11)
-		for i, typ := range []types.T{
-			types.T_varbinary, // link_id
-			types.T_uint64,    // table_id
-			types.T_varbinary, // old_pk_sha
-			types.T_varbinary, // old_row_id
-			types.T_varbinary, // old_pk
-			types.T_varbinary, // new_pk_sha
-			types.T_varbinary, // new_pk
-			types.T_varbinary, // new_row_id
-			types.T_uint64,    // write_ts
-			types.T_varbinary, // txn_id
-			types.T_TS,        // commit ts
-		} {
-			vecs[i] = vector.NewVec(typ.ToType())
-		}
-		return vecs
-	}
-	appendRow := func(vecs []*vector.Vector, tableID, writeTS uint64, commitTS types.TS) {
-		require.NoError(t, vector.AppendBytes(vecs[0], make([]byte, 64), false, mp))
-		require.NoError(t, vector.AppendFixed(vecs[1], tableID, false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[2], make([]byte, 32), false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[3], make([]byte, 24), false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[4], []byte{1}, false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[5], make([]byte, 32), false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[6], []byte{2}, false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[7], make([]byte, 24), false, mp))
-		require.NoError(t, vector.AppendFixed(vecs[8], writeTS, false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[9], make([]byte, 16), false, mp))
-		require.NoError(t, vector.AppendFixed(vecs[10], commitTS, false, mp))
-	}
-	vecs := newVecs()
-	appendRow(vecs, 7, 40, types.BuildTS(60, 0))
-	appendRow(vecs, 8, 42, types.BuildTS(61, 0)) // another relation's history
-	appendRow(vecs, 7, 44, types.BuildTS(62, 1))
-	data := batch.NewWithSize(11)
-	data.Vecs = vecs
-	data.SetRowCount(3)
-
-	type record struct {
-		scope pkMoveTxnScope
-		cts   types.TS
-	}
-	var got []record
-	err := foldPkMoveLinkCaptureBatch(
-		pkMoveLinkTableWindow{tableID: 7}, data,
-		func(scope pkMoveTxnScope, cts types.TS) error {
-			got = append(got, record{scope, cts})
-			return nil
-		})
-	require.NoError(t, err)
-	require.Len(t, got, 2, "only this window's relation is admitted")
-	require.Equal(t, types.BuildTS(40, 0), got[0].scope.writeTS,
-		"write_ts is a physical-nanosecond create instant, logical zero")
-	require.False(t, got[0].scope.hasTxn, "an all-zero txn id is identity unknown")
-	require.Equal(t, types.BuildTS(60, 0), got[0].cts)
-	require.Equal(t, types.BuildTS(44, 0), got[1].scope.writeTS)
-	require.Equal(t, types.BuildTS(62, 1), got[1].cts)
-	data.Clean(mp)
-
-	// A malformed stream width is corruption, failing the capture.
-	bad := batch.NewWithSize(10)
-	bad.SetRowCount(0)
-	require.Error(t, foldPkMoveLinkCaptureBatch(
-		pkMoveLinkTableWindow{tableID: 7}, bad, func(pkMoveTxnScope, types.TS) error { return nil }))
-	require.Zero(t, mp.CurrNB())
 }
 
 // TestPkMoveSyntheticWindowSeedFailsClosed pins the r53 D156(E) amendment
@@ -7614,149 +7857,6 @@ func TestPkMoveConstructSubstitutedWindowCannotAuthorizeFold(t *testing.T) {
 	require.Equal(t, pkMoveUnresolved, verdict)
 }
 
-// TestDrainPkMoveLinkCaptureHandle pins the capture drain protocol of
-// r51 (G) against the engine's serving contract: a page is live while
-// EITHER side carries rows, so the standalone tombstone pages the
-// engine legitimately serves — a size-bounded tombstone page ahead of
-// later data, or link reclamation rows from an unrelated dropped
-// generation under the capture's account-wide read — must not end the
-// stream. Stopping at the first data==nil certifies false ABSENCE in
-// the arrival-commit index and re-opens the unsafe fold D156 was
-// introduced to reject. Every returned batch is caller-owned and
-// released on success and failure alike, and a read failure propagates
-// unchanged so the caller's incomplete (fail-closed) classification
-// stands.
-func TestDrainPkMoveLinkCaptureHandle(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	newLinkVecs := func() []*vector.Vector {
-		vecs := make([]*vector.Vector, 11)
-		for i, typ := range []types.T{
-			types.T_varbinary, // link_id
-			types.T_uint64,    // table_id
-			types.T_varbinary, // old_pk_sha
-			types.T_varbinary, // old_row_id
-			types.T_varbinary, // old_pk
-			types.T_varbinary, // new_pk_sha
-			types.T_varbinary, // new_pk
-			types.T_varbinary, // new_row_id
-			types.T_uint64,    // write_ts
-			types.T_varbinary, // txn_id
-			types.T_TS,        // commit ts
-		} {
-			vecs[i] = vector.NewVec(typ.ToType())
-		}
-		return vecs
-	}
-	appendLinkRow := func(vecs []*vector.Vector, tableID, writeTS uint64, txnTag byte, commitTS types.TS) {
-		txnID := make([]byte, catalog.DataBranchUpdateLinkTxnIDBytes)
-		txnID[0] = txnTag
-		require.NoError(t, vector.AppendBytes(vecs[0], make([]byte, 64), false, mp))
-		require.NoError(t, vector.AppendFixed(vecs[1], tableID, false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[2], make([]byte, 32), false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[3], make([]byte, 24), false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[4], []byte{1}, false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[5], make([]byte, 32), false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[6], []byte{2}, false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[7], make([]byte, 24), false, mp))
-		require.NoError(t, vector.AppendFixed(vecs[8], writeTS, false, mp))
-		require.NoError(t, vector.AppendBytes(vecs[9], txnID, false, mp))
-		require.NoError(t, vector.AppendFixed(vecs[10], commitTS, false, mp))
-	}
-	mkTombstonePage := func(n int) *batch.Batch {
-		// The capture drain never inspects tombstone rows (skipDeletes
-		// semantics); only ownership matters here.
-		page := batch.NewWithSize(2)
-		page.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
-		page.Vecs[1] = vector.NewVec(types.T_TS.ToType())
-		for i := 0; i < n; i++ {
-			require.NoError(t, vector.AppendBytes(page.Vecs[0], []byte{byte(i)}, false, mp))
-			require.NoError(t, vector.AppendFixed(page.Vecs[1], types.BuildTS(2, uint32(i)), false, mp))
-		}
-		page.SetRowCount(n)
-		return page
-	}
-
-	t.Run("a tombstone-only page does not end the capture", func(t *testing.T) {
-		linkVecs := newLinkVecs()
-		appendLinkRow(linkVecs, 7, 40, 1, types.BuildTS(60, 0))
-		appendLinkRow(linkVecs, 8, 42, 2, types.BuildTS(61, 0)) // another relation's history
-		appendLinkRow(linkVecs, 7, 44, 3, types.BuildTS(62, 1))
-		linkBat := batch.NewWithSize(11)
-		linkBat.Vecs = linkVecs
-		linkBat.SetRowCount(3)
-
-		stub := &stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{
-			{tombstone: mkTombstonePage(2)}, // standalone tombstone page FIRST
-			{data: linkBat},                 // then the relevant link inserts
-			{data: nil, tombstone: nil},     // true exhaustion
-		}}
-
-		type admission struct {
-			scope pkMoveTxnScope
-			cts   types.TS
-		}
-		var got []admission
-		err := drainPkMoveLinkCaptureHandle(
-			context.Background(), stub, mp,
-			func(data *batch.Batch) error {
-				return foldPkMoveLinkCaptureBatch(
-					pkMoveLinkTableWindow{tableID: 7}, data,
-					func(scope pkMoveTxnScope, cts types.TS) error {
-						got = append(got, admission{scope, cts})
-						return nil
-					})
-			},
-		)
-		require.NoError(t, err)
-		// The pre-fix protocol returned success at the tombstone page and
-		// certified absence for both of these admitted commits.
-		require.Len(t, got, 2, "only this window's relation is admitted, beyond the tombstone page")
-		require.True(t, got[0].scope.hasTxn)
-		require.Equal(t, types.BuildTS(60, 0), got[0].cts)
-		require.Equal(t, types.BuildTS(62, 1), got[1].cts)
-		require.Zero(t, mp.CurrNB())
-		require.Zero(t, mp.OnHeapCurrNB(), "every served page is released")
-	})
-
-	t.Run("read failure releases partial batches and propagates", func(t *testing.T) {
-		partData := mkTombstonePage(1)
-		partTomb := mkTombstonePage(1)
-		wantErr := moerr.NewInternalErrorNoCtx("capture read failed")
-		stub := &stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{
-			{data: partData, tombstone: partTomb, err: wantErr},
-		}}
-		foldCalls := 0
-		err := drainPkMoveLinkCaptureHandle(
-			context.Background(), stub, mp,
-			func(data *batch.Batch) error {
-				foldCalls++
-				return nil
-			},
-		)
-		require.Equal(t, wantErr, err)
-		require.Zero(t, foldCalls, "an errored page is a partial page: it is released, never folded")
-		require.Zero(t, mp.CurrNB())
-		require.Zero(t, mp.OnHeapCurrNB())
-	})
-
-	t.Run("failure after a tombstone page stays fail-closed", func(t *testing.T) {
-		wantErr := moerr.NewInternalErrorNoCtx("capture read failed mid-stream")
-		stub := &stubEngineChangesHandle{responses: []stubEngineChangesHandleResponse{
-			{tombstone: mkTombstonePage(2)},
-			{err: wantErr},
-		}}
-		err := drainPkMoveLinkCaptureHandle(
-			context.Background(), stub, mp,
-			func(data *batch.Batch) error { return nil },
-		)
-		require.Equal(t, wantErr, err, "the read failure reaches the caller, which poisons the index")
-		require.Zero(t, mp.CurrNB())
-		require.Zero(t, mp.OnHeapCurrNB())
-	})
-}
-
 // TestPkMoveSyntheticContinuityFailsClosed pins the r53 D156(E) amendment
 // at the anchor-vs-LCA continuity comparison: a tainted previous-death
 // instant can never prove a reincarnation (the certified-quiet control
@@ -7836,4 +7936,67 @@ func TestPkMoveSyntheticContinuityFailsClosed(t *testing.T) {
 		_, _, verdict = newProvider().resolvePkMoveChainVerdict(synthetic, oldKeyEnc, anchorRid)
 		require.Equal(t, pkMoveUnresolved, verdict)
 	})
+}
+
+// TestPkMoveArrivalSharedNettedKeyBindsRecordedPairing pins the era-26
+// regression oracle at the arrival attribution's backward binding: one
+// transaction deletes B at key 1, moves A 2->4->1 and C 5->4->6 (BOTH
+// lineages pass through the netted intermediate key 4 in the
+// identity-less S3 form: no committed tombstones or stream rows exist
+// for the netted generations), then a second transaction moves A 1->3.
+// Two identity-less landings at the shared netted key in one scope are
+// indistinguishable by (key, scope) alone — the backward hop must bind
+// L_a2's predecessor through the recorded pairing (L_a1.succ = L_a2),
+// or A's valid arrival is poisoned as ambiguous and a conflict-free
+// merge aborts. The merge folds A to a native UPDATE 2->3 and C to
+// 5->6, with B's tombstone and A@1's interior tombstone keeping their
+// own delete semantics.
+func TestPkMoveArrivalSharedNettedKeyBindsRecordedPairing(t *testing.T) {
+	s3 := func(oldKey, oldRidSeq, newKey byte, writeTS uint64) pkMoveLink {
+		l := pkMoveWalkTestLink(oldKey, oldRidSeq, newKey, 0, writeTS)
+		l.hasNewRowID = false // the S3 route records no replacement identity
+		return l
+	}
+	// rids: A_shared=1, A@4=2, A@1=3, A@3=4, C_shared=5, C@4=6, C@6=7, B=9.
+	p := pkMoveWalkTestProvider(
+		s3(2, 1, 4, 10), // T1 stmt: A 2->4
+		s3(4, 2, 1, 10), // T1 stmt: A 4->1
+		s3(5, 5, 4, 10), // T1 stmt: C 5->4
+		s3(4, 6, 6, 10), // T1 stmt: C 4->6
+		s3(1, 3, 3, 20), // T2 stmt: A 1->3
+	)
+	pkMoveWalkStampCommits(p, 10, 15)
+	pkMoveWalkStampCommits(p, 20, 25)
+	view := pkMoveWalkTestStubView(
+		pkMoveTombRow(1, 0x51, 9, 15), // B plainly deleted at T1
+		pkMoveTombRow(2, 0x52, 1, 15), // A@2 departs at T1
+		pkMoveTombRow(5, 0x55, 5, 15), // C@5 departs at T1
+		pkMoveTombRow(1, 0x56, 3, 25), // A@1 departs at T2
+		pkMoveDepartRow(3, 25, 15),    // A@1 born 15, died 25
+		pkMoveLiveRow(3, 0xaa, 4, 25), // A@3 live
+		pkMoveLiveRow(6, 0xbb, 7, 15), // C@6 live
+	)
+
+	finalPK, row, verdict := p.resolvePkMoveChainVerdict(view, []byte{2}, mustRowID(t, 1))
+	require.Equal(t, pkMoveResolved, verdict, "A's chain 2->4->1->3 must resolve")
+	require.Equal(t, []byte{3}, finalPK)
+	require.Equal(t, []byte{0xaa}, row)
+
+	finalPK, row, verdict = p.resolvePkMoveChainVerdict(view, []byte{5}, mustRowID(t, 5))
+	require.Equal(t, pkMoveResolved, verdict, "C's chain 5->4->6 must resolve")
+	require.Equal(t, []byte{6}, finalPK)
+	require.Equal(t, []byte{0xbb}, row)
+
+	_, _, verdict = p.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 9))
+	require.Equal(t, pkMoveProvenNone, verdict, "B's plain delete keeps its own semantics")
+
+	// The regression assertion: A@1's interior tombstone ties B's death
+	// instant (born 15 = B died 15), so the anchor-arrival verdict
+	// attributes the chain landing at key 1. C's lineage also landed at
+	// the shared netted key 4 in the same transaction; only the recorded
+	// pairing distinguishes A's predecessor from C's.
+	finalPK, _, verdict = p.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 3))
+	require.Equal(t, pkMoveProvenNone, verdict,
+		"the shared netted key must not poison A's recorded arrival: the interior tombstone keeps its own delete semantics")
+	require.Empty(t, finalPK)
 }

@@ -305,7 +305,7 @@ func pkMoveVecOverwriteRowidAtBase(vec *vector.Vector, row int, data []byte, mp 
 // and the ensuing statement rollback restores whatever the failed pass
 // already changed.
 func (txn *Transaction) fillPkMoveLinkNewRowIDsLocked(accountId uint32, bat *batch.Batch) error {
-	tableIdx, newPKIdx, newRowIdx, oldPKIdx, oldRowIdx, linkIDIdx := -1, -1, -1, -1, -1, -1
+	tableIdx, newPKIdx, newRowIdx, oldPKIdx, oldRowIdx, linkIDIdx, stmtSeqIdx := -1, -1, -1, -1, -1, -1, -1
 	for i, attr := range bat.Attrs {
 		switch attr {
 		case catalog.DataBranchUpdateLinkColTableID:
@@ -320,6 +320,8 @@ func (txn *Transaction) fillPkMoveLinkNewRowIDsLocked(accountId uint32, bat *bat
 			oldRowIdx = i
 		case catalog.DataBranchUpdateLinkColLinkID:
 			linkIDIdx = i
+		case catalog.DataBranchUpdateLinkColStmtSeq:
+			stmtSeqIdx = i
 		}
 	}
 	if tableIdx < 0 || newPKIdx < 0 || newRowIdx < 0 || oldPKIdx < 0 || oldRowIdx < 0 {
@@ -638,8 +640,17 @@ func (txn *Transaction) fillPkMoveLinkNewRowIDsLocked(accountId uint32, bat *bat
 
 	// Pass 4: statement bookkeeping for the surviving rows. link ids
 	// remember their staging statement (the S3-death evaluation compares
-	// statement ids), and the owning tables unlock the delete path's
-	// death recording. Rolled-back statements have their tags dropped by
+	// statement ids), the stmt_seq column takes the staging statement's
+	// ordinal (the writer stages a zero placeholder; the commit-time
+	// pairing fixup orders same-transaction departures by it), and the
+	// owning tables unlock the delete path's death recording. The stamp
+	// is populate-missing: the D225 commit-ts stamping UPDATE re-inserts
+	// the addressed link rows through this same hook carrying their
+	// ORIGINAL ordinals, and re-stamping those to the stamping
+	// transaction's own (single) statement would collapse a chain's
+	// persisted ordinals — the D232 walk verifies them strictly
+	// increasing along a recorded pairing and would abort every stamped
+	// chain. Rolled-back statements have their tags dropped by
 	// rollbackPkMoveStmtStateLocked.
 	if txn.pkMoveLinkTables == nil {
 		txn.pkMoveLinkTables = make(map[pkMoveAcctTbl]struct{})
@@ -648,10 +659,18 @@ func (txn *Transaction) fillPkMoveLinkNewRowIDsLocked(accountId uint32, bat *bat
 	if 0 <= linkIDIdx && linkIDIdx < len(bat.Vecs) {
 		idVec = bat.Vecs[linkIDIdx]
 	}
+	var stmtSeqs []uint64
+	if 0 <= stmtSeqIdx && stmtSeqIdx < len(bat.Vecs) &&
+		bat.Vecs[stmtSeqIdx].GetType().Oid == types.T_uint64 {
+		stmtSeqs = vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[stmtSeqIdx])
+	}
 	keptRows := bat.RowCount()
 	tableIDs = vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[tableIdx])
 	for r := 0; r < keptRows && r < len(tableIDs); r++ {
 		txn.pkMoveLinkTables[pkMoveAcctTbl{account: accountId, table: tableIDs[r]}] = struct{}{}
+		if r < len(stmtSeqs) && stmtSeqs[r] == 0 {
+			stmtSeqs[r] = uint64(txn.statementID)
+		}
 		if idVec == nil || idVec.IsNull(uint64(r)) {
 			continue
 		}
@@ -4074,6 +4093,208 @@ func (txn *Transaction) pruneDeadPkMoveLinkRowsLocked() {
 	// statement boundaries and the commit prune), so the destruction needs
 	// no undo journal.
 	txn.cancelGenesisRegistrationsWithoutLinksLocked()
+}
+
+// pairPkMoveLinkContinuationsLocked records the D228 same-transaction
+// continuation credential over the converged post-prune link set: every
+// retained link arriving at a key pairs with the same transaction's
+// retained link DEPARTING that key at the smallest strictly later
+// statement ordinal, and the pairing persists on the link row's
+// succ_link_id cell. The pass is UNCONDITIONAL — a link with no such
+// departure keeps NULL, and NULL means the generation is terminal, so the
+// consumer never falls back to inferring continuity from commit-timestamp
+// ties: a live row born at the same commit instant may be an unrelated
+// reincarnation of a vacated intermediate key.
+//
+// The pass runs once per commit, after pruneDeadPkMoveLinkRowsLocked has
+// removed rows whose replacement died inside the transaction and before
+// mergeTxnWorkspaceLocked/dumpBatchLocked serialize the workspace, so the
+// persisted image is exactly the converged set the walk later reads.
+// Link batches dodge every pre-commit dump, so the whole retained set is
+// staged here. Pairing is scoped per (account, table): packer-encoded
+// keys are not comparable across tables. A smallest-ordinal tie between
+// two distinct departures of one key violates primary-key uniqueness and
+// fails the commit loudly rather than persisting an ambiguous credential.
+// Schema drift (a staged batch lacking succ_link_id or stmt_seq) leaves
+// the cells NULL, the mixed-version posture under which netted
+// continuations stay unprovable and folds keep single-shot semantics.
+func (txn *Transaction) pairPkMoveLinkContinuationsLocked() error {
+	type departure struct {
+		stmtSeq uint64
+		linkID  string
+	}
+	type arrivalRef struct {
+		entry   int
+		row     int
+		stmtSeq uint64
+	}
+	departures := make(map[pkMoveAcctTbl]map[string][]departure)
+	var arrivals []arrivalRef
+	for i := range txn.writes {
+		we := &txn.writes[i]
+		if we.typ != INSERT || we.bat == nil || we.bat.RowCount() == 0 ||
+			!isPkMoveLinkTableInsert(we.databaseName, we.tableName) {
+			continue
+		}
+		tableIdx, oldPKIdx, newPKIdx, idIdx, stmtSeqIdx, succIdx := -1, -1, -1, -1, -1, -1
+		for j, attr := range we.bat.Attrs {
+			switch attr {
+			case catalog.DataBranchUpdateLinkColTableID:
+				tableIdx = j
+			case catalog.DataBranchUpdateLinkColOldPK:
+				oldPKIdx = j
+			case catalog.DataBranchUpdateLinkColNewPK:
+				newPKIdx = j
+			case catalog.DataBranchUpdateLinkColLinkID:
+				idIdx = j
+			case catalog.DataBranchUpdateLinkColStmtSeq:
+				stmtSeqIdx = j
+			case catalog.DataBranchUpdateLinkColSuccLinkID:
+				succIdx = j
+			}
+		}
+		if tableIdx < 0 || oldPKIdx < 0 || newPKIdx < 0 || idIdx < 0 ||
+			stmtSeqIdx < 0 || succIdx < 0 ||
+			tableIdx >= len(we.bat.Vecs) || oldPKIdx >= len(we.bat.Vecs) ||
+			newPKIdx >= len(we.bat.Vecs) || idIdx >= len(we.bat.Vecs) ||
+			stmtSeqIdx >= len(we.bat.Vecs) || succIdx >= len(we.bat.Vecs) ||
+			we.bat.Vecs[tableIdx].GetType().Oid != types.T_uint64 ||
+			we.bat.Vecs[stmtSeqIdx].GetType().Oid != types.T_uint64 {
+			continue
+		}
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](we.bat.Vecs[tableIdx])
+		stmtSeqs := vector.MustFixedColNoTypeCheck[uint64](we.bat.Vecs[stmtSeqIdx])
+		oldPKVec, newPKVec, idVec := we.bat.Vecs[oldPKIdx], we.bat.Vecs[newPKIdx], we.bat.Vecs[idIdx]
+		rowCount := we.bat.RowCount()
+		if len(tableIDs) < rowCount || len(stmtSeqs) < rowCount {
+			continue
+		}
+		for r := 0; r < rowCount; r++ {
+			if stmtSeqs[r] == 0 || idVec.IsNull(uint64(r)) {
+				// Unstamped statement ordinal: the fill hook stamps every
+				// surviving row, so zero marks evidence the pairing must
+				// not consume; the cell keeps its NULL terminal.
+				continue
+			}
+			acct := pkMoveAcctTbl{account: we.accountId, table: tableIDs[r]}
+			if !oldPKVec.IsNull(uint64(r)) {
+				byKey := departures[acct]
+				if byKey == nil {
+					byKey = make(map[string][]departure)
+					departures[acct] = byKey
+				}
+				key := string(oldPKVec.GetBytesAt(r))
+				byKey[key] = append(byKey[key], departure{
+					stmtSeq: stmtSeqs[r],
+					linkID:  string(idVec.GetBytesAt(r)),
+				})
+			}
+			if !newPKVec.IsNull(uint64(r)) {
+				arrivals = append(arrivals, arrivalRef{
+					entry: i, row: r, stmtSeq: stmtSeqs[r],
+				})
+			}
+		}
+	}
+	if len(arrivals) == 0 {
+		return nil
+	}
+	// Resolve each arrival's successor: the same-scope departure of its
+	// arrived key at the smallest strictly later statement ordinal.
+	succOf := make(map[int]map[int]string)
+	for _, arr := range arrivals {
+		we := &txn.writes[arr.entry]
+		tableIdx := pkMoveLinkColIndexLocked(we, catalog.DataBranchUpdateLinkColTableID)
+		newPKIdx := pkMoveLinkColIndexLocked(we, catalog.DataBranchUpdateLinkColNewPK)
+		if tableIdx < 0 || newPKIdx < 0 {
+			continue
+		}
+		tableIDs := vector.MustFixedColNoTypeCheck[uint64](we.bat.Vecs[tableIdx])
+		if arr.row >= len(tableIDs) {
+			continue
+		}
+		acct := pkMoveAcctTbl{account: we.accountId, table: tableIDs[arr.row]}
+		key := string(we.bat.Vecs[newPKIdx].GetBytesAt(arr.row))
+		var best *departure
+		for i := range departures[acct][key] {
+			cand := &departures[acct][key][i]
+			if cand.stmtSeq <= arr.stmtSeq {
+				continue
+			}
+			if best == nil || cand.stmtSeq < best.stmtSeq {
+				best = cand
+				continue
+			}
+			if cand.stmtSeq == best.stmtSeq && cand.linkID != best.linkID {
+				return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+					"pk-move link pairing: two same-transaction departures of one key share statement ordinal %d", best.stmtSeq))
+			}
+		}
+		if best != nil {
+			byRow := succOf[arr.entry]
+			if byRow == nil {
+				byRow = make(map[int]string)
+				succOf[arr.entry] = byRow
+			}
+			byRow[arr.row] = best.linkID
+		}
+	}
+	// Persist the pairings: rewrite each entry's succ_link_id column in one
+	// accounted swap (a fresh vector per entry, like the fill hook's
+	// new_row_id fill), so null-bitmap and area accounting stay exact.
+	for entry, byRow := range succOf {
+		if len(byRow) == 0 {
+			continue
+		}
+		we := &txn.writes[entry]
+		succIdx := pkMoveLinkColIndexLocked(we, catalog.DataBranchUpdateLinkColSuccLinkID)
+		if succIdx < 0 {
+			continue
+		}
+		old := we.bat.Vecs[succIdx]
+		filled := vector.NewVec(*old.GetType())
+		rowCount := we.bat.RowCount()
+		buildErr := func() error {
+			for r := 0; r < rowCount; r++ {
+				if succ, ok := byRow[r]; ok {
+					if err := pkMoveVecAppendBytes(filled, []byte(succ), false, txn.proc.Mp()); err != nil {
+						return err
+					}
+				} else if err := pkMoveVecAppendBytes(filled, nil, true, txn.proc.Mp()); err != nil {
+					return err
+				}
+			}
+			return nil
+		}()
+		if buildErr != nil {
+			filled.Free(txn.proc.Mp())
+			return buildErr
+		}
+		accounted := we.accountedSize != 0
+		if accounted {
+			txn.unaccountWorkspaceEntryLocked(we)
+		}
+		we.bat.Vecs[succIdx] = filled
+		old.Free(txn.proc.Mp())
+		if accounted {
+			txn.accountWorkspaceEntryLocked(we)
+		}
+	}
+	return nil
+}
+
+// pkMoveLinkColIndexLocked returns the column position of attr in a staged
+// link entry's batch, or -1 when absent.
+func pkMoveLinkColIndexLocked(we *Entry, attr string) int {
+	if we == nil || we.bat == nil {
+		return -1
+	}
+	for j, a := range we.bat.Attrs {
+		if a == attr {
+			return j
+		}
+	}
+	return -1
 }
 
 // pkMoveLinkRowsToKeep computes, per staging-order entry index, the rows a

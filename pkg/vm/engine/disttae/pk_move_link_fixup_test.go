@@ -297,6 +297,35 @@ func TestFillPkMoveLinkNewRowIDsLocked(t *testing.T) {
 		})
 		require.True(t, bat.Vecs[8].IsNull(0))
 	})
+
+	t.Run("stmt_seq stamps the placeholder but preserves a carried ordinal", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		mp := proc.Mp()
+		txn := &Transaction{proc: proc, statementID: 3}
+		bat := pkMoveLinkStagedBatch(t, mp,
+			[]types.Rowid{linkRid1, linkRid2},
+			[]uint64{42, 42},
+			[][]byte{pkMoveEncodeInt64(t, 3), pkMoveEncodeInt64(t, 4)},
+		)
+		defer bat.Clean(mp)
+		// Append the stmt_seq column the D228 layout carries: the first
+		// row is a fresh stage (zero placeholder), the second carries the
+		// original ordinal the way the D225 commit-ts stamping UPDATE's
+		// re-inserted image does. Re-stamping the carried ordinal to this
+		// transaction's own statement collapses a chain's persisted
+		// ordinals and the D232 walk's strictly-increasing check then
+		// aborts every stamped chain merge.
+		bat.SetAttributes(append(bat.Attrs, catalog.DataBranchUpdateLinkColStmtSeq))
+		seqVec := vector.NewVec(types.T_uint64.ToType())
+		require.NoError(t, vector.AppendFixed(seqVec, uint64(0), false, mp))
+		require.NoError(t, vector.AppendFixed(seqVec, uint64(9), false, mp))
+		bat.Vecs = append(bat.Vecs, seqVec)
+
+		require.NoError(t, txn.fillPkMoveLinkNewRowIDsLocked(7, bat))
+		stmtSeqs := vector.MustFixedColNoTypeCheck[uint64](bat.Vecs[len(bat.Vecs)-1])
+		require.Equal(t, uint64(3), stmtSeqs[0], "zero placeholder takes the staging statement's ordinal")
+		require.Equal(t, uint64(9), stmtSeqs[1], "a carried ordinal survives the stamping transaction's own fill")
+	})
 }
 
 // errPkMoveInjected faults the allocation seams in the provenance paths.

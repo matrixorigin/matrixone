@@ -3842,6 +3842,21 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 	// consumer's commit-timestamp claiming must never meet a link whose
 	// landed generation the moving transaction itself removed.
 	txn.pruneDeadPkMoveLinkRowsLocked()
+	// D228: record the same-transaction continuation pairing over the
+	// converged post-prune link set BEFORE the merge/dump serializes it:
+	// the walk later follows ONLY this persisted credential, so a live row
+	// born at the same commit instant on a vacated intermediate key can
+	// never terminate the lineage early.
+	if err := txn.pairPkMoveLinkContinuationsLocked(); err != nil {
+		txn.Unlock()
+		return nil, err
+	}
+	// D225: arm the commit-completion stamping of this transaction's
+	// converged link rows by their exact link_id set. The callback is
+	// best-effort and never changes the COMMIT result; a skipped or failed
+	// stamp leaves commit_ts NULL as the durable stamp-pending intent the
+	// apply-side D227 recovery outcome table resolves.
+	txn.registerPkMoveLinkCommitStampLocked()
 	if err := txn.mergeTxnWorkspaceLocked(ctx); err != nil {
 		txn.Unlock()
 		return nil, err

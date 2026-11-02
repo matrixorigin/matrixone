@@ -2478,6 +2478,12 @@ func findDeleteAndUpdateBat(
 	if err != nil {
 		return err
 	}
+	// D227(e): persist the commit instants healed or inherited during
+	// resolution back to their link rows. Best-effort — a failure leaves
+	// the NULL stamp the next read re-derives from the same evidence.
+	if pkMoveProvider != nil {
+		pkMoveProvider.flushRestamps()
+	}
 
 	if err = tombstoneHashmap.ForEachShardParallel(func(cursor databranchutils.ShardCursor) error {
 		var (

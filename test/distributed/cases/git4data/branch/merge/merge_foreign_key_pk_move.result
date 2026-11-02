@@ -172,7 +172,7 @@ update failmove_src set id = 3, v = 'three' where id = 2;
 update failmove_p set id = 4, v = 'four' where id = 2;
 data branch merge failmove_src into failmove_p;
 -- @regex("conflict: failmove_src UPDATE and failmove_p UPDATE on pk", true)
-internal error: conflict: failmove_src UPDATE and failmove_p UPDATE on pk(2)
+conflict: failmove_src UPDATE and failmove_p UPDATE on pk(2)
 select id, v from failmove_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 4  ¦  four
@@ -201,7 +201,7 @@ update delfail_src set id = 3, v = 'three' where id = 2;
 delete from delfail_p where id = 2;
 data branch merge delfail_src into delfail_p;
 -- @regex("conflict: delfail_src UPDATE and delfail_p DELETE on pk", true)
-internal error: conflict: delfail_src UPDATE and delfail_p DELETE on pk(2)
+conflict: delfail_src UPDATE and delfail_p DELETE on pk(2)
 select id, v from delfail_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]
 create table reclaim_tb (id int primary key, v int);
@@ -2205,7 +2205,7 @@ update esqmf_src set id = 3, v = 'three' where id = 2;
 delete from esqmf_p where id = 2;
 data branch merge esqmf_src into esqmf_p when conflict fail;
 -- @regex("esqmf_src UPDATE and esqmf_p DELETE", true)
-internal error: conflict: esqmf_src UPDATE and esqmf_p DELETE on pk(2)
+conflict: esqmf_src UPDATE and esqmf_p DELETE on pk(2)
 select id, v from esqmf_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 9  ¦  nine
@@ -2237,7 +2237,7 @@ delete from etjf_p where id = 2;
 insert into etjf_p values (3, 'destination');
 data branch merge etjf_src into etjf_p when conflict fail;
 -- @regex("etjf_src UPDATE and etjf_p DELETE", true)
-internal error: conflict: etjf_src UPDATE and etjf_p DELETE on pk(2)
+conflict: etjf_src UPDATE and etjf_p DELETE on pk(2)
 select id, v from etjf_p order by id;
 ➤ id[4,32,0]  ¦  v[12,32,0]  𝄀
 3  ¦  destination
@@ -3775,5 +3775,242 @@ data branch merge sn_src into sn_t when conflict accept;
 select id, pid, v from sn_t order by id;
 ➤ id[4,32,0]  ¦  pid[4,32,0]  ¦  v[12,32,0]  𝄀
 3  ¦  null  ¦  two
+set session transaction isolation level read committed;
+create table cfs_p (id int primary key, v varchar(16));
+insert into cfs_p values (1, 'one');
+data branch create table cfs_d from cfs_p;
+create table cfs_c (id int primary key, pid int,
+constraint fk_cfs foreign key (pid) references cfs_d(id) on update cascade
+);
+insert into cfs_c values (900, 1);
+use branch_merge_fk_pk_move;
+begin;
+update cfs_p set id = 2, v = 'oneP' where id = 1;
+data branch create table cfs_s from cfs_p;
+commit;
+update cfs_s set id = 3, v = 'oneS' where id = 1;
+set @cfsp = (select rel_id from mo_catalog.mo_tables where relname = 'cfs_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @cfsp and commit_ts is not null;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @cfss = (select rel_id from mo_catalog.mo_tables where relname = 'cfs_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @cfss and commit_ts is not null;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge cfs_s into cfs_d when conflict accept;
+select id, v from cfs_d order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  oneS
+select id, pid from cfs_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  3
+create table cfu_p (id int primary key, v varchar(16));
+insert into cfu_p values (1, 'one');
+data branch create table cfu_d from cfu_p;
+create table cfu_c (id int primary key, pid int,
+constraint fk_cfu foreign key (pid) references cfu_d(id) on update cascade
+);
+insert into cfu_c values (900, 1);
+use branch_merge_fk_pk_move;
+begin;
+update cfu_p set id = 2, v = 'oneP' where id = 1;
+data branch create table cfu_s from cfu_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails',':::','echo',0,'0');
+➤ add_fault_point(fj/cn/data_branch_pk_move_link_stamp_fails, :::, echo, 0, 0)[-6,8,0]  𝄀
+1
+commit;
+select remove_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails');
+➤ remove_fault_point(fj/cn/data_branch_pk_move_link_stamp_fails)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+update cfu_s set id = 3, v = 'oneS' where id = 1;
+set @cfup = (select rel_id from mo_catalog.mo_tables where relname = 'cfu_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @cfup and commit_ts is null;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @cfus = (select rel_id from mo_catalog.mo_tables where relname = 'cfu_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @cfus and commit_ts is not null;
+➤ count(*)[-5,64,0]  𝄀
+1
+data branch merge cfu_s into cfu_d when conflict accept;
+select id, v from cfu_d order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  oneS
+select id, pid from cfu_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  3
+create table cfd_p (id int primary key, v varchar(16));
+insert into cfd_p values (1, 'one');
+data branch create table cfd_d from cfd_p;
+create table cfd_c (id int primary key, pid int,
+constraint fk_cfd foreign key (pid) references cfd_d(id) on update cascade
+);
+insert into cfd_c values (900, 1);
+use branch_merge_fk_pk_move;
+begin;
+update cfd_p set id = 2, v = 'oneP' where id = 1;
+data branch create table cfd_s from cfd_p;
+commit;
+begin;
+delete from cfd_s where id = 1;
+insert into cfd_s values (1, 'oneS');
+commit;
+set @cfdp = (select rel_id from mo_catalog.mo_tables where relname = 'cfd_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @cfdp;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @cfds = (select rel_id from mo_catalog.mo_tables where relname = 'cfd_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @cfds;
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch merge cfd_s into cfd_d when conflict accept;
+select id, v from cfd_d order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+1  ¦  oneS
+select id, pid from cfd_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  1
+create table cfo_p (id int primary key, v varchar(16));
+insert into cfo_p values (1, 'one');
+data branch create table cfo_d from cfo_p;
+create table cfo_c (id int primary key, pid int,
+constraint fk_cfo foreign key (pid) references cfo_d(id) on update cascade
+);
+insert into cfo_c values (900, 1);
+use branch_merge_fk_pk_move;
+begin;
+data branch create table cfo_s from cfo_p;
+update cfo_p set id = 2, v = 'oneP' where id = 1;
+delete from cfo_s where id = 1;
+insert into cfo_s values (1, 'oneS');
+commit;
+set @cfop = (select rel_id from mo_catalog.mo_tables where relname = 'cfo_p' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @cfop;
+➤ count(*)[-5,64,0]  𝄀
+1
+set @cfos = (select rel_id from mo_catalog.mo_tables where relname = 'cfo_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @cfos;
+➤ count(*)[-5,64,0]  𝄀
+0
+data branch merge cfo_s into cfo_d when conflict accept;
+select id, v from cfo_d order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+1  ¦  oneS
+select id, pid from cfo_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  1
+create table k4c_p (id int primary key, v varchar(16));
+create table k4c_c (id int primary key, pid int,
+constraint fk_k4c foreign key (pid) references k4c_p(id) on update cascade
+);
+insert into k4c_p values (2, 'two');
+insert into k4c_c values (900, 2);
+data branch create table k4c_s from k4c_p;
+update k4c_s set id = 3 where id = 2;
+update k4c_s set id = 4 where id = 3;
+update k4c_s set id = 3, v = 'twoX' where id = 4;
+set @k4cl = (select rel_id from mo_catalog.mo_tables where relname = 'k4c_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @k4cl and commit_ts is not null;
+➤ count(*)[-5,64,0]  𝄀
+3
+data branch merge k4c_s into k4c_p when conflict accept;
+select id, v from k4c_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  twoX
+select id, pid from k4c_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  3
+create table k4u_p (id int primary key, v varchar(16));
+create table k4u_c (id int primary key, pid int,
+constraint fk_k4u foreign key (pid) references k4u_p(id) on update cascade
+);
+insert into k4u_p values (2, 'two');
+insert into k4u_c values (900, 2);
+data branch create table k4u_s from k4u_p;
+update k4u_s set id = 3 where id = 2;
+update k4u_s set id = 4 where id = 3;
+update k4u_s set id = 3 where id = 4;
+set @k4ul = (select rel_id from mo_catalog.mo_tables where relname = 'k4u_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @k4ul and commit_ts is not null;
+➤ count(*)[-5,64,0]  𝄀
+3
+data branch merge k4u_s into k4u_p when conflict accept;
+select id, v from k4u_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  two
+select id, pid from k4u_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  3
+create table k4cf_p (id int primary key, v varchar(16));
+create table k4cf_c (id int primary key, pid int,
+constraint fk_k4cf foreign key (pid) references k4cf_p(id) on update cascade
+);
+insert into k4cf_p values (2, 'two');
+insert into k4cf_c values (900, 2);
+data branch create table k4cf_s from k4cf_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails',':::','echo',0,'0');
+➤ add_fault_point(fj/cn/data_branch_pk_move_link_stamp_fails, :::, echo, 0, 0)[-6,8,0]  𝄀
+1
+update k4cf_s set id = 3 where id = 2;
+update k4cf_s set id = 4 where id = 3;
+update k4cf_s set id = 3, v = 'twoX' where id = 4;
+select remove_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails');
+➤ remove_fault_point(fj/cn/data_branch_pk_move_link_stamp_fails)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+set @k4cfl = (select rel_id from mo_catalog.mo_tables where relname = 'k4cf_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @k4cfl and commit_ts is null;
+➤ count(*)[-5,64,0]  𝄀
+3
+data branch merge k4cf_s into k4cf_p when conflict accept;
+select id, v from k4cf_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  twoX
+select id, pid from k4cf_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  3
+create table k4uf_p (id int primary key, v varchar(16));
+create table k4uf_c (id int primary key, pid int,
+constraint fk_k4uf foreign key (pid) references k4uf_p(id) on update cascade
+);
+insert into k4uf_p values (2, 'two');
+insert into k4uf_c values (900, 2);
+data branch create table k4uf_s from k4uf_p;
+select enable_fault_injection();
+➤ enable_fault_injection()[-6,8,0]  𝄀
+1
+select add_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails',':::','echo',0,'0');
+➤ add_fault_point(fj/cn/data_branch_pk_move_link_stamp_fails, :::, echo, 0, 0)[-6,8,0]  𝄀
+1
+update k4uf_s set id = 3 where id = 2;
+update k4uf_s set id = 4 where id = 3;
+update k4uf_s set id = 3 where id = 4;
+select remove_fault_point('fj/cn/data_branch_pk_move_link_stamp_fails');
+➤ remove_fault_point(fj/cn/data_branch_pk_move_link_stamp_fails)[-6,8,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-6,8,0]  𝄀
+1
+set @k4ufl = (select rel_id from mo_catalog.mo_tables where relname = 'k4uf_s' and reldatabase = 'branch_merge_fk_pk_move');
+select count(*) from mo_catalog.mo_data_branch_update_link where table_id = @k4ufl and commit_ts is null;
+➤ count(*)[-5,64,0]  𝄀
+3
+data branch merge k4uf_s into k4uf_p when conflict accept;
+select id, v from k4uf_p order by id;
+➤ id[4,32,0]  ¦  v[12,16,0]  𝄀
+3  ¦  two
+select id, pid from k4uf_c order by id;
+➤ id[4,32,0]  ¦  pid[4,32,0]  𝄀
+900  ¦  3
 drop database branch_merge_fk_pk_move;
 set session transaction isolation level read committed;

@@ -433,8 +433,11 @@ var (
 		new_row_id binary(24) null comment 'row id assigned to the replacement row; null when the replacement identity was not recorded',
 		write_ts bigint unsigned not null comment 'physical ns of the updating transaction creation timestamp',
 		txn_id binary(%d) not null comment 'recording transaction identity; namespaces workspace-minted link ids and same-transaction matching',
+		commit_ts binary(%d) null comment 'recording transaction commit instant (full precision); null until the best-effort commit-completion stamp lands',
+		succ_link_id binary(%d) null comment 'recorded same-transaction continuation: link departing new_pk at the smallest later statement ordinal; null when terminal',
+		stmt_seq bigint unsigned not null comment 'staging statement ordinal inside the recording transaction',
 		primary key(link_id)
-	)`, catalog.MO_DATA_BRANCH_UPDATE_LINK, catalog.DataBranchUpdateLinkIDBytes, catalog.DataBranchUpdateLinkTxnIDBytes)
+	)`, catalog.MO_DATA_BRANCH_UPDATE_LINK, catalog.DataBranchUpdateLinkIDBytes, catalog.DataBranchUpdateLinkTxnIDBytes, catalog.DataBranchUpdateLinkTSBytes, catalog.DataBranchUpdateLinkIDBytes)
 
 	// MoCatalogDataBranchLinkRetentionDDL mirrors the tenant-upgrade entry
 	// in pkg/bootstrap/versions/v4_0_19: the per-account ledger of retained
