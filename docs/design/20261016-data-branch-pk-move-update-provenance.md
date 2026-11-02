@@ -6,7 +6,7 @@
 | --- | --- |
 | Owning issue | matrixorigin/matrixone#28026 |
 | Implementation | PR [matrixorigin/matrixone#31629](https://github.com/matrixorigin/matrixone/pull/31629) (branch `agent/issue-28026-688adec6` on fork `gouhongshen/matrixone`), single PR |
-| Current revision | r109, 2026-11-02, supersedes r108 |
+| Current revision | r110, 2026-11-02, supersedes r109 |
 
 | Revision | Date | Note |
 | --- | --- | --- |
@@ -20,6 +20,7 @@
 | r107 | 2026-11-02 | Protocol repair — D223 withdrawn, one new decision (D224). The independent design review of r106 (the issue-fix-loop controller's local reviewer, 2026-11-02, REQUEST_CHANGES, blocking P2) verified that D223's `{MO_TS = window.end}` reads of the link catalog require retained historical storage versions that no protection channel covers: TN's all-snapshot protection names only the three core catalog tables, table-level snapshots propagate only to non-system tables of the same database (system tables are skipped), and the mo_catalog PITR channel carries only user-created PITRs, so catalog-object rewriting and reclamation could delete the very version an anchored read queries while its logical links remain live. No CN-expressible mechanism can establish that retention, and adding one in TN is outside this PR's scope. r107 therefore repairs the straddler defect without any historical catalog-state dependency: provenance probes keep the unanchored current-snapshot posture, probed links keep their per-(table, window) attribution, and identity conflict checking is deferred until commit membership is established through the D156 scope-to-commit capture (D224). Section 9.3 gains the storage-version retention audit and section 10 gains the demanded lifecycle validation scenario (table-scoped branch protection only, no account/cluster snapshot or PITR, catalog rewriting/reclamation, restart, exact MERGE/PICK cascade assertions). |
 | r108 | 2026-11-02 | Protocol repair — D224 withdrawn, one new decision (D225). The independent design review of r107 (the issue-fix-loop controller's local reviewer, 2026-11-02, REQUEST_CHANGES, blocking P1 + P2) found: (P1) D224(f)'s single-candidate exemption let a lone out-of-window candidate start a chain without membership proof — an ancestor straddler's link can splice onto a sibling branch's independent same-transaction DELETE/INSERT sharing the inherited row identity, because the claim binds by commit instant alone and never binds the candidate's recording transaction to the deleting transaction (verified at the reviewed head's chain walk: the claim accepts any row born at the seeded instant and the durable `new_row_id` is never compared, so the destination count guard passes and a wrong UPDATE cascade executes); (P2) D224's membership screening made valid anchor resolution depend on the D156 capture, which reads the link catalog's committed change history — reclaimable under the §9.3 audit — so after ordinary catalog rewriting/reclamation a valid retained branch could no longer resolve, contradicting D13 (link lifetime equals protected-stream lifetime). r108 repairs both without any historical catalog-state dependency and without consulting reclaimable change history on any resolution path: the link row preserves its recording transaction's full-precision commit instant (new `commit_ts` column, D15's preservation executed in its commit-exact form), stamped by a CN-side commit-completion step that observes the TN-assigned commit timestamp; every candidate that starts or continues a chain must present `commit_ts` equal to the departure tombstone's instant (exact-transaction binding; certified window membership by construction; no single-candidate exemption); the D156 scope-to-commit capture is retired from every resolution path (the arrival tie re-attributes from the preserved column). Section 5.1 gains the column and stamping contract, section 5.2 the commit-exact gate, section 5.3 the revised reader bounds, section 9.3 the rewritten retention audit (the reclaimable-history reader class is removed), and section 10 the revised validation map — including the review's demanded singleton-straddler independent DELETE/INSERT oracle (DELETE semantics, FK rejection, unchanged destination parent/child rows, MERGE and PICK) and the lifecycle oracle restoring exact cascade assertions after catalog reclamation and restart. Submitted for fresh independent design approval before implementation; D224 never shipped. |
 | r109 | 2026-11-02 | Protocol repair — D225 amended, one new decision (D226). The independent design review of r108 (the issue-fix-loop controller's local reviewer, 2026-11-02, REQUEST_CHANGES, blocking P1 + P2) found: (P1) D225(d) treated `commit_ts` equality as sufficient window membership and discarded per-window attribution, so ONE transaction — an RC transaction begun before a fork whose per-statement snapshot advance (`handleRCSnapshot`, `pkg/vm/engine/disttae/types.go:2022-2031`) lets it write both branches — can perform the ancestor move AND the sibling's independent same-transaction DELETE/INSERT in a single commit; the ancestor window's unanchored probe returns that link (`write_ts` = create ts), its `commit_ts` equals the sibling anchor's departure instant (one transaction, one commit instant), and the equality-only gate admits it and claims the sibling's unrelated row — the destination count guard passes and a wrong UPDATE cascade executes (verified at the reviewed head: windows are relation-specific, `pkg/frontend/data_branch.go:2628-2653`; the identity merge omits the table, `data_branch_pk_move_link.go:1067-1081`; the terminal claim checks birth time only, `:3246-3301`; guard `data_branch_output.go:2200-2241`). Transaction identity does not establish WHICH table's operation a link records. (P2) r108's two-step publication (commit first, stamp later) left a durable gap: a stamping failure, cancellation, lost commit response (`FinalizeCommitWithUnknownResult`, `pkg/vm/engine/disttae/txn.go:4004-4011`), or CN crash leaves `commit_ts` NULL permanently, and r108 made that state abort forever — an otherwise valid committed branch permanently losing MERGE/PICK provenance after a transient failure — while the completion event joins callback errors into the post-commit result (`pkg/txn/client/operator.go:1187-1191`), leaving COMMIT-result semantics unclosed. D226 repairs both: per-(table, window) candidate attribution is restored and a candidate's preserved `commit_ts` must fall INSIDE its own attributed window in addition to equalling the departure instant; and NULL `commit_ts` becomes a recoverable durable intent — the commit instant is re-derived at resolution from the protected user-table stream (the link's `old_row_id` row version dies exactly once; I7 ties the link to that commit) with same-transaction inheritance for placeholder chains, a best-effort re-stamp, and a closed COMMIT-result rule (stamping never alters the user transaction's own outcome). Section 5.1's stamping contract, section 5.2's admission gate (plus the new recovery rule), section 5.3's reader bounds, section 6.2's failure semantics, section 9.3's audit consequences, section 10's validation map (the review's demanded one-transaction ancestor-move + sibling DELETE/INSERT oracle for MERGE and PICK, and deterministic crash/failure checkpoints requiring eventual exact cascades with rollback leaving no provenance), and this register updated. Submitted for fresh independent design approval before implementation; D225's r108 form never shipped. |
+| r110 | 2026-11-02 | Protocol repair — D226 amended, one new decision (D227). The independent design review of r109 (the issue-fix-loop controller's local reviewer, 2026-11-02, REQUEST_CHANGES, blocking P1 + P2) found: (P1) D226's recovery rule classified every non-workspace `old_row_id` as a committed stream-bound version and excluded a NULL-stamped candidate with no in-window death, but uncommitted S3 rows also carry non-workspace object identities whose same-transaction deletes are diverted without publishing a tombstone (`pkg/vm/engine/disttae/txn.go:2544-2569`: the delete lands in the per-block list, the batch is shrunk, and the object is rewritten minus the row at commit), so under a stamping failure the second hop of an S3-netted chain — the reviewed schedule: one transaction moves 2->1000->1001 through a forced small-object flush and independently reinserts 1000 (`test/distributed/cases/git4data/branch/merge/merge_foreign_key_pk_move.sql:879-907`) — is wrongly excluded, the terminal timestamp claim then adopts the unrelated reinserted row born at the chain instant (`data_branch_pk_move_link.go:3206-3301`), the destination count guard passes (`data_branch_output.go:2200-2241`), and the apply cascades onto the impostor key instead of the lineage's final key; and (P2) the recovery rule text excluded a candidate with no in-window death while the soundness argument and section 5.3 classified the same shape (no death, no bound sibling) as a loud abort — an unstamped successor committed after a historical endpoint (`test/distributed/cases/git4data/branch/pick/pick_foreign_key_pk_move.sql:822-855`) would abort the apply and block the valid earlier in-window move, contradicting D226's own promise that out-of-window candidates cannot poison valid applies; the stamped form already resolves by ending the lineage at the claimed version (the terminal exclusion path, `data_branch_pk_move_link.go:3303-3322`). D227 repairs both: recovery becomes a single outcome table keyed by identity class — heal from the unique in-window death; inherit the bound instant across the candidate's own transaction for transaction-local netted identities (workspace placeholders AND uncommitted S3 object identities — a missing death carries no window information for either, and window absence is never inferred from it); exclude on proven window absence (stream-bound identity, NF5-complete stream, no in-window death — never loud); abort loudly only on incomplete or corrupt evidence (a truncated/disabled stream, a duplicate in-window death, or an unbound transaction-local candidate). The established continuation checks and per-(table, window) attribution are preserved, and the two-condition gate still evaluates the inherited instant against the candidate's own window. Section 5.1's NULL-identity bullet is aligned with the recorded S3 continuity (D32/D49/D50, D75-D81), section 5.2's same-transaction continuation records both shipped chain forms and the recovery rule is rewritten as the outcome table with the soundness argument aligned, sections 5.3/5.4/6.2/9.3 name the table, section 10 gains the demanded MERGE/PICK stamping-failure and crash twins of both S3-chain scenarios (asserting the exact child key and the preservation of the unrelated intermediate row) plus the NULL-stamped future-successor and cross-fork cases requiring the valid in-window move to cascade, and this register updated. Submitted for fresh independent design approval before implementation; D226's r109 form never shipped. |
 ## 2. Problem, evidence, and invariants
 
 A pk-moving `UPDATE` executes in `multi_update` as a delete of the old row
@@ -198,12 +199,17 @@ create table mo_catalog.mo_data_branch_update_link(
   table, new_pk)`. Ordering is guaranteed: the planner places the
   synthetic link ctx directly after the owning main-table ctx and both
   execute inside one statement, so the replacement insert is staged
-  first. Its sole consumer role is chaining same-transaction netted
+  first. Its consumer role is chaining same-transaction netted
   generations (§5.2); the fold itself runs on the commit-timestamp tie,
-  so a NULL that survives staging (e.g. the replacement went straight to
-  S3) still folds single-shot and only netted continuations become
-  unprovable. The `UpdateWriteS3` operator path writes no link rows at
-  all (fail closed, legacy replay).
+  so a NULL that survives staging still folds single-shot. A
+  replacement the statement flushed to an uncommitted S3 object keeps
+  no usable staged identity (the column stays NULL or names a
+  rewrite-erased placeholder), yet the netted generation still chains:
+  the transaction's S3-route continuity is recorded explicitly
+  (D32/D49/D50, D75-D81) and §5.2's same-transaction continuation
+  follows the transaction's own recorded departure from the landed key
+  within the transaction scope. The `UpdateWriteS3` operator path
+  writes no link rows at all (fail closed, legacy replay).
 - `write_ts` is the *creation* timestamp of the moving transaction
   (`CreateTS` of the txn operator), in physical nanoseconds. The create
   timestamp is constant for the whole transaction, which the
@@ -244,10 +250,15 @@ create table mo_catalog.mo_data_branch_update_link(
   stamping window, or a lost commit response
   (`FinalizeCommitWithUnknownResult` — the CN releases its local state
   without learning the outcome) leaves `commit_ts` NULL, and the
-  §5.2 recovery rule re-derives the commit instant at resolution time
-  from the protected user-table stream — never from reclaimable
-  catalog change history and never from GC-able TN txn records — so
-  committed moves keep resolving exactly. Because link lifetime equals
+  §5.2 recovery rule (r110, D227's single outcome table) re-derives the
+  commit instant at resolution time from the protected user-table
+  stream — never from reclaimable catalog change history and never
+  from GC-able TN txn records — so committed moves keep resolving
+  exactly, including chains that net generations through uncommitted
+  S3 objects: their diverted deletes publish no tombstone, so the
+  instant is inherited across the transaction's own recorded
+  continuity and never inferred from a missing death. Because link
+  lifetime equals
   protected-stream lifetime (D13), both the pending intent and its
   recovery evidence remain available for exactly the protected
   lineage's lifetime without any reclaimable catalog change history.
@@ -343,10 +354,13 @@ Walk for one LCA-hit tombstone `(K0, R0)`:
    candidate the anchor is proven link-less and keeps legacy DELETE
    semantics. `commit_ts` NULL triggers the §5.2 recovery rule below
    FIRST — the commit instant is re-derived from this window's
-   protected stream — and only an unrecoverable candidate is
-   unprovable provenance failing closed LOUDLY (D51/D56), never
-   absence and never a silent legacy downgrade. Every candidate
-   passes this gate; there is no single-candidate exemption.
+   protected stream or inherited across the candidate's own
+   transaction (D227's single outcome table) — and the gate then
+   admits, excludes (proven window absence), or fails closed LOUDLY
+   (D51/D56) exactly as the table rules: a loud verdict follows only
+   from incomplete or corrupt evidence, never from a stamp-pending
+   candidate alone and never a silent legacy downgrade. Every
+   candidate passes this gate; there is no single-candidate exemption.
    `K = L1.new_pk`, snapshot `S = L1.write_ts`, inhabitant
    `I = L1.new_row_id` (possibly a workspace placeholder or NULL).
 3. Repeat (cap 32 hops, visited-key set seeded with `K0`):
@@ -370,8 +384,11 @@ Walk for one LCA-hit tombstone `(K0, R0)`:
      `commit_ts` must fall inside that window's `[start, end]` AND
      equal `T'`, the departure tombstone's own instant. A paired
      candidate with `commit_ts` NULL first takes the §5.2 recovery
-     rule; only an unrecoverable candidate poisons the hop —
-     unprovable provenance, fail closed loudly; a candidate outside
+     rule (D227): a stream-bound identity with no in-window death on
+     a complete stream is excluded as proven out-of-window history —
+     never loud — and only an unrecoverable candidate (corrupt,
+     truncated, or unbound transaction-local evidence) poisons the
+     hop, failing closed loudly; a candidate outside
      its window or with `commit_ts != T'` is excluded and the
      tombstone is treated as unpaired (a straddler's out-of-window
      link never chains off a deletion its recorder did not author);
@@ -406,63 +423,128 @@ Walk for one LCA-hit tombstone `(K0, R0)`:
      equals `T` contradicts committed one-image-per-key (F1+F2): fail
      closed.
    - SAME-TRANSACTION CONTINUATION: otherwise, the landed generation was
-     netted out of the stream by its own transaction. The unique
-     `succ(K, I)` may continue the walk only if `I` is a
-     workspace-segment placeholder (the harvested pre-commit identity)
-     and `L'.write_ts = S` (one transaction create timestamp). `T` and
-     `S` carry over; `I = L'.new_row_id`. A NULL inhabitant or a non-
-     workspace identity cannot chain netted hops: fail closed. The
-     continuation's `commit_ts` equals the running chain's by
-     construction (one transaction, one commit instant), so netted hops
-     inherit the anchor's commit-exact binding instead of re-proving
-     it — and a NULL `commit_ts` on a netted hop heals by that same
-     inheritance (D226's recovery rule).
+     netted out of the stream by its own transaction, and the walk
+     follows the departure the transaction itself recorded, in either
+     recorded form (D32/D49/D50, D75-D81): (i) IDENTITY-CHAINED — the
+     incoming link's inhabitant `I` is a workspace-segment placeholder
+     (the harvested pre-commit identity), and the unique `succ(K, I)`
+     with `L'.write_ts = S` (one transaction create timestamp)
+     continues the walk; `T` and `S` carry over, `I = L'.new_row_id`;
+     (ii) KEY-CHAINED (the S3 route) — the incoming link names no
+     usable replacement identity (its replacement was flushed to an
+     uncommitted S3 object, so the column is NULL or names a
+     rewrite-erased placeholder), and the unique same-transaction
+     departure from the landed key (`L'.write_ts = S`, the
+     transaction's recorded S3-route departure grouped by old key)
+     continues the walk, UNLESS the in-window stream tombstone naming
+     that departure's old row id proves it consumed a committed
+     pre-image of the key (the vacate-before-arrival shape): then it
+     vacated an older generation, not the landed one, and is not
+     followed. An ambiguous, incompletely probed, or proven-foreign
+     departure fails closed. In both forms the continuation's
+     `commit_ts` equals the running chain's by construction (one
+     transaction, one commit instant), so netted hops inherit the
+     anchor's commit-exact binding instead of re-proving it — and a
+     NULL `commit_ts` on a netted hop heals by that same inheritance
+     for the workspace-placeholder identity and the netted S3 object
+     identity alike (D227's recovery rule: their diverted deletes
+     publish no tombstone, so a missing death carries no window
+     information for either class).
    - Landing on a previously visited key by a cross-key hop (cycle,
      including reincarnation `2->3->4->3`) fails closed even when a
      longer walk could in principle resolve it. Same-key tail
      re-entries carry a strictly newer birth certificate and are the
      only exemption.
 
-Recovery rule (r109, D226): an unstamped `commit_ts` is a pending
-intent, healed from evidence the protocol already retains. A
-candidate link whose `commit_ts` is NULL takes this rule before the
-admission gate evaluates it. (a) STREAM BOUND: the link's
-`old_row_id` names one committed row version (a pre-existing row's
-durable id; a workspace placeholder takes (b)). That version dies
+Recovery rule (r110, D227 — amends r109's D226 rule): an unstamped
+`commit_ts` is a pending intent, healed from evidence the protocol
+already retains. A candidate link whose `commit_ts` is NULL takes
+this rule before the admission gate evaluates it, and every outcome
+is exactly one row of a single table — heal, inherit, exclude, or
+abort — keyed by the identity class of the link's `old_row_id` and
+the completeness of the candidate window's collected stream.
+
+Identity classes. The `old_row_id` of a committed link names either
+a STREAM-BOUND identity — a durable committed row version (a
+pre-existing row's durable id, or any version the committed stream
+itself carries) — or a TRANSACTION-LOCAL identity — a version the
+recording transaction itself produced and netted inside that same
+transaction: a workspace-segment placeholder (the harvested
+pre-commit identity), or an uncommitted S3 object identity (the row
+was flushed to an uncommitted CN object by an intra-transaction S3
+flush, and its later same-transaction delete was DIVERTED —
+`pkg/vm/engine/disttae/txn.go:2544-2569` moves it to the per-block
+delete list and shrinks it out of the outgoing batch, the object is
+rewritten minus the row at commit, and NO tombstone is ever
+published). Both transaction-local shapes leave no trace in the
+committed stream, and the S3 shape carries no workspace-segment
+mark — the r109 rule misclassified it as stream-bound and excluded
+its link on a missing death that proves nothing (the r109 review's
+P1).
+
+Outcomes for a NULL-stamped candidate attributed to window `W`:
+(a) HEAL (stream-bound death): the candidate's `old_row_id` version
+has exactly one death in `W`'s collected stream. That version dies
 exactly once in its physical table's committed stream (§6.2: a rowid
 dies once), and I7 ties the link to the very commit that killed it,
 so the death's instant IS the recording transaction's commit
-instant. The walk looks the death up inside the candidate's own
-attributed window's collected stream — the same protected user-table
-stream the walk already reads, so recovery adds no reader class and
-no storage dependency. Outcomes: exactly one in-window death heals
-the candidate (`commit_ts` := that instant); no in-window death
-means the move is outside this window — the candidate is excluded
-before identity comparison (an out-of-window straddler never heals
-INTO a window); two in-window deaths of one row version are corrupt
-stream evidence — fail closed loudly; a truncated or disabled stream
-(NF5) is genuinely incomplete evidence — fail closed loudly. (b)
-TRANSACTION INHERITANCE: a candidate whose `old_row_id` is a
-workspace placeholder (its row was born inside the recording
-transaction) inherits the commit instant of any stream-bound or
-stamped link of the SAME transaction (one transaction, one commit
-instant; scope equality by `txn_id`/`write_ts`, D18/D26) — the
-netted-hop chains above are exactly such chains; a placeholder-chain
-candidate with no bound sibling is unprovable and fails closed
-loudly. (c) RE-STAMP: a healed candidate is re-stamped in the
-catalog by one small bounded internal transaction over its exact
-`link_id` set, so later resolutions read the durable value; re-stamp
-failure is harmless — the value stays recomputable from the retained
-stream. (d) POSTURE: because every heal source is the protected
-stream (D13 lifetime) or the transaction's own live rows, a stamping
+instant: `commit_ts` := that instant, and the admission gate
+evaluates it like a stamped value. The lookup rides the same
+protected per-window user-table stream the walk already collected —
+recovery adds no reader class and no storage dependency.
+(b) INHERIT (transaction-local identity): the candidate's
+`old_row_id` is a workspace placeholder, or it is an uncommitted S3
+object identity the walk reached through the transaction's own
+recorded continuity (the same-transaction continuation above: scope
+equality by `txn_id`/`write_ts`, D18/D26, identity-chained or
+key-chained). A missing death carries NO window information for
+this class — the row never publishes a tombstone no matter when its
+transaction commits — so window absence is never inferred from it.
+The candidate inherits the commit instant of any admitted link of
+the SAME transaction (one transaction, one commit instant): a
+stamped sibling, a sibling healed by (a), or the running chain's
+anchor binding. The established continuation checks and the
+per-(table, window) attribution are preserved unchanged: after
+inheriting, the candidate still faces the two-condition gate against
+its OWN attributed window, so an inherited instant that falls
+outside that window excludes the candidate exactly as a stamped
+mismatch does.
+(c) EXCLUDE (proven window absence): the candidate's `old_row_id`
+is stream-bound, `W`'s collected stream is complete (NF5
+certified), and the version has NO in-window death. A complete
+stream records every committed in-window death, so the recording
+transaction provably did not commit this move inside `W` — the
+candidate is excluded before identity comparison, never loud, and
+never heals INTO a window. This is the single outcome for the
+shape (the r109 review's P2): an unstamped successor committed
+after a historical endpoint (its linked version dies after the
+window's end) and an unstamped cross-fork straddler both exclude,
+so the valid in-window move the walk already holds still cascades —
+exactly the stamped path's verdict at the terminal claim exclusion.
+(d) ABORT LOUDLY (incomplete or corrupt evidence): `W`'s stream or
+probe is truncated or disabled (NF5 completeness not certified); the
+linked version shows two or more in-window deaths (corrupt: a rowid
+dies once); or the candidate is transaction-local with NO bound
+same-transaction sibling (an unbound netted chain — nothing proves
+when its transaction committed, and death-absence proves nothing
+for this class). All are unprovable provenance failing closed
+through D51/D56 — never a wrong fold, never a silent legacy
+downgrade.
+(e) RE-STAMP: a candidate healed by (a) or inherited by (b) is
+re-stamped in the catalog by one small bounded internal transaction
+over its exact `link_id` set, so later resolutions read the durable
+value; re-stamp failure is harmless — the value stays recomputable
+from the retained stream and the transaction's own recorded
+continuity.
+(f) POSTURE: because every heal source is the protected stream (D13
+lifetime) or the transaction's own recorded continuity, a stamping
 failure, cancellation, CN crash in the stamping window, or lost
 commit response can no longer strand an otherwise valid branch:
-committed moves keep resolving exactly, and loud aborts remain only
-for genuinely incomplete or ambiguous evidence (truncated/disabled
-stream, duplicate in-window deaths, unbound placeholder chains,
-duplicate admitted identities). A rolled-back move commits no links
-and no stream entries (I7), so no provenance outlives its move and
-nothing recovers toward it.
+committed moves keep resolving exactly — through workspace-netted
+and S3-netted chains alike — and loud aborts remain only for row
+(d)'s genuinely incomplete or ambiguous evidence. A rolled-back
+move commits no links and no stream entries (I7), so no provenance
+outlives its move and nothing recovers toward it.
 
 Soundness argument: the anchor identifies one physical row version and
 the anchor tombstone identifies the one transaction that deleted it;
@@ -499,16 +581,22 @@ shape (NULL identity mid-chain, ambiguous successor, cycle, missing
 stream identity evidence, duplicate births at `T`, duplicate lineage
 departures, probe budget exhaustion) degrades to the legacy
 delete+insert replay, which stays loud on referenced parents. NULL `commit_ts` is no longer one of
-the loud shapes (r109, D226): it is a durable stamp-pending intent,
-and the recovery rule above heals it from the protected stream before
-any verdict is reached. A loud D51/D56 abort follows only when the
-retained evidence itself cannot heal it — no in-window death of the
-linked version and no bound same-transaction sibling, a duplicate
-in-window death (a corrupt stream), or a truncated/disabled stream —
-so a transient stamping failure, its cancellation, a CN crash in the
-stamping window, or a lost commit response can never permanently
-strand a committed move, and the verdict still never guesses
-author-or-straddler.
+the loud shapes (r109, D226; r110, D227): it is a durable
+stamp-pending intent, and the recovery rule above resolves it to
+exactly one outcome before any verdict is reached — heal from the
+unique in-window death, inherit across the transaction's own netted
+generations (workspace-placeholder and uncommitted-S3 identities
+alike), exclude on proven window absence, or abort. A loud D51/D56
+abort follows only for the table's abort row — a duplicate in-window
+death (a corrupt stream), a truncated/disabled stream, or an unbound
+transaction-local candidate — while a stream-bound candidate with no
+in-window death on a complete stream is EXCLUDED as proven
+out-of-window history, so an unstamped successor committed after a
+historical endpoint or an unstamped cross-fork straddler never blocks
+the valid in-window move the walk already holds: a transient stamping
+failure, its cancellation, a CN crash in the stamping window, or a
+lost commit response can never permanently strand a committed move,
+and the verdict still never guesses author-or-straddler.
 
 Claimed finals join a per-diff claimed-key set (computed in one
 classification pass before any residual tombstone is emitted): an
@@ -563,14 +651,20 @@ delete that would kill the lineage row the fold just installed.
   committed instant at most one transaction deletes a given row
   version (§5.2 F1+F2), so admitted duplicates are genuinely
   ambiguous catalog evidence. A needed candidate whose `commit_ts`
-  is NULL first takes the §5.2 recovery rule — the commit instant is
-  re-derived from the linked version's unique in-window death or
-  inherited from a bound same-transaction sibling, and a healed
-  candidate is then admitted or excluded by the same two-condition
-  gate — so only an UNRECOVERABLE NULL (no in-window death, no bound
-  sibling, a duplicate death, or a truncated/disabled stream) aborts
-  loudly through D51/D56, never a silent legacy downgrade (r108
-  review P2). There is no single-candidate exemption — every
+  is NULL first takes the §5.2 recovery rule (D227's single outcome
+  table) — the commit instant is re-derived from the linked version's
+  unique in-window death, inherited across the candidate's own
+  transaction for a transaction-local netted identity (a workspace
+  placeholder or an uncommitted S3 object identity; a missing death
+  carries no window information for either, so absence is never
+  inferred from it), or the candidate is excluded as proven
+  out-of-window history when its stream-bound version has no
+  in-window death on a complete (NF5-certified) stream; a healed or
+  inheriting candidate is then admitted or excluded by the same
+  two-condition gate — so only an UNRECOVERABLE NULL (a duplicate
+  death, a truncated/disabled stream, or an unbound transaction-local
+  candidate) aborts loudly through D51/D56, never a silent legacy
+  downgrade (r108 review P2, r109 review P2). There is no single-candidate exemption — every
   followed link presents the same proof (r107 review P1). The D156
   scope-to-commit capture is retired from every resolution path: its
   remaining r100 role, arrival-tie attribution, now reads the same
@@ -698,7 +792,9 @@ link commits outside the collected windows is excluded by the
 windowed commit-exact gate (§5.2, D226) — and so is a link whose
 commit instant equals the departure yet lies outside the candidate's
 own attributed window — proven absent for that anchor, never a
-poison.
+poison; an unstamped link earns the same exclusion from the recovery
+rule's proven-window-absence row (D227), stamped and stamp-pending
+candidates landing on one verdict.
 
 ### 5.5 Diff/apply changes
 
@@ -795,16 +891,21 @@ poison.
   NULL. The no-link shape degrades to legacy replay; the NULL-identity
   shape still folds single-shot by the commit-timestamp tie (D14) and
   only same-transaction netted continuations degrade.
-- Provenance stamping (D225/D226) is best-effort: its failure,
-  cancellation, a CN crash in the stamping window, or a lost commit
-  response never changes the user-visible COMMIT outcome — the
-  stamping callback reports no error into the completion event, whose
-  path otherwise joins callback errors into the post-commit result —
-  and never strands provenance, because a NULL `commit_ts` heals
-  lazily from the protected stream at resolution (§5.2 recovery
-  rule). A rolled-back move commits no links and no stream entries
-  (I7), so no provenance outlives its move and nothing recovers
-  toward it.
+- Provenance stamping (D225/D226, recovery by D227) is best-effort:
+  its failure, cancellation, a CN crash in the stamping window, or a
+  lost commit response never changes the user-visible COMMIT outcome —
+  the stamping callback reports no error into the completion event,
+  whose path otherwise joins callback errors into the post-commit
+  result — and never strands provenance, because a NULL `commit_ts`
+  resolves through the §5.2 recovery rule's single outcome table at
+  resolution: heal from the unique in-window death, inherit across the
+  transaction's own netted generations (workspace placeholders and
+  uncommitted S3 object identities alike — their diverted deletes
+  publish no tombstone, so absence is never inferred from a missing
+  death), exclude on proven window absence, abort only on incomplete
+  or corrupt evidence. A rolled-back move commits no links and no
+  stream entries (I7), so no provenance outlives its move and nothing
+  recovers toward it.
 
 ### 6.3 Zero-match guard as loud failure
 
@@ -1002,15 +1103,22 @@ assertions to hold after reclamation and restart on otherwise valid
 retained branches (r107 review P2). Loud aborts remain only for
 genuinely invalid or incomplete evidence — a truncated or disabled
 probe (NF5), duplicate admitted identities (corruption), or an
-UNRECOVERABLE stamp-pending candidate whose own protected stream
-cannot heal it — never a wrong fold and never a silent downgrade to
-legacy replay. A NULL `commit_ts` is not in the loud list (r109,
-D226): the recovery rule heals it from the same protected per-window
-user-table stream the walk already reads (the class-(a)/protected
+UNRECOVERABLE stamp-pending candidate (recovery row (d): a duplicate
+in-window death, a truncated/disabled stream, or an unbound
+transaction-local candidate) — never a wrong fold and never a silent
+downgrade to legacy replay; a stamp-pending candidate whose
+stream-bound version provably did not die in the window is EXCLUDED
+as proven out-of-window history, so an unstamped successor committed
+after a historical endpoint never blocks the valid in-window fold.
+A NULL `commit_ts` is not in the loud list (r109, D226; r110, D227):
+the recovery rule resolves it from the same protected per-window
+user-table stream the walk already reads plus the transaction's own
+recorded netted-generation continuity (the class-(a)/protected
 family), so it adds no reader class and keeps this section's
 lifecycle guarantee — a transient stamping failure, its cancellation,
 a crash in the stamping window, or a lost commit response cannot
-degrade a valid apply.
+degrade a valid apply, through workspace-netted and S3-netted chains
+alike.
 
 ## 10. Validation map
 
@@ -1027,14 +1135,16 @@ Every invariant maps to the cheapest deterministic evidence:
 | I5 lineage selection (NF4): reused intermediate keys admit only the selected lineage; unrelated parent and child rows unchanged | pair consumer UT (`TestPairPkMovingTombstones/PICK_dependency-only_anchor_never_folds`) + live reused-key PICK regression |
 | I5 windows (NF6/NF7): multi-generation branches fold through ancestor tables; retired intermediate tables still resolve; historical endpoints and PICK BETWEEN read only in-window moves | live battery MG/HW scenarios + probe SQL bound assertions (`TestPkMoveLinkProbeBudgetAndBounds`) |
 | I5 staleness: a move after the selected snapshot endpoint never contaminates the historical apply | live battery HW scenario |
-| I5 lineage visibility (D226): a transaction begun before a fork but committed after its lineage window ended stays visible to the unanchored probe yet is excluded by windowed commit-exact admission (`commit_ts` != the departure instant), so its link can neither bind nor poison a descendant generation's anchor on the same inherited row identity (the reviewed straddler schedule); a candidate whose `commit_ts` EQUALS the departure instant yet falls OUTSIDE its own attributed window is likewise excluded before identity comparison or arrival attribution (the r108 review P1's one-transaction cross-branch schedule); a straddler committed INSIDE its window still resolves; two DISTINCT admitted links sharing one row identity fail closed loudly; a NULL `commit_ts` heals via stream recovery and only an unrecoverable NULL fails loudly; there is no single-candidate exemption | multi-generation/sibling fabric UT (the reviewed two-candidate straddler: out-of-window ancestor excluded, in-window child binds and resolves) + commit-gate UTs (admit on equal instant inside the attributed window, exclude on instant mismatch, exclude on window mismatch even with equal instant, NULL heals via recovery, unrecoverable NULL loud, duplicate admitted poison, no singleton exemption, same-transaction netted hops inheriting the anchor's binding) + live BVT merging sibling branches with a cross-fork straddling pk-moving transaction, MERGE and PICK twins |
+| I5 lineage visibility (D226): a transaction begun before a fork but committed after its lineage window ended stays visible to the unanchored probe yet is excluded by windowed commit-exact admission (`commit_ts` != the departure instant), so its link can neither bind nor poison a descendant generation's anchor on the same inherited row identity (the reviewed straddler schedule); a candidate whose `commit_ts` EQUALS the departure instant yet falls OUTSIDE its own attributed window is likewise excluded before identity comparison or arrival attribution (the r108 review P1's one-transaction cross-branch schedule); a straddler committed INSIDE its window still resolves; two DISTINCT admitted links sharing one row identity fail closed loudly; a NULL `commit_ts` resolves by the D227 outcome table (heal, inherit, exclude on proven window absence) and only an unrecoverable NULL fails loudly; there is no single-candidate exemption | multi-generation/sibling fabric UT (the reviewed two-candidate straddler: out-of-window ancestor excluded, in-window child binds and resolves) + commit-gate UTs (admit on equal instant inside the attributed window, exclude on instant mismatch, exclude on window mismatch even with equal instant, NULL heals via the unique in-window death, NULL with proven window absence excludes — the unstamped future-successor and cross-fork straddler forms — transaction-local netted identities inherit, unbound transaction-local loud, duplicate admitted poison, no singleton exemption, same-transaction netted hops inheriting the anchor's binding) + live BVT merging sibling branches with a cross-fork straddling pk-moving transaction, MERGE and PICK twins |
 | I2 lineage visibility (D226; the r107 review P1's and r108 review P1's demanded oracles): a sibling branch's independent same-transaction DELETE/INSERT that shares an inherited row identity with an out-of-window straddler's recorded move is proven link-less — the out-of-window candidate is rejected by windowed commit-exact admission, so MERGE and PICK keep DELETE semantics, the FK implicit RESTRICT check rejects loudly, and the destination parent/child rows stay unchanged (no UPDATE cascade onto the unrelated row) — including the r108 review's harder shape where ONE RC transaction begun before the fork performs BOTH the ancestor move and the sibling's independent DELETE/INSERT in a single commit, so the candidate's `commit_ts` equals the departure instant yet lies outside its own attributed window | live BVT MERGE and PICK twins of the straddler + independent DELETE/INSERT schedules (the two-transaction singleton form and the one-transaction form) asserting DELETE semantics, FK rejection, and unchanged destination parent/child rows + fabric UT of the walk verdict (candidate excluded on window membership; zero admissible -> proven absence -> legacy replay) |
 | I6 bounds (NF8): probe SQL carries `write_ts <= endPhys` and `LIMIT budget+1` on the apply statement's current snapshot (D225: no historical anchor, no membership capture); overflow disables the provider, releases caches, and never caches a truncated prefix; cache over budget disables before SQL; mid-walk truncation fails closed (NF5) | `TestPkMoveLinkProbeBudgetAndBounds` (SQL capture + truncation + disable-before-SQL + injected cap-boundary walk + `commit_ts` decode assertions) |
 | Storage-version lifecycle (r107/r108 reviews): with table-scoped branch-protect snapshots ONLY — no account/cluster snapshot, no PITR — force catalog compaction/checkpoint rewriting and object reclamation, restart, then run the exact MERGE/PICK pk-move cascade assertions: no resolution-path reader depends on reclaimable catalog change history (the D156 capture is retired), so while the lineage's links and its protected user-table stream stay live every cascade assertion holds exactly after reclamation and restart — including links whose `commit_ts` was left NULL by an injected stamping failure, which heal from the protected stream and still resolve exactly; loud aborts are asserted only for genuinely incomplete evidence (a truncated protected stream, duplicate admitted identities) — never a wrong fold, never a silent downgrade to legacy delete+insert replay | live lifecycle battery (catalog rewrite + reclamation + restart + exact MERGE/PICK cascade assertions on otherwise valid retained branches, with unstamped links healing to exact cascades; truncated-stream fixtures assert the loud-abort posture) |
 | Commit/stamping failure and crash protocol (D226; the r108 review P2's demanded checkpoints): stamping-failure injection, stamping cancellation, a crash between commit and stamping (fault point), a lost commit response (`FinalizeCommitWithUnknownResult`), and restart — each followed by exact MERGE/PICK cascade assertions for the committed move, because the NULL stamp heals from the protected stream at resolution; rollback leaves zero links and no provenance; the user-visible COMMIT result equals the user transaction's own outcome in every injection | live fault-injection battery over the completion hook with exact MERGE/PICK cascade assertions + fabric UTs driving the walk over unstamped fixtures + unknown-result finalize UT |
+| Stamp recovery over netted S3 generations (D227; the r109 review P1's demanded variants): a pk-move chain whose intermediate generations live in uncommitted S3 objects (their same-transaction deletes diverted, no tombstone published) keeps resolving exactly when the chain's links are left NULL-stamped — the first hop heals from its durable old version's unique in-window death and every netted hop inherits the transaction's bound instant through the recorded same-transaction continuity (a missing death is never read as window absence for this identity class); the chain fold lands on the exact final key, and an unrelated row reinserted at the vacated intermediate key keeps its own identity as a plain insert | live MERGE/PICK twins of BOTH S3-chain scenarios — the plain 2->1000->1001 chain and the chain plus an unrelated reinsert at the vacated key (the `fj/cn/flush_small_objs` fixtures) — each under stamping-failure injection and under a crash between commit and stamping, asserting the exact child key (the cascade lands on the lineage's final key) and the preservation of the unrelated intermediate row (its own payload survives as a plain insert) + fabric UTs driving the walk's recovery over unstamped netted S3 identities (inherit when chained, exclusion never inferred from a missing death, unbound transaction-local loud) |
+| Stamp recovery at window boundaries (D227; the r109 review P2's demanded cases): an unstamped successor committed after a historical endpoint, and an unstamped cross-fork straddler begun before the fork and committed after its lineage window ended, are EXCLUDED as proven out-of-window history (stream-bound identity, complete stream, no in-window death) — never loud — so the valid in-window move still cascades exactly | live PICK between snapshots with the future successor's stamping suppressed (the fold still ends at the in-window key and the child cascades there) and its MERGE twin, plus the cross-fork straddling-transaction MERGE/PICK pair with the straddler link's stamping suppressed (the in-window child move still applies as a native UPDATE) + fabric UTs of the outcome table's exclude row against its loud rows |
 | Writer protocol: NULL-identity staging; NULL `commit_ts` staging; link batch layout matches the catalog schema; eligibility/fail-closed paths | `pkg/sql/colexec/multi_update/pk_move_link_test.go` |
 | Writer atomicity (I7): injected link-write failure aborts the statement; degraded ctx skips silently; healthy write stages exactly one NULL-identity row | `TestInsertUpdatePkMoveLinkRowsWritePath` |
-| Identity back-fill, commit stamping, and stamp recovery (D225/D226): harvests map pk bytes to the freshest staged row id; account/table/type filters; NULL and malformed entries skipped; null identity column left untouched on schema drift; the commit-completion step observes the TN-assigned commit timestamp and stamps exactly the transaction's staged `link_id` set with the full-precision commit instant; a stamping failure, its cancellation, a CN crash in the stamping window, or a lost commit response leaves `commit_ts` NULL and never alters the user-visible COMMIT result; ROLLBACK stages nothing and stamps nothing; recovery re-derives the commit instant from the linked version's unique in-window death (heal), excludes a candidate with no in-window death, fails loudly on a duplicate in-window death or an unbound placeholder chain, inherits the instant from a bound same-transaction sibling, and re-stamps healed links best-effort | `pkg/vm/engine/disttae/pk_move_link_fixup_test.go` + commit-completion stamping UTs (exact link set, full-precision instant, failure-leaves-NULL, rollback-noop, COMMIT-result unaffected by stamping failure) + recovery UTs (heal in-window death, exclude no-death, duplicate-death loud, transaction inheritance, unbound placeholder loud, best-effort re-stamp of the healed link set) |
+| Identity back-fill, commit stamping, and stamp recovery (D225/D226, recovery by D227): harvests map pk bytes to the freshest staged row id; account/table/type filters; NULL and malformed entries skipped; null identity column left untouched on schema drift; the commit-completion step observes the TN-assigned commit timestamp and stamps exactly the transaction's staged `link_id` set with the full-precision commit instant; a stamping failure, its cancellation, a CN crash in the stamping window, or a lost commit response leaves `commit_ts` NULL and never alters the user-visible COMMIT result; ROLLBACK stages nothing and stamps nothing; recovery resolves a NULL stamp by the single outcome table (D227): heal from the linked version's unique in-window death; inherit the bound instant across the candidate's own transaction for transaction-local netted identities (workspace placeholders and uncommitted S3 object identities — a missing death carries no window information for either, so absence is never inferred from it); exclude on proven window absence (stream-bound identity, complete stream, no in-window death — the unstamped future-successor and cross-fork forms); fail loudly only on a duplicate in-window death, a truncated/disabled stream, or an unbound transaction-local candidate; and re-stamp healed links best-effort | `pkg/vm/engine/disttae/pk_move_link_fixup_test.go` + commit-completion stamping UTs (exact link set, full-precision instant, failure-leaves-NULL, rollback-noop, COMMIT-result unaffected by stamping failure) + recovery UTs (heal in-window death, exclude on proven window absence, transaction inheritance for workspace and S3 identities, unbound transaction-local loud, duplicate-death loud, truncated-stream loud, best-effort re-stamp of the healed link set) |
 | Pair consumer: proven anchors fold and claim their replacement (durable-identity and NULL-identity links alike, commit-gated by the preserved `commit_ts`); unproven/dependency-only anchors stay deletes; replacement leaves the stream exactly once | `TestPairPkMovingTombstones` |
 | I7 rollback/restart: ROLLBACK removes link rows with user rows; links survive a clean restart and keep resolving | live battery RB/RS scenarios |
 | I6 tenancy: a second tenant writes/reads only its own links; a tenant without the table degrades to legacy replay | live battery TI scenario |
@@ -1313,7 +1423,8 @@ reachable in the r101 blob linked from section 1.
 - D223 (r106, 2026-11-02, snapshot-anchored provenance reads; refines D11/D24 window bounds) [SUPERSEDED by D224 before implementation — REJECTED at the independent design review of r106]: PR #31629 review (aunjgr inline, 2026-11-02T09:41:16Z) found that the provider's catalog probes read the apply statement's CURRENT snapshot with only `write_ts <= endPhys` (write_ts is the recording transaction's CREATE ts, per D2), so an ancestor transaction begun before a fork but committed after its lineage window ended — a straddler whose provenance this source lineage never saw — entered `mergeProbedLinksLocked` and poisoned the shared `(old row id, old pk)` identity before stream commit-membership screening could exclude it, aborting a conflict-free merge. The failure is fail-closed only: every manifestation routes through D51's unresolved-verdict abort, and birth-certificate binding bars a misattributed fold, so the defect never produces wrong data. Repair: every provider-window catalog read — the whole-window scan, the per-key overflow fallback, and the LIMIT-1 existence probe — is snapshot-anchored at the window's full `end` types.TS via `{MO_TS = '<phys-logical TS>'}` (the D222 anchor form), so the probe exposes exactly the links committed at or before the window's end; the missing lower bound on `write_ts` is unchanged, since a transaction created before a window's start but committed inside it remains visible at the anchor. Sufficiency without per-window cache attribution: the link_id prefix range already restricts each probe to the window's physical table, and on a linear lineage an in-window move retires its (row id, old pk) occupant from every descendant generation's inherited state, so after anchoring two DIFFERENT visible links can share one row identity only through genuinely ambiguous catalog evidence (duplicate committed rows naming one inherited identity with different successors) — the poisoning path stays fail-closed for exactly that case. An empty `end` (unit fixtures, the MaxInt64 endpoint-relation fallback) keeps the unanchored posture, where "now" is the intended horizon. Anchored existence: a window whose end predates the link catalog's creation in its owner account degrades to complete absence for that window only (the anchored `mo_tables {MO_TS = window.end}` existence check extends D220 (B.4)), so historical endpoints preceding the upgrade read as empty instead of erroring on the absent catalog. The PICK key-closure probes keep the wider unanchored read: closure windows carry endPhys only, and over-admission there widens only the dependency-key set while every fold decision stays behind the provider's anchored, membership-screened walk. The rejected alternative — per-(table, window) attribution of the byRow cache with conflict checking deferred until commit membership is established — repairs the same defect but reworks the cache keying and every verdict accessor for no additional behavioral guarantee. Supersession record: the independent design review of r106 (the issue-fix-loop controller's local reviewer, 2026-11-02, REQUEST_CHANGES, blocking P2) verified that the anchored reads require retained historical storage versions of the link catalog that no snapshot/PITR channel covers (see §9.3's storage-version retention audit), so catalog-object rewriting and reclamation could remove the very version an anchored read queries while the logical links remain live; no CN-expressible protection mechanism exists, and establishing one in TN is outside this PR's authorized scope. D223 never shipped. D224 adopts the per-window attribution alternative this entry had rejected, because the retention finding reverses that trade-off: the cache/verdict rework buys the decisive guarantee that no provenance verdict depends on reconstructing a historical catalog state.
 - D224 (r107, 2026-11-02, per-window provenance attribution with commit-membership-deferred conflict checking; supersedes D223; refines D11/D24 window bounds) [SUPERSEDED by D225 before implementation — REJECTED at the independent design review of r107]: repairs the same reviewed straddler defect (aunjgr inline, 2026-11-02T09:41:16Z) without any historical catalog-state dependency. (a) Reads: every provider-window catalog probe keeps the unanchored current-snapshot posture with `write_ts <= endPhys` and the row-budget LIMIT; no `{MO_TS}` anchor is placed on the link catalog. (b) Attribution: probed links are cached WITH their (table, window) attribution — one window per physical table id at construction — instead of merging into a single shared `(old row id, old pk)` identity map at probe time; the merge no longer poisons. (c) Screening before comparison: at verdict time each candidate is first tested for commit membership — the D156 scope-to-commit capture, built from the window's own committed change stream under its certify-complete-or-poison-wholesale contract, answers whether the candidate's recording transaction committed inside its own window's collected [start, end]; a candidate committed outside every collected window of this source lineage (the straddler) is excluded before identities compare, so it can neither bind nor poison an anchor. Membership is unique by construction: a transaction commits exactly once, and the link's table id is the updated table (D4), so one candidate admits through at most one collected window. (d) Comparison: only membership-admitted candidates enter the identity comparison — zero candidates is proven absence (completeness semantics of NF5 unchanged), exactly one binds the anchor, and two or more DISTINCT identities poison (fail closed), which on a linear lineage is genuinely ambiguous catalog evidence: an in-window move retires its (row id, old pk) occupant from every descendant generation's inherited state. (e) Failure posture: a window whose membership evidence cannot be certified complete poisons that window's screening — the D156 wholesale rule extended from the arrival tie to the anchor conflict check — so reclamation of the catalog's change history (§9.3 class (c)) degrades to the loud D51/D56 abort, never a wrong fold and never a silent downgrade to legacy replay. (f) Cost: the capture arms lazily for anchor screening exactly as it already does for the arrival tie, bounded by the collected windows' ranges (D156/D157: one pass per provider generation, budget-limited, cancellation-observed); a verdict holding a single candidate may follow it directly because the walk's stream-side birth-certificate binding already bars a wrong fold — screening is mandatory exactly where identities conflict and where an arrival tie is consulted. (g) Fixtures: empty-end windows keep the "read to now" posture, and a provider without a capture source keeps the adopted complete-empty index whose candidates pass unscreened (r50 (D)), so the walk fixtures are untouched; the catalog-existence check per owner account (D220 (B.4)) and the wider unanchored PICK key-closure read (over-admission widens only the dependency-key set; fold decisions stay behind the screened walk) are unchanged. Supersession record: the independent design review of r107 (the issue-fix-loop controller's local reviewer, 2026-11-02, REQUEST_CHANGES, blocking P1 + P2) verified (P1) that (f)'s single-candidate exemption admitted an unscreened out-of-window candidate: a singleton ancestor straddler's link splices onto a sibling branch's independent same-transaction DELETE/INSERT sharing the inherited row identity, because the claim bound by commit instant alone and never bound the candidate's recording transaction to the deleting transaction — the destination count guard then passes and a wrong UPDATE cascade executes; and (P2) that (c)'s membership screening made valid anchor resolution depend on the D156 capture, which reads the link catalog's reclaimable committed change history (§9.3 class (c)), so ordinary catalog rewriting/reclamation would strand otherwise valid retained branches — contradicting D13 and leaving the original straddler scenario unresolved after reclamation. D224 never shipped. D225 repairs both findings by preserving the commit instant inside the live link row (executing D15's preservation in its commit-exact form), gating every candidate on it with no exemption, and retiring the capture from every resolution path.
 - D225 (r108, 2026-11-02, preserved commit-exact provenance: the link row carries its recording transaction's commit instant; supersedes D224 before implementation; refines D14/D15; retires D156's capture; refines D11/D24 window verdicts) [AMENDED by D226 before implementation: admission gains per-window membership alongside departure equality, per-(table, window) attribution is restored, and the NULL `commit_ts` posture moves from the loud abort to D226's recovery rule; the `commit_ts` column, the CN commit-completion stamping hook, the D156 capture retirement, the equality binding, and the no-exemption posture stand]: repairs the reviewed straddler defect (aunjgr inline, 2026-11-02T09:41:16Z) and both r107-review findings without any historical catalog-state dependency and without any reclaimable-history reader. (a) Catalog: `mo_data_branch_update_link` gains `commit_ts binary(12) null` — the recording transaction's full-precision `types.TS` byte form; physical-only precision cannot order two transactions committed inside one physical instant (the HLC logical component distinguishes them), and the walk compares stream instants with full precision. The column is added in place to the same unpublished 4.0.7 tail upgrade entry and the predefined DDL: no release carries this table, and a tenant that executed a pre-column entry shape is an unreleased dev layout under the existing offset hard-error rule. (b) Writer/stamping: the moving statement stages rows with `commit_ts` NULL (I7 atomicity unchanged — the commit instant is unknowable before TN assigns it); after the recording transaction's successful commit, a CN-side commit-completion step — the `pkg/txn/client` operator completion event already observes the TN-assigned timestamp — runs one bounded internal transaction updating exactly this transaction's staged link rows by their exact `link_id` set, carried from the transaction's bounded staging bookkeeping. Entries are applied before the commit response returns the assigned timestamp, so no CN write can ride the same commit batch; the second transaction is small and attempted synchronously, and a stamping failure or CN crash leaves `commit_ts` NULL. (c) Resolution gate: a candidate link may start or continue a fold chain at a departure instant `T` only when `commit_ts = T`. This is exact-transaction binding: the link insert committed atomically with the move (I7), and at one committed instant at most one transaction deletes a given row version or births a given key (§5.2 F1+F2), so the admitted link's recorder is provably the departure tombstone's author. `commit_ts` NULL on a material candidate is unprovable evidence — the verdict fails closed LOUDLY (D51/D56), never a silent legacy downgrade; `commit_ts != T` EXCLUDES the candidate before any identity comparison — it can neither bind nor poison; zero admissible is proven absence (legacy semantics, NF5 completeness unchanged); two or more DISTINCT admissible identities fail closed loudly (impossible absent corruption, since one row version dies once). There is NO single-candidate exemption (r107 review P1): every followed link presents the same proof. (d) Membership subsumption: every departure instant the walk consults is a collected stream entry of this source lineage by construction, so an admitted candidate provably committed inside the collected windows — certified window membership with no separate evidence — and the reviewed straddler (created before a fork, committed after its lineage window ended) fails the equality and is excluded; D224's per-window attribution and deferred screening are never built. (e) Capture retirement: the D156 scope-to-commit capture is removed from every resolution path; the arrival tie (its remaining r100 role) re-attributes from the preserved column — a predecessor move justifies an arrival exactly when its `commit_ts` equals the arrival instant, NULL stays undecidable per instant, distinct justifiers stay ambiguous — under the unchanged whole-window completeness requirement. No verdict anywhere reads the link catalog's reclaimable committed change history (r107 review P2); §9.3's reader class (c) is removed. (f) Same-transaction/netted chaining unchanged: one transaction's links share one commit instant, so netted continuations (scope equality by `txn_id`/`write_ts`, D18/D26) inherit the anchor's binding instead of re-proving it. (g) PICK unchanged: the key closure keeps its wider unanchored read and never consults `commit_ts` (over-admission widens only the dependency-key set); fold decisions stay behind the commit-gated walk. (h) Cost: one small stamping transaction per pk-moving transaction (bounded by the existing coordinator budget) replaces the capture's per-generation change-stream pass; the probe/budget posture (I6/NF8) is unchanged. (i) Failure posture and lifecycle: after catalog-object rewriting and reclamation, while the lineage's links and its protected user-table stream stay live, every verdict keeps resolving — the §10 lifecycle oracle restores exact MERGE/PICK cascade assertions after reclamation and restart on otherwise valid retained branches; loud aborts remain for genuinely invalid or incomplete evidence only (truncated/disabled probes per NF5, duplicate admissible identities, unstamped material links). (j) Fixtures: walk fixtures fabricate links with their intended commit instants, and a fixture may leave `commit_ts` NULL to prove the loud lane; empty-end windows keep the "read to now" posture. The r107 review's P1 counterexample (singleton straddler plus independent DELETE/INSERT, MERGE and PICK, asserting DELETE semantics, FK rejection, and unchanged destination parent/child rows) and the P2 lifecycle oracle enter the §10 validation map.
-- D226 (r109, 2026-11-02, windowed commit-exact admission and durable stamp recovery; amends D225; refines D11/D24 window verdicts and D13's evidence lifetime): repairs both r108-review findings (the issue-fix-loop controller's local reviewer, 2026-11-02, REQUEST_CHANGES, blocking P1 + P2). The r108 review verified (P1) that D225(d)'s membership subsumption conflated the anchor's window with the candidate's own window: windows are relation-specific (one per physical table, `data_branch.go`'s collectRange projection), so ONE transaction — an RC transaction begun before a fork advances its snapshot per statement (`handleRCSnapshot`) and can write both generations — that moves a row on the parent and independently DELETEs/INSERTs on the child commits both at one instant; the parent link's `commit_ts` then EQUALS the child anchor's departure instant while lying OUTSIDE the parent window's `[start, end]`, so equality-only admission splices the parent's link onto the child's independent pair, and the destination count guard passes a wrong UPDATE cascade; and (P2) that a NULL `commit_ts` after a stamping failure, its cancellation, a CN crash in the stamping window, or a lost commit response permanently strands an otherwise valid committed branch under D225's loud-abort posture, with the txn-operator completion event joining callback errors into the post-commit result path. (a) Attribution restored: the probe preserves each candidate's per-(physical table, window) attribution — one candidate pool per collected window, the pool of the window whose stream carries the hop's departure tombstone — and conflict checking happens only among the admitted candidates of one hop's pool; candidates of different windows never poison one another. (b) Windowed admission: a candidate may start or continue a chain at a departure instant `T` only when its stored `commit_ts` falls INSIDE its own attributed window's `[start, end]` AND equals `T`, checked before any identity comparison or arrival attribution; the one-transaction cross-branch counterexample fails condition (i) (the parent window ended before the single commit), the classic straddler fails condition (ii), and a valid in-window move passes both. (c) The arrival tie is amended identically: a predecessor justifies an arrival exactly when its `commit_ts` equals the arrival instant AND falls inside the predecessor's own attributed window. (d) Publication/recovery protocol: the eager commit-completion stamping is best-effort and never alters the user-visible COMMIT result — the stamping callback swallows and logs its own failure rather than reporting it into the completion event; a NULL `commit_ts` is a durable stamp-pending intent, and resolution heals it lazily from the protected per-window user-table stream the walk already collected: the linked `old_row_id` version dies exactly once in its physical table's committed stream, and I7 ties the link to that commit, so the death's instant IS the recording transaction's commit instant; a placeholder `old_row_id` inherits the instant from any stream-bound or stamped link of the same transaction by D18/D26 scope equality; exactly one in-window death heals, no in-window death excludes the candidate, and a duplicate in-window death, an unbound placeholder chain, or a truncated/disabled stream aborts loudly; a healed candidate is best-effort re-stamped by one small bounded internal transaction over its exact `link_id` set, and re-stamp failure is harmless because the instant is recomputable; lost commit responses (`FinalizeCommitWithUnknownResult`), cancellation, crash and restart all land on the same NULL-heals lane; a rolled-back move commits no links and no stream entries (I7), so no provenance outlives its move. (e) Failure posture: loud aborts remain only for genuinely incomplete or ambiguous evidence — a truncated/disabled probe (NF5), duplicate admitted identities, or an unrecoverable stamp-pending candidate; no permanent NULL-induced aborts remain. (f) The D156 capture retirement, the equality binding, the no-single-candidate-exemption posture, and PICK's wider unanchored read are unchanged from D225. (g) Cost: recovery rides the already-collected protected stream (no new reader class, no historical catalog state), plus at most one optional re-stamp transaction per healed link. (h) Validation: the §10 map gains the one-transaction cross-branch MERGE/PICK oracle (FK rejection and unchanged destination parent/child rows), the window-mismatch commit-gate assertions, the recovery UTs, and the deterministic crash/failure checkpoints (stamping failure, cancellation, crash between commit and stamping, lost commit response, restart — each followed by exact MERGE/PICK cascades for committed moves, with rollback leaving no provenance).
+- D226 (r109, 2026-11-02, windowed commit-exact admission and durable stamp recovery; amends D225; refines D11/D24 window verdicts and D13's evidence lifetime) [AMENDED by D227 before implementation: the recovery rule becomes a single outcome table keyed by identity class — transaction-bound inheritance extends to netted S3 object identities, a stream-bound candidate with no in-window death on a complete stream is excluded as proven window absence rather than aborted, and loud aborts confine to incomplete or corrupt evidence and unbound transaction-local candidates; the windowed admission gate, the publication protocol, the re-stamp, and the failure posture stand]: repairs both r108-review findings (the issue-fix-loop controller's local reviewer, 2026-11-02, REQUEST_CHANGES, blocking P1 + P2). The r108 review verified (P1) that D225(d)'s membership subsumption conflated the anchor's window with the candidate's own window: windows are relation-specific (one per physical table, `data_branch.go`'s collectRange projection), so ONE transaction — an RC transaction begun before a fork advances its snapshot per statement (`handleRCSnapshot`) and can write both generations — that moves a row on the parent and independently DELETEs/INSERTs on the child commits both at one instant; the parent link's `commit_ts` then EQUALS the child anchor's departure instant while lying OUTSIDE the parent window's `[start, end]`, so equality-only admission splices the parent's link onto the child's independent pair, and the destination count guard passes a wrong UPDATE cascade; and (P2) that a NULL `commit_ts` after a stamping failure, its cancellation, a CN crash in the stamping window, or a lost commit response permanently strands an otherwise valid committed branch under D225's loud-abort posture, with the txn-operator completion event joining callback errors into the post-commit result path. (a) Attribution restored: the probe preserves each candidate's per-(physical table, window) attribution — one candidate pool per collected window, the pool of the window whose stream carries the hop's departure tombstone — and conflict checking happens only among the admitted candidates of one hop's pool; candidates of different windows never poison one another. (b) Windowed admission: a candidate may start or continue a chain at a departure instant `T` only when its stored `commit_ts` falls INSIDE its own attributed window's `[start, end]` AND equals `T`, checked before any identity comparison or arrival attribution; the one-transaction cross-branch counterexample fails condition (i) (the parent window ended before the single commit), the classic straddler fails condition (ii), and a valid in-window move passes both. (c) The arrival tie is amended identically: a predecessor justifies an arrival exactly when its `commit_ts` equals the arrival instant AND falls inside the predecessor's own attributed window. (d) Publication/recovery protocol: the eager commit-completion stamping is best-effort and never alters the user-visible COMMIT result — the stamping callback swallows and logs its own failure rather than reporting it into the completion event; a NULL `commit_ts` is a durable stamp-pending intent, and resolution heals it lazily from the protected per-window user-table stream the walk already collected: the linked `old_row_id` version dies exactly once in its physical table's committed stream, and I7 ties the link to that commit, so the death's instant IS the recording transaction's commit instant; a placeholder `old_row_id` inherits the instant from any stream-bound or stamped link of the same transaction by D18/D26 scope equality; exactly one in-window death heals, no in-window death excludes the candidate, and a duplicate in-window death, an unbound placeholder chain, or a truncated/disabled stream aborts loudly; a healed candidate is best-effort re-stamped by one small bounded internal transaction over its exact `link_id` set, and re-stamp failure is harmless because the instant is recomputable; lost commit responses (`FinalizeCommitWithUnknownResult`), cancellation, crash and restart all land on the same NULL-heals lane; a rolled-back move commits no links and no stream entries (I7), so no provenance outlives its move. (e) Failure posture: loud aborts remain only for genuinely incomplete or ambiguous evidence — a truncated/disabled probe (NF5), duplicate admitted identities, or an unrecoverable stamp-pending candidate; no permanent NULL-induced aborts remain. (f) The D156 capture retirement, the equality binding, the no-single-candidate-exemption posture, and PICK's wider unanchored read are unchanged from D225. (g) Cost: recovery rides the already-collected protected stream (no new reader class, no historical catalog state), plus at most one optional re-stamp transaction per healed link. (h) Validation: the §10 map gains the one-transaction cross-branch MERGE/PICK oracle (FK rejection and unchanged destination parent/child rows), the window-mismatch commit-gate assertions, the recovery UTs, and the deterministic crash/failure checkpoints (stamping failure, cancellation, crash between commit and stamping, lost commit response, restart — each followed by exact MERGE/PICK cascades for committed moves, with rollback leaving no provenance).
+- D227 (r110, 2026-11-02, single recovery outcome table; transaction-bound stamp recovery extended to netted S3 object identities; amends D226; refines D32/D49/D50's S3-route continuity and D13's evidence lifetime): repairs both r109-review findings (the issue-fix-loop controller's local reviewer, 2026-11-02, REQUEST_CHANGES, blocking P1 + P2). The r109 review verified (P1) that D226's recovery rule classified every non-workspace `old_row_id` as a committed stream-bound version and excluded a NULL-stamped candidate with no in-window death, but uncommitted S3 rows also carry non-workspace object identities and their same-transaction deletes are diverted without publishing a tombstone (`pkg/vm/engine/disttae/txn.go:2544-2569`: the delete lands in the per-block list, the batch is shrunk, the object is rewritten minus the row at commit), so under a stamping failure the second hop of an S3-netted chain (the reviewed schedule: one transaction moves 2->1000->1001 through a forced small-object flush and independently reinserts 1000, `merge_foreign_key_pk_move.sql:879-907`) is wrongly excluded, the terminal timestamp claim then adopts the unrelated reinserted row born at the chain instant (`data_branch_pk_move_link.go:3206-3301`), the destination count guard passes (`data_branch_output.go:2200-2241`), and the apply cascades onto the impostor key instead of the lineage's final key; and (P2) that D226's rule text excluded a candidate with no in-window death while its soundness argument and section 5.3 classified the same shape (no death, no bound sibling) as a loud abort — an unstamped successor committed after a historical endpoint (`pick_foreign_key_pk_move.sql:822-855`) would abort the apply and block the valid earlier in-window move, contradicting D226's own promise that out-of-window candidates cannot poison valid applies, while the stamped form already resolves by ending the lineage at the claimed version (the terminal exclusion path, `data_branch_pk_move_link.go:3303-3322`). (a) Single outcome table: recovery resolves every NULL-stamped candidate to exactly one of heal (the linked stream-bound version's unique in-window death is the commit instant), inherit (a transaction-local identity — a workspace placeholder or an uncommitted S3 object identity reached through the transaction's own recorded continuity — takes the commit instant of any admitted same-transaction sibling, one transaction one commit instant, the established continuation checks and per-(table, window) attribution preserved, and the two-condition gate still evaluated against the candidate's own window), exclude (proven window absence: stream-bound identity, NF5-complete stream, no in-window death — never loud, never heals into a window), or abort loudly (incomplete or corrupt evidence: a truncated/disabled stream, a duplicate in-window death, or an unbound transaction-local candidate). (b) No absence inference for netted identities: window absence is never inferred from a missing death for transaction-local identities, because their diverted deletes publish no tombstone regardless of when the transaction commits; their exclusion comes only from the bound instant failing the candidate's own window. (c) Boundary behavior: an unstamped successor committed after a historical endpoint and an unstamped cross-fork straddler both land on the exclude row, so the valid in-window move still cascades — one verdict for stamped and stamp-pending candidates. (d) The same-transaction continuation records both of its shipped forms (identity-chained through the workspace placeholder; key-chained through the transaction's recorded S3-route departure, screened against foreign vacate-before-arrival departures by the in-window tombstone), and section 5.1's NULL-identity bullet is aligned with the recorded S3 continuity (D32/D49/D50, D75-D81). (e) The D226 windowed admission gate, the best-effort publication protocol with the closed COMMIT-result rule, the best-effort re-stamp, the rollback-no-provenance posture, and the no-historical-catalog-reader posture are unchanged; recovery still adds no reader class and no storage dependency. (f) Validation: the section 10 map gains the MERGE/PICK stamping-failure and crash twins of both S3-chain scenarios asserting the exact child key and the preservation of the unrelated intermediate row, the NULL-stamped future-successor and cross-fork cases requiring the valid in-window move to cascade, and the outcome-table recovery UTs (inherit when chained, exclusion never inferred from a missing death, unbound transaction-local loud).
 
 - O1 (owner: issue assignee; decision point: first maintenance window
   after merge): time-based or branch-DAG-aware GC of link history for
@@ -1345,22 +1456,23 @@ the r101 blob linked from section 1):
 | r106 | D223 | PR #31629 review (aunjgr inline): snapshot-anchored provenance reads — an out-of-window straddler commit can no longer poison a valid descendant anchor; submitted for independent design approval before implementation and REJECTED there (historical link-catalog storage versions are unprotected); never shipped. |
 | r107 | D224 (supersedes D223) | Independent design review of r106 (issue-fix-loop controller's local reviewer, REQUEST_CHANGES, P2): D223's anchored reads required historical link-catalog storage versions no snapshot/PITR channel retains; r107 withdraws them for per-window attribution with membership-deferred conflict checking, adds the §9.3 storage-version retention audit and the §10 lifecycle validation scenario; submitted for fresh independent design approval before implementation and REJECTED there (P1 singleton exemption admits an unscreened out-of-window candidate; P2 membership screening depends on reclaimable catalog change history); never shipped. |
 | r108 | D225 (supersedes D224; retires D156's capture) | Independent design review of r107 (issue-fix-loop controller's local reviewer, REQUEST_CHANGES, P1+P2): D224(f)'s single-candidate exemption let a singleton out-of-window straddler link splice onto a sibling branch's independent DELETE/INSERT (no transaction/commit binding), and D224's membership screening depended on the reclaimable link-catalog change history, stranding valid branches after reclamation; r108 withdraws D224 for preserved commit-exact provenance (`commit_ts` column + CN commit-completion stamping + the commit-exact admission gate with no exemption), retires the D156 capture from every resolution path, rewrites the §9.3 audit, and updates the §10 validation map with the review's demanded oracles; submitted for fresh independent design approval before implementation and REJECTED there (P1: equality-only admission conflated the anchor's window with the candidate's own window — one RC transaction can author both the ancestor move and the sibling's independent DELETE/INSERT in a single commit; P2: permanent NULL-induced aborts strand valid committed branches after a transient stamping failure, and the COMMIT-result semantics were unclosed); never shipped. |
-| r109 | D226 (amends D225) | Independent design review of r108 (issue-fix-loop controller's local reviewer, REQUEST_CHANGES, P1+P2): r109 restores per-(table, window) candidate attribution and gates admission on the candidate's `commit_ts` falling inside its own attributed window in addition to departure equality, and replaces the permanent NULL-abort posture with the durable publication/recovery protocol (best-effort stamping with a closed COMMIT-result rule, NULL as a stamp-pending intent healed lazily from the protected stream, same-transaction inheritance for placeholder chains, best-effort re-stamp); the §5.1-§5.4 and §6.2 protocol text, the §9.3 consequences, the §10 validation map (window-mismatch gate assertions, the one-transaction cross-branch MERGE/PICK oracle, recovery UTs, deterministic crash/failure checkpoints), and this trace updated in step; submitted for fresh independent design approval before implementation. |
+| r109 | D226 (amends D225) | Independent design review of r108 (issue-fix-loop controller's local reviewer, REQUEST_CHANGES, P1+P2): r109 restores per-(table, window) candidate attribution and gates admission on the candidate's `commit_ts` falling inside its own attributed window in addition to departure equality, and replaces the permanent NULL-abort posture with the durable publication/recovery protocol (best-effort stamping with a closed COMMIT-result rule, NULL as a stamp-pending intent healed lazily from the protected stream, same-transaction inheritance for placeholder chains, best-effort re-stamp); the §5.1-§5.4 and §6.2 protocol text, the §9.3 consequences, the §10 validation map (window-mismatch gate assertions, the one-transaction cross-branch MERGE/PICK oracle, recovery UTs, deterministic crash/failure checkpoints), and this trace updated in step; submitted for fresh independent design approval before implementation and REJECTED there (P1: the recovery rule misclassified netted uncommitted-S3 object identities as stream-bound and excluded their unstamped links on a missing death that carries no window information, so an S3-netted chain folded onto an unrelated reinserted row; P2: the rule text carried two inconsistent outcomes — exclude versus loud abort — for one evidence shape, letting an unstamped post-endpoint successor block a valid in-window apply); never shipped. |
+| r110 | D227 (amends D226) | Independent design review of r109 (issue-fix-loop controller's local reviewer, REQUEST_CHANGES, P1+P2): r110 makes recovery a single outcome table (heal from the unique in-window death / inherit across the transaction's own netted generations / exclude on proven window absence / abort only on incomplete or corrupt evidence), extends transaction-bound inheritance to netted S3 object identities with the established continuation checks and per-(table, window) attribution preserved, aligns the §5.1 NULL-identity bullet with the recorded S3 continuity, records both same-transaction chain forms in §5.2, aligns the soundness argument, the §5.3 reader rules, and the §6.2/§9.3 consequences, and updates the §10 validation map (MERGE/PICK stamping-failure and crash twins of both S3-chain scenarios asserting the exact child key and the preserved unrelated intermediate row; NULL-stamped future-successor and cross-fork cases requiring the valid in-window move to cascade; the outcome-table recovery UTs) and this trace in step; submitted for fresh independent design approval before implementation. |
 
 Review record:
 
 ```text
 Change scope: whole feature (single PR on #28026), PR matrixorigin/matrixone#31629
 Trigger: catalog persistence change; cross-subsystem protocol; upgrade/restore impact
-Design: docs/design/20261016-data-branch-pk-move-update-provenance.md, revision r109 (this document)
+Design: docs/design/20261016-data-branch-pk-move-update-provenance.md, revision r110 (this document)
 Blocking findings: the r1-r101 rounds above; every finding is resolved by the
   numbered decision in the register, except D87 which was verified and rejected
   with grounds, and O1/O2 which remain open items with named owners
-Decision log: D1-D226 above, with refinement/supersession stamps; the approvals at
+Decision log: D1-D227 above, with refinement/supersession stamps; the approvals at
   r1-r4, r8-r15, r16-r21, r22-r46, r47-r74, r75-r97, r98-r101 all PASS after their
-  respective blocking findings closed; r106 (D223), r107 (D224) and r108 (D225)
-  were REQUEST_CHANGES at independent design review and never shipped; r109
-  (D226) is submitted for independent design approval with this revision
+  respective blocking findings closed; r106 (D223), r107 (D224), r108 (D225) and
+  r109 (D226) were REQUEST_CHANGES at independent design review and never shipped;
+  r110 (D227) is submitted for independent design approval with this revision
 Decision: the PR #31629 implementation follows sections 5/6 and the section 10
   validation map, and stands for the independent reviewers of record
 Implementation deviations: none known; section 5/6 invariants gate the code
@@ -1460,7 +1572,34 @@ contract, "the reviewed revision and approval decision must be traceable"):
   documented decisions and therefore requires a fresh independent
   design approval covering D226 before its implementation proceeds,
   and the delivered r109 content hash will be recorded in the PR
-  #31629 ledger entry for its head.
+  #31629 ledger entry for its head. That independent review returned
+  REQUEST_CHANGES (2026-11-02, P1+P2): the recovery rule
+  misclassified netted uncommitted-S3 object identities as
+  stream-bound and excluded their unstamped links on a missing death
+  that carries no window information (the S3-netted chain then folded
+  onto an unrelated reinserted row), and its text carried two
+  inconsistent outcomes — exclude versus loud abort — for one
+  evidence shape, which would let an unstamped post-endpoint
+  successor block a valid in-window apply — so r109 was never
+  implemented.
+  r110 = r109 with D226 amended by D227 (the recovery rule becomes a
+  single outcome table keyed by identity class: heal from the unique
+  in-window death, inherit the bound instant across the transaction's
+  own netted generations — workspace placeholders and uncommitted S3
+  object identities alike, with window absence never inferred from a
+  missing death — exclude on proven window absence, abort only on
+  incomplete or corrupt evidence), the section 5.1 NULL-identity
+  bullet aligned with the recorded S3 continuity, section 5.2's
+  same-transaction continuation recording both shipped chain forms
+  and the recovery rule rewritten with the soundness argument
+  aligned, the sections 5.3/5.4/6.2/9.3 consequences updated, the
+  section 10 validation map gaining the MERGE/PICK stamping-failure
+  and crash twins of both S3-chain scenarios and the NULL-stamped
+  future-successor and cross-fork cases, and this trace updated in
+  step; r110 changes a documented decision and therefore requires a
+  fresh independent design approval covering D227 before its
+  implementation proceeds, and the delivered r110 content hash will
+  be recorded in the PR #31629 ledger entry for its head.
 - Durable decision record and verbatim artifact:
   <https://gist.github.com/gouhongshen/5e3e7f1c103a8312e31c684676bf0cad>
   (decision record README plus the r100 PASS artifact JSON, MD5
