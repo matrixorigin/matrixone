@@ -247,10 +247,10 @@ func runCreateOrReindex(ctx compileplugin.CompileContext, indexDefs map[string]*
 	}
 
 	// 4.b + 4.c: build the index. Both kmeans (4.b) and entry assignment (4.c)
-	// scan the source table, but queries never re-read it (re-rank fetches only a
-	// handful of rows), so run the build's reads with SkipMemoryCacheWrites — this
-	// one-shot source scan must not evict the index-entry working set the queries
-	// actually hit from the fileservice cache. The optional-interface keeps the
+	// scan the whole source table, while queries read only the candidate rows of
+	// it, so run the build's reads with SkipMemoryCacheWrites — this one-shot
+	// source scan must not evict the working set the queries hit from the
+	// fileservice cache. The optional-interface keeps the
 	// CompileContext interface (and its plugin mocks) untouched; non-supporting
 	// contexts just build directly.
 	buildIndex := func() error {

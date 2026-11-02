@@ -608,6 +608,29 @@ func TestPreparedScopeRunReleasesCompletedReader(t *testing.T) {
 	}
 }
 
+func TestScopeRunAppliesScanReadPolicy(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		proc := testutil.NewProcess(t)
+		proc.BuildPipelineContext(context.Background())
+		reader := &mockReaderForParallelOrderBy{}
+		scope := &Scope{
+			RootOp: table_scan.NewArgument(),
+			Proc:   proc,
+			DataSource: &Source{
+				R:    reader,
+				Rel:  &mockRelationForMembershipFilter{},
+				node: &plan.Node{NodeType: plan.Node_TABLE_SCAN, NarrowScan: skip},
+			},
+		}
+		require.NoError(t, scope.Run(&Compile{proc: proc}))
+		want := fileservice.Policy(0)
+		if skip {
+			want = fileservice.NarrowRead
+		}
+		require.Equal(t, []fileservice.Policy{want}, reader.readPolicies)
+	}
+}
+
 func TestPreparedScopeRunReleasesBuiltReader(t *testing.T) {
 	for _, parallel := range []bool{false, true} {
 		name := "direct"
@@ -3178,6 +3201,7 @@ type mockReaderForParallelOrderBy struct {
 	closeCalls   int
 	onRead       func()
 	readErr      error
+	readPolicies []fileservice.Policy
 }
 
 func (m *mockReaderForParallelOrderBy) Close() error {
@@ -3185,7 +3209,8 @@ func (m *mockReaderForParallelOrderBy) Close() error {
 	return nil
 }
 
-func (m *mockReaderForParallelOrderBy) Read(context.Context, []string, *plan.Expr, *mpool.MPool, *batch.Batch) (bool, error) {
+func (m *mockReaderForParallelOrderBy) Read(ctx context.Context, _ []string, _ *plan.Expr, _ *mpool.MPool, _ *batch.Batch) (bool, error) {
+	m.readPolicies = append(m.readPolicies, fileservice.GetFileServicePolicy(ctx))
 	if m.onRead != nil {
 		m.onRead()
 	}
