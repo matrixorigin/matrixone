@@ -20,10 +20,49 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTemporalIntegerCastPreservesNestedCastPolicy(t *testing.T) {
+	for _, temporal := range []types.T{types.T_datetime, types.T_time, types.T_timestamp} {
+		for _, target := range []types.T{types.T_int64, types.T_uint64} {
+			t.Run(temporal.String()+"/"+target.String(), func(t *testing.T) {
+				ctx := context.Background()
+				temporalType := temporal.ToTypeWithScale(6)
+				integerType := target.ToType()
+				inner, err := appendSyntaxExplicitCastBeforeExpr(ctx,
+					makePlan2StringConstExprWithType("2024-02-29 23:59:59.500000"), makePlan2Type(&temporalType))
+				require.NoError(t, err)
+				outer, err := appendExplicitCastBeforeExpr(ctx, inner, makePlan2Type(&integerType))
+				require.NoError(t, err)
+				_, overload := function.DecodeOverloadID(outer.GetF().Func.Obj)
+				require.Equal(t, function.TemporalCastIntegerOverload, overload, "the integer policy must retain the nested CAST source")
+				wire, err := outer.Marshal()
+				require.NoError(t, err)
+				decoded := &Expr{}
+				require.NoError(t, decoded.Unmarshal(wire))
+				for _, expr := range []*Expr{decoded, DeepCopyExpr(decoded)} {
+					_, id := function.DecodeOverloadID(expr.GetF().Func.Obj)
+					require.Equal(t, overload, id)
+					impl, err := function.GetFunctionById(ctx, expr.GetF().Func.Obj)
+					require.NoError(t, err)
+					require.True(t, impl.IsVolatile(), "SQL mode must be resolved at execution, not frozen by folding")
+					require.True(t, isExplicitPreparedCast(expr))
+				}
+				// A typed value without the nested CAST keeps the storage-value policy.
+				value := DeepCopyExpr(inner)
+				value.Expr = &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}
+				control, err := appendExplicitCastBeforeExpr(ctx, value, makePlan2Type(&integerType))
+				require.NoError(t, err)
+				_, id := function.DecodeOverloadID(control.GetF().Func.Obj)
+				require.EqualValues(t, 1, id)
+			})
+		}
+	}
+}
 
 func TestExplicitCastProvenanceUsesLegacyOverload(t *testing.T) {
 	ctx := context.Background()

@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -24,6 +25,74 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTemporalCastIntegerLiveMode(t *testing.T) {
+	for _, source := range []types.T{types.T_datetime, types.T_time, types.T_timestamp} {
+		for _, target := range []types.T{types.T_int64, types.T_uint64} {
+			t.Run(source.String()+"/"+target.String(), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+8", 8*3600)
+				dt := types.DatetimeFromClock(2024, 2, 29, 23, 59, 59, 500000)
+				var values any
+				rounded, truncated := int64(20240301000000), int64(20240229235959)
+				switch source {
+				case types.T_datetime:
+					values = []types.Datetime{dt, 0, types.Datetime(math.MaxInt64)}
+				case types.T_timestamp:
+					values = []types.Timestamp{dt.ToTimestamp(proc.GetSessionInfo().TimeZone), 0, types.Timestamp(math.MaxInt64)}
+				case types.T_time:
+					values, rounded, truncated = []types.Time{-500000, 0, types.Time(math.MinInt64)}, -1, 0
+				}
+				mode, calls := "", 0
+				var resolveErr error
+				proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+					require.Equal(t, "sql_mode", name)
+					calls++
+					return mode, resolveErr
+				})
+				var empty any = []int64{}
+				if target == types.T_uint64 {
+					empty = []uint64{}
+				}
+				test := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(source.ToTypeWithScale(6), values, []bool{false, true, false}),
+					NewFunctionTestInput(target.ToType(), empty, nil),
+				}, NewFunctionTestResult(target.ToType(), false, empty, []bool{false, true, true}), NewTemporalCastInteger).
+					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}})
+				defer test.Free()
+				for _, tc := range []struct {
+					mode string
+					want int64
+				}{{"", rounded}, {"TIME_TRUNCATE_FRACTIONAL", truncated}, {"", rounded}} {
+					mode = tc.mode
+					test.expected.wanted = []int64{tc.want, 0, 0}
+					if target == types.T_uint64 {
+						test.expected.wanted = []uint64{uint64(tc.want), 0, 0}
+					}
+					ok, info := test.Run()
+					require.True(t, ok, info)
+				}
+				require.Equal(t, 3, calls, "resolve the live mode once per execution, not per row")
+				resolveErr = errors.New("sql_mode unavailable")
+				require.NoError(t, test.result.PreExtendAndReset(test.fnLength))
+				require.ErrorIs(t, NewTemporalCastInteger(test.parameters, test.result, proc, test.fnLength, nil), resolveErr)
+			})
+		}
+	}
+}
+
+func TestTemporalCastIntegerRejectsInvalidShape(t *testing.T) {
+	require.Error(t, NewTemporalCastInteger(nil, nil, nil, 0, nil))
+	proc := testutil.NewProcess(t)
+	for _, inputs := range [][]FunctionTestInput{
+		{NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil), NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil)},
+		{NewFunctionTestInput(types.T_time.ToType(), []types.Time{0}, nil), NewFunctionTestInput(types.T_int32.ToType(), []int32{}, nil)},
+	} {
+		test := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(inputs[1].typ, true, nil, nil), NewTemporalCastInteger)
+		ok, info := test.RunAndFree()
+		require.True(t, ok, info)
+	}
+}
 
 func TestExplicitTemporalIntegerCast(t *testing.T) {
 	for _, tc := range []struct {
@@ -86,6 +155,7 @@ func TestExplicitTemporalIntegerCastSelection(t *testing.T) {
 		t.Run(oid.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.GetSessionInfo().TimeZone = time.FixedZone("UTC+8", 8*3600)
+			proc.GetSessionInfo().SqlMode = "TIME_TRUNCATE_FRACTIONAL"
 			dt := types.DatetimeFromClock(2024, 2, 29, 23, 59, 59, 500000)
 			var values any
 			var want int64

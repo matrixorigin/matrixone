@@ -12104,6 +12104,15 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	if (types.T(toType.Id) == types.T_int64 || types.T(toType.Id) == types.T_uint64) && isExplicitPreparedCast(expr) {
+		switch types.T(expr.Typ.Id) {
+		case types.T_datetime, types.T_time, types.T_timestamp:
+			// A temporal CAST evaluates integers with the current fractional policy;
+			// storage columns instead round regardless of TIME_TRUNCATE_FRACTIONAL.
+			// Retain that distinction before folding/materialization loses the source.
+			return appendCastBeforeExprWithOverload(ctx, expr, toType, function.TemporalCastIntegerOverload)
+		}
+	}
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
 }
 

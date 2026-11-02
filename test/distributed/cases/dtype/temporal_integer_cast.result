@@ -57,6 +57,46 @@ execute temporal_integer_query;
 ➤ dt_signed[-5,64,0]  ¦  dt_unsigned[-5,64,0]  ¦  ts_signed[-5,64,0]  ¦  tm_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
 20240301000000  ¦  20240301000000  ¦  20240301000000  ¦  130000  ¦  130000
 deallocate prepare temporal_integer_query;
+create table temporal_text_values(id int, dt varchar(40), tm varchar(40));
+insert into temporal_text_values values
+(1, '2024-02-29 23:59:59.500000', '-00:00:00.500000'), (2, null, null);
+select id, cast(cast(dt as datetime(6)) as signed) as dt_signed,
+cast(cast(tm as time(6)) as unsigned) as tm_unsigned
+from temporal_text_values order by id;
+➤ id[4,32,0]  ¦  dt_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+1  ¦  20240301000000  ¦  18446744073709551615  𝄀
+2  ¦  null  ¦  null
+prepare temporal_integer_param from 'select cast(cast(? as datetime(6)) as signed) as dt_signed, cast(cast(? as time(6)) as unsigned) as tm_unsigned';
+set @temporal_integer_dt = '2024-02-29 23:59:59.500000';
+set @temporal_integer_tm = '-00:00:00.500000';
+execute temporal_integer_param using @temporal_integer_dt, @temporal_integer_tm;
+➤ dt_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+20240301000000  ¦  18446744073709551615
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+select cast(cast('2024-02-29 23:59:59.500000' as datetime(6)) as signed) as dt_signed,
+cast(cast('-00:00:00.500000' as time(6)) as unsigned) as tm_unsigned;
+➤ dt_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+20240229235959  ¦  0
+select id, cast(cast(dt as datetime(6)) as signed) as dt_signed,
+cast(cast(tm as time(6)) as unsigned) as tm_unsigned
+from temporal_text_values order by id;
+➤ id[4,32,0]  ¦  dt_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+1  ¦  20240229235959  ¦  0  𝄀
+2  ¦  null  ¦  null
+select cast(dt as signed) as stored_dt, cast(cast(dt as datetime(6)) as signed) as recast_dt,
+cast(tm as unsigned) as stored_tm, cast(cast(tm as time(6)) as unsigned) as recast_tm
+from temporal_values where id = 3;
+➤ stored_dt[-5,64,0]  ¦  recast_dt[-5,64,0]  ¦  stored_tm[-5,64,0]  ¦  recast_tm[-5,64,0]  𝄀
+20250101000000  ¦  20241231235959  ¦  18446744073709551615  ¦  0
+execute temporal_integer_param using @temporal_integer_dt, @temporal_integer_tm;
+➤ dt_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+20240229235959  ¦  0
+set session sql_mode = '';
+execute temporal_integer_param using @temporal_integer_dt, @temporal_integer_tm;
+➤ dt_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+20240301000000  ¦  18446744073709551615
+deallocate prepare temporal_integer_param;
+drop table temporal_text_values;
 drop database temporal_integer_cast;
 set time_zone = @temporal_integer_saved_zone;
 set session sql_mode = @temporal_integer_saved_mode;

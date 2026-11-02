@@ -1188,9 +1188,9 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		switch fromType.Oid {
 		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
 			if toType.Oid == types.T_uint64 {
-				return explicitTemporalIntegerCast[uint64](parameters, result, proc, length, selectList)
+				return explicitTemporalIntegerCast[uint64](parameters, result, proc, length, selectList, false)
 			}
-			return explicitTemporalIntegerCast[int64](parameters, result, proc, length, selectList)
+			return explicitTemporalIntegerCast[int64](parameters, result, proc, length, selectList, false)
 		}
 	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
