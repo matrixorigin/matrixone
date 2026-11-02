@@ -1,0 +1,62 @@
+set @temporal_integer_saved_mode = @@session.sql_mode;
+set @temporal_integer_saved_zone = @@session.time_zone;
+set session sql_mode = '';
+set time_zone = '+00:00';
+drop database if exists temporal_integer_cast;
+create database temporal_integer_cast;
+use temporal_integer_cast;
+create table temporal_values(id int, d date, dt datetime(6), ts timestamp(6), tm time(6));
+insert into temporal_values values
+(1, '2024-02-29', '2024-02-29 23:59:59.499999', '2024-02-29 23:59:59.499999', '12:59:59.499999'),
+(2, '2024-02-29', '2024-02-29 23:59:59.500000', '2024-02-29 23:59:59.500000', '12:59:59.500000'),
+(3, '2024-12-31', '2024-12-31 23:59:59.999999', '2024-12-31 23:59:59.999999', '-00:00:00.500000'),
+(4, null, null, null, null);
+select id, cast(d as signed) as d_signed, cast(d as unsigned) as d_unsigned,
+cast(dt as signed) as dt_signed, cast(dt as unsigned) as dt_unsigned,
+cast(ts as signed) as ts_signed, cast(ts as unsigned) as ts_unsigned,
+cast(tm as signed) as tm_signed, cast(tm as unsigned) as tm_unsigned
+from temporal_values order by id;
+➤ id[4,32,0]  ¦  d_signed[-5,64,0]  ¦  d_unsigned[-5,64,0]  ¦  dt_signed[-5,64,0]  ¦  dt_unsigned[-5,64,0]  ¦  ts_signed[-5,64,0]  ¦  ts_unsigned[-5,64,0]  ¦  tm_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+1  ¦  20240229  ¦  20240229  ¦  20240229235959  ¦  20240229235959  ¦  20240229235959  ¦  20240229235959  ¦  125959  ¦  125959  𝄀
+2  ¦  20240229  ¦  20240229  ¦  20240301000000  ¦  20240301000000  ¦  20240301000000  ¦  20240301000000  ¦  130000  ¦  130000  𝄀
+3  ¦  20241231  ¦  20241231  ¦  20250101000000  ¦  20250101000000  ¦  20250101000000  ¦  20250101000000  ¦  -1  ¦  18446744073709551615  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select cast(cast('2024-02-29 23:59:59.99' as datetime(2)) as signed) as dt_signed,
+convert(cast('2024-02-29 23:59:59.99' as datetime(2)), unsigned) as dt_unsigned,
+cast(cast('12:00:00.5' as time(1)) as signed) as tm_signed,
+cast(cast('2024-02-29 23:59:59.99' as datetime(2)) as decimal(20,2)) as dt_decimal;
+➤ dt_signed[-5,64,0]  ¦  dt_unsigned[-5,64,0]  ¦  tm_signed[-5,64,0]  ¦  dt_decimal[3,20,2]  𝄀
+20240301000000  ¦  20240301000000  ¦  120001  ¦  20240229235959.99
+select cast(cast('9999-12-31 23:59:59.999999' as datetime(6)) as signed) as dt_max,
+cast(cast('838:59:59.999999' as time(6)) as signed) as tm_max,
+cast(cast('-838:59:59.999999' as time(6)) as signed) as tm_min;
+➤ dt_max[-5,64,0]  ¦  tm_max[-5,64,0]  ¦  tm_min[-5,64,0]  𝄀
+99991231000000  ¦  8385959  ¦  -8385959
+set time_zone = '+08:00';
+select cast(ts as signed) as ts_signed, cast(ts as unsigned) as ts_unsigned
+from temporal_values where id = 2;
+➤ ts_signed[-5,64,0]  ¦  ts_unsigned[-5,64,0]  𝄀
+20240301080000  ¦  20240301080000
+set time_zone = '+00:00';
+prepare temporal_integer_query from 'select cast(dt as signed) as dt_signed, cast(dt as unsigned) as dt_unsigned, cast(ts as signed) as ts_signed, cast(tm as signed) as tm_signed, cast(tm as unsigned) as tm_unsigned from temporal_values where id = 2';
+execute temporal_integer_query;
+➤ dt_signed[-5,64,0]  ¦  dt_unsigned[-5,64,0]  ¦  ts_signed[-5,64,0]  ¦  tm_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+20240301000000  ¦  20240301000000  ¦  20240301000000  ¦  130000  ¦  130000
+set session sql_mode = 'TIME_TRUNCATE_FRACTIONAL';
+execute temporal_integer_query;
+➤ dt_signed[-5,64,0]  ¦  dt_unsigned[-5,64,0]  ¦  ts_signed[-5,64,0]  ¦  tm_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+20240301000000  ¦  20240301000000  ¦  20240301000000  ¦  130000  ¦  130000
+select id, cast(dt as signed) as dt_signed, cast(ts as unsigned) as ts_unsigned,
+cast(tm as signed) as tm_signed, cast(tm as unsigned) as tm_unsigned
+from temporal_values where id in (2, 3) order by id;
+➤ id[4,32,0]  ¦  dt_signed[-5,64,0]  ¦  ts_unsigned[-5,64,0]  ¦  tm_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+2  ¦  20240301000000  ¦  20240301000000  ¦  130000  ¦  130000  𝄀
+3  ¦  20250101000000  ¦  20250101000000  ¦  -1  ¦  18446744073709551615
+set session sql_mode = '';
+execute temporal_integer_query;
+➤ dt_signed[-5,64,0]  ¦  dt_unsigned[-5,64,0]  ¦  ts_signed[-5,64,0]  ¦  tm_signed[-5,64,0]  ¦  tm_unsigned[-5,64,0]  𝄀
+20240301000000  ¦  20240301000000  ¦  20240301000000  ¦  130000  ¦  130000
+deallocate prepare temporal_integer_query;
+drop database temporal_integer_cast;
+set time_zone = @temporal_integer_saved_zone;
+set session sql_mode = @temporal_integer_saved_mode;
