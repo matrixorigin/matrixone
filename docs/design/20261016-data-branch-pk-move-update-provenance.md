@@ -6,7 +6,7 @@
 | --- | --- |
 | Owning issue | matrixorigin/matrixone#28026 |
 | Implementation | PR [matrixorigin/matrixone#31629](https://github.com/matrixorigin/matrixone/pull/31629) (branch `agent/issue-28026-688adec6` on fork `gouhongshen/matrixone`), single PR |
-| Current revision | r105, 2026-10-31, supersedes r104 |
+| Current revision | r106, 2026-11-02, supersedes r105 |
 
 | Revision | Date | Note |
 | --- | --- | --- |
@@ -16,6 +16,7 @@
 | r103 | 2026-10-30 | Editorial only — no protocol or decision change. Answers the PR #31629 design-gate review by aunjgr (2026-10-30T13:43:12Z): section 11 now identifies the independent design approval of record for the delivered revision with its reviewed content hash, public byte link, reviewer identity, and a durable artifact link. No completed review was rerun; no review transcripts are added to the repository. |
 | r104 | 2026-10-31 | Editorial only — no protocol or decision change. Answers the PR #31629 Codex automated follow-up review (2026-10-30T20:27:13Z, non-blocking P2): sections 3, 7 and 10 now name the delivered v4_0_19 tenant-upgrade vehicle and its real test package instead of the retired 4.0.8 design-time placeholder; the D149 register entry already states the version-neutral forward-placement rule, and no register entry changed. |
 | r105 | 2026-10-31 | Editorial placement re-derivation — no protocol or behavior-design change. Upstream #31488 folded the unpublished 4.0.8-4.0.19 identities into the unpublished 4.0.7 handler and deleted their packages; docs/design/20261028-catalog-upgrade-407.md forbids registering those identities as upgrade steps. The two provenance catalog creations therefore ride as the tail tenant entries of the unpublished 4.0.7 handler (offset 41 -> 43), still strictly forward of every supported upgrade source; sections 3, 7 and 10 and the D149 register note name the re-derived placement, and the incompatible-unreleased-layout rejection for main-era 4.0.7-offset-41 clusters is recorded. All decisions, invariants and validation anchors stand. |
+| r106 | 2026-11-02 | Protocol repair — one new decision (D223). Answers the PR #31629 review by aunjgr (2026-11-02T09:41:16Z, blocking P2): the unanchored provenance probe read the apply statement's snapshot, so an ancestor transaction begun before a fork but committed after its lineage window ended was visible to that window's probe and poisoned a valid child-generation anchor on the same inherited row identity before stream commit-membership screening could exclude it. D223 snapshot-anchors every provider-window catalog read at the window's full end timestamp and degrades pre-catalog windows to complete absence; section 5.3 and the section 10 validation map record the repaired bounds. |
 ## 2. Problem, evidence, and invariants
 
 A pk-moving `UPDATE` executes in `multi_update` as a delete of the old row
@@ -365,6 +366,30 @@ delete that would kill the lineage row the fold just installed.
   diff's collected commit interval can neither fold nor admit keys (I5,
   NF6/NF7). A source read with an LCA-timestamp endpoint therefore never
   sees post-endpoint history.
+- Every provider-window catalog read is *snapshot-anchored* at the
+  window's full end timestamp (`{MO_TS = '<phys-logical TS>'}`, the
+  D222 anchor form): `write_ts` is the recording transaction's CREATE
+  time, so an unanchored read at the apply statement's snapshot admits
+  a straddling transaction that was created before the window ended but
+  COMMITTED after it — provenance this source lineage never saw — and
+  the identity merge would poison a valid descendant anchor on the same
+  inherited row identity before the walk's commit-membership screening
+  could exclude it (D223). The anchored read exposes exactly the links
+  committed at or before the window's end; the link_id prefix range
+  already restricts each probe to the window's physical table, and on a
+  linear lineage an in-window move retires its (row id, old pk)
+  occupant from every descendant's inherited state, so two different
+  visible links can share one row identity only through genuinely
+  ambiguous catalog evidence, which keeps poisoning fail-closed. A
+  window with an empty end timestamp (unit fixtures and the MaxInt64
+  endpoint fallback) keeps the unanchored posture, which there denotes
+  "read to now". A window whose end predates the link catalog's
+  creation in its owner account degrades to complete absence for that
+  window only (the anchored existence check extends D220 (B.4)), and
+  the PICK key-closure probes keep the wider unanchored read because
+  over-admission only widens the dependency-key set while every fold
+  decision stays behind the provider's anchored, membership-screened
+  walk.
 - Pairing loads links on demand: per tombstone chunk, prefetch per window
   over `link_id` prefix ranges for the chunk's keys; continuation hops
   probe per key lazily and cache. Negative answers are remembered per
@@ -723,7 +748,8 @@ Every invariant maps to the cheapest deterministic evidence:
 | I5 lineage selection (NF4): reused intermediate keys admit only the selected lineage; unrelated parent and child rows unchanged | pair consumer UT (`TestPairPkMovingTombstones/PICK_dependency-only_anchor_never_folds`) + live reused-key PICK regression |
 | I5 windows (NF6/NF7): multi-generation branches fold through ancestor tables; retired intermediate tables still resolve; historical endpoints and PICK BETWEEN read only in-window moves | live battery MG/HW scenarios + probe SQL bound assertions (`TestPkMoveLinkProbeBudgetAndBounds`) |
 | I5 staleness: a move after the selected snapshot endpoint never contaminates the historical apply | live battery HW scenario |
-| I6 bounds (NF8): probe SQL carries `write_ts <= endPhys` and `LIMIT budget+1`; overflow disables the provider, releases caches, and never caches a truncated prefix; cache over budget disables before SQL; mid-walk truncation fails closed (NF5) | `TestPkMoveLinkProbeBudgetAndBounds` (SQL capture + truncation + disable-before-SQL + injected cap-boundary walk) |
+| I5 lineage visibility (D223): a transaction begun before a fork but committed after its lineage window ended is invisible to that window's anchored probe, so its link cannot poison a descendant generation's anchor on the same inherited row identity (the reviewed straddler schedule); a straddler committed INSIDE the window still resolves; a window ending before the link catalog's creation degrades to complete absence | multi-generation/sibling fabric UT (straddler commit vs child-anchor verdict) + anchored-SQL assertions extending `TestPkMoveLinkProbeBudgetAndBounds`; live BVT merging sibling branches with a cross-fork straddling pk-moving transaction |
+| I6 bounds (NF8): probe SQL carries `write_ts <= endPhys`, the `{MO_TS = window.end}` snapshot anchor (D223), and `LIMIT budget+1`; overflow disables the provider, releases caches, and never caches a truncated prefix; cache over budget disables before SQL; mid-walk truncation fails closed (NF5) | `TestPkMoveLinkProbeBudgetAndBounds` (SQL capture + anchor + truncation + disable-before-SQL + injected cap-boundary walk) |
 | Writer protocol: NULL-identity staging; link batch layout matches the catalog schema; eligibility/fail-closed paths | `pkg/sql/colexec/multi_update/pk_move_link_test.go` |
 | Writer atomicity (I7): injected link-write failure aborts the statement; degraded ctx skips silently; healthy write stages exactly one NULL-identity row | `TestInsertUpdatePkMoveLinkRowsWritePath` |
 | Identity back-fill: harvests map pk bytes to the freshest staged row id; account/table/type filters; NULL and malformed entries skipped; null identity column left untouched on schema drift | `pkg/vm/engine/disttae/pk_move_link_fixup_test.go` |
@@ -1002,6 +1028,7 @@ reachable in the r101 blob linked from section 1.
 - D220 (r100, 2026-10-30, owner-scoped provenance reads for subscription-routed segments): `pkMoveLinkTableWindow` gains routing-layer segment identity from `collectRange.idents`; every provenance read derives its context via `identityCtx(base, window.ident)` (the provider probes, the D156 scope-to-commit capture, and the PICK closure probes), so a subscription-routed diff (subscriber clone plus publisher pk move) reads the PUBLISHER's link catalog; the PICK pre-collect window owner is resolved by the reopen walk's ordered-candidate rule `dedupeBranchIdentities(walking, opposite)`; a per-account existence probe degrades per-account; failure semantics and the write path are untouched.
 - D221 (r100, 2026-10-30, re-bind the retention relation handle per execution under prepared-compile reuse): in `Prepare`'s per-context loop, a non-nil `info.retentionSource` is re-bound with `Reset(proc.GetTxnOperator())` exactly like `info.Source` (multi_update.go:115-119), and a re-bind error aborts the statement; `resetMultiSources` (multi_update.go:1010) clears retentionSource so the lazy resolver re-resolves under the executing transaction; the sticky `pkMoveRetentionDisabled` degrade is unchanged; the disttae side is untouched.
 - D222 (r101, 2026-10-30, historical owner resolution for PICK closure windows after physical-generation retirement): the pre-collect PICK window owner probe anchors at each window's historical transition snapshot (`{MO_TS = '<phys-logical TS>'}`), following `buildSideCollectRange`/`reopenDataBranchNodeByID` precedence (pathTS[i+1] for intermediate windows, endpointSP for the endpoint; an empty snapshot keeps the unanchored probe), so a retired physical generation's owner is resolved as of the transition instead of against the current catalog; the ordered-candidate rule and BETWEEN narrowing are unchanged.
+- D223 (r106, 2026-11-02, snapshot-anchored provenance reads; refines D11/D24 window bounds): PR #31629 review (aunjgr inline, 2026-11-02T09:41:16Z) found that the provider's catalog probes read the apply statement's CURRENT snapshot with only `write_ts <= endPhys` (write_ts is the recording transaction's CREATE ts, per D2), so an ancestor transaction begun before a fork but committed after its lineage window ended — a straddler whose provenance this source lineage never saw — entered `mergeProbedLinksLocked` and poisoned the shared `(old row id, old pk)` identity before stream commit-membership screening could exclude it, aborting a conflict-free merge. The failure is fail-closed only: every manifestation routes through D51's unresolved-verdict abort, and birth-certificate binding bars a misattributed fold, so the defect never produces wrong data. Repair: every provider-window catalog read — the whole-window scan, the per-key overflow fallback, and the LIMIT-1 existence probe — is snapshot-anchored at the window's full `end` types.TS via `{MO_TS = '<phys-logical TS>'}` (the D222 anchor form), so the probe exposes exactly the links committed at or before the window's end; the missing lower bound on `write_ts` is unchanged, since a transaction created before a window's start but committed inside it remains visible at the anchor. Sufficiency without per-window cache attribution: the link_id prefix range already restricts each probe to the window's physical table, and on a linear lineage an in-window move retires its (row id, old pk) occupant from every descendant generation's inherited state, so after anchoring two DIFFERENT visible links can share one row identity only through genuinely ambiguous catalog evidence (duplicate committed rows naming one inherited identity with different successors) — the poisoning path stays fail-closed for exactly that case. An empty `end` (unit fixtures, the MaxInt64 endpoint-relation fallback) keeps the unanchored posture, where "now" is the intended horizon. Anchored existence: a window whose end predates the link catalog's creation in its owner account degrades to complete absence for that window only (the anchored `mo_tables {MO_TS = window.end}` existence check extends D220 (B.4)), so historical endpoints preceding the upgrade read as empty instead of erroring on the absent catalog. The PICK key-closure probes keep the wider unanchored read: closure windows carry endPhys only, and over-admission there widens only the dependency-key set while every fold decision stays behind the provider's anchored, membership-screened walk. The rejected alternative — per-(table, window) attribution of the byRow cache with conflict checking deferred until commit membership is established — repairs the same defect but reworks the cache keying and every verdict accessor for no additional behavioral guarantee.
 
 - O1 (owner: issue assignee; decision point: first maintenance window
   after merge): time-based or branch-DAG-aware GC of link history for
@@ -1030,19 +1057,21 @@ the r101 blob linked from section 1):
 | r100 | D220, D221 | PR #31629 review rounds 49-50: owner-scoped provenance reads for subscription-routed segments; retention relation handle re-bound per execution under prepared-compile reuse. |
 | r101 | D222 | PR #31629 review (aunjgr inline): historical owner resolution for PICK closure windows after physical-generation retirement — the owner probe anchors at each window's transition snapshot `{MO_TS = '<phys-logical TS>'}`. |
 | r102 | — (editorial) | PR #31629 review (aunjgr, doc scope): tracked artifact compacted to the durable protocol, decisions and this trace; Implementation field corrected; transient history moved to the linked r101 blob. |
+| r106 | D223 | PR #31629 review (aunjgr inline): snapshot-anchored provenance reads — an out-of-window straddler commit can no longer poison a valid descendant anchor; submitted for independent design approval before implementation. |
 
 Review record:
 
 ```text
 Change scope: whole feature (single PR on #28026), PR matrixorigin/matrixone#31629
 Trigger: catalog persistence change; cross-subsystem protocol; upgrade/restore impact
-Design: docs/design/20261016-data-branch-pk-move-update-provenance.md, revision r102 (this document)
+Design: docs/design/20261016-data-branch-pk-move-update-provenance.md, revision r106 (this document)
 Blocking findings: the r1-r101 rounds above; every finding is resolved by the
   numbered decision in the register, except D87 which was verified and rejected
   with grounds, and O1/O2 which remain open items with named owners
-Decision log: D1-D222 above, with refinement/supersession stamps; the approvals at
+Decision log: D1-D223 above, with refinement/supersession stamps; the approvals at
   r1-r4, r8-r15, r16-r21, r22-r46, r47-r74, r75-r97, r98-r101 all PASS after their
-  respective blocking findings closed
+  respective blocking findings closed; r106 (D223) is submitted for independent
+  design approval with this revision
 Decision: the PR #31629 implementation follows sections 5/6 and the section 10
   validation map, and stands for the independent reviewers of record
 Implementation deviations: none known; section 5/6 invariants gate the code
@@ -1077,6 +1106,12 @@ contract, "the reviewed revision and approval decision must be traceable"):
   handler's tail tenant entries after upstream #31488 deleted the v4_0_19
   vehicle; editorial only, no protocol or decision change. Delivered r105
   content MD5 recorded in the PR #31629 ledger entry for this head.
+  r106 = r105 plus the D223 protocol repair (snapshot-anchored provenance
+  reads, with the section 5.3 bounds bullet, the section 10 validation-map
+  row, and this trace updated in step); r106 changes a documented decision
+  and therefore requires a fresh independent design approval covering D223
+  before its implementation proceeds, and the delivered r106 content hash
+  will be recorded in the PR #31629 ledger entry for its head.
 - Durable decision record and verbatim artifact:
   <https://gist.github.com/gouhongshen/5e3e7f1c103a8312e31c684676bf0cad>
   (decision record README plus the r100 PASS artifact JSON, MD5
