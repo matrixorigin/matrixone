@@ -319,7 +319,7 @@ create table fk_03(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign 
 create table fk_04(col1 int,col2 varchar(25),col3 tinyint,constraint ck foreign key(col2) REFERENCES fk_01(b) on delete RESTRICT on update RESTRICT);
 internal error: failed to add the foreign key constraint
 drop table fk_04;
-no such table fk_base.fk_04
+Unknown table 'fk_base.fk_04'
 drop table fk_03;
 drop table fk_02;
 drop table fk_01;

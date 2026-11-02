@@ -67,8 +67,6 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	execSQLRequire(t, ctx, db, "create database reconnect_guard")
 	execSQLRequire(t, ctx, db, "create table reconnect_guard.t(id int primary key)")
 	execSQLRequire(t, ctx, db, "insert into reconnect_guard.t values (1)")
-	execSQLRequire(t, ctx, db, "create database reconnect_frontier")
-	execSQLRequire(t, ctx, db, "create table reconnect_frontier.marker(id int primary key)")
 	execSQLRequire(t, ctx, db, "create database reconnect_target")
 	execSQLRequire(t, ctx, db, "create table reconnect_target.retained(id int primary key)")
 	execSQLRequire(t, ctx, db, "insert into reconnect_target.retained values (10)")
@@ -150,24 +148,25 @@ func TestPKCheckReconnectRollsBackAndFreshTxnSucceeds(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	// ReadBarrier reports the latest committed logtail, which can precede
-	// the parked transaction's snapshot when no later transaction has
-	// committed. Commit on an unrelated table after the DELETE is parked so
-	// the conflict timestamp is both applied and newer than that snapshot.
-	execSQLRequire(t, ctx, db, "insert into reconnect_frontier.marker values (1)")
-	frontier, err = pushClient.AcquireLogtailReadBarrier(ctx)
-	require.NoError(t, err)
+	var snapshot timestamp.Timestamp
 	found := false
 	cn.GetTxnClient().IterTxns(func(tx client.TxnOverview) bool {
 		if bytes.Equal(tx.Meta.ID, owner) {
 			found = true
 			require.True(t, tx.Meta.IsRCIsolation())
-			require.True(t, tx.Meta.SnapshotTS.LessEq(frontier))
+			snapshot = tx.Meta.SnapshotTS
 			return false
 		}
 		return true
 	})
 	require.True(t, found, "the parked DELETE must belong to an active transaction")
+	// RC chooses the latest applied timestamp's successor. A TN read barrier
+	// need not cover that snapshot, so wait for the parked transaction's actual
+	// snapshot before choosing the already-applied conflicting lock frontier.
+	_, err = cn.GetTxnClient().WaitLogTailAppliedAt(ctx, snapshot)
+	require.NoError(t, err)
+	frontier = pushClient.LatestLogtailAppliedTime()
+	require.True(t, snapshot.LessEq(frontier))
 	require.NoError(t, pushClient.Disconnect())
 	select {
 	case <-reconnecting:

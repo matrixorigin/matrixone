@@ -359,19 +359,7 @@ func NewGlobalStats(
 	//    - Set to executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
 	// This optimization reduces goroutine count significantly (e.g., 192 -> 120 in typical environments)
 	// while maintaining performance since updateWorker's actual concurrency is much lower.
-	executorConcurrency := runtime.GOMAXPROCS(0)
-	if s.updateWorkerFactor > 0 {
-		executorConcurrency = executorConcurrency * s.updateWorkerFactor
-	}
-	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
-	if executorConcurrency < MinExecutorConcurrency {
-		executorConcurrency = MinExecutorConcurrency
-	}
-	if executorConcurrency > MaxExecutorConcurrency {
-		executorConcurrency = MaxExecutorConcurrency
-	}
-	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
-	updateWorkerConcurrency := max(executorConcurrency/WorkerConcurrencyRatio, MinWorkerConcurrency)
+	executorConcurrency, updateWorkerConcurrency := globalStatsConcurrency(runtime.GOMAXPROCS(0), s.updateWorkerFactor)
 	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
 	s.concurrentExecutor.Run(ownerCtx)
 	s.workers.Add(1)
@@ -393,6 +381,22 @@ func NewGlobalStats(
 	)
 	constructed = true
 	return s
+}
+
+// globalStatsConcurrency bounds the executor pool and sizes its update workers.
+func globalStatsConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurrency, updateWorkerConcurrency int) {
+	executorConcurrency = gomaxprocs
+	if updateWorkerFactor > 0 {
+		executorConcurrency *= updateWorkerFactor
+	}
+	if executorConcurrency < MinExecutorConcurrency {
+		executorConcurrency = MinExecutorConcurrency
+	}
+	if executorConcurrency > MaxExecutorConcurrency {
+		executorConcurrency = MaxExecutorConcurrency
+	}
+	updateWorkerConcurrency = max(executorConcurrency/WorkerConcurrencyRatio, MinWorkerConcurrency)
+	return
 }
 
 // Close cancels statistics producers and joins every root and queued-task

@@ -200,6 +200,12 @@ func (m *MockAutoIncrementService) Reload(ctx context.Context, tableID uint64) e
 	return nil
 }
 
+// ReloadForPKRetry preserves counters: this mock has no reservation history
+// and cannot replace a committed allocation generation.
+func (m *MockAutoIncrementService) ReloadForPKRetry(ctx context.Context, tableID uint64, expectedEpoch uint32, txn client.TxnOperator) (bool, error) {
+	return false, nil
+}
+
 // SetOffset sets the offset of an auto-increment column
 func (m *MockAutoIncrementService) SetOffset(
 	ctx context.Context,

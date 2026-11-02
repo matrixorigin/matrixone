@@ -64,8 +64,13 @@ func TestInitSchemaDefersViewsUntilAuthoringFence(t *testing.T) {
 	joined := strings.Join(statements, "\n")
 	require.Contains(t, joined, InformationSchemaViewsLegacyDDL)
 	require.NotContains(t, joined, "mo_view_definition(")
+	// The authoring fence defers only the VIEWS definitions. Information
+	// schema column, statistics and index metadata publish the corrected
+	// current identities unconditionally at every fence level.
 	require.Contains(t, statements, InformationSchemaColumnsDDL)
 	require.NotContains(t, statements, InformationSchemaColumnsV100DDL())
+	require.Contains(t, statements, InformationSchemaStatisticsPrefixSubPartDDL)
+	require.NotContains(t, statements, InformationSchemaStatisticsDDL)
 	require.Contains(t, statements, InformationSchemaSchemataDDL)
 	require.NotContains(t, statements, InformationSchemaSchemataLegacyDDL)
 	require.Contains(t, statements, InformationSchemaTablesDDL)
@@ -78,11 +83,14 @@ func TestInitSchemaDefersViewsUntilAuthoringFence(t *testing.T) {
 		require.Contains(t, statements, InformationSchemaViewsLegacyDDL)
 		require.Contains(t, statements, InformationSchemaSchemataDDL)
 		require.Contains(t, statements, InformationSchemaColumnsDDL)
+		require.Contains(t, statements, InformationSchemaStatisticsPrefixSubPartDDL)
 		require.Contains(t, statements, InformationSchemaTablesDDL)
 		require.NotContains(t, statements, InformationSchemaTablesV118DDL,
 			"TABLES is published separately after bootstrap admission")
 	}
 
+	// Above the fence the bootstrap authors the parser-derived VIEWS
+	// definitions next to the same current identities.
 	statements = nil
 	rt.SetGlobalVariables(
 		moruntime.PersistedExpressionProtocolAuthoringFloor,
@@ -91,4 +99,10 @@ func TestInitSchemaDefersViewsUntilAuthoringFence(t *testing.T) {
 	joined = strings.Join(statements, "\n")
 	require.Contains(t, joined, InformationSchemaViewsDDL)
 	require.Contains(t, joined, "mo_view_definition(")
+	require.Contains(t, statements, InformationSchemaColumnsDDL)
+	require.Contains(t, statements, InformationSchemaStatisticsPrefixSubPartDDL)
+	require.Contains(t, statements, InformationSchemaColumnsDDL)
+	require.NotContains(t, statements, InformationSchemaColumnsV110DDL())
+	require.Contains(t, statements, InformationSchemaStatisticsPrefixSubPartDDL)
+	require.NotContains(t, statements, InformationSchemaStatisticsDDL)
 }

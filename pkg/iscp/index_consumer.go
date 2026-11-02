@@ -48,7 +48,6 @@ type IndexConsumer struct {
 	cnTxnClient  client.TxnClient
 	jobID        JobID
 	info         *ConsumerInfo
-	tableDef     *plan.TableDef
 	sqlWriter    IndexSqlWriter
 	rowdata      []any
 	rowdelete    []any
@@ -141,7 +140,6 @@ func NewIndexConsumer(cnUUID string,
 		cnTxnClient: cnTxnClient,
 		jobID:       jobID,
 		info:        info,
-		tableDef:    tableDef,
 		sqlWriter:   sqlwriter,
 		rowdata:     make([]any, len(tableDef.Cols)),
 		rowdelete:   make([]any, 1),

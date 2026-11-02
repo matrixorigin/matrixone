@@ -521,8 +521,20 @@ func Test_GetFunctionByName(t *testing.T) {
 		},
 
 		{
+			// This change adds the two-argument label-aware overload of
+			// internal_numeric_scale: the exact probe that the one-argument
+			// era rejected as an unknown arity now resolves to label-aware
+			// metadata. A scalar INT64 label argument casts through the
+			// base formatted-scalar text width (varchar(20)) rather than the
+			// default maximum VARCHAR width.
 			name: "internal_numeric_scale", args: []types.Type{types.T_char.ToType(), types.T_int64.ToType()},
-			shouldErr: true,
+			shouldErr:  false,
+			requireFid: INTERNAL_NUMERIC_SCALE, requireOid: 1,
+			shouldCast: true, requireTyp: []types.Type{
+				types.T_varchar.ToType(),
+				formattedScalarStringType(types.T_int64.ToType()),
+			},
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "char_length", args: []types.Type{types.T_binary.ToType()},
@@ -1463,6 +1475,7 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 		INTERNAL_CHAR_LENGTH: true, INTERNAL_CHAR_SIZE: true, INTERNAL_TABLE_COLLATION: true,
 		INTERNAL_COLUMN_CHARACTER_SET: true, INTERNAL_DATETIME_SCALE: true,
 		INTERNAL_NUMERIC_PRECISION: true, INTERNAL_NUMERIC_SCALE: true,
+		MO_INDEX_SUB_PART:   true,
 		MO_SHOW_VISIBLE_BIN: true, MO_SHOW_VISIBLE_BIN_ENUM: true, MO_SHOW_COL_UNIQUE: true,
 		MO_LOG_DATE: true, MO_WIN_TRUNCATE: true, MO_WIN_DIVISOR: true, MO_EXPLAIN_PHY: true,
 		DATABASE: true, USER: true, FOUND_ROWS: true, ROW_COUNT: true, LAST_INSERT_ID: true, LAST_QUERY_ID: true,

@@ -167,6 +167,18 @@ func TestQuotedDefaultDumpRoundTrip(t *testing.T) {
 			names = append(names, name)
 			projections = append(projections, "hex("+name+")")
 		}
+		assertValues := func(t *testing.T, target, predicate string) {
+			t.Helper()
+			got := make([]string, len(values))
+			args := make([]any, len(got))
+			for i := range got {
+				args[i] = &got[i]
+			}
+			require.NoError(t, conn.QueryRowContext(ctx, "select "+strings.Join(projections, ",")+" from "+target+predicate).Scan(args...))
+			for i, value := range values {
+				require.Equal(t, strings.ToUpper(hex.EncodeToString([]byte(value))), got[i], names[i])
+			}
+		}
 		exec(t, "set sql_mode=DEFAULT")
 		create(t, "seed", "(id int,"+strings.Join(declarations, ",")+",n int default 7,z int default null,dt date default '2024-01-01',e varchar(32) default (concat('it''s','!')),ts timestamp default current_timestamp)")
 		for modeIndex, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
@@ -195,9 +207,7 @@ func TestQuotedDefaultDumpRoundTrip(t *testing.T) {
 				scalar(t, "select hex(added) from "+target+" where id=2", "615C62")
 				scalar(t, "select hex(added) from "+target+" where id=3", "635C64")
 				scalar(t, "select hex(column_default) from information_schema.columns where table_schema='"+schema+"' and table_name='"+target+"' and column_name='added'", "635C64")
-				for i, value := range values {
-					scalar(t, "select hex("+names[i]+") from "+target+" where id=3", strings.ToUpper(hex.EncodeToString([]byte(value))))
-				}
+				assertValues(t, target, " where id=3")
 				scalar(t, "select concat(n,':',z is null,':',dt,':',e,':',ts is not null) from "+target+" where id=3", "7:1:2024-01-01:it's!:1")
 				_, err := conn.ExecContext(ctx, "alter table "+target+" add added int")
 				require.Error(t, err)
@@ -214,15 +224,7 @@ func TestQuotedDefaultDumpRoundTrip(t *testing.T) {
 					ddl = strings.Replace(ddl, header, "CREATE TABLE "+string(rune(96))+target+string(rune(96)), 1)
 					exec(t, ddl)
 					exec(t, "insert into "+target+"(id) values(1)")
-					var got = make([]string, len(values))
-					args := make([]interface{}, len(values))
-					for i := range got {
-						args[i] = &got[i]
-					}
-					require.NoError(t, conn.QueryRowContext(ctx, "select "+strings.Join(projections, ",")+" from "+target).Scan(args...))
-					for i, value := range values {
-						require.Equal(t, strings.ToUpper(hex.EncodeToString([]byte(value))), got[i], names[i])
-					}
+					assertValues(t, target, "")
 					scalar(t, "select concat(n,':',z is null,':',dt,':',e,':',ts is not null) from "+target, "7:1:2024-01-01:it's!:1")
 					source = target
 				}

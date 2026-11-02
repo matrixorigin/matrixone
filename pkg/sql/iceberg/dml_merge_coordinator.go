@@ -236,7 +236,7 @@ func (c *DMLMergeCoordinator) rejectDuplicateMatchedTargets(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		key := lengthPrefixedKey(path, strconv.FormatInt(ordinal, 10))
+		key := api.LengthPrefixedKey(path, strconv.FormatInt(ordinal, 10))
 		if _, exists := c.matchedRows[key]; exists {
 			return api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg MERGE matched multiple source rows for the same target row", map[string]string{
 				"path":        api.RedactPath(path),
@@ -277,7 +277,7 @@ func (c *DMLMergeCoordinator) Commit(ctx context.Context) error {
 	req := DMLMergeActionStreamRequest{
 		TableLocation:                   "",
 		Schema:                          c.spec.Schema,
-		Base:                            c.commitBase(),
+		Base:                            resolveDMLCommitBase(c.spec.Base, c.writeReq),
 		DeleteSchemaID:                  c.spec.DeleteSchemaID,
 		ObjectWriter:                    c.spec.ObjectWriter,
 		MatchedDeletes:                  matchedDeletes,
@@ -407,32 +407,6 @@ func (c *DMLMergeCoordinator) replacementBatches(bats []*batch.Batch) []DMLRepla
 		})
 	}
 	return out
-}
-
-func (c *DMLMergeCoordinator) commitBase() dml.CommitBase {
-	base := c.spec.Base
-	if len(base.Namespace) == 0 && c.writeReq.Namespace != "" {
-		base.Namespace = dottedNamespace(c.writeReq.Namespace)
-	}
-	if base.Table == "" {
-		base.Table = c.writeReq.Table
-	}
-	if base.TargetRef == "" {
-		base.TargetRef = firstNonEmpty(c.writeReq.DMLScan.Ref, c.writeReq.DefaultRef, "main")
-	}
-	if base.IdempotencyKey == "" {
-		base.IdempotencyKey = firstNonEmpty(c.writeReq.IdempotencyKey, c.writeReq.StatementID)
-	}
-	if base.StatementID == "" {
-		base.StatementID = firstNonEmpty(c.writeReq.StatementID, c.writeReq.IdempotencyKey)
-	}
-	if base.BaseSnapshotID == 0 {
-		base.BaseSnapshotID = c.writeReq.DMLScan.BaseSnapshotID
-	}
-	if base.BaseSchemaID == 0 {
-		base.BaseSchemaID = c.writeReq.DMLScan.BaseSchemaID
-	}
-	return base
 }
 
 func (c *DMLMergeCoordinator) cleanReplacementBatches() {
