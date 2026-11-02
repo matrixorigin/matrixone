@@ -60,6 +60,7 @@ func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vec
 		slotOf[i] = slotEmpty
 	}
 
+rows:
 	for i := 0; i < n; i++ {
 		grp := groups[i]
 		if grp == GroupNotMatched {
@@ -71,11 +72,11 @@ func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vec
 			s := slotOf[h]
 			if s == slotEmpty {
 				if nSlots >= maxSlots {
-					x := int(g >> aggBatchSizeShift)
-					y := g & aggBatchSizeMask
-					vals := chunkArr[int64](exec.state[x].vecs[0])
-					vals[y]++
-					break
+					// After a confirmed miss in the full local cache, avoid
+					// repeating a nearly full-table probe for each remaining row.
+					// COUNT additions compose with the pending local scatter.
+					exec.countGroupsDirect(groups[i:], 0, nil)
+					break rows
 				}
 				s = uint8(nSlots)
 				slotOf[h] = s
@@ -197,6 +198,7 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 	}
 
 	hasNull := vec.HasNull()
+rows:
 	for i := 0; i < n; i++ {
 		grp := groups[i]
 		if grp == GroupNotMatched {
@@ -212,11 +214,12 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 			s := slotOf[h]
 			if s == slotEmpty {
 				if nSlots >= maxSlots {
-					x := int(g >> aggBatchSizeShift)
-					y := g & aggBatchSizeMask
-					vals := chunkArr[int64](exec.state[x].vecs[0])
-					vals[y]++
-					break
+					var nullable *vector.Vector
+					if hasNull {
+						nullable = vec
+					}
+					exec.countGroupsDirect(groups[i:], offset+i, nullable)
+					break rows
 				}
 				s = uint8(nSlots)
 				slotOf[h] = s
@@ -250,6 +253,42 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 
 func (exec *countColumnExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	return exec.BatchMerge(next, groupIdx2, []uint64{uint64(groupIdx1 + 1)})
+}
+
+// countGroupsDirect is the full-local-cache fallback for non-DISTINCT COUNT.
+// A nil input means every matched row counts; otherwise retain SQL NULL checks.
+// Integer addition has the same result before or after the pending local counts
+// are scattered, so this does not alter COUNT's existing arithmetic semantics.
+func (ae *aggExec) countGroupsDirect(groups []uint64, offset int, input *vector.Vector) {
+	lastX := -1
+	var vals *[AggBatchSize]int64
+	if input == nil {
+		for _, group := range groups {
+			if group == GroupNotMatched {
+				continue
+			}
+			g := group - 1
+			x := int(g >> aggBatchSizeShift)
+			if x != lastX {
+				lastX = x
+				vals = chunkArr[int64](ae.state[x].vecs[0])
+			}
+			vals[g&aggBatchSizeMask]++
+		}
+		return
+	}
+	for row, group := range groups {
+		if group == GroupNotMatched || input.IsNull(uint64(offset+row)) {
+			continue
+		}
+		g := group - 1
+		x := int(g >> aggBatchSizeShift)
+		if x != lastX {
+			lastX = x
+			vals = chunkArr[int64](ae.state[x].vecs[0])
+		}
+		vals[g&aggBatchSizeMask]++
+	}
 }
 
 func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {

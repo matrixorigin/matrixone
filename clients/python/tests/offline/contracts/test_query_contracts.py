@@ -378,7 +378,7 @@ def test_logical_in_method_uses_real_fulltext_source():
     from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
 
     sql, _ = Client().query(Item).logical_in(Item.id, boolean_match('text').must('red'))._build_sql()
-    assert 'items.id IN (SELECT id FROM items WHERE MATCH(text)' in sql
+    assert 'items.id IN (SELECT id FROM items WHERE MATCH(`text`)' in sql
 
 
 @pytest.mark.asyncio

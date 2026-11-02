@@ -16,24 +16,13 @@ package plan
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
-
-const icebergBuiltinCallPrefix = "iceberg_"
-
-func isIcebergBuiltinCall(stmt *tree.CallStmt) bool {
-	if stmt == nil || stmt.Name == nil || !stmt.Name.HasNoNameQualifier() {
-		return false
-	}
-	name := strings.ToLower(strings.TrimSpace(tree.String(stmt.Name, dialect.MYSQL)))
-	return strings.HasPrefix(name, icebergBuiltinCallPrefix)
-}
 
 func buildIcebergBuiltinCall(stmt *tree.CallStmt, ctx CompilerContext) (*Plan, error) {
 	call, err := parseIcebergBuiltinCall(ctx.GetContext(), stmt)
@@ -56,23 +45,12 @@ type icebergBuiltinCall struct {
 }
 
 func parseIcebergBuiltinCall(ctx context.Context, stmt *tree.CallStmt) (icebergBuiltinCall, error) {
-	if !isIcebergBuiltinCall(stmt) {
+	if !sqliceberg.IsBuiltinProcedure(stmt) {
 		return icebergBuiltinCall{}, moerr.NewInvalidInput(ctx, "not an Iceberg builtin procedure call")
 	}
-	name := strings.TrimSpace(tree.String(stmt.Name, dialect.MYSQL))
-	if len(stmt.Args) < 1 || len(stmt.Args) > 2 {
-		return icebergBuiltinCall{}, moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires target and optional options string arguments", name)
-	}
-	target, err := icebergBuiltinStringArg(ctx, name, "target", stmt.Args[0])
+	name, target, options, err := sqliceberg.BuiltinProcedureArgs(ctx, stmt)
 	if err != nil {
 		return icebergBuiltinCall{}, err
-	}
-	options := ""
-	if len(stmt.Args) == 2 {
-		options, err = icebergBuiltinStringArg(ctx, name, "options", stmt.Args[1])
-		if err != nil {
-			return icebergBuiltinCall{}, err
-		}
 	}
 	parsed, err := maintenance.ParseProcedureCall(name, target, options)
 	if err != nil {
@@ -84,20 +62,4 @@ func parseIcebergBuiltinCall(ctx context.Context, stmt *tree.CallStmt) (icebergB
 		Options: options,
 		Parsed:  parsed,
 	}, nil
-}
-
-func icebergBuiltinStringArg(ctx context.Context, procedure, argName string, expr tree.Expr) (string, error) {
-	var out string
-	switch value := expr.(type) {
-	case *tree.StrVal:
-		out = strings.TrimSpace(value.String())
-	case *tree.NumVal:
-		if value.Kind() == tree.Str {
-			out = strings.TrimSpace(value.String())
-		}
-	}
-	if out == "" {
-		return "", moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires %s as a string literal", procedure, argName)
-	}
-	return out, nil
 }

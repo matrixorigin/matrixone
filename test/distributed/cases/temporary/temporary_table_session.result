@@ -206,9 +206,9 @@ show tables;
 permanent1  𝄀
 permanent2
 drop table temp1;
-no such table temp_session.temp1
+Unknown table 'temp_session.temp1'
 drop table temp2;
-no such table temp_session.temp2
+Unknown table 'temp_session.temp2'
 drop table permanent1;
 drop table permanent2;
 create table test_visibility (id int);

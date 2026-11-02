@@ -21,6 +21,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPartitionSpecFieldCounts(t *testing.T) {
+	var nilMeta *TableMetadata
+	require.Nil(t, nilMeta.PartitionSpecFieldCounts())
+	empty := (&TableMetadata{}).PartitionSpecFieldCounts()
+	require.NotNil(t, empty)
+	require.Empty(t, empty)
+	meta := &TableMetadata{PartitionSpecs: []PartitionSpec{
+		{SpecID: 1, Fields: []PartitionField{{}, {}}},
+		{SpecID: 2},
+		{SpecID: 1, Fields: []PartitionField{{}}},
+	}}
+	require.Equal(t, map[int]int{1: 1, 2: 0}, meta.PartitionSpecFieldCounts())
+}
+
 func TestTableMetadataSchemaAndSpecLookup(t *testing.T) {
 	meta := TableMetadata{
 		CurrentSchemaID: 7,

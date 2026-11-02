@@ -620,6 +620,11 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Account
 %token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY RESTRICTED
 
+// GRANT role TO user WITH ADMIN OPTION: ADMIN is a contextual token, the
+// lexer only yields it inside that clause (see mysql_lexer.go), so the word
+// admin keeps parsing as a plain identifier everywhere else.
+%token <str> ADMIN
+
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD SHARED EXCLUSIVE
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
@@ -680,6 +685,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK MRANK CUMRANK TMRANK
 %token <str> SMA WMA TRIMA EMA WILDER KAMA DEMA TEMA T3 MMAXDRAWDOWN CUMPOSITIVESTREAK
+%token <str> EWM_MEAN EWM_VAR EWM_STD EWM_COV EWM_CORR
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> JSON_ARRAYAGG JSON_OBJECTAGG
 %token <str> GET_FORMAT
@@ -1002,7 +1008,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <updateExprs> update_list on_duplicate_key_update on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
-%type <boolVal> grant_option_opt enforce enforce_opt generated_column_type_opt
+%type <boolVal> grant_option_opt grant_role_option_opt enforce enforce_opt generated_column_type_opt
 
 %type <varAssignmentExpr> var_assignment
 %type <varAssignmentExprs> var_assignment_list
@@ -2570,7 +2576,7 @@ grant_stmt:
             },
         }
     }
-|   GRANT role_spec_list TO drop_user_spec_list grant_option_opt
+|   GRANT role_spec_list TO drop_user_spec_list grant_role_option_opt
     {
         $$ = &tree.Grant{
             Typ: tree.GrantTypeRole,
@@ -2606,6 +2612,23 @@ grant_option_opt:
 // |    WITH MAX_UPDATES_PER_HOUR INTEGRAL
 // |    WITH MAX_CONNECTIONS_PER_HOUR INTEGRAL
 // |    WITH MAX_USER_CONNECTIONS INTEGRAL
+
+// The role grant accepts MySQL 8.0's WITH ADMIN OPTION alongside the legacy
+// WITH GRANT OPTION; both set the same GrantRole.GrantOption flag, persisted
+// as with_grant_option and enforced on re-grants. Privilege and proxy grants
+// keep grant_option_opt and therefore reject ADMIN.
+grant_role_option_opt:
+    {
+        $$ = false
+    }
+|   WITH GRANT OPTION
+    {
+        $$ = true
+    }
+|   WITH ADMIN OPTION
+    {
+        $$ = true
+    }
 
 revoke_stmt:
     REVOKE exists_opt  priv_list ON object_type priv_level FROM role_spec_list
@@ -14288,6 +14311,56 @@ function_call_aggregate:
             WithinGroup: $5 != nil,
         }
     }
+|   EWM_MEAN '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_VAR '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_STD '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_COV '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_CORR '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
 |   BIT_AND '(' func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
@@ -17232,6 +17305,11 @@ not_keyword:
 |   BITMAP_COUNT
 |   PERCENTILE_CONT
 |   PERCENTILE_DISC
+|   EWM_MEAN
+|   EWM_VAR
+|   EWM_STD
+|   EWM_COV
+|   EWM_CORR
 
 value_window_null_treatment_opt:
     {

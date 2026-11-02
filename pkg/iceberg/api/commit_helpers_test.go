@@ -23,6 +23,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCloneMetricBoundsOwnership(t *testing.T) {
+	require.Nil(t, CloneMetricBounds(nil))
+	require.Nil(t, CloneMetricBounds(map[int][]byte{}))
+	input := map[int][]byte{1: {1, 2}, 2: {}, 3: nil}
+	cloned := CloneMetricBounds(input)
+	require.Nil(t, cloned[2])
+	require.Nil(t, cloned[3])
+	input[1][0] = 3
+	require.Equal(t, []byte{1, 2}, cloned[1])
+	cloned[1][1] = 4
+	require.Equal(t, []byte{3, 2}, input[1])
+}
+
+func TestCloneNonEmptyMapOwnership(t *testing.T) {
+	require.Nil(t, CloneNonEmptyMap(map[string]string(nil)))
+	require.Nil(t, CloneNonEmptyMap(map[string]string{}))
+	bytes := []byte{1}
+	input := map[string]any{"bytes": bytes}
+	cloned := CloneNonEmptyMap(input)
+	cloned["new"] = "value"
+	require.NotContains(t, input, "new")
+	bytes[0] = 2
+	require.Equal(t, byte(2), cloned["bytes"].([]byte)[0], "values remain shallow copies")
+}
+
 func TestCommitSnapshotHelpersCloneMutableSummary(t *testing.T) {
 	summary := map[string]string{"operation": "append", "added-records": "10"}
 	snapshot := NewCommitSnapshot(11, 10, 4, 7, 123456, "s3://warehouse/metadata/snap.avro", summary)
@@ -110,4 +135,24 @@ func TestErrorWrappingCauseAndMOConversionEdges(t *testing.T) {
 	for _, code := range []ErrorCode{ErrMetadataIOTimeout, ErrCommitConflict, ErrRemoteSigningDenied, ErrUnsupportedFeature, ErrInternal} {
 		require.NotNil(t, CauseForCode(code), code)
 	}
+}
+
+func TestExpectedAddedSnapshot(t *testing.T) {
+	_, ok := ExpectedAddedSnapshot(nil)
+	require.False(t, ok)
+	_, ok = ExpectedAddedSnapshot(&CommitAttempt{Updates: []CommitUpdate{
+		{Type: "add-snapshot"},
+		{Type: "add-snapshot", Snapshot: &Snapshot{SnapshotID: 0}},
+		{Type: "other", Snapshot: &Snapshot{SnapshotID: 5}},
+	}})
+	require.False(t, ok)
+	attempt := &CommitAttempt{Updates: []CommitUpdate{
+		{Type: "add-snapshot", Snapshot: &Snapshot{SnapshotID: -1}},
+		{Type: "add-snapshot", Snapshot: &Snapshot{SnapshotID: 7, ManifestList: "first"}},
+		{Type: "add-snapshot", Snapshot: &Snapshot{SnapshotID: 8, ManifestList: "second"}},
+	}}
+	got, ok := ExpectedAddedSnapshot(attempt)
+	require.True(t, ok)
+	require.Equal(t, int64(7), got.SnapshotID)
+	require.Equal(t, "first", got.ManifestList)
 }

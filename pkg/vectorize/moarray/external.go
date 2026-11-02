@@ -194,6 +194,8 @@ func Divide[T types.RealNumbers](p, q []T) ([]T, error) {
 
 /* ------------ [START] Performance critical functions. ------- */
 
+// InnerProduct is the SQL inner_product: -Σ v1ᵢv2ᵢ, a distance where smaller is nearer, so the sign
+// is negative by design. See docs/sql/vector-distance-functions.md.
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 
 	ret, err := metric.InnerProduct(v1, v2)

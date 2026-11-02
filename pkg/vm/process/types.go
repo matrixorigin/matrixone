@@ -176,7 +176,40 @@ type SessionInfo struct {
 	SeqDeleteKeys     []uint64
 	SeqAddValues      map[uint64]string
 	SeqLastValue      []string
-	SqlHelper         sqlHelper
+	// SeqObligations is the session-owned issued-value tracking for
+	// transaction-local sequence generations (rollback/statement-rewind
+	// non-reissue and pre-commit stamping). The pointer is seeded from the
+	// owning session per statement; it is deliberately outside the
+	// statement-level sequence snapshot/restore machinery.
+	SeqObligations *SequenceObligationSet
+	// SeqRetry is the per-statement tier-2 allocation-retry state
+	// (synchronized publication flag, sticky retry window, pending converted
+	// exhaustion; design docs/design/sequence_ownership_state_consistency.md
+	// §4 D, v13–v16). Installed once per statement execution by the compiler
+	// and shared with the statement's pipeline processes through Base; nil in
+	// background/internal processes means default-deny.
+	SeqRetry *SequenceRetryState
+	// RetryDiscardOutput, when armed, releases every output the failed
+	// statement generation retained for later delivery before the compiler's
+	// retry transition replays the statement. The frontend arms it for
+	// prepared-cursor EXECUTEs: the cursor capture path retains row bytes
+	// without publishing them to the wire, so a replayed generation would
+	// otherwise append a fresh result behind the failed generation's stale
+	// rows (and its byte reservations and staged saved-result blocks),
+	// duplicating the prefix into COM_STMT_FETCH. It also covers the other
+	// unpublished retention shapes the autonomous retry admits: SELECT ...
+	// INTO @var's per-statement capture and PERFORM's saved-result blocks
+	// (#30359 review). A non-nil return reports an attempt-cleanup failure:
+	// the retry transition surfaces it and abandons the replay instead of
+	// rebuilding over surviving stale output, and the failed cleanup keeps
+	// its owner so terminal statement cleanup can still reach the files.
+	// The hook never marks anything published and is itself never
+	// serialized — the process codec copies SessionInfo field by explicit
+	// field, remote processes therefore observe nil, and the per-statement
+	// SessionInfo rebuild in the frontend clears it at the next statement
+	// boundary.
+	RetryDiscardOutput func() error
+	SqlHelper          sqlHelper
 	// CompilerContext is request-local and never serialized. Origin-only metadata
 	// operators use it to bind View definitions in the executing transaction.
 	CompilerContext any
@@ -346,6 +379,8 @@ func (sp *StmtProfile) SetSqlSourceType(st string) {
 }
 
 func (sp *StmtProfile) GetSqlSourceType() string {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
 	return sp.sqlSourceType
 }
 

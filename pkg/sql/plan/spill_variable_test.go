@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,4 +76,60 @@ func TestNewQueryBuilderRejectsNonInt64SpillThresholds(t *testing.T) {
 	require.Zero(t, builder.joinSpillMem)
 	require.Zero(t, builder.sortSpillMem)
 	require.Zero(t, builder.qry.MaxDop)
+}
+
+func TestSetOperationCapturesAggregateSpillThreshold(t *testing.T) {
+	for _, threshold := range []int64{0, 1 << 20} {
+		for _, tc := range []struct {
+			setOp    string
+			nodeType planpb.Node_NodeType
+			distinct bool
+		}{
+			{"union", planpb.Node_UNION, true},
+			{"intersect", planpb.Node_INTERSECT, true},
+			{"except", planpb.Node_MINUS, true},
+			{"union all", planpb.Node_UNION_ALL, false},
+			{"intersect all", planpb.Node_INTERSECT_ALL, false},
+			{"except all", planpb.Node_MINUS_ALL, false},
+		} {
+			t.Run(fmt.Sprintf("%s/%d", tc.setOp, threshold), func(t *testing.T) {
+				ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+				base := *ctx
+				ctx.ResolveVariableFunc = func(name string, system, global bool) (any, error) {
+					if name == "agg_spill_mem" {
+						return threshold, nil
+					}
+					return base.ResolveVariable(name, system, global)
+				}
+				stmts, err := mysql.Parse(ctx.GetContext(),
+					"select n_nationkey from nation "+tc.setOp+" select r_regionkey from region", 1)
+				require.NoError(t, err)
+				require.Len(t, stmts, 1)
+				p, err := BuildPlan(ctx, stmts[0], false)
+				require.NoError(t, err)
+				query := p.GetQuery()
+				require.NotNil(t, query)
+				found := false
+				var visit func(int32)
+				visit = func(id int32) {
+					node := query.Nodes[id]
+					if node.NodeType == tc.nodeType {
+						found = true
+						want := int64(0)
+						if tc.distinct {
+							want = threshold
+						}
+						require.Equal(t, want, node.SpillMem)
+					}
+					for _, child := range node.Children {
+						visit(child)
+					}
+				}
+				for _, root := range query.Steps {
+					visit(root)
+				}
+				require.True(t, found, "expected a reachable %s node", tc.nodeType)
+			})
+		}
+	}
 }
