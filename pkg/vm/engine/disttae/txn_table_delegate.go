@@ -66,7 +66,6 @@ func newTxnTableWithItem(
 		tableDef:      item.TableDef,
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
-		clusterByIdx:  item.ClusterByIdx,
 		relKind:       item.Kind,
 		viewdef:       item.ViewDef,
 		comment:       item.Comment,
@@ -707,6 +706,7 @@ func (tbl *txnTableDelegate) BuildShardingReaders(
 				tbl.origin.db.op.SnapshotTS(),
 				expr,
 				ds,
+				readutil.GetThresholdForReader(newNum),
 				engine.FilterHint{},
 			)
 			if err != nil {

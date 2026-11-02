@@ -954,3 +954,18 @@ func TestRejectZeroTemporalWritePolicy(t *testing.T) {
 		})
 	}
 }
+
+// Issue #31808: BLOB width, like CHAR/VARCHAR/TEXT, is enforced by the runtime
+// assignment cast (ER_DATA_TOO_LONG in strict mode, truncation with a warning
+// otherwise, measured in bytes). The plan-time literal path must not reject an
+// oversized BLOB literal with an internal error that ignores sql_mode.
+func TestSetInsertValueStringDefersBlobWidthToAssignmentCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_blob, types.T_text} {
+		typ := types.New(oid, 3, 0)
+		canInsert, got, err := SetInsertValueString(proc, tree.NewNumVal("abcd", "abcd", false, tree.P_char), &typ)
+		require.NoError(t, err, oid.String())
+		require.True(t, canInsert)
+		require.Equal(t, []byte("abcd"), got, oid.String())
+	}
+}

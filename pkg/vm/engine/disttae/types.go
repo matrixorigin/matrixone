@@ -265,7 +265,6 @@ type Engine struct {
 	us       udf.Service
 	cli      client.TxnClient
 	idGen    IDGenerator
-	tnID     string
 
 	config struct {
 		insertEntryMaxCount      int
@@ -1451,7 +1450,6 @@ type txnTable struct {
 	typs          []types.Type
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key
-	clusterByIdx  int // -1 means no clusterBy key
 	viewdef       string
 	comment       string
 	partitioned   int8   //1 : the table has partitions ; 0 : no partition

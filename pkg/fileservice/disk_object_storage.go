@@ -181,28 +181,9 @@ func (d *diskObjectStorage) Read(ctx context.Context, key string, min *int64, ma
 	}
 	defer closeOnError(&err, f)
 
-	var reader io.Reader
-	reader = f
-
-	if min != nil {
-		pos, err := f.Seek(*min, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
-		if pos != *min {
-			return nil, moerr.NewEmptyRangeNoCtx(key)
-		}
-	}
-
-	if max != nil {
-		limit := *max
-		if min != nil {
-			limit -= *min
-		}
-		if limit <= 0 {
-			return nil, moerr.NewEmptyRangeNoCtx(key)
-		}
-		reader = io.LimitReader(reader, limit)
+	reader, err := readObjectRange(f, key, min, max)
+	if err != nil {
+		return nil, err
 	}
 
 	adviseOffset := int64(0)

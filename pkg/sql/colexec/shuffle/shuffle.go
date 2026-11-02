@@ -123,7 +123,7 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 	}
 
 	getFull := shuffle.ctr.shufflePool.getAnyFullBatch
-	getLast := shuffle.ctr.shufflePool.getAnyLastBatch
+	getLast := shuffle.ctr.shufflePool.getAnyStoppedBatch
 	wait := func() { shuffle.ctr.shufflePool.waitAnyBatchOrEnd(proc) }
 
 	for {
@@ -238,7 +238,7 @@ func (shuffle *Shuffle) callLocal(proc *process.Process) (vm.CallResult, error) 
 			if err := shuffle.ctr.shufflePool.terminalError(); err != nil {
 				return vm.CancelResult, err
 			}
-			if bat := shuffle.ctr.shufflePool.getLastBatch(shuffle.CurrentShuffleIdx); bat != nil {
+			if bat := shuffle.ctr.shufflePool.getStoppedBatch(shuffle.CurrentShuffleIdx); bat != nil {
 				return shuffle.returnLocalBatch(proc, bat, true)
 			}
 			return vm.CancelResult, nil

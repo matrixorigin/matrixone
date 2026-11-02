@@ -188,7 +188,7 @@ func TestNewFulltextSqlWriterUpsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256)))) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 23, id, body) as f", string(bytes))
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256)))) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('{\"parser\":\"ngram\"}', 23, `id`, `body`) as f", string(bytes))
 }
 
 func TestNewFulltextSqlWriterInsert(t *testing.T) {
@@ -211,7 +211,7 @@ func TestNewFulltextSqlWriterInsert(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256)))) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 23, id, body) as f", string(bytes))
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as BIGINT) as `id`, CAST(column_1 as VARCHAR(256)) as `body` FROM (VALUES ROW(1000,'hello world'),ROW(2000,CAST(NULL as VARCHAR(256)))) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('{\"parser\":\"ngram\"}', 23, `id`, `body`) as f", string(bytes))
 }
 
 func TestNewFulltextSqlWriterDelete(t *testing.T) {
@@ -257,7 +257,7 @@ func TestNewFulltextSqlWriterCPkey(t *testing.T) {
 
 	bytes, err := writer.ToSql()
 	require.Nil(t, err)
-	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as VARBINARY(0)) as `__mo_cpkey`, CAST(column_1 as VARCHAR(256)) as `body`, CAST(column_2 as VARCHAR(256)) as `title` FROM (VALUES ROW(x'6162636465663132','hello world','one title'),ROW(x'616263','hello world','two title')) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('', 65, __mo_cpkey, body, title) as f", string(bytes))
+	require.Equal(t, "REPLACE INTO `mydb`.`fulltext_tbl` WITH src as (SELECT CAST(column_0 as VARBINARY(0)) as `__mo_cpkey`, CAST(column_1 as VARCHAR(256)) as `body`, CAST(column_2 as VARCHAR(256)) as `title` FROM (VALUES ROW(x'6162636465663132','hello world','one title'),ROW(x'616263','hello world','two title')) as __mo_iscp_values) SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('{\"parser\":\"ngram\"}', 65, `__mo_cpkey`, `body`, `title`) as f", string(bytes))
 }
 
 func TestNewHnswSqlWriter(t *testing.T) {

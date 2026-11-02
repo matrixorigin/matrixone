@@ -183,7 +183,7 @@ drop table temp_if_not_exists;
 select * from temp_nonexistent;  -- 失败
 SQL parser error: table "temp_nonexistent" does not exist
 drop table temp_nonexistent;  -- 失败
-no such table unnormal_db.temp_nonexistent
+Unknown table 'unnormal_db.temp_nonexistent'
 drop table if exists temp_nonexistent;  -- 成功，不报错
 create database test_temp_db;
 use test_temp_db;
