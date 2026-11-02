@@ -1469,6 +1469,7 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 		CONVERT: true, DATEDIFF: true, UNIX_TIMESTAMP: true,
 		EXTRACTVALUE: true, UPDATEXML: true, UNCOMPRESS: true, UNCOMPRESSED_LENGTH: true,
 		AES_ENCRYPT: true, AES_DECRYPT: true, CAST_ASSIGN: true, CAST_IGNORE: true,
+		CAST:                true, // TemporalCastIntegerOverload reads a statement-stable session mode.
 		CAST_INDEX_TO_VALUE: true, CAST_VALUE_TO_INDEX: true, CAST_INDEX_VALUE_TO_INDEX: true,
 		CAST_INDEX_TO_SET_VALUE: true, CAST_SET_VALUE_TO_INDEX: true, CAST_SET_INDEX_VALUE_TO_INDEX: true,
 		CAST_GEOMETRY_TO_SUBTYPE: true, CAST_JSON_TO_ARRAY: true, CAST_NANO_TO_TIMESTAMP: true,

@@ -1388,7 +1388,6 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// deadlock: cleanMemoryTableWithTable holds Engine.mu→GlobalStats.mu,
 	// while GlobalStats.Get holds GlobalStats.mu→Engine.mu (via GetOrCreateLatestPart).
 	e.globalStats.RemoveTid(tblId)
-	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
 func (e *Engine) PushClient() *PushClient {
