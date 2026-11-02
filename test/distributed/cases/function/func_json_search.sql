@@ -3,6 +3,7 @@ SET @old_sql_mode = @@sql_mode;
 SET sql_mode = '';
 
 SELECT JSON_SEARCH('{"a":"x"}', 'one', 'x') AS one_match;
+SELECT JSON_SEARCH('{"a":"x"}', 'all', 'x') AS all_single_match;
 SELECT JSON_SEARCH('{"a":["x","x"],"one potato":{"x":"x"},"nested":[{"x":"x"}]}', 'all', 'x') AS all_matches;
 SELECT JSON_SEARCH('["abc","ABC"]', 'one', 'abc') AS case_exact;
 SELECT JSON_SEARCH('["abc","ABC"]', 'one', 'aBc') AS case_mismatch;
@@ -10,6 +11,9 @@ SELECT JSON_SEARCH('{"a":"x"}', 'all', 'no-match') IS NULL AS no_match;
 
 -- Overlapping filters are deduplicated and explicit paths are evaluated in source order.
 SELECT JSON_SEARCH('{"a":["x","x"]}', 'all', 'x', NULL, '$.a[*]', '$.a[1]') AS overlapping_paths;
+SELECT JSON_SEARCH('{"a":{"b":"x"}}', 'one', 'x', NULL, '$.a') AS object_subtree;
+SELECT JSON_SEARCH('{"a":[{"b":"x"},"x"]}', 'all', 'x', NULL, '$.a') AS array_subtree;
+SELECT JSON_SEARCH('{"a":{"b":"x"}}', 'one', 'x', NULL, '$') AS root_subtree;
 SELECT JSON_SEARCH('{"a":"x"}', 'one', 'x', NULL, '$.missing') IS NULL AS missing_path;
 SELECT JSON_SEARCH('{"a":"x"}', 'one', 'x', NULL, 'not-a-path') AS invalid_path;
 

@@ -50,6 +50,7 @@ func (bj ByteJson) SearchStringPaths(
 
 	result := make([]string, 0, min(len(paths), 8))
 	seen := make(map[string]struct{})
+	searchedSubtrees := make(map[string]struct{})
 	totalBytes := 0
 
 	var walk func(ByteJson, *Path, string) (bool, error)
@@ -85,6 +86,15 @@ func (bj ByteJson) SearchStringPaths(
 
 		sub, remaining := filter.step()
 		if sub.tp == subPathDoubleStar {
+			// A terminal recursive search visits the complete selected subtree.
+			// Overlapping filters can select it again; never rescan the same
+			// concrete subtree or let overlap multiply traversal cost.
+			if remaining.empty() {
+				if _, ok := searchedSubtrees[location]; ok {
+					return false, nil
+				}
+				searchedSubtrees[location] = struct{}{}
+			}
 			done, err := walk(current, &remaining, location)
 			if err != nil || done {
 				return done, err
@@ -192,7 +202,16 @@ func (bj ByteJson) SearchStringPaths(
 		if path == nil {
 			return nil, moerr.NewInvalidInputNoCtx("JSON search path is nil")
 		}
-		done, err := walk(bj, path, "$")
+		// A user path selects the root of a search, not just a string leaf.
+		// Extend a private copy so callers' parsed paths remain unchanged.
+		searchPath := path
+		if len(path.paths) == 0 || path.paths[len(path.paths)-1].tp != subPathDoubleStar {
+			steps := make([]subPath, len(path.paths)+1)
+			copy(steps, path.paths)
+			steps[len(path.paths)] = subPath{tp: subPathDoubleStar}
+			searchPath = &Path{paths: steps}
+		}
+		done, err := walk(bj, searchPath, "$")
 		if err != nil {
 			return nil, err
 		}

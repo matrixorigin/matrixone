@@ -102,6 +102,17 @@ func TestJSONSearchOneAllAndLocations(t *testing.T) {
 	require.JSONEq(t, `["$.a[0]","$.a[1]"]`, jsonVectorRowString(t, vec, 0))
 }
 
+func TestJSONSearchAllSingleMatchIsScalar(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vec := runJsonFunctionWithSelectList(t, proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"a":"x"}`}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"all"}, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"x"}, nil),
+		}, types.T_json.ToType(), JSONSearch, nil)
+	require.Equal(t, `"$.a"`, jsonVectorRowString(t, vec, 0))
+}
+
 func TestJSONSearchCaseNullAndLikeEscapes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	document := `["abc","ABC","a_b","a%b","a\\b"]`
@@ -113,7 +124,7 @@ func TestJSONSearchCaseNullAndLikeEscapes(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"abc"}, nil),
 		},
 		types.T_json.ToType(), JSONSearch, nil)
-	require.JSONEq(t, `["$[0]"]`, jsonVectorRowString(t, vec, 0))
+	require.JSONEq(t, `"$[0]"`, jsonVectorRowString(t, vec, 0))
 
 	vec = runJsonFunctionWithSelectList(t, proc,
 		[]FunctionTestInput{
@@ -123,7 +134,7 @@ func TestJSONSearchCaseNullAndLikeEscapes(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"!"}, nil),
 		},
 		types.T_json.ToType(), JSONSearch, nil)
-	require.JSONEq(t, `["$[2]"]`, jsonVectorRowString(t, vec, 0))
+	require.JSONEq(t, `"$[2]"`, jsonVectorRowString(t, vec, 0))
 
 	vec = runJsonFunctionWithSelectList(t, proc,
 		[]FunctionTestInput{
@@ -132,7 +143,7 @@ func TestJSONSearchCaseNullAndLikeEscapes(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{`a\%b`}, nil),
 		},
 		types.T_json.ToType(), JSONSearch, nil)
-	require.JSONEq(t, `["$[3]"]`, jsonVectorRowString(t, vec, 0))
+	require.JSONEq(t, `"$[3]"`, jsonVectorRowString(t, vec, 0))
 
 	vec = runJsonFunctionWithSelectList(t, proc,
 		[]FunctionTestInput{

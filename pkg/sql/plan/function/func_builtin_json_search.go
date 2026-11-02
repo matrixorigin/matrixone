@@ -307,7 +307,7 @@ func JSONSearch(
 		}
 
 		var output bytejson.ByteJson
-		if one {
+		if len(locations) == 1 {
 			output, err = bytejson.CreateByteJSON(locations[0])
 		} else {
 			values := make([]any, len(locations))

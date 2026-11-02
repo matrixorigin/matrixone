@@ -3,6 +3,9 @@ SET sql_mode = '';
 SELECT JSON_SEARCH('{"a":"x"}', 'one', 'x') AS one_match;
 ➤ one_match[-1,2147483647,0]  𝄀
 "$.a"
+SELECT JSON_SEARCH('{"a":"x"}', 'all', 'x') AS all_single_match;
+➤ all_single_match[-1,2147483647,0]  𝄀
+"$.a"
 SELECT JSON_SEARCH('{"a":["x","x"],"one potato":{"x":"x"},"nested":[{"x":"x"}]}', 'all', 'x') AS all_matches;
 ➤ all_matches[-1,2147483647,0]  𝄀
 ["$.a[0]", "$.a[1]", "$.nested[0].x", "$.\"one potato\".x"]
@@ -18,6 +21,15 @@ SELECT JSON_SEARCH('{"a":"x"}', 'all', 'no-match') IS NULL AS no_match;
 SELECT JSON_SEARCH('{"a":["x","x"]}', 'all', 'x', NULL, '$.a[*]', '$.a[1]') AS overlapping_paths;
 ➤ overlapping_paths[-1,2147483647,0]  𝄀
 ["$.a[0]", "$.a[1]"]
+SELECT JSON_SEARCH('{"a":{"b":"x"}}', 'one', 'x', NULL, '$.a') AS object_subtree;
+➤ object_subtree[-1,2147483647,0]  𝄀
+"$.a.b"
+SELECT JSON_SEARCH('{"a":[{"b":"x"},"x"]}', 'all', 'x', NULL, '$.a') AS array_subtree;
+➤ array_subtree[-1,2147483647,0]  𝄀
+["$.a[0].b", "$.a[1]"]
+SELECT JSON_SEARCH('{"a":{"b":"x"}}', 'one', 'x', NULL, '$') AS root_subtree;
+➤ root_subtree[-1,2147483647,0]  𝄀
+"$.a.b"
 SELECT JSON_SEARCH('{"a":"x"}', 'one', 'x', NULL, '$.missing') IS NULL AS missing_path;
 ➤ missing_path[-6,8,0]  𝄀
 1
@@ -25,13 +37,13 @@ SELECT JSON_SEARCH('{"a":"x"}', 'one', 'x', NULL, 'not-a-path') AS invalid_path;
 invalid input: invalid json path 'not-a-path'
 SELECT JSON_SEARCH('["a_b","axb","a%b"]', 'all', 'a!_b', '!') AS custom_escape;
 ➤ custom_escape[-1,2147483647,0]  𝄀
-["$[0]"]
+"$[0]"
 SELECT JSON_SEARCH('["a_b","axb","a%b"]', 'all', 'a\%b') AS default_escape;
 ➤ default_escape[-1,2147483647,0]  𝄀
-["$[2]"]
+"$[2]"
 SELECT JSON_SEARCH('["a_b","axb","a%b"]', 'all', 'a\%b', NULL) AS explicit_null_escape;
 ➤ explicit_null_escape[-1,2147483647,0]  𝄀
-["$[2]"]
+"$[2]"
 SELECT JSON_SEARCH('["a_b","axb","a%b"]', 'all', 'a_b', '') AS empty_escape_disabled;
 ➤ empty_escape_disabled[-1,2147483647,0]  𝄀
 ["$[0]", "$[1]", "$[2]"]
@@ -64,8 +76,8 @@ INSERT INTO t_json_search VALUES
 (3, '{"a":["x","X"]}', 'missing');
 SELECT JSON_SEARCH(doc, 'all', term) AS loc FROM t_json_search ORDER BY id;
 ➤ loc[-1,2147483647,0]  𝄀
-["$.a[0]"]  𝄀
-["$.a[1]"]  𝄀
+"$.a[0]"  𝄀
+"$.a[1]"  𝄀
 null
 DROP TABLE t_json_search;
 DROP VIEW IF EXISTS v_json_search;

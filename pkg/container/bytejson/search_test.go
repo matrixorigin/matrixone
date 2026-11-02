@@ -99,3 +99,29 @@ func TestSearchStringPathsBoundsAndCancellation(t *testing.T) {
 		ctx, []*Path{path}, exactSearchMatcher("x"), false, 100, 4096)
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+func TestSearchStringPathsSearchesSelectedSubtrees(t *testing.T) {
+	document, err := ParseFromByteSlice([]byte(`{"a":{"b":"x","arr":["x",{"c":"x"}]},"other":"x"}`))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		paths []string
+		want  []string
+	}{
+		{"object", []string{"$.a"}, []string{"$.a.b", "$.a.arr[0]", "$.a.arr[1].c"}},
+		{"array", []string{"$.a.arr"}, []string{"$.a.arr[0]", "$.a.arr[1].c"}},
+		{"root", []string{"$"}, []string{"$.a.b", "$.a.arr[0]", "$.a.arr[1].c", "$.other"}},
+		{"overlap", []string{"$.a", "$.a.arr", "$.a.arr[1].c"}, []string{"$.a.b", "$.a.arr[0]", "$.a.arr[1].c"}},
+		{"recursive path", []string{"$**.arr"}, []string{"$.a.arr[0]", "$.a.arr[1].c"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			paths := make([]*Path, 0, len(tc.paths))
+			for _, path := range tc.paths {
+				paths = append(paths, mustSearchPath(t, path))
+			}
+			got, err := document.SearchStringPaths(context.Background(), paths, exactSearchMatcher("x"), false, 100, 4096)
+			require.NoError(t, err)
+			require.ElementsMatch(t, tc.want, got)
+		})
+	}
+}
