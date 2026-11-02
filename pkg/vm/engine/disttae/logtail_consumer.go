@@ -766,11 +766,6 @@ func (c *PushClient) subscribeTable(
 		if err != nil {
 			return err
 		}
-		logutil.Info(
-			fmt.Sprintf("%s-send-subscribe-ok", logTag),
-			zap.Uint64("table-id", tblId.TbId),
-			zap.Uint64("db-id", tblId.DbId),
-		)
 		return nil
 	}
 }
@@ -1309,24 +1304,25 @@ func (c *PushClient) UnsubscribeTable(ctx context.Context, accId, dbID, tbID uin
 	if ifShouldNotDistribute(dbID, tbID) {
 		return moerr.NewInternalErrorf(ctx, "%s cannot unsubscribe table %d-%d as table ID is not allowed", logTag, dbID, tbID)
 	}
-	c.subscribed.rw.Lock()
-	defer c.subscribed.rw.Unlock()
-	k := tbID
-	ent, ok := c.subscribed.m[k]
-	if !ok || ent.state != Subscribed {
+	attempted, err := func() (bool, error) {
+		c.subscribed.rw.Lock()
+		defer c.subscribed.rw.Unlock()
+		ent, ok := c.subscribed.m[tbID]
+		if !ok || ent.state != Subscribed {
+			return false, nil
+		}
+		dbID = ent.dbID
+		ent.state = Unsubscribing
+		return true, c.subscriber.sendUnSubscribe(ctx, api.TableID{DbId: dbID, TbId: tbID})
+	}()
+	if !attempted {
 		logutil.Infof("%s table %d-%d is not subscribed yet", logTag, dbID, tbID)
-		return nil
-	}
-
-	dbID = ent.dbID
-	ent.state = Unsubscribing
-
-	if err := c.subscriber.sendUnSubscribe(ctx, api.TableID{DbId: dbID, TbId: tbID}); err != nil {
+	} else if err != nil {
 		logutil.Errorf("%s cannot unsubscribe table %d-%d, err: %v", logTag, dbID, tbID, err)
-		return err
+	} else {
+		logutil.Infof("%s send unsubscribe table %d-%d request succeed", logTag, dbID, tbID)
 	}
-	logutil.Infof("%s send unsubscribe table %d-%d request succeed", logTag, dbID, tbID)
-	return nil
+	return err
 }
 
 func (c *PushClient) doGCUnusedTable(ctx context.Context) {
@@ -1398,18 +1394,22 @@ func (c *PushClient) doGCUnusedTable(ctx context.Context) {
 	// retried after one GC cycle (20 min) instead of waiting full unsubscribeTimer (1 hour)
 	if len(failedJobs) > 0 {
 		backoffTs := time.Now().Add(-unsubscribeTimer + unsubscribeProcessTicker).UnixNano()
+		rolledBack := failedJobs[:0]
 		c.subscribed.rw.Lock()
 		for _, job := range failedJobs {
 			if ent, ok := c.subscribed.m[job.tId]; ok && ent.state == Unsubscribing {
 				ent.state = Subscribed
 				ent.lastTs.Store(backoffTs)
-				logutil.Infof("%s reverted tbl[db: %d, tbl: %d] to Subscribed for retry (backoff ~20min)",
-					logTag,
-					job.dbID,
-					job.tId)
+				rolledBack = append(rolledBack, job)
 			}
 		}
 		c.subscribed.rw.Unlock()
+		for _, job := range rolledBack {
+			logutil.Infof("%s reverted tbl[db: %d, tbl: %d] to Subscribed for retry (backoff ~20min)",
+				logTag,
+				job.dbID,
+				job.tId)
+		}
 	}
 }
 
@@ -1957,14 +1957,16 @@ func (c *PushClient) Close() error {
 }
 
 func (s *subscribedTable) setTableSubNotExist(dbId, tblId uint64) {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: SubRspTableNotExist,
-	}
-	ent.lastTs.Store(time.Now().UnixNano())
-	s.m[tblId] = ent
+	func() {
+		s.rw.Lock()
+		defer s.rw.Unlock()
+		ent := &subEntry{
+			dbID:  dbId,
+			state: SubRspTableNotExist,
+		}
+		ent.lastTs.Store(time.Now().UnixNano())
+		s.m[tblId] = ent
+	}()
 	logutil.Error(
 		"logtail.consumer.set.table.sub.not.exist",
 		zap.Uint64("db-id", dbId),
@@ -1979,14 +1981,16 @@ func (s *subscribedTable) clearTable(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: Subscribed,
-	}
-	ent.lastTs.Store(time.Now().UnixNano())
-	s.m[tblId] = ent
+	func() {
+		s.rw.Lock()
+		defer s.rw.Unlock()
+		ent := &subEntry{
+			dbID:  dbId,
+			state: Subscribed,
+		}
+		ent.lastTs.Store(time.Now().UnixNano())
+		s.m[tblId] = ent
+	}()
 	logutil.Info(
 		"logtail.consumer.set.table.subscribed",
 		zap.Uint64("db-id", dbId),
@@ -1995,28 +1999,32 @@ func (s *subscribedTable) setTableSubscribed(dbId, tblId uint64) {
 }
 
 func (s *subscribedTable) setTableSubRspReceived(dbId, tblId uint64) {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-	ent := &subEntry{
-		dbID:  dbId,
-		state: SubRspReceived,
-	}
-	ent.lastTs.Store(time.Now().UnixNano())
-	s.m[tblId] = ent
+	service := func() string {
+		s.rw.Lock()
+		defer s.rw.Unlock()
+		ent := &subEntry{
+			dbID:  dbId,
+			state: SubRspReceived,
+		}
+		ent.lastTs.Store(time.Now().UnixNano())
+		s.m[tblId] = ent
+		return s.eng.service
+	}()
 	logutil.Info(
 		"logtail.consumer.set.table.sub.rsp.received",
-		zap.String("service", s.eng.service),
+		zap.String("service", service),
 		zap.Uint64("db-id", dbId),
 		zap.Uint64("tbl-id", tblId),
-		zap.Any("subscribed-table", s),
 	)
 }
 
 func (s *subscribedTable) setTableUnsubscribe(dbId, tblId uint64) {
-	s.rw.Lock()
-	defer s.rw.Unlock()
-	s.eng.cleanMemoryTableWithTable(dbId, tblId)
-	delete(s.m, tblId)
+	func() {
+		s.rw.Lock()
+		defer s.rw.Unlock()
+		s.eng.cleanMemoryTableWithTable(dbId, tblId)
+		delete(s.m, tblId)
+	}()
 	logutil.Info(
 		"logtail.consumer.set.table.unsubscribe",
 		zap.Uint64("db-id", dbId),
