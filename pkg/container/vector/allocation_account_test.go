@@ -2711,8 +2711,10 @@ func TestAccountedShuffleGrowingBitmapsFailurePreservesState(t *testing.T) {
 		for _, slots := range []int{3, 4, 5} {
 			t.Run(fmt.Sprintf("buffered=%v/slots=%d", buffered, slots), func(t *testing.T) {
 				state := newTestVectorAllocationAccount(t, 1<<20, uint64(slots))
+				t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 				mp := mpool.MustNewZero()
 				vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+				t.Cleanup(func() { vec.Free(mp) })
 				require.NoError(t, vec.PreExtend(2, mp))
 				require.NoError(t, vec.PreExtendBitmap(2, mp))
 				require.NoError(t, AppendFixedList(vec, []int64{1, 2}, nil, mp))
@@ -2738,7 +2740,6 @@ func TestAccountedShuffleGrowingBitmapsFailurePreservesState(t *testing.T) {
 				require.True(t, vec.IsNull(0))
 				require.True(t, vec.GetGrouping().Contains(1))
 				vec.Free(mp)
-				finalizeTestVectorAllocationAccount(t, state)
 				require.Zero(t, mp.CurrNB())
 			})
 		}
@@ -2747,8 +2748,10 @@ func TestAccountedShuffleGrowingBitmapsFailurePreservesState(t *testing.T) {
 
 func TestAccountedMixedStringShuffleThenSort(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 32)
+	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 	mp := mpool.MustNewZero()
 	vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("z"), []byte("a")}, nil, mp))
 	require.NoError(t, vec.SetIsBinaryStringAt(0, true, mp))
 	vec.GetGrouping().Add(0)
@@ -2770,14 +2773,15 @@ func TestAccountedMixedStringShuffleThenSort(t *testing.T) {
 		require.False(t, vec.IsNull(uint64(i)))
 	}
 	vec.Free(mp)
-	finalizeTestVectorAllocationAccount(t, state)
 	require.Zero(t, mp.CurrNB())
 }
 
 func TestAccountedShuffleFailureRetainsBorrowedValidity(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 5)
+	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 	mp := mpool.MustNewZero()
 	vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	t.Cleanup(func() { vec.Free(mp) })
 	require.NoError(t, AppendFixedList(vec, []int64{1, 2}, nil, mp))
 	require.NoError(t, vec.PreExtendBitmap(2, mp))
 	vec.GetGrouping().Add(1)
@@ -2785,8 +2789,14 @@ func TestAccountedShuffleFailureRetainsBorrowedValidity(t *testing.T) {
 	releases := 0
 	lease, err := NewRefCountedBufferLease(validity, int64(cap(validity)), func() { releases++ })
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if lease != nil {
+			lease.Release()
+		}
+	})
 	require.NoError(t, vec.GetNulls().InstallBorrowedValidity(validity, 0, 2, 1, lease))
 	lease.Release()
+	lease = nil
 	before := state.account.Snapshot().Used
 	sels := make([]int64, 65)
 	for i := range sels {
@@ -2799,7 +2809,6 @@ func TestAccountedShuffleFailureRetainsBorrowedValidity(t *testing.T) {
 	require.Zero(t, releases)
 	vec.Free(mp)
 	require.Equal(t, 1, releases)
-	finalizeTestVectorAllocationAccount(t, state)
 	require.Zero(t, mp.CurrNB())
 }
 
@@ -2812,9 +2821,16 @@ func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
 			controller := &rejectNextVectorAllocation{}
 			account, err := registry.OpenWithController(1<<20, controller)
 			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Seal().Used)
+				require.Zero(t, registry.LiveAllocationMetadata())
+				_, err := registry.Finalize(account)
+				require.NoError(t, err)
+			})
 			selection, err := NewAllocationAccountSelection(account, testVectorAllocationOwner, testVectorDataAllocationSite, testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite)
 			require.NoError(t, err)
 			v := newAccountedTestVector(t, types.T_text.ToType(), selection)
+			t.Cleanup(func() { v.Free(mp) })
 			require.NoError(t, AppendBytesList(v, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, nil, mp))
 			require.NoError(t, v.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
 			require.NoError(t, v.SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, mp))
@@ -2865,8 +2881,6 @@ func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
 			v.Free(mp)
 			require.Zero(t, account.Seal().Used)
 			require.Zero(t, registry.LiveAllocationMetadata())
-			_, err = registry.Finalize(account)
-			require.NoError(t, err)
 			require.Zero(t, controller.used)
 			require.Zero(t, mp.CurrNB())
 		})
@@ -2875,8 +2889,10 @@ func TestAccountedShuffleStringSidecarAdmissionRollback(t *testing.T) {
 
 func TestAccountedShuffleFailureRetainsBorrowedArea(t *testing.T) {
 	state := newTestVectorAllocationAccount(t, 1<<20, 1)
+	t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
 	mp := mpool.MustNewZero()
 	v := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+	t.Cleanup(func() { v.Free(mp) })
 	require.NoError(t, v.PreExtend(2, mp))
 	v.SetLength(2)
 	first, second := "first payload longer than twenty three bytes", "second payload longer than twenty three bytes"
@@ -2887,8 +2903,14 @@ func TestAccountedShuffleFailureRetainsBorrowedArea(t *testing.T) {
 	releases := 0
 	lease, err := NewRefCountedBufferLease(area, int64(cap(area)), func() { releases++ })
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if lease != nil {
+			lease.Release()
+		}
+	})
 	require.NoError(t, v.InstallBorrowedArea(area, lease))
 	lease.Release()
+	lease = nil
 	before := state.account.Snapshot().Used
 	err = v.Shuffle([]int64{1, 0}, mp)
 	require.ErrorIs(t, err, mpool.ErrAllocationMetadataSlots)
@@ -2898,6 +2920,5 @@ func TestAccountedShuffleFailureRetainsBorrowedArea(t *testing.T) {
 	require.Zero(t, releases)
 	v.Free(mp)
 	require.Equal(t, 1, releases)
-	finalizeTestVectorAllocationAccount(t, state)
 	require.Zero(t, mp.CurrNB())
 }
