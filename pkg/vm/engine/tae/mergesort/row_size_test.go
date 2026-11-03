@@ -89,7 +89,7 @@ func TestMergeFlushesOversizedRows(t *testing.T) {
 			require.Len(t, host.commitEntry.CreatedObjs, 3, "flush before the row limit and before 100 rows")
 
 			var actual []int64
-			var output [][][]int64 // object -> block -> keys
+			output := make([][][]int64, 0, len(host.commitEntry.CreatedObjs)) // object -> block -> keys
 			for _, raw := range host.commitEntry.CreatedObjs {
 				stat := objectio.ObjectStats(raw)
 				reader, err := ioutil.NewFileReaderNoCache(fs, stat.ObjectName().String())
