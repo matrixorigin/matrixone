@@ -473,7 +473,7 @@ func TestReaderAppliesInMemoryFilterBeforeVectorTopK(t *testing.T) {
 					sels = append(sels, int64(pos))
 				}
 			}
-			bat.Shrink(sels, false)
+			require.NoError(t, bat.Shrink(sels, false, queryMP))
 			return engine.ReaderFilterResult{Sels: sels}, nil
 		}},
 		testVectorTopKParam(1, 1),
