@@ -137,8 +137,17 @@ func TestResolveNumericBinaryTypesContextPriority(t *testing.T) {
 			got, ok := resolveNumericBinaryTypes(numericOpAdd, test.left, test.right, test.outer)
 			require.True(t, ok)
 			if test.left.Oid == types.T_any || test.right.Oid == types.T_any {
-				require.Equal(t, test.wantInputs, got.left.Oid)
-				require.Equal(t, test.wantInputs, got.right.Oid)
+				wantOperand := func(source types.T) types.T {
+					if source.IsInteger() && test.wantInputs.IsInteger() {
+						if source.IsUnsignedInt() {
+							return types.T_uint64
+						}
+						return types.T_int64
+					}
+					return test.wantInputs
+				}
+				require.Equal(t, wantOperand(test.left.Oid), got.left.Oid)
+				require.Equal(t, wantOperand(test.right.Oid), got.right.Oid)
 			}
 			paramType, ok := InferNumericParameterType([]types.Type{test.left, test.right}, test.outer)
 			require.True(t, ok)

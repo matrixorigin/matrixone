@@ -201,13 +201,14 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "delete from multiple tables")
 	}
 
-	aliasMap := make(map[string][2]string)
-	for _, tbl := range stmt.TableRefs {
-		getAliasToName(builder.compCtx, tbl, "", aliasMap)
+	aliasMap, err := resolveDeleteTargetAliases(builder.compCtx, stmt)
+	if err != nil {
+		return 0, err
 	}
 
 	dmlCtx := NewDMLContext()
-	err := dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, stmt.With, aliasMap, false)
+	// Target CTE/writability checks precede catalog lookup; SELECT keeps WITH.
+	err = dmlCtx.ResolveTables(builder.compCtx, stmt.Tables, nil, aliasMap, false)
 	if err != nil {
 		return 0, err
 	}
@@ -242,6 +243,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	var selectList []tree.SelectExpr
+	physicalGeneratedRefs := make(map[*tree.UnresolvedName]struct{})
 	colName2Idx := make([]map[string]int32, len(stmt.Tables))
 
 	getResolveExpr := func(alias string) {
@@ -250,6 +252,9 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		for _, col := range dmlCtx.tableDefs[defIdx].Cols {
 			colName2Idx[defIdx][col.Name] = int32(len(selectList))
 			selectExpr := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			if col.GeneratedCol != nil {
+				physicalGeneratedRefs[selectExpr] = struct{}{}
+			}
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: selectExpr,
 			})
@@ -290,6 +295,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	selectCtx := NewBindContext(builder, bindCtx)
+	selectCtx.physicalGeneratedRefs = physicalGeneratedRefs
 	lastNodeID, err := builder.bindSelect(astSelect, selectCtx, false)
 	if err != nil {
 		return 0, err
@@ -395,6 +401,12 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 				ScanSnapshot: bindCtx.snapshot,
 			}
 			idxTableNodeID := builder.appendNode(idxScanNodes[i][j], bindCtx)
+			if catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) && !isSpatialIndexDef(idxDef) {
+				if builder.deleteIndexScanTables == nil {
+					builder.deleteIndexScanTables = make(map[int32]deleteIndexScan)
+				}
+				builder.deleteIndexScanTables[idxTag] = deleteIndexScan{tableID: idxTableDef.TblId}
+			}
 
 			lookupColName := indexLookupColumnName(idxDef)
 			rightPkPos := idxTableDef.Name2ColIndex[lookupColName]

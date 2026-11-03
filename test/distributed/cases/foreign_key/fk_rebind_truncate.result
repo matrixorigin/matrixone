@@ -1,0 +1,91 @@
+drop database if exists fk_rebind_truncate;
+create database fk_rebind_truncate;
+use fk_rebind_truncate;
+create table p (id int primary key, u int, unique key uk1(u), unique key uk2(u));
+create table c (id int primary key, u int, constraint fkc foreign key (u) references p(u));
+insert into p values (1,10);
+insert into c values (1,10);
+select constraint_name, table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_rebind_truncate' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc  ¦  c  ¦  uk1
+alter table p drop index uk1;
+select constraint_name, table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_rebind_truncate' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc  ¦  c  ¦  uk2
+truncate table c;
+insert into p values (2,20);
+insert into c values (2,20);
+insert into c values(3,999);
+Cannot add or update a child row: a foreign key constraint fails
+select constraint_name, table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_rebind_truncate' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc  ¦  c  ¦  uk2
+drop table c;
+create table c (id int primary key, u int, constraint fkc foreign key (u) references p(u));
+insert into c values (4,20);
+insert into c values(5,999);
+Cannot add or update a child row: a foreign key constraint fails
+select constraint_name, table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_rebind_truncate' and table_name='c' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc  ¦  c  ¦  uk2
+create unique index uk1 on p(id);
+drop index uk2 on p;
+Cannot drop index 'uk2': needed in a foreign key constraint
+create table p2 (id int primary key, v int);
+create table c2 (id int primary key, pid int, constraint fkc2 foreign key (pid) references p2(id));
+insert into p2 values (1,10);
+insert into c2 values (1,1);
+alter table p2 drop primary key, add unique key uq_id(id);
+select constraint_name, table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_rebind_truncate' and table_name='c2' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc2  ¦  c2  ¦  uq_id
+insert into p2 values (2,20);
+insert into c2 values (2,2);
+insert into c2 values(9,99);
+Cannot add or update a child row: a foreign key constraint fails
+drop index uq_id on p2;
+Cannot drop index 'uq_id': needed in a foreign key constraint
+create table p3 (id int primary key, v int);
+create table c3 (id int primary key, pid int, constraint fkc3 foreign key (pid) references p3(id));
+insert into p3 values (1,10);
+alter table p3 add unique key uq_id(id), drop primary key;
+select constraint_name, table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_rebind_truncate' and table_name='c3' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc3  ¦  c3  ¦  uq_id
+create table p4 (id int primary key, v int);
+create table c4 (id int primary key, pid int, constraint fkc4 foreign key (pid) references p4(id));
+alter table p4 drop primary key;
+Cannot drop index 'PRIMARY': needed in a foreign key constraint
+create table fs2 (id int primary key, v int, pid int, unique key vs_a(v), unique key vs_b(v), constraint fs foreign key (pid) references fs2(v));
+insert into fs2 values (1,10,10);
+select constraint_name, table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_rebind_truncate' and table_name='fs2' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fs  ¦  fs2  ¦  vs_a
+drop index vs_a on fs2;
+select constraint_name, table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_rebind_truncate' and table_name='fs2' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fs  ¦  fs2  ¦  vs_b
+truncate table fs2;
+insert into fs2 values (2,20,20);
+insert into fs2 values(9,90,999);
+Cannot add or update a child row: a foreign key constraint fails
+select constraint_name, table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_rebind_truncate' and table_name='fs2' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fs  ¦  fs2  ¦  vs_b
+drop index vs_b on fs2;
+Cannot drop index 'vs_b': needed in a foreign key constraint
+drop table fs2;
+create table fs2 (id int primary key, v int, pid int, unique key vs_a(v), unique key vs_b(v), constraint fs foreign key (pid) references fs2(v));
+insert into fs2 values (1,10,10);
+insert into fs2 values(9,90,999);
+Cannot add or update a child row: a foreign key constraint fails
+drop database if exists fk_rebind_truncate;

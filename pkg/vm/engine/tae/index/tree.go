@@ -73,6 +73,27 @@ func (art *simpleARTMap) Delete(key any) (old uint32, err error) {
 	return
 }
 
+func (art *simpleARTMap) DeleteAt(key []byte, row uint32) error {
+	value, found := art.tree.Search(key)
+	if !found {
+		return ErrNotFound
+	}
+	positions := value.(Positions)
+	for i := len(positions) - 1; i >= 0; i-- {
+		if positions[i] != row {
+			continue
+		}
+		positions = append(positions[:i], positions[i+1:]...)
+		if len(positions) == 0 {
+			art.tree.Delete(key)
+		} else {
+			art.tree.Insert(key, positions)
+		}
+		return nil
+	}
+	return ErrNotFound
+}
+
 func (art *simpleARTMap) Search(key []byte) ([]uint32, error) {
 	v, found := art.tree.Search(key)
 	if !found {

@@ -79,7 +79,9 @@ class TestPitrManagerSQLGeneration(unittest.TestCase):
         mock_result.rows = [('account_pitr2', datetime.now(), datetime.now(), 'account', 'acc1', '*', '*', 1, 'd')]
         self.client.execute = Mock(return_value=mock_result)
 
-        pitr = self.pitr_manager.create_account_pitr("account_pitr2", account_name="acc1", range_value=1, range_unit="d")
+        pitr = self.pitr_manager.create_account_pitr(
+            "account_pitr2", account_name="acc1", range_value=1, range_unit="d"
+        )
 
         expected_create_sql = "CREATE PITR `account_pitr2` FOR ACCOUNT `acc1` RANGE 1 'd'"
         self.client.execute.assert_any_call(expected_create_sql)
@@ -116,7 +118,7 @@ class TestPitrManagerSQLGeneration(unittest.TestCase):
 
         pitr = self.pitr_manager.get("test_pitr")
 
-        expected_sql = "SHOW PITR WHERE pitr_name = 'test_pitr'"
+        expected_sql = "SHOW PITR WHERE pitr_name = LOWER('test_pitr')"
         self.client.execute.assert_called_with(expected_sql)
         self.assertIsNone(pitr.account_name)
         self.assertIsNone(pitr.database_name)
@@ -264,7 +266,7 @@ class TestAsyncPitrManagerSQLGeneration(unittest.IsolatedAsyncioTestCase):
 
         pitr = await self.pitr_manager.get("test_pitr")
 
-        expected_sql = "SHOW PITR WHERE pitr_name = 'test_pitr'"
+        expected_sql = "SHOW PITR WHERE pitr_name = LOWER('test_pitr')"
         self.client.execute.assert_called_with(expected_sql)
         self.assertIsNone(pitr.account_name)
         self.assertIsNone(pitr.database_name)
@@ -406,8 +408,16 @@ class TestSyncVsAsyncSQLConsistency(unittest.IsolatedAsyncioTestCase):
         test_cases = [
             # (method_name, args, expected_sql)
             ('create_cluster_pitr', ['cluster_pitr', 1, 'd'], "CREATE PITR `cluster_pitr` FOR CLUSTER RANGE 1 'd'"),
-            ('create_account_pitr', ['account_pitr', None, 2, 'h'], "CREATE PITR `account_pitr` FOR ACCOUNT RANGE 2 'h'"),
-            ('create_database_pitr', ['db_pitr', 'db1', 1, 'mo'], "CREATE PITR `db_pitr` FOR DATABASE `db1` RANGE 1 'mo'"),
+            (
+                'create_account_pitr',
+                ['account_pitr', None, 2, 'h'],
+                "CREATE PITR `account_pitr` FOR ACCOUNT RANGE 2 'h'",
+            ),
+            (
+                'create_database_pitr',
+                ['db_pitr', 'db1', 1, 'mo'],
+                "CREATE PITR `db_pitr` FOR DATABASE `db1` RANGE 1 'mo'",
+            ),
             (
                 'create_table_pitr',
                 ['tab_pitr', 'db1', 't1', 1, 'y'],
@@ -437,7 +447,7 @@ class TestSyncVsAsyncSQLConsistency(unittest.IsolatedAsyncioTestCase):
 
         query_cases = [
             # (method, args, expected_sql)
-            ('get', ['test_pitr'], "SHOW PITR WHERE pitr_name = 'test_pitr'"),
+            ('get', ['test_pitr'], "SHOW PITR WHERE pitr_name = LOWER('test_pitr')"),
             ('alter', ['test_pitr', 3, 'd'], "ALTER PITR `test_pitr` RANGE 3 'd'"),
             ('delete', ['test_pitr'], "DROP PITR `test_pitr`"),
         ]

@@ -743,7 +743,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			return nil, err
 		}
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
-		coverageChanged := moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged)
 		c.onLoadUniqueIndexPromotionRetry(defChanged)
 
 		retryTransitionStart := time.Now()
@@ -762,6 +761,39 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			)
 			attemptOpen = false
 			return nil, err
+		}
+		// Tier-2 allocation-retry arbitration (design §4 D, G1/F1): the
+		// authoritative admission phase runs exactly here — at the retry
+		// quiescence boundary, after prepareRetryTransition's producer join
+		// and before the retry generation is rebuilt below. A converted
+		// sequence exhaustion pending on this statement is re-verified
+		// (publication flag, sticky window, frozen envelope facts, isolation,
+		// generic acceptance). When publication won the race the retry is
+		// declined and the client receives the ORIGINAL named exhaustion
+		// error exactly once — the delivered prefix is never replayed or
+		// duplicated.
+		if retryState := c.proc.GetSequenceRetryState(); retryState != nil {
+			if pendings := retryState.ConsumePendings(); len(pendings) > 0 {
+				admitted, cancelErr := c.arbitrateSequenceRetryAdmission(retryState, pendings, err)
+				if !admitted {
+					resourceRecorder.finishAttempt(
+						uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
+						attemptScopes, attemptAnal, c.addr, false,
+					)
+					attemptOpen = false
+					// The caller's own cancellation (F2, v21 precedence)
+					// surfaces unchanged; otherwise a declined verdict
+					// surfaces the named terminal of the FIRST-recorded
+					// pending entry exactly once (B3) — never a stale
+					// pending error in place of a live cancellation.
+					cause := cancelErr
+					if cause == nil {
+						cause = pendings[0].Pending.Original
+					}
+					err = abortSinkAttempt(cause)
+					return nil, err
+				}
+			}
 		}
 		if c.resultSink != nil {
 			if abortErr := c.resultSink.AbortAttempt(c.executionGeneration, err); abortErr != nil {
@@ -798,11 +830,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 		// Retry compilation can itself emit expression diagnostics.
 		warnings = newWarningAttempt(c.proc, promoteGroupConcatCut)
-		retryContext := c.proc.GetTopContext()
-		if coverageChanged {
-			retryContext = context.WithValue(retryContext, defines.HnswSnapshotFallbackKey{}, true)
-		}
-		nextRunC, buildErr := c.buildRetryCompile(defChanged || coverageChanged, retryContext)
+		nextRunC, buildErr := c.buildRetryCompile(defChanged)
 		carriedPreRunWall = time.Since(attemptStart)
 		attemptPreRunWall = carriedPreRunWall
 		if buildErr != nil {
@@ -916,6 +944,24 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	if err := c.cancelAndWaitRunningSQL(remoteWait); err != nil {
 		return err
 	}
+	// A prepared-cursor EXECUTE retains its output rows for COM_STMT_FETCH
+	// instead of publishing them, so the failed generation's prefix sits in
+	// the cursor's retained set (never delivered). Replay would append the
+	// fresh result behind that stale prefix; release the failed generation's
+	// retained rows, byte reservation and staged saved-result blocks before
+	// any new-generated output is captured (#30359 review). Running only
+	// after the generation quiesced above guarantees no pipeline can still
+	// append to the set being discarded.
+	if hook := c.proc.GetSessionInfo().RetryDiscardOutput; hook != nil {
+		// Attempt-cleanup failures abort the transition: surfacing the
+		// error declines this retry instead of rebuilding a replay over
+		// output that survived its cleanup (#30359 review). The failed
+		// cleanup retains its owner, so terminal statement cleanup can
+		// still reach those files.
+		if err := hook(); err != nil {
+			return err
+		}
+	}
 
 	topContext := c.proc.GetTopContext()
 	// clear the workspace of the failed statement
@@ -928,6 +974,19 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	// retry generation. Otherwise a rolled-back value can change LASTVAL or
 	// CURRVAL on the retry even when the retried plan never calls that sequence.
 	c.restoreSequenceStatementState()
+	// The rewind above is a statement-failure boundary: a SETVAL/restart the
+	// failed attempt staged (SequenceObligationSet.StageRemoval) never
+	// persisted its reposition, so the issued-value protection it hid must
+	// come back — mirroring the frontend statement-rollback restore
+	// (txn.go). Without this the retried attempt would see the staged
+	// boundary as still applied and could re-issue pre-boundary values
+	// before SETVAL executes again (#30359 review). Issued-value obligations
+	// raised by the failed attempt stay recorded: RollbackLastStatement
+	// rewound the workspace but not any observed emissions, so
+	// envelope-restored protection only ever produces gaps, never reuse.
+	if seqSet := c.proc.GetSequenceObligationSet(); seqSet != nil {
+		seqSet.RestoreStaged()
+	}
 
 	// increase the statement id
 	if e := c.proc.GetTxnOperator().GetWorkspace().IncrStatementID(topContext, false); e != nil {
@@ -939,6 +998,7 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	// generates a replacement value.
 	c.proc.SetStatementLastInsertID(0)
 	c.proc.SetLastInsertID(c.lastInsertIDBaseline)
+	c.proc.ResetODKUResult()
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()
@@ -990,7 +1050,8 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 // buildRetryCompile starts the next generation. A build or compile failure is
 // therefore a terminal outcome of that new attempt instead of disappearing
 // into the previous attempt's closing phase.
-func (c *Compile) buildRetryCompile(rebuildPlan bool, topContext context.Context) (*Compile, error) {
+func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
+	topContext := c.proc.GetTopContext()
 	// Invalidate a completed proof before a different logical generation can be
 	// built or observed.
 	c.onLoadUniqueIndexPromotionRetry(rebuildPlan)
@@ -999,7 +1060,17 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool, topContext context.Context
 	// improved to refresh expression in the future.
 
 	var e error
+	// NewCompile installs a fresh tier-2 retry state for a NEW statement, but
+	// a retry generation is the SAME logical statement: the sticky retry
+	// window and the publication flag must survive the rebuild (design §4 D
+	// G1/G2). Carry the existing instance over the reseed instead of letting
+	// each retried compilation restart (and so indefinitely extend) the
+	// statement's bounded retry window.
+	seqRetryState := c.proc.GetSequenceRetryState()
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	if seqRetryState != nil {
+		c.proc.ReplaceSequenceRetryState(seqRetryState)
+	}
 	runC.temporaryDropRetryStage = c.temporaryDropRetryStage
 	runC.temporaryDropRetryActive = c.temporaryDropRetryActive
 	runC.preparedJoinDiagnosticFree = c.preparedJoinDiagnosticFree

@@ -27,7 +27,7 @@ func main() {
 	if err := patch(os.Args[1]); err != nil {
 		panic(err)
 	}
-	if err := patchCollationMetadata(os.Args[1], "Type", "TableDef", "IndexDef"); err != nil {
+	if err := patchCollationMetadata(os.Args[1], "Type", "TableDef", "IndexDef", "Query"); err != nil {
 		panic(err)
 	}
 	if err := patchCollationMetadata(os.Args[2], "SchemaExtra"); err != nil {

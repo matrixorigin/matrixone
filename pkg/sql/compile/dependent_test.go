@@ -163,6 +163,38 @@ func TestDependentNativeStages(t *testing.T) {
 		name, sql string
 		want      []string
 	}{
+		{"range_row_operand_skipped", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`, []string{"false", "false", "false"}},
+		{"range_row_operand_selected_error", `SELECT CASE WHEN o.N_NATIONKEY>0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o WHERE o.N_NATIONKEY=2`, nil},
+		{"range_row_operand_selected_one", `SELECT CASE WHEN o.N_NATIONKEY=1 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`, []string{"true", "false", "false"}},
+		{"range_row_operand_empty", `SELECT (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<0))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM NATION o`, []string{"NULL", "NULL", "NULL"}},
+		{"range_row_operand_uncorrelated", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`, []string{"false", "false", "false"}},
+		{"range_row_operand_inner_case", `SELECT (o.N_NATIONKEY,CASE WHEN o.N_NATIONKEY<0 THEN (SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY) ELSE o.N_NATIONKEY END)=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM NATION o`, []string{"true", "true", "true"}},
+		{"range_row_operand_deep_guard", `SELECT (SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END) FROM NATION o`, []string{"false", "false", "false"}},
+		{"range_row_operand_coalesce", `SELECT COALESCE(o.N_NATIONKEY=1,(o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY)) FROM NATION o`, []string{"true", "false", "false"}},
+		{"range_row_limit_zero", `SELECT (0,NULL)<=>(SELECT COUNT(*),SUM(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY LIMIT 0) FROM NATION o`, []string{"false", "false", "false"}},
+		{"range_row_computed_input", `SELECT (0,NULL)<=>(SELECT SUM(COALESCE(i.N_NATIONKEY,0)),SUM(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY) FROM NATION o`, []string{"false", "false", "false"}},
+		{"range_row_composed_operand", `SELECT (o.N_NATIONKEY-1,(SELECT MAX(N_NATIONKEY) FROM NATION))=(SELECT COUNT(*),SUM(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY) FROM NATION o`, []string{"NULL", "false", "true"}},
+		// Plain result expressions use set-based execution; the SQL integration
+		// fixture retains their original value oracles. HAVING keeps these
+		// witnesses on the complete-relation runtime and its lifecycle checks.
+		{"range_having_expression", `SELECT (SELECT MAX(i.N_NATIONKEY)+1 FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY HAVING COUNT(*)>=0) FROM NATION o`, []string{"2", "3", "4"}},
+		{"range_having_empty_coalesce", `SELECT (SELECT COALESCE(MAX(i.N_NATIONKEY),-1) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY HAVING COUNT(*)>=0) FROM NATION o`, []string{"-1", "1", "2"}},
+		{"range_having", `SELECT (SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY HAVING MAX(i.N_NATIONKEY)>=2) FROM NATION o`, []string{"NULL", "2", "3"}},
+		{"range_having_empty_count", `SELECT (SELECT COUNT(*) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY HAVING COUNT(*)=0) FROM NATION o`, []string{"0", "NULL", "NULL"}},
+		{"range_distinct", `SELECT (SELECT DISTINCT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM NATION o`, []string{"1", "2", "3"}},
+		{"range_grouped_top_one", `SELECT (SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY GROUP BY i.N_REGIONKEY ORDER BY i.N_REGIONKEY DESC LIMIT 1) FROM NATION o`, []string{"1", "2", "3"}},
+		{"range_grouped_cardinality", `SELECT (SELECT COUNT(*) FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY GROUP BY i.N_REGIONKEY HAVING i.N_REGIONKEY>0) FROM NATION o WHERE o.N_NATIONKEY=3`, nil},
+		{"range_grouped_empty", `SELECT (SELECT COUNT(*) FROM NATION i WHERE i.N_NATIONKEY>o.N_NATIONKEY+5 GROUP BY i.N_REGIONKEY) FROM NATION o`, []string{"NULL", "NULL", "NULL"}},
+		{"range_limit_zero", `SELECT (SELECT COUNT(*) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY LIMIT 0) FROM NATION o`, []string{"NULL", "NULL", "NULL"}},
+		{"range_aggregate_offset", `SELECT (SELECT COUNT(*) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY LIMIT 1 OFFSET 1) FROM NATION o`, []string{"NULL", "NULL", "NULL"}},
+		{"range_derived_outer", `SELECT (SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM (SELECT N_NATIONKEY FROM NATION) o`, []string{"1", "2", "3"}},
+		{"range_duplicate_outer", `WITH q AS (SELECT N_NATIONKEY FROM NATION UNION ALL SELECT N_NATIONKEY FROM NATION) SELECT (SELECT COUNT(*) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM q o ORDER BY o.N_NATIONKEY`, []string{"1", "1", "2", "2", "3", "3"}},
+		{"range_two_outer_bindings", `SELECT (SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY AND i.N_NATIONKEY<x.N_NATIONKEY) FROM NATION o JOIN NATION x ON x.N_NATIONKEY=o.N_NATIONKEY`, []string{"NULL", "1", "2"}},
+		{"range_union_inner", `SELECT (SELECT COUNT(*) FROM (SELECT N_NATIONKEY FROM NATION UNION ALL SELECT N_NATIONKEY FROM NATION) i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM NATION o`, []string{"2", "4", "6"}},
+		{"range_derived_inner", `SELECT (SELECT MAX(i.N_NATIONKEY) FROM (SELECT N_NATIONKEY FROM NATION) i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM NATION o`, []string{"1", "2", "3"}},
+		{"range_unselected_cardinality", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (SELECT COUNT(*) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY GROUP BY i.N_REGIONKEY) ELSE 7 END FROM NATION o`, []string{"7", "7", "7"}},
+		{"range_non_aggregate_top_one", `SELECT (SELECT i.N_NATIONKEY FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY ORDER BY i.N_NATIONKEY DESC LIMIT 1) FROM NATION o`, []string{"NULL", "1", "2"}},
+		{"range_recursive_top_one", `WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r WHERE n<3) SELECT (SELECT COUNT(*) FROM r i WHERE i.n<=o.n GROUP BY i.n HAVING i.n>0 ORDER BY i.n DESC LIMIT 1) FROM r o`, []string{"1", "1", "1"}},
 		{"independent_equi_join", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a JOIN NATION b ON a.N_NATIONKEY=b.N_NATIONKEY`, []string{"1", "2", "3"}},
 		{"independent_left_join", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a LEFT JOIN NATION b ON a.N_NATIONKEY=b.N_NATIONKEY+1`, []string{"1", "2", "3"}},
 		{"independent_full_join", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a FULL JOIN NATION b ON a.N_NATIONKEY+1=b.N_NATIONKEY`, []string{"1", "2", "3", "NULL"}},
@@ -277,8 +309,9 @@ func TestDependentNativeStages(t *testing.T) {
 			}()
 			allocation, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 64, 65, 66, 67)
 			require.NoError(t, err)
-			opened, closed := 0, 0
+			compiled, opened, closed := 0, 0, 0
 			sourceCompiler := func(node *plan.Node) (dependent.SourceFactory, error) {
+				compiled++
 				if node.NodeType == plan.Node_VALUE_SCAN {
 					return func(p *process.Process, sourceAllocation *vector.AllocationAccountSelection, account *mpool.AllocationAccount) (dependent.Source, error) {
 						opened++
@@ -378,6 +411,10 @@ func TestDependentNativeStages(t *testing.T) {
 					require.Zero(t, account.Snapshot().Used)
 					require.Zero(t, budget.Used())
 				}()
+			}
+			if tc.name == "range_having_expression" {
+				require.Equal(t, 2, compiled, "compile each lexical source once, not per outer row or generation")
+				require.Equal(t, 8, opened, "each generation opens one outer source and three inner sources")
 			}
 		})
 	}

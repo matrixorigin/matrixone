@@ -38,11 +38,10 @@ import (
 )
 
 type wmMockSQLExecutor struct {
-	mp                        map[string]string
-	insertRe                  *regexp.Regexp
-	updateRe                  *regexp.Regexp
-	selectRe                  *regexp.Regexp
-	insertOnDuplicateUpdateRe *regexp.Regexp
+	mp       map[string]string
+	insertRe *regexp.Regexp
+	updateRe *regexp.Regexp
+	selectRe *regexp.Regexp
 }
 
 type retryableMockExecutor struct {
@@ -310,10 +309,9 @@ func newWmMockSQLExecutor() *wmMockSQLExecutor {
 	return &wmMockSQLExecutor{
 		mp: make(map[string]string),
 		// matches[1] = db_name, matches[2] = table_name, matches[3] = watermark
-		insertRe:                  regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
-		updateRe:                  regexp.MustCompile(`^UPDATE .* SET watermark\=\'(.*)\' WHERE .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
-		selectRe:                  regexp.MustCompile(`^SELECT .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
-		insertOnDuplicateUpdateRe: regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\) ON DUPLICATE KEY UPDATE watermark \= VALUES\(watermark\)$`),
+		insertRe: regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
+		updateRe: regexp.MustCompile(`^UPDATE .* SET watermark\=\'(.*)\' WHERE .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
+		selectRe: regexp.MustCompile(`^SELECT .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
 	}
 }
 
@@ -340,7 +338,6 @@ func (m *wmMockSQLExecutor) Query(ctx context.Context, sql string, pts ie.Sessio
 	if strings.HasPrefix(sql, "SELECT") {
 		matches := m.selectRe.FindStringSubmatch(sql)
 		return &InternalExecResultForTest{
-			affectedRows: 1,
 			resultSet: &MysqlResultSetForTest{
 				Columns:    nil,
 				Name2Index: nil,
@@ -3269,7 +3266,6 @@ func (m *mockExecutorForScanErrors) Query(ctx context.Context, sql string, opts 
 		return m.queryFunc(ctx, sql, opts)
 	}
 	return &InternalExecResultForTest{
-		affectedRows: 0,
 		resultSet: &MysqlResultSetForTest{
 			Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 			Data:    [][]interface{}{},
@@ -3302,7 +3298,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_EmptyResult(t
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3327,7 +3322,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_ParseAccountI
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3351,7 +3345,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_EmptyErrMsg(t
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3375,7 +3368,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_OrphanTable(t
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3400,7 +3392,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_LegacyFormat(
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3426,7 +3417,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_RetryableErro
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3453,7 +3443,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_NonRetryableE
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3495,7 +3484,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_ErrorTypes(t 
 			mockExec := &mockExecutorForScanErrors{
 				queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 					return &InternalExecResultForTest{
-						affectedRows: 1,
 						resultSet: &MysqlResultSetForTest{
 							Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 							Data: [][]interface{}{
@@ -3526,7 +3514,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_DiffCleanup(t
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 2,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3567,7 +3554,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_QueryFailedSk
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 1,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3600,7 +3586,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_MultipleTable
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 3,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3633,7 +3618,6 @@ func TestCDCWatermarkUpdater_scanAndUpdateNonRetryableErrorMetrics_MixedScenario
 	mockExec := &mockExecutorForScanErrors{
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			return &InternalExecResultForTest{
-				affectedRows: 4,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data: [][]interface{}{
@@ -3677,7 +3661,6 @@ func (m *mockExecutorForWrapCronJob) Query(ctx context.Context, sql string, opts
 		return m.queryFunc(ctx, sql, opts)
 	}
 	return &InternalExecResultForTest{
-		affectedRows: 0,
 		resultSet: &MysqlResultSetForTest{
 			Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 			Data:    [][]interface{}{},
@@ -3715,7 +3698,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ExportTimeReached(t *testing.T) {
 			// Mock the JOIN query for valid watermarks
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 1,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -3727,7 +3709,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ExportTimeReached(t *testing.T) {
 			}
 			// Mock the error scan query
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3806,7 +3787,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanKeysCleanup(t *testing.T) {
 			if strings.Contains(sql, "INNER JOIN") {
 				// Only task1 is valid, task2 is orphan
 				return &InternalExecResultForTest{
-					affectedRows: 1,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -3818,7 +3798,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanKeysCleanup(t *testing.T) {
 			}
 			// Error scan query
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3914,7 +3893,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_EmptyWatermark(t *testing.T) {
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 0,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data:    [][]interface{}{},
@@ -3923,7 +3901,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_EmptyWatermark(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -3958,7 +3935,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ValidWatermarkMetrics(t *testing.T) {
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 1,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -3969,7 +3945,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_ValidWatermarkMetrics(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -4018,7 +3993,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanDoubleCheck(t *testing.T) {
 				updater.activeWatermarkFence[key] = replacementFence
 				updater.Unlock()
 				return &InternalExecResultForTest{
-					affectedRows: 0,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data:    [][]interface{}{},
@@ -4027,7 +4001,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_OrphanDoubleCheck(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -4067,7 +4040,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_MultipleKeysMixed(t *testing.T) {
 			if strings.Contains(sql, "INNER JOIN") {
 				// task1 and task3 are valid, task2 is orphan
 				return &InternalExecResultForTest{
-					affectedRows: 2,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -4079,7 +4051,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_MultipleKeysMixed(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -4124,7 +4095,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_StatsExport(t *testing.T) {
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 0,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data:    [][]interface{}{},
@@ -4133,7 +4103,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_StatsExport(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},
@@ -4172,7 +4141,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
 		queryFunc: func(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 			if strings.Contains(sql, "INNER JOIN") {
 				return &InternalExecResultForTest{
-					affectedRows: 1,
 					resultSet: &MysqlResultSetForTest{
 						Columns: []string{"account_id", "task_id", "db_name", "table_name"},
 						Data: [][]interface{}{
@@ -4183,7 +4151,6 @@ func TestCDCWatermarkUpdater_wrapCronJob_NoKeysToRemove(t *testing.T) {
 				}
 			}
 			return &InternalExecResultForTest{
-				affectedRows: 0,
 				resultSet: &MysqlResultSetForTest{
 					Columns: []string{"account_id", "task_id", "db_name", "table_name", "err_msg"},
 					Data:    [][]interface{}{},

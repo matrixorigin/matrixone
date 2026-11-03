@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ftv2rt "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -279,6 +280,32 @@ func buildFullText2Params(idx *tree.FullTextIndex) (string, error) {
 					"fulltext2 POSITION_FREE requires WITH PARSER gojieba (got %q): a position-free index answers only IN BM25 MODE bag-of-words, and ngram/json tokens are meaningless without positions", parser)
 			}
 			res[catalog.IndexAlgoParamPositionFree] = "true"
+		}
+		// token_filter: the analyzer chain applied symmetrically at build/CDC/query.
+		// Step 1 requires POSITION_FREE=TRUE — a bag-of-words index. Removing stopword
+		// postings leaves a positional gap a phrase query cannot reason about, so NL /
+		// BOOLEAN phrase matching is unsupported; POSITION_FREE already rejects those
+		// modes and already requires the gojieba word parser, so token_filter rides on
+		// its guarantees (bag-of-words, gojieba) rather than re-checking them.
+		if len(idx.IndexOption.TokenFilters) > 0 {
+			if !idx.IndexOption.PositionFree {
+				return "", moerr.NewInvalidInputNoCtxf(
+					"fulltext2 token_filter requires POSITION_FREE=TRUE: it is a bag-of-words analyzer, and stopword removal is incompatible with natural-language / boolean phrase matching")
+			}
+			names := make([]string, 0, len(idx.IndexOption.TokenFilters))
+			for _, f := range idx.IndexOption.TokenFilters {
+				switch n := strings.ToLower(strings.TrimSpace(f)); n {
+				case "":
+					continue
+				case tokenfilter.Stop:
+					names = append(names, n)
+				default:
+					return "", moerr.NewInvalidInputNoCtxf("fulltext2: unsupported token_filter %q (supported: stop)", f)
+				}
+			}
+			if len(names) > 0 {
+				res[catalog.IndexAlgoParamTokenFilter] = strings.Join(names, ",")
+			}
 		}
 		// auto_update + day/hour/second drive the idxcron scheduled compaction
 		// cadence (read from algo_params by the idxcron executor). Mirrors bm25's

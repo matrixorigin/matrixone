@@ -28,11 +28,6 @@ var (
 
 type OnItemsCB = func(...any)
 
-type Closable interface {
-	IsClosed() bool
-	TryClose() bool
-}
-
 type ClosedState struct {
 	closed atomic.Int32
 }

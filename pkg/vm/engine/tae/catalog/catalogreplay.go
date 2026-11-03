@@ -137,6 +137,8 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		defer db.Unlock()
 		tbl = NewReplayTableEntry()
 		tbl.ID = cmd.ID.TableID
+		tbl.dataObjects.SetTableID(tbl.ID)
+		tbl.tombstoneObjects.SetTableID(tbl.ID)
 		tbl.db = db
 		tbl.tableData = catalog.MakeTableFactory()(tbl)
 		tbl.TableNode = cmd.node
@@ -178,8 +180,10 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.TableNode.schema.Store(schema)
 		// alter table rename
 		if schema.Extra.OldName != "" && un.DeletedAt.IsEmpty() {
+			// WAL replays each table's final name independently. Another table in
+			// the same committed swap may still have its old name, so skip admission.
 			if err := tbl.db.replayRenameTable(
-				schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true,
+				schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, nil, true,
 			); err != nil {
 				logutil.Warn(schema.String())
 				panic(err)
@@ -546,6 +550,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.TableNode.schema.Store(schema)
 	tbl.db = db
 	tbl.ID = tid
+	tbl.dataObjects.SetTableID(tbl.ID)
+	tbl.tombstoneObjects.SetTableID(tbl.ID)
 	tbl.tableData = catalog.MakeTableFactory()(tbl)
 	_ = db.AddEntryLocked(tbl, nil, true)
 	un := &MVCCNode[*TableMVCCNode]{

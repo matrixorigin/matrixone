@@ -184,6 +184,9 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		TargetRowIdCol:               ctx.TargetRowIdCol,
 		TrackAutoIncrementGenerated:  ctx.TrackAutoIncrementGenerated,
 		AutoIncrementGeneratedColumn: ctx.AutoIncrementGeneratedColumn,
+		TrackOdkuResult:              ctx.TrackOdkuResult,
+		OdkuOrdinalColumn:            ctx.OdkuOrdinalColumn,
+		OdkuAutoIncrementColumn:      ctx.OdkuAutoIncrementColumn,
 	}
 
 	return newCtx
@@ -291,6 +294,22 @@ func DeepCopyDedupJoinCtx(ctx *plan.DedupJoinCtx) *plan.DedupJoinCtx {
 		col := *ctx.ActionFinalCol
 		newCtx.ActionFinalCol = &col
 	}
+	if ctx.OdkuTargetAutoIncrementCol != nil {
+		col := *ctx.OdkuTargetAutoIncrementCol
+		newCtx.OdkuTargetAutoIncrementCol = &col
+	}
+	if ctx.OdkuGeneratedCol != nil {
+		col := *ctx.OdkuGeneratedCol
+		newCtx.OdkuGeneratedCol = &col
+	}
+	if ctx.OdkuOrdinalCol != nil {
+		col := *ctx.OdkuOrdinalCol
+		newCtx.OdkuOrdinalCol = &col
+	}
+	if ctx.OdkuGeneratedAutoIncrementCol != nil {
+		col := *ctx.OdkuGeneratedAutoIncrementCol
+		newCtx.OdkuGeneratedAutoIncrementCol = &col
+	}
 	newCtx.ForeignKeyChecks = make([]plan.ODKUForeignKeyCheck, len(ctx.ForeignKeyChecks))
 	for i, check := range ctx.ForeignKeyChecks {
 		newCtx.ForeignKeyChecks[i].ColIdxList = slices.Clone(check.ColIdxList)
@@ -318,23 +337,24 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 
 func DeepCopyNode(node *plan.Node) *plan.Node {
 	newNode := &Node{
-		NodeType:        node.NodeType,
-		NodeId:          node.NodeId,
-		ExtraOptions:    node.ExtraOptions,
-		Children:        slices.Clone(node.Children),
-		JoinType:        node.JoinType,
-		IsRightJoin:     node.IsRightJoin,
-		AsofRightCol:    node.AsofRightCol,
-		BindingTags:     slices.Clone(node.BindingTags),
-		Limit:           DeepCopyExpr(node.Limit),
-		Offset:          DeepCopyExpr(node.Offset),
-		ProjectList:     DeepCopyExprList(node.ProjectList),
-		OnList:          DeepCopyExprList(node.OnList),
-		FilterList:      DeepCopyExprList(node.FilterList),
-		BlockFilterList: DeepCopyExprList(node.BlockFilterList),
-		GroupBy:         DeepCopyExprList(node.GroupBy),
-		GroupingFlag:    slices.Clone(node.GroupingFlag),
-		GroupByHashKey:  slices.Clone(node.GroupByHashKey),
+		NodeType:          node.NodeType,
+		NodeId:            node.NodeId,
+		ExtraOptions:      node.ExtraOptions,
+		Children:          slices.Clone(node.Children),
+		JoinType:          node.JoinType,
+		MarkExistenceOnly: node.MarkExistenceOnly,
+		IsRightJoin:       node.IsRightJoin,
+		AsofRightCol:      node.AsofRightCol,
+		BindingTags:       slices.Clone(node.BindingTags),
+		Limit:             DeepCopyExpr(node.Limit),
+		Offset:            DeepCopyExpr(node.Offset),
+		ProjectList:       DeepCopyExprList(node.ProjectList),
+		OnList:            DeepCopyExprList(node.OnList),
+		FilterList:        DeepCopyExprList(node.FilterList),
+		BlockFilterList:   DeepCopyExprList(node.BlockFilterList),
+		GroupBy:           DeepCopyExprList(node.GroupBy),
+		GroupingFlag:      slices.Clone(node.GroupingFlag),
+		GroupByHashKey:    slices.Clone(node.GroupByHashKey),
 		PhysicalEqualityKeyList: DeepCopyExprList(
 			node.PhysicalEqualityKeyList),
 		AggList:      DeepCopyExprList(node.AggList),
@@ -414,6 +434,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		}
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
+	newNode.NarrowScan = node.NarrowScan
 
 	for idx, target := range node.LockTargets {
 		newNode.LockTargets[idx] = DeepCopyLockTarget(target)
@@ -572,25 +593,26 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		ColId:            col.ColId,
-		Name:             col.Name,
-		OriginName:       col.OriginName,
-		Alg:              col.Alg,
-		Typ:              *DeepCopyType(&col.Typ),
-		Default:          DeepCopyDefault(col.Default),
-		Primary:          col.Primary,
-		Unique:           col.Unique,
-		Pkidx:            col.Pkidx,
-		Comment:          col.Comment,
-		OnUpdate:         DeepCopyOnUpdate(col.OnUpdate),
-		GeneratedCol:     DeepCopyGeneratedCol(col.GeneratedCol),
-		ClusterBy:        col.ClusterBy,
-		Hidden:           col.Hidden,
-		Seqnum:           col.Seqnum,
-		TblName:          col.TblName,
-		OriginTblName:    col.OriginTblName,
-		DbName:           col.DbName,
-		ResultColumnKind: col.ResultColumnKind,
+		IntegerResultPresentation: cloneIntegerResultPresentation(col.IntegerResultPresentation),
+		ColId:                     col.ColId,
+		Name:                      col.Name,
+		OriginName:                col.OriginName,
+		Alg:                       col.Alg,
+		Typ:                       *DeepCopyType(&col.Typ),
+		Default:                   DeepCopyDefault(col.Default),
+		Primary:                   col.Primary,
+		Unique:                    col.Unique,
+		Pkidx:                     col.Pkidx,
+		Comment:                   col.Comment,
+		OnUpdate:                  DeepCopyOnUpdate(col.OnUpdate),
+		GeneratedCol:              DeepCopyGeneratedCol(col.GeneratedCol),
+		ClusterBy:                 col.ClusterBy,
+		Hidden:                    col.Hidden,
+		Seqnum:                    col.Seqnum,
+		TblName:                   col.TblName,
+		OriginTblName:             col.OriginTblName,
+		DbName:                    col.DbName,
+		ResultColumnKind:          col.ResultColumnKind,
 	}
 }
 
@@ -865,6 +887,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		}
 	}
 	newQry := &plan.Query{
+		IntegerPrecision:         cloneIntegerPrecisionGraph(qry.IntegerPrecision),
 		StmtType:                 qry.StmtType,
 		Steps:                    slices.Clone(qry.Steps),
 		Nodes:                    make([]*plan.Node, len(qry.Nodes)),
@@ -888,6 +911,18 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	}
 	for idx, dependency := range qry.CatalogDependencies {
 		newQry.CatalogDependencies[idx] = DeepCopyObjectRef(dependency)
+	}
+	if qry.SelectLockReferences != nil {
+		newQry.SelectLockReferences = make([]*plan.SelectLockReference, len(qry.SelectLockReferences))
+		for i, reference := range qry.SelectLockReferences {
+			if reference != nil {
+				newQry.SelectLockReferences[i] = &plan.SelectLockReference{
+					IsClusterTable: reference.IsClusterTable,
+					ObjectRef:      DeepCopyObjectRef(reference.ObjectRef),
+					ViewPath:       DeepCopyViewPath(reference.ViewPath),
+				}
+			}
+		}
 	}
 	if qry.ViewReferences != nil {
 		newQry.ViewReferences = make([]*plan.ViewReference, len(qry.ViewReferences))
@@ -991,6 +1026,16 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				continue
 			}
 			switch act := action.Action.(type) {
+			case *plan.AlterTable_Action_AddColumn:
+				if act == nil || act.AddColumn == nil {
+					continue
+				}
+				add := *act.AddColumn
+				add.XXX_unrecognized = slices.Clone(act.AddColumn.XXX_unrecognized)
+				add.Type = *DeepCopyType(&act.AddColumn.Type)
+				AlterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AddColumn{AddColumn: &add},
+				}
 			case *plan.AlterTable_Action_Drop:
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_Drop{

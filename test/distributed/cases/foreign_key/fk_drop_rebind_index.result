@@ -1,0 +1,73 @@
+drop database if exists fk_drop_rebind_index;
+create database fk_drop_rebind_index;
+use fk_drop_rebind_index;
+create table p (id int primary key, u int, unique key uk1(u), unique key uk2(u));
+create table c (id int primary key, u int, constraint fkc foreign key (u) references p(u));
+insert into p values (1,10);
+insert into c values (1,10);
+select constraint_name, table_name, refer_table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_drop_rebind_index' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  refer_table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc  ¦  c  ¦  p  ¦  uk1
+alter table p drop index uk1;
+show create table p;
+➤ Table[12,1,0]  ¦  Create Table[12,112,0]  𝄀
+p  ¦  CREATE TABLE `p` (
+  `id` int NOT NULL,
+  `u` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk2` (`u`)
+)
+select constraint_name, table_name, refer_table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_drop_rebind_index' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  refer_table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc  ¦  c  ¦  p  ¦  uk2
+insert into c values(2,999);
+Cannot add or update a child row: a foreign key constraint fails
+insert into p values (2,20);
+insert into c values (3,20);
+alter table p drop index uk2;
+Cannot drop index 'uk2': needed in a foreign key constraint
+create table p2 (id int primary key, u int, unique key uk_old(u));
+create table c2 (id int primary key, u int, constraint fkc2 foreign key (u) references p2(u));
+insert into p2 values (1,10);
+insert into c2 values (1,10);
+alter table p2 drop index uk_old, add unique index uk_new(u);
+show create table p2;
+➤ Table[12,2,0]  ¦  Create Table[12,116,0]  𝄀
+p2  ¦  CREATE TABLE `p2` (
+  `id` int NOT NULL,
+  `u` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_new` (`u`)
+)
+select constraint_name, table_name, refer_table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_drop_rebind_index' and table_name='c2' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  refer_table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc2  ¦  c2  ¦  p2  ¦  uk_new
+insert into c2 values(4,999);
+Cannot add or update a child row: a foreign key constraint fails
+alter table p2 drop index uk_new;
+Cannot drop index 'uk_new': needed in a foreign key constraint
+create table p3 (id int primary key, unique key uk_id(id));
+create table c3 (id int primary key, pid int, constraint fkc3 foreign key (pid) references p3(id));
+insert into p3 values (1);
+insert into c3 values (1,1);
+alter table p3 drop primary key;
+select constraint_name, table_name, refer_table_name, referenced_index_name
+from mo_catalog.mo_foreign_keys where db_name='fk_drop_rebind_index' and table_name='c3' order by constraint_name;
+➤ constraint_name[12,5000,0]  ¦  table_name[12,5000,0]  ¦  refer_table_name[12,5000,0]  ¦  referenced_index_name[12,5000,0]  𝄀
+fkc3  ¦  c3  ¦  p3  ¦  uk_id
+insert into p3 values (2);
+insert into c3 values (2,2);
+insert into c3 values (9,99);
+Cannot add or update a child row: a foreign key constraint fails
+create table p4 (id int primary key, u int, unique key uk_only(u));
+create table c4 (id int primary key, u int, constraint fkc4 foreign key (u) references p4(u));
+insert into p4 values (1,10);
+insert into c4 values (1,10);
+alter table p4 drop index uk_only;
+Cannot drop index 'uk_only': needed in a foreign key constraint
+drop index uk_only on p4;
+Cannot drop index 'uk_only': needed in a foreign key constraint
+drop database if exists fk_drop_rebind_index;

@@ -1028,7 +1028,7 @@ func TestPKFilterPruning_SinglePK_Int32(t *testing.T) {
 	for _, v := range []int32{10, 20, 30, 50, 51, 52} {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, pkSeqnum)
 	vec.Free(mp)
@@ -1070,7 +1070,7 @@ func TestPKFilterPruning_SinglePK_Varchar(t *testing.T) {
 	for _, s := range []string{"apple", "banana", "mango"} {
 		require.NoError(t, vector.AppendBytes(vec, []byte(s), false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, pkSeqnum)
 	vec.Free(mp)
@@ -1107,7 +1107,7 @@ func TestPKFilterPruning_Decimal64(t *testing.T) {
 		require.NoError(t, parseErr)
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, pkSeqnum)
 	vec.Free(mp)
@@ -1143,7 +1143,7 @@ func TestPKFilterPruning_SeqnumPreserved(t *testing.T) {
 
 	vec := vector.NewVec(pkType)
 	require.NoError(t, vector.AppendFixed(vec, int64(100), false, mp))
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	// Simulate a schema where PK is at column index 2 but seqnum 5
 	// (e.g., after dropping columns).
@@ -1168,7 +1168,7 @@ func TestPKFilterPruning_LargeKeySet(t *testing.T) {
 	for i := int64(0); i < 1000; i++ {
 		require.NoError(t, vector.AppendFixed(vec, i*10, false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, 0)
 	vec.Free(mp)
@@ -1243,7 +1243,7 @@ func TestPKFilterPruning_CompositePK_IntVarchar(t *testing.T) {
 	require.Equal(t, 3, encodedVec.Length())
 
 	// Sort (lexicographic order on serial-encoded bytes).
-	encodedVec.InplaceSort()
+	require.NoError(t, encodedVec.InplaceSort(mp))
 
 	// The __mo_cpkey_col type in production is T_varchar.
 	cpkType := types.T_varchar.ToType()
@@ -1310,7 +1310,7 @@ func TestPKFilterPruning_CompositePK_IntInt(t *testing.T) {
 	col1.Free(mp)
 	col2.Free(mp)
 
-	encodedVec.InplaceSort()
+	require.NoError(t, encodedVec.InplaceSort(mp))
 
 	cpkType := types.T_varchar.ToType()
 	pkFilter := buildPKFilterFromVec(encodedVec, cpkType, 0)
@@ -1438,7 +1438,7 @@ func TestAppendStrValToVec_PrunesCorrectly(t *testing.T) {
 	}
 	require.Equal(t, 3, vec.Length())
 
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, 0)
 	require.NotNil(t, pkFilter)

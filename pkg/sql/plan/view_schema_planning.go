@@ -26,7 +26,15 @@ import (
 // checks each root name before lookup; it does not replace View security chains.
 // Neither the plan nor its provenance retains this request or its compiler.
 // Existing SQL entry points do not select this mode automatically.
-func (r *ViewSchemaRequest) BuildPlan(stmt tree.Statement, isPrepare bool) (result *Plan, err error) {
+func (r *ViewSchemaRequest) BuildPlan(stmt tree.Statement, isPrepare bool) (*Plan, error) {
+	return r.buildPlan(stmt, isPrepare, func(compiler CompilerContext) (*Plan, error) {
+		return BuildPlan(compiler, stmt, isPrepare)
+	})
+}
+
+// buildPlan keeps admission, authorization, dependency capture and lifetime in
+// one owner even when an integration validation uses the prepared binder.
+func (r *ViewSchemaRequest) buildPlan(stmt tree.Statement, isPrepare bool, build func(CompilerContext) (*Plan, error)) (result *Plan, err error) {
 	select {
 	case <-r.ctx.Done():
 		return nil, r.cause(nil)
@@ -72,7 +80,7 @@ func (r *ViewSchemaRequest) BuildPlan(stmt tree.Statement, isPrepare bool) (resu
 	previousSub := state.compiler.GetQueryingSubscription()
 	state.compiler.SetQueryingSubscription(nil)
 	defer state.compiler.SetQueryingSubscription(previousSub)
-	result, err = BuildPlan(state.compiler, stmt, isPrepare)
+	result, err = build(state.compiler)
 	if state.rootAuthorizationErr != nil {
 		return nil, r.cause(state.rootAuthorizationErr)
 	}

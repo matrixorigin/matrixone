@@ -116,6 +116,32 @@ func GetFunctionIsWinIndicatorFunById(fid int32) bool {
 	return false
 }
 
+// GetFunctionIsWinEwmFunByName reports whether the name is one of the
+// ewmMean/ewmVar/ewmStd/ewmCov/ewmCorr window statistics: the window
+// operator's EWM dispatch, the binder validations, the cache-exclusion
+// detection and explain printing all key on this single registry fact.
+func GetFunctionIsWinEwmFunByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return false
+	}
+	return fid == EWM_MEAN || fid == EWM_VAR || fid == EWM_STD ||
+		fid == EWM_COV || fid == EWM_CORR
+}
+
+// EwmFunctionIdByName resolves an ewm name to its function id.
+func EwmFunctionIdByName(name string) (int32, bool) {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	if !exists {
+		return 0, false
+	}
+	if fid == EWM_MEAN || fid == EWM_VAR || fid == EWM_STD ||
+		fid == EWM_COV || fid == EWM_CORR {
+		return fid, true
+	}
+	return 0, false
+}
+
 // GetFunctionIgnoresWindowFrameByName reports whether a window function
 // operates on partition-relative row positions instead of the current frame.
 func GetFunctionIgnoresWindowFrameByName(name string) bool {
@@ -608,6 +634,11 @@ func getFunctionByName(
 	}
 
 	check := f.checkArgumentTypes(args, stringDomainModes)
+	if legacyIntegerDecimalCoercions(ctx) {
+		check = legacyIntegerDecimalCheck(r.fid, args, check)
+	} else if LegacyDecimalIntermediatePrecision(ctx) {
+		check = legacyDecimalPrecisionCheck(r.fid, args, check)
+	}
 	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
 		check = fixedTypeMatch(f.Overloads[:4], args)
 	}
@@ -625,6 +656,28 @@ func getFunctionByName(
 	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
 		check = newCheckResultWithCast(3, integerDomainOperands(args))
 	}
+	if (r.fid == IFF || r.fid == CASE) && !MySQLConditionalBooleanContracts(ctx) {
+		// D11 gate: a native-mode statement keeps the pre-contract IF/CASE
+		// condition admission - JSON conditions reject, and ENUM/SET display
+		// operands keep their ordinary string-typed handling without the
+		// storage-truth admission.
+		if legacy, ok := legacyConditionalBooleanCheck(r.fid, f.Overloads, args); ok {
+			check = legacy
+		}
+	}
+	if !MySQLConditionalBooleanContracts(ctx) && len(args) == 2 &&
+		args[0].Oid == types.T_enum && args[1].Oid == types.T_bool &&
+		isEnumToBoolCastFunctionId(r.fid) {
+		// D11 gate for the shared cast boundary: the ENUM -> BOOL cast pair
+		// exists only for the conditional storage-truth contracts (CASE
+		// conditions, explicit BOOL targets), and the cast resolution table is
+		// context-free, so the compatibility decision is enforced here where
+		// the statement scalar is in scope. A native-mode statement keeps the
+		// pre-contract bind result byte-identically: base had no such cast
+		// pair, and the failure below produces the same bind error base gave.
+		check = newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	check = legacyFloatStringCheck(ctx, check, args)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -660,6 +713,9 @@ func getFunctionByName(
 		err = moerr.NewInvalidArg(ctx, fmt.Sprintf("too many overloads matched %s", name), args)
 	}
 	if err == nil {
+		if LegacyDecimalIntermediatePrecision(ctx) {
+			r.applyLegacyDecimalArithmeticReturnType(args)
+		}
 		r.applyDivPrecisionIncrement(ctx, args)
 		r.applyDecimalModMetadata(args)
 		if !LegacyDecimalIntegerDiv(ctx) {
@@ -892,6 +948,17 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		if oid == 0 || oid == 2 || ((oid == 3 || oid == 4) && !LegacyTemporalNullability(ctx)) {
 			return false
 		}
+	case TIME:
+		// String conversions synthesize NULL with a truncation warning for
+		// invalid input even when the argument is NOT NULL. The typed and
+		// numeric overloads fail the statement instead of producing NULL
+		// and keep their NOT NULL inference. Historical dump bindings keep
+		// their pre-8dd published NOT NULL metadata, and the intermediate
+		// post-8dd era that predates the NULL synthesis change kept TIME
+		// NOT NULL while DATE conversions were already nullable.
+		if oid >= 5 && oid <= 8 && !LegacyTemporalNullability(ctx) && !LegacyTimeNullability(ctx) {
+			return false
+		}
 	case CAST:
 		if (oid == 0 || oid == 1) && len(args) == 2 &&
 			types.T(args[0].Typ.Id).IsMySQLString() && types.T(args[1].Typ.Id) == types.T_datetime && !LegacyTemporalNullability(ctx) {
@@ -997,6 +1064,13 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 			}
 		}
 		return true
+	// The exponentially weighted statistics synthesize NULL from non-NULL
+	// arguments: the §5 C-gate (minPeriods publication gate), the
+	// zero-variance correlation rule and the unseen-account rule publish
+	// NULL regardless of the argument nullabilities, so their window
+	// outputs declare nullability independently of their inputs.
+	case EWM_MEAN, EWM_VAR, EWM_STD, EWM_COV, EWM_CORR:
+		return false
 	// These STRICT functions can synthesize NULL from non-NULL arguments.
 	// The UUID extractors do so for non-RFC-4122 variants, and
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
@@ -1290,6 +1364,15 @@ func (ov *overload) GetExecuteMethod() (
 
 	fn := ov.newOp()
 	return fn, nil, nil, nil
+}
+
+// GetArgumentType returns one element of the registered signature, whose meaning
+// is defined by the function's type checker, without exposing its mutable slice.
+func (ov *overload) GetArgumentType(index int) (types.T, bool) {
+	if index < 0 || index >= len(ov.args) {
+		return types.T_any, false
+	}
+	return ov.args[index], true
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {

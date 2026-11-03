@@ -47,10 +47,11 @@ type S3FS struct {
 	rawStorage ObjectStorage
 	keyPrefix  string
 
-	memCache    *MemCache
-	diskCache   *DiskCache
-	remoteCache *RemoteCache
-	asyncUpdate bool
+	memCache       *MemCache
+	diskCache      *DiskCache
+	indexFileCache *IndexFileCache
+	remoteCache    *RemoteCache
+	asyncUpdate    bool
 
 	perfCounterSets []*perfcounter.CounterSet
 
@@ -324,6 +325,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	s.remoteCache = caches.remote
 	s.memCache = caches.memory
 	s.diskCache = caches.disk
+	s.indexFileCache = caches.index
 	if s.memCache != nil {
 		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
 	}
@@ -476,6 +478,10 @@ func (s *S3FS) OpenReadWithIdentity(
 		max = &end
 	}
 	return storage.ReadObjectWithIdentity(ctx, s.pathToKey(path.File), &min, max, expected)
+}
+
+func (s *S3FS) fullFilePreloadsThrashing() bool {
+	return s.diskCache != nil && s.diskCache.preloads.isThrashing()
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
@@ -675,6 +681,9 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	if vector.Policy.Any(NarrowRead) && s.fullFilePreloadsThrashing() {
+		vector.Policy |= SkipFullFilePreloads
+	}
 	var finishDecode func()
 	var decodePrepared bool
 	var fillTicket *decodedFillTicket
@@ -1647,8 +1656,13 @@ func (*S3FS) ETLCompatible() {}
 
 var _ CachingFileService = new(S3FS)
 
+// IndexFileCache returns the index-file cache, or nil.
+func (s *S3FS) IndexFileCache() *IndexFileCache {
+	return s.indexFileCache
+}
+
 func (s *S3FS) Close(ctx context.Context) {
-	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache}
+	caches := fileServiceCaches{memory: s.memCache, disk: s.diskCache, index: s.indexFileCache}
 	if s.decodedReads != nil {
 		s.decodedReads.close(func() { caches.close(ctx) })
 	} else {

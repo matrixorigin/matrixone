@@ -90,21 +90,6 @@ func IsFullText2IndexAlgo(algo string) bool {
 	return _algo == MoIndexFullText2Algo.ToString()
 }
 
-func IsHnswIndexAlgo(algo string) bool {
-	_algo := ToLower(algo)
-	return _algo == MoIndexHnswAlgo.ToString()
-}
-
-func IsCagraIndexAlgo(algo string) bool {
-	_algo := ToLower(algo)
-	return _algo == MoIndexCagraAlgo.ToString()
-}
-
-func IsIvfpqIndexAlgo(algo string) bool {
-	_algo := ToLower(algo)
-	return _algo == MoIndexIvfpqAlgo.ToString()
-}
-
 // ------------------------[START] IndexAlgoParams------------------------
 const (
 	IndexAlgoParamLists     = "lists"
@@ -137,6 +122,10 @@ const (
 	IndexAlgoParamMaxIndexCapacity    = "max_index_capacity"
 	IndexAlgoParamQuantizerTrainLimit = "quantizer_train_limit"
 
+	// IndexAlgoParamMaxBadRecords is the number of source rows an index may leave out because
+	// it cannot store them. Recorded only when specified; absence means 0.
+	IndexAlgoParamMaxBadRecords = "max_bad_records"
+
 	// IndexAlgoParamMaxPostingsCapacity (fulltext2): max postings (term occurrences)
 	// per built segment. Bounds per-segment build memory regardless of doc size —
 	// max_index_capacity (docs) is a poor memory proxy since a doc can hold one token
@@ -154,6 +143,11 @@ const (
 	// (bag-of-words retrieval only, ~half the footprint; the FST term dict is kept).
 	// Recorded only when POSITION_FREE=TRUE; absence ⇒ positional (phrase-capable).
 	IndexAlgoParamPositionFree = "position_free"
+
+	// IndexAlgoParamTokenFilter (fulltext2): the comma-separated token_filter analyzer
+	// chain (currently only "stop"), applied symmetrically at build/CDC/query so a
+	// dropped token (stopword) never breaks a query for it. Recorded only when set.
+	IndexAlgoParamTokenFilter = "token_filter"
 
 	// IndexAlgoParamPrefixLengths is the legacy, delimiter-separated encoding.
 	// It remains readable for metadata written by older versions.
@@ -340,11 +334,21 @@ func IndexParamsToStringList(indexParams string) (string, error) {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxPostingsCapacity, val)
 	}
 
+	if val, ok := result[IndexAlgoParamMaxBadRecords]; ok {
+		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamMaxBadRecords, val)
+	}
+
 	// POSITION_FREE is recorded only when TRUE (absence ⇒ positional). Render it so a
 	// SHOW CREATE / checkpoint-restore DDL rebuilds a position-free fulltext2 index as
 	// position-free instead of silently reverting to the phrase-capable positional one.
 	if val, ok := result[IndexAlgoParamPositionFree]; ok && val == "true" {
 		res += fmt.Sprintf(" %s = %s ", IndexAlgoParamPositionFree, val)
+	}
+
+	// token_filter is recorded only when set. Render the quoted form so a SHOW CREATE /
+	// checkpoint-restore DDL re-parses it (grammar: token_filter = '<list>').
+	if val, ok := result[IndexAlgoParamTokenFilter]; ok && val != "" {
+		res += fmt.Sprintf(" %s = '%s' ", IndexAlgoParamTokenFilter, val)
 	}
 
 	if val, ok := result[IndexAlgoParamQuantizerTrainLimit]; ok {
@@ -621,13 +625,6 @@ func indexParamsToMap(def interface{}) (map[string]string, error) {
 	return res, moerr.NewInternalErrorNoCtx("indexParamsToMap: invalid index type")
 }
 
-func DefaultIvfIndexAlgoOptions() map[string]string {
-	res := make(map[string]string)
-	res[IndexAlgoParamLists] = "1"                       // set lists = 1 as default
-	res[IndexAlgoParamOpType] = metric.OpType_L2Distance // set l2 as default
-	return res
-}
-
 // IndexAlgoParamVersionOf returns the engine version recorded in an index's
 // algo_params (currently only fulltext uses it: v2 = WAND engine). Absent or
 // unparseable ⇒ 1 (the classic engine), so pre-version indexes read as v1.
@@ -649,6 +646,26 @@ func IndexAlgoParamVersionOf(indexAlgoParams string) int64 {
 		return 1
 	}
 	return n
+}
+
+// IndexParamMaxBadRecords returns the max_bad_records of an index's algo params, 0 when unset.
+func IndexParamMaxBadRecords(indexAlgoParams string) (int64, error) {
+	if indexAlgoParams == "" {
+		return 0, nil
+	}
+	params, err := IndexParamsStringToMap(indexAlgoParams)
+	if err != nil {
+		return 0, err
+	}
+	val, ok := params[IndexAlgoParamMaxBadRecords]
+	if !ok {
+		return 0, nil
+	}
+	n, err := strconv.ParseInt(val, 10, 64)
+	if err != nil || n < 0 {
+		return 0, moerr.NewInternalErrorNoCtxf("invalid %s: %q", IndexAlgoParamMaxBadRecords, val)
+	}
+	return n, nil
 }
 
 // IndexParamAsync reports whether the user opted into async maintenance via the

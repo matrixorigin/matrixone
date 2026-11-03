@@ -1,0 +1,14 @@
+drop database if exists test_diff_save_set;
+create database test_diff_save_set;
+use test_diff_save_set;
+create table set_base(id int primary key, v set('a','b'));
+insert into set_base values (1, 'a');
+data branch create table set_branch from set_base;
+update set_branch set v = 'a,b' where id = 1;
+set save_query_result = on;
+data branch diff set_branch against set_base;
+select id, v from result_scan(last_query_id()) as u;
+set save_query_result = off;
+drop table set_branch;
+drop table set_base;
+drop database test_diff_save_set;

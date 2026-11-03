@@ -516,11 +516,9 @@ async def main():
         await session.execute(insert(User).values(name='Alice', age=30))
         await session.execute(update(User).where(User.age < 18).values(status='minor'))
         
-        # Concurrent queries with asyncio.gather
-        user_result, order_result = await asyncio.gather(
-            session.execute(select(User)),
-            session.execute(select(Order))
-        )
+        # Operations in one session are sequential and share this transaction.
+        user_result = await session.execute(select(User))
+        order_result = await session.execute(select(Order))
         # Commits automatically
     
     await client.disconnect()
@@ -530,7 +528,7 @@ asyncio.run(main())
 
 **Async Benefits:**
 - ✅ Non-blocking I/O operations
-- ✅ Concurrent execution with `asyncio.gather()`
+- ✅ Run independent parallel operations with separate sessions
 - ✅ Perfect for FastAPI, aiohttp, and async frameworks
 - ✅ Same transaction guarantees as sync version
 

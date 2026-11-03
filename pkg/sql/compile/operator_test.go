@@ -100,6 +100,25 @@ func TestDupOperatorUnionAllMarker(t *testing.T) {
 	require.Panics(t, func() { dupOperator(sequential, 0, 1) })
 }
 
+func TestCompleteKeyShuffleCloneAndRemoteBoundary(t *testing.T) {
+	c := NewMockCompile(t)
+	defer c.proc.Free()
+	source := shuffle.NewArgument()
+	defer source.Release()
+	source.BucketNum = 4
+	source.DrainAllBuckets = true
+	source.ShuffleType = int32(plan.ShuffleType_Hash)
+	source.ShuffleKeyColumns = []int32{0, 2}
+	clone := dupOperator(source, 0, 1).(*shuffle.Shuffle)
+	defer clone.Release()
+	defer clone.Free(c.proc, false, nil)
+	require.Equal(t, source.ShuffleKeyColumns, clone.ShuffleKeyColumns)
+	clone.ShuffleKeyColumns[0] = 1
+	require.Equal(t, int32(0), source.ShuffleKeyColumns[0])
+	_, _, err := convertToPipelineInstruction(source, c.proc, &scopeContext{}, 1)
+	require.ErrorContains(t, err, "coordinator-local")
+}
+
 func TestConstructMergeGroupCarriesEmptyGroupingSetMetadata(t *testing.T) {
 	groupNode := &plan.Node{GroupBy: []*plan.Expr{
 		{Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
@@ -500,8 +519,15 @@ func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
 			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
 			_, configErr = check(nil, true)
 			require.ErrorContains(t, configErr, "cannot be NULL")
-			_, configErr = check([]byte("NaN"), false)
-			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
+			// A textual NaN is a MySQL nonnumeric string, hence zero.
+			// Actual IEEE NaN/Inf rejection is covered by config-vector tests.
+			config, configErr = check([]byte("NaN"), false)
+			require.NoError(t, configErr)
+			zero := []byte("0")
+			if tc.name != plan2.NameApproxPercentile {
+				zero = aggexec.EncodeOrderedPercentileConfig(zero, false)
+			}
+			require.Equal(t, zero, config)
 
 			config, configErr = check([]byte("50"), false)
 			require.NoError(t, configErr)

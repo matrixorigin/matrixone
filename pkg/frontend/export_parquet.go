@@ -20,9 +20,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -39,6 +41,12 @@ type ParquetWriter struct {
 	schema      *parquet.Schema
 	columnNames []string
 	columnTypes []defines.MysqlType
+	// utf8Cols marks every column whose values are written into a Parquet
+	// String() (UTF-8 logical type) node straight from user bytes. The loader
+	// (pkg/sql/colexec/external/parquet.go) rejects invalid-UTF-8 string
+	// values for VARCHAR-family targets, so the writer rejects them up front
+	// instead of reporting success for a file that cannot be read back.
+	utf8Cols []bool
 
 	bufferedBytes uint64 // Plain value bytes plus definition levels, before encoding.
 	bufferedRows  int
@@ -59,6 +67,7 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 
 	columnNames := make([]string, len(mrs.Columns))
 	columnTypes := make([]defines.MysqlType, len(mrs.Columns))
+	utf8Cols := make([]bool, len(mrs.Columns))
 	columnNamesSeen := make(map[string]struct{}, len(mrs.Columns))
 
 	// Build parquet schema from column definitions using Group (map[string]Node)
@@ -77,6 +86,7 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 		}
 		columnTypes[i] = mysqlCol.ColumnType()
 		group[columnNames[i]] = buildParquetNode(columnTypes[i], mysqlCol.Flag())
+		utf8Cols[i] = valueRequiresValidUTF8(columnTypes[i], mysqlCol.Flag())
 	}
 
 	schema := parquet.NewSchema("export", group)
@@ -92,7 +102,27 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 		schema:      schema,
 		columnNames: columnNames,
 		columnTypes: columnTypes,
+		utf8Cols:    utf8Cols,
 	}, nil
+}
+
+// valueRequiresValidUTF8 reports whether a column's raw bytes land in a
+// Parquet String() (UTF-8 logical) node with string semantics. This is also
+// the schema's raw-string classification: binary-flagged string families use
+// unannotated BYTE_ARRAY instead, not merely an exemption from validation.
+func valueRequiresValidUTF8(typ defines.MysqlType, flag uint16) bool {
+	if flag&uint16(defines.BINARY_FLAG) != 0 {
+		return false
+	}
+	switch typ {
+	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING,
+		defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT,
+		defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
+		return true
+	default:
+		return false
+	}
 }
 
 // buildParquetNode creates a parquet node from MySQL type
@@ -137,13 +167,13 @@ func buildParquetNode(typ defines.MysqlType, flag uint16) parquet.Node {
 		// Use string representation for decimals
 		return parquet.Optional(parquet.String())
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-		defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_UUID, defines.MYSQL_TYPE_TEXT:
-		return parquet.Optional(parquet.String())
-	case defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
 		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
-		if flag&uint16(defines.BINARY_FLAG) != 0 {
-			return parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
+		if valueRequiresValidUTF8(typ, flag) {
+			return parquet.Optional(parquet.String())
 		}
+		return parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
+	case defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_UUID:
 		return parquet.Optional(parquet.String())
 	default:
 		// Default to string for unknown types
@@ -194,6 +224,21 @@ func (pw *ParquetWriter) writeBatchChunk(bat *batch.Batch, start, end int, maxBu
 			val, err := pw.vectorValueToParquet(vec, colIdx, rowIdx, timeZone)
 			if err != nil {
 				return start, err
+			}
+			if pw.utf8Cols[colIdx] {
+				// A String() node cannot express non-UTF-8 bytes; fail here
+				// (before any bytes reach the file) with the same error shape
+				// the loader reports for such a value.
+				var raw []byte
+				switch v := val.(type) {
+				case string:
+					raw = util2.UnsafeStringToBytes(v)
+				case []byte:
+					raw = v
+				}
+				if raw != nil && !utf8.Valid(raw) {
+					return start, moerr.NewInvalidInputf(pw.ctx, "invalid UTF-8 value for %s", vec.GetType().Oid.String())
+				}
 			}
 			row[colName] = val
 			switch v := val.(type) {

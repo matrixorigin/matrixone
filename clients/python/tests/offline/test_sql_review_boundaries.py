@@ -226,5 +226,8 @@ def test_snapshot_defers_parameters_to_execution_connection(client):
     probes = []
     mode_transport(client._engine, probes, {'value': 'NO_BACKSLASH_ESCAPES'})
     snapshot = SnapshotClient(client, 'existing_snapshot')
-    assert snapshot.execute("SELECT '\\', ?", (7,)).rows == [('\\', 7)]
-    assert len(probes) == 1
+    # The bounded wrapper cannot know the executing session's lexical mode.
+    with pytest.raises(ValueError, match='ambiguous'):
+        snapshot.execute("SELECT '\\', ?", (7,))
+    assert probes == []
+    assert snapshot.execute('SELECT ?, ?', ('\\', 7)).rows == [('\\', 7)]

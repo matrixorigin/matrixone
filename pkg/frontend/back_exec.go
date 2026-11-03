@@ -53,6 +53,13 @@ import (
 type backExec struct {
 	backSes    *backSession
 	statsArray *statistic.StatsArray
+	// internalExecution tags every statement this executor runs as trusted
+	// implementation SQL (BackgroundExecOption.internalExecution), e.g. the
+	// catalog writes generated for SET GLOBAL, instead of caller-authored
+	// work. It flows into UserInput.isInternalInput so the READ ONLY
+	// transaction gate never observes generated catalog maintenance as user
+	// writes, while user-authored procedure statements stay gated.
+	internalExecution bool
 }
 
 // backExecProcessHook runs after a background statement has created its
@@ -213,7 +220,11 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 
 	var statements []tree.Statement
 	if useSQLMode {
-		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, v.(int64), sqlMode)
+		lowerCase, modeErr := plan2.RestoredViewLowerCaseTableNames(ctx, sql, v.(int64))
+		if modeErr != nil {
+			return modeErr
+		}
+		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, lowerCase, sqlMode)
 	} else {
 		statements, err = mysql.Parse(ctx, sql, v.(int64))
 	}
@@ -250,6 +261,7 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 		parserSQLMode:    sqlMode,
 		useParserSQLMode: useSQLMode,
 		isRestore:        isRestore,
+		isInternalInput:  back.internalExecution,
 	}
 	execCtx := ExecCtx{
 		reqCtx: ctx,
@@ -946,6 +958,12 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 			lowerCaseTableNames = 0
 		}
 		if input.useParserSQLMode {
+			// This parse produces the executed AST; preliminary classification
+			// in back.exec is not sufficient to preserve restored identifiers.
+			lowerCaseTableNames, err = plan2.RestoredViewLowerCaseTableNames(execCtx.reqCtx, input.getSql(), lowerCaseTableNames)
+			if err != nil {
+				return nil, err
+			}
 			stmts, err = parsers.ParseWithSQLMode(
 				execCtx.reqCtx,
 				dialect.MYSQL,
@@ -1261,6 +1279,9 @@ func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack 
 		be := &backExec{}
 		be.init(backSes, txnOp, db, callBack)
 		be.backSes.upstream = backSes.upstream
+		if len(opts) > 0 && opts[0] != nil {
+			be.internalExecution = opts[0].internalExecution
+		}
 		return be
 	} else if backSes.upstream != nil {
 		// XXXSP

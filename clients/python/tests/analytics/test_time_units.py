@@ -15,6 +15,7 @@ def stream_for(value, dtype):
     # The real Arrow conversion, with the DBAPI's documented TIME timedelta.
     stream = ArrowStream.__new__(ArrowStream)
     stream._closed = stream._complete = False
+    stream._source_check = None
     stream.batch_size = 8
     stream.schema = pa.schema([('clock', dtype)])
     stream._source_schema = pa.schema([('clock', pa.duration('us'))])

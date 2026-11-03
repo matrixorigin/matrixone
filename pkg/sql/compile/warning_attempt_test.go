@@ -406,7 +406,7 @@ func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {
 		// retain the same statement-owned floor, independently of physical config.
 		for _, rebuild := range []bool{false, true} {
 			c.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) { return plan2.DeepCopyPlan(pn), nil })
-			retry, err := c.buildRetryCompile(rebuild, c.proc.GetTopContext())
+			retry, err := c.buildRetryCompile(rebuild)
 			require.NoError(t, err)
 			require.Equal(t, tc.floor, retry.groupConcatMaxLenFloor)
 			_, err = retry.Run(0)

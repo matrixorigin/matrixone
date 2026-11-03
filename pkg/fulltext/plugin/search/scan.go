@@ -59,8 +59,6 @@ type Scan struct {
 	n_result         uint64
 	sacc             *fulltext.SearchAccum
 	limit            uint64
-	nrows            int
-	idx2word         map[int]string
 	agghtab          map[any]uint64
 	aggcnt           []int64
 	mpool            *fulltext.FixedBytePool
@@ -155,8 +153,6 @@ func (u *Scan) ResetRowState(proc *process.Process) {
 	u.streamingStarted = false
 	u.n_result = 0
 	u.sacc = nil
-	u.nrows = 0
-	u.idx2word = make(map[int]string)
 	u.agghtab = nil
 	u.aggcnt = nil
 	u.docLenMap = make(map[any]int32)
@@ -762,8 +758,6 @@ func groupby(u *Scan, proc *process.Process, s *fulltext.SearchAccum) (stream_cl
 		return false, moerr.NewInternalError(proc.Ctx, "output vector columns not match")
 	}
 	needSetDocLen := len(bat.Vecs) == 3
-
-	u.nrows += bat.RowCount()
 
 	for i := 0; i < bat.RowCount(); i++ {
 		// doc_id any

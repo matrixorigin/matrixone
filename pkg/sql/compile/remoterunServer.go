@@ -487,12 +487,25 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.groupConcatReportingIncomplete = receiver.warningSession.incompleteGroupConcatReporting()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
+				// A terminal envelope can accompany an error response. ODKU facts
+				// are publishable only for a fully successful statement; do not let
+				// an invalidated attempt leak its partial action summary to the
+				// initiating CN.
+				if err == nil {
+					receiver.odkuResult = remoteODKUResultFromProcess(
+						runCompile.proc.GetODKUResultSummary())
+				} else {
+					receiver.odkuResult = nil
+				}
 				runCompile.clear()
 				return nil
 			}))
 			terminal, terminalErr := allocationParticipant.finish(err)
 			participantFinished = true
 			err = joinAllocationLifecycleErrors(err, terminalErr)
+			if err != nil {
+				receiver.odkuResult = nil
+			}
 			for _, snapshot := range terminal.allocation {
 				localAllocationQuality |= addAllocationAccountTerminal(
 					&localAllocation,
@@ -535,6 +548,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			receiver.resourceMissingMemoryDomains = aggregate.MissingMemoryDomainCount
 			receiver.resourcePendingAllocationGroups = aggregate.PendingAllocationGroups
 			receiver.resourceCompletedAllocationGroups = aggregate.CompletedAllocationGroups
+			if err != nil {
+				receiver.odkuResult = nil
+			}
 		}()
 		if statementGroupEnabled {
 			expectedFragments, ok := runCompile.remoteFragmentCounts[runCompile.addr]
@@ -848,10 +864,12 @@ type processHelper struct {
 	StmtId                     uuid.UUID
 	statementRuntimeIgnore     bool
 	statementRuntimeSelect     bool
+	statementRuntimeDML        bool
 	planSnapshotTS             timestamp.Timestamp
 	hasPlanSnapshotTS          bool
 	planGenerationReused       bool
 	stringShuffleHashAlgorithm process.StringShuffleHashAlgorithm
+	odkuOrdinalBase            uint64
 	prepareParams              pipeline.PrepareParamInfo
 	affectedRows               int64
 	remoteFragmentCounts       map[string]uint32
@@ -901,6 +919,7 @@ type messageReceiverOnServer struct {
 	groupConcatCutMessage             string
 	groupConcatReportingIncomplete    bool
 	statementLastInsertID             uint64
+	odkuResult                        *remoteODKUResultSummary
 }
 
 func newMessageReceiverOnServer(
@@ -995,6 +1014,9 @@ func (receiver *messageReceiverOnServer) acquireMessage() (*pipeline.Message, er
 
 // newCompile make and return a new compile to run a pipeline.
 func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
+	if err := process.ValidateODKUInputOrdinalBase(receiver.procBuildHelper.odkuOrdinalBase); err != nil {
+		return nil, err
+	}
 	// A remote compile used to have an unlimited local pool. HashBuild could
 	// therefore grow until the CN was killed even though the process limitation
 	// was already present on the wire. Keep a finite physical backstop while the
@@ -1028,6 +1050,9 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	proc.SetLastInsertID(pHelper.sessionInfo.LastInsertID)
+	// The range was checked before constructing the process.
+	_ = proc.SetODKUInputOrdinalBase(pHelper.odkuOrdinalBase)
 	warningLimit := process.WarningDiagnosticLegacyRetentionLimit
 	if proc.Base.SessionInfo.MaxErrorCountSet {
 		warningLimit = proc.Base.SessionInfo.MaxErrorCount
@@ -1125,6 +1150,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		stmtProfile.SetStatementRuntimeProfile("", "", pHelper.statementRuntimeIgnore)
 		if pHelper.statementRuntimeSelect {
 			stmtProfile.SetStatementRuntimeProfile("Select", "DQL", pHelper.statementRuntimeIgnore)
+		} else if pHelper.statementRuntimeDML {
+			stmtProfile.SetStatementRuntimeProfile("", "DML", pHelper.statementRuntimeIgnore)
 		}
 		proc.Base.StmtProfile = stmtProfile
 	}
@@ -1344,6 +1371,7 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 	envelope := remoteTerminalEnvelope{
 		TerminalResourceVersion:   remoteTerminalResourceVersion,
 		StatementLastInsertID:     receiver.statementLastInsertID,
+		ODKUResult:                receiver.odkuResult,
 		WarningCount:              receiver.warningCount,
 		GroupConcatCut:            receiver.groupConcatCut,
 		GroupConcatCutMessage:     receiver.groupConcatCutMessage,
@@ -1405,6 +1433,9 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if err != nil {
 		return processHelper{}, err
 	}
+	if err := process.ValidateStatementRuntimeClassification(procInfo.StatementRuntimeSelect, procInfo.StatementRuntimeDml); err != nil {
+		return processHelper{}, err
+	}
 	stringShuffleHashAlgorithm, err := process.DecodeStringShuffleHashAlgorithm(
 		procInfo.StringShuffleHashAlgorithm,
 	)
@@ -1421,7 +1452,9 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 		affectedRows:               procInfo.AffectedRows,
 		statementRuntimeIgnore:     procInfo.StatementRuntimeIgnore,
 		statementRuntimeSelect:     procInfo.StatementRuntimeSelect,
+		statementRuntimeDML:        procInfo.StatementRuntimeDml,
 		stringShuffleHashAlgorithm: stringShuffleHashAlgorithm,
+		odkuOrdinalBase:            procInfo.OdkuOrdinalBase,
 		remoteFragmentCounts:       maps.Clone(procInfo.RemoteFragmentCounts),
 	}
 	if procInfo.PlanSnapshotTs != nil {

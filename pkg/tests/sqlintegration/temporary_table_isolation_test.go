@@ -163,19 +163,48 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 		t.Run("inline_async_and_background_fulltext", func(t *testing.T) {
 			var original int
 			require.NoError(t, owner.QueryRowContext(ctx, "select @@experimental_fulltext2_index").Scan(&original))
-			exec(owner, "set experimental_fulltext2_index=1")
+			service := cn.RawService().(cnservice.Service)
+			var executor *iscp.ISCPTaskExecutor
+			require.Eventually(t, func() bool {
+				var ready bool
+				executor, ready = iscp.GetExecutorRuntime(service.ID())
+				return ready
+			}, time.Minute, 10*time.Millisecond, "ISCP executor must be ready before pausing")
 			defer func() {
-				_, _ = owner.ExecContext(context.WithoutCancel(ctx), fmt.Sprintf("set experimental_fulltext2_index=%d", original))
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				defer cleanupCancel()
+				for _, statement := range []string{
+					"drop table if exists background_t",
+					"drop table if exists async_t",
+					fmt.Sprintf("set experimental_fulltext2_index=%d", original),
+				} {
+					if _, err := owner.ExecContext(cleanupCtx, statement); err != nil {
+						t.Errorf("cleanup %s: %v", statement, err)
+					}
+				}
+				require.NoError(t, executor.Resume())
+				restored, ready := iscp.GetExecutorRuntime(service.ID())
+				require.True(t, ready, "restore ISCP before releasing the shared fixture")
+				require.Same(t, executor, restored)
 			}()
-			exec(owner, "create temporary table async_t(id int primary key, body varchar(100), fulltext ft(body) async)")
-			defer exec(owner, "drop table async_t")
-			exec(owner, "create temporary table background_t(id int primary key, body varchar(100), fulltext2 ft(body))")
-			defer exec(owner, "drop table background_t")
-			exec(owner, "insert into background_t values(1, 'apple')")
+			// This case verifies background SQL access, not periodic scheduling.
+			// Drain workers before a single-attempt initialization can unregister
+			// the same job they update. Production workers retry whole iterations.
+			require.NoError(t, executor.Pause())
+			_, running := iscp.GetExecutorRuntime(service.ID())
+			require.False(t, running, "Pause must drain and unpublish the executor")
+			exec := func(statement string) {
+				t.Helper()
+				_, err := owner.ExecContext(ctx, statement)
+				require.NoError(t, err, statement)
+			}
+			exec("set experimental_fulltext2_index=1")
+			exec("create temporary table async_t(id int primary key, body varchar(100), fulltext ft(body) async)")
+			exec("create temporary table background_t(id int primary key, body varchar(100), fulltext2 ft(body))")
+			exec("insert into background_t values(1, 'apple')")
 			var physical string
 			require.NoError(t, owner.QueryRowContext(ctx,
 				"select relname from mo_catalog.mo_tables where reldatabase=? and relname like '%_background_t'", schema).Scan(&physical))
-			service := cn.RawService().(cnservice.Service)
 			initSQL := fmt.Sprintf("alter table `%s`.`%s` alter reindex ft fulltext2 force_sync", schema, physical)
 			accountCtx := defines.AttachAccountId(ctx, 0)
 			require.NoError(t, iscp.ProcessInitSQL(accountCtx, service.ID(), service.GetEngine(), service.GetTxnClient(),

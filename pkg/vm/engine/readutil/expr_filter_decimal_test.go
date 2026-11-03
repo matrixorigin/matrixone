@@ -92,6 +92,15 @@ func TestCompileFilterExprDecimalScaleMatchesPublicPlan(t *testing.T) {
 			blockMax:         "2500.0000",
 			selectedExpected: true,
 		},
+		{
+			name:             "decimal128 low scale literal prunes boundary",
+			table:            "decimal_scan128",
+			literalScale:     0,
+			literalRaw:       types.Decimal128{B0_63: 2000},
+			blockMin:         "2000.0000",
+			blockMax:         "2500.0000",
+			selectedExpected: false,
+		},
 	}
 
 	for _, test := range tests {

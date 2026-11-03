@@ -57,6 +57,6 @@ func TestMergeStats(t *testing.T) {
 	}
 
 	for i, c := range cases {
-		require.Equal(t, c.expected, c.stats.needNewObject(), "case %d", i)
+		require.Equal(t, c.expected, c.stats.needNewObject(), "case %d: %s", i, c.note)
 	}
 }

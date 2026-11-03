@@ -133,6 +133,13 @@ func preparedFieldBindingKey(key string, state *plan2.PreparedFieldTypes) string
 	return key + "field:" + strconv.FormatUint(state.Revision(), 10)
 }
 
+func preparedTemporalBindingKey(key string, state *plan2.PreparedTemporalTypes) string {
+	if state == nil {
+		return key
+	}
+	return key + "temporal:" + strconv.FormatUint(state.Revision(), 10)
+}
+
 func (prepareStmt *PrepareStmt) rememberBitCountSourceTypes(values []any) {
 	if len(prepareStmt.bitCountOverloadParamPositions) == 0 {
 		prepareStmt.bitCountNumericParamTypes = nil
@@ -169,7 +176,11 @@ func buildPreparedBoundQuery(ctx context.Context, ses FeSession, compiler plan2.
 	var bound *plan2.PreparedExecutionPlan
 	_, err := buildPlanWithStats(planning, ses, compiler, func() (*plan2.Plan, error) {
 		var buildErr error
-		bound, buildErr = plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, values)
+		var selected bool
+		bound, selected, buildErr = buildViewSchemaValidationPreparedPlan(planning, ses, compiler, stmt, bindings, values)
+		if !selected {
+			bound, buildErr = plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, values)
+		}
 		if buildErr != nil {
 			return nil, buildErr
 		}
@@ -184,10 +195,12 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	}
 	var preparedPlan *plan2.Plan
 	var fieldTypes *plan2.PreparedFieldTypes
+	var temporalTypes *plan2.PreparedTemporalTypes
 	var fieldSchemas []*plan2.ObjectRef
 	if cwft.preparedStmt != nil {
 		fieldTypes = cwft.preparedStmt.fieldTypes
-		if fieldTypes != nil {
+		temporalTypes = cwft.preparedStmt.temporalTypes
+		if fieldTypes != nil || temporalTypes != nil {
 			// Keep immutable declaration facts, not another retained plan graph
 			// or a later EXECUTE's mutable handle, as the retry generation proof.
 			schemas := cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().GetSchemas()
@@ -204,10 +217,44 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	}
 	return &preparedExecutionRetry{
 		fieldTypes:         fieldTypes,
+		temporalTypes:      temporalTypes,
 		fieldSchemas:       fieldSchemas,
 		paramVals:          append([]any(nil), cwft.paramVals...),
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
 		preparedPlan:       preparedPlan,
 		diagnosticFreeJoin: cwft.preparedJoinDiagnosticFree,
+	}
+}
+
+// Keep inferred domains only for markers owned by integer +/* metadata. NULL
+// retains the previous effective domain; a valid non-NULL source replaces it,
+// including decimal/string transitions. This state belongs to the statement,
+// and is committed before SQL evaluation (an arithmetic error does not undo it).
+func (prepareStmt *PrepareStmt) rememberIntegerArithmeticBindings(p *plan2.Plan, bindings []plan2.PreparedSourceBinding, values []any) {
+	defaults := plan2.IntegerPrecisionParameterBindings(p)
+	if len(defaults) == 0 {
+		return
+	}
+	if len(prepareStmt.integerArithmeticBindings) != len(bindings) {
+		prepareStmt.integerArithmeticBindings = make([]plan2.PreparedSourceBinding, len(bindings))
+	}
+	for _, initial := range defaults {
+		pos := int(initial.Position)
+		if pos < 0 || pos >= len(bindings) || pos >= len(values) {
+			continue
+		}
+		value := values[pos]
+		if param, ok := value.(plan2.ParamValue); ok {
+			value = param.Value
+		}
+		if value == nil {
+			previous := prepareStmt.integerArithmeticBindings[pos]
+			if previous.Type.Oid == types.T_any {
+				previous = initial
+			}
+			bindings[pos] = previous
+		} else {
+			prepareStmt.integerArithmeticBindings[pos] = bindings[pos]
+		}
 	}
 }

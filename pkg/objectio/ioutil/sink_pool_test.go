@@ -776,3 +776,79 @@ func TestSinker_PipelineFlushKey(t *testing.T) {
 	ctx = context.WithValue(ctx, PipelineFlushKey, true)
 	require.Equal(t, true, ctx.Value(PipelineFlushKey))
 }
+
+// Draining a pipeline does not finish the sinker lifecycle; it must remain
+// usable for further writes. Close and Reset must release the derived context.
+func TestSinkerPipelineContextLifecycle(t *testing.T) {
+	for _, operation := range []string{"close", "reset"} {
+		for _, failed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/failed=%t", operation, failed), func(t *testing.T) {
+				parent, stop := context.WithCancel(context.Background())
+				defer stop()
+				ctx, cancel := context.WithCancel(parent)
+				defer cancel()
+				r := &pipelineResult{ctx: ctx, cancel: cancel}
+				sinker := &Sinker{}
+				sinker.pipe.enabled = true
+				sinker.pipe.result = r
+				var wantErr error
+				if failed {
+					wantErr = fmt.Errorf("pipeline failure")
+					r.setError(wantErr)
+				} else {
+					require.NoError(t, sinker.drainPipeline())
+					require.NoError(t, ctx.Err(), "a drain must allow subsequent writes")
+				}
+				if operation == "close" {
+					require.ErrorIs(t, sinker.Close(), wantErr)
+					require.ErrorIs(t, sinker.Close(), wantErr)
+				} else {
+					sinker.Reset()
+					require.Nil(t, sinker.pipe.result)
+					sinker.Reset()
+				}
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+				require.NoError(t, parent.Err(), "cleanup must not cancel the parent")
+			})
+		}
+	}
+}
+
+func TestSinkerPipelineContextReleasedAfterWrite(t *testing.T) {
+	for _, operation := range []string{"close", "reset"} {
+		t.Run(operation, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			attrs, typs, seqnums := mockSchema(3, 2)
+			sinker := NewSinker(-1, attrs, typs,
+				NewFSinkerImplFactory(seqnums, -1, false, false, 0), proc.Mp(), fs,
+				WithPipelineFlush(), WithMemorySizeThreshold(1))
+			t.Cleanup(func() { _ = sinker.Close() })
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			for i := 0; i < 2; i++ {
+				bat := containers.MockBatch(typs, 100, 2, nil)
+				require.NoError(t, sinker.Write(parent, containers.ToCNBatch(bat)))
+				bat.Close()
+				r := sinker.pipe.result
+				require.NotNil(t, r)
+				require.NoError(t, sinker.Sync(parent))
+				rows := 0
+				for _, stats := range sinker.result.persisted {
+					rows += int(stats.Rows())
+				}
+				require.Equal(t, 100, rows)
+				if operation == "close" {
+					require.NoError(t, sinker.Close())
+				} else {
+					sinker.Reset()
+				}
+				require.ErrorIs(t, r.ctx.Err(), context.Canceled)
+				if operation == "close" {
+					break
+				}
+			}
+		})
+	}
+}

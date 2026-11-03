@@ -19,6 +19,7 @@ import (
 	"context"
 	"strings"
 
+	_ "github.com/go-sql-driver/mysql"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"

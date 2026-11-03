@@ -16,8 +16,10 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -25,10 +27,12 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -473,6 +477,43 @@ func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tableDef.Cols, actual.Cols)
 	require.NotSame(t, tableDef, actual)
+}
+
+func TestInternalResolverNormalizesPersistedDecimalCoercions(t *testing.T) {
+	data, err := os.ReadFile("../plan/testdata/legacy_decimal_catalog_63a964a82f.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	catalogDef := new(plan.TableDef)
+	require.NoError(t, catalogDef.Unmarshal(fixtures["signed_compare"]))
+	wire, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	requestCtx := proc.GetTopContext()
+	pipelineCtx, cancel := context.WithCancel(requestCtx)
+	cancel()
+	proc.Ctx = pipelineCtx
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).Times(2)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "legacy_cmp", nil).Return(relation, nil).Times(2)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil).Times(2)
+	c := &compilerContext{ctx: requestCtx, defaultDB: "db", engine: eng, proc: proc}
+	for range 2 {
+		_, resolved, err := c.Resolve("db", "legacy_cmp", nil)
+		require.NoError(t, err)
+		require.NotSame(t, catalogDef.Checks[0], resolved.Checks[0])
+		for _, arg := range resolved.Checks[0].Check.GetF().Args {
+			require.Equal(t, int32(types.T_decimal128), arg.Typ.Id)
+			require.Equal(t, int32(19), arg.Typ.Width)
+		}
+	}
+	after, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, wire, after)
 }
 
 func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testing.T) {
@@ -956,4 +997,84 @@ func TestInternalCompilerLoadPrimaryKeyPolicy(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, value, got)
 	}
+}
+
+type namespaceDelegate struct {
+	*plan.MockCompilerContext
+	t        *testing.T
+	snapshot *plan.Snapshot
+}
+
+func (d *namespaceDelegate) Resolve(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	return &plan.ObjectRef{Obj: 99}, &plan.TableDef{TblId: 99, IsTemporary: true}, nil
+}
+
+func (d *namespaceDelegate) ResolveWithoutTemporaryAlias(db, table string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	require.Equal(d.t, "subscription_db", db)
+	require.Equal(d.t, "source", table)
+	require.Same(d.t, d.snapshot, snapshot)
+	id, err := d.GetAccountId()
+	require.NoError(d.t, err)
+	return &plan.ObjectRef{Obj: 11, PubInfo: &pbplan.PubInfo{TenantId: int32(id)}}, &plan.TableDef{TblId: 11}, nil
+}
+
+func TestCompilerContextDelegatesWithoutTemporaryAlias(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	snapshot := &plan.Snapshot{Tenant: &pbplan.SnapshotTenant{TenantID: 23}}
+	delegate := &namespaceDelegate{MockCompilerContext: plan.NewMockCompilerContext(false, proc), t: t, snapshot: snapshot}
+	for _, viewChild := range []bool{false, true} {
+		c := &compilerContext{proc: proc, ctx: attachInternalExecutorCompilerContext(proc.Ctx, delegate), viewChild: viewChild, viewDelegate: delegate}
+		obj, def, err := c.ResolveWithoutTemporaryAlias("subscription_db", "source", snapshot)
+		require.NoError(t, err)
+		require.Equal(t, uint64(11), def.TblId)
+		id, err := delegate.GetAccountId()
+		require.NoError(t, err)
+		require.Equal(t, int32(id), obj.PubInfo.TenantId)
+		_, def, err = c.Resolve("subscription_db", "source", snapshot)
+		require.NoError(t, err)
+		require.Equal(t, uint64(99), def.TblId)
+	}
+}
+
+func TestCompilerContextResolveWithoutTemporaryAlias(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	owner.AddTempTable("db", "t", "physical")
+	proc.Session = owner
+	database := mock_frontend.NewMockDatabase(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", nil).Return(database, nil).AnyTimes()
+	for i, name := range []string{"t", "physical"} {
+		def := &plan.TableDef{Name: name, TblId: uint64(i + 11), TableType: catalog.SystemOrdinaryRel}
+		if name == "physical" {
+			def.TableType = catalog.SystemTemporaryTable
+		}
+		relation := mock_frontend.NewMockRelation(ctrl)
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+		relation.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+		database.EXPECT().Relation(gomock.Any(), name, nil).Return(relation, nil).AnyTimes()
+	}
+	c := &compilerContext{engine: eng, proc: proc, ctx: proc.Ctx}
+	for _, skipAlias := range []bool{false, true, false} {
+		resolve := c.Resolve
+		if skipAlias {
+			resolve = c.ResolveWithoutTemporaryAlias
+		}
+		obj, def, err := resolve("db", "t", nil)
+		require.NoError(t, err)
+		require.Equal(t, !skipAlias, def.IsTemporary)
+		require.Equal(t, !skipAlias, obj.NotLockMeta)
+		if skipAlias {
+			require.Equal(t, uint64(11), def.TblId)
+		} else {
+			require.Equal(t, uint64(12), def.TblId)
+		}
+	}
+	obj, def, err := c.ResolveWithoutTemporaryAlias("db", "physical", nil)
+	require.NoError(t, err)
+	require.True(t, def.IsTemporary)
+	require.True(t, obj.NotLockMeta)
+	_, _, err = (&recoveryCompilerContext{compilerContext: c}).ResolveWithoutTemporaryAlias("db", "t", nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 }

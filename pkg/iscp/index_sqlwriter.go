@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 const (
@@ -88,7 +89,7 @@ type IvfflatSqlWriter struct {
 }
 
 // Hnsw Sql Writer.  Use the vectorindex.VectorIndeXCdc JSON format
-type HnswSqlWriter[T types.RealNumbers] struct {
+type HnswSqlWriter[T types.ArrayElement] struct {
 	cdc       *vectorindex.VectorIndexCdc[T]
 	meta      vectorindex.HnswCdcParam
 	tabledef  *plan.TableDef
@@ -102,6 +103,8 @@ type HnswSqlWriter[T types.RealNumbers] struct {
 	srcPos    []int32
 	srcType   []*types.Type
 	dbName    string
+	kind      usearch.Quantization
+	ignored   *ignoredRows
 }
 
 // check FulltextSqlWriter is the interface of IndexSqlWriter
@@ -301,6 +304,7 @@ func NewFulltextSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef
 
 	w.indexTableName = w.indexdef[0].IndexTableName
 	w.dbName = tabledef.DbName
+	w.param = w.indexdef[0].IndexAlgoParams
 
 	return w, nil
 }
@@ -340,13 +344,9 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	cnames := make([]string, 0, len(w.srcPos))
 	for i, pos := range w.srcPos {
 		typstr := w.srcType[i].DescString()
-		// Alias is quoted (byte-identical to the old `name` wrapping for ordinary
-		// names, safe for special chars). cnames keeps the RAW name: it feeds the
-		// column references in fulltext_index_tokenize(...) below, and quoting
-		// those would change that call's SQL for every column — keep it identical
-		// to the original.
+		// Both the alias and its subsequent reference represent one atomic name.
 		coldefs = append(coldefs, fmt.Sprintf("CAST(column_%d as %s) as %s", i, typstr, sqlquote.Ident(w.tabledef.Cols[pos].Name)))
-		cnames = append(cnames, w.tabledef.Cols[pos].Name)
+		cnames = append(cnames, sqlquote.Ident(w.tabledef.Cols[pos].Name))
 	}
 
 	cols := strings.Join(coldefs, ", ")
@@ -361,12 +361,12 @@ func (w *FulltextSqlWriter) toFulltextUpsert(upsert bool) ([]byte, error) {
 	}
 
 	sql += fmt.Sprintf("WITH src as (SELECT %s FROM (VALUES %s) as __mo_iscp_values) ", cols, string(w.vbuf))
-	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize('%s', %d, %s) as f", w.param, w.pkType.Oid, cnames_str)
+	sql += fmt.Sprintf("SELECT f.* FROM src CROSS APPLY fulltext_index_tokenize(%s, %d, %s) as f", sqlquote.String(w.param), w.pkType.Oid, cnames_str)
 
 	return []byte(sql), nil
 }
 
-func NewGenericHnswSqlWriter[T types.RealNumbers](algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
+func NewGenericHnswSqlWriter[T types.ArrayElement](algo string, jobID JobID, info *ConsumerInfo, tabledef *plan.TableDef, indexdef []*plan.IndexDef) (IndexSqlWriter, error) {
 
 	// get the first indexdef as they are the same
 	idxdef := indexdef[0]
@@ -427,6 +427,12 @@ func NewGenericHnswSqlWriter[T types.RealNumbers](algo string, jobID JobID, info
 
 	w.dbName = tabledef.DbName
 
+	kind, err := hnsw.StorageQuantization(hnswparam.Quantization, tabledef.Cols[w.partsPos[0]].Typ.Id)
+	if err != nil {
+		return nil, err
+	}
+	w.kind = kind
+
 	w.meta = vectorindex.HnswCdcParam{
 		MetaTbl:   meta,
 		IndexTbl:  storage,
@@ -448,8 +454,8 @@ func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one primary key")
 	}
 
-	if len(indexdef) != 2 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table must have 2 secondary tables")
+	if len(indexdef) < 2 || len(indexdef) > 4 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table must have 2 to 4 secondary tables")
 	}
 
 	idxdef := indexdef[0]
@@ -466,8 +472,16 @@ func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 		return NewGenericHnswSqlWriter[float32](algo, jobID, info, tabledef, indexdef)
 	case int32(types.T_array_float64):
 		return NewGenericHnswSqlWriter[float64](algo, jobID, info, tabledef, indexdef)
+	case int32(types.T_array_float16):
+		return NewGenericHnswSqlWriter[types.Float16](algo, jobID, info, tabledef, indexdef)
+	case int32(types.T_array_bf16):
+		return NewGenericHnswSqlWriter[types.BF16](algo, jobID, info, tabledef, indexdef)
+	case int32(types.T_array_int8):
+		return NewGenericHnswSqlWriter[int8](algo, jobID, info, tabledef, indexdef)
+	case int32(types.T_array_uint8):
+		return NewGenericHnswSqlWriter[uint8](algo, jobID, info, tabledef, indexdef)
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("NewHnswSqlWriter: part is not vecf32 or vecf64")
+		return nil, moerr.NewInternalErrorNoCtx("NewHnswSqlWriter: part is not a supported vector type")
 	}
 }
 
@@ -501,7 +515,7 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 
 	v, ok := row[w.partsPos[0]].([]T)
 	if !ok {
-		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
+		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type %T", row[w.partsPos[0]]))
 	}
 
 	if v == nil {
@@ -510,8 +524,27 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 		return nil
 	}
 
+	if skip, err := w.unstorable(key, v); skip || err != nil {
+		return err
+	}
 	w.cdc.Insert(key, v, nil)
 	return nil
+}
+
+// unstorable records whether the index cannot store v, the vector of the row with key.
+func (w *HnswSqlWriter[T]) unstorable(key int64, v []T) (bool, error) {
+	if w.ignored == nil {
+		return false, nil
+	}
+	if err := hnsw.CheckStorable(v, w.kind); err != nil {
+		return true, w.ignored.ignore(key, err)
+	}
+	w.ignored.indexed(key)
+	return false, nil
+}
+
+func (w *HnswSqlWriter[T]) setIgnored(ignored *ignoredRows) {
+	w.ignored = ignored
 }
 
 func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
@@ -529,7 +562,7 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 
 	v, ok := row[w.partsPos[0]].([]T)
 	if !ok {
-		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
+		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type %T", row[w.partsPos[0]]))
 	}
 
 	if v == nil {
@@ -538,6 +571,11 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 		return nil
 	}
 
+	if skip, err := w.unstorable(key, v); skip || err != nil {
+		// remove the version the index holds
+		w.cdc.Delete(key)
+		return err
+	}
 	w.cdc.Upsert(key, v, nil)
 	return nil
 }
@@ -547,6 +585,9 @@ func (w *HnswSqlWriter[T]) Delete(ctx context.Context, row []any) error {
 	key, ok := row[0].(int64)
 	if !ok {
 		return moerr.NewInternalError(ctx, "invalid key type. not int64")
+	}
+	if w.ignored != nil {
+		w.ignored.indexed(key)
 	}
 	w.cdc.Delete(key)
 	return nil

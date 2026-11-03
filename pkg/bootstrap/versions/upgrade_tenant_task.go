@@ -52,6 +52,26 @@ func AddUpgradeTenantTask(
 	return nil
 }
 
+// LastUpgradeTenantTaskAccountID returns the end of the committed task prefix.
+// The caller must hold the upgrade-step lock while reading and extending it.
+func LastUpgradeTenantTaskAccountID(upgradeID uint64, txn executor.TxnExecutor) (int32, error) {
+	sql := fmt.Sprintf("select to_account_id from %s where upgrade_id = %d order by to_account_id desc limit 1",
+		catalog.MOUpgradeTenantTable, upgradeID)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return 0, err
+	}
+	defer res.Close()
+	last := int32(-1)
+	_, rows := readSingleRow(res, func(cols []*vector.Vector) {
+		last = vector.GetFixedAtWithTypeCheck[int32](cols[0], 0)
+	})
+	if rows > 1 {
+		return 0, moerr.NewInvalidStateNoCtx("multiple last upgrade tenant ranges")
+	}
+	return last, nil
+}
+
 func UpdateUpgradeTenantTaskState(
 	taskID uint64,
 	state int32,
@@ -66,6 +86,29 @@ func UpdateUpgradeTenantTaskState(
 	}
 	res.Close()
 	return nil
+}
+
+// GetUpgradeTenantTask reads the persisted range before acquiring account
+// locks. Task identity and range do not change while an upgrade is active.
+func GetUpgradeTenantTask(taskID uint64, txn executor.TxnExecutor) (int32, int32, uint64, int32, error) {
+	sql := fmt.Sprintf("select from_account_id, to_account_id, upgrade_id, ready from %s where id = %d", catalog.MOUpgradeTenantTable, taskID)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	defer res.Close()
+	var from, to, ready int32
+	var upgradeID uint64
+	loaded, count := readSingleRow(res, func(cols []*vector.Vector) {
+		from = vector.GetFixedAtWithTypeCheck[int32](cols[0], 0)
+		to = vector.GetFixedAtWithTypeCheck[int32](cols[1], 0)
+		upgradeID = vector.GetFixedAtWithTypeCheck[uint64](cols[2], 0)
+		ready = vector.GetFixedAtWithTypeCheck[int32](cols[3], 0)
+	})
+	if !loaded || count != 1 || from > to {
+		return 0, 0, 0, 0, moerr.NewInvalidStateNoCtxf("invalid upgrade tenant task %d", taskID)
+	}
+	return from, to, upgradeID, ready, nil
 }
 
 func ReconcileDeletedUpgradeTenantTasks(
@@ -113,15 +156,25 @@ func HasUnreadyUpgradeTenantTasks(
 	return hasUnready, nil
 }
 
+// TenantTaskConflict means the transaction could not acquire an account range.
+// A lock conflict aborts the transaction, so callers must retry the next range
+// in a new transaction instead of issuing more SQL on this one.
+type TenantTaskConflict struct {
+	NextAccountID int32
+	Err           error
+}
+
+func (e *TenantTaskConflict) Error() string { return e.Err.Error() }
+func (e *TenantTaskConflict) Unwrap() error { return e.Err }
+
 func GetUpgradeTenantTasks(
 	upgradeID uint64,
-	txn executor.TxnExecutor) (uint64, []int32, []string, bool, bool, error) {
+	after int32,
+	txn executor.TxnExecutor) (uint64, []int32, []string, bool, error) {
 	taskID := uint64(0)
 	tenants := make([]int32, 0)
 	versions := make([]string, 0)
-	after := int32(0)
 	hasDeletedTenantTasks := false
-	hasConflictTenantTasks := false
 	for {
 		sql := fmt.Sprintf("select id, from_account_id, to_account_id from %s where from_account_id >= %d and upgrade_id = %d and ready = %d order by id limit 1",
 			catalog.MOUpgradeTenantTable,
@@ -130,7 +183,7 @@ func GetUpgradeTenantTasks(
 			No)
 		res, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
-			return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, err
+			return 0, nil, nil, hasDeletedTenantTasks, err
 		}
 		from := int32(-1)
 		to := int32(-1)
@@ -142,7 +195,7 @@ func GetUpgradeTenantTasks(
 		})
 		res.Close()
 		if from == -1 {
-			return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, nil
+			return 0, nil, nil, hasDeletedTenantTasks, nil
 		}
 
 		tenants = tenants[:0]
@@ -152,15 +205,11 @@ func GetUpgradeTenantTasks(
 		res, err = txn.Exec(sql, executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail))
 		if err != nil {
 			if isConflictError(err) {
-				hasConflictTenantTasks = true
-				next, ok := nextUpgradeTenantTaskAfter(to)
-				if !ok {
-					return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, nil
-				}
-				after = next
-				continue
+				// Zero wraps a conflict at MaxInt32 back to the first range.
+				next, _ := nextUpgradeTenantTaskAfter(to)
+				return 0, nil, nil, hasDeletedTenantTasks, &TenantTaskConflict{NextAccountID: next, Err: err}
 			}
-			return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, err
+			return 0, nil, nil, hasDeletedTenantTasks, err
 		}
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
@@ -174,12 +223,12 @@ func GetUpgradeTenantTasks(
 			hasDeletedTenantTasks = true
 			next, ok := nextUpgradeTenantTaskAfter(to)
 			if !ok {
-				return 0, nil, nil, hasDeletedTenantTasks, hasConflictTenantTasks, nil
+				return 0, nil, nil, hasDeletedTenantTasks, nil
 			}
 			after = next
 			continue
 		}
-		return taskID, tenants, versions, hasDeletedTenantTasks, hasConflictTenantTasks, nil
+		return taskID, tenants, versions, hasDeletedTenantTasks, nil
 	}
 }
 

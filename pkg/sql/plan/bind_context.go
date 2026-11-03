@@ -30,6 +30,7 @@ import (
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
+		builder:             builder,
 		groupByAst:          make(map[string]int32),
 		groupByCanonicalAst: make(map[string]int32),
 		groupByParamAst:     make(map[string]int32),
@@ -43,19 +44,24 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 		projectColByAst: make(map[string]int32),
 
-		aliasMap:       make(map[string]*aliasItem),
-		aliasFrequency: make(map[string]int),
-		bindingByTag:   make(map[int32]*Binding),
-		bindingByTable: make(map[string]*Binding),
-		bindingByCol:   make(map[string]*Binding),
-		outerUsingCols: make(map[string][]string),
-		sqlUdfArgs:     make(map[string]*plan.Expr),
-		parent:         parent,
-		boundCtes:      make(map[string]*CTERef),
-		boundViews:     make(map[[2]string]*tree.CreateView),
+		aliasMap:         make(map[string]*aliasItem),
+		aliasFrequency:   make(map[string]int),
+		bindingByTag:     make(map[int32]*Binding),
+		nullExtendedTags: make(map[int32]bool),
+		bindingByTable:   make(map[string]*Binding),
+		bindingByCol:     make(map[string]*Binding),
+		outerUsingCols:   make(map[string][]string),
+		sqlUdfArgs:       make(map[string]*plan.Expr),
+		parent:           parent,
+		boundCtes:        make(map[string]*CTERef),
+		boundViews:       make(map[[2]string]*tree.CreateView),
 	}
 
 	if builder != nil {
+		if builder.integerPrecision == nil {
+			builder.integerPrecision = newIntegerPrecisionBuilder()
+		}
+		bc.integerPrecision = builder.integerPrecision
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
 		if parent == nil && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
 			bc.defaultDatabase = builder.compCtx.DefaultDatabase()
@@ -64,11 +70,20 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 			requiredProtocol := int64(0)
 			bc.persistedExpressionProtocolRequirement = &requiredProtocol
 		}
+		if parent == nil {
+			// D11 carrier one: resolve the statement compatibility scalar once
+			// at (root) BindContext entry from the session flag the executors
+			// read. Children inherit it below.
+			bc.mysqlConditionalBooleanContracts = function.MySQLConditionalBooleanContractsFromProcess(builder.compCtx.GetProcess())
+			bc.mysqlConditionalBooleanContractsValid = true
+		}
 	}
 
 	if parent != nil {
 		bc.persistedExpressionProtocolRequirement = parent.persistedExpressionProtocolRequirement
 		bc.ctasExecutionProtocolRequirement = parent.ctasExecutionProtocolRequirement
+		bc.mysqlConditionalBooleanContracts = parent.mysqlConditionalBooleanContracts
+		bc.mysqlConditionalBooleanContractsValid = parent.mysqlConditionalBooleanContractsValid
 		bc.existentialBlock = parent.existentialBlock
 		bc.subqueryNestingDepth = parent.subqueryNestingDepth
 		bc.lower = parent.lower
@@ -283,6 +298,12 @@ func (bc *BindContext) recordViews(views []string) {
 func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc
+	for tag := range left.nullExtendedTags {
+		bc.nullExtendedTags[tag] = true
+	}
+	for tag := range right.nullExtendedTags {
+		bc.nullExtendedTags[tag] = true
+	}
 
 	for _, binding := range left.bindings {
 		bc.bindings = append(bc.bindings, binding)
@@ -449,6 +470,11 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 func (bc *BindContext) buildUsingEqOperand(col string, binding *Binding, coalesceArms []string) (*plan.Expr, error) {
 	if len(coalesceArms) < 2 {
 		colPos := binding.colIdByName[col]
+		if read, affected, err := bc.bindVirtualTimestampRead(binding, colPos, 0); err != nil {
+			return nil, err
+		} else if affected {
+			return read, nil
+		}
 		return &plan.Expr{
 			Typ: *binding.types[colPos],
 			Expr: &plan.Expr_Col{
@@ -463,6 +489,12 @@ func (bc *BindContext) buildUsingEqOperand(col string, binding *Binding, coalesc
 	for _, t := range coalesceArms {
 		b := bc.bindingByTable[t]
 		colPos := b.colIdByName[col]
+		if read, affected, err := bc.bindVirtualTimestampRead(b, colPos, 0); err != nil {
+			return nil, err
+		} else if affected {
+			args = append(args, read)
+			continue
+		}
 		args = append(args, &plan.Expr{
 			Typ: *b.types[colPos],
 			Expr: &plan.Expr_Col{
@@ -890,6 +922,18 @@ func (bc *BindContext) isAliasExpansion(expr tree.Expr) (*tree.ParenExpr, int32,
 	}
 	projectPos, ok := bc.aliasExpandedExprs[wrapper]
 	return wrapper, projectPos, ok
+}
+
+// DeepCopyExpr does not detach the query/program graph behind a scalar call.
+// Rebind such aliases from their AST before a consumer can lower their output
+// or decorrelate them; the published projection must retain its own graph.
+func aliasProjectionNeedsRebind(expr *plan.Expr) bool {
+	needsRebind := false
+	_ = plan.VisitExprTree(expr, func(e *plan.Expr) error {
+		needsRebind = needsRebind || e.GetSub() != nil || e.GetDependent() != nil
+		return nil
+	})
+	return needsRebind
 }
 
 func (bc *BindContext) projectedExprPosition(expr tree.Expr) int32 {

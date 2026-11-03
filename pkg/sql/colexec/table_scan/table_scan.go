@@ -20,9 +20,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -63,6 +65,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return
 		}
+		tableScan.ctr.subjectReuseAdmissionDone = false
 	}
 
 	// runtime filters are set fresh by handleRuntimeFilters before each Prepare call
@@ -83,16 +86,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.runtimeFilterExecutors...)
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.filterExecutors...)
 	tableScan.configureLateMaterialization()
-	if len(tableScan.ctr.earlyColumns) > 0 {
-		tableScan.ctr.readerFilter = func(
-			bat *batch.Batch,
-			loadedColumns []int,
-		) (engine.ReaderFilterResult, error) {
-			return tableScan.applyReaderFilter(proc, bat, loadedColumns)
-		}
-	} else {
-		tableScan.ctr.readerFilter = nil
-	}
+	tableScan.prepareReaderFilter(proc)
 
 	err = tableScan.PrepareProjection(proc)
 	if err != nil {
@@ -146,6 +140,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+		if tableScan.ReadPolicy != 0 {
+			newCtx = fileservice.WithFileServicePolicy(newCtx, fileservice.GetFileServicePolicy(newCtx)|tableScan.ReadPolicy)
+		}
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
 			return vm.CancelResult, err
@@ -271,18 +268,21 @@ func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
 // and shrinking it is precisely the crash. It cannot mask a real misalignment either --
 // any vector the reader DID fill is shrunk, so every populated column stays consistent
 // with the row count set below.
-func shrinkPopulatedVecs(bat *batch.Batch, sels []int64) {
+func shrinkPopulatedVecs(bat *batch.Batch, sels []int64, mp *mpool.MPool) error {
 	if len(sels) == bat.RowCount() {
-		return
+		return nil
 	}
 	rowCount := bat.RowCount()
 	for _, vec := range bat.Vecs {
 		if vec == nil || (vec.Length() == 0 && rowCount != 0) {
 			continue
 		}
-		vec.Shrink(sels, false)
+		if err := vec.Shrink(sels, false, mp); err != nil {
+			return err
+		}
 	}
 	bat.SetRowCount(len(sels))
+	return nil
 }
 
 // evalFilter evaluates inline filter expressions in-place. loadedColumns is
@@ -293,6 +293,11 @@ func (tableScan *TableScan) evalFilter(
 	bat *batch.Batch,
 	loadedColumns []int,
 ) (engine.ReaderFilterResult, error) {
+	firstInvocation := false
+	if !bat.IsEmpty() {
+		firstInvocation = !tableScan.ctr.subjectReuseAdmissionDone
+		tableScan.ctr.subjectReuseAdmissionDone = true
+	}
 	if tableScan.ctr.padCharToFullLength {
 		if err := padCharColumnsToFullLength(bat, proc); err != nil {
 			return engine.ReaderFilterResult{}, err
@@ -315,6 +320,12 @@ func (tableScan *TableScan) evalFilter(
 		if bat.IsEmpty() {
 			break
 		}
+		if firstInvocation && i >= len(tableScan.ctr.runtimeFilterExecutors) {
+			staticIndex := i - len(tableScan.ctr.runtimeFilterExecutors)
+			executor := colexec.ReuseFilterExpressionExecutor(tableScan.FilterExprs[staticIndex], tableScan.ctr.filterExecutors[staticIndex], bat.RowCount())
+			tableScan.ctr.filterExecutors[staticIndex] = executor
+			tableScan.ctr.allFilterExecutors[i] = executor
+		}
 
 		vec, err := tableScan.ctr.allFilterExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
@@ -330,18 +341,13 @@ func (tableScan *TableScan) evalFilter(
 			return engine.ReaderFilterResult{}, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
-		if tableScan.ctr.filterBs == nil {
-			tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
-		} else {
-			ok := vector.ReuseFunctionFixedTypeParameter[bool](vec, tableScan.ctr.filterBs)
-			if !ok {
+		if vec.IsConst() {
+			if tableScan.ctr.filterBs == nil {
+				tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
+			} else if !vector.ReuseFunctionFixedTypeParameter[bool](vec, tableScan.ctr.filterBs) {
 				tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
 			}
-		}
-		bs := tableScan.ctr.filterBs
-
-		if vec.IsConst() {
-			v, null := bs.GetValue(0)
+			v, null := tableScan.ctr.filterBs.GetValue(0)
 			if null || !v {
 				tableScan.clearLoadedFilterColumns(bat, loadedColumns)
 				tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
@@ -354,17 +360,16 @@ func (tableScan *TableScan) evalFilter(
 			}
 			sels = sels[:0]
 
-			l := uint64(vec.Length())
-			if bs.WithAnyNullValue() {
-				for j := uint64(0); j < l; j++ {
-					v, null := bs.GetValue(j)
-					if !null && v {
+			values := vector.MustFixedColNoTypeCheck[bool](vec)
+			nulls := vec.GetNulls()
+			if !nulls.EmptyByFlag() {
+				for j, v := range values {
+					if v && !nulls.Contains(uint64(j)) {
 						sels = append(sels, int64(j))
 					}
 				}
 			} else {
-				for j := uint64(0); j < l; j++ {
-					v, _ := bs.GetValue(j)
+				for j, v := range values {
 					if v {
 						sels = append(sels, int64(j))
 					}
@@ -392,10 +397,14 @@ func (tableScan *TableScan) evalFilter(
 				}
 
 				if loadedColumns == nil {
-					shrinkPopulatedVecs(bat, sels)
+					if err := shrinkPopulatedVecs(bat, sels, proc.Mp()); err != nil {
+						return engine.ReaderFilterResult{}, err
+					}
 				} else {
 					for _, pos := range loadedColumns {
-						bat.Vecs[pos].Shrink(sels, false)
+						if err := bat.Vecs[pos].Shrink(sels, false, proc.Mp()); err != nil {
+							return engine.ReaderFilterResult{}, err
+						}
 					}
 					bat.SetRowCount(len(sels))
 				}

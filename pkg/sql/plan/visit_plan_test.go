@@ -121,7 +121,7 @@ func TestVisitPlanUpdateTypeResetOnlyCastsChangedExpressions(t *testing.T) {
 
 	restored := project.ProjectList[0]
 	require.Equal(t, int32(types.T_float64), restored.Typ.Id)
-	require.Equal(t, "cast", restored.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast_assign", restored.GetF().GetFunc().GetObjName())
 	require.Equal(t, uint64(7), restored.GetF().Args[0].GetLit().GetU64Val())
 }
 

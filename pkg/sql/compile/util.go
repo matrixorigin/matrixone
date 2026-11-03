@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -114,25 +115,12 @@ func groupConcatMaxLenAsUint64(value any) (uint64, bool) {
 }
 
 const (
-	INDEX_TYPE_PRIMARY  = "PRIMARY"
-	INDEX_TYPE_UNIQUE   = "UNIQUE"
-	INDEX_TYPE_MULTIPLE = "MULTIPLE"
-	INDEX_TYPE_FULLTEXT = "FULLTEXT"
-	INDEX_TYPE_SPATIAL  = "SPATIAL"
+	INDEX_TYPE_PRIMARY  = colexec.INDEX_TYPE_PRIMARY
+	INDEX_TYPE_UNIQUE   = colexec.INDEX_TYPE_UNIQUE
+	INDEX_TYPE_MULTIPLE = colexec.INDEX_TYPE_MULTIPLE
+	INDEX_TYPE_FULLTEXT = colexec.INDEX_TYPE_FULLTEXT
+	INDEX_TYPE_SPATIAL  = colexec.INDEX_TYPE_SPATIAL
 )
-
-func indexMetadataType(unique bool, algo string) string {
-	switch {
-	case unique:
-		return INDEX_TYPE_UNIQUE
-	case catalog.IsRTreeIndexAlgo(algo):
-		return INDEX_TYPE_SPATIAL
-	case catalog.IsFullTextIndexAlgo(algo) || catalog.IsFullText2IndexAlgo(algo):
-		return INDEX_TYPE_FULLTEXT
-	default:
-		return INDEX_TYPE_MULTIPLE
-	}
-}
 
 const (
 	INDEX_VISIBLE_YES = 1
@@ -207,11 +195,19 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	physicalSinglePart := singlePart && indexSinglePartNeedsPhysicalKey(originTableDef, indexDef)
 	withPKey := originTableDef.Pkey != nil && originTableDef.Pkey.PkeyColName != ""
 	keyExpr := indexBackfillKeyExpr(temp, indexDef.KeyFormat, isUnique, singlePart, physicalSinglePart, withPKey)
+	// The generated backfill SQL is re-parsed by the internal executor. DB,
+	// table and index-table identifiers are wrapped in backticks by the format
+	// templates above, so any backtick the raw name itself contains must be
+	// doubled here, or names like `tick``table` splice the template into
+	// invalid SQL (issue #31080).
+	quotedDBName := strings.ReplaceAll(DBName, "`", "``")
+	quotedIndexTableName := strings.ReplaceAll(indexDef.IndexTableName, "`", "``")
+	quotedTableName := strings.ReplaceAll(originTableDef.Name, "`", "``")
 	if len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 || spatialIndex {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, DBName, originTableDef.Name, keyExpr)
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, quotedDBName, quotedIndexTableName, keyExpr, quotedDBName, quotedTableName, keyExpr)
 		} else {
-			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, DBName, originTableDef.Name, keyExpr)
+			insertSQL = fmt.Sprintf(insertIntoIndexTableWithoutPKeyFormat, quotedDBName, quotedIndexTableName, keyExpr, quotedDBName, quotedTableName, keyExpr)
 		}
 	} else {
 		pkeyName := originTableDef.Pkey.PkeyColName
@@ -230,12 +226,12 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 			pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
 		}
 		if len(indexDef.Parts) == 1 || spatialIndex {
-			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, pKeyMsg, DBName, originTableDef.Name, keyExpr)
+			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithPKeyFormat, quotedDBName, quotedIndexTableName, keyExpr, pKeyMsg, quotedDBName, quotedTableName, keyExpr)
 		} else {
 			if isUnique {
-				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, pKeyMsg, DBName, originTableDef.Name, keyExpr)
+				insertSQL = fmt.Sprintf(insertIntoUniqueIndexTableWithPKeyFormat, quotedDBName, quotedIndexTableName, keyExpr, pKeyMsg, quotedDBName, quotedTableName, keyExpr)
 			} else {
-				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, DBName, indexDef.IndexTableName, keyExpr, pKeyMsg, DBName, originTableDef.Name)
+				insertSQL = fmt.Sprintf(insertIntoSecondaryIndexTableWithPKeyFormat, quotedDBName, quotedIndexTableName, keyExpr, pKeyMsg, quotedDBName, quotedTableName)
 			}
 		}
 	}
@@ -309,11 +305,17 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 		colSeqNumMap[col.GetName()] = fmt.Sprintf("%d", col.GetSeqnum())
 	}
 
+	// Same doubling as genInsertIndexTableSql: the master-index backfill SQL is
+	// re-parsed as well, so raw identifiers cannot splice the template's
+	// backticks (issue #31080).
+	quotedDBName := strings.ReplaceAll(DBName, "`", "``")
+	quotedIndexTableName := strings.ReplaceAll(indexDef.IndexTableName, "`", "``")
+	quotedTableName := strings.ReplaceAll(originTableDef.Name, "`", "``")
 	for i, part := range indexDef.Parts {
 		resolvedPart := catalog.ResolveAlias(part)
 		insertSQLs[i] = fmt.Sprintf(insertIntoMasterIndexTableFormat,
-			DBName, indexDef.IndexTableName,
-			colSeqNumMap[resolvedPart], quoteMySQLQualifiedIdent(resolvedPart), pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
+			quotedDBName, quotedIndexTableName,
+			colSeqNumMap[resolvedPart], quoteMySQLQualifiedIdent(resolvedPart), pKeyMsg, pKeyMsg, quotedDBName, quotedTableName)
 	}
 
 	return insertSQLs
@@ -369,7 +371,7 @@ func genInsertMOIndexesSql(eg engine.Engine, proc *process.Process, databaseId s
 					fmt.Fprintf(buffer, "%s, ", sqlquote.String(indexDef.IndexName))
 
 					// 5. index_type
-					index_type := indexMetadataType(indexDef.Unique, indexDef.IndexAlgo)
+					index_type := colexec.IndexMetadataType(indexDef.Unique, indexDef.IndexAlgo)
 					fmt.Fprintf(buffer, "%s, ", sqlquote.String(index_type))
 
 					//6. algorithm

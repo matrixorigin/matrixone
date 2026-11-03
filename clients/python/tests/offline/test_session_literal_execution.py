@@ -215,8 +215,9 @@ def test_public_batch_literals_and_statement_budget(client):
     event.listen(client._engine, 'commit', lambda c: commits.append(c))
     manager = VectorManager(client)
     assert manager.batch_insert('rows', data(), batch_size=3) is manager
-    assert len(statements) == 3
-    assert all(sql.startswith('INSERT INTO `rows`') for sql in statements)
+    assert statements[0] == 'BEGIN'
+    assert len(statements) == 4
+    assert all(sql.startswith('INSERT INTO `rows`') for sql in statements[1:])
     assert len(commits) == 1
     assert client.execute('SELECT label FROM rows ORDER BY id').rows == [(label,) for label in LABELS]
 
@@ -695,7 +696,8 @@ async def test_async_public_literals_and_caller_rollback(async_client):
     event.listen(c._engine.sync_engine, 'commit', lambda conn: commits.append(conn))
     manager = AsyncVectorManager(c)
     assert await manager.batch_insert('rows', data(), batch_size=3) is manager
-    assert len(statements) == 3
+    assert statements[0] == 'BEGIN'
+    assert len(statements) == 4
     assert len(commits) == 1
     async with c.session() as session:
         assert (await session.execute('SELECT label FROM rows ORDER BY id')).all() == [(label,) for label in LABELS]

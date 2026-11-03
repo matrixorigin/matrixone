@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -221,6 +221,28 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
 		require.Equal(t, int64(7), status)
+
+		// The cached statement takes the execution-time SQL mode. Strict DML
+		// rejects truncated predicates without changing the selected row.
+		var comparisonSQLMode string
+		require.NoError(t, db.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&comparisonSQLMode))
+		defer func() {
+			restoreCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			_, restoreErr := db.ExecContext(restoreCtx, "set session sql_mode = ?", comparisonSQLMode)
+			require.NoError(t, restoreErr)
+		}()
+		execSQLRequire(t, ctx, db, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+		execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")
+		for _, text := range []string{"foo", "1abc"} {
+			_, err = numericTextPredicateStmt.ExecContext(ctx, int64(0), text)
+			var mysqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &mysqlErr)
+			require.Equal(t, uint16(1292), mysqlErr.Number)
+			require.NoError(t, db.QueryRowContext(ctx, "select status from `"+dbName+"`.predicate_dst where id=1").Scan(&status))
+			require.Equal(t, int64(0), status)
+		}
+		execSQLRequire(t, ctx, db, "set session sql_mode = ''")
 
 		// Numeric comparison must use the engine's ordinary MySQL string-to-
 		// DOUBLE conversion for the entire text domain, not only complete finite
@@ -484,6 +506,9 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 				require.Equal(t, test.status, status)
 			})
 		}
+
+		_, err = db.ExecContext(ctx, "set session sql_mode = ?", comparisonSQLMode)
+		require.NoError(t, err)
 
 		t.Run("string function keeps text input", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")

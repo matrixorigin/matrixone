@@ -240,6 +240,25 @@ func newTopKHeap(k int, maxDocs int64) *topKHeap {
 // buildWandIters makes a posting cursor for each present SHOULD term, with its
 // max-impact bound under the given (global or local) stats. Shared by the top-k
 // searchWAND and the no-LIMIT streamWAND.
+// queryCeilingWAND returns an upper bound on any doc's score in s for the disjunctive
+// term clauses — the sum of the present terms' max-impact bounds — using dict lookups
+// only (no posting-block loads). It is the segment-level analogue of the per-doc WAND
+// bound: a doc's score is the sum of its matched terms' contributions, each ≤ that
+// term's max-impact, so no doc in s can score above this ceiling. If the ceiling is
+// below the shared global floor, the whole segment can be skipped. Returns 0 when no
+// query term is present in s (an empty segment contributes nothing).
+func (s *Segment) queryCeilingWAND(clauses []clause, algo ScoreAlgo, gs *globalStats, avgDocLen float64) float32 {
+	var ceil float32
+	for _, c := range clauses {
+		pl, ok := s.lookup(c.terms[0])
+		if !ok || pl.df() == 0 {
+			continue
+		}
+		ceil += c.weight * s.termMaxImpact(algo, gs.idfFor(s, c.terms[0], pl), pl, avgDocLen)
+	}
+	return ceil
+}
+
 func (s *Segment) buildWandIters(clauses []clause, algo ScoreAlgo, gs *globalStats, avgDocLen float64) []*wandIter {
 	iters := make([]*wandIter, 0, len(clauses))
 	for _, c := range clauses {
@@ -291,15 +310,25 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 			break // all exhausted
 		}
 
+		// Effective pruning threshold: the local k-th best (theta) OR the shared global
+		// floor (the best segment's k-th best so far), whichever is higher. floor is -Inf
+		// when gs is nil or no segment heap has filled, so eff == theta until then and
+		// this is identical to the local-only WAND. See globalStats.minScore.
+		floor := gs.floor()
+		eff := theta
+		if floor > eff {
+			eff = floor
+		}
+
 		// Term-level WAND pivot: first cursor at which the cumulative max-impact
-		// reaches θ.
+		// reaches the effective threshold.
 		acc, pivot := float32(0), -1
 		for i, it := range iters {
 			if it.atEnd() {
 				break
 			}
 			acc += it.maxImpact
-			if acc >= theta {
+			if acc >= eff {
 				pivot = i
 				break
 			}
@@ -326,7 +355,12 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 		for i := 0; i <= pivot; i++ {
 			blockSum += iters[i].blockMax(pivotDoc, algo, avgDocLen)
 		}
-		if blockSum <= theta {
+		// Local skip is `<= theta` (local admission is strict `> theta`, so a block
+		// whose max equals theta can never be admitted here). The shared-floor skip is
+		// STRICT (`< floor`): a block whose max EQUALS floor may hold a doc that ties the
+		// global k-th best, which must still be scored and emitted so the merged top-k is
+		// identical with or without the floor (ties included). floor <= theta adds nothing.
+		if blockSum <= theta || blockSum < floor {
 			next := int64(math.MaxInt64)
 			for i := 0; i <= pivot; i++ {
 				if e := iters[i].blockEndAt(pivotDoc); e < next {
@@ -366,6 +400,14 @@ func (s *Segment) searchWAND(clauses []clause, algo ScoreAlgo, k int, allow Memb
 				if h.Full() {
 					_, negRoot, _ := h.Peek()
 					theta = -negRoot
+					// Publish to the shared floor ONLY from a heap holding a true k-th
+					// best. A segment with fewer than k live docs fills its heap at s.N<k,
+					// whose minimum is NOT a lower bound on the GLOBAL k-th best (a tiny
+					// high-scoring segment — e.g. the CDC tail — would otherwise inflate the
+					// floor above global-k-th and wrongly prune competitive docs elsewhere).
+					if h.Len() >= k {
+						gs.raise(theta)
+					}
 				}
 			}
 			for _, it := range iters {

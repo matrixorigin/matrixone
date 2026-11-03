@@ -1,0 +1,8 @@
+modump query_result '00000000-0000-0000-0000-00000000dead' into '/tmp/m3_modump_bvt_error_000000000000000000000000dead.jsonl';
+query id 00000000-0000-0000-0000-00000000dead not found
+select 'alive-after-modump-error' as t;
+➤ t[12,24,0]  𝄀
+alive-after-modump-error
+select 1;
+➤ 1[-5,64,0]  𝄀
+1

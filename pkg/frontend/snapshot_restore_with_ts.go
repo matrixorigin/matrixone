@@ -617,10 +617,11 @@ func recreateTableFromTS(
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 	}
-	if isCurrentSchemaUserDefinedFunctionCatalog(tblInfo) {
-		return restoreUserDefinedFunctionCatalogWithCurrentSchema(
+	if isCurrentSchemaRoutineCatalog(tblInfo) {
+		return restoreRoutineCatalogWithCurrentSchema(
 			ctx,
 			bh,
+			tblInfo.tblName,
 			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
 			restoreAccount,
 			toAccountId,
@@ -664,7 +665,7 @@ func recreateTableFromTS(
 		return
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%d:%d] insert select table: %v, cost: %v", restoreAccount, snapshotTs, tblInfo.tblName, time.Since(beginTime)))
-	return
+	return ensureRestoredIcebergAllocator(ctx, bh, tblInfo)
 }
 
 func restoreSystemDatabaseFromTS(
@@ -783,7 +784,7 @@ func restoreViewsFromTS(
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
@@ -791,7 +792,7 @@ func restoreViewsFromTS(
 			if err != nil {
 				return err
 			}
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 			freeStatements(stmts)
 			if err != nil {
 				if markUnservableViewInSort(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), viewEntry, &g, key, err) {

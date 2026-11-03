@@ -23,7 +23,7 @@ const sdkControlPaths = ['.github/workflows/python-sdk.yml',
   '.github/ci/change-scope.cjs', '.github/workflows/entrypoint.yaml'];
 function category(path) {
   if (!validPath(path)) return 'full';
-  if (path.startsWith('clients/python/')) return 'sdk';
+  if (path.startsWith('clients/python/') || path === '.github/workflows/python-sdk.yml') return 'sdk';
   if (/(^|\/)(testdata|fixtures)\//i.test(path)) return 'full';
   const extension = path.slice(path.lastIndexOf('.')).toLowerCase();
   if (extension === '.md' || extension === '.rst' ||

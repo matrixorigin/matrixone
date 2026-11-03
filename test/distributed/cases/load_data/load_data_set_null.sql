@@ -9,6 +9,10 @@ col5 text
 
 load data infile "$resources/load_data/set_null_1.csv" into table t1 fields terminated by ',' set a=nullif(col1,'1');
 
+-- Expression diagnostics retain priority across the complete SET list.
+load data infile "$resources/load_data/set_null_1.csv" into table t1 fields terminated by ',' set a=nullif(a,'1'),col2='x';
+load data infile "$resources/load_data/set_null_1.csv" into table t1 fields terminated by ',' set a=nullif(a,'1');
+
 load data infile "$resources/load_data/set_null_1.csv" into table t1 fields terminated by ',' set col2=nullif(col3,'1');
 
 load data infile "$resources/load_data/not_exists.csv" into table t1 fields terminated by ',';

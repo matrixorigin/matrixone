@@ -91,7 +91,6 @@ func newIe(
 type internalExecResult struct {
 	affectedRows uint64
 	resultSet    *MysqlResultSet
-	dropped      uint64
 	err          error
 }
 
@@ -503,7 +502,6 @@ func (ip *internalProtocol) sendRows(mrs *MysqlResultSet, cnt uint64) error {
 		}
 
 		if res.GetRowCount() > 100 {
-			ip.result.dropped += cnt
 			return nil
 		}
 
@@ -544,7 +542,6 @@ func (ip *internalProtocol) WriteColumnDefBytes(payload []byte) error {
 
 func (ip *internalProtocol) ResetStatistics() {
 	ip.result.affectedRows = 0
-	ip.result.dropped = 0
 	ip.result.err = nil
 	ip.result.resultSet = nil
 }

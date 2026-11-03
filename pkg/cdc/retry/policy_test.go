@@ -177,3 +177,29 @@ func TestPolicy_Do_CircuitOpenStops(t *testing.T) {
 		t.Fatalf("expected 1 attempt, got %d", attempts)
 	}
 }
+
+func TestExponentialBackoffDefaultsCapAndJitter(t *testing.T) {
+	calls := 0
+	b := ExponentialBackoff{
+		Base: 10 * time.Millisecond, Factor: 3, Max: 20 * time.Millisecond, Jitter: 5 * time.Millisecond,
+		randFn: func(max time.Duration) time.Duration {
+			calls++
+			if max != 5*time.Millisecond {
+				t.Fatalf("jitter bound = %s", max)
+			}
+			return 4 * time.Millisecond
+		},
+	}
+	if got := b.Next(0); got != 14*time.Millisecond {
+		t.Fatalf("first delay = %s", got)
+	}
+	if got := b.Next(3); got != 24*time.Millisecond {
+		t.Fatalf("capped delay with jitter = %s", got)
+	}
+	if calls != 2 {
+		t.Fatalf("jitter calls = %d", calls)
+	}
+	if got := (ExponentialBackoff{}).Next(2); got != 200*time.Millisecond {
+		t.Fatalf("default delay = %s", got)
+	}
+}

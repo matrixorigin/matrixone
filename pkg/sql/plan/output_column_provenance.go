@@ -63,6 +63,7 @@ type SourceColumn struct {
 }
 
 type OutputColumnProvenance struct {
+	IntegerPrecisionID uint32
 	// Planner-local display length of a DECIMAL DIV expression, captured before
 	// optimization and carried only across transparent query boundaries.
 	DecimalDivDisplayLength int32
@@ -175,7 +176,14 @@ func transparentOutputSourceExpr(expr *plan.Expr) (*plan.Expr, bool) {
 	}
 }
 
-func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) OutputColumnProvenance {
+func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) (result OutputColumnProvenance) {
+	defer func() {
+		if bc.integerPrecision != nil && expr != nil {
+			if id := bc.integerPrecision.ids[expr]; id != 0 {
+				result.IntegerPrecisionID = id
+			}
+		}
+	}()
 	if expr == nil {
 		return OutputColumnProvenance{State: ProvenanceNone}
 	}

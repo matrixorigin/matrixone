@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/subscriptionmetadata"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -93,98 +94,17 @@ type subscriptionMetadataState struct {
 
 var subscriptionTablesConfig = subscriptionMetadataConfig{
 	functionName: subscriptionTablesFunctionName,
-	columnNames: []string{
-		"account_id",
-		"rel_id",
-		"relname",
-		"reldatabase",
-		"reldatabase_id",
-		"relkind",
-		"rel_createsql",
-		"created_time",
-		"partitioned",
-		"rel_comment",
-		"extra_info",
-		"rel_logical_id",
-		"owner",
-		"publisher_account_id",
-	},
-	columnTypes: []types.Type{
-		catalog.MoTablesTypes[catalog.MO_TABLES_ACCOUNT_ID_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_REL_ID_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_REL_NAME_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_RELDATABASE_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_RELDATABASE_ID_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_RELKIND_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_REL_CREATESQL_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_CREATED_TIME_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_PARTITIONED_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_REL_COMMENT_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_EXTRA_INFO_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_LOGICAL_ID_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_OWNER_IDX],
-		types.New(types.T_uint32, 0, 0),
-	},
-	buildQuery: buildSubscriptionTablesQuery,
+	buildQuery:   buildSubscriptionTablesQuery,
 }
 
 var subscriptionColumnsConfig = subscriptionMetadataConfig{
 	functionName: subscriptionColumnsFunctionName,
-	columnNames: []string{
-		"account_id",
-		"att_database_id",
-		"att_database",
-		"att_relname_id",
-		"att_relname",
-		"attname",
-		"atttyp",
-		"attnum",
-		"attnotnull",
-		"att_default",
-		"att_constraint_type",
-		"att_is_auto_increment",
-		"att_comment",
-		"att_is_hidden",
-		"attr_enum",
-		"attr_has_generated",
-		"attr_generated",
-		"key_priority",
-		"rel_id",
-		"relkind",
-		"rel_createsql",
-		"partitioned",
-		"extra_info",
-		"rel_logical_id",
-		"table_owner",
-	},
-	columnTypes: []types.Type{
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ACCOUNT_ID_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_DATABASE_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_RELNAME_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATTNAME_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATTTYP_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATTNUM_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATTNOTNULL_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_DEFAULT_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_COMMENT_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_ENUM_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_HAS_GENERATED_IDX],
-		catalog.MoColumnsTypes[catalog.MO_COLUMNS_ATT_GENERATED_IDX],
-		types.New(types.T_int64, 0, 0),
-		catalog.MoTablesTypes[catalog.MO_TABLES_REL_ID_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_RELKIND_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_REL_CREATESQL_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_PARTITIONED_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_EXTRA_INFO_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_LOGICAL_ID_IDX],
-		catalog.MoTablesTypes[catalog.MO_TABLES_OWNER_IDX],
-	},
-	buildQuery: buildSubscriptionColumnsQuery,
+	buildQuery:   buildSubscriptionColumnsQuery,
+}
+
+func init() {
+	subscriptionTablesConfig.columnNames, subscriptionTablesConfig.columnTypes = subscriptionmetadata.TablesSchema()
+	subscriptionColumnsConfig.columnNames, subscriptionColumnsConfig.columnTypes = subscriptionmetadata.ColumnsSchema()
 }
 
 func subscriptionMetadataPrepare(_ *process.Process, tf *TableFunction) (tvfState, error) {
@@ -795,7 +715,8 @@ func buildSubscriptionColumnsQuery(candidate subscriptionCandidate, tableNames [
 		"mc.att_constraint_type, mc.att_is_auto_increment, mc.att_comment, mc.att_is_hidden, mc.attr_enum, " +
 		"mc.attr_has_generated, mc.attr_generated, CAST(mk.key_priority AS BIGINT) AS key_priority, " +
 		"mt.rel_id, mt.relkind, mt.rel_createsql, mt.partitioned, mt.extra_info, mt.rel_logical_id, " +
-		"CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) + " AS INT UNSIGNED) AS table_owner " +
+		"CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) + " AS INT UNSIGNED) AS table_owner, " +
+		"mc.att_is_unsigned " +
 		"FROM mo_catalog.mo_columns mc " +
 		"JOIN mo_catalog.mo_tables mt ON mt.account_id = mc.account_id " +
 		"AND mt.reldatabase = mc.att_database AND mt.relname = mc.att_relname " +

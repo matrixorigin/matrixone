@@ -359,19 +359,7 @@ func NewGlobalStats(
 	//    - Set to executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
 	// This optimization reduces goroutine count significantly (e.g., 192 -> 120 in typical environments)
 	// while maintaining performance since updateWorker's actual concurrency is much lower.
-	executorConcurrency := runtime.GOMAXPROCS(0)
-	if s.updateWorkerFactor > 0 {
-		executorConcurrency = executorConcurrency * s.updateWorkerFactor
-	}
-	// Apply limits: min MinExecutorConcurrency, max MaxExecutorConcurrency
-	if executorConcurrency < MinExecutorConcurrency {
-		executorConcurrency = MinExecutorConcurrency
-	}
-	if executorConcurrency > MaxExecutorConcurrency {
-		executorConcurrency = MaxExecutorConcurrency
-	}
-	// Calculate updateWorker concurrency: executorConcurrency / WorkerConcurrencyRatio, but minimum MinWorkerConcurrency
-	updateWorkerConcurrency := max(executorConcurrency/WorkerConcurrencyRatio, MinWorkerConcurrency)
+	executorConcurrency, updateWorkerConcurrency := globalStatsConcurrency(runtime.GOMAXPROCS(0), s.updateWorkerFactor)
 	s.concurrentExecutor = newConcurrentExecutor(executorConcurrency)
 	s.concurrentExecutor.Run(ownerCtx)
 	s.workers.Add(1)
@@ -393,6 +381,22 @@ func NewGlobalStats(
 	)
 	constructed = true
 	return s
+}
+
+// globalStatsConcurrency bounds the executor pool and sizes its update workers.
+func globalStatsConcurrency(gomaxprocs, updateWorkerFactor int) (executorConcurrency, updateWorkerConcurrency int) {
+	executorConcurrency = gomaxprocs
+	if updateWorkerFactor > 0 {
+		executorConcurrency *= updateWorkerFactor
+	}
+	if executorConcurrency < MinExecutorConcurrency {
+		executorConcurrency = MinExecutorConcurrency
+	}
+	if executorConcurrency > MaxExecutorConcurrency {
+		executorConcurrency = MaxExecutorConcurrency
+	}
+	updateWorkerConcurrency = max(executorConcurrency/WorkerConcurrencyRatio, MinWorkerConcurrency)
+	return
 }
 
 // Close cancels statistics producers and joins every root and queued-task
@@ -1313,6 +1317,15 @@ func (gs *GlobalStats) PatchStats(key pb.StatsInfoKey, patch *PatchArgs) error {
 		gs.mu.statsInfoMap[key] = stats
 	}
 
+	// Optional row distributions belong to one analyzed generation. Do not
+	// mutate a published object held by lock-free planning readers.
+	if len(stats.ByteRangeMap) > 0 {
+		source := *stats
+		source.ByteRangeMap = nil
+		stats = proto.Clone(&source).(*pb.StatsInfo)
+		gs.mu.statsInfoMap[key] = stats
+	}
+
 	// Apply table-level stats
 	if patch.TableCnt != nil {
 		stats.TableCnt = *patch.TableCnt
@@ -1797,7 +1810,9 @@ func composeAnalyzedStatsGeneration(metadata, collected *pb.StatsInfo) *pb.Stats
 	}
 	published := plan2.NewStatsInfo()
 	if metadata != nil {
-		published = proto.Clone(metadata).(*pb.StatsInfo)
+		source := *metadata
+		source.ByteRangeMap = nil
+		published = proto.Clone(&source).(*pb.StatsInfo)
 	}
 	if published.NdvMap == nil {
 		published.NdvMap = make(map[string]float64)
@@ -1821,6 +1836,16 @@ func composeAnalyzedStatsGeneration(metadata, collected *pb.StatsInfo) *pb.Stats
 		published.ShuffleRangeMap = make(map[string]*pb.ShuffleRange)
 	}
 
+	// A partial/manual collection must not inherit another population's sample.
+	published.ByteRangeMap = nil
+	if len(collected.ByteRangeMap) > 0 {
+		published.ByteRangeMap = make(map[string]*pb.ByteRangeDistribution, len(collected.ByteRangeMap))
+		for column, d := range collected.ByteRangeMap {
+			if d != nil {
+				published.ByteRangeMap[column] = proto.Clone(d).(*pb.ByteRangeDistribution)
+			}
+		}
+	}
 	published.TableName = collected.TableName
 	published.TableCnt = collected.TableCnt
 	published.BlockNumber = collected.BlockNumber
@@ -1909,6 +1934,7 @@ func applyStatsRefreshOptions(
 		stats.NdvMap = make(map[string]float64, len(options.ColumnNDVs)+1)
 	}
 	stats.TableName = tableDef.Name
+	stats.ByteRangeMap = nil
 	stats.TableCnt = rowCount
 	if _, hasFakePrimaryKey := knownColumns[catalog.FakePrimaryKeyColName]; options.TableRowCount != nil && hasFakePrimaryKey {
 		stats.NdvMap[catalog.FakePrimaryKeyColName] = rowCount

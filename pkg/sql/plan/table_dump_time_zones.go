@@ -31,6 +31,31 @@ var tableDumpFixedTimeZoneCache struct {
 	zones []*time.Location
 }
 
+const (
+	tableDumpMinTimeZoneMinute = -(13*60 + 59)
+	tableDumpMaxTimeZoneMinute = 14 * 60
+)
+
+// Prioritize a bounded numeric-offset grid for migration's ambiguous folded
+// defaults. These are only witnesses: named transition rules and every remaining
+// legal minute offset still come from the existing verification-local inventory.
+func newLegacyFloatTimeZones(loadLocation func(string) (*time.Location, error)) func(func(*time.Location) bool) {
+	exhaustive := newTableDumpTimeZones(loadLocation)
+	return func(yield func(*time.Location) bool) {
+		for _, step := range []int{60, 15} {
+			for minute := tableDumpMinTimeZoneMinute; minute <= tableDumpMaxTimeZoneMinute; minute++ {
+				if minute == 0 || minute%step != 0 || step == 15 && minute%60 == 0 {
+					continue
+				}
+				if !yield(time.FixedZone("legacy float binding", minute*60)) {
+					return
+				}
+			}
+		}
+		exhaustive(yield)
+	}
+}
+
 // newTableDumpTimeZones owns a named-rule snapshot for one verification only.
 // A later verification reloads tzdata just like SET time_zone, including zones
 // that were temporarily unavailable. No matching results or budgets are cached.
@@ -64,7 +89,7 @@ func newTableDumpTimeZones(loadLocation func(string) (*time.Location, error)) fu
 		// Numeric offsets have no external rule source and may be reused globally.
 		tableDumpFixedTimeZoneCache.Do(func() {
 			tableDumpFixedTimeZoneCache.zones = make([]*time.Location, 0, 1679)
-			for minute := -(13*60 + 59); minute <= 14*60; minute++ {
+			for minute := tableDumpMinTimeZoneMinute; minute <= tableDumpMaxTimeZoneMinute; minute++ {
 				if minute != 0 {
 					tableDumpFixedTimeZoneCache.zones = append(tableDumpFixedTimeZoneCache.zones,
 						time.FixedZone("table dump binding", minute*60))

@@ -22,17 +22,8 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_10"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_11"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_12"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_13"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_14"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_15"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_16"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_9"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -42,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,346 +44,90 @@ func statisticsFinalUpgradeVersion() versions.Version {
 	return s.getFinalVersionHandle().Metadata()
 }
 
-func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
-	final := statisticsFinalUpgradeVersion()
-	require.Greater(t, versions.Compare(final.Version, "4.0.7"), 0)
-	for _, test := range []struct {
-		name    string
-		version string
-		offset  uint32
-		upgrade bool
-		via407  bool
-		via408  bool
-		via409  bool
-		via410  bool
+func TestPublishedCatalogUpgradeRoutes(t *testing.T) {
+	for _, tc := range []struct {
+		name, version string
+		offset        uint32
+		hops          [][2]string
 	}{
-		// Released v4.2.4 has four tenant entries and one cluster entry;
-		// later additions to main's 4.0.6 handler must not be assumed to run.
-		{name: "release_4.2.4", version: "4.0.6", offset: 5, upgrade: true, via407: true, via408: true, via409: true, via410: true},
-		{name: "4.0.6", version: "4.0.6", offset: v4_0_6.Handler.Metadata().VersionOffset, upgrade: true, via407: true, via408: true, via409: true, via410: true},
-		{name: "old_4.0.7", version: "4.0.7", upgrade: true, via408: true, via409: true, via410: true},
-		{name: "4.0.7_offset_1", version: "4.0.7", offset: 1, upgrade: true, via408: true, via409: true, via410: true},
-		{name: "current_4.0.8", version: "4.0.8", offset: v4_0_8.Handler.Metadata().VersionOffset, upgrade: true, via409: true, via410: true},
-		{name: "current_4.0.9", version: "4.0.9", offset: v4_0_9.Handler.Metadata().VersionOffset, upgrade: true, via410: true},
-		{name: "current_4.0.10", version: "4.0.10", offset: v4_0_10.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.11", version: "4.0.11", offset: v4_0_11.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.12", version: "4.0.12", offset: v4_0_12.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.13", version: "4.0.13", offset: v4_0_13.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.14", version: "4.0.14", offset: v4_0_14.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.15", version: "4.0.15", offset: v4_0_15.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.16", version: "4.0.16", offset: v4_0_16.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current", version: final.Version, offset: final.VersionOffset},
+		{name: "4.1", version: "4.0.1", offset: 1, hops: [][2]string{{"4.0.1", "4.0.2"}, {"4.0.2", "4.0.3"}, {"4.0.3", "4.0.4"}, {"4.0.4", "4.0.5"}, {"4.0.5", "4.0.6"}, {"4.0.6", "4.0.7"}}},
+		{name: "4.2", version: "4.0.6", offset: 5, hops: [][2]string{{"4.0.6", "4.0.7"}}},
+		{name: "already_current", version: "4.0.7", offset: v4_0_7.Handler.Metadata().VersionOffset},
 	} {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
 				var upgrades []string
 				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 					switch {
 					case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
 						return newBootstrapStringResult("mo_catalog"), nil
-					case sql == "select version, version_offset, state from mo_version order by create_at desc limit 1":
-						mp := mpool.MustNewZeroNoFixed()
-						t.Cleanup(func() { mpool.DeleteMPool(mp) })
-						res := executor.NewMemResult([]types.Type{
-							types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_int32.ToType(),
-						}, mp)
-						res.NewBatchWithRowCount(1)
-						require.NoError(t, executor.AppendStringRows(res, 0, []string{test.version}))
-						require.NoError(t, executor.AppendFixedRows(res, 1, []uint32{test.offset}))
-						require.NoError(t, executor.AppendFixedRows(res, 2, []int32{versions.StateReady}))
-						return res.GetResult(), nil
+					case sql == versions.LatestVersionSQL:
+						return statisticsLatestVersionResult(t, versions.Version{Version: tc.version, VersionOffset: tc.offset}, versions.StateReady), nil
 					case strings.HasPrefix(sql, "select version from mo_version"):
-						return newBootstrapStringResult(test.version), nil
+						return newBootstrapStringResult(tc.version), nil
 					case strings.HasPrefix(sql, "insert into mo_upgrade"):
 						upgrades = append(upgrades, sql)
 					}
 					return executor.Result{}, nil
 				}, &testTxnOperator{})
-				b := newServiceForTest("", &memLocker{},
-					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) { s.initUpgrade() })
-				defer b.stopper.Stop()
-				require.Equal(t, final, b.getFinalVersionHandle().Metadata())
-				require.NoError(t, b.doCheckUpgrade(context.Background()))
-				if test.upgrade {
-					hops := []versions.Version{final}
-					if versions.Compare(test.version, "4.0.16") < 0 {
-						hops = append([]versions.Version{v4_0_16.Handler.Metadata()}, hops...)
-					}
-					if versions.Compare(test.version, "4.0.15") < 0 {
-						hops = append([]versions.Version{v4_0_15.Handler.Metadata()}, hops...)
-					}
-					if versions.Compare(test.version, "4.0.14") < 0 {
-						hops = append([]versions.Version{v4_0_14.Handler.Metadata()}, hops...)
-					}
-					if versions.Compare(test.version, "4.0.13") < 0 {
-						hops = append([]versions.Version{v4_0_13.Handler.Metadata()}, hops...)
-					}
-					if versions.Compare(test.version, "4.0.12") < 0 {
-						hops = append([]versions.Version{v4_0_12.Handler.Metadata()}, hops...)
-					}
-					if versions.Compare(test.version, "4.0.11") < 0 {
-						hops = append([]versions.Version{v4_0_11.Handler.Metadata()}, hops...)
-					}
-					if test.via410 {
-						hops = append([]versions.Version{v4_0_10.Handler.Metadata()}, hops...)
-					}
-					if test.via409 {
-						hops = append([]versions.Version{v4_0_9.Handler.Metadata()}, hops...)
-					}
-					if test.via408 {
-						hops = append([]versions.Version{v4_0_8.Handler.Metadata()}, hops...)
-					}
-					if test.via407 {
-						hops = append([]versions.Version{v4_0_7.Handler.Metadata()}, hops...)
-					}
-					expected := make([]string, 0, len(hops))
-					from := test.version
-					for order, hop := range hops {
-						expected = append(expected, versions.GetVersionUpgradeSQL(versions.VersionUpgrade{
-							FromVersion:        from,
-							ToVersion:          hop.Version,
-							FinalVersion:       final.Version,
-							FinalVersionOffset: final.VersionOffset,
-							State:              versions.StateCreated,
-							UpgradeOrder:       int32(order),
-							UpgradeCluster:     hop.UpgradeCluster,
-							UpgradeTenant:      hop.UpgradeTenant,
-						}))
-						from = hop.Version
-					}
-					require.Equal(t, expected, upgrades)
-				} else {
-					require.Empty(t, upgrades)
+				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+				t.Cleanup(s.stopper.Stop)
+				require.Equal(t, "4.0.7", s.GetFinalVersion())
+				require.Equal(t, uint32(5), v4_0_6.Handler.Metadata().VersionOffset)
+				require.NoError(t, s.doCheckUpgrade(t.Context()))
+				require.Len(t, upgrades, len(tc.hops))
+				for i, hop := range tc.hops {
+					require.Contains(t, upgrades[i], fmt.Sprintf("values ('%s', '%s', '4.0.7',", hop[0], hop[1]))
 				}
 			})
 		})
 	}
 }
 
-func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
-	final := v4_0_8.Handler.Metadata()
-	for _, test := range []struct {
-		name        string
-		target      string
-		oldCanClaim bool
-	}{
-		// Control: the previous offset-only target lets the unchanged old handler
-		// finish the task without touching the persisted STATISTICS definition.
-		{name: "unsafe_offset_only_control", target: "4.0.7", oldCanClaim: true},
-		{name: "new_semantic_version", target: final.Version},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			runtime.RunTest("", func(runtime.Runtime) {
-				const (
-					upgradeID = uint64(100)
-					taskID    = uint64(200)
-					tenantID  = int32(10)
-				)
-				legacy := strings.Replace(sysview.InformationSchemaStatisticsDDL,
-					"coalesce(nullif(`idx`.`algo`, ''), 'BTREE')", "`idx`.`algo`", 1)
-				require.NotEqual(t, sysview.InformationSchemaStatisticsDDL, legacy)
-				definition := legacy
-				var claimed, ready bool
-				var readyTenants, creates int
-				txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-				txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
-					switch {
-					case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
-						if readyTenants == 1 {
-							return executor.Result{}, nil
-						}
-						return buildUpgradeVersionResult(upgradeID, versions.StateUpgradingTenant,
-							"4.0.7", test.target, final.VersionOffset, 0,
-							versions.No, versions.Yes, 1, 0), nil
-					case strings.Contains(sql, "from mo_upgrade_tenant where from_account_id >= 0"):
-						claimed = true
-						return buildUpgradeTenantTaskRows([]uint64{taskID}, []int32{tenantID}, []int32{tenantID}), nil
-					case strings.HasPrefix(sql, "select account_id, create_version from mo_account"):
-						return buildUpgradeTenantAccountRows([]int32{tenantID}, []string{"4.0.7"}), nil
-					case strings.HasPrefix(sql, "SELECT tbl.rel_createsql"):
-						if strings.Contains(sql, "tbl.relname = 'STATISTICS'") {
-							return executor.Result{}, nil
-						}
-						return newBootstrapStringResult(definition), nil
-					case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-						// Old 4.0.7 and new CNs both speak protocol 61: the pre-existing
-						// protocol barrier cannot distinguish their upgrade handlers.
-						return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"old-cn:61,new-cn:61"}`), nil
-					case sql == "DROP VIEW IF EXISTS information_schema.STATISTICS;":
-						definition = ""
-					case sql == sysview.InformationSchemaStatisticsDDL:
-						definition = sql
-						creates++
-					case strings.HasPrefix(sql, "select distinct t.reldatabase, i.index_table_name, i.algo_table_type"):
-						return executor.Result{}, nil // no provenance tables for this tenant
-					case sql == fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d", test.target, tenantID):
-						require.Equal(t, !test.oldCanClaim, definition == sysview.InformationSchemaStatisticsDDL)
-					case strings.HasPrefix(sql, "update mo_upgrade_tenant set ready = 1"):
-						ready = true
-					case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where id = 100 for update"):
-						return buildUpgradeVersionResult(upgradeID, versions.StateUpgradingTenant,
-							"4.0.7", test.target, final.VersionOffset, 0,
-							versions.No, versions.Yes, 1, 0), nil
-					case strings.HasPrefix(sql, "update mo_upgrade set total_tenant = 1, ready_tenant = 1"):
-						readyTenants = 1
-					default:
-						return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
-					}
-					return executor.Result{AffectedRows: 1}, nil
-				}, txnOp)
-
-				old := newServiceForTest("", &memLocker{},
-					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) {
-						// Use the actual retained handler: its offset and protocol
-						// gate must still match the released binary.
-						s.handles = append(s.handles, v4_0_7.Handler)
-					})
-				defer old.stopper.Stop()
-				// Both the worker admission code and this restored 4.0.7 handler are
-				// unchanged from the old binary; no new-worker-only offset check is used.
-				hasWork, err := old.newTenantUpgradePass(t.Context())()
-				require.NoError(t, err)
-				require.Equal(t, test.oldCanClaim, hasWork)
-				require.Equal(t, test.oldCanClaim, claimed)
-				require.Equal(t, test.oldCanClaim, ready)
-				require.Equal(t, legacy, definition)
-				require.Zero(t, creates)
-
-				current := newServiceForTest("", &memLocker{},
-					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) { s.initUpgrade() })
-				defer current.stopper.Stop()
-				hasWork, err = current.newTenantUpgradePass(t.Context())()
-				require.NoError(t, err)
-				require.Equal(t, !test.oldCanClaim, hasWork)
-				require.True(t, ready)
-				require.Equal(t, 1, readyTenants)
-				if test.oldCanClaim {
-					require.Equal(t, legacy, definition, "new workers cannot repair an already-completed task")
-					require.Zero(t, creates)
-				} else {
-					require.Equal(t, sysview.InformationSchemaStatisticsDDL, definition)
-					require.Equal(t, 1, creates)
-				}
-			})
-		})
-	}
-}
-
-func TestStatisticsUpgradeCompensatesPostSnapshotTenantAfterRestart(t *testing.T) {
+func TestLateTenantUpgradeUsesPersistedVersionAndCachesOnlyCommittedResult(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
-		const (
-			lastSnapshotID = int32(10)
-			lateTenantID   = lastSnapshotID + 1
-		)
-		// This test exercises the STATISTICS repair in 4.0.8, independently
-		// of the subsequent 4.0.9 cluster and 4.0.10 View upgrades.
-		final := v4_0_8.Handler.Metadata()
-		legacy := strings.Replace(sysview.InformationSchemaStatisticsDDL,
-			"coalesce(nullif(`idx`.`algo`, ''), 'BTREE')", "`idx`.`algo`", 1)
-		var snapshotCommitted, tenantCreated bool
-		var tenantVersion, definition string
-		var creates, reads, queued int
-		globalState := versions.StateUpgradingTenant
-		txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
-		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-		txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		tenantVersion := "4.0.6"
+		handler := newTestVersionHandler("4.0.7", "4.0.6", versions.No, versions.Yes, 1)
+		final := handler.Metadata()
+		final.State = versions.StateReady
+		reads, updates := 0, 0
 		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 			switch {
-			case strings.HasPrefix(sql, "insert into mo_upgrade_tenant"):
-				require.False(t, tenantCreated)
-				require.Contains(t, sql, fmt.Sprintf("'%s', 0, %d,", final.Version, lastSnapshotID))
-			case strings.HasPrefix(sql, "update mo_version set state"):
-				require.True(t, snapshotCommitted)
-				require.True(t, tenantCreated)
-				globalState = versions.StateReady
-			case sql == "select version, version_offset, state from mo_version order by create_at desc limit 1":
-				return statisticsLatestVersionResult(t, final, globalState), nil
-			case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
-				return newBootstrapStringResult("mo_catalog"), nil
-			case strings.HasPrefix(sql, "select version from mo_version"):
-				return newBootstrapStringResult(final.Version), nil
-			case strings.HasPrefix(sql, "insert into mo_upgrade"):
-				queued++
-			case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
-				return executor.Result{}, nil // the finite background tasks have finished
 			case strings.HasPrefix(sql, "select create_version from mo_account"):
-				require.True(t, tenantCreated)
-				require.Contains(t, sql, fmt.Sprintf("account_id = %d", lateTenantID))
 				reads++
 				return newBootstrapStringResult(tenantVersion), nil
-			case strings.HasPrefix(sql, "SELECT tbl.rel_createsql"):
-				return newBootstrapStringResult(definition), nil
-			case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-				return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"old-cn:61,new-cn:61"}`), nil
-			case sql == "DROP VIEW IF EXISTS information_schema.STATISTICS;":
-				definition = ""
-			case sql == sysview.InformationSchemaStatisticsDDL:
-				definition = sql
-				creates++
-			case sql == fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d", final.Version, lateTenantID):
-				require.Equal(t, sysview.InformationSchemaStatisticsDDL, definition,
-					"publish the version only after repairing the view")
-				tenantVersion = final.Version
+			case strings.HasPrefix(sql, "select version, version_offset, state from mo_version"):
+				return statisticsLatestVersionResult(t, final, versions.StateReady), nil
+			case strings.HasPrefix(sql, "update mo_account set create_version"):
+				updates++
+				tenantVersion = "4.0.7"
+				return executor.Result{AffectedRows: 1}, nil
 			default:
 				return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
 			}
-			return executor.Result{AffectedRows: 1}, nil
-		}, txnOp)
-
-		// Commit a finite account snapshot, then let an old CN create an account
-		// beyond that range. No sleeps or scheduler-dependent interleaving.
-		require.NoError(t, exec.ExecTxn(t.Context(), func(txn executor.TxnExecutor) error {
-			return versions.AddUpgradeTenantTask(100, final.Version, 0, lastSnapshotID, txn)
-		}, executor.Options{}))
-		snapshotCommitted = true
-		require.True(t, snapshotCommitted)
-		tenantCreated = true
-		tenantVersion, definition = "4.0.7", legacy
-		require.NoError(t, exec.ExecTxn(t.Context(), func(txn executor.TxnExecutor) error {
-			return versions.UpdateVersionState(final.Version, final.VersionOffset, versions.StateReady, txn)
-		}, executor.Options{}))
-
+		}, &testTxnOperator{})
 		newCN := func() *service {
-			b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
-				nil, exec, func(s *service) {
-					s.handles = append(s.handles, v4_0_6.Handler, v4_0_7.Handler, v4_0_8.Handler)
-				})
-			t.Cleanup(b.stopper.Stop)
-			return b
+			s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.handles = []VersionHandle{handler} })
+			t.Cleanup(s.stopper.Stop)
+			return s
 		}
-		restarted := newCN()
-		require.NoError(t, restarted.doCheckUpgrade(t.Context()))
-		require.Zero(t, queued, "ready global metadata does not queue another background upgrade")
-		hasWork, err := restarted.newTenantUpgradePass(t.Context())()
-		require.NoError(t, err)
-		require.False(t, hasWork)
-		require.Equal(t, legacy, definition, "background completion missed the late account")
-		require.False(t, restarted.upgrade.finalVersionCompleted.Load())
-
-		// Reproduce the old caller's misleading CN-version hint. The catalog
-		// still says 4.0.7 and must override it even after global ready/restart.
-		fetch := func() (int32, string, error) { return lateTenantID, final.Version, nil }
-		upgraded, err := restarted.MaybeUpgradeTenant(t.Context(), fetch, nil)
+		s := newCN()
+		fetch := func() (int32, string, error) { return 11, "4.0.7", nil }
+		upgraded, err := s.MaybeUpgradeTenant(t.Context(), fetch, nil)
 		require.NoError(t, err)
 		require.True(t, upgraded)
-		require.Equal(t, final.Version, tenantVersion)
-		require.Equal(t, sysview.InformationSchemaStatisticsDDL, definition)
-		require.Equal(t, 1, creates)
-		require.Equal(t, 2, reads, "read the catalog and recheck under the account lock")
-		upgraded, err = restarted.MaybeUpgradeTenant(t.Context(), fetch, nil)
+		require.Equal(t, "4.0.7", tenantVersion)
+		require.Equal(t, 1, updates)
+		require.Equal(t, 2, reads)
+		upgraded, err = s.MaybeUpgradeTenant(t.Context(), fetch, nil)
 		require.NoError(t, err)
 		require.False(t, upgraded)
-		require.Equal(t, 2, reads, "only a committed successful check is cached")
-
+		require.Equal(t, 2, reads)
 		upgraded, err = newCN().MaybeUpgradeTenant(t.Context(), fetch, nil)
 		require.NoError(t, err)
 		require.False(t, upgraded)
-		require.Equal(t, 3, reads, "another restart verifies the persisted tenant version")
-		require.Equal(t, 1, creates)
+		require.Equal(t, 3, reads)
+		require.Equal(t, uint64(1), handler.callHandleTenantUpgrade.Load())
 	})
 }
 
@@ -409,9 +143,9 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 	}{
 		{name: "caller_owned_transaction", version: final.Version, ownTxn: true},
 		{name: "catalog_read_failure", version: final.Version, fail: true},
-		{name: "migration_failure", version: "4.0.9", failUpgrade: true},
+		{name: "migration_failure", version: "4.0.6", failUpgrade: true},
 		{name: "newer_catalog_version", version: "999.0.0"},
-		{name: "different_cluster_version", version: "4.0.9", clusterVersion: "999.0.0"},
+		{name: "different_cluster_version", version: "4.0.6", clusterVersion: "999.0.0"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -457,7 +191,7 @@ func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
 					require.Empty(t, b.mu.tenants)
 				}
 				if test.failUpgrade {
-					require.Equal(t, 4, reads)
+					require.Equal(t, 6, reads, "each retry rechecks the version in its independently owned operation transaction")
 				} else {
 					require.Equal(t, 2, reads)
 				}
@@ -474,7 +208,7 @@ func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
 			switch {
 			case sql == "select create_version from mo_account where account_id = 11":
 				reads++
-				return newBootstrapStringResult("4.0.7"), nil
+				return newBootstrapStringResult("4.0.6"), nil
 			case sql == "select create_version from mo_account where account_id = 11 for update":
 				reads++
 				return newBootstrapStringResult(final.Version), nil // another worker finished
@@ -502,11 +236,11 @@ func TestMaybeUpgradeTenantWaitHonorsCancellation(t *testing.T) {
 		exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
 			switch {
 			case sql == "select create_version from mo_account where account_id = 11":
-				return newBootstrapStringResult("4.0.7"), nil
+				return newBootstrapStringResult("4.0.6"), nil
 			case strings.HasPrefix(sql, "select version, version_offset, state from mo_version"):
 				return statisticsLatestVersionResult(t, final, versions.StateCreated), nil
 			case strings.Contains(sql, "from mo_upgrade"):
-				return buildUpgradeVersionResult(100, versions.StateCreated, "4.0.7", final.Version,
+				return buildUpgradeVersionResult(100, versions.StateCreated, "4.0.6", final.Version,
 					final.VersionOffset, 0, versions.No, versions.Yes, 1, 0), nil
 			default:
 				return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
@@ -543,8 +277,8 @@ func TestMaybeUpgradeTenantRejectsConcurrentAccountDeletion(t *testing.T) {
 							if dropped {
 								return executor.Result{}, nil
 							}
-							return newBootstrapStringResult("4.0.7"), nil
-						case "select version, version_offset, state from mo_version order by create_at desc limit 1":
+							return newBootstrapStringResult("4.0.6"), nil
+						case versions.LatestVersionSQL:
 							dropped = true // DROP commits before the locking recheck
 							return statisticsLatestVersionResult(t, final, versions.StateReady), nil
 						case "select create_version from mo_account where account_id = 11 for update":

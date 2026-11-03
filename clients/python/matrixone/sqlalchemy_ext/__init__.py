@@ -19,6 +19,7 @@ This module provides SQLAlchemy-specific extensions and utilities
 for working with MatrixOne database features.
 """
 
+from .snapshot import select, compile_select, with_snapshot, enable_snapshot_method
 from .dialect import MatrixOneDialect
 from .fulltext_index import (
     FulltextAlgorithmType,
@@ -129,6 +130,10 @@ from .json_type import (
 )
 
 __all__ = [
+    "select",
+    "compile_select",
+    "with_snapshot",
+    "enable_snapshot_method",
     "VectorType",
     "Vectorf32",
     "Vectorf64",

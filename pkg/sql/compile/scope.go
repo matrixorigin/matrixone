@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -53,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -413,11 +415,22 @@ func (s *Scope) Run(c *Compile) (err error) {
 			if len(s.DataSource.RecvMsgList) > 0 {
 				tag = s.DataSource.RecvMsgList[0].MsgTag
 			}
+			if ts, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+				ts.ReadPolicy = scanReadPolicy(s.DataSource.node)
+			}
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
 	return err
+}
+
+// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads.
+func scanReadPolicy(node *plan.Node) fileservice.Policy {
+	if node.GetNarrowScan() {
+		return fileservice.NarrowRead
+	}
+	return 0
 }
 
 func (s *Scope) FreeOperator(c *Compile) {
@@ -499,6 +512,11 @@ type sequentialBranchLifecycle interface {
 func installSequentialBranchStarter(root vm.Operator, start, wait func(int) error) (func(), bool, error) {
 	var target sequentialBranchStarter
 	err := vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		// Parallel inputs and flattened unions retain pass-through UNION ALL
+		// markers for projection/analysis. They do not own pre-scope activation.
+		if u, ok := op.(*unionall.UnionAll); ok && u.SequentialBranches <= 1 {
+			return nil
+		}
 		candidate, ok := op.(sequentialBranchStarter)
 		if !ok {
 			return nil

@@ -72,8 +72,8 @@ select id from items order by id desc;
 3  𝄀
 2  𝄀
 1
-select count(*) from (select cast(name as decimal(10,0)) as k from items order by k) s;
-invalid input: "x" is invalid decimal string
+select count(*) from (select regexp_substr(name, '[') as k from items order by k) s;
+error parsing regexp: missing closing ]: `[`
 create table left_join_keepalive_l (id int primary key);
 create table left_join_keepalive_r (id int primary key, bad varchar(32));
 insert into left_join_keepalive_l values (1);
@@ -81,10 +81,10 @@ insert into left_join_keepalive_r values (1, 'bad');
 select count(*) from (
 select l.id
 from left_join_keepalive_l l left join left_join_keepalive_r r
-on l.id = r.id and cast(r.bad as decimal(10,0)) > 0
+on l.id = r.id and length(regexp_substr(r.bad, '[')) > 0
 order by r.id
 ) s;
-invalid input: "bad" is invalid decimal string
+error parsing regexp: missing closing ]: `[`
 select count(*) as total from (
 select l.id
 from left_join_keepalive_l l left join left_join_keepalive_r r

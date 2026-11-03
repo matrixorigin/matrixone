@@ -4,7 +4,7 @@ create database issue_28854_percentile_nan;
 use issue_28854_percentile_nan;
 create table issue_28854_percentile_nan(v double);
 insert into issue_28854_percentile_nan values
-    (-1), (0), (1), (cast('NaN' as double));
+    (-1), (0), (1), (bit_cast(unhex('000000000000f87f') as double));
 
 select approx_percentile(v, 0) as approx_p0,
        approx_percentile(v, 0.5) as approx_p50,

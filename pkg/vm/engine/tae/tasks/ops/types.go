@@ -19,7 +19,6 @@ import (
 	"time"
 
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
-	iworker "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
 type OpDoneCB = func(iops.IOp)
@@ -28,9 +27,7 @@ type Op struct {
 	Impl       iops.IOpInternal
 	ErrorC     chan error
 	WaitedOnce atomic.Bool
-	Worker     iworker.IOpWorker
 	Err        error
-	Result     any
 	CreateTime time.Time
 	StartTime  time.Time
 	EndTime    time.Time

@@ -17,6 +17,7 @@ package plan
 import (
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -837,8 +839,9 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := make([]*plan.ColRef, 0, 3+len(ctx.ForeignKeyChecks))
+	cols := make([]*plan.ColRef, 0, 7+len(ctx.ForeignKeyChecks))
 	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
+	cols = append(cols, ctx.OdkuTargetAutoIncrementCol, ctx.OdkuGeneratedCol, ctx.OdkuOrdinalCol, ctx.OdkuGeneratedAutoIncrementCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -921,6 +924,11 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 		return nil
 	}
 
+	// This proof belongs to the current inputs and predicates. Rewriters may
+	// have changed them since a previous invocation, including for a trial.
+	if node.Stats != nil && node.Stats.HashmapStats != nil {
+		node.Stats.HashmapStats.HashOnPK = false
+	}
 	leftColMap := determineHashOnPK(node.Children[0], builder)
 	rightColMap := determineHashOnPK(node.Children[1], builder)
 	if rightColMap == nil {
@@ -2018,10 +2026,12 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	if isSameColumnType(source, target) {
 		return !sourceID.IsDecimal() || validDecimalPlanType(source)
 	}
-	// CHAR comparison binding casts text operands to the fixed CHAR domain.
-	// With the same charset and a target at least as wide as the declared
-	// source, that cast cannot reject or truncate any source value.
-	if targetID == types.T_char &&
+	// Text widening is total in the same collation: strToStr checks character
+	// width without transcoding, and every value fits a target at least as wide
+	// as its bounded source. Keep the cast itself (including comparison-key
+	// trimming); this only proves that skipping its evaluation cannot hide an
+	// input-dependent error or warning.
+	if (targetID == types.T_char || targetID == types.T_varchar) &&
 		(sourceID == types.T_char || sourceID == types.T_varchar) &&
 		source.SameCollation(target) && source.Width > 0 &&
 		target.Width >= source.Width {
@@ -2111,23 +2121,6 @@ func integerTypeDomain(oid types.T) (bits int, signed bool) {
 		return 64, false
 	default:
 		return 0, false
-	}
-}
-
-func integerDecimalDigits(oid types.T) int32 {
-	switch oid {
-	case types.T_int8, types.T_uint8:
-		return 3
-	case types.T_int16, types.T_uint16:
-		return 5
-	case types.T_int32, types.T_uint32:
-		return 10
-	case types.T_int64:
-		return 19
-	case types.T_uint64:
-		return 20
-	default:
-		return 0
 	}
 }
 
@@ -2253,84 +2246,108 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 	if builder.optimizerHints != nil && builder.optimizerHints.optimizeLikeExpr != 0 {
 		return
 	}
-	// for a like "abc%", change it to prefix_equal(a,"abc")
-	// for a like "abc%def", add an extra filter prefix_equal(a,"abc")
 	node := builder.qry.Nodes[nodeID]
-
 	for _, childID := range node.Children {
 		builder.optimizeLikeExpr(childID)
 	}
 	if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 {
 		return
 	}
-	var newFilters []*plan.Expr
-	for i := range node.FilterList {
-		expr := node.FilterList[i]
-		fun := expr.GetF()
-		if fun != nil && fun.Func.ObjName == "like" {
-			// Explicit ESCAPE changes how wildcard bytes are interpreted. Keep
-			// the original predicate intact instead of applying the two-argument
-			// prefix rewrite with its hard-coded default escape semantics.
-			if len(fun.Args) != 2 {
-				continue
+	var stats *statspb.StatsInfo
+	if w := builder.getStatsInfoByTableID(node.TableDef.TblId); w != nil {
+		stats = w.GetStats()
+	}
+	var prefixes []*plan.Expr
+	var equalities []*plan.Expr
+	for i, expr := range node.FilterList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func.ObjName != "like" || len(fn.Args) != 2 || fn.Args[0].GetCol() == nil {
+			continue
+		}
+		if _, usable := prefixStringDomain(fn.Args[0].Typ); !usable {
+			continue
+		}
+		lit := fn.Args[1].GetLit()
+		if lit == nil || lit.Isnull || lit.Src != nil {
+			continue
+		}
+		value, ok := lit.Value.(*plan.Literal_Sval)
+		if !ok || value.Sval == "" {
+			continue
+		}
+		binary, _ := prefixStringDomain(fn.Args[0].Typ)
+		if !binary && (!utf8.ValidString(value.Sval) || strings.ContainsRune(value.Sval, utf8.RuneError)) {
+			continue
+		}
+		prefix, wildcard, escaped, pure := likeLiteralPrefix(value.Sval)
+		if !wildcard {
+			if !escaped {
+				fn.Func.ObjName = function.EqualFunctionName
+				fn.Func.Obj = function.EqualFunctionEncodedID
+				equalities = append(equalities, expr)
 			}
-			col := fun.Args[0].GetCol()
-			if col == nil {
-				continue
-			}
-			if fun.Args[1].GetLit() == nil {
-				continue
-			}
-			str := fun.Args[1].GetLit().GetSval()
-			if len(str) == 0 {
-				continue
-			}
-			index1 := strings.IndexByte(str, '_')
-			if index1 > 0 && str[index1-1] == '\\' {
-				index1--
-			}
-			index2 := strings.IndexByte(str, '%')
-			if index2 > 0 && str[index2-1] == '\\' {
-				index2--
-			}
-			if index1 == -1 && index2 == -1 {
-				// it's col like string without wildcard, can change to equal
-				fun.Func.ObjName = function.EqualFunctionName
-				fun.Func.Obj = function.EqualFunctionEncodedID
-				continue
-			}
-
-			indexOfWildCard := index1
-			if index1 == -1 {
-				indexOfWildCard = index2
-			}
-			if index2 != -1 && index2 < index1 {
-				indexOfWildCard = index2
-			}
-			if indexOfWildCard <= 0 {
-				continue
-			}
-			newStr := str[:indexOfWildCard]
-
-			newFilter := node.FilterList[i]
-			// if no _ and % in the last, we can replace the origin filter
-			replaceOrigin := (index1 == -1) && (index2 == len(str)-1)
-			if !replaceOrigin {
-				newFilter = DeepCopyExpr(newFilter)
-				newFilters = append(newFilters, newFilter)
-			}
-			newFunc := newFilter.GetF()
-			newFunc.Func.ObjName = function.PrefixEqualFunctionName
-			newFunc.Func.Obj = function.PrefixEqualFunctionEncodedID
-			newFunc.Args[1].GetLit().Value.(*plan.Literal_Sval).Sval = newStr
-			if replaceOrigin {
-				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(newFilter))
-			}
+			continue
+		}
+		if _, ok := stringPrefixSuccessor(prefix, binary); !ok {
+			continue
+		}
+		bound := makePlan2StringConstExprWithType(prefix, binary)
+		bound.Typ.Charset = fn.Args[0].Typ.Charset
+		prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_eq", []*plan.Expr{DeepCopyExpr(fn.Args[0]), bound})
+		if err != nil {
+			continue
+		}
+		col := fn.Args[0].GetCol()
+		if !logicalPrefixOnTable(prefixExpr.GetF(), node.TableDef) || len(node.BindingTags) == 0 || col.RelPos != node.BindingTags[0] {
+			continue
+		}
+		prefixExpr.Selectivity = regularIndexUnknownRangeSel
+		if upper, known := stringPrefixSelectivity(prefixExpr.GetF(), stats, node); known {
+			prefixExpr.Selectivity = upper
+		}
+		// This is one predicate's necessary condition, not an independent estimate.
+		// Preserve LIKE's truth and error semantics after the candidate lookup.
+		if pure {
+			// In the proved byte domain, trailing '%' contributes only a suffix:
+			// prefix_eq is exact even if later subject bytes are malformed UTF-8.
+			node.FilterList[i] = prefixExpr
+			node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(prefixExpr))
+		} else {
+			expr.Selectivity = 1
+			prefixes = append(prefixes, prefixExpr)
 		}
 	}
-	if len(newFilters) > 0 {
-		node.FilterList = append(node.FilterList, newFilters...)
-		node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(newFilters)...)
+	node.FilterList = append(node.FilterList, prefixes...)
+	node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(prefixes)...)
+	if len(equalities) > 0 && builder.canRefreshLiteralLikeSelectivity(nodeID) && regularIndexFiltersHaveStableEvaluation(node, equalities...) {
+		for _, expr := range equalities {
+			// LIKE's cached 20% estimate no longer describes this equality.
+			// Refresh before filter sorting, without an observable zero estimate.
+			expr.Selectivity = estimateEqualitySelectivity(expr, builder, stats)
+		}
+	}
+}
+
+// New estimates may change which independent branch is executed first. Keep
+// their historical behavior; a linear single-scan query has no such branch.
+func (builder *QueryBuilder) canRefreshLiteralLikeSelectivity(scanID int32) bool {
+	if len(builder.qry.Steps) != 1 || builder.qry.Correlation != nil {
+		return false
+	}
+	for nodeID := builder.qry.Steps[0]; ; {
+		node := builder.qry.Nodes[nodeID]
+		if nodeID == scanID {
+			return node.NodeType == plan.Node_TABLE_SCAN && len(node.Children) == 0
+		}
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_AGG, plan.Node_SORT:
+		default:
+			return false
+		}
+		if len(node.Children) != 1 {
+			return false
+		}
+		nodeID = node.Children[0]
 	}
 }
 
@@ -2440,6 +2457,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.skipDedup = value
 	case "outerAntiPlanning":
 		builder.optimizerHints.outerAntiPlanning = value
+	case "rollupSort":
+		builder.optimizerHints.rollupSort = value
 	}
 }
 
@@ -2474,6 +2493,20 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
+	}
+}
+
+// sortRollupMode is retained as an internal compatibility adapter. New code
+// should use rollup_algorithm through rollupAlgorithmMode, which mirrors the
+// COST/SORT/HASH session variable used by the window partition implementation.
+func (builder *QueryBuilder) sortRollupMode() int {
+	switch builder.rollupAlgorithmMode() {
+	case rollupAlgorithmSort:
+		return 1
+	case rollupAlgorithmHash:
+		return 2
+	default:
+		return 0
 	}
 }
 

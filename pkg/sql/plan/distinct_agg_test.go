@@ -146,9 +146,9 @@ func TestOptimizeSingleCountDistinctBuildsLocalPreDedupPath(t *testing.T) {
 	// final pair stage shuffles despite having an unshuffled Group child.
 	localPair.Stats.HashmapStats.Shuffle = true
 	localPair.Stats.HashmapStats.HashmapSize = 3_000_000
-	determineShuffleForGroupBy(localPair, builder)
+	determineShuffleForGroupBy(localPair, builder, false)
 	require.False(t, localPair.Stats.HashmapStats.Shuffle)
-	determineShuffleForGroupBy(finalPair, builder)
+	determineShuffleForGroupBy(finalPair, builder, false)
 	require.True(t, finalPair.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(1), finalPair.Stats.HashmapStats.ShuffleColIdx)
 	require.Equal(t, planpb.ShuffleType_Hash, finalPair.Stats.HashmapStats.ShuffleType)
@@ -454,7 +454,7 @@ func TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent(t *testi
 }
 
 func TestTupleCountDistinctRetainsConservativeFallbacks(t *testing.T) {
-	for _, reason := range []string{"low ndv", "missing ndv", "small input", "nan ndv", "infinite ndv", "unsupported type", "expression", "rollup", "mixed", "high group ndv", "unknown provenance"} {
+	for _, reason := range []string{"low ndv", "missing ndv", "small input", "nan ndv", "infinite ndv", "unsupported type", "expression", "rollup", "sort rollup", "mixed", "high group ndv", "unknown provenance"} {
 		t.Run(reason, func(t *testing.T) {
 			a := distinctAggTestCol(types.T_int32, 1, 1, 8)
 			b := distinctAggTestCol(types.T_int64, 1, 2, 1_000_000)
@@ -478,6 +478,9 @@ func TestTupleCountDistinctRetainsConservativeFallbacks(t *testing.T) {
 				b.Expr = MakePlan2Int64ConstExprWithType(1).Expr
 			case "rollup":
 				outer.GroupingFlag = []bool{false}
+			case "sort rollup":
+				outer.GroupingFlag = []bool{true}
+				outer.ExtraOptions = EncodeSortRollupOption()
 			case "mixed":
 				outer.AggList = append(outer.AggList, distinctAggTestExpr(function.SUM, false, b.Typ, b))
 			case "unknown provenance":
@@ -488,7 +491,31 @@ func TestTupleCountDistinctRetainsConservativeFallbacks(t *testing.T) {
 			require.NoError(t, builder.optimizeDistinctAgg(1))
 			require.Len(t, builder.qry.Nodes, 2)
 			require.NotZero(t, uint64(count.GetF().Func.Obj)&function.Distinct)
+			require.Len(t, count.GetF().Args, 2)
 			require.Empty(t, builder.distinctKeyShuffleCols)
+		})
+	}
+}
+
+func TestSortRollupDistinctEntryNormalizesComparisonArguments(t *testing.T) {
+	for _, arity := range []int{1, 2} {
+		t.Run(fmt.Sprintf("arity=%d", arity), func(t *testing.T) {
+			key := distinctAggTestCol(types.T_varchar, 1, 1, 1_000_000)
+			key.Typ.PadSpace = true
+			args := []*planpb.Expr{key}
+			if arity == 2 {
+				args = append(args, distinctAggTestCol(types.T_int64, 1, 2, 1_000_000))
+			}
+			count := distinctAggTestExpr(function.COUNT, true, planpb.Type{Id: int32(types.T_int64)}, args...)
+			builder, outer := newDistinctAggTestBuilder(1_000_000, 4, 1_000_000, []*planpb.Expr{count})
+			outer.ExtraOptions = EncodeSortRollupOption()
+			outer.GroupingFlag = []bool{true}
+			require.NoError(t, builder.optimizeDistinctAgg(1))
+			require.Len(t, builder.qry.Nodes, 2)
+			require.Equal(t, []int32{0}, outer.Children)
+			require.NotZero(t, uint64(count.GetF().Func.Obj)&function.Distinct)
+			require.Len(t, count.GetF().Args, arity)
+			require.True(t, isCastOverload(count.GetF().Args[0], 2), "bypassing pair rewrites must retain PAD SPACE comparison normalization")
 		})
 	}
 }

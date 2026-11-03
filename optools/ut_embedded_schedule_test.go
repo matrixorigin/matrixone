@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 const embeddedSetup = `source ./run_ut.sh UT
@@ -329,6 +330,7 @@ func TestEmbeddedPrebuiltAdmission(t *testing.T) {
 		{"serial", "1", "success"},
 		{"pool", "2", "success"},
 		{"heavy-failure", "2", "heavy-failure"},
+		{"slow-prebuild", "1", "slow-prebuild"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			script := embeddedSetup + `
@@ -347,25 +349,27 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
 (
  trap release_children EXIT
  trap 'exit 143' TERM INT
+ # The harness deadline bounds the fixture, including prebuild and metadata
+ # discovery. FIFO reads assert event ordering, not preparation latency.
  for heavy in embed bootstrap; do
-  read -r -t 5 leaf pid <&8 || exit 100
+  read -r leaf pid <&8 || exit 100
   [[ "$leaf" == "$heavy" ]] || exit 101
   kill -0 "$pid" || exit 102
   printf 'release\n' >&10
  done
  if [[ "$UT_EMBEDDED_PACKAGE_PARALLEL" == 2 ]]; then
-  read -r -t 5 first first_pid <&8 || exit 103
-  read -r -t 5 second second_pid <&8 || exit 104
+  read -r first first_pid <&8 || exit 103
+  read -r second second_pid <&8 || exit 104
   [[ "$first $second" == 'arrowload dml' || "$first $second" == 'dml arrowload' ]] || exit 105
   [[ "$first_pid" != "$second_pid" ]] || exit 106
   kill -0 "$first_pid" && kill -0 "$second_pid" || exit 107
   printf 'release\nrelease\n' >&11
-  read -r -t 5 leaf pid <&8 || exit 108
+  read -r leaf pid <&8 || exit 108
   [[ "$leaf" == sqlintegration ]] || exit 109
   printf 'release\n' >&10
  else
   for next in arrowload sqlintegration dml; do
-   read -r -t 5 leaf pid <&8 || exit 110
+   read -r leaf pid <&8 || exit 110
    [[ "$leaf" == "$next" ]] || exit 111
    if [[ "$leaf" == sqlintegration ]]; then printf 'release\n' >&10; else printf 'release\n' >&11; fi
   done
@@ -409,6 +413,8 @@ fi
 if [[ "$1" == test ]]; then
  package=${!#}; leaf=${package##*/}
  [[ " $* " == *' -c '* ]] || exit 120
+ # Exceed the old per-event timeout before execution can publish any event.
+ if [[ "$MODE" == slow-prebuild && "$leaf" == bootstrap ]]; then sleep 6; fi
  while [[ "$1" != -o ]]; do shift; done
  output=$2
  printf '%s\n' "$output" > "$CASE_DIR/binary-$leaf"
@@ -433,7 +439,7 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
 fi
 exit 125
 `
-			out, err := scheduleHarnessWithMock(t, script, mock,
+			out, err := scheduleHarnessWithMockTimeout(t, 30*time.Second, script, mock, nil,
 				"MODE="+tc.mode, "UT_EMBEDDED_PACKAGE_PARALLEL="+tc.parallel)
 			if err != nil {
 				t.Fatalf("prebuilt entry admission %s: %v\n%s", tc.name, err, out)
@@ -648,10 +654,12 @@ run_embedded_tests "$scope" 2
 			var transform func(string) string
 			mock := embeddedGoMock
 			switch phase {
-			case "active-publication", "watchdog-publication", "cleanup":
-				mock = strings.Replace(mock, `trap 'touch "$CASE_DIR/stopped-execute-a"; exit 143' TERM`, `trap 'fixture_self_pid fixture_pid; printf "MOCK_TERM shell=%s\n" "$fixture_pid" >&16; touch "$CASE_DIR/stopped-execute-a"; printf "MOCK_STOPPED shell=%s\n" "$fixture_pid" >&16; exit 143' TERM`, 1)
+			case "running", "active-publication", "watchdog-publication", "cleanup":
+				mock = strings.Replace(mock, `trap 'touch "$CASE_DIR/stopped-execute-a"; exit 143' TERM`, `trap 'fixture_self_pid fixture_pid; printf "MOCK_TERM shell=%s\n" "$fixture_pid" >&16; touch "$CASE_DIR/stopped-execute-a"; printf "MOCK_STOPPED shell=%s\n" "$fixture_pid" >&16; printf "stopped\n" >&17; exit 143' TERM`, 1)
 				script = strings.Replace(script, " printf 'EXECUTE_CANCELLED %s\\n' \"$status\"", " cat \"$CASE_DIR/ut-signal-trace.log\"\n printf 'EXECUTE_CANCELLED %s\\n' \"$status\"", 1)
 				script = strings.Replace(script, "function ut_test_execution_spawned() {", `exec 16>"$CASE_DIR/ut-signal-trace.log"
+mkfifo "$CASE_DIR/term-ack"
+exec 17<>"$CASE_DIR/term-ack"
 fixture_self_pid fixture_pid
 printf 'BASH %s outer=%s shell=%s\n' "$BASH_VERSION" "$$" "$fixture_pid" >&16
 function kill() {
@@ -659,6 +667,14 @@ function kill() {
  fixture_self_pid fixture_pid
  builtin kill "$@" || result=$?
  if [[ "$1" != -0 ]]; then printf 'KILL shell=%s result=%s args=%s\n' "$fixture_pid" "$result" "$*" >&16; fi
+ # This mock promises graceful TERM handling. A busy CI host may otherwise
+ # exhaust the runner's valid KILL fallback before the marker is scheduled.
+ # Acknowledge this fixture's handler before starting that grace-period probe;
+ # separate resistant-child tests continue to exercise the forced-KILL path.
+ if (( result == 0 )) && [[ "$1" == -TERM && "${2:-}" == -- && -n "${test_pids[0]:-}" && "${3:-}" == "-${test_pids[0]}" ]]; then
+  read -r _ <&17
+  printf 'TERM_ACK shell=%s\n' "$fixture_pid" >&16
+ fi
  return "$result"
 }
 function ut_test_execution_spawned() {`, 1)
@@ -724,6 +740,9 @@ function ut_test_execution_spawned() {`, 1)
 			exit, ok := err.(*exec.ExitError)
 			if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "EXECUTE_CANCELLED 143") {
 				t.Fatalf("embedded execution cancellation %s: %v\n%s", phase, err, out)
+			}
+			if !strings.Contains(string(out), "TERM_ACK ") {
+				t.Fatalf("missing graceful mock acknowledgment: %s", out)
 			}
 			if phase == "cleanup" {
 				for _, event := range []string{"ROOT_CANCEL ", "ROOT_RELEASE ", "OBSERVER_ACK ", "OBSERVER_RELEASE ", "ROOT_NOTIFIED ", "CANCEL ", "SWEEP_START ", "SWEEP_RESULT ", "DRAINED ", "JOINED ", "MOCK_TERM ", "MOCK_STOPPED "} {
@@ -885,13 +904,14 @@ run_embedded_tests "$scope" 2
 func TestEmbeddedPrebuiltExecutionHardTimeout(t *testing.T) {
 	t.Parallel()
 	script := embeddedSetup + `
+scope=$'example/a\nexample/b'
 function logger() { printf '%s\n' "$*"; }
-start_embedded_prebuild "$scope" 1
+start_embedded_prebuild "$scope" 2
 artifact_dir=$CLUSTER_PREBUILD_DIR
 status=0
 run_embedded_tests "$scope" 2 || status=$?
 [[ "$status" != 0 ]] || exit 90
-for p in a b c; do [[ -d "$CASE_DIR/executed-$p" ]] || exit 91; done
+for p in a b; do [[ -d "$CASE_DIR/executed-$p" ]] || exit 91; done
 ! kill -0 -- "-$(<"$CASE_DIR/pgid-execute-timeout-a")" 2>/dev/null || exit 95
 [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID$CLUSTER_PREBUILD_REPORT$CLUSTER_PREBUILD_DIR" ]] || exit 92
 [[ ! -d "$artifact_dir" ]] || exit 93
@@ -907,6 +927,7 @@ grep -q 'prebuilt embedded package example/a failed' "$UT_STDERR" || exit 94
 func TestEmbeddedPrebuiltTimeoutAddsFailureEvent(t *testing.T) {
 	t.Parallel()
 	script := embeddedSetup + `
+scope=example/a
 start_embedded_prebuild "$scope" 1
 status=0
 run_embedded_tests "$scope" 2 || status=$?
@@ -927,6 +948,7 @@ func TestEmbeddedPrebuiltOuterCancellationKillsResistantGroup(t *testing.T) {
 		for _, drain := range []string{"complete", "failed", "helper-killed"} {
 			t.Run("parallel="+parallel+"/drain="+drain, func(t *testing.T) {
 				script := embeddedSetup + `
+scope=$'example/a\nexample/b'
 if [[ "$DRAIN" != complete ]]; then
  original_stop=$(declare -f terminate_ut_process_groups)
  eval "${original_stop/terminate_ut_process_groups/real_terminate_ut_process_groups}"
@@ -953,7 +975,7 @@ cleanup_check() {
  exit "$status"
 }
 trap cleanup_check EXIT
-start_embedded_prebuild "$scope" 1
+start_embedded_prebuild "$scope" 2
 artifact_dir=$CLUSTER_PREBUILD_DIR
 (read -r _ <&8; kill -TERM $$) &
 run_embedded_tests "$scope" 2

@@ -1112,6 +1112,57 @@ func TestConvertUsingDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNumericExponentStatementBoundaries(t *testing.T) {
+	ctx := context.Background()
+	const sql = "select 1; select 1.5Efoo"
+	stmts, err := Parse(ctx, sql, 1)
+	for _, stmt := range stmts {
+		t.Cleanup(stmt.Free)
+	}
+	require.Error(t, err)
+	require.Empty(t, stmts)
+	fragments, err := SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, 1, "")
+	require.Error(t, err)
+	require.Empty(t, fragments)
+
+	parser := &MySQLParser{}
+	stmt, first, next, err := parser.ParseFirstStatementWithSQLMode(ctx, SQLContinuation{SQL: sql}, 1, "")
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, "select 1;", first)
+	require.Equal(t, "select 1", tree.String(stmt, dialect.MYSQL))
+	stmt, _, _, err = parser.ParseFirstStatementWithSQLMode(ctx, next, 1, "")
+	if stmt != nil {
+		t.Cleanup(stmt.Free)
+	}
+	require.Error(t, err)
+	require.Nil(t, stmt)
+	positioned, ok := err.(PositionedErr)
+	require.True(t, ok)
+	require.Contains(t, positioned.Near, "1.5Efoo")
+
+	stmts, err = parser.Parse(ctx, "select 1.5e", 1)
+	for _, stmt := range stmts {
+		t.Cleanup(stmt.Free)
+	}
+	require.Error(t, err)
+	require.Empty(t, stmts)
+	stmts, err = parser.Parse(ctx, "select 1.5e1foo", 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	require.Len(t, stmts, 1)
+	expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
+	require.Equal(t, "foo", expr.As.Origin())
+	require.IsType(t, &tree.NumVal{}, expr.Expr)
+	value, exact := expr.Expr.(*tree.NumVal).Float64()
+	require.True(t, exact)
+	require.Equal(t, float64(15), value)
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}
@@ -1155,6 +1206,22 @@ func TestParseFirstWithSQLMode(t *testing.T) {
 			require.Equal(t, test.first, test.sql[:end])
 		})
 	}
+	t.Run("future comment does not start a continuation", func(t *testing.T) {
+		const ignored = "/*!99999 set sql_mode='ANSI_QUOTES'; select 99 */ "
+		stmt, first, next, err := parser.ParseFirstStatementWithSQLMode(ctx, SQLContinuation{SQL: ignored + "select 1; select 2"}, 1, "")
+		require.NoError(t, err)
+		defer stmt.Free()
+		require.Equal(t, "select 1", tree.String(stmt, dialect.MYSQL))
+		require.Equal(t, ignored+"select 1;", first)
+		require.Equal(t, SQLContinuation{SQL: " select 2"}, next)
+		second, _, rest, err := parser.ParseFirstStatementWithSQLMode(ctx, next, 1, "")
+		require.NoError(t, err)
+		defer second.Free()
+		require.Equal(t, "select 2", tree.String(second, dialect.MYSQL))
+		require.Empty(t, rest.SQL)
+		require.False(t, rest.InExecutableComment)
+	})
+
 	t.Run("executable comment continuation and parser reuse", func(t *testing.T) {
 		input := SQLContinuation{SQL: `/*!50000 set sql_mode='NO_BACKSLASH_ESCAPES'; select 'x\'; select 2 */; select 3`}
 		for i, want := range []string{
@@ -2337,6 +2404,9 @@ var (
 		input:  "alter table t1 alter reindex idx1 HNSW m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
 		output: "alter table t1 alter reindex idx1 hnsw m = 32 ef_construction = 128 ef_search = 100 max_index_capacity = 100000",
 	}, {
+		input:  "alter table t1 alter reindex idx1 HNSW max_bad_records = 0",
+		output: "alter table t1 alter reindex idx1 hnsw max_bad_records = 0",
+	}, {
 		// String options must round-trip quoted (the grammar takes a STRING);
 		// op_type itself is rejected at compile for reindex, but Format stays
 		// re-parseable. (Parses, formats, re-parses to the same tree.)
@@ -2420,6 +2490,21 @@ var (
 	}, {
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
+	}, {
+		input:  "show index ignored from t1",
+		output: "show index ignored from t1",
+	}, {
+		input:  "SHOW KEYS IGNORED IN db.t1 WHERE Key_name = 'i'",
+		output: "show index ignored from db.t1 where Key_name = i",
+	}, {
+		input:  "show index status from t1",
+		output: "show index status from t1",
+	}, {
+		input:  "SHOW INDEXES STATUS IN db.t1 WHERE State = 'stopped'",
+		output: "show index status from db.t1 where State = stopped",
+	}, {
+		input:  "create table ignored (ignored int)",
+		output: "create table ignored (ignored int)",
 	}, {
 		input:  "create table t2(a int, b datalink);",
 		output: "create table t2 (a int, b datalink)",
@@ -3724,7 +3809,13 @@ var (
 			output: "explain (analyze) select * from t",
 		}, {
 			input:  "explain format = 'tree' for connection 10",
-			output: "explain format = tree for connection 10",
+			output: "explain format = 'tree' for connection 10",
+		}, {
+			input:  "explain for connection 10",
+			output: "explain for connection 10",
+		}, {
+			input:  "describe for connection 328",
+			output: "explain for connection 328",
 		}, {
 			input:  "explain db.a",
 			output: "show columns from db.a",
@@ -3858,11 +3949,23 @@ var (
 			input:  "create index idx using hnsw on A (a) M 16 max_index_capacity = 500000",
 			output: "create index idx using hnsw on a (a) M 16 MAX_INDEX_CAPACITY 500000 ",
 		}, {
+			input:  "create index idx using hnsw on A (a) max_bad_records = 0",
+			output: "create index idx using hnsw on a (a) MAX_BAD_RECORDS 0 ",
+		}, {
+			input:  "create index idx using hnsw on A (a) M 16 max_bad_records 100",
+			output: "create index idx using hnsw on a (a) M 16 MAX_BAD_RECORDS 100 ",
+		}, {
 			input:  "create index idx using ivfpq on A (a) LISTS 8 kmeans_train_percent 7 max_index_capacity 2000",
 			output: "create index idx using ivfpq on a (a) LISTS 8 KMEANS_TRAIN_PERCENT 7 MAX_INDEX_CAPACITY 2000 ",
 		}, {
 			input:  "create fulltext2 index idx on A (a) max_index_capacity 500000 max_postings_capacity 8000000",
 			output: "create fulltext2 index idx on a (a) MAX_INDEX_CAPACITY 500000 MAX_POSTINGS_CAPACITY 8000000 ",
+		}, {
+			input:  "create fulltext2 index idx on A (a) with parser gojieba token_filter = 'stop'",
+			output: "create fulltext2 index idx on a (a) with parser gojieba TOKEN_FILTER = 'stop' ",
+		}, {
+			input:  "create fulltext2 index idx on A (a) with parser gojieba token_filter 'stop,synonym'",
+			output: "create fulltext2 index idx on a (a) with parser gojieba TOKEN_FILTER = 'stop,synonym' ",
 		}, {
 			input:  "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
 			output: "alter table t1 alter reindex idx1 fulltext2 max_postings_capacity = 4000000",
@@ -7340,5 +7443,29 @@ func TestAlterAddParenthesizedColumns(t *testing.T) {
 			require.Equal(t, tree.ColumnPositionNone, add.Position.Typ)
 		}
 		stmt.Free()
+	}
+}
+
+func TestExtensionAndLoadStatementMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		sql, name, query string
+		output           tree.OutputType
+		location         tree.ExecLocation
+	}{
+		{"load some_ext", "Load Extension", tree.QueryTypeOth, tree.OUTPUT_UNDEFINED, tree.EXEC_IN_FRONTEND},
+		{"create extension pg as myext file '/missing.so'", "Create Extension", tree.QueryTypeDDL, tree.OUTPUT_UNDEFINED, tree.EXEC_IN_FRONTEND},
+		{"select 1", "Select", tree.QueryTypeDQL, tree.OUTPUT_RESULT_ROW, tree.EXEC_IN_ENGINE},
+		{"create database metadata_control", "Create Database", tree.QueryTypeDDL, tree.OUTPUT_STATUS, tree.EXEC_IN_ENGINE},
+		{"load data infile '/missing.csv' into table t", "Load", tree.QueryTypeDML, tree.OUTPUT_STATUS, tree.EXEC_IN_ENGINE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, tc.name, stmt.GetStatementType())
+			require.Equal(t, tc.query, stmt.GetQueryType())
+			require.Equal(t, tc.output, stmt.StmtKind().OutputType())
+			require.Equal(t, tc.location, stmt.StmtKind().ExecLocation())
+		})
 	}
 }

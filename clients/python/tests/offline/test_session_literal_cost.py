@@ -108,7 +108,7 @@ def test_shared_cte_keeps_mode_options_and_next_execution_is_unmarked(client, cl
         )
         assert session.execute('SELECT ?', (8,)).scalar() == 8
     assert len(probes) == 1
-    assert markers == [False, True, False]
+    assert markers == ([False] if cls is ClientSession else []) + [False, True, False]
     assert options == {'test_marker': 'unchanged'}
 
 

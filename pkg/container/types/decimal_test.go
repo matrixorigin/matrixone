@@ -27,6 +27,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDecimal256MagnitudeBigInt(t *testing.T) {
+	min := Decimal256{B192_255: 1 << 63}
+	for _, tc := range []struct {
+		value Decimal256
+		want  *big.Int
+	}{
+		{Decimal256{}, big.NewInt(0)},
+		{Decimal256{B0_63: 7}, big.NewInt(7)},
+		{(Decimal256{B0_63: 7}).Minus(), big.NewInt(7)},
+		{min, new(big.Int).Lsh(big.NewInt(1), 255)},
+		{Decimal256{B192_255: 1, B128_191: 2, B64_127: 3, B0_63: 4},
+			new(big.Int).SetBytes([]byte{1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 4})},
+	} {
+		got := tc.value.MagnitudeBigInt()
+		require.Equal(t, tc.want, got)
+		got.SetInt64(0)
+		require.Equal(t, tc.want, tc.value.MagnitudeBigInt())
+	}
+}
+
 func TestDecimalPrecisionCheckedOwner(t *testing.T) {
 	for _, tc := range []struct {
 		x, ceil, floor, round int64
@@ -717,12 +737,12 @@ func TestDecimal128FromFloat64KeepsDecimalRoundingAndRangeChecks(t *testing.T) {
 	for _, width := range []int32{18, 19} {
 		result, err = Decimal128FromFloat64(1.005, width, 2)
 		require.NoError(t, err)
-		require.Equal(t, "1.00", result.Format(2))
+		require.Equal(t, "1.01", result.Format(2))
 	}
 
 	result, err = Decimal128FromFloat64(1.0000000000000002, 38, 18)
 	require.NoError(t, err)
-	require.Equal(t, "1.000000000000000256", result.Format(18))
+	require.Equal(t, "1.000000000000000200", result.Format(18))
 
 	_, err = Decimal128FromFloat64(1000000000001, 18, 6)
 	require.Error(t, err)
@@ -1872,6 +1892,48 @@ func TestParseDecimal128PostRoundingRange(t *testing.T) {
 	}
 	for _, suffix := range []string{"4 e-", "4z"} {
 		_, err := ParseDecimal128("0."+strings.Repeat("1", 38)+suffix, 38, 38)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	}
+}
+
+func TestFloatDecimalShortestRounding(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value float64
+		scale int32
+		want  string
+	}{
+		{"positive tie", 1.005, 2, "1.01"},
+		{"next tie", 1.015, 2, "1.02"},
+		{"negative tie", -1.005, 2, "-1.01"},
+		{"negative next tie", -1.015, 2, "-1.02"},
+		{"below tie", math.Nextafter(1.005, 0), 2, "1.00"},
+		{"above tie", math.Nextafter(1.005, 2), 2, "1.01"},
+		{"binary tie", 0.125, 2, "0.13"},
+		{"ordinary fraction", 2.675, 2, "2.68"},
+		{"integer scale", -2.5, 0, "-3"},
+		{"small scientific", 1e-18, 18, "0.000000000000000001"},
+		{"leading zeros", 0.00010000000000000002, 18, "0.000100000000000000"},
+		{"subnormal", math.SmallestNonzeroFloat64, 18, "0.000000000000000000"},
+		{"negative zero", math.Copysign(0, -1), 2, "0.00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, err := Decimal64FromFloat64(tc.value, 18, tc.scale)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, a.Format(tc.scale))
+			b, err := Decimal128FromFloat64(tc.value, 38, tc.scale)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, b.Format(tc.scale))
+		})
+	}
+	for _, value := range []float64{999.995, -999.995, math.Inf(1), math.Inf(-1), math.NaN(), math.MaxFloat64} {
+		_, err := Decimal64FromFloat64(value, 5, 2)
+		require.Error(t, err)
+		_, err = Decimal128FromFloat64(value, 5, 2)
+		require.Error(t, err)
+	}
+	for _, target := range [][2]int32{{0, 0}, {19, 0}, {6, -1}, {5, 6}} {
+		_, err := Decimal64FromFloat64(1.234, target[0], target[1])
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	}
 }

@@ -33,7 +33,11 @@ func patchCollationMetadata(path string, messages ...string) error {
 			end = start + 1 + next
 		}
 		body := data[start:end]
-		replacement := []byte("\treturn m.ValidateCollation()\n}")
+		validator := "ValidateCollation"
+		if message == "Query" {
+			validator = "ValidateIntegerPrecision"
+		}
+		replacement := []byte("\treturn m." + validator + "()\n}")
 		if bytes.Contains(body, replacement) {
 			continue
 		}

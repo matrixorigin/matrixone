@@ -26,6 +26,10 @@ const (
 	SkipFullFilePreloads
 	SkipRemoteCacheReads
 	SkipRemoteCacheWrites
+	// NarrowRead marks a read of a small share of each object. It acts as
+	// SkipFullFilePreloads while the disk cache evicts whole-object files before
+	// most of their bytes are read.
+	NarrowRead
 )
 
 const (

@@ -286,7 +286,7 @@ func TestFixedMinMaxMergeScalarKindMetadata(t *testing.T) {
 			requireFixedPreflightRowsUnchanged(t, before, snapshotFixedMetadataPreflight(f))
 			admitted, calls := f.account.Snapshot().Used, f.controller.calls
 			f.controller.failAt = calls + 1
-			require.NoError(t, f.exec.BatchMerge(source.exec, 0, []uint64{1}))
+			require.NoError(t, f.exec.Merge(source.exec, 0, 0))
 			require.False(t, f.controller.rejected)
 			require.Equal(t, calls, f.controller.calls)
 			require.LessOrEqual(t, f.account.Snapshot().Used, admitted)

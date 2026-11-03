@@ -36,7 +36,7 @@ str1    str2
 deallocate prepare p6;
 prepare p7 from 'select * from t1 where str1 like ?';
 execute p7;
-invalid input: Incorrect arguments to EXECUTE
+Incorrect arguments to EXECUTE
 deallocate prepare p7;
 prepare p8 from 'select * from t1 where str1 like "?"';
 execute p8;

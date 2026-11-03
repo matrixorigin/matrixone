@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -67,6 +68,20 @@ type Hooks struct{}
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.EmptyScanHooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
+var _ searchplugin.CandidateBudgetHooks = Hooks{}
+
+// PostFilterCandidateBudget is the fulltext2 over-fetch of resultLimit for a search whose
+// candidates the base-table join may drop.
+//
+// WARNING: TOXIC. Do not widen or drop this bound when the index lags the source.
+// Decision (PR #30618 review P2, @cpegeric, 2026-10-24): the search reads only the index.
+// Accepted consequence, for uncommitted writes of the reading transaction and for commits
+// ISCP has not applied: rows not in the index are not matched, changed text is matched and
+// scored as indexed, and when the join drops more candidates than this over-fetch adds the
+// page has fewer than LIMIT rows. Index freshness is tracked by #30853.
+func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
+	return overfetch.PostFilterLimit(resultLimit)
+}
 
 // ExplainSettings describes the static semantics using the same options as the reader.
 func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, _ bool) ([]string, error) {
@@ -105,13 +120,17 @@ func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req se
 	if err != nil {
 		return nil, err
 	}
+	limit := req.ResultLimit
+	if limit != 0 {
+		limit = max(limit, req.CandidateBudget)
+	}
 	return &reader{
 		proc:         proc,
 		spec:         spec,
 		req:          req,
 		opts:         opts,
-		limit:        req.ResultLimit,
-		plannedLimit: req.ResultLimit,
+		limit:        limit,
+		plannedLimit: limit,
 	}, nil
 }
 
@@ -743,6 +762,7 @@ func (u *reader) start() (err error) {
 	}
 
 	newsearch := fulltext2.NewFulltext2Search(u.tblcfg)
+	newsearch.SetThreadsSearch(int(u.opts.ThreadsSearch))
 	q := fulltext2.Fulltext2Query{
 		ScoreRange:       scoreRange,
 		Pattern:          []byte(pattern),
@@ -781,7 +801,7 @@ func (u *reader) start() (err error) {
 		u.errCh = make(chan error, 1)
 		ctx, cancel := context.WithCancel(proc.Ctx)
 		u.cancel = cancel
-		rt := vectorindex.RuntimeConfig{Emit: func(out *vectorindex.SearchOutput) error {
+		rt := vectorindex.RuntimeConfig{SearchDFCutoff: u.opts.SearchDFCutoff, Emit: func(out *vectorindex.SearchOutput) error {
 			select {
 			case u.streamCh <- out:
 				return nil
@@ -810,7 +830,7 @@ func (u *reader) start() (err error) {
 	// With a pushed LIMIT: WAND top-K, filled box-free into the caller-owned u.out via
 	// SearchInto (pk/scores/includes as reusable ColumnBuffers) — no []any keys; Read
 	// pages u.out via u.offset.
-	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit)}
+	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit), SearchDFCutoff: u.opts.SearchDFCutoff}
 	if len(u.includeNames) > 0 {
 		// Request the covered INCLUDE columns; SearchInto fills u.out.Include (box-free,
 		// column-major, whole result set), which Read pages by segPos.

@@ -1129,12 +1129,23 @@ func TestConstantTranspose(t *testing.T) {
 	target := &plan.Expr{Typ: colExpr.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
 	wideParam := plan2.DeepCopyExpr(param)
 	wideParam.Typ.Id = int32(types.T_int64)
-	for _, peer := range []*plan.Expr{makeConstExpr(42), makeAddExpr(makeConstExpr(40), makeConstExpr(2)), bind(t, "cast", wideParam, target)} {
+	for _, peer := range []*plan.Expr{makeConstExpr(42), bind(t, "cast", makeAddExpr(makeConstExpr(40), makeConstExpr(2)), target), bind(t, "cast", wideParam, target)} {
 		input := bind(t, "<=", peer, colExpr)
 		result, err := plan2.ConstantTranspose(input, proc)
 		require.NoError(t, err)
 		require.Equal(t, bind(t, ">=", colExpr, peer), result, "peer domain must stay executable")
 	}
+	t.Run("widened_arithmetic_keeps_column_cast", func(t *testing.T) {
+		peer := makeAddExpr(makeConstExpr(40), makeConstExpr(2))
+		require.Equal(t, int32(types.T_int64), peer.Typ.Id)
+		input := bind(t, "<=", peer, colExpr)
+		require.Equal(t, "cast", input.GetF().Args[1].GetF().Func.ObjName)
+		before := plan2.DeepCopyExpr(input)
+		result, err := plan2.ConstantTranspose(input, proc)
+		require.NoError(t, err)
+		require.Same(t, input, result, "a widened comparison has no bare column to transpose")
+		require.Equal(t, before, input)
+	})
 
 	// Equality direction must preserve typed NULL and executable parameter/cast domains.
 	nullPeer := makeConstExpr(0)
@@ -1172,4 +1183,65 @@ func TestConstantTranspose(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestShrinkWithSelsFailureFreedByOperator(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
+	require.NoError(t, err)
+	account, err := registry.Open(1)
+	require.NoError(t, err)
+	accountFinalized := false
+	defer func() {
+		if !accountFinalized {
+			account.Seal()
+			_, cleanupErr := registry.Finalize(account)
+			if cleanupErr != nil {
+				t.Errorf("finalize account: %v", cleanupErr)
+			}
+		}
+	}()
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	data := types.EncodeSlice([]int64{1, 2, 3})
+	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	require.NoError(t, err)
+	defer func() {
+		if lease != nil {
+			lease.Release()
+		}
+	}()
+	vec, err := vector.NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), 3, data, lease, selection)
+	require.NoError(t, err)
+	defer func() {
+		if vec != nil {
+			vec.Free(proc.Mp())
+		}
+	}()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	bat.SetRowCount(3)
+	filter := NewArgument()
+	filter.ctr.buf = bat
+	vec = nil // the operator owns the batch and vector
+	defer func() {
+		if filter != nil {
+			filter.Free(proc, true, nil)
+			filter.Release()
+		}
+	}()
+	out, err := filter.ctr.shrinkWithSels(proc, bat, []int64{1, 2})
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Nil(t, out)
+	require.Equal(t, 3, bat.RowCount())
+	filter.Free(proc, true, err)
+	filter.Release()
+	filter = nil
+	lease.Release()
+	lease = nil
+	require.Zero(t, proc.Mp().CurrNB())
+	account.Seal()
+	accountFinalized = true
+	_, err = registry.Finalize(account)
+	require.NoError(t, err)
 }

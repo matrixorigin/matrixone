@@ -49,8 +49,7 @@ func (c *testRPCClient) CloseBackend() error                            { return
 func TestPipelineClient_NewStreamAllowsLocalBackend(t *testing.T) {
 	rpcClient := &testRPCClient{}
 	client := &pipelineClient{
-		localServiceAddress: "127.0.0.1:1234",
-		client:              rpcClient,
+		client: rpcClient,
 	}
 
 	_, err := client.NewStream(context.Background(), "127.0.0.1:1234")

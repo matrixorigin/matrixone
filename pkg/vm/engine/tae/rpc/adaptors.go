@@ -52,11 +52,6 @@ func CreateRelation(
 	return err
 }
 
-func TableDefs(rel handle.Relation) ([]engine.TableDef, error) {
-	schema := rel.Schema(false).(*catalog.Schema)
-	return catalog.SchemaToDefs(schema)
-}
-
 func AppendDataToTable(ctx context.Context, rel handle.Relation, bat *batch.Batch) (err error) {
 	tnBat := containers.ToTNBatch(bat, common.WorkspaceAllocator)
 	defer tnBat.Close()

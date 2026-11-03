@@ -837,6 +837,13 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 		}
 		replayCtl.Stop()
 		replayCtl = nil
+		// WAL replay has finished and Now() is serialized with timestamp
+		// publication. Use this restart timestamp to bookmark the contiguous
+		// frozen prefix of recovered appendable objects before new writes start.
+		restartTS := db.TxnMgr.Now()
+		if err = db.Catalog.MarkRestartSealedObjectBookmarks(restartTS); err != nil {
+			return
+		}
 	}
 
 	db.MergeScheduler = merge.NewMergeScheduler(

@@ -29,6 +29,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/collation/encoding"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -769,12 +770,14 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
-		members := strings.Split(enumStr, ",")
+		var members []string
 		if typ.Oid == types.T_uint64 {
 			if enumStr == "" {
 				return nil, nil
 			}
 			members = types.DecodeSetValues(enumStr)
+		} else {
+			members = strings.Split(enumStr, ",")
 		}
 		for i := range members {
 			members[i] = sqlquote.String(members[i])
@@ -855,8 +858,127 @@ func moShowColUnique(constraintStr string, colName string) bool {
 	return containsCol
 }
 
+// internalDeclaredLabelCharLength derives the information_schema character
+// metadata of a declared ENUM or SET column from the catalog label list:
+// ENUM reports its longest member, SET reports every member joined by the
+// separating commas. A T_enum with an empty label string is the declared
+// single empty member of ENUM(”): a zero-length domain, absent only as a
+// NULL label argument. A T_uint64 type carries declared labels only for SET
+// columns, so an empty or NULL label argument keeps the ordinary unsigned
+// integer identity. Geometry SRID annotations and JSON array declarations
+// share the attribute storage but never under these two OIDs.
+func internalDeclaredLabelCharLength(oid types.T, declaredLabels string) (int64, bool) {
+	switch oid {
+	case types.T_enum:
+		if len(declaredLabels) == 0 {
+			return 0, true
+		}
+		longest := 0
+		for _, member := range strings.Split(declaredLabels, ",") {
+			if width := utf8.RuneCountInString(member); width > longest {
+				longest = width
+			}
+		}
+		return int64(longest), true
+	case types.T_uint64:
+		members := types.DecodeSetValues(declaredLabels)
+		if len(members) == 0 {
+			return 0, false
+		}
+		length := int64(len(members) - 1)
+		for _, member := range members {
+			length += int64(utf8.RuneCountInString(member))
+		}
+		return length, true
+	}
+	return 0, false
+}
+
+// builtInInternalIndexSubPart reports the retained prefix length of one
+// index part from mo_catalog.mo_indexes.algo_params. MySQL reports
+// information_schema.STATISTICS.SUB_PART and SHOW INDEX Sub_part as the
+// number of indexed characters and SQL NULL when the whole column is
+// indexed. Rows without metadata, parts without a retained prefix
+// (including FULLTEXT parts, which never persist one), and legacy rows a
+// parser cannot decode return SQL NULL rather than fabricating a length.
+func builtInInternalIndexSubPart(parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	_ *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	indexParameters := vector.GenerateFunctionStrParameter(parameters[0])
+	columnNames := vector.GenerateFunctionStrParameter(parameters[1])
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		params, paramsNull := indexParameters.GetStrValue(i)
+		columnName, columnNull := columnNames.GetStrValue(i)
+		if paramsNull || columnNull {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		prefixLength := int64(0)
+		valid := false
+		lengths, err := catalog.IndexPrefixLengthsFromParamsWithError(
+			functionUtil.QuickBytesToStr(params))
+		if err == nil {
+			column := functionUtil.QuickBytesToStr(columnName)
+			if value, ok := lengths[column]; ok {
+				prefixLength, valid = int64(value), true
+			} else {
+				// Older catalog rows can retain the declared spelling's
+				// case; rename reconciliation matches case-insensitively.
+				for part, value := range lengths {
+					if strings.EqualFold(part, column) {
+						prefixLength, valid = int64(value), true
+						break
+					}
+				}
+			}
+		}
+		if err := rs.Append(prefixLength, !valid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// internalDeclaredLabelOctetLength scales the label metadata to the byte
+// bound MySQL reports. Declared labels are stored and rendered as full
+// UTF-8, the domain the default VARCHAR charset metadata already claims
+// for CHARACTER_OCTET_LENGTH, so the UTF-8 maximum is the multiplier.
+func internalDeclaredLabelOctetLength(characterLength int64) int64 {
+	return characterLength * int64(utf8.UTFMax)
+}
+
+// declaredLabelColumn reports whether row i is an ENUM/SET column with
+// declared labels. It stays false for the historical one-argument overload,
+// which never receives the label argument.
+func declaredLabelColumn(declaredLabels vector.FunctionParameterWrapper[types.Varlena], hasDeclaredLabels bool, oid types.T, i uint64) bool {
+	if !hasDeclaredLabels {
+		return false
+	}
+	labels, labelNull := declaredLabels.GetStrValue(i)
+	if labelNull {
+		return false
+	}
+	_, declared := internalDeclaredLabelCharLength(oid, functionUtil.QuickBytesToStr(labels))
+	return declared
+}
+
 func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	// The declared label parameter exists only for the two-argument overload
+	// bound by information_schema.COLUMNS. The historical one-argument form
+	// must keep its exact pre-existing behavior for persisted definitions
+	// written by older binaries.
+	var declaredLabels vector.FunctionParameterWrapper[types.Varlena]
+	hasDeclaredLabels := len(parameters) > 1
+	if hasDeclaredLabels {
+		declaredLabels = vector.GenerateFunctionStrParameter(parameters[1])
+	}
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
@@ -868,6 +990,18 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 			// row. The direct method call keeps typ on the stack.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
+			}
+			if hasDeclaredLabels {
+				labels, labelNull := declaredLabels.GetStrValue(i)
+				if !labelNull {
+					if charLength, ok := internalDeclaredLabelCharLength(
+						typ.Oid, functionUtil.QuickBytesToStr(labels)); ok {
+						if err := rs.Append(charLength, false); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 			}
 			if typ.Oid == types.T_text {
 				if err := rs.Append(internalTextMetadataLength(typ), false); err != nil {
@@ -891,6 +1025,11 @@ func builtInInternalCharLength(parameters []*vector.Vector, result vector.Functi
 
 func builtInInternalCharSize(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	var declaredLabels vector.FunctionParameterWrapper[types.Varlena]
+	hasDeclaredLabels := len(parameters) > 1
+	if hasDeclaredLabels {
+		declaredLabels = vector.GenerateFunctionStrParameter(parameters[1])
+	}
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
@@ -902,6 +1041,18 @@ func builtInInternalCharSize(parameters []*vector.Vector, result vector.Function
 			// row. The direct method call keeps typ on the stack.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
+			}
+			if hasDeclaredLabels {
+				labels, labelNull := declaredLabels.GetStrValue(i)
+				if !labelNull {
+					if charLength, ok := internalDeclaredLabelCharLength(
+						typ.Oid, functionUtil.QuickBytesToStr(labels)); ok {
+						if err := rs.Append(internalDeclaredLabelOctetLength(charLength), false); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 			}
 			switch typ.Oid {
 			case types.T_char, types.T_varchar:
@@ -1010,6 +1161,15 @@ func internalNumericPrecision(typ types.Type) (int64, bool) {
 
 func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	// Label-declared ENUM/SET columns are character metadata: MySQL leaves
+	// NUMERIC_PRECISION NULL rather than reporting SET's bitmap backing store
+	// as a 20-digit unsigned integer. The one-argument overload never sees
+	// the label argument and keeps its historical behavior.
+	var declaredLabels vector.FunctionParameterWrapper[types.Varlena]
+	hasDeclaredLabels := len(parameters) > 1
+	if hasDeclaredLabels {
+		declaredLabels = vector.GenerateFunctionStrParameter(parameters[1])
+	}
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
@@ -1021,6 +1181,12 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 			// row. The direct method call keeps typ on the stack.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
+			}
+			if declaredLabelColumn(declaredLabels, hasDeclaredLabels, typ.Oid, i) {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
 			}
 			if precision, ok := internalNumericPrecision(typ); ok {
 				if err := rs.Append(precision, false); err != nil {
@@ -1038,6 +1204,12 @@ func builtInInternalNumericPrecision(parameters []*vector.Vector, result vector.
 
 func builtInInternalNumericScale(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	// See builtInInternalNumericPrecision: ENUM/SET numeric metadata is NULL.
+	var declaredLabels vector.FunctionParameterWrapper[types.Varlena]
+	hasDeclaredLabels := len(parameters) > 1
+	if hasDeclaredLabels {
+		declaredLabels = vector.GenerateFunctionStrParameter(parameters[1])
+	}
 	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetStrValue(i)
@@ -1049,6 +1221,12 @@ func builtInInternalNumericScale(parameters []*vector.Vector, result vector.Func
 			// row. The direct method call keeps typ on the stack.
 			if err := typ.Unmarshal(v); err != nil {
 				return err
+			}
+			if declaredLabelColumn(declaredLabels, hasDeclaredLabels, typ.Oid, i) {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
 			}
 			if scale, ok := internalNumericScale(typ); ok {
 				if err := rs.Append(scale, false); err != nil {
@@ -1200,11 +1378,11 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 
 // JSON stores an encoded value; concatenation consumes its JSON text, including
 // quotes around JSON strings. Keep assignment CAST's unquoting contract separate.
-func concatStringValue(source types.T, value []byte) ([]byte, error) {
+func concatStringValue(ctx context.Context, source types.T, value []byte) ([]byte, error) {
 	if source != types.T_json {
 		return value, nil
 	}
-	return types.DecodeJson(value).MarshalJSON()
+	return marshalJSONForFloatStringProof(ctx, types.DecodeJson(value))
 }
 
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1295,7 +1473,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 				apv = false
 				break
 			} else {
-				v, err := concatStringValue(parameters[j].GetType().Oid, v)
+				v, err := concatStringValue(proc.Ctx, parameters[j].GetType().Oid, v)
 				if err != nil {
 					return err
 				}
@@ -2015,10 +2193,6 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 		}
 	}
 	return nil
-}
-
-func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (int, bool) {
-	return padResultByteLengthWithCharacterWidth(src, tgtLen, pad, maxBytes, utf8.UTFMax)
 }
 
 func padResultByteLengthWithCharacterWidth(
@@ -4648,8 +4822,8 @@ func calcDateTimeInterval(t1 types.Datetime, t2 types.Datetime, sign int) (secon
 	second := int(t2.Sec())
 	microsecond := int(t2.MicroSec())
 
-	days1 := calcDaysSinceZero(int(t1.Year()), int(t1.Month()), int(t1.Day()))
-	days2 := calcDaysSinceZero(year, month, day)
+	days1 := types.MySQLDayNumber(int(t1.Year()), int(t1.Month()), int(t1.Day()))
+	days2 := types.MySQLDayNumber(year, month, day)
 	days1 -= sign * days2
 
 	tmp := (int64(days1)*SecondsIn24Hours+
@@ -4667,22 +4841,6 @@ func calcDateTimeInterval(t1 types.Datetime, t2 types.Datetime, sign int) (secon
 	seconds = int(tmp / 1e6)
 	microseconds = int(tmp % 1e6)
 	return
-}
-
-// calcDaynr calculates days since 0000-00-00.
-func calcDaysSinceZero(year int, month int, day int) int {
-	if year == 0 && month == 0 {
-		return 0
-	}
-
-	delsum := 365*year + 31*(month-1) + day
-	if month <= 2 {
-		year--
-	} else {
-		delsum -= (month*4 + 23) / 10
-	}
-	temp := ((year/100 + 1) * 3) / 4
-	return delsum + year/4 - temp
 }
 
 // Seconds in 0000 AD

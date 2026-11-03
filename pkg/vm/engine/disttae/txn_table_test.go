@@ -482,7 +482,7 @@ func TestReusableRelationHandleRejectsNonDisttaeWorkspace(t *testing.T) {
 	require.ErrorContains(t, handle.Reset(op), "disttae transaction workspace")
 }
 
-func newPrimaryKeyCheckTableForTest(t *testing.T) (*txnTable, *Engine) {
+func newPrimaryKeyCheckTableForTest(t testing.TB) (*txnTable, *Engine) {
 	t.Helper()
 
 	eng := &Engine{
@@ -923,7 +923,12 @@ func TestWorkspaceInsertRowEstimate(t *testing.T) {
 func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	published := &pbstats.StatsInfo{TableName: "events", TableCnt: 5, AccurateObjectNumber: 1,
 		NdvMap: map[string]float64{"id": 5}, SizeMap: map[string]uint64{"id": 40, "payload": 40960}}
+	published.ByteRangeMap = map[string]*pbstats.ByteRangeDistribution{"name": {Version: 1}}
+
 	got := transientTableStats(published, 10005)
+	require.Empty(t, got.ByteRangeMap)
+	require.NotEmpty(t, published.ByteRangeMap)
+
 	require.Equal(t, float64(10005), got.TableCnt)
 	require.Empty(t, got.TableName)
 	require.Equal(t, published.AccurateObjectNumber, got.AccurateObjectNumber)
@@ -936,6 +941,8 @@ func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	require.Equal(t, float64(5), published.TableCnt, "workspace overlay cannot mutate committed Rows/Size statistics")
 	txn := newTransactionWithActivePKTableForTest(t, "pk")
 	tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	snapshot := false
+	tbl.db.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().DoAndReturn(func() bool { return snapshot }).AnyTimes()
 	tbl.tableId = 43 // a committed table, distinct from the fixture's created ID
 	eng := mock_frontend.NewMockEngine(gomock.NewController(t))
 	tbl.eng = eng
@@ -953,6 +960,19 @@ func TestTransientTableStatsPreservePublishedOwner(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, float64(^uint64(0)), actual.TableCnt, "remote workspace cannot publish a partial global bound")
 	require.Empty(t, actual.TableName)
+	tbl.remoteWorkspace = false
+	actual, err = tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Empty(t, actual.ByteRangeMap, "nonreadonly view cannot borrow samples even without inserted rows")
+	require.NotEmpty(t, published.ByteRangeMap)
+
+	txn.readOnly.Store(true)
+	snapshot = true
+	actual, err = tbl.Stats(context.Background(), false)
+	require.NoError(t, err)
+	require.Empty(t, actual.ByteRangeMap, "historical views cannot borrow the current population sample")
+	require.NotEmpty(t, published.ByteRangeMap)
+
 }
 
 func TestPartitionRowEstimate(t *testing.T) {
@@ -989,6 +1009,43 @@ func TestPartitionRowEstimate(t *testing.T) {
 	state.UpdateDuration(types.BuildTS(10, 0), types.MaxTs())
 	_, err = partitionRowEstimate(state, types.BuildTS(9, 0))
 	require.Error(t, err, "historical state must not be admitted as current statistics")
+}
+
+func TestReplayRowColumnSizeIncludesPhysicalRowID(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType())
+	idVec := vector.NewVec(types.T_int64.ToType())
+	defer rowIDVec.Free(mp)
+	defer tsVec.Free(mp)
+	defer idVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(rowIDVec, types.RandomRowid(), false, mp))
+	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(1, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(idVec, int64(42), false, mp))
+	state := logtailreplay.NewPartitionState("test", false, 42, false)
+	packer := types.NewPacker()
+	defer packer.Close()
+	state.HandleRowsInsert(context.Background(), &api.Batch{
+		Attrs: []string{catalog.Row_ID, objectio.DefaultCommitTS_Attr, "id"},
+		Vecs: []api.Vector{
+			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, idVec),
+		},
+	}, 0, packer, mp)
+	iter := state.NewRowsIter(types.MaxTs(), nil, false)
+	defer iter.Close()
+	require.True(t, iter.Next())
+	entry := iter.Entry()
+	require.Zero(t, entry.Batch.Vecs[0].Length())
+	cols := map[string]*planpb.ColDef{
+		catalog.Row_ID: {Name: catalog.Row_ID},
+		"id":           {Name: "id"},
+	}
+	require.Equal(t, uint64(types.RowidSize+8), replayRowColumnSize(entry, cols))
+	delete(cols, catalog.Row_ID)
+	require.Equal(t, uint64(8), replayRowColumnSize(entry, cols))
 }
 
 func TestPartitionRowEstimateAfterAppendableFlush(t *testing.T) {

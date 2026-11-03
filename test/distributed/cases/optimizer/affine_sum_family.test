@@ -100,12 +100,13 @@ select distinct outer_t.g,
 from t outer_t
 order by outer_t.g;
 
--- dynamic constants are a semantic barrier
+-- Dynamic constants are a semantic barrier. Use a signed base so a negative
+-- rebind remains valid even for the zero-valued unsigned source row.
 set @a = 1;
 set @b = 2;
 set @c = 3;
 prepare affine_sum_stmt from
-    'select sum(u16 + ?) s1, sum(u16 + ?) s2, sum(u16 + ?) s3 from affine_sum_family.t';
+    'select sum(cast(u16 as signed) + ?) s1, sum(cast(u16 as signed) + ?) s2, sum(cast(u16 as signed) + ?) s3 from affine_sum_family.t';
 execute affine_sum_stmt using @a, @b, @c;
 set @a = 10;
 set @b = -2;

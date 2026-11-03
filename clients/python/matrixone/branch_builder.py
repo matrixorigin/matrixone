@@ -9,7 +9,8 @@ by passing them to client.execute() or session.execute() as strings.
 from typing import Optional, Union, Type
 from enum import Enum
 
-from .branch import MergeConflictStrategy
+from .branch import BaseBranchManager, MergeConflictStrategy
+from ._sql_literals import sql_object_name, sql_string_token
 from ._utils import get_table_name as _get_table_name, require_non_empty as _require_non_empty
 
 
@@ -68,11 +69,9 @@ class CreateTableBranch(BranchStatement):
     def compile(self) -> str:
         if not self._source:
             raise ValueError("source_table must be set via from_table()")
-        sql = f"data branch create table {self._target} from {self._source}"
-        if self._snapshot:
-            sql += f'{{snapshot="{self._snapshot}"}}'
+        sql = BaseBranchManager(None)._build_create_table_branch_sql(self._target, self._source, self._snapshot)
         if self._account:
-            sql += f" to account {self._account}"
+            sql += f" to account {sql_object_name(self._account)}"
         return sql
 
 
@@ -102,11 +101,9 @@ class CreateDatabaseBranch(BranchStatement):
     def compile(self) -> str:
         if not self._source:
             raise ValueError("source_database must be set via from_database()")
-        sql = f"data branch create database {self._target} from {self._source}"
-        if self._snapshot:
-            sql += f'{{snapshot="{self._snapshot}"}}'
+        sql = BaseBranchManager(None)._build_create_database_branch_sql(self._target, self._source, self._snapshot)
         if self._account:
-            sql += f" to account {self._account}"
+            sql += f" to account {sql_object_name(self._account)}"
         return sql
 
 
@@ -119,7 +116,7 @@ class DeleteTableBranch(BranchStatement):
         self._table = name
 
     def compile(self) -> str:
-        return f"data branch delete table {self._table}"
+        return BaseBranchManager(None)._build_delete_table_branch_sql(self._table)
 
 
 class DeleteDatabaseBranch(BranchStatement):
@@ -130,7 +127,7 @@ class DeleteDatabaseBranch(BranchStatement):
         self._database = database
 
     def compile(self) -> str:
-        return f"data branch delete database {self._database}"
+        return BaseBranchManager(None)._build_delete_database_branch_sql(self._database)
 
 
 class DiffTableBranch(BranchStatement):
@@ -191,20 +188,20 @@ class DiffTableBranch(BranchStatement):
     def compile(self) -> str:
         if not self._base:
             raise ValueError("base_table must be set via against()")
-        sql = f"data branch diff {self._target}"
-        if self._target_snapshot:
-            sql += f'{{snapshot="{self._target_snapshot}"}}'
-        sql += f" against {self._base}"
-        if self._base_snapshot:
-            sql += f'{{snapshot="{self._base_snapshot}"}}'
+        sql = f"data branch diff {sql_object_name(self._target, qualified=True)}"
+        if self._target_snapshot is not None:
+            sql += '{snapshot=' + sql_string_token(self._target_snapshot, context='Snapshot') + '}'
+        sql += f" against {sql_object_name(self._base, qualified=True)}"
+        if self._base_snapshot is not None:
+            sql += '{snapshot=' + sql_string_token(self._base_snapshot, context='Snapshot') + '}'
         if self._output_type == DiffOutputOption.COUNT:
             sql += " output count"
         elif self._output_type == DiffOutputOption.LIMIT:
             sql += f" output limit {self._output_value}"
         elif self._output_type == DiffOutputOption.FILE:
-            sql += f" output file '{self._output_value}'"
+            sql += ' output file ' + sql_string_token(self._output_value, context='Branch output')
         elif self._output_type == DiffOutputOption.AS:
-            sql += f" output as {self._output_value}"
+            sql += f" output as {sql_object_name(self._output_value, qualified=True)}"
         return sql
 
 
@@ -238,7 +235,7 @@ class MergeTableBranch(BranchStatement):
     def compile(self) -> str:
         if not self._target:
             raise ValueError("target_table must be set via into()")
-        return f"data branch merge {self._source} into {self._target} " f"when conflict {self._strategy.value}"
+        return BaseBranchManager(None)._build_merge_table_sql(self._source, self._target, self._strategy)
 
 
 # ---------------------------------------------------------------------------

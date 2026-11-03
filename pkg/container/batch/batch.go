@@ -122,18 +122,6 @@ func NewWithSchema(offHeap bool, attrs []string, attTypes []types.Type) *Batch {
 	return bat
 }
 
-func EmptyBatchWithAttrs(attrs []string) Batch {
-	bat := Batch{
-		Attrs: attrs,
-		Vecs:  make([]*vector.Vector, len(attrs)),
-	}
-	for i := range attrs {
-		bat.Vecs[i] = vector.NewVec(types.T_any.ToType())
-	}
-
-	return bat
-}
-
 func SetLength(bat *Batch, n int) {
 	for _, vec := range bat.Vecs {
 		vec.SetLength(n)
@@ -335,7 +323,7 @@ func (bat *Batch) appendPrepareParamKindMetadataTo(w io.Writer, includeStringSou
 	if includeStringSources && bat.HasStringSourceMetadata() {
 		version = prepareParamKindBatchVersion
 	}
-	if err := writeBatchMarshalBytes(w, []byte{
+	if err := types.WriteFull(w, []byte{
 		prepareParamKindBatchMagic0, prepareParamKindBatchMagic1,
 		prepareParamKindBatchMagic2, version,
 	}); err != nil {
@@ -626,7 +614,7 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	if err := writeBatchMarshalInt32(w, extraSize); err != nil {
 		return err
 	}
-	if err := writeBatchMarshalBytes(w, bat.ExtraBuf); err != nil {
+	if err := types.WriteFull(w, bat.ExtraBuf); err != nil {
 		return err
 	}
 
@@ -648,7 +636,7 @@ func writeBatchMarshalUint32(w io.Writer, value uint32) error {
 	}
 	var data [4]byte
 	binary.NativeEndian.PutUint32(data[:], value)
-	return writeBatchMarshalBytes(w, data[:])
+	return types.WriteFull(w, data[:])
 }
 
 func writeBatchMarshalInt32(w io.Writer, value int32) error {
@@ -657,7 +645,7 @@ func writeBatchMarshalInt32(w io.Writer, value int32) error {
 	}
 	var data [4]byte
 	binary.NativeEndian.PutUint32(data[:], uint32(value))
-	return writeBatchMarshalBytes(w, data[:])
+	return types.WriteFull(w, data[:])
 }
 
 func writeBatchMarshalInt64(w io.Writer, value int64) error {
@@ -666,7 +654,7 @@ func writeBatchMarshalInt64(w io.Writer, value int64) error {
 	}
 	var data [8]byte
 	binary.NativeEndian.PutUint64(data[:], uint64(value))
-	return writeBatchMarshalBytes(w, data[:])
+	return types.WriteFull(w, data[:])
 }
 
 func writeBatchMarshalByte(w io.Writer, value byte) error {
@@ -675,18 +663,7 @@ func writeBatchMarshalByte(w io.Writer, value byte) error {
 	}
 	var data [1]byte
 	data[0] = value
-	return writeBatchMarshalBytes(w, data[:])
-}
-
-func writeBatchMarshalBytes(w io.Writer, value []byte) error {
-	written, err := w.Write(value)
-	if err != nil {
-		return err
-	}
-	if written != len(value) {
-		return io.ErrShortWrite
-	}
-	return nil
+	return types.WriteFull(w, data[:])
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
@@ -1659,38 +1636,44 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 	return nil
 }
 
-func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
+func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
 	if !negate {
 		if sels.Count() == bat.rowCount {
-			return
+			return nil
 		}
 	}
 
 	for _, vec := range bat.Vecs {
-		vec.ShrinkByMask(sels, negate, offset)
+		if err := vec.ShrinkByMask(sels, negate, offset, mp); err != nil {
+			return err
+		}
 	}
 
 	if negate {
 		bat.rowCount -= sels.Count()
-		return
+		return nil
 	}
 	bat.rowCount = sels.Count()
+	return nil
 }
 
-func (bat *Batch) Shrink(sels []int64, negate bool) {
+func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 	if !negate {
 		if len(sels) == bat.rowCount {
-			return
+			return nil
 		}
 	}
 	for _, vec := range bat.Vecs {
-		vec.Shrink(sels, negate)
+		if err := vec.Shrink(sels, negate, mp); err != nil {
+			return err
+		}
 	}
 	if negate {
 		bat.rowCount -= len(sels)
-		return
+		return nil
 	}
 	bat.rowCount = len(sels)
+	return nil
 }
 
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {

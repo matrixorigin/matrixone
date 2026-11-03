@@ -184,7 +184,7 @@ func TestWindowQuantileExactWeightedRetainedResultSurvivesExecutorDestruction(t 
 			// produced yet: the aggregate executor for the partition
 			// generation is gone (its deferred freeAggFun already ran) and
 			// only the retained result vector still serves the next ranges.
-			require.NotNil(t, arg.ctr.orderedSetPartitionResults,
+			require.NotNil(t, arg.ctr.fullPartitionResults,
 				"partition result must survive the first output range")
 			require.Nil(t, arg.ctr.batAggs,
 				"the partition generation's aggregate executor must already be destroyed")
@@ -193,7 +193,7 @@ func TestWindowQuantileExactWeightedRetainedResultSurvivesExecutorDestruction(t 
 	require.Equal(t, rows, outputRows)
 	require.Equal(t, 2, chunks,
 		"this witness requires the two full-partition output ranges")
-	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.fullPartitionResults)
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)

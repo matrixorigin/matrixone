@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -63,7 +62,7 @@ func TestDefinitionRetryBuildFailureInvalidatesGeneration(t *testing.T) {
 			called := 0
 			c.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) { called++; return nil, sentinel })
 			c.resultMetadataFrozen.Store(frozen)
-			rebuilt, err := c.buildRetryCompile(true, c.proc.GetTopContext())
+			rebuilt, err := c.buildRetryCompile(true)
 			require.ErrorIs(t, err, sentinel)
 			require.Nil(t, rebuilt)
 			require.Equal(t, 1, called)
@@ -71,31 +70,4 @@ func TestDefinitionRetryBuildFailureInvalidatesGeneration(t *testing.T) {
 			require.Same(t, original, c.pn, "failure cannot publish a different plan")
 		})
 	}
-}
-
-func TestHnswCoverageRetryContext(t *testing.T) {
-	c := &Compile{proc: testutil.NewProcess(t), pn: &plan.Plan{}, MessageBoard: message.NewMessageBoard(), affectRows: new(atomic.Uint64)}
-	t.Cleanup(func() {
-		if c.proc != nil {
-			c.clear()
-		}
-	})
-	retryErr := moerr.NewVectorIndexSnapshotChangedNoCtx()
-	require.True(t, c.canRetry(retryErr))
-	c.disableRetry = true
-	require.False(t, c.canRetry(retryErr))
-	c.disableRetry = false
-	sentinel := moerr.NewInternalErrorNoCtx("stop after observing retry planning context")
-	called := false
-	c.SetBuildPlanFunc(func(ctx context.Context) (*plan.Plan, error) {
-		called = true
-		require.Equal(t, true, ctx.Value(defines.HnswSnapshotFallbackKey{}))
-		return nil, sentinel
-	})
-	ctx := context.WithValue(c.proc.GetTopContext(), defines.HnswSnapshotFallbackKey{}, true)
-	rebuilt, err := c.buildRetryCompile(true, ctx)
-	require.ErrorIs(t, err, sentinel)
-	require.Nil(t, rebuilt)
-	require.True(t, called)
-	require.Nil(t, c.proc.GetTopContext().Value(defines.HnswSnapshotFallbackKey{}), "retry policy must not mutate the process or session context")
 }

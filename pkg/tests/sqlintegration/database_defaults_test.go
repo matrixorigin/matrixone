@@ -294,8 +294,10 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			var showCollation sql.NullString
 			require.NoError(t, first.QueryRowContext(ctx, "show full columns from binary_conversion where Field='v'").Scan(new(any), new(any), &showCollation, new(any), new(any), new(any), new(any), new(any), new(any)))
 			require.False(t, showCollation.Valid, "SHOW must not advertise a text collation for non-character binary types")
-			require.NoError(t, first.QueryRowContext(ctx, "select collation_name from information_schema.columns where table_schema=? and table_name='binary_conversion' and column_name='v'", schema).Scan(&value))
-			require.Equal(t, "binary", value, "information_schema retains the binary pseudo-character-set metadata")
+			var colCharset, colCollation sql.NullString
+			require.NoError(t, first.QueryRowContext(ctx, "select character_set_name, collation_name from information_schema.columns where table_schema=? and table_name='binary_conversion' and column_name='v'", schema).Scan(&colCharset, &colCollation))
+			require.False(t, colCharset.Valid, "information_schema must not advertise a text charset for non-character binary types")
+			require.False(t, colCollation.Valid, "information_schema must not advertise a text collation for non-character binary types")
 		})
 
 		t.Run("binary COPY preserves an explicit cast inside a generated expression", func(t *testing.T) {
@@ -315,7 +317,10 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			exec(t, first, "alter table binary_generated modify g varchar(8) generated always as (concat(v,'x')) stored")
 			exec(t, first, "alter table binary_generated convert to character set binary")
 			require.Equal(t, 1, count(t, "select count(*) from binary_generated where hex(g)='F09FA7AA78'"))
-			require.Equal(t, "binary", collation(t, "binary_generated", "g"))
+			var gColl sql.NullString
+			require.NoError(t, first.QueryRowContext(ctx,
+				"select collation_name from information_schema.columns where table_schema=? and table_name='binary_generated' and column_name='g'", schema).Scan(&gColl))
+			require.False(t, gColl.Valid, "information_schema must not advertise a text collation for non-character binary types")
 		})
 	})
 }

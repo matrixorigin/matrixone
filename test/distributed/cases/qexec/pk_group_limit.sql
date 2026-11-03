@@ -149,4 +149,17 @@ having cast(avg(dbl) as varchar) = '0'
 order by id
 limit 10;
 
+-- Same-collation widening text casts are total, including multi-byte CHAR.
+-- Their predicates may participate in singleton-group elimination without
+-- dropping NULL filtering or changing the comparison operands.
+create table text_casts (id int primary key, c char(2), v varchar(3));
+insert into text_casts values
+    (1, 'ab', 'ac'), (2, '中', '文'), (3, null, 'x'), (4, 'yy', 'yy');
+select id, count(*)
+from text_casts
+where cast(c as varchar(4)) <> cast(v as varchar(4))
+group by id
+order by id
+limit 10;
+
 drop database pk_group_limit_bvt;

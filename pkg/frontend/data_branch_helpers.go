@@ -549,7 +549,7 @@ func formatValIntoStringWithFloatCast(
 	}
 
 	writeFloat := func(v float64, bits uint64, bitSize int, sqlType string) {
-		if math.IsNaN(v) || (v == 0 && math.Signbit(v)) {
+		if math.IsNaN(v) || math.IsInf(v, 0) || (v == 0 && math.Signbit(v)) {
 			var raw [8]byte
 			if bitSize == 32 {
 				binary.LittleEndian.PutUint32(raw[:4], uint32(bits))
@@ -560,14 +560,6 @@ func formatValIntoStringWithFloatCast(
 			buf.WriteString(hex.EncodeToString(raw[:bitSize/8]))
 			buf.WriteString("')")
 			buf.WriteString(" as ")
-			buf.WriteString(sqlType)
-			buf.WriteByte(')')
-			return
-		}
-		if math.IsInf(v, 0) {
-			buf.WriteString("cast('")
-			buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
-			buf.WriteString("' as ")
 			buf.WriteString(sqlType)
 			buf.WriteByte(')')
 			return

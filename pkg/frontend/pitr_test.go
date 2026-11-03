@@ -3969,6 +3969,8 @@ func TestRestorePitrPreflightsBeforeExistingAccountSideEffects(t *testing.T) {
 	accountExistsSQL, err := getSqlForCheckAccountWithPitr(ctx, ts, sysAccountName)
 	require.NoError(t, err)
 	bh.sql2result[accountExistsSQL] = newMrsForPitrRecord([][]interface{}{{uint64(sysAccountID)}})
+	cdcSQL := fmt.Sprintf("select attname from mo_catalog.mo_columns {MO_TS = %d} where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_cdc_watermark' and attname in ('source_table_id','owner_generation','pending_source_table_id','target_identity')", ts)
+	bh.sql2result[cdcSQL] = newMrsForRestoreStringRows([]string{"attname"}, [][]interface{}{{"source_table_id"}, {"owner_generation"}, {"pending_source_table_id"}, {"target_identity"}})
 	showDatabasesSQL := fmt.Sprintf("show databases {MO_TS = %d}", ts)
 	createDatabaseSQL := fmt.Sprintf(
 		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
