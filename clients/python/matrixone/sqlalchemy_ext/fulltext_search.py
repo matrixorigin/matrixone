@@ -990,32 +990,17 @@ class FulltextFilter(ColumnElement):
                    MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE) AS score
             FROM articles
         """
-        # Create a text expression that can be labeled
-        sql_text = self.compile()
-        text_expr = text(sql_text)
+        # SQLAlchemy needs a genuine Label expression for SELECT projection.
+        # Preserve the existing bare .compile() string for SDK callers.
+        from sqlalchemy.sql.elements import Label
 
-        # Create a custom labeled expression
-        class FulltextLabel:
-            def __init__(self, text_expr, name):
-                self.text_expr = text_expr
-                self.name = name
+        class FulltextLabel(Label):
+            def compile(self, *args, **kwargs):
+                if not args and not kwargs:
+                    return f"{self.element.compile()} AS {self.name}"
+                return super().compile(*args, **kwargs)
 
-            def __str__(self):
-                # For ORM integration, return only the expression without AS
-                # The ORM will add the AS alias part
-                return sql_text
-
-            # Make it compatible with SQLAlchemy's compilation
-            def compile(self, compile_kwargs=None):
-                # For standalone use, include AS
-                return f"{sql_text} AS {self.name}"
-
-            def _compiler_dispatch(self, visitor, **kw):
-                # For SQLAlchemy integration, return only the expression
-                # SQLAlchemy will handle the AS alias
-                return sql_text
-
-        return FulltextLabel(text_expr, name)
+        return FulltextLabel(name, self)
 
     def __str__(self):
         """String representation for debugging."""
