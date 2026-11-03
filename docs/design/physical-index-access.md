@@ -38,6 +38,10 @@ when bound. Untrusted contexts cannot inherit an internal access capability.
 Each index plugin maps its own generated function and operands to the live base
 and child definitions. The SQL owner selects roles through that descriptor;
 callers supply the function and index name without repeating the role list.
+Maintenance matches the exact name from the owned definition; SQL spelling is
+normalized by the planner, preserving distinct Unicode index identities.
+Synchronous maintenance and ISCP share role projection while retaining their
+own source admission and error policy.
 Vector plugin validators share config decoding, while runtime admission retains
 its independent checks of the consumed relations. A bounded attestation carries the account, database,
 base, function, and role-specific child identities on exactly one generated

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -153,13 +154,11 @@ func resolveInitSQLMaintenance(ctx context.Context, eng engine.Engine, txn clien
 	if err != nil {
 		return nil, err
 	}
-	defs := make(map[string]*plan.IndexDef, len(roles))
-	for _, role := range roles {
-		if role == "" || group[role] == nil || defs[role] != nil {
-			return nil, moerr.NewInvalidInput(ctx, "invalid index initialization role")
-		}
-		defs[role] = group[role]
+	defs := maintenance.SelectDefinitions(group, roles)
+	if defs == nil {
+		return nil, moerr.NewInvalidInput(ctx, "invalid index initialization role")
 	}
+
 	spec, err := compileplugin.ResolveIndexMaintenanceSpec(ctx, dbName, db, tableName, baseID, function, defs)
 	if err != nil {
 		return nil, err

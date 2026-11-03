@@ -548,8 +548,11 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 			exec(user, "insert into hidden_access_db.tvf_source values(1,'[1,1]'),(2,'[2,2]')")
 			exec(user, "alter table hidden_access_db.tvf_source add column "+sqlquote.Ident("v`x")+" vecf32(2)")
 			exec(user, "update hidden_access_db.tvf_source set "+sqlquote.Ident("v`x")+"=v")
-			exec(user, "create index iv using ivfflat on hidden_access_db.tvf_source("+sqlquote.Ident("v`x")+") lists=1 op_type 'vector_l2_ops'")
-			exec(user, "alter table hidden_access_db.tvf_source alter reindex iv ivfflat force_sync")
+			exec(user, "create index `Σ` using ivfflat on hidden_access_db.tvf_source("+sqlquote.Ident("v`x")+") lists=1 op_type 'vector_l2_ops'")
+			exec(user, "alter table hidden_access_db.tvf_source alter reindex `σ` ivfflat force_sync")
+			exec(user, "create index `ς` using ivfflat on hidden_access_db.tvf_source(v) lists=1 op_type 'vector_l2_ops'")
+			exec(user, "alter table hidden_access_db.tvf_source alter reindex `Σ` ivfflat force_sync")
+			exec(user, "alter table hidden_access_db.tvf_source alter reindex `ς` ivfflat force_sync")
 			var nearest int
 			require.NoError(t, user.QueryRowContext(ctx, "select id from hidden_access_db.tvf_source order by l2_distance("+sqlquote.Ident("v`x")+",'[1,1]') limit 1").Scan(&nearest))
 			require.Equal(t, 1, nearest)

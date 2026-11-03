@@ -47,7 +47,7 @@ func (e *maintenanceOwnerExecutor) Exec(ctx context.Context, sql string, opts ex
 }
 
 func TestIndexMaintenanceOwnerDerivesRoles(t *testing.T) {
-	for _, scenario := range []string{"current", "create plan", "missing role", "duplicate role", "wrong parent", "cancelled"} {
+	for _, scenario := range []string{"current", "create plan", "missing role", "duplicate role", "wrong parent", "cancelled", "mixed case", "distinct Unicode names"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			db := mock_frontend.NewMockDatabase(ctrl)
@@ -62,6 +62,24 @@ func TestIndexMaintenanceOwnerDerivesRoles(t *testing.T) {
 			for role, name := range map[string]string{catalog.SystemSI_IVFFLAT_TblType_Metadata: "meta", catalog.SystemSI_IVFFLAT_TblType_Centroids: "cent", catalog.SystemSI_IVFFLAT_TblType_Entries: "entries"} {
 				defs = append(defs, &plan.IndexDef{IndexName: "idx", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoTableType: role, IndexTableName: name})
 			}
+			indexName := "idx"
+			if scenario == "mixed case" {
+				indexName = "MixedCaseIdx"
+			}
+			if scenario == "distinct Unicode names" {
+				indexName = "Σ"
+			}
+			for _, def := range defs {
+				def.IndexName = indexName
+			}
+			if scenario == "distinct Unicode names" {
+				for _, def := range append([]*plan.IndexDef(nil), defs...) {
+					other := *def
+					other.IndexName = "ς"
+					defs = append(defs, &other)
+				}
+			}
+
 			if scenario == "missing role" {
 				kept := defs[:0]
 				for _, def := range defs {
@@ -102,8 +120,8 @@ func TestIndexMaintenanceOwnerDerivesRoles(t *testing.T) {
 			}).AnyTimes()
 			exec := &maintenanceOwnerExecutor{t: t}
 			installDropDDLExecutor(t, proc, exec)
-			err := owner.RunIndexMaintenanceSQL("select maintenance", "ivf_create", "idx")
-			if scenario == "current" || scenario == "create plan" {
+			err := owner.RunIndexMaintenanceSQL("select maintenance", "ivf_create", indexName)
+			if scenario == "current" || scenario == "create plan" || scenario == "mixed case" || scenario == "distinct Unicode names" {
 				require.NoError(t, err)
 				require.True(t, exec.called)
 			} else {

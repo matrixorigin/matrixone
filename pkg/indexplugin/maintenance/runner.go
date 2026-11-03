@@ -17,6 +17,7 @@ package maintenance
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 // RunSQL requires scoped generated-operator provenance from the SQL owner.
@@ -25,4 +26,18 @@ func RunSQL(ctx compileplugin.CompileContext, sql, function, indexName string) e
 		return runner.RunIndexMaintenanceSQL(sql, function, indexName)
 	}
 	return moerr.NewInternalErrorNoCtx("index maintenance owner cannot attest generated SQL")
+}
+
+// SelectDefinitions projects plugin roles onto an owned index group. Invalid
+// roles return nil; callers retain their own context and diagnostic policy.
+// An empty role list remains an empty selection for the resolver to reject.
+func SelectDefinitions(group map[string]*plan.IndexDef, roles []string) map[string]*plan.IndexDef {
+	selected := make(map[string]*plan.IndexDef, len(roles))
+	for _, role := range roles {
+		if role == "" || group[role] == nil || selected[role] != nil {
+			return nil
+		}
+		selected[role] = group[role]
+	}
+	return selected
 }

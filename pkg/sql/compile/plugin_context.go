@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -101,7 +102,7 @@ func (p *pluginCompileCtx) RunIndexMaintenanceSQL(sql, function, indexName strin
 	group := make(map[string]*plan.IndexDef)
 	var algorithm string
 	for _, def := range defs {
-		if def == nil || !strings.EqualFold(def.IndexName, indexName) {
+		if def == nil || def.IndexName != indexName {
 			continue
 		}
 		if def.IndexAlgoTableType == "" || group[def.IndexAlgoTableType] != nil || (algorithm != "" && !strings.EqualFold(algorithm, def.IndexAlgo)) {
@@ -122,13 +123,11 @@ func (p *pluginCompileCtx) RunIndexMaintenanceSQL(sql, function, indexName strin
 	if err != nil {
 		return err
 	}
-	selected := make(map[string]*plan.IndexDef, len(expected))
-	for _, role := range expected {
-		if role == "" || selected[role] != nil || group[role] == nil {
-			return moerr.NewInvalidInputNoCtx("index maintenance roles do not match the owner")
-		}
-		selected[role] = group[role]
+	selected := maintenance.SelectDefinitions(group, expected)
+	if selected == nil {
+		return moerr.NewInvalidInputNoCtx("index maintenance roles do not match the owner")
 	}
+
 	spec, err := compileplugin.ResolveIndexMaintenanceSpec(p.c.proc.Ctx, p.qryDatabase, p.dbSource, p.originalTableDef.Name, p.mainTableID, function, selected)
 	if err != nil {
 		return err

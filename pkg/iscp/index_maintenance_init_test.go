@@ -39,6 +39,7 @@ func TestIndexInitSQLFencesSourceAndMatchesLiveGroup(t *testing.T) {
 		{"matching", 10, "idx", false},
 		{"replaced source", 99, "idx", true},
 		{"missing index", 10, "missing", true},
+		{"wrong case", 10, "IDX", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
