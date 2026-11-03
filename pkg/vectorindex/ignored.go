@@ -25,7 +25,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -66,7 +65,7 @@ func SerialPkString(b []byte, scales []int32) string {
 // SerialPkScales returns the scales of the parts of the composite primary key of tableDef, nil
 // when its key is a single column.
 func SerialPkScales(tableDef *plan.TableDef) []int32 {
-	if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) < 2 {
 		return nil
 	}
 	scales := make([]int32, 0, len(tableDef.Pkey.Names))

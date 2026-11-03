@@ -42,6 +42,18 @@ show index ignored from t;
 truncate table t;
 show index ignored from t;
 
+-- a referential action keeps the record of a row the index still cannot store
+create table fp(id int primary key);
+create table fc(id int primary key, pid int, v vecf32(2), foreign key (pid) references fp(id) on delete set null);
+insert into fp values (1),(2);
+insert into fc values (1,1,'[1,1]'),(2,1,'[100000,1]'),(3,2,'[2,2]');
+create index ifc using ivfflat on fc(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5 include(pid);
+delete from fp where id = 1;
+select * from fc order by id;
+-- @ignore:4
+show index ignored from fc;
+select id from fc order by l2_distance(v, '[1,1]') limit 3;
+
 -- ---------------- I17: an asynchronous build and its sync record the rows -----
 create table c(a int, b varchar(10), v vecf64(2), primary key(a, b));
 insert into c values (1,'x','[1,2]'),(2,'y','[3,4]'),(3,'z','[1e300,1]'),(4,'w','[5,6]');

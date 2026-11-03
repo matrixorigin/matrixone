@@ -57,7 +57,8 @@ var (
 	// vector types live in one place — the IVF-FLAT plugin's catalog hooks.
 	ivfflatCatalogHooks = ivfflatrt.CatalogHooks{}
 
-	ivf_runSql = sqlexec.RunSql
+	ivf_runSql     = sqlexec.RunSql
+	ivf_getVersion = ivfflat.GetVersion
 )
 
 type ivfCreateState struct {
@@ -76,7 +77,7 @@ type ivfCreateState struct {
 }
 
 func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc *process.Process, data [][]T) error {
-	version, err := ivfflat.GetVersion(sqlexec.NewSqlProcess(proc), u.tblcfg)
+	version, err := ivf_getVersion(sqlexec.NewSqlProcess(proc), u.tblcfg)
 	if err != nil {
 		return err
 	}
@@ -198,7 +199,7 @@ func kmeansCentroids[T types.RealNumbers](u *ivfCreateState, proc *process.Proce
 
 func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
 
-	if !u.inited || (len(u.data32) == 0 && len(u.data64) == 0) {
+	if !u.inited || (u.data32 == nil && u.data64 == nil) {
 		return nil
 	}
 
