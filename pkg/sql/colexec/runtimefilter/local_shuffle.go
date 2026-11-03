@@ -100,6 +100,12 @@ func (f *LocalShuffleFilter) Begin(proc *process.Process, id, count int) (*Local
 	if err = f.prepareLocked(proc, g, count); err != nil {
 		return nil, err
 	}
+	if f.expected == 0 {
+		f.expected = count
+		f.producers = make([]*LocalShuffleProducer, count)
+	} else if f.expected != count {
+		return nil, moerr.NewInvalidStateNoCtx("inconsistent local shuffle build producer count")
+	}
 	if f.producers[id] != nil {
 		return nil, moerr.NewInvalidStateNoCtx("duplicate local shuffle filter producer")
 	}
@@ -122,20 +128,20 @@ func (f *LocalShuffleFilter) prepareLocked(proc *process.Process, g *process.Exe
 	if proc.GetMessageBoard() == nil {
 		return moerr.NewInvalidStateNoCtx("local shuffle filter has no message board")
 	}
-	if f.expected == 0 {
-		f.expected = count
+	if f.generation == nil {
 		f.generation = g
 		f.board = proc.GetMessageBoard()
-		f.producers = make([]*LocalShuffleProducer, count)
-		f.reservation, err = g.ReserveTransientMemory((f.bytes + LocalShuffleProbeRows + 256) * uint64(count))
+		// Build and probe reader counts can shrink independently. Reserve the
+		// compile-proven upper bound, and register only actual build producers.
+		f.reservation, err = g.ReserveTransientMemory((f.bytes + LocalShuffleProbeRows + 256) * uint64(f.maxProducers))
 		if err != nil {
 			if ClassifyOptionalFallback(err) != OptionalFallbackBudgetAdmission {
 				return err
 			}
 			f.pass = true
 		}
-	} else if f.expected != count || f.generation != g || f.board != proc.GetMessageBoard() {
-		return moerr.NewInvalidStateNoCtx("local shuffle filter generation or fanout mismatch")
+	} else if f.generation != g || f.board != proc.GetMessageBoard() {
+		return moerr.NewInvalidStateNoCtx("local shuffle filter generation or board mismatch")
 	}
 	return nil
 }

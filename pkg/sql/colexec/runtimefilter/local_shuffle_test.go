@@ -16,6 +16,7 @@ package runtimefilter
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -166,4 +167,34 @@ func TestLocalShuffleFilterStoppedConsumer(t *testing.T) {
 	f.Close()
 	_, err = f.Wait(ctx, stopped)
 	require.ErrorIs(t, err, context.Canceled, "cancellation wins over a closed coordinator")
+}
+
+func TestLocalShuffleFilterIndependentProbeFanout(t *testing.T) {
+	for _, probeCount := range []int{1, 8} {
+		t.Run(fmt.Sprintf("probe=%d", probeCount), func(t *testing.T) {
+			proc, g := newLocalFilterTestProcess(t, 16<<20)
+			f, _ := NewLocalShuffleFilter(75, types.T_int64, 1000, 8)
+			t.Cleanup(f.Close)
+			enabled, err := f.PrepareProbe(proc, probeCount)
+			require.NoError(t, err)
+			require.True(t, enabled)
+			require.Zero(t, f.expected, "probe admission cannot seal build fanout")
+			for id := range 8 {
+				producer, err := f.Begin(proc, id, 8)
+				require.NoError(t, err)
+				require.NoError(t, producer.Complete(false))
+				if id != 7 {
+					select {
+					case <-f.done:
+						t.Fatal("incomplete build domain")
+					default:
+					}
+				}
+			}
+			_, err = f.Wait(proc.Ctx, nil)
+			require.NoError(t, err)
+			f.Close()
+			require.Zero(t, g.Snapshot().Used)
+		})
+	}
 }
