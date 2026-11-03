@@ -308,9 +308,14 @@ func (u *ivfpqCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if cfg.SrcTable == "" {
 			return moerr.NewInvalidInput(proc.Ctx, "ivfpq_create: source is empty")
 		}
-		policy, err := prepareIndexMaintenance(proc, tf, "ivfpq_create", cfg.DbName, cfg.SrcTable,
-			maintenanceOperand{catalog.Ivfpq_TblType_Metadata, cfg.MetadataTable},
-			maintenanceOperand{catalog.Ivfpq_TblType_Storage, cfg.IndexTable})
+		operands := []maintenanceOperand{
+			{catalog.Ivfpq_TblType_Metadata, cfg.MetadataTable},
+			{catalog.Ivfpq_TblType_Storage, cfg.IndexTable},
+		}
+		if cfg.IgnoredTable != "" {
+			operands = append(operands, maintenanceOperand{catalog.IndexIgnored_TblType, cfg.IgnoredTable})
+		}
+		policy, err := prepareIndexMaintenance(proc, tf, "ivfpq_create", cfg.DbName, cfg.SrcTable, operands...)
 		if err != nil {
 			return err
 		}

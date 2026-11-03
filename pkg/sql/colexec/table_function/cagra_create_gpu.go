@@ -298,9 +298,14 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		if cfg.SrcTable == "" {
 			return moerr.NewInvalidInput(proc.Ctx, "cagra_create: source is empty")
 		}
-		policy, err := prepareIndexMaintenance(proc, tf, "cagra_create", cfg.DbName, cfg.SrcTable,
-			maintenanceOperand{catalog.Cagra_TblType_Metadata, cfg.MetadataTable},
-			maintenanceOperand{catalog.Cagra_TblType_Storage, cfg.IndexTable})
+		operands := []maintenanceOperand{
+			{catalog.Cagra_TblType_Metadata, cfg.MetadataTable},
+			{catalog.Cagra_TblType_Storage, cfg.IndexTable},
+		}
+		if cfg.IgnoredTable != "" {
+			operands = append(operands, maintenanceOperand{catalog.IndexIgnored_TblType, cfg.IgnoredTable})
+		}
+		policy, err := prepareIndexMaintenance(proc, tf, "cagra_create", cfg.DbName, cfg.SrcTable, operands...)
 		if err != nil {
 			return err
 		}

@@ -194,8 +194,12 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		// subsequent steps observe the index. Then re-register the
 		// CDC task with startFromNow=true (CDC catches only forward
 		// changes; the build we just ran already produced tag=0).
+		roles, err := (Hooks{}).IndexMaintenanceRoles("cagra_create", indexDefs)
+		if err != nil {
+			return err
+		}
 		for _, sql := range buildSqls {
-			if err = maintenance.RunSQL(ctx, sql, "cagra_create", indexName, catalog.Cagra_TblType_Metadata, catalog.Cagra_TblType_Storage); err != nil {
+			if err = maintenance.RunSQL(ctx, sql, "cagra_create", indexName, roles...); err != nil {
 				return err
 			}
 		}

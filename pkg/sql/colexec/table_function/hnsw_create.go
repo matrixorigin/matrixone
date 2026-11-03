@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -198,7 +199,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 				u.build = nil
 			}
 			if u.ignored != nil {
-				u.ignored.Close()
+				u.ignored.close()
 				u.ignored = nil
 			}
 			if u.batch != nil {

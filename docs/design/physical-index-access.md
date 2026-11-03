@@ -48,3 +48,5 @@ repeated after reset and operator reuse, without per-row catalog lookups.
 The CPU implementations cover fulltext2, HNSW, and IVF-FLAT; CAGRA and IVF-PQ
 use the same boundary without changing their distributed placement. GPU runtime
 behavior requires validation on a CUDA-capable runner.
+
+CAGRA and IVF-PQ ignored-row targets follow the same optional-operand contract as HNSW: the plugin validates and attests each present ignored relation, synchronous rebuild uses the descriptor's role list, and runtime admission checks that target before any effects. ISCP initialization derives the same role list from the fenced live index group. An absent optional target grants no authority.

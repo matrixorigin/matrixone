@@ -235,8 +235,12 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		// Background reindex: build ivfpq_create synchronously inside
 		// this txn, then re-register CDC starting from now (the build
 		// produced tag=0; CDC handles only forward changes).
+		roles, err := (Hooks{}).IndexMaintenanceRoles("ivfpq_create", indexDefs)
+		if err != nil {
+			return err
+		}
 		for _, sql := range buildSqls {
-			if err = maintenance.RunSQL(ctx, sql, "ivfpq_create", indexName, catalog.Ivfpq_TblType_Metadata, catalog.Ivfpq_TblType_Storage); err != nil {
+			if err = maintenance.RunSQL(ctx, sql, "ivfpq_create", indexName, roles...); err != nil {
 				return err
 			}
 		}
