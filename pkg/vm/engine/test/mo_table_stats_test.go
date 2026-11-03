@@ -226,7 +226,7 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 			otherDB, otherID := otherTable.GetDBID(p.Ctx), otherTable.GetTableID(p.Ctx)
 
 			// Every ID in the stale row is live, but this combination is not.
-			runSQL(fmt.Sprintf("delete from %s where account_id=0 and database_id=%d and table_id=%d", statsTable, dbID, firstID))
+			runSQL(fmt.Sprintf("delete from %s where account_id=0 and database_id=%d and table_id in (%d,%d)", statsTable, dbID, firstID, secondID))
 			insert(0, otherDB, otherID, `'{"table_size":4}'`)
 			insert(0, otherDB, firstID, `'{"table_size":9999}'`)
 			sizes, ok, err := e.QueryAccountTableSizes(p.Ctx, []uint64{0}, false)
