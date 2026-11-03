@@ -6,10 +6,11 @@ create table jdbc_enum_set_metadata (
     e enum('a','bb',''),
     s set('x','yy'),
     c char(2),
-    v varchar(2)
+    v varchar(2),
+    u int unique
 );
 insert into jdbc_enum_set_metadata values
-    (1, 'a', 'x,yy', 'ab', 'ab'), (2, '', '', '', ''), (3, null, null, null, null);
+    (1, 'a', 'x,yy', 'ab', 'ab', 1), (2, '', '', '', '', null), (3, null, null, null, null, null);
 -- @metacmp(true)
 select e, s, c, v from jdbc_enum_set_metadata where 1 = 0;
 -- @metacmp(true)
@@ -103,4 +104,43 @@ from jdbc_enum_set_metadata l join jdbc_enum_set_metadata r on false;
 -- @metacmp(true)
 select min(l.e) over() as min_e, max(l.s) over() as max_s
 from jdbc_enum_set_metadata l left join jdbc_enum_set_metadata r on false;
+-- PARTITION and ordinary grouping preserve constant/empty input facts.
+-- @metacmp(true)
+select min(e) over(partition by id) as min_e,max(s) over(partition by id) as max_s
+from jdbc_enum_set_metadata where id=1;
+-- @metacmp(true)
+select min(e) over(partition by id) as min_e,max(s) over(partition by id) as max_s
+from jdbc_enum_set_metadata where false;
+-- @metacmp(true)
+select min(min(e)) over() as min_e,max(max(s)) over() as max_s
+from jdbc_enum_set_metadata where id=1 group by id;
+-- @metacmp(true)
+select min(min(e)) over() as min_e,max(max(s)) over() as max_s
+from jdbc_enum_set_metadata where false group by id;
+-- Projection-generated joins and inner windows do not redefine the outer window block.
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s,
+       (select count(*) from jdbc_enum_set_metadata) as total
+from jdbc_enum_set_metadata where id=1;
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s
+from (select id,e,s,row_number() over(order by id) as n
+      from jdbc_enum_set_metadata order by id limit 1)d where n>0;
+-- Existence providers must be proven constant, not rejected categorically.
+-- @metacmp(true)
+select min(l.e) over() as min_e,max(l.s) over() as max_s from jdbc_enum_set_metadata l
+where l.id=1 and exists(select 1 from jdbc_enum_set_metadata r where r.id=1 and r.id=l.id);
+-- @metacmp(true)
+select min(l.e) over() as min_e,max(l.s) over() as max_s from jdbc_enum_set_metadata l
+where l.id=1 and not exists(select 1 from jdbc_enum_set_metadata r where r.id=100);
+-- Equivalent non-NULL key equalities differ from a nullable unique-key NULL probe.
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s from jdbc_enum_set_metadata where id between 1 and 1;
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s from jdbc_enum_set_metadata where id<=>1;
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s from jdbc_enum_set_metadata where u<=>1;
+-- @metacmp(true)
+select min(e) over() as min_e,max(s) over() as max_s,count(*) over() as null_matches
+from jdbc_enum_set_metadata where u<=>null;
 drop table jdbc_enum_set_metadata;

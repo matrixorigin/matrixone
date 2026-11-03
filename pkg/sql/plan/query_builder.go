@@ -12095,6 +12095,20 @@ func (builder *QueryBuilder) appendWindowNode(
 		}
 	}
 
+	// This is the current block's window input, before projection subqueries
+	// add JOINs above it. Capture the value-independent fact at its owner.
+	var constantInput *bool
+	for _, result := range ctx.mysqlSpecialResultTypes {
+		if result.Kind != plan.MySQLSpecialResultType_PREPARE_ONLY {
+			continue
+		}
+		if constantInput == nil {
+			constant := newResultMaterialization(builder.qry, nil).bound(nodeID) <= 1
+			constantInput = &constant
+		}
+		result.MaterializationElided = *constantInput
+	}
+
 	for i, w := range ctx.windows {
 		e := w.GetW()
 		if len(e.PartitionBy) > 0 {

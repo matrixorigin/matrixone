@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -44,7 +45,14 @@ func resultIntegerLiteralZero(expr *plan.Expr) bool {
 // A provably empty statement also skips materialization (including DISTINCT
 // ROLLUP). Unknown bounds never prove either optimization. No statistics or
 // observed row counts participate, and all state is local to this traversal.
-func resultMaterializationElided(query *plan.Query, root int32, values []any) bool {
+type resultMaterialization struct {
+	query            *plan.Query
+	bound            func(int32) uint8
+	constantProvider func(int32) bool
+}
+
+func newResultMaterialization(query *plan.Query, values []any) *resultMaterialization {
+	r := &resultMaterialization{query: query}
 	const unknown = uint8(2) // bounds are saturated at 0, 1, or unknown/many
 	memo := make(map[int32]uint8)
 	valid := func(id int32) bool { return id >= 0 && int(id) < len(query.Nodes) && query.Nodes[id] != nil }
@@ -66,7 +74,7 @@ func resultMaterializationElided(query *plan.Query, root int32, values []any) bo
 			return bound(node.Children[0])
 		}
 		switch node.NodeType {
-		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_DISTINCT, plan.Node_WINDOW, plan.Node_SINK:
+		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_DISTINCT, plan.Node_WINDOW, plan.Node_SINK, plan.Node_PARTITION:
 			result = child()
 			if node.NodeType == plan.Node_FILTER && len(node.Children) == 1 && valid(node.Children[0]) {
 				agg := query.Nodes[node.Children[0]]
@@ -76,6 +84,11 @@ func resultMaterializationElided(query *plan.Query, root int32, values []any) bo
 					if resultScanSingleRow(&scan) {
 						result = min(result, 1)
 					}
+				}
+				if agg.NodeType == plan.Node_JOIN && agg.JoinType == plan.Node_MARK && len(agg.Children) == 2 &&
+					bound(agg.Children[0]) <= 1 && bound(agg.Children[1]) <= 1 && r.constantProvider(agg.Children[1]) &&
+					resultPositiveExistenceFilter(node.FilterList, agg) {
+					result = bound(agg.Children[0])
 				}
 				if agg.NodeType == plan.Node_AGG && len(agg.GroupBy) == 0 && len(agg.Children) == 1 && bound(agg.Children[0]) == 0 {
 					for _, filter := range node.FilterList {
@@ -92,7 +105,7 @@ func resultMaterializationElided(query *plan.Query, root int32, values []any) bo
 				result = 1
 			} else if input == 0 {
 				result = 0
-			} else if len(node.GroupingFlag) == 0 && !IsSortRollupOption(node.ExtraOptions) {
+			} else if !hasInactiveGroupingColumn(node.GroupingFlag) && !IsSortRollupOption(node.ExtraOptions) {
 				result = input
 			}
 			if input == 0 && len(node.GroupBy) == 0 {
@@ -143,12 +156,16 @@ func resultMaterializationElided(query *plan.Query, root int32, values []any) bo
 				case plan.Node_SEMI:
 					if reject || left == 0 || right == 0 {
 						result = 0
+					} else if right <= 1 && r.constantProvider(node.Children[1]) {
+						result = left
 					}
 				case plan.Node_ANTI, plan.Node_MARK:
 					// A nonconstant EXISTS provider can require window execution
 					// even when its preserved side is a single point lookup.
 					// Its generated LIMIT/aggregate is not a source const-table fact.
 					if reject || left == 0 || right == 0 {
+						result = left
+					} else if right <= 1 && r.constantProvider(node.Children[1]) && !resultMarkCorrelated(query, node) {
 						result = left
 					}
 				case plan.Node_SINGLE:
@@ -171,29 +188,113 @@ func resultMaterializationElided(query *plan.Query, root int32, values []any) bo
 		memo[id] = result
 		return result
 	}
-	if bound(root) == 0 {
-		return true
-	}
-	// Inspect the root block's window layer, not unrelated windows below an
-	// aggregate/join/materialized source. Every window in this layer must be
-	// redundant; an outer LIMIT must not hide an active inner window.
-	found := false
-	for depth := 0; depth < len(query.Nodes) && valid(root); depth++ {
-		node := query.Nodes[root]
-		switch node.NodeType {
-		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_DISTINCT:
-		case plan.Node_WINDOW:
-			if len(node.Children) != 1 || bound(node.Children[0]) > 1 {
-				return false
-			}
-			found = true
-		default:
-			return found
-		}
-		if len(node.Children) != 1 {
+	r.bound = bound
+	providers := make(map[int32]bool)
+	r.constantProvider = func(id int32) bool {
+		if !valid(id) {
 			return false
 		}
-		root = node.Children[0]
+		if value, ok := providers[id]; ok {
+			return value
+		}
+		providers[id] = false
+		n := query.Nodes[id]
+		value := false
+		switch n.NodeType {
+		case plan.Node_TABLE_SCAN:
+			value = resultScanSingleRow(n)
+		case plan.Node_VALUE_SCAN:
+			value = n.TableDef == nil
+		case plan.Node_FILTER:
+			if len(n.Children) == 1 && valid(n.Children[0]) && query.Nodes[n.Children[0]].NodeType == plan.Node_TABLE_SCAN {
+				scan := *query.Nodes[n.Children[0]]
+				scan.FilterList = append(append([]*plan.Expr(nil), scan.FilterList...), n.FilterList...)
+				value = resultScanSingleRow(&scan)
+			}
+		}
+		if !value && len(n.Children) > 0 {
+			value = true
+			for _, child := range n.Children {
+				value = value && r.constantProvider(child)
+			}
+		}
+		// LIMIT/global aggregation may reduce rows, but cannot make a
+		// nonconstant EXISTS provider into a source const-table lookup.
+		providers[id] = value
+		return value
+	}
+	return r
+}
+
+func (r *resultMaterialization) elided(root int32, expr *plan.Expr) bool {
+	if r.bound(root) == 0 {
+		return true
+	}
+	// Resolve this selected value's producer, using the same typed slot/join
+	// routing as result metadata classification. MIN/MAX is a terminal producer:
+	// its input's inner windows belong to another query block, not this result.
+	k := newResultColumnKinds(r.query)
+	k.windowInputs = make(map[int32]bool)
+	k.computed(root, expr)
+	if len(k.windowInputs) == 0 {
+		return false
+	}
+	for input := range k.windowInputs {
+		if r.bound(input) > 1 {
+			return false
+		}
+	}
+	return true
+}
+
+func resultMarkCorrelated(query *plan.Query, node *plan.Node) bool {
+	k := newResultColumnKinds(query)
+	var left func(*plan.Expr) bool
+	left = func(e *plan.Expr) bool {
+		if ref := e.GetCol(); ref != nil {
+			if len(node.BindingTags) == 0 {
+				return ref.RelPos == 0
+			}
+			return k.bindingChild(node.NodeId, node, ref) == 0
+		}
+		if fn := e.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if left(arg) {
+					return true
+				}
+			}
+		}
+		return e.GetCorr() != nil
+	}
+	for _, e := range node.OnList {
+		if left(e) {
+			return true
+		}
+	}
+	return false
+}
+
+func resultPositiveExistenceFilter(filters []*plan.Expr, mark *plan.Node) bool {
+	for _, e := range filters {
+		fn := e.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "istrue" || len(fn.Args) != 1 {
+			continue
+		}
+		ref := fn.Args[0].GetCol()
+		if ref == nil {
+			continue
+		}
+		if len(mark.BindingTags) > 0 {
+			if ref.RelPos == mark.BindingTags[0] {
+				return true
+			}
+			continue
+		}
+		if ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(mark.ProjectList) {
+			if output := mark.ProjectList[ref.ColPos].GetCol(); output != nil && output.RelPos == -1 {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -205,6 +306,34 @@ func resultScanSingleRow(node *plan.Node) bool {
 		return false
 	}
 	scan := *node
+	// Normalize only predicates which prove the same non-NULL key equality.
+	// These private proof expressions are never installed in the executable plan.
+	scan.FilterList = make([]*plan.Expr, len(node.FilterList))
+	for i, filter := range node.FilterList {
+		scan.FilterList[i] = filter
+		fn := filter.GetF()
+		if fn == nil || fn.Func == nil {
+			continue
+		}
+		var args []*plan.Expr
+		if fn.Func.ObjName == "<=>" && len(fn.Args) == 2 {
+			for side := 0; side < 2; side++ {
+				if lit := fn.Args[1-side].GetLit(); fn.Args[side].GetCol() != nil && lit != nil && !lit.Isnull {
+					args = fn.Args
+					break
+				}
+			}
+		}
+		if fn.Func.ObjName == "between" && len(fn.Args) == 3 && fn.Args[0].GetCol() != nil {
+			lo, hi := fn.Args[1].GetLit(), fn.Args[2].GetLit()
+			if lo != nil && hi != nil && !lo.Isnull && !hi.Isnull && fn.Args[1].Typ.Id == fn.Args[2].Typ.Id && fn.Args[1].Typ.Scale == fn.Args[2].Typ.Scale && proto.Equal(lo, hi) {
+				args = fn.Args[:2]
+			}
+		}
+		if args != nil {
+			scan.FilterList[i] = &plan.Expr{Typ: filter.Typ, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "="}, Args: args}}}
+		}
+	}
 	table := *node.TableDef
 	if len(node.BindingTags) == 0 || table.Name2ColIndex == nil {
 		table.Name2ColIndex = make(map[string]int32, len(table.Cols))

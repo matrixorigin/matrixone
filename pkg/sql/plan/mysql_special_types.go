@@ -992,10 +992,10 @@ func (builder *QueryBuilder) captureMySQLSpecialResultTypes(ctx *BindContext, ro
 		}
 		if typ.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY {
 			if materializationElided == nil {
-				elided := resultMaterializationElided(builder.qry, root, nil)
+				elided := newResultMaterialization(builder.qry, nil).bound(root) == 0
 				materializationElided = &elided
 			}
-			typ.MaterializationElided = *materializationElided
+			typ.MaterializationElided = typ.MaterializationElided || *materializationElided
 		}
 		builder.qry.MysqlSpecialResultTypes[i] = *typ
 	}

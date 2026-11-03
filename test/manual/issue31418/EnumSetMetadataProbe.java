@@ -7,9 +7,9 @@ public final class EnumSetMetadataProbe {
         if (!ok) throw new AssertionError(message);
     }
 
-    private static void metadata(ResultSetMetaData meta, int type, boolean declared, String phase)
+    private static void metadata(ResultSetMetaData meta, int type, boolean declared, String phase, int... columnCount)
             throws SQLException {
-        check(meta != null && meta.getColumnCount() == 2, phase + ": missing columns");
+        check(meta != null && meta.getColumnCount() == (columnCount.length == 0 ? 2 : columnCount[0]), phase + ": missing columns");
         for (int i = 1; i <= 2; i++) {
             check(meta.getColumnType(i) == type,
                     phase + ": column " + i + " expected JDBC " + type + ", got " + meta.getColumnType(i));
@@ -29,12 +29,14 @@ public final class EnumSetMetadataProbe {
         check(meta.getPrecision(1) == 2 && meta.getPrecision(2) == 4, "wrong materialized label width");
     }
 
-    private static void rows(ResultSet result, int type, boolean declared, List<List<String>> expectedRows, String phase)
+    private static void rows(ResultSet result, int type, boolean declared, List<List<String>> expectedRows, String phase, int... columnCount)
             throws SQLException {
-        metadata(result.getMetaData(), type, declared, phase);
+        metadata(result.getMetaData(), type, declared, phase, columnCount);
         Map<List<String>, Integer> actual = new HashMap<>();
         while (result.next()) {
-            actual.merge(Arrays.asList(result.getString(1), result.getString(2)), 1, Integer::sum);
+            List<String> row = new ArrayList<>();
+            for (int i = 1; i <= result.getMetaData().getColumnCount(); i++) row.add(result.getString(i));
+            actual.merge(row, 1, Integer::sum);
         }
         Map<List<String>, Integer> expected = new HashMap<>();
         for (List<String> row : expectedRows) expected.merge(row, 1, Integer::sum);
@@ -58,13 +60,13 @@ public final class EnumSetMetadataProbe {
     }
 
     private static void query(Connection connection, String mode, String sql, int type, int prepareType,
-                              boolean declared, List<List<String>> expectedRows) throws Exception {
+                              boolean declared, List<List<String>> expectedRows, int... columnCount) throws Exception {
         if (mode.equals("statement")) {
             try (Statement statement = connection.createStatement()) {
                 statement.setQueryTimeout(30);
                 try (ResultSet result = statement.executeQuery(sql)) {
                     if (type != prepareType) labelWidths(result.getMetaData());
-                    rows(result, type, declared, expectedRows, mode + ": " + sql);
+                    rows(result, type, declared, expectedRows, mode + ": " + sql, columnCount);
                 }
             }
         } else {
@@ -76,11 +78,11 @@ public final class EnumSetMetadataProbe {
                 }
                 if (mode.equals("cursor")) statement.setFetchSize(1);
                 metadata(statement.getMetaData(), mode.equals("server-prepared") || mode.equals("cursor") ? prepareType : type,
-                        declared, mode + " prepare: " + sql);
+                        declared, mode + " prepare: " + sql, columnCount);
                 for (int i = 0; i < 2; i++) {
                     try (ResultSet result = statement.executeQuery()) {
                         if (type != prepareType) labelWidths(result.getMetaData());
-                        rows(result, type, declared, expectedRows, mode + " execute: " + sql);
+                        rows(result, type, declared, expectedRows, mode + " execute: " + sql, columnCount);
                     }
                 }
             }
@@ -106,8 +108,8 @@ public final class EnumSetMetadataProbe {
                 setup.execute("CREATE DATABASE " + db);
                 try {
                     setup.execute("USE " + db);
-                    setup.execute("CREATE TABLE t (id INT PRIMARY KEY, e ENUM('a','bb',''), s SET('x','yy'))");
-                    setup.execute("INSERT INTO t VALUES (1,'a','x,yy'),(2,'',''),(3,NULL,NULL)");
+                    setup.execute("CREATE TABLE t (id INT PRIMARY KEY, e ENUM('a','bb',''), s SET('x','yy'), u INT UNIQUE)");
+                    setup.execute("INSERT INTO t VALUES (1,'a','x,yy',1),(2,'','',NULL),(3,NULL,NULL,NULL)");
                     List<List<String>> rollup = Arrays.asList(
                             Arrays.asList("a", "x,yy"), Arrays.asList("a", null),
                             Arrays.asList("", ""), Arrays.asList("", null),
@@ -235,7 +237,51 @@ public final class EnumSetMetadataProbe {
                     query(connection, mode, "SELECT MIN(l.e) OVER (),MAX(l.s) OVER () FROM t l LEFT JOIN t r ON FALSE",
                             Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),
                                     Arrays.asList("", "x,yy"), Arrays.asList("", "x,yy")));
+                    for (String sql : new String[]{
+                            "SELECT MIN(e) OVER(PARTITION BY id),MAX(s) OVER(PARTITION BY id) FROM t WHERE id=1",
+                            "SELECT MIN(MIN(e)) OVER(),MAX(MAX(s)) OVER() FROM t WHERE id=1 GROUP BY id",
+                            "SELECT MIN(e) OVER(),MAX(s) OVER() FROM (SELECT e,s,ROW_NUMBER() OVER(ORDER BY id)n FROM t ORDER BY id LIMIT 1)d WHERE n>0",
+                            "SELECT MIN(l.e) OVER(),MAX(l.s) OVER() FROM t l WHERE l.id=1 AND EXISTS(SELECT 1 FROM t r WHERE r.id=1 AND r.id=l.id)",
+                            "SELECT MIN(l.e) OVER(),MAX(l.s) OVER() FROM t l WHERE l.id=1 AND NOT EXISTS(SELECT 1 FROM t r WHERE r.id=100)",
+                            "SELECT MIN(e) OVER(),MAX(s) OVER() FROM t WHERE id BETWEEN 1 AND 1",
+                            "SELECT MIN(e) OVER(),MAX(s) OVER() FROM t WHERE id<=>1",
+                            "SELECT MIN(e) OVER(),MAX(s) OVER() FROM t WHERE u<=>1"}) {
+                        query(connection, mode, sql, constantWindowType, Types.CHAR, false,
+                                Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    }
+                    for (String sql : new String[]{
+                            "SELECT MIN(e) OVER(PARTITION BY id),MAX(s) OVER(PARTITION BY id) FROM t WHERE FALSE",
+                            "SELECT MIN(MIN(e)) OVER(),MAX(MAX(s)) OVER() FROM t WHERE FALSE GROUP BY id",
+                            "SELECT MIN(l.e) OVER(),MAX(l.s) OVER() FROM t l WHERE l.id=1 AND NOT EXISTS(SELECT 1 FROM t r WHERE r.id=1)"}) {
+                        query(connection, mode, sql, constantWindowType, Types.CHAR, false, Collections.<List<String>>emptyList());
+                    }
+                    query(connection, mode, "SELECT MIN(e) OVER(),MAX(s) OVER(),(SELECT COUNT(*) FROM t) FROM t WHERE id=1",
+                            constantWindowType, Types.CHAR, false, Collections.singletonList(Arrays.asList("a", "x,yy", "3")), 3);
+                    query(connection, mode, "SELECT MIN(e) OVER(),MAX(s) OVER(),(SELECT COUNT(*) FROM t) FROM t LIMIT 1",
+                            Types.VARCHAR, Types.CHAR, false, Collections.singletonList(Arrays.asList("", "x,yy", "3")), 3);
+                    query(connection, mode, "SELECT MIN(e) OVER(),MAX(s) OVER() FROM t WHERE u<=>NULL",
+                            Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", ""),Arrays.asList("", "")));
+                    query(connection, mode, "SELECT MIN(l.e) OVER(),MAX(l.s) OVER() FROM t l WHERE l.id=1 AND NOT EXISTS(SELECT 1 FROM t r WHERE r.id=1 AND r.id=l.id)",
+                            Types.VARCHAR, Types.CHAR, false, Collections.<List<String>>emptyList());
                     if (mode.equals("server-prepared") || mode.equals("cursor")) {
+                        try (PreparedStatement nested = connection.prepareStatement("SELECT MIN(e) OVER(),MAX(s) OVER() FROM "
+                                + "(SELECT e,s,ROW_NUMBER() OVER(ORDER BY id)n FROM t ORDER BY id LIMIT ?)d WHERE n>0")) {
+                            nested.setQueryTimeout(30);
+                            if (mode.equals("cursor")) nested.setFetchSize(1);
+                            check(nested.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"), "nested prepare fell back");
+                            metadata(nested.getMetaData(), Types.CHAR, false, "nested prepare");
+                            for (int count : new int[]{1,2,0,1}) {
+                                nested.setInt(1,count);
+                                try (ResultSet result = nested.executeQuery()) {
+                                    int expectedType = count<=1 && !mode.equals("cursor") ? Types.CHAR : Types.VARCHAR;
+                                    List<List<String>> wanted = count==0 ? Collections.<List<String>>emptyList()
+                                            : count==1 ? Collections.singletonList(Arrays.asList("a", "x,yy"))
+                                            : Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy"));
+                                    labelWidths(result.getMetaData());
+                                    rows(result, expectedType, false, wanted, "nested LIMIT " + count);
+                                }
+                            }
+                        }
                         try (PreparedStatement limit = connection.prepareStatement("SELECT MIN(e) OVER (),MAX(s) OVER () FROM t LIMIT ?")) {
                             limit.setQueryTimeout(30);
                             check(limit.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"),

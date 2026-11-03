@@ -62,6 +62,9 @@ type resultColumnKinds struct {
 	bindings       map[int32]map[int32]int
 	timeWindows    map[int32]TimeWindowLayout
 	returningImage int32
+	// Optional result-publication observer. MIN/MAX is a terminal producer,
+	// so observing its input does not cross into a nested window query block.
+	windowInputs map[int32]bool
 }
 
 func newResultColumnKinds(query *pb.Query) *resultColumnKinds {
@@ -408,6 +411,10 @@ func (k *resultColumnKinds) window(id int, node *pb.Node, spec *pb.WindowSpec) {
 	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
 		k.mark(id)
 		return
+	}
+	if k.windowInputs != nil && node.NodeType == pb.Node_WINDOW && len(node.Children) == 1 &&
+		(fn.Func.ObjName == "min" || fn.Func.ObjName == "max") {
+		k.windowInputs[node.Children[0]] = true
 	}
 	switch strings.ToLower(fn.Func.ObjName) {
 	case "first_value", "last_value", "nth_value", "lag", "lead":

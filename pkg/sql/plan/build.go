@@ -1021,7 +1021,7 @@ func GetResultColumnsFromPlanWithParams(p *Plan, parameters []any) []*ColDef {
 		// Only BOOLEAN wire metadata consumes expression kind. Keep all other
 		// result types on the existing origin/key path.
 		var kinds *resultColumnKinds
-		var materializationElided *bool
+		var materialization *resultMaterialization
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
@@ -1033,11 +1033,10 @@ func GetResultColumnsFromPlanWithParams(p *Plan, parameters []any) []*ColDef {
 				if isEnumOrSetPlanType(&typ.Typ) {
 					columns[idx].MysqlSpecialResultType = DeepCopyMySQLSpecialResultType(typ)
 					if typ.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY && !typ.MaterializationElided {
-						if materializationElided == nil {
-							elided := resultMaterializationElided(query, query.Steps[step], parameters)
-							materializationElided = &elided
+						if materialization == nil {
+							materialization = newResultMaterialization(query, parameters)
 						}
-						columns[idx].MysqlSpecialResultType.MaterializationElided = *materializationElided
+						columns[idx].MysqlSpecialResultType.MaterializationElided = materialization.elided(query.Steps[step], expr)
 					}
 				}
 			}

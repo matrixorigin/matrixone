@@ -155,6 +155,25 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false", true},
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t", true},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=1", true},
+		{"select min(e) over(partition by id),max(s) over(partition by id) from enum_order_t where id=1", true},
+		{"select min(e) over(partition by id),max(s) over(partition by id) from enum_order_t where false", true},
+		{"select min(e) over(partition by id),max(s) over(partition by id) from enum_order_t", false},
+		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where id=1 group by id", true},
+		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false group by id", true},
+		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t group by id", false},
+		{"select min(e) over(),max(s) over(),(select count(*) from enum_order_t) from enum_order_t where id=1", true},
+		{"select min(e) over(),max(s) over(),(select count(*) from enum_order_t) from enum_order_t limit 1", false},
+		{"select min(e) over(),max(s) over() from (select e,s,row_number() over(order by id) n from enum_order_t order by id limit 1)d where n>0", true},
+		{"select min(e) over(),max(s) over() from (select e,s,row_number() over(order by id) n from enum_order_t order by id limit 2)d where n>0", false},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and exists(select 1 from enum_order_t r where r.id=1 and r.id=l.id)", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and not exists(select 1 from enum_order_t r where r.id=100)", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and not exists(select 1 from enum_order_t r where r.id=1)", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and not exists(select 1 from enum_order_t r where r.id=1 and r.id=l.id)", false},
+		{"select min(e) over(),max(s) over() from enum_order_t where id between 1 and 1", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id between 1 and 2", false},
+		{"select min(e) over(),max(s) over() from enum_order_t where id<=>1", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where u<=>1", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where u<=>null", false},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=100", true},
 		{"select min(e) over(),max(s) over() from enum_order_t where id<2", false},
 		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and exists(select 1 from enum_order_t r where r.id%2=l.id)", false},
@@ -174,10 +193,18 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		t.Run(tc.sql, func(t *testing.T) {
 			mock := newMySQLSpecialOrderMock(t)
 			mock.ctxt.tables["enum_order_t"].Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+			mock.ctxt.tables["enum_order_t"].Cols = append(mock.ctxt.tables["enum_order_t"].Cols, &pb.ColDef{Name: "u", Typ: pb.Type{Id: int32(types.T_int64)}})
+			mock.ctxt.tables["enum_order_t"].Indexes = []*pb.IndexDef{{IndexName: "u_key", Unique: true, Parts: []string{"u"}}}
 			p, err := runOneStmt(mock, t, tc.sql)
 			require.NoError(t, err)
 			snapshot := proto.Clone(p)
-			for _, def := range GetResultColumnsFromPlan(p) {
+			cols := GetResultColumnsFromPlan(p)
+			require.GreaterOrEqual(t, len(cols), 2)
+			for index, def := range cols {
+				if index >= 2 {
+					require.Nil(t, def.MysqlSpecialResultType)
+					continue
+				}
 				require.NotNil(t, def.MysqlSpecialResultType)
 				require.Equal(t, tc.elided, def.MysqlSpecialResultType.MaterializationElided)
 				cloned := DeepCopyColDef(def)
