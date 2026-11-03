@@ -17,6 +17,7 @@ package aggexec
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -58,10 +59,13 @@ func TestSingleGroupReuseMatchesBulkFlush(t *testing.T) {
 	} {
 		for _, id := range []int64{AggIdOfCountStar, AggIdOfCountColumn, AggIdOfSum, AggIdOfAvg, AggIdOfMin, AggIdOfMax} {
 			switch tc.typ.Oid {
-			case types.T_bool, types.T_int64, types.T_uint64, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_enum, types.T_decimal64, types.T_decimal128, types.T_decimal256, types.T_uuid:
+			case types.T_bool, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_enum, types.T_uuid:
 				if id != AggIdOfMin && id != AggIdOfMax {
 					continue
 				}
+			}
+			if tc.typ.Oid == types.T_decimal64 && id == AggIdOfAvg {
+				continue // independent decimal64 fast executor remains fallback
 			}
 			if tc.typ.Oid == types.T_varchar && id != AggIdOfCountColumn && id != AggIdOfCountStar {
 				continue
@@ -183,7 +187,6 @@ func TestSingleGroupReuseRejectsUnsupported(t *testing.T) {
 		extra              any
 	}{
 		{"distinct", AggIdOfCountColumn, true, false, types.T_int32.ToType(), nil},
-		{"decimal-sum", AggIdOfSum, false, false, types.T_int64.ToType(), nil},
 		{"decimal-avg", AggIdOfAvg, false, false, types.T_decimal64.ToType(), nil},
 		{"min-bytes", AggIdOfMin, false, false, types.T_varchar.ToType(), nil},
 		{"min-extra", AggIdOfMin, false, false, types.T_int32.ToType(), int32(2)},
@@ -454,4 +457,78 @@ func TestSingleGroupMinRejectsRichMetadata(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSingleGroupDecimalAvgRoundingAndRetry(t *testing.T) {
+	for _, typ := range []types.Type{types.T_int64.ToType(), types.New(types.T_int64, 35, 0)} {
+		for _, sign := range []int64{1, -1} {
+			t.Run(fmt.Sprintf("%v/%d", typ, sign), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				controller := &rejectNthAggregateAllocation{}
+				registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+				require.NoError(t, err)
+				account, err := registry.OpenWithController(128<<20, controller)
+				require.NoError(t, err)
+				defer func() { finishTestAggregateAllocation(t, registry, account); require.Zero(t, mp.CurrNB()) }()
+				allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
+				require.NoError(t, err)
+				exec, err := MakeSingleGroupAgg(mp, AggIdOfAvg, false, allocation, nil, typ)
+				require.NoError(t, err)
+				defer exec.Free()
+				SyncAggregatorsToChunkSize([]GroupAggFuncExec{exec}, 1)
+				require.NoError(t, exec.GroupGrow(1))
+				values := make([]int64, 113)
+				values[1] = sign
+				input := buildAvgFixedVector(t, mp, typ, values)
+				defer input.Free(mp)
+				require.NoError(t, BulkFillSingleGroupRange(exec, 0, len(values), []*vector.Vector{input}))
+				controller.failAt = controller.calls + 1
+				_, err = AppendSingleGroupResultAndReset(exec, nil)
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				controller.failAt = 0
+				dst, err := AppendSingleGroupResultAndReset(exec, nil)
+				require.NoError(t, err)
+				defer dst.Free(mp)
+				want := "0.0088"
+				if sign < 0 {
+					want = "-0.0088"
+				}
+				if dst.GetType().Oid == types.T_decimal128 {
+					require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal128](dst, 0).Format(4))
+				} else {
+					require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal256](dst, 0).Format(4))
+				}
+			})
+		}
+	}
+}
+
+func TestSingleGroupDecimalSumFinalPrecisionAndRetry(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	typ := types.New(types.T_decimal256, 65, 0)
+	maxValue, err := types.ParseDecimal256(strings.Repeat("9", 65), 65, 0)
+	require.NoError(t, err)
+	one := types.Decimal256FromInt64(1)
+	input := buildDecimal256Vector(t, mp, typ, nil, []types.Decimal256{maxValue, one, one.Minus()})
+	defer input.Free(mp)
+	exec, err := MakeSingleGroupAgg(mp, AggIdOfSum, false, nil, nil, typ)
+	require.NoError(t, err)
+	defer exec.Free()
+	SyncAggregatorsToChunkSize([]GroupAggFuncExec{exec}, 1)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, BulkFillSingleGroupRange(exec, 0, 1, []*vector.Vector{input}))
+	require.NoError(t, BulkFillSingleGroupRange(exec, 1, 1, []*vector.Vector{input}))
+	for i := 0; i < 2; i++ {
+		result, err := AppendSingleGroupResultAndReset(exec, nil)
+		require.Nil(t, result)
+		require.ErrorContains(t, err, "beyond the range")
+	}
+	require.NoError(t, BulkFillSingleGroupRange(exec, 2, 1, []*vector.Vector{input}))
+	result, err := AppendSingleGroupResultAndReset(exec, nil)
+	require.NoError(t, err)
+	defer result.Free(mp)
+	require.Equal(t, maxValue, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 }
