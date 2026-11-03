@@ -1572,38 +1572,43 @@ func TestPauseTaskHandleKeepsPauseRequestedWhenActivePauseFails(t *testing.T) {
 }
 
 func TestPauseTasksRetriesPausedCDCFinalize(t *testing.T) {
-	r, store := newDaemonHandleTestRunner(t)
+	for _, owner := range []string{"r2", "r1"} {
+		t.Run(owner, func(t *testing.T) {
+			r, store := newDaemonHandleTestRunner(t)
 
-	calls := atomic.Int32{}
-	r.options.pauseTaskCompleted = func(ctx context.Context, tk task.DaemonTask) error {
-		if calls.Add(1) == 1 {
-			return errors.New("finalize failed")
-		}
-		return nil
+			calls := atomic.Int32{}
+			r.options.pauseTaskCompleted = func(ctx context.Context, tk task.DaemonTask) error {
+				if calls.Add(1) == 1 {
+					return errors.New("finalize failed")
+				}
+				return nil
+			}
+
+			r.canClaimDaemonTask = func(string) bool { return owner != r.runnerID }
+			dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, owner)
+			dt.Metadata.ID = "pause-finalize-retry-1"
+			dt.Metadata.Executor = task.TaskCode_InitCdc
+			dt.LastHeartbeat = time.Time{}
+			mustAddTestDaemonTask(t, store, 1, dt)
+
+			pauseH := newPauseTask(r, &daemonTask{task: dt})
+			require.ErrorContains(t, pauseH.Handle(context.Background()), "finalize failed")
+			require.Equal(t, int32(1), calls.Load())
+
+			tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+			require.Equal(t, task.TaskStatus_Paused, tasks[0].TaskStatus)
+
+			retryTasks := r.pauseTasks(context.Background())
+			require.Len(t, retryTasks, 1)
+			require.Equal(t, dt.ID, retryTasks[0].ID)
+			require.Equal(t, task.TaskStatus_Paused, retryTasks[0].TaskStatus)
+
+			retryH := newPauseTask(r, &daemonTask{task: retryTasks[0]})
+			require.NoError(t, retryH.Handle(context.Background()))
+			require.Equal(t, int32(2), calls.Load())
+			require.Empty(t, r.pauseTasks(context.Background()))
+		})
 	}
-
-	dt := newDaemonTaskForTest(1, task.TaskStatus_PauseRequested, "r2")
-	dt.Metadata.ID = "pause-finalize-retry-1"
-	dt.Metadata.Executor = task.TaskCode_InitCdc
-	dt.LastHeartbeat = time.Time{}
-	mustAddTestDaemonTask(t, store, 1, dt)
-
-	pauseH := newPauseTask(r, &daemonTask{task: dt})
-	require.ErrorContains(t, pauseH.Handle(context.Background()), "finalize failed")
-	require.Equal(t, int32(1), calls.Load())
-
-	tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
-	require.Equal(t, task.TaskStatus_Paused, tasks[0].TaskStatus)
-
-	retryTasks := r.pauseTasks(context.Background())
-	require.Len(t, retryTasks, 1)
-	require.Equal(t, dt.ID, retryTasks[0].ID)
-	require.Equal(t, task.TaskStatus_Paused, retryTasks[0].TaskStatus)
-
-	retryH := newPauseTask(r, &daemonTask{task: retryTasks[0]})
-	require.NoError(t, retryH.Handle(context.Background()))
-	require.Equal(t, int32(2), calls.Load())
-	require.Empty(t, r.pauseTasks(context.Background()))
 }
 
 func TestPauseCompletedTasksClearedByLifecycle(t *testing.T) {
@@ -2494,4 +2499,72 @@ func TestRestartStartClaimErrorPreservesSupersedingControlRequest(t *testing.T) 
 	assert.Empty(t, got[0].Details.Error)
 	assert.Equal(t, int64(1), updateCalls.Load())
 	assert.False(t, executed.Load())
+}
+
+func TestOwnedStopTasksDoNotRequirePlacement(t *testing.T) {
+	for _, status := range []task.TaskStatus{task.TaskStatus_PauseRequested, task.TaskStatus_Paused, task.TaskStatus_CancelRequested, task.TaskStatus_Created, task.TaskStatus_ResumeRequested, task.TaskStatus_RestartRequested, task.TaskStatus_Running} {
+		for _, owner := range []string{"r1", "r2", ""} {
+			t.Run(status.String()+"/owner="+owner, func(t *testing.T) {
+				r, _ := newDaemonHandleTestRunner(t)
+				calls := 0
+				r.canClaimDaemonTask = func(string) bool { calls++; return false }
+				dt := newDaemonTaskForTest(1, status, owner)
+				got := r.mergeTasks([]task.DaemonTask{dt}, []task.DaemonTask{dt})
+				stopping := owner == r.runnerID && (status == task.TaskStatus_PauseRequested || status == task.TaskStatus_Paused || status == task.TaskStatus_CancelRequested)
+				if stopping {
+					require.Equal(t, []task.DaemonTask{dt}, got, "stop admission must preserve ownership and deduplicate")
+					require.Zero(t, calls, "local stop must not block on placement discovery")
+				} else {
+					require.Empty(t, got)
+					require.Positive(t, calls, "new or foreign work still needs placement admission")
+				}
+			})
+		}
+	}
+}
+
+func TestOwnedStopDispatchWhilePlacementUnavailable(t *testing.T) {
+	for _, cancelTask := range []bool{false, true} {
+		name := "pause"
+		if cancelTask {
+			name = "cancel"
+		}
+		t.Run(name, func(t *testing.T) {
+			r, store := newDaemonHandleTestRunner(t)
+			r.canClaimDaemonTask = func(string) bool { t.Error("local stop called placement discovery"); return false }
+			status, final := task.TaskStatus_PauseRequested, task.TaskStatus_Paused
+			if cancelTask {
+				status, final = task.TaskStatus_CancelRequested, task.TaskStatus_Canceled
+			}
+			dt := newDaemonTaskForTest(1, status, r.runnerID)
+			dt.LastHeartbeat = time.Now()
+			mustAddTestDaemonTask(t, store, 1, dt)
+			ref := &daemonTask{task: dt}
+			r.addDaemonTask(ref)
+			routine := newMockActiveRoutine()
+			require.NoError(t, r.Attach(context.Background(), dt.ID, routine))
+			if cancelTask {
+				selected := r.cancelTasks(context.Background())
+				require.Len(t, selected, 1)
+				require.NoError(t, newCancelTask(r, selected[0].ID).Handle(context.Background()))
+				select {
+				case <-routine.cancelC:
+				default:
+					t.Fatal("owned routine was not canceled")
+				}
+			} else {
+				selected := r.pauseTasks(context.Background())
+				require.Len(t, selected, 1)
+				require.NoError(t, newPauseTask(r, ref).Handle(context.Background()))
+				select {
+				case <-routine.pauseC:
+				default:
+					t.Fatal("owned routine was not paused")
+				}
+			}
+			got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+			require.Equal(t, final, got[0].TaskStatus)
+			require.Equal(t, r.runnerID, got[0].TaskRunner)
+		})
+	}
 }
