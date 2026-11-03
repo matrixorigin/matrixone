@@ -533,6 +533,136 @@ func TestSingleGroupDecimalSumFinalPrecisionAndRetry(t *testing.T) {
 	require.Equal(t, maxValue, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 }
 
+func TestSingleGroupDecimalScale(t *testing.T) {
+	for _, scale := range []int32{2, 30} {
+		for _, id := range []int64{AggIdOfSum, AggIdOfAvg} {
+			t.Run(fmt.Sprintf("scale=%d/id=%d", scale, id), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				defer func() { require.Zero(t, mp.CurrNB()) }()
+				typ := types.New(types.T_decimal256, 65, scale)
+				one, err := types.ParseDecimal256("1."+strings.Repeat("0", int(scale)), 65, scale)
+				require.NoError(t, err)
+				input := buildDecimal256Vector(t, mp, typ, nil, []types.Decimal256{one, one, one.Minus()})
+				defer input.Free(mp)
+				exec, err := MakeSingleGroupAgg(mp, id, false, nil, nil, typ)
+				require.NoError(t, err)
+				defer exec.Free()
+				SyncAggregatorsToChunkSize([]GroupAggFuncExec{exec}, 1)
+				require.NoError(t, exec.GroupGrow(1))
+				require.True(t, SupportsSingleGroupReuse([]GroupAggFuncExec{exec}))
+				require.NoError(t, BulkFillSingleGroupRange(exec, 0, 2, []*vector.Vector{input}))
+				require.NoError(t, BulkFillSingleGroupRange(exec, 2, 1, []*vector.Vector{input}))
+				result, err := AppendSingleGroupResultAndReset(exec, nil)
+				require.NoError(t, err)
+				defer result.Free(mp)
+				want := "1." + strings.Repeat("0", int(result.GetType().Scale))
+				if id == AggIdOfAvg {
+					want = "0." + strings.Repeat("3", int(result.GetType().Scale))
+				}
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0).Format(result.GetType().Scale))
+			})
+		}
+	}
+}
+
+func TestSingleGroupDecimalOutputAllocationFailure(t *testing.T) {
+	for _, growth := range []bool{false, true} {
+		t.Run(fmt.Sprintf("growth=%t", growth), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			controller := &rejectNthAggregateAllocation{}
+			registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(128<<20, controller)
+			require.NoError(t, err)
+			defer func() {
+				finishTestAggregateAllocation(t, registry, account)
+				require.Zero(t, controller.used)
+				require.Zero(t, mp.CurrNB())
+			}()
+			allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
+			require.NoError(t, err)
+			exec, err := MakeSingleGroupAgg(mp, AggIdOfSum, false, allocation, nil, types.T_int64.ToType())
+			require.NoError(t, err)
+			defer exec.Free()
+			SyncAggregatorsToChunkSize([]GroupAggFuncExec{exec}, 1)
+			require.NoError(t, exec.GroupGrow(1))
+			input := buildAvgFixedVector(t, mp, types.T_int64.ToType(), []int64{7})
+			defer input.Free(mp)
+			var dst *vector.Vector
+			defer func() {
+				if dst != nil {
+					dst.Free(mp)
+				}
+			}()
+			if growth {
+				dst, err = AppendSingleGroupResultAndReset(exec, nil)
+				require.NoError(t, err)
+				for dst.Length() < dst.Capacity() {
+					_, err = AppendSingleGroupResultAndReset(exec, dst)
+					require.NoError(t, err)
+				}
+				require.NoError(t, BulkFillSingleGroupRange(exec, 0, 1, []*vector.Vector{input}))
+			}
+			oldLen := 0
+			if dst != nil {
+				oldLen = dst.Length()
+			}
+			before := account.Snapshot().Used
+			controller.failAt = controller.calls + 1
+			if !growth {
+				controller.failAt++
+			}
+			result, err := AppendSingleGroupResultAndReset(exec, dst)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.True(t, controller.rejected)
+			require.Nil(t, result)
+			require.Equal(t, before, account.Snapshot().Used)
+			if dst != nil {
+				require.Equal(t, oldLen, dst.Length())
+			}
+			controller.failAt = 0
+			dst, err = AppendSingleGroupResultAndReset(exec, dst)
+			require.NoError(t, err)
+			require.Equal(t, !growth, dst.IsNull(uint64(oldLen)))
+			if growth {
+				require.Equal(t, types.Decimal128FromInt64(7), vector.GetFixedAtNoTypeCheck[types.Decimal128](dst, oldLen))
+			}
+		})
+	}
+}
+
+func TestSingleGroupDecimalPhysicalOverflow(t *testing.T) {
+	// Deliberately outside SQL's 65-digit input envelope to exercise physical
+	// overflow without requiring hundreds of billions of valid maximum values.
+	max := types.Decimal256{B0_63: ^uint64(0), B64_127: ^uint64(0), B128_191: ^uint64(0), B192_255: ^uint64(0) >> 1}
+	for _, id := range []int64{AggIdOfSum, AggIdOfAvg} {
+		for _, split := range []bool{false, true} {
+			t.Run(fmt.Sprintf("id=%d/split=%t", id, split), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				defer func() { require.Zero(t, mp.CurrNB()) }()
+				typ := types.New(types.T_decimal256, 65, 0)
+				input := buildDecimal256Vector(t, mp, typ, nil, []types.Decimal256{max, types.Decimal256FromInt64(1)})
+				defer input.Free(mp)
+				exec, err := MakeSingleGroupAgg(mp, id, false, nil, nil, typ)
+				require.NoError(t, err)
+				defer exec.Free()
+				SyncAggregatorsToChunkSize([]GroupAggFuncExec{exec}, 1)
+				require.NoError(t, exec.GroupGrow(1))
+				if split {
+					require.NoError(t, BulkFillSingleGroupRange(exec, 0, 1, []*vector.Vector{input}))
+					err = BulkFillSingleGroupRange(exec, 1, 1, []*vector.Vector{input})
+				} else {
+					err = BulkFillSingleGroupRange(exec, 0, 2, []*vector.Vector{input})
+				}
+				require.ErrorContains(t, err, "overflow")
+			})
+		}
+	}
+}
+
 func TestSingleGroupUint64Boundary(t *testing.T) {
 	for _, tc := range []struct {
 		id   int64

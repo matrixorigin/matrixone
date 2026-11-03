@@ -17,6 +17,7 @@ package group
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,6 +31,41 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSortRollupLaterDecimalFinalizerFailure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	child := colexec.NewMockOperator()
+	typ := types.New(types.T_decimal256, 65, 0)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{
+		countStarAgg(), aggexec.MakeAggFunctionExpression(aggexec.AggIdOfSum, false, []*plan.Expr{colExprWithType(1, typ)}, nil),
+	})
+	g.SortRollup = true
+	g.AppendChild(child)
+	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	defer func() {
+		g.Free(proc, true, nil)
+		child.Free(proc, true, nil)
+		finalizeGroupTestAllocation(t, g, allocation)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	}()
+	max, err := types.ParseDecimal256(strings.Repeat("9", 65), 65, 0)
+	require.NoError(t, err)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1}, nil, proc.Mp())
+	input.Vecs[1] = vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], max, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.Decimal256FromInt64(1), false, proc.Mp()))
+	input.SetRowCount(2)
+	child.WithBatchs([]*batch.Batch{input})
+	require.NoError(t, g.Prepare(proc))
+	require.True(t, g.ctr.sortRollup.reuseSingleGroup)
+	result, err := vm.Exec(g, proc)
+	require.ErrorContains(t, err, "beyond the range")
+	require.Nil(t, result.Batch)
+	g.Reset(proc, true, err)
+	require.Zero(t, allocation.account.Snapshot().Used)
+}
 
 func TestSortRollupSingleGroupReuseAndMixedFallback(t *testing.T) {
 	for _, name := range []string{"reuse", "mixed-distinct", "mixed-min", "mixed-decimal"} {
@@ -273,6 +309,25 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	g.Reset(proc, true, err)
 	require.Nil(t, g.ctr.sortRollup)
 	require.Zero(t, allocation.account.Snapshot().Used)
+	generation := allocation.generation
+	finalizeGroupTestAllocation(t, g, allocation)
+	allocation = groupTestAllocation{}
+	child.Free(proc, true, err)
+	g.Children = nil
+	proc.Ctx = context.Background()
+	child = colexec.NewMockOperator()
+	fresh := batch.NewWithSize(1)
+	fresh.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+	fresh.SetRowCount(1)
+	child.WithBatchs([]*batch.Batch{fresh})
+	g.AppendChild(child)
+	allocation = installGroupTestAllocation(t, g, proc, 64<<20, generation)
+	require.NoError(t, g.Prepare(proc))
+	result, err = vm.Exec(g, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{1, 1}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
+	require.Equal(t, []int32{7, 7}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[2]))
 }
 
 func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T) {
