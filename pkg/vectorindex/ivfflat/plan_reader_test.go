@@ -125,7 +125,7 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
-		require.Zero(t, req.ReadPolicy)
+		require.Equal(t, fileservice.Policy(fileservice.NarrowRead), req.ReadPolicy)
 		require.Equal(t, "entries1", req.Table)
 		require.NotNil(t, req.Filter)
 		require.NotNil(t, req.IndexParam)

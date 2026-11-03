@@ -481,7 +481,7 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 
 	// bathed prefetch block data and deletes
-	if !fileservice.GetFileServicePolicy(ctx).Any(fileservice.SkipFullFilePreloads) {
+	if !fileservice.FullFilePreloadsSkipped(ctx, ls.fs) {
 		ls.batchPrefetch(seqNums)
 	}
 

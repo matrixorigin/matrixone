@@ -108,8 +108,8 @@ func (Hooks) BuildSecondaryIndexDefs(
 		}
 	}
 
-	indexDefs := make([]*plan.IndexDef, 2)
-	tableDefs := make([]*plan.TableDef, 2)
+	indexDefs := make([]*plan.IndexDef, 2, 3)
+	tableDefs := make([]*plan.TableDef, 2, 3)
 
 	// 1. metadata table
 	provenance := planplugin.ClusterHasIndexProvenance(ctx)
@@ -301,6 +301,16 @@ func (Hooks) BuildSecondaryIndexDefs(
 				Properties: &plan.PropertiesDef{Properties: properties},
 			},
 		})
+	}
+
+	// 3. ignored table: the rows whose vector the index cannot store
+	{
+		indexDef, tableDef, err := planplugin.BuildIgnoredTableDefs(ctx, indexInfo, indexParts, pk)
+		if err != nil {
+			return nil, nil, err
+		}
+		indexDefs = append(indexDefs, indexDef)
+		tableDefs = append(tableDefs, tableDef)
 	}
 	return indexDefs, tableDefs, nil
 }

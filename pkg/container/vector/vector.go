@@ -3594,9 +3594,9 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 	if v.allocationAccount == nil {
 		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
 	} else {
-		storage, err = mpool.MakeSliceAccounted[uint64](
+		storage, err = mpool.MakeSliceAccountedWithCapacityClass[uint64](
 			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.nullsSite)
+			v.allocationAccount.nullsSite, v.allocationAccount.capacityClass)
 	}
 	if err != nil {
 		return remapped, nil, err
@@ -3613,8 +3613,10 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 }
 
 func (v *Vector) releaseRemappedBinaryStringRows(remapped *bitmap.Bitmap, storage []uint64, mp *mpool.MPool) {
-	remapped.ReleaseExternalStorage()
-	mpool.FreeSlice(mp, storage)
+	if storage != nil {
+		remapped.ReleaseExternalStorage()
+		mpool.FreeSlice(mp, storage)
+	}
 }
 
 func (v *Vector) publishRemappedBinaryStringRows(binaryRows, textRows *bitmap.Bitmap) {
@@ -6476,15 +6478,22 @@ func (v *Vector) remapPrepareParamKindsAfterShuffle(
 	v.normalizePrepareParamKinds()
 }
 
+// preserveSortedAfterShuffle retains the ordering proof only for a stable selection.
+func (v *Vector) preserveSortedAfterShuffle(sels []int64) {
+	if v.sorted {
+		for i := 1; i < len(sels); i++ {
+			if sels[i] < sels[i-1] {
+				v.sorted = false
+				return
+			}
+		}
+	}
+}
+
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
 		return nil
-	}
-	if v.binaryStringRowsActive {
-		if err = v.ensureBinaryStringCapacity(len(sels), mp); err != nil {
-			return err
-		}
 	}
 	remappedSources, remappedSourcesOwner, err := v.remapStringSources(sels, mp)
 	if err != nil {
@@ -6500,12 +6509,12 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp) }()
 	remappedText, remappedTextStorage, err := v.prepareRemappedStringRows(v.textStringRows, sels, mp)
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp) }()
 	oldKinds := v.prepareParamKinds
 	var preparedKinds []PrepareParamKind
 	var preparedOwner *mpool.MPool
@@ -6580,10 +6589,19 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		}
 		return err
 	}
+	v.preserveSortedAfterShuffle(sels)
 	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
 	releaseRemappedSources = false
-	v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+	if v.allocationAccount != nil && v.binaryStringRowsActive {
+		mpool.FreeSlice(mp, v.binaryStringRows.ReleaseExternalStorage())
+		mpool.FreeSlice(mp, v.textStringRows.ReleaseExternalStorage())
+		*v.binaryStringRows, *v.textStringRows = remappedBinary, remappedText
+		remappedStorage, remappedTextStorage = nil, nil
+		v.normalizeBinaryStringRows()
+	} else {
+		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -6594,9 +6612,6 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 // alloc/free churn when the permutation preserves the element count.
 // buf is grown as needed and retained across calls.
 func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
-	if v.typ.IsVarlen() {
-		v.areaDisjoint = false
-	}
 	if v.IsConst() {
 		return nil
 	}
@@ -6612,10 +6627,10 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	if v.cantFreeData || len(sels) != v.length {
 		return v.Shuffle(sels, mp)
 	}
-	if v.binaryStringRowsActive {
-		if err = v.ensureBinaryStringCapacity(len(sels), mp); err != nil {
-			return err
-		}
+	// Uniform metadata needs no row remapping. Keep ordinary vectors out of
+	// the temporary sidecar and deferred-cleanup path.
+	if v.stringSources == nil && oldKinds == nil && !v.binaryStringRowsActive {
+		return v.shuffleWithBufData(sels, buf)
 	}
 	remappedSources, remappedSourcesOwner, err := v.remapStringSources(sels, mp)
 	if err != nil {
@@ -6631,13 +6646,26 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp) }()
 	remappedText, remappedTextStorage, err := v.prepareRemappedStringRows(v.textStringRows, sels, mp)
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp) }()
 
+	err = v.shuffleWithBufData(sels, buf)
+	if err == nil {
+		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
+		v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
+		releaseRemappedSources = false
+		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+	}
+	return err
+}
+
+// shuffleWithBufData performs the common payload/bitmap permutation after all
+// fallible metadata preparation, then updates ordering and area properties.
+func (v *Vector) shuffleWithBufData(sels []int64, buf *[]byte) (err error) {
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixedNoTypeCheckWithBuf[bool](v, sels, buf)
@@ -6697,10 +6725,10 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	}
 
 	if err == nil {
-		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
-		v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
-		releaseRemappedSources = false
-		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+		v.preserveSortedAfterShuffle(sels)
+		if v.typ.IsVarlen() {
+			v.areaDisjoint = false
+		}
 	}
 	return err
 }
@@ -10848,21 +10876,22 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 		mp.Free(data)
 		return err
 	}
-	v.data = data
-	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
-	if v.cantFreeData {
+	// Retire the old lease before installing data: releaseBorrowedData clears v.data.
+	if v.dataLease != nil {
+		v.releaseBorrowedData()
+	} else if v.cantFreeData {
 		v.cantFreeData = false
 	} else {
 		mp.Free(olddata)
 	}
+	v.data = data
 	v.length = ns
 	return nil
 }
 
 type bitmapRemapScratch struct {
-	destination *bitmap.Bitmap
-	value       bitmap.Bitmap
-	storage     []uint64
+	value   bitmap.Bitmap
+	storage []uint64
 }
 
 func (s *bitmapRemapScratch) release(mp *mpool.MPool) {
@@ -10886,40 +10915,23 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 	}
 
 	targets := [...]struct {
-		destination *bitmap.Bitmap
+		destination *nulls.Nulls
 		site        mpool.AllocationSite
 	}{
-		{v.gsp.GetBitmap(), v.allocationAccount.groupingSite},
-		{v.nsp.GetBitmap(), v.allocationAccount.nullsSite},
+		{&v.gsp, v.allocationAccount.groupingSite},
+		{&v.nsp, v.allocationAccount.nullsSite},
 	}
-	if targets[0].destination.EmptyByFlag() &&
-		targets[1].destination.EmptyByFlag() {
-		return nil
-	}
-	if !targets[0].destination.EmptyByFlag() {
-		if err := v.ensureGroupingCapacity(len(sels), mp); err != nil {
-			return err
-		}
-	}
-	if !targets[1].destination.EmptyByFlag() {
-		if err := v.ensureNullCapacity(len(sels), mp); err != nil {
-			return err
-		}
-	}
-
 	var scratch [2]bitmapRemapScratch
 	for i, target := range targets {
-		if target.destination.EmptyByFlag() {
+		// Mixed string metadata is sorted without an allocator later, so both
+		// row bitmaps need capacity even when currently empty.
+		if target.destination.EmptyByFlag() && !v.binaryStringRowsActive {
 			continue
 		}
 		words := (len(sels) + 63) / 64
 		storage, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
-			words,
-			mp,
-			v.allocationAccount.account,
-			v.allocationAccount.owner,
-			target.site,
-			v.allocationAccount.capacityClass,
+			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
+			target.site, v.allocationAccount.capacityClass,
 		)
 		if err != nil {
 			for j := range i {
@@ -10927,7 +10939,6 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			}
 			return err
 		}
-		scratch[i].destination = target.destination
 		scratch[i].storage = storage
 		scratch[i].value.InstallExternalStorage(storage)
 		scratch[i].value.InitWithSize(int64(len(sels)))
@@ -10937,15 +10948,16 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			}
 		}
 	}
-
-	for i := range scratch {
-		if scratch[i].destination != nil {
-			scratch[i].destination.InitWith(&scratch[i].value)
+	for i, target := range targets {
+		if scratch[i].value.HasExternalStorage() {
+			target.destination.Reset()
+			dst := target.destination.GetBitmap()
+			mpool.FreeSlice(mp, dst.ReleaseExternalStorage())
+			*dst = scratch[i].value
+			scratch[i].storage = nil
 		}
 	}
-	for i := range scratch {
-		scratch[i].release(mp)
-	}
+
 	return nil
 }
 
