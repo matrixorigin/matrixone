@@ -17,6 +17,8 @@ package readutil
 import (
 	"fmt"
 	"math"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -80,6 +82,13 @@ func TestUnsortedPKInSearch(t *testing.T) {
 			[]float64{-5, -2, math.Copysign(0, -1), 1, 8},
 			[]float64{0, math.NaN(), 8, 2, math.Copysign(0, -1)}, func(a, b float64) bool { return a == b }, true)
 	})
+	t.Run("float32 signed zero infinities and nan row", func(t *testing.T) {
+		checkFixedUnsortedIN(t, types.T_float32,
+			[]float32{float32(math.Inf(-1)), -2, float32(math.Copysign(0, -1)), 0, 2, float32(math.Inf(1))},
+			[]float32{0, float32(math.Copysign(0, -1)), float32(math.NaN()), float32(math.Inf(1)), -2, 3, float32(math.Inf(-1))},
+			func(a, b float32) bool { return a == b }, true)
+	})
+
 	t.Run("decimal comparator", func(t *testing.T) {
 		checkFixedUnsortedIN(t, types.T_decimal128,
 			[]types.Decimal128{{B0_63: 0}, {B0_63: 1}, {B0_63: 2}, {B0_63: 3}, {B0_63: 4}, {B0_63: 5}},
@@ -105,6 +114,60 @@ func TestUnsortedPKInSearch(t *testing.T) {
 	t.Run("empty needles", func(t *testing.T) {
 		checkFixedUnsortedIN(t, types.T_uint64, nil, []uint64{0, 1}, func(a, b uint64) bool { return a == b }, true)
 	})
+}
+
+func TestUnsortedPKInSearchBoundaries(t *testing.T) {
+	for _, count := range []int{1, 4, 5, maxUnsortedINHashKeys, maxUnsortedINHashKeys + 1} {
+		t.Run(fmt.Sprintf("keys_%d", count), func(t *testing.T) {
+			values := make([]uint64, count)
+			for i := range values {
+				values[i] = uint64(i * 2)
+			}
+			checkFixedUnsortedIN(t, types.T_uint64, values,
+				[]uint64{uint64(count*2 - 2), 1, 0, math.MaxUint64, 0},
+				func(a, b uint64) bool { return a == b }, true)
+		})
+	}
+	for _, count := range []int{5, maxUnsortedINHashKeys + 1} {
+		t.Run(fmt.Sprintf("float_rows_%d", count), func(t *testing.T) {
+			values := make([]float64, count)
+			for i := range values {
+				values[i] = float64(i - 2)
+			}
+
+			checkFixedUnsortedIN(t, types.T_float64, values,
+				[]float64{-2, -1, 0, math.Copysign(0, -1), math.NaN(), float64(count), float64(count - 4)},
+				func(a, b float64) bool { return a == b }, true)
+		})
+	}
+}
+
+func TestUnsortedPKInSearchConcurrentReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	rows := vector.NewVec(types.T_uint64.ToType())
+	t.Cleanup(func() { rows.Free(mp) })
+	for _, v := range []uint64{9, 8, 0, 5, 3, 5, math.MaxUint64} {
+		require.NoError(t, vector.AppendFixed(rows, v, false, mp))
+	}
+	search := orderedInUnsortedSearch([]uint64{0, 3, 5, 5, 8, math.MaxUint64}, true)
+	start := make(chan struct{})
+	results := make(chan []int64, 16)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Go(func() {
+			<-start
+			for j := 0; j < 2; j++ {
+				results <- search(rows)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	for got := range results {
+		require.Equal(t, []int64{1, 2, 3, 4, 5, 6}, got)
+	}
 }
 
 func TestUnsortedPKInBytes(t *testing.T) {
@@ -215,5 +278,48 @@ func BenchmarkUnsortedPKInSearch(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// Include first-use construction as well as the amortized reader workload.
+func BenchmarkUnsortedPKInReader(b *testing.B) {
+	for _, count := range []int{4, 64, 1000, 10000, maxUnsortedINHashKeys, maxUnsortedINHashKeys + 1} {
+		for _, blocks := range []int{1, 124} {
+			b.Run(fmt.Sprintf("keys_%d/blocks_%d", count, blocks), func(b *testing.B) {
+				mp := mpool.MustNewZero()
+				b.Cleanup(func() { mpool.DeleteMPool(mp) })
+				rows := vector.NewVec(types.T_uint64.ToType())
+				b.Cleanup(func() { rows.Free(mp) })
+				mix := func(x uint64) uint64 {
+					x ^= x >> 30
+					x *= 0xbf58476d1ce4e5b9
+					x ^= x >> 27
+					x *= 0x94d049bb133111eb
+					return x ^ (x >> 31)
+				}
+				values := make([]uint64, count)
+				for i := range values {
+					values[i] = mix(uint64(i * 997))
+				}
+				slices.Sort(values)
+				for i := 0; i < 8192; i++ {
+					require.NoError(b, vector.AppendFixed(rows, mix(uint64(i)), false, mp))
+				}
+				want := (8192-1)/997 + 1
+				if want > count {
+					want = count
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					search := orderedInUnsortedSearch(values, true)
+					for j := 0; j < blocks; j++ {
+						if got := len(search(rows)); got != want {
+							b.Fatalf("matches %d want %d", got, want)
+						}
+					}
+				}
+			})
+		}
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	stdcmp "cmp"
 	"math"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -372,14 +373,22 @@ func blockPKRangeHint(op int) uint8 {
 	}
 }
 
-// orderedInUnsortedSearch searches unsorted block rows using the normalized,
-// sorted IN values. Callers with an unnormalized vector retain the exact
-// linear search; its values may not be reordered because they can be borrowed
-// from the serialized expression.
+// Bound the additional Go heap per search closure. Larger candidate lists retain
+// binary search; sorted-block readers never construct the hash set.
+const maxUnsortedINHashKeys = 16 * 1024
+
+// orderedInUnsortedSearch searches unsorted block rows using normalized IN
+// values. Unnormalized vectors retain exact linear search without reordering
+// borrowed values. Short lists avoid a hash build; larger bounded lists reuse
+// immutable membership across blocks instead of binary-searching every row.
 func orderedInUnsortedSearch[T types.OrderedT](values []T, sorted bool) func(*vector.Vector) []int64 {
 	if !sorted || len(values) <= 4 {
 		return vector.OrderedLinearSearchOffsetByValFactory(values, nil)
 	}
+	if len(values) <= maxUnsortedINHashKeys {
+		return hashInUnsortedSearch(values)
+	}
+
 	return func(vec *vector.Vector) []int64 {
 		var offsets []int64
 		for row, value := range vector.MustFixedColNoTypeCheck[T](vec) {
@@ -393,6 +402,28 @@ func orderedInUnsortedSearch[T types.OrderedT](values []T, sorted bool) func(*ve
 				}
 			}
 			if lo < len(values) && values[lo] == value {
+				offsets = append(offsets, int64(row))
+			}
+		}
+		return offsets
+	}
+}
+
+// Keep hash construction separate so the short-list search does not retain
+// initialization state. Validation has already excluded NaN candidate keys.
+func hashInUnsortedSearch[T types.OrderedT](values []T) func(*vector.Vector) []int64 {
+	lookup := sync.OnceValue(func() map[T]struct{} {
+		set := make(map[T]struct{}, len(values))
+		for _, value := range values {
+			set[value] = struct{}{}
+		}
+		return set
+	})
+	return func(vec *vector.Vector) []int64 {
+		set := lookup()
+		var offsets []int64
+		for row, value := range vector.MustFixedColNoTypeCheck[T](vec) {
+			if _, ok := set[value]; ok {
 				offsets = append(offsets, int64(row))
 			}
 		}
