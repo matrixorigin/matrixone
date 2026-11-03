@@ -340,12 +340,15 @@ func isIfNullCase(fn *plan.Function) bool {
 	if condition == nil || condition.Func.ObjName != "isnull" || len(condition.Args) != 1 {
 		return false
 	}
-	// CASE type reconciliation may cast the ELSE source to the common type.
+	// CASE type reconciliation may widen an integer ELSE source. Do not
+	// recognize casts that could themselves produce NULL or lose information.
 	otherwise := fn.Args[2]
 	for cast := otherwise.GetF(); cast != nil && cast.Func.ObjName == "cast" && len(cast.Args) > 0; cast = otherwise.GetF() {
 		_, overload := function.DecodeOverloadID(cast.Func.Obj)
-		if overload != 0 {
-			break
+		from, to := types.T(cast.Args[0].Typ.Id), types.T(otherwise.Typ.Id)
+		if overload != 0 || !from.IsInteger() || !to.IsInteger() ||
+			from.IsSignedInt() != to.IsSignedInt() || from.TypeLen() > to.TypeLen() {
+			return false
 		}
 		otherwise = cast.Args[0]
 	}
@@ -364,19 +367,25 @@ func refreshExprNullabilityFromInput(expr *plan.Expr, input []*plan.Expr) {
 		for _, arg := range impl.F.Args {
 			refreshExprNullabilityFromInput(arg, input)
 		}
+		// Ordinary inference may only weaken the bind-time contract. In
+		// particular, a function argument marked NOT NULL is not proof that
+		// it cannot produce NULL itself (for example, division by zero).
+		expr.Typ.NotNullable = expr.Typ.NotNullable &&
+			function.DeduceNotNullable(impl.F.Func.Obj, impl.F.Args)
 		if impl.F.Func.ObjName == "coalesce" {
-			expr.Typ.NotNullable = false
 			for _, arg := range impl.F.Args {
-				expr.Typ.NotNullable = expr.Typ.NotNullable || arg.Typ.NotNullable
+				if lit := arg.GetLit(); lit != nil && !lit.Isnull {
+					// A non-NULL literal is an independent output guarantee,
+					// unlike a potentially stale argument type annotation.
+					expr.Typ.NotNullable = true
+					break
+				}
 			}
 		} else if isIfNullCase(impl.F) {
 			// IFNULL is bound as CASE WHEN x IS NULL THEN fallback ELSE x.
-			expr.Typ.NotNullable = impl.F.Args[1].Typ.NotNullable || impl.F.Args[2].Typ.NotNullable
-		} else {
-			// Do not strengthen an expression that may produce NULL
-			// independently of its inputs.
-			expr.Typ.NotNullable = expr.Typ.NotNullable &&
-				function.DeduceNotNullable(impl.F.Func.Obj, impl.F.Args)
+			if lit := impl.F.Args[1].GetLit(); lit != nil && !lit.Isnull {
+				expr.Typ.NotNullable = true
+			}
 		}
 	}
 }

@@ -2026,4 +2026,42 @@ constraint violation: Column 'v' cannot be null
 select count(*) from explicit_guard;
 ➤ count(*)[-5,64,0]  𝄀
 0
+create table nullable_fallback (x int, y int not null);
+insert into nullable_fallback values (null, 0), (0, 1);
+select coalesce(x,1/y) as v, count(*) as c from nullable_fallback group by coalesce(x,1/y) order by v;
+➤ v[8,54,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  1  𝄀
+0.0  ¦  1
+select distinct coalesce(x,1/y) as v from nullable_fallback order by v;
+➤ v[8,54,0]  𝄀
+null  𝄀
+0.0
+create table coalesce_nullable_result as select coalesce(x,1/y) as v from nullable_fallback;
+select v from coalesce_nullable_result order by v;
+➤ v[8,54,0]  𝄀
+null  𝄀
+0.0
+select ifnull(x,1/y) as v, count(*) as c from nullable_fallback group by ifnull(x,1/y) order by v;
+➤ v[8,54,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  1  𝄀
+0.0  ¦  1
+select distinct ifnull(x,1/y) as v from nullable_fallback order by v;
+➤ v[8,54,0]  𝄀
+null  𝄀
+0.0
+create table ifnull_nullable_result as select ifnull(x,1/y) as v from nullable_fallback;
+select v from ifnull_nullable_result order by v;
+➤ v[8,54,0]  𝄀
+null  𝄀
+0.0
+select table_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('coalesce_nullable_result','ifnull_nullable_result') and column_name='v' order by table_name;
+➤ table_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+coalesce_nullable_result  ¦  YES  𝄀
+ifnull_nullable_result  ¦  YES
+select coalesce(x,0) as v, count(*) as c from nullable_fallback group by coalesce(x,0) order by v;
+➤ v[-5,64,0]  ¦  c[-5,64,0]  𝄀
+0  ¦  2
+select ifnull(x,0) as v, count(*) as c from nullable_fallback group by ifnull(x,0) order by v;
+➤ v[-5,64,0]  ¦  c[-5,64,0]  𝄀
+0  ¦  2
 drop database ctas_output_nullability;

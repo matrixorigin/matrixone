@@ -1468,4 +1468,19 @@ select table_name, column_name, is_nullable from information_schema.columns wher
 create table explicit_guard (v int not null);
 insert into explicit_guard select r.v from l left join r on l.id=r.id;
 select count(*) from explicit_guard;
+
+-- A non-null input type is not proof that its expression cannot produce NULL.
+create table nullable_fallback (x int, y int not null);
+insert into nullable_fallback values (null, 0), (0, 1);
+select coalesce(x,1/y) as v, count(*) as c from nullable_fallback group by coalesce(x,1/y) order by v;
+select distinct coalesce(x,1/y) as v from nullable_fallback order by v;
+create table coalesce_nullable_result as select coalesce(x,1/y) as v from nullable_fallback;
+select v from coalesce_nullable_result order by v;
+select ifnull(x,1/y) as v, count(*) as c from nullable_fallback group by ifnull(x,1/y) order by v;
+select distinct ifnull(x,1/y) as v from nullable_fallback order by v;
+create table ifnull_nullable_result as select ifnull(x,1/y) as v from nullable_fallback;
+select v from ifnull_nullable_result order by v;
+select table_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('coalesce_nullable_result','ifnull_nullable_result') and column_name='v' order by table_name;
+select coalesce(x,0) as v, count(*) as c from nullable_fallback group by coalesce(x,0) order by v;
+select ifnull(x,0) as v, count(*) as c from nullable_fallback group by ifnull(x,0) order by v;
 drop database ctas_output_nullability;

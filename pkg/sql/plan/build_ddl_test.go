@@ -658,6 +658,12 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		{"minus nullable left", "select null as c minus select count(*) from nation", []bool{true}},
 		{"union intersect precedence", "select null as c union all select count(*) from nation intersect select 1", []bool{true}},
 		{"pruned union output", "select c from (select 1 as k, count(*) as c from nation union all select 2, null) u", []bool{true}},
+		{"coalesce null-producing fallback", "select coalesce(n_comment,1/n_nationkey) as v from nation", []bool{true}},
+		{"ifnull null-producing fallback", "select ifnull(n_comment,1/n_nationkey) as v from nation", []bool{true}},
+		{"coalesce derived fallback", "select coalesce(x,d) as v from (select n_comment as x,1/n_nationkey as d from nation) t", []bool{true}},
+		{"ifnull derived fallback", "select ifnull(x,d) as v from (select n_comment as x,1/n_nationkey as d from nation) t", []bool{true}},
+		{"coalesce join fallback", "select coalesce(r.r_regionkey,1/n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull join fallback", "select ifnull(r.r_regionkey,1/n.n_nationkey) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
