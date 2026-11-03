@@ -508,7 +508,7 @@ func TestFixedSortCompactKeepsOwnedStorage(t *testing.T) {
 	vec := NewVec(types.T_int64.ToType())
 	defer vec.Free(mp)
 	require.NoError(t, AppendFixedList(vec, []int64{3, 1, 3, 2}, nil, mp))
-	vec.InplaceSortAndCompact()
+	require.NoError(t, vec.InplaceSortAndCompact(mp))
 	require.Equal(t, []int64{1, 2, 3}, MustFixedColNoTypeCheck[int64](vec))
 	require.True(t, vec.GetSorted())
 	require.NoError(t, AppendFixed(vec, int64(4), false, mp))

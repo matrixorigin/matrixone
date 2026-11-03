@@ -77,7 +77,7 @@ func TestReadonlyWindowMutations(t *testing.T) {
 									})
 									values := [][]byte{[]byte("aaaaaa"), bytes.Repeat([]byte{'b'}, 64), bytes.Repeat([]byte{'c'}, 64)}
 									source, destination := readonlyAliasVectors(t, mp, values, leased, nil)
-									destination.Shrink([]int64{2}, true)
+									require.NoError(t, destination.Shrink([]int64{2}, true, mp))
 									require.GreaterOrEqual(t, cap(destination.GetData()), 3*types.VarlenaSize)
 									input, err := destination.Window(row, row+1)
 									require.NoError(t, err)
@@ -122,7 +122,7 @@ func TestReadonlyWindowSelectionMetadata(t *testing.T) {
 					types.StringSourceLiteral, types.StringSourceUserVariable, types.StringSourceSQLPrepare,
 					types.StringSourceExpression, types.StringSourceExpression, types.StringSourceExpression, types.StringSourceExpression,
 				}, mp))
-				destination.Shrink([]int64{3, 4, 5, 6}, true)
+				require.NoError(t, destination.Shrink([]int64{3, 4, 5, 6}, true, mp))
 				require.GreaterOrEqual(t, cap(destination.GetData()), 7*types.VarlenaSize)
 				input, err := destination.Window(0, 3)
 				require.NoError(t, err)
@@ -163,7 +163,7 @@ func TestReadonlyWindowSelfAndRetainedSource(t *testing.T) {
 				})
 				values := [][]byte{[]byte("aaaaaa"), bytes.Repeat([]byte{'b'}, 64), []byte("c"), []byte("d"), []byte("e")}
 				_, destination := readonlyAliasVectors(t, mp, values, true, nil)
-				destination.Shrink([]int64{2, 3, 4}, true)
+				require.NoError(t, destination.Shrink([]int64{2, 3, 4}, true, mp))
 				require.GreaterOrEqual(t, cap(destination.GetData()), 4*types.VarlenaSize)
 				input := destination
 				if retained {
@@ -225,7 +225,7 @@ func TestReadonlyFixedWindowMutations(t *testing.T) {
 					for _, value := range values {
 						require.NoError(t, AppendFixed(destination, value, false, mp))
 					}
-					destination.Shrink([]int64{2}, true)
+					require.NoError(t, destination.Shrink([]int64{2}, true, mp))
 					require.NoError(t, destination.PrepareBorrowedValidity(2, mp))
 					validity := []byte{0b01}
 					lease, err := NewRefCountedBufferLease(validity, 1, nil)
@@ -282,7 +282,7 @@ func TestReadonlyWindowMutationFailure(t *testing.T) {
 				require.NoError(t, err)
 				values := [][]byte{[]byte("aaaaaa"), bytes.Repeat([]byte{'b'}, 64), bytes.Repeat([]byte{'c'}, 64)}
 				_, destination := readonlyAliasVectors(t, mp, values, true, state.selection)
-				destination.Shrink([]int64{2}, true)
+				require.NoError(t, destination.Shrink([]int64{2}, true, mp))
 				input, err := destination.Window(0, 1)
 				require.NoError(t, err)
 				t.Cleanup(func() { input.Free(mp) })

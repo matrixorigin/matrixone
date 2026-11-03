@@ -651,9 +651,9 @@ func TestBatchUnmarshalSeparatesBorrowedAliasedReuseVectorsWithoutMpool(t *testi
 
 func TestBatchShrink(t *testing.T) {
 	bat := newBatch([]types.Type{types.T_int8.ToType()}, 4)
-	bat.Shrink([]int64{0}, true)
+	require.NoError(t, bat.Shrink([]int64{0}, true, nil))
 	require.Equal(t, 3, bat.rowCount)
-	bat.Shrink([]int64{0, 2}, false)
+	require.NoError(t, bat.Shrink([]int64{0, 2}, false, nil))
 	require.Equal(t, 2, bat.rowCount)
 }
 
@@ -1989,4 +1989,26 @@ func TestBatchUnmarshalWithAnyMp_SerializedAttrsLenLessThanVecsLen(t *testing.T)
 	// Clean up
 	reusedBat.Clean(mp)
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestShrinkFailureLeavesRowCountUnpublished(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	bat := NewWithSize(2)
+	defer bat.Clean(mp)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{10, 20, 30}, nil, mp))
+	values := []int64{1, 2, 3}
+	data := types.EncodeSlice(values)
+	lease, err := vector.NewRefCountedBufferLease(data, int64(cap(data)), nil)
+	require.NoError(t, err)
+	defer lease.Release()
+	bat.Vecs[1], err = vector.NewBorrowedFixedVector(types.T_int64.ToType(), len(values), data, lease)
+	require.NoError(t, err)
+	bat.SetRowCount(3)
+
+	require.Error(t, bat.Shrink([]int64{1, 2}, false, nil))
+	require.Equal(t, 3, bat.RowCount())
+	require.Equal(t, []int64{20, 30}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]))
+	require.Equal(t, []int64{1, 2, 3}, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[1]))
 }
