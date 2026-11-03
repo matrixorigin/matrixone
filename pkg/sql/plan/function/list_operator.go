@@ -316,6 +316,19 @@ func decimalAddSubReturnType(parameters []types.Type) types.Type {
 	return types.New(oid, int32(min(precision, int64(min(oid.ToType().Width, 65)))), scale)
 }
 
+// DecimalAddSubPublication re-invokes the decimal addition/subtraction
+// return-type publication for callers outside this package (issue #30938,
+// design section 4.1 add/subtract bullet, revision 40
+// F-OUTPUT-DIVERGENCE-PROVENANCE): the storage-boundary envelope evaluator
+// derives an add/subtract node's parent-side type from its operands'
+// parent-side types through this single authoritative typing source, so the
+// fixed-DECIMAL64(18, s) d64+d64 shortcut, the general
+// min(maxIntegerDigits + scale + 1, 65) rule and the oid promotion all fire
+// exactly as the parent's and no re-implemented mirror remains to drift.
+func DecimalAddSubPublication(parameters []types.Type) types.Type {
+	return decimalAddSubReturnType(parameters)
+}
+
 func decimalMultiplyReturnType(parameters []types.Type) types.Type {
 	scale := int32(12)
 	scale1, scale2 := parameters[0].Scale, parameters[1].Scale
@@ -337,7 +350,21 @@ func decimalMultiplyReturnType(parameters []types.Type) types.Type {
 	if !leftOK || !rightOK {
 		return types.New(oid, min(oid.ToType().Width, int32(65)), scale)
 	}
-	return types.New(oid, int32(min(int64(leftWidth)+int64(rightWidth), int64(min(oid.ToType().Width, 65)))), scale)
+	// Multiplication over the Decimal256 carrier publishes the full physical
+	// carrier precision (76 digits) for expression results, matching the
+	// intermediate-result width MySQL allows, because the kernel already
+	// rejects products beyond the carrier (issue #30938). The Decimal128
+	// narrow route keeps the parent's per-carrier-family publication
+	// (min over the decimalMultiplyDomain widths capped by the 38-digit
+	// carrier), so statements without a widened multiplication publish and
+	// persist parent-identical schemas; the 65-digit declared domain still
+	// applies to storage: CTAS/view authoring clamps the column width and
+	// checked casts admit persisted values.
+	publicationCap := int64(min(oid.ToType().Width, 65))
+	if oid == types.T_decimal256 {
+		publicationCap = int64(oid.ToType().Width)
+	}
+	return types.New(oid, int32(min(int64(leftWidth)+int64(rightWidth), publicationCap)), scale)
 }
 
 // isJSONBooleanComparison identifies equality predicates whose result depends

@@ -127,7 +127,8 @@ func TestPreparedTemporalResultContracts(t *testing.T) {
 					proc.SetPrepareParams(params)
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{value})
 					require.NoError(t, err)
-					require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt))
+					retained, _ := proc.ClaimDecimalBoundaryEvidence()
+					require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt, retained, function.DefaultDivPrecisionIncrement))
 					query = filled.GetDdl().Query
 					column := filled.GetDdl().GetCreateTable().TableDef.Cols[0]
 					assertTemporalResultType(t, column.Typ, tc.result, tc.fsp)
@@ -333,7 +334,8 @@ func TestPreparedTemporalMarkerReuse(t *testing.T) {
 					param := ParamValue{Value: value, SourceType: types.T_varchar.ToType(), HasSourceType: true}
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{param})
 					require.NoError(t, err)
-					require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt))
+					retained, _ := proc.ClaimDecimalBoundaryEvidence()
+					require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, original, stmt, retained, function.DefaultDivPrecisionIncrement))
 					query := filled.GetDdl().Query
 					expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
 					wantType := types.T_datetime
@@ -412,7 +414,8 @@ func TestPreparedCalendarUnitWithCountMarker(t *testing.T) {
 					}
 					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), prepared.GetDcl().GetPrepare().Plan, values)
 					require.NoError(t, err)
-					require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, prepared.GetDcl().GetPrepare().Plan, stmt))
+					retained, _ := mock.ctxt.GetProcess().ClaimDecimalBoundaryEvidence()
+					require.NoError(t, RefreshPreparedCTASInferredColumns(context.Background(), filled, prepared.GetDcl().GetPrepare().Plan, stmt, retained, function.DefaultDivPrecisionIncrement))
 					query := filled.GetDdl().Query
 					expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
 					assertTemporalResultType(t, expr.Typ, tc.oid, tc.fsp)

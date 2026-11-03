@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
@@ -4665,6 +4666,21 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
+	// Decimal aggregate argument-domain finalization (issue #30938, design
+	// §5): reconcile AVG/SUM argument seams against the statement's retained
+	// decision evidence, then re-sync downstream cached reference types and
+	// consumer overloads for the reconciled statement.
+	reconciled, err := reconcileDecimalAggregateDomains(builder.compCtx.GetProcess(), builder.qry, resolveDivPrecisionIncrement(builder.compCtx))
+	if err != nil {
+		return nil, err
+	}
+	if reconciled {
+		if _, err := refreshPreparedPlanProjectionTypes(builder.GetContext(),
+			&Plan{Plan: &plan.Plan_Query{Query: builder.qry}}, nil, nil,
+			NewResetParamRefRule(builder.GetContext(), nil)); err != nil {
+			return nil, err
+		}
+	}
 	return builder.qry, nil
 }
 
@@ -4862,6 +4878,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		// we don't cast null as any type in function
 		// but we will cast null as some target type in union/intersect/minus
 		var tmpArgsType []types.Type
+		// tmpBranchIdx maps each tmpArgsType entry back to its branch (issue
+		// #30938, design decision log entry 73 (iii)): the failure retry below
+		// resolves each represented branch expression's parent-published
+		// domain and needs the branch's own expression, node and bind context.
+		var tmpBranchIdx []int
 		hasDecimalInput := false
 		for branchIdx, typ := range argsType {
 			if !setBranchPureNull[branchIdx][columnIdx] && typ.Oid.IsDecimal() {
@@ -4882,14 +4903,16 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					}
 				}
 				tmpArgsType = append(tmpArgsType, typ)
+				tmpBranchIdx = append(tmpBranchIdx, branchIdx)
 			}
 		}
 		// Preserve the historical concrete text result when every branch is a
 		// pure NULL; there is no real value from which to derive another type.
 		if len(tmpArgsType) == 0 {
-			for _, typ := range argsType {
+			for branchIdx, typ := range argsType {
 				if typ.Oid != types.T_any {
 					tmpArgsType = append(tmpArgsType, typ)
+					tmpBranchIdx = append(tmpBranchIdx, branchIdx)
 				}
 			}
 		}
@@ -4897,6 +4920,17 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if len(tmpArgsType) > 0 {
 			var targetType plan.Type
 			var targetArgType types.Type
+			// Entry-73 retry outcome carriers (issue #30938): set only when
+			// the coalesce lookup below failed and the parent-published
+			// vector retry succeeded. The reconstructed parent domains
+			// choose the common type and feed the synthesized decision
+			// record; the standing needsCast alignment below compares each
+			// branch's LIVE export type against that target exactly as the
+			// base engine aligns its own live exports (issue #30938 review
+			// round 12, F2).
+			retriedCommonColumn := false
+			var retriedCommonFuncID int64
+			var retriedArgsCastType []types.Type
 			pureBinaryType, pureFixedBinary := setOperationPureBinaryCommonType(tmpArgsType)
 			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
 			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
@@ -4908,9 +4942,57 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			} else {
 				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 				if err != nil {
+					// One retry at this owner's own failure (issue #30938,
+					// design decision log entry 73 (iii)): run the shared
+					// source-domain resolver over the per-branch exports
+					// under each branch's own node and bind context, then
+					// retry the identical lookup once over the resolved
+					// parent-published vector. A branch set without any
+					// widened-multiplication provenance, an unresolvable
+					// branch and a still-overflowing retried combination all
+					// re-arm this owner's original outcome byte-identically.
+					proc := builder.compCtx.GetProcess()
+					branchExprs := make([]*Expr, len(tmpArgsType))
+					branchNodes := make([]*plan.Node, len(tmpArgsType))
+					branchCtxs := make([]*BindContext, len(tmpArgsType))
+					for i, br := range tmpBranchIdx {
+						branchNode := builder.qry.Nodes[nodes[br]]
+						if branchNode == nil || columnIdx >= len(branchNode.ProjectList) {
+							branchExprs[i] = nil
+						} else {
+							branchExprs[i] = branchNode.ProjectList[columnIdx]
+						}
+						branchNodes[i] = branchNode
+						branchCtxs[i] = subCtxList[br]
+					}
+					if parents, retried := decimalBoundarySetOperationParentDomains(
+						proc, builder.qry, builder, builder.divPrecisionIncrement, branchNodes, branchCtxs, branchExprs); retried {
+						for i, br := range tmpBranchIdx {
+							if hasDecimalInput && columnIdx < len(subCtxList[br].results) {
+								if exact, ok := setOperationIntegerLiteralDecimalType(
+									subCtxList[br].results[columnIdx],
+								); ok {
+									parents[i] = exact
+								}
+							}
+						}
+						if retryGet, retryErr := function.GetFunctionByName(
+							builder.GetContext(), "coalesce", parents); retryErr == nil {
+							tmpArgsType = parents
+							fGet = retryGet
+							err = nil
+							retriedCommonColumn = true
+							retriedCommonFuncID = retryGet.GetEncodedOverloadID()
+						}
+					}
+				}
+				if err != nil {
 					return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
 				}
 				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
+				if retriedCommonColumn {
+					retriedArgsCastType = argsCastType
+				}
 
 				// Preserve the common temporal FSP selected by the coalesce type
 				// checker. Dropping it here makes UNION/CTAS values round to seconds
@@ -5036,6 +5118,26 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 			targetArgType = makeTypeByPlan2Type(targetType)
 
+			if retriedCommonColumn {
+				// The retried binding records the content-keyed decision the
+				// base binder would have recorded over parent-typed exports
+				// (issue #30938, design decision log entry 73 (iii)): each
+				// position's aligned type is the retried merge's cast target,
+				// or the parent domain where the position aligns uncast.
+				preTypes := make([]types.Type, len(tmpArgsType))
+				aligned := make([]types.Type, len(tmpArgsType))
+				copy(preTypes, tmpArgsType)
+				copy(aligned, tmpArgsType)
+				for i, castType := range retriedArgsCastType {
+					if i < len(aligned) && castType.Oid != types.T_any && !aligned[i].Eq(castType) {
+						aligned[i] = castType
+					}
+				}
+				recordSynthesizedSetOperationRetryDecision(
+					builder.compCtx.GetProcess(), retriedCommonFuncID,
+					preTypes, aligned, targetArgType)
+			}
+
 			preparedDeferredColumn := false
 			if builder.isPrepareStatement {
 				for _, tmpID := range nodes {
@@ -5046,6 +5148,14 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			}
 			for idx, tmpID := range nodes {
+				// After a retried common, the reconstructed parent domains
+				// chose the common type; the standing alignment compares
+				// each branch's LIVE export type against that target
+				// exactly as the base engine aligns its own live exports,
+				// so a branch whose parent domain equals the common but
+				// whose live export widened still carries its alignment
+				// cast (issue #30938, design decision log entry 73 (iii);
+				// review round 12, F2).
 				needsCast := !argsType[idx].Eq(targetArgType) ||
 					(targetType.CollationCoercibilitySet && !builder.qry.Nodes[tmpID].ProjectList[columnIdx].Typ.SameCollation(targetType))
 				sameMediumIntStorageWidth := argsType[idx].Oid == targetArgType.Oid &&
@@ -13053,6 +13163,13 @@ func (builder *QueryBuilder) bindView(
 	viewCtx := NewBindContext(builder, nil)
 	// Preserve execution admission while keeping view name resolution isolated.
 	viewCtx.ctasExecutionProtocolRequirement = ctx.ctasExecutionProtocolRequirement
+	// Join the outer statement's persisted-expression protocol channel so a
+	// band lag/lead merge bound while this view definition expands lifts the
+	// authoring root's accumulator (issue #30938, design decision log 83,
+	// F-LAGLEAD-VIEW-EXPANSION-PROPAGATION), transitively across arbitrary
+	// nesting depth. A non-view statement or a CTAS generation shares the
+	// nil field here, so the share and any later raise stay a no-op.
+	viewCtx.persistedExpressionProtocolRequirement = ctx.persistedExpressionProtocolRequirement
 	viewCtx.cteDatabase = schema
 	// View expansion has its own name-resolution scope, but it must retain the
 	// outer query's row-rewrite policy so base-table access rules still apply
@@ -14609,6 +14726,42 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				ctx.orderResolution.semanticKeysByTag = make(map[int32][]string)
 			}
 			ctx.orderResolution.semanticKeysByTag[binding.tag] = append([]string(nil), subCtx.projectSemanticKeys[:colLength]...)
+		}
+
+		// Producer channel (issue #30938, design decision log 56 (b)): every
+		// output column whose producing expression carries
+		// widened-multiplication provenance publishes its parent-published
+		// domain under "b#<binding tag>#<column position>" in the statement
+		// registry, so a consumer-side reference resolves its parent domain
+		// without inspecting the producer's plan. A statement whose ledger
+		// holds no provenance-bearing decision skips the walk entirely.
+		if proc := builder.compCtx.GetProcess(); proc != nil &&
+			proc.DecimalBoundaryBarrierActive() {
+			scope := &decimalBoundaryScope{bctx: subCtx, builder: builder}
+			// Producer-resolution lineage view anchored at this subquery's
+			// root node (issue #30938, design decision log 56 (b) and
+			// 74 (vi) (c)): a producer-relative output reference whose
+			// binder channels miss — a set-operation output column —
+			// resolves branch-wise through the storage-domain resolver,
+			// read-only and depth-guarded; shapes it cannot prove keep
+			// the surface fallback exactly as before.
+			if view := newDecimalBoundaryLineageView(builder.qry); view != nil && view.d != nil {
+				view.owner = node
+				scope.lineage = view
+			}
+			for i := range projects {
+				parent, provenance, ok := decimalBoundaryOperandParentDomain(
+					proc, scope, projects[i])
+				if !ok || !provenance {
+					continue
+				}
+				proc.RecordDecimalBoundaryDecision(
+					decimalBoundaryBindingChannelKey(tag, int32(i)),
+					&rule.DecimalBoundaryDerivedDomain{
+						Parent:     makePlan2Type(&parent),
+						Provenance: true,
+					}, "", false)
+			}
 		}
 	}
 

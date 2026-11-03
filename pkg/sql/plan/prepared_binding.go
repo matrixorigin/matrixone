@@ -100,6 +100,15 @@ type preparedSourceBindingState struct {
 	diagnosticCandidates []*Expr
 	decimalFloatProofs   []PreparedDecimalFloatProof
 	diagnosticFree       bool
+	// proc and the session div_precision_increment feed the exact-common
+	// retry's parent-domain resolution (issue #30938, design decision log
+	// 56): the source-binding route binds without a retained plan snapshot,
+	// so the retry reads the statement's own decision ledger through proc
+	// and mirrors division parent domains at the same increment the
+	// statement's publications used.
+	proc                     *process.Process
+	divPrecisionIncrement    int32
+	hasDivPrecisionIncrement bool
 }
 
 func withPreparedSourceBindings(ctx context.Context, bindings []PreparedSourceBinding, values ...[]any) context.Context {
@@ -121,6 +130,22 @@ func preparedBindingState(ctx context.Context) *preparedSourceBindingState {
 	}
 	state, _ := ctx.Value(preparedSourceBindingsKey{}).(*preparedSourceBindingState)
 	return state
+}
+
+// armPreparedExactCommonRetry equips one fresh source-binding state with
+// the channels the exact-common retry needs (issue #30938, design decision
+// log 56): the statement's own process for the decision ledger, and the
+// session div_precision_increment resolved through the same compiler-context
+// channel the QueryBuilder consumes, so a division parent domain mirrors
+// the statement's own publication.
+func armPreparedExactCommonRetry(planning context.Context, ctx CompilerContext) {
+	state := preparedBindingState(planning)
+	if state == nil || ctx == nil {
+		return
+	}
+	state.proc = ctx.GetProcess()
+	state.divPrecisionIncrement = resolveDivPrecisionIncrement(ctx)
+	state.hasDivPrecisionIncrement = true
 }
 
 // A consumer that asks for exact numeric spelling can choose different
@@ -971,7 +996,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 	if isPreparedCommonValueFunction(name) && !fixed {
 		return args, nil
 	}
-	bound, _, err := preparedNumericPrefixArgs(ctx, name, args, witnesses,
+	bound, _, err := preparedNumericPrefixArgs(ctx, state.proc, name, args, witnesses,
 		prefixArgs, prefixKinds, prefixListArgs, prefixListKinds, fixed)
 	return bound, err
 }
@@ -1035,6 +1060,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, moerr.NewWrongArguments(previous, "EXECUTE")
 	}
 	planning := withPreparedSourceBindings(previous, bindings, values)
+	armPreparedExactCommonRetry(planning, ctx)
 	fieldTypes := newPreparedFieldTypeBinding(previous, stmt)
 	preparedBindingState(planning).fieldTypes = fieldTypes
 	if fieldTypes != nil && fieldTypes.current != nil {
@@ -1051,6 +1077,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		fieldTypes.beginApplication()
 		fieldTypes.reprepare(preparedBindingState(planning))
 		planning = withPreparedSourceBindings(previous, bindings, values)
+		armPreparedExactCommonRetry(planning, ctx)
 		preparedBindingState(planning).fieldTypes = fieldTypes
 		preparedBindingState(planning).selectStatement = preparedUnderlyingSelect(stmt)
 		ctx.SetContext(planning)

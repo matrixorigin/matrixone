@@ -424,6 +424,21 @@ type PrepareStmt struct {
 	// EXECUTE must not reinterpret optimizer comments after session sql_mode
 	// changes.
 	schedulingSQLMode string
+
+	// retainedDecimalBoundaryLedger carries the completed decimal-boundary
+	// decision ledger of the plan generation this PrepareStmt stores (issue
+	// #30938, design decision log 64-65): claimed read-once from the
+	// process-side publication slot at the late PREPARE construction, at
+	// both retry channels and at the rebuild commit, and consulted
+	// read-only by RefreshPreparedCTASInferredColumns on every execute. The
+	// nonce pairs the ledger with its authoring generation. The carrier is
+	// released only by a replacing claim, by Close, or by the claiming
+	// wrapper's failure cleanup — clearRuntimeSpecializationCache
+	// deliberately leaves it intact, because the specialization cache
+	// rebuilds per execute while the carrier serves the seed plan's whole
+	// lifetime.
+	retainedDecimalBoundaryLedger map[string]any
+	retainedDecimalBoundaryNonce  uint64
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -891,12 +906,40 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
 }
 
+// claimDecimalBoundaryEvidence replaces the retained carrier with the
+// process's published prepared-CTAS decision ledger when one waits unclaimed
+// (issue #30938, design decision log 64-65): the late PREPARE construction,
+// both retry channels and the rebuild commit call it, the displaced copy
+// releasing with the replacing claim. The nonce reads the process's current
+// generation, which the read-once nonce check guarantees is the publishing
+// generation's own.
+func (prepareStmt *PrepareStmt) claimDecimalBoundaryEvidence(proc *process.Process) {
+	if proc == nil {
+		return
+	}
+	ledger, ok := proc.ClaimDecimalBoundaryEvidence()
+	if !ok {
+		return
+	}
+	prepareStmt.retainedDecimalBoundaryLedger = ledger
+	prepareStmt.retainedDecimalBoundaryNonce = proc.DecimalBoundaryGenerationNonce()
+}
+
+// releaseDecimalBoundaryEvidence drops the retained carrier (PrepareStmt
+// Close and the wrapper-scope failure cleanup of an execute that claimed a
+// copy its plan never consumed, issue #30938 decision log 65 (ii)).
+func (prepareStmt *PrepareStmt) releaseDecimalBoundaryEvidence() {
+	prepareStmt.retainedDecimalBoundaryLedger = nil
+	prepareStmt.retainedDecimalBoundaryNonce = 0
+}
+
 func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.temporalTypes = nil
 	prepareStmt.temporalTypesResetPending = false
 	prepareStmt.fieldTypes = nil
 	prepareStmt.fieldTypesResetPending = false
 	prepareStmt.closeCursor()
+	prepareStmt.releaseDecimalBoundaryEvidence()
 	prepareStmt.releaseLongDataBuffers()
 	prepareStmt.longDataErr = nil
 	// Release the runtime compile while the current parameter vector is still

@@ -7204,6 +7204,27 @@ func decimal256ToDecimal256(
 	if !constant && !source.GetNulls().EmptyByFlag() {
 		sourceNulls = source.GetNulls().GetBitmap()
 	}
+	// A same-scale cast re-parses the identical coefficient only to re-check
+	// the target width, so admit fitting rows by the limb comparison
+	// |v| < 10^width that ParseDecimal256WithContext itself applies, and
+	// reserve Format+Parse for the rejecting row, whose error text must stay
+	// byte-identical (issue #30938 capacity-cast budget: the aggregate
+	// argument seam cast executes this branch per row).
+	sameScaleCheck := !safeGrowth && !scaleDown && scaleDelta == 0
+	var sameScaleBound, sameScaleBoundNeg types.Decimal256
+	if sameScaleCheck {
+		w := totype.Width
+		if w > 76 {
+			w = 76
+		}
+		var powErr error
+		sameScaleBound, powErr = types.Decimal256Pow10(w)
+		if powErr != nil {
+			sameScaleCheck = false
+		} else {
+			sameScaleBoundNeg = sameScaleBound.Minus()
+		}
+	}
 	for i = 0; i < l; i++ {
 		row := i
 		if constant {
@@ -7228,7 +7249,17 @@ func decimal256ToDecimal256(
 				result, err = types.ParseDecimal256(scaled.Format(0), totype.Width, 0)
 			}
 		} else {
-			result, err = types.ParseDecimal256(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+			if sameScaleCheck {
+				fits := (!v.Sign() && v.Less(sameScaleBound)) ||
+					(v.Sign() && sameScaleBoundNeg.Less(v))
+				if fits {
+					result = v
+				} else {
+					result, err = types.ParseDecimal256(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+				}
+			} else {
+				result, err = types.ParseDecimal256(v.Format(fromtype.Scale), totype.Width, totype.Scale)
+			}
 		}
 		if err != nil {
 			return err

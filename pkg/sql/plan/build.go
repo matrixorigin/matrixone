@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
@@ -77,6 +78,12 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	restoreViewMySQLSpecialTypes bool,
 	persistedViewTarget string,
 ) (*Plan, error) {
+	// Statement-local decimal boundary generation (issue #30938, decision
+	// log 60): the shared SELECT funnel keeps its invocation as the
+	// defensive standalone entry; every current caller already nests inside
+	// an outer generation, so in practice this only shares the active
+	// registry.
+	defer process.EnterDecimalBoundaryGeneration(ctx.GetProcess())()
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
@@ -724,6 +731,25 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 }
 
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (result *Plan, err error) {
+	// Statement-local decimal boundary generation (issue #30938, decision
+	// log 58): one of the two outermost planner entries. Registered first so
+	// its release runs last on every return path, holding the registry
+	// through the whole build — nested builds (inline view binding, the
+	// EXPLAIN inner build) share it — and restoring the session process's
+	// exact prior field value on success, error and panic alike.
+	defer process.EnterDecimalBoundaryGeneration(ctx.GetProcess())()
+	// A CTAS DDL plan carrying a Query flags the generation for the
+	// prepared-CTAS evidence stash (issue #30938, decision log 64): only the
+	// prepare/retry/rebuild channels claim the slot, and an ordinary
+	// statement's stash is discarded unclaimed by the next generation's
+	// fresh install. Registered after the generation entry so the mark runs
+	// before its outermost release.
+	defer func() {
+		if err == nil && result != nil && result.GetDdl().GetQuery() != nil &&
+			ctx.GetProcess() != nil {
+			ctx.GetProcess().MarkDecimalBoundaryPreparedCTAS()
+		}
+	}()
 	defer func() {
 		if err == nil {
 			err = plan.RequireLegacyCollations(result)

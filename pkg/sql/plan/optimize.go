@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var defaultRules = []Rule{}
@@ -52,6 +53,13 @@ func (opt *BaseOptimizer) CurrentContext() CompilerContext {
 }
 
 func (opt *BaseOptimizer) Optimize(stmt tree.Statement, isPrepareStmt bool) (*Query, error) {
+	// Statement-local decimal boundary generation (issue #30938, decision
+	// log 58): one of the two outermost planner entries. The entry shares a
+	// nested caller's active registry and, at the outermost release,
+	// restores the exact prior field value on success, error and panic, so
+	// the fold rules below consult this generation's barrier and the reused
+	// session process never carries one statement's decisions into the next.
+	defer process.EnterDecimalBoundaryGeneration(opt.ctx.GetProcess())()
 	pn, err := BuildPlan(opt.ctx, stmt, isPrepareStmt)
 	if err != nil {
 		return nil, err

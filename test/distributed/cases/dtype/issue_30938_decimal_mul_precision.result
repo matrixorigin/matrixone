@@ -1,0 +1,1364 @@
+drop database if exists issue_30938_decimal_mul;
+create database issue_30938_decimal_mul;
+use issue_30938_decimal_mul;
+select 99999999999999999999999999999999999999 * 99999999999999999999999999999999999999;
+➤ 99999999999999999999999999999999999999 * 99999999999999999999999999999999999999[3,76,0]  𝄀
+9999999999999999999999999999999999999800000000000000000000000000000000000001
+select cast(repeat('9',65) as decimal(65,0)) * 2;
+➤ cast(repeat(9, 65) as decimal(65)) * 2[3,66,0]  𝄀
+199999999999999999999999999999999999999999999999999999999999999998
+select cast(repeat('9',38) as decimal(38,0)) * cast(repeat('9',28) as decimal(38,0));
+➤ cast(repeat(9, 38) as decimal(38)) * cast(repeat(9, 28) as decimal(38))[3,76,0]  𝄀
+999999999999999999999999999899999999990000000000000000000000000001
+select cast(repeat('9',38) as decimal(38,0)) * cast(repeat('9',27) as decimal(38,0));
+➤ cast(repeat(9, 38) as decimal(38)) * cast(repeat(9, 27) as decimal(38))[3,76,0]  𝄀
+99999999999999999999999999899999999999000000000000000000000000001
+select cast('-99999999999999999999999999999999999999' as decimal(38,0)) * cast('99999999999999999999999999999999999999' as decimal(38,0));
+➤ cast(-99999999999999999999999999999999999999 as decimal(38)) * cast(99999999999999999999999999999999999999 as decimal(38))[3,76,0]  𝄀
+-9999999999999999999999999999999999999800000000000000000000000000000000000001
+select cast(null as decimal(38,0)) * cast('99999999999999999999999999999999999999' as decimal(38,0));
+➤ cast(null as decimal(38)) * cast(99999999999999999999999999999999999999 as decimal(38))[3,76,0]  𝄀
+null
+select cast('111111111111111111111111111111111111.11' as decimal(38,2)) * cast('111111111111111111111111111111111111.11' as decimal(38,2));
+➤ cast(111111111111111111111111111111111111.11 as decimal(38, 2)) * cast(111111111111111111111111111111111111.11 as decimal(38, 2))[3,76,4]  𝄀
+12345679012345679012345679012345679012098765432098765432098765432098765.4321
+create table wide_operands(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into wide_operands values (1, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (2, -99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (3, 99999999999999999999999999999999999999, null);
+select a * b as product from wide_operands order by id;
+➤ product[3,76,0]  𝄀
+9999999999999999999999999999999999999800000000000000000000000000000000000001  𝄀
+-9999999999999999999999999999999999999800000000000000000000000000000000000001  𝄀
+null
+create table wide_product as select a * b as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+show create table wide_product;
+no such table issue_30938_decimal_mul.wide_product
+select product from wide_product order by product;
+SQL parser error: table "wide_product" does not exist
+select cast(a * b as decimal(65,0)) from wide_operands where id = 1;
+➤ cast(a * b as decimal(65))[3,65,0]  𝄀
+99999999999999999999999999999999999999999999999999999999999999999
+create table declared_target(d decimal(65,0));
+insert into declared_target select a * b from wide_operands where id = 1;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table small_operands(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into small_operands values (1, 99999999999999999999, 99999999999999999999);
+create table small_product as select a * b as product from small_operands;
+show create table small_product;
+➤ Table[12,13,0]  ¦  Create Table[12,71,0]  𝄀
+small_product  ¦  CREATE TABLE `small_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from small_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table cond_product as select coalesce(a * b, a) as product from small_operands;
+show create table cond_product;
+➤ Table[12,12,0]  ¦  Create Table[12,70,0]  𝄀
+cond_product  ¦  CREATE TABLE `cond_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from cond_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table neg_product as select -(a * b) as product from small_operands;
+show create table neg_product;
+➤ Table[12,11,0]  ¦  Create Table[12,69,0]  𝄀
+neg_product  ¦  CREATE TABLE `neg_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from neg_product;
+➤ product[3,65,0]  𝄀
+-9999999999999999999800000000000000000001
+create table case_product as select case when id > 0 then a * b else a end as product from small_operands;
+show create table case_product;
+➤ Table[12,12,0]  ¦  Create Table[12,70,0]  𝄀
+case_product  ¦  CREATE TABLE `case_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from case_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table wide_literal_keeper as select 999999999999999999999999999999999999999999999999999999999999999999 as product;
+select * from wide_literal_keeper;
+➤ product[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table high_scale_literal_keeper as select 0.0000000000000000000000000000000000000000000000000000000000000000000000000001 as product;
+select * from high_scale_literal_keeper;
+➤ product[3,76,76]  𝄀
+1E-76
+create table cond_literal_dominant as select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999) as product from small_operands;
+select product from cond_literal_dominant;
+➤ product[3,70,0]  𝄀
+9999999999999999999800000000000000000001
+set @wide = 99999999999999999999999999999999999999;
+set @narrow = 99999999999999999999999999;
+prepare pmul from "create table prepared_product as select ? * cast(99999999999999999999999999999999999999 as decimal(38,0)) as product";
+execute pmul using @wide;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+execute pmul using @narrow;
+show create table prepared_product;
+➤ Table[12,16,0]  ¦  Create Table[12,74,0]  𝄀
+prepared_product  ¦  CREATE TABLE `prepared_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from prepared_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999999999899999999999900000000000000000000000001
+create table agg_product as select max(a * b) as product from small_operands;
+show create table agg_product;
+➤ Table[12,11,0]  ¦  Create Table[12,69,0]  𝄀
+agg_product  ¦  CREATE TABLE `agg_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from agg_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table agg_product_wide as select max(a * b) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table distinct_product as select distinct a * b as product from small_operands;
+show create table distinct_product;
+➤ Table[12,16,0]  ¦  Create Table[12,74,0]  𝄀
+distinct_product  ¦  CREATE TABLE `distinct_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from distinct_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table union_product as select a * b as product from small_operands union all select 99999999999999999999;
+show create table union_product;
+➤ Table[12,13,0]  ¦  Create Table[12,71,0]  𝄀
+union_product  ¦  CREATE TABLE `union_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from union_product order by product;
+➤ product[3,65,0]  𝄀
+99999999999999999999  𝄀
+9999999999999999999800000000000000000001
+create table union_product_wide as select a * b as product from wide_operands union all select 1;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table coalesce_zero_product as select coalesce(a * b, 0) as product from small_operands;
+show create table coalesce_zero_product;
+➤ Table[12,21,0]  ¦  Create Table[12,75,0]  𝄀
+coalesce_zero_product  ¦  CREATE TABLE `coalesce_zero_product` (
+  `product` decimal(65,0) NOT NULL
+)
+select product from coalesce_zero_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table coalesce_zero_wide as select coalesce(a * b, 0) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table mixed_scale_operands(id int primary key, a decimal(65,4));
+insert into mixed_scale_operands values (1, null), (2, 123.2500);
+create table mixed_scale_coalesce as select coalesce(a, 999999999999999999999999999999999999999999999999999999999999999999) as product from mixed_scale_operands;
+select product from mixed_scale_coalesce order by product;
+➤ product[3,70,4]  𝄀
+123.2500  𝄀
+999999999999999999999999999999999999999999999999999999999999999999.0000
+create table scaled_operands(id int primary key, a decimal(38,15), b decimal(38,15));
+insert into scaled_operands values (1, 99999999999999999999.5, 99999999999999999999.5);
+create table scaled_dominant as select coalesce(a * b, 999999999999999999999999999999999999999999999999999999999999) as product from scaled_operands;
+select product from scaled_dominant;
+➤ product[3,75,15]  𝄀
+9999999999999999999900000000000000000000.250000000000000
+create table agg_grouped_literal as select max(999999999999999999999999999999999999999999999999999999999999999999) as product from small_operands group by id;
+select product from agg_grouped_literal;
+➤ product[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table agg_grouped_product as select max(a * b) as product from small_operands group by id;
+show create table agg_grouped_product;
+➤ Table[12,19,0]  ¦  Create Table[12,77,0]  𝄀
+agg_grouped_product  ¦  CREATE TABLE `agg_grouped_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from agg_grouped_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table agg_grouped_wide as select max(a * b) as product from wide_operands group by id;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table abs_agg_product as select abs(max(a * b)) as product from small_operands;
+show create table abs_agg_product;
+➤ Table[12,15,0]  ¦  Create Table[12,73,0]  𝄀
+abs_agg_product  ¦  CREATE TABLE `abs_agg_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from abs_agg_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table abs_agg_wide as select abs(max(a * b)) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table coalesce_agg_product as select coalesce(max(a * b), 0) as product from small_operands;
+show create table coalesce_agg_product;
+➤ Table[12,20,0]  ¦  Create Table[12,74,0]  𝄀
+coalesce_agg_product  ¦  CREATE TABLE `coalesce_agg_product` (
+  `product` decimal(65,0) NOT NULL
+)
+select product from coalesce_agg_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table coalesce_agg_wide as select coalesce(max(a * b), 0) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table order_product as select a * b as product from small_operands order by product;
+show create table order_product;
+➤ Table[12,13,0]  ¦  Create Table[12,71,0]  𝄀
+order_product  ¦  CREATE TABLE `order_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from order_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table order_product_wide as select a * b as product from wide_operands order by product;
+invalid input: -9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table order_lit as select 999999999999999999999999999999999999999999999999999999999999999999 as product from small_operands order by product;
+select product from order_lit;
+➤ product[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table win_product as select max(a * b) over () as product from small_operands;
+show create table win_product;
+➤ Table[12,11,0]  ¦  Create Table[12,69,0]  𝄀
+win_product  ¦  CREATE TABLE `win_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select distinct product from win_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table win_product_wide as select max(a * b) over () as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table win_part_product as select max(a * b) over (partition by id) as product from small_operands;
+show create table win_part_product;
+➤ Table[12,16,0]  ¦  Create Table[12,74,0]  𝄀
+win_part_product  ¦  CREATE TABLE `win_part_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from win_part_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table win_part_wide as select max(a * b) over (partition by id) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table win_lit as select max(999999999999999999999999999999999999999999999999999999999999999999) over () as product from small_operands;
+select distinct product from win_lit;
+➤ product[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table anyval_product as select any_value(a * b) as product from small_operands;
+show create table anyval_product;
+➤ Table[12,14,0]  ¦  Create Table[12,72,0]  𝄀
+anyval_product  ¦  CREATE TABLE `anyval_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from anyval_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table anyval_wide as select any_value(a * b) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table maxby_product as select max_by(a * b, id, id) as product from small_operands;
+show create table maxby_product;
+➤ Table[12,13,0]  ¦  Create Table[12,71,0]  𝄀
+maxby_product  ¦  CREATE TABLE `maxby_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from maxby_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table maxby_wide as select max_by(a * b, id, id) as product from wide_operands;
+create table maxbynn_product as select max_by_non_null(a * b, id, id) as product from small_operands;
+show create table maxbynn_product;
+➤ Table[12,15,0]  ¦  Create Table[12,73,0]  𝄀
+maxbynn_product  ¦  CREATE TABLE `maxbynn_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+create table maxbynn_wide as select max_by_non_null(a * b, id, id) as product from wide_operands;
+invalid input: -9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+select max_by(a * b, id, id) as product from small_operands;
+➤ product[3,76,0]  𝄀
+9999999999999999999800000000000000000001
+select max_by(a * b, id, id) as product from wide_operands;
+➤ product[3,76,0]  𝄀
+null
+select max_by_non_null(a * b, id, id) as product from wide_operands;
+➤ product[3,76,0]  𝄀
+-9999999999999999999999999999999999999800000000000000000000000000000000000001
+select id, max_by(a * b, id, id) as product from wide_operands group by id order by id;
+➤ id[4,32,0]  ¦  product[3,76,0]  𝄀
+1  ¦  9999999999999999999999999999999999999800000000000000000000000000000000000001  𝄀
+2  ¦  -9999999999999999999999999999999999999800000000000000000000000000000000000001  𝄀
+3  ¦  null
+select max_by(a * b, id) from wide_operands;
+invalid argument aggregate function max_by, bad value [DECIMAL256 INT]
+create table rounded_2p32 as select round(product, 4294967296) as product from mixed_scale_coalesce;
+select product from rounded_2p32;
+➤ product[3,70,4]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999.0000  𝄀
+123.2500
+create table rounded_2p31 as select round(product, 2147483648) as product from mixed_scale_coalesce;
+select product from rounded_2p31;
+➤ product[3,70,4]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999.0000  𝄀
+123.2500
+create table truncated_2p32 as select truncate(product, 4294967296) as product from mixed_scale_coalesce;
+select product from truncated_2p32;
+➤ product[3,70,4]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999.0000  𝄀
+123.2500
+select lag(a * b, 1, 0) over (order by id) as product from small_operands;
+➤ product[3,76,0]  𝄀
+0
+select lead(a * b, 1, 0) over (order by id) as product from small_operands;
+➤ product[3,76,0]  𝄀
+0
+create table lag_def_product as select lag(a * b, 1, 0) over (order by id) as product from small_operands;
+show create table lag_def_product;
+➤ Table[12,15,0]  ¦  Create Table[12,73,0]  𝄀
+lag_def_product  ¦  CREATE TABLE `lag_def_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from lag_def_product;
+➤ product[3,65,0]  𝄀
+0
+create table lag_def_wide as select lag(a * b, 1, 0) over (order by id) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table lead_def_wide as select lead(a * b, 1, 0) over (order by id) as product from wide_operands;
+invalid input: -9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table lag_def_lit as select lag(1, 0, 999999999999999999999999999999999999999999999999999999999999999999) over () as product from small_operands;
+select product from lag_def_lit;
+➤ product[3,66,0]  𝄀
+1
+create table fv_product as select first_value(a * b) over (order by id) as product from small_operands;
+show create table fv_product;
+➤ Table[12,10,0]  ¦  Create Table[12,68,0]  𝄀
+fv_product  ¦  CREATE TABLE `fv_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from fv_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table fv_wide as select first_value(a * b) over (order by id) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table lv_product as select last_value(a * b) over (order by id rows between unbounded preceding and unbounded following) as product from small_operands;
+show create table lv_product;
+➤ Table[12,10,0]  ¦  Create Table[12,68,0]  𝄀
+lv_product  ¦  CREATE TABLE `lv_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from lv_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table lv_wide as select last_value(a * b) over (order by id desc rows between unbounded preceding and unbounded following) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table nv_product as select nth_value(a * b, 1) over (order by id rows between unbounded preceding and unbounded following) as product from small_operands;
+show create table nv_product;
+➤ Table[12,10,0]  ¦  Create Table[12,68,0]  𝄀
+nv_product  ¦  CREATE TABLE `nv_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from nv_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table nv_wide as select nth_value(a * b, 2) over (order by id rows between unbounded preceding and unbounded following) as product from wide_operands;
+invalid input: -9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table winlag_product as select lag(a * b) over (order by id) as product from small_operands;
+show create table winlag_product;
+➤ Table[12,14,0]  ¦  Create Table[12,72,0]  𝄀
+winlag_product  ¦  CREATE TABLE `winlag_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from winlag_product;
+➤ product[3,65,0]  𝄀
+null
+create table winlag_wide as select lag(a * b) over (order by id) as product from wide_operands;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table winlead_product as select lead(a * b) over (order by id) as product from small_operands;
+show create table winlead_product;
+➤ Table[12,15,0]  ¦  Create Table[12,73,0]  𝄀
+winlead_product  ¦  CREATE TABLE `winlead_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from winlead_product;
+➤ product[3,65,0]  𝄀
+null
+create table winlead_wide as select lead(a * b) over (order by id) as product from wide_operands;
+invalid input: -9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table fv_lit as select first_value(999999999999999999999999999999999999999999999999999999999999999999) over () as product from small_operands;
+select distinct product from fv_lit;
+➤ product[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table join_product as select d.product from (select max(a * b) as product from small_operands group by id % 2) d cross join small_operands r;
+show create table join_product;
+➤ Table[12,12,0]  ¦  Create Table[12,70,0]  𝄀
+join_product  ¦  CREATE TABLE `join_product` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select distinct product from join_product;
+➤ product[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table join_wide as select d.product from (select max(a * b) as product from wide_operands group by id % 2) d cross join small_operands r;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table join_lit as select d.product from (select max(999999999999999999999999999999999999999999999999999999999999999999) as product from small_operands group by id % 2) d cross join small_operands r;
+select distinct product from join_lit;
+➤ product[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+select cast(repeat('9',65) as decimal(65,0)) * cast(repeat('9',65) as decimal(65,0));
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal256 Mul overflow: 99999999999999999999999999999999999999999999999999999999999999999*99999999999999999999999999999999999999999999999999999999999999999
+select cast('-99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0)) * cast(repeat('9',65) as decimal(65,0));
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal256 Mul overflow: -99999999999999999999999999999999999999999999999999999999999999999*99999999999999999999999999999999999999999999999999999999999999999
+create table int_branches(id int primary key, d decimal(65,50), i bigint, u bigint unsigned);
+insert into int_branches values (1, null, 9223372036854775807, 18446744073709551615), (2, 1.5, -9223372036854775808, null);
+create table coalesce_int_domain as select coalesce(d, i) as v from int_branches;
+select v from coalesce_int_domain;
+➤ v[3,69,50]  𝄀
+9223372036854775807.00000000000000000000000000000000000000000000000000  𝄀
+1.50000000000000000000000000000000000000000000000000
+create table coalesce_uint_domain as select coalesce(d, u) as v from int_branches;
+select v from coalesce_uint_domain;
+➤ v[3,70,50]  𝄀
+18446744073709551615.00000000000000000000000000000000000000000000000000  𝄀
+1.50000000000000000000000000000000000000000000000000
+create table f2_lim_src(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into f2_lim_src values (1, 99999999999999999999, 99999999999999999999), (2, 2, 3), (3, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f2_limit_product as select p from (select a * b as p from f2_lim_src limit 1) d where p > 0;
+show create table f2_limit_product;
+➤ Table[12,16,0]  ¦  Create Table[12,68,0]  𝄀
+f2_limit_product  ¦  CREATE TABLE `f2_limit_product` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f2_limit_product;
+➤ p[3,65,0]  𝄀
+9999999999999999999800000000000000000001
+create table f2_limit_offset as select p from (select a * b as p from f2_lim_src limit 1 offset 1) d where p > 0;
+show create table f2_limit_offset;
+➤ Table[12,15,0]  ¦  Create Table[12,67,0]  𝄀
+f2_limit_offset  ¦  CREATE TABLE `f2_limit_offset` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f2_limit_offset;
+➤ p[3,65,0]  𝄀
+6
+create table f2_limit_wide as select p from (select a * b as p from f2_lim_src limit 1 offset 2) d where p > 0;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table f2_limit_lit as select p from (select 999999999999999999999999999999999999999999999999999999999999999999 as p from f2_lim_src limit 1) d where p > 0;
+select p from f2_limit_lit;
+➤ p[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table f1_fold_fit as select cast(2 as decimal(65,0)) * cast(3 as decimal(65,0)) as p;
+show create table f1_fold_fit;
+➤ Table[12,11,0]  ¦  Create Table[12,59,0]  𝄀
+f1_fold_fit  ¦  CREATE TABLE `f1_fold_fit` (
+  `p` decimal(65,0) NOT NULL
+)
+select p from f1_fold_fit;
+➤ p[3,65,0]  𝄀
+6
+create table f1_fold_over as select cast(99999999999999999999999999999999999999 as decimal(65,0)) * cast(99999999999999999999999999999999999999 as decimal(65,0)) as p;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table f1_neg_lit as select -999999999999999999999999999999999999999999999999999999999999999999 as p;
+select p from f1_neg_lit;
+➤ p[3,66,0]  𝄀
+-999999999999999999999999999999999999999999999999999999999999999999
+create table f2_hs(id int primary key, a decimal(65,65), b decimal(65,65));
+insert into f2_hs values (1, 0.1, 0.01), (2, -0.01, 0.1), (-3, 0.01, 0.1);
+create table f2_case_hs as select case when id > 0 then a * b else a end as p from f2_hs;
+show create table f2_case_hs;
+➤ Table[12,10,0]  ¦  Create Table[12,63,0]  𝄀
+f2_case_hs  ¦  CREATE TABLE `f2_case_hs` (
+  `p` decimal(65,65) DEFAULT NULL
+)
+select p from f2_case_hs order by p;
+➤ p[3,65,65]  𝄀
+-0.00100000000000000000000000000000000000000000000000000000000000000  𝄀
+0.00100000000000000000000000000000000000000000000000000000000000000  𝄀
+0.01000000000000000000000000000000000000000000000000000000000000000
+create table f2_if_hs as select if(id > 0, a * b, a) as p from f2_hs;
+show create table f2_if_hs;
+➤ Table[12,8,0]  ¦  Create Table[12,61,0]  𝄀
+f2_if_hs  ¦  CREATE TABLE `f2_if_hs` (
+  `p` decimal(65,65) DEFAULT NULL
+)
+select p from f2_if_hs order by p;
+➤ p[3,65,65]  𝄀
+-0.00100000000000000000000000000000000000000000000000000000000000000  𝄀
+0.00100000000000000000000000000000000000000000000000000000000000000  𝄀
+0.01000000000000000000000000000000000000000000000000000000000000000
+create table f3_wide_match as select lag(999999999999999999999999999999999999999999999999999999999999999999, 0, 999999999999999999999999999999999999999999999999999999999999999999) over () as v;
+select v from f3_wide_match;
+➤ v[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table f3_null_def as select lag(999999999999999999999999999999999999999999999999999999999999999999, 0, null) over () as v;
+select v from f3_null_def;
+➤ v[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table f4_sel as select lag(cast(0.1 as decimal(65,65)), 0, 0.0000000000000000000000000000000000000000000000000000000000000000000001) over () as v;
+desc f4_sel;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(70,70)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from f4_sel;
+➤ v[3,70,70]  𝄀
+0.1000000000000000000000000000000000000000000000000000000000000000000000
+create table f4_unsel as select x, lag(cast(0.1 as decimal(65,65)), 1, 0.0000000000000000000000000000000000000000000000000000000000000000000001) over (order by x) as v from (select 1 as x union all select 2) t;
+desc f4_unsel;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+x  ¦  bigint  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+v  ¦  decimal(70,70)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select x, v from f4_unsel order by x;
+➤ x[-5,64,0]  ¦  v[3,70,70]  𝄀
+1  ¦  1E-70  𝄀
+2  ¦  0.1000000000000000000000000000000000000000000000000000000000000000000000
+create table band_src(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into band_src values (1, 1, 1), (2, 2, 3);
+create table band_66_1 as select lag(a * b, 1, cast(0 as decimal(65,1))) over (order by id) as v from band_src;
+desc band_66_1;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(66,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from band_66_1 order by v;
+➤ v[3,66,1]  𝄀
+0.0  𝄀
+1.0
+create table band_75_10 as select lead(a * b, 1, cast(0 as decimal(30,10))) over (order by id) as v from band_src;
+desc band_75_10;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(75,10)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from band_75_10 order by v;
+➤ v[3,75,10]  𝄀
+0E-10  𝄀
+6.0000000000
+create table band_76_0 as select lag(a * b, 0, 9999999999999999999999999999999999999999999999999999999999999999999999999999) over () as v from band_src;
+desc band_76_0;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(76,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from band_76_0 order by v;
+➤ v[3,76,0]  𝄀
+1  𝄀
+6
+select lag(a * b, 1, cast(0 as decimal(65,20))) over (order by id) as v from band_src;
+Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
+create table f5_src(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into f5_src values (1, 2, 3);
+create table f5_fit as select sample(a * b, 100 percent) as p from f5_src;
+show create table f5_fit;
+➤ Table[12,6,0]  ¦  Create Table[12,58,0]  𝄀
+f5_fit  ¦  CREATE TABLE `f5_fit` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f5_fit;
+➤ p[3,65,0]  𝄀
+6
+insert into f5_src values (2, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f5_over as select sample(a * b, 100 percent) as p from f5_src;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table f5_lit as select sample(999999999999999999999999999999999999999999999999999999999999999999, 100 percent) as p from f5_src;
+select p from f5_lit;
+➤ p[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table f6_fold_genuine as select +if(false, cast(1 as decimal(65,0)), 999999999999999999999999999999999999999999999999999999999999999999) as p;
+select p from f6_fold_genuine;
+➤ p[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table f6_fold_dom as select +if(true, 999999999999999999999999999999999999999999999999999999999999999999, cast(2 as decimal(65,0)) * cast(3 as decimal(65,0))) as p;
+select p from f6_fold_dom;
+➤ p[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table f6_tw_src(ts timestamp, a decimal(38,0), b decimal(38,0));
+insert into f6_tw_src values ('2024-01-01 00:00:00', 2, 3);
+create table f6_tw_fit as select max(a * b) as p from f6_tw_src interval(ts, 1, minute);
+show create table f6_tw_fit;
+➤ Table[12,9,0]  ¦  Create Table[12,61,0]  𝄀
+f6_tw_fit  ¦  CREATE TABLE `f6_tw_fit` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f6_tw_fit;
+➤ p[3,65,0]  𝄀
+6
+create table f6_tw_fill as select max(a * b) as p from f6_tw_src where ts > '2023-12-31 23:55:00' and ts < '2024-01-01 00:10:00' interval(ts, 2, minute) sliding(1, minute) fill(prev);
+show create table f6_tw_fill;
+➤ Table[12,10,0]  ¦  Create Table[12,62,0]  𝄀
+f6_tw_fill  ¦  CREATE TABLE `f6_tw_fill` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f6_tw_fill;
+➤ p[3,65,0]  𝄀
+6
+insert into f6_tw_src values ('2024-01-01 00:00:00', 99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f6_tw_over as select max(a * b) as p from f6_tw_src interval(ts, 1, minute);
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table f6_tw_lit as select max(999999999999999999999999999999999999999999999999999999999999999999) as p from f6_tw_src interval(ts, 1, minute);
+select p from f6_tw_lit;
+➤ p[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+create table f6_cte_src(a decimal(38,0), b decimal(38,0));
+insert into f6_cte_src values (2, 3);
+create table f6_cte_rec as with recursive r(n, p) as (select 1, a * b from f6_cte_src union all select n + 1, p from r where n < 2) select p from r;
+show create table f6_cte_rec;
+➤ Table[12,10,0]  ¦  Create Table[12,62,0]  𝄀
+f6_cte_rec  ¦  CREATE TABLE `f6_cte_rec` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f6_cte_rec order by p;
+➤ p[3,65,0]  𝄀
+6  𝄀
+6
+create table f6_cte_shared as with recursive r(n, p) as (select 1, a * b from f6_cte_src union all select n + 1, p from r where n < 2) select a.p as p from r a join r b on a.n = b.n;
+show create table f6_cte_shared;
+➤ Table[12,13,0]  ¦  Create Table[12,65,0]  𝄀
+f6_cte_shared  ¦  CREATE TABLE `f6_cte_shared` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f6_cte_shared order by p;
+➤ p[3,65,0]  𝄀
+6  𝄀
+6
+create table f6_cte_lit as with recursive r(n, p) as (select 1, 999999999999999999999999999999999999999999999999999999999999999999 from f6_cte_src union all select n + 1, p from r where n < 2) select p from r;
+select p from f6_cte_lit order by p;
+➤ p[3,66,0]  𝄀
+999999999999999999999999999999999999999999999999999999999999999999  𝄀
+999999999999999999999999999999999999999999999999999999999999999999
+insert into f6_cte_src values (99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f6_cte_over as with recursive r(n, p) as (select 1, a * b from f6_cte_src union all select n + 1, p from r where n < 2) select p from r;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table f7_cte_src(a decimal(38,0), b decimal(38,0));
+insert into f7_cte_src values (2, 3);
+create table f7_cte_abs as with recursive r(n, p) as (select 1, a * b from f7_cte_src union all select n + 1, abs(p) from r where n < 2) select p from r;
+show create table f7_cte_abs;
+➤ Table[12,10,0]  ¦  Create Table[12,62,0]  𝄀
+f7_cte_abs  ¦  CREATE TABLE `f7_cte_abs` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f7_cte_abs order by p;
+➤ p[3,65,0]  𝄀
+6  𝄀
+6
+create table f7_cte_coal as with recursive r(n, p) as (select 1, a * b from f7_cte_src union all select n + 1, coalesce(p, 0) from r where n < 2) select p from r;
+show create table f7_cte_coal;
+➤ Table[12,11,0]  ¦  Create Table[12,63,0]  𝄀
+f7_cte_coal  ¦  CREATE TABLE `f7_cte_coal` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f7_cte_coal order by p;
+➤ p[3,65,0]  𝄀
+6  𝄀
+6
+insert into f7_cte_src values (99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+create table f7_cte_abs_over as with recursive r(n, p) as (select 1, a * b from f7_cte_src union all select n + 1, abs(p) from r where n < 2) select p from r;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table f7_avg_src(a decimal(38,0), b decimal(38,0));
+insert into f7_avg_src values (99999999999999999999999999999998, 99999999999999999999999999999999);
+select avg(a * b) from f7_avg_src;
+➤ avg(a * b)[3,65,0]  𝄀
+9999999999999999999999999999999700000000000000000000000000000002
+select avg(a * b) over () from f7_avg_src;
+➤ avg(a * b) over ()[3,65,0]  𝄀
+9999999999999999999999999999999700000000000000000000000000000002
+create table f7_avg_fit as select avg(a * b) as p from f7_avg_src;
+show create table f7_avg_fit;
+➤ Table[12,10,0]  ¦  Create Table[12,62,0]  𝄀
+f7_avg_fit  ¦  CREATE TABLE `f7_avg_fit` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f7_avg_fit;
+➤ p[3,65,0]  𝄀
+9999999999999999999999999999999700000000000000000000000000000002
+create table f7_avg_win as select avg(a * b) over () as p from f7_avg_src;
+show create table f7_avg_win;
+➤ Table[12,10,0]  ¦  Create Table[12,62,0]  𝄀
+f7_avg_win  ¦  CREATE TABLE `f7_avg_win` (
+  `p` decimal(65,0) DEFAULT NULL
+)
+select p from f7_avg_win;
+➤ p[3,65,0]  𝄀
+9999999999999999999999999999999700000000000000000000000000000002
+insert into f7_avg_src values (null, null);
+insert into f7_avg_src values (1, 2);
+select avg(a * b) from f7_avg_src;
+➤ avg(a * b)[3,65,0]  𝄀
+4999999999999999999999999999999850000000000000000000000000000002
+create table f7_avg_s(a decimal(38,2), b decimal(38,2));
+insert into f7_avg_s values (999999999999999999999999999999.99, 999999999999999999999999999999.99);
+select avg(a * b) from f7_avg_s;
+➤ avg(a * b)[3,65,4]  𝄀
+999999999999999999999999999999980000000000000000000000000000.0001
+create table f7_avg_s_fit as select avg(a * b) as p from f7_avg_s;
+show create table f7_avg_s_fit;
+➤ Table[12,12,0]  ¦  Create Table[12,64,0]  𝄀
+f7_avg_s_fit  ¦  CREATE TABLE `f7_avg_s_fit` (
+  `p` decimal(65,4) DEFAULT NULL
+)
+select p from f7_avg_s_fit;
+➤ p[3,65,4]  𝄀
+999999999999999999999999999999980000000000000000000000000000.0001
+create table f7_avg_n(a decimal(38,0), b decimal(38,0));
+insert into f7_avg_n values (2, 3), (null, 4);
+select avg(a * b) from f7_avg_n;
+➤ avg(a * b)[3,65,0]  𝄀
+6
+create table f7_avg_o(a decimal(38,0), b decimal(38,0));
+insert into f7_avg_o values (99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+select avg(a * b) from f7_avg_o;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table f7_avg_o_ctas as select avg(a * b) as p from f7_avg_o;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(65,0).
+create table bd_src(a decimal(38,10), b decimal(38,10), d decimal(39,1));
+insert into bd_src values (1, 2, 3), (4, 5, 6), (null, 7, 8);
+set @bd_zero = 0;
+prepare bd_p from "create table bd_prepared as select truncate(coalesce(truncate(a * b, 0), d), ?) as v from bd_src";
+execute bd_p using @bd_zero;
+show create table bd_prepared;
+➤ Table[12,11,0]  ¦  Create Table[12,63,0]  𝄀
+bd_prepared  ¦  CREATE TABLE `bd_prepared` (
+  `v` decimal(54,1) DEFAULT NULL
+)
+select v from bd_prepared order by v;
+➤ v[3,54,1]  𝄀
+2.0  𝄀
+8.0  𝄀
+20.0
+alter table bd_src add column pad int;
+drop table bd_prepared;
+execute bd_p using @bd_zero;
+show create table bd_prepared;
+➤ Table[12,11,0]  ¦  Create Table[12,63,0]  𝄀
+bd_prepared  ¦  CREATE TABLE `bd_prepared` (
+  `v` decimal(54,1) DEFAULT NULL
+)
+select v from bd_prepared order by v;
+➤ v[3,54,1]  𝄀
+2.0  𝄀
+8.0  𝄀
+20.0
+drop table bd_prepared;
+execute bd_p using @bd_zero;
+show create table bd_prepared;
+➤ Table[12,11,0]  ¦  Create Table[12,63,0]  𝄀
+bd_prepared  ¦  CREATE TABLE `bd_prepared` (
+  `v` decimal(54,1) DEFAULT NULL
+)
+prepare bd_x from "create table bd_explicit as select truncate(coalesce(truncate(a * b, 0), cast(d as decimal(65,1))), ?) as v from bd_src";
+execute bd_x using @bd_zero;
+show create table bd_explicit;
+➤ Table[12,11,0]  ¦  Create Table[12,63,0]  𝄀
+bd_explicit  ¦  CREATE TABLE `bd_explicit` (
+  `v` decimal(65,1) DEFAULT NULL
+)
+select v from bd_explicit order by v;
+➤ v[3,65,1]  𝄀
+2.0  𝄀
+8.0  𝄀
+20.0
+create table bd_noparam as select truncate(coalesce(truncate(a * b, 0), d), 0) as v from bd_src;
+show create table bd_noparam;
+➤ Table[12,10,0]  ¦  Create Table[12,62,0]  𝄀
+bd_noparam  ¦  CREATE TABLE `bd_noparam` (
+  `v` decimal(53,0) DEFAULT NULL
+)
+select v from bd_noparam order by v;
+➤ v[3,53,0]  𝄀
+2  𝄀
+8  𝄀
+20
+create table xx_src (a decimal(38,0), b decimal(38,0), d decimal(65,1));
+insert into xx_src values (1, 1, 1);
+select a * b as v from xx_src union all select d from xx_src order by v;
+➤ v[3,66,1]  𝄀
+1.0  𝄀
+1.0
+select d as v from xx_src union all select a * b from xx_src order by v;
+➤ v[3,66,1]  𝄀
+1.0  𝄀
+1.0
+create table xx_ctas_first as select a * b as v from xx_src union all select d from xx_src;
+desc xx_ctas_first;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(66,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from xx_ctas_first order by v;
+➤ v[3,66,1]  𝄀
+1.0  𝄀
+1.0
+create table xx_ctas_second as select d as v from xx_src union all select a * b from xx_src;
+desc xx_ctas_second;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(66,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from xx_ctas_second order by v;
+➤ v[3,66,1]  𝄀
+1.0  𝄀
+1.0
+set @xx_arm = cast(1 as decimal(65,1));
+prepare xx_union from "create table xx_prepared as select a * b as v from xx_src union all select ?";
+execute xx_union using @xx_arm;
+desc xx_prepared;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(66,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from xx_prepared order by v;
+➤ v[3,66,1]  𝄀
+1.0  𝄀
+1.0
+drop table xx_prepared;
+execute xx_union using @xx_arm;
+desc xx_prepared;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(66,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from xx_prepared order by v;
+➤ v[3,66,1]  𝄀
+1.0  𝄀
+1.0
+create table xx_authored as select cast(a * b as decimal(65,0)) as v from xx_src union all select d from xx_src;
+desc xx_authored;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(66,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from xx_authored order by v;
+➤ v[3,66,1]  𝄀
+1.0  𝄀
+1.0
+select 9999999999999999999999999999999999999999999999999999999999999999999999999999 as v union all select 9.9;
+SQL parser error: the 0 column cann't cast to a same type
+create table tw_operands(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0));
+insert into tw_operands values (1, '2026-01-01 00:00:00', 10000000000000000000000000000000, 10000000000000000000000000000000), (2, '2026-01-01 00:01:00', 10000000000000000000000000000000, 10000000000000000000000000000000);
+select max(a * b) as product from tw_operands interval(ts, 1, minute);
+➤ product[3,76,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+select _wstart, max(a * b) as product from tw_operands interval(ts, 1, minute) order by _wstart;
+➤ _wstart[93,19,0]  ¦  product[3,76,0]  𝄀
+2026-01-01 00:00:00  ¦  100000000000000000000000000000000000000000000000000000000000000  𝄀
+2026-01-01 00:01:00  ¦  100000000000000000000000000000000000000000000000000000000000000
+select avg(a * b) as product from tw_operands interval(ts, 1, minute);
+➤ product[3,65,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+select max(a * b) as product from tw_operands interval(ts, 2, minute) sliding(1, minute);
+➤ product[3,76,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+create table tw_wide(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0));
+insert into tw_wide values (1, '2026-01-01 00:00:00', 99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (2, '2026-01-01 00:01:00', 99999999999999999999999999999999999999, 99999999999999999999999999999999999999);
+select max(a * b) as product from tw_wide interval(ts, 1, minute);
+➤ product[3,76,0]  𝄀
+9999999999999999999999999999999999999800000000000000000000000000000000000001  𝄀
+9999999999999999999999999999999999999800000000000000000000000000000000000001
+select coalesce(max(a * b), 0) as product from tw_wide interval(ts, 1, minute);
+➤ product[3,76,0]  𝄀
+9999999999999999999999999999999999999800000000000000000000000000000000000001  𝄀
+9999999999999999999999999999999999999800000000000000000000000000000000000001
+select max(a * b) as product from tw_wide group by time_window(ts,1,'minute');
+not supported: function or operator 'time_window'
+create table tw_unit(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0));
+insert into tw_unit values (1, '2026-01-01 00:00:00', 1, 1), (2, '2026-01-01 00:01:00', 1, 1);
+select coalesce(max(a * b), cast(0 as decimal(65,1))) as product from tw_unit interval(ts, 1, minute);
+➤ product[3,66,1]  𝄀
+1.0  𝄀
+1.0
+select coalesce(max(a * b), cast(1 as decimal(65,1))) as product from tw_operands interval(ts, 1, minute);
+➤ product[3,66,1]  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0
+select max(a * b) as product from tw_operands having coalesce(max(a * b), cast(1 as decimal(65,1))) > 0 interval(ts, 1, minute);
+➤ product[3,76,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+select max(a * b) as product from tw_unit interval(ts, 1, minute);
+➤ product[3,76,0]  𝄀
+1  𝄀
+1
+select coalesce(max(a * b), 0) as product from tw_unit interval(ts, 1, minute);
+➤ product[3,76,0]  𝄀
+1  𝄀
+1
+create table modw_src(id int primary key, a decimal(38,10), b decimal(38,10), d decimal(39,0));
+insert into modw_src values (1, 3.5, 2, 7), (2, 2.5, 2, 7);
+create table modw_ctas as select truncate(a * b, 0) % d as m from modw_src;
+show create table modw_ctas;
+➤ Table[12,9,0]  ¦  Create Table[12,61,0]  𝄀
+modw_ctas  ¦  CREATE TABLE `modw_ctas` (
+  `m` decimal(53,0) DEFAULT NULL
+)
+select m from modw_ctas order by m;
+➤ m[3,53,0]  𝄀
+0  𝄀
+5
+create view modw_view as select truncate(a * b, 0) % d as m from modw_src;
+show create view modw_view;
+➤ View[12,9,0]  ¦  Create View[12,74,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
+modw_view  ¦  create view modw_view as select truncate(a * b, 0) % d as m from modw_src;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+select m from modw_view order by m;
+➤ m[3,64,0]  𝄀
+0  𝄀
+5
+select column_name, column_type from information_schema.columns where table_schema = 'issue_30938_decimal_mul' and table_name in ('modw_ctas', 'modw_view') order by table_name;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  𝄀
+m  ¦  decimal(53,0)  𝄀
+m  ¦  decimal(53,0)
+create table modg_src(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into modg_src values (1, 7, 3, 7), (2, 8, 3, 7);
+create table modg_ctas as select (a * b) % d as m from modg_src;
+show create table modg_ctas;
+➤ Table[12,9,0]  ¦  Create Table[12,61,0]  𝄀
+modg_ctas  ¦  CREATE TABLE `modg_ctas` (
+  `m` decimal(65,0) DEFAULT NULL
+)
+select m from modg_ctas order by m;
+➤ m[3,65,0]  𝄀
+0  𝄀
+3
+create table modu_s1(id int primary key, a decimal(38,0), b decimal(38,0));
+create table modu_s2(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into modu_s1 values (1, 1, 1);
+insert into modu_s2 values (1, 1, 1);
+create table modu_plain as select coalesce(u.v, cast(0.5 as decimal(20,1))) as w from (select a * b as v from modu_s1 union all select a * b as v from modu_s2) u;
+show create table modu_plain;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 65. at line 2 column 20 near ") NOT NULL
+)";
+select w from modu_plain order by w;
+➤ w[3,66,1]  𝄀
+1.0  𝄀
+1.0
+create table modu_mod as select coalesce(u.v, cast(0.5 as decimal(20,1))) as w from (select a * b as v from modu_s1 union all select (a * b) % 1 as v from modu_s2) u;
+show create table modu_mod;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 65. at line 2 column 20 near ") NOT NULL
+)";
+select w from modu_mod order by w;
+➤ w[3,66,1]  𝄀
+0.0  𝄀
+1.0
+create table tr_src(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into tr_src values (1, 100000000000000000000000000000000, 1000000000000000000000000000000000), (2, -100000000000000000000000000000000, 1000000000000000000000000000000000);
+with c as (select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999999999) as v, uuid() as r from tr_src) select (select avg(v) from c) av, (select max(v) from c) mx;
+invalid input: 100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+with c as (select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999999999) as v, uuid() as r from tr_src) select (select max(v) from c) mx;
+➤ mx[3,76,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000000
+create table tr_fit(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into tr_fit values (1, 10000000000000000000000000000000, 10000000000000000000000000000000), (2, 10000000000000000000000000000000, 20000000000000000000000000000000);
+with c as (select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999999999) as v, uuid() as r from tr_fit) select (select avg(v) from c) av, (select max(v) from c) mx;
+invalid input: 150000000000000000000000000000000000000000000000000000000000000.0000 beyond the range, can't be converted to Decimal256(65,4).
+create table tr_ok(id int primary key, a decimal(38,0), b decimal(38,0));
+insert into tr_ok values (1, 1000000000000000000000000000000, 1000000000000000000000000000000), (2, 1000000000000000000000000000000, 2000000000000000000000000000000);
+with c as (select coalesce(a * b, 9999999999999999999999999999999999999999999999999999999999999999999999999999) as v, uuid() as r from tr_ok) select (select avg(v) from c) av, (select max(v) from c) mx;
+➤ av[3,65,4]  ¦  mx[3,76,0]  𝄀
+1500000000000000000000000000000000000000000000000000000000000.0000  ¦  2000000000000000000000000000000000000000000000000000000000000
+create table tr_sc(id int primary key, x decimal(38,0), a decimal(38,0), b decimal(38,0));
+insert into tr_sc values (1, 6, 100000000000000000000000000000000, 1000000000000000000000000000000000), (2, null, 2, 3);
+with c as (select coalesce(x, a * b) as v, uuid() as r from tr_sc) select (select avg(v) from c) av;
+➤ av[3,65,0]  𝄀
+6
+select avg(a * b) / 3 from modu_s1;
+➤ avg(a * b) / 3[3,65,4]  𝄀
+0.3333
+create table tw_avg_ctas as select avg(a * b) as product from tw_operands interval(ts, 1, minute);
+show create table tw_avg_ctas;
+➤ Table[12,11,0]  ¦  Create Table[12,69,0]  𝄀
+tw_avg_ctas  ¦  CREATE TABLE `tw_avg_ctas` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from tw_avg_ctas order by product;
+➤ product[3,65,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+prepare tw_avg_p from "create table tw_avg_prep as select avg(a * b) as product from tw_operands interval(ts, 1, minute)";
+execute tw_avg_p;
+show create table tw_avg_prep;
+➤ Table[12,11,0]  ¦  Create Table[12,69,0]  𝄀
+tw_avg_prep  ¦  CREATE TABLE `tw_avg_prep` (
+  `product` decimal(65,0) DEFAULT NULL
+)
+select product from tw_avg_prep order by product;
+➤ product[3,65,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+create table r11r_src(id int primary key, a decimal(38,10), b decimal(38,10));
+insert into r11r_src values (1, 1.5, 2.25), (2, -3.5, 4);
+create table r11r_round_ctas as select round(a * b) as v from r11r_src;
+show create table r11r_round_ctas;
+➤ Table[12,15,0]  ¦  Create Table[12,67,0]  𝄀
+r11r_round_ctas  ¦  CREATE TABLE `r11r_round_ctas` (
+  `v` decimal(54,0) DEFAULT NULL
+)
+select v from r11r_round_ctas order by v;
+➤ v[3,54,0]  𝄀
+-14  𝄀
+3
+create table r11r_trunc_ctas as select truncate(a * b, 0) as v from r11r_src;
+show create table r11r_trunc_ctas;
+➤ Table[12,15,0]  ¦  Create Table[12,67,0]  𝄀
+r11r_trunc_ctas  ¦  CREATE TABLE `r11r_trunc_ctas` (
+  `v` decimal(53,0) DEFAULT NULL
+)
+select v from r11r_trunc_ctas order by v;
+➤ v[3,53,0]  𝄀
+-14  𝄀
+3
+create view r11r_ceil_view as select ceil(a * b, -12) as v from r11r_src;
+show create view r11r_ceil_view;
+➤ View[12,14,0]  ¦  Create View[12,73,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
+r11r_ceil_view  ¦  create view r11r_ceil_view as select ceil(a * b, -12) as v from r11r_src;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+select v from r11r_ceil_view order by v;
+➤ v[3,65,0]  𝄀
+0  𝄀
+1000000000000
+create view r11r_floor_view as select floor(a * b, -12) as v from r11r_src;
+show create view r11r_floor_view;
+➤ View[12,15,0]  ¦  Create View[12,75,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
+r11r_floor_view  ¦  create view r11r_floor_view as select floor(a * b, -12) as v from r11r_src;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+select v from r11r_floor_view order by v;
+➤ v[3,65,0]  𝄀
+-1000000000000  𝄀
+0
+create table r11d_src(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11d_src values (1, 1, 1, 3);
+set session div_precision_increment = 10;
+select avg((a * b) / d) as v from r11d_src;
+➤ v[3,65,10]  𝄀
+0.3333333333
+create table r11d_ctas as select avg((a * b) / d) as v from r11d_src;
+show create table r11d_ctas;
+➤ Table[12,9,0]  ¦  Create Table[12,62,0]  𝄀
+r11d_ctas  ¦  CREATE TABLE `r11d_ctas` (
+  `v` decimal(65,10) DEFAULT NULL
+)
+select v from r11d_ctas;
+➤ v[3,65,10]  𝄀
+0.3333333333
+prepare r11d_p from "select avg((a * b) / d) as v from r11d_src";
+execute r11d_p;
+➤ v[3,65,10]  𝄀
+0.3333333333
+set session div_precision_increment = 0;
+select avg((a * b) / d) as v from r11d_src;
+➤ v[3,65,0]  𝄀
+0
+set session div_precision_increment = 4;
+create table r11g_src(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11g_src values (1, -10000000000000000000000000000000000, 10000000000000000000000000000000, 1), (2, 1, 1, 1);
+select max(a * b) as v from r11g_src group by d;
+➤ v[3,76,0]  𝄀
+1
+select min(a * b) as v from r11g_src group by d;
+➤ v[3,76,0]  𝄀
+-100000000000000000000000000000000000000000000000000000000000000000
+select max(a * b) over (partition by d) as w from r11g_src;
+➤ w[3,76,0]  𝄀
+1  𝄀
+1
+select sum(v) from (select max(a * b) as v from r11g_src group by d) q;
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select sum(v) from (select min(a * b) as v from r11g_src group by d) q;
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select sum(w) from (select max(a * b) over (partition by d) as w from r11g_src) q;
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+create table r11g_fit(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11g_fit values (1, 10000000000000000000000000000000, 10000000000000000000000000000000, 2), (2, 1, 1, 2);
+select max(a * b) as v from r11g_fit group by d;
+➤ v[3,76,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+select sum(v) from (select max(a * b) as v from r11g_fit group by d) q;
+➤ sum(v)[3,65,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+create table r11vs_src(k int primary key, a decimal(38,0), b decimal(38,0));
+insert into r11vs_src values (1, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (2, 9999999999999999999999999999999999999, 9999999999999999999999999999999999999);
+select min(a * b), max(a * b), any_value(a * b) from r11vs_src;
+➤ min(a * b)[3,76,0]  ¦  max(a * b)[3,76,0]  ¦  any_value(a * b)[3,76,0]  𝄀
+99999999999999999999999999999999999980000000000000000000000000000000000001  ¦  9999999999999999999999999999999999999800000000000000000000000000000000000001  ¦  9999999999999999999999999999999999999800000000000000000000000000000000000001
+select first_value(a * b) over (order by k) as fv, last_value(a * b) over (order by k rows between unbounded preceding and unbounded following) as lv, nth_value(a * b, 1) over (order by k) as nv from r11vs_src order by k limit 1;
+➤ fv[3,76,0]  ¦  lv[3,76,0]  ¦  nv[3,76,0]  𝄀
+9999999999999999999999999999999999999800000000000000000000000000000000000001  ¦  99999999999999999999999999999999999980000000000000000000000000000000000001  ¦  9999999999999999999999999999999999999800000000000000000000000000000000000001
+create table r11vs_null(k int primary key, a decimal(38,0), b decimal(38,0));
+insert into r11vs_null values (1, 99999999999999999999999999999999999999, 99999999999999999999999999999999999999), (2, null, null);
+select max(a * b) over () as w from r11vs_null where k = 1;
+➤ w[3,76,0]  𝄀
+9999999999999999999999999999999999999800000000000000000000000000000000000001
+create table r11i_src(id int primary key, i int);
+insert into r11i_src values (1, 5);
+create table r11w_src(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11w_src values (1, 10000000000000000000000000000000, 10000000000000000000000000000000, 100);
+select avg((select (select a * b from r11w_src where r11w_src.d > r11i_src.i limit 1) from r11w_src as w2 limit 1)) as v from r11i_src;
+➤ v[3,65,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+create table r11dep_ctas as select (select (select a * b from r11w_src where r11w_src.d > r11i_src.i limit 1) from r11w_src as w2 limit 1) as v from r11i_src;
+show create table r11dep_ctas;
+➤ Table[12,11,0]  ¦  Create Table[12,63,0]  𝄀
+r11dep_ctas  ¦  CREATE TABLE `r11dep_ctas` (
+  `v` decimal(65,0) DEFAULT NULL
+)
+select v from r11dep_ctas;
+➤ v[3,65,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+create table r11w_big(id int primary key, a decimal(38,0), b decimal(38,0), d decimal(39,0));
+insert into r11w_big values (1, 100000000000000000000000000000000, 1000000000000000000000000000000000, 100);
+select avg((select (select a * b from r11w_big where r11w_big.d > r11i_src.i limit 1) from r11w_big as w2 limit 1)) as v from r11i_src;
+invalid input: 100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+create table r12coef(id int primary key, a decimal(38,0), c decimal(27,0));
+insert into r12coef values (1, 99999999999999999999999999999999999999, 999999999999999999999999999);
+select coalesce(v, cast(0 as decimal(20,11))) as m from (select a * c as v from r12coef) q;
+➤ m[3,76,11]  𝄀
+99999999999999999999999999899999999999000000000000000000000000001.00000000000
+select a * c as v from r12coef;
+➤ v[3,66,0]  𝄀
+99999999999999999999999999899999999999000000000000000000000000001
+create table r12coef_ctas as select a * c as v from r12coef;
+show create table r12coef_ctas;
+➤ Table[12,12,0]  ¦  Create Table[12,64,0]  𝄀
+r12coef_ctas  ¦  CREATE TABLE `r12coef_ctas` (
+  `v` decimal(65,0) DEFAULT NULL
+)
+select v from r12coef_ctas;
+➤ v[3,65,0]  𝄀
+99999999999999999999999999899999999999000000000000000000000000001
+create table r12int(id int primary key, a decimal(47,0), bi bigint);
+insert into r12int values (1, 99999999999999999999999999999999999999999999999, 9223372036854775807), (2, 99999999999999999999999999999999999999999999999, 2);
+select coalesce(v, cast(0 as decimal(20,11))) as m from (select a * bi as v from r12int) q;
+invalid input: 922337203685477580699999999999999999999999999990776627963145224193 beyond the range, can't be converted to Decimal256(76,11).
+select coalesce(v, cast(0 as decimal(20,11))) as m from (select a * bi as v from r12int where id = 2) q;
+➤ m[3,76,11]  𝄀
+199999999999999999999999999999999999999999999998.00000000000
+create table r12pair(id int primary key, a decimal(18,0), c decimal(47,0), bi bigint);
+insert into r12pair values (1, 999999999999999999, 99999999999999999999999999999999999999999999999, 1000000000);
+select coalesce(v, cast(0 as decimal(20,11))) as m from (select a * c as v from r12pair) q;
+➤ m[3,76,11]  𝄀
+99999999999999999899999999999999999999999999999000000000000000001.00000000000
+select a * bi as v from r12pair;
+➤ v[3,37,0]  𝄀
+999999999999999999000000000
+create table r12set(id int primary key, a decimal(38,0), b decimal(38,1), c decimal(38,0));
+insert into r12set values (1, 10000000000000000000000000000000, 10000000000000000000000000000000.0, 10000000000000000000000000000000);
+select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set union all select a * c as v from r12set;
+➤ v[3,66,1]  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0
+select a * c as v from r12set union all select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set;
+➤ v[3,66,1]  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0
+create table r12set_ctas as select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set union all select a * c as v from r12set;
+show create table r12set_ctas;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 65. at line 2 column 20 near ") DEFAULT NULL
+)";
+select v from r12set_ctas;
+➤ v[3,66,1]  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0
+prepare r12set_p from "select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set union all select a * c as v from r12set";
+execute r12set_p;
+➤ v[3,66,1]  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0  𝄀
+100000000000000000000000000000000000000000000000000000000000000.0
+create table r12set_big(id int primary key, a decimal(38,0), b decimal(38,1), c decimal(38,0));
+insert into r12set_big values (1, 99999999999999999999999999999999999999, 9999999999999999999999999999999999999.9, 99999999999999999999999999999999999999);
+select coalesce(a * b, 99999999999999999999999999999999999999999999999999999999999999999.9) as v from r12set_big where id = 2 union all select a * c as v from r12set_big;
+invalid input: 9999999999999999999999999999999999999800000000000000000000000000000000000001 beyond the range, can't be converted to Decimal256(66,1).
+select sum((select (select max(a * b) from r11g_src where r11g_src.d < r11i_src.i) from r11g_src as w2 limit 1)) from r11i_src;
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select sum((select (select min(a * b) from r11g_src where r11g_src.d < r11i_src.i) from r11g_src as w2 limit 1)) from r11i_src;
+invalid input: -100000000000000000000000000000000000000000000000000000000000000000 beyond the range, can't be converted to Decimal256(65,0).
+select sum((select (select max(a * b) from r11g_fit where r11g_fit.d < r11i_src.i) from r11g_fit as w2 limit 1)) from r11i_src;
+➤ sum((select (select max(a * b) from r11g_fit where r11g_fit.d < r11i_src.i) from r11g_fit as w2 limit 1))[3,65,0]  𝄀
+100000000000000000000000000000000000000000000000000000000000000
+select (select (select max(a * b) from r11g_src where r11g_src.d < r11i_src.i) from r11g_src as w2 limit 1) as v from r11i_src;
+➤ v[3,76,0]  𝄀
+1
+create table r13div(id int primary key, a decimal(38,0), b decimal(38,0), c decimal(38,0), d decimal(38,0), h decimal(65,65));
+insert into r13div values (1, NULL, 1, 1, 1, 0.5);
+set div_precision_increment = 10;
+set @r13_half = 0.5;
+prepare r13div_p from "select coalesce(a * b, (c * d) / cast(3 as decimal(1,0)), ?) as v from r13div";
+execute r13div_p using @r13_half;
+➤ v[3,75,10]  𝄀
+0.3333333333
+execute r13div_p using @r13_half;
+➤ v[3,75,10]  𝄀
+0.3333333333
+set @r13_half_s = '0.5';
+execute r13div_p using @r13_half_s;
+➤ v[3,75,10]  𝄀
+0.3333333333
+prepare r13div_w from "select coalesce(coalesce(9999999999999999999999999999999999999999999999999999999999999999999999999999, a), (c * d) / cast(3 as decimal(1,0)), ?) as v from r13div";
+execute r13div_w using @r13_half_s;
+Data truncation: data out of range: data type DECIMAL, prepared common type exceeds exact precision
+prepare r13div_o from "select coalesce(a * b, h, ?) as v from r13div";
+execute r13div_o using @r13_half_s;
+Data truncation: data out of range: data type DECIMAL, prepared common type exceeds exact precision
+set @r13_three = 3;
+prepare r13div_u from "create table r13uout as select a * b as v from r13div union all select (c * d) / ? from r13div";
+execute r13div_u using @r13_three;
+desc r13uout;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(75,10)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from r13uout order by v;
+➤ v[3,75,10]  𝄀
+null  𝄀
+0.3333000000
+drop table r13uout;
+set div_precision_increment = 4;
+prepare r13div_d from "select coalesce(a * b, (c * d) / cast(3 as decimal(1,0)), ?) as v from r13div";
+execute r13div_d using @r13_half;
+➤ v[3,69,4]  𝄀
+0.3333
+create table r13t38(id int primary key, a decimal(38,27), b decimal(38,27), c decimal(1,0));
+insert into r13t38 values (1, 99999999999.999999999999999999999999999, 1.000000000000000000000000000, 2);
+create table r13f2 as select truncate(a * b, 0) * c as v from r13t38;
+desc r13f2;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(39,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from r13f2;
+➤ v[3,39,0]  𝄀
+199999999998
+create view r13f2v as select truncate(a * b, 0) * c as v from r13t38;
+desc r13f2v;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(39,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from r13f2v;
+➤ v[3,50,0]  𝄀
+199999999998
+prepare r13f2_p from "create table r13f2p as select truncate(a * b, 0) * c as v from r13t38";
+execute r13f2_p;
+desc r13f2p;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(39,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from r13f2p;
+➤ v[3,39,0]  𝄀
+199999999998
+drop table r13f2p;
+create table r13t37(id int primary key, a decimal(38,28), b decimal(38,28), c decimal(1,0));
+insert into r13t37 values (1, 9999999999.9999999999999999999999999999, 1.0000000000000000000000000000, 2);
+create table r13f2_37 as select truncate(a * b, 0) * c as v from r13t37;
+desc r13f2_37;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(38,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from r13f2_37;
+➤ v[3,38,0]  𝄀
+19999999998
+create table r13t39(id int primary key, a decimal(38,26), b decimal(38,26), c decimal(1,0));
+insert into r13t39 values (1, 999999999999.99999999999999999999999999, 1.00000000000000000000000000, 2);
+create table r13f2_39 as select truncate(a * b, 0) * c as v from r13t39;
+desc r13f2_39;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(40,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from r13f2_39;
+➤ v[3,40,0]  𝄀
+1999999999998
+create table twr15(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0), c decimal(10,2));
+insert into twr15 values (1, '2026-01-01 00:00:00', 9007199254740993, 1, 12.34), (2, '2026-01-01 00:00:30', 9007199254740993, 1, 12.34), (3, '2026-01-01 00:01:00', 9007199254740993, 1, 12.34), (4, '2026-01-01 00:01:30', 9007199254740993, 1, 12.34);
+select coalesce(max(a * b), avg(c)) as product from twr15 interval(ts, 2, minute) sliding(1, minute);
+➤ product[3,73,8]  𝄀
+9007199254740993.00000000  𝄀
+9007199254740993.00000000
+create table twr15n(id int primary key, ts datetime, a decimal(38,0), b decimal(38,0), c decimal(10,2));
+insert into twr15n values (1, '2026-01-01 00:00:00', NULL, NULL, 56.78), (2, '2026-01-01 00:00:30', NULL, NULL, 56.78), (3, '2026-01-01 00:01:00', NULL, NULL, 56.78), (4, '2026-01-01 00:01:30', NULL, NULL, 56.78);
+select coalesce(max(a * b), avg(c)) as product from twr15n interval(ts, 2, minute) sliding(1, minute);
+➤ product[3,73,8]  𝄀
+56.78000000  𝄀
+56.78000000
+select coalesce(max(a * b), avg(c)) as product from twr15 interval(ts, 2, minute);
+➤ product[3,71,6]  𝄀
+9007199254740993.000000
+select coalesce(max(a * b), avg(c)) as product from twr15;
+➤ product[3,71,6]  𝄀
+9007199254740993.000000
+create table twg16(g int, a decimal(38,0), b decimal(38,0), c decimal(10,2));
+insert into twg16 values (1, NULL, 1, 0), (1, NULL, 1, 0), (1, NULL, 1, 1), (2, NULL, 1, 1);
+select coalesce(max(max(a * b)) over (), avg(avg(c)) over ()) as product from twg16 group by g order by g;
+➤ product[3,75,10]  𝄀
+0.6666665000  𝄀
+0.6666665000
+create table tmix16(a decimal(65,55), b decimal(20,0), x decimal(25,25), y decimal(25,25), z decimal(5,5));
+insert into tmix16 values (1, 1, 0.5, 0.25, 0.5), (NULL, 1, 0.5, 0.25, 0.5);
+select coalesce(a * b, (x + y) * z, cast(0 as decimal(65,65))) as product from tmix16 order by product;
+➤ product[3,75,65]  𝄀
+0.37500000000000000000000000000000000000000000000000000000000000000  𝄀
+1.00000000000000000000000000000000000000000000000000000000000000000
+create table r17t1(a decimal(38,30), b decimal(38,30), d decimal(1,0));
+insert into r17t1 values (9, 9, 9);
+create table r17ct1 as select coalesce(round(a * b, 0), cast(d as decimal(34,0))) as c1, coalesce(round(a * b, 0), cast(d as decimal(37,0))) as c2 from r17t1;
+desc r17ct1;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+c1  ¦  decimal(36,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c2  ¦  decimal(37,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select c1, c2 from r17ct1;
+➤ c1[3,36,0]  ¦  c2[3,37,0]  𝄀
+81  ¦  81
+create table r17ct2 as select coalesce(round(a * b, 0), cast(d as decimal(37,0))) as c1, coalesce(round(a * b, 0), cast(d as decimal(34,0))) as c2 from r17t1;
+desc r17ct2;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+c1  ¦  decimal(37,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c2  ¦  decimal(36,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select c1, c2 from r17ct2;
+➤ c1[3,37,0]  ¦  c2[3,36,0]  𝄀
+81  ¦  81
+create view r17v1 as select coalesce(round(a * b, 0), cast(d as decimal(34,0))) as c1, coalesce(round(a * b, 0), cast(d as decimal(37,0))) as c2 from r17t1;
+desc r17v1;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+c1  ¦  decimal(36,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c2  ¦  decimal(37,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select c1, c2 from r17v1;
+➤ c1[3,47,0]  ¦  c2[3,47,0]  𝄀
+81  ¦  81
+prepare r17p1 from "create table r17pt1 as select coalesce(round(a * b, 0), cast(d as decimal(34,0))) as c1, coalesce(round(a * b, 0), cast(d as decimal(37,0))) as c2 from r17t1";
+execute r17p1;
+desc r17pt1;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+c1  ¦  decimal(36,0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c2  ¦  decimal(37,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select c1, c2 from r17pt1;
+➤ c1[3,36,0]  ¦  c2[3,37,0]  𝄀
+81  ¦  81
+create table r17t2(a decimal(38,0), b decimal(38,0));
+insert into r17t2 values (10, 10), (20, 20), (1, 1);
+with c as (select coalesce(d.v, d.v) as v from (select a * b as v from r17t2 where a > 5) d) select sum(v) from c union all select sum(v) from c;
+➤ sum(v)[3,65,0]  𝄀
+500  𝄀
+500
+create table r18t1(a decimal(38,30), b decimal(38,30));
+insert into r18t1 values (10000, 10000);
+create table r18t2(c decimal(38,0), d decimal(38,0));
+insert into r18t2 values (1000000000000000000000000000000, 1000000000000000000000000000000);
+set @r18_half = cast(0.5 as decimal(20,1));
+prepare r18p1 from "create table r18pt1 as select x.v as lv, y.v as rv from (select a * b as v from r18t1 limit 100) x join (select c * d as v from r18t2 limit 100) y on coalesce(y.v, ?) = x.v";
+execute r18p1 using @r18_half;
+invalid input: 1000000000000000000000000000000000000000000000000000000000000.0 beyond the range, can't be converted to Decimal256(76,30).
+desc r18pt1;
+no such table issue_30938_decimal_mul.r18pt1
+select lv, rv from r18pt1;
+SQL parser error: table "r18pt1" does not exist
+prepare r18p2 from "create table r18pt2 as select x.v as lv, y.v as rv from (select c * d as v from r18t2 limit 100) x join (select a * b as v from r18t1 limit 100) y on coalesce(x.v, ?) = y.v";
+execute r18p2 using @r18_half;
+invalid input: 1000000000000000000000000000000000000000000000000000000000000.0 beyond the range, can't be converted to Decimal256(76,30).
+desc r18pt2;
+no such table issue_30938_decimal_mul.r18pt2
+select lv, rv from r18pt2;
+SQL parser error: table "r18pt2" does not exist
+create table r18t3(a decimal(38,0), b decimal(38,0));
+insert into r18t3 values (2, 3), (4, 5), (6, 7), (8, 9), (10, 11), (12, 1);
+with c as (select coalesce(e.v, e.v) as v from (select abs(d.v) as v from (select a * b as v from r18t3 where a > 5) d limit 100) e) select sum(v) from c union all select sum(v) from c;
+➤ sum(v)[3,65,0]  𝄀
+236  𝄀
+236
+create table nconst1 as select name_const(123456789, 12.34) as v;
+desc nconst1;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(4,2)  ¦  NO  ¦    ¦  null  ¦    ¦  
+select v from nconst1;
+➤ v[3,4,2]  𝄀
+12.34
+create table nconst2 as select name_const('999999999', 12.34) as v;
+desc nconst2;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(4,2)  ¦  NO  ¦    ¦  null  ¦    ¦  
+select v from nconst2;
+➤ v[3,4,2]  𝄀
+12.34
+create view nconstv1 as select name_const(123456789, 12.34) as v;
+desc nconstv1;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(4,2)  ¦  NO  ¦    ¦  null  ¦    ¦  
+select v from nconstv1;
+➤ v[3,4,2]  𝄀
+12.34
+create table nconst3 as select name_const(999999999, 123456.78) as v;
+desc nconst3;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(8,2)  ¦  NO  ¦    ¦  null  ¦    ¦  
+select v from nconst3;
+➤ v[3,8,2]  𝄀
+123456.78
+create table nconst4 as select name_const(123456789, -12.34) as v;
+desc nconst4;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+v  ¦  decimal(4,2)  ¦  NO  ¦    ¦  null  ¦    ¦  
+select v from nconst4;
+➤ v[3,4,2]  𝄀
+-12.34
+drop database issue_30938_decimal_mul;

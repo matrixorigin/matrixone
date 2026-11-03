@@ -16,6 +16,8 @@ package function
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -230,6 +232,154 @@ func TestDecimal256ArithmeticPublishedPrecision(t *testing.T) {
 	}
 }
 
+// TestDecimalMultiplicationPublishesPhysicalCarrierWidth covers issue #30938:
+// multiplication resolves its expression result into the Decimal256 physical
+// carrier domain (up to 76 digits) instead of clamping to the 65-digit DECIMAL
+// declaration limit, matching MySQL's intermediate-result width. The declared
+// storage domain stays at 65 digits and is enforced by checked casts; results
+// whose declared precision fits below the carrier bound keep their existing
+// inference.
+func TestDecimalMultiplicationPublishesPhysicalCarrierWidth(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		left, right types.Type
+		wantCast    []types.Type // nil means the pair resolves without casts
+		want        types.Type
+	}{
+		{
+			// A width-38 DECIMAL128 operand counts 39 coefficient digits
+			// (decimalMultiplyCoefficientWidth), so the coercion targets carry
+			// the adjusted width and 39 + 39 = 78 saturates the 76-digit
+			// carrier publication.
+			name:     "38 digit square reaches 76",
+			left:     types.New(types.T_decimal128, 38, 0),
+			right:    types.New(types.T_decimal128, 38, 0),
+			wantCast: []types.Type{types.New(types.T_decimal256, 39, 0), types.New(types.T_decimal256, 39, 0)},
+			want:     types.New(types.T_decimal256, 76, 0),
+		},
+		{
+			name:     "38 by 28 digits reaches 67",
+			left:     types.New(types.T_decimal128, 38, 0),
+			right:    types.New(types.T_decimal128, 28, 0),
+			wantCast: []types.Type{types.New(types.T_decimal256, 39, 0), types.New(types.T_decimal256, 28, 0)},
+			want:     types.New(types.T_decimal256, 67, 0),
+		},
+		{
+			name:     "65 digit square saturates the carrier",
+			left:     types.New(types.T_decimal256, 65, 0),
+			right:    types.New(types.T_decimal256, 65, 0),
+			wantCast: []types.Type{types.New(types.T_decimal256, 65, 0), types.New(types.T_decimal256, 65, 0)},
+			want:     types.New(types.T_decimal256, 76, 0),
+		},
+		{
+			// 39 + 27 = 66 exceeds the 65-digit declaration limit but fits
+			// the physical carrier, so the pair widens past the declared
+			// domain (storage admission stays a separate checked cast).
+			name:     "38 by 27 digits widens beyond the declared domain",
+			left:     types.New(types.T_decimal128, 38, 0),
+			right:    types.New(types.T_decimal128, 27, 0),
+			wantCast: []types.Type{types.New(types.T_decimal256, 39, 0), types.New(types.T_decimal256, 27, 0)},
+			want:     types.New(types.T_decimal256, 66, 0),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "*", []types.Type{test.left, test.right})
+			require.NoError(t, err)
+			if test.wantCast == nil {
+				require.False(t, resolved.needCast)
+			} else {
+				require.True(t, resolved.needCast)
+				require.Len(t, resolved.targetTypes, 2)
+				require.Equal(t, test.wantCast[0], resolved.targetTypes[0])
+				require.Equal(t, test.wantCast[1], resolved.targetTypes[1])
+			}
+			require.Equal(t, test.want, resolved.retType)
+		})
+	}
+}
+
+// TestDecimal256MultiplyPhysicalCarrierValues pins the exact values that the
+// Decimal256 kernel and the published-precision gate must return for products
+// beyond the 65-digit declaration limit (issue #30938). The result metadata is
+// the physical carrier width, so checkDecimal256ResultPrecision defers to the
+// kernel's own range check and the exact coefficient is returned.
+func TestDecimal256MultiplyPhysicalCarrierValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	nines38 := strings.Repeat("9", 38)
+	cases := []struct {
+		name                string
+		leftType, rightType types.Type
+		resultType          types.Type
+		left, right         string
+		want                string
+	}{
+		{
+			name:       "issue 30938 38x38 literal pair",
+			leftType:   types.New(types.T_decimal256, 38, 0),
+			rightType:  types.New(types.T_decimal256, 38, 0),
+			resultType: types.New(types.T_decimal256, 76, 0),
+			left:       nines38,
+			right:      nines38,
+			want:       "9999999999999999999999999999999999999800000000000000000000000000000000000001",
+		},
+		{
+			name:       "issue 30938 65 digit by 2",
+			leftType:   types.New(types.T_decimal256, 65, 0),
+			rightType:  types.New(types.T_decimal256, 19, 0),
+			resultType: types.New(types.T_decimal256, 76, 0),
+			left:       strings.Repeat("9", 65),
+			right:      "2",
+			want:       "199999999999999999999999999999999999999999999999999999999999999998",
+		},
+		{
+			name:       "38x28 saturates 66",
+			leftType:   types.New(types.T_decimal256, 38, 0),
+			rightType:  types.New(types.T_decimal256, 28, 0),
+			resultType: types.New(types.T_decimal256, 66, 0),
+			left:       nines38,
+			right:      strings.Repeat("9", 28),
+			want:       "999999999999999999999999999899999999990000000000000000000000000001",
+		},
+		{
+			name:       "negative 38 digit square",
+			leftType:   types.New(types.T_decimal256, 38, 0),
+			rightType:  types.New(types.T_decimal256, 38, 0),
+			resultType: types.New(types.T_decimal256, 76, 0),
+			left:       "-" + nines38,
+			right:      nines38,
+			want:       "-9999999999999999999999999999999999999800000000000000000000000000000000000001",
+		},
+		{
+			name:       "scaled coefficients fill the carrier",
+			leftType:   types.New(types.T_decimal256, 38, 2),
+			rightType:  types.New(types.T_decimal256, 38, 2),
+			resultType: types.New(types.T_decimal256, 76, 4),
+			left:       "111111111111111111111111111111111111.11",
+			right:      "111111111111111111111111111111111111.11",
+			want:       "12345679012345679012345679012345679012098765432098765432098765432098765.4321",
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			left, parseErr := types.ParseDecimal256(test.left, test.leftType.Width, test.leftType.Scale)
+			require.NoError(t, parseErr)
+			right, parseErr := types.ParseDecimal256(test.right, test.rightType.Width, test.rightType.Scale)
+			require.NoError(t, parseErr)
+			expected, parseErr := types.ParseDecimal256(test.want, test.resultType.Width, test.resultType.Scale)
+			require.NoError(t, parseErr)
+
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(test.leftType, []types.Decimal256{left, left}, nil),
+				NewFunctionTestInput(test.rightType, []types.Decimal256{right, right}, nil),
+			}
+			result := NewFunctionTestResult(test.resultType, false, []types.Decimal256{expected, expected}, nil)
+			testCase := NewFunctionTestCase(proc, inputs, result, multiFn)
+			succeeded, info := testCase.RunAndFree()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
 func TestDecimal256MultiplyPreservesWideSignedOperand(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	leftType := types.New(types.T_decimal256, 19, 0)
@@ -288,4 +438,355 @@ func TestDecimal256MultiplyPreservesWideSignedOperand(t *testing.T) {
 			}
 		})
 	}
+}
+
+// inventoryRule names the section 4.1 rule (or the documented exclusion) a
+// consumer's inventory membership relies on. The pinned sets below implement
+// section 4.2 item 2's machine-checked exhaustiveness (revision 5
+// F-CAPPED-CONSUMERS, revision 8 F-TRANSPARENT-CONSUMERS, revision 29
+// F-MOD-STORAGE-ENVELOPE) against the live registry: they fail
+// deterministically on any forgotten or newly added consumer.
+type inventoryRule string
+
+const (
+	ruleMultiply     inventoryRule = "section 4.1 widened multiplication publication (the seam subject itself)"
+	ruleModMirror    inventoryRule = "section 4.1 mod/% envelope mirror (revision 29: DecimalModReturnType rule-for-rule, maximum operand width and scale)"
+	ruleTransparent  inventoryRule = "section 4.1 transparent scalar selector (verbatim copy or binder merge over the value-producing input types)"
+	ruleValueArg     inventoryRule = "section 4.1 value-arg rule (non-value arguments — ordering keys, the NAME_CONST label — never produce result values)"
+	ruleLagLead      inventoryRule = "section 4.1 lag/lead merge rule"
+	ruleCast         inventoryRule = "section 4.1 cast declared-target rule (retType returns the target type)"
+	ruleRoundMirror  inventoryRule = "section 4.1 round/truncate/floor/ceil envelope mirror (refineDecimalRoundingReturnType rule-for-rule)"
+	ruleAddSubMirror inventoryRule = "section 4.1 add/subtract envelope mirror (decimalAddSubReturnType rule-for-rule)"
+	ruleDivMirror    inventoryRule = "section 4.1 divide envelope mirror (decimalDivisionReturnType rule-for-rule)"
+	ruleAvgAggregate inventoryRule = "section 5 envelope-bound aggregate argument (avgDecimal256ReturnType, width-sensitive at every width)"
+	ruleSumAggregate inventoryRule = "section 5 envelope-bound aggregate argument (SumReturnType min(w+22,65), width-sensitive below argument width 43)"
+	ruleValuesCopy   inventoryRule = "family T verbatim copy of the value-producing input (the VALUES overload retType returns parameters[0]); production binding is the ON DUPLICATE KEY UPDATE path (base_binder.go values dispatch) whose argument is a declared target-table column"
+	rulePythonUdf    inventoryRule = "documented exclusion: the result is the UDF's declared return-type input (pythonUdfRetType returns the trailing parameter), a SQL declaration capped at 65 digits, so no >65 output is constructible; UDF semantics are outside this change's scope"
+)
+
+// inventoryCheckOne is the section 4.2 item 1 inventory: the exact set of
+// consumers whose production-resolution result can exceed 65 digits for the
+// synthesized carrier inputs (76,0)/(76,38), each naming its section 4.1
+// rule. percentile_disc joins through its tailored (value, p) shape pinned in
+// the test body; ifnull's SQL surface is the binder's case-when-isnull
+// rewrite, also pinned in the body.
+var inventoryCheckOne = map[string]inventoryRule{
+	"*": ruleMultiply,
+
+	"%":   ruleModMirror,
+	"mod": ruleModMirror,
+
+	"abs":         ruleTransparent,
+	"unary_plus":  ruleTransparent,
+	"unary_minus": ruleTransparent,
+	"coalesce":    ruleTransparent,
+	"case":        ruleTransparent,
+	"if":          ruleTransparent,
+	"iff":         ruleTransparent,
+	"greatest":    ruleTransparent,
+	"least":       ruleTransparent,
+	"max":         ruleTransparent,
+	"min":         ruleTransparent,
+	"name_const":  ruleValueArg,
+
+	"any_value":       ruleValueArg,
+	"max_by":          ruleValueArg,
+	"max_by_non_null": ruleValueArg,
+	"first_value":     ruleValueArg,
+	"last_value":      ruleValueArg,
+	"nth_value":       ruleValueArg,
+
+	"lag":  ruleLagLead,
+	"lead": ruleLagLead,
+
+	"cast":        ruleCast,
+	"cast_assign": ruleCast,
+	"cast_ignore": ruleCast,
+	"cast_strict": ruleCast,
+
+	"round":    ruleRoundMirror,
+	"truncate": ruleRoundMirror,
+	"floor":    ruleRoundMirror,
+	"ceil":     ruleRoundMirror,
+	"ceiling":  ruleRoundMirror,
+
+	"values": ruleValuesCopy,
+
+	"python_user_defined_function": rulePythonUdf,
+}
+
+// inventoryFamilyT is check two's transparent-propagation family: consumers
+// whose registered result is a verbatim copy of, or a binder merge over, the
+// types of their value-producing inputs, so propagation across the seam is
+// sound without admission.
+var inventoryFamilyT = map[string]inventoryRule{
+	"abs":         ruleTransparent,
+	"unary_plus":  ruleTransparent,
+	"unary_minus": ruleTransparent,
+	"coalesce":    ruleTransparent,
+	"case":        ruleTransparent,
+	"if":          ruleTransparent,
+	"iff":         ruleTransparent,
+	"greatest":    ruleTransparent,
+	"least":       ruleTransparent,
+	"max":         ruleTransparent,
+	"min":         ruleTransparent,
+	"name_const":  ruleValueArg,
+
+	"any_value":       ruleValueArg,
+	"max_by":          ruleValueArg,
+	"max_by_non_null": ruleValueArg,
+	"first_value":     ruleValueArg,
+	"last_value":      ruleValueArg,
+	"nth_value":       ruleValueArg,
+
+	"lag":  ruleLagLead,
+	"lead": ruleLagLead,
+
+	"cast":        ruleCast,
+	"cast_assign": ruleCast,
+	"cast_ignore": ruleCast,
+	"cast_strict": ruleCast,
+
+	"values": ruleValuesCopy,
+}
+
+// inventoryFamilyD is check two's domain-arithmetic family: consumers that
+// derive their result by a width/scale computing rule over the input types.
+// sum joins through the below-width-43 pin in the test body because
+// min(w+22, 65) saturates on section 4.2's seam pairs.
+var inventoryFamilyD = map[string]inventoryRule{
+	"%":   ruleModMirror,
+	"mod": ruleModMirror,
+
+	"+": ruleAddSubMirror,
+	"-": ruleAddSubMirror,
+
+	"/": ruleDivMirror,
+
+	"avg": ruleAvgAggregate,
+
+	"round":    ruleRoundMirror,
+	"truncate": ruleRoundMirror,
+	"floor":    ruleRoundMirror,
+	"ceil":     ruleRoundMirror,
+	"ceiling":  ruleRoundMirror,
+}
+
+func inventorySortedKeys[V any](set map[string]V) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestDecimalConsumerInventoryExhaustiveIssue30938 is section 4.2 item 2's
+// machine-checked exhaustiveness proof. It walks every registered function
+// name through the production resolution path (GetFunctionByNameWithoutError,
+// the same resolution the binder uses, including the decimal metadata
+// finalizers) and pins both checks against the live registry:
+//
+// Check one (section 4.2 item 1): for the synthesized carrier inputs (76,0)
+// and (76,38), any resolution result wider than 65 must name a section 4.1
+// rule; the observed wide set must equal the inventory exactly, so a
+// forgotten or newly added consumer fails deterministically.
+//
+// Check two (revision 5, re-founded in revision 8): across section 4.2's
+// seam pairs - widened products against their base publications, the
+// mid-scale wrapper pairs (64,0)/(53,0) and (65,0)/(54,0), and the division
+// pair (65,4)/(59,4) - every decimal consumer whose result type differs
+// between a pair classifies into exactly one owned family: family T
+// (transparent propagation) or family D (domain arithmetic), with the one
+// documented exclusion justified by pinned registry facts.
+func TestDecimalConsumerInventoryExhaustiveIssue30938(t *testing.T) {
+	carriers := []types.Type{
+		types.New(types.T_decimal256, 76, 0),
+		types.New(types.T_decimal256, 76, 38),
+	}
+	seamPairs := [][2]types.Type{
+		{types.New(types.T_decimal256, 76, 0), types.New(types.T_decimal256, 65, 0)},
+		{types.New(types.T_decimal256, 66, 0), types.New(types.T_decimal256, 65, 0)},
+		{types.New(types.T_decimal256, 76, 12), types.New(types.T_decimal256, 65, 12)},
+		{types.New(types.T_decimal256, 70, 4), types.New(types.T_decimal256, 65, 4)},
+		{types.New(types.T_decimal256, 64, 0), types.New(types.T_decimal256, 53, 0)},
+		{types.New(types.T_decimal256, 65, 0), types.New(types.T_decimal256, 54, 0)},
+		{types.New(types.T_decimal256, 65, 4), types.New(types.T_decimal256, 59, 4)},
+	}
+	vec := func(carrier types.Type, arity int) []types.Type {
+		inputs := make([]types.Type, arity)
+		for i := range inputs {
+			inputs[i] = carrier
+		}
+		return inputs
+	}
+	resolve := func(name string, inputs []types.Type) (rt types.Type, ok bool, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic: %v", r)
+				rt, ok = types.Type{}, false
+			}
+		}()
+		r, resolved := GetFunctionByNameWithoutError(name, inputs)
+		if !resolved {
+			return types.Type{}, false, nil
+		}
+		return r.retType, true, nil
+	}
+
+	wide := map[string]types.Type{}
+	divergent := map[string][2]types.Type{}
+	for name := range functionIdRegister {
+		for _, carrier := range carriers {
+			for arity := 1; arity <= 4; arity++ {
+				rt, ok, err := resolve(name, vec(carrier, arity))
+				require.NoErrorf(t, err, "check one resolution panicked for %s arity %d", name, arity)
+				if ok && rt.Oid.IsDecimal() && rt.Width > 65 {
+					wide[name] = rt
+				}
+			}
+		}
+		for _, pair := range seamPairs {
+			for arity := 1; arity <= 4; arity++ {
+				rtA, okA, errA := resolve(name, vec(pair[0], arity))
+				rtB, okB, errB := resolve(name, vec(pair[1], arity))
+				require.NoErrorf(t, errA, "check two resolution panicked for %s arity %d", name, arity)
+				require.NoErrorf(t, errB, "check two resolution panicked for %s arity %d", name, arity)
+				if okA && okB && rtA.Oid.IsDecimal() && rtB.Oid.IsDecimal() &&
+					(rtA.Oid != rtB.Oid || rtA.Width != rtB.Width || rtA.Scale != rtB.Scale) {
+					divergent[name] = [2]types.Type{rtA, rtB}
+				}
+			}
+		}
+	}
+
+	// Check one: the observed wide set equals the inventory exactly, and
+	// every member names its section 4.1 rule.
+	require.Equal(t, inventorySortedKeys(inventoryCheckOne), inventorySortedKeys(wide),
+		"check one: every >65 resolution-path result must name a section 4.1 rule and the inventory must be exact (section 4.2 items 1-2)")
+	for _, name := range []string{"*", "mod", "%", "round", "coalesce", "max", "cast"} {
+		require.Contains(t, wide, name, "non-vacuous pin: %s must stay >65-capable", name)
+	}
+	// The widened multiplication owner publishes >65 at every width, so it is
+	// wide but cannot diverge across section 4.2's seam pairs on this tree;
+	// its parent-side divergence is the issue's own red/green proof.
+	require.NotContains(t, divergent, "*")
+
+	// Check two: families T and D stay disjoint, and every divergent consumer
+	// classifies into exactly one owned family or the documented exclusion.
+	classified := map[string]inventoryRule{}
+	for name, rule := range inventoryFamilyT {
+		classified[name] = rule
+	}
+	for name, rule := range inventoryFamilyD {
+		_, clash := inventoryFamilyT[name]
+		require.False(t, clash, "families T and D must stay disjoint: %s", name)
+		classified[name] = rule
+	}
+	classified["python_user_defined_function"] = rulePythonUdf
+	require.Equal(t, inventorySortedKeys(classified), inventorySortedKeys(divergent),
+		"check two: every divergent consumer must classify into family T, family D, or the documented exclusion (section 4.2 item 2)")
+	for _, name := range []string{"+", "mod", "round", "avg", "coalesce", "max"} {
+		require.Contains(t, divergent, name, "non-vacuous pin: %s must stay seam-divergent", name)
+	}
+
+	t.Run("percentile_disc tailored shape joins family T", func(t *testing.T) {
+		// Ordered-set plan arguments are (order value, percentile p)
+		// (ordered_set.go header); p must be numeric and never decimal256
+		// (orderedSetPercentileCheckWithMode), which is why the uniform
+		// same-type synthesis cannot resolve percentile_disc at all.
+		p := types.T_float64.ToType()
+		rt, ok, err := resolve("percentile_disc", []types.Type{types.New(types.T_decimal256, 76, 0), p})
+		require.NoError(t, err)
+		require.True(t, ok, "percentile_disc must resolve its tailored (value, p) shape")
+		require.Equal(t, types.New(types.T_decimal256, 76, 0), rt,
+			"percentile_disc returns args[0] verbatim (aggexec PercentileDiscReturnType), the section 4.1 percentile_disc rule")
+		rtNarrow, ok, err := resolve("percentile_disc", []types.Type{types.New(types.T_decimal256, 65, 0), p})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal256, 65, 0), rtNarrow)
+		_, ok, err = resolve("percentile_disc", []types.Type{types.New(types.T_decimal256, 76, 0), types.New(types.T_decimal256, 76, 0)})
+		require.NoError(t, err)
+		require.False(t, ok, "a decimal256 percentile argument is rejected by the ordered-set check")
+	})
+
+	t.Run("percentile_cont stays class (i) width-insensitive", func(t *testing.T) {
+		p := types.T_float64.ToType()
+		_, ok, err := resolve("percentile_cont", []types.Type{types.New(types.T_decimal256, 76, 0), p})
+		require.NoError(t, err)
+		require.False(t, ok, "percentile_cont rejects decimal256 and >=38-wide decimal values, so no carrier input resolves")
+		rt, ok, err := resolve("percentile_cont", []types.Type{types.New(types.T_decimal128, 20, 10), p})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal128, 38, 11), rt,
+			"percentile_cont returns decimal128(38, s+1), a pure function of scale (class (i))")
+	})
+
+	t.Run("sum joins family D below argument width 43", func(t *testing.T) {
+		rt34, ok, err := resolve("sum", []types.Type{types.New(types.T_decimal128, 34, 0)})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal256, 56, 0), rt34)
+		rt42, ok, err := resolve("sum", []types.Type{types.New(types.T_decimal128, 42, 0)})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal256, 64, 0), rt42,
+			"SumReturnType min(w+22,65) is width-sensitive below argument width 43 (family D, section 5 subject)")
+		// min(w+22, 65) saturates at 65 on section 4.2's seam pairs, so sum
+		// is absent from the uniform-synthesis divergent set by construction.
+		rtWide, ok, err := resolve("sum", []types.Type{types.New(types.T_decimal256, 76, 0)})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal256, 65, 0), rtWide)
+		rtBase, ok, err := resolve("sum", []types.Type{types.New(types.T_decimal256, 65, 0)})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, rtWide, rtBase)
+	})
+
+	t.Run("ifnull registry facts", func(t *testing.T) {
+		// The registry maps the name ifnull to the ISNULL function id
+		// (function_id.go), a one-argument null predicate returning bool;
+		// SQL ifnull(a, b) is rewritten by the binder to
+		// case when isnull(a) then b else null (base_binder.go), so the SQL
+		// surface is covered by family T's case rule.
+		_, ok, err := resolve("ifnull", []types.Type{types.New(types.T_decimal256, 76, 0), types.New(types.T_decimal256, 76, 0)})
+		require.NoError(t, err)
+		require.False(t, ok, "ifnull resolves to the one-argument ISNULL predicate id, never a two-argument decimal consumer")
+		rt, ok, err := resolve("ifnull", []types.Type{types.New(types.T_decimal256, 76, 0)})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, types.T_bool.ToType(), rt)
+	})
+
+	t.Run("values is a family T verbatim copy", func(t *testing.T) {
+		rt, ok, err := resolve("values", []types.Type{types.New(types.T_decimal256, 76, 0)})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal256, 76, 0), rt,
+			"VALUES returns parameters[0] verbatim, family T's defining property")
+	})
+
+	t.Run("python udf result is its declared return type input", func(t *testing.T) {
+		rt, ok, err := resolve("python_user_defined_function", []types.Type{types.T_varchar.ToType(), types.New(types.T_decimal256, 65, 0)})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal256, 65, 0), rt,
+			"the result is the trailing declared-return-type input, a SQL declaration capped at 65 digits; the all-carrier synthesis feeding a carrier as the return-type slot is not a production shape")
+	})
+
+	t.Run("dml cast variants follow the declared-target rule", func(t *testing.T) {
+		// cast_strict is the upstream internal assignment conversion
+		// (list_operator.go): like cast_assign/cast_ignore its result is the
+		// declared target parameters[1], so it names the same section 4.1
+		// cast rule.
+		for _, name := range []string{"cast_assign", "cast_ignore", "cast_strict"} {
+			rt, ok, err := resolve(name, []types.Type{types.New(types.T_decimal256, 76, 0), types.New(types.T_decimal256, 65, 1)})
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, types.New(types.T_decimal256, 65, 1), rt,
+				"%s returns the declared target parameters[1], the section 4.1 cast rule", name)
+		}
+	})
 }

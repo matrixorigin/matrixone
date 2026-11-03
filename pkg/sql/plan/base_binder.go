@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -4915,13 +4916,17 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	if b.builder != nil {
 		var e *plan.Expr
 		var err error
+		// Attach the decimal-boundary resolution scope (issue #30938) so the
+		// merge-family retry funnel can reach the pending-producer and
+		// scalar-subquery channels of this query block.
+		scopedContext := withDecimalBoundaryBindScope(b.GetContext(), b)
 		if findInSetInternalArgs {
 			e, err = bindBoundFuncExprAndConstFoldWithInternalFunctionArgsAndObserver(
-				b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+				scopedContext, b.builder.compCtx.GetProcess(), name, args,
 				b.observeExpressionProtocol)
 		} else {
 			e, err = bindBoundFuncExprAndConstFoldWithObserver(
-				b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+				scopedContext, b.builder.compCtx.GetProcess(), name, args,
 				b.observeExpressionProtocol)
 		}
 		if err == nil {
@@ -7540,6 +7545,7 @@ func bindBetweenAsComparisons(ctx context.Context, args []*Expr) (*Expr, error) 
 
 func bindPreparedFuncExprImplByPlanExpr(
 	ctx context.Context,
+	proc *process.Process,
 	originalBoundExpr *Expr,
 	name string,
 	args []*Expr,
@@ -7552,8 +7558,13 @@ func bindPreparedFuncExprImplByPlanExpr(
 		// again and preserves direct-marker/domainless provenance separately.
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
+	// The execute scope's process (issue #30938, design decision log entry
+	// 68 (iv)) records each rebound coercive decision content-keyed by its
+	// rebound binding into the execute-scope registry; a nil process (test
+	// mocks and channels without an execute scope) keeps the pre-existing
+	// no-op behavior.
 	return bindFuncExprImplByPlanExpr(
-		ctx, nil, name, args, true, stringDomainModes, originalBoundExpr, true)
+		ctx, proc, name, args, true, stringDomainModes, originalBoundExpr, true)
 }
 
 func bindFuncExprImplByPlanExpr(
@@ -7565,7 +7576,7 @@ func bindFuncExprImplByPlanExpr(
 	stringDomainModes []function.StringDomainCheckMode,
 	originalBoundExpr *Expr,
 	allowInternalFunctionArgs bool,
-) (*plan.Expr, error) {
+) (bound *plan.Expr, boundErr error) {
 	var err error
 	// The unsigned-DECIMAL admission entries exist only for the plan-composed
 	// assignment boundary. Their retType mirrors the source type, so a public
@@ -7914,6 +7925,15 @@ func bindFuncExprImplByPlanExpr(
 		}
 		args = []*Expr{args[0], countSlot, unitSlot}
 	case "mo_win_truncate":
+		// mo_win_truncate's internal (value, count, unit) form is produced by
+		// resetDateFunction below and saved into plans. Rebind paths (prepared
+		// re-binding and projection refresh, both allowInternalFunctionArgs)
+		// re-resolve that saved form with refreshed types; the two-argument
+		// check must not reject it there (issue #30938, same internal-form
+		// convention as tmrank).
+		if allowInternalFunctionArgs && len(args) == 3 {
+			break
+		}
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
 		}
@@ -8407,8 +8427,31 @@ func bindFuncExprImplByPlanExpr(
 	var returnType types.Type
 	var argsCastType []types.Type
 
-	// get function definition
+	// Statement-local decision ledger (issue #30938, design decision log
+	// entries 49, 52 and 55): every successful decimal coercive binding
+	// inside an active planning generation records a content-keyed decision
+	// — the overload identity, the arity, the pre-coercion operand types
+	// exactly as the merge consumed them and each position's post-merge
+	// aligned type — on the compile-time process's statement registry, and a
+	// widened-multiplication provenance-bearing decision joins the decision
+	// barrier so both fold engines preserve the operand structure its entry
+	// witnesses. A nil process (the public and prepared wrappers), a
+	// generation-free build, a failed binding and a non-decimal result all
+	// skip recording.
+	retriedDecimalBoundary := false
+	// The alignment loop below rewrites args[idx] in place with this
+	// decision's own casts, and a slice-header copy would observe those
+	// writes at defer time; freeze the pre-cast operand list the provenance
+	// walk is documented to consume.
+	recordDecimalBoundaryArgs := append([]*Expr(nil), args...)
 	lookupTypes := argsType
+	defer func() {
+		recordDecimalBoundaryDecision(
+			ctx, proc, name, recordDecimalBoundaryArgs, lookupTypes, funcID,
+			retriedDecimalBoundary, bound, boundErr)
+	}()
+
+	// get function definition
 	if name == "json_quote" && len(args) == 1 {
 		switch {
 		case isUnresolvedPreparedParam(ctx, args[0]):
@@ -8506,6 +8549,22 @@ func bindFuncExprImplByPlanExpr(
 			ctx, name, lookupTypes, stringDomainModes)
 	} else {
 		fGet, err = function.GetFunctionByName(ctx, name, lookupTypes)
+	}
+	// Source-domain retry funnel (issue #30938, design decision log 56): when
+	// a value-merge family's widened first lookup failed outright — or
+	// silently degraded to FLOAT64 over decimal-family inputs for
+	// LEAST/GREATEST — and at least one operand resolves its parent-published
+	// domain with widened-multiplication provenance through the statement
+	// registry's channels, retry the identical lookup once over the operands'
+	// parent-published domain vector. Success binds the parent's own overload
+	// and its parent-domain alignment casts over the real argument
+	// expressions, and the defer-registered recorder stores the retried
+	// decision; failure, no provenance and an unresolvable operand all re-arm
+	// the family's original outcome untouched.
+	if decimalBoundaryMergeFamily(name) {
+		fGet, err, retriedDecimalBoundary = retryDecimalBoundaryFamilyLookup(
+			ctx, proc, decimalBoundaryBindScope(ctx), name, args, lookupTypes,
+			stringDomainModes, fGet, err)
 	}
 	if err != nil {
 		if name == "between" {
@@ -9087,7 +9146,20 @@ func bindFuncExprImplByPlanExpr(
 			}
 			commonType, ok, typeErr := reconcileLagLeadDefaultType(ctx, args[2], argsType[0], argsType[2])
 			if typeErr != nil {
-				return nil, typeErr
+				// Source-domain retry (issue #30938, design decision log 82,
+				// mirroring the entry-56 merge-family funnel): when the
+				// reconcile over the widened surface domains rejects the
+				// derivation, retry the identical reconcile once over the
+				// operands' parent-published domains. With at least one
+				// widened-multiplication-provenance operand a successful
+				// retry binds the parent's own common; every other outcome
+				// re-arms the surface rejection untouched.
+				if retried, retryOk := retryLagLeadReconcileOverParentDomains(
+					ctx, proc, decimalBoundaryBindScope(ctx), args); retryOk {
+					commonType, ok = retried, true
+				} else {
+					return nil, typeErr
+				}
 			}
 			if ok {
 				// CHAR 重载的固定容量不能代表另一分支的完整字符串域。
@@ -9395,8 +9467,13 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 			return numeric, true, nil
 		}
 		common, ok := mergeExactDecimalComparisonType(makePlan2Type(&numeric), plan.Type{Width: digits})
-		if !ok || common.Width > 65 {
-			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
+		// Widened multiplication may publish a 76-digit value; the shared
+		// result is capped by the Decimal256 expression domain alone, and
+		// persisted-column admission stays with the storage boundary
+		// (issue #30938 review round 6). A merge beyond 76 fails inside
+		// mergeExactDecimalComparisonType.
+		if !ok {
+			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds the Decimal256 limit 76")
 		}
 		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
 	}
@@ -9424,10 +9501,11 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 			digits = 0
 		}
 		common, ok := mergeExactDecimalComparisonType(makePlan2Type(&valueArg), plan.Type{Width: digits})
-		// The shared exact-arithmetic helper permits 76 internal digits, but
-		// this public result must remain expressible in persisted SQL DDL.
-		if !ok || common.Width > 65 {
-			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
+		// The expression domain permits the full 76-digit Decimal256
+		// carrier; persisted-column admission is enforced separately at
+		// the storage boundary (issue #30938 review round 6).
+		if !ok {
+			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds the Decimal256 limit 76")
 		}
 		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
 	}
@@ -9472,10 +9550,48 @@ func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueAr
 		}
 		return types.New(types.T_varchar, 0, 0), true, nil
 	}
-	if ret.Oid.IsDecimal() && ret.Width > 65 {
-		return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
+	// See above: the widened expression domain, not the persisted SQL
+	// limit, caps the shared LAG/LEAD result (issue #30938 review
+	// round 6).
+	if ret.Oid.IsDecimal() && ret.Width > 76 {
+		return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds the Decimal256 limit 76")
 	}
 	return ret, true, nil
+}
+
+// retryLagLeadReconcileOverParentDomains is the lag/lead instance of the
+// source-domain retry (issue #30938, design decision log 82, mirroring the
+// entry-56 merge-family funnel): resolve each operand's parent-published
+// domain and retry the identical reconcile once over that vector. With at
+// least one widened-multiplication-provenance operand a successful retry
+// binds the parent's own common type; a reconcile failure, an unresolvable
+// operand or a provenance-free vector declines so the caller re-arms the
+// surface rejection untouched.
+func retryLagLeadReconcileOverParentDomains(
+	ctx context.Context,
+	proc *process.Process,
+	scope *decimalBoundaryScope,
+	args []*Expr,
+) (types.Type, bool) {
+	if proc == nil || proc.DecimalBoundaryGenerationDepth() == 0 || len(args) < 3 {
+		return types.Type{}, false
+	}
+	parentValue, valueProvenance, ok := decimalBoundaryOperandParentDomain(proc, scope, args[0])
+	if !ok {
+		return types.Type{}, false
+	}
+	parentDefault, defaultProvenance, ok := decimalBoundaryOperandParentDomain(proc, scope, args[2])
+	if !ok {
+		return types.Type{}, false
+	}
+	if !valueProvenance && !defaultProvenance {
+		return types.Type{}, false
+	}
+	common, ok, err := reconcileLagLeadDefaultType(ctx, args[2], parentValue, parentDefault)
+	if err != nil || !ok {
+		return types.Type{}, false
+	}
+	return common, true
 }
 
 func sameFunctionArgumentTypes(left, right []types.Type) bool {
@@ -9612,6 +9728,1282 @@ func maxDecimalPrecisionForRounding(oid types.T) int32 {
 	default:
 		return 1
 	}
+}
+
+// decimalBoundaryMergeFamily reports whether name is one of the value-merge
+// families whose common-domain computation can overflow the physical carrier
+// when it consumes a widened decimal multiplication publication (issue
+// #30938, design decision log 56). These are exactly the families the
+// source-domain retry funnel guards around their function-resolution call.
+func decimalBoundaryMergeFamily(name string) bool {
+	switch name {
+	case "coalesce", "ifnull", "case", "if", "iff", "least", "greatest":
+		return true
+	default:
+		return false
+	}
+}
+
+// decimalBoundaryScope carries the binder-owned context the source-domain
+// resolver needs beyond the statement registry (issue #30938, design
+// decision log entries 56, 57, 59 and 61): the query block's BindContext
+// inventories the pending group, aggregate, window, projected, sampled and
+// time-boundary outputs a positional ColRef resolves through, and the
+// QueryBuilder retains every subquery's BindContext (and the statement's
+// div_precision_increment) while scalar subqueries stay structurally
+// navigable. The value is planner-local, never persisted and never
+// serialized.
+type decimalBoundaryScope struct {
+	bctx    *BindContext
+	builder *QueryBuilder
+	// lineage carries the execute-time plan-producer lineage view (issue
+	// #30938, design decision log entries 69-72): attached once around a
+	// prepared fill-and-refresh window whose plan carries widened decimal
+	// provenance, it lets a decimal column reference resolve its producing
+	// expression through the plan's own relational and source-step edges
+	// read-only when the binder channels miss.
+	lineage *decimalBoundaryLineageView
+	// divPrecisionIncrement carries the statement's div_precision_increment
+	// through execute-time scopes that have no live QueryBuilder (issue
+	// #30938 review round 13, F1): the execute route installs the session
+	// setting so parent-domain recovery consumes the same increment the
+	// statement's own publications did. hasDivPrecisionIncrement
+	// distinguishes an installed zero from an unset field.
+	divPrecisionIncrement    int32
+	hasDivPrecisionIncrement bool
+}
+
+// decimalBoundaryScopeContextKey carries the active binder's resolution
+// scope down to the function-resolution funnel, following the
+// preparedBindingState precedent.
+type decimalBoundaryScopeContextKey struct{}
+
+// withDecimalBoundaryBindScope attaches the binder's resolution scope to the
+// binding context at the funnel's primary entry, so every merge-family
+// binding under a builder can resolve operand provenance through all
+// channels. Bindings without a builder keep a nil scope: the ledger and
+// producer channels stay available and only the tag/ordinal and
+// scalar-subquery channels defer.
+func withDecimalBoundaryBindScope(ctx context.Context, binder *baseBinder) context.Context {
+	if ctx == nil || binder == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, decimalBoundaryScopeContextKey{},
+		&decimalBoundaryScope{bctx: binder.ctx, builder: binder.builder})
+}
+
+// decimalBoundaryBindScope returns the resolution scope attached at the
+// funnel's entry, or nil for binding paths that do not carry one.
+func decimalBoundaryBindScope(ctx context.Context) *decimalBoundaryScope {
+	if ctx == nil {
+		return nil
+	}
+	scope, _ := ctx.Value(decimalBoundaryScopeContextKey{}).(*decimalBoundaryScope)
+	return scope
+}
+
+// parentDivPrecisionIncrement resolves the statement's
+// div_precision_increment for parent-domain recovery (issue #30938 review
+// round 13, F1): the live builder's value at bind time, the value the
+// execute route installed on the lineage scope at execute time, and the
+// engine default when neither channel exists.
+func (s *decimalBoundaryScope) parentDivPrecisionIncrement() int32 {
+	if s == nil {
+		return function.DefaultDivPrecisionIncrement
+	}
+	if s.builder != nil {
+		return s.builder.divPrecisionIncrement
+	}
+	if s.hasDivPrecisionIncrement {
+		return s.divPrecisionIncrement
+	}
+	return function.DefaultDivPrecisionIncrement
+}
+
+// withDecimalBoundaryLineageScope attaches the execute-time plan-producer
+// lineage view (issue #30938, design decision log entries 69-72) to the
+// resolution scope carried by ctx, preserving any binder scope already
+// attached, and installs the statement's div_precision_increment so the
+// builder-less execute scopes recover division parent domains with the same
+// setting the statement's publications used (issue #30938 review round 13,
+// F1). The adapter is constructed once per fill-and-refresh window over
+// the filled plan's query and discarded with it; a nil context or query
+// leaves the context untouched.
+func withDecimalBoundaryLineageScope(ctx context.Context, query *Query, divIncrement int32) context.Context {
+	if ctx == nil || query == nil {
+		return ctx
+	}
+	view := newDecimalBoundaryLineageView(query)
+	if existing := decimalBoundaryBindScope(ctx); existing != nil {
+		increment, hasIncrement := existing.divPrecisionIncrement, existing.hasDivPrecisionIncrement
+		if !hasIncrement {
+			increment, hasIncrement = divIncrement, true
+		}
+		return context.WithValue(ctx, decimalBoundaryScopeContextKey{},
+			&decimalBoundaryScope{bctx: existing.bctx, builder: existing.builder, lineage: view,
+				divPrecisionIncrement: increment, hasDivPrecisionIncrement: hasIncrement})
+	}
+	return context.WithValue(ctx, decimalBoundaryScopeContextKey{},
+		&decimalBoundaryScope{lineage: view,
+			divPrecisionIncrement: divIncrement, hasDivPrecisionIncrement: true})
+}
+
+// decimalBoundaryExactNumericOperand reports whether one multiplication
+// operand participates in the exact-numeric publication rules: the
+// families decimalMultiplyDomain derives an operand domain for - decimal,
+// integer, BIT and BOOL (issue #30938 review round 12, F1).
+func decimalBoundaryExactNumericOperand(typ types.Type) bool {
+	return typ.Oid.IsDecimal() || typ.Oid.IsInteger() ||
+		typ.Oid == types.T_bit || typ.Oid == types.T_bool
+}
+
+// decimalBoundaryWidenedMultiply reports whether one successful binding
+// published through the widened multiplication rule (issue #30938): the
+// actual publication carried the widened decimalMultiplyReturnType past
+// the parent's 65-digit cap (a DECIMAL256 result wider than 65), and the
+// authoritative operand domains sum past the same cap - declared width
+// (carrier capacity when undeclared) with the legacy DECIMAL64 18->19 and
+// released DECIMAL128 38->39 coefficient adjustments, integer integral
+// widths, BIT 20 and BOOL 1 (decimalMultiplyParentDomainWidth). Over the
+// genuine operand domains the two tests are exactly the divergence
+// between the actual publication and the parent's 65-capped mirror: a
+// coefficient-adjusted pair such as DECIMAL(38,0) x DECIMAL(27,0)
+// (domains 39+27=66 publishing (66,0) against the parent's (65,0)) and a
+// decimal-times-integer pair such as DECIMAL(47,0) x BIGINT (domains
+// 47+19=66) carry the same provenance as a raw-width pair. The
+// publication-side test also keeps carrier-envelope operand types from
+// masquerading as divergence: an internal node's bind-time operand can
+// carry the carrier capacity envelope (a subtraction's DECIMAL128(38,s)
+// or an aggregate's DECIMAL256(65,s) parent side), whose mirror
+// publication diverges from a narrow surface without any widening (issue
+// #30938 review round 12, F1).
+func decimalBoundaryWidenedMultiply(name string, lookupTypes []types.Type, result *plan.Type) bool {
+	if name != "*" || len(lookupTypes) != 2 || result == nil {
+		return false
+	}
+	if result.Id != int32(types.T_decimal256) || result.Width <= 65 {
+		return false
+	}
+	leftDW, _, leftOK := decimalMultiplyParentDomainWidth(lookupTypes[0])
+	rightDW, _, rightOK := decimalMultiplyParentDomainWidth(lookupTypes[1])
+	if !leftOK || !rightOK {
+		return false
+	}
+	return leftDW+rightDW > 65
+}
+
+// recordDecimalBoundaryDecision is the defer-installed recorder of the
+// statement-local decision ledger (issue #30938, design decision log
+// entries 49, 52 and 55): a successful decimal coercive binding inside an
+// active planning generation records a content-keyed decision — the overload
+// identity, the arity, the pre-coercion operand types exactly as the merge
+// consumed them, each position's post-merge aligned type and the published
+// result type — and a provenance-bearing decision joins the decision barrier
+// so both fold engines preserve the operand syntax its entry witnesses.
+// Provenance flags a decision that publishes through the widened
+// multiplication rule itself or whose recorded operand lineage does; the
+// walk consumes the pre-cast argument expressions because the physical
+// arguments may already carry this decision's own alignment casts, whose
+// ledger-transparent form is the operand behind them.
+func recordDecimalBoundaryDecision(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+	lookupTypes []types.Type,
+	funcID int64,
+	retried bool,
+	bound *plan.Expr,
+	boundErr error,
+) {
+	if proc == nil || boundErr != nil || bound == nil || funcID == 0 {
+		return
+	}
+	if proc.DecimalBoundaryGenerationDepth() == 0 {
+		return
+	}
+	if !types.T(bound.Typ.Id).IsDecimal() {
+		return
+	}
+	fn := bound.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObj() != funcID {
+		// A metadata wrapper that re-presents another node's outcome is not a
+		// decision; the wrapped call recorded its own entry.
+		return
+	}
+	if len(fn.Args) != len(lookupTypes) {
+		return
+	}
+	entry := &rule.DecimalBoundaryDecisionEntry{
+		Overload: funcID,
+		Name:     name,
+		ArgCount: len(fn.Args),
+		PreTypes: make([]plan.Type, len(lookupTypes)),
+		// A position the alignment loop left uncast keeps the argument's own
+		// type in the physical tree, which records its pre type verbatim.
+		AlignedTypes: make([]plan.Type, len(fn.Args)),
+		ResultType:   bound.Typ,
+		Retried:      retried,
+	}
+	for i := range lookupTypes {
+		entry.PreTypes[i] = makePlan2Type(&lookupTypes[i])
+	}
+	for i := range fn.Args {
+		entry.AlignedTypes[i] = fn.Args[i].Typ
+	}
+	provenance := decimalBoundaryWidenedMultiply(name, lookupTypes, &bound.Typ)
+	if !provenance && len(args) == len(fn.Args) {
+		scope := decimalBoundaryBindScope(ctx)
+		for i := range args {
+			_, prov, ok := decimalBoundaryOperandParentDomain(proc, scope, args[i])
+			if ok && prov {
+				provenance = true
+				break
+			}
+		}
+	}
+	entry.Provenance = provenance
+	proc.RecordDecimalBoundaryDecision(
+		rule.DecimalBoundaryDecisionLedgerKey(bound), entry,
+		rule.DecimalBoundaryFoldSignature(bound), provenance)
+}
+
+// retryDecimalBoundaryFamilyLookup is the source-domain retry funnel (issue
+// #30938, design decision log 56): when a value-merge family's widened first
+// lookup failed, or silently degraded to FLOAT64 over decimal-family inputs
+// for least/greatest, resolve each operand's (provenance, parent-published
+// domain) pair through the binder's channels and retry the identical lookup
+// once over the resolved parent vector. With at least one provenance-bearing
+// operand a successful retry authors the parent's own overload and its
+// parent-domain alignment casts over the real argument expressions; a
+// failure, an unresolvable operand or a provenance-free operand vector all
+// re-arm the family's original outcome untouched. The parent vector needs no
+// further literal refinement: refineDecimalArithmeticLiteralLookupTypes
+// rewrites only the arithmetic names, never the merge families.
+func retryDecimalBoundaryFamilyLookup(
+	ctx context.Context,
+	proc *process.Process,
+	scope *decimalBoundaryScope,
+	name string,
+	args []*Expr,
+	lookupTypes []types.Type,
+	stringDomainModes []function.StringDomainCheckMode,
+	first function.FuncGetResult,
+	firstErr error,
+) (function.FuncGetResult, error, bool) {
+	if proc == nil || proc.DecimalBoundaryGenerationDepth() == 0 {
+		return first, firstErr, false
+	}
+	retry := firstErr != nil
+	if !retry && (name == "least" || name == "greatest") &&
+		first.GetReturnType().Oid == types.T_float64 {
+		for i := range lookupTypes {
+			if lookupTypes[i].Oid.IsDecimal() {
+				retry = true
+				break
+			}
+		}
+	}
+	if !retry {
+		return first, firstErr, false
+	}
+	if len(args) != len(lookupTypes) {
+		return first, firstErr, false
+	}
+	parents := make([]types.Type, len(args))
+	proven := false
+	for i := range args {
+		parent, prov, ok := decimalBoundaryOperandParentDomain(proc, scope, args[i])
+		if !ok {
+			return first, firstErr, false
+		}
+		parents[i] = parent
+		proven = proven || prov
+	}
+	if !proven {
+		return first, firstErr, false
+	}
+	var retried function.FuncGetResult
+	var err error
+	if stringDomainModes != nil {
+		retried, err = function.GetFunctionByNameWithStringDomainCheckModes(
+			ctx, name, parents, stringDomainModes)
+	} else {
+		retried, err = function.GetFunctionByName(ctx, name, parents)
+	}
+	if err != nil {
+		return first, firstErr, false
+	}
+	return retried, nil, true
+}
+
+// recordSynthesizedSetOperationRetryDecision records the content-keyed
+// decision of a set-operation common-type owner that bound through the
+// entry-73 retry (issue #30938, design decision log entry 73 (iii)): the
+// retry's coalesce lookup ran outside the base binder, so no binder defer
+// can record it, but the execute-time lineage resolver and the refresh's
+// parent-domain derivation consume the same decision the base binder would
+// have recorded had the branch exports carried the parent-published types.
+// The synthetic decision node mirrors that record verbatim: one argument
+// per branch position, the parent's published domain as the observed type,
+// the position's aligned type (the retried merge's cast target, or the
+// parent domain itself when the position aligns without a cast) exactly as
+// the physical alignment authors it, and the retried overload identity.
+// The dummy argument tree exists only to reuse the ledger's keyed encoding;
+// it never reaches execution.
+func recordSynthesizedSetOperationRetryDecision(
+	proc *process.Process,
+	funcID int64,
+	parents []types.Type,
+	aligned []types.Type,
+	result types.Type,
+) {
+	if proc == nil || funcID == 0 || len(parents) == 0 || len(aligned) != len(parents) {
+		return
+	}
+	if !result.Oid.IsDecimal() {
+		return
+	}
+	args := make([]*Expr, len(parents))
+	entry := &rule.DecimalBoundaryDecisionEntry{
+		Overload:     funcID,
+		Name:         "coalesce",
+		ArgCount:     len(parents),
+		PreTypes:     make([]plan.Type, len(parents)),
+		AlignedTypes: make([]plan.Type, len(parents)),
+		ResultType:   makePlan2Type(&result),
+		Retried:      true,
+		Provenance:   true,
+	}
+	for i := range parents {
+		entry.PreTypes[i] = makePlan2Type(&parents[i])
+		entry.AlignedTypes[i] = makePlan2Type(&aligned[i])
+		inner := &Expr{
+			Typ:  makePlan2Type(&parents[i]),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}
+		if parents[i].Eq(aligned[i]) {
+			args[i] = inner
+			continue
+		}
+		args[i] = &Expr{
+			Typ: makePlan2Type(&aligned[i]),
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Obj:     function.EncodeOverloadID(function.CAST, 0),
+					ObjName: "cast",
+				},
+				Args: []*Expr{inner},
+			}},
+		}
+	}
+	synthetic := &Expr{
+		Typ: makePlan2Type(&result),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: funcID, ObjName: "coalesce"},
+			Args: args,
+		}},
+	}
+	proc.RecordDecimalBoundaryDecision(
+		rule.DecimalBoundaryDecisionLedgerKey(synthetic), entry,
+		rule.DecimalBoundaryFoldSignature(synthetic), true)
+}
+
+// decimalBoundarySetOperationParentDomains resolves the parent-published
+// domain of each set-operation branch expression for the entry-73
+// failure-retry (issue #30938, design decision log entry 73 (iii)): each
+// branch is evaluated read-only through the shared source-domain resolver
+// under a lineage view keyed to its own branch child node, so every branch
+// sees the same producer topology the outer consumer's retry already uses;
+// the initial route additionally threads the branch's bind context and the
+// builder (channel (c)'s scalar-subquery descent), which the execute route
+// leaves nil because a cached plan carries no live binder. The retry
+// engages only when at least one branch resolves with widened-multiplication
+// provenance; a nil branch node or expression, an unresolvable branch or a
+// provenance-free vector reports ok=false and the owner re-arms its own
+// outcome untouched.
+func decimalBoundarySetOperationParentDomains(
+	proc *process.Process,
+	query *Query,
+	builder *QueryBuilder,
+	divIncrement int32,
+	branchNodes []*plan.Node,
+	branchCtxs []*BindContext,
+	argExprs []*Expr,
+) ([]types.Type, bool) {
+	// A live process outside an entered generation has no decision ledger to
+	// consult and declines. A nil process is the execute route without an
+	// execute-scope registry (for example the internal executor's prepared
+	// reparse): the resolver is read-only, every registry channel answers a
+	// guarded miss, and the mirror/lineage channels alone resolve provenance
+	// where the branch expressions themselves carry it; a branch whose only
+	// provenance channel was the ledger still declines to the family's own
+	// outcome, so the retry never invents a binding the evidence cannot
+	// support.
+	if proc != nil && proc.DecimalBoundaryGenerationDepth() == 0 {
+		return nil, false
+	}
+	if query == nil || len(argExprs) == 0 || len(branchNodes) != len(argExprs) {
+		return nil, false
+	}
+	view := newDecimalBoundaryLineageView(query)
+	if view == nil || view.d == nil {
+		return nil, false
+	}
+	parents := make([]types.Type, len(argExprs))
+	proven := false
+	for i := range argExprs {
+		if argExprs[i] == nil || branchNodes[i] == nil {
+			return nil, false
+		}
+		childView := &decimalBoundaryLineageView{
+			query:         view.query,
+			d:             view.d,
+			setOpBranches: view.setOpBranches,
+			owner:         branchNodes[i],
+		}
+		var branchBctx *BindContext
+		if branchCtxs != nil && i < len(branchCtxs) {
+			branchBctx = branchCtxs[i]
+		}
+		parent, prov, ok := decimalBoundaryOperandParentDomain(
+			proc,
+			&decimalBoundaryScope{bctx: branchBctx, builder: builder, lineage: childView,
+				divPrecisionIncrement: divIncrement, hasDivPrecisionIncrement: true},
+			argExprs[i])
+		if !ok {
+			return nil, false
+		}
+		parents[i] = parent
+		proven = proven || prov
+	}
+	if !proven {
+		return nil, false
+	}
+	return parents, true
+}
+
+// decimalBoundaryBindingChannelKey computes the statement-registry key for
+// the producer channel of design decision log 56 (b): at derived-producer
+// binding construction each provenance-carrying output column publishes its
+// parent-published domain under "b#<binding tag>#<column position>", and a
+// consumer-side column reference resolves it directly.
+func decimalBoundaryBindingChannelKey(tag int32, pos int32) string {
+	return "b#" + strconv.Itoa(int(tag)) + "#" + strconv.Itoa(int(pos))
+}
+
+// decimalBoundaryOperandParentDomain resolves one operand's parent-published
+// domain and widened-multiplication provenance through the source-domain
+// resolver (issue #30938, design decision log 56): (a) a direct expression
+// operand walks the statement-local decision ledger and re-derives the
+// parent's published result through the registered parent rules; (b) a
+// producer reference resolves the per-column channel populated at
+// producer-binding construction; (c) a scalar subquery resolves its retained
+// projection head; (d) a tag/ordinal reference descends the query block's
+// pending producer inventories. Non-widened operands resolve identity views
+// (parent = surface) and an unresolvable operand reports ok=false, deferring
+// the family's own outcome. The result parent always describes the domain
+// the pre-change engine's own typing published for the same source.
+func decimalBoundaryOperandParentDomain(
+	proc *process.Process,
+	scope *decimalBoundaryScope,
+	expr *plan.Expr,
+) (types.Type, bool, bool) {
+	if expr == nil {
+		return types.Type{}, false, false
+	}
+	surface := makeTypeByPlan2Expr(expr)
+	if !surface.Oid.IsDecimal() {
+		// A non-decimal surface publishes identically on both engines.
+		return surface, false, true
+	}
+	switch node := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P:
+		// Genuine wide literals and parameter markers keep their declared
+		// domain on both engines.
+		return surface, false, true
+	case *plan.Expr_Col:
+		col := node.Col
+		if col == nil {
+			return types.Type{}, false, false
+		}
+		if scope != nil && scope.bctx != nil {
+			bctx := scope.bctx
+			switch col.RelPos {
+			case bctx.aggregateTag:
+				if col.ColPos < 0 || int(col.ColPos) >= len(bctx.aggregates) {
+					return types.Type{}, false, false
+				}
+				return decimalBoundaryAggregateParentDomain(
+					proc, scope, bctx.aggregates[col.ColPos], false)
+			case bctx.windowTag:
+				if col.ColPos < 0 || int(col.ColPos) >= len(bctx.windows) {
+					return types.Type{}, false, false
+				}
+				fn := bctx.windows[col.ColPos].GetW().GetWindowFunc()
+				if fn == nil || fn.GetF() == nil {
+					return types.Type{}, false, false
+				}
+				// A window-over-grouped aggregate applies its own rule
+				// over the resolved inner aggregate domain; it is not a
+				// binder-minted TIME_WINDOW twin (review round 16, F1).
+				return decimalBoundaryAggregateParentDomain(proc, scope, fn, false)
+			case bctx.groupTag:
+				// The retained bound grouping expression is itself the
+				// producing expression; the grouping-set nullability
+				// adjustment does not change a decimal domain.
+				if col.ColPos < 0 || int(col.ColPos) >= len(bctx.groups) {
+					return types.Type{}, false, false
+				}
+				return decimalBoundaryOperandParentDomain(
+					proc, scope, bctx.groups[col.ColPos])
+			case bctx.projectTag:
+				if col.ColPos < 0 || int(col.ColPos) >= len(bctx.projects) {
+					return types.Type{}, false, false
+				}
+				return decimalBoundaryOperandParentDomain(
+					proc, scope, bctx.projects[col.ColPos])
+			case bctx.sampleTag:
+				if col.ColPos < 0 || int(col.ColPos) >= len(bctx.sampleFunc.columns) {
+					return types.Type{}, false, false
+				}
+				return decimalBoundaryOperandParentDomain(
+					proc, scope, bctx.sampleFunc.columns[col.ColPos])
+			case bctx.timeTag:
+				if col.ColPos < 0 || int(col.ColPos) >= len(bctx.times) {
+					return types.Type{}, false, false
+				}
+				if bctx.times[col.ColPos].GetF() != nil {
+					// A retained TIME_WINDOW aggregate output resolves
+					// through the aggregate parent-domain resolver
+					// (decision log 61); its ColRef{aggregateTag, k}
+					// arguments descend ctx.aggregates[k]. This is the
+					// one route whose same-name self-reference is the
+					// binder-minted twin, so the twin shortcut applies.
+					return decimalBoundaryAggregateParentDomain(
+						proc, scope, bctx.times[col.ColPos], true)
+				}
+				// Time-boundary columns carry the timestamp identity
+				// (decision log 61); the boundary self-references resolve
+				// nothing.
+				return surface, false, true
+			}
+		}
+		if payload, ok := proc.DecimalBoundaryDecision(
+			decimalBoundaryBindingChannelKey(col.RelPos, col.ColPos)); ok {
+			if domain, ok := payload.(*rule.DecimalBoundaryDerivedDomain); ok {
+				return makeTypeByPlan2Type(domain.Parent), domain.Provenance, true
+			}
+		}
+		if scope != nil && scope.lineage != nil {
+			// The execute-time plan-producer lineage view (design decision
+			// log entries 69-72): when the binder context and the b#-channel
+			// both miss, resolve the reference's producing expression through
+			// the plan's own edges read-only before falling back to the
+			// surface type.
+			if parent, prov, ok, handled := decimalBoundaryLineageParentDomain(
+				proc, scope, expr); handled {
+				return parent, prov, ok
+			}
+		}
+		// A base table column and a non-provenance derived column publish
+		// their declared types identically on both engines.
+		return surface, false, true
+	case *plan.Expr_Sub:
+		if scope == nil || scope.builder == nil {
+			return types.Type{}, false, false
+		}
+		sub := node.Sub
+		if sub == nil || sub.NodeId < 0 ||
+			int(sub.NodeId) >= len(scope.builder.ctxByNode) {
+			return types.Type{}, false, false
+		}
+		subCtx := scope.builder.ctxByNode[sub.NodeId]
+		if subCtx == nil || len(subCtx.projects) == 0 {
+			return types.Type{}, false, false
+		}
+		// The retained projection head carries the producing expression until
+		// flattenSubqueries; resolve it under the subquery's own block.
+		return decimalBoundaryOperandParentDomain(
+			proc, &decimalBoundaryScope{bctx: subCtx, builder: scope.builder,
+				divPrecisionIncrement:    scope.divPrecisionIncrement,
+				hasDivPrecisionIncrement: scope.hasDivPrecisionIncrement},
+			subCtx.projects[0])
+	case *plan.Expr_W:
+		winFn := node.W.GetWindowFunc()
+		if winFn == nil || winFn.GetF() == nil || winFn.GetF().Func == nil {
+			return types.Type{}, false, false
+		}
+		fn := winFn.GetF()
+		return decimalBoundaryCallParentDomain(proc, scope, fn.Func.GetObjName(), fn, &expr.Typ)
+	case *plan.Expr_F:
+		fn := node.F
+		if fn == nil || fn.Func == nil {
+			return types.Type{}, false, false
+		}
+		if id, overload := function.DecodeOverloadID(fn.Func.GetObj()); id == function.CAST {
+			// An SQL-authored cast operand fixes its target on both
+			// engines: the resolution stops at the fixed target with no
+			// provenance (the cast barrier). Both authored forms barrier
+			// here — the syntax-flagged spelling and the explicit-overload
+			// spelling useExplicitCastOverload selects for DECIMAL,
+			// floating and character targets (overload 1).
+			if fn.SyntaxExplicitCast || overload != 0 || len(fn.Args) != 2 {
+				return surface, false, true
+			}
+			// An engine-inserted overload-0 cast enforces its target as
+			// the resolved domain either way; only the admission-pass seam
+			// cast also passes its operand's provenance through. The seam
+			// cast enforces the operand's parent-published domain, so its
+			// target equals that domain (design §5 fact 16, F-ROW-CHANGING-
+			// BOUNDARY); a decision-owned alignment layer re-types the
+			// operand to the decision's own common domain instead, and
+			// keeps the barrier exactly as before — its owning decision's
+			// recorded entry already carries the lineage, and arming
+			// consumer retries off the aligned surface would publish
+			// producer channels the approved inventories do not carry.
+			// Without the seam passthrough, an admission cast below a
+			// row-changing operator masks the admitted product's provenance
+			// from the family's retry funnel and from the recorded-entry
+			// ledger backstop, whose content key no longer matches the
+			// admitted call.
+			parent, prov, ok := decimalBoundaryOperandParentDomain(proc, scope, fn.Args[0])
+			if ok && prov && parent.Oid.IsDecimal() &&
+				parent.Width == surface.Width && parent.Scale == surface.Scale {
+				return surface, true, true
+			}
+			return surface, false, true
+		}
+		name := fn.Func.GetObjName()
+		parent, provenance, ok := decimalBoundaryCallParentDomain(proc, scope, name, fn, &expr.Typ)
+		if !ok {
+			return types.Type{}, false, false
+		}
+		if provenance {
+			return parent, true, true
+		}
+		// The recorded entry is authoritative where the binder marked the
+		// decision provenance-bearing; the mirror recursion can decline
+		// provenance only when no channel witnesses it.
+		if payload, found := proc.DecimalBoundaryDecision(
+			rule.DecimalBoundaryDecisionLedgerKey(expr)); found {
+			if entry, ok := payload.(*rule.DecimalBoundaryDecisionEntry); ok && entry.Provenance {
+				return parent, true, true
+			}
+		}
+		return parent, false, true
+	case *plan.Expr_List, *plan.Expr_Vec, *plan.Expr_Corr:
+		return surface, false, true
+	}
+	return types.Type{}, false, false
+}
+
+// decimalBoundaryAggregateParentDomain derives the parent-published domain
+// of a decimal aggregate or window call output through the parent's
+// registered result rules over the resolved parent argument domain (issue
+// #30938, design decision log entries 57 and 58): AVG and SUM evaluate their
+// registered formulas against the parent argument domain, while
+// value-selecting aggregates publish their selected argument's domain
+// unchanged. timeWindowRetained reports that the call is a retained
+// TIME_WINDOW copy resolved through the binder's timeTag route — the only
+// route whose same-name self-reference is a binder-minted twin.
+func decimalBoundaryAggregateParentDomain(
+	proc *process.Process,
+	scope *decimalBoundaryScope,
+	expr *plan.Expr,
+	timeWindowRetained bool,
+) (types.Type, bool, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+		return types.Type{}, false, false
+	}
+	parentArg, prov, ok := decimalBoundaryOperandParentDomain(proc, scope, fn.Args[0])
+	if !ok {
+		return types.Type{}, false, false
+	}
+	// A retained TIME_WINDOW twin call re-publishes the original aggregate
+	// over its ColRef{aggregateTag, k} self-reference (having_binder.go
+	// BindTimeWindowFunc); the descent above already resolved that reference
+	// into the original producing call and applied this same aggregate's
+	// rule once. Re-applying the rule here would double-apply the formula
+	// (issue #30938 review round 15: AVG's width and scale grew twice,
+	// resolving DECIMAL(75,10) for a merge the parent binds DECIMAL(71,6)).
+	// Nested aggregates are not legal SQL, so on the TIME_WINDOW route a
+	// same-name descent can only be the retained twin; its descent result
+	// is the parent domain. The shortcut is restricted to that route: a
+	// genuine window-over-grouped aggregate such as AVG(AVG(c)) OVER ()
+	// carries the same reference shape through the windowTag route yet
+	// legitimately applies the aggregate rule once per level, so the
+	// parent's outer AVG publication (DECIMAL(18,10) over the inner
+	// DECIMAL(14,6)) must stand (issue #30938 review round 16, F1).
+	if timeWindowRetained {
+		if col := fn.Args[0].GetCol(); col != nil && scope != nil && scope.bctx != nil &&
+			col.RelPos == scope.bctx.aggregateTag && col.ColPos >= 0 &&
+			int(col.ColPos) < len(scope.bctx.aggregates) {
+			if inner := scope.bctx.aggregates[col.ColPos].GetF(); inner != nil &&
+				inner.Func != nil && inner.Func.GetObjName() == fn.Func.GetObjName() {
+				return parentArg, prov, true
+			}
+		}
+	}
+	switch fn.Func.GetObjName() {
+	case "avg":
+		return aggexec.AvgReturnType([]types.Type{parentArg}), prov, true
+	case "avg_tw_result":
+		// The sliding TIME_WINDOW result aggregate republishes its cache's
+		// VARCHAR surface through its own registered rule; the ordinary AVG
+		// rule degrades that surface to FLOAT64 where the parent binds
+		// DECIMAL128(18, s) (issue #30938 review round 15, F1).
+		return aggexec.AvgTwResultReturnType([]types.Type{parentArg}), prov, true
+	case "sum":
+		if !parentArg.Oid.IsDecimal() && !parentArg.IsIntOrUint() &&
+			parentArg.Oid != types.T_bit && parentArg.Oid != types.T_year &&
+			parentArg.Oid != types.T_float32 && parentArg.Oid != types.T_float64 {
+			return types.Type{}, false, false
+		}
+		return aggexec.SumReturnType([]types.Type{parentArg}), prov, true
+	case "min", "max", "any_value", "max_by", "max_by_non_null",
+		"percentile_disc", "first_value", "last_value", "nth_value":
+		// Value-selecting forms publish the selected argument's own domain
+		// (design decision log 76 (ii): percentile_disc plan args carry the
+		// value first with the fraction appended after; nth_value carries
+		// the value first). quantileexactweighted keeps its pre-existing
+		// DECIMAL256 admission rejection on both engines and percentile_cont
+		// publishes a width-independent decimal128(38,s+1), so both stand
+		// excluded at the default.
+		return parentArg, prov, true
+	case "lag", "lead":
+		if len(fn.Args) < 3 {
+			// Without a default the call selects the value argument's own
+			// domain.
+			return parentArg, prov, true
+		}
+		parentDefault, defaultProv, ok := decimalBoundaryOperandParentDomain(proc, scope, fn.Args[2])
+		if !ok {
+			return types.Type{}, false, false
+		}
+		// The with-default merge derives the parent's common through the
+		// parent's own reconcile over the parent domains of the value and
+		// default arguments (design decision log 76 (ii)); the default Expr
+		// still feeds the literal rules. A derivation the parent's gate
+		// rejects has no parent domain to resolve to: the resolver declines
+		// so the changed engine's own expansion-band outcome stands. The
+		// discarded error's context only decorates its message.
+		common, ok, err := reconcileLagLeadDefaultType(context.Background(), fn.Args[2], parentArg, parentDefault)
+		if err != nil || !ok {
+			return types.Type{}, false, false
+		}
+		return common, prov || defaultProv, true
+	default:
+		return types.Type{}, false, false
+	}
+}
+
+// decimalBoundaryCallParentDomain derives one call node's parent-published
+// domain by dispatching on the call name over the resolved parent domains of
+// its live arguments (issue #30938, design decision log 56 (a) and the §4.1
+// envelope mirrors): multiplication, addition/subtraction, division, the
+// value-merge families, the rounding families and the width-preserving
+// pass-throughs each apply the pre-change engine's own result rule, and any
+// other decimal-result call reports unresolvable so the retry funnel defers
+// to the family's original outcome.
+func decimalBoundaryCallParentDomain(
+	proc *process.Process,
+	scope *decimalBoundaryScope,
+	name string,
+	fn *plan.Function,
+	surface *plan.Type,
+) (types.Type, bool, bool) {
+	switch fn.Func.GetObjName() {
+	case "avg", "avg_tw_result", "sum", "min", "max", "any_value", "max_by",
+		"max_by_non_null", "percentile_disc", "first_value", "last_value",
+		"nth_value", "lag", "lead":
+		// Aggregate and window selectors resolve through their per-selector
+		// rules (design decision log 76 (ii)); the value-selecting and
+		// default-free forms resolve exactly to the value argument's parent
+		// domain there.
+		return decimalBoundaryAggregateParentDomain(proc, scope, &plan.Expr{
+			Typ:  fn.Args[0].Typ,
+			Expr: &plan.Expr_F{F: fn},
+		}, false)
+	}
+	if len(fn.Args) == 0 {
+		return types.Type{}, false, false
+	}
+	switch name {
+	case "abs", "unary_minus", "unary_plus":
+		// Width-preserving consumers propagate the operationally selected
+		// value's domain unchanged.
+		return decimalBoundaryOperandParentDomain(proc, scope, fn.Args[0])
+	case "name_const":
+		if len(fn.Args) < 2 {
+			return types.Type{}, false, false
+		}
+		return decimalBoundaryOperandParentDomain(proc, scope, fn.Args[1])
+	}
+	parents := make([]types.Type, len(fn.Args))
+	provenance := false
+	for i := range fn.Args {
+		parent, prov, ok := decimalBoundaryOperandParentDomain(proc, scope, fn.Args[i])
+		if !ok {
+			return types.Type{}, false, false
+		}
+		parents[i] = parent
+		provenance = provenance || prov
+	}
+	switch name {
+	case "*":
+		if len(parents) != 2 || !decimalBoundaryExactNumericOperand(parents[0]) ||
+			!decimalBoundaryExactNumericOperand(parents[1]) {
+			return types.Type{}, false, false
+		}
+		// Multiplication is the one operator whose own publication widens,
+		// so its provenance is the operand lineage's OR its own widened
+		// publication — the recorder's decimalBoundaryWidenedMultiply over
+		// the resolved parent operand domains and the published surface.
+		// A narrow product both engines publish identically carries no
+		// provenance: marking it would pin fold structure and fire the
+		// aggregate-domain reconcile on statements the change must leave
+		// byte-identical (design limitations: statements without widened
+		// decimal multiplication see no behavioral change).
+		widened := surface != nil && decimalBoundaryWidenedMultiply(name, parents, surface)
+		return decimalBoundaryParentMultiply(parents[0], parents[1]), provenance || widened, true
+	case "+", "-":
+		if len(parents) != 2 || !parents[0].Oid.IsDecimal() || !parents[1].Oid.IsDecimal() {
+			return types.Type{}, false, false
+		}
+		return decimalBoundaryParentAddSub(parents[0], parents[1]), provenance, true
+	case "/":
+		if len(parents) != 2 || !parents[0].Oid.IsDecimal() || !parents[1].Oid.IsDecimal() {
+			return types.Type{}, false, false
+		}
+		return decimalBoundaryParentDivision(scope, parents[0], parents[1]), provenance, true
+	case "mod", "%":
+		// Mirror DecimalModReturnType over the reconstructed parent
+		// operand domains (issue #30938, design decision log 74 (i) and
+		// revision 29 F-MOD-STORAGE-ENVELOPE): the shared typing owner
+		// derives the MOD result domain from the ORIGINAL operands because
+		// implicit alignment casts describe storage, not the operands' SQL
+		// precision, so each operand is recovered through the owner's own
+		// original-operand channels — exact integer literal widths, integer
+		// digit recovery, non-decimal pass-through declining the mirror —
+		// before the maximum-width/maximum-scale rule runs.
+		if len(fn.Args) != 2 {
+			return types.Type{}, false, false
+		}
+		left, lprov, lok := decimalBoundaryModOperandParentDomain(proc, scope, fn.Args[0])
+		if !lok {
+			return types.Type{}, false, false
+		}
+		right, rprov, rok := decimalBoundaryModOperandParentDomain(proc, scope, fn.Args[1])
+		if !rok {
+			return types.Type{}, false, false
+		}
+		if !left.Oid.IsDecimal() && !right.Oid.IsDecimal() {
+			return types.Type{}, false, false
+		}
+		parent, ok := decimalBoundaryParentMod(left, right)
+		if !ok {
+			return types.Type{}, false, false
+		}
+		return parent, lprov || rprov, true
+	case "round", "truncate", "ceil", "ceiling", "floor":
+		if !parents[0].Oid.IsDecimal() {
+			return types.Type{}, false, false
+		}
+		returnType := parents[0]
+		refineDecimalRoundingReturnType(name, fn.Args, parents, &returnType,
+			decimalBoundaryLegacyPrecision(proc, scope))
+		return returnType, provenance, true
+	default:
+		if decimalBoundaryMergeFamily(name) {
+			merged, ok := decimalBoundaryParentMerge(parents)
+			if !ok {
+				return types.Type{}, false, false
+			}
+			return merged, provenance, true
+		}
+	}
+	return types.Type{}, false, false
+}
+
+// decimalBoundaryLegacyPrecision resolves the legacy intermediate-precision
+// flag for the mirror's rounding-rule replay: the parent's own
+// refineDecimalRoundingReturnType call site passes
+// function.LegacyDecimalIntermediatePrecision over the binder's context, so
+// the mirror reads the same flag from the scope's compiler context and
+// falls back to the process context (and then the released-era-disabled
+// false) for ledger-only resolutions without a builder.
+func decimalBoundaryLegacyPrecision(proc *process.Process, scope *decimalBoundaryScope) bool {
+	if scope != nil && scope.builder != nil && scope.builder.compCtx != nil {
+		return function.LegacyDecimalIntermediatePrecision(scope.builder.compCtx.GetContext())
+	}
+	if proc != nil {
+		return function.LegacyDecimalIntermediatePrecision(proc.Ctx)
+	}
+	return false
+}
+
+// decimalBoundaryParentMultiply mirrors the pre-change engine's
+// multiplication publication rule-for-rule over the operands' parent
+// domains (decimalMultiplyReturnType over decimalMultiplyDomain domains,
+// list_operator.go; issue #30938; the widened engine's own rule lives in
+// list_operator.go): the shared scale rule min(s1+s2, max(12, s1, s2)); the
+// narrow checked-DECIMAL128 route caps min(dw1+dw2, 38); the DECIMAL256
+// carrier - a physical DECIMAL256 operand, or a domain pair whose
+// coefficient widths and nominal widths both exceed 38
+// (decimalArithmeticInputs promotion with keepCheckedD128) - caps
+// min(dw1+dw2, 65) (design §4.1 multiplication bullet, revision 38
+// F-NARROW-CARRIER-ENVELOPE; decision log 84 (iii)).
+func decimalBoundaryParentMultiply(left, right types.Type) types.Type {
+	scale := int32(12)
+	if left.Scale > scale {
+		scale = left.Scale
+	}
+	if right.Scale > scale {
+		scale = right.Scale
+	}
+	if left.Scale+right.Scale < scale {
+		scale = left.Scale + right.Scale
+	}
+	leftDW, leftNominal, leftOK := decimalMultiplyParentDomainWidth(left)
+	rightDW, rightNominal, rightOK := decimalMultiplyParentDomainWidth(right)
+	oid := types.T_decimal128
+	if left.Oid == types.T_decimal256 || right.Oid == types.T_decimal256 {
+		oid = types.T_decimal256
+	}
+	if !leftOK || !rightOK {
+		// Unknown domain: the parent's retType retains the carrier envelope.
+		return types.New(oid, min(oid.ToType().Width, int32(65)), scale)
+	}
+	cap := int32(38)
+	if oid == types.T_decimal256 ||
+		(leftDW+rightDW > 38 && leftNominal+rightNominal > 38) {
+		oid = types.T_decimal256
+		cap = 65
+	}
+	return types.New(oid, min(leftDW+rightDW, cap), scale)
+}
+
+// decimalMultiplyParentDomainWidth derives one operand's contribution to the
+// parent's multiplication publication (decimalMultiplyDomain with the
+// nominal route precision decimalArithmeticInputs tracks): the declared
+// width (carrier capacity when undeclared) with the legacy DECIMAL64 18->19
+// signed-coefficient and released DECIMAL128 38->39 adjustments, and the
+// nominal width - the declared width, 18 for an undeclared DECIMAL64, the
+// unadjusted domain width otherwise. Exact-numeric non-decimal operands
+// contribute the domain the publication's decimalArithmeticDomain derives
+// - integer integral widths (integerDecimalDigits, value-identical with
+// the publication's integerIntegralWidth), BIT 20 and BOOL 1 - each as
+// its own nominal width, since decimalArithmeticInputs tracks no declared
+// width for a non-decimal operand (issue #30938 review round 12, F1).
+func decimalMultiplyParentDomainWidth(typ types.Type) (width, nominal int32, ok bool) {
+	if !typ.Oid.IsDecimal() {
+		switch {
+		case typ.Oid.IsInteger():
+			width = integerDecimalDigits(typ.Oid)
+			return width, width, width > 0
+		case typ.Oid == types.T_bit:
+			return 20, 20, true
+		case typ.Oid == types.T_bool:
+			return 1, 1, true
+		}
+		return 0, 0, false
+	}
+	width = typ.Width
+	if width <= 0 {
+		width = typ.Oid.ToType().Width
+	}
+	nominal = width
+	if typ.Width > 0 {
+		nominal = typ.Width
+	} else if typ.Oid == types.T_decimal64 {
+		nominal = 18
+	}
+	if typ.Oid == types.T_decimal64 && width == 18 {
+		width = 19
+	} else if typ.Oid == types.T_decimal128 && width == 38 {
+		width = 39
+	}
+	return width, nominal, true
+}
+
+// decimalBoundaryParentAddSub derives the parent-published
+// addition/subtraction result domain over the operands' parent domains
+// through the shared typing owner's authoritative publication (issue
+// #30938, design section 4.1 add/subtract bullet and revision 40
+// F-OUTPUT-DIVERGENCE-PROVENANCE, review round 16, F2): the fixed
+// DECIMAL64(18, s) d64+d64 shortcut, the general
+// min(maxIntegerDigits + scale + 1, 65) rule and the oid promotion all
+// fire exactly as the parent's decimalAddSubReturnType. The retired local
+// mirror returned DECIMAL128(38, s) for every d128-family addition where
+// the owner derives the narrower exact rule (e.g. DECIMAL(31,25) for
+// (25,25)+(25,25) chained into a (5,5) multiplication), so a merge the
+// parent binds could re-arm the checked binding error here.
+func decimalBoundaryParentAddSub(left, right types.Type) types.Type {
+	return function.DecimalAddSubPublication([]types.Type{left, right})
+}
+
+// decimalBoundaryParentDivision mirrors the pre-change engine's exact-value
+// division rule over the operands' parent domains
+// (decimalDivisionReturnType, unchanged by this fix): precision = left
+// precision + right scale + div_precision_increment, scale = left scale +
+// div_precision_increment, capped by DECIMAL(65, 30).
+func decimalBoundaryParentDivision(scope *decimalBoundaryScope, left, right types.Type) types.Type {
+	increment := scope.parentDivPrecisionIncrement()
+	if increment < 0 {
+		increment = 0
+	}
+	if increment > 30 {
+		increment = 30
+	}
+	precision := left.Width + right.Scale + increment
+	if precision > 65 {
+		precision = 65
+	}
+	scale := left.Scale + increment
+	if scale > 30 {
+		scale = 30
+	}
+	if precision < scale {
+		precision = scale
+	}
+	oid := types.T_decimal128
+	if left.Oid == types.T_decimal256 || right.Oid == types.T_decimal256 || precision > 38 {
+		oid = types.T_decimal256
+	}
+	return types.New(oid, precision, scale)
+}
+
+// decimalBoundaryParentMod mirrors the pre-change engine's exact-value MOD
+// metadata rule over the operands' parent domains (DecimalModReturnType,
+// pkg/sql/plan/function/decimal_mod.go:22-54, unchanged by this fix):
+// result precision is the maximum operand width and result scale the
+// maximum operand scale, where a decimal operand's width is its type width
+// (storage width when unset) and an integer operand contributes its exact
+// digit domain (integerDecimalDigits, with the mediumint override). The
+// result family follows the engine's arithmetic alignment ladder: at least
+// the widest decimal operand's family, wide enough to hold the derived
+// precision. Temporal, approximate, string, BIT and unknown operands keep
+// the selected type under the owner, so the mirror declines and the retry
+// funnel keeps the family's original outcome.
+func decimalBoundaryParentMod(left, right types.Type) (types.Type, bool) {
+	precision := int32(0)
+	scale := int32(0)
+	family := types.T(0)
+	for _, operand := range []types.Type{left, right} {
+		var width, operandScale int32
+		switch {
+		case operand.Oid.IsDecimal():
+			width = operand.Width
+			if width <= 0 {
+				switch operand.Oid {
+				case types.T_decimal64:
+					width = 18
+				case types.T_decimal128:
+					width = 38
+				case types.T_decimal256:
+					width = 76
+				}
+			}
+			operandScale = max(operand.Scale, 0)
+			if family == 0 || operand.Oid == types.T_decimal256 ||
+				(operand.Oid == types.T_decimal128 && family == types.T_decimal64) {
+				family = operand.Oid
+			}
+		case operand.Oid.IsInteger():
+			// integerDecimalDigits verbatim: int64 holds 19 digits, uint64
+			// and BIT hold 20.
+			switch operand.Oid {
+			case types.T_int8, types.T_uint8:
+				width = 3
+			case types.T_int16, types.T_uint16:
+				width = 5
+			case types.T_int32, types.T_uint32:
+				width = 10
+			case types.T_int64:
+				width = 19
+			case types.T_uint64, types.T_bit:
+				width = 20
+			}
+			if operand.IsMediumInt() {
+				width = 7
+				if operand.Oid == types.T_uint32 {
+					width = 8
+				}
+			}
+		default:
+			return types.Type{}, false
+		}
+		precision = max(precision, width)
+		scale = max(scale, operandScale)
+	}
+	if family == 0 || (family == types.T_decimal64 && precision > 18) {
+		family = types.T_decimal128
+	}
+	if family == types.T_decimal128 && precision > 38 {
+		family = types.T_decimal256
+	}
+	return types.New(family, precision, scale), true
+}
+
+// decimalBoundaryModOperandParentDomain recovers one MOD operand's parent
+// domain through the shared typing owner's own original-operand channels
+// (issue #30938, design decision log 74 (i)): DecimalModReturnType consumes
+// the pre-cast operand metadata, where an integer literal contributes its
+// exact digit width (refineDecimalArithmeticLiteralLookupTypes) and an
+// integer column its declared integer type. The widened engine's implicit
+// alignment casts around such operands describe storage, not the operands'
+// SQL precision, so the mirror looks through them first; every other shape
+// resolves through the generic channel.
+func decimalBoundaryModOperandParentDomain(
+	proc *process.Process,
+	scope *decimalBoundaryScope,
+	arg *plan.Expr,
+) (types.Type, bool, bool) {
+	if arg == nil {
+		return types.Type{}, false, false
+	}
+	if width, ok := decimalBoundaryModIntegerLiteralWidth(arg); ok {
+		oid := types.T_decimal64
+		if width > types.T_decimal64.ToType().Width {
+			oid = types.T_decimal128
+		}
+		return types.New(oid, width, 0), false, true
+	}
+	if source := decimalBoundaryImplicitDecimalCastSource(arg); source != nil {
+		t := makeTypeByPlan2Expr(source)
+		if t.Oid.IsInteger() {
+			return t, false, true
+		}
+		if !t.Oid.IsDecimal() {
+			return types.Type{}, false, false
+		}
+		return decimalBoundaryOperandParentDomain(proc, scope, source)
+	}
+	return decimalBoundaryOperandParentDomain(proc, scope, arg)
+}
+
+// decimalBoundaryModIntegerLiteralWidth recovers the exact digit width of
+// an integer literal MOD operand through the same cast descent the shared
+// typing owner's metadata refinement performs
+// (refineDecimalArithmeticLiteralLookupTypes): non-explicit cast wrappers
+// are transparent, a syntax-explicit cast or a non-cast expression stops the
+// descent, and a null or non-integer literal declines the recovery.
+func decimalBoundaryModIntegerLiteralWidth(arg *plan.Expr) (int32, bool) {
+	for current := arg; current != nil; {
+		if isExplicitPreparedCast(current) {
+			return 0, false
+		}
+		lit := current.GetLit()
+		if lit != nil {
+			if lit.Isnull {
+				return 0, false
+			}
+			width, exact := decimalIntegerWidth(current, makeTypeByPlan2Expr(current))
+			return width, exact && width > 0
+		}
+		cast := current.GetF()
+		if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" || len(cast.Args) == 0 {
+			return 0, false
+		}
+		current = cast.Args[0]
+	}
+	return 0, false
+}
+
+// decimalBoundaryImplicitDecimalCastSource returns the source of a
+// binder-inserted decimal alignment cast around a MOD operand. A CAST
+// expression whose decimal target exceeds the 65-digit SQL declaration cap
+// is provably engine-inserted: no SQL spelling can declare it, so the
+// wrapped source — not the storage target — carries the operand's SQL
+// precision for the shared typing owner's original-operand rule. A target
+// at or below the cap stays a surface: the parent's own alignment cast
+// lands on the identical type.
+func decimalBoundaryImplicitDecimalCastSource(arg *plan.Expr) *plan.Expr {
+	if arg == nil || !types.T(arg.Typ.Id).IsDecimal() || arg.Typ.Width <= 65 {
+		return nil
+	}
+	cast := arg.GetF()
+	if cast == nil || cast.Func == nil || len(cast.Args) == 0 {
+		return nil
+	}
+	if id, _ := function.DecodeOverloadID(cast.Func.GetObj()); id != function.CAST {
+		return nil
+	}
+	if isExplicitPreparedCast(arg) {
+		return nil
+	}
+	return cast.Args[0]
+}
+
+// decimalBoundaryParentMerge mirrors the pre-change engine's value-merge
+// common-domain rule over the operands' parent domains
+// (setSafeDecimalWidthAndScaleFromSource, unchanged by this fix): the
+// largest integral width and largest scale across the decimal and integer
+// operands determine the required width, and the decimal family ladder
+// seeded by the widest decimal operand admits widths through the Decimal256
+// 76-digit carrier and fails beyond it.
+func decimalBoundaryParentMerge(parents []types.Type) (types.Type, bool) {
+	maxScale := int32(0)
+	maxIntegralWidth := int32(0)
+	seed := types.T(0)
+	hasDecimalOrInteger := false
+	for i := range parents {
+		if parents[i].Oid.IsDecimal() {
+			if seed == 0 || parents[i].Oid == types.T_decimal256 ||
+				(parents[i].Oid == types.T_decimal128 && seed == types.T_decimal64) {
+				seed = parents[i].Oid
+			}
+			hasDecimalOrInteger = true
+			if parents[i].Scale > maxScale {
+				maxScale = parents[i].Scale
+			}
+			if integralWidth := parents[i].Width - parents[i].Scale; integralWidth > maxIntegralWidth {
+				maxIntegralWidth = integralWidth
+			}
+			continue
+		}
+		if parents[i].IsIntOrUint() {
+			hasDecimalOrInteger = true
+			integerWidth := int32(0)
+			switch parents[i].Oid {
+			case types.T_int8, types.T_uint8:
+				integerWidth = 3
+			case types.T_int16, types.T_uint16:
+				integerWidth = 5
+			case types.T_int32, types.T_uint32:
+				integerWidth = 10
+			case types.T_int64, types.T_bit:
+				integerWidth = 19
+			case types.T_uint64:
+				integerWidth = 20
+			}
+			if integerWidth > maxIntegralWidth {
+				maxIntegralWidth = integerWidth
+			}
+		}
+	}
+	if !hasDecimalOrInteger || seed == 0 {
+		return types.Type{}, false
+	}
+	requiredWidth := maxIntegralWidth + maxScale
+	switch seed {
+	case types.T_decimal64:
+		if requiredWidth > 38 {
+			seed = types.T_decimal256
+		} else if requiredWidth > 18 {
+			seed = types.T_decimal128
+		}
+	case types.T_decimal128:
+		if requiredWidth > 38 {
+			seed = types.T_decimal256
+		}
+	}
+	if requiredWidth > 76 {
+		return types.Type{}, false
+	}
+	return types.New(seed, requiredWidth, maxScale), true
 }
 
 func isCollatedTextPlanType(expr *plan.Expr) bool {
