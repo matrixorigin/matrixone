@@ -398,6 +398,14 @@ func (node *ShowIndex) StmtKind() StmtKind {
 	return defaultResRowTyp
 }
 
+func (node *ShowIndexIgnored) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
+func (node *ShowIndexStatus) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
 func (node *ShowTarget) StmtKind() StmtKind {
 	return defaultResRowTyp
 }

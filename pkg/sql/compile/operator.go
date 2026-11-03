@@ -513,6 +513,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets
 		op.StringHashKey = sourceArg.StringHashKey
+		op.ShuffleKeyColumns = append([]int32(nil), sourceArg.ShuffleKeyColumns...)
 		op.SetInfo(&info)
 		return op
 	case vm.Dispatch:
@@ -631,6 +632,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
+		op.ReadPolicy = t.ReadPolicy
 		op.SetInfo(&info)
 		return op
 	case vm.ValueScan:

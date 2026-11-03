@@ -56,6 +56,7 @@ type DiskCache struct {
 
 	cache        diskCacheIndex
 	capacityFunc fscache.CapacityFunc
+	preloads     *preloadUsage
 	dirEntries   bool
 	// held counts the holds on entry directories.
 	held        dirHolds
@@ -202,12 +203,14 @@ func newDiskCache(
 
 		capacityFunc: capacityFunc,
 		dirEntries:   opts.dirEntries,
+		preloads:     newPreloadUsage(),
 	}
 
 	keyShard := func(key string) uint64 {
 		return maphash.String(seed, key)
 	}
-	postSet := func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) {
+	postSet := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
+		ret.preloads.cached(path)
 		inuseBytes.Add(float64(size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
@@ -231,7 +234,8 @@ func newDiskCache(
 			}
 		}
 	}
-	postEvict := func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) {
+	postEvict := func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
+		ret.preloads.removed(path, size)
 		inuseBytes.Add(float64(-size))
 		capacityBytes.Set(float64(capacityFunc()))
 	}
@@ -589,6 +593,7 @@ func (d *DiskCache) Read(
 		readOffset, readSize := int64(0), entry.Size
 		if diskPath == d.pathForFile(path.File) {
 			readOffset = entry.Offset
+			d.preloads.read(diskPath, entry.Size)
 		}
 		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
 			return err
@@ -1436,6 +1441,9 @@ func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) 
 		}
 		err = nil
 	}
+	if d.cache.Contains(diskPath) {
+		d.preloads.deleted(diskPath)
+	}
 	d.cache.Delete(ctx, diskPath)
 
 	// A pre-upgrade binary may have left a legacy, unsharded cache file for this
@@ -1450,6 +1458,9 @@ func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) 
 				return
 			}
 			err = nil
+		}
+		if d.cache.Contains(legacyPath) {
+			d.preloads.deleted(legacyPath)
 		}
 		d.cache.Delete(ctx, legacyPath)
 	}
