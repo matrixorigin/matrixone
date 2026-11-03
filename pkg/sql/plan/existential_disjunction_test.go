@@ -255,6 +255,78 @@ func TestExistentialDisjunctionDisabledAndCanceled(t *testing.T) {
 	}
 }
 
+func TestExistentialDisjunctionPreservesIndexHints(t *testing.T) {
+	for _, tc := range []struct {
+		name, hint string
+		indexScans int
+	}{
+		{"no hint", "", 2},
+		{"ignore", "ignore index(idx_a)", 0},
+		{"use empty", "use index()", 0},
+		{"use", "use index(idx_a)", 2},
+		{"force", "force index(idx_a)", 2},
+		// JOIN-scoped hints must not suppress local scan-filter access.
+		{"ignore for join leaves scan access", "ignore index for join(idx_a)", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			addIndexHintChoiceTableForTest(mock)
+			// Keep a single candidate: ignored indexes must not be replaced by
+			// another index, and the no-hint control must exercise index access.
+			mock.ctxt.tables["index_hint_t"].Indexes = mock.ctxt.tables["index_hint_t"].Indexes[:1]
+			p, err := runOneStmt(mock, t,
+				"select exists(select 1 from index_hint_t i "+tc.hint+
+					" where i.a=1 and (i.id=n.n_regionkey-1 or i.id=n.n_regionkey+1)) from tpch.nation n")
+			require.NoError(t, err)
+			var indexScans, marks int
+			for _, node := range reachableFlattenSubqueryNodes(p.GetQuery()) {
+				if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_MARK {
+					marks++
+				}
+				if node.NodeType == planpb.Node_TABLE_SCAN && node.IndexScanInfo.IsIndexScan {
+					indexScans++
+					require.Equal(t, "idx_a", node.IndexScanInfo.IndexName)
+				}
+			}
+			require.Equal(t, 2, marks, "the regression must exercise both copied OR arms")
+			require.Equal(t, tc.indexScans, indexScans, "every reachable arm must honor the inner table hint")
+		})
+	}
+}
+
+func TestExistentialDisjunctionCopiesIndexHintOwner(t *testing.T) {
+	b, mark, _ := existentialDisjunctionFixture(t)
+	tags := make(map[int32]bool)
+	for _, tag := range b.enumerateTags(mark.Children[1]) {
+		tags[tag] = true
+	}
+	chain, ok := b.existentialDisjunctionInput(mark.Children[1], tags)
+	require.True(t, ok)
+	source := chain[len(chain)-1]
+	hints := &indexHintSet{scan: indexHintScopeSet{useSpecified: true}, join: indexHintScopeSet{forceSpecified: true}}
+	b.indexHintsByScan = map[int32]*indexHintSet{source: hints}
+	b.indexHintOwnerByNode[source] = source
+	for generation := 0; generation < 2; generation++ {
+		input, _ := b.copyExistentialDisjunctionInput(chain)
+		tags = make(map[int32]bool)
+		for _, tag := range b.enumerateTags(input) {
+			tags[tag] = true
+		}
+		chain, ok = b.existentialDisjunctionInput(input, tags)
+		require.True(t, ok)
+		copyID := chain[len(chain)-1]
+		require.NotEqual(t, source, copyID)
+		require.Same(t, hints, b.indexHintsByScan[copyID])
+		owner, inherited := b.indexHintOwnerByNode[copyID]
+		require.True(t, inherited)
+		require.Equal(t, source, owner, "copying a copy must retain the original table-reference owner")
+		require.Same(t, b.qry.Nodes[source], b.indexHintOwnerScan(copyID))
+		require.True(t, b.scanForcesJoinIndex(copyID))
+	}
+	require.Same(t, hints, b.indexHintsByScan[source])
+	require.Equal(t, source, b.indexHintOwnerByNode[source])
+}
+
 func TestExistentialDisjunctionOldPathDoesNotAllocate(t *testing.T) {
 	b := &QueryBuilder{qry: &planpb.Query{StmtType: planpb.Query_SELECT}}
 	predicates := []*planpb.Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: function.EQUAL, ObjName: "="}}}}}

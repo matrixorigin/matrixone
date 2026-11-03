@@ -179,6 +179,7 @@ func (builder *QueryBuilder) copyExistentialDisjunctionInput(chain []int32) (int
 			}
 		}
 		input = builder.appendNode(node, builder.ctxByNode[id])
+		builder.inheritIndexHints(input, id)
 	}
 	return input, tags
 }
