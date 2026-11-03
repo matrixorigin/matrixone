@@ -656,6 +656,9 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		count := bat.RowCount()
 		evaluated := false
 		var hashBytesBefore int64
+		var compactHitRows int64
+		compactEligible := !group.DynamicGrouping && !group.ctr.groupingAware && !group.ctr.legacyH8CharSemantics &&
+			compactGroupExpressions(group.GroupBy)
 		if !group.ctr.hr.IsEmpty() {
 			hashBytesBefore = group.ctr.hr.Hash.Size()
 		}
@@ -690,14 +693,20 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 				if err == nil {
 					hashKeyVecs := group.ctr.hashKeyVectors(
 						group.ctr.groupByEvaluate.Vec)
-					err = group.ctr.hr.TxnItr.PreviewInsert(
-						i, n, hashKeyVecs,
-						group.ctr.hr.Hash.GroupCount(),
-						&group.ctr.hr.insertPlan)
-					if err == nil {
-						preview.values = group.ctr.hr.insertPlan.Values()
-						preview.inserted = group.ctr.hr.insertPlan.Inserted()
-						preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+					var compact bool
+					if compactEligible {
+						preview, compact, err = group.ctr.previewCompactGroups(hashKeyVecs, i, n)
+					}
+					if err == nil && !compact {
+						err = group.ctr.hr.TxnItr.PreviewInsert(
+							i, n, hashKeyVecs,
+							group.ctr.hr.Hash.GroupCount(),
+							&group.ctr.hr.insertPlan)
+						if err == nil {
+							preview.values = group.ctr.hr.insertPlan.Values()
+							preview.inserted = group.ctr.hr.insertPlan.Inserted()
+							preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+						}
 					}
 					if err == nil && preview.newGroups > 0 {
 						var growth uint64
@@ -729,7 +738,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					}
 					if err == nil {
 						err = group.ctr.hr.Hash.PreAlloc(
-							group.ctr.hr.insertPlan.NewGroups())
+							uint64(preview.newGroups))
 					}
 					if err == nil {
 						err = group.ctr.preflightBuildChunk(
@@ -788,6 +797,11 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 								return false, err
 							}
 						}
+						if preview.existingOnly {
+							compactHitRows += int64(n)
+						} else {
+							group.ctr.hr.publishCompactGroups(vals[:n])
+						}
 						break
 					}
 				}
@@ -800,6 +814,9 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			}
 		} // end of mini batch for loop
 
+		if compactHitRows > 0 {
+			group.OpAnalyzer.GetOpStats().AddExtraStat("GroupCompactLookupRows", compactHitRows)
+		}
 		observeHashGrowth(group.OpAnalyzer.GetOpStats(), "GroupHashBuild", hashBytesBefore, group.ctr.hr.Hash.Size())
 		// Prefer subdividing eligible exact DISTINCT keys before generic Group
 		// spill. A hot group's key set can make progress only on this axis.
