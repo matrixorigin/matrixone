@@ -143,7 +143,7 @@ func TestUnsortedPKInArrayUsesByteEquality(t *testing.T) {
 					require.NoError(t, vector.AppendArray(needles, []float64{float64(i)}, false, mp))
 				}
 			}
-			needles.InplaceSortAndCompact()
+			require.NoError(t, needles.InplaceSortAndCompact(mp))
 			require.True(t, needles.GetSorted())
 			if oid == types.T_array_float32 {
 				require.NoError(t, vector.AppendArray(rows, []float32{2}, false, mp))
