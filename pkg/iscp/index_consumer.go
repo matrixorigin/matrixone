@@ -61,6 +61,16 @@ type ignoredRowWriter interface {
 	setIgnored(*ignoredRows)
 }
 
+// ignoredTableWriter is a writer whose index statements record the rows the index cannot store.
+type ignoredTableWriter interface {
+	// followingSql returns, once, the statement to run after the one the last ToSql returned.
+	followingSql() []byte
+	// checkIgnored stops the job when the index left out too many rows.
+	checkIgnored(ctx context.Context, service string, txn client.TxnOperator, rebuild bool) error
+	// hasIgnored reports whether the index has an ignored table.
+	hasIgnored() bool
+}
+
 var _ Consumer = new(IndexConsumer)
 
 var runTxnWithSqlContext = sqlexec.RunTxnWithSqlContext
@@ -197,8 +207,10 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				return
 			case sql, ok := <-c.sqlBufSendCh:
 				if !ok {
-					if c.ignored != nil {
-						if err := c.RunTxn(ctx, r, 5*time.Minute, c.flushIgnored); err != nil {
+					if c.recordsIgnored() {
+						if err := c.RunTxn(ctx, r, 5*time.Minute, func(sqlproc *sqlexec.SqlProcess) error {
+							return c.flushIgnoredOf(sqlproc, true)
+						}); err != nil {
 							reportIndexConsumerErr(errch, err)
 						}
 					}
@@ -490,10 +502,26 @@ func waitISCPIndexCancelCtx(ctx context.Context, key, indexName string) error {
 
 // flushIgnored writes the iteration's ignored rows in the transaction that commits it.
 func (c *IndexConsumer) flushIgnored(sqlproc *sqlexec.SqlProcess) error {
+	return c.flushIgnoredOf(sqlproc, false)
+}
+
+// flushIgnoredOf is flushIgnored of an iteration that rebuilds the index or not.
+func (c *IndexConsumer) flushIgnoredOf(sqlproc *sqlexec.SqlProcess, rebuild bool) error {
+	if w, ok := c.sqlWriter.(ignoredTableWriter); ok {
+		return w.checkIgnored(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), rebuild)
+	}
 	if c.ignored == nil {
 		return nil
 	}
 	return c.ignored.flush(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), c.indexName())
+}
+
+// recordsIgnored reports whether the index records the rows it cannot store.
+func (c *IndexConsumer) recordsIgnored() bool {
+	if w, ok := c.sqlWriter.(ignoredTableWriter); ok {
+		return w.hasIgnored()
+	}
+	return c.ignored != nil
 }
 
 func (c *IndexConsumer) indexName() string {
@@ -819,6 +847,17 @@ func (c *IndexConsumer) sendSql(ctx context.Context, errch chan error, writer In
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+	if w, ok := writer.(ignoredTableWriter); ok {
+		if following := w.followingSql(); following != nil {
+			select {
+			case c.sqlBufSendCh <- following:
+			case err := <-errch:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 	}
 	//os.Stderr.WriteString(string(sql))
 	//os.Stderr.WriteString("\n")

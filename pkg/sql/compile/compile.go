@@ -83,6 +83,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/productl2"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -486,6 +487,7 @@ func (c *Compile) clear() {
 	if c.anal != nil {
 		c.anal.release()
 	}
+	c.productL2IgnoredOf = nil
 	// Materialized sources own allocation-account-backed retained and decoded
 	// batches but are not VM operators. Close their compile-owned safety nets
 	// before sealing the execution account, especially on partial-run failures
@@ -2147,6 +2149,18 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		c.setAnalyzeCurrent(right, int(curNodeIdx))
 		left = c.ensureCoordinatorOnlyFunctions(node, left)
 		right = c.ensureCoordinatorOnlyFunctions(node, right)
+		if node.JoinType == plan.Node_L2 {
+			ig, err := c.productL2Ignored(node)
+			if err != nil {
+				return nil, err
+			}
+			if ig != nil {
+				if c.productL2IgnoredOf == nil {
+					c.productL2IgnoredOf = make(map[*plan.Node]*productl2.Ignored)
+				}
+				c.productL2IgnoredOf[node] = ig
+			}
+		}
 		ss = c.compileSort(node, c.compileJoin(node, nodes[node.Children[0]], nodes[node.Children[1]], left, right))
 		return ss, nil
 	case plan.Node_SORT:
@@ -7201,6 +7215,7 @@ func (c *Compile) compileProbeSideForBroadcastJoin(node, left, right *plan.Node,
 		currentFirstFlag := c.anal.isFirst
 		for i := range rs {
 			op := constructProductL2(node, c.proc)
+			op.Ignored = c.productL2IgnoredOf[node]
 			op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 			rs[i].setRootOperator(op)
 			if rs[i].NodeInfo.Mcpu != 1 {

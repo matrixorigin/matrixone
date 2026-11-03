@@ -1107,9 +1107,10 @@ func (builder *QueryBuilder) deletePkColExpr(relPos, sourceStep int32) *plan.Exp
 }
 
 // buildIrregularIvfDeleteByPk drops the stale IVF entries keyed by the recorded PK
-// position. It projects only the entries row_id + compound pk into the join output
-// (the join key is the integer PK, never the vector), so it is robust to the
-// materialized layout and never copies the base vector through the hash join.
+// position, and the ignored rows of those keys. It projects only the hidden table's
+// row_id + primary key into the join output (the join key is the base PK, never the
+// vector), so it is robust to the materialized layout and never copies the base
+// vector through the hash join.
 func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, multiTableIndex *MultiTableIndex, sourceStep int32) error {
 	async, err := catalog.IndexParamAsync(multiTableIndex.IndexAlgoParams)
 	if err != nil {
@@ -1118,46 +1119,61 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 	if async {
 		return nil
 	}
+	if err = builder.buildIrregularHiddenDeleteByPk(bindCtx, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries],
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, catalog.CPrimaryKeyColName, sourceStep); err != nil {
+		return err
+	}
+	if ignored, ok := multiTableIndex.IndexDefs[catalog.IndexIgnored_TblType]; ok {
+		return builder.buildIrregularHiddenDeleteByPk(bindCtx, ignored,
+			catalog.IndexIgnored_TblCol_Pk, catalog.IndexIgnored_TblCol_Pk, sourceStep)
+	}
+	return nil
+}
 
+// buildIrregularHiddenDeleteByPk deletes the rows of the hidden table of indexdef whose
+// column originPkCol is a recorded PK; pkCol is the table's primary key.
+func (builder *QueryBuilder) buildIrregularHiddenDeleteByPk(bindCtx *BindContext, indexdef *IndexDef, originPkCol, pkCol string, sourceStep int32) error {
 	objRef := builder.irregularMaintObjRef
-	entriesObjRef, entriesTableDef, err := builder.compCtx.ResolveIndexTableByRef(
-		objRef, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName, nil)
+	hiddenObjRef, hiddenTableDef, err := builder.compCtx.ResolveIndexTableByRef(objRef, indexdef.IndexTableName, nil)
 	if err != nil {
 		return err
 	}
-	if entriesTableDef == nil {
-		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName,
-			multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexName)
+	if hiddenTableDef == nil {
+		return moerr.NewNoSuchTable(builder.GetContext(), objRef.SchemaName, indexdef.IndexName)
 	}
 
-	// entries scan projecting [row_id, cpk, origin_pk] (positions 0,1,2).
+	// hidden table scan projecting [row_id, pk, origin_pk] (positions 0,1,2).
 	scanCols := make([]*ColDef, 0, 3)
 	scanProj := make([]*plan.Expr, 3)
-	var rowidTyp, cpkTyp, orgPkTyp plan.Type
-	for _, col := range entriesTableDef.Cols {
-		var slot int
-		switch col.Name {
-		case catalog.Row_ID:
-			slot, rowidTyp = 0, col.Typ
-		case catalog.CPrimaryKeyColName:
-			slot, cpkTyp = 1, col.Typ
-		case catalog.SystemSI_IVFFLAT_TblCol_Entries_pk:
-			slot, orgPkTyp = 2, col.Typ
-		default:
+	var rowidTyp, pkTyp, orgPkTyp plan.Type
+	for _, col := range hiddenTableDef.Cols {
+		var slots []int
+		if col.Name == catalog.Row_ID {
+			slots, rowidTyp = append(slots, 0), col.Typ
+		}
+		if col.Name == pkCol {
+			slots, pkTyp = append(slots, 1), col.Typ
+		}
+		if col.Name == originPkCol {
+			slots, orgPkTyp = append(slots, 2), col.Typ
+		}
+		if len(slots) == 0 {
 			continue
 		}
-		scanProj[slot] = &plan.Expr{
-			Typ:  col.Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(len(scanCols)), Name: col.Name}},
+		for _, slot := range slots {
+			scanProj[slot] = &plan.Expr{
+				Typ:  col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(len(scanCols)), Name: col.Name}},
+			}
 		}
 		scanCols = append(scanCols, col)
 	}
-	scanTableDef := CloneTableDefForPlan(entriesTableDef, false)
+	scanTableDef := CloneTableDefForPlan(hiddenTableDef, false)
 	scanTableDef.Cols = scanCols
-	ivfScanID := builder.appendNode(&plan.Node{
+	scanID := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
-		ObjRef:      entriesObjRef,
+		ObjRef:      hiddenObjRef,
 		TableDef:    scanTableDef,
 		ProjectList: scanProj,
 	}, bindCtx)
@@ -1165,7 +1181,7 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 	// direct sink-scan of the shared materialized image (no intermediate sink).
 	srcScan := appendSinkScanNode(builder, bindCtx, sourceStep)
 
-	// join entries (left) with the image (right) on origin_pk == old/final PK.
+	// join the hidden table (left) with the image (right) on origin_pk == old/final PK.
 	cond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 		{Typ: orgPkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
 		builder.deletePkColExpr(1, sourceStep),
@@ -1176,15 +1192,15 @@ func (builder *QueryBuilder) buildIrregularIvfDeleteByPk(bindCtx *BindContext, m
 	joinID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		JoinType: plan.Node_INNER,
-		Children: []int32{ivfScanID, srcScan},
+		Children: []int32{scanID, srcScan},
 		OnList:   []*plan.Expr{cond},
 		ProjectList: []*plan.Expr{
 			{Typ: rowidTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: catalog.Row_ID}}},
-			{Typ: cpkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: catalog.CPrimaryKeyColName}}},
+			{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: pkCol}}},
 		},
 	}, bindCtx)
 
-	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, entriesObjRef, entriesTableDef, 0, false, 1, cpkTyp, false)
+	delNodeInfo := makeDeleteNodeInfo(builder.compCtx, hiddenObjRef, hiddenTableDef, 0, false, 1, pkTyp, false)
 	lastID, err := makeOneDeletePlan(builder, bindCtx, joinID, delNodeInfo, false, true, false)
 	putDeleteNodeInfo(delNodeInfo)
 	if err != nil {

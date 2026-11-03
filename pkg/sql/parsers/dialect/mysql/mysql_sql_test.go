@@ -5808,6 +5808,10 @@ var (
 			output: "select t.a from sa.t centroidx ('vector_ip_ops') join u",
 		},
 		{
+			input:  `select t.a from sa.t centroidx ('Vector_l2_ops', '{"quantization":"int8"}', '{"db":"D","ignored":"it''s"}') join u`,
+			output: `select t.a from sa.t centroidx ('vector_l2_ops', '{"quantization":"int8"}', '{"db":"D","ignored":"it\'s"}') join u`,
+		},
+		{
 			input: "alter user u1 lock",
 		},
 		{

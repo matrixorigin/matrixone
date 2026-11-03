@@ -56,6 +56,10 @@ type TableConfig struct {
 	IndexTable    string `json:"index"`    // chunk store (FullText2Index_TblType_Storage)
 	MetadataTable string `json:"metadata"` // metadata (FullText2Index_TblType_Metadata)
 	PKey          string `json:"pkey"`
+	// IgnoredTable is the table of the rows the index cannot read, "" when the index has none;
+	// MaxBadRecords is the number of rows it may hold.
+	IgnoredTable  string `json:"ignored,omitempty"`
+	MaxBadRecords int64  `json:"max_bad_records,omitempty"`
 	Parser        string `json:"parser,omitempty"`
 	// TokenFilters is the ordered token_filter chain (currently only "stop"),
 	// sourced from the persisted token_filter algo_param so the build (create, CDC

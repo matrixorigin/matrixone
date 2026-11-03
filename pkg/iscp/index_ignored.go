@@ -48,6 +48,10 @@ type ignoredRows struct {
 	tbl    string
 	table  string
 	pkType *types.Type
+	// pkScales are the scales of the parts of a composite key, nil for a single column.
+	pkScales []int32
+	// pkEnum are the members of an ENUM key.
+	pkEnum string
 	limit  int64
 	// count is the number of changes that record a row, and kept the number of rows a rebuild
 	// stores.
@@ -70,8 +74,27 @@ type ignoredRows struct {
 type ignoredChange struct {
 	pk      any
 	code    uint16
+	reason  string
 	ts      types.TS
 	ignored bool
+}
+
+// pkString returns the primary key pk as users read it.
+func (g *ignoredRows) pkString(pk any) string {
+	if g.pkScales != nil {
+		switch b := pk.(type) {
+		case []byte:
+			return vectorindex.SerialPkString(b, g.pkScales)
+		case string:
+			return vectorindex.SerialPkString([]byte(b), g.pkScales)
+		}
+	}
+	if e, ok := pk.(types.Enum); ok {
+		if label, err := types.ParseEnumIndex(g.pkEnum, e); err == nil {
+			return label
+		}
+	}
+	return fmt.Sprint(pk)
 }
 
 // ignoredKey returns a map key equal for equal primary keys.
@@ -94,13 +117,20 @@ func newIgnoredRows(dbName string, tableDef *plan.TableDef, indexdefs []*plan.In
 			return nil, err
 		}
 		pk := tableDef.Cols[tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]].Typ
+		pkType := &types.Type{Oid: types.T(pk.Id), Width: pk.Width, Scale: pk.Scale}
+		if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+			// the serial of a composite key is written in hex, as the index writers do
+			pkType.Oid = types.T_varbinary
+		}
 		return &ignoredRows{
-			db:      dbName,
-			tbl:     idx.IndexTableName,
-			table:   sqlquote.QualifiedIdent(dbName, idx.IndexTableName),
-			pkType:  &types.Type{Oid: types.T(pk.Id), Width: pk.Width, Scale: pk.Scale},
-			limit:   limit,
-			changes: make(map[any]ignoredChange),
+			db:       dbName,
+			tbl:      idx.IndexTableName,
+			table:    sqlquote.QualifiedIdent(dbName, idx.IndexTableName),
+			pkType:   pkType,
+			pkScales: vectorindex.SerialPkScales(tableDef),
+			pkEnum:   pk.Enumvalues,
+			limit:    limit,
+			changes:  make(map[any]ignoredChange),
 		}, nil
 	}
 	return nil, nil
@@ -120,7 +150,7 @@ func (g *ignoredRows) ignore(pk any, err error) error {
 		if !g.changes[key].ignored {
 			g.count++
 		}
-		g.changes[key] = ignoredChange{pk: pk, code: code, ts: g.ts, ignored: true}
+		g.changes[key] = ignoredChange{pk: pk, code: code, reason: vectorindex.IgnoredReason(err), ts: g.ts, ignored: true}
 		return nil
 	}
 	g.count++
@@ -128,13 +158,13 @@ func (g *ignoredRows) ignore(pk any, err error) error {
 		g.firstPk, g.firstErr = pk, err
 	}
 	if g.count > g.limit {
-		return NewPermanentError(moerr.NewIndexTooManyBadRecordsNoCtx(g.limit, fmt.Sprint(pk), err.Error()))
+		return NewPermanentError(moerr.NewIndexTooManyBadRecordsNoCtx(g.limit, g.pkString(pk), err.Error()))
 	}
 	lit, cerr := convertColIntoSql(g.ctx, pk, g.pkType, nil)
 	if cerr != nil {
 		return cerr
 	}
-	return g.spill.Add(string(lit), code)
+	return g.spill.Add(string(lit), code, vectorindex.IgnoredReason(err))
 }
 
 // indexed records that the row with key pk is in the index or no longer exists.
@@ -200,12 +230,12 @@ func (g *ignoredRows) flush(ctx context.Context, service string, txn client.TxnO
 	if g.reset {
 		defer g.close()
 		if g.count > 0 && g.kept == 0 {
-			return NewPermanentError(moerr.NewIndexAllRowsBadNoCtx(g.count, fmt.Sprint(g.firstPk), g.firstErr.Error()))
+			return NewPermanentError(moerr.NewIndexAllRowsBadNoCtx(g.count, g.pkString(g.firstPk), g.firstErr.Error()))
 		}
 		if err := exec(fmt.Sprintf("DELETE FROM %s WHERE TRUE", g.table)); err != nil {
 			return err
 		}
-		cols := vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Ts: catalog.IndexIgnored_TblCol_Ts}
+		cols := vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Reason: catalog.IndexIgnored_TblCol_Reason, Ts: catalog.IndexIgnored_TblCol_Ts}
 		if err := g.spill.Sqls(g.db, g.tbl, cols, g.ts.Physical(), exec); err != nil {
 			return err
 		}
@@ -213,7 +243,7 @@ func (g *ignoredRows) flush(ctx context.Context, service string, txn client.TxnO
 			logutil.Warn("ISCP-Task index ignored rows",
 				zap.String("index", indexName),
 				zap.Int64("ignored", g.count),
-				zap.String("first", fmt.Sprintf("%v: %v", g.firstPk, g.firstErr)))
+				zap.String("first", fmt.Sprintf("%s: %v", g.pkString(g.firstPk), g.firstErr)))
 		}
 		return nil
 	}
@@ -260,9 +290,9 @@ func (g *ignoredRows) flush(ctx context.Context, service string, txn client.TxnO
 			return err
 		}
 		c := g.changes[k]
-		rows = append(rows, vectorindex.IgnoredRow{Pk: string(lit), Code: c.code, Ts: c.ts.Physical()})
+		rows = append(rows, vectorindex.IgnoredRow{Pk: string(lit), Code: c.code, Reason: c.reason, Ts: c.ts.Physical()})
 	}
-	for _, sql := range vectorindex.IgnoredRowsSql(g.db, g.tbl, vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Ts: catalog.IndexIgnored_TblCol_Ts}, rows) {
+	for _, sql := range vectorindex.IgnoredRowsSql(g.db, g.tbl, vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Reason: catalog.IndexIgnored_TblCol_Reason, Ts: catalog.IndexIgnored_TblCol_Ts}, rows) {
 		if err := exec(sql); err != nil {
 			return err
 		}
@@ -274,14 +304,14 @@ func (g *ignoredRows) flush(ctx context.Context, service string, txn client.TxnO
 		}
 		if n > g.limit {
 			c := g.changes[ignored[0]]
-			return NewPermanentError(moerr.NewIndexTooManyBadRecordsNoCtx(g.limit, fmt.Sprint(c.pk), moerr.MessageOf(c.code)))
+			return NewPermanentError(moerr.NewIndexTooManyBadRecordsNoCtx(g.limit, g.pkString(c.pk), moerr.MessageOf(c.code)))
 		}
 	}
 
 	if len(ignored) > 0 {
 		samples := make([]string, 0, ignoredLogSamples)
 		for _, k := range ignored[:min(len(ignored), ignoredLogSamples)] {
-			samples = append(samples, fmt.Sprintf("%v: %d", k, g.changes[k].code))
+			samples = append(samples, fmt.Sprintf("%s: %d", g.pkString(g.changes[k].pk), g.changes[k].code))
 		}
 		logutil.Warn("ISCP-Task index ignored rows",
 			zap.String("index", indexName),

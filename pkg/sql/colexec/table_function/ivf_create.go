@@ -76,63 +76,18 @@ type ivfCreateState struct {
 }
 
 func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc *process.Process, data [][]T) error {
-
-	var clusterer kmeans.Clusterer
-	var err error
-	var ok bool
-
 	version, err := ivfflat.GetVersion(sqlexec.NewSqlProcess(proc), u.tblcfg)
 	if err != nil {
 		return err
 	}
 
-	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
-
-	logutil.Infof("IVFFLAT START: Kmeans clustering CREATE")
-	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
-	var centers [][]T
-	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
-	if clusterer, err = device.NewKMeans(
-		data, int(u.idxcfg.Ivfflat.Lists),
-		int(u.idxcfg.Ivfflat.KmeansMaxIteration),
-		defaultKmeansDeltaThreshold,
-		metric.MetricType(u.idxcfg.Ivfflat.Metric),
-		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
-		u.idxcfg.Ivfflat.Spherical, // For dense vector, spherical kmeans is false.
-		int(nworker),
-		gpuMode); err != nil {
+	var values []string
+	if len(data) < int(u.idxcfg.Ivfflat.Lists) {
+		// the rows the index cannot store are no samples: fewer samples than lists seed one NULL
+		// centroid, as a table with fewer rows does
+		values = []string{fmt.Sprintf("(%d, 1, NULL)", version)}
+	} else if values, err = kmeansCentroids(u, proc, data, version); err != nil {
 		return err
-	}
-	logutil.Infof("IVFFLAT END: Kmeans clustering CREATE")
-	defer func() {
-		if clusterer != nil {
-			logutil.Infof("IVFFLAT START: Kmeans clustering Closed")
-			clusterer.Close()
-			logutil.Infof("IVFFLAT END: Kmeans clustering Closed")
-		}
-	}()
-
-	logutil.Infof("IVFFLAT START: Kmeans clustering RUN")
-	anycenters, err := clusterer.Cluster(proc.Ctx)
-	if err != nil {
-		return err
-	}
-	logutil.Infof("IVFFLAT END: Kmeans clustering RUN")
-
-	centers, ok = anycenters.([][]T)
-	if !ok {
-		return moerr.NewInternalError(proc.Ctx, "centers is not [][]float64")
-	}
-
-	// insert into centroid table
-	values := make([]string, 0, len(centers))
-	for i, c := range centers {
-		s := types.ArrayToString(c)
-		values = append(values, fmt.Sprintf("(%d, %d, '%s')", version, i, s))
-	}
-
-	if len(values) == 0 {
-		return moerr.NewInternalError(proc.Ctx, "output centroids is empty")
 	}
 
 	logutil.Infof("IVFFLAT START: After Kmeans clustering, insert centroids to table")
@@ -181,6 +136,64 @@ func clustering[T types.RealNumbers](u *ivfCreateState, tf *TableFunction, proc 
 	}
 
 	return nil
+}
+
+// kmeansCentroids returns the rows of the centroids k-means trains on data.
+func kmeansCentroids[T types.RealNumbers](u *ivfCreateState, proc *process.Process, data [][]T, version int64) ([]string, error) {
+	var clusterer kmeans.Clusterer
+	var err error
+	var ok bool
+
+	nworker := vectorindex.GetConcurrencyForBuild(u.tblcfg.ThreadsBuild)
+
+	logutil.Infof("IVFFLAT START: Kmeans clustering CREATE")
+	// NOTE: We use L2 distance to caculate centroid.  Ivfflat metric just for searching.
+	var centers [][]T
+	gpuMode := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+	if clusterer, err = device.NewKMeans(
+		data, int(u.idxcfg.Ivfflat.Lists),
+		int(u.idxcfg.Ivfflat.KmeansMaxIteration),
+		defaultKmeansDeltaThreshold,
+		metric.MetricType(u.idxcfg.Ivfflat.Metric),
+		kmeans.InitType(u.idxcfg.Ivfflat.InitType),
+		u.idxcfg.Ivfflat.Spherical, // For dense vector, spherical kmeans is false.
+		int(nworker),
+		gpuMode); err != nil {
+		return nil, err
+	}
+	logutil.Infof("IVFFLAT END: Kmeans clustering CREATE")
+	defer func() {
+		if clusterer != nil {
+			logutil.Infof("IVFFLAT START: Kmeans clustering Closed")
+			clusterer.Close()
+			logutil.Infof("IVFFLAT END: Kmeans clustering Closed")
+		}
+	}()
+
+	logutil.Infof("IVFFLAT START: Kmeans clustering RUN")
+	anycenters, err := clusterer.Cluster(proc.Ctx)
+	if err != nil {
+		return nil, err
+	}
+	logutil.Infof("IVFFLAT END: Kmeans clustering RUN")
+
+	centers, ok = anycenters.([][]T)
+	if !ok {
+		return nil, moerr.NewInternalError(proc.Ctx, "centers is not [][]float64")
+	}
+
+	// insert into centroid table
+	values := make([]string, 0, len(centers))
+	for i, c := range centers {
+		s := types.ArrayToString(c)
+		values = append(values, fmt.Sprintf("(%d, %d, '%s')", version, i, s))
+	}
+
+	if len(values) == 0 {
+		return nil, moerr.NewInternalError(proc.Ctx, "output centroids is empty")
+	}
+
+	return values, nil
 }
 
 func (u *ivfCreateState) end(tf *TableFunction, proc *process.Process) error {
@@ -372,9 +385,15 @@ func (u *ivfCreateState) start(tf *TableFunction, proc *process.Process, nthRow 
 		u.idxcfg.Ivfflat.Dimensions = uint(dimension)
 		//elemsz := res.Batches[0].Vecs[0].GetType().GetArrayElementSize()
 
+		// a row the index cannot store does not train the centroids; its int8/uint8 range is not
+		// known before they are trained
+		storage := ivfflat.NewStorage(embedvec.GetType().Oid, u.param.Quantization, 0, 0, false)
 		for _, bat := range res.Batches {
 			evec := bat.Vecs[0]
 			for i := 0; i < bat.RowCount(); i++ {
+				if storage.Check(evec.GetBytesAt(i)) != nil {
+					continue
+				}
 				var f32a []float32
 				switch evec.GetType().Oid {
 				case types.T_array_float32:

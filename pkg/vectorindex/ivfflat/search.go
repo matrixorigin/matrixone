@@ -609,6 +609,19 @@ func (idx *IvfflatSearchIndex[T]) entryQueryExpression(
 		"ivfflat: cannot encode %T query for entries vector type %s", query, vectorType.String()))
 }
 
+// queryStorage returns how the index stores a query decoded to T.
+func (idx *IvfflatSearchIndex[T]) queryStorage(idxcfg vectorindex.IndexConfig) Storage {
+	_, f32 := any(*new(T)).(float32)
+	entry := types.T(idxcfg.Ivfflat.VectorType)
+	if entry == 0 {
+		entry = types.T_array_float64
+		if f32 {
+			entry = types.T_array_float32
+		}
+	}
+	return Storage{F32: f32, Entry: entry, Mul: idx.QuantMul, Add: idx.QuantAdd}
+}
+
 func (idx *IvfflatSearchIndex[T]) buildSearchRoundSQL(
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
@@ -821,6 +834,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 				"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
 		}
 	}()
+
+	if err = CheckQuery(idx.queryStorage(idxcfg), query); err != nil {
+		return nil, nil, err
+	}
 
 	if sqlproc != nil {
 		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData

@@ -105,7 +105,7 @@ func TestHnswWriterIgnoresUnstorableVectors(t *testing.T) {
 	require.NoError(t, ignored.flush(ctx, "", nil, "hnsw_idx"))
 	require.Equal(t, []string{
 		"DELETE FROM `test_db`.`ignored_tbl` WHERE `__mo_index_pk` IN (1,4,5)",
-		fmt.Sprintf("REPLACE INTO `test_db`.`ignored_tbl` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_ts`) VALUES (2, %d, 7), (3, %d, 7)",
+		fmt.Sprintf("REPLACE INTO `test_db`.`ignored_tbl` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_reason`, `__mo_index_ts`) VALUES (2, %d, NULL, 7), (3, %d, NULL, 7)",
 			moerr.ErrIndexVectorOutOfRange, moerr.ErrIndexVectorOutOfRange),
 		"SELECT COUNT(*) FROM `test_db`.`ignored_tbl`",
 	}, *sqls)
@@ -130,7 +130,7 @@ func TestIgnoredRowsTransitions(t *testing.T) {
 	require.NoError(t, ignored.flush(ctx, "", nil, "idx"))
 	require.Equal(t, []string{
 		"DELETE FROM `db`.`ignored_tbl` WHERE `__mo_index_pk` IN (2)",
-		fmt.Sprintf("REPLACE INTO `db`.`ignored_tbl` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_ts`) VALUES (1, %d, 0)", moerr.ErrIndexVectorNonFinite),
+		fmt.Sprintf("REPLACE INTO `db`.`ignored_tbl` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_reason`, `__mo_index_ts`) VALUES (1, %d, NULL, 0)", moerr.ErrIndexVectorNonFinite),
 		"SELECT COUNT(*) FROM `db`.`ignored_tbl`",
 	}, *sqls)
 
@@ -148,7 +148,7 @@ func TestIgnoredRowsTransitions(t *testing.T) {
 	require.NoError(t, ignored.flush(ctx, "", nil, "idx"))
 	require.Equal(t, []string{
 		"DELETE FROM `db`.`ignored_tbl` WHERE TRUE",
-		fmt.Sprintf("REPLACE INTO `db`.`ignored_tbl` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_ts`) VALUES (3, %d, 0)", moerr.ErrIndexVectorOutOfRange),
+		fmt.Sprintf("REPLACE INTO `db`.`ignored_tbl` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_reason`, `__mo_index_ts`) VALUES (3, %d, NULL, 0)", moerr.ErrIndexVectorOutOfRange),
 	}, *sqls)
 }
 
@@ -339,4 +339,29 @@ func TestPermanentErrorCause(t *testing.T) {
 // SHOW INDEX STATUS shows a job stopped by a permanent error by its state in mo_iscp_log.
 func TestStoppedJobState(t *testing.T) {
 	require.Equal(t, ISCPJobState_Error, catalog.MoISCPJobStateError)
+}
+
+// A composite key reads as its parts in the errors and logs of the tracker.
+func TestIgnoredRowsPkString(t *testing.T) {
+	p := types.NewPacker()
+	defer p.Close()
+	p.EncodeInt64(1)
+	p.EncodeStringType([]byte("x"))
+	g := &ignoredRows{pkScales: []int32{0, 0}}
+	require.Equal(t, "(1, x)", g.pkString(p.GetBuf()))
+	require.Equal(t, "(1, x)", g.pkString(string(p.GetBuf())))
+	require.Equal(t, "7", (&ignoredRows{}).pkString(int64(7)))
+	require.Equal(t, "b", (&ignoredRows{pkEnum: "a,b"}).pkString(types.Enum(2)), "users read the member")
+	require.Equal(t, "3", (&ignoredRows{pkEnum: "a,b"}).pkString(types.Enum(3)), "no such member")
+
+	tabledef := newTestHnswIgnoredTableDef("float16", 0)
+	tabledef.Pkey = &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"pk", "pk"}}
+	tabledef.Cols = append(tabledef.Cols, &plan.ColDef{Name: catalog.CPrimaryKeyColName, Typ: plan.Type{Id: int32(types.T_varchar)}})
+	tabledef.Name2ColIndex[catalog.CPrimaryKeyColName] = int32(len(tabledef.Cols) - 1)
+	ignored, err := newIgnoredRows("db", tabledef, tabledef.Indexes)
+	require.NoError(t, err)
+	require.NoError(t, ignored.load(context.Background(), "", nil, true, t.TempDir()))
+	defer ignored.close()
+	err = ignored.ignore(p.GetBuf(), outOfRange("c"))
+	require.ErrorContains(t, err, "row (1, x): ")
 }

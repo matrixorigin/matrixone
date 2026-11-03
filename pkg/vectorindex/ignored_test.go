@@ -22,17 +22,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIgnoredRowsSql(t *testing.T) {
-	cols := IgnoredColumns{Pk: "__mo_index_pk", Code: "__mo_index_code", Ts: "__mo_index_ts"}
+	cols := IgnoredColumns{Pk: "__mo_index_pk", Code: "__mo_index_code", Reason: "__mo_index_reason", Ts: "__mo_index_ts"}
 	require.Empty(t, IgnoredRowsSql("db", "t", cols, nil))
 
-	sqls := IgnoredRowsSql("db", "t", cols, []IgnoredRow{{Pk: "1", Code: moerr.ErrIndexVectorOutOfRange, Ts: 5}, {Pk: "'x'", Code: moerr.ErrIndexVectorNonFinite, Ts: 6}})
+	sqls := IgnoredRowsSql("db", "t", cols, []IgnoredRow{{Pk: "1", Code: moerr.ErrIndexVectorOutOfRange, Ts: 5},
+		{Pk: "'x'", Code: moerr.ErrIndexDatalink, Reason: "stage://s/a.pdf: it's gone", Ts: 6}})
 	require.Equal(t, []string{
-		"REPLACE INTO `db`.`t` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_ts`) VALUES (1, 20348, 5), ('x', 20347, 6)",
+		"REPLACE INTO `db`.`t` (`__mo_index_pk`, `__mo_index_code`, `__mo_index_reason`, `__mo_index_ts`) VALUES (1, 20348, NULL, 5), ('x', 20352, 'stage://s/a.pdf: it''s gone', 6)",
 	}, sqls)
 
 	rows := make([]IgnoredRow, ignoredRowsPerSql+1)
@@ -45,11 +49,21 @@ func TestIgnoredRowsSql(t *testing.T) {
 	require.Equal(t, 1, strings.Count(sqls[1], ", 20346, "))
 }
 
+func TestIgnoredReason(t *testing.T) {
+	require.Empty(t, IgnoredReason(moerr.NewIndexVectorOutOfRangeNoCtx("70000 as F16")))
+	err := moerr.NewIndexDatalinkNoCtx("stage://s/a.pdf: file not found")
+	require.Equal(t, err.Error(), IgnoredReason(err))
+	err = moerr.NewIndexInvalidJSONNoCtx("json text {")
+	require.Equal(t, err.Error(), IgnoredReason(err))
+}
+
 func TestUnstorableCode(t *testing.T) {
 	for _, err := range []error{
 		moerr.NewIndexVectorDimensionNoCtx("3 != 4"),
 		moerr.NewIndexVectorNonFiniteNoCtx(),
 		moerr.NewIndexVectorOutOfRangeNoCtx("70000 as F16"),
+		moerr.NewIndexInvalidJSONNoCtx("json text {"),
+		moerr.NewIndexDatalinkNoCtx("stage://s/a.pdf: file not found"),
 	} {
 		code, ok := UnstorableCode(err)
 		require.True(t, ok)
@@ -70,7 +84,7 @@ func TestUnstorableCode(t *testing.T) {
 // A spill gives back its rows in order, in statements of at most ignoredRowsPerSql rows, and
 // removes its file.
 func TestIgnoredSpill(t *testing.T) {
-	cols := IgnoredColumns{Pk: "pk", Code: "code", Ts: "ts"}
+	cols := IgnoredColumns{Pk: "pk", Code: "code", Reason: "reason", Ts: "ts"}
 	dir := t.TempDir()
 
 	empty := NewIgnoredSpill(dir)
@@ -84,7 +98,11 @@ func TestIgnoredSpill(t *testing.T) {
 		if i == 1 {
 			pk = "'a''b\nc'"
 		}
-		require.NoError(t, s.Add(pk, moerr.ErrIndexVectorOutOfRange))
+		reason := ""
+		if i == 2 {
+			reason = "file not found"
+		}
+		require.NoError(t, s.Add(pk, moerr.ErrIndexVectorOutOfRange, reason))
 	}
 	require.Equal(t, int64(n), s.Len())
 	files, err := os.ReadDir(dir)
@@ -94,10 +112,10 @@ func TestIgnoredSpill(t *testing.T) {
 	var sqls []string
 	require.NoError(t, s.Sqls("db", "t", cols, 7, func(sql string) error { sqls = append(sqls, sql); return nil }))
 	require.Len(t, sqls, 2)
-	require.True(t, strings.HasPrefix(sqls[0], "REPLACE INTO `db`.`t` (`pk`, `code`, `ts`) VALUES (0, 20348, 7), ('a''b\nc', 20348, 7), (2, 20348, 7)"))
-	require.Equal(t, ignoredRowsPerSql, strings.Count(sqls[0], ", 20348, 7)"))
-	require.Equal(t, 3, strings.Count(sqls[1], ", 20348, 7)"))
-	require.True(t, strings.HasSuffix(sqls[1], fmt.Sprintf("(%d, 20348, 7)", n-1)))
+	require.True(t, strings.HasPrefix(sqls[0], "REPLACE INTO `db`.`t` (`pk`, `code`, `reason`, `ts`) VALUES (0, 20348, NULL, 7), ('a''b\nc', 20348, NULL, 7), (2, 20348, 'file not found', 7)"))
+	require.Equal(t, ignoredRowsPerSql, strings.Count(sqls[0], ", 20348, "))
+	require.Equal(t, 3, strings.Count(sqls[1], ", 20348, NULL, 7)"))
+	require.True(t, strings.HasSuffix(sqls[1], fmt.Sprintf("(%d, 20348, NULL, 7)", n-1)))
 
 	boom := errors.New("boom")
 	require.ErrorIs(t, s.Sqls("db", "t", cols, 7, func(string) error { return boom }), boom)
@@ -107,4 +125,35 @@ func TestIgnoredSpill(t *testing.T) {
 	files, err = os.ReadDir(dir)
 	require.NoError(t, err)
 	require.Empty(t, files)
+}
+
+func TestCentroidxArgs(t *testing.T) {
+	args, err := CentroidxArgs("vector_l2_ops", `{"lists":"2"}`, IndexTableConfig{DbName: "db"})
+	require.NoError(t, err)
+	require.Equal(t, "'vector_l2_ops'", args, "an index without an ignored table keeps the metric alone")
+	args, err = CentroidxArgs("vector_l2_ops", `{"lists":"2"}`, IndexTableConfig{DbName: "db", IgnoredTable: "ign", MaxBadRecords: 3})
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(args, `'vector_l2_ops', '{"lists":"2"}', '{"db":"db",`), args)
+	require.Contains(t, args, `"ignored":"ign"`)
+	require.Contains(t, args, `"max_bad_records":3`)
+}
+
+func TestSerialPkString(t *testing.T) {
+	p := types.NewPacker()
+	defer p.Close()
+	p.EncodeInt64(1)
+	p.EncodeStringType([]byte("x"))
+	d, err := types.Decimal64FromFloat64(1.5, 10, 2)
+	require.NoError(t, err)
+	p.EncodeDecimal64(d)
+	require.Equal(t, "(1, x, 1.50)", SerialPkString(p.GetBuf(), []int32{0, 0, 2}))
+	require.Equal(t, "X'ff01'", SerialPkString([]byte{0xff, 0x01}, nil), "bytes that are no serial")
+
+	tableDef := &plan.TableDef{
+		Cols: []*plan.ColDef{{Name: "a"}, {Name: "d", Typ: plan.Type{Scale: 2}}},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"d", "a"}},
+	}
+	require.Equal(t, []int32{2, 0}, SerialPkScales(tableDef))
+	tableDef.Pkey = &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
+	require.Nil(t, SerialPkScales(tableDef), "a single key column")
 }

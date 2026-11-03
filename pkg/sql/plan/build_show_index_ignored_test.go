@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -127,4 +128,19 @@ func TestIgnoredReasonSql(t *testing.T) {
 	for _, code := range []uint16{moerr.ErrIndexVectorDimension, moerr.ErrIndexVectorNonFinite, moerr.ErrIndexVectorOutOfRange} {
 		require.Contains(t, sql, fmt.Sprintf(" WHEN %d THEN '%s'", code, moerr.MessageOf(code)))
 	}
+}
+
+func TestIgnoredPkSql(t *testing.T) {
+	require.Equal(t, "CAST(`__mo_index_pk` AS VARCHAR)", ignoredPkSql(&TableDef{Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}}))
+	require.Equal(t, "CAST(`__mo_index_pk` AS VARCHAR)", ignoredPkSql(&TableDef{}))
+	def := &TableDef{
+		Cols: []*ColDef{
+			{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}},
+			{Name: "b", Typ: plan.Type{Id: int32(types.T_varchar), Width: 10}},
+		},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"a", "b"}},
+	}
+	require.Equal(t, "CONCAT('(', CAST(SERIAL_EXTRACT(`__mo_index_pk`, 0 AS INT) AS VARCHAR), ', ', CAST(SERIAL_EXTRACT(`__mo_index_pk`, 1 AS VARCHAR(10)) AS VARCHAR), ')')", ignoredPkSql(def))
+	def.Cols[1].Typ = plan.Type{Id: int32(types.T_enum), Enumvalues: "x,it's"}
+	require.Contains(t, ignoredPkSql(def), "ELT(CAST(SERIAL_EXTRACT(`__mo_index_pk`, 1 AS ENUM('x','it''s')) AS INT), 'x', 'it''s')", "an ENUM part reads as its member")
 }

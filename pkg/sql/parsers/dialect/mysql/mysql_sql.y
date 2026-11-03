@@ -8398,6 +8398,10 @@ optype_opt:
     {
 	$$ = $2
     }
+|	'(' optype ',' STRING ',' STRING ')'
+    {
+	$$ = tree.CentroidxOption{OpType: $2, Params: $4, Config: $6}.String()
+    }
 
 straight_join:
     STRAIGHT_JOIN

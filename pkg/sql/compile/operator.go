@@ -318,6 +318,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.OnExpr = t.OnExpr
 		op.JoinMapTag = t.JoinMapTag
 		op.VectorOpType = t.VectorOpType
+		op.Ignored = t.Ignored
 		op.SetInfo(&info)
 		return op
 	case vm.Projection:
@@ -3058,7 +3059,8 @@ func constructProductL2(node *plan.Node, proc *process.Process) *productl2.Produ
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := productl2.NewArgument()
-	arg.VectorOpType = node.ExtraOptions
+	opt, _ := tree.ParseCentroidxOption(node.ExtraOptions)
+	arg.VectorOpType = opt.OpType
 	arg.Result = result
 	arg.OnExpr = colexec.RewriteFilterExprList(node.OnList)
 	for i := range node.SendMsgList {

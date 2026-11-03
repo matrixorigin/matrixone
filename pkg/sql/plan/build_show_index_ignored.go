@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -71,9 +72,9 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 				continue
 			}
 			selects = append(selects, fmt.Sprintf(
-				"SELECT CAST(%s AS VARCHAR) AS `Key_name`, CAST(%s AS VARCHAR) AS `Primary_key`, %s AS `Error_code`, %s AS `Reason`, FROM_UNIXTIME(%s DIV 1000000000) AS `Ignored_at` FROM %s",
+				"SELECT CAST(%s AS VARCHAR) AS `Key_name`, %s AS `Primary_key`, %s AS `Error_code`, %s AS `Reason`, FROM_UNIXTIME(%s DIV 1000000000) AS `Ignored_at` FROM %s",
 				sqlquote.String(idx.IndexName),
-				sqlquote.Ident(catalog.IndexIgnored_TblCol_Pk),
+				ignoredPkSql(def),
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Code),
 				reason,
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Ts),
@@ -99,6 +100,35 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 	}
 	readOnBehalfOf(p, ignoredTables, objRef)
 	return p, nil
+}
+
+// ignoredPkSql returns the primary key of an ignored row of tableDef as text: a composite key,
+// recorded as the serial of its parts, as the list of its parts.
+func ignoredPkSql(tableDef *TableDef) string {
+	pk := sqlquote.Ident(catalog.IndexIgnored_TblCol_Pk)
+	if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		return fmt.Sprintf("CAST(%s AS VARCHAR)", pk)
+	}
+	parts := make([]string, 0, len(tableDef.Pkey.Names))
+	for i, name := range tableDef.Pkey.Names {
+		for _, col := range tableDef.Cols {
+			if col.Name == name {
+				if types.T(col.Typ.Id) == types.T_enum {
+					// the extracted ENUM is its number: ELT reads the member
+					members := strings.Split(col.Typ.Enumvalues, ",")
+					for j, member := range members {
+						members[j] = sqlquote.String(member)
+					}
+					parts = append(parts, fmt.Sprintf("ELT(CAST(SERIAL_EXTRACT(%s, %d AS ENUM(%s)) AS INT), %s)",
+						pk, i, strings.Join(members, ","), strings.Join(members, ", ")))
+					break
+				}
+				typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+				parts = append(parts, fmt.Sprintf("CAST(SERIAL_EXTRACT(%s, %d AS %s) AS VARCHAR)", pk, i, typ.DescString()))
+			}
+		}
+	}
+	return fmt.Sprintf("CONCAT('(', %s, ')')", strings.Join(parts, ", ', ', "))
 }
 
 // tableWithPartitions returns tableDef and the definitions of its partitions, with the names
