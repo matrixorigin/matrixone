@@ -1,7 +1,7 @@
 # Bounded reuse-aware decoded cache admission
 
 Owner: #30849. Base: main 38f4ba680442ec00be281cbeb707dbfbe1d18bc7.
-Status: design approved by the user's “Implement the plan” instruction on 2026-11-03.
+Status: revised no-new-layer design approved by the user's latest “Implement the plan” instruction on 2026-11-03.
 Risk: R3 (hot path, resource ownership and generation lifecycle).
 
 ## Contract and implementation
@@ -10,7 +10,7 @@ Retain normal admission before the reader threshold. Beyond it use an internal r
 
 Decide before decoded allocation, so rejected reads do not evict useful cache contents merely to allocate temporary decode storage. Existing physical reservations, pin accounting, ownership transfer and rejection remain authoritative. Do not count retries of the same read as reuse. Shared decode/fill cannot upgrade a bypass decision.
 
-Use existing FIFO ghosts, keyed by canonical path/offset/size. History retains no payload, is bounded by represented decoded bytes and a metadata allowance min(configured capacity/1024,64 MiB), with that allowance deducted from payload capacity. Include retained paths and conservative item/map overhead. Capacity shrink trims both; delete/flush/close remove relevant history. No new cache worker, user knob, on-disk format or protocol.
+Use observation-only entries in the existing FIFO key namespace, keyed by canonical path/offset/size. They retain no payload and have an intrusive FIFO list owned by that cache; bounding them must not shorten ordinary replacement ghost history. Bound represented decoded bytes and metadata allowance min(configured capacity/1024,64 MiB), deducted from payload capacity. Include retained paths and conservative item/map overhead. Capacity shrink trims observations; delete/flush/close invalidate them. Payload admission may promote an observed key, while rejected publication restores a still-live observation. No new data cache tier, controller, read-ahead subsystem, worker, user knob, on-disk format or protocol.
 
 Alternatives: removing the cutoff repeats the reverted 1T exposure; rejecting only at Update is too late because allocation can evict; retaining encoded pages is a separate policy and is outside this PR. Default-on acceptance requires independent SF10/SF100 and paired equivalent 1T regression evidence.
 
