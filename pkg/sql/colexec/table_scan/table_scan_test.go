@@ -583,7 +583,7 @@ func TestShrinkPopulatedVecs_SkipsUnmaterializedColumn(t *testing.T) {
 	defer bat.Clean(mp)
 
 	require.NotPanics(t, func() {
-		shrinkPopulatedVecs(bat, []int64{1, 3})
+		require.NoError(t, shrinkPopulatedVecs(bat, []int64{1, 3}, mp))
 	})
 
 	require.Equal(t, 2, bat.RowCount())
@@ -604,7 +604,7 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	bat.SetRowCount(3)
 	defer bat.Clean(mp)
 
-	shrinkPopulatedVecs(bat, []int64{0, 1, 2})
+	require.NoError(t, shrinkPopulatedVecs(bat, []int64{0, 1, 2}, mp))
 	require.Equal(t, 3, bat.RowCount())
 	require.Equal(t, []int64{1, 2, 3}, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]))
 
@@ -613,7 +613,7 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	empty.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 	empty.SetRowCount(0)
 	defer empty.Clean(mp)
-	require.NotPanics(t, func() { shrinkPopulatedVecs(empty, []int64{}) })
+	require.NotPanics(t, func() { require.NoError(t, shrinkPopulatedVecs(empty, []int64{}, mp)) })
 	require.Equal(t, 0, empty.RowCount())
 }
 
@@ -639,10 +639,12 @@ func TestCallReadPolicy(t *testing.T) {
 			proc.Ctx = callerCtx
 
 			var seen []fileservice.Policy
+			var groups []uint64
 			reader := mock_frontend.NewMockReader(ctrl)
 			reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 				func(ctx context.Context, _ []string, _ *plan.Expr, _ interface{}, _ *batch.Batch) (bool, error) {
 					seen = append(seen, fileservice.GetFileServicePolicy(ctx))
+					groups = append(groups, fileservice.GetPreloadGroup(ctx))
 					return true, nil
 				}).AnyTimes()
 			reader.EXPECT().Close().Return(nil).AnyTimes()
@@ -654,11 +656,17 @@ func TestCallReadPolicy(t *testing.T) {
 				Attrs:      []string{"int_col"},
 				Types:      []plan.Type{plan.MakePlan2Type(&typ)},
 				ReadPolicy: tc.readPolicy,
+				TableID:    42,
 			}
 			require.NoError(t, arg.Prepare(proc))
 			_, err := vm.Exec(arg, proc)
 			require.NoError(t, err)
 			require.Equal(t, []fileservice.Policy{tc.want}, seen)
+			wantGroup := uint64(0)
+			if tc.readPolicy != 0 {
+				wantGroup = 42
+			}
+			require.Equal(t, []uint64{wantGroup}, groups, "only scans with a read policy are grouped")
 			require.Equal(t, fileservice.Policy(fileservice.SkipMemoryCacheWrites), fileservice.GetFileServicePolicy(proc.Ctx))
 
 			arg.Free(proc, false, nil)
