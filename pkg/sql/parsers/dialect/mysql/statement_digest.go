@@ -54,6 +54,8 @@ type statementDigestSyntax struct {
 	// Lexical candidates only enable the final contextual walk. The same
 	// spelling can be an alias or appear in an unused CTE, so do not reject it.
 	checkTableNames bool
+	invalidTemporal map[*tree.FuncExpr]struct{}
+	temporalMode    digestTemporalMode
 }
 type digestSymbol struct {
 	id       uint16
@@ -81,8 +83,9 @@ func StatementDigest(ctx context.Context, sql, sqlMode string) (string, string, 
 	}
 	ctx = WithParseLimits(ctx, limits)
 	syntax := &statementDigestSyntax{
-		nulls:      make(map[int]struct{}),
-		normalized: &statementDigest{},
+		nulls:        make(map[int]struct{}),
+		normalized:   &statementDigest{},
+		temporalMode: digestTemporalSQLMode(sqlMode),
 	}
 	stmts, parseErr := parseWithSQLMode(ctx, sql, 0, sqlMode, syntax)
 	if parseErr != nil {

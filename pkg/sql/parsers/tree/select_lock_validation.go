@@ -21,12 +21,12 @@ import (
 	"unicode/utf8"
 )
 
-// ValidateSelectContext shares query-expression contextualization between lock
-// checks and digest-only table-name checks. WITH definitions are itemized only
-// on reference. Neither check resolves a catalog or executes a query.
-func ValidateSelectContext(stmt Statement, nameKey func(string) string, locks, tableNames bool) string {
+// ValidateSelectContext shares query-expression contextualization between lock,
+// table-name and optional expression checks. WITH definitions are itemized only
+// on reference. Checks never resolve a catalog or execute a query.
+func ValidateSelectContext(stmt Statement, nameKey func(string) string, locks, tableNames bool, checkExpr func(Expr) string) string {
 	return validateSelectLockValue(reflect.ValueOf(stmt), &selectLockScope{
-		nameKey: nameKey, checkLocks: locks, checkTableNames: tableNames,
+		nameKey: nameKey, checkLocks: locks, checkTableNames: tableNames, checkExpr: checkExpr,
 	})
 }
 
@@ -69,16 +69,17 @@ type selectLockScope struct {
 	checkLocks       bool
 	checkTableNames  bool
 	checkViewColumns bool
+	checkExpr        func(Expr) string
 }
 
 func (scope *selectLockScope) child() *selectLockScope {
 	return &selectLockScope{outer: scope, nameKey: scope.nameKey,
 		checkLocks: scope.checkLocks, checkTableNames: scope.checkTableNames,
-		checkViewColumns: scope.checkViewColumns}
+		checkViewColumns: scope.checkViewColumns, checkExpr: scope.checkExpr}
 }
 
 func validateExplainTableNames(stmt Statement, scope *selectLockScope) string {
-	if !scope.checkTableNames {
+	if !scope.checkTableNames && scope.checkExpr == nil {
 		return ""
 	}
 	inner := *scope
@@ -144,6 +145,13 @@ func validateSelectLockValue(value reflect.Value, scope *selectLockScope) string
 	if value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
 		if value.IsNil() {
 			return ""
+		}
+		if value.Kind() == reflect.Pointer && value.CanInterface() && scope.checkExpr != nil {
+			if expr, ok := value.Interface().(Expr); ok {
+				if err := scope.checkExpr(expr); err != "" {
+					return err
+				}
+			}
 		}
 		if value.CanInterface() {
 			switch node := value.Interface().(type) {

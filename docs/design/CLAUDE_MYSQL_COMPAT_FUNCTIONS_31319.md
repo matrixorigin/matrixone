@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v20，2026-11-02。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v21，2026-11-03。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -100,6 +100,10 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - DDL列定义的CHAR/CHARACTER/NCHAR长度不超过255字符、BINARY宽度不超过255字节；BIT显式长度为1..64，省略不等于显式0。原length_opt/length的展示宽度可能把0映射为默认值，因此yacc语义栈保留原始typeLength（空产生式-1）供BIT检查，不在持久AST或池状态加字段。DECIMAL/NUMERIC/DEC的小数位上限30在共同decimal_length_opt归约检查，精度65及M≥D规则继续沿用。
 - CAST/CONVERT支持POINT、LINESTRING、POLYGON、MULTIPOINT、MULTILINESTRING、MULTIPOLYGON、GEOMETRYCOLLECTION七种空间目标（含GEOMCOLLECTION原生同token别名），泛型GEOMETRY不属于CAST目标；CONVERT的空间产生式仅digest开放，普通parser准入不变。MO专属GEOGRAPHY/32声明不能利用归一化的GEOMETRY FamilyString冒充原生MySQL类型，spatial_type在构造前核对固定MySQL词表。MO未收录的GEOMCOLLECTION别名保留ID词法角色，只在类型产生式按固定原生token身份桥接到规范GEOMETRYCOLLECTION类型，不全局改变其函数/名称语法或准许任意ID类型。CAST/CONVERT重用类型构造但不重用DDL准入：浮点目标只允许无参数或FLOAT单参数形式，不接受(M,D)；NUMERIC、BIT、VARCHAR等不是MySQL CAST目标，YEAR也不带长度。CHAR/BINARY在CAST中不套DDL的255限制。共同digestCastTypeValid在mo_cast_type改写无长度CHAR之前验证，CONVERT的decimal_type入口同样消费；其TIME/DATETIME独立产生式也检查0..6精度，TIME使用原始typeLength而非把显式0映射后的DisplayWith作为判据。有符号目标仍由独立产生式构造。CHARACTER只在digest词法适配并保留CHARACTER SET角色；NCHAR与NATIONAL CHAR由类型产生式所有，不能全局折叠成CHAR使SELECT NCHAR(1)/NATIONAL CHAR(1)误成为函数。digest-only NATIONAL token也可按非保留词作为普通名字，但不进入ID泛型函数产生式；类型上下文后接CHAR时采用显式shift优先级，生成零冲突。独立编码扫描不改原生token身份。
 - SHOW LIKE模式只接受一个普通STRING token，不接受数字、NULL、函数、子查询、括号表达式、字符集引导或后缀运算。Lexer复用现有语法深度/记录器，在根SHOW且顶层WHERE之前派发DIGEST_SHOW_LIKE，专用产生式只消费STRING；WHERE表达式内（含子查询）的LIKE仍是正常比较运算。根SHOW/WHERE布尔量在setScanner与分号边界重置，原普通LIKE/ILIKE解析准入不变，digest不接受SHOW ILIKE。SHOW根节点的LIKE/WHERE至多一个；CHARSET/TRIGGERS/EVENTS等支持单一过滤，ENGINES/PLUGINS/PRIVILEGES/PROFILES不接受过滤，MO专有CONFIG不属于MySQL语法。共同纯检查只检查根SHOW AST字段，不统计过滤子查询的WHERE或LIKE表达式。LOCAL在SHOW STATUS/VARIABLES中是SESSION同义词，仅digest加入该准入。
+- MATCH AGAINST的文本参数与ENGINE/COMMENT的STRING-only域不同。text_literal统一STRING、折叠引导字符串及非折叠charset STRING/HEX的AST构造，由literal与search_pattern共享；普通parser的AGAINST仅保留原P_char准入。digest不套执行侧空查询串禁令，但保留原非空列语法；不执行检索或查目录。
+- INTERVAL value unit不是独立表达式。digest-only DIGEST_INTERVAL进入原生语法：bit_expr加/减interval、前置interval加完整expression、DATE_ADD/DATE_SUB/ADDDATE/SUBDATE的interval参数、window frame及独立INTERVAL(...)函数。不能从MO已降低的FuncExpr父节点猜合法性，也不能用同名函数代替语法身份。普通INTERVAL token保留MO原准入；新增token仅由Lexer派发，独立编码scanner不改变native token。完整表达式引入的比较/LIKE ESCAPE/简单表达式后缀歧义按原生优先级显式归约；复用现有优先级而非扩展goyacc packed等级或放宽冲突门禁，保留PIPES_AS_CONCAT正控。
+- DATE/TIME/TIMESTAMP typed literal在itemization检查原生日期/时间字段及类型身份；运行时DATE()/TIME()/TIMESTAMP()/CAST不套该规则。私有digestTemporalMode捕获NO_ZERO_DATE、NO_ZERO_IN_DATE、ALLOW_INVALID_DATES/TRADITIONAL，不扩展持久SQLModeFlags。解析支持原生紧凑/分隔格式、两位年、模糊零日期、闰年（原生year=0非闰）、TIME扩展小时/日期段及原生unsigned累加再检查语义、秒后必须有小数点的fraction、微秒与纳秒舍入溢出、固定offset范围；conversion警告导致失败而非把结果当有效。沿用budget，按字节预付额外检查工作。
+- 无效时间literal只记录本次解析的候选节点：复用既有引用式CTE/名称/锁作用域遍历，在被itemize时通过表达式回调拒绝。未引用CTE内的无效literal不提前失败，引用、derived、view和EXPLAIN不能跳过；没有候选不增加walk。回调仅本次语法数据，无全局cache/目录查询/执行副作用；错误仍归原parser清理所有者，普通parser回调为nil。
 - 生成 parser 必须零冲突且可复现。
 - 裸时间默认值须来自原生 keyword 语法域；复用 FuncExpr.IsGeneric 保存普通 identifier 函数身份，digest-only 解析额外标记被引号包裹的原生时间 keyword。IGNORE_SPACE 仅放宽函数名和左括号之间的空白，不跨注释；括号表达式也不接受这些伪装的原生函数。普通执行 parser 契约不变。
 - 摘要 lexer 的 ROW 构造器适配不能吞掉窗口 frame 的 CURRENT ROW；该 native frame token 保持原样。窗口跳过的是列 itemization，不跳过 parser、资源预算或摘要编码。

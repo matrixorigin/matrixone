@@ -1,0 +1,99 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package mysql
+
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDigestLiteralAndIntervalDomains(t *testing.T) {
+	for _, test := range []struct {
+		name, sql, mode string
+		reject          bool
+	}{
+		{"match-introduced", "SELECT MATCH(a) AGAINST(_utf8mb4'a') FROM t", "", false},
+		{"match-gap", "SELECT MATCH(a) AGAINST(_utf8mb4 /*gap*/ 'a' IN BOOLEAN MODE) FROM t", "", false},
+		{"match-national", "SELECT MATCH(a) AGAINST(N'a') FROM t", "", false},
+		{"match-empty", "SELECT MATCH(a) AGAINST(_utf8mb4'') FROM t", "", false},
+		{"match-no-columns", "SELECT MATCH() AGAINST('a')", "", true},
+		{"interval-not-value", "SELECT INTERVAL 1 DAY", "", true},
+		{"interval-parenthesis", "SELECT (INTERVAL 1 DAY) + 1", "", true},
+		{"interval-wrong-operator", "SELECT 1 * INTERVAL 1 DAY", "", true},
+		{"interval-right", "SELECT 1 - INTERVAL 1 DAY", "", false},
+		{"interval-left", "SELECT INTERVAL 1 DAY + 1", "", false},
+		{"interval-prefix-unary", "SELECT -INTERVAL 1 DAY + 1", "", false},
+		{"interval-nested-prefix", "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1", "", false},
+		{"interval-function", "SELECT INTERVAL(1,2,3)", "", false},
+		{"interval-native-date-add", "SELECT DATE_ADD(1,INTERVAL 1 DAY)", "", false},
+		{"interval-date-add-scalar", "SELECT DATE_ADD(1,INTERVAL 1 DAY + 1)", "", true},
+		{"interval-generic-function", "SELECT foo(1,INTERVAL 1 DAY)", "", true},
+		{"interval-window", "SELECT SUM(1) OVER (ORDER BY a RANGE BETWEEN INTERVAL 1 DAY PRECEDING AND CURRENT ROW) FROM t", "", false},
+		{"date-invalid-calendar", "SELECT DATE'2020-02-30'", "", true},
+		{"date-invalid-allowed", "SELECT DATE'2020-02-30'", "ALLOW_INVALID_DATES", false},
+		{"date-leap-century", "SELECT DATE'1900-02-29'", "", true},
+		{"date-leap-four-century", "SELECT DATE'2000-02-29'", "", false},
+		{"date-zero", "SELECT DATE'0000-00-00'", "", false},
+		{"date-year-zero-not-leap", "SELECT DATE'0000-02-29'", "", true},
+		{"date-no-zero", "SELECT DATE'0000-00-00'", "NO_ZERO_DATE", true},
+		{"date-no-zero-in-date", "SELECT DATE'2020-00-01'", "NO_ZERO_IN_DATE", true},
+		{"date-not-datetime", "SELECT DATE'2020-01-01 00:00:00'", "", true},
+		{"time-extended-hour", "SELECT TIME'25:00:00'", "", false},
+		{"time-max", "SELECT TIME'838:59:59'", "", false},
+		{"time-overflow", "SELECT TIME'839:00:00'", "", true},
+		{"time-invalid-minute", "SELECT TIME'25:61:00'", "", true},
+		{"timestamp-date-only", "SELECT TIMESTAMP'2020-01-01'", "", true},
+		{"timestamp-extra-undelimited-digits", "SELECT TIMESTAMP'202001010000001'", "", true},
+		{"time-native-unsigned-accumulator", "SELECT TIME'18446744073709551616:00:00'", "", false},
+		{"timestamp-fraction-overflow", "SELECT TIMESTAMP'9999-12-31 23:59:59.9999999'", "", true},
+		{"timestamp-offset", "SELECT TIMESTAMP'2020-01-01 01:02:03+14:00'", "", false},
+		{"timestamp-invalid-offset", "SELECT TIMESTAMP'2020-01-01 01:02:03+14:01'", "", true},
+		{"cast-not-literal", "SELECT CAST('bad' AS DATE)", "", false},
+		{"date-function-not-literal", "SELECT DATE('bad')", "", false},
+		{"unused-cte", "WITH c AS (SELECT DATE'bad') SELECT 1", "", false},
+		{"used-cte", "WITH c AS (SELECT DATE'bad') SELECT * FROM c", "", true},
+		{"explain-itemizes", "EXPLAIN SELECT DATE'bad'", "", true},
+		{"derived-itemizes", "SELECT 1 FROM (SELECT DATE'bad') d", "", true},
+		{"concat-precedence-control", "SELECT 'a' || 'b'", "PIPES_AS_CONCAT", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for range 3 {
+				_, _, err := StatementDigest(t.Context(), test.sql, test.mode)
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				text, hash, err := StatementDigest(t.Context(), "SELECT 1", "")
+				require.NoError(t, err)
+				require.Equal(t, "SELECT ?", text)
+				require.Equal(t, "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae", hash)
+			}
+		})
+	}
+	for _, sql := range []string{"SELECT INTERVAL 1 DAY", "SELECT ABS(INTERVAL 1 DAY)", "SELECT DATE'bad'", "SELECT TIME'25:61:00'", "SELECT TIMESTAMP'2020-02-30 00:00:00'"} {
+		func() {
+			stmts, err := Parse(t.Context(), sql, 0)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.NoError(t, err, "ordinary parser owns its old admission: %s", sql)
+		}()
+	}
+}

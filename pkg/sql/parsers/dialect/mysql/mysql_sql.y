@@ -189,6 +189,13 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
         HasFrame: hasFrame,
     }
 }
+func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
+    return &tree.FuncExpr{
+        Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(name)),
+        FuncName: tree.NewCStr(name, 1),
+        Exprs: tree.Exprs{value, tree.NewTimeUnitExpr(strings.ToLower(unit))},
+    }
+}
 %}
 
 %struct {
@@ -531,7 +538,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %left <str> BETWEEN CASE WHEN THEN ELSE END ELSEIF
 %nonassoc LOWER_THAN_EQ
 %left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
-%left <str> '|'
+// ESCAPE shifts before completing LIKE, but below simple-expression suffixes.
+%left <str> '|' ESCAPE
 %left <str> '&'
 %left <str> SHIFT_LEFT SHIFT_RIGHT ARROW LONG_ARROW
 %left <str> '+' '-'
@@ -541,7 +549,6 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // HIGH_NOT shares the unary precedence used by the `!` production. The lexer
 // emits it only when HIGH_NOT_PRECEDENCE is active.
 %right <str> '~' UNARY HIGH_NOT
-%nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
 %left TYPECAST
 %nonassoc LOWER_THAN_SIGNED
@@ -551,7 +558,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %nonassoc LOWER_THAN_INT
 %left INT INTEGER
 %right <str> BINARY UNDERSCORE_BINARY
-%right <str> INTERVAL
+%right <str> INTERVAL DIGEST_INTERVAL
 %nonassoc <str> '.' ','
 
 %token <str> OUT INOUT
@@ -584,7 +591,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Create Table
 %token <str> CREATE ALTER DROP RENAME REMOVE ANALYZE PHYPLAN ADD RETURNS
 %token <str> SCHEMA TABLE SEQUENCE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
-%token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
+%token <str> SHOW DESCRIBE EXPLAIN DATE REPAIR OPTIMIZE TRUNCATE
 %token <str> MAXVALUE PARTITION REORGANIZE LESS THAN PROCEDURE TRIGGER
 %token <str> STATUS VARIABLES ROLE PROXY AVG_ROW_LENGTH STORAGE DISK MEMORY
 %token <str> CHECKSUM COMPRESSION DATA DIRECTORY DELAY_KEY_WRITE ENCRYPTION ENGINE
@@ -988,7 +995,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 %type <expr> literal num_literal
 %type <expr> predicate
-%type <expr> bit_expr interval_expr
+%type <expr> bit_expr interval_expr ordinary_interval_expr digest_interval_expr text_literal
 %type <expr> simple_expr else_opt
 %type <expr> expression value_expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
@@ -13283,7 +13290,12 @@ bit_expr:
             Exprs: tree.Exprs{inner},
         }
     }
-|   simple_expr %prec LOWER_THAN_COLLATE
+|   bit_expr '+' digest_interval_expr %prec '+'
+    { $$ = tree.NewBinaryExpr(tree.PLUS, $1, $3) }
+|   bit_expr '-' digest_interval_expr %prec '-'
+    { $$ = tree.NewBinaryExpr(tree.MINUS, $1, $3) }
+// Finish binary operands below concatenation/COLLATE/TYPECAST suffixes.
+|   simple_expr %prec '^'
     {
         $$ = $1
     }
@@ -13433,10 +13445,10 @@ simple_expr:
             return 1
         }
     }
-|   interval_expr
-    {
-        $$ = $1
-    }
+|   ordinary_interval_expr
+    { $$ = $1 }
+|   digest_interval_expr '+' expression %prec DIGEST_INTERVAL
+    { $$ = tree.NewBinaryExpr(tree.PLUS, $1, $3) }
 |   subquery
     {
         $$ = $1
@@ -13518,17 +13530,21 @@ simple_expr:
     }
 |   MATCH '(' index_column_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
     {
-	val, err := tree.NewFullTextMatchFuncExpression($3, $7, $8)
-	if err != nil {
-		yylex.Error(err.Error())
-		goto ret1
-	}
-	$$ = val
+        if yylex.(*Lexer).digest != nil {
+            $$ = &tree.FullTextMatchExpr{KeyParts: $3, Pattern: $7, Mode: $8}
+        } else {
+            val, err := tree.NewFullTextMatchFuncExpression($3, $7, $8)
+            if err != nil { yylex.Error(err.Error()); goto ret1 }
+            $$ = val
+        }
     }
 search_pattern:
-    STRING
+    text_literal
     {
-        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
+        if yylex.(*Lexer).digest == nil && $1.(*tree.NumVal).ValType != tree.P_char {
+            yylex.Error("syntax error"); goto ret1
+        }
+        $$ = $1
     }
 |   VALUE_ARG
     {
@@ -14778,6 +14794,23 @@ function_call_generic:
             Exprs: exprs,
         }
     }
+|   DIGEST_INTERVAL '(' bit_expr ',' expression_list ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1), Exprs: append(tree.Exprs{$3}, $5...)}
+    }
+|   func_not_keyword '(' expression_list ',' digest_interval_expr ')'
+    {
+        if len($3) != 1 { yylex.Error("Date arithmetic requires two arguments"); goto ret1 }
+        switch strings.ToUpper($1) {
+        case "DATE_ADD", "DATE_SUB", "ADDDATE", "SUBDATE":
+        default: yylex.Error("Function does not consume an INTERVAL operand"); goto ret1
+        }
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1), Exprs: append($3, $5)}
+    }
 |   substr_option '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -14827,6 +14860,9 @@ function_call_generic:
     }
 |   func_not_keyword '(' expression_list_opt ')'
     {
+        if yylex.(*Lexer).digest != nil && (strings.EqualFold($1, "DATE_ADD") || strings.EqualFold($1, "DATE_SUB")) {
+            yylex.Error("DATE_ADD/DATE_SUB require INTERVAL"); goto ret1
+        }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -15116,27 +15152,9 @@ function_call_keyword:
         }
     }
 |   DATE STRING
-    {
-        val := tree.NewNumVal($2, $2, false, tree.P_char)
-        name := tree.NewUnresolvedColName($1)
-        $$ = &tree.FuncExpr{
-            IsTemporalLiteral: true,
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{val},
-        }
-    }
+    { $$ = digestTemporalLiteral(yylex, $1, $2) }
 |   TIME STRING
-    {
-        val := tree.NewNumVal($2, $2, false, tree.P_char)
-        name := tree.NewUnresolvedColName($1)
-        $$ = &tree.FuncExpr{
-            IsTemporalLiteral: true,
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{val},
-        }
-    }
+    { $$ = digestTemporalLiteral(yylex, $1, $2) }
 |   INSERT '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -15167,16 +15185,7 @@ function_call_keyword:
         }
     }
 |   TIMESTAMP STRING
-    {
-        val := tree.NewNumVal($2, $2, false, tree.P_char)
-        name := tree.NewUnresolvedColName($1)
-        $$ = &tree.FuncExpr{
-            IsTemporalLiteral: true,
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{val},
-        }
-    }
+    { $$ = digestTemporalLiteral(yylex, $1, $2) }
 |   BITMAP_BIT_POSITION '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -15284,17 +15293,18 @@ name_confict:
 |   UUID
 
 interval_expr:
+    ordinary_interval_expr
+    { $$ = $1 }
+|   digest_interval_expr
+    { $$ = $1 }
+
+ordinary_interval_expr:
     INTERVAL expression time_unit
-    {
-        name := tree.NewUnresolvedColName($1)
-        str := strings.ToLower($3)
-        arg2 := tree.NewTimeUnitExpr(str)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: tree.Exprs{$2, arg2},
-        }
-    }
+    { $$ = makeIntervalExpr($1, $2, $3) }
+
+digest_interval_expr:
+    DIGEST_INTERVAL expression time_unit
+    { $$ = makeIntervalExpr($1, $2, $3) }
 
 func_type_opt:
     {
@@ -15362,7 +15372,7 @@ expression:
     {
         $$ = tree.NewNotExpr($2)
     }
-|   boolean_primary
+|   boolean_primary %prec NOT
     {
         $$ = $1
     }
@@ -15518,10 +15528,11 @@ predicate:
 |   bit_expr %prec LOWER_THAN_COMMA
 
 like_escape_opt:
+    %prec LIKE
     {
         $$ = nil
     }
-|   ESCAPE simple_expr
+|   ESCAPE simple_expr %prec LIKE
     {
         $$ = $2
     }
@@ -15627,7 +15638,7 @@ num_literal:
         $$ = tree.NewNumVal($1, $1, false, tree.P_decimal)
     }
 
-literal:
+text_literal:
     STRING
     {
         $$ = tree.NewNumVal($1, $1, false, tree.P_char)
@@ -15636,24 +15647,22 @@ literal:
     {
         $$ = tree.NewNumVal($1, $1, false, tree.P_char)
     }
-|   INTEGRAL
+|   UNDERSCORE_BINARY HEXNUM
     {
-        str := $<str>1
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumVal(v, str, false, tree.P_int64)
-        default:
-            yylex.Error("parse integral fail")
-            goto ret1
-        }
+        if !digestCharsetLiteralValid(yylex, $1, $2, true) { goto ret1 }
+        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinaryHexnum)
     }
-|   FLOAT
+|   UNDERSCORE_BINARY STRING
     {
-        fval := $1.(float64)
-        $$ = tree.NewNumVal(fval, yylex.(*Lexer).scanner.LastToken, false, tree.P_float64)
+        if !digestCharsetLiteralValid(yylex, $1, $2, false) { goto ret1 }
+        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinary)
     }
+
+literal:
+    text_literal
+    { $$ = $1 }
+|   num_literal
+    { $$ = $1 }
 |   TRUE
     {
         $$ = tree.NewNumVal(true, "true", false, tree.P_bool)
@@ -15673,15 +15682,7 @@ literal:
     {
         $$ = tree.NewNumVal($1, $1, false, tree.P_hexnum)
     }
-|   UNDERSCORE_BINARY HEXNUM
-    {
-        if !digestCharsetLiteralValid(yylex, $1, $2, true) { goto ret1 }
-        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinaryHexnum)
-    }
-|   DECIMAL_VALUE
-    {
-        $$ = tree.NewNumVal($1, $1, false, tree.P_decimal)
-    }
+
 |   BIT_LITERAL
     {
         $$ = tree.NewNumVal($1, $1, false, tree.P_bit)
@@ -15689,11 +15690,6 @@ literal:
 |   VALUE_ARG
     {
         $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
-    }
-|   UNDERSCORE_BINARY STRING
-    {
-        if !digestCharsetLiteralValid(yylex, $1, $2, false) { goto ret1 }
-        $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinary)
     }
 
 column_type:

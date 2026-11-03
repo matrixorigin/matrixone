@@ -571,6 +571,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// ROW constructor and quoted user-variable names without changing ordinary
 	// SQL execution syntax. The independent digest scanner keeps their tokens.
 	if l.digest != nil {
+		if typ == INTERVAL {
+			typ = DIGEST_INTERVAL
+		}
 		// A SHOW filter accepts a text token, not an arbitrary expression.
 		// WHERE and nested queries retain ordinary LIKE expression syntax.
 		if typ == LIKE && l.digestShow && !l.digestShowWhere && l.syntaxDepth == 0 {
@@ -1064,12 +1067,16 @@ func validateSelectIntoStatements(lexer *Lexer) error {
 				checkNames = true
 			}
 		}
-		if lexer.selectLockClauses > 1 || checkNames {
+		var checkExpr func(tree.Expr) string
+		if lexer.digest != nil && len(lexer.digest.invalidTemporal) != 0 {
+			checkExpr = lexer.digest.checkTemporalExpression
+		}
+		if lexer.selectLockClauses > 1 || checkNames || checkExpr != nil {
 			nameKey := strings.ToLower
 			if lexer.digest != nil {
 				nameKey = digestIdentifierKey
 			}
-			if errMsg := tree.ValidateSelectContext(stmt, nameKey, lexer.selectLockClauses > 1, checkNames); errMsg != "" {
+			if errMsg := tree.ValidateSelectContext(stmt, nameKey, lexer.selectLockClauses > 1, checkNames, checkExpr); errMsg != "" {
 				lexer.Error(errMsg)
 				return lexer.scanner.LastError
 			}

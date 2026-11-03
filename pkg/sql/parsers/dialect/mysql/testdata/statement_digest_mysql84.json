@@ -44526,5 +44526,3289 @@
     "sql": "SELECT t.geomcollection FROM t",
     "text": "SELECT `t` . `geomcollection` FROM `t`",
     "digest": "9defdd7cda878af41a3bdc4eb9acf4d872989ddad8a7c313b4f27e70229db776"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST('a') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST (?) FROM `t`",
+    "digest": "662a08c20b7e7d7414c894f4e1940d404af64991eb681551dfa8ce0a2433b21c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST('a' IN BOOLEAN MODE) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( ? IN BOOLEAN MODE ) FROM `t`",
+    "digest": "54cd8850d0e79c88f83b69c33f9aa2670d65c40a880c998e40d9ddd8bb80072b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST('a' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( ? IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION ) FROM `t`",
+    "digest": "e83364246084204ecbf2f9ce391a88e62cda0744dc4a7ad4df356bb6c1022bb4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4'a') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? ) FROM `t`",
+    "digest": "28874992ccdf79f05dab4757c47f64d4822637646cb6952f63c3d3a388db23be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4'a' IN BOOLEAN MODE) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN BOOLEAN MODE ) FROM `t`",
+    "digest": "6a15eced5976e3265df814aee37af7a641ad48da335cbfbea080c3cb820ed90e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4'a' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION ) FROM `t`",
+    "digest": "d4d72ed430be3afa38ad1057713c9bb3d076e462ad9f17b167122e0460f91886"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4 /*gap*/ 'a') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? ) FROM `t`",
+    "digest": "28874992ccdf79f05dab4757c47f64d4822637646cb6952f63c3d3a388db23be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4 /*gap*/ 'a' IN BOOLEAN MODE) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN BOOLEAN MODE ) FROM `t`",
+    "digest": "6a15eced5976e3265df814aee37af7a641ad48da335cbfbea080c3cb820ed90e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4 /*gap*/ 'a' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION ) FROM `t`",
+    "digest": "d4d72ed430be3afa38ad1057713c9bb3d076e462ad9f17b167122e0460f91886"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8'a') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? ) FROM `t`",
+    "digest": "28874992ccdf79f05dab4757c47f64d4822637646cb6952f63c3d3a388db23be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8'a' IN BOOLEAN MODE) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN BOOLEAN MODE ) FROM `t`",
+    "digest": "6a15eced5976e3265df814aee37af7a641ad48da335cbfbea080c3cb820ed90e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8'a' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION ) FROM `t`",
+    "digest": "d4d72ed430be3afa38ad1057713c9bb3d076e462ad9f17b167122e0460f91886"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_binary'a') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? ) FROM `t`",
+    "digest": "28874992ccdf79f05dab4757c47f64d4822637646cb6952f63c3d3a388db23be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_binary'a' IN BOOLEAN MODE) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN BOOLEAN MODE ) FROM `t`",
+    "digest": "6a15eced5976e3265df814aee37af7a641ad48da335cbfbea080c3cb820ed90e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_binary'a' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION ) FROM `t`",
+    "digest": "d4d72ed430be3afa38ad1057713c9bb3d076e462ad9f17b167122e0460f91886"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(N'a') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST (?) FROM `t`",
+    "digest": "662a08c20b7e7d7414c894f4e1940d404af64991eb681551dfa8ce0a2433b21c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(N'a' IN BOOLEAN MODE) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( ? IN BOOLEAN MODE ) FROM `t`",
+    "digest": "54cd8850d0e79c88f83b69c33f9aa2670d65c40a880c998e40d9ddd8bb80072b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(N'a' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( ? IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION ) FROM `t`",
+    "digest": "e83364246084204ecbf2f9ce391a88e62cda0744dc4a7ad4df356bb6c1022bb4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4 X'61') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? ) FROM `t`",
+    "digest": "28874992ccdf79f05dab4757c47f64d4822637646cb6952f63c3d3a388db23be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4 X'61' IN BOOLEAN MODE) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN BOOLEAN MODE ) FROM `t`",
+    "digest": "6a15eced5976e3265df814aee37af7a641ad48da335cbfbea080c3cb820ed90e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4 X'61' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION ) FROM `t`",
+    "digest": "d4d72ed430be3afa38ad1057713c9bb3d076e462ad9f17b167122e0460f91886"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4'SELECT') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? ) FROM `t`",
+    "digest": "28874992ccdf79f05dab4757c47f64d4822637646cb6952f63c3d3a388db23be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4'SELECT' IN BOOLEAN MODE) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN BOOLEAN MODE ) FROM `t`",
+    "digest": "6a15eced5976e3265df814aee37af7a641ad48da335cbfbea080c3cb820ed90e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4'SELECT' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION ) FROM `t`",
+    "digest": "d4d72ed430be3afa38ad1057713c9bb3d076e462ad9f17b167122e0460f91886"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST('😀') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST (?) FROM `t`",
+    "digest": "662a08c20b7e7d7414c894f4e1940d404af64991eb681551dfa8ce0a2433b21c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST('😀' IN BOOLEAN MODE) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( ? IN BOOLEAN MODE ) FROM `t`",
+    "digest": "54cd8850d0e79c88f83b69c33f9aa2670d65c40a880c998e40d9ddd8bb80072b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST('😀' IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION) FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( ? IN NATURAL LANGUAGE MODE WITH QUERY EXPANSION ) FROM `t`",
+    "digest": "e83364246084204ecbf2f9ce391a88e62cda0744dc4a7ad4df356bb6c1022bb4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT +INTERVAL 1 DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT -INTERVAL 1 DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(INTERVAL 1 DAY AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 * INTERVAL 1 DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY - 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 = INTERVAL 1 DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 WHERE INTERVAL 1 DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE t SET a=INTERVAL 1 DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "40526fe1e1e35b7fe49f5bec0780eb7e3d1025c2b304bb21ea5257125dac839d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY",
+    "digest": "53ca1977eb575897798986e0f8964062c2a1419908f3b20b19dd4ae4658bd9e9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 - INTERVAL 1 DAY",
+    "text": "SELECT ? - INTERVAL ? SQL_TSI_DAY",
+    "digest": "34992fbee9a838caa8c9a272cffce4006e9b622ed5ce139d2a6199fbd1919b4b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD('2020-01-01', INTERVAL 1 DAY)",
+    "text": "SELECT DATE_ADD ( ? , INTERVAL ? SQL_TSI_DAY )",
+    "digest": "b3e5f4a80c8af5f14edca9595803f63e14cdc4382aaf6236c1492f0f3cff1564"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE('2020-01-01', INTERVAL 1 DAY)",
+    "text": "SELECT ADDDATE ( ? , INTERVAL ? SQL_TSI_DAY )",
+    "digest": "0317cce0f8ba6cd502133453d93f13f47e54ac88f9cf9bd98498a99b706ad113"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1) OVER (ORDER BY a RANGE BETWEEN INTERVAL 1 DAY PRECEDING AND CURRENT ROW) FROM t",
+    "text": "SELECT SUM (?) OVER ( ORDER BY `a` RANGE BETWEEN INTERVAL ? SQL_TSI_DAY PRECEDING AND CURRENT ROW ) FROM `t`",
+    "digest": "41524c1d60d0915de6ae8b24d2f5c5ff857a2c77f4f7af5b1b1af49eb4eb9047"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL (1+2) DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (INTERVAL (1+2) DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT +INTERVAL (1+2) DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT -INTERVAL (1+2) DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(INTERVAL (1+2) DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(INTERVAL (1+2) DAY AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 * INTERVAL (1+2) DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL (1+2) DAY - 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 = INTERVAL (1+2) DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 WHERE INTERVAL (1+2) DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (INTERVAL (1+2) DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE t SET a=INTERVAL (1+2) DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL (1+2) DAY + 1",
+    "text": "SELECT INTERVAL ( ? + ? ) SQL_TSI_DAY + ?",
+    "digest": "cde1cccd72bd5313f778b63739b20931249d21e7ceec68c9fc74efdfa62c05a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL (1+2) DAY",
+    "text": "SELECT ? + INTERVAL ( ? + ? ) SQL_TSI_DAY",
+    "digest": "75b67df5f3d6f768009902ea90393134939654085efdfd76d927411d8dfda987"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 - INTERVAL (1+2) DAY",
+    "text": "SELECT ? - INTERVAL ( ? + ? ) SQL_TSI_DAY",
+    "digest": "ba1d9a2ee2ee697a43f57beb520422febadcd275e1144f80a704e1e1a618727c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD('2020-01-01', INTERVAL (1+2) DAY)",
+    "text": "SELECT DATE_ADD ( ? , INTERVAL ( ? + ? ) SQL_TSI_DAY )",
+    "digest": "e51fb2d4a485640cf63103accfe0697e622d3fccd1d51594311f20d27b8b3e3d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE('2020-01-01', INTERVAL (1+2) DAY)",
+    "text": "SELECT ADDDATE ( ? , INTERVAL ( ? + ? ) SQL_TSI_DAY )",
+    "digest": "e0d9617b860b2ab7500c9eceaca02e5c03452d934ea453deea1cdb95b0c48c92"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1) OVER (ORDER BY a RANGE BETWEEN INTERVAL (1+2) DAY PRECEDING AND CURRENT ROW) FROM t",
+    "text": "SELECT SUM (?) OVER ( ORDER BY `a` RANGE BETWEEN INTERVAL ( ? + ? ) SQL_TSI_DAY PRECEDING AND CURRENT ROW ) FROM `t`",
+    "digest": "aa17fef6624950cabec7aa24797e2b61e926cf5aecc52f41d2ecd18e50d72935"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL -1 HOUR",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (INTERVAL -1 HOUR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT +INTERVAL -1 HOUR",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT -INTERVAL -1 HOUR",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(INTERVAL -1 HOUR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(INTERVAL -1 HOUR AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 * INTERVAL -1 HOUR",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL -1 HOUR - 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 = INTERVAL -1 HOUR",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 WHERE INTERVAL -1 HOUR",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (INTERVAL -1 HOUR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE t SET a=INTERVAL -1 HOUR",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL -1 HOUR + 1",
+    "text": "SELECT INTERVAL ? SQL_TSI_HOUR + ?",
+    "digest": "be8fc0ef9dd44d956bfdf0c88b159fc77f13cee16703de6c47c9158eb326d953"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL -1 HOUR",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_HOUR",
+    "digest": "7565767c48391f8fd37479877bf6cf52e2f208cff99cee37505a7b941c17312f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 - INTERVAL -1 HOUR",
+    "text": "SELECT ? - INTERVAL ? SQL_TSI_HOUR",
+    "digest": "9868c386bbaa9fb5292f65cd4d8ee150e802036e3ec210b6ef852bed7aa8e3a5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD('2020-01-01', INTERVAL -1 HOUR)",
+    "text": "SELECT DATE_ADD ( ? , INTERVAL ? SQL_TSI_HOUR )",
+    "digest": "c83a024427fa99d7fde82086fb134c664e0adc731ebda8657ad89a96a2af4498"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE('2020-01-01', INTERVAL -1 HOUR)",
+    "text": "SELECT ADDDATE ( ? , INTERVAL ? SQL_TSI_HOUR )",
+    "digest": "b9eda919da7d9791da75720742c9b26a674bd7454b56d0fb0fb1ea68889461d8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1) OVER (ORDER BY a RANGE BETWEEN INTERVAL -1 HOUR PRECEDING AND CURRENT ROW) FROM t",
+    "text": "SELECT SUM (?) OVER ( ORDER BY `a` RANGE BETWEEN INTERVAL ? SQL_TSI_HOUR PRECEDING AND CURRENT ROW ) FROM `t`",
+    "digest": "419c8b3fa7255659bea320831207880492933de3853a404b06d3ef70fa3a96f7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL NULL DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (INTERVAL NULL DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT +INTERVAL NULL DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT -INTERVAL NULL DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(INTERVAL NULL DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(INTERVAL NULL DAY AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 * INTERVAL NULL DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL NULL DAY - 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 = INTERVAL NULL DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 WHERE INTERVAL NULL DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (INTERVAL NULL DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "UPDATE t SET a=INTERVAL NULL DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL NULL DAY + 1",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "40526fe1e1e35b7fe49f5bec0780eb7e3d1025c2b304bb21ea5257125dac839d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL NULL DAY",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY",
+    "digest": "53ca1977eb575897798986e0f8964062c2a1419908f3b20b19dd4ae4658bd9e9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 - INTERVAL NULL DAY",
+    "text": "SELECT ? - INTERVAL ? SQL_TSI_DAY",
+    "digest": "34992fbee9a838caa8c9a272cffce4006e9b622ed5ce139d2a6199fbd1919b4b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD('2020-01-01', INTERVAL NULL DAY)",
+    "text": "SELECT DATE_ADD ( ? , INTERVAL ? SQL_TSI_DAY )",
+    "digest": "b3e5f4a80c8af5f14edca9595803f63e14cdc4382aaf6236c1492f0f3cff1564"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE('2020-01-01', INTERVAL NULL DAY)",
+    "text": "SELECT ADDDATE ( ? , INTERVAL ? SQL_TSI_DAY )",
+    "digest": "0317cce0f8ba6cd502133453d93f13f47e54ac88f9cf9bd98498a99b706ad113"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1) OVER (ORDER BY a RANGE BETWEEN INTERVAL NULL DAY PRECEDING AND CURRENT ROW) FROM t",
+    "text": "SELECT SUM (?) OVER ( ORDER BY `a` RANGE BETWEEN INTERVAL ? SQL_TSI_DAY PRECEDING AND CURRENT ROW ) FROM `t`",
+    "digest": "41524c1d60d0915de6ae8b24d2f5c5ff857a2c77f4f7af5b1b1af49eb4eb9047"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (INTERVAL 1 DAY) + 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + (INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 * 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? * ?",
+    "digest": "28ff3049729feb54481b5bd1bf2f2458d8987601df962a0366ac81fcf14a3242"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL INTERVAL 2 DAY DAY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD(1,(INTERVAL 1 DAY))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_SUB(1,INTERVAL 1 DAY)",
+    "text": "SELECT DATE_SUB ( ? , INTERVAL ? SQL_TSI_DAY )",
+    "digest": "5c1cb7b75b9e35aef877ec384cf64a8292bcc8ee9f1afb1b6d4fe98d2d319ef5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,INTERVAL 1 DAY)",
+    "text": "SELECT SUBDATE ( ? , INTERVAL ? SQL_TSI_DAY )",
+    "digest": "9370e01612bd8ee4761baa225f152f91f17437b97bcf6a2ba94031ff4af4bae6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT foo(1,INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL(1,2,3)",
+    "text": "SELECT INTERVAL (...)",
+    "digest": "5efebb95809f1199263479caf1cff2ad4da6e31b08a711c352bf3465491288a4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 > 0",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? > ?",
+    "digest": "3c2f15029787d9758491b7dde139db2f1dc96cd10ff54590f7ff44858209fb0f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'bad'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'0'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'000000'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'00000000'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'0000-00-00'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-00-01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-00'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'0000-01-01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-13-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2000-02-29'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'20200101'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'200101'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'69-01-01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'70-01-01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020/1/2'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020.1.2'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020:1:2'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-1-2'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE' 2020-01-01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 '",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'20200101000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'200101000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'20200101T000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01T01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 24:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 23:59:60'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 01:02:03.123456'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 01:02:03.1234567'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 01:02:03.'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 01:02:03+08:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 01:02:03+14:01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'00:00:00'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'25:00:00'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'838:59:59'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'839:00:00'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'-12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'+12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'1 02:03:04'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'34 22:59:59'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'35 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'123456'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'1234'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'123'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:34'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:34:56.123456'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:34:56.1234567'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:34:56.'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:34:60'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:60:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'1e2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:34:56x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:34:56 '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE' 12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01\u0000junk'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'9999-12-31 23:59:59.999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'9999-12-31 23:59:59.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT DATE'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT DATE'2020-00-01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT DATE'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT DATE'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT DATE'2020-01-01 01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT DATE'00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT DATE'0000-00-00'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT DATE'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT DATE'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT DATE'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT DATE'2020-01-01 01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT DATE'00:00:00'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT DATE'0000-00-00'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT DATE'2020-00-01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT DATE'2020-02-30'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT DATE'1900-02-29'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT DATE'2020-01-01 01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT DATE'00:00:00'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT DATE'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT DATE'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT DATE'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT DATE'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT DATE'2020-01-01 01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT DATE'00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'bad'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'0'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'000000'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'00000000'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'0000-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-13-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2000-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'20200101'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'200101'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'69-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'70-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020/1/2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020.1.2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020:1:2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-1-2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME' 2020-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'20200101000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'200101000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'20200101T000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01T01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 24:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 23:59:60'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 01:02:03.123456'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 01:02:03.1234567'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 01:02:03.'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 01:02:03+08:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 01:02:03+14:01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'00:00:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34:56'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'25:00:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'838:59:59'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'839:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'-12:34:56'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'+12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'1 02:03:04'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'34 22:59:59'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'35 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'123456'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'1234'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'123'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34:56.123456'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34:56.1234567'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34:56.'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34:60'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:60:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'1e2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34:56x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34:56 '",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME' 12:34:56'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01\u0000junk'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'9999-12-31 23:59:59.999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'9999-12-31 23:59:59.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIME'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIME'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIME'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIME'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIME'2020-01-01 01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIME'00:00:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIME'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIME'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIME'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIME'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIME'2020-01-01 01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIME'00:00:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'2020-01-01 01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'00:00:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIME'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIME'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIME'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIME'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIME'2020-01-01 01:02:03'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIME'00:00:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP''",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'bad'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'0'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'00000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'0000-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-13-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2000-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'20200101'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'200101'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'69-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'70-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020/1/2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020.1.2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020:1:2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-1-2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP' 2020-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 00:00:00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'20200101000000'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'200101000000'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'20200101T000000'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01T01:02:03'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 24:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 23:59:60'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03.123456'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03.1234567'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03.'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03+08:00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03+14:01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'25:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'838:59:59'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'839:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'-12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'+12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'1 02:03:04'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'34 22:59:59'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'35 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'123456'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'1234'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'123'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34:56.123456'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34:56.1234567'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34:56.'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34:60'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:60:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'1e2'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34:56x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34:56 '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP' 12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01\u0000junk'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'9999-12-31 23:59:59.999999'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'9999-12-31 23:59:59.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIMESTAMP'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIMESTAMP'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIMESTAMP'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIMESTAMP'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "NO_ZERO_DATE",
+    "sql": "SELECT TIMESTAMP'00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIMESTAMP'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIMESTAMP'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIMESTAMP'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIMESTAMP'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "NO_ZERO_IN_DATE",
+    "sql": "SELECT TIMESTAMP'00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIMESTAMP'0000-00-00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIMESTAMP'2020-00-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIMESTAMP'2020-02-30'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIMESTAMP'1900-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "TRADITIONAL",
+    "sql": "SELECT TIMESTAMP'00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT DATE'bad') SELECT 1",
+    "text": "WITH `c` AS ( SELECT DATE ? ) SELECT ?",
+    "digest": "8d741622059329de972ec6e3e074a9d32a4db340a509c95c708c6fd9ed709c7c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (DATE'bad')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DATE DEFAULT DATE'bad')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(DATE'bad' AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'25:61:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT TIME'25:61:00') SELECT 1",
+    "text": "WITH `c` AS ( SELECT TIME ? ) SELECT ?",
+    "digest": "3953298073b4e2fb46c3c7819778f0fe64bb9797b1da2792d4dd83755923af27"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (TIME'25:61:00')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DATE DEFAULT TIME'25:61:00')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(TIME'25:61:00' AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-02-30 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT TIMESTAMP'2020-02-30 00:00:00') SELECT 1",
+    "text": "WITH `c` AS ( SELECT TIMESTAMP ? ) SELECT ?",
+    "digest": "a13e6173f8642d32bfab01c7263a4644bff8babef9046c65313b51692a96c9f2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (TIMESTAMP'2020-02-30 00:00:00')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DATE DEFAULT TIMESTAMP'2020-02-30 00:00:00')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(TIMESTAMP'2020-02-30 00:00:00' AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT DATE'2000-02-29') SELECT 1",
+    "text": "WITH `c` AS ( SELECT DATE ? ) SELECT ?",
+    "digest": "8d741622059329de972ec6e3e074a9d32a4db340a509c95c708c6fd9ed709c7c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (DATE'2000-02-29')",
+    "text": "INSERT INTO `t` VALUES ( DATE ? )",
+    "digest": "2948447ac01f6924479df2be4ac57fe238fdc616d8a695644c25ed2be6503875"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t (a DATE DEFAULT DATE'2000-02-29')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(DATE'2000-02-29' AS CHAR)",
+    "text": "SELECT CAST ( DATE ? AS CHARACTER )",
+    "digest": "256f24270b6f8593e5c63890b3079243644f0080b14b442b4ead76f2446cc501"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE('bad')",
+    "text": "SELECT DATE (?)",
+    "digest": "db32a041e519d28462dca70ccce52642bcfe298f4d022330a966f4df44d6dc8b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME('bad')",
+    "text": "SELECT TIME (?)",
+    "digest": "f48f6a4d9c02a51b4ca26ed3d806ee34fb4df3d54edba31ae00f076b39bd14d4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP('bad')",
+    "text": "SELECT TIMESTAMP (?)",
+    "digest": "83d866ed0e5b897904c7fd2e2443233d814d7e3c5bc0371e6a4fbbbbbc830ac5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST('bad' AS DATE)",
+    "text": "SELECT CAST ( ? AS DATE )",
+    "digest": "377138de9a04442f3f593f2485faa443d49481fa4c6a85bbc28d84cedc3bd98b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT {d 'bad'}",
+    "text": "SELECT { `d` ? }",
+    "digest": "41da1f45b465e0c9835cd59447ae82fba1248c3ad844ca9864f67fcdf371fccc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT {d '2020-01-01'}",
+    "text": "SELECT { `d` ? }",
+    "digest": "41da1f45b465e0c9835cd59447ae82fba1248c3ad844ca9864f67fcdf371fccc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT {t 'bad'}",
+    "text": "SELECT { `t` ? }",
+    "digest": "3d81c973bd487a022c82b6bea2b6f8e5f51da35917c83c3829dac00c51325a56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT {ts '2020-01-01 00:00:00'}",
+    "text": "SELECT { `ts` ? }",
+    "digest": "3830e61971c82507c9c5e0ec1103e40b2f5d3198e75f490dcfed7b7eb0e0f3a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT {t '12:34:56'}",
+    "text": "SELECT { `t` ? }",
+    "digest": "3d81c973bd487a022c82b6bea2b6f8e5f51da35917c83c3829dac00c51325a56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT +INTERVAL 1 DAY + 1",
+    "text": "SELECT + INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "d554f698ec2057b5df8cb96b9d4797a45c3b9139b3766c5e4bb12005b1e37062"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT -INTERVAL 1 DAY + 1",
+    "text": "SELECT - INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "ad53c163e35c33a871c7ce128b2671d19e47496619557373d688e5e7669576d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ~INTERVAL 1 DAY + 1",
+    "text": "SELECT ~ INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "a2e9df4673d2a8a0aaf31ae1356dac2fb33dd5980dfa27e92be516c1c405164d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT !INTERVAL 1 DAY + 1",
+    "text": "SELECT ! INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "c6db18d787571667e4bdfd9e944df320eefc50d690c13f3bb7f466fd474fd3e6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BINARY INTERVAL 1 DAY + 1",
+    "text": "SELECT BINARY INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "777c17d7630743a7e95e737e7787b5f3ab2fa441b9f0b0da5970923f12cae472"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NOT INTERVAL 1 DAY + 1",
+    "text": "SELECT NOT INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "fb4d0f80c97fafac06b5911807ca3014f659ada2affa07a1772fd7243deae3c3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 + 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? + ?",
+    "digest": "bfdb2d9b71936176bbc7cd43af5c51530dfa107b419dbf50304b0ab0d336acd4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 - 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? - ?",
+    "digest": "44b99542abe50da60814b6f157f290a689a77d84ae743cb824fda35fbaa054dc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 / 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? / ?",
+    "digest": "4f689d853123f10ab24996bbc9e50005351a34c13d633419b377ceda99c6ee66"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 = 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? = ?",
+    "digest": "6bcb8931712022f9f660ca39f6749639608df709d331bf6950df9afe6b96cba0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 AND 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? AND ?",
+    "digest": "16e01fd0ba99e381ae44fcb7e0f320ab78663fbcb07f69e830217b7d06476c8f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 OR 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? OR ?",
+    "digest": "a39c54a119d320e27d4a245d26c260f9e42f868c3f374283a4541baf255c49ff"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 | 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? | ?",
+    "digest": "7e66d870739d5aff3bef8e6bc9c7f7c15611164d203e9c09508cc171f64b5896"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 & 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? & ?",
+    "digest": "051434b7d2f7c05f13c4e51e4c2f180ac8e1cc5157800a5e882d42ca092a466c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + 1 ^ 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + ? ^ ?",
+    "digest": "a10d763f489e0766adc26b669570e169a09202a1af97ff3e162f16d75f395862"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "1fa5ad2cb4f785dd311a47da1d08c8b401bb7cf63cd08059e45593e79b7bc4ca"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT +INTERVAL 1 DAY + INTERVAL 2 DAY + 1",
+    "text": "SELECT + INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "a647eeb2debbbe87f2eedc83f4d9f104d9858bafef4504ea8defdf6f99c21237"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT -INTERVAL 1 DAY + INTERVAL 2 DAY + 1",
+    "text": "SELECT - INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "61a38f96d983cdaca7f08d1a819e2974931fdd42c079fa57dabaf5a234ca3854"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ~INTERVAL 1 DAY + INTERVAL 2 DAY + 1",
+    "text": "SELECT ~ INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "266ef26dd31ca4e5a30519cdd3c3b139047a59d1b8ab3928337e50283a3345b0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT !INTERVAL 1 DAY + INTERVAL 2 DAY + 1",
+    "text": "SELECT ! INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "cb39a608717fde5b327be55b32a506ce56fbb4c6902789d40930446064e745d9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BINARY INTERVAL 1 DAY + INTERVAL 2 DAY + 1",
+    "text": "SELECT BINARY INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "78ce293e5ee939bd15a020999d0456a17d0b6be3e2214a069dddb9da3402d20e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NOT INTERVAL 1 DAY + INTERVAL 2 DAY + 1",
+    "text": "SELECT NOT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "a52dd7bf979754c82ee9610505d65e610bab4695648de78e2b94b6d1f3e8fbed"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 + 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? + ?",
+    "digest": "e211febdc181fd143343b4daa19923bfbf1def95903dfe390526376b7f71b9dc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 - 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? - ?",
+    "digest": "90f9b729708e1f2ea945f18264cdb010337d164a0314b3376851bb1155391a9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 * 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? * ?",
+    "digest": "d54ceea7f35a083df89689787a52415244c335726ee9cd5f1f12a2a4dd85b0c4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 / 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? / ?",
+    "digest": "8173298929ea3957a10586efc9617f919438823cfff95d9c69b46c363b8bdc46"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 = 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? = ?",
+    "digest": "56a930e56ce0989aec00ac68ce0a6c7536afc6d6297dcb213704f0484385b98e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 AND 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? AND ?",
+    "digest": "5c3eb964b038535f9cf0fc601eb8e0ce711be0ddaa7d8e9779da51d3f04c2ae1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 OR 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? OR ?",
+    "digest": "be2ef1a8d8c843ae612a9528cfe1d06d0689289ea1bc344e2486a1f472246e50"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 | 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? | ?",
+    "digest": "bba7a53d5cb6d1fc88cccccc8c80a90d2b96e136436eaf989550dbe5211ccc2a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 & 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? & ?",
+    "digest": "a8661f321e30d92d1d05c84e0c0308fc9d588da8a0b4bb4086fe9cb904038195"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT INTERVAL 1 DAY + INTERVAL 2 DAY + 1 ^ 2",
+    "text": "SELECT INTERVAL ? SQL_TSI_DAY + INTERVAL ? SQL_TSI_DAY + ? ^ ?",
+    "digest": "399c42a7ecbec21b36c1fdb2517d035ccf6506e1441dc771879ad23ce942265f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT +1 + INTERVAL 1 DAY",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY",
+    "digest": "53ca1977eb575897798986e0f8964062c2a1419908f3b20b19dd4ae4658bd9e9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT -1 + INTERVAL 1 DAY",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY",
+    "digest": "53ca1977eb575897798986e0f8964062c2a1419908f3b20b19dd4ae4658bd9e9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ~1 + INTERVAL 1 DAY",
+    "text": "SELECT ~ ? + INTERVAL ? SQL_TSI_DAY",
+    "digest": "f7cd1c3ea5f6768712471155e89406959f88aa89d5345663eaed4b12c0624dac"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT !1 + INTERVAL 1 DAY",
+    "text": "SELECT ! ? + INTERVAL ? SQL_TSI_DAY",
+    "digest": "da6921c622991a94d4259eca492fb11d54c33b5ad78e588ca65c1c45f95d2a59"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BINARY 1 + INTERVAL 1 DAY",
+    "text": "SELECT BINARY ? + INTERVAL ? SQL_TSI_DAY",
+    "digest": "356cac53b1626048997f9cdacb66ab086e16ff4975306312252b92892c70ccf6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NOT 1 + INTERVAL 1 DAY",
+    "text": "SELECT NOT ? + INTERVAL ? SQL_TSI_DAY",
+    "digest": "e18971c3bfbe601480bfaab65a29f368c2c2d542c38d4be4a5ed2a051159ec6c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY + 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY + ?",
+    "digest": "1bf40fd25381f3b9d78fceedf09ea3a842593f7ddbd89d4f7eb8937fde43cdfe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY - 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY - ?",
+    "digest": "57be313f8a51667033936a930237f57502f7f806ddcbb110f5991f71955f3767"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY * 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY * ?",
+    "digest": "35cfa46b945f512bf08ae2fbc1544f266db0b7f328f4ed89e44ad7a2f406a16f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY / 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY / ?",
+    "digest": "f0f195e0e00481be2b7c026b548d60fde61b782cbc1f3b023f7525a7106125d6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY = 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY = ?",
+    "digest": "6ca2a05ba2e96bfad16a87c4b53c117f1947b3e93d18857d723932915c1b43d6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY AND 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY AND ?",
+    "digest": "9628935f7dfdb576da35c969ccbddeca2f0b4ef7e6dd810fd1be613905ce7929"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY OR 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY OR ?",
+    "digest": "ba6de2611c1dceb1601f076ed68b760ab028c1eefdf238c764e61aa230606c37"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY | 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY | ?",
+    "digest": "26a5605dd7867212bc45a2737ce648ce1268ec83a49dec407ef6ce6b3fd2f382"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY & 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY & ?",
+    "digest": "8f75ac34a36269a583611d179f5419e7ac5d307c1a3217a08b72d55d1f34ffcd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 + INTERVAL 1 DAY ^ 2",
+    "text": "SELECT ? + INTERVAL ? SQL_TSI_DAY ^ ?",
+    "digest": "8271432a76c35cb22a19358844d35b2f30ece5de11d23765917fa1698049d16a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD(1,INTERVAL 1 DAY)",
+    "text": "SELECT DATE_ADD ( ? , INTERVAL ? SQL_TSI_DAY )",
+    "digest": "b3e5f4a80c8af5f14edca9595803f63e14cdc4382aaf6236c1492f0f3cff1564"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD(1,INTERVAL 1 DAY + 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD(1,1 + INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD(1,INTERVAL(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD(1,INTERVAL INTERVAL 1 DAY + 1 DAY)",
+    "text": "SELECT DATE_ADD ( ? , INTERVAL INTERVAL ? SQL_TSI_DAY + ? SQL_TSI_DAY )",
+    "digest": "58906016415fe02808a787d925ffc679273eb82ead9cd3f14bbeb4872b34934e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_SUB(1,(INTERVAL 1 DAY))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_SUB(1,INTERVAL 1 DAY + 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_SUB(1,1 + INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_SUB(1,INTERVAL(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_SUB(1,INTERVAL INTERVAL 1 DAY + 1 DAY)",
+    "text": "SELECT DATE_SUB ( ? , INTERVAL INTERVAL ? SQL_TSI_DAY + ? SQL_TSI_DAY )",
+    "digest": "37e4b8844f1c85c6cea6f90cae89baf3e4c890fc37e4b53629761f6f7be1cb5b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,INTERVAL 1 DAY)",
+    "text": "SELECT ADDDATE ( ? , INTERVAL ? SQL_TSI_DAY )",
+    "digest": "0317cce0f8ba6cd502133453d93f13f47e54ac88f9cf9bd98498a99b706ad113"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,(INTERVAL 1 DAY))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,INTERVAL 1 DAY + 1)",
+    "text": "SELECT ADDDATE ( ? , INTERVAL ? SQL_TSI_DAY + ? )",
+    "digest": "20a1643c68400c4d6154c283d88e256979685bed6423118fe4f3b006447a291f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,1 + INTERVAL 1 DAY)",
+    "text": "SELECT ADDDATE ( ?, ... + INTERVAL ? SQL_TSI_DAY )",
+    "digest": "46607ba6880d52dbebacab6aaaeeaf04963461757b98dbf87ec29bd51116a268"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,INTERVAL(1,2))",
+    "text": "SELECT ADDDATE ( ? , INTERVAL (...) )",
+    "digest": "ba8d6bdd4f971cd7ffbb02e3154cd7e464d4000598b7e2240f6232148349cdb6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,INTERVAL INTERVAL 1 DAY + 1 DAY)",
+    "text": "SELECT ADDDATE ( ? , INTERVAL INTERVAL ? SQL_TSI_DAY + ? SQL_TSI_DAY )",
+    "digest": "f3b32206965b93fcb7b7e375b085258d3ceb1c123d74bb62838e73d26c38160a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,(INTERVAL 1 DAY))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,INTERVAL 1 DAY + 1)",
+    "text": "SELECT SUBDATE ( ? , INTERVAL ? SQL_TSI_DAY + ? )",
+    "digest": "ed5109cc232e46728a99fe31f8805de5c8464f2e73626b9e2ef973b0794528b4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,1 + INTERVAL 1 DAY)",
+    "text": "SELECT SUBDATE ( ?, ... + INTERVAL ? SQL_TSI_DAY )",
+    "digest": "07554a3198ecea0a0ce015ebcbffe62e91fa662e476b449a42c52f9c0cba8e05"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,INTERVAL(1,2))",
+    "text": "SELECT SUBDATE ( ? , INTERVAL (...) )",
+    "digest": "537f84eb8585d5d72ec9edcb58b0249b8a43a6c116d023e90a6d9ca75cc8887f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,INTERVAL INTERVAL 1 DAY + 1 DAY)",
+    "text": "SELECT SUBDATE ( ? , INTERVAL INTERVAL ? SQL_TSI_DAY + ? SQL_TSI_DAY )",
+    "digest": "cb6cbf220bd2fe96dd41013eca47b701a382bef5db30c0ad600c237bb3798f95"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT foo(1,(INTERVAL 1 DAY))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT foo(1,INTERVAL 1 DAY + 1)",
+    "text": "SELECT `foo` ( ? , INTERVAL ? SQL_TSI_DAY + ? )",
+    "digest": "0c3e35e740817aa396a8da7fa29b0894a34e51fa29f9c6071661542b765b01c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT foo(1,1 + INTERVAL 1 DAY)",
+    "text": "SELECT `foo` ( ?, ... + INTERVAL ? SQL_TSI_DAY )",
+    "digest": "e000f15da14f3978c23355aaa607eb728393fb60029a240df9900c6ed375c27b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT foo(1,INTERVAL(1,2))",
+    "text": "SELECT `foo` ( ? , INTERVAL (...) )",
+    "digest": "1d267c848441ab342a2a139c085d1b0dd18918efc25b59a76c5777c89b378d1b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT foo(1,INTERVAL INTERVAL 1 DAY + 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `date_add`(1,INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `date_add`(1,(INTERVAL 1 DAY))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `date_add`(1,INTERVAL 1 DAY + 1)",
+    "text": "SELECT `date_add` ( ? , INTERVAL ? SQL_TSI_DAY + ? )",
+    "digest": "1bffcbb1a4af789096f3a331ec2f2ffadb2f0ad2ad833121ea28a53b74d8b807"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `date_add`(1,1 + INTERVAL 1 DAY)",
+    "text": "SELECT `date_add` ( ?, ... + INTERVAL ? SQL_TSI_DAY )",
+    "digest": "d351e4d2556f59b836c88cca65a37ae8145d46282ff60b8dfc6442150ca28488"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `date_add`(1,INTERVAL(1,2))",
+    "text": "SELECT `date_add` ( ? , INTERVAL (...) )",
+    "digest": "3bbab8d853f8cc615b2b6273897612b3dd1adf4b0d95aa0e090f82caa48b77f2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `date_add`(1,INTERVAL INTERVAL 1 DAY + 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'20200101 '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'20200101.5'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020--01--01'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 01:02:03-00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 01:02:03+14:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-01-01 01:02:03.123456789+00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'0000-01-01 00:00:00+00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'2020-02-30 00:00:00+00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'838:59:59.000001'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'838:59:59.0000001'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12:34:56.  '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'12::34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'0 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'- 12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'99999999999999999999999999999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'20200101 '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'20200101.5'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020--01--01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 01:02:03-00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 01:02:03+14:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-01-01 01:02:03.123456789+00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'0000-01-01 00:00:00+00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-02-30 00:00:00+00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'838:59:59.000001'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'838:59:59.0000001'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34:56.  '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12::34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'0 00:00:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'- 12:34:56'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'99999999999999999999999999999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'20200101 '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'20200101.5'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020--01--01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 00:00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03-00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03+14:00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-01-01 01:02:03.123456789+00:00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'0000-01-01 00:00:00+00:00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-02-30 00:00:00+00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'838:59:59.000001'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'838:59:59.0000001'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34:56.  '",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12::34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'0 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'- 12:34:56'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'99999999999999999999999999999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST('') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST (?) FROM `t`",
+    "digest": "662a08c20b7e7d7414c894f4e1940d404af64991eb681551dfa8ce0a2433b21c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_utf8mb4'') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? ) FROM `t`",
+    "digest": "28874992ccdf79f05dab4757c47f64d4822637646cb6952f63c3d3a388db23be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(N'') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST (?) FROM `t`",
+    "digest": "662a08c20b7e7d7414c894f4e1940d404af64991eb681551dfa8ce0a2433b21c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH(a) AGAINST(_binary X'') FROM t",
+    "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? ) FROM `t`",
+    "digest": "28874992ccdf79f05dab4757c47f64d4822637646cb6952f63c3d3a388db23be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MATCH() AGAINST('a')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT DATE'bad'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT DATE'bad') SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT DATE'bad'), d AS (SELECT * FROM c) SELECT 1",
+    "text": "WITH `c` AS ( SELECT DATE ? ) , `d` AS ( SELECT * FROM `c` ) SELECT ?",
+    "digest": "f0aedbd28723c66f7872bd6840965ce0618e284fcd42bd543cf9e2db4cdd6fc4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT DATE'bad'), d AS (SELECT * FROM c) SELECT * FROM d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 1 FROM (SELECT DATE'bad') d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS SELECT DATE'bad'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE_ADD(1,2,INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STR_TO_DATE(1,INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 'a' LIKE 'a' ESCAPE 'x'",
+    "text": "SELECT ? LIKE ? ESCAPE ?",
+    "digest": "6813162169c8c15f237cd889db35d9fb44714a309fe6c4c27ea1e4202a771057"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 'a' LIKE 'a' COLLATE utf8mb4_general_ci ESCAPE 'x'",
+    "text": "SELECT ? LIKE ? COLLATE `utf8mb4_general_ci` ESCAPE ?",
+    "digest": "da5b7580342233fdb42dd4852b85befd18ca287a67afb7f3c16570858dc5be5e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT 'a' LIKE 'a' || 'b' ESCAPE 'x'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'838:59:59.0000009'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'838:59:59.0000009'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'838:59:59.00000019'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'838:59:59.00000019'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'838:59:59.00000091'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'838:59:59.00000091'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'9999-12-31 23:59:59.9999994'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'9999-12-31 23:59:59.9999994'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'9999-12-31 23:59:59.9999995'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'9999-12-31 23:59:59.9999995'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'2020-02-30 12:00:00.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'2020-02-30 12:00:00.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'0000-00-00 00:00:00.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'0000-00-00 00:00:00.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'12:34:56.9999999'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'12:34:56.9999999'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'20200101.000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'20200101.000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'.'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'.'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'.1'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIME'.1'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'838:59:59.0000009'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'838:59:59.0000009'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'838:59:59.00000019'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'838:59:59.00000019'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'838:59:59.00000091'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'838:59:59.00000091'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'9999-12-31 23:59:59.9999994'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'9999-12-31 23:59:59.9999994'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'9999-12-31 23:59:59.9999995'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'9999-12-31 23:59:59.9999995'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020-02-30 12:00:00.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'2020-02-30 12:00:00.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'0000-00-00 00:00:00.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'0000-00-00 00:00:00.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'12:34:56.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'12:34:56.9999999'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'20200101.000000'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'20200101.000000'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'.'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'.'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'.1'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'.1'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'0000-02-28'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'0000-02-28 00:00:00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT DATE'0000-02-29'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'0000-02-29 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT DATE'0000-02-28'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'0000-02-28 00:00:00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT DATE'0000-02-29'",
+    "text": "SELECT DATE ?",
+    "digest": "5e0f9cc7bb2c8b618e60c55c4278113acf8d67e456140b29a33d3a0e34d98b60"
+  },
+  {
+    "sql_mode": "ALLOW_INVALID_DATES",
+    "sql": "SELECT TIMESTAMP'0000-02-29 00:00:00'",
+    "text": "SELECT TIMESTAMP ?",
+    "digest": "f84b085f1fa0a55e86f60dd67627629af1312564b4444327b5c3953df5c1841e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'202001010000001'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'2020010100000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIMESTAMP'20200101000000000'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'18446744073709551616:00:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'00:18446744073709551616:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'0 18446744073709551616:00:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'4294967296:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT TIME'00:18446744073709551617:00'",
+    "text": "SELECT TIME ?",
+    "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
   }
 ]
