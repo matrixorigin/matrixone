@@ -60,7 +60,7 @@ func TestCheckStorable(t *testing.T) {
 	// CheckStorable rejects exactly the vectors ToStorage rejects, with the same error, on both
 	// sides of every overflow boundary
 	var f32s []float32
-	for _, b := range []float32{f16Overflow, bf16Overflow, math.MaxFloat32} {
+	for _, b := range []float32{vectorindex.Float16Overflow, bf16Overflow, math.MaxFloat32} {
 		for _, x := range []float32{b, math.Nextafter32(b, 0), math.Nextafter32(b, float32(math.Inf(1)))} {
 			f32s = append(f32s, x, -x)
 		}

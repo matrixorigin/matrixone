@@ -480,6 +480,10 @@ func (s *S3FS) OpenReadWithIdentity(
 	return storage.ReadObjectWithIdentity(ctx, s.pathToKey(path.File), &min, max, expected)
 }
 
+func (s *S3FS) fullFilePreloadsThrashing() bool {
+	return s.diskCache != nil && s.diskCache.preloads.isThrashing()
+}
+
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -677,6 +681,9 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
+	if vector.Policy.Any(NarrowRead) && s.fullFilePreloadsThrashing() {
+		vector.Policy |= SkipFullFilePreloads
+	}
 	var finishDecode func()
 	var decodePrepared bool
 	var fillTicket *decodedFillTicket

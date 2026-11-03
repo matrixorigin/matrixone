@@ -481,7 +481,7 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 
 	// bathed prefetch block data and deletes
-	if !fileservice.GetFileServicePolicy(ctx).Any(fileservice.SkipFullFilePreloads) {
+	if !fileservice.FullFilePreloadsSkipped(ctx, ls.fs) {
 		ls.batchPrefetch(seqNums)
 	}
 
@@ -775,29 +775,33 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		}
 
 		if offsets == nil {
-			// apply pk filter on workspace entries
-			if enableFilter {
-				skipMask = objectio.GetReusableBitmap()
-				put := ls.table.db.getEng().packerPool.Get(&packer)
-				ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
-				put.Put()
-			}
-
-			// apply bf filter on workspace entries
-			if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
-				if !skipMask.IsValid() {
+			func() {
+				defer func() { skipMask.Release() }()
+				// apply pk filter on workspace entries
+				if enableFilter {
 					skipMask = objectio.GetReusableBitmap()
+					func() {
+						put := ls.table.db.getEng().packerPool.Get(&packer)
+						defer put.Put()
+						ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
+					}()
 				}
-				bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
-				ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
-					if !exist {
-						skipMask.Add(uint64(row))
-					}
-				})
-			}
 
-			offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
-			skipMask.Release()
+				// apply bf filter on workspace entries
+				if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+					if !skipMask.IsValid() {
+						skipMask = objectio.GetReusableBitmap()
+					}
+					bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
+					ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
+						if !exist {
+							skipMask.Add(uint64(row))
+						}
+					})
+				}
+
+				offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
+			}()
 		}
 
 		if len(offsets) == 0 {

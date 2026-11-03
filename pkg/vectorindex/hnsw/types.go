@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -219,12 +220,9 @@ func ToStorage[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds 
 	}
 }
 
-// The smallest float32 magnitudes that round to infinity when narrowed to float16 and bf16:
-// the midpoint above the largest finite value, which rounds to even, away from it.
-const (
-	f16Overflow  = float32(65520)
-	bf16Overflow = float32(3.3961775e38) // bits 0x7F7F8000
-)
+// bf16Overflow is the smallest float32 magnitude that rounds to infinity when narrowed to
+// bf16, as vectorindex.Float16Overflow is for float16.
+const bf16Overflow = float32(3.3961775e38) // bits 0x7F7F8000
 
 // CheckStorable returns the reason an index storing kind cannot store vec, or nil. It rejects
 // exactly the vectors ToStorage rejects, by range, without converting them; the range of an
@@ -241,7 +239,7 @@ func CheckStorable[T types.ArrayElement](vec []T, kind usearch.Quantization) err
 	case usearch.F64:
 		return nil
 	case usearch.F16:
-		limit = f16Overflow
+		limit = vectorindex.Float16Overflow
 	case usearch.BF16:
 		limit = bf16Overflow
 	case usearch.I8, usearch.U8:
