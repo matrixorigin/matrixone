@@ -10866,7 +10866,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 		nulls.FilterInPlaceOrdered(&v.nsp, sels, false)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
-		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
+		for oldIdx, newIdx, selIdx, sel, length := 0, 0, 0, sels[0], v.length; oldIdx < length; oldIdx++ {
 			if oldIdx != int(sel) {
 				vs[newIdx] = vs[oldIdx]
 				newIdx++
