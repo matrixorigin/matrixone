@@ -25,13 +25,13 @@ import (
 
 // Filtering feeds the original batch's row indices into the existing exchange.
 // It never materializes an intermediate batch or changes its borrowed input.
-func (s *Shuffle) routeWithLocalFilter(bat *batch.Batch, proc *process.Process) (bool, error) {
-	vec := bat.Vecs[s.ShuffleColIdx]
-	if bat.RowCount() > len(s.ctr.filterScratch) || !s.ctr.localBloom.TestFixedVectorInto(vec, s.ctr.filterScratch) {
-		s.ctr.filterBypassed = true
+func (shuffle *Shuffle) routeWithLocalFilter(bat *batch.Batch, proc *process.Process) (bool, error) {
+	vec := bat.Vecs[shuffle.ShuffleColIdx]
+	if bat.RowCount() > len(shuffle.ctr.filterScratch) || !shuffle.ctr.localBloom.TestFixedVectorInto(vec, shuffle.ctr.filterScratch) {
+		shuffle.ctr.filterBypassed = true
 		return false, nil
 	}
-	mask := s.ctr.filterScratch[:bat.RowCount()]
+	mask := shuffle.ctr.filterScratch[:bat.RowCount()]
 	survivors := 0
 	for row, present := range mask {
 		if vec.IsNull(uint64(row)) {
@@ -42,10 +42,10 @@ func (s *Shuffle) routeWithLocalFilter(bat *batch.Batch, proc *process.Process) 
 			survivors++
 		}
 	}
-	s.ctr.filterTested += int64(len(mask))
-	s.ctr.filterRejected += int64(len(mask) - survivors)
-	if s.ctr.filterTested >= 8192 && s.ctr.filterRejected*10 < s.ctr.filterTested {
-		s.ctr.filterBypassed = true
+	shuffle.ctr.filterTested += int64(len(mask))
+	shuffle.ctr.filterRejected += int64(len(mask) - survivors)
+	if shuffle.ctr.filterTested >= 8192 && shuffle.ctr.filterRejected*10 < shuffle.ctr.filterTested {
+		shuffle.ctr.filterBypassed = true
 	}
 	if survivors == len(mask) {
 		return false, nil
@@ -53,25 +53,25 @@ func (s *Shuffle) routeWithLocalFilter(bat *batch.Batch, proc *process.Process) 
 	if survivors == 0 {
 		return true, nil
 	}
-	sels := s.clearSels()
+	sels := shuffle.clearSels()
 	switch vec.GetType().Oid {
 	case types.T_int16:
-		routeFilteredIntegers[int16](s, vec, mask, sels, true)
+		routeFilteredIntegers[int16](shuffle, vec, mask, sels, true)
 	case types.T_int32:
-		routeFilteredIntegers[int32](s, vec, mask, sels, true)
+		routeFilteredIntegers[int32](shuffle, vec, mask, sels, true)
 	case types.T_int64:
-		routeFilteredIntegers[int64](s, vec, mask, sels, true)
+		routeFilteredIntegers[int64](shuffle, vec, mask, sels, true)
 	case types.T_uint16:
-		routeFilteredIntegers[uint16](s, vec, mask, sels, false)
+		routeFilteredIntegers[uint16](shuffle, vec, mask, sels, false)
 	case types.T_uint32:
-		routeFilteredIntegers[uint32](s, vec, mask, sels, false)
+		routeFilteredIntegers[uint32](shuffle, vec, mask, sels, false)
 	case types.T_uint64:
-		routeFilteredIntegers[uint64](s, vec, mask, sels, false)
+		routeFilteredIntegers[uint64](shuffle, vec, mask, sels, false)
 	default:
-		s.ctr.filterBypassed = true
+		shuffle.ctr.filterBypassed = true
 		return false, nil
 	}
-	return true, s.enqueueBySels(bat, proc)
+	return true, shuffle.enqueueBySels(bat, proc)
 }
 
 func routeFilteredIntegers[T interface {
