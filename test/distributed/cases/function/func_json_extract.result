@@ -1021,4 +1021,23 @@ a	b
 1	2
 1	3
 drop table json_numeric_composite;
+create table json_float_boundary(id int primary key, doc json);
+insert into json_float_boundary values (1,'{"a":1}'),(2,'{"a":1e38}'),(3,'{"a":1e100}'),(4,'{"a":-1e100}');
+select id from json_float_boundary where json_extract(doc,'$.a')=cast(1 as float) order by id;
+id
+1
+select id from json_float_boundary where cast(1 as float)=json_extract(doc,'$.a') order by id;
+id
+1
+select id from json_float_boundary where json_extract(doc,'$.a')>cast(1 as float) order by id;
+id
+2
+3
+select id from json_float_boundary where cast(1 as float)>json_extract(doc,'$.a') order by id;
+id
+4
+select count(*), sum(id) from json_float_boundary;
+count(*)	sum(id)
+4	10
+drop table json_float_boundary;
 drop database test;
