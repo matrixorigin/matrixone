@@ -80,16 +80,46 @@ from __future__ import annotations
 
 import re
 
-from .._sql_literals import fulltext_term_token
+from .._sql_literals import string_grammar_token
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from sqlalchemy import Boolean
+from sqlalchemy import Float
 from sqlalchemy.sql import and_, or_, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.compiler import compiles
 
 if TYPE_CHECKING:
     from ..client import Client
+
+
+def _match_columns(columns):
+    from .._sql_literals import identifier_parts, sql_identifier
+    from sqlalchemy.sql.elements import quoted_name
+
+    rendered = []
+    for column in columns:
+        name = quoted_name(column.name, True) if hasattr(column, 'name') else column
+        parts = identifier_parts(name, qualified=True, max_parts=3)
+        # MatrixOne has keywords beyond MySQL's preparer keyword set.
+        rendered.append('.'.join(sql_identifier(part, force=True) for part in parts))
+    return ', '.join(rendered)
+
+
+def _match_mode(mode, strict=False):
+    if isinstance(mode, str):
+        mode = ' '.join(mode.casefold().split())
+    if mode == FulltextSearchMode.QUERY_EXPANSION:
+        return ' WITH QUERY EXPANSION'
+    if mode == FulltextSearchMode.BOOLEAN:
+        return ' IN BOOLEAN MODE'
+    if mode == FulltextSearchMode.NATURAL_LANGUAGE:
+        return ' IN natural language mode' if strict else ''
+    if strict:
+        if mode in ('bm25 mode', 'natural language mode with query expansion'):
+            return ' IN ' + mode.upper()
+        raise ValueError('Unsupported fulltext search mode')
+    # Preserve the filter's legacy natural-language fallback for unknown modes.
+    return ''
 
 
 class FulltextSearchMode:
@@ -105,6 +135,30 @@ class FulltextSearchAlgorithm:
 
     TF_IDF = "TF-IDF"
     BM25 = "BM25"
+
+
+def _boolean_term(value):
+    """Preserve valid phrase/prefix shorthands, reject structural ambiguity."""
+    if not isinstance(value, str):
+        raise TypeError('Fulltext terms must be strings')
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        _boolean_phrase(value[1:-1])
+        return value
+    # The native parser recognizes Boolean operators at the beginning of a
+    # token; punctuation within a word (such as C++) is ordinary term content.
+    if not value or value[0] in '+-<>~' or any(char.isspace() or char in '()"\\\x00' for char in value):
+        raise ValueError('Expected one literal fulltext term; use phrase() or an explicit raw query')
+    if '*' in value and not (value.endswith('*') and value.count('*') == 1 and len(value) > 1):
+        raise ValueError('A fulltext wildcard must be one trailing asterisk')
+    return value
+
+
+def _boolean_phrase(value):
+    if not isinstance(value, str):
+        raise TypeError('Fulltext phrases must be strings')
+    if not value.strip() or any(char in '"\\\x00' for char in value):
+        raise ValueError('Fulltext phrases cannot contain quotes, backslash or NUL')
+    return value
 
 
 class FulltextElement:
@@ -166,6 +220,7 @@ class FulltextGroup:
 
     def must(self, *terms: str) -> "FulltextGroup":
         """Add required terms (only for top-level, groups should use medium() instead)."""
+        terms = tuple(_boolean_term(term) for term in terms)
         for term in terms:
             # Groups don't use +/- operators on elements, only at group level
             if self.group_type in ["or", "not"]:
@@ -178,6 +233,7 @@ class FulltextGroup:
 
     def must_not(self, *terms: str) -> "FulltextGroup":
         """Add excluded terms (only for top-level, groups should use medium() instead)."""
+        terms = tuple(_boolean_term(term) for term in terms)
         for term in terms:
             # Groups don't use +/- operators on elements, only at group level
             if self.group_type in ["or", "not"]:
@@ -203,6 +259,7 @@ class FulltextGroup:
             # Documents with 'python' get normal positive boost
             group.encourage("python")  # Generates: python
         """
+        terms = tuple(_boolean_term(term) for term in terms)
         for term in terms:
             # Optional terms never have operators
             self.elements.append(FulltextElement(term, ""))
@@ -210,33 +267,41 @@ class FulltextGroup:
 
     def medium(self, *terms: str) -> "FulltextGroup":
         """Add terms with medium/normal weight (no operators)."""
+        terms = tuple(_boolean_term(term) for term in terms)
         for term in terms:
             self.elements.append(FulltextElement(term, ""))
         return self
 
     def phrase(self, phrase: str) -> "FulltextGroup":
         """Add a phrase search."""
+        phrase = _boolean_phrase(phrase)
         self.elements.append(FulltextElement(f'"{phrase}"', ""))
         return self
 
     def prefix(self, prefix: str) -> "FulltextGroup":
         """Add a prefix search."""
+        prefix = _boolean_term(prefix)
+        if prefix.startswith('"') or '*' in prefix:
+            raise ValueError('prefix() expects an unquoted prefix without an asterisk')
         self.elements.append(FulltextElement(f"{prefix}*", ""))
         return self
 
     def boost(self, term: str, weight: float) -> "FulltextGroup":
         """Add a boosted term."""
+        term = _boolean_term(term)
         self.elements.append(FulltextElement(f"{term}^{weight}", ""))
         return self
 
     def high(self, *terms: str) -> "FulltextGroup":
         """Add terms with high weight (>term)."""
+        terms = tuple(_boolean_term(term) for term in terms)
         for term in terms:
             self.elements.append(FulltextElement(term, "", ">"))
         return self
 
     def low(self, *terms: str) -> "FulltextGroup":
         """Add terms with low weight (<term)."""
+        terms = tuple(_boolean_term(term) for term in terms)
         for term in terms:
             self.elements.append(FulltextElement(term, "", "<"))
         return self
@@ -279,6 +344,17 @@ class FulltextGroup:
                     parts.append(f"({group_str})")
 
         return " ".join(parts)
+
+
+def _validate_boolean_items(method, items):
+    for item in items:
+        if isinstance(item, (list, tuple)):
+            raise TypeError(
+                '%s() received a %s object, but expected individual terms; use %s(*terms)'
+                % (method, type(item).__name__, method)
+            )
+        if not isinstance(item, FulltextGroup):
+            _boolean_term(item)
 
 
 class FulltextQueryBuilder:
@@ -346,14 +422,9 @@ class FulltextQueryBuilder:
 
             FulltextQueryBuilder: Self for method chaining
         """
+        _validate_boolean_items('must', items)
         for item in items:
             # Validate parameter types and provide friendly error messages
-            if isinstance(item, (list, tuple)):
-                raise TypeError(
-                    f"must() received a {type(item).__name__} object, but expected individual terms. "
-                    f"To search multiple terms, use the unpacking operator: must(*terms) instead of must(terms). "
-                    f"Example: must(*{list(item)[:3]}) or must({', '.join(repr(str(t)) for t in list(item)[:3])})"
-                )
             if isinstance(item, FulltextGroup):
                 item.group_type = "and"  # Force group to be required
                 self.main_group.add_group(item)
@@ -394,14 +465,9 @@ class FulltextQueryBuilder:
 
             FulltextQueryBuilder: Self for method chaining
         """
+        _validate_boolean_items('must_not', items)
         for item in items:
             # Validate parameter types and provide friendly error messages
-            if isinstance(item, (list, tuple)):
-                raise TypeError(
-                    f"must_not() received a {type(item).__name__} object, but expected individual terms. "
-                    f"To exclude multiple terms, use the unpacking operator: must_not(*terms) instead of must_not(terms). "
-                    f"Example: must_not(*{list(item)[:3]}) or must_not({', '.join(repr(str(t)) for t in list(item)[:3])})"
-                )
             if isinstance(item, FulltextGroup):
                 item.group_type = "not"  # Force group to be excluded
                 self.main_group.add_group(item)
@@ -446,16 +512,9 @@ class FulltextQueryBuilder:
 
             FulltextQueryBuilder: Self for method chaining
         """
+        _validate_boolean_items('encourage', items)
         for item in items:
             # Validate parameter types and provide friendly error messages
-            if isinstance(item, (list, tuple)):
-                raise TypeError(
-                    f"encourage() received a {type(item).__name__} object, but expected individual terms. "
-                    f"To encourage multiple terms, use the unpacking operator: encourage(*terms) "
-                    f"instead of encourage(terms). "
-                    f"Example: encourage(*{list(item)[:3]}) or "
-                    f"encourage({', '.join(repr(str(t)) for t in list(item)[:3])})"
-                )
             if isinstance(item, FulltextGroup):
                 item.group_type = "or"  # Force group to be optional
                 self.main_group.add_group(item)
@@ -508,16 +567,9 @@ class FulltextQueryBuilder:
 
             FulltextQueryBuilder: Self for method chaining
         """
+        _validate_boolean_items('discourage', items)
         for item in items:
             # Validate parameter types and provide friendly error messages
-            if isinstance(item, (list, tuple)):
-                raise TypeError(
-                    f"discourage() received a {type(item).__name__} object, but expected individual terms. "
-                    f"To discourage multiple terms, use the unpacking operator: discourage(*terms) "
-                    f"instead of discourage(terms). "
-                    f"Example: discourage(*{list(item)[:3]}) or "
-                    f"discourage({', '.join(repr(str(t)) for t in list(item)[:3])})"
-                )
             if isinstance(item, FulltextGroup):
                 # Apply tilde to the entire group
                 self.main_group.add_tilde_group(item)
@@ -633,7 +685,10 @@ class FulltextQueryBuilder:
             raise ValueError("Search columns are required")
 
         # Build columns string for MATCH()
-        columns_str = ", ".join(columns)
+        columns_str = _match_columns(columns)
+        fulltext_condition = (
+            f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)}{_match_mode(mode, strict=True)})"
+        )
 
         # Build SELECT clause
         if select_columns:
@@ -642,7 +697,7 @@ class FulltextQueryBuilder:
             select_parts = ["*"]
 
         if include_score:
-            score_expr = f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {mode}) AS score"
+            score_expr = f"{fulltext_condition} AS score"
             select_parts.append(score_expr)
 
         select_clause = f"SELECT {', '.join(select_parts)}"
@@ -653,13 +708,12 @@ class FulltextQueryBuilder:
         # Build WHERE clause
         where_parts = []
 
-        # Add fulltext search condition
-        fulltext_condition = f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {mode})"
+        # Reuse the same MATCH expression for scoring and filtering.
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
         if where_conditions:
-            where_parts.extend(where_conditions)
+            where_parts.extend(f"({condition})" for condition in where_conditions)
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -670,7 +724,7 @@ class FulltextQueryBuilder:
         limit_clause = f"LIMIT {limit}" if limit is not None else ""
 
         # Build OFFSET clause
-        offset_clause = f"OFFSET {offset}" if offset else ""
+        offset_clause = f"OFFSET {offset}" if offset is not None else ""
 
         # Combine all clauses
         sql_parts = [
@@ -784,11 +838,15 @@ class FulltextFilter(ColumnElement):
 
     def __init__(self, columns: List[str], mode: str = FulltextSearchMode.BOOLEAN):
         super().__init__()
-        self.columns = columns
+        from sqlalchemy.sql.elements import quoted_name
+
+        self.columns = [quoted_name(col.name, True) if hasattr(col, 'name') else col for col in columns]
         self.mode = mode
         self.query_builder = FulltextQueryBuilder()
         self._natural_query = None  # Store natural language query separately
-        self.type = Boolean()
+        # MATCH returns a relevance score, including when used as a predicate.
+        # Boolean result processing would collapse every nonzero score to True.
+        self.type = Float()
 
     def __bool__(self):
         """
@@ -826,7 +884,10 @@ class FulltextFilter(ColumnElement):
 
     def phrase(self, *phrases: str) -> "FulltextFilter":
         """Add exact phrases - equivalent to "phrase"."""
-        self.query_builder.phrase(*phrases)
+        for value in phrases:
+            _boolean_phrase(value)
+        for value in phrases:
+            self.query_builder.phrase(value)
         return self
 
     def prefix(self, *terms: str) -> "FulltextFilter":
@@ -856,7 +917,7 @@ class FulltextFilter(ColumnElement):
         for child in filters:
             if not isinstance(child, FulltextFilter):
                 raise TypeError("group() expects FulltextFilter branches")
-            if child.mode != self.mode or child.columns != self.columns:
+            if child.mode != self.mode or _match_columns(child.columns) != _match_columns(self.columns):
                 raise ValueError("group() branches must use the same columns and BOOLEAN mode")
         builders = [f.query_builder for f in filters]
         self.query_builder.group(*builders)
@@ -882,7 +943,7 @@ class FulltextFilter(ColumnElement):
         if not self.columns:
             raise ValueError("Columns must be specified")
 
-        columns_str = ", ".join(self.columns)
+        columns_str = _match_columns(self.columns)
 
         # For natural language mode, use the stored natural query if available
         if self.mode == FulltextSearchMode.NATURAL_LANGUAGE and self._natural_query:
@@ -893,14 +954,7 @@ class FulltextFilter(ColumnElement):
         if not query_string:
             raise ValueError("Query cannot be empty")
 
-        if self.mode == FulltextSearchMode.NATURAL_LANGUAGE:
-            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)})"
-        elif self.mode == FulltextSearchMode.BOOLEAN:
-            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN BOOLEAN MODE)"
-        elif self.mode == FulltextSearchMode.QUERY_EXPANSION:
-            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} WITH QUERY EXPANSION)"
-        else:
-            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)})"
+        return f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)}{_match_mode(self.mode)})"
 
     def label(self, name: str):
         """Create a labeled version for use in SELECT clauses.
@@ -1059,20 +1113,7 @@ def boolean_match(*columns) -> FulltextFilter:
     Note: The columns specified must exactly match the FULLTEXT index columns. For example, if your
     index is FULLTEXT(title, content, tags), you must use boolean_match("title", "content", "tags")
     """
-    # Convert columns to strings
-    column_names = []
-    for col in columns:
-        if hasattr(col, 'name'):
-            # SQLAlchemy Column object
-            column_names.append(col.name)
-        elif hasattr(col, '__tablename__') and hasattr(col, 'name'):
-            # Model attribute
-            column_names.append(col.name)
-        else:
-            # String column name
-            column_names.append(str(col))
-
-    return FulltextFilter(column_names, FulltextSearchMode.BOOLEAN)
+    return FulltextFilter(list(columns), FulltextSearchMode.BOOLEAN)
 
 
 def natural_match(*columns, query: str) -> FulltextFilter:
@@ -1157,20 +1198,7 @@ def natural_match(*columns, query: str) -> FulltextFilter:
             natural_match(Article.content, query="programming tutorial")
         ).filter(Article.category == "Education").execute()
     """
-    # Convert columns to strings
-    column_names = []
-    for col in columns:
-        if hasattr(col, 'name'):
-            # SQLAlchemy Column object
-            column_names.append(col.name)
-        elif hasattr(col, '__tablename__') and hasattr(col, 'name'):
-            # Model attribute
-            column_names.append(col.name)
-        else:
-            # String column name
-            column_names.append(str(col))
-
-    return FulltextFilter(column_names, FulltextSearchMode.NATURAL_LANGUAGE).set_natural_query(query)
+    return FulltextFilter(list(columns), FulltextSearchMode.NATURAL_LANGUAGE).set_natural_query(query)
 
 
 def group() -> FulltextGroup:
@@ -1278,6 +1306,7 @@ class FulltextSearchBuilder:
         self._search_mode = FulltextSearchMode.NATURAL_LANGUAGE
         self._algorithm = None
         self._query_obj = FulltextQueryBuilder()
+        self._raw_query = ''
         self._include_score = False
         self._where_conditions: List[str] = []
         self._order_by: Optional[str] = None
@@ -1391,8 +1420,11 @@ class FulltextSearchBuilder:
 
         Note: This method resets any previously added terms, phrases, or wildcards.
         """
+        string_grammar_token(query_string)
+        if not query_string.strip():
+            raise ValueError('Query is required')
         self._query_obj = FulltextQueryBuilder()
-        self._query_obj.encourage(query_string)
+        self._raw_query = query_string
         return self
 
     def add_term(
@@ -1520,7 +1552,7 @@ class FulltextSearchBuilder:
 
     def where(self, condition: str) -> "FulltextSearchBuilder":
         """
-        Add a WHERE condition.
+        Add a caller-owned raw SQL predicate; bind or safely render untrusted values.
 
         Args::
 
@@ -1587,17 +1619,17 @@ class FulltextSearchBuilder:
         if not self._columns:
             raise ValueError("Search columns are required")
 
-        query_string = self._query_obj.build()
+        query_string = ' '.join(part for part in (self._raw_query, self._query_obj.build()) if part)
         if not query_string:
             raise ValueError("Query is required")
+
+        columns_str = _match_columns(self._columns)
+        fulltext_condition = f"MATCH({columns_str}) AGAINST({string_grammar_token(query_string)}{_match_mode(self._search_mode, strict=True)})"
 
         # Build SELECT clause
         select_parts = self._select_columns.copy()
         if self._include_score:
-            columns_str = ", ".join(self._columns)
-            select_parts.append(
-                f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {self._search_mode}) AS score"
-            )
+            select_parts.append(f"{fulltext_condition} AS score")
 
         select_clause = f"SELECT {', '.join(select_parts)}"
 
@@ -1607,13 +1639,11 @@ class FulltextSearchBuilder:
         # Build WHERE clause
         where_parts = []
 
-        # Add fulltext search condition
-        columns_str = ", ".join(self._columns)
-        fulltext_condition = f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {self._search_mode})"
+        # Reuse the same MATCH expression for scoring and filtering.
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
-        where_parts.extend(self._where_conditions)
+        where_parts.extend(f"({condition})" for condition in self._where_conditions)
 
         where_clause = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -1624,7 +1654,7 @@ class FulltextSearchBuilder:
         limit_clause = f"LIMIT {self._limit_value}" if self._limit_value is not None else ""
 
         # Build OFFSET clause
-        offset_clause = f"OFFSET {self._offset_value}" if self._offset_value else ""
+        offset_clause = f"OFFSET {self._offset_value}" if self._offset_value is not None else ""
 
         # Combine all clauses
         sql_parts = [
@@ -1684,7 +1714,7 @@ class FulltextIndexManager:
         table_name: str,
         name: str,
         columns: List[str],
-        algorithm: str = FulltextSearchAlgorithm.BM25,
+        algorithm: str = FulltextSearchAlgorithm.TF_IDF,
     ) -> bool:
         """
         Create a fulltext index.
@@ -1700,24 +1730,10 @@ class FulltextIndexManager:
 
             bool: True if successful
         """
-        from .fulltext_index import FulltextIndex
+        from ..fulltext_manager import FulltextIndexManager as Manager
 
-        # Set the algorithm
-        self.client.execute(f'SET ft_relevancy_algorithm = "{algorithm}"')
-
-        # Create the index using session connection
-        with self.client.session() as session:
-            conn = session.connection()
-            success = FulltextIndex.create_index(
-                bind=conn,
-                table_name=table_name,
-                name=name,
-                columns=columns,
-                algorithm=algorithm,
-            )
-            session.commit()
-
-        return success
+        Manager(self.client).create(table_name, name, columns, algorithm)
+        return True
 
     def drop(self, table_name: str, name: str) -> bool:
         """
@@ -1732,15 +1748,10 @@ class FulltextIndexManager:
 
             bool: True if successful
         """
-        from .fulltext_index import FulltextIndex
+        from ..fulltext_manager import FulltextIndexManager as Manager
 
-        # Drop the index using session connection
-        with self.client.session() as session:
-            conn = session.connection()
-            success = FulltextIndex.drop_index(bind=conn, table_name=table_name, name=name)
-            session.commit()
-
-        return success
+        Manager(self.client).drop(table_name, name)
+        return True
 
     def search(self) -> "FulltextSearchBuilder":
         """

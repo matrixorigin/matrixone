@@ -1,0 +1,32 @@
+select cast('10:00:00' as time) + interval 1 hour;
+➤ cast(10:00:00 as time) + INTERVAL 1 hour[92,10,0]  𝄀
+11:00:00
+select interval 90 minute + cast('10:00:00' as time);
+➤ INTERVAL 90 minute + cast(10:00:00 as time)[92,10,0]  𝄀
+11:30:00
+select cast('10:00:00' as time) - interval 30 second;
+➤ cast(10:00:00 as time) - INTERVAL 30 second[92,10,0]  𝄀
+09:59:30
+select cast('10:00:00' as time) + interval '1:30' hour_minute;
+➤ cast(10:00:00 as time) + INTERVAL 1:30 hour_minute[92,10,0]  𝄀
+11:30:00
+select cast('23:30:00' as time) + interval 1 hour, date_add(cast('23:30:00' as time), interval 1 hour);
+➤ cast(23:30:00 as time) + INTERVAL 1 hour[92,10,0]  ¦  date_add(cast(23:30:00 as time), INTERVAL 1 hour)[92,10,0]  𝄀
+24:30:00  ¦  24:30:00
+select cast(null as time) + interval 1 hour;
+➤ cast(null as time) + INTERVAL 1 hour[92,10,0]  𝄀
+null
+drop database if exists time_interval_op;
+create database time_interval_op;
+use time_interval_op;
+create table t (id int primary key, t time);
+insert into t values (1, '08:15:00'), (2, '01:00:00'), (3, null);
+select id, t + interval 45 minute, t - interval 2 hour, interval 1 second + t from t order by id;
+➤ id[4,32,0]  ¦  t + INTERVAL 45 minute[92,10,0]  ¦  t - INTERVAL 2 hour[92,10,0]  ¦  INTERVAL 1 second + t[92,10,0]  𝄀
+1  ¦  09:00:00  ¦  06:15:00  ¦  08:15:01  𝄀
+2  ¦  01:45:00  ¦  -1:00:00  ¦  01:00:01  𝄀
+3  ¦  null  ¦  null  ¦  null
+select id from t where t + interval 1 hour > '09:00:00' order by id;
+➤ id[4,32,0]  𝄀
+1
+drop database time_interval_op;

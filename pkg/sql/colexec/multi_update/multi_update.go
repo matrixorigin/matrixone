@@ -584,7 +584,10 @@ func filterTargetRows(
 	if err != nil {
 		return nil, false, 0, err
 	}
-	filtered.Shrink(selections, false)
+	if err := filtered.Shrink(selections, false, proc.Mp()); err != nil {
+		filtered.Clean(proc.Mp())
+		return nil, false, 0, err
+	}
 	filtered.SetRowCount(len(selections))
 	if seen == nil || filtered.RowCount() == 0 {
 		semanticAffectedRows := matchedSemanticAffectedRows
@@ -617,7 +620,10 @@ func filterTargetRows(
 			}
 		}
 	}
-	filtered.Shrink(physicalSelections, false)
+	if err := filtered.Shrink(physicalSelections, false, proc.Mp()); err != nil {
+		filtered.Clean(proc.Mp())
+		return nil, false, 0, err
+	}
 	filtered.SetRowCount(len(physicalSelections))
 	semanticAffectedRows := matchedSemanticAffectedRows
 	if updateCtx.ChangedRowsCol != nil {
@@ -678,7 +684,10 @@ func filterODKUPhysicalRows(
 	if err != nil {
 		return nil, false, 0, err
 	}
-	filtered.Shrink(selections, false)
+	if err := filtered.Shrink(selections, false, proc.Mp()); err != nil {
+		filtered.Clean(proc.Mp())
+		return nil, false, 0, err
+	}
 	filtered.SetRowCount(len(selections))
 	return filtered, true, affectedRows, nil
 }

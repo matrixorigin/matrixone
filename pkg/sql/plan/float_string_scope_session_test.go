@@ -257,11 +257,19 @@ func testLegacyFloatAlteredSessionWitnesses(t *testing.T, part int) {
 		if precision == 4 || precision == 8 || precision == 30 {
 			continue // Already independently named above.
 		}
-		cases = append(cases, alteredSessionWitness{
+		tc := alteredSessionWitness{
 			name: fmt.Sprintf("distinct_source_precision%d", precision), suffix: "1970-01-01 08:04:00",
 			altered: strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1),
 			offset:  8*3600 + 2*60, precision: precision,
-		})
+		}
+		// Keep cross-zone searches for representative interior precisions.
+		// Every other precision still exercises ALTER, both real candidate
+		// searches and the exact result with the reading zone as witness.
+		if precision != 0 && precision != 1 && precision != 15 && precision != 28 && precision != 29 {
+			tc.offset = 0
+			tc.suffix = "1970-01-01 00:02:00"
+		}
+		cases = append(cases, tc)
 	}
 	for i, tc := range cases {
 		if i%4 != part {
@@ -272,7 +280,14 @@ func testLegacyFloatAlteredSessionWitnesses(t *testing.T, part int) {
 			// origin boundaries and precision zero. Every precision still
 			// exercises migration, LOAD, and its exact result.
 			fullProof := tc.precision == 0 || tc.precision == 4 || tc.precision == 8 || tc.precision == 30
-			compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default("+expression+"),h varchar(200) default("+expression+"))", 4, time.FixedZone("creation", 8*3600+60))
+			// Keep two complex witnesses for named sessions and decimal boundaries;
+			// other intermediate precisions use one precision witness.
+			twoWitnesses := fullProof || tc.precision == 1 || tc.precision == 15 || tc.precision == 28 || tc.precision == 29
+			gExpression := expression
+			if !twoWitnesses {
+				gExpression = "concat(a)"
+			}
+			compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default("+gExpression+"),h varchar(200) default("+expression+"))", 4, time.FixedZone("creation", 8*3600+60))
 			func() {
 				proc := compiler.GetProcess()
 				reading := compiler.GetContext()
@@ -301,11 +316,19 @@ func testLegacyFloatAlteredSessionWitnesses(t *testing.T, part int) {
 				require.NoError(t, err)
 				source = altered
 			}()
+			require.True(t, hasLegacyFloatStringCast(tableDumpDDLColumn(t, source, "g").Default.Expr))
+			require.True(t, hasLegacyFloatStringCast(tableDumpDDLColumn(t, source, "h").Default.Expr))
 			before := proto.Clone(source)
 			execution := CloneTableDefForPlan(source, true)
 			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
 			const full = "-0.0000000000000012345678901234568"
-			require.Equal(t, full+"1970-01-01 08:01:000.1429", executeLegacyFloatScope(t, compiler, execution, "g"))
+			wantG := full
+			if twoWitnesses {
+				wantG += "1970-01-01 08:01:000.1429"
+			}
+			require.Equal(t, wantG, executeLegacyFloatScope(t, compiler, execution, "g"))
+			require.False(t, hasLegacyFloatStringCast(tableDumpDDLColumn(t, execution, "g").Default.Expr))
+			require.False(t, hasLegacyFloatStringCast(tableDumpDDLColumn(t, execution, "h").Default.Expr))
 			// Exact rational rounding is independent of the SQL decimal/format owners.
 			fraction := new(big.Rat).SetFrac64(1, 7).FloatString(int(tc.precision))
 			if tc.precision == 4 {
@@ -324,8 +347,9 @@ func testLegacyFloatAlteredSessionWitnesses(t *testing.T, part int) {
 				_, err := AnalyzeTableDumpBindings(compiler, execution, nil)
 				require.NoError(t, err)
 			}
-			_, err := AnalyzeTableDumpBindings(compiler, execution, execution)
+			sensitive, err := AnalyzeTableDumpBindings(compiler, execution, execution)
 			require.NoError(t, err)
+			require.True(t, sensitive)
 			require.Same(t, time.UTC, compiler.GetProcess().GetSessionInfo().TimeZone)
 			require.Equal(t, "en_US", compiler.GetProcess().GetSessionInfo().LCTimeNames)
 			migrated := proto.Clone(execution)
@@ -607,26 +631,29 @@ func TestLegacyFloatSessionProbeProofBoundary(t *testing.T) {
 func TestLegacyFloatSessionProjectionMatchesBinding(t *testing.T) {
 	const plainSQL = "create table t(a double,g varchar(200) default(concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))))"
 	zone := time.FixedZone("creation", 8*3600+60)
-	for _, precision := range []int32{4, 30} {
-		for _, sql := range []string{plainSQL,
-			"create table t(a double,g varchar(200) default(concat(a,cast(concat(date_format(from_unixtime(0),'%M %H:%i'),cast(hour(from_unixtime(0)) as double)*cast('1e20' as double)) as char(100)))))",
-		} {
+	for precision := int32(0); precision <= 30; precision++ {
+		sqls := []string{plainSQL}
+		if precision == 4 || precision == 30 {
+			sqls = append(sqls, "create table t(a double,g varchar(200) default(concat(a,cast(concat(date_format(from_unixtime(0),'%M %H:%i'),cast(hour(from_unixtime(0)) as double)*cast('1e20' as double)) as char(100)))))")
+		}
+		for _, sql := range sqls {
 			compiler, source := legacyFloatScopeTable(t, sql, precision, zone)
 			col := tableDumpDDLColumn(t, source, "g")
 			item := tableDumpExpression{kind: "default", name: col.Name, col: col, expr: col.Default.Expr, origin: col.Default.OriginString}
 			stmt, ast, _, err := parseTableDumpExpression(compiler.GetContext(), item.origin, "")
-			require.NoError(t, err)
+			require.NoError(t, err, "precision=%d sql=%s", precision, sql)
 			defer stmt.Free()
 			budget := &tableDumpBindingBudget{}
+			creationMatch := false
 			for _, format := range []tableDumpBindingMode{0, tableDumpBindingLegacyFloatFormatting} {
 				search := tableDumpSessionCandidate{increment: int64(precision), mode: tableDumpBindingLegacyFloat | format}
 				dependency := &tableDumpDefaultSession{captureUnfolded: true}
 				folded, err := bindTableDumpExpression(compiler, source, item, ast, search.increment, search.mode, dependency)
-				require.NoError(t, err)
+				require.NoError(t, err, "precision=%d format=%d", precision, format)
 				original := proto.Clone(dependency.unfolded)
 				probe, err := prepareLegacyFloatSessionProbe(compiler, item.expr, folded, dependency.unfolded, search, budget)
-				require.NoError(t, err)
-				require.NotNil(t, probe)
+				require.NoError(t, err, "precision=%d format=%d", precision, format)
+				require.NotNil(t, probe, "precision=%d format=%d", precision, format)
 				if precision == 4 && sql == plainSQL && format == 0 {
 					require.True(t, probe.readingShape)
 					unknown := DeepCopyExpr(folded)
@@ -660,10 +687,13 @@ func TestLegacyFloatSessionProjectionMatchesBinding(t *testing.T) {
 					for _, lc := range []string{"en_US", "de_DE", "en_US"} {
 						compiler.GetProcess().GetSessionInfo().LCTimeNames = lc
 						bound, err := bindTableDumpExpression(compiler, source, item, ast, search.increment, search.mode, &tableDumpDefaultSession{})
-						require.NoError(t, err)
+						require.NoError(t, err, "precision=%d format=%d zone=%v locale=%s", precision, format, tz, lc)
 						possible, err := probe.matches(compiler, budget)
-						require.NoError(t, err)
-						require.Equal(t, sameLegacyFloatOrigin(item.expr, bound), possible, "sql=%s format=%d zone=%v locale=%s", sql, format, tz, lc)
+						require.NoError(t, err, "precision=%d format=%d zone=%v locale=%s", precision, format, tz, lc)
+						require.Equal(t, sameLegacyFloatOrigin(item.expr, bound), possible, "precision=%d sql=%s format=%d zone=%v locale=%s", precision, sql, format, tz, lc)
+						if tz == zone && lc == "en_US" && possible {
+							creationMatch = true
+						}
 					}
 				}
 				compiler.GetProcess().GetSessionInfo().TimeZone = time.UTC
@@ -675,6 +705,9 @@ func TestLegacyFloatSessionProjectionMatchesBinding(t *testing.T) {
 				probe, err = prepareLegacyFloatSessionProbe(compiler, timestamp, timestamp, timestamp, search, &tableDumpBindingBudget{})
 				require.NoError(t, err)
 				require.Nil(t, probe)
+			}
+			if sql == plainSQL {
+				require.True(t, creationMatch, "creation session must match at precision %d", precision)
 			}
 		}
 	}

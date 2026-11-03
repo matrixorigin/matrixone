@@ -289,12 +289,8 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 		}
 	}
 	if newEvalVectors {
-		evecs := make([]evalVector, len(evalExecs))
-		for i := range evalExecs {
-			evecs[i].executor = evalExecs[i]
-		}
 		dedupJoin.ctr.vecs = make([]*vector.Vector, len(evalExecs))
-		dedupJoin.ctr.evecs = evecs
+		dedupJoin.ctr.evecs = evalExecs
 	}
 	if newUpdateExecs {
 		dedupJoin.ctr.exprExecs = updateExecs
@@ -2290,12 +2286,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 }
 func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process) error {
 	for i := range ctr.evecs {
-		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat}, nil)
+		vec, err := ctr.evecs[i].Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
 		}
 		ctr.vecs[i] = vec
-		ctr.evecs[i].vec = vec
 	}
 	return nil
 }

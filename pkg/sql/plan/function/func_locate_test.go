@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_getSubstring(t *testing.T) {
+func TestRuneByteOffsetSuffix(t *testing.T) {
 	tests := []struct {
 		name  string
 		str   string
@@ -58,170 +58,48 @@ func Test_getSubstring(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, getSubstring(tt.str, tt.start), "getSubstring(%v, %v)", tt.str, tt.start)
+			offset, ok := runeByteOffset(tt.str, int64(tt.start))
+			got := ""
+			if ok {
+				got = tt.str[offset:]
+			}
+			assert.Equalf(t, tt.want, got, "runeByteOffset(%v, %v)", tt.str, tt.start)
 		})
 	}
 }
 
 func initLocateTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"ghi"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{7},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"gxhi"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{0},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"ghi"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{0},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{0},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"ghi"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{7},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"ghi"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{6},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{7},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"ghi"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-6},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{0},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"ghi"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{8},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{0},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"xxx"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{8},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{0},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{0},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
-				[]int64{0},
-				[]bool{false}),
-		},
+	cases := []struct {
+		info, needle, value string
+		position, want      int64
+	}{
+		{"2", "ghi", "abcdefghijklmn", 0, 7},
+		{"2", "gxhi", "abcdefghijklmn", 0, 0},
+		{"3", "ghi", "abcdefghijklmn", 0, 0},
+		{"3", "ghi", "abcdefghijklmn", 1, 7},
+		{"3", "ghi", "abcdefghijklmn", 6, 7},
+		{"3", "ghi", "abcdefghijklmn", -6, 0},
+		{"3", "ghi", "abcdefghijklmn", 8, 0},
+		{"3", "xxx", "abcdefghijklmn", 8, 0},
+		{"3", "abcdefghijklmn", "abcdefghijklmn", 0, 0},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.needle}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.value}, []bool{false}),
+		}
+		if tc.info == "3" {
+			inputs = append(inputs, NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.position}, []bool{false}))
+		}
+		result = append(result, tcTemp{
+			info:   tc.info,
+			typ:    types.T_varchar,
+			inputs: inputs,
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.want}, []bool{false}),
+		})
+	}
+	return result
 }
 
 func TestLocate(t *testing.T) {
@@ -238,6 +116,8 @@ func TestLocate(t *testing.T) {
 		case "3":
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, buildInLocate3Args)
+		default:
+			t.Fatalf("unexpected LOCATE arity %q", tc.info)
 		}
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))

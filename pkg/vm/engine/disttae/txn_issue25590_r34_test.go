@@ -227,7 +227,8 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 		delBat.Vecs[0] = rowid
 		delBat.Vecs[1] = pkOne
 		delBat.SetRowCount(1)
-		out := txn.deleteBatch(delBat, issue25590DBID, mt.id)
+		out, delErr := txn.deleteBatch(delBat, issue25590DBID, mt.id)
+		require.NoError(t, delErr)
 		t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 	}
 	require.Equal(t, 2, txn.deletedBlocks.size(),

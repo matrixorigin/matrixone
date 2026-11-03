@@ -211,6 +211,33 @@ func planCapacity(
 	return plan, nil
 }
 
+// minSubIndexRows returns the fewest rows a sub-index of a build must receive for cuVS to build
+// it: threshold, the minimum planCapacity checks; for a sharded build over numShards devices,
+// the rows whose split gives every shard threshold, since (n / numShards) &^ 31 >= threshold
+// exactly when n >= numShards * threshold rounded up to a multiple of 32.
+func minSubIndexRows(threshold int64, sharded bool, numShards int) int64 {
+	if sharded && numShards > 1 {
+		return int64(numShards) * ((threshold + 31) &^ 31)
+	}
+	return threshold
+}
+
+// reserveHeldRows lowers hostRowsFit, the rows of capacity host memory admits (0: not measured),
+// by the rows of hostPerRow bytes that holdRows held rows of heldRowBytes take: a build holds
+// them while the builder still holds its previous sub-index.
+func reserveHeldRows(hostRowsFit, holdRows int64, heldRowBytes, hostPerRow uint64, algo string) (int64, error) {
+	if hostRowsFit <= 0 || holdRows <= 0 || hostPerRow == 0 {
+		return hostRowsFit, nil
+	}
+	reserve := int64((uint64(holdRows)*heldRowBytes + hostPerRow - 1) / hostPerRow)
+	if reserve >= hostRowsFit {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"%s: host memory admits %d rows, not the %d rows a build that leaves out rows holds; "+
+				"free memory on this node or run the build on a larger CN", algo, hostRowsFit, holdRows)
+	}
+	return hostRowsFit - reserve, nil
+}
+
 // kmeansPointsPerCentroid is the conventional floor for k-means to have enough
 // evidence per cluster. cuVS does not enforce it — validate_build_params only
 // checks rows >= n_lists — so a build can train 16 points per centroid, succeed,

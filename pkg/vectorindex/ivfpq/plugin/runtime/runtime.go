@@ -66,6 +66,7 @@ func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.Ivfpq_TblType_Metadata,
 		catalog.Ivfpq_TblType_Storage,
+		catalog.IndexIgnored_TblType,
 	}
 }
 
@@ -271,6 +272,9 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.QuantizerTrainLimit > 0 {
 		res[catalog.IndexAlgoParamQuantizerTrainLimit] = strconv.FormatInt(idx.IndexOption.QuantizerTrainLimit, 10)
+	}
+	if idx.IndexOption.MaxBadRecordsSet {
+		res[catalog.IndexAlgoParamMaxBadRecords] = strconv.FormatInt(idx.IndexOption.MaxBadRecords, 10)
 	}
 
 	return res, nil

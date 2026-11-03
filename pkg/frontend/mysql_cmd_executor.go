@@ -1181,6 +1181,36 @@ func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch
 	return nil
 }
 
+// discardPreparedCursorRetryOutput releases everything a failed statement
+// generation retained for a prepared cursor before the compiler's retry
+// transition replays the statement: the captured row set (its session byte
+// reservation returns via preparedStmtCursor.resetAttempt) and any staged
+// saved-result blocks. The rows never reached the wire, so discarding them
+// loses nothing delivered. Statement-lifetime state the retry cannot
+// re-create survives the discard: the cursor shell and its frozen column
+// metadata (production installs it exactly once per EXECUTE before the
+// pipeline starts and internal retries do not repeat the installation) and
+// the session's authorized statement plan (installed once before Run; the
+// retried generation's publication re-serializes its Plan/Tables
+// provenance — abortPreparedCursorAttemptStaging keeps it). The retried
+// generation captures a fresh, complete row set into the kept cursor shell
+// (#30359 review). The hook is invoked by Compile.prepareRetryTransition
+// only after the failed generation's running SQL has quiesced, so no
+// pipeline can still append to the discarded set.
+func discardPreparedCursorRetryOutput(execCtx *ExecCtx) error {
+	if execCtx == nil {
+		return nil
+	}
+	if execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil {
+		execCtx.prepareStmt.cursor.resetAttempt()
+	}
+	// Attempt-cleanup failures are reported, not hidden (#30359 review):
+	// the retry transition surfaces the error and abandons the replay, and
+	// the failed staging cleanup keeps its owner (cursorResultSaver) so
+	// terminal statement cleanup can still reach the surviving files.
+	return abortPreparedCursorAttemptStaging(execCtx)
+}
+
 func doUse(ctx context.Context, ses FeSession, db string) (err error) {
 	defer RecordStatementTxnID(ctx, ses)
 
@@ -2302,8 +2332,11 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 				}
 			}
 
-			bat.Shrink(sels, false)
+			err = bat.Shrink(sels, false, ses.proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
 
 			v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
 			v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
@@ -3420,7 +3453,7 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 
 	bh := ses.GetBackgroundExec(
 		execCtx.reqCtx,
-		&BackgroundExecOption{forcePessimisticRC: true},
+		&BackgroundExecOption{forcePessimisticRC: true, internalExecution: true},
 	)
 	defer bh.Close()
 
@@ -3451,7 +3484,7 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 
 	bh := ses.GetBackgroundExec(
 		execCtx.reqCtx,
-		&BackgroundExecOption{forcePessimisticRC: true},
+		&BackgroundExecOption{forcePessimisticRC: true, internalExecution: true},
 	)
 	defer bh.Close()
 
@@ -3658,7 +3691,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 	// Object lifecycle locks are part of GRANT's correctness contract. Force the
 	// private transaction into the same pessimistic RC protocol as DROP even on
 	// optimistic deployments; LockOp intentionally skips optimistic txns.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3676,7 +3709,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 // handleRevokePrivilege revokes the privilege from the user or role
 func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3852,8 +3885,11 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 				}
 			}
 
-			bat.Shrink(sels, false)
+			err = bat.Shrink(sels, false, proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
 			v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
 			v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 			v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
@@ -4266,7 +4302,7 @@ func buildPlanWithPrepareMode(
 			case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 				*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
 				*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
 				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				opt := plan2.NewBaseOptimizer(ctx)
 				optimized, err := opt.Optimize(stmt, isPrepareStmt)
@@ -5386,15 +5422,7 @@ var (
 type loadLocalDrainCapable interface {
 	InterruptLoadLocalIO()
 	ClearLoadLocalIOInterrupt()
-	// LoadLocalFramingBroken reports that an upload read failed mid-frame
-	// (partial header, a header whose payload was never read, or a partial
-	// payload), so the connection's packet boundary is unknown: the bytes a
-	// drain would re-frame as the next packet still belong to the interrupted
-	// frame. The drain must then refuse to resync — accepting a re-framed
-	// empty packet as the upload EOF would leave the true frame remainder to
-	// be decoded as commands — and the caller retires the connection.
-	LoadLocalFramingBroken() bool
-	ReadLoadLocalPacketWithTimeout(time.Duration, time.Time) ([]byte, error)
+	DiscardLoadLocalPacket(time.Duration, time.Time, int64) (discarded int64, eof bool, err error)
 }
 
 // The production protocol behind ses.GetResponser().MysqlRrWr() must satisfy
@@ -5477,9 +5505,8 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 	}
 	// The client has accepted the upload; a later cancellation or failure
 	// drains its finite remainder before the command boundary is answered —
-	// provided the upload can still be re-framed at a known packet boundary:
-	// if the upload read died mid-frame, the boundary is unknown and the
-	// connection is retired instead (see loadLocalDrainCapable/drain).
+	// including an interrupted frame whose exact progress was preserved. A
+	// fatal framing/transport error still requires connection retirement.
 	requestAccepted := true
 	// drainOnExit requests the bounded post-failure drain below for an ordinary
 	// (non-cancellation) error, so the SQL error — not 2013 — answers the
@@ -5622,25 +5649,15 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 // within its budgets. The empty upload packet is the protocol EOF marker (see
 // readThenWrite).
 func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrainCapable) bool {
-	// A read interrupted mid-frame (partial header, a complete header whose
-	// payload was never read, or a partial payload) consumed bytes without
-	// reaching the frame end: the next byte on the wire is NOT a packet
-	// boundary, so a fresh packet read here could re-frame file bytes as an
-	// empty upload packet (a fake EOF authorizing reuse) and leave the true
-	// remainder to be decoded as commands. Only a clean boundary may drain;
-	// an unknown one retires the connection.
-	if drainer.LoadLocalFramingBroken() {
-		ses.Errorf(execCtx.reqCtx, "load local upload interrupted mid-packet: packet boundary unknown, retiring connection")
-		return false
-	}
 	deadline := time.Now().Add(loadLocalDrainMaxWait)
 	var drainedBytes int64
 	for {
 		// The absolute deadline is installed on every network read of this
 		// packet, so a trickled header or payload cannot outlive the drain's
 		// total budget one byte at a time.
-		payload, err := drainer.ReadLoadLocalPacketWithTimeout(loadLocalDrainReadTimeout, deadline)
-		if err == nil && len(payload) == 0 {
+		discarded, eof, err := drainer.DiscardLoadLocalPacket(loadLocalDrainReadTimeout, deadline, loadLocalDrainMaxBytes-drainedBytes)
+		ses.CountPayload(int(discarded))
+		if err == nil && eof {
 			return true
 		}
 		if err != nil {
@@ -5651,8 +5668,7 @@ func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrai
 			}
 			return false
 		}
-		drainedBytes += int64(len(payload))
-		ses.CountPayload(len(payload))
+		drainedBytes += discarded
 		switch {
 		case drainedBytes > loadLocalDrainMaxBytes:
 			ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drained %d bytes over budget %d, retiring connection", drainedBytes, loadLocalDrainMaxBytes)
@@ -5763,6 +5779,16 @@ func executeStmtWithTxn(ses FeSession,
 		wasDisabled := execCtx.proc.IncrStatementDisabled()
 		execCtx.proc.SetIncrStatementDisabled(true)
 		defer execCtx.proc.SetIncrStatementDisabled(wasDisabled)
+
+		// Derived statements on a shared-transaction background executor
+		// (e.g. nested procedure bodies) skip executeStmtWithWorkspace, so
+		// the READ ONLY admission runs here before dispatch instead. The gate
+		// evaluates the originating user session and the temporary bindings
+		// live at this moment; origin-less maintenance executions stay
+		// exempt inside it.
+		if err = enforceReadOnlyTxnAccessMode(ses, execCtx, execCtx.stmt, ses.GetDatabaseName()); err != nil {
+			return err
+		}
 
 		err = dispatchStmt(ses, statsArr, execCtx)
 		recordSessionDDL(ses, execCtx, err)
@@ -5890,6 +5916,15 @@ func executeStmtWithWorkspace(ses FeSession,
 		return moerr.NewInternalError(execCtx.reqCtx, "savepoint has not been implemented yet. please rollback the transaction.")
 	}
 
+	// Reject writes in a READ ONLY transaction (MySQL ERROR 1792). This runs
+	// before TxnHandler.Create so a DDL statement inside an explicit read-only
+	// transaction is rejected before its implicit commit, and the rejection
+	// leaves the transaction fully usable for reads.
+	if err = enforceReadOnlyTxnAccessMode(
+		ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+		return err
+	}
+
 	//in session migration, the txn forced to be autocommit.
 	//then the txn can be committed.
 	if execCtx.inMigration {
@@ -5929,6 +5964,16 @@ func executeStmtWithWorkspace(ses FeSession,
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
 		return err
+	}
+	if execCtx.deferReadOnlyOwnership {
+		// The pre-Create admission deferred an unqualified multi-source
+		// UPDATE verdict (READ ONLY path without an active transaction):
+		// re-run the gate now that a catalog transaction is attached.
+		execCtx.deferReadOnlyOwnership = false
+		if err = enforceReadOnlyTxnAccessMode(
+			ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+			return err
+		}
 	}
 	if backSes, ok := ses.(*backSession); ok {
 		if hook := backSes.processHook; hook != nil {
@@ -6755,6 +6800,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// completion and must not commit the new transaction opened by BEGIN.
 		_, replacementBegin := stmt.(*tree.BeginTransaction)
 		replacementBegin = replacementBegin && isTopLevelClientStatement(ses, execCtx, currentInput) && !ses.GetIsInternal()
+		if execCtx.implicitCommitBefore {
+			// A writing implicit-commit statement (TRUNCATE, RENAME) would
+			// commit an active READ ONLY transaction below and then execute in
+			// a fresh write-capable transaction. MySQL instead rejects the
+			// statement with ERROR 1792 and keeps the transaction alive for
+			// reads, so gate before the implicit commit happens.
+			execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
+			execCtx.txnOpt.activeTxnAtStartKnown = true
+			if err = enforceReadOnlyTxnAccessMode(ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				return err
+			}
+		}
 		if execCtx.implicitCommitBefore || replacementBegin {
 			beforeCommit := ses.getLastCommitTS()
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {

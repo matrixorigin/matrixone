@@ -16,6 +16,7 @@ package icebergio
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
+
+func TestCredentialRefreshFailurePreservesErrorAndSkipsClock(t *testing.T) {
+	ctx := context.Background()
+	wantErr := api.NewError(api.ErrObjectIO, "refresh failed", nil)
+	clockCalls := 0
+	now := func() time.Time { clockCalls++; return time.Time{} }
+	refresh := func(context.Context, ObjectScope) (ObjectScope, error) {
+		return ObjectScope{CredentialID: "partial"}, wantErr
+	}
+	for name, provider := range map[string]ObjectIOProvider{
+		"scoped": ScopedProvider{Now: now, RefreshFunc: refresh},
+		"vended": VendedCredentialProvider{Now: now, RefreshFunc: refresh},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := provider.Refresh(ctx, ObjectScope{})
+			if !errors.Is(err, wantErr) || got.CredentialID != "" {
+				t.Fatalf("unexpected refresh result: %+v, %v", got, err)
+			}
+			if clockCalls != 0 {
+				t.Fatalf("clock called after refresh failed: %d", clockCalls)
+			}
+		})
+	}
+}
 
 func TestScopedProviderResolveAndRefresh(t *testing.T) {
 	ctx := context.Background()
@@ -963,5 +988,17 @@ func writeMemoryFile(t *testing.T, ctx context.Context, fs fileservice.ETLFileSe
 		}},
 	}); err != nil {
 		t.Fatalf("write memory file %q: %v", path, err)
+	}
+}
+
+func TestClonedCredentialAndSignedRequestDoNotShareNonEmptyMaps(t *testing.T) {
+	credential := api.StorageCredential{Config: map[string]string{"token": "original"}}
+	request := SignedRequest{Headers: map[string]string{"Authorization": "original"}}
+	clonedCredential := cloneStorageCredential(credential)
+	clonedRequest := cloneSignedRequest(request)
+	clonedCredential.Config["token"] = "changed"
+	clonedRequest.Headers["Authorization"] = "changed"
+	if credential.Config["token"] != "original" || request.Headers["Authorization"] != "original" {
+		t.Fatal("mutating a clone changed the original credential or request")
 	}
 }

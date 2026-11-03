@@ -183,7 +183,9 @@ func (f *lateMaterializationBenchmarkFixture) read(late, all bool) (int, error) 
 			}
 		}
 		for _, pos := range loaded {
-			bat.Vecs[pos].Shrink(sels, false)
+			if err := bat.Vecs[pos].Shrink(sels, false, mp); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 		}
 		bat.SetRowCount(len(sels))
 		return engine.ReaderFilterResult{Sels: sels}, nil
@@ -194,7 +196,7 @@ func (f *lateMaterializationBenchmarkFixture) read(late, all bool) (int, error) 
 			f.ctx, &f.info, f.ds, f.columns, f.colTypes, -1, timestamp.Timestamp{},
 			nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0),
 			"ivfflat-include-benchmark", output, cacheVectors, mp, f.fs,
-			[]int{0}, filter,
+			[]int{0}, &engine.ReaderFilterRequest{Apply: filter},
 		)
 		return output.RowCount(), err
 	}
@@ -471,7 +473,9 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 			}
 		}
 		for _, pos := range loaded {
-			bat.Vecs[pos].Shrink(sels, false)
+			if err := bat.Vecs[pos].Shrink(sels, false, mp); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 		}
 		bat.SetRowCount(len(sels))
 		return engine.ReaderFilterResult{Sels: sels}, nil
@@ -485,7 +489,7 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 		if err := blockDataReadWithFilter(
 			f.ctx, &f.info, nil, f.columns, f.columnTypes, 1, types.TS{},
 			f.storageRows, fileservice.Policy(0), output, cacheVectors, mp, f.fs,
-			[]int{0}, filter, pushedTop, nil,
+			[]int{0}, &engine.ReaderFilterRequest{Apply: filter}, pushedTop, nil,
 		); err != nil {
 			return err
 		}
@@ -494,7 +498,7 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 			f.ctx, &f.info, f.ds, f.columns, f.columnTypes, 1, timestamp.Timestamp{},
 			nil, nil, objectio.BlockReadFilter{}, pushedTop, fileservice.Policy(0),
 			"ivfflat-filtered-topk-benchmark", output, cacheVectors, mp, f.fs,
-			[]int{0}, filter,
+			[]int{0}, &engine.ReaderFilterRequest{Apply: filter},
 		); err != nil {
 			return err
 		}

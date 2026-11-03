@@ -1378,7 +1378,8 @@ func TestIssue25590MergeFailureKeepsPriorStatementIntact(t *testing.T) {
 	delBat.Vecs[0] = rowidVec
 	delBat.Vecs[1] = pkVec
 	delBat.SetRowCount(2)
-	out := txn.deleteBatch(delBat, issue25590DBID, issue25590TableID)
+	out, delErr := txn.deleteBatch(delBat, issue25590DBID, issue25590TableID)
+	require.NoError(t, delErr)
 	t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 	require.Greater(t, txn.deletedBlocks.size(), 0,
 		"deletes of flushed rows must register pending block deletions")
@@ -2632,7 +2633,8 @@ func TestIssue25590CompactPublishFailureKeepsPendingDeletes(t *testing.T) {
 	delBat.Vecs[0] = rowidVec
 	delBat.Vecs[1] = pkVec
 	delBat.SetRowCount(2)
-	out := txn.deleteBatch(delBat, issue25590DBID, issue25590TableID)
+	out, delErr := txn.deleteBatch(delBat, issue25590DBID, issue25590TableID)
+	require.NoError(t, delErr)
 	t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 	require.Equal(t, 1, txn.deletedBlocks.size(),
 		"the two dumped-row deletes register one pending block deletion")
@@ -2982,7 +2984,8 @@ func TestIssue25590CompactSecondPublishFailureKeepsEveryOriginal(t *testing.T) {
 		delBat.Vecs[0] = rowidVec
 		delBat.Vecs[1] = pkVec
 		delBat.SetRowCount(2)
-		out := txn.deleteBatch(delBat, issue25590DBID, issue25590TableID)
+		out, delErr := txn.deleteBatch(delBat, issue25590DBID, issue25590TableID)
+		require.NoError(t, delErr)
 		t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 	}
 	deleteTwoMarkedRows(obj2Block1, 1, obj1Rows1)
@@ -5953,7 +5956,8 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	delBat.Vecs[0] = rowidVec2
 	delBat.Vecs[1] = pkVec
 	delBat.SetRowCount(2)
-	out := txn.deleteBatch(delBat, issue25590DBID, ctblID)
+	out, delErr := txn.deleteBatch(delBat, issue25590DBID, ctblID)
+	require.NoError(t, delErr)
 	t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 	require.Equal(t, 1, txn.deletedBlocks.size())
 	txn.EndStatement()
@@ -6479,7 +6483,8 @@ func TestIssue25590TwoDirtyObjectCompactionIsAtomicAcrossReplacements(t *testing
 	delBat.Vecs[0] = rowidVec2
 	delBat.Vecs[1] = pk2Vec
 	delBat.SetRowCount(4)
-	out := txn.deleteBatch(delBat, issue25590DBID, ctblID)
+	out, delErr := txn.deleteBatch(delBat, issue25590DBID, ctblID)
+	require.NoError(t, delErr)
 	t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 	require.Equal(t, 2, txn.deletedBlocks.size(),
 		"the four drops mark two blocks on two dirty objects")
@@ -6816,7 +6821,8 @@ func TestIssue25590RecordFailureAfterStagedReplacementRetracts(t *testing.T) {
 		delBat.Vecs[0] = rowid
 		delBat.Vecs[1] = pkOne
 		delBat.SetRowCount(1)
-		out := txn.deleteBatch(delBat, issue25590DBID, mt.id)
+		out, delErr := txn.deleteBatch(delBat, issue25590DBID, mt.id)
+		require.NoError(t, delErr)
 		t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 	}
 	require.Equal(t, 2, txn.deletedBlocks.size(),
@@ -8778,7 +8784,8 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 		delBat.Vecs[1] = pk2Vec
 		delBat.SetRowCount(rows)
 		admit()
-		out := txn.deleteBatch(delBat, issue25590DBID, ctblID)
+		out, delErr := txn.deleteBatch(delBat, issue25590DBID, ctblID)
+		require.NoError(t, delErr)
 		t.Cleanup(func() { out.Clean(txn.proc.Mp()) })
 		require.Equal(t, 1, txn.deletedBlocks.size(),
 			"the full delete marks the object's single block")
@@ -8952,7 +8959,8 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 	requiring.Vecs[1] = delPKCol
 	requiring.SetRowCount(deletedRows)
 	admit()
-	outMixed := txn.deleteBatch(requiring, issue25590DBID, ctblID)
+	outMixed, delErr := txn.deleteBatch(requiring, issue25590DBID, ctblID)
+	require.NoError(t, delErr)
 	t.Cleanup(func() { outMixed.Clean(txn.proc.Mp()) })
 	require.GreaterOrEqual(t, txn.deletedBlocks.size(), 1,
 		"the full deletes mark the first object's blocks")

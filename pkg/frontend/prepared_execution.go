@@ -133,6 +133,13 @@ func preparedFieldBindingKey(key string, state *plan2.PreparedFieldTypes) string
 	return key + "field:" + strconv.FormatUint(state.Revision(), 10)
 }
 
+func preparedTemporalBindingKey(key string, state *plan2.PreparedTemporalTypes) string {
+	if state == nil {
+		return key
+	}
+	return key + "temporal:" + strconv.FormatUint(state.Revision(), 10)
+}
+
 func (prepareStmt *PrepareStmt) rememberBitCountSourceTypes(values []any) {
 	if len(prepareStmt.bitCountOverloadParamPositions) == 0 {
 		prepareStmt.bitCountNumericParamTypes = nil
@@ -188,10 +195,12 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	}
 	var preparedPlan *plan2.Plan
 	var fieldTypes *plan2.PreparedFieldTypes
+	var temporalTypes *plan2.PreparedTemporalTypes
 	var fieldSchemas []*plan2.ObjectRef
 	if cwft.preparedStmt != nil {
 		fieldTypes = cwft.preparedStmt.fieldTypes
-		if fieldTypes != nil {
+		temporalTypes = cwft.preparedStmt.temporalTypes
+		if fieldTypes != nil || temporalTypes != nil {
 			// Keep immutable declaration facts, not another retained plan graph
 			// or a later EXECUTE's mutable handle, as the retry generation proof.
 			schemas := cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().GetSchemas()
@@ -208,6 +217,7 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	}
 	return &preparedExecutionRetry{
 		fieldTypes:         fieldTypes,
+		temporalTypes:      temporalTypes,
 		fieldSchemas:       fieldSchemas,
 		paramVals:          append([]any(nil), cwft.paramVals...),
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),

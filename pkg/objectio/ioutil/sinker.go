@@ -632,6 +632,9 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	}
 
 	if err := bat.PreExtend(sinker.mp, objectio.BlockMaxRows); err != nil {
+		// Earlier vectors may already have allocated before a later one failed.
+		// The fetched batch is no longer owned by the freelist, so release it.
+		bat.Clean(sinker.mp)
 		return nil, err
 	}
 	return bat, nil
@@ -961,7 +964,8 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sinkStart := time.Now()
 		if err := fSinker.Sink(ctx, data); err != nil {
-			return nil, err
+			// Keep ownership of the merge buffer so the caller can recycle it.
+			return data, err
 		}
 		atomic.AddInt64(&sinker.timing.sinkNs, int64(time.Since(sinkStart)))
 		data.CleanOnlyData()
@@ -1018,6 +1022,7 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 	if err := containers.DedupSortedBatches(
 		sinker.schema.sortKeyIdx,
 		sorted,
+		sinker.mp,
 	); err != nil {
 		return err
 	}
@@ -1147,7 +1152,9 @@ func (sinker *Sinker) Write(
 					return
 				}
 			} else if curr.RowCount() == objectio.BlockMaxRows {
-				if err = sinker.pushStaged(ctx, curr); err != nil {
+				staged := curr
+				curr = nil // pushStaged takes ownership even if it returns an error.
+				if err = sinker.pushStaged(ctx, staged); err != nil {
 					return
 				}
 				if curr, err = sinker.fetchBuffer(); err != nil {
@@ -1165,16 +1172,19 @@ func (sinker *Sinker) Write(
 			return
 		}
 		if curr.RowCount() == objectio.BlockMaxRows {
-			if err = sinker.pushStaged(ctx, curr); err != nil {
+			staged := curr
+			curr = nil
+			if err = sinker.pushStaged(ctx, staged); err != nil {
 				return
 			}
-			curr = nil
 		}
 		left -= toAdd
 		offset += toAdd
 	}
 	if curr != nil && curr.RowCount() > 0 {
-		if err = sinker.pushStaged(ctx, curr); err != nil {
+		staged := curr
+		curr = nil
+		if err = sinker.pushStaged(ctx, staged); err != nil {
 			return
 		}
 	}
@@ -1183,6 +1193,7 @@ func (sinker *Sinker) Write(
 
 // WriteOwned stages a full-block batch directly without copying. The caller
 // transfers ownership: the sinker will clean the batch later.
+// When owned is true, the caller must release its reference even if err is non-nil.
 // If the batch is not exactly BlockMaxRows or there is a partially-filled
 // staged buffer, falls back to Write (which copies).
 func (sinker *Sinker) WriteOwned(
@@ -1249,6 +1260,7 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 			if err := containers.DedupSortedBatches(
 				sinker.schema.sortKeyIdx,
 				sinker.staged.inMemory,
+				sinker.mp,
 			); err != nil {
 				return err
 			}

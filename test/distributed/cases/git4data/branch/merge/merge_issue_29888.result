@@ -8,7 +8,7 @@ update t_same set v = 'same' where id = 8;
 update t_same_dev set v = 'same' where id = 8;
 data branch merge t_same_dev into t_same when conflict fail;
 -- @regex("t_same_dev UPDATE and t_same UPDATE on pk\(8\)", true)
-internal error: conflict: t_same_dev UPDATE and t_same UPDATE on pk(8)
+conflict: t_same_dev UPDATE and t_same UPDATE on pk(8)
 select * from t_same order by id;
 ➤ id[4,32,0]  ¦  v[12,10,0]  𝄀
 8  ¦  same
@@ -22,10 +22,10 @@ update t set v = 'main' where id = 7;
 update t_dev set v = 'dev' where id = 7;
 data branch merge t_dev into t when conflict fail;
 -- @regex("t_dev UPDATE and t UPDATE on pk\(7\)", true)
-internal error: conflict: t_dev UPDATE and t UPDATE on pk(7)
+conflict: t_dev UPDATE and t UPDATE on pk(7)
 data branch merge t_dev into t;
 -- @regex("t_dev UPDATE and t UPDATE on pk\(7\)", true)
-internal error: conflict: t_dev UPDATE and t UPDATE on pk(7)
+conflict: t_dev UPDATE and t UPDATE on pk(7)
 select * from t order by id;
 ➤ id[4,32,0]  ¦  v[12,10,0]  𝄀
 7  ¦  main

@@ -199,7 +199,7 @@ drop table fk_01;
 --more foreign key
 create table fk_01(id int primary key auto_increment,title varchar(25));
 create table fk_02(id int primary key auto_increment,name varchar(25));
-create table fk_03(id int primary key auto_increment,book_id int,foreign key(book_id) REFERENCES fk_01(id) on delete cascade on update cascade,author_id int,foreign key(author_id) REFERENCES fk_02(id) on delete cascade on update cascade);
+create table fk_03(id int primary key auto_increment,book_id int,constraint fk_03_book foreign key(book_id) REFERENCES fk_01(id) on delete cascade on update cascade,author_id int,constraint fk_03_author foreign key(author_id) REFERENCES fk_02(id) on delete cascade on update cascade);
 insert into fk_01(title) values ('self'),('method'),('console');
 insert into fk_02(name) values ('daisy'),('wulan');
 insert into fk_03(book_id,author_id) values (1,2),(2,2),(3,1);

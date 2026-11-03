@@ -359,24 +359,37 @@ func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
 // that appends the new statement boundary, so dump errors never reuse a
 // pre-compaction rollback boundary; until then the nil slot never moves, so
 // recorded statement boundaries stay valid.
-func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) (retired bool) {
+// Borrowed vector data (upstream #32076) is copied into writable storage
+// before any in-place mutation, and an allocation failure propagates before a
+// single row is shrunk, leaving the entry's accounting and pending selections
+// untouched.
+func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) (retired bool, err error) {
 	entry := &txn.writes[idx]
 	if entry.bat == nil {
-		return false
+		return false, nil
+	}
+	bat := entry.bat
+	if len(sels) == 0 {
+		txn.beginCatalogMutation()
+		defer txn.endCatalogMutation()
+		delete(txn.batchSelectList, bat)
+		return false, nil
+	}
+
+	for _, vec := range bat.Vecs {
+		if err := vec.PrepareDataForInplaceMutation(txn.proc.Mp()); err != nil {
+			return false, err
+		}
 	}
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
-	bat := entry.bat
-	if len(sels) == 0 {
-		delete(txn.batchSelectList, bat)
-		return false
-	}
-
 	slices.Sort(sels)
 	sels = slices.Compact(sels)
 	txn.unaccountWorkspaceEntryLocked(entry)
 	txn.unaccountInsertKeyOffsetsLocked(entry)
-	shrinkBatchWithRowids(bat, sels)
+	if err := shrinkBatchWithRowids(bat, sels, txn.proc.Mp()); err != nil {
+		return false, err
+	}
 	txn.accountWorkspaceEntryLocked(entry)
 	delete(txn.batchSelectList, bat)
 	if bat.RowCount() == 0 {
@@ -387,9 +400,9 @@ func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) (
 		// unaccounts it again, Clean()s the empty batch and nils the
 		// slot for the compaction pass below.
 		txn.releaseWorkspaceEntryBatchLocked(idx)
-		return true
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 
 // mergeWorkspaceEntryBatchesLocked historically merged workspace entries in
@@ -4409,7 +4422,12 @@ func (txn *Transaction) writeFileWithAutoIncrEpochKnown(
 func (txn *Transaction) deleteBatch(
 	bat *batch.Batch,
 	databaseId, tableId uint64,
-) *batch.Batch {
+) (*batch.Batch, error) {
+	for _, vec := range bat.Vecs {
+		if err := vec.PrepareDataForInplaceMutation(txn.proc.Mp()); err != nil {
+			return bat, err
+		}
+	}
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
 	var (
@@ -4445,11 +4463,14 @@ func (txn *Transaction) deleteBatch(
 		// update workspace
 	}
 	// cn rowId antiShrink
-	bat.Shrink(cnRowIdOffsets, true)
+	if err := bat.Shrink(cnRowIdOffsets, true, txn.proc.Mp()); err != nil {
+		return bat, err
+	}
 	if bat.RowCount() == 0 {
-		return bat
+		return bat, nil
 	}
 	sels := vector.GetSels()
+	defer func() { vector.PutSels(sels) }()
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 
 	sels = sels[:0]
@@ -4460,9 +4481,10 @@ func (txn *Transaction) deleteBatch(
 			sels = append(sels, int64(k))
 		}
 	}
-	bat.Shrink(sels, true)
-	vector.PutSels(sels)
-	return bat
+	if err := bat.Shrink(sels, true, txn.proc.Mp()); err != nil {
+		return bat, err
+	}
+	return bat, nil
 }
 
 func (txn *Transaction) addBatchSelectionsLocked(bat *batch.Batch, sels []int64) {
@@ -4624,7 +4646,10 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	if len(txn.batchSelectList) > 0 {
 		for i := range txn.writes {
 			if sels, ok := txn.batchSelectList[txn.writes[i].bat]; ok {
-				txn.shrinkWorkspaceEntryBatchLocked(i, sels)
+				_, err := txn.shrinkWorkspaceEntryBatchLocked(i, sels)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}

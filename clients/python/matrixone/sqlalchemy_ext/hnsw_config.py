@@ -26,6 +26,17 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
 
+def _decode_boolean_setting(value):
+    if isinstance(value, bytes):
+        value = value.decode('ascii')
+    value = str(value).strip().lower()
+    if value in ('1', 'on', 'true'):
+        return True
+    if value in ('0', 'off', 'false'):
+        return False
+    raise ValueError('Unrecognized server boolean setting: %r' % value)
+
+
 def _exec_sql_safe(connection, sql: str):
     """Execute SQL safely, bypassing bind parameter parsing when possible."""
     if hasattr(connection, 'exec_driver_sql'):
@@ -66,15 +77,15 @@ class HNSWConfig:
 
             bool: True if successful, False otherwise
         """
+        from ..connection_hooks import configure_pool_settings
+
         try:
-            if connection:
-                _exec_sql_safe(connection, "SET experimental_hnsw_index = 1")
+            if connection is not None:
+                _exec_sql_safe(connection, 'SET experimental_hnsw_index = 1').close()
             else:
-                with self.engine.begin() as conn:
-                    _exec_sql_safe(conn, "SET experimental_hnsw_index = 1")
+                configure_pool_settings(self.engine, experimental_hnsw_index=1)
             return True
-        except Exception as e:
-            print(f"Failed to enable HNSW indexing: {e}")
+        except Exception:
             return False
 
     def disable_hnsw_indexing(self, connection: Optional[Connection] = None) -> bool:
@@ -89,15 +100,15 @@ class HNSWConfig:
 
             bool: True if successful, False otherwise
         """
+        from ..connection_hooks import configure_pool_settings
+
         try:
-            if connection:
-                _exec_sql_safe(connection, "SET experimental_hnsw_index = 0")
+            if connection is not None:
+                _exec_sql_safe(connection, 'SET experimental_hnsw_index = 0').close()
             else:
-                with self.engine.begin() as conn:
-                    _exec_sql_safe(conn, "SET experimental_hnsw_index = 0")
+                configure_pool_settings(self.engine, experimental_hnsw_index=0)
             return True
-        except Exception as e:
-            print(f"Failed to disable HNSW indexing: {e}")
+        except Exception:
             return False
 
     def get_hnsw_status(self, connection: Optional[Connection] = None) -> Optional[bool]:
@@ -121,7 +132,7 @@ class HNSWConfig:
 
             row = result.fetchone()
             if row:
-                return row[1] in ("1", "on", "ON")
+                return _decode_boolean_setting(row[1])
             return None
         except Exception as e:
             print(f"Failed to get HNSW status: {e}")
