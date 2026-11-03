@@ -26,6 +26,7 @@ import (
 
 func TestBorrowedDataShrinkPreservesRetainedView(t *testing.T) {
 	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	data := types.EncodeSlice([]int64{10, 20, 30, 40})
 	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
 	require.NoError(t, err)
@@ -145,16 +146,39 @@ func TestBorrowedVarlenInplacePreservesAreaAndView(t *testing.T) {
 			var dataReleased, areaReleased atomic.Int32
 			dataLease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() { dataReleased.Add(1) })
 			require.NoError(t, err)
+			defer func() {
+				if dataLease != nil {
+					dataLease.Release()
+				}
+			}()
 			areaLease, err := NewRefCountedBufferLease(area, int64(cap(area)), func() { areaReleased.Add(1) })
 			require.NoError(t, err)
+			areaLeaseOwned := true
+			defer func() {
+				if areaLeaseOwned {
+					areaLease.Release()
+				}
+			}()
 			vec := NewOffHeapVecWithType(types.T_varchar.ToType())
+			defer func() {
+				if vec != nil {
+					vec.Free(mp)
+				}
+			}()
 			require.NoError(t, vec.InstallBorrowedData(data, dataLease))
 			require.NoError(t, vec.InstallBorrowedArea(area, areaLease))
 			dataLease.Release()
+			dataLease = nil
 			areaLease.Release()
+			areaLeaseOwned = false
 			vec.SetLength(len(values))
 			view, err := vec.Window(0, len(values))
 			require.NoError(t, err)
+			defer func() {
+				if view != nil {
+					view.Free(mp)
+				}
+			}()
 			require.Error(t, tc.mutate(vec, nil))
 			require.Same(t, areaLease, vec.areaLease)
 			require.NoError(t, tc.mutate(vec, mp))
@@ -168,8 +192,10 @@ func TestBorrowedVarlenInplacePreservesAreaAndView(t *testing.T) {
 			require.Zero(t, dataReleased.Load())
 			require.Zero(t, areaReleased.Load())
 			vec.Free(mp)
+			vec = nil
 			require.Zero(t, areaReleased.Load())
 			view.Free(mp)
+			view = nil
 			require.EqualValues(t, 1, dataReleased.Load())
 			require.EqualValues(t, 1, areaReleased.Load())
 			require.Zero(t, mp.CurrNB())
@@ -224,20 +250,39 @@ func TestInplaceDataCOWKeepsSharedAreaLease(t *testing.T) {
 	var released atomic.Int32
 	lease, err := NewRefCountedBufferLease(backing, int64(cap(backing)), func() { released.Add(1) })
 	require.NoError(t, err)
+	leaseOwned := true
+	defer func() {
+		if leaseOwned {
+			lease.Release()
+		}
+	}()
 	vec := NewOffHeapVecWithType(types.T_varchar.ToType())
+	defer func() {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	}()
 	require.NoError(t, vec.InstallBorrowedData(backing[:len(encoded)], lease))
 	require.NoError(t, vec.InstallBorrowedArea(backing[len(encoded):], lease))
 	lease.Release()
+	leaseOwned = false
 	vec.SetLength(2)
 	view, err := vec.Window(0, 2)
 	require.NoError(t, err)
+	defer func() {
+		if view != nil {
+			view.Free(mp)
+		}
+	}()
 	require.NoError(t, vec.Shrink([]int64{1}, false, mp))
 	require.Same(t, lease, vec.areaLease)
 	require.Equal(t, payload, vec.GetBytesAt(0))
 	require.Equal(t, payload, view.GetBytesAt(0))
 	vec.Free(mp)
+	vec = nil
 	require.Zero(t, released.Load())
 	view.Free(mp)
+	view = nil
 	require.EqualValues(t, 1, released.Load())
 	require.Zero(t, mp.CurrNB())
 }
