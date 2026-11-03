@@ -2950,28 +2950,61 @@ func TestAccountedSortExpandsSparseNullAndGrouping(t *testing.T) {
 }
 
 func TestBorrowedSortMetadataAdmissionFailurePreservesRows(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	controller := &readonlyWriteController{}
-	state := readonlyWriteAccount(t, controller)
-	values := make([]int64, 65)
-	for i := range values {
-		values[i] = int64(len(values) - i)
+	for _, compact := range []bool{false, true} {
+		for _, metadata := range []string{"null", "grouping"} {
+			t.Run(fmt.Sprintf("compact=%t/%s", compact, metadata), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+				controller := &readonlyWriteController{}
+				state := readonlyWriteAccount(t, controller)
+				vec := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
+				t.Cleanup(func() { vec.Free(mp) })
+				// Sparse metadata predates a larger borrowed row domain. Sorting
+				// must admit its expansion before moving any value or row flag.
+				vec.SetLength(2)
+				switch metadata {
+				case "null":
+					require.NoError(t, vec.ensureNullCapacity(1, mp))
+					vec.GetNulls().Add(0)
+				case "grouping":
+					require.NoError(t, vec.ensureGroupingCapacity(2, mp))
+					vec.GetGrouping().Add(1)
+				}
+				values := make([]types.Varlena, 65)
+				for i := range values {
+					var err error
+					values[i], _, err = types.BuildVarlena([]byte(fmt.Sprintf("%02d", len(values)-i)), nil, nil)
+					require.NoError(t, err)
+				}
+				data := types.EncodeSlice(values)
+				before := bytes.Clone(data)
+				lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
+				require.NoError(t, err)
+				t.Cleanup(lease.Release)
+				require.NoError(t, vec.InstallBorrowedData(data, lease))
+				vec.SetLength(len(values))
+				nullCount, groupCount := vec.GetNulls().Count(), vec.GetGrouping().Count()
+				domain := vec.GetRuntimeStringDomainAt(0)
+				controller.failAt = controller.calls + 2 // COW succeeds; metadata expansion fails.
+				mutate := vec.InplaceSort
+				if compact {
+					mutate = vec.InplaceSortAndCompact
+				}
+				require.ErrorIs(t, mutate(mp), mpool.ErrAllocationAccountCapacity)
+				require.True(t, controller.rejected)
+				require.Equal(t, OwnedMPoolUnique, vec.DataBackingKind())
+				require.Equal(t, before, vec.GetData())
+				require.Equal(t, len(values), vec.Length())
+				require.Equal(t, nullCount, vec.GetNulls().Count())
+				require.Equal(t, groupCount, vec.GetGrouping().Count())
+				require.Equal(t, metadata == "null", vec.IsNull(0))
+				require.Equal(t, metadata == "grouping", vec.GetGrouping().Contains(1))
+				require.Equal(t, domain, vec.GetRuntimeStringDomainAt(0))
+				require.False(t, vec.GetSorted())
+				require.NoError(t, mutate(mp))
+				require.True(t, vec.GetSorted())
+				require.Equal(t, before, data)
+			})
+		}
 	}
-	data := types.EncodeSlice(values)
-	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), nil)
-	require.NoError(t, err)
-	defer lease.Release()
-	vec, err := NewBorrowedFixedVectorWithAllocation(types.T_int64.ToType(), len(values), data, lease, state.selection)
-	require.NoError(t, err)
-	defer vec.Free(mp)
-	require.NoError(t, vec.ensureNullCapacity(1, mp))
-	vec.GetNulls().Add(0)
-	controller.failAt = controller.calls + 2 // data COW succeeds; bitmap expansion fails.
-	require.ErrorIs(t, vec.InplaceSort(mp), mpool.ErrAllocationAccountCapacity)
-	require.True(t, controller.rejected)
-	require.Equal(t, OwnedMPoolUnique, vec.DataBackingKind())
-	require.Equal(t, values, MustFixedColNoTypeCheck[int64](vec))
-	require.True(t, vec.IsNull(0))
-	require.False(t, vec.GetSorted())
 }

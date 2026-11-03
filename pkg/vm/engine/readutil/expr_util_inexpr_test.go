@@ -172,6 +172,18 @@ func TestNormalizationTemporaryPoolIsReleased(t *testing.T) {
 	require.NoError(t, err)
 	input.Free(mp)
 	before := append([]byte(nil), data...)
+	// A decoded payload borrows its data. Rejecting COW must surface through
+	// both real normalization callers without changing or leaking the input.
+	rejected, rejectedLength, err := normalizeInPayloadWithPool(data, nil)
+	require.Error(t, err)
+	require.Nil(t, rejected)
+	require.Zero(t, rejectedLength)
+	require.Equal(t, before, data)
+	rejectedFilter, err := normalizePKInVectorPayload(data, nil)
+	require.Error(t, err)
+	require.Nil(t, rejectedFilter)
+	require.Equal(t, before, data)
+	require.Zero(t, mp.CurrNB())
 	encoded, length, err := normalizeInPayloadWithPool(data, mp)
 	require.NoError(t, err)
 	require.Zero(t, mp.CurrNB())

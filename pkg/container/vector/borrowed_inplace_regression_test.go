@@ -43,6 +43,119 @@ func TestBorrowedDataShrinkPreservesRetainedView(t *testing.T) {
 	require.Equal(t, []int64{10, 20, 30, 40}, MustFixedColWithTypeCheck[int64](view))
 }
 
+// Each fixed physical family has its own compaction path. Publication must keep
+// the compacted values alive without changing the storage retained by the owner.
+func TestBorrowedFixedCompactionAndMaskPreserveOwner(t *testing.T) {
+	cases := []struct {
+		oid       types.T
+		low, high any
+	}{
+		{types.T_bool, false, true},
+		{types.T_bit, uint64(1), uint64(2)},
+		{types.T_int8, int8(1), int8(2)},
+		{types.T_int16, int16(1), int16(2)},
+		{types.T_int32, int32(1), int32(2)},
+		{types.T_int64, int64(1), int64(2)},
+		{types.T_uint8, uint8(1), uint8(2)},
+		{types.T_uint16, uint16(1), uint16(2)},
+		{types.T_uint32, uint32(1), uint32(2)},
+		{types.T_uint64, uint64(1), uint64(2)},
+		{types.T_float32, float32(1), float32(2)},
+		{types.T_float64, float64(1), float64(2)},
+		{types.T_date, types.Date(1), types.Date(2)},
+		{types.T_year, types.MoYear(2025), types.MoYear(2026)},
+		{types.T_datetime, types.Datetime(1), types.Datetime(2)},
+		{types.T_time, types.Time(1), types.Time(2)},
+		{types.T_timestamp, types.Timestamp(1), types.Timestamp(2)},
+		{types.T_enum, types.Enum(1), types.Enum(2)},
+		{types.T_decimal64, types.Decimal64(1), types.Decimal64(2)},
+		{types.T_decimal128, types.Decimal128{B0_63: 1}, types.Decimal128{B0_63: 2}},
+		{types.T_decimal256, types.Decimal256{B0_63: 1}, types.Decimal256{B0_63: 2}},
+		{types.T_TS, types.BuildTS(1, 0), types.BuildTS(2, 0)},
+		{types.T_uuid, types.Uuid{1}, types.Uuid{2}},
+		{types.T_Rowid, types.Rowid{1}, types.Rowid{2}},
+	}
+	for _, tc := range cases {
+		for _, operation := range []string{"compact", "mask negate"} {
+			t.Run(tc.oid.String()+"/"+operation, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+				owner := NewVec(tc.oid.ToType())
+				t.Cleanup(func() { owner.Free(mp) })
+				values := []any{tc.high, tc.low, tc.high, tc.low}
+				for _, value := range values {
+					require.NoError(t, AppendAny(owner, value, false, mp))
+				}
+				view, err := owner.Window(0, len(values))
+				require.NoError(t, err)
+				t.Cleanup(func() { view.Free(mp) })
+				want := []any{tc.low, tc.high}
+				if operation == "compact" {
+					require.NoError(t, view.InplaceSortAndCompact(mp))
+					require.True(t, view.GetSorted())
+				} else {
+					var mask bitmap.Bitmap
+					mask.InitWithSize(4)
+					mask.AddMany([]uint64{0, 2})
+					require.NoError(t, view.ShrinkByMask(&mask, true, 0, mp))
+					want = []any{tc.low, tc.low}
+				}
+				require.Equal(t, OwnedMPoolUnique, view.DataBackingKind())
+				require.Equal(t, len(want), view.Length())
+				for i, value := range want {
+					require.Equal(t, value, GetAny(view, i, false))
+				}
+				for i, value := range values {
+					require.Equal(t, value, GetAny(owner, i, false))
+				}
+			})
+		}
+	}
+}
+
+func TestConstShrinkPreservesPayload(t *testing.T) {
+	operations := []struct {
+		name   string
+		mutate func(*Vector, *bitmap.Bitmap) error
+		length int
+	}{
+		{"select", func(v *Vector, _ *bitmap.Bitmap) error { return v.Shrink([]int64{1, 3}, false, nil) }, 2},
+		{"negate", func(v *Vector, _ *bitmap.Bitmap) error { return v.Shrink([]int64{1, 3}, true, nil) }, 3},
+		{"mask select", func(v *Vector, b *bitmap.Bitmap) error { return v.ShrinkByMask(b, false, 0, nil) }, 2},
+		{"mask negate", func(v *Vector, b *bitmap.Bitmap) error { return v.ShrinkByMask(b, true, 0, nil) }, 3},
+		{"empty negate", func(v *Vector, _ *bitmap.Bitmap) error {
+			var empty bitmap.Bitmap
+			return v.ShrinkByMask(&empty, true, 0, nil)
+		}, 5},
+	}
+	for _, oid := range []types.T{types.T_int64, types.T_varchar} {
+		for _, op := range operations {
+			t.Run(oid.String()+"/"+op.name, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+				var v *Vector
+				var err error
+				if oid == types.T_int64 {
+					v, err = NewConstFixed(oid.ToType(), int64(7), 5, mp)
+				} else {
+					v, err = NewConstBytes(oid.ToType(), []byte("constant-payload-stored-out-of-line"), 5, mp)
+				}
+				require.NoError(t, err)
+				t.Cleanup(func() { v.Free(mp) })
+				value, used := GetAny(v, 0, true), mp.CurrNB()
+				var mask bitmap.Bitmap
+				mask.InitWithSize(5)
+				mask.AddMany([]uint64{1, 3})
+				require.NoError(t, op.mutate(v, &mask))
+				require.True(t, v.IsConst())
+				require.Equal(t, op.length, v.Length())
+				require.Equal(t, value, GetAny(v, 0, false))
+				require.Equal(t, used, mp.CurrNB())
+			})
+		}
+	}
+}
+
 func TestBorrowedInplaceMutationIsolationAndFailure(t *testing.T) {
 	cases := []struct {
 		name   string
