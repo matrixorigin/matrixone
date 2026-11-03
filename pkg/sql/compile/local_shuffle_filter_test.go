@@ -67,6 +67,8 @@ func TestCompileLocalShuffleFilterTopology(t *testing.T) {
 			require.Same(t, producer.LocalFilter, copiedBuild.LocalFilter)
 			require.Same(t, producer.LocalFilter, copiedProbe.LocalFilter)
 			require.Equal(t, int32(2), copiedBuild.ShuffleIdx)
+			require.Equal(t, int32(2), copiedBuild.GetParalleID(), "duplicated producers need distinct registration IDs")
+			require.Equal(t, int32(4), copiedBuild.GetMaxParallel(), "completion counts actual duplicated producers")
 		})
 	}
 }

@@ -201,6 +201,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
 		op.TrackNullKeys = t.TrackNullKeys
+		op.SetInfo(&info)
 		return op
 
 	case vm.Group:
