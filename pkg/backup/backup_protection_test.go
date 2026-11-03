@@ -683,7 +683,7 @@ func TestCopyFileAndGetMetaFilesWithFiltering(t *testing.T) {
 		return ioutil.DecodeTSRangeFile(name)
 	}
 
-	taeFiles, metaFiles, dirEntries, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, dirEntries, err := (backupFileCopier{}).copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, "", backupTS, decoder, true,
 	)
 	require.NoError(t, err)
@@ -755,7 +755,7 @@ func TestExecBackupWithProtectionUpdate(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil, backupFileCopier{})
 		_ = err
 	}()
 }
@@ -839,7 +839,7 @@ func TestExecBackupWithProtectionMgr(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, protectionMgr, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, protectionMgr, nil, backupFileCopier{})
 		_ = err
 	}()
 }
@@ -884,7 +884,7 @@ func TestExecBackupWithBaseTS(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, ts, "full", nil, nil, nil, backupFileCopier{})
 		_ = err
 	}()
 }
@@ -930,7 +930,7 @@ func TestExecBackupWithEmptyBaseTS(t *testing.T) {
 				t.Logf("Expected panic in execBackup: %v", r)
 			}
 		}()
-		err = execBackup(ctx, "", srcFs, dstFs, names, 1, emptyTS, "full", nil, nil, nil)
+		err = execBackup(ctx, "", srcFs, dstFs, names, 1, emptyTS, "full", nil, nil, nil, backupFileCopier{})
 		_ = err
 	}()
 }
@@ -985,7 +985,7 @@ func TestCopyFileAndGetMetaFilesWithStartGEBackup(t *testing.T) {
 		return ioutil.DecodeTSRangeFile(name)
 	}
 
-	taeFiles, metaFiles, _, err := copyFileAndGetMetaFiles(
+	taeFiles, metaFiles, _, err := (backupFileCopier{}).copyFileAndGetMetaFiles(
 		ctx, srcFs, dstFs, "", backupTS, decoder, true,
 	)
 	require.NoError(t, err)
