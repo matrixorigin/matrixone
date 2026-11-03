@@ -90,8 +90,8 @@ func (p *pluginCompileCtx) MainTableID() uint64              { return p.mainTabl
 func (p *pluginCompileCtx) MainExtra() *api.SchemaExtra      { return p.mainExtra }
 func (p *pluginCompileCtx) RunSql(sql string) error          { return p.c.runSql(sql) }
 
-func (p *pluginCompileCtx) RunIndexMaintenanceSQL(sql, function, indexName string, roles ...string) error {
-	if p.c == nil || p.c.proc == nil || p.originalTableDef == nil || p.dbSource == nil || indexName == "" || len(roles) == 0 {
+func (p *pluginCompileCtx) RunIndexMaintenanceSQL(sql, function, indexName string) error {
+	if p.c == nil || p.c.proc == nil || p.originalTableDef == nil || p.dbSource == nil || indexName == "" {
 		return moerr.NewInvalidInputNoCtx("missing index maintenance compiler owner")
 	}
 	defs := p.originalTableDef.Indexes
@@ -122,19 +122,9 @@ func (p *pluginCompileCtx) RunIndexMaintenanceSQL(sql, function, indexName strin
 	if err != nil {
 		return err
 	}
-	if len(expected) != len(roles) {
-		return moerr.NewInvalidInputNoCtx("index maintenance roles do not match the owner")
-	}
-	requested := make(map[string]bool, len(roles))
-	for _, role := range roles {
-		if role == "" || requested[role] {
-			return moerr.NewInvalidInputNoCtx("duplicate index maintenance role")
-		}
-		requested[role] = true
-	}
 	selected := make(map[string]*plan.IndexDef, len(expected))
 	for _, role := range expected {
-		if !requested[role] || selected[role] != nil || group[role] == nil {
+		if role == "" || selected[role] != nil || group[role] == nil {
 			return moerr.NewInvalidInputNoCtx("index maintenance roles do not match the owner")
 		}
 		selected[role] = group[role]

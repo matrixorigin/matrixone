@@ -141,15 +141,8 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		if err != nil {
 			return err
 		}
-		roles := []string{catalog.Hnsw_TblType_Metadata, catalog.Hnsw_TblType_Storage}
-		if _, ok := indexDefs[catalog.Hnsw_TblType_Dict]; ok {
-			roles = append(roles, catalog.Hnsw_TblType_Dict)
-		}
-		if _, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
-			roles = append(roles, catalog.IndexIgnored_TblType)
-		}
 		for _, sql := range sqls {
-			if err = maintenance.RunSQL(ctx, sql, "hnsw_create", indexName, roles...); err != nil {
+			if err = maintenance.RunSQL(ctx, sql, "hnsw_create", indexName); err != nil {
 				return err
 			}
 		}

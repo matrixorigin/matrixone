@@ -1,0 +1,116 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package compile
+
+import (
+	"context"
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+type maintenanceOwnerExecutor struct {
+	executor.SQLExecutor
+	t      *testing.T
+	called bool
+}
+
+func (e *maintenanceOwnerExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+	e.called = true
+	spec := opts.IndexMaintenanceSpec()
+	require.NotNil(e.t, spec)
+	require.Len(e.t, spec.Targets, 2, "entries are not consumed by ivf_create")
+	require.Equal(e.t, uint64(10), spec.BaseID)
+	require.NoError(e.t, opts.IndexMaintenanceValidator().ValidateIndexMaintenance("ivf_create", []string{"{}", `{"db":"db","src":"source","metadata":"meta","index":"cent"}`}, spec))
+	require.Error(e.t, opts.IndexMaintenanceValidator().ValidateIndexMaintenance("ivf_create", []string{"{}", `{"db":"db","src":"source","metadata":"forged","index":"cent"}`}, spec))
+	return executor.Result{}, nil
+}
+
+func TestIndexMaintenanceOwnerDerivesRoles(t *testing.T) {
+	for _, scenario := range []string{"current", "create plan", "missing role", "duplicate role", "wrong parent", "cancelled"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			proc := testutil.NewProcess(t)
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
+			if scenario == "cancelled" {
+				ctx, cancel := context.WithCancel(proc.Ctx)
+				cancel()
+				proc.Ctx = ctx
+			}
+			defs := []*plan.IndexDef{}
+			for role, name := range map[string]string{catalog.SystemSI_IVFFLAT_TblType_Metadata: "meta", catalog.SystemSI_IVFFLAT_TblType_Centroids: "cent", catalog.SystemSI_IVFFLAT_TblType_Entries: "entries"} {
+				defs = append(defs, &plan.IndexDef{IndexName: "idx", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoTableType: role, IndexTableName: name})
+			}
+			if scenario == "missing role" {
+				defs = nil
+			}
+			if scenario == "duplicate role" {
+				defs = append(defs, defs[0])
+			}
+			owner := &pluginCompileCtx{c: &Compile{proc: proc}, dbSource: db, qryDatabase: "db", mainTableID: 10, originalTableDef: &plan.TableDef{Name: "source", Indexes: defs}}
+			if scenario == "create plan" {
+				owner.originalTableDef.Indexes = nil
+				owner.indexInfo = &plan.CreateTable{TableDef: &plan.TableDef{Indexes: defs}}
+			}
+			db.EXPECT().GetDatabaseId(gomock.Any()).Return("8").AnyTimes()
+			db.EXPECT().Relation(gomock.Any(), gomock.Any(), nil).DoAndReturn(func(ctx context.Context, name string, _ any) (engine.Relation, error) {
+				require.Equal(t, proc.Ctx, ctx)
+				if scenario == "cancelled" {
+					return nil, ctx.Err()
+				}
+				rel := mock_frontend.NewMockRelation(ctrl)
+				rel.EXPECT().GetTableID(gomock.Any()).Return(map[string]uint64{"source": 10, "meta": 11, "cent": 12}[name]).AnyTimes()
+				rel.EXPECT().GetTableName().Return(name).AnyTimes()
+				kind := catalog.SystemSI_IVFFLAT_TblType_Metadata
+				if name == "cent" {
+					kind = catalog.SystemSI_IVFFLAT_TblType_Centroids
+				}
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Name: name, TableType: kind}).AnyTimes()
+				parent := uint64(10)
+				if scenario == "wrong parent" {
+					parent = 99
+				}
+				rel.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{ParentTableID: parent}).AnyTimes()
+				return rel, nil
+			}).AnyTimes()
+			exec := &maintenanceOwnerExecutor{t: t}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, _ := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			t.Cleanup(func() { rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous) })
+			err := owner.RunIndexMaintenanceSQL("select maintenance", "ivf_create", "idx")
+			if scenario == "current" || scenario == "create plan" {
+				require.NoError(t, err)
+				require.True(t, exec.called)
+			} else {
+				require.Error(t, err)
+				require.False(t, exec.called)
+			}
+			if scenario == "cancelled" {
+				require.ErrorIs(t, err, context.Canceled)
+			}
+		})
+	}
+}

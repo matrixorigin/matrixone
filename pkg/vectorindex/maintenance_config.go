@@ -15,12 +15,25 @@
 package vectorindex
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
+
+// DecodeMaintenanceConfig decodes plugin literals without granting relation access.
+func DecodeMaintenanceConfig(raw string) (IndexTableConfig, error) {
+	var cfg IndexTableConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return cfg, err
+	}
+	if cfg.SrcTable == "" {
+		return cfg, moerr.NewInvalidInputNoCtx("index maintenance source is empty")
+	}
+	return cfg, nil
+}
 
 func MaintenanceRoles(defs map[string]*plan.IndexDef, roles ...string) ([]string, error) {
 	for _, role := range roles {

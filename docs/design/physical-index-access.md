@@ -36,7 +36,10 @@ without executing or folding its expressions; actual child SQL is checked again
 when bound. Untrusted contexts cannot inherit an internal access capability.
 
 Each index plugin maps its own generated function and operands to the live base
-and child definitions. A bounded attestation carries the account, database,
+and child definitions. The SQL owner selects roles through that descriptor;
+callers supply the function and index name without repeating the role list.
+Vector plugin validators share config decoding, while runtime admission retains
+its independent checks of the consumed relations. A bounded attestation carries the account, database,
 base, function, and role-specific child identities on exactly one generated
 operator. The internal codec transports this record when the operator runs on a
 different CN. A restricted nested statement may mark only the exact generated

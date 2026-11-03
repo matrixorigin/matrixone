@@ -434,6 +434,6 @@ func TestIvfpqHandleReindex_DelegatesToCreate(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func (s *stubCompileContext) RunIndexMaintenanceSQL(sql, _ string, _ string, _ ...string) error {
+func (s *stubCompileContext) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
 	return s.RunSql(sql)
 }

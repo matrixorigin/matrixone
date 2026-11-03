@@ -488,6 +488,6 @@ func TestBuildFromSourceCarriesThreadsBuild(t *testing.T) {
 	require.NotContains(t, sql, "threads_build")
 }
 
-func (s *stubCtx) RunIndexMaintenanceSQL(sql, _ string, _ string, _ ...string) error {
+func (s *stubCtx) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
 	return s.RunSql(sql)
 }

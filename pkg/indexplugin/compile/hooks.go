@@ -140,7 +140,7 @@ type CompileContext interface {
 // IndexMaintenanceRunner is an optional capability offered by the SQL owner
 // to an index plugin for one server-generated maintenance statement.
 type IndexMaintenanceRunner interface {
-	RunIndexMaintenanceSQL(sql, function, indexName string, roles ...string) error
+	RunIndexMaintenanceSQL(sql, function, indexName string) error
 }
 
 // IndexMaintenanceDescriptor validates the owner-generated TVF arguments and

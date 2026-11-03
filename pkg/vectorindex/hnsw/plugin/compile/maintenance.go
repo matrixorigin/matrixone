@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,13 +27,11 @@ func (Hooks) ValidateIndexMaintenance(function string, args []string, spec *exec
 	if function != "hnsw_create" || len(args) < 2 {
 		return moerr.NewInvalidInputNoCtx("unexpected index maintenance function")
 	}
-	var cfg vectorindex.IndexTableConfig
-	if err := json.Unmarshal([]byte(args[1]), &cfg); err != nil {
+	cfg, err := vectorindex.DecodeMaintenanceConfig(args[1])
+	if err != nil {
 		return err
 	}
-	if cfg.SrcTable == "" {
-		return moerr.NewInvalidInputNoCtx("index maintenance source is empty")
-	}
+
 	targets := map[string]string{catalog.Hnsw_TblType_Metadata: cfg.MetadataTable, catalog.Hnsw_TblType_Storage: cfg.IndexTable}
 	if cfg.DictTable != "" {
 		targets[catalog.Hnsw_TblType_Dict] = cfg.DictTable

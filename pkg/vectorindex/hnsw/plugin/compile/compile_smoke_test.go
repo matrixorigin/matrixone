@@ -101,6 +101,6 @@ func TestHnswIdxcronMetadata_NoOp(t *testing.T) {
 	require.Nil(t, got)
 }
 
-func (s *stubCtx) RunIndexMaintenanceSQL(sql, _ string, _ string, _ ...string) error {
+func (s *stubCtx) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
 	return s.RunSql(sql)
 }

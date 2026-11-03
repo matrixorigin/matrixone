@@ -20,9 +20,9 @@ import (
 )
 
 // RunSQL requires scoped generated-operator provenance from the SQL owner.
-func RunSQL(ctx compileplugin.CompileContext, sql, function, indexName string, roles ...string) error {
+func RunSQL(ctx compileplugin.CompileContext, sql, function, indexName string) error {
 	if runner, ok := ctx.(compileplugin.IndexMaintenanceRunner); ok {
-		return runner.RunIndexMaintenanceSQL(sql, function, indexName, roles...)
+		return runner.RunIndexMaintenanceSQL(sql, function, indexName)
 	}
 	return moerr.NewInternalErrorNoCtx("index maintenance owner cannot attest generated SQL")
 }

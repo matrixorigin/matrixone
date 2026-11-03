@@ -267,6 +267,6 @@ func TestGenBuildSQL(t *testing.T) {
 	}
 }
 
-func (r *recordingCtx) RunIndexMaintenanceSQL(sql, _ string, _ string, _ ...string) error {
+func (r *recordingCtx) RunIndexMaintenanceSQL(sql, _ string, _ string) error {
 	return r.RunSql(sql)
 }

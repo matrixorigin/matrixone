@@ -433,8 +433,7 @@ func ivfIndexCentroidsTable(
 		if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
 			return ctx.RunSql(sql)
 		}
-		return maintenance.RunSQL(ctx, sql, "ivf_create", indexName,
-			catalog.SystemSI_IVFFLAT_TblType_Metadata, catalog.SystemSI_IVFFLAT_TblType_Centroids)
+		return maintenance.RunSQL(ctx, sql, "ivf_create", indexName)
 	}
 
 	if async {
