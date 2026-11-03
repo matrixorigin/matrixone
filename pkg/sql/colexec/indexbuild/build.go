@@ -373,7 +373,13 @@ func (ctr *container) handleRuntimeFilter(ap *IndexBuild, proc *process.Process)
 	// InplaceSort preserves exact duplicate representations and marks supported
 	// payload types sorted for pruning.
 	vec.GetNulls().Reset()
-	vec.InplaceSort()
+	if err := vec.InplaceSort(proc.Mp()); err != nil {
+		if ctr.fallbackRuntimeFilter(ap, proc, err) {
+			return nil
+		}
+		ctr.abandonRuntimeFilter(proc)
+		return err
+	}
 	data, release, err := runtimefilter.MarshalExactFilterVector(
 		vec,
 		proc.Mp(),
