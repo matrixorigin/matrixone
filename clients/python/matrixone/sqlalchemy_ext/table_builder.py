@@ -263,7 +263,9 @@ class VectorTableBuilder:
         if column_type in ("float", "double"):
             from sqlalchemy.dialects.mysql import DOUBLE, FLOAT
 
-            return self.add_column(name, (DOUBLE if column_type == 'double' else FLOAT)(precision=precision), **kwargs)
+            return self.add_column(
+                name, (DOUBLE if column_type == 'double' else FLOAT)(precision=precision, scale=scale), **kwargs
+            )
         elif column_type in ("decimal", "numeric"):
             return self.add_column(name, Numeric(precision=precision, scale=scale), **kwargs)
         else:
