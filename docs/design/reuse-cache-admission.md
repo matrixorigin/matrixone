@@ -26,7 +26,7 @@ Use existing fixtures and the controlled CGo wrapper; no benchmark-time input/re
 Benchmark this candidate alone against clean main with identical data/config/CPUs, exclude
 the cold run, and separate scored wall time from instruction/CPU profiling. Use five paired
 SF10/SF100 measurements and three paired full-workload 1T measurements where required.
-Require a confirmed target TPC-H wall-time gain and no confirmed query/total regression.
+Readiness criterion updated by the user on 2026-11-04: require no confirmed query/total regression; a confirmed speedup is not required. Keep the existing resource, correctness and applicable scale gates.
 SF10 stays local. The specifically authorized local SF100 disk test uses all 32 CPUs, 48 GiB application memory, 16 GiB CN cache, 32 GiB agg_spill_mem and no swap; any SF100 spill invalidates the run. Reuse loaded images; no data/result verification. Run a pilot before completing five pairs. Report all query wall times and a Total row. SF100 all-memory and the original constrained-memory SF1000 protocol use server129 only when available.
 No new load/profiling is authorized while server129 remains busy.
 Use the repository PR template and keep benchmark evidence outside the squash-message section.
