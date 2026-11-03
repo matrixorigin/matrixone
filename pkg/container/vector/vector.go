@@ -6095,65 +6095,79 @@ func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 		v.areaDisjoint = false
 	}
 
-	switch v.typ.Oid {
-	case types.T_bool:
-		shrinkFixed[bool](v, sels, negate, skipData)
-	case types.T_bit:
-		shrinkFixed[uint64](v, sels, negate, skipData)
-	case types.T_int8:
-		shrinkFixed[int8](v, sels, negate, skipData)
-	case types.T_int16:
-		shrinkFixed[int16](v, sels, negate, skipData)
-	case types.T_int32:
-		shrinkFixed[int32](v, sels, negate, skipData)
-	case types.T_int64:
-		shrinkFixed[int64](v, sels, negate, skipData)
-	case types.T_uint8:
-		shrinkFixed[uint8](v, sels, negate, skipData)
-	case types.T_uint16:
-		shrinkFixed[uint16](v, sels, negate, skipData)
-	case types.T_uint32:
-		shrinkFixed[uint32](v, sels, negate, skipData)
-	case types.T_uint64:
-		shrinkFixed[uint64](v, sels, negate, skipData)
-	case types.T_float32:
-		shrinkFixed[float32](v, sels, negate, skipData)
-	case types.T_float64:
-		shrinkFixed[float64](v, sels, negate, skipData)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
-		// XXX shrink varlena, but did not shrink area.  For our vector, this
-		// may well be the right thing.  If want to shrink area as well, we
-		// have to copy each varlena value and swizzle pointer.
-		shrinkFixed[types.Varlena](v, sels, negate, skipData)
-	case types.T_date:
-		shrinkFixed[types.Date](v, sels, negate, skipData)
-	case types.T_datetime:
-		shrinkFixed[types.Datetime](v, sels, negate, skipData)
-	case types.T_time:
-		shrinkFixed[types.Time](v, sels, negate, skipData)
-	case types.T_timestamp:
-		shrinkFixed[types.Timestamp](v, sels, negate, skipData)
-	case types.T_year:
-		shrinkFixed[types.MoYear](v, sels, negate, skipData)
-	case types.T_enum:
-		shrinkFixed[types.Enum](v, sels, negate, skipData)
-	case types.T_decimal64:
-		shrinkFixed[types.Decimal64](v, sels, negate, skipData)
-	case types.T_decimal128:
-		shrinkFixed[types.Decimal128](v, sels, negate, skipData)
-	case types.T_decimal256:
-		shrinkFixed[types.Decimal256](v, sels, negate, skipData)
-	case types.T_uuid:
-		shrinkFixed[types.Uuid](v, sels, negate, skipData)
-	case types.T_TS:
-		shrinkFixed[types.TS](v, sels, negate, skipData)
-	case types.T_Rowid:
-		shrinkFixed[types.Rowid](v, sels, negate, skipData)
-	case types.T_Blockid:
-		shrinkFixed[types.Blockid](v, sels, negate, skipData)
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
+	// Keep the borrowed prefix in place while still remapping its metadata.
+	// The ordinary path uses the same compact loop as owned data.
+	if skipData {
+		if !negate || len(sels) > 0 {
+			nulls.FilterInPlaceOrdered(&v.gsp, sels, negate)
+			nulls.FilterInPlaceOrdered(&v.nsp, sels, negate)
+			if negate {
+				v.length -= len(sels)
+			} else {
+				v.length = len(sels)
+			}
+		}
+	} else {
+		switch v.typ.Oid {
+		case types.T_bool:
+			shrinkFixed[bool](v, sels, negate)
+		case types.T_bit:
+			shrinkFixed[uint64](v, sels, negate)
+		case types.T_int8:
+			shrinkFixed[int8](v, sels, negate)
+		case types.T_int16:
+			shrinkFixed[int16](v, sels, negate)
+		case types.T_int32:
+			shrinkFixed[int32](v, sels, negate)
+		case types.T_int64:
+			shrinkFixed[int64](v, sels, negate)
+		case types.T_uint8:
+			shrinkFixed[uint8](v, sels, negate)
+		case types.T_uint16:
+			shrinkFixed[uint16](v, sels, negate)
+		case types.T_uint32:
+			shrinkFixed[uint32](v, sels, negate)
+		case types.T_uint64:
+			shrinkFixed[uint64](v, sels, negate)
+		case types.T_float32:
+			shrinkFixed[float32](v, sels, negate)
+		case types.T_float64:
+			shrinkFixed[float64](v, sels, negate)
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry, types.T_geometry32:
+			// XXX shrink varlena, but did not shrink area.  For our vector, this
+			// may well be the right thing.  If want to shrink area as well, we
+			// have to copy each varlena value and swizzle pointer.
+			shrinkFixed[types.Varlena](v, sels, negate)
+		case types.T_date:
+			shrinkFixed[types.Date](v, sels, negate)
+		case types.T_datetime:
+			shrinkFixed[types.Datetime](v, sels, negate)
+		case types.T_time:
+			shrinkFixed[types.Time](v, sels, negate)
+		case types.T_timestamp:
+			shrinkFixed[types.Timestamp](v, sels, negate)
+		case types.T_year:
+			shrinkFixed[types.MoYear](v, sels, negate)
+		case types.T_enum:
+			shrinkFixed[types.Enum](v, sels, negate)
+		case types.T_decimal64:
+			shrinkFixed[types.Decimal64](v, sels, negate)
+		case types.T_decimal128:
+			shrinkFixed[types.Decimal128](v, sels, negate)
+		case types.T_decimal256:
+			shrinkFixed[types.Decimal256](v, sels, negate)
+		case types.T_uuid:
+			shrinkFixed[types.Uuid](v, sels, negate)
+		case types.T_TS:
+			shrinkFixed[types.TS](v, sels, negate)
+		case types.T_Rowid:
+			shrinkFixed[types.Rowid](v, sels, negate)
+		case types.T_Blockid:
+			shrinkFixed[types.Blockid](v, sels, negate)
+		default:
+			panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
+		}
 	}
 	v.remapPrepareParamKindsAfterShrink(oldKinds, oldLength, sels, negate)
 	v.remapStringSourcesAfterShrink(oldSources, oldLength, sels, negate)
@@ -10842,34 +10856,30 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 	return nil
 }
 
-func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool, skipData bool) {
+func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 	vs := MustFixedColNoTypeCheck[T](v)
 	if !negate {
-		if !skipData {
-			for i, sel := range sels {
-				vs[i] = vs[sel]
-			}
+		for i, sel := range sels {
+			vs[i] = vs[sel]
 		}
 		nulls.FilterInPlaceOrdered(&v.gsp, sels, false)
 		nulls.FilterInPlaceOrdered(&v.nsp, sels, false)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
-		if !skipData {
-			for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
-				if oldIdx != int(sel) {
-					vs[newIdx] = vs[oldIdx]
-					newIdx++
-				} else {
-					selIdx++
-					if selIdx >= len(sels) {
-						for idx := oldIdx + 1; idx < v.length; idx++ {
-							vs[newIdx] = vs[idx]
-							newIdx++
-						}
-						break
+		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
+			if oldIdx != int(sel) {
+				vs[newIdx] = vs[oldIdx]
+				newIdx++
+			} else {
+				selIdx++
+				if selIdx >= len(sels) {
+					for idx := oldIdx + 1; idx < v.length; idx++ {
+						vs[newIdx] = vs[idx]
+						newIdx++
 					}
-					sel = sels[selIdx]
+					break
 				}
+				sel = sels[selIdx]
 			}
 		}
 		nulls.FilterInPlaceOrdered(&v.gsp, sels, true)
