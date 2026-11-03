@@ -553,9 +553,42 @@ func TestHiddenIndexUserAccess(t *testing.T) {
 			exec(user, "create index `ς` using ivfflat on hidden_access_db.tvf_source(v) lists=1 op_type 'vector_l2_ops'")
 			exec(user, "alter table hidden_access_db.tvf_source alter reindex `Σ` ivfflat force_sync")
 			exec(user, "alter table hidden_access_db.tvf_source alter reindex `ς` ivfflat force_sync")
-			var nearest int
-			require.NoError(t, user.QueryRowContext(ctx, "select id from hidden_access_db.tvf_source order by l2_distance("+sqlquote.Ident("v`x")+",'[1,1]') limit 1").Scan(&nearest))
-			require.Equal(t, 1, nearest)
+			func() {
+				rows, err := admin.QueryContext(ctx, `select i.name, i.index_table_name, t.rel_id
+					from mo_catalog.mo_indexes i join mo_catalog.mo_tables t
+					on i.index_table_name=t.relname and t.reldatabase='hidden_access_db'
+					where i.table_id=(select rel_id from mo_catalog.mo_tables
+					where reldatabase='hidden_access_db' and relname='tvf_source')`)
+				require.NoError(t, err)
+				defer rows.Close()
+				groups := map[string]map[string]uint64{"σ": {}, "ς": {}}
+				for rows.Next() {
+					var name, physical string
+					var id uint64
+					require.NoError(t, rows.Scan(&name, &physical, &id))
+					if group, ok := groups[strings.ToLower(name)]; ok {
+						group[physical] = id
+					}
+				}
+				require.NoError(t, rows.Err())
+				require.Len(t, groups["σ"], 3)
+				require.Len(t, groups["ς"], 3)
+				firstIDs := make(map[uint64]bool, len(groups["σ"]))
+				for _, id := range groups["σ"] {
+					require.NotZero(t, id)
+					firstIDs[id] = true
+				}
+				for physical, id := range groups["ς"] {
+					require.NotContains(t, groups["σ"], physical)
+					require.NotZero(t, id)
+					require.False(t, firstIDs[id])
+				}
+			}()
+			for _, column := range []string{"v`x", "v"} {
+				var nearest int
+				require.NoError(t, user.QueryRowContext(ctx, "select id from hidden_access_db.tvf_source order by l2_distance("+sqlquote.Ident(column)+",'[1,1]') limit 1").Scan(&nearest))
+				require.Equal(t, 1, nearest)
+			}
 		}()
 		// Server-authored SHOW scans remain authorized on behalf of the base,
 		// while caller-written WHERE subqueries retain their own permissions.

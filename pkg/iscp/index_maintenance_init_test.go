@@ -20,10 +20,12 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin"
 	_ "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -31,15 +33,19 @@ import (
 
 func TestIndexInitSQLFencesSourceAndMatchesLiveGroup(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		expected uint64
-		index    string
-		wantErr  bool
+		name        string
+		expected    uint64
+		index       string
+		function    string
+		duplicate   bool
+		wantErrText string
 	}{
-		{"matching", 10, "idx", false},
-		{"replaced source", 99, "idx", true},
-		{"missing index", 10, "missing", true},
-		{"wrong case", 10, "IDX", true},
+		{name: "matching", expected: 10, index: "idx", function: "ivf_create"},
+		{name: "replaced source", expected: 99, index: "idx", function: "ivf_create", wantErrText: "source identity changed"},
+		{name: "missing index", expected: 10, index: "missing", function: "ivf_create", wantErrText: "plugin is unavailable"},
+		{name: "wrong case", expected: 10, index: "IDX", function: "ivf_create", wantErrText: "plugin is unavailable"},
+		{name: "duplicate role", expected: 10, index: "idx", function: "ivf_create", duplicate: true, wantErrText: "duplicate index initialization role"},
+		{name: "wrong function owner", expected: 10, index: "idx", function: "hnsw_create", wantErrText: "function does not match its owner"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
@@ -52,6 +58,9 @@ func TestIndexInitSQLFencesSourceAndMatchesLiveGroup(t *testing.T) {
 				{IndexName: "idx", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Metadata, IndexTableName: "meta"},
 				{IndexName: "idx", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Centroids, IndexTableName: "cent"},
 				{IndexName: "idx", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoTableType: catalog.SystemSI_IVFFLAT_TblType_Entries, IndexTableName: "entries"},
+			}
+			if tc.duplicate {
+				defs = append(defs, defs[0])
 			}
 			db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, name string, _ any) (engine.Relation, error) {
 				rel := mock_frontend.NewMockRelation(ctrl)
@@ -70,10 +79,12 @@ func TestIndexInitSQLFencesSourceAndMatchesLiveGroup(t *testing.T) {
 				rel.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{ParentTableID: 10}).AnyTimes()
 				return rel, nil
 			}).AnyTimes()
-			sql := `select * from ivf_create('{}','{"db":"db","src":"source","index":"cent","metadata":"meta"}') f`
+			sql := `select * from ` + tc.function + `('{}','{"db":"db","src":"source","index":"cent","metadata":"meta"}') f`
 			got, err := resolveInitSQLMaintenance(ctx, eng, nil, "db", "source", tc.index, []uint64{tc.expected}, []string{sql})
-			if tc.wantErr {
-				require.Error(t, err)
+			if tc.wantErrText != "" {
+				require.ErrorContains(t, err, tc.wantErrText)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+				require.Nil(t, got)
 				return
 			}
 			require.NoError(t, err)

@@ -62,6 +62,8 @@ func TestResolveIndexMaintenanceSpec(t *testing.T) {
 	meta := &maintenanceTestRelation{name: "renamed_meta", id: 21, def: &plan.TableDef{Name: "renamed_meta", TableType: "meta"}, extra: &api.SchemaExtra{ParentTableID: 20}}
 	store := &maintenanceTestRelation{name: "renamed_store", id: 22, def: &plan.TableDef{Name: "renamed_store", TableType: catalog.SystemTemporaryTable, FeatureFlag: features.IndexTable}, extra: &api.SchemaExtra{ParentTableID: 20}}
 	db := &maintenanceTestDB{relations: map[string]*maintenanceTestRelation{"base": base, "renamed_meta": meta, "renamed_store": store}}
+	_, err := ResolveIndexMaintenanceSpec(ctx, "db", db, "base", 20, "build", map[string]*plan.IndexDef{})
+	require.ErrorContains(t, err, "missing index maintenance owner")
 	defs := map[string]*plan.IndexDef{
 		"meta":  {IndexName: "ix", IndexAlgo: "test", IndexAlgoTableType: "meta", IndexTableName: "renamed_meta"},
 		"store": {IndexName: "ix", IndexAlgo: "test", IndexAlgoTableType: "store", IndexTableName: "renamed_store"},

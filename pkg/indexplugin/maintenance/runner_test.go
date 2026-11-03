@@ -15,9 +15,10 @@
 package maintenance
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestSelectDefinitions(t *testing.T) {
@@ -28,8 +29,13 @@ func TestSelectDefinitions(t *testing.T) {
 		roles   []string
 		invalid bool
 	}{
-		{"subset", []string{"meta"}, false}, {"empty", nil, false}, {"empty role", []string{""}, true},
-		{"duplicate", []string{"meta", "meta"}, true}, {"missing", []string{"missing"}, true}, {"nil definition", []string{"nil"}, true},
+		{"subset", []string{"meta"}, false},
+		{"nil roles", nil, false},
+		{"empty roles", []string{}, false},
+		{"empty role", []string{""}, true},
+		{"duplicate", []string{"meta", "meta"}, true},
+		{"missing", []string{"missing"}, true},
+		{"nil definition", []string{"nil"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			selected := SelectDefinitions(group, tc.roles)
