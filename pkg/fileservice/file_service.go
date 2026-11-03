@@ -150,6 +150,11 @@ type IOEntry struct {
 	// ownership hooks and must move with the entry.
 	admitCachedData   fscache.DataCachePinAdmission
 	releaseCachedData func()
+	// Scoped to one Read. Retry paths reuse the decision without recording
+	// another observation. A transient decoder cannot reserve payload capacity.
+	cacheAdmissionResolved bool
+	cacheAdmissionBypass   bool
+	decodeAllocator        CacheDataAllocator
 	// CachedDataSize is the expected size of the final cache representation.
 	// Zero means Size. It may differ from Size when ToCacheData decompresses the
 	// storage extent before cache admission.

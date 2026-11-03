@@ -48,6 +48,8 @@ type MemCache struct {
 	lastStatsUpdate     atomic.Int64
 	statsRefreshPending atomic.Bool
 	closed              atomic.Bool
+	reuseHistoryEnabled atomic.Bool
+	transientDecoder    transientDecodeAllocator
 
 	// Capacity decisions and the reservation-to-FIFO handoff share this lock.
 	// Releases only decrease reservedBytes and must not reacquire it from the
@@ -263,7 +265,8 @@ func newMemCacheWithMetricScope(
 	allocatorGauges := metric.GetFsCacheAllocatorStatsGaugesWithScope(metricScope, name, "mem")
 	capacityBytes.Set(float64(capacity()))
 
-	capacityFunc := func() int64 {
+	var ret *MemCache
+	configuredCapacity := func() int64 {
 		// read from global hint
 		if n := GlobalMemoryCacheSizeHint.Load(); n > 0 {
 			return n
@@ -271,10 +274,17 @@ func newMemCacheWithMetricScope(
 		// fallback
 		return capacity()
 	}
+	capacityFunc := func() int64 {
+		value := configuredCapacity()
+		if ret != nil && ret.reuseHistoryEnabled.Load() {
+			value -= reuseHistoryAllowance(value)
+		}
+		return value
+	}
 
 	var dataCache *fifocache.DataCache
 	cacheAllocator, arenaAllocator := newMemoryCacheDataAllocator()
-	ret := &MemCache{
+	ret = &MemCache{
 		counterSets:       counterSets,
 		allocator:         cacheAllocator,
 		uncachedAllocator: newBytesAllocator(ioAllocator()),
@@ -282,6 +292,7 @@ func newMemCacheWithMetricScope(
 		allocatorGauges:   allocatorGauges,
 		metricKey:         memoryCacheMetricKey{scope: metricScope, name: name},
 	}
+	ret.transientDecoder.cache = ret
 
 	prepareSetFn := func(_ context.Context, _ fscache.CacheKey, value fscache.Data, _, _ int64, _ uint64) func(inserted bool) {
 		value.Retain()
@@ -380,6 +391,15 @@ func newMemCacheWithMetricScope(
 	dataCache = fifocache.NewDataCacheWithPrepareSet(capacityFunc, prepareSetFn, postSetFn, postGetFn, postEvictFn)
 	dataCache.SetAccountingGuard(&ret.capacityMu)
 	dataCache.SetAdmissionTarget(memoryCachePressureTarget)
+	dataCache.SetReuseHistoryCapacity(func() int64 {
+		if ret.closed.Load() {
+			return 0
+		}
+		if !ret.reuseHistoryEnabled.Load() {
+			return int64(^uint64(0) >> 1)
+		}
+		return reuseHistoryAllowance(configuredCapacity())
+	})
 
 	ret.cache = dataCache
 	ret.refreshAllocatorMetrics(true)
@@ -678,6 +698,11 @@ func (m *MemCache) Read(
 ) {
 
 	if vector.Policy.Any(SkipMemoryCacheReads) {
+		path, parseErr := ParsePath(vector.FilePath)
+		if parseErr != nil {
+			return parseErr
+		}
+		m.prepareReuseAdmission(ctx, vector, path.File)
 		return nil
 	}
 
@@ -741,6 +766,7 @@ func (m *MemCache) Read(
 			numHit++
 		}
 	}
+	m.prepareReuseAdmission(ctx, vector, path.File)
 
 	return
 }
@@ -766,6 +792,9 @@ func (m *MemCache) Update(
 			continue
 		}
 		if entry.fromCache == m {
+			continue
+		}
+		if entry.cacheAdmissionBypass || vector.Policy.Any(MemoryCacheReuseOnly) && !entry.cacheAdmissionResolved {
 			continue
 		}
 		if !m.cacheAdmissionAllowed(entry.CachedData) {
@@ -831,6 +860,9 @@ func (m *MemCache) admitCacheData(ctx context.Context, data fscache.Data) fscach
 func (m *MemCache) Flush(ctx context.Context) {
 	m.releaseIdleCacheData()
 	m.cache.EvictToTargetWithWait(ctx, 0)
+	if cache, ok := m.cache.(*fifocache.DataCache); ok {
+		cache.ClearReuseHistory()
+	}
 	m.reclaimAllocator()
 }
 

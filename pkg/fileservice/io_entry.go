@@ -40,7 +40,7 @@ func (i *IOEntry) setCachedData(ctx context.Context, allocator CacheDataAllocato
 		return nil
 	}
 	LogEvent(ctx, str_to_cache_data_begin)
-	cacheData, err := i.ToCacheData(ctx, bytes.NewReader(i.Data), i.Data, allocator)
+	cacheData, err := i.ToCacheData(ctx, bytes.NewReader(i.Data), i.Data, i.allocatorForDecode(allocator))
 	LogEvent(ctx, str_to_cache_data_end)
 	if err != nil {
 		return err
