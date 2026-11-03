@@ -9433,7 +9433,11 @@ func (builder *QueryBuilder) bindSelectClause(
 	// tree) restrict the row set the lock observes -- otherwise rows that the
 	// final result set filters out would still get locked.
 	if builder.isForUpdate {
-		lockTargets := builder.collectLockTargets(nodeID, ctx)
+		lockTargets, lockErr := builder.collectLockTargets(nodeID, ctx, selectLockMode)
+		if lockErr != nil {
+			err = lockErr
+			return
+		}
 		for _, target := range lockTargets {
 			target.Mode = selectLockMode
 			target.NoWait = selectLockNoWait
@@ -14334,6 +14338,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				}
 				builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
 			}
+			if mayHaveVirtualTimestampRead(midNode.TableDef) &&
+				len(VirtualTimestampExpansionFindings(midNode.TableDef)) != 0 {
+				nodeID, err = builder.stageLegacyVirtualTimestampColumns(nodeID, ctx)
+				if err != nil {
+					return 0, "", err
+				}
+			}
 		}
 		return
 	case *tree.StatementSource:
@@ -14758,6 +14769,18 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
+	}
+	// Expressions bound above this join must distinguish a missing child row
+	// from a real row whose generated expression happens to return a value.
+	if joinType == plan.Node_RIGHT || joinType == plan.Node_OUTER {
+		for _, binding := range leftCtx.bindings {
+			ctx.nullExtendedTags[binding.tag] = true
+		}
+	}
+	if joinType == plan.Node_LEFT || joinType == plan.Node_ASOF_LEFT || joinType == plan.Node_OUTER {
+		for _, binding := range rightCtx.bindings {
+			ctx.nullExtendedTags[binding.tag] = true
+		}
 	}
 	if ctx.bindingTree != nil {
 		_, hasUsingClause := tbl.Cond.(*tree.UsingJoinCond)
@@ -15573,22 +15596,26 @@ func getPartitionColNameFromExpr(expr *plan.Expr) string {
 // (typically the flattened body of an EXISTS / IN / scalar subquery) does not
 // contribute to the outer result rows and must not be locked, matching MySQL's
 // rule that an outer FOR UPDATE does not lock subquery tables.
-func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindContext) []*plan.LockTarget {
+func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindContext, mode lockpb.LockMode) ([]*plan.LockTarget, error) {
 	node := builder.qry.Nodes[nodeID]
 	var targets []*plan.LockTarget
 
 	nodeCtx := builder.ctxByNode[nodeID]
 	if callerCtx != nil && !callerCtx.bindingCte() && nodeCtx != nil && nodeCtx.bindingCte() {
-		return targets
+		return targets, nil
 	}
 
 	if node.NodeType == plan.Node_JOIN {
 		switch node.JoinType {
 		case plan.Node_SEMI, plan.Node_ANTI, plan.Node_SINGLE, plan.Node_MARK:
 			if len(node.Children) > 0 {
-				targets = append(targets, builder.collectLockTargets(node.Children[0], callerCtx)...)
+				var err error
+				targets, err = builder.collectLockTargets(node.Children[0], callerCtx, mode)
+				if err != nil {
+					return nil, err
+				}
 			}
-			return targets
+			return targets, nil
 		}
 	}
 
@@ -15615,14 +15642,36 @@ func (builder *QueryBuilder) collectLockTargets(nodeID int32, callerCtx *BindCon
 					}
 				}
 
+				if mode == lockpb.LockMode_Exclusive {
+					obj := node.ObjRef
+					if node.ParentObjRef != nil {
+						obj = node.ParentObjRef
+					}
+					if obj == nil || obj.SchemaName == "" || obj.ObjName == "" {
+						return nil, moerr.NewInternalError(builder.GetContext(), "missing SELECT lock authorization target")
+					}
+					identity := DeepCopyObjectRef(obj)
+					if node.ScanSnapshot != nil {
+						identity.Snapshot = DeepCopySnapshot(node.ScanSnapshot)
+					}
+					builder.qry.SelectLockReferences = append(builder.qry.SelectLockReferences, &plan.SelectLockReference{
+						IsClusterTable: tableDef.TableType == catalog.SystemClusterRel,
+						ObjectRef:      identity,
+						ViewPath:       DeepCopyViewPath(node.ViewPath),
+					})
+				}
 				targets = append(targets, lockTarget)
 			}
 		}
 	}
 
 	for _, childID := range node.Children {
-		targets = append(targets, builder.collectLockTargets(childID, callerCtx)...)
+		childTargets, err := builder.collectLockTargets(childID, callerCtx, mode)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, childTargets...)
 	}
 
-	return targets
+	return targets, nil
 }

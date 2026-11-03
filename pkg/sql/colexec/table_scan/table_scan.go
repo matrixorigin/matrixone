@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -84,16 +85,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.runtimeFilterExecutors...)
 	tableScan.ctr.allFilterExecutors = append(tableScan.ctr.allFilterExecutors, tableScan.ctr.filterExecutors...)
 	tableScan.configureLateMaterialization()
-	if len(tableScan.ctr.earlyColumns) > 0 {
-		tableScan.ctr.readerFilter = func(
-			bat *batch.Batch,
-			loadedColumns []int,
-		) (engine.ReaderFilterResult, error) {
-			return tableScan.applyReaderFilter(proc, bat, loadedColumns)
-		}
-	} else {
-		tableScan.ctr.readerFilter = nil
-	}
+	tableScan.prepareReaderFilter(proc)
 
 	err = tableScan.PrepareProjection(proc)
 	if err != nil {
@@ -147,6 +139,9 @@ func (tableScan *TableScan) Call(proc *process.Process) (vm.CallResult, error) {
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+		if tableScan.ReadPolicy != 0 {
+			newCtx = fileservice.WithFileServicePolicy(newCtx, fileservice.GetFileServicePolicy(newCtx)|tableScan.ReadPolicy)
+		}
 		isEnd, err := tableScan.readBatch(newCtx, proc)
 		if err != nil {
 			return vm.CancelResult, err

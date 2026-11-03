@@ -303,7 +303,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			}
 		}
 		if useExplicitCastOverload(exprImpl.Type) {
-			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+			expr, err = appendTemporalIntegerCast(b.GetContext(), expr, typ, b)
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
@@ -708,11 +708,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	relPos := NotFound
 	colPos := NotFound
 	var typ *plan.Type
+	var resolvedBinding *Binding
 	localErrCtx := errutil.ContextWithNoReport(b.GetContext(), true)
 
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
 			if binding != nil {
+				resolvedBinding = binding
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = DeepCopyType(binding.types[colPos])
@@ -759,6 +761,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	} else {
 		binding := b.resolveTableBinding(b.ctx, db, table)
 		if binding != nil {
+			resolvedBinding = binding
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -799,6 +802,21 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			columnPos: colPos,
 		})
 	}
+	var virtualRead *plan.Expr
+	_, physicalGeneratedRef := b.ctx.physicalGeneratedRefs[astExpr]
+	if colPos != NotFound {
+		if !physicalGeneratedRef {
+			virtualRead, _, err = b.ctx.bindVirtualTimestampRead(resolvedBinding, colPos, depth)
+			if err != nil {
+				return nil, err
+			}
+		} else if resolvedBinding != nil && resolvedBinding.virtualTimestampStaged {
+			// The staged read value occupies the ordinary column position; the
+			// passthrough half of the projection retains the writer-time OLD
+			// value needed for secondary-index maintenance.
+			colPos += int32(len(resolvedBinding.types))
+		}
+	}
 
 	preserveSpecialValue := typ != nil && b.mysqlSpecialTargetType != nil &&
 		typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues &&
@@ -807,7 +825,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	// ENUM and SET have distinct storage and display representations. Keep their
 	// display value by default. Numeric and bitwise expression binders explicitly
 	// enable raw storage binding so they follow MySQL's numeric semantics.
-	if !b.bindRawMySQLSpecialType && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
+	_, physicalMySQLSpecialRef := b.ctx.physicalMySQLSpecialRefs[astExpr]
+	if !b.bindRawMySQLSpecialType && !physicalMySQLSpecialRef && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
@@ -842,11 +861,17 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				},
 			},
 		}
+		if virtualRead != nil {
+			args[len(args)-1] = virtualRead
+		}
 
 		return BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
 	}
 
 	if colPos != NotFound {
+		if virtualRead != nil {
+			return virtualRead, nil
+		}
 		expr = &plan.Expr{
 			Typ: *typ,
 		}
@@ -5732,6 +5757,12 @@ func rewriteFindInSetSetProvenance(
 // Children were already bound; only the temporal call itself and casts added
 // by the current overload resolver need a warning-free materialization proof.
 func foldTemporalTextConstant(proc *process.Process, expr *Expr) *Expr {
+	// The enclosing integer consumer has not bound yet. Preserve an explicit
+	// temporal CAST's value owner through IF/CASE argument binding; ordinary
+	// optimizer folding can run after its integer policy has been lowered.
+	if temporalIntegerSource(expr) && isExplicitPreparedCast(expr) {
+		return expr
+	}
 	if !function.IsTemporalTextDiagnosticCall(expr) {
 		return expr
 	}
@@ -7577,7 +7608,7 @@ func bindFuncExprImplByPlanExpr(
 		return nil, moerr.NewInvalidInputf(
 			ctx, "function %s is plan-internal and cannot be called directly", name)
 	}
-	preparedCalendarResult := preparedRawCalendarResult(name, args)
+	preparedCalendarResult := preparedRawCalendarResult(ctx, name, args)
 	// Validate before rewriting or converting argument metadata. Checked public
 	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
 	for _, arg := range args {
@@ -7819,6 +7850,12 @@ func bindFuncExprImplByPlanExpr(
 			// before returning to raw arithmetic and the template's result cast.
 			if rawPreparedCalendarMarker(originalBoundExpr.GetF().Args[0]) {
 				source := unwrapPreparedImplicitCast(args[0], true)
+				// Runtime DATE/DATETIME casts materialize a typed source, not
+				// a provisional marker cast. Keep that domain when selecting
+				// the calendar consumer, especially for DATE plus HOUR.
+				if args[0].Typ.Id == int32(types.T_date) || args[0].Typ.Id == int32(types.T_datetime) {
+					source = args[0]
+				}
 				oid := types.T(source.Typ.Id)
 				if oid != types.T_any && !oid.IsMySQLString() {
 					value, e := bindTemporalMarkerConsumer(ctx, source, types.New(types.T_datetime, 6, 6))
@@ -8912,6 +8949,11 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 		returnType.Width = returnType.Scale
+
+	case "from_unixtime":
+		if len(args) == 1 && temporalDirectMarkerArgument(args, originalBoundExpr, 0) {
+			returnType.Width, returnType.Scale = 6, 6
+		}
 
 	case "sec_to_time":
 		returnType.Width = returnType.Scale
@@ -12079,9 +12121,11 @@ func appendBitwiseAggregateCastBeforeExpr(ctx context.Context, expr *Expr, toTyp
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
 	if expr != nil && types.T(expr.Typ.Id).IsDateRelate() &&
-		(types.T(toType.Id) == types.T_decimal256 || types.T(toType.Id).IsFloat()) {
-		// Temporal arithmetic already has exact casts to Decimal128. Preserve
-		// packed values and fractional seconds before widening or float conversion.
+		(types.T(toType.Id) == types.T_decimal256 ||
+			(types.T(toType.Id).IsFloat() && !function.IfTypeCastSupported(types.T(expr.Typ.Id), types.T(toType.Id)))) {
+		// Bridge widening and unsupported floating targets through Decimal128.
+		// Supported direct casts already preserve packed temporal values and
+		// fractions, without an intermediate vector or decimal text conversion.
 		intermediate := types.New(types.T_decimal128, 38, max(expr.Typ.Scale, 0))
 		var err error
 		expr, err = appendCastBeforeExprWithOverload(ctx, expr, makePlan2Type(&intermediate), 0)
@@ -12093,7 +12137,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
-	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+	return appendTemporalIntegerCast(ctx, expr, toType, nil)
 }
 
 // appendSyntaxExplicitCastBeforeExpr records syntax provenance while retaining
@@ -12743,13 +12787,10 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	}
 	markerDate := temporalDirectMarker(dateExpr)
 	if markerDate {
-		target := types.New(types.T_datetime, 6, 6)
-		if timestampAddDateUnit(intervalType) || intervalType == types.Year_Month {
-			target = types.T_date.ToType()
-		}
 		if rawPreparedCalendarMarker(dateExpr) {
 			dateExpr, err = appendCastBeforeExpr(ctx, unwrapPreparedImplicitCast(dateExpr, true), plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
 		} else {
+			target := preparedCalendarMarkerResult(ctx, dateExpr, timestampAddDateUnit(intervalType) || intervalType == types.Year_Month)
 			dateExpr, err = bindTemporalMarkerConsumer(ctx, dateExpr, target)
 		}
 		if err != nil {

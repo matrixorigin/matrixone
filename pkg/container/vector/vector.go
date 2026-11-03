@@ -3594,9 +3594,9 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 	if v.allocationAccount == nil {
 		storage, err = mpool.MakeSlice[uint64](words, mp, v.offHeap)
 	} else {
-		storage, err = mpool.MakeSliceAccounted[uint64](
+		storage, err = mpool.MakeSliceAccountedWithCapacityClass[uint64](
 			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
-			v.allocationAccount.nullsSite)
+			v.allocationAccount.nullsSite, v.allocationAccount.capacityClass)
 	}
 	if err != nil {
 		return remapped, nil, err
@@ -3613,8 +3613,10 @@ func (v *Vector) prepareRemappedStringRows(rowsBitmap *bitmap.Bitmap, sels []int
 }
 
 func (v *Vector) releaseRemappedBinaryStringRows(remapped *bitmap.Bitmap, storage []uint64, mp *mpool.MPool) {
-	remapped.ReleaseExternalStorage()
-	mpool.FreeSlice(mp, storage)
+	if storage != nil {
+		remapped.ReleaseExternalStorage()
+		mpool.FreeSlice(mp, storage)
+	}
 }
 
 func (v *Vector) publishRemappedBinaryStringRows(binaryRows, textRows *bitmap.Bitmap) {
@@ -6476,15 +6478,22 @@ func (v *Vector) remapPrepareParamKindsAfterShuffle(
 	v.normalizePrepareParamKinds()
 }
 
+// preserveSortedAfterShuffle retains the ordering proof only for a stable selection.
+func (v *Vector) preserveSortedAfterShuffle(sels []int64) {
+	if v.sorted {
+		for i := 1; i < len(sels); i++ {
+			if sels[i] < sels[i-1] {
+				v.sorted = false
+				return
+			}
+		}
+	}
+}
+
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
 		return nil
-	}
-	if v.binaryStringRowsActive {
-		if err = v.ensureBinaryStringCapacity(len(sels), mp); err != nil {
-			return err
-		}
 	}
 	remappedSources, remappedSourcesOwner, err := v.remapStringSources(sels, mp)
 	if err != nil {
@@ -6500,12 +6509,12 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp) }()
 	remappedText, remappedTextStorage, err := v.prepareRemappedStringRows(v.textStringRows, sels, mp)
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp) }()
 	oldKinds := v.prepareParamKinds
 	var preparedKinds []PrepareParamKind
 	var preparedOwner *mpool.MPool
@@ -6580,10 +6589,19 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		}
 		return err
 	}
+	v.preserveSortedAfterShuffle(sels)
 	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
 	releaseRemappedSources = false
-	v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+	if v.allocationAccount != nil && v.binaryStringRowsActive {
+		mpool.FreeSlice(mp, v.binaryStringRows.ReleaseExternalStorage())
+		mpool.FreeSlice(mp, v.textStringRows.ReleaseExternalStorage())
+		*v.binaryStringRows, *v.textStringRows = remappedBinary, remappedText
+		remappedStorage, remappedTextStorage = nil, nil
+		v.normalizeBinaryStringRows()
+	} else {
+		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+	}
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -6594,9 +6612,6 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 // alloc/free churn when the permutation preserves the element count.
 // buf is grown as needed and retained across calls.
 func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err error) {
-	if v.typ.IsVarlen() {
-		v.areaDisjoint = false
-	}
 	if v.IsConst() {
 		return nil
 	}
@@ -6612,10 +6627,10 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	if v.cantFreeData || len(sels) != v.length {
 		return v.Shuffle(sels, mp)
 	}
-	if v.binaryStringRowsActive {
-		if err = v.ensureBinaryStringCapacity(len(sels), mp); err != nil {
-			return err
-		}
+	// Uniform metadata needs no row remapping. Keep ordinary vectors out of
+	// the temporary sidecar and deferred-cleanup path.
+	if v.stringSources == nil && oldKinds == nil && !v.binaryStringRowsActive {
+		return v.shuffleWithBufData(sels, buf)
 	}
 	remappedSources, remappedSourcesOwner, err := v.remapStringSources(sels, mp)
 	if err != nil {
@@ -6631,13 +6646,26 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedBinary, remappedStorage, mp) }()
 	remappedText, remappedTextStorage, err := v.prepareRemappedStringRows(v.textStringRows, sels, mp)
 	if err != nil {
 		return err
 	}
-	defer v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp)
+	defer func() { v.releaseRemappedBinaryStringRows(&remappedText, remappedTextStorage, mp) }()
 
+	err = v.shuffleWithBufData(sels, buf)
+	if err == nil {
+		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
+		v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
+		releaseRemappedSources = false
+		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+	}
+	return err
+}
+
+// shuffleWithBufData performs the common payload/bitmap permutation after all
+// fallible metadata preparation, then updates ordering and area properties.
+func (v *Vector) shuffleWithBufData(sels []int64, buf *[]byte) (err error) {
 	switch v.typ.Oid {
 	case types.T_bool:
 		err = shuffleFixedNoTypeCheckWithBuf[bool](v, sels, buf)
@@ -6697,10 +6725,10 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 	}
 
 	if err == nil {
-		v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, nil, nil)
-		v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
-		releaseRemappedSources = false
-		v.publishRemappedBinaryStringRows(&remappedBinary, &remappedText)
+		v.preserveSortedAfterShuffle(sels)
+		if v.typ.IsVarlen() {
+			v.areaDisjoint = false
+		}
 	}
 	return err
 }
@@ -8040,13 +8068,31 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return err
 			}
 		}
+		if length == 0 {
+			if err := set(v, w, sel, length); err != nil {
+				return err
+			}
+			v.resetPrepareParamKind()
+			v.resetBinaryString()
+			v.resetStringSource()
+			v.gsp.Reset()
+			return nil
+		}
+		// The selected source row is stable through set: aliases were cloned above.
+		// Compute NULL once for both provenance admission and publication.
+		var sourceNull bool
+		if w.IsConst() {
+			sourceNull = w.IsConstNull()
+		} else {
+			sourceNull = w.nsp.Contains(uint64(sel))
+		}
 		domain := types.RuntimeStringInherit
-		if length > 0 && !w.IsConstNull() && !w.IsNull(uint64(sel)) {
+		if !sourceNull {
 			domain = w.GetRuntimeStringDomainAt(int(sel))
 		}
 		// Admit the only fallible provenance allocation before SetConst*
 		// publishes the new payload, const state, and logical length.
-		if domain == types.RuntimeStringText && length > 0 {
+		if domain == types.RuntimeStringText {
 			if err := v.ensureBinaryStringCapacity(1, mp); err != nil {
 				return err
 			}
@@ -8058,7 +8104,7 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 		// constant value.  The value and its prepared-parameter provenance are
 		// one state: copy only the selected row's category, never the source
 		// sidecar's whole row layout. NULL retains its independent source.
-		if length == 0 || w.IsConstNull() || w.IsNull(uint64(sel)) {
+		if sourceNull {
 			v.resetPrepareParamKind()
 			v.resetBinaryString()
 		} else {
@@ -8067,13 +8113,11 @@ func GetConstSetFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector, sel
 				return err
 			}
 		}
-		if length == 0 {
-			v.resetStringSource()
-		} else if err := v.SetStringSource(w.GetStringSourceAt(int(sel))); err != nil {
+		if err := v.SetStringSource(w.GetStringSourceAt(int(sel))); err != nil {
 			return err
 		}
 		v.gsp.Reset()
-		if grouping && length > 0 {
+		if grouping {
 			v.gsp.AddRange(0, uint64(length))
 		}
 		return nil
@@ -8127,6 +8171,92 @@ func pregrowVarlenaArea(vec *Vector, totalBytes int, mp *mpool.MPool) error {
 
 func (v *Vector) UnionNull(mp *mpool.MPool) error {
 	return appendOneFixed(v, 0, true, mp)
+}
+
+// FixedSourceRow identifies an immutable source for a single append call.
+type FixedSourceRow struct {
+	Vec *Vector
+	Row int64
+}
+
+// TryUnionFlatFixedRows copies rows across source vectors without changing their
+// order. A false result leaves v untouched, allowing the caller to use UnionOne.
+// A true result transfers no source ownership; v owns every copied payload.
+func (v *Vector) TryUnionFlatFixedRows(rows []FixedSourceRow, mp *mpool.MPool) (bool, error) {
+	if len(rows) < 2 || mp == nil || v.class != FLAT || v.typ.IsVarlen() ||
+		v.DataBackingKind() != OwnedMPoolUnique || !v.hasPlainFixedMetadata() ||
+		v.preflightStringSourceReady {
+		return false, nil
+	}
+	size := v.typ.TypeSize()
+	if size <= 0 || rows[0].Vec == nil {
+		return false, nil
+	}
+	source := rows[0].Vec.stringSource
+	if v.length != 0 && v.stringSource != source {
+		return false, nil
+	}
+
+	hasNulls, hasValues := false, false
+	for _, row := range rows {
+		w := row.Vec
+		if w == nil || w == v || w.class != FLAT || w.typ != v.typ ||
+			w.DataBackingKind() != OwnedMPoolUnique || row.Row < 0 || row.Row >= int64(w.length) ||
+			!w.gsp.EmptyByFlag() || !w.hasPlainFixedMetadata() || w.stringSource != source {
+			return false, nil
+		}
+		isNull := !w.nsp.EmptyByFlag() && nulls.Contains(&w.nsp, uint64(row.Row))
+		hasNulls = hasNulls || isNull
+		hasValues = hasValues || !isNull
+	}
+	oldLen := v.length
+	if err := extendWithBitmaps(v, len(rows), mp, hasNulls && v.allocationAccount != nil, false); err != nil {
+		return true, err
+	}
+	// Keep the nullable path separate: ordinary fixed columns need neither
+	// row-by-row NULL checks nor scalar append/admission work in the gather loop.
+	if hasNulls {
+		for i, row := range rows {
+			if !row.Vec.nsp.EmptyByFlag() && nulls.Contains(&row.Vec.nsp, uint64(row.Row)) {
+				nulls.Add(&v.nsp, uint64(oldLen+i))
+				continue
+			}
+			dst, src := (oldLen+i)*size, int(row.Row)*size
+			copy(v.data[dst:dst+size], row.Vec.data[src:src+size])
+		}
+	} else {
+		switch size {
+		case 8:
+			for i, row := range rows {
+				*(*uint64)(unsafe.Pointer(&v.data[(oldLen+i)*8])) =
+					*(*uint64)(unsafe.Pointer(&row.Vec.data[row.Row*8]))
+			}
+		case 4:
+			for i, row := range rows {
+				*(*uint32)(unsafe.Pointer(&v.data[(oldLen+i)*4])) =
+					*(*uint32)(unsafe.Pointer(&row.Vec.data[row.Row*4]))
+			}
+		default:
+			for i, row := range rows {
+				dst, src := (oldLen+i)*size, int(row.Row)*size
+				copy(v.data[dst:dst+size], row.Vec.data[src:src+size])
+			}
+		}
+	}
+	v.length = oldLen + len(rows)
+	v.stringSource = source
+	if hasValues {
+		if !v.nsp.EmptyByFlag() {
+			v.prepareParamKindAppendStart(oldLen)
+		}
+		v.prepareParamKindSeen = true
+	}
+	return true, nil
+}
+
+func (v *Vector) hasPlainFixedMetadata() bool {
+	return v.prepareParamKinds == nil && v.prepareParamKind == PrepareParamNone &&
+		!v.binaryStringRowsActive && !v.binaryString && v.stringSources == nil
 }
 
 // It is simply append. the purpose of retention is ease of use
@@ -10746,21 +10876,22 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 		mp.Free(data)
 		return err
 	}
-	v.data = data
-	// XXX We should never allow "half-owned" vectors later. And unowned vector should be strictly read-only.
-	if v.cantFreeData {
+	// Retire the old lease before installing data: releaseBorrowedData clears v.data.
+	if v.dataLease != nil {
+		v.releaseBorrowedData()
+	} else if v.cantFreeData {
 		v.cantFreeData = false
 	} else {
 		mp.Free(olddata)
 	}
+	v.data = data
 	v.length = ns
 	return nil
 }
 
 type bitmapRemapScratch struct {
-	destination *bitmap.Bitmap
-	value       bitmap.Bitmap
-	storage     []uint64
+	value   bitmap.Bitmap
+	storage []uint64
 }
 
 func (s *bitmapRemapScratch) release(mp *mpool.MPool) {
@@ -10784,40 +10915,23 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 	}
 
 	targets := [...]struct {
-		destination *bitmap.Bitmap
+		destination *nulls.Nulls
 		site        mpool.AllocationSite
 	}{
-		{v.gsp.GetBitmap(), v.allocationAccount.groupingSite},
-		{v.nsp.GetBitmap(), v.allocationAccount.nullsSite},
+		{&v.gsp, v.allocationAccount.groupingSite},
+		{&v.nsp, v.allocationAccount.nullsSite},
 	}
-	if targets[0].destination.EmptyByFlag() &&
-		targets[1].destination.EmptyByFlag() {
-		return nil
-	}
-	if !targets[0].destination.EmptyByFlag() {
-		if err := v.ensureGroupingCapacity(len(sels), mp); err != nil {
-			return err
-		}
-	}
-	if !targets[1].destination.EmptyByFlag() {
-		if err := v.ensureNullCapacity(len(sels), mp); err != nil {
-			return err
-		}
-	}
-
 	var scratch [2]bitmapRemapScratch
 	for i, target := range targets {
-		if target.destination.EmptyByFlag() {
+		// Mixed string metadata is sorted without an allocator later, so both
+		// row bitmaps need capacity even when currently empty.
+		if target.destination.EmptyByFlag() && !v.binaryStringRowsActive {
 			continue
 		}
 		words := (len(sels) + 63) / 64
 		storage, err := mpool.MakeSliceAccountedWithCapacityClass[uint64](
-			words,
-			mp,
-			v.allocationAccount.account,
-			v.allocationAccount.owner,
-			target.site,
-			v.allocationAccount.capacityClass,
+			words, mp, v.allocationAccount.account, v.allocationAccount.owner,
+			target.site, v.allocationAccount.capacityClass,
 		)
 		if err != nil {
 			for j := range i {
@@ -10825,7 +10939,6 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			}
 			return err
 		}
-		scratch[i].destination = target.destination
 		scratch[i].storage = storage
 		scratch[i].value.InstallExternalStorage(storage)
 		scratch[i].value.InitWithSize(int64(len(sels)))
@@ -10835,15 +10948,16 @@ func (v *Vector) remapShuffleBitmaps(sels []int64, mp *mpool.MPool) error {
 			}
 		}
 	}
-
-	for i := range scratch {
-		if scratch[i].destination != nil {
-			scratch[i].destination.InitWith(&scratch[i].value)
+	for i, target := range targets {
+		if scratch[i].value.HasExternalStorage() {
+			target.destination.Reset()
+			dst := target.destination.GetBitmap()
+			mpool.FreeSlice(mp, dst.ReleaseExternalStorage())
+			*dst = scratch[i].value
+			scratch[i].storage = nil
 		}
 	}
-	for i := range scratch {
-		scratch[i].release(mp)
-	}
+
 	return nil
 }
 

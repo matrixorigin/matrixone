@@ -434,6 +434,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		}
 	}
 	newNode.Uuid = append(newNode.Uuid, node.Uuid...)
+	newNode.NarrowScan = node.NarrowScan
 
 	for idx, target := range node.LockTargets {
 		newNode.LockTargets[idx] = DeepCopyLockTarget(target)
@@ -910,6 +911,18 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	}
 	for idx, dependency := range qry.CatalogDependencies {
 		newQry.CatalogDependencies[idx] = DeepCopyObjectRef(dependency)
+	}
+	if qry.SelectLockReferences != nil {
+		newQry.SelectLockReferences = make([]*plan.SelectLockReference, len(qry.SelectLockReferences))
+		for i, reference := range qry.SelectLockReferences {
+			if reference != nil {
+				newQry.SelectLockReferences[i] = &plan.SelectLockReference{
+					IsClusterTable: reference.IsClusterTable,
+					ObjectRef:      DeepCopyObjectRef(reference.ObjectRef),
+					ViewPath:       DeepCopyViewPath(reference.ViewPath),
+				}
+			}
+		}
 	}
 	if qry.ViewReferences != nil {
 		newQry.ViewReferences = make([]*plan.ViewReference, len(qry.ViewReferences))

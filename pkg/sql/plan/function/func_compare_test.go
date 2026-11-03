@@ -190,9 +190,9 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	}
 
 	t.Run("JSON numeric operators preserve category fraction and orientation", func(t *testing.T) {
-		jsonValues := makeJSON(t, []any{int64(1), 1.5, int64(-1), -1.5, map[string]any{"a": int64(1)}, []any{int64(1)}, "str", "1", true, false, nil, nil}, 11)
-		signs := []int{0, 1, -1, -1, 1, 1, 1, 1, 1, 1, 0, 0}
-		const length = 12
+		jsonValues := makeJSON(t, []any{int64(1), 1.5, int64(-1), -1.5, map[string]any{"a": int64(1)}, []any{int64(1)}, "str", "1", true, false, int64(128), uint64(math.MaxUint64), 1e100, -1e100, nil, nil}, 15)
+		signs := []int{0, 1, -1, -1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, 0, 0}
+		const length = 16
 		direct, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), length, proc.Mp())
 		require.NoError(t, err)
 		t.Cleanup(func() { direct.Free(proc.Mp()) })
@@ -235,7 +235,7 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 							require.NoError(t, op.fn(args, result, proc, length, nil))
 							got := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
 							for row, sign := range signs {
-								if row >= 10 {
+								if row >= 14 {
 									require.Equal(t, !op.nullSafe, result.GetResultVector().IsNull(uint64(row)))
 									require.False(t, got[row])
 									continue
@@ -276,7 +276,10 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		require.NoError(t, nullSafeEqualFn([]*vector.Vector{nullPeer, jsonValues}, result, proc, 3, nil))
 		require.Equal(t, []bool{false, false, true}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 		require.True(t, result.GetResultVector().GetNulls().IsEmpty())
-		require.ErrorContains(t, equalFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, nil), "JSON -> BIGINT")
+		require.NoError(t, equalFn([]*vector.Vector{jsonValues, numbers}, result, proc, 3, nil))
+		require.Equal(t, []bool{true, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
+		require.False(t, result.GetResultVector().IsNull(1))
+		require.True(t, result.GetResultVector().IsNull(2))
 		empty := makeJSON(t, nil)
 		require.NoError(t, equalFn([]*vector.Vector{empty, numbers}, makeResult(t, 0), proc, 0, nil))
 	})
@@ -579,37 +582,43 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		require.Equal(t, []bool{true, true, false, false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
-	t.Run("concrete signed type preserves overflow errors", func(t *testing.T) {
+	t.Run("concrete signed type compares wider JSON", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{uint64(math.MaxUint64)})
 		params := makePreparedJSON(t, []any{int64(math.MaxInt64)})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
 		params.SetPrepareParamType(types.T_int64)
+		result := makeResult(t, 1)
 		err := comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1,
+			[]*vector.Vector{jsonValues, params}, result, proc, 1,
 			false, func(c int) bool { return c == 0 }, nil)
-		require.ErrorContains(t, err, "JSON -> BIGINT")
+		require.NoError(t, err)
+		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
-	t.Run("concrete narrow integer rejects out of range JSON", func(t *testing.T) {
+	t.Run("concrete narrow integer compares wider JSON", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{int64(math.MaxInt8 + 1)})
 		params := makePreparedJSON(t, []any{int64(1)})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
 		params.SetPrepareParamType(types.T_int8)
+		result := makeResult(t, 1)
 		err := comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1,
+			[]*vector.Vector{jsonValues, params}, result, proc, 1,
 			false, func(c int) bool { return c == 0 }, nil)
-		require.ErrorContains(t, err, "JSON -> TINYINT")
+		require.NoError(t, err)
+		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
-	t.Run("concrete unsigned type rejects negative JSON", func(t *testing.T) {
+	t.Run("concrete unsigned type compares negative JSON", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{int64(-1)})
 		params := makePreparedJSON(t, []any{uint64(1)})
 		params.SetPrepareParamKind(vector.PrepareParamInteger)
 		params.SetPrepareParamType(types.T_uint64)
+		result := makeResult(t, 1)
 		err := comparePreparedJSON(
-			[]*vector.Vector{jsonValues, params}, makeResult(t, 1), proc, 1,
+			[]*vector.Vector{jsonValues, params}, result, proc, 1,
 			false, func(c int) bool { return c == 0 }, nil)
-		require.ErrorContains(t, err, "JSON -> BIGINT UNSIGNED")
+		require.NoError(t, err)
+		require.Equal(t, []bool{false}, vector.MustFixedColNoTypeCheck[bool](result.GetResultVector()))
 	})
 
 	t.Run("concrete float32 rounds both operands", func(t *testing.T) {

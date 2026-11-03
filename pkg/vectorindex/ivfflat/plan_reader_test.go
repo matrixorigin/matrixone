@@ -125,7 +125,7 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
-		require.Zero(t, req.ReadPolicy)
+		require.Equal(t, fileservice.Policy(fileservice.NarrowRead), req.ReadPolicy)
 		require.Equal(t, "entries1", req.Table)
 		require.NotNil(t, req.Filter)
 		require.NotNil(t, req.IndexParam)
@@ -1398,7 +1398,7 @@ func (r *lateFilterRelationReader) ReadWithFilter(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	out *batch.Batch,
 ) (bool, error) {
@@ -1435,7 +1435,7 @@ func (r *lateFilterRelationReader) ReadWithFilter(
 	}
 	out.SetRowCount(len(rows))
 	r.wideWasDeferred = out.Vecs[3].Length() == 0
-	filtered, err := filter(out, earlyColumns)
+	filtered, err := filter.Apply(out, earlyColumns)
 	if err != nil {
 		return false, err
 	}
@@ -1479,7 +1479,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	out *batch.Batch,
@@ -1501,7 +1501,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 		}
 	}
 	out.SetRowCount(2)
-	filtered, err := filter(out, earlyColumns)
+	filtered, err := filter.Apply(out, earlyColumns)
 	if err != nil {
 		return false, false, err
 	}

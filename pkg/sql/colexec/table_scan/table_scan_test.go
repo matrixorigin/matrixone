@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -614,4 +615,54 @@ func TestShrinkPopulatedVecs_NoOpAndEmptyBatch(t *testing.T) {
 	defer empty.Clean(mp)
 	require.NotPanics(t, func() { shrinkPopulatedVecs(empty, []int64{}) })
 	require.Equal(t, 0, empty.RowCount())
+}
+
+func TestCallReadPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		readPolicy fileservice.Policy
+		want       fileservice.Policy
+	}{
+		{name: "unset keeps the caller policy", want: fileservice.SkipMemoryCacheWrites},
+		{
+			name:       "set adds to the caller policy",
+			readPolicy: fileservice.SkipFullFilePreloads,
+			want:       fileservice.SkipMemoryCacheWrites | fileservice.SkipFullFilePreloads,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			proc := testutil.NewProc(t)
+			callerCtx := fileservice.WithFileServicePolicy(context.Background(), fileservice.SkipMemoryCacheWrites)
+			proc.Ctx = callerCtx
+
+			var seen []fileservice.Policy
+			reader := mock_frontend.NewMockReader(ctrl)
+			reader.EXPECT().Read(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(ctx context.Context, _ []string, _ *plan.Expr, _ interface{}, _ *batch.Batch) (bool, error) {
+					seen = append(seen, fileservice.GetFileServicePolicy(ctx))
+					return true, nil
+				}).AnyTimes()
+			reader.EXPECT().Close().Return(nil).AnyTimes()
+			reader.EXPECT().GetOrderBy().Return(nil).AnyTimes()
+
+			typ := types.T_uint64.ToType()
+			arg := &TableScan{
+				Reader:     reader,
+				Attrs:      []string{"int_col"},
+				Types:      []plan.Type{plan.MakePlan2Type(&typ)},
+				ReadPolicy: tc.readPolicy,
+			}
+			require.NoError(t, arg.Prepare(proc))
+			_, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.Equal(t, []fileservice.Policy{tc.want}, seen)
+			require.Equal(t, fileservice.Policy(fileservice.SkipMemoryCacheWrites), fileservice.GetFileServicePolicy(proc.Ctx))
+
+			arg.Free(proc, false, nil)
+			proc.Free()
+		})
+	}
 }

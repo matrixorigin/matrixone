@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/ci/**'
+      - '.github/mergify.yml'
       - 'Makefile'
       - 'go.mod'
       - '.github/workflows/entrypoint.yaml'
