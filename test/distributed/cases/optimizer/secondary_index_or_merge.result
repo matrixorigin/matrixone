@@ -46,37 +46,106 @@ select id from f ignore index(ik,iv) where k=3 or v=10 order by id;
 3  𝄀
 4  𝄀
 5
-select payload from f force index(ik,iv) where k=3 or v=10 order by id;
+explain select payload from f force index(ik,iv) where k=3 or v=10 order by id+0;
+-- @regex("Union", true)
+-- @regex("Index Table Scan on f.ik", true)
+-- @regex("Index Table Scan on f.iv", true)
+-- @regex("Join Type: INDEX", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: (cast(f.id AS BIGINT) + 0) INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (f.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on secondary_or_merge.f [ForceOneCN]  𝄀
+                    Filter Cond: ((f.v = 10) or (f.k = 3))  𝄀
+                    Runtime Filter Probe: f.id  𝄀
+              ->  Union  𝄀
+                    ->  Project  𝄀
+                          ->  Index Table Scan on f.iv [ForceOneCN]  𝄀
+                                Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                                Block Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                    ->  Project  𝄀
+                          ->  Index Table Scan on f.ik [ForceOneCN]  𝄀
+                                Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                                Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select payload from f force index(ik,iv) where k=3 or v=10 order by id+0;
 ➤ payload[12,20,0]  𝄀
 same  𝄀
 same  𝄀
 right  𝄀
 null-left  𝄀
 null-right
-select payload from f ignore index(ik,iv) where k=3 or v=10 order by id;
+select payload from f ignore index(ik,iv) where k=3 or v=10 order by id+0;
 ➤ payload[12,20,0]  𝄀
 same  𝄀
 same  𝄀
 right  𝄀
 null-left  𝄀
 null-right
-select id,payload from f force index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id;
+explain select id,payload from f force index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id+0;
+-- @regex("Union", true)
+-- @regex("Index Table Scan on f.ik", true)
+-- @regex("Index Table Scan on f.iv", true)
+-- @regex("Join Type: INDEX", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: (cast(f.id AS BIGINT) + 0) INTERNAL  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (f.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on secondary_or_merge.f [ForceOneCN]  𝄀
+                    Filter Cond: (f.payload <> 'right'), ((f.v = 10) or (f.k = 3))  𝄀
+                    Runtime Filter Probe: f.id  𝄀
+              ->  Union  𝄀
+                    ->  Project  𝄀
+                          ->  Index Table Scan on f.iv [ForceOneCN]  𝄀
+                                Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                                Block Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                    ->  Project  𝄀
+                          ->  Index Table Scan on f.ik [ForceOneCN]  𝄀
+                                Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                                Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select id,payload from f force index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id+0;
 ➤ id[4,32,0]  ¦  payload[12,20,0]  𝄀
 1  ¦  same  𝄀
 2  ¦  same  𝄀
 4  ¦  null-left  𝄀
 5  ¦  null-right
-select id,payload from f ignore index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id;
+select id,payload from f ignore index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id+0;
 ➤ id[4,32,0]  ¦  payload[12,20,0]  𝄀
 1  ¦  same  𝄀
 2  ¦  same  𝄀
 4  ¦  null-left  𝄀
 5  ¦  null-right
-select id from f force index(ik,iv) where k=3 or v=10 order by id limit 2 offset 1;
+explain select id from f force index(ik,iv) where k=3 or v=10 order by id+0 limit 2 offset 1;
+-- @regex("Union", true)
+-- @regex("Index Table Scan on f.ik", true)
+-- @regex("Index Table Scan on f.iv", true)
+-- @regex("Table Scan on secondary_or_merge.f", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: (cast(#[0,0] AS BIGINT) + 0) INTERNAL  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Union  𝄀
+              ->  Project  𝄀
+                    ->  Index Table Scan on f.iv  𝄀
+                          Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                          Block Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+              ->  Project  𝄀
+                    ->  Index Table Scan on f.ik  𝄀
+                          Filter Cond: prefix_eq(__mo_index_idx_col)  𝄀
+                          Block Filter Cond: prefix_eq(__mo_index_idx_col)
+select id from f force index(ik,iv) where k=3 or v=10 order by id+0 limit 2 offset 1;
 ➤ id[4,32,0]  𝄀
 2  𝄀
 3
-select id from f ignore index(ik,iv) where k=3 or v=10 order by id limit 2 offset 1;
+select id from f ignore index(ik,iv) where k=3 or v=10 order by id+0 limit 2 offset 1;
 ➤ id[4,32,0]  𝄀
 2  𝄀
 3

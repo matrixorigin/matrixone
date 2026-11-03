@@ -20,13 +20,33 @@ select count(*) from f ignore index(ik,iv) where k=3 or v=10;
 select id from f force index(ik,iv) where k=3 or v=10 order by id;
 select id from f ignore index(ik,iv) where k=3 or v=10 order by id;
 
--- 不同主键的相同投影值不可去重；回表保留残余条件。
-select payload from f force index(ik,iv) where k=3 or v=10 order by id;
-select payload from f ignore index(ik,iv) where k=3 or v=10 order by id;
-select id,payload from f force index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id;
-select id,payload from f ignore index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id;
-select id from f force index(ik,iv) where k=3 or v=10 order by id limit 2 offset 1;
-select id from f ignore index(ik,iv) where k=3 or v=10 order by id limit 2 offset 1;
+-- id+0 保持主键顺序，但避免既有排序索引规则提前选择单索引回表。
+-- 不同主键的相同投影值不可去重；回表必须由两路索引的主键并集驱动。
+-- @regex("Union",true)
+-- @regex("Index Table Scan on f.ik",true)
+-- @regex("Index Table Scan on f.iv",true)
+-- @regex("Join Type: INDEX",true)
+explain select payload from f force index(ik,iv) where k=3 or v=10 order by id+0;
+select payload from f force index(ik,iv) where k=3 or v=10 order by id+0;
+select payload from f ignore index(ik,iv) where k=3 or v=10 order by id+0;
+
+-- 并集回表后仍需验证非索引列的残余条件。
+-- @regex("Union",true)
+-- @regex("Index Table Scan on f.ik",true)
+-- @regex("Index Table Scan on f.iv",true)
+-- @regex("Join Type: INDEX",true)
+explain select id,payload from f force index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id+0;
+select id,payload from f force index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id+0;
+select id,payload from f ignore index(ik,iv) where (k=3 or v=10) and payload <> 'right' order by id+0;
+
+-- 覆盖路径在主键并集去重后执行全局分页，不回扫基表。
+-- @regex("Union",true)
+-- @regex("Index Table Scan on f.ik",true)
+-- @regex("Index Table Scan on f.iv",true)
+-- @regex("Table Scan on secondary_or_merge.f",false)
+explain select id from f force index(ik,iv) where k=3 or v=10 order by id+0 limit 2 offset 1;
+select id from f force index(ik,iv) where k=3 or v=10 order by id+0 limit 2 offset 1;
+select id from f ignore index(ik,iv) where k=3 or v=10 order by id+0 limit 2 offset 1;
 
 -- IN、范围、空集合以及三个分支。
 select id from f force index(ik,iv) where k in (3,8) or v=10 order by id;
