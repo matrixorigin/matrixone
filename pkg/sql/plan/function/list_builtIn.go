@@ -3284,7 +3284,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LENGTH,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    lengthTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3327,6 +3327,18 @@ var supportedStringBuiltIns = []FuncNew{
 					return Length
 				},
 			},
+			{
+				// BIT(M) counts its fixed-width binary string form:
+				// ceil(M/8) bytes for every non-NULL value.
+				overloadId: 4,
+				args:       []types.T{types.T_bit},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LengthBit
+				},
+			},
 		},
 	},
 
@@ -3335,7 +3347,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: LENGTH_UTF8,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    lengthTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3396,6 +3408,19 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return LengthBinary
+				},
+			},
+			{
+				// BIT(M) counts its fixed-width binary string form:
+				// ceil(M/8) bytes, and the binary charset is single-byte,
+				// so the character count equals the byte count.
+				overloadId: 6,
+				args:       []types.T{types.T_bit},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return LengthBit
 				},
 			},
 		},

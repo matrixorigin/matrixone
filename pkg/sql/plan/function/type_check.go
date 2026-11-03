@@ -523,6 +523,24 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 	return stringDomainFixedTypeMatchIf(overloads, inputs, func(oid types.T) bool { return oid.IsMySQLString() })
 }
 
+// lengthTypeMatch admits a native BIT argument for the LENGTH/OCTET_LENGTH
+// and CHAR_LENGTH family. MySQL evaluates these functions over the BIT value's
+// fixed-width binary string form: Field_bit::val_str materializes ceil(M/8)
+// big-endian bytes with leading zero bytes preserved, in the binary charset,
+// so the result depends on the declared width M, not on the stored value. The
+// dedicated BIT overload carries that semantics and reads M from the input
+// vector's type; a cast to a plain binary string would erase M, so the
+// matcher binds the exact BIT overload instead of rewriting the input. BIT
+// stays out of the string targets of fixedCanImplicitCastRule for the same
+// reason BOOL does: that table is shared by unrelated functions where
+// changing overload resolution would be a silent compatibility regression.
+func lengthTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 || inputs[0].Oid != types.T_bit {
+		return stringDomainFixedTypeMatch(overloads, inputs)
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 // spatialDistanceTypeMatch keeps the historical integer third argument for
 // ST_DISTANCE while making a statically string-backed third argument select
 // the MySQL length-unit overload. fixedTypeMatch treats both conversions as
