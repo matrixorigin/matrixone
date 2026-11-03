@@ -81,16 +81,29 @@ const (
 )
 
 type collectRange struct {
-	from             []types.TS
-	end              []types.TS
-	rel              []engine.Relation
-	startBoundaryRel []engine.Relation
+	from                []types.TS
+	end                 []types.TS
+	rel                 []engine.Relation
+	startBoundaryRel    []engine.Relation
+	startBoundaryIdents []branchIdentity
+	creationBoundary    []bool
 	// idents carries the physical identity each segment was opened under
 	// (design §6): the walking side's endpoint identity for the endpoint
 	// segment and the winning candidate identity for reopened lineage
 	// nodes. A nil slice means every segment runs under the caller
 	// context, the pre-routing behavior local-local diffs rely on.
 	idents []branchIdentity
+}
+
+func (r collectRange) startBoundaryIdentity(i int) (branchIdentity, bool) {
+	if i < 0 || i >= len(r.startBoundaryIdents) {
+		return branchIdentity{}, false
+	}
+	return r.startBoundaryIdents[i], true
+}
+
+func (r collectRange) isCreationBoundary(i int) bool {
+	return i >= 0 && i < len(r.creationBoundary) && r.creationBoundary[i]
 }
 
 func (r collectRange) segmentIdentity(i int, fallback branchIdentity) branchIdentity {
