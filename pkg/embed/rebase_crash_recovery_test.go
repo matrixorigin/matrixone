@@ -16,6 +16,7 @@ package embed
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -33,11 +34,23 @@ type rebaseCrashIdentity struct {
 	PortBase               uint64
 	BaseTS                 int64
 	Committed, Uncommitted [2]uint64
+	EdgeCount, PinCount    int
 }
+
+var nativeRebaseCrashPhase func(*testing.T, string, string, *sql.DB, context.Context, rebaseCrashIdentity)
 
 // The parent owns no cluster. It kills precisely the ready child, then starts
 // a fresh process over the same service identities and volume, never Stop/Start.
 func TestRebaseCrashRecovery(t *testing.T) {
+	runRebaseCrashRecovery(t, false)
+}
+
+func TestNativeRebaseCrashRecovery(t *testing.T) {
+	runRebaseCrashRecovery(t, true)
+}
+
+func runRebaseCrashRecovery(t *testing.T, native bool) {
+	t.Helper()
 	if os.Getenv("MO_REBASE_CRASH_CHILD") != "" {
 		t.Fatal("parent selected in child")
 	}
@@ -60,6 +73,9 @@ func TestRebaseCrashRecovery(t *testing.T) {
 		require.NoError(t, err)
 		cmd := exec.CommandContext(ctx, binary, "-test.v", "-test.timeout=210s", "-test.run=^TestRebaseCrashHelper$")
 		cmd.Env = append(os.Environ(), "MO_REBASE_CRASH_CHILD="+phase, "MO_REBASE_CRASH_ROOT="+root)
+		if native {
+			cmd.Env = append(cmd.Env, "MO_REBASE_NATIVE_CRASH=1")
+		}
 		cmd.Stdout, cmd.Stderr = log, log
 		if ready != nil {
 			cmd.ExtraFiles = []*os.File{ready}
@@ -184,6 +200,13 @@ func TestRebaseCrashHelper(t *testing.T) {
 		var n int
 		require.NoError(t, db.QueryRowContext(ctx, q).Scan(&n), q)
 		return n
+	}
+	if os.Getenv("MO_REBASE_NATIVE_CRASH") == "1" {
+		if nativeRebaseCrashPhase == nil {
+			t.Fatal("native Rebase crash fixture is unavailable")
+		}
+		nativeRebaseCrashPhase(t, phase, root, db, ctx, identity)
+		return
 	}
 	if phase == "verify" {
 		require.Equal(t, 11, count("select v from rebase_crash_committed.a where id=1"))

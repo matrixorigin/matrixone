@@ -335,7 +335,7 @@ func statementRequiresPersistentWriteAccess(
 		*tree.CreateProcedure, *tree.DropProcedure,
 		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
 		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
-		*tree.DataBranchMerge, *tree.DataBranchPick:
+		*tree.DataBranchMerge, *tree.DataBranchPick, *tree.DataBranchRebase:
 		return true
 	}
 	// A read-classified statement can still mutate persistent state through a

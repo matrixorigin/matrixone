@@ -852,7 +852,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <unresolvedName> insert_target_column
 %type <str> optype_opt
 %type <str> optype
-%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list accounts_list restore_db_scope restore_table_scope diff_columns_opt merge_insert_column_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list accounts_list restore_db_scope restore_table_scope diff_columns_opt merge_insert_column_list rebase_table_selection_opt rebase_table_name_list
 %type <insertColumns> insert_column_list
 %type <insertPartition> insert_partition_clause_opt
 %type <partitionValues> insert_partition_value_list
@@ -10594,8 +10594,39 @@ replace_opt:
         $$ = true
     }
 
+rebase_table_selection_opt:
+    {
+        $$ = nil
+    }
+|   TABLES '(' rebase_table_name_list ')'
+    {
+        $$ = $3
+    }
+
+rebase_table_name_list:
+    ident
+    {
+        $$ = tree.IdentifierList{tree.Identifier(yylex.(*Lexer).GetDbOrTblName($1.Origin()))}
+    }
+|   rebase_table_name_list ',' ident
+    {
+        $$ = append($1, tree.Identifier(yylex.(*Lexer).GetDbOrTblName($3.Origin())))
+    }
+
 branch_stmt:
-    DATA BRANCH CREATE TABLE table_name FROM table_name to_account_opt
+    DATA BRANCH REBASE DATABASE db_name FROM db_name table_snapshot_opt AGAINST db_name table_snapshot_opt BETWEEN db_name table_snapshot_opt AND db_name table_snapshot_opt rebase_table_selection_opt conflict_opt
+    {
+        t := tree.NewDataBranchRebase()
+        t.Destination = tree.Identifier($5)
+        t.Feature = tree.RebaseDatabaseEndpoint{Database: tree.Identifier($7), AtTsExpr: $8}
+        t.Upstream = tree.RebaseDatabaseEndpoint{Database: tree.Identifier($10), AtTsExpr: $11}
+        t.FeatureBase = tree.RebaseDatabaseEndpoint{Database: tree.Identifier($13), AtTsExpr: $14}
+        t.UpstreamBase = tree.RebaseDatabaseEndpoint{Database: tree.Identifier($16), AtTsExpr: $17}
+        t.Tables = $18
+        t.ConflictOpt = $19
+        $$ = t
+    }
+|   DATA BRANCH CREATE TABLE table_name FROM table_name to_account_opt
     {
     	t := tree.NewDataBranchCreateTable()
     	t.CreateTable.Table = *$5
@@ -16707,6 +16738,7 @@ non_reserved_keyword:
 |   BOOL
 |   BITS_PER_CODE
 |   BRANCH
+|   REBASE
 |   CATALOG
 |   CATALOGS
 |   CLONE

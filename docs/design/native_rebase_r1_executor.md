@@ -10,9 +10,11 @@ in cb28006f08. This review is separate from implementation acceptance.
 One request supplies immutable feature base Bf, feature head F, corresponding
 upstream base Bu, upstream head U, a NEW destination database and conflict
 policy. All belong to the caller's account. Existing destination is an error,
-not an overwrite or an implicit retry. Explicit client transactions are rejected.
-Sources are never mutated. Initially implement FAIL; KEEP_UPSTREAM and
-KEEP_BRANCH use the same row decision and will be independently tested.
+not an overwrite or an implicit retry. The default path owns a private
+transaction. An explicit BEGIN may borrow an existing pessimistic RC owner;
+implicit autocommit-off transactions and unsupported transaction modes are
+rejected. Sources are never mutated. FAIL, KEEP_UPSTREAM and KEEP_BRANCH use
+the same row decision; user-defined conflict callbacks are not supported.
 
 For each key, absent differs from a present tuple containing NULL. If feature
 did not change, retain U; if only feature changed, take F; equal concurrent
@@ -77,11 +79,12 @@ before writes. Do not treat hidden IDs or hash-only equality as row identity.
 | Resource | First owner | Release / transfer |
 | --- | --- | --- |
 | Private pessimistic RC transaction and BackgroundExec | R1 coordinator via getDataBranchComponentExecutor | finish once; error/panic rollback, success commit |
+| Explicit pessimistic RC transaction | Caller | R1 borrows the owner; only the caller commits or rolls back |
 | Lifecycle process and distributed locks | Existing admission object | finishDataBranchComponent; no alternate transaction |
 | Endpoint definitions, identities, protected refs | Coordinator | Until finish; O(table/column metadata), no row map |
 | Query pipeline batches/hash tables/spill | Existing SQL planner/executor for each internal statement | Normal query cancellation/cleanup, before next statement |
 | Aggregate result | BackgroundExec, copied as a few integer values | ClearExecResultSet/ClearExecResultBatches after each read |
-| Client summary | Coordinator, one aggregate row | Send only AFTER successful finish/commit; discard on error |
+| Client summary | Coordinator, one aggregate row | After private commit, or provisional until caller-owned commit; discard on statement error |
 
 Sequence: authorize/bind -> admit/revalidate -> validate all tables/base states ->
 clone fixed U with handleCloneDatabaseWithSource using the NON-NIL owner ->
@@ -91,6 +94,12 @@ Internal SQL is parsed/planned DML in the same owner transaction, not another
 frontend request. P1 does not prove this new coordinator's cancellation path.
 Use bh.Exec on trusted, typed lowering output. backExec.ExecStmt is currently
 an unimplemented nil-returning seam and must NOT be used as evidence of work.
+
+In a caller-owned transaction, an error can roll back only the failing
+statement, leaving earlier caller statements intact when rollback-on-error is
+disabled. The caller must explicitly roll back on every failure; it must not
+publish a branch or infer transaction rollback from the statement error. A
+successful statement result does not prove its surrounding transaction committed.
 
 ## Chosen first implementation: relational delta lowering
 
@@ -134,11 +143,18 @@ DML and cancellation, at the explicit cost of more scans. No fast-path claim.
 
 ## Public integration and unknown outcomes
 
-Add AST/parser, dispatch, privilege classification and a working handler together
-only after the typed coordinator works. Do not register a success-returning stub.
-Use four database endpoints with immutable time/snapshot hints; finalize grammar
-against existing Clone/DataBranch forms before public integration. Return new
-destination identity, retained base identity and explicit counts only on commit.
+The SQL entry point uses four fixed database endpoints:
+
+`DATA BRANCH REBASE DATABASE dst FROM F{snapshot='f'} AGAINST U{snapshot='u'} BETWEEN Bf{snapshot='bf'} AND Bu{snapshot='bu'} [TABLES (t1, ...)] [WHEN CONFLICT FAIL|SKIP|ACCEPT]`.
+
+The optional table list selects which feature changes to replay; omitted tables
+are copied from U. Permissions, inventory and retained-base checks still cover
+the whole database. Selected tables must satisfy the normal explicit-PK and
+schema restrictions. A changed no-PK table is rejected; an unchanged one is
+retained only after exact bag comparisons. Omitted ordinary, matching,
+non-unique indexes may be cloned, but are not supported for replay. Return
+destination and retained-base identities and logical counts; a caller-owned
+result remains provisional until that caller commits.
 
 R1 does not update adapter registry/history. A lost commit acknowledgement means
 outcome UNKNOWN; inspect the explicitly named destination and its base identity,
@@ -149,6 +165,12 @@ protocol; do not add that framework as a prerequisite of R1.
 No new catalog or wire state: use existing clone edges/pins and normal transaction
 recovery. Shutdown-only upgrade, backup and retention have exactly those existing
 representations; no mixed-version serving or invented per-feature RPC gate.
+
+The creation-commit boundary correction used by subsequent Diff/Merge can compare
+visible parent and child states at each affected clone edge. This is a shared
+path, not a Rebase-only optimization, and can scan whole tables. Its selected
+correctness tests do not establish acceptable large-table cost or all lineage
+shapes. Treat performance and broader review as separate acceptance gates.
 
 ## Acceptance
 

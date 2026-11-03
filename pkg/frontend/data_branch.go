@@ -477,6 +477,8 @@ func handleDataBranch(
 		return stats, handleBranchMerge(execCtx, ses, st)
 	case *tree.DataBranchPick:
 		return stats, handleBranchPick(execCtx, ses, st)
+	case *tree.DataBranchRebase:
+		return stats, handleBranchRebase(execCtx, ses, st)
 	default:
 		return stats, moerr.NewNotSupportedNoCtxf("data branch not supported: %v", st)
 	}
