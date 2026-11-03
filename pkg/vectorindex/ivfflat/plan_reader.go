@@ -756,6 +756,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if tableDef == nil {
 		return res, moerr.NewInvalidStateNoCtxf("ivfflat hidden relation %s.%s has no table definition", req.Schema, req.Table)
 	}
+	ctx = fileservice.WithPreloadGroup(ctx, tableDef.TblId)
 	var statsStart time.Time
 	if s.executionStats != nil {
 		statsStart = time.Now()
