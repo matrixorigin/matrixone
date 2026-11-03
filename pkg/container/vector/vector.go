@@ -12180,9 +12180,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_bit:
@@ -12190,9 +12188,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int8:
@@ -12200,9 +12196,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int16:
@@ -12210,9 +12204,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int32:
@@ -12220,9 +12212,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int64:
@@ -12230,9 +12220,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint8:
@@ -12240,9 +12228,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint16:
@@ -12250,9 +12236,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint32:
@@ -12260,9 +12244,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint64:
@@ -12270,9 +12252,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_float32:
@@ -12280,9 +12260,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_float64:
@@ -12290,9 +12268,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_date:
@@ -12300,9 +12276,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_year:
@@ -12310,9 +12284,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_datetime:
@@ -12320,9 +12292,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_time:
@@ -12330,9 +12300,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_timestamp:
@@ -12340,9 +12308,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_enum:
@@ -12350,9 +12316,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_decimal64:
@@ -12370,9 +12334,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_decimal128:
@@ -12390,9 +12352,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_decimal256:
@@ -12410,9 +12370,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_TS:
@@ -12430,9 +12388,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Equal(&b)
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uuid:
@@ -12444,9 +12400,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
@@ -12463,9 +12417,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.EQ(&b)
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
