@@ -16,6 +16,8 @@ Remove the full-key observation FIFO, its cloned keys, quotas and observation-sp
 
 Alternatives: unrestricted allocation repeats the reverted 1T exposure; rejecting only at Update is too late because allocation can evict. Free-capacity-only allocation does not replace stale residents on behalf of late scans; normal readers retain existing S3-FIFO replacement. Decoded residency can still compete with query and OS file-cache memory, so a performance claim requires measurement.
 
+Known capacity refusal uses a conservative negative hint before allocator-size/pressure locks and before advertising memory publication to I/O/fill coordination. Otherwise a full-cache read could serialize followers that must read again because nothing was cached. Pending fills can still accept joins, disk publication remains independent, and transient conversion sharing remains available. This hint never grants capacity; the locked reservation is authoritative.
+
 ## Validation and delivery
 
 Focused deterministic tests cover first-touch fill, resident-preserving full-cache refusal, competing reservations, held buffers after eviction, actual/estimated size differences, publication-time pressure/shrink, ordinary ghosts, explicit suppression, destination isolation, allocation/decode failure, cancel and reset/close. Extend existing fixtures; verify disk conversion and shared-decode paths preserve the allocation mode.

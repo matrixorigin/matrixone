@@ -97,6 +97,33 @@ func TestNoEvictAllocationCompetingReservations(t *testing.T) {
 	require.Zero(t, cache.reservedBytes.Load())
 }
 
+func TestNoEvictKnownRefusalDoesNotAdvertiseMemoryFill(t *testing.T) {
+	ctx := t.Context()
+	cache := NewMemCache(fscache.ConstCapacity(4096), nil, nil, "")
+	t.Cleanup(func() { cache.Close(ctx) })
+	fs := &S3FS{memCache: cache}
+	v := &IOVector{FilePath: "value", Policy: MemoryCacheNoEvict,
+		Entries: []IOEntry{{Size: 3, CachedDataSize: 3, ToCacheData: CacheOriginalData}}}
+	_, eligible := fs.singleEntryRangeMergeKey(v)
+	require.True(t, eligible)
+	data := cache.AllocateCacheDataWithHint(ctx, 4096, malloc.DoNotReuse)
+	release := sync.OnceFunc(data.Release)
+	t.Cleanup(release)
+	seed := &IOVector{FilePath: "resident", Entries: []IOEntry{{Size: 4096, CachedData: data}}}
+	require.NoError(t, cache.Update(ctx, seed, false))
+	release()
+	require.True(t, cache.cannotReserveWithoutEviction(3))
+	_, eligible = fs.singleEntryRangeMergeKey(v)
+	require.False(t, eligible, "a transient read cannot publish to memory for a waiting I/O follower")
+	v.Policy = 0
+	_, eligible = fs.singleEntryRangeMergeKey(v)
+	require.True(t, eligible, "ordinary fills retain their existing eviction permission")
+	cache.Flush(ctx)
+	pending := cache.AllocateCacheDataWithHint(ctx, 4096, malloc.DoNotReuse)
+	defer pending.Release()
+	require.False(t, cache.cannotReserveWithoutEviction(3), "an existing pending fill may still accept a join")
+}
+
 func TestNoEvictAllocationCountsEvictedHeldBacking(t *testing.T) {
 	ctx := context.Background()
 	const request = 256

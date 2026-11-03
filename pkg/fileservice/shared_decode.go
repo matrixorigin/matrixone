@@ -529,6 +529,9 @@ func (s *S3FS) prepareSharedDecodeInternal(vector *IOVector, coordinateFill bool
 	if coordinateFill && !vector.Policy.Any(SkipDiskCacheReads) &&
 		sharedDecodeDiskFillAvailable(s.diskCache, path.File, vector) {
 		mayStart := sharedDecodeFillMayStart(s.memCache, entry.CachedDataSize)
+		if vector.Policy.Any(MemoryCacheNoEvict) && s.memCache.cannotReserveWithoutEviction(entry.CachedDataSize) {
+			mayStart = false
+		}
 		fill, err = s.decodedReads.acquireFill(key, mayStart)
 		fillAttempted = mayStart || fill != nil
 		if err != nil {

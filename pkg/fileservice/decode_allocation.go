@@ -59,6 +59,9 @@ func (a *nonEvictingDecodeAllocator) AllocateCacheData(ctx context.Context, size
 
 func (a *nonEvictingDecodeAllocator) AllocateCacheDataWithHint(ctx context.Context, size int, hints malloc.Hints) fscache.Data {
 	m := a.cache
+	if m.cannotReserveWithoutEviction(int64(size)) {
+		return m.transientDecoder.AllocateCacheDataWithHint(ctx, size, hints)
+	}
 	backing := m.BackingSize(size)
 	m.capacityMu.Lock()
 	_, pressure := memoryCachePressureTarget(m.cache.Capacity())
@@ -93,6 +96,16 @@ func (a *nonEvictingDecodeAllocator) CopyToCacheData(ctx context.Context, raw []
 }
 
 func (a *nonEvictingDecodeAllocator) BackingSize(size int) int { return a.cache.BackingSize(size) }
+
+// This is a negative hint, never an admission grant. Pending reservations may
+// include reusable idle buffers or an active fill another read can join. When
+// there are none, a known full cache needs no allocator/pressure locks or fill
+// coordination: this read will remain transient. Concurrent release may make
+// this conservative; actual allocation still validates and reserves capacity.
+func (m *MemCache) cannotReserveWithoutEviction(size int64) bool {
+	return size <= 0 || m.closed.Load() ||
+		(m.reservedBytes.Load() == 0 && size > m.cache.Capacity()-m.backingBytes.Load())
+}
 
 // Called under capacityMu by conditional cache publication. The backing charge
 // also covers this fill, so it must fit without releasing any resident buffer.
