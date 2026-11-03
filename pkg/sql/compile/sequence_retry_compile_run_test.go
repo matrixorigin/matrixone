@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang/mock/gomock"
@@ -1009,13 +1010,9 @@ func TestCompileRunSequenceRetryConjunctiveBothAdvancingRenews(t *testing.T) {
 // renewal interval) at the first decision: a young identity can be
 // neither terminal nor renewable, so seqa (old, unchanged, held)
 // terminates immediately and names itself; the late join neither extends
-// seqa's window nor delays its verdict. The doubled window plus the
-// deadline-relative join (D-450 ms) makes both sides robust: seqb's full
-// 8-attempt join cycle (~90-330 ms) always exhausts strictly inside
-// seqa's first window — a live-window admission, never the expiry branch
-// — and seqb's baseline age at the decision, 450 ms minus one cycle,
-// stays inside (0, interval) with >=100 ms margin on both sides. The
-// single observed deadline pins that no re-anchoring ever happened.
+// seqa's window nor delays its verdict. A virtual clock controls the real
+// retry path: seqb joins while D is live, then the first decision runs after
+// seqa's baseline has aged one full interval but seqb's is still young.
 func TestCompileRunSequenceRetryConjunctiveLateJoinKeepsStalledVerdict(t *testing.T) {
 	f := newCrFixtureWindow(t, "select nextval('seqb'), nextval('seqa')", 2*crWindow)
 	f.exec.failAlloc(crSeqA, 0)
@@ -1023,31 +1020,76 @@ func TestCompileRunSequenceRetryConjunctiveLateJoinKeepsStalledVerdict(t *testin
 		f.exec.failAlloc(crSeqB, g)
 	}
 	f.exec.probeHeld[crSeqA] = true
-	// seqb joins 450 ms into seqa's 600 ms window: the join cycle
-	// exhausts inside the live window, so the admission samples seqb's
-	// baseline; that baseline's age at the first decision (at or just
-	// past the deadline) is 450 ms minus one join cycle — young.
-	f.sink.beforeGen[1] = func() { sleepUntilDeadlineDelta(f.state, -450*time.Millisecond) }
 
-	runErr := f.run()
+	// The fixture is created outside the bubble because its process setup can
+	// start a runtime-owned background service. This literal query must run
+	// locally in the bubble, not on the external ants worker pool.
+	require.True(t, f.compile.IsTpQuery())
+	require.Len(t, f.compile.scopes, 1)
+	require.False(t, f.compile.hasMergeOp)
+	scope := f.compile.scopes[0]
+	require.Contains(t, []magicType{Normal, Merge}, scope.Magic)
+	require.Empty(t, scope.PreScopes)
+	require.False(t, scope.ConcurrentPreScopes)
+	require.False(t, scope.LazyPreScopes)
+	require.False(t, scope.IsLoad)
+	require.False(t, scope.IsTbFunc)
+	require.False(t, scope.isTableScan())
 
-	require.Error(t, runErr)
-	require.ErrorContains(t, runErr,
-		"sequence testdb.seqa: allocation could not acquire the sequence row within 8 attempts",
-		"the young identity neither delays nor rescues the stalled verdict")
-	identity, terminal := f.state.TerminalIdentity()
-	require.True(t, terminal)
-	require.Equal(t, crWatchA, identity)
-	plain, locks, _, lockResults := f.exec.counts()
-	require.Equal(t, 4, plain,
-		"two admission samples plus the single decision round's tuple probes")
-	require.Equal(t, 1, locks,
-		"a young identity takes no availability check: it can be neither terminal nor renewable")
-	require.Equal(t, []bool{false}, lockResults, "seqa held is the only checked row")
-	require.Equal(t, 1, f.namedTerminalAborts())
-	deadlines := f.distinctDeadlines()
-	require.Len(t, deadlines, 1,
-		"a late join never re-anchors the live window: one deadline, no extension")
+	synctest.Test(t, func(t *testing.T) {
+		// Run creates query contexts in the bubble; cancel them here before
+		// the outer fixture cleanup calls Compile.Release.
+		defer f.proc.ResetQueryContext()
+		f.compile.startAt = time.Now()
+
+		var aUpper, firstDeadline time.Time
+		f.sink.beforeGen[1] = func() {
+			// A's admission sample has completed before this hook, so this
+			// time is an upper bound on its baseline timestamp.
+			aUpper = time.Now()
+			var ok bool
+			firstDeadline, ok = f.state.RetryDeadline()
+			require.True(t, ok)
+		}
+		f.sink.beforeGen[2] = func() {
+			// B has joined A's live episode. Its eight backoffs each take
+			// less than 26 ms of virtual time, so they fit within D.
+			require.True(t, f.state.HasWatch(crWatchA))
+			require.True(t, f.state.HasWatch(crWatchB))
+			deadline, ok := f.state.RetryDeadline()
+			require.True(t, ok)
+			require.True(t, deadline.Equal(firstDeadline))
+			require.True(t, time.Now().Before(deadline))
+			plain, locks, _, _ := f.exec.counts()
+			require.Equal(t, 2, plain, "both admission samples precede the first decision")
+			require.Zero(t, locks)
+
+			// Advancing the bubble to aUpper + interval makes A at least
+			// one interval old. B's baseline was sampled after aUpper, so
+			// it remains young when the next allocation decides expiry.
+			time.Sleep(time.Until(aUpper.Add(2 * crWindow)))
+		}
+
+		runErr := f.run()
+
+		require.Error(t, runErr)
+		require.ErrorContains(t, runErr,
+			"sequence testdb.seqa: allocation could not acquire the sequence row within 8 attempts",
+			"the young identity neither delays nor rescues the stalled verdict")
+		identity, terminal := f.state.TerminalIdentity()
+		require.True(t, terminal)
+		require.Equal(t, crWatchA, identity)
+		plain, locks, _, lockResults := f.exec.counts()
+		require.Equal(t, 4, plain,
+			"two admission samples plus the single decision round's tuple probes")
+		require.Equal(t, 1, locks,
+			"a young identity takes no availability check: it can be neither terminal nor renewable")
+		require.Equal(t, []bool{false}, lockResults, "seqa held is the only checked row")
+		require.Equal(t, 1, f.namedTerminalAborts())
+		deadlines := f.distinctDeadlines()
+		require.Len(t, deadlines, 1,
+			"a late join never re-anchors the live window: one deadline, no extension")
+	})
 }
 
 // N1 (#30359 review): a prepared-cursor EXECUTE keeps its rows off the
