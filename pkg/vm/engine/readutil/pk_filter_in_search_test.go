@@ -117,6 +117,164 @@ func TestUnsortedPKInSearch(t *testing.T) {
 	})
 }
 
+func TestUnsortedPKInOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	needles := vector.NewVec(types.T_uint64.ToType())
+	t.Cleanup(func() { needles.Free(mp) })
+	for i := 0; i < 1000; i++ {
+		require.NoError(t, vector.AppendFixed(needles, uint64(4*(i/2)), false, mp))
+	}
+	require.NoError(t, vector.AppendFixed(needles, uint64(math.MaxUint64), false, mp))
+	needles.SetSorted(true)
+	filter, err := ConstructBlockPKFilter(true, BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_uint64, Vec: needles}, nil)
+	require.NoError(t, err)
+	if filter.Cleanup != nil {
+		t.Cleanup(filter.Cleanup)
+	}
+	require.True(t, filter.Valid)
+	search := filter.DecideSearchFunc(true) // fake PK must ignore block sort metadata
+	base := make([]uint64, objectio.BlockMaxRows)
+	for i := range base {
+		base[i] = uint64(i / 4)
+	}
+	base[len(base)-1] = math.MaxUint64
+	for _, tc := range []struct {
+		name   string
+		mutate func([]uint64)
+	}{
+		{"ordered", func([]uint64) {}},
+		{"first inversion", func(rows []uint64) { rows[0] = math.MaxUint64 }},
+		{"middle inversion", func(rows []uint64) { rows[len(rows)/2] = math.MaxUint64 }},
+		{"last inversion", func(rows []uint64) { rows[len(rows)-1] = 0 }},
+		{"ordered after fallback", func([]uint64) {}},
+		{"all equal", func(rows []uint64) {
+			for i := range rows {
+				rows[i] = 20
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := slices.Clone(base)
+			tc.mutate(data)
+			rows := vector.NewVec(types.T_uint64.ToType())
+			t.Cleanup(func() { rows.Free(mp) })
+			var want []int64
+			for i, value := range data {
+				require.NoError(t, vector.AppendFixed(rows, value, false, mp))
+				// Independent arithmetic oracle for the generated candidate set.
+				if value == math.MaxUint64 || value <= 1996 && value%4 == 0 {
+					want = append(want, int64(i))
+				}
+			}
+			require.Equal(t, want, search(containers.Vectors{*rows}))
+		})
+	}
+}
+
+func TestUnsortedPKInOrderSigned(t *testing.T) {
+	values := []int32{math.MinInt32}
+	for i := -32; i < 32; i++ {
+		values = append(values, int32(i))
+	}
+	values = append(values, math.MaxInt32)
+	rows := make([]int32, objectio.BlockMaxRows)
+	for i := range rows {
+		rows[i] = int32(i/8 - 512)
+	}
+	rows[0], rows[len(rows)-1] = math.MinInt32, math.MaxInt32
+	checkFixedUnsortedIN(t, types.T_int32, values, rows, func(a, b int32) bool { return a == b }, true)
+}
+
+func checkUnsortedPKInIntegerType[T orderedIntegerBacked](t *testing.T, oid types.T) {
+	t.Helper()
+	values := make([]T, minUnsortedINHashKeys)
+	for i := range values {
+		values[i] = T(i)
+	}
+	rows := make([]T, objectio.BlockMaxRows/2)
+	for i := range rows {
+		rows[i] = T(i / 64)
+	}
+	checkFixedUnsortedIN(t, oid, values, rows, func(a, b T) bool { return a == b }, true)
+	rows[len(rows)-1] = 0
+	checkFixedUnsortedIN(t, oid, values, rows, func(a, b T) bool { return a == b }, true)
+}
+
+func TestUnsortedPKInIntegerTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"bit", func(t *testing.T) { checkUnsortedPKInIntegerType[uint64](t, types.T_bit) }},
+		{"int8", func(t *testing.T) { checkUnsortedPKInIntegerType[int8](t, types.T_int8) }},
+		{"int16", func(t *testing.T) { checkUnsortedPKInIntegerType[int16](t, types.T_int16) }},
+		{"int32", func(t *testing.T) { checkUnsortedPKInIntegerType[int32](t, types.T_int32) }},
+		{"int64", func(t *testing.T) { checkUnsortedPKInIntegerType[int64](t, types.T_int64) }},
+		{"uint8", func(t *testing.T) { checkUnsortedPKInIntegerType[uint8](t, types.T_uint8) }},
+		{"uint16", func(t *testing.T) { checkUnsortedPKInIntegerType[uint16](t, types.T_uint16) }},
+		{"uint32", func(t *testing.T) { checkUnsortedPKInIntegerType[uint32](t, types.T_uint32) }},
+		{"uint64", func(t *testing.T) { checkUnsortedPKInIntegerType[uint64](t, types.T_uint64) }},
+		{"date", func(t *testing.T) { checkUnsortedPKInIntegerType[types.Date](t, types.T_date) }},
+		{"time", func(t *testing.T) { checkUnsortedPKInIntegerType[types.Time](t, types.T_time) }},
+		{"datetime", func(t *testing.T) { checkUnsortedPKInIntegerType[types.Datetime](t, types.T_datetime) }},
+		{"timestamp", func(t *testing.T) { checkUnsortedPKInIntegerType[types.Timestamp](t, types.T_timestamp) }},
+		{"year", func(t *testing.T) { checkUnsortedPKInIntegerType[types.MoYear](t, types.T_year) }},
+		{"enum", func(t *testing.T) { checkUnsortedPKInIntegerType[types.Enum](t, types.T_enum) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, test.run)
+	}
+}
+
+func TestUnsortedPKInOrderInRangeBoundary(t *testing.T) {
+	// The sorted vector search switches from binary probes to a merge when
+	// more than 64 candidates fall within the physical row range.
+	for _, count := range []int{64, 65} {
+		t.Run(fmt.Sprintf("keys_%d", count), func(t *testing.T) {
+			values := make([]uint64, count)
+			for i := range values {
+				values[i] = uint64(2 * i)
+			}
+			rows := make([]uint64, objectio.BlockMaxRows/2)
+			for i := range rows {
+				rows[i] = uint64(i)
+			}
+			checkFixedUnsortedIN(t, types.T_uint64, values, rows, func(a, b uint64) bool { return a == b }, true)
+		})
+	}
+	t.Run("candidates below rows", func(t *testing.T) {
+		values := make([]uint64, minUnsortedINHashKeys)
+		for i := range values {
+			values[i] = uint64(2 * i)
+		}
+		rows := make([]uint64, objectio.BlockMaxRows/2)
+		for i := range rows {
+			rows[i] = uint64(i + 256)
+		}
+		checkFixedUnsortedIN(t, types.T_uint64, values, rows, func(a, b uint64) bool { return a == b }, true)
+	})
+}
+
+func TestUnsortedPKInOrderFallbacks(t *testing.T) {
+	values := make([]uint64, minUnsortedINHashKeys)
+	for i := range values {
+		values[i] = uint64(2 * i)
+	}
+	t.Run("unnormalized candidates", func(t *testing.T) {
+		unsorted := slices.Clone(values)
+		slices.Reverse(unsorted)
+		rows := make([]uint64, objectio.BlockMaxRows/2)
+		for i := range rows {
+			rows[i] = uint64(i)
+		}
+		checkFixedUnsortedIN(t, types.T_uint64, unsorted, rows, func(a, b uint64) bool { return a == b }, false)
+	})
+	t.Run("empty physical rows", func(t *testing.T) {
+		checkFixedUnsortedIN(t, types.T_uint64, values, nil, func(a, b uint64) bool { return a == b }, true)
+	})
+}
+
 func TestUnsortedPKInSearchBoundaries(t *testing.T) {
 	for _, count := range []int{1, 4, 5, minUnsortedINHashKeys - 1, minUnsortedINHashKeys, maxUnsortedINHashKeys, maxUnsortedINHashKeys + 1} {
 		t.Run(fmt.Sprintf("keys_%d", count), func(t *testing.T) {
@@ -176,7 +334,7 @@ func TestUnsortedPKInSearchRowBoundaries(t *testing.T) {
 					want = append(want, int64(i))
 				}
 			}
-			search := orderedInUnsortedSearch(values, true)
+			_, search := orderedInSearchFuncs(values, true)
 			require.Equal(t, want, search(rows))
 		})
 	}
@@ -196,7 +354,8 @@ func TestUnsortedPKInSearchConstantRows(t *testing.T) {
 	}
 	// A constant vector has one physical value, despite its logical length.
 	require.Len(t, vector.MustFixedColNoTypeCheck[uint64](rows), 1)
-	require.Equal(t, []int64{0}, orderedInUnsortedSearch(values, true)(rows))
+	_, search := orderedInSearchFuncs(values, true)
+	require.Equal(t, []int64{0}, search(rows))
 }
 
 func checkUnsortedPKInFloatFullBlock[T ~float32 | ~float64](t *testing.T, oid types.T) {
@@ -236,27 +395,39 @@ func TestUnsortedPKInSearchConcurrentReuse(t *testing.T) {
 			largeWant = append(largeWant, int64(i))
 		}
 	}
+	ordered := vector.NewVec(types.T_uint64.ToType())
+	t.Cleanup(func() { ordered.Free(mp) })
+	orderedWant := make([]int64, objectio.BlockMaxRows)
+	for i := range orderedWant {
+		require.NoError(t, vector.AppendFixed(ordered, uint64(i/32), false, mp))
+		orderedWant[i] = int64(i)
+	}
 	values := make([]uint64, 256)
 	for i := range values {
 		values[i] = uint64(i)
 	}
-	search := orderedInUnsortedSearch(values, true)
+	orderedSearch, search := orderedInSearchFuncs(values, true)
 	start := make(chan struct{})
 	type result struct {
 		offsets []int64
-		large   bool
+		kind    int
 	}
 	results := make(chan result, 16)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
-		useLarge := i%2 == 0
+		kind := i % 4
 		wg.Go(func() {
 			<-start
 			for j := 0; j < 2; j++ {
-				if useLarge {
-					results <- result{offsets: search(large), large: true}
-				} else {
-					results <- result{offsets: search(small)}
+				switch kind {
+				case 0:
+					results <- result{offsets: search(large), kind: kind}
+				case 1:
+					results <- result{offsets: search(ordered), kind: kind}
+				case 2:
+					results <- result{offsets: orderedSearch(ordered), kind: kind}
+				default:
+					results <- result{offsets: search(small), kind: kind}
 				}
 			}
 		})
@@ -265,9 +436,12 @@ func TestUnsortedPKInSearchConcurrentReuse(t *testing.T) {
 	wg.Wait()
 	close(results)
 	for got := range results {
-		if got.large {
+		switch got.kind {
+		case 0:
 			require.Equal(t, largeWant, got.offsets)
-		} else {
+		case 1, 2:
+			require.Equal(t, orderedWant, got.offsets)
+		default:
 			require.Equal(t, []int64{0, 1, 2, 3, 4, 5}, got.offsets)
 		}
 	}
@@ -354,6 +528,47 @@ func TestUnsortedPKInSearchComparisonBound(t *testing.T) {
 	require.LessOrEqual(t, comparisons, 4*12)
 }
 
+// Measure an ordered block and the worst-case order proof before hash fallback.
+func BenchmarkUnsortedPKInOrderedRows(b *testing.B) {
+	for _, inverted := range []bool{false, true} {
+		name := "ordered"
+		if inverted {
+			name = "last-inversion"
+		}
+		b.Run(name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			b.Cleanup(func() { mpool.DeleteMPool(mp) })
+			rows := vector.NewVec(types.T_uint64.ToType())
+			b.Cleanup(func() { rows.Free(mp) })
+			values := make([]uint64, 1000)
+			for i := range values {
+				values[i] = uint64(i)
+			}
+			want := 0
+			for i := 0; i < objectio.BlockMaxRows; i++ {
+				value := uint64(i / 4)
+				if inverted && i == objectio.BlockMaxRows-1 {
+					value = 0
+				}
+				require.NoError(b, vector.AppendFixed(rows, value, false, mp))
+				if value < uint64(len(values)) {
+					want++
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, search := orderedInSearchFuncs(values, true)
+				for block := 0; block < 16; block++ {
+					if got := len(search(rows)); got != want {
+						b.Fatalf("matches %d want %d", got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkUnsortedPKInSearch(b *testing.B) {
 	for _, count := range []int{1000, 2000, 5000} {
 		b.Run(fmt.Sprintf("keys_%d", count), func(b *testing.B) {
@@ -415,7 +630,7 @@ func BenchmarkUnsortedPKInReader(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					search := orderedInUnsortedSearch(values, true)
+					_, search := orderedInSearchFuncs(values, true)
 					for j := 0; j < blocks; j++ {
 						if got := len(search(rows)); got != want {
 							b.Fatalf("matches %d want %d", got, want)
@@ -470,7 +685,7 @@ func BenchmarkUnsortedPKInRowSize(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				search := orderedInUnsortedSearch(values, true)
+				_, search := orderedInSearchFuncs(values, true)
 				for j := 0; j < test.blocks; j++ {
 					if got := len(search(rows)); got != want {
 						b.Fatalf("matches %d want %d", got, want)
