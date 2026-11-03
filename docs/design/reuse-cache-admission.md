@@ -1,28 +1,30 @@
-# Bounded reuse-aware decoded cache admission
+# Non-evicting allocation for late scan reads
 
-Owner: #30849. Base: main 38f4ba680442ec00be281cbeb707dbfbe1d18bc7.
-Status: revised no-new-layer design approved by the user's latest “Implement the plan” instruction on 2026-11-03.
+Owner: #30849; implementation PR #32093.
+Status: revised three-PR coding plan approved by the user's “Implement the plan” instruction on 2026-11-03. The compact-group and local-shuffle-filter designs remain independent and unchanged.
 Risk: R3 (hot path, resource ownership and generation lifecycle).
 
 ## Contract and implementation
 
-Retain normal admission before the reader threshold. Beyond it use an internal reuse-only policy: an unseen key records metadata and decodes transiently; a seen key can request existing cache admission. Explicit SkipMemoryCacheWrites overrides both history and payload admission. Only valid positive CachedDataSize estimates qualify initially.
+Retain normal allocation and S3-FIFO behavior before the existing reader threshold. Beyond it use MemoryCacheNoEvict: cache lookups remain normal, but conversion may reserve only unused cache backing capacity. A first touch can be cached immediately when space is available. Refusal uses transient decode storage, never forced eviction or a wait for pinned buffers. Explicit SkipMemoryCacheWrites overrides this mode.
 
-Decide before decoded allocation, so rejected reads do not evict useful cache contents merely to allocate temporary decode storage. Existing physical reservations, pin accounting, ownership transfer and rejection remain authoritative. Do not count retries of the same read as reuse. Shared decode/fill cannot upgrade a bypass decision.
+Use the actual allocator backing size, not CachedDataSize estimates. Pending reservations and all live backing allocations, including evicted buffers held by readers, remain charged until native deallocation. A reservation moves pending ownership to FIFO membership on publication without releasing its live backing charge. Idle pending allocations stay charged and can be reused without a new reservation. Allocation failure and final release discharge ownership exactly once. Backing bytes exclude native arena fragmentation and process RSS; existing pressure reclamation remains authoritative.
 
-Use observation-only entries in the existing FIFO key namespace, keyed by canonical path/offset/size. They retain no payload and have an intrusive FIFO list owned by that cache; bounding them must not shorten ordinary replacement ghost history. Bound represented decoded bytes and metadata allowance min(configured capacity/1024,64 MiB), deducted from payload capacity. Include retained paths and conservative item/map overhead. Capacity shrink trims observations; delete/flush/close invalidate them. Payload admission may promote an observed key, while rejected publication restores a still-live observation. No new data cache tier, controller, read-ahead subsystem, worker, user knob, on-disk format or protocol.
+Non-evicting publication rechecks capacity, close and pressure under the existing accounting guard and rejects rather than evicting. Successful publication uses ordinary S3-FIFO queue placement, ghosts, callbacks and ownership handoff. Admission state is destination-scoped. Only matching cache-owned, reservation-backed results qualify; foreign/transient results must not be rehomed through ordinary allocation. Apply the same mode to LocalFS, S3FS, disk conversion and DecodeFromBytes. Shared-decode keys keep policy separation and conversion uses the selected allocator; sharing/fill coordination cannot upgrade bypassed data. Cancel, decode failure, duplicate insertion, flush and close preserve one release owner. Lock order is accounting guard -> FIFO queue -> shard; final backing release is atomic and cannot reacquire cache locks.
 
-Alternatives: removing the cutoff repeats the reverted 1T exposure; rejecting only at Update is too late because allocation can evict; retaining encoded pages is a separate policy and is outside this PR. Default-on acceptance requires independent SF10/SF100 and paired equivalent 1T regression evidence.
+Remove the full-key observation FIFO, its cloned keys, quotas and observation-specific rollback/cleanup. SF100 diagnostics showed 1.9 million late candidates with zero admission because 16 MiB of history retained only 56,299 of roughly 278,000 recurring late keys. Preserve that evidence as superseded-implementation evidence. No frequency sketch, new cache tier, controller, read-ahead subsystem, worker, user knob, allocator-interface expansion, persistence format or protocol change. Encoded-page/mmap changes remain outside this PR.
+
+Alternatives: unrestricted allocation repeats the reverted 1T exposure; rejecting only at Update is too late because allocation can evict. Free-capacity-only allocation does not replace stale residents on behalf of late scans; normal readers retain existing S3-FIFO replacement. Decoded residency can still compete with query and OS file-cache memory, so a performance claim requires measurement.
 
 ## Validation and delivery
 
-Focused deterministic tests cover boundaries, fallback, allocation refusal and reset/spill.
+Focused deterministic tests cover first-touch fill, resident-preserving full-cache refusal, competing reservations, held buffers after eviction, actual/estimated size differences, publication-time pressure/shrink, ordinary ghosts, explicit suppression, destination isolation, allocation/decode failure, cancel and reset/close. Extend existing fixtures; verify disk conversion and shared-decode paths preserve the allocation mode.
 For shared state, add cancellation/completion races and owning-package race evidence.
 Use existing fixtures and the controlled CGo wrapper; no benchmark-time input/result verification.
 Benchmark this candidate alone against clean main with identical data/config/CPUs, exclude
 the cold run, and separate scored wall time from instruction/CPU profiling. Use five paired
 SF10/SF100 measurements and three paired full-workload 1T measurements where required.
 Require a confirmed target TPC-H wall-time gain and no confirmed query/total regression.
-SF10 stays local; SF100 uses server129 only when available. Report a Total row.
+SF10 stays local. The specifically authorized local SF100 disk test uses all 32 CPUs, 48 GiB application memory, 16 GiB CN cache, 32 GiB agg_spill_mem and no swap; any SF100 spill invalidates the run. Reuse loaded images; no data/result verification. Run a pilot before completing five pairs. Report all query wall times and a Total row. SF100 all-memory and the original constrained-memory SF1000 protocol use server129 only when available.
 No new load/profiling is authorized while server129 remains busy.
 Use the repository PR template and keep benchmark evidence outside the squash-message section.

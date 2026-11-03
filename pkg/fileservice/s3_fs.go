@@ -1418,7 +1418,7 @@ func (s *S3FS) singleEntryRangeMergeKey(vector *IOVector) (IOMergeKey, bool) {
 		return IOMergeKey{}, false
 	}
 
-	canPublish := target.ToCacheData != nil && !target.cacheAdmissionBypass && s.memCache != nil &&
+	canPublish := target.ToCacheData != nil && target.cacheAllocationMode != cacheAllocationTransient && s.memCache != nil &&
 		!vector.Policy.Any(SkipMemoryCacheReads, SkipMemoryCacheWrites)
 	if !canPublish {
 		canPublish = s.diskCache != nil && vector.Policy.CacheIOEntry() &&

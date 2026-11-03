@@ -69,33 +69,26 @@ type Cache[K comparable, V any] struct {
 	// even though queueLock has not yet charged it to used1/used2.
 	pendingBytes atomic.Int64
 
-	queueLock                   sync.RWMutex
-	used1                       int64
-	queue1                      Queue[*_CacheItem[K, V]]
-	used2                       int64
-	queue2                      Queue[*_CacheItem[K, V]]
-	ghostSize                   int64
-	ghost                       Queue[*_CacheItem[K, V]]
-	observationHead             *_CacheItem[K, V]
-	observationTail             *_CacheItem[K, V]
-	observationBytes            int64
-	observationMetadataUsed     int64
-	observationMetadataSize     func(K) int64
-	observationMetadataCapacity fscache.CapacityFunc
+	queueLock sync.RWMutex
+	used1     int64
+	queue1    Queue[*_CacheItem[K, V]]
+	used2     int64
+	queue2    Queue[*_CacheItem[K, V]]
+	ghostSize int64
+	ghost     Queue[*_CacheItem[K, V]]
 
 	capacityCut atomic.Int64
 	nextSeq     atomic.Uint64
 }
 
 type _CacheItem[K comparable, V any] struct {
-	key             K
-	value           V
-	valueOK         bool
-	size            int64
-	count           atomic.Int32
-	queue           uint8
-	seq             uint64
-	observationNext *_CacheItem[K, V]
+	key     K
+	value   V
+	valueOK bool
+	size    int64
+	count   atomic.Int32
+	queue   uint8
+	seq     uint64
 }
 
 const (
@@ -103,7 +96,6 @@ const (
 	cacheItemQueue1
 	cacheItemQueue2
 	cacheItemGhost
-	cacheItemObservation
 )
 
 func (c *_CacheItem[K, V]) inc() {
@@ -456,7 +448,7 @@ func (c *Cache[K, V]) rollbackRejectedSet(item, replacedGhost *_CacheItem[K, V])
 	}
 
 	if shard.values[item.key] == item {
-		if replacedGhost != nil && (replacedGhost.queue == cacheItemGhost || replacedGhost.queue == cacheItemObservation) {
+		if replacedGhost != nil && replacedGhost.queue == cacheItemGhost {
 			shard.values[item.key] = replacedGhost
 		} else {
 			delete(shard.values, item.key)
@@ -812,7 +804,6 @@ func (c *Cache[K, V]) evictWithWait(ctx context.Context, capacityCut int64, incl
 func (c *Cache[K, V]) evictBatch(capacityCut *int64, includeAsyncDebt bool) (pending []_PendingPostEvict[K, V], used int64, evicted bool) {
 	c.queueLock.Lock()
 	defer c.queueLock.Unlock()
-	c.trimObservations()
 
 	var (
 		pendingBytes int64
@@ -1020,6 +1011,17 @@ func (c *Cache[K, V]) evictGhost() {
 			continue
 		}
 		c.ghostSize -= item.size
-		c.retireHistoryItem(item)
+		item.queue = cacheItemNoQueue
+		c.deleteItem(item)
+	}
+}
+
+func (c *Cache[K, V]) deleteItem(item *_CacheItem[K, V]) {
+	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
+	shard.Lock()
+	defer shard.Unlock()
+	// item may be replaced in set, check before delete
+	if shard.values[item.key] == item {
+		delete(shard.values, item.key)
 	}
 }

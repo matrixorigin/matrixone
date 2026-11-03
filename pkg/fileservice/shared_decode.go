@@ -506,7 +506,7 @@ func (s *S3FS) prepareSharedDecodeInternal(vector *IOVector, coordinateFill bool
 		return nil, nil, false, nil
 	}
 	entry := &vector.Entries[index]
-	if entry.cacheAdmissionBypass {
+	if entry.cacheAllocationMode == cacheAllocationTransient {
 		return nil, nil, false, nil
 	}
 	sharing := entry.DecodeSharing

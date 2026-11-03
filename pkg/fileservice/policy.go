@@ -30,8 +30,8 @@ const (
 	// SkipFullFilePreloads while the disk cache evicts whole-object files before
 	// most of their bytes are read.
 	NarrowRead
-	// MemoryCacheReuseOnly admits late scan reads only after observed reuse.
-	MemoryCacheReuseOnly
+	// MemoryCacheNoEvict allows late reads to allocate only unused cache capacity.
+	MemoryCacheNoEvict
 )
 
 const (
