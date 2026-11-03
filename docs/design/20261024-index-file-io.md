@@ -1,11 +1,13 @@
 # Index file I/O: a logical file layer over index chunk tables
 
-- Status: approved by @fengttt on 2026-10-27, revision `fc9d8c02dd`
-  ([review](https://github.com/matrixorigin/matrixone/pull/31050#pullrequestreview-5661299764))
+- Status: approved by @fengttt on 2026-11-03, revision `039c69973b`
+  ([review](https://github.com/matrixorigin/matrixone/pull/31773#pullrequestreview-5754706671));
+  the revision before the decisions dated 2026-10-28 was approved on 2026-10-27, revision
+  `fc9d8c02dd` ([review](https://github.com/matrixorigin/matrixone/pull/31050#pullrequestreview-5661299764))
 - Issue: #31051
 - Implementation PR: #31050
 - Branch: `index_io`
-- Last updated: 2026-10-29; the decisions dated 2026-10-28 and later await review
+- Last updated: 2026-10-29
 
 ## Problem
 
