@@ -2664,8 +2664,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		return retID
 	}
 
-	//no index applied
-	return nodeID
+	return builder.applyRegularIndexMerge(node, indexes, colRefCnt, idxColMap, costCtx)
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
@@ -4713,6 +4712,25 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 	scanSnapshot *Snapshot,
 	match *regularIndexOnlyMatch,
 ) int32 {
+	indexNode := builder.buildRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
+	if indexNode == nil {
+		return -1
+	}
+	builder.addNameByColRef(indexNode.BindingTags[0], indexNode.TableDef)
+	id := builder.appendNode(indexNode, builder.ctxByNode[node.NodeId])
+	builder.inheritIndexHints(id, node.NodeId)
+	forceScanNodeStatsTP(id, builder)
+	return id
+}
+
+// 先构造、后发布，使多分支访问在任一分支失败时仍保留完整原计划。
+func (builder *QueryBuilder) buildRegularIndexOnlyScan(
+	idxDef *IndexDef,
+	node *plan.Node,
+	idxColMap map[[2]int32]*plan.Expr,
+	scanSnapshot *Snapshot,
+	match *regularIndexOnlyMatch,
+) *plan.Node {
 	leadingPos := match.filterIdx
 	numParts := len(idxDef.Parts)
 	missFilterIdx := make([]int, 0, len(node.FilterList))
@@ -4734,6 +4752,9 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 	if e != nil {
 		panic(e)
 	}
+	if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 {
+		panic(moerr.NewInternalError(builder.GetContext(), "missing regular index table metadata"))
+	}
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 	var newLeadingFilter *plan.Expr
 	var err error
@@ -4743,9 +4764,8 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		newLeadingFilter, err = builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, match.leadingEqual, idxTag, idxTableDef)
 	}
 	if err != nil {
-		return -1
+		return nil
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
 
 	if numParts == 1 {
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
@@ -4794,7 +4814,7 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		IndexTableName: idxDef.IndexTableName,
 	}
 
-	idxTableNodeID := builder.appendNode(&plan.Node{
+	return &plan.Node{
 		NodeType:      plan.Node_TABLE_SCAN,
 		TableDef:      idxTableDef,
 		IndexScanInfo: idxScanInfo,
@@ -4805,11 +4825,7 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		Offset:        node.Offset,
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
-	}, builder.ctxByNode[node.NodeId])
-	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
-
-	forceScanNodeStatsTP(idxTableNodeID, builder)
-	return idxTableNodeID
+	}
 }
 
 func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
