@@ -2343,8 +2343,11 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 				}
 			}
 
-			bat.Shrink(sels, false)
+			err = bat.Shrink(sels, false, ses.proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
 
 			v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
 			v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
@@ -3893,8 +3896,11 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 				}
 			}
 
-			bat.Shrink(sels, false)
+			err = bat.Shrink(sels, false, proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
 			v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
 			v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 			v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])

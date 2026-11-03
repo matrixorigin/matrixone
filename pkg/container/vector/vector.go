@@ -6068,10 +6068,7 @@ func copyBitmapWithinLength(dst, src *nulls.Nulls, length int) {
 }
 
 // Shrink use to shrink vectors, sels must be guaranteed to be ordered
-func (v *Vector) Shrink(sels []int64, negate bool) {
-	if v.typ.IsVarlen() {
-		v.areaDisjoint = false
-	}
+func (v *Vector) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 
 	shrinkSortedCheckIfRaceDetectorEnabled(sels)
 	oldKinds := v.prepareParamKinds
@@ -6079,81 +6076,121 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 	oldLength := v.length
 
 	if v.IsConst() {
+		if v.typ.IsVarlen() {
+			v.areaDisjoint = false
+		}
 		if negate {
 			v.length -= len(sels)
 		} else {
 			v.length = len(sels)
 		}
-		return
+		return nil
+	}
+	needsWrite := len(sels) > 0
+	if v.cantFreeData && needsWrite {
+		needsWrite = false
+		if negate {
+			needsWrite = sels[0] < int64(v.length-len(sels))
+		} else {
+			for i, sel := range sels {
+				if int64(i) != sel {
+					needsWrite = true
+					break
+				}
+			}
+		}
+	}
+	skipData := v.cantFreeData && !needsWrite
+	if needsWrite {
+		if err := v.PrepareDataForInplaceMutation(mp); err != nil {
+			return err
+		}
+	}
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
 	}
 
-	switch v.typ.Oid {
-	case types.T_bool:
-		shrinkFixed[bool](v, sels, negate)
-	case types.T_bit:
-		shrinkFixed[uint64](v, sels, negate)
-	case types.T_int8:
-		shrinkFixed[int8](v, sels, negate)
-	case types.T_int16:
-		shrinkFixed[int16](v, sels, negate)
-	case types.T_int32:
-		shrinkFixed[int32](v, sels, negate)
-	case types.T_int64:
-		shrinkFixed[int64](v, sels, negate)
-	case types.T_uint8:
-		shrinkFixed[uint8](v, sels, negate)
-	case types.T_uint16:
-		shrinkFixed[uint16](v, sels, negate)
-	case types.T_uint32:
-		shrinkFixed[uint32](v, sels, negate)
-	case types.T_uint64:
-		shrinkFixed[uint64](v, sels, negate)
-	case types.T_float32:
-		shrinkFixed[float32](v, sels, negate)
-	case types.T_float64:
-		shrinkFixed[float64](v, sels, negate)
-	case types.T_bf16:
-		shrinkFixed[types.BF16](v, sels, negate)
-	case types.T_float16:
-		shrinkFixed[types.Float16](v, sels, negate)
-	case types.T_float8:
-		shrinkFixed[types.Float8](v, sels, negate)
-	case types.T_float4:
-		shrinkFixed[types.Float4](v, sels, negate)
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
-		// XXX shrink varlena, but did not shrink area.  For our vector, this
-		// may well be the right thing.  If want to shrink area as well, we
-		// have to copy each varlena value and swizzle pointer.
-		shrinkFixed[types.Varlena](v, sels, negate)
-	case types.T_date:
-		shrinkFixed[types.Date](v, sels, negate)
-	case types.T_datetime:
-		shrinkFixed[types.Datetime](v, sels, negate)
-	case types.T_time:
-		shrinkFixed[types.Time](v, sels, negate)
-	case types.T_timestamp:
-		shrinkFixed[types.Timestamp](v, sels, negate)
-	case types.T_year:
-		shrinkFixed[types.MoYear](v, sels, negate)
-	case types.T_enum:
-		shrinkFixed[types.Enum](v, sels, negate)
-	case types.T_decimal64:
-		shrinkFixed[types.Decimal64](v, sels, negate)
-	case types.T_decimal128:
-		shrinkFixed[types.Decimal128](v, sels, negate)
-	case types.T_decimal256:
-		shrinkFixed[types.Decimal256](v, sels, negate)
-	case types.T_uuid:
-		shrinkFixed[types.Uuid](v, sels, negate)
-	case types.T_TS:
-		shrinkFixed[types.TS](v, sels, negate)
-	case types.T_Rowid:
-		shrinkFixed[types.Rowid](v, sels, negate)
-	case types.T_Blockid:
-		shrinkFixed[types.Blockid](v, sels, negate)
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
+	// Keep the borrowed prefix in place while still remapping its metadata.
+	// The ordinary path uses the same compact loop as owned data.
+	if skipData {
+		if !negate || len(sels) > 0 {
+			nulls.FilterInPlaceOrdered(&v.gsp, sels, negate)
+			nulls.FilterInPlaceOrdered(&v.nsp, sels, negate)
+			if negate {
+				v.length -= len(sels)
+			} else {
+				v.length = len(sels)
+			}
+		}
+	} else {
+		switch v.typ.Oid {
+		case types.T_bool:
+			shrinkFixed[bool](v, sels, negate)
+		case types.T_bit:
+			shrinkFixed[uint64](v, sels, negate)
+		case types.T_int8:
+			shrinkFixed[int8](v, sels, negate)
+		case types.T_int16:
+			shrinkFixed[int16](v, sels, negate)
+		case types.T_int32:
+			shrinkFixed[int32](v, sels, negate)
+		case types.T_int64:
+			shrinkFixed[int64](v, sels, negate)
+		case types.T_uint8:
+			shrinkFixed[uint8](v, sels, negate)
+		case types.T_uint16:
+			shrinkFixed[uint16](v, sels, negate)
+		case types.T_uint32:
+			shrinkFixed[uint32](v, sels, negate)
+		case types.T_uint64:
+			shrinkFixed[uint64](v, sels, negate)
+		case types.T_float32:
+			shrinkFixed[float32](v, sels, negate)
+		case types.T_float64:
+			shrinkFixed[float64](v, sels, negate)
+		case types.T_bf16:
+			shrinkFixed[types.BF16](v, sels, negate)
+		case types.T_float16:
+			shrinkFixed[types.Float16](v, sels, negate)
+		case types.T_float8:
+			shrinkFixed[types.Float8](v, sels, negate)
+		case types.T_float4:
+			shrinkFixed[types.Float4](v, sels, negate)
+		case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+			types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
+			// XXX shrink varlena, but did not shrink area.  For our vector, this
+			// may well be the right thing.  If want to shrink area as well, we
+			// have to copy each varlena value and swizzle pointer.
+			shrinkFixed[types.Varlena](v, sels, negate)
+		case types.T_date:
+			shrinkFixed[types.Date](v, sels, negate)
+		case types.T_datetime:
+			shrinkFixed[types.Datetime](v, sels, negate)
+		case types.T_time:
+			shrinkFixed[types.Time](v, sels, negate)
+		case types.T_timestamp:
+			shrinkFixed[types.Timestamp](v, sels, negate)
+		case types.T_year:
+			shrinkFixed[types.MoYear](v, sels, negate)
+		case types.T_enum:
+			shrinkFixed[types.Enum](v, sels, negate)
+		case types.T_decimal64:
+			shrinkFixed[types.Decimal64](v, sels, negate)
+		case types.T_decimal128:
+			shrinkFixed[types.Decimal128](v, sels, negate)
+		case types.T_decimal256:
+			shrinkFixed[types.Decimal256](v, sels, negate)
+		case types.T_uuid:
+			shrinkFixed[types.Uuid](v, sels, negate)
+		case types.T_TS:
+			shrinkFixed[types.TS](v, sels, negate)
+		case types.T_Rowid:
+			shrinkFixed[types.Rowid](v, sels, negate)
+		case types.T_Blockid:
+			shrinkFixed[types.Blockid](v, sels, negate)
+		default:
+			panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
+		}
 	}
 	v.remapPrepareParamKindsAfterShrink(oldKinds, oldLength, sels, negate)
 	v.remapStringSourcesAfterShrink(oldSources, oldLength, sels, negate)
@@ -6162,19 +6199,47 @@ func (v *Vector) Shrink(sels []int64, negate bool) {
 		v.textStringRows.RemapOrdered(sels, negate)
 		v.normalizeBinaryStringRows()
 	}
+	return nil
 }
 
-func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
-	if v.typ.IsVarlen() {
-		v.areaDisjoint = false
+func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
+	if negate && sels.Count() == 0 {
+		return nil
 	}
 	if v.IsConst() {
+		if v.typ.IsVarlen() {
+			v.areaDisjoint = false
+		}
 		if negate {
 			v.length -= sels.Count()
 		} else {
 			v.length = sels.Count()
 		}
-		return
+		return nil
+	}
+	needsWrite := sels.Count() > 0
+	if v.cantFreeData && needsWrite {
+		needsWrite = false
+		itr := sels.Iterator()
+		if negate {
+			needsWrite = itr.Next()+offset < uint64(v.length-sels.Count())
+		} else {
+			for i := uint64(0); itr.HasNext(); i++ {
+				if itr.Next()+offset != i {
+					needsWrite = true
+					break
+				}
+			}
+		}
+	}
+	skipData := v.cantFreeData && !needsWrite
+	if needsWrite {
+		if err := v.PrepareDataForInplaceMutation(mp); err != nil {
+			return err
+		}
+	}
+	if v.typ.IsVarlen() {
+		v.areaDisjoint = false
 	}
 	oldKinds := v.prepareParamKinds
 	oldSources := v.stringSources
@@ -6182,69 +6247,69 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 
 	switch v.typ.Oid {
 	case types.T_bool:
-		shrinkFixedByMask[bool](v, sels, negate, offset)
+		shrinkFixedByMask[bool](v, sels, negate, offset, skipData)
 	case types.T_bit:
-		shrinkFixedByMask[uint64](v, sels, negate, offset)
+		shrinkFixedByMask[uint64](v, sels, negate, offset, skipData)
 	case types.T_int8:
-		shrinkFixedByMask[int8](v, sels, negate, offset)
+		shrinkFixedByMask[int8](v, sels, negate, offset, skipData)
 	case types.T_int16:
-		shrinkFixedByMask[int16](v, sels, negate, offset)
+		shrinkFixedByMask[int16](v, sels, negate, offset, skipData)
 	case types.T_int32:
-		shrinkFixedByMask[int32](v, sels, negate, offset)
+		shrinkFixedByMask[int32](v, sels, negate, offset, skipData)
 	case types.T_int64:
-		shrinkFixedByMask[int64](v, sels, negate, offset)
+		shrinkFixedByMask[int64](v, sels, negate, offset, skipData)
 	case types.T_uint8:
-		shrinkFixedByMask[uint8](v, sels, negate, offset)
+		shrinkFixedByMask[uint8](v, sels, negate, offset, skipData)
 	case types.T_uint16:
-		shrinkFixedByMask[uint16](v, sels, negate, offset)
+		shrinkFixedByMask[uint16](v, sels, negate, offset, skipData)
 	case types.T_uint32:
-		shrinkFixedByMask[uint32](v, sels, negate, offset)
+		shrinkFixedByMask[uint32](v, sels, negate, offset, skipData)
 	case types.T_uint64:
-		shrinkFixedByMask[uint64](v, sels, negate, offset)
+		shrinkFixedByMask[uint64](v, sels, negate, offset, skipData)
 	case types.T_float32:
-		shrinkFixedByMask[float32](v, sels, negate, offset)
+		shrinkFixedByMask[float32](v, sels, negate, offset, skipData)
 	case types.T_float64:
-		shrinkFixedByMask[float64](v, sels, negate, offset)
+		shrinkFixedByMask[float64](v, sels, negate, offset, skipData)
 	case types.T_bf16:
-		shrinkFixedByMask[types.BF16](v, sels, negate, offset)
+		shrinkFixedByMask[types.BF16](v, sels, negate, offset, skipData)
 	case types.T_float16:
-		shrinkFixedByMask[types.Float16](v, sels, negate, offset)
+		shrinkFixedByMask[types.Float16](v, sels, negate, offset, skipData)
 	case types.T_float8:
-		shrinkFixedByMask[types.Float8](v, sels, negate, offset)
+		shrinkFixedByMask[types.Float8](v, sels, negate, offset, skipData)
 	case types.T_float4:
-		shrinkFixedByMask[types.Float4](v, sels, negate, offset)
+		shrinkFixedByMask[types.Float4](v, sels, negate, offset, skipData)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
 		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry, types.T_geometry32:
 		// XXX shrink varlena, but did not shrink area.  For our vector, this
 		// may well be the right thing.  If want to shrink area as well, we
 		// have to copy each varlena value and swizzle pointer.
-		shrinkFixedByMask[types.Varlena](v, sels, negate, offset)
+		shrinkFixedByMask[types.Varlena](v, sels, negate, offset, skipData)
 	case types.T_date:
-		shrinkFixedByMask[types.Date](v, sels, negate, offset)
+		shrinkFixedByMask[types.Date](v, sels, negate, offset, skipData)
 	case types.T_datetime:
-		shrinkFixedByMask[types.Datetime](v, sels, negate, offset)
+		shrinkFixedByMask[types.Datetime](v, sels, negate, offset, skipData)
 	case types.T_time:
-		shrinkFixedByMask[types.Time](v, sels, negate, offset)
+		shrinkFixedByMask[types.Time](v, sels, negate, offset, skipData)
 	case types.T_timestamp:
-		shrinkFixedByMask[types.Timestamp](v, sels, negate, offset)
+		shrinkFixedByMask[types.Timestamp](v, sels, negate, offset, skipData)
 	case types.T_year:
-		shrinkFixedByMask[types.MoYear](v, sels, negate, offset)
+		shrinkFixedByMask[types.MoYear](v, sels, negate, offset, skipData)
 	case types.T_enum:
-		shrinkFixedByMask[types.Enum](v, sels, negate, offset)
+		shrinkFixedByMask[types.Enum](v, sels, negate, offset, skipData)
 	case types.T_decimal64:
-		shrinkFixedByMask[types.Decimal64](v, sels, negate, offset)
+		shrinkFixedByMask[types.Decimal64](v, sels, negate, offset, skipData)
 	case types.T_decimal128:
-		shrinkFixedByMask[types.Decimal128](v, sels, negate, offset)
+		shrinkFixedByMask[types.Decimal128](v, sels, negate, offset, skipData)
 	case types.T_decimal256:
-		shrinkFixedByMask[types.Decimal256](v, sels, negate, offset)
+		shrinkFixedByMask[types.Decimal256](v, sels, negate, offset, skipData)
 	case types.T_uuid:
-		shrinkFixedByMask[types.Uuid](v, sels, negate, offset)
+		shrinkFixedByMask[types.Uuid](v, sels, negate, offset, skipData)
 	case types.T_TS:
-		shrinkFixedByMask[types.TS](v, sels, negate, offset)
+		shrinkFixedByMask[types.TS](v, sels, negate, offset, skipData)
 	case types.T_Rowid:
-		shrinkFixedByMask[types.Rowid](v, sels, negate, offset)
+		shrinkFixedByMask[types.Rowid](v, sels, negate, offset, skipData)
 	case types.T_Blockid:
-		shrinkFixedByMask[types.Blockid](v, sels, negate, offset)
+		shrinkFixedByMask[types.Blockid](v, sels, negate, offset, skipData)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shrink", v.typ))
 	}
@@ -6255,6 +6320,7 @@ func (v *Vector) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
 		v.textStringRows.RemapMaskOrderedWithOffset(sels, negate, offset)
 		v.normalizeBinaryStringRows()
 	}
+	return nil
 }
 
 func (v *Vector) remapPrepareParamKindsAfterShrink(
@@ -10922,7 +10988,7 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 		nulls.FilterInPlaceOrdered(&v.nsp, sels, false)
 		v.length = len(sels)
 	} else if len(sels) > 0 {
-		for oldIdx, newIdx, selIdx, sel := 0, 0, 0, sels[0]; oldIdx < v.length; oldIdx++ {
+		for oldIdx, newIdx, selIdx, sel, length := 0, 0, 0, sels[0], v.length; oldIdx < length; oldIdx++ {
 			if oldIdx != int(sel) {
 				vs[newIdx] = vs[oldIdx]
 				newIdx++
@@ -10944,34 +11010,39 @@ func shrinkFixed[T types.FixedSizeT](v *Vector, sels []int64, negate bool) {
 	}
 }
 
-func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64) {
+func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negate bool, offset uint64, skipData bool) {
 	vs := MustFixedColNoTypeCheck[T](v)
 	length := sels.Count()
-	itr := sels.Iterator()
 	if !negate {
-		idx := 0
-		for itr.HasNext() {
-			vs[idx] = vs[itr.Next()+offset]
-			idx++
+		if !skipData {
+			itr := sels.Iterator()
+			idx := 0
+			for itr.HasNext() {
+				vs[idx] = vs[itr.Next()+offset]
+				idx++
+			}
 		}
 		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, false, offset)
 		nulls.FilterByMaskInPlaceWithOffset(&v.nsp, sels, false, offset)
 		v.length = length
 	} else if length > 0 {
-		sel := itr.Next() + offset
-		for oldIdx, newIdx := 0, 0; oldIdx < v.length; oldIdx++ {
-			if oldIdx != int(sel) {
-				vs[newIdx] = vs[oldIdx]
-				newIdx++
-			} else {
-				if !itr.HasNext() {
-					for idx := oldIdx + 1; idx < v.length; idx++ {
-						vs[newIdx] = vs[idx]
-						newIdx++
+		if !skipData {
+			itr := sels.Iterator()
+			sel := itr.Next() + offset
+			for oldIdx, newIdx := 0, 0; oldIdx < v.length; oldIdx++ {
+				if oldIdx != int(sel) {
+					vs[newIdx] = vs[oldIdx]
+					newIdx++
+				} else {
+					if !itr.HasNext() {
+						for idx := oldIdx + 1; idx < v.length; idx++ {
+							vs[newIdx] = vs[idx]
+							newIdx++
+						}
+						break
 					}
-					break
+					sel = itr.Next() + offset
 				}
-				sel = itr.Next() + offset
 			}
 		}
 		nulls.FilterByMaskInPlaceWithOffset(&v.gsp, sels, true, offset)
@@ -12278,7 +12349,7 @@ func (v *Vector) copySortedRow(destination, source int, varlena []types.Varlena)
 }
 
 func (v *Vector) inplaceSortRowMetadata(compact bool) bool {
-	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil && !v.HasStringSourceMetadata()) ||
+	if (!v.binaryStringRowsActive && v.prepareParamKinds == nil && !v.HasStringSourceMetadata() && !v.nsp.Any() && !v.gsp.Any()) ||
 		v.IsConst() || !supportsInplaceSort(v.typ.Oid) {
 		return false
 	}
@@ -12374,11 +12445,38 @@ func sortAndCompactLowPrecFloatCol[T types.LowPrecFloat](v *Vector) {
 	}
 }
 
-// InplaceSortAndCompact requires writable descriptors and row metadata.
+// InplaceSortAndCompact prepares writable data and row metadata before sorting.
 // A leased varlen payload can remain readonly: only descriptors are reordered.
-func (v *Vector) InplaceSortAndCompact() {
+func (v *Vector) InplaceSortAndCompact(mp *mpool.MPool) error {
+	if !supportsInplaceSort(v.typ.Oid) {
+		return nil
+	}
+	if v.IsConst() || v.length <= 1 {
+		v.SetSorted(true)
+		return nil
+	}
+	{
+		if err := v.PrepareDataForInplaceMutation(mp); err != nil {
+			return err
+		}
+		if !v.nsp.IsEmpty() {
+			if err := v.ensureNullCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+		if !v.gsp.IsEmpty() {
+			if err := v.ensureGroupingCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+		if v.binaryStringRowsActive && (!v.binaryStringRows.IsEmpty() || !v.textStringRows.IsEmpty()) {
+			if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+	}
 	if v.inplaceSortRowMetadata(true) {
-		return
+		return nil
 	}
 	publishCompactedLength := func(length int) {
 		// Compact already wrote the result into the descriptor prefix. Do not
@@ -12402,9 +12500,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		})
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_bit:
@@ -12412,9 +12508,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int8:
@@ -12422,9 +12516,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int16:
@@ -12432,9 +12524,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int32:
@@ -12442,9 +12532,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_int64:
@@ -12452,9 +12540,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint8:
@@ -12462,9 +12548,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint16:
@@ -12472,9 +12556,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint32:
@@ -12482,9 +12564,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uint64:
@@ -12492,9 +12572,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_float32:
@@ -12502,9 +12580,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_float64:
@@ -12512,9 +12588,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_bf16:
@@ -12531,9 +12605,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_year:
@@ -12541,9 +12613,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_datetime:
@@ -12551,9 +12621,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_time:
@@ -12561,9 +12629,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_timestamp:
@@ -12571,9 +12637,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_enum:
@@ -12581,9 +12645,7 @@ func (v *Vector) InplaceSortAndCompact() {
 		slices.Sort(col)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_decimal64:
@@ -12601,9 +12663,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_decimal128:
@@ -12621,9 +12681,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_decimal256:
@@ -12641,9 +12699,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_TS:
@@ -12661,9 +12717,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Equal(&b)
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_uuid:
@@ -12675,9 +12729,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.Compare(b) == 0
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 	case types.T_Rowid:
 		col := MustFixedColNoTypeCheck[types.Rowid](v)
@@ -12694,9 +12746,7 @@ func (v *Vector) InplaceSortAndCompact() {
 			return a.EQ(&b)
 		})
 		if len(newCol) != len(col) {
-			v.CleanOnlyData()
-			v.SetSorted(true)
-			appendList(v, newCol, nil, nil)
+			publishCompactedLength(len(newCol))
 		}
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
@@ -12756,11 +12806,12 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_array_uint8:
 		inplaceSortAndCompactArrayElement[uint8](v, publishCompactedLength)
 	default:
-		return
+		return nil
 	}
 	// Sorting happened even when compaction did not change the vector length.
 	// Keep the metadata invariant aligned with the physical ordering.
 	v.SetSorted(true)
+	return nil
 }
 
 // inplaceSortAndCompactArrayElement sorts+dedups a narrow-typed vector using the
@@ -12787,9 +12838,36 @@ func inplaceSortAndCompactArrayElement[T types.ArrayElement](v *Vector, publishC
 // InplaceSort orders every supported vector type without compacting duplicate
 // values and marks that order in the vector metadata. Unsupported types remain
 // untouched and unflagged.
-func (v *Vector) InplaceSort() {
+func (v *Vector) InplaceSort(mp *mpool.MPool) error {
+	if !supportsInplaceSort(v.typ.Oid) {
+		return nil
+	}
+	if v.IsConst() || v.length <= 1 {
+		v.SetSorted(true)
+		return nil
+	}
+	{
+		if err := v.PrepareDataForInplaceMutation(mp); err != nil {
+			return err
+		}
+		if !v.nsp.IsEmpty() {
+			if err := v.ensureNullCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+		if !v.gsp.IsEmpty() {
+			if err := v.ensureGroupingCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+		if v.binaryStringRowsActive && (!v.binaryStringRows.IsEmpty() || !v.textStringRows.IsEmpty()) {
+			if err := v.ensureBinaryStringCapacity(v.length, mp); err != nil {
+				return err
+			}
+		}
+	}
 	if v.inplaceSortRowMetadata(false) {
-		return
+		return nil
 	}
 	switch v.GetType().Oid {
 	case types.T_bool:
@@ -12978,9 +13056,10 @@ func (v *Vector) InplaceSort() {
 	case types.T_array_uint8:
 		sortArrayElement[uint8](v)
 	default:
-		return
+		return nil
 	}
 	v.SetSorted(true)
+	return nil
 }
 
 // sortArrayElement sorts a narrow-typed vector in place using the

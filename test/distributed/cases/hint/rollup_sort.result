@@ -211,6 +211,104 @@ null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  0  𝄀
 null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  1  𝄀
 null  ¦  null  ¦  1  ¦  null  ¦  1  ¦  1
 truncate table t_rollup_sort;
+insert into t_rollup_sort values (1, 1, 10), (1, 1, null), (1, 2, 5), (2, 1, null);
+set session rollup_algorithm = 'SORT';
+select a, b, count(*) as cnt, sum(amount) as total,
+cast(avg(amount) as decimal(10,2)) as avg_amount, min(amount) as min_amount,
+max(amount) as max_amount, grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  avg_amount[3,10,2]  ¦  min_amount[4,32,0]  ¦  max_amount[4,32,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  10  ¦  10.00  ¦  10  ¦  10  ¦  0  ¦  0  𝄀
+1  ¦  2  ¦  1  ¦  5  ¦  5.00  ¦  5  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+1  ¦  null  ¦  3  ¦  15  ¦  7.50  ¦  5  ¦  10  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  4  ¦  15  ¦  7.50  ¦  5  ¦  10  ¦  1  ¦  1
+set session rollup_algorithm = 'HASH';
+select a, b, count(*) as cnt, sum(amount) as total,
+cast(avg(amount) as decimal(10,2)) as avg_amount, min(amount) as min_amount,
+max(amount) as max_amount, grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  avg_amount[3,10,2]  ¦  min_amount[4,32,0]  ¦  max_amount[4,32,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  10  ¦  10.00  ¦  10  ¦  10  ¦  0  ¦  0  𝄀
+1  ¦  2  ¦  1  ¦  5  ¦  5.00  ¦  5  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+1  ¦  null  ¦  3  ¦  15  ¦  7.50  ¦  5  ¦  10  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  4  ¦  15  ¦  7.50  ¦  5  ¦  10  ¦  1  ¦  1
+create table t_rollup_big (a int, b int, x bigint, d decimal(65,2), s varchar(10));
+insert into t_rollup_big values
+(null, 1, 10, 1.25, 'z'), (null, 1, null, null, null),
+(1, 1, -4, -2.50, 'b'), (1, 2, 7, 3.00, 'a'),
+(2, 1, null, null, null);
+set session rollup_algorithm = 'SORT';
+select a, b, count(*) as cnt, sum(x) as total, avg(x) as mean,
+min(x) as lo, max(x) as hi, grouping(a) as ga, grouping(b) as gb
+from t_rollup_big group by a, b with rollup order by ga, gb, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[3,38,0]  ¦  mean[3,23,4]  ¦  lo[-5,64,0]  ¦  hi[-5,64,0]  ¦  ga[-5,64,0]  ¦  gb[-5,64,0]  𝄀
+null  ¦  1  ¦  2  ¦  10  ¦  10.0000  ¦  10  ¦  10  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  1  ¦  -4  ¦  -4.0000  ¦  -4  ¦  -4  ¦  0  ¦  0  𝄀
+1  ¦  2  ¦  1  ¦  7  ¦  7.0000  ¦  7  ¦  7  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  2  ¦  10  ¦  10.0000  ¦  10  ¦  10  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  2  ¦  3  ¦  1.5000  ¦  -4  ¦  7  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  5  ¦  13  ¦  4.3333  ¦  -4  ¦  10  ¦  1  ¦  1
+select a, b, sum(d) as total, avg(d) as mean, min(d) as lo, max(d) as hi,
+grouping(a) as ga, grouping(b) as gb
+from t_rollup_big group by a, b with rollup order by ga, gb, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  total[3,65,2]  ¦  mean[3,65,2]  ¦  lo[3,65,2]  ¦  hi[3,65,2]  ¦  ga[-5,64,0]  ¦  gb[-5,64,0]  𝄀
+null  ¦  1  ¦  1.25  ¦  1.25  ¦  1.25  ¦  1.25  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  -2.50  ¦  -2.50  ¦  -2.50  ¦  -2.50  ¦  0  ¦  0  𝄀
+1  ¦  2  ¦  3.00  ¦  3.00  ¦  3.00  ¦  3.00  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  1.25  ¦  1.25  ¦  1.25  ¦  1.25  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  0.50  ¦  0.25  ¦  -2.50  ¦  3.00  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  1.75  ¦  0.58  ¦  -2.50  ¦  3.00  ¦  1  ¦  1
+select a, count(*) as cnt, sum(x) as total, min(s) as lo, max(s) as hi,
+grouping(a) as ga from t_rollup_big group by a with rollup order by ga, a;
+➤ a[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[3,38,0]  ¦  lo[12,10,0]  ¦  hi[12,10,0]  ¦  ga[-5,64,0]  𝄀
+null  ¦  2  ¦  10  ¦  z  ¦  z  ¦  0  𝄀
+1  ¦  2  ¦  3  ¦  a  ¦  b  ¦  0  𝄀
+2  ¦  1  ¦  null  ¦  null  ¦  null  ¦  0  𝄀
+null  ¦  5  ¦  13  ¦  a  ¦  z  ¦  1
+set session rollup_algorithm = 'HASH';
+select a, b, count(*) as cnt, sum(x) as total, avg(x) as mean,
+min(x) as lo, max(x) as hi, grouping(a) as ga, grouping(b) as gb
+from t_rollup_big group by a, b with rollup order by ga, gb, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[3,38,0]  ¦  mean[3,23,4]  ¦  lo[-5,64,0]  ¦  hi[-5,64,0]  ¦  ga[-5,64,0]  ¦  gb[-5,64,0]  𝄀
+null  ¦  1  ¦  2  ¦  10  ¦  10.0000  ¦  10  ¦  10  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  1  ¦  -4  ¦  -4.0000  ¦  -4  ¦  -4  ¦  0  ¦  0  𝄀
+1  ¦  2  ¦  1  ¦  7  ¦  7.0000  ¦  7  ¦  7  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  2  ¦  10  ¦  10.0000  ¦  10  ¦  10  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  2  ¦  3  ¦  1.5000  ¦  -4  ¦  7  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  5  ¦  13  ¦  4.3333  ¦  -4  ¦  10  ¦  1  ¦  1
+select a, b, sum(d) as total, avg(d) as mean, min(d) as lo, max(d) as hi,
+grouping(a) as ga, grouping(b) as gb
+from t_rollup_big group by a, b with rollup order by ga, gb, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  total[3,65,2]  ¦  mean[3,65,2]  ¦  lo[3,65,2]  ¦  hi[3,65,2]  ¦  ga[-5,64,0]  ¦  gb[-5,64,0]  𝄀
+null  ¦  1  ¦  1.25  ¦  1.25  ¦  1.25  ¦  1.25  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  -2.50  ¦  -2.50  ¦  -2.50  ¦  -2.50  ¦  0  ¦  0  𝄀
+1  ¦  2  ¦  3.00  ¦  3.00  ¦  3.00  ¦  3.00  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  1.25  ¦  1.25  ¦  1.25  ¦  1.25  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  0.50  ¦  0.25  ¦  -2.50  ¦  3.00  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  1.75  ¦  0.58  ¦  -2.50  ¦  3.00  ¦  1  ¦  1
+select a, count(*) as cnt, sum(x) as total, min(s) as lo, max(s) as hi,
+grouping(a) as ga from t_rollup_big group by a with rollup order by ga, a;
+➤ a[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[3,38,0]  ¦  lo[12,10,0]  ¦  hi[12,10,0]  ¦  ga[-5,64,0]  𝄀
+null  ¦  2  ¦  10  ¦  z  ¦  z  ¦  0  𝄀
+1  ¦  2  ¦  3  ¦  a  ¦  b  ¦  0  𝄀
+2  ¦  1  ¦  null  ¦  null  ¦  null  ¦  0  𝄀
+null  ¦  5  ¦  13  ¦  a  ¦  z  ¦  1
+drop table t_rollup_big;
+truncate table t_rollup_sort;
 insert into t_rollup_sort values (1, 10, 0);
 set session rollup_algorithm = 'SORT';
 select a, sample(b, 100 percent) as sampled
