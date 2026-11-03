@@ -13,6 +13,7 @@ package function
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -63,7 +64,9 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 		{"unsigned negative fraction", "-0.5", "0", types.T_uint64, -1, false},
 		{"negative fraction", "-1.5", "-1", types.T_int64, -1, false},
 		{"float32 rounding", "16777217", "16777216", types.T_float32, 0, false},
-		{"float32 overflow", "1e100", "1", types.T_float32, 0, true},
+		{"float32 overflow", "1e100", "1", types.T_float32, 1, false},
+		{"float32 negative overflow", "-1e100", "1", types.T_float32, -1, false},
+		{"double precision", "16777217", "16777216", types.T_float64, 1, false},
 		{"double fraction", "1.5", "1", types.T_float64, 1, false},
 		// bf16/float16/float8/float4 round a JSON number to the type's grid as CAST does,
 		// and reject it outside the type's finite range
@@ -108,6 +111,9 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 		{"unsigned peer range", "256", types.T_uint8, vector.PrepareParamInteger},
 		{"unsigned peer sign", "-1", types.T_uint64, vector.PrepareParamInteger},
 		{"legacy peer range", "1e100", types.T_any, vector.PrepareParamInteger},
+		{"float32 peer overflow", "1e100", types.T_float32, vector.PrepareParamFloat},
+		{"float32 peer underflow", "-1e100", types.T_float32, vector.PrepareParamFloat},
+		{"float32 peer nonnumeric", `"x"`, types.T_float32, vector.PrepareParamFloat},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := makeJSONNumericPeer(context.Background(), parse(tc.value), tc.typ, tc.kind)
@@ -115,11 +121,41 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 		})
 	}
 
+	// Values just outside the FLOAT32 domain must not round back to its maximum.
+	for _, sign := range []float64{-1, 1} {
+		max := sign * float64(math.MaxFloat32)
+		peerJSON, err := bytejson.CreateByteJSON(max)
+		require.NoError(t, err)
+		peer, err := makeJSONNumericPeer(context.Background(), peerJSON, types.T_float32, vector.PrepareParamNone)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			value float64
+			want  int
+		}{
+			{max, 0}, {math.Nextafter(max, 0), 0}, {math.Nextafter(max, sign*math.Inf(1)), int(sign)},
+			{sign * math.MaxFloat64, int(sign)},
+		} {
+			value, err := bytejson.CreateByteJSON(tc.value)
+			require.NoError(t, err)
+			cmp, _, err := compareJSONNumeric(context.Background(), value, &peer)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cmp)
+		}
+	}
+	floatPeer, err := makeJSONNumericPeer(context.Background(), parse("0"), types.T_float32, vector.PrepareParamNone)
+	require.NoError(t, err)
+	cmp, _, err := compareJSONNumeric(context.Background(), parse("1e-100"), &floatPeer)
+	require.NoError(t, err)
+	require.Zero(t, cmp)
+	cmp, _, err = compareJSONNumeric(context.Background(), newTypedByteJson(bytejson.TpCodeDecimal, "1e100"), &floatPeer)
+	require.NoError(t, err)
+	require.Equal(t, 1, cmp)
+
 	// JSON decimal values also retain their full value above the integer peer
 	// range, without truncating or narrowing before comparison.
 	peer, err := makeJSONNumericPeer(context.Background(), parse("18446744073709551615"), types.T_uint64, vector.PrepareParamNone)
 	require.NoError(t, err)
-	cmp, _, err := compareJSONNumeric(context.Background(), newTypedByteJson(bytejson.TpCodeDecimal, "18446744073709551615.9"), &peer)
+	cmp, _, err = compareJSONNumeric(context.Background(), newTypedByteJson(bytejson.TpCodeDecimal, "18446744073709551615.9"), &peer)
 	require.NoError(t, err)
 	require.Equal(t, 1, cmp)
 	peer, err = makeJSONNumericPeer(context.Background(), newTypedByteJson(bytejson.TpCodeDecimal, "1.0000000000000000001"), types.T_decimal256, vector.PrepareParamNone)
