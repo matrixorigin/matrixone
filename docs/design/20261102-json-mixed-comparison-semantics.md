@@ -109,6 +109,41 @@ battery). Only JSON comparisons rank the SQL operand's runtime kind against a
 runtime-dependent JSON document, which is exactly why the metadata adapter -
 and its channel-parity obligation - exists.
 
+### Why the resolver is an adapter function, not a plain `?` to JSON cast
+
+The binder already resolves the shape with a function:
+`adjustJsonDynamicParamType` (`base_binder.go`) wraps only a direct dynamic
+parameter paired with a JSON operand into `__mo_json_comparison_param`
+(`=`, `<=>`, `<>`, `!=`) or `__mo_json_ordering_param` (`<`, `<=`, `>`, `>=`);
+`base_binder.go` is untouched by this change set. The open question is what
+that function must emit. A plain ANY to JSON cast answers like a document
+`strToJson`/`ConvertJsonBytes` parse, which cannot reproduce the
+typed-literal oracle for any row whose runtime SQL category matters:
+
+| Parameter binding | Oracle (equivalent typed literal) | Plain `CAST(? AS JSON)` resolves |
+| --- | --- | --- |
+| VARCHAR `'active'` | JSON string `"active"` (raw text, never parsed) | document parse of `active`: invalid-JSON error |
+| VARCHAR `'{"a":1}'` | JSON string unequally ranked against the object `{"a":1}` | the object document: the row flips |
+| BOOL `TRUE` | BOOL row of the table - boolean category with the established nonzero-is-true fold (JSON number `1` equals `TRUE`) | JSON `true` document; a number then answers unequal by category |
+| `DECIMAL(39,2)` `90071992547409.93` | exact numeric domain - each width's own DEC->DOUBLE coercion (see the BETWEEN parity rows) | JSON number storage (int64/float64) loses exact DECIMAL and integer-width parity |
+| VARCHAR `'null'` | JSON string `"null"` | the JSON literal null value - a different, ranked valuation; the same conflation applies to any valid-JSON text binding |
+| BINARY `X'41'` | rejection in every spelling (invalid-argument operator error) | invents a byte-document domain the contract rejects |
+
+The adapter therefore emits JSON data plus the two orthogonal metadata axes
+of [prepared_json_comparison.md](prepared_json_comparison.md) - the
+parameter's runtime SQL category and its optional concrete SQL type, plus the
+adapter-output identity bit - and the kernels apply the admission-table row
+for that runtime category (`comparePreparedJSONScalarsAsType`, where the
+concrete type selects the exact numeric and rejected-domain facts). That is
+the whole difference from a cast: the comparison needs the parameter's SQL
+provenance, which no JSON document can carry. Nothing in JOIN planning,
+join ordering or index selection relies on this channel; those changes gate
+the newly admitted comparison pairs out of single-key-domain fast paths (see
+"typed residual predicates" above), and this execution channel is
+reproduced by the parity suites
+(`json_prepared_boolean_ordering_test.go`, `json_prepared_binary_param_test.go`,
+the prepared BETWEEN rows of `func_json_scalar_semantics_31121`).
+
 ## JSON text round-trip
 
 - An integral-valued JSON DOUBLE keeps a fractional or exponent marker in
