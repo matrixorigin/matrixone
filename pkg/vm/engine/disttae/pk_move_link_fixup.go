@@ -4214,10 +4214,10 @@ func (txn *Transaction) pairPkMoveLinkContinuationsLocked() error {
 			continue
 		}
 		acct := pkMoveAcctTbl{account: we.accountId, table: tableIDs[arr.row]}
-		key := string(we.bat.Vecs[newPKIdx].GetBytesAt(arr.row))
+		newPK := we.bat.Vecs[newPKIdx].GetBytesAt(arr.row)
 		var best *departure
-		for i := range departures[acct][key] {
-			cand := &departures[acct][key][i]
+		for i := range departures[acct][string(newPK)] {
+			cand := &departures[acct][string(newPK)][i]
 			if cand.stmtSeq <= arr.stmtSeq {
 				continue
 			}

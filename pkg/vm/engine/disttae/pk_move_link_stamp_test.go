@@ -450,7 +450,7 @@ func TestCollectPkMoveLinkStampSet(t *testing.T) {
 		idD := pkMoveStampTestLinkID(0xD1)
 		entry7 := pkMovePairingLinkEntry(t, mp, 7, []pkMovePairRow{
 			{tableID: 42, linkID: idA, stmtSeq: 1},
-			{tableID: 42, linkID: nil, stmtSeq: 1},               // NULL id: skipped
+			{tableID: 42, linkID: nil, stmtSeq: 1},                // NULL id: skipped
 			{tableID: 42, linkID: []byte{0x01, 0x02}, stmtSeq: 1}, // short id: skipped
 		})
 		entry8 := pkMovePairingLinkEntry(t, mp, 8, []pkMovePairRow{
@@ -512,7 +512,7 @@ func TestCollectPkMoveLinkStampSet(t *testing.T) {
 		idFresh := pkMoveStampTestLinkID(0xA2)
 		idStamped := pkMoveStampTestLinkID(0xB2)
 		entry := pkMovePairingLinkEntry(t, mp, 7, []pkMovePairRow{
-			{tableID: 42, linkID: idFresh, stmtSeq: 1},                    // fresh link: collected
+			{tableID: 42, linkID: idFresh, stmtSeq: 1},                      // fresh link: collected
 			{tableID: 42, linkID: idStamped, stmtSeq: 1, commitTS: stamped}, // stamp image: skipped
 		})
 		txn := &Transaction{proc: proc, writes: []Entry{entry}}

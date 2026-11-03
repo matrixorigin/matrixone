@@ -1743,7 +1743,7 @@ func TestResolvePkMoveChain(t *testing.T) {
 			return pkMoveWalkTestProvider(l1, l2)
 		}
 		view := pkMoveWalkTestStubView(
-			pkMoveTombRow(2, 0x01, 1, 15),   // the anchor's departure, grounding l1 at 15
+			pkMoveTombRow(2, 0x01, 1, 15),  // the anchor's departure, grounding l1 at 15
 			pkMoveLiveRow(3, 0xbb, 9, 15),  // the intruder at the vacated intermediate key
 			pkMoveLiveRow(4, 0xcc, 10, 15), // the lineage's real final row
 		)
@@ -2096,8 +2096,8 @@ func TestResolvePkMoveChain(t *testing.T) {
 			rival2.hasNewRowID = false
 			p := pkMoveWalkTestProvider(
 				pkMoveWalkTestLink(2, 2, 3, 5, 20),
-				rival1, // arrives at the intermediate key first, so the
-				rival2, // fixup records the landed link as BOTH rivals'
+				rival1,                             // arrives at the intermediate key first, so the
+				rival2,                             // fixup records the landed link as BOTH rivals'
 				pkMoveWalkTestLink(6, 9, 2, 10, 5), // continuation (D228)
 			)
 			// D225: T1's scope is stamped committed in-window at the
@@ -7467,12 +7467,13 @@ func TestSameKeyTailFailsClosedPastTruncatedForeignArrival(t *testing.T) {
 		return links
 	}
 	mkView := func(extra ...pkMoveWalkTestRow) *pkMoveWalkTestView {
-		entries := []pkMoveWalkTestRow{
+		entries := make([]pkMoveWalkTestRow, 0, 4+len(extra))
+		entries = append(entries,
 			pkMoveTombRow(1, 0x11, 1, 10),    // A's origin deleted by its move
 			pkMoveTombRow(2, 0x12, 2, 20),    // A's landed version dies linkless at 20
 			pkMoveDepartRow(2, 20, 10),       // ... born at 10
 			pkMoveLiveRow(2, 0xbb, 0xc0, 20), // B's landed row at key 2, born 20
-		}
+		)
 		return pkMoveWalkTestStubView(append(entries, extra...)...)
 	}
 
