@@ -157,104 +157,117 @@ func TestSortRollupSingleGroupReuseAndMixedFallback(t *testing.T) {
 }
 
 func TestSortRollupAppendFailureAbortsAndReprepares(t *testing.T) {
-	for _, growth := range []bool{false, true} {
-		name := "new-result"
-		if growth {
-			name = "result-growth"
-		}
-		t.Run(name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			child := colexec.NewMockOperator()
-			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
-				[]aggexec.AggFuncExecExpression{countStarAgg(), sumAgg(0), aggexec.MakeAggFunctionExpression(
-					aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)})
-			g.SortRollup = true
-			g.AppendChild(child)
-			var allocation groupTestAllocation
-			defer func() {
-				g.Free(proc, true, nil)
-				child.Free(proc, true, nil)
-				if allocation.account != nil {
-					finalizeGroupTestAllocation(t, g, allocation)
-				}
-				proc.Free()
-				require.Zero(t, proc.Mp().CurrNB())
-			}()
-			generation := installGroupTestResourceBudget(t, proc)
-			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)
-			require.NoError(t, err)
-			controller := &rejectNextGroupAllocationController{}
-			account, err := registry.OpenWithController(64<<20, controller)
-			require.NoError(t, err)
-			require.NoError(t, g.ctr.setAllocationAccount(account))
-			allocation = groupTestAllocation{generation: generation, registry: registry, account: account}
-			rows := 2
+	for _, target := range []int{2, 3} {
+		for _, growth := range []bool{false, true} {
+			name := fmt.Sprintf("column-%d/new-result", target)
 			if growth {
-				rows = aggBatchSize + 1
+				name = fmt.Sprintf("column-%d/result-growth", target)
 			}
-			values := make([]int32, rows)
-			for i := range values {
-				values[i] = int32(i + 1)
-			}
-			input := batch.NewWithSize(1)
-			input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
-			input.SetRowCount(rows)
-			child.WithBatchs([]*batch.Batch{input})
-			require.NoError(t, g.Prepare(proc))
-			require.True(t, g.ctr.sortRollup.reuseSingleGroup)
-			controller.rejectWhen = func() bool {
+			t.Run(name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				child := colexec.NewMockOperator()
+				g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+					[]aggexec.AggFuncExecExpression{countStarAgg(),
+						aggexec.MakeAggFunctionExpression(aggexec.AggIdOfSum, false, []*plan.Expr{colExpr(1, types.T_int64)}, nil),
+						aggexec.MakeAggFunctionExpression(aggexec.AggIdOfAvg, false, []*plan.Expr{colExpr(1, types.T_int64)}, nil)})
+				g.SortRollup = true
+				g.AppendChild(child)
+				var allocation groupTestAllocation
+				defer func() {
+					g.Free(proc, true, nil)
+					child.Free(proc, true, nil)
+					if allocation.account != nil {
+						finalizeGroupTestAllocation(t, g, allocation)
+					}
+					proc.Free()
+					require.Zero(t, proc.Mp().CurrNB())
+				}()
+				generation := installGroupTestResourceBudget(t, proc)
+				registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)
+				require.NoError(t, err)
+				controller := &rejectNextGroupAllocationController{}
+				account, err := registry.OpenWithController(64<<20, controller)
+				require.NoError(t, err)
+				require.NoError(t, g.ctr.setAllocationAccount(account))
+				allocation = groupTestAllocation{generation: generation, registry: registry, account: account}
+				rows := 2
+				if growth {
+					rows = aggBatchSize + 1
+				}
+				values := make([]int32, rows)
+				for i := range values {
+					values[i] = int32(i + 1)
+				}
+				input := batch.NewWithSize(2)
+				input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+				bigints := make([]int64, rows)
+				for i := range bigints {
+					bigints[i] = int64(values[i])
+				}
+				input.Vecs[1] = testutil.MakeInt64Vector(bigints, nil, proc.Mp())
+				input.SetRowCount(rows)
+				child.WithBatchs([]*batch.Batch{input})
+				require.NoError(t, g.Prepare(proc))
+				require.True(t, g.ctr.sortRollup.reuseSingleGroup)
+				controller.rejectWhen = func() bool {
+					s := g.ctr.sortRollup
+					if s.output == nil {
+						return false
+					}
+					if !growth {
+						return len(s.output.Vecs) == target
+					}
+					return len(s.output.Vecs) == 4 && s.outputRows > 0 &&
+						s.output.Vecs[target-1].Length() == s.outputRows+1 &&
+						s.output.Vecs[target].Length() == s.outputRows
+				}
+				result, err := vm.Exec(g, proc)
+				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+				require.Nil(t, result.Batch, "a later column failure must not expose any buffered row")
 				s := g.ctr.sortRollup
-				if s.output == nil {
-					return false
+				require.Equal(t, s.outputRows, s.output.RowCount())
+				require.Equal(t, s.outputRows+1, s.output.Vecs[1].Length())
+				if growth {
+					require.Positive(t, s.outputRows)
+					require.Equal(t, s.outputRows, s.output.Vecs[target].Length())
+				} else {
+					require.Zero(t, s.outputRows)
 				}
-				if !growth {
-					return len(s.output.Vecs) == 2
-				}
-				return len(s.output.Vecs) == 4 && s.outputRows > 0 &&
-					s.output.Vecs[1].Length() == s.outputRows+1 &&
-					s.output.Vecs[2].Length() == s.outputRows
-			}
-			result, err := vm.Exec(g, proc)
-			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-			require.Nil(t, result.Batch, "a later column failure must not expose any buffered row")
-			s := g.ctr.sortRollup
-			require.Equal(t, s.outputRows, s.output.RowCount())
-			require.Equal(t, s.outputRows+1, s.output.Vecs[1].Length())
-			if growth {
-				require.Positive(t, s.outputRows)
-				require.Equal(t, s.outputRows, s.output.Vecs[2].Length())
-			} else {
-				require.Zero(t, s.outputRows)
-			}
-			oldSelection := s.output.Vecs[1].AllocationAccountSelection()
-			_, rejected := controller.snapshot()
-			require.True(t, rejected)
-			g.Reset(proc, true, err)
-			require.Nil(t, g.ctr.sortRollup)
-			require.Zero(t, account.Snapshot().Used)
-			used, _ := controller.snapshot()
-			require.Zero(t, used)
-			finalizeGroupTestAllocation(t, g, allocation)
-			allocation = groupTestAllocation{}
-			child.Free(proc, true, err)
-			g.Children = nil
+				oldSelection := s.output.Vecs[1].AllocationAccountSelection()
+				_, rejected := controller.snapshot()
+				require.True(t, rejected)
+				g.Reset(proc, true, err)
+				require.Nil(t, g.ctr.sortRollup)
+				require.Zero(t, account.Snapshot().Used)
+				used, _ := controller.snapshot()
+				require.Zero(t, used)
+				finalizeGroupTestAllocation(t, g, allocation)
+				allocation = groupTestAllocation{}
+				child.Free(proc, true, err)
+				g.Children = nil
 
-			// A fresh account and Prepare must not retain the failed generation.
-			child = colexec.NewMockOperator()
-			fresh := batch.NewWithSize(1)
-			fresh.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
-			fresh.SetRowCount(1)
-			child.WithBatchs([]*batch.Batch{fresh})
-			g.AppendChild(child)
-			allocation = installGroupTestAllocation(t, g, proc, 64<<20, generation)
-			require.NoError(t, g.Prepare(proc))
-			result, err = vm.Exec(g, proc)
-			require.NoError(t, err)
-			require.NotNil(t, result.Batch)
-			require.False(t, vector.AllocationAccountSelectionsEqual(oldSelection, result.Batch.Vecs[1].AllocationAccountSelection()))
-			require.Equal(t, []int64{1, 1}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
-			require.Equal(t, []int64{7, 7}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2]))
-		})
+				// A fresh account and Prepare must not retain the failed generation.
+				child = colexec.NewMockOperator()
+				fresh := batch.NewWithSize(2)
+				fresh.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+				fresh.Vecs[1] = testutil.MakeInt64Vector([]int64{7}, nil, proc.Mp())
+				fresh.SetRowCount(1)
+				child.WithBatchs([]*batch.Batch{fresh})
+				g.AppendChild(child)
+				allocation = installGroupTestAllocation(t, g, proc, 64<<20, generation)
+				require.NoError(t, g.Prepare(proc))
+				result, err = vm.Exec(g, proc)
+				require.NoError(t, err)
+				require.NotNil(t, result.Batch)
+				require.False(t, vector.AllocationAccountSelectionsEqual(oldSelection, result.Batch.Vecs[1].AllocationAccountSelection()))
+				require.Equal(t, []int64{1, 1}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
+				for row := 0; row < 2; row++ {
+					require.Equal(t, types.Decimal128FromInt64(7), vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[2], row))
+					avg := vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[3], row)
+					require.Equal(t, "7.0000", avg.Format(result.Batch.Vecs[3].GetType().Scale))
+				}
+			})
+		}
 	}
 }
 
@@ -265,8 +278,9 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	proc.Ctx = ctx
 	child := colexec.NewMockOperator()
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
-		[]aggexec.AggFuncExecExpression{countStarAgg(), aggexec.MakeAggFunctionExpression(
-			aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)})
+		[]aggexec.AggFuncExecExpression{countStarAgg(),
+			aggexec.MakeAggFunctionExpression(aggexec.AggIdOfSum, false, []*plan.Expr{colExpr(1, types.T_int64)}, nil),
+			aggexec.MakeAggFunctionExpression(aggexec.AggIdOfAvg, false, []*plan.Expr{colExpr(1, types.T_int64)}, nil)})
 	g.SortRollup = true
 	g.AppendChild(child)
 	var allocation groupTestAllocation
@@ -284,8 +298,13 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	for i := range values {
 		values[i] = int32(i)
 	}
-	input := batch.NewWithSize(1)
+	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bigints := make([]int64, len(values))
+	for i := range bigints {
+		bigints[i] = int64(values[i])
+	}
+	input.Vecs[1] = testutil.MakeInt64Vector(bigints, nil, proc.Mp())
 	input.SetRowCount(len(values))
 	child.WithBatchs([]*batch.Batch{input})
 	require.NoError(t, g.Prepare(proc))
@@ -298,6 +317,9 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	for row := 0; row < borrowed.RowCount(); row++ {
 		require.Equal(t, int32(row), vector.GetFixedAtNoTypeCheck[int32](borrowed.Vecs[0], row))
 		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](borrowed.Vecs[1], row))
+		require.Equal(t, types.Decimal128FromInt64(int64(row)), vector.GetFixedAtNoTypeCheck[types.Decimal128](borrowed.Vecs[2], row))
+		avg := vector.GetFixedAtNoTypeCheck[types.Decimal128](borrowed.Vecs[3], row)
+		require.Equal(t, fmt.Sprintf("%d.0000", row), avg.Format(borrowed.Vecs[3].GetType().Scale))
 	}
 	cancel()
 	result, err = vm.Exec(g, proc)
@@ -316,8 +338,9 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	g.Children = nil
 	proc.Ctx = context.Background()
 	child = colexec.NewMockOperator()
-	fresh := batch.NewWithSize(1)
+	fresh := batch.NewWithSize(2)
 	fresh.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+	fresh.Vecs[1] = testutil.MakeInt64Vector([]int64{7}, nil, proc.Mp())
 	fresh.SetRowCount(1)
 	child.WithBatchs([]*batch.Batch{fresh})
 	g.AppendChild(child)
@@ -327,7 +350,11 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []int64{1, 1}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1]))
-	require.Equal(t, []int32{7, 7}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[2]))
+	for row := 0; row < 2; row++ {
+		require.Equal(t, types.Decimal128FromInt64(7), vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[2], row))
+		avg := vector.GetFixedAtNoTypeCheck[types.Decimal128](result.Batch.Vecs[3], row)
+		require.Equal(t, "7.0000", avg.Format(result.Batch.Vecs[3].GetType().Scale))
+	}
 }
 
 func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T) {
