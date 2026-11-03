@@ -1025,6 +1025,9 @@ func buildDefaultExprWithColumnsObserved(
 	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, planExpr); err != nil {
 		return nil, err
 	}
+	if err = RejectJSONSearchInNonViewDefinition(bindCtx, planExpr); err != nil {
+		return nil, err
+	}
 	if exprHasLocalColumnRef(planExpr) {
 		if err := requireExpressionDefaultProtocol(proc); err != nil {
 			return nil, err
@@ -1174,6 +1177,9 @@ func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.T
 	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, planExpr); err != nil {
 		return nil, err
 	}
+	if err = RejectJSONSearchInNonViewDefinition(bindCtx, planExpr); err != nil {
+		return nil, err
+	}
 
 	onUpdateExpr, err := makePlan2AssignmentCastExprForColumn(bindCtx, planExpr, typ, col.Name.ColName())
 	if err != nil {
@@ -1268,6 +1274,9 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 		return nil, err
 	}
 	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, planExpr); err != nil {
+		return nil, err
+	}
+	if err = RejectJSONSearchInNonViewDefinition(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
 

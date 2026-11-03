@@ -958,7 +958,10 @@ const (
 	EWM_COV  = 627
 	EWM_CORR = 628
 
-	FUNCTION_END_NUMBER = 629
+	// JSON_SEARCH identity follows all function IDs in the integrated main.
+	JSON_SEARCH = 629
+
+	FUNCTION_END_NUMBER = 630
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1292,6 +1295,7 @@ var functionIdRegister = map[string]int32{
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_depth":                     JSON_DEPTH,
+	"json_search":                    JSON_SEARCH,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,

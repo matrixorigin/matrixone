@@ -885,7 +885,8 @@ var predefinedFunids = map[int]int{
 	EWM_STD:             626,
 	EWM_COV:             627,
 	EWM_CORR:            628,
-	FUNCTION_END_NUMBER: 629,
+	JSON_SEARCH:         629,
+	FUNCTION_END_NUMBER: 630,
 }
 
 func Test_funids(t *testing.T) {
