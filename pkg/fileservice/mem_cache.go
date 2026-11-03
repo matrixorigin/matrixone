@@ -794,7 +794,7 @@ func (m *MemCache) Update(
 		if entry.fromCache == m {
 			continue
 		}
-		if entry.cacheAdmissionBypass || vector.Policy.Any(MemoryCacheReuseOnly) && !entry.cacheAdmissionResolved {
+		if entry.cacheAdmissionOwner == m && entry.cacheAdmissionBypass || vector.Policy.Any(MemoryCacheReuseOnly) && entry.cacheAdmissionOwner != m {
 			continue
 		}
 		if !m.cacheAdmissionAllowed(entry.CachedData) {

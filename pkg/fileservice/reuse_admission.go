@@ -44,8 +44,8 @@ func (a *transientDecodeAllocator) BackingSize(size int) int {
 }
 
 func (e *IOEntry) allocatorForDecode(fallback CacheDataAllocator) CacheDataAllocator {
-	if e.decodeAllocator != nil {
-		return e.decodeAllocator
+	if e.cacheAdmissionBypass && e.cacheAdmissionOwner != nil {
+		return &e.cacheAdmissionOwner.transientDecoder
 	}
 	return fallback
 }
@@ -53,9 +53,8 @@ func (e *IOEntry) allocatorForDecode(fallback CacheDataAllocator) CacheDataAlloc
 func (v *IOVector) resetCacheAdmission() {
 	for i := range v.Entries {
 		e := &v.Entries[i]
-		e.cacheAdmissionResolved = false
+		e.cacheAdmissionOwner = nil
 		e.cacheAdmissionBypass = false
-		e.decodeAllocator = nil
 	}
 }
 
@@ -65,10 +64,10 @@ func (m *MemCache) prepareReuseAdmission(ctx context.Context, v *IOVector, path 
 	}
 	for i := range v.Entries {
 		e := &v.Entries[i]
-		if e.done || e.cacheAdmissionResolved {
+		if e.done || e.cacheAdmissionOwner == m {
 			continue
 		}
-		e.cacheAdmissionResolved = true
+		e.cacheAdmissionOwner = m
 		admit := false
 		if !v.Policy.Any(SkipMemoryCacheWrites) && e.CachedDataSize > 0 &&
 			e.CachedDataSize <= int64(^uint(0)>>1) && e.Offset >= 0 && e.Size > 0 && e.ToCacheData != nil {
@@ -80,8 +79,5 @@ func (m *MemCache) prepareReuseAdmission(ctx context.Context, v *IOVector, path 
 			}
 		}
 		e.cacheAdmissionBypass = !admit
-		if !admit {
-			e.decodeAllocator = &m.transientDecoder
-		}
 	}
 }

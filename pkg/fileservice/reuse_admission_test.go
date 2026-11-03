@@ -78,3 +78,27 @@ func TestReuseAdmissionRetryAndExplicitSkip(t *testing.T) {
 	require.NoError(t, cache.Read(ctx, unknown))
 	require.True(t, unknown.Entries[0].cacheAdmissionBypass)
 }
+
+func TestReuseAdmissionIsDestinationScoped(t *testing.T) {
+	ctx := context.Background()
+	first := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	t.Cleanup(func() { first.Close(ctx) })
+	second := NewMemCache(fscache.ConstCapacity(1<<20), nil, nil, "")
+	t.Cleanup(func() { second.Close(ctx) })
+	makeRead := func() *IOVector {
+		return &IOVector{FilePath: "value", Policy: MemoryCacheReuseOnly, Entries: []IOEntry{{Size: 3, CachedDataSize: 3, ToCacheData: CacheOriginalData}}}
+	}
+	require.NoError(t, second.Read(ctx, makeRead()))
+	v := makeRead()
+	t.Cleanup(v.Release)
+	require.NoError(t, first.Read(ctx, v))
+	require.True(t, v.Entries[0].cacheAdmissionBypass)
+	require.NoError(t, second.Read(ctx, v))
+	require.False(t, v.Entries[0].cacheAdmissionBypass, "another cache's first touch must not override this destination's reuse")
+	require.Same(t, second, v.Entries[0].cacheAdmissionOwner)
+	require.NoError(t, decodeEntryBytes(ctx, v, []byte("abc"), second))
+	require.NoError(t, second.Update(ctx, v, false))
+	require.Positive(t, second.cache.Used())
+	require.NoError(t, first.Update(ctx, v, false))
+	require.Zero(t, first.cache.Used(), "another destination's decision cannot admit a cold payload")
+}

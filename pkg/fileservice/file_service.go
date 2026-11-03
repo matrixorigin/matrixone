@@ -152,9 +152,8 @@ type IOEntry struct {
 	releaseCachedData func()
 	// Scoped to one Read. Retry paths reuse the decision without recording
 	// another observation. A transient decoder cannot reserve payload capacity.
-	cacheAdmissionResolved bool
-	cacheAdmissionBypass   bool
-	decodeAllocator        CacheDataAllocator
+	cacheAdmissionOwner  *MemCache
+	cacheAdmissionBypass bool
 	// CachedDataSize is the expected size of the final cache representation.
 	// Zero means Size. It may differ from Size when ToCacheData decompresses the
 	// storage extent before cache admission.
