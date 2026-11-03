@@ -79,7 +79,7 @@ select mo_ctl('dn','flush','d1.t1');
 select * from t1 where c2=1;
 -- @separator:table
 -- @regex("Index",true)
-explain select * from t1 where c3<2000;
+explain select * from t1 force index(id1) where c3<2000;
 select count(*) from t1 where c3<2000;
 drop table if exists t1;
 drop database if exists d1;
