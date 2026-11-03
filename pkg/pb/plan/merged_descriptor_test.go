@@ -27,7 +27,7 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	want := map[string]map[string]int32{
 		"Type":             {"numeric_attributes": 14},
 		"Function":         {"routine_call": 6},
-		"Node":             {"dedup_key_exprs": 95, "mark_existence_only": 96},
+		"Node":             {"dedup_key_exprs": 95, "mark_existence_only": 96, "narrow_scan": 97},
 		"PreInsertUkCtx":   {"key_diagnostic_exprs": 19},
 		"Query":            {"correlation": 19, "integer_precision": 20, "execution_dependent_access": 22, "select_lock_references": 21, "routine_dependencies": 23},
 		"Expr":             {"candidate_filter": 27},
@@ -71,6 +71,9 @@ func TestMergedQueryMetadataRoundTrip(t *testing.T) {
 		FunctionRef: &FunctionRef{FunctionId: 3, Revision: 7},
 		Language:    "SQL", NamespaceFingerprint: "namespace",
 	}}
+	original.Nodes = append(original.Nodes, &Node{
+		NodeType: Node_TABLE_SCAN, NodeId: int32(len(original.Nodes)), NarrowScan: true,
+	})
 	encoded, err := original.Marshal()
 	require.NoError(t, err)
 	require.Len(t, encoded, original.ProtoSize())
@@ -79,6 +82,7 @@ func TestMergedQueryMetadataRoundTrip(t *testing.T) {
 	require.Equal(t, original.IntegerPrecision, decoded.IntegerPrecision)
 	require.Equal(t, original.SelectLockReferences, decoded.SelectLockReferences)
 	require.Equal(t, original.RoutineDependencies, decoded.RoutineDependencies)
+	require.Equal(t, original.Nodes, decoded.Nodes)
 }
 
 func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
