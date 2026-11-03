@@ -61,18 +61,6 @@ func addMemorySlots(count *uint32, parallel, multiplier int) error {
 	return nil
 }
 
-// importMemoryNoWait is an origin policy: transactions that are not known to
-// be autocommit can retain previous statements' workspace and locks. Waiting
-// for those resources before this statement returns could wait on itself.
-// A nil operator preserves the existing isolated embedding/test contract.
-func (c *Compile) importMemoryNoWait() bool {
-	if c.proc == nil || c.proc.Base == nil || c.proc.GetTxnOperator() == nil {
-		return false
-	}
-	options := c.proc.GetTxnOperator().TxnOptions()
-	return options.ByBegin || !options.Autocommit
-}
-
 func memoryStage(op vm.Operator, count int) (MemoryStageDescriptor, bool, error) {
 	stage := MemoryStageDescriptor{Count: uint32(count)}
 	switch value := op.(type) {
@@ -125,7 +113,7 @@ func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
 	if err != nil || !supported {
 		return MemoryManifest{}, err
 	}
-	manifest := MemoryManifest{TargetUnit: unit, Parallel: c.ncpu, NoWait: c.importMemoryNoWait(), Producers: producers}
+	manifest := MemoryManifest{TargetUnit: unit, Parallel: c.ncpu, NoWait: c.proc.MemoryAdmissionNoWait(), Producers: producers}
 	var walk func(*Scope) error
 	walk = func(scope *Scope) error {
 		if scope == nil {
