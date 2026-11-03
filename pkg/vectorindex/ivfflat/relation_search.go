@@ -201,7 +201,8 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 		// Optional domains retain their existing transported-filter contract.
 		filterHint.MembershipFilterBytes = sqlproc.IvfMembershipFilter
 	}
-	var readPolicy fileservice.Policy
+	// A search reads the probed lists, a small share of each entries object.
+	readPolicy := fileservice.Policy(fileservice.NarrowRead)
 	if sqlproc.IvfHasMembershipFilter || len(filters) > 0 {
 		readPolicy = fileservice.SkipFullFilePreloads
 	}
