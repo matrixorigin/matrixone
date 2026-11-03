@@ -329,19 +329,6 @@ func (shuffle *Shuffle) runLocalProducer(proc *process.Process) {
 		close(shuffle.ctr.producerDone)
 	}()
 
-	if shuffle.LocalFilter != nil {
-		filter, err := shuffle.LocalFilter.Wait(proc.Ctx, shuffle.ctr.consumerDone)
-		if err != nil {
-			select {
-			case <-shuffle.ctr.consumerDone:
-				return
-			default:
-			}
-			shuffle.failLocalProducer(proc, err)
-			return
-		}
-		shuffle.ctr.localBloom = filter
-	}
 	for {
 		if shuffle.ctr.pendingBat != nil {
 			done, waiter, err := shuffle.flushPending(proc)
@@ -384,6 +371,22 @@ func (shuffle *Shuffle) runLocalProducer(proc *process.Process) {
 			continue
 		}
 
+		// Optional filtering must not serialize probe scanning behind the
+		// build. Until the complete domain is ready, use ordinary routing.
+		if shuffle.LocalFilter != nil && shuffle.ctr.localBloom == nil && !shuffle.ctr.filterBypassed && shuffle.LocalFilter.Ready() {
+			filter, filterErr := shuffle.LocalFilter.Wait(proc.Ctx, shuffle.ctr.consumerDone)
+			if filterErr != nil {
+				select {
+				case <-shuffle.ctr.consumerDone:
+					return
+				default:
+				}
+				shuffle.failLocalProducer(proc, filterErr)
+				return
+			}
+			shuffle.ctr.localBloom = filter
+			shuffle.ctr.filterBypassed = filter == nil
+		}
 		if shuffle.ctr.localBloom != nil && !shuffle.ctr.filterBypassed {
 			handled, filterErr := shuffle.routeWithLocalFilter(bat, proc)
 			if filterErr != nil {

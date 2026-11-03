@@ -50,6 +50,7 @@ func TestLocalShuffleFilterCompleteDomain(t *testing.T) {
 	require.NoError(t, err)
 	first.AddVector(vec)
 	require.NoError(t, first.Complete(false))
+	require.False(t, f.Ready(), "a partial domain cannot filter a streaming probe")
 	select {
 	case <-f.done:
 		t.Fatal("a partial build must not seal membership")
@@ -63,6 +64,7 @@ func TestLocalShuffleFilterCompleteDomain(t *testing.T) {
 	require.NoError(t, err)
 	second.AddVector(vec)
 	require.NoError(t, second.Complete(false))
+	require.True(t, f.Ready())
 	require.NoError(t, first.Complete(true), "completion retry cannot alter the sealed filter")
 	bloom, err := f.Wait(context.Background(), nil)
 	require.NoError(t, err)

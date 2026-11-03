@@ -15,8 +15,11 @@
 package shuffle
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,6 +32,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLocalShuffleFilterPreservesProbeStreaming(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	ctx, cancel := context.WithTimeoutCause(proc.Ctx, 5*time.Second, moerr.NewInternalErrorNoCtx("probe streaming test deadline"))
+	t.Cleanup(cancel)
+	proc.Ctx = ctx
+	proc.SetMessageBoard(message.NewMessageBoard())
+	budget := process.MustNewExecutionResourceBudget(16<<20, 16<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(generation.Close)
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+	filter, _ := runtimefilter.NewLocalShuffleFilter(82, types.T_int64, 2, 1)
+	t.Cleanup(filter.Close)
+	producer, err := filter.Begin(proc, 0, 1)
+	require.NoError(t, err)
+	input := batch.NewWithSize(1)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	input.Vecs[0] = testutil.MakeInt64Vector([]int64{1, 2, 3}, nil, proc.Mp())
+	input.SetRowCount(3)
+	producer.AddVector(input.Vecs[0])
+	source := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := NewArgument()
+	arg.BucketNum = 1
+	arg.ShuffleType = int32(plan.ShuffleType_Hash)
+	arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 82}
+	arg.LocalFilter = filter
+	arg.SetShufflePool(NewShufflePool(1, 1, false))
+	arg.AppendChild(source)
+	t.Cleanup(func() { arg.Reset(proc, true, nil); arg.Free(proc, false, nil); arg.Release(); source.ResetBatchs() })
+	require.NoError(t, arg.Prepare(proc))
+	arg.startLocalProducer(proc)
+	select {
+	case <-arg.ctr.producerDone:
+		require.False(t, filter.Ready())
+		require.NoError(t, producer.Complete(false))
+	case <-ctx.Done():
+		t.Fatal("the optional filter blocked upstream probe work", context.Cause(ctx))
+	}
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{1, 2, 3}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[0]))
+	require.Zero(t, arg.ctr.filterTested, "incomplete membership cannot reject probe rows")
+}
 
 func TestLocalShuffleFilterConsumer(t *testing.T) {
 	proc := testutil.NewProcess(t)

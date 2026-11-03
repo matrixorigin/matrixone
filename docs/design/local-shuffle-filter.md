@@ -12,6 +12,10 @@ A query-generation-owned coordinator registers actual duplicated producer IDs. P
 
 Probe shuffle tests the immutable complete filter before routing, using reusable scratch and existing selections. Bypass further testing after 8192 rows if fewer than 10% were rejected. Direct local handles avoid wire/protobuf changes. No key-vector retention, per-row CGo calls or intermediate filtered batch. Add fallible construction and supplied-buffer testing helpers without changing existing callers.
 
+Do not delay probe scanning or ordinary routing while the optional domain is incomplete: pass those batches through the existing path and enable testing only after completion is observable. This preserves build/probe overlap without consulting partial membership or adding buffering. Copy only the worker identity needed by filter-enabled duplicated HashBuild operators; ordinary HashBuild metadata behavior is unchanged.
+
+The private complete-domain notification replaces the probe Shuffle's legacy dependency wait when the optional handle is attached. HashJoin still owns partition join-map readiness and empty-build behavior. The coordinator keeps its complete-domain publication rule; no partial membership is published or tested.
+
 Execution generation owns coordinator, reservations and filters; consumers lease them. Cancel/reset closes waits and frees only after live builders/consumers finish. Existing per-producer DROP finalization must not run for coordinator-owned filters.
 
 Alternatives: partition-local filters before global routing are incorrect; cross-CN fan-in and scan Bloom pushdown require broader protocols and are deferred. Exact IN alone is cardinality-limited for larger builds.

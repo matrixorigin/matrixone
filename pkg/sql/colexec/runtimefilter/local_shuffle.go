@@ -221,6 +221,17 @@ func (p *LocalShuffleProducer) Complete(pass bool) error {
 	return nil
 }
 
+// Ready allows an optional consumer to keep streaming until the complete
+// membership domain exists. No partial producer filter may be consulted.
+func (f *LocalShuffleFilter) Ready() bool {
+	select {
+	case <-f.done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (f *LocalShuffleFilter) Wait(ctx context.Context, stopped <-chan struct{}) (*bloomfilter.CBloomFilter, error) {
 	if ctx.Err() != nil {
 		return nil, context.Cause(ctx)

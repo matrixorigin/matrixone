@@ -60,6 +60,7 @@ func TestCompileLocalShuffleFilterTopology(t *testing.T) {
 			require.NotNil(t, producer.LocalFilter)
 			router := result[0].RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
 			require.Same(t, producer.LocalFilter, router.LocalFilter)
+			require.Nil(t, router.RuntimeFilterSpec, "optional membership must not add a global probe barrier")
 			copiedBuild := dupOperator(producer, 2, 4).(*hashbuild.HashBuild)
 			copiedProbe := dupOperator(router, 2, 4).(*shuffle.Shuffle)
 			t.Cleanup(copiedBuild.Release)

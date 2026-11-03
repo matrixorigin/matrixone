@@ -6930,6 +6930,12 @@ func (c *Compile) compileLocalShuffleJoinWithBuildLeft(
 					plan2.DeepCopyRuntimeFilterSpec(node.RuntimeFilterProbeList[0])
 			}
 			shuffleOpForProbe.LocalFilter = localFilter
+			if localFilter != nil {
+				// HashJoin owns join-map readiness. Optional membership must not
+				// turn its private complete-domain notification into a global
+				// barrier for otherwise ready probe partitions.
+				shuffleOpForProbe.RuntimeFilterSpec = nil
+			}
 			shuffleOpForProbe.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			probeScopes[i].setRootOperator(shuffleOpForProbe)
 		}
