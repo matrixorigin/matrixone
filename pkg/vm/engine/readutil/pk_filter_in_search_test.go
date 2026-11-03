@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
@@ -117,7 +118,7 @@ func TestUnsortedPKInSearch(t *testing.T) {
 }
 
 func TestUnsortedPKInSearchBoundaries(t *testing.T) {
-	for _, count := range []int{1, 4, 5, maxUnsortedINHashKeys, maxUnsortedINHashKeys + 1} {
+	for _, count := range []int{1, 4, 5, minUnsortedINHashKeys - 1, minUnsortedINHashKeys, maxUnsortedINHashKeys, maxUnsortedINHashKeys + 1} {
 		t.Run(fmt.Sprintf("keys_%d", count), func(t *testing.T) {
 			values := make([]uint64, count)
 			for i := range values {
@@ -142,23 +143,121 @@ func TestUnsortedPKInSearchBoundaries(t *testing.T) {
 	}
 }
 
+func TestUnsortedPKInSearchRowBoundaries(t *testing.T) {
+	halfBlock := objectio.BlockMaxRows / 2
+	for _, test := range []struct {
+		name       string
+		keys, rows int
+	}{
+		{"below key threshold", minUnsortedINHashKeys - 1, halfBlock},
+		{"below row threshold", minUnsortedINHashKeys, halfBlock - 1},
+		{"at row threshold", minUnsortedINHashKeys, halfBlock},
+		{"above row threshold", minUnsortedINHashKeys, halfBlock + 1},
+		{"below key-size threshold", 10000, 4999},
+		{"at key-size threshold", 10000, 5000},
+		{"partial block at key cap", maxUnsortedINHashKeys, objectio.BlockMaxRows - 1},
+		{"full block at key cap", maxUnsortedINHashKeys, objectio.BlockMaxRows},
+		{"above key cap", maxUnsortedINHashKeys + 1, objectio.BlockMaxRows},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			rows := vector.NewVec(types.T_uint64.ToType())
+			t.Cleanup(func() { rows.Free(mp) })
+			values := make([]uint64, test.keys)
+			for i := range values {
+				values[i] = uint64(2 * i)
+			}
+			var want []int64
+			for i := 0; i < test.rows; i++ {
+				value := uint64(2*(i%test.keys) + i%2)
+				require.NoError(t, vector.AppendFixed(rows, value, false, mp))
+				if i%2 == 0 {
+					want = append(want, int64(i))
+				}
+			}
+			search := orderedInUnsortedSearch(values, true)
+			require.Equal(t, want, search(rows))
+		})
+	}
+}
+
+func TestUnsortedPKInSearchConstantRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	rows, err := vector.NewConstFixed(types.T_uint64.ToType(), uint64(42), objectio.BlockMaxRows, mp)
+	if rows != nil {
+		t.Cleanup(func() { rows.Free(mp) })
+	}
+	require.NoError(t, err)
+	values := make([]uint64, 1000)
+	for i := range values {
+		values[i] = uint64(i)
+	}
+	// A constant vector has one physical value, despite its logical length.
+	require.Len(t, vector.MustFixedColNoTypeCheck[uint64](rows), 1)
+	require.Equal(t, []int64{0}, orderedInUnsortedSearch(values, true)(rows))
+}
+
+func checkUnsortedPKInFloatFullBlock[T ~float32 | ~float64](t *testing.T, oid types.T) {
+	t.Helper()
+	values := []T{T(math.Inf(-1)), -1, T(math.Copysign(0, -1)), 0}
+	for i := 1; i <= 64; i++ {
+		values = append(values, T(i))
+	}
+	values = append(values, T(math.Inf(1)))
+	inputs := []T{T(math.Inf(-1)), 0, T(math.Copysign(0, -1)), T(math.NaN()), 12, 65, T(math.Inf(1))}
+	rows := make([]T, objectio.BlockMaxRows)
+	for i := range rows {
+		rows[i] = inputs[i%len(inputs)]
+	}
+	checkFixedUnsortedIN(t, oid, values, rows, func(a, b T) bool { return a == b }, true)
+}
+
+func TestUnsortedPKInFloatFullBlock(t *testing.T) {
+	t.Run("float32", func(t *testing.T) { checkUnsortedPKInFloatFullBlock[float32](t, types.T_float32) })
+	t.Run("float64", func(t *testing.T) { checkUnsortedPKInFloatFullBlock[float64](t, types.T_float64) })
+}
+
 func TestUnsortedPKInSearchConcurrentReuse(t *testing.T) {
 	mp := mpool.MustNewZero()
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
-	rows := vector.NewVec(types.T_uint64.ToType())
-	t.Cleanup(func() { rows.Free(mp) })
+	small := vector.NewVec(types.T_uint64.ToType())
+	t.Cleanup(func() { small.Free(mp) })
 	for _, v := range []uint64{9, 8, 0, 5, 3, 5, math.MaxUint64} {
-		require.NoError(t, vector.AppendFixed(rows, v, false, mp))
+		require.NoError(t, vector.AppendFixed(small, v, false, mp))
 	}
-	search := orderedInUnsortedSearch([]uint64{0, 3, 5, 5, 8, math.MaxUint64}, true)
+	large := vector.NewVec(types.T_uint64.ToType())
+	t.Cleanup(func() { large.Free(mp) })
+	var largeWant []int64
+	for i := 0; i < objectio.BlockMaxRows; i++ {
+		require.NoError(t, vector.AppendFixed(large, uint64(i%512), false, mp))
+		if i%512 < 256 {
+			largeWant = append(largeWant, int64(i))
+		}
+	}
+	values := make([]uint64, 256)
+	for i := range values {
+		values[i] = uint64(i)
+	}
+	search := orderedInUnsortedSearch(values, true)
 	start := make(chan struct{})
-	results := make(chan []int64, 16)
+	type result struct {
+		offsets []int64
+		large   bool
+	}
+	results := make(chan result, 16)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
+		useLarge := i%2 == 0
 		wg.Go(func() {
 			<-start
 			for j := 0; j < 2; j++ {
-				results <- search(rows)
+				if useLarge {
+					results <- result{offsets: search(large), large: true}
+				} else {
+					results <- result{offsets: search(small)}
+				}
 			}
 		})
 	}
@@ -166,7 +265,11 @@ func TestUnsortedPKInSearchConcurrentReuse(t *testing.T) {
 	wg.Wait()
 	close(results)
 	for got := range results {
-		require.Equal(t, []int64{1, 2, 3, 4, 5, 6}, got)
+		if got.large {
+			require.Equal(t, largeWant, got.offsets)
+		} else {
+			require.Equal(t, []int64{0, 1, 2, 3, 4, 5}, got.offsets)
+		}
 	}
 }
 
@@ -321,5 +424,93 @@ func BenchmarkUnsortedPKInReader(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+// Compare construction and repeated partial blocks around the row threshold.
+func BenchmarkUnsortedPKInRowSize(b *testing.B) {
+	for _, test := range []struct {
+		name         string
+		rows, blocks int
+		constant     bool
+	}{
+		{"tiny", 16, 1, false},
+		{"below threshold", objectio.BlockMaxRows/2 - 1, 1, false},
+		{"at threshold", objectio.BlockMaxRows / 2, 1, false},
+		{"partial block reused", objectio.BlockMaxRows - 1, 32, false},
+		{"full block reused", objectio.BlockMaxRows, 32, false},
+		{"constant logical block", objectio.BlockMaxRows, 1, true},
+	} {
+		b.Run(test.name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			b.Cleanup(func() { mpool.DeleteMPool(mp) })
+			var rows *vector.Vector
+			if test.constant {
+				var err error
+				rows, err = vector.NewConstFixed(types.T_uint64.ToType(), uint64(42), test.rows, mp)
+				if rows != nil {
+					b.Cleanup(func() { rows.Free(mp) })
+				}
+				require.NoError(b, err)
+			} else {
+				rows = vector.NewVec(types.T_uint64.ToType())
+				b.Cleanup(func() { rows.Free(mp) })
+				for i := 0; i < test.rows; i++ {
+					require.NoError(b, vector.AppendFixed(rows, uint64(2*(i%1000)+1), false, mp))
+				}
+			}
+			values := make([]uint64, 1000)
+			for i := range values {
+				values[i] = uint64(2 * i)
+			}
+			want := 0
+			if test.constant {
+				want = 1
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				search := orderedInUnsortedSearch(values, true)
+				for j := 0; j < test.blocks; j++ {
+					if got := len(search(rows)); got != want {
+						b.Fatalf("matches %d want %d", got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkUnsortedPKInFloat(b *testing.B) {
+	mp := mpool.MustNewZero()
+	b.Cleanup(func() { mpool.DeleteMPool(mp) })
+	needles := vector.NewVec(types.T_float64.ToType())
+	b.Cleanup(func() { needles.Free(mp) })
+	rows := vector.NewVec(types.T_float64.ToType())
+	b.Cleanup(func() { rows.Free(mp) })
+	for i := 0; i < 1000; i++ {
+		require.NoError(b, vector.AppendFixed(needles, float64(2*i), false, mp))
+	}
+	needles.SetSorted(true)
+	for i := 0; i < objectio.BlockMaxRows; i++ {
+		require.NoError(b, vector.AppendFixed(rows, float64(2*(i%1000)+1), false, mp))
+	}
+	base := BasePKFilter{Valid: true, Op: function.IN, Oid: types.T_float64, Vec: needles}
+	batch := containers.Vectors{*rows}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		func() {
+			filter, err := ConstructBlockPKFilter(true, base, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if filter.Cleanup != nil {
+				defer filter.Cleanup()
+			}
+			if got := len(filter.DecideSearchFunc(true)(batch)); got != 0 {
+				b.Fatalf("unexpected %d matches", got)
+			}
+		}()
 	}
 }
