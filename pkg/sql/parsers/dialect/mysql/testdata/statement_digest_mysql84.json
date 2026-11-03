@@ -47810,5 +47810,875 @@
     "sql": "SELECT TIME'00:18446744073709551617:00'",
     "text": "SELECT TIME ?",
     "digest": "5d819aca6bf2534bb535afd7e122141ba1b17fb3de3e7e2d11b82493321d1fea"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,2)",
+    "text": "SELECT ADDDATE (...)",
+    "digest": "e1f1908db141dac07368b2abfd95b6f3458ea20efc3352ffb1b56295e3191a16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,2,3,4)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE('2020-01-01',1)",
+    "text": "SELECT ADDDATE (...)",
+    "digest": "e1f1908db141dac07368b2abfd95b6f3458ea20efc3352ffb1b56295e3191a16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(NULL,NULL)",
+    "text": "SELECT ADDDATE (...)",
+    "digest": "e1f1908db141dac07368b2abfd95b6f3458ea20efc3352ffb1b56295e3191a16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,2,INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(1,INTERVAL 1 DAY,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE(INTERVAL(1,2),3)",
+    "text": "SELECT ADDDATE ( INTERVAL (...) , ? )",
+    "digest": "4a61476c6abc3942e959d9c16b8241e4b571041a6226a396f4c5568b1847b4d9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT adddate(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT adddate(1,2)",
+    "text": "SELECT ADDDATE (...)",
+    "digest": "e1f1908db141dac07368b2abfd95b6f3458ea20efc3352ffb1b56295e3191a16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT adddate(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT adddate(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT adddate(1,2)",
+    "text": "SELECT ADDDATE (...)",
+    "digest": "e1f1908db141dac07368b2abfd95b6f3458ea20efc3352ffb1b56295e3191a16"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT adddate(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT adddate (1)",
+    "text": "SELECT `adddate` (?)",
+    "digest": "831b108a03696110c18394cb8dd07c3a63a50c993c29864b898a427ebf2ae496"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT adddate (1,2)",
+    "text": "SELECT `adddate` (...)",
+    "digest": "e7fc3b55b3c47448d22c303e9ef5be1b327c8902edb6ca4548ace2a18488c2fc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT adddate (1,2,3)",
+    "text": "SELECT `adddate` (...)",
+    "digest": "e7fc3b55b3c47448d22c303e9ef5be1b327c8902edb6ca4548ace2a18488c2fc"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT adddate (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT adddate (1,2)",
+    "text": "SELECT ADDDATE (...)",
+    "digest": "e1f1908db141dac07368b2abfd95b6f3458ea20efc3352ffb1b56295e3191a16"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT adddate (1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT adddate /*gap*/ (1)",
+    "text": "SELECT `adddate` (?)",
+    "digest": "831b108a03696110c18394cb8dd07c3a63a50c993c29864b898a427ebf2ae496"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT adddate /*gap*/ (1,2)",
+    "text": "SELECT `adddate` (...)",
+    "digest": "e7fc3b55b3c47448d22c303e9ef5be1b327c8902edb6ca4548ace2a18488c2fc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT adddate /*gap*/ (1,2,3)",
+    "text": "SELECT `adddate` (...)",
+    "digest": "e7fc3b55b3c47448d22c303e9ef5be1b327c8902edb6ca4548ace2a18488c2fc"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT adddate /*gap*/ (1)",
+    "text": "SELECT `adddate` (?)",
+    "digest": "831b108a03696110c18394cb8dd07c3a63a50c993c29864b898a427ebf2ae496"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT adddate /*gap*/ (1,2)",
+    "text": "SELECT `adddate` (...)",
+    "digest": "e7fc3b55b3c47448d22c303e9ef5be1b327c8902edb6ca4548ace2a18488c2fc"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT adddate /*gap*/ (1,2,3)",
+    "text": "SELECT `adddate` (...)",
+    "digest": "e7fc3b55b3c47448d22c303e9ef5be1b327c8902edb6ca4548ace2a18488c2fc"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT ADDDATE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT ADDDATE(1,2)",
+    "text": "SELECT ADDDATE (...)",
+    "digest": "e1f1908db141dac07368b2abfd95b6f3458ea20efc3352ffb1b56295e3191a16"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT ADDDATE(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE (1)",
+    "text": "SELECT `ADDDATE` (?)",
+    "digest": "1c3aaddcb870b5f4192d8d39a5c9dd62d0b8a42e65f699128348c47e57671a8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE (1,2)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE (1,2,3)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT ADDDATE (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT ADDDATE (1,2)",
+    "text": "SELECT ADDDATE (...)",
+    "digest": "e1f1908db141dac07368b2abfd95b6f3458ea20efc3352ffb1b56295e3191a16"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT ADDDATE (1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE /*gap*/ (1)",
+    "text": "SELECT `ADDDATE` (?)",
+    "digest": "1c3aaddcb870b5f4192d8d39a5c9dd62d0b8a42e65f699128348c47e57671a8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE /*gap*/ (1,2)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ADDDATE /*gap*/ (1,2,3)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT ADDDATE /*gap*/ (1)",
+    "text": "SELECT `ADDDATE` (?)",
+    "digest": "1c3aaddcb870b5f4192d8d39a5c9dd62d0b8a42e65f699128348c47e57671a8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT ADDDATE /*gap*/ (1,2)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT ADDDATE /*gap*/ (1,2,3)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `ADDDATE`(1)",
+    "text": "SELECT `ADDDATE` (?)",
+    "digest": "1c3aaddcb870b5f4192d8d39a5c9dd62d0b8a42e65f699128348c47e57671a8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `ADDDATE`(1,2)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `ADDDATE`(1,2,3)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `ADDDATE`(1)",
+    "text": "SELECT `ADDDATE` (?)",
+    "digest": "1c3aaddcb870b5f4192d8d39a5c9dd62d0b8a42e65f699128348c47e57671a8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `ADDDATE`(1,2)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `ADDDATE`(1,2,3)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `ADDDATE` (1)",
+    "text": "SELECT `ADDDATE` (?)",
+    "digest": "1c3aaddcb870b5f4192d8d39a5c9dd62d0b8a42e65f699128348c47e57671a8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `ADDDATE` (1,2)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `ADDDATE` (1,2,3)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `ADDDATE` (1)",
+    "text": "SELECT `ADDDATE` (?)",
+    "digest": "1c3aaddcb870b5f4192d8d39a5c9dd62d0b8a42e65f699128348c47e57671a8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `ADDDATE` (1,2)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `ADDDATE` (1,2,3)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `ADDDATE` /*gap*/ (1)",
+    "text": "SELECT `ADDDATE` (?)",
+    "digest": "1c3aaddcb870b5f4192d8d39a5c9dd62d0b8a42e65f699128348c47e57671a8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `ADDDATE` /*gap*/ (1,2)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `ADDDATE` /*gap*/ (1,2,3)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `ADDDATE` /*gap*/ (1)",
+    "text": "SELECT `ADDDATE` (?)",
+    "digest": "1c3aaddcb870b5f4192d8d39a5c9dd62d0b8a42e65f699128348c47e57671a8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `ADDDATE` /*gap*/ (1,2)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `ADDDATE` /*gap*/ (1,2,3)",
+    "text": "SELECT `ADDDATE` (...)",
+    "digest": "9aefd9b0545691a796a0aaea28ca1a200733fff6d99e8628249fede47c1c6e8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT ADDDATE(1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT ADDDATE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (ADDDATE(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(ADDDATE(1) AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(ADDDATE(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT ADDDATE(1,2)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT ADDDATE (...) ) SELECT ?",
+    "digest": "21383631bbab4dc1f0040737fea2b5584acd7806ec9afc89a1aaf62fe68b268a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT ADDDATE(1,2)",
+    "text": "EXPLAIN SELECT ADDDATE (...)",
+    "digest": "0f4f78824ccf6f5c22a6ab72a811e82f53bda55fb6ea2bba73a423b2763c3e95"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (ADDDATE(1,2))",
+    "text": "INSERT INTO `t` VALUES ( ADDDATE (...) )",
+    "digest": "bbe9e498393c07d47c7e0ea9a9341d93aeaae634a3076b8a3aa597068f0d9af9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(ADDDATE(1,2) AS CHAR)",
+    "text": "SELECT CAST ( ADDDATE (...) AS CHARACTER )",
+    "digest": "b1f300db830491607dfc5037359c53e65276b442aa49d1c6b5bf7f50e437a052"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(ADDDATE(1,2))",
+    "text": "SELECT `ABS` ( ADDDATE (...) )",
+    "digest": "66f09b2c8dc1b2c502a98f3f0c7bbebf91ff5a67589da707c857353ded5b861e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT ADDDATE(1,2,3)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT ADDDATE(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (ADDDATE(1,2,3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(ADDDATE(1,2,3) AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(ADDDATE(1,2,3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,2)",
+    "text": "SELECT SUBDATE (...)",
+    "digest": "91bd65bcebc0d997ccd2864d5795acb8e2238b8f26a7e5d8e321a737c8df2d84"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,2,3,4)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE('2020-01-01',1)",
+    "text": "SELECT SUBDATE (...)",
+    "digest": "91bd65bcebc0d997ccd2864d5795acb8e2238b8f26a7e5d8e321a737c8df2d84"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(NULL,NULL)",
+    "text": "SELECT SUBDATE (...)",
+    "digest": "91bd65bcebc0d997ccd2864d5795acb8e2238b8f26a7e5d8e321a737c8df2d84"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,2,INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(1,INTERVAL 1 DAY,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(INTERVAL 1 DAY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE(INTERVAL(1,2),3)",
+    "text": "SELECT SUBDATE ( INTERVAL (...) , ? )",
+    "digest": "2b1c68cb45e404d65b0ea389e954c3984b60c9dbc4680371f0f8057f30215722"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT subdate(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT subdate(1,2)",
+    "text": "SELECT SUBDATE (...)",
+    "digest": "91bd65bcebc0d997ccd2864d5795acb8e2238b8f26a7e5d8e321a737c8df2d84"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT subdate(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT subdate(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT subdate(1,2)",
+    "text": "SELECT SUBDATE (...)",
+    "digest": "91bd65bcebc0d997ccd2864d5795acb8e2238b8f26a7e5d8e321a737c8df2d84"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT subdate(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT subdate (1)",
+    "text": "SELECT `subdate` (?)",
+    "digest": "338149473fb77e8aede5d8d686f0da35acf9c4baf088234d85c52b2b00765d10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT subdate (1,2)",
+    "text": "SELECT `subdate` (...)",
+    "digest": "82807da64892d2baea29c559e4e2a9ddbde185281e1424cc7b174399609a600d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT subdate (1,2,3)",
+    "text": "SELECT `subdate` (...)",
+    "digest": "82807da64892d2baea29c559e4e2a9ddbde185281e1424cc7b174399609a600d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT subdate (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT subdate (1,2)",
+    "text": "SELECT SUBDATE (...)",
+    "digest": "91bd65bcebc0d997ccd2864d5795acb8e2238b8f26a7e5d8e321a737c8df2d84"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT subdate (1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT subdate /*gap*/ (1)",
+    "text": "SELECT `subdate` (?)",
+    "digest": "338149473fb77e8aede5d8d686f0da35acf9c4baf088234d85c52b2b00765d10"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT subdate /*gap*/ (1,2)",
+    "text": "SELECT `subdate` (...)",
+    "digest": "82807da64892d2baea29c559e4e2a9ddbde185281e1424cc7b174399609a600d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT subdate /*gap*/ (1,2,3)",
+    "text": "SELECT `subdate` (...)",
+    "digest": "82807da64892d2baea29c559e4e2a9ddbde185281e1424cc7b174399609a600d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT subdate /*gap*/ (1)",
+    "text": "SELECT `subdate` (?)",
+    "digest": "338149473fb77e8aede5d8d686f0da35acf9c4baf088234d85c52b2b00765d10"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT subdate /*gap*/ (1,2)",
+    "text": "SELECT `subdate` (...)",
+    "digest": "82807da64892d2baea29c559e4e2a9ddbde185281e1424cc7b174399609a600d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT subdate /*gap*/ (1,2,3)",
+    "text": "SELECT `subdate` (...)",
+    "digest": "82807da64892d2baea29c559e4e2a9ddbde185281e1424cc7b174399609a600d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUBDATE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUBDATE(1,2)",
+    "text": "SELECT SUBDATE (...)",
+    "digest": "91bd65bcebc0d997ccd2864d5795acb8e2238b8f26a7e5d8e321a737c8df2d84"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUBDATE(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE (1)",
+    "text": "SELECT `SUBDATE` (?)",
+    "digest": "8784af15353ed3d166c19ee17fe82f372eb48f0781ceb95db8f0f46f6d329cfc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE (1,2)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE (1,2,3)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUBDATE (1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUBDATE (1,2)",
+    "text": "SELECT SUBDATE (...)",
+    "digest": "91bd65bcebc0d997ccd2864d5795acb8e2238b8f26a7e5d8e321a737c8df2d84"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUBDATE (1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE /*gap*/ (1)",
+    "text": "SELECT `SUBDATE` (?)",
+    "digest": "8784af15353ed3d166c19ee17fe82f372eb48f0781ceb95db8f0f46f6d329cfc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE /*gap*/ (1,2)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUBDATE /*gap*/ (1,2,3)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUBDATE /*gap*/ (1)",
+    "text": "SELECT `SUBDATE` (?)",
+    "digest": "8784af15353ed3d166c19ee17fe82f372eb48f0781ceb95db8f0f46f6d329cfc"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUBDATE /*gap*/ (1,2)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUBDATE /*gap*/ (1,2,3)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUBDATE`(1)",
+    "text": "SELECT `SUBDATE` (?)",
+    "digest": "8784af15353ed3d166c19ee17fe82f372eb48f0781ceb95db8f0f46f6d329cfc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUBDATE`(1,2)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUBDATE`(1,2,3)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `SUBDATE`(1)",
+    "text": "SELECT `SUBDATE` (?)",
+    "digest": "8784af15353ed3d166c19ee17fe82f372eb48f0781ceb95db8f0f46f6d329cfc"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `SUBDATE`(1,2)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `SUBDATE`(1,2,3)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUBDATE` (1)",
+    "text": "SELECT `SUBDATE` (?)",
+    "digest": "8784af15353ed3d166c19ee17fe82f372eb48f0781ceb95db8f0f46f6d329cfc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUBDATE` (1,2)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUBDATE` (1,2,3)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `SUBDATE` (1)",
+    "text": "SELECT `SUBDATE` (?)",
+    "digest": "8784af15353ed3d166c19ee17fe82f372eb48f0781ceb95db8f0f46f6d329cfc"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `SUBDATE` (1,2)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `SUBDATE` (1,2,3)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUBDATE` /*gap*/ (1)",
+    "text": "SELECT `SUBDATE` (?)",
+    "digest": "8784af15353ed3d166c19ee17fe82f372eb48f0781ceb95db8f0f46f6d329cfc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUBDATE` /*gap*/ (1,2)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUBDATE` /*gap*/ (1,2,3)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `SUBDATE` /*gap*/ (1)",
+    "text": "SELECT `SUBDATE` (?)",
+    "digest": "8784af15353ed3d166c19ee17fe82f372eb48f0781ceb95db8f0f46f6d329cfc"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `SUBDATE` /*gap*/ (1,2)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT `SUBDATE` /*gap*/ (1,2,3)",
+    "text": "SELECT `SUBDATE` (...)",
+    "digest": "262e72a408047dcfa9379215a5c6c6bcace09ad709b8c49ebde012b5afd06f1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUBDATE(1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT SUBDATE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (SUBDATE(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(SUBDATE(1) AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(SUBDATE(1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUBDATE(1,2)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUBDATE (...) ) SELECT ?",
+    "digest": "16f348f81d4e0030d9c25e431cbcbc172793b2fe70f1e34887c22e58cf8d6449"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT SUBDATE(1,2)",
+    "text": "EXPLAIN SELECT SUBDATE (...)",
+    "digest": "5594013ce587761454aea18dfcf24a30cb24ef64ff6e862cda80cd57a51d8df9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (SUBDATE(1,2))",
+    "text": "INSERT INTO `t` VALUES ( SUBDATE (...) )",
+    "digest": "175e8b29243a3ea29cf6b69d59bd55df5bacf41cfbd9b92d057389daba1a9dc0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(SUBDATE(1,2) AS CHAR)",
+    "text": "SELECT CAST ( SUBDATE (...) AS CHARACTER )",
+    "digest": "9d345d9ae4f1396d97a271e71c55802768679c02a00b0c72a312d2d57c12c6d4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(SUBDATE(1,2))",
+    "text": "SELECT `ABS` ( SUBDATE (...) )",
+    "digest": "fca2a016aae744cbeb317de07cdfb0bb41af987fd7d8c0dbabd80806bf09f301"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUBDATE(1,2,3)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT SUBDATE(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t VALUES (SUBDATE(1,2,3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT CAST(SUBDATE(1,2,3) AS CHAR)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT ABS(SUBDATE(1,2,3))",
+    "error_code": 3677
   }
 ]

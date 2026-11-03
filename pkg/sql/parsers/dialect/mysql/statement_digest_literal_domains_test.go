@@ -21,6 +21,56 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDigestDateArithmeticArity(t *testing.T) {
+	for _, name := range []string{"ADDDATE", "SUBDATE"} {
+		for _, test := range []struct {
+			args   string
+			reject bool
+		}{
+			{"", true}, {"1", true}, {"1,2", false}, {"1,2,3", true},
+			{"1,INTERVAL 1 DAY", false}, {"1,2,INTERVAL 1 DAY", true},
+		} {
+			sql := "SELECT " + name + "(" + test.args + ")"
+			t.Run(sql, func(t *testing.T) {
+				for range 3 {
+					_, _, err := StatementDigest(t.Context(), sql, "")
+					if test.reject {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+					} else {
+						require.NoError(t, err)
+					}
+					text, _, err := StatementDigest(t.Context(), "SELECT 1", "")
+					require.NoError(t, err)
+					require.Equal(t, "SELECT ?", text)
+				}
+			})
+		}
+	}
+	// The same spelling in a generic-call role is not native ADDDATE syntax.
+	for _, sql := range []string{"SELECT ADDDATE (1)", "SELECT SUBDATE /*gap*/ (1)", "SELECT `ADDDATE`(1)"} {
+		_, _, err := StatementDigest(t.Context(), sql, "")
+		require.NoError(t, err)
+	}
+}
+
+func TestOrdinaryParserDiagnosticOwnership(t *testing.T) {
+	for _, test := range []struct{ sql, detail string }{
+		{"SELECT MAKE_SET(CAST(5 AS INT32), 'a', 'b', 'c') AS make_set_int32;", "syntax error at line 1 column 31 near \" INT32), 'a', 'b', 'c') AS make_set_int32;\";"},
+		{"create user if not exists user1 ,user2 ,user3 identified by '12345678';", "syntax error at line 1 column 33 near \" ,user2 ,user3 identified by '12345678';\";"},
+	} {
+		func() {
+			stmts, err := Parse(t.Context(), test.sql, 0)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), test.detail)
+		}()
+	}
+}
+
 func TestDigestLiteralAndIntervalDomains(t *testing.T) {
 	for _, test := range []struct {
 		name, sql, mode string

@@ -1020,8 +1020,8 @@ func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
 %type <role> role_spec
 %type <cstr> role_name
 %type <usernameRecord> user_name
-%type <user> user_spec drop_user_spec user_spec_with_identified
-%type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user
+%type <user> user_spec drop_user_spec user_spec_with_identified create_user_spec
+%type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user create_user_spec_list
 //%type <tlsOptions> require_clause_opt require_clause require_list
 //%type <tlsOption> require_elem
 //%type <resourceOptions> conn_option_list conn_options
@@ -9430,13 +9430,10 @@ account_comment_opt:
     }
 
 create_user_stmt:
-    CREATE USER not_exists_opt user_spec_list default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
+    CREATE USER not_exists_opt create_user_spec_list default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
         var IfNotExists = $3
         var Users = $4
-        if yylex.(*Lexer).digest == nil {
-            for _, user := range Users { if user.AuthOption == nil { yylex.Error("syntax error"); goto ret1 } }
-        }
         var Role = $5
         var MiscOpt = $6
         var CommentOrAttribute = $7
@@ -9930,6 +9927,23 @@ user_comment_or_attribute_opt:
 //    {
 //        $$ = &tree.TlsOptionSan{San: $2}
 //    }
+// Check each ordinary CREATE USER at its own reduction, before consuming
+// subsequent users/options. Digest keeps MySQL's optional authentication.
+create_user_spec:
+    user_spec
+    {
+        if yylex.(*Lexer).digest == nil && $1.AuthOption == nil {
+            yylex.Error("syntax error"); goto ret1
+        }
+        $$ = $1
+    }
+
+create_user_spec_list:
+    create_user_spec
+    { $$ = []*tree.User{$1} }
+|   create_user_spec_list ',' create_user_spec
+    { $$ = append($1, $3) }
+
 user_spec_list_of_create_user:
     user_spec_with_identified
     {
@@ -14860,6 +14874,10 @@ function_call_generic:
     }
 |   func_not_keyword '(' expression_list_opt ')'
     {
+        if yylex.(*Lexer).digest != nil &&
+            (strings.EqualFold($1, "ADDDATE") || strings.EqualFold($1, "SUBDATE")) && len($3) != 2 {
+            yylex.Error("ADDDATE/SUBDATE require two arguments"); goto ret1
+        }
         if yylex.(*Lexer).digest != nil && (strings.EqualFold($1, "DATE_ADD") || strings.EqualFold($1, "DATE_SUB")) {
             yylex.Error("DATE_ADD/DATE_SUB require INTERVAL"); goto ret1
         }
@@ -16627,7 +16645,7 @@ spatial_type_name:
         // function/name positions. Bridge it only in the type grammar.
         if yylex.(*Lexer).digest == nil ||
             digestSymbols[digestKeywordUpper($1)].id != digestSymbols["GEOMETRYCOLLECTION"].id {
-            yylex.Error("Invalid MySQL spatial type"); goto ret1
+            yylex.Error("syntax error"); goto ret1
         }
         $$ = "GEOMETRYCOLLECTION"
     }
