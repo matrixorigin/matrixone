@@ -630,14 +630,29 @@ func unmarshalPKInVector(data []byte) (ret *vector.Vector, err error) {
 	if !vec.IsConst() && vec.GetSorted() && !vec.GetNulls().Any() {
 		return vec, nil
 	}
-	owned := vector.NewVec(types.T_any.ToType())
-	// Keep the mutable clone on the Go heap: search closures retain it after this
-	// function returns, and GC can reclaim it without adding another mpool owner.
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	return normalizePKInVectorPayload(data, mp)
+}
+
+func normalizePKInVectorPayload(data []byte, mp *mpool.MPool) (ret *vector.Vector, err error) {
+	owned := vector.NewOffHeapVecWithType(types.T_any.ToType())
+	defer owned.Free(mp)
 	if err := owned.UnmarshalBinary(bytes.Clone(data)); err != nil {
 		return nil, err
 	}
-	normalizePKInVector(owned)
-	return owned, nil
+	if err := normalizePKInVector(owned, mp); err != nil {
+		return nil, err
+	}
+	encoded, err := owned.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	ret = vector.NewVec(types.T_any.ToType())
+	if err := ret.UnmarshalBinary(encoded); err != nil {
+		return nil, err
+	}
+	return ret, nil
 }
 
 func validatePKInVectorShape(vec *vector.Vector) (err error) {
@@ -776,7 +791,7 @@ func validatePKInNullEncoding(data []byte, logicalLength uint64) error {
 	return nil
 }
 
-func normalizePKInVector(vec *vector.Vector) {
+func normalizePKInVector(vec *vector.Vector, mp *mpool.MPool) error {
 	// A constant vector represents a repeated value, while IN is set-valued.
 	// Collapse its logical length before encoding it for workspace filtering;
 	// otherwise a corrupt or adversarial logical length can force an O(n)
@@ -789,7 +804,7 @@ func normalizePKInVector(vec *vector.Vector) {
 			vec.SetLength(1)
 		}
 		vec.SetSorted(true)
-		return
+		return nil
 	}
 	if vec.GetNulls().Any() {
 		sels := make([]int64, 0, vec.Length()-vec.GetNulls().Count())
@@ -798,9 +813,11 @@ func normalizePKInVector(vec *vector.Vector) {
 				sels = append(sels, int64(row))
 			}
 		}
-		vec.Shrink(sels, false)
+		if err := vec.Shrink(sels, false, mp); err != nil {
+			return err
+		}
 	}
-	vec.InplaceSortAndCompact()
+	return vec.InplaceSortAndCompact(mp)
 }
 
 func releaseUnreferencedMergedVectors(filters []BasePKFilter, keep *basePKFilterResource) {

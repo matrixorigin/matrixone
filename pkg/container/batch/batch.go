@@ -1636,38 +1636,44 @@ func (bat *Batch) prepareOwnedDecodeVectors(count int, mp *mpool.MPool) error {
 	return nil
 }
 
-func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64) {
+func (bat *Batch) ShrinkByMask(sels *bitmap.Bitmap, negate bool, offset uint64, mp *mpool.MPool) error {
 	if !negate {
 		if sels.Count() == bat.rowCount {
-			return
+			return nil
 		}
 	}
 
 	for _, vec := range bat.Vecs {
-		vec.ShrinkByMask(sels, negate, offset)
+		if err := vec.ShrinkByMask(sels, negate, offset, mp); err != nil {
+			return err
+		}
 	}
 
 	if negate {
 		bat.rowCount -= sels.Count()
-		return
+		return nil
 	}
 	bat.rowCount = sels.Count()
+	return nil
 }
 
-func (bat *Batch) Shrink(sels []int64, negate bool) {
+func (bat *Batch) Shrink(sels []int64, negate bool, mp *mpool.MPool) error {
 	if !negate {
 		if len(sels) == bat.rowCount {
-			return
+			return nil
 		}
 	}
 	for _, vec := range bat.Vecs {
-		vec.Shrink(sels, negate)
+		if err := vec.Shrink(sels, negate, mp); err != nil {
+			return err
+		}
 	}
 	if negate {
 		bat.rowCount -= len(sels)
-		return
+		return nil
 	}
 	bat.rowCount = len(sels)
+	return nil
 }
 
 func (bat *Batch) Shuffle(sels []int64, m *mpool.MPool) error {
