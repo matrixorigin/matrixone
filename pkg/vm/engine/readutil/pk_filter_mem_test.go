@@ -824,3 +824,56 @@ func BenchmarkMemPKFilterPrefixIn(b *testing.B) {
 		})
 	}
 }
+
+func TestMemPKFilterINConcurrentFirstUseAndReplacement(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	input := vector.NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { input.Free(mp) })
+	for _, value := range []int64{1, 2, 2, 3} {
+		require.NoError(t, vector.AppendFixed(input, value, false, mp))
+	}
+	packer := types.NewPacker()
+	t.Cleanup(packer.Close)
+	var filter MemPKFilter
+	filter.SetFullData(function.IN, true, EncodePrimaryKey(int64(2), packer))
+	require.Nil(t, filter.lookup.set)
+	// Value copies share a holder; all first probes race at the same barrier.
+	copied := filter
+	start := make(chan struct{})
+	counts := make(chan int, 16)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p := types.NewPacker()
+			defer p.Close()
+			skip := objectio.GetReusableBitmap()
+			defer skip.Release()
+			<-start
+			copied.FilterVector(input, p, &skip)
+			counts <- skip.Count()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(counts)
+	for count := range counts {
+		require.Equal(t, 2, count)
+	}
+	old := filter.lookup
+	require.Len(t, old.set, 1)
+	filter.SetFullData(function.IN, true, EncodePrimaryKey(int64(1), packer))
+	require.NotSame(t, old, filter.lookup)
+	require.Nil(t, filter.lookup.set)
+	skip := objectio.GetReusableBitmap()
+	defer skip.Release()
+	filter.FilterVector(input, packer, &skip)
+	require.Equal(t, 3, skip.Count())
+	filter.SetFullData(function.IN, true)
+	require.Nil(t, filter.lookup)
+	skip.Clear()
+	filter.FilterVector(input, packer, &skip)
+	require.Equal(t, 4, skip.Count())
+}

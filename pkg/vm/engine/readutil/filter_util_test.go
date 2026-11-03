@@ -82,3 +82,21 @@ func TestEncodePrimaryKeyVectorOwnershipAndConstants(t *testing.T) {
 	packer.EncodeInt64(123456)
 	require.Equal(t, want, variableKeys)
 }
+
+func TestEncodePrimaryKeyVectorVariableConstantOwnership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	packer := types.NewPacker()
+	t.Cleanup(packer.Close)
+	vec, err := vector.NewConstBytes(types.T_varbinary.ToType(), []byte{0, 1, 0}, 3, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { vec.Free(mp) })
+	keys := EncodePrimaryKeyVector(vec, packer)
+	require.Len(t, keys, 3)
+	want := append([]byte(nil), keys[1]...)
+	keys[0][0] ^= 0xff
+	packer.Reset()
+	packer.EncodeInt64(100)
+	require.Equal(t, want, keys[1])
+	require.Equal(t, want, keys[2])
+}

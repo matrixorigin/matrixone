@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -41,9 +42,33 @@ type MemPKFilterSpec struct {
 	Keys [][]byte
 }
 
+// workspaceINLookup is pointer-owned because MemPKFilter is copied by value.
+// Candidate bytes are immutable until the filter generation is retired.
+type workspaceINLookup struct {
+	once sync.Once
+	keys [][]byte
+	set  map[string]struct{}
+}
+
+func (l *workspaceINLookup) contains(key []byte) (bool, bool) {
+	l.once.Do(func() {
+		set := make(map[string]struct{}, len(l.keys))
+		for _, candidate := range l.keys {
+			set[string(candidate)] = struct{}{}
+		}
+		l.set = set
+	})
+	if l.set == nil {
+		return false, false
+	}
+	_, ok := l.set[string(key)]
+	return ok, true
+}
+
 type MemPKFilter struct {
 	op        int
 	packed    [][]byte
+	lookup    *workspaceINLookup
 	prefixes  [][]byte
 	disjuncts []MemPKFilter
 	isVec     bool
@@ -459,6 +484,7 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 	f.op = op
 	f.isVec = isVec
 	f.isValid = true
+	f.lookup = nil
 	f.prefixes = nil
 	f.disjuncts = nil
 
@@ -466,6 +492,9 @@ func (f *MemPKFilter) SetFullData(op int, isVec bool, val ...[]byte) {
 		sort.Slice(f.packed, func(i, j int) bool {
 			return bytes.Compare(f.packed[i], f.packed[j]) < 0
 		})
+	}
+	if op == function.IN && len(f.packed) > 0 {
+		f.lookup = &workspaceINLookup{keys: f.packed}
 	}
 	if op == function.PREFIX_IN {
 		f.prefixes = make([][]byte, 0, len(f.packed))
@@ -494,6 +523,11 @@ func (f *MemPKFilter) matches(key []byte) bool {
 	case function.PREFIX_EQ:
 		return len(f.packed) == 1 && bytes.HasPrefix(key, f.packed[0])
 	case function.IN:
+		if f.lookup != nil {
+			if matched, valid := f.lookup.contains(key); valid {
+				return matched
+			}
+		}
 		idx := sort.Search(len(f.packed), func(i int) bool {
 			return bytes.Compare(f.packed[i], key) >= 0
 		})
@@ -538,11 +572,17 @@ func (f *MemPKFilter) FilterVector(
 	skipMask *objectio.Bitmap,
 ) {
 	filterVectorRowsForTest.Add(uint64(vec.Length()))
-	keys := EncodePrimaryKeyVector(vec, packer)
-	for i := 0; i < len(keys); i++ {
-		if !f.matches(keys[i]) {
-			skipMask.Add(uint64(i))
+	row := uint64(0)
+	visitEncodedPrimaryKeyVector(vec, packer, func(key []byte, repeats int) {
+		if !f.matches(key) {
+			for i := 0; i < repeats; i++ {
+				skipMask.Add(row + uint64(i))
+			}
 		}
+		row += uint64(repeats)
+	})
+	if row != uint64(vec.Length()) {
+		panic(fmt.Sprintf("bad result, expecting %v, got %v", vec.Length(), row))
 	}
 }
 
