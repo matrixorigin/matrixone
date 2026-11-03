@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -3338,6 +3340,9 @@ const (
 	regularIndexPredicateRowWork = 1.0
 	regularIndexJoinFixedWork    = 64.0
 	regularIndexUnknownRangeSel  = 0.1
+	// Byte-equivalent CPU cost for one packed-key encoding/allocation. The
+	// descriptor and payload bytes are charged separately per local reader.
+	regularIndexKeyEncodingWork = 64.0
 )
 
 type encodedIndexFilterFact struct {
@@ -4048,6 +4053,41 @@ func regularIndexBackfillInputRows(scanRows, selectedRows float64) float64 {
 	return min(scanRows, max(selectedRows, math.Ceil(selectedRows)*float64(objectio.BlockMaxRows)))
 }
 
+// backfillReaders estimates local reader construction, not a cluster-wide
+// reader count. BuildReaders constructs each reader's packed PK filter, so
+// parallel scan width cannot make this preparation a single per-query cost.
+func (ctx *encodedRegularIndexCostContext) backfillReaders() float64 {
+	cpus := max(1, system.GoMaxProcs())
+	if ctx.builder.qry != nil && ctx.builder.qry.MaxDop > 0 && ctx.builder.qry.MaxDop < int64(cpus) {
+		cpus = int(ctx.builder.qry.MaxDop)
+	}
+	if cpus > math.MaxInt32 {
+		cpus = math.MaxInt32
+	}
+	readers := calcDOP(int32(cpus), ctx.node.Stats, ctx.builder.isPrepareStatement)
+	if blocks := ctx.node.Stats.BlockNum; blocks > 0 {
+		readers = min(readers, blocks)
+	}
+	return float64(max(1, readers))
+}
+
+func regularIndexInSearchComparisons(keys float64) float64 {
+	if keys <= 0 {
+		return 0
+	}
+	if keys <= 4 {
+		return keys
+	}
+	return math.Ceil(math.Log2(keys + 1))
+}
+
+// Building the in-memory filter creates a packed payload plus two []byte
+// descriptor slices per reader. Width and reader count are cost estimates.
+func regularIndexBackfillPrepareWork(keys, packedWidth, readers float64) float64 {
+	const sliceBytes = 3 * (strconv.IntSize / 8)
+	return keys * ((2*float64(sliceBytes)+packedWidth)*readers + regularIndexKeyEncodingWork)
+}
+
 func (ctx *encodedRegularIndexCostContext) score(
 	idxDef *IndexDef,
 	leadingPos []int32,
@@ -4288,10 +4328,12 @@ func (ctx *encodedRegularIndexCostContext) score(
 
 	pkIdx, hasPK := ctx.node.TableDef.Name2ColIndex[ctx.node.TableDef.Pkey.PkeyColName]
 	pkWidth := 0.0
+	packedPKWidth := 0.0
 	if hasPK && pkIdx >= 0 && int(pkIdx) < len(ctx.columnWidths) {
 		pkWidth = ctx.columnWidths[pkIdx]
+		packedPKWidth = ctx.serialWidths[pkIdx]
 	}
-	if shape == encodedRegularIndexCostBackfill && !finitePositive(pkWidth) {
+	if shape == encodedRegularIndexCostBackfill && (!finitePositive(pkWidth) || !finitePositive(packedPKWidth)) {
 		ctx.resetScratch()
 		return 0, false, false
 	}
@@ -4314,7 +4356,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	if shape == encodedRegularIndexCostBackfill {
 		hiddenOutputWidth = pkWidth
 	}
-	calculateWork := func(candidateRows, hiddenRows, outputRows float64) (float64, float64, bool) {
+	calculateWork := func(candidateRows, hiddenRows, outputRows float64, optimistic bool) (float64, float64, bool) {
 		hiddenScanInput := candidateRows * hiddenInputWidth
 		prefixScanInput := hiddenScanInput
 		if prefixAccess && ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2 {
@@ -4362,23 +4404,39 @@ func (ctx *encodedRegularIndexCostContext) score(
 				}
 			}
 
-			// The hidden output already accounts for transferring each physical PK.
-			// Charge the targeted base lookup once more as a per-key operation.
-			pkBackfill := hiddenRows * regularIndexPredicateRowWork
 			rankingBaseInput = hiddenRows * ctx.baseWidth
 			prefixBaseInput = rankingBaseInput
-			if prefixAccess {
-				lookupRows := regularIndexBackfillInputRows(ctx.baseRows, hiddenRows)
-				probeRows := lookupRows
+			// Preserve the relative ranking of index candidates. Build and
+			// physical probe estimates below are admission-only costs.
+			commonWork += hiddenRows * regularIndexPredicateRowWork
+			admissionExtra := 0.0
+			if !optimistic {
+				lookupRows := hiddenRows
+				probeRows := hiddenRows
 				if hiddenRows > 0 && (!sortedPK || ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2) {
 					probeRows = ctx.baseRows
 				}
-				prefixBaseInput = max(rankingBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
+				prefixBaseInput = max(prefixBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
+				if prefixAccess {
+					// Retain the established conservative prefix admission guard.
+					lookupRows = regularIndexBackfillInputRows(ctx.baseRows, hiddenRows)
+					if sortedPK && (ctx.builder.optimizerHints == nil || ctx.builder.optimizerHints.blockFilter != 2) {
+						probeRows = lookupRows
+					}
+					prefixBaseInput = max(prefixBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
+				}
+				candidateBuild := regularIndexBackfillPrepareWork(hiddenRows, packedPKWidth, ctx.backfillReaders())
+				// Replace, rather than duplicate, the ranking's per-key proxy.
+				admissionExtra = candidateBuild - hiddenRows*regularIndexPredicateRowWork
+				if !sortedPK {
+					admissionExtra += probeRows * regularIndexInSearchComparisons(hiddenRows) * regularIndexPredicateRowWork
+				}
 			}
 			baseChildPredicates := hiddenRows * float64(len(ctx.node.FilterList)) * regularIndexPredicateRowWork
 			joinFixed := regularIndexJoinFixedWork + ctx.outputWidth + float64(ctx.outputCols)*regularIndexPredicateRowWork
 			joinRows := outputRows * (ctx.outputWidth + regularIndexPredicateRowWork)
-			commonWork += pkBackfill + baseChildPredicates + joinFixed + joinRows
+			commonWork += baseChildPredicates + joinFixed + joinRows
+			prefixBaseInput += admissionExtra
 		}
 
 		rankingWork := hiddenScanInput + commonWork + rankingBaseInput
@@ -4394,7 +4452,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	if hasCorrelatedPrefix {
 		outputCostRows = max(outputCostRows, hiddenRows)
 	}
-	indexWork, rejectionWork, validWork := calculateWork(candidateRows, hiddenRows, outputCostRows)
+	indexWork, rejectionWork, validWork := calculateWork(candidateRows, hiddenRows, outputCostRows, false)
 	baseComparisonWork := ctx.baseWork
 	if len(ctx.unknownRangeLowerSelectivities) > 0 && validWork {
 		// Compare uncertainty intervals instead of the ranking point estimate. An
@@ -4410,11 +4468,12 @@ func (ctx *encodedRegularIndexCostContext) score(
 			// in the uncertainty lower bound.
 			lowerOutputRows = lowerHiddenRows
 		}
-		_, rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, lowerOutputRows)
+		_, rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, lowerOutputRows, true)
 		baseComparisonWork = ctx.baseUpperWork
 	}
 	overBudget := shape == encodedRegularIndexCostBackfill && boundedLeading && ctx.backfillCapacityExceeded(budgetRows)
-	shouldReject = !ctx.force && (overBudget || (prefixAccess || len(idxDef.Parts) >= 2 && ctx.node.Stats.TableCnt >= 50000) && validWork && rejectionWork >= baseComparisonWork)
+	compareCost := prefixAccess || ctx.node.Stats.TableCnt >= 50000 && (shape == encodedRegularIndexCostBackfill || len(idxDef.Parts) >= 2)
+	shouldReject = !ctx.force && (overBudget || compareCost && validWork && rejectionWork >= baseComparisonWork)
 	ctx.resetScratch()
 	if !validWork {
 		return 0, false, false
