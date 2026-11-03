@@ -30,6 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          fetch-depth: 1
           repository: ${{ github.repository }}
           ref: ${{ github.event_name == 'pull_request_target' && github.event.repository.default_branch || github.workflow_sha }}
           sparse-checkout: .github/ci
