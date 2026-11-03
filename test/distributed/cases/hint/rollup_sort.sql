@@ -165,6 +165,34 @@ select a, b, count(*) as cnt, sum(amount) as total,
 from t_rollup_sort group by a, b with rollup
 order by grouping_a, grouping_b, a, b;
 
+-- BIGINT SUM/AVG use decimal state. Source NULL keys and all-NULL values
+-- distinguish actual NULLs from rollup-generated NULLs at every prefix.
+create table t_rollup_big (a int, b int, x bigint, d decimal(65,2), s varchar(10));
+insert into t_rollup_big values
+  (null, 1, 10, 1.25, 'z'), (null, 1, null, null, null),
+  (1, 1, -4, -2.50, 'b'), (1, 2, 7, 3.00, 'a'),
+  (2, 1, null, null, null);
+set session rollup_algorithm = 'SORT';
+select a, b, count(*) as cnt, sum(x) as total, avg(x) as mean,
+       min(x) as lo, max(x) as hi, grouping(a) as ga, grouping(b) as gb
+from t_rollup_big group by a, b with rollup order by ga, gb, a, b;
+select a, b, sum(d) as total, avg(d) as mean, min(d) as lo, max(d) as hi,
+       grouping(a) as ga, grouping(b) as gb
+from t_rollup_big group by a, b with rollup order by ga, gb, a, b;
+-- Variable-length MIN/MAX retain the unsupported-list fallback.
+select a, count(*) as cnt, sum(x) as total, min(s) as lo, max(s) as hi,
+       grouping(a) as ga from t_rollup_big group by a with rollup order by ga, a;
+set session rollup_algorithm = 'HASH';
+select a, b, count(*) as cnt, sum(x) as total, avg(x) as mean,
+       min(x) as lo, max(x) as hi, grouping(a) as ga, grouping(b) as gb
+from t_rollup_big group by a, b with rollup order by ga, gb, a, b;
+select a, b, sum(d) as total, avg(d) as mean, min(d) as lo, max(d) as hi,
+       grouping(a) as ga, grouping(b) as gb
+from t_rollup_big group by a, b with rollup order by ga, gb, a, b;
+select a, count(*) as cnt, sum(x) as total, min(s) as lo, max(s) as hi,
+       grouping(a) as ga from t_rollup_big group by a with rollup order by ga, a;
+drop table t_rollup_big;
+
 -- SAMPLE owns a separate node and needs the legacy detail/grand-total
 -- branches even when SORT is requested or ordered input is eligible for COST.
 truncate table t_rollup_sort;
