@@ -73,7 +73,7 @@ func TestNoEvictAllocationCompetingReservations(t *testing.T) {
 		}()
 	}
 	close(start)
-	var held []fscache.Data
+	held := make([]fscache.Data, 0, 8)
 	t.Cleanup(func() {
 		for _, data := range held {
 			data.Release()
