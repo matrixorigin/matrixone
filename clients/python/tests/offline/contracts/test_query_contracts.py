@@ -120,6 +120,27 @@ async def resolve(value):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('query_client', ['sync', 'async'], indirect=True)
+async def test_table_mapped_model_without_tablename_materializes_rows(query_client):
+    metadata = sa.MetaData()
+    table = sa.Table(
+        'items',
+        metadata,
+        sa.Column('id', sa.Integer, primary_key=True),
+        sa.Column('value', sa.Integer),
+        sa.Column('text', sa.String),
+    )
+    table_model = type('TableMappedItem', (declarative_base(),), {'__table__': table})
+
+    assert sa.inspect(table_model).mapper.class_ is table_model
+    rows = await resolve(query_client.query(table_model).order_by(table_model.id).all())
+    assert [(row.id, row.value, row.text) for row in rows] == [(1, 2, 'red'), (2, 1, 'blue'), (3, None, None)]
+
+    first = await resolve(query_client.query(table_model).filter_by(id=1).first())
+    assert (first.id, first.value, first.text) == (1, 2, 'red')
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('reverse', [False, True])
 async def test_parameter_ownership_and_rebuild(query_client, reverse):
     q = query_client.query(Item)
