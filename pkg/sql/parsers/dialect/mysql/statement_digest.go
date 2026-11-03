@@ -53,9 +53,9 @@ type statementDigestSyntax struct {
 	normalized *statementDigest
 	// Lexical candidates only enable the final contextual walk. The same
 	// spelling can be an alias or appear in an unused CTE, so do not reject it.
-	checkTableNames bool
-	invalidTemporal map[*tree.FuncExpr]struct{}
-	temporalMode    digestTemporalMode
+	checkTableNames    bool
+	invalidExpressions map[*tree.FuncExpr]struct{}
+	temporalMode       digestTemporalMode
 }
 type digestSymbol struct {
 	id       uint16
@@ -208,7 +208,7 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 		case INTEGRAL, FLOAT, HEXNUM, BIT_LITERAL:
 			d.add(digestValue, "", true)
 			continue
-		case STRING, DIGEST_INTRODUCED_STRING:
+		case STRING, DIGEST_INTRODUCED_STRING, DIGEST_INTRODUCED_HEX:
 			if !hint && d.last(0) == digestIdentifier && d.last(1) != '.' && strings.TrimSpace(s.buf[priorEnd:s.PrePos]) == "" {
 				if strings.EqualFold(priorRaw, "n") && strings.HasPrefix(raw, "'") && priorEnd == s.Pos-len(raw) {
 					d.pop(1)

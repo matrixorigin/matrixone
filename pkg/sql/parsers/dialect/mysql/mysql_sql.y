@@ -674,6 +674,7 @@ func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
 %token <str> REPLACE CONVERT
 %token <str> SEPARATOR TIMESTAMPDIFF TIMESTAMPADD
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
+%token <str> DIGEST_JSON_VALUE
 
 // Time unit
 %token <str> SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND
@@ -765,7 +766,7 @@ func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
 // DUAL is reserved only in MySQL digest syntax; ordinary MO identifiers keep
 // their existing grammar. Its only unqualified form is the entire FROM clause.
-%token <str> DIGEST_DUAL DIGEST_NATIONAL DIGEST_INTRODUCED_STRING DIGEST_SHOW_LIKE
+%token <str> DIGEST_DUAL DIGEST_NATIONAL DIGEST_INTRODUCED_STRING DIGEST_INTRODUCED_HEX DIGEST_SHOW_LIKE
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
 %token <str> DATASTREAM ESQL KAFKA
 
@@ -995,7 +996,7 @@ func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
 
 %type <expr> literal num_literal
 %type <expr> predicate
-%type <expr> bit_expr interval_expr ordinary_interval_expr digest_interval_expr text_literal
+%type <expr> bit_expr interval_expr ordinary_interval_expr digest_interval_expr text_literal json_text_literal
 %type <expr> simple_expr else_opt
 %type <expr> expression value_expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
@@ -14788,6 +14789,7 @@ std_dev_pop:
 function_call_generic:
     ID '(' expression_list_opt ')'
     {
+        if !digestNativeIdentifierArgs(yylex, $1, $3, $<quotedIdentifier>1) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14796,6 +14798,7 @@ function_call_generic:
                 (yylex.(*Lexer).digest != nil && isDigestTemporalFunctionName($1)),
             Exprs: $3,
         }
+        digestRegisterFunction(yylex, $$)
     }
 |   INTERVAL '(' bit_expr ',' expression_list ')'
     {
@@ -14827,6 +14830,7 @@ function_call_generic:
     }
 |   substr_option '(' expression_list_opt ')'
     {
+        if !digestNativeFunctionArgs(yylex, $1, $3) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14874,10 +14878,7 @@ function_call_generic:
     }
 |   func_not_keyword '(' expression_list_opt ')'
     {
-        if yylex.(*Lexer).digest != nil &&
-            (strings.EqualFold($1, "ADDDATE") || strings.EqualFold($1, "SUBDATE")) && len($3) != 2 {
-            yylex.Error("ADDDATE/SUBDATE require two arguments"); goto ret1
-        }
+        if !digestNativeFunctionArgs(yylex, $1, $3) { goto ret1 }
         if yylex.(*Lexer).digest != nil && (strings.EqualFold($1, "DATE_ADD") || strings.EqualFold($1, "DATE_SUB")) {
             yylex.Error("DATE_ADD/DATE_SUB require INTERVAL"); goto ret1
         }
@@ -15108,12 +15109,14 @@ function_call_nonkeyword:
 function_call_keyword:
     name_confict '(' expression_list_opt ')'
     {
+        if !digestNativeFunctionArgs(yylex, $1, $3) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: $3,
         }
+        digestRegisterFunction(yylex, $$)
     }
 |   name_braces braces_opt
     {
@@ -15169,12 +15172,19 @@ function_call_keyword:
             Exprs: tree.Exprs{charExpr, charset},
         }
     }
+|   DIGEST_JSON_VALUE '(' simple_expr ',' json_text_literal ')'
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1), Exprs: tree.Exprs{$3, $5}}
+    }
 |   DATE STRING
     { $$ = digestTemporalLiteral(yylex, $1, $2) }
 |   TIME STRING
     { $$ = digestTemporalLiteral(yylex, $1, $2) }
 |   INSERT '(' expression_list_opt ')'
     {
+        if !digestNativeFunctionArgs(yylex, $1, $3) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -15255,6 +15265,9 @@ datetime_scale:
         }
         str := fmt.Sprintf("%v", $2)
         $$ = tree.NewNumVal(ival, str, false, tree.P_int64)
+        if yylex.(*Lexer).digest != nil && !digestDatetimePrecision($$) {
+            yylex.Error("Invalid datetime precision syntax"); goto ret1
+        }
     }
 
 name_datetime_scale:
@@ -15657,11 +15670,9 @@ num_literal:
     }
 
 text_literal:
-    STRING
-    {
-        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
-    }
-|   DIGEST_INTRODUCED_STRING
+    json_text_literal
+    { $$ = $1 }
+|   DIGEST_INTRODUCED_HEX
     {
         $$ = tree.NewNumVal($1, $1, false, tree.P_char)
     }
@@ -15669,6 +15680,16 @@ text_literal:
     {
         if !digestCharsetLiteralValid(yylex, $1, $2, true) { goto ret1 }
         $$ = tree.NewNumVal($2, $2, false, tree.P_ScoreBinaryHexnum)
+    }
+
+json_text_literal:
+    STRING
+    {
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
+    }
+|   DIGEST_INTRODUCED_STRING
+    {
+        $$ = tree.NewNumVal($1, $1, false, tree.P_char)
     }
 |   UNDERSCORE_BINARY STRING
     {
@@ -17508,7 +17529,8 @@ func_not_keyword:
 |   TRANSLATE
 
 not_keyword:
-    ADDDATE
+    DIGEST_JSON_VALUE
+|   ADDDATE
 |   BIT_AND
 |   BIT_OR
 |   BIT_XOR

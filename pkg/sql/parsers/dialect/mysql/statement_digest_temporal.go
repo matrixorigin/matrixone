@@ -339,20 +339,7 @@ func digestTemporalLiteral(yylex yyLexer, kind, value string) *tree.FuncExpr {
 		Exprs:             tree.Exprs{tree.NewNumVal(value, value, false, tree.P_char)},
 	}
 	if !digestTemporalLiteralValid(yylex, kind, value) {
-		syntax := yylex.(*Lexer).digest
-		if syntax.invalidTemporal == nil {
-			syntax.invalidTemporal = make(map[*tree.FuncExpr]struct{})
-		}
-		syntax.invalidTemporal[node] = struct{}{}
+		yylex.(*Lexer).digest.rejectExpression(node)
 	}
 	return node
-}
-
-func (syntax *statementDigestSyntax) checkTemporalExpression(expr tree.Expr) string {
-	if node, ok := expr.(*tree.FuncExpr); ok {
-		if _, invalid := syntax.invalidTemporal[node]; invalid {
-			return "Invalid temporal literal"
-		}
-	}
-	return ""
 }

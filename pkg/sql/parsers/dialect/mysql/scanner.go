@@ -179,7 +179,7 @@ func (s *Scanner) scan(comments bool) (int, string) {
 				}
 				if token == COMMENT {
 					s.digestReservedWord = reserved
-				} else if token != QUOTE_ID && token != STRING && token != DIGEST_INTRODUCED_STRING && token != AT_ID && token != AT_AT_ID && !s.qualifiedIdentifier {
+				} else if token != QUOTE_ID && token != STRING && token != DIGEST_INTRODUCED_STRING && token != DIGEST_INTRODUCED_HEX && token != AT_ID && token != AT_AT_ID && !s.qualifiedIdentifier {
 					symbol := digestSymbols[digestKeywordUpper(value)]
 					if s.identifierAfterDot && symbol.reserved {
 						return LEX_ERROR, value
@@ -310,7 +310,7 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 					return LEX_ERROR, value
 				}
 				if s.digestMode {
-					return DIGEST_INTRODUCED_STRING, string(decoded)
+					return DIGEST_INTRODUCED_HEX, string(decoded)
 				}
 				return STRING, string(decoded)
 			}

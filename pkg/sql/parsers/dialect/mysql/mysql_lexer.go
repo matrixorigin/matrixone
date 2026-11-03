@@ -574,6 +574,15 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		if typ == INTERVAL {
 			typ = DIGEST_INTERVAL
 		}
+		switch typ {
+		case GEOMETRYCOLLECTION, LINESTRING, MULTILINESTRING, MULTIPOINT, MULTIPOLYGON, POLYGON:
+			// These nonreserved native constructor names are type tokens in MO.
+			// Adapt only the call role; retain the existing CAST/DDL type owner.
+			lookahead := *l.scanner
+			if next, _ := lookahead.Scan(); next == '(' {
+				typ = ID
+			}
+		}
 		// A SHOW filter accepts a text token, not an arbitrary expression.
 		// WHERE and nested queries retain ordinary LIKE expression syntax.
 		if typ == LIKE && l.digestShow && !l.digestShowWhere && l.syntaxDepth == 0 {
@@ -597,13 +606,11 @@ func (l *Lexer) Lex(lval *yySymType) int {
 				typ = ID
 			}
 		} else if typ == CURRENT_ROLE {
-			// MySQL's CURRENT_ROLE is an ordinary identifier unless called.
-			// Retain the existing zero-argument call grammar, including spaces
-			// and comments, without changing ordinary MO execution parsing.
-			lookahead := *l.scanner
-			if next, _ := lookahead.Scan(); next != '(' {
-				typ = ID
-			}
+			// MySQL resolves CURRENT_ROLE through the generic native factory;
+			// its arity is checked only when the containing scope is itemized.
+			typ = ID
+		} else if typ == ID && !l.scanner.qualifiedIdentifier && digestKeywordUpper(str) == "JSON_VALUE" {
+			typ = DIGEST_JSON_VALUE
 		} else if typ == NOW && l.previousToken == ON && l.lastToken == UPDATE {
 			// MySQL also admits NOW(fsp) for an ON UPDATE timestamp attribute.
 			// Keep this digest-only; bare NOW is not the CURRENT_TIMESTAMP form.
@@ -1068,8 +1075,8 @@ func validateSelectIntoStatements(lexer *Lexer) error {
 			}
 		}
 		var checkExpr func(tree.Expr) string
-		if lexer.digest != nil && len(lexer.digest.invalidTemporal) != 0 {
-			checkExpr = lexer.digest.checkTemporalExpression
+		if lexer.digest != nil && len(lexer.digest.invalidExpressions) != 0 {
+			checkExpr = lexer.digest.checkExpression
 		}
 		if lexer.selectLockClauses > 1 || checkNames || checkExpr != nil {
 			nameKey := strings.ToLower

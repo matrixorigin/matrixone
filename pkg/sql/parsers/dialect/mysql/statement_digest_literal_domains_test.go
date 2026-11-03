@@ -21,6 +21,76 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDigestFunctionArgumentDomains(t *testing.T) {
+	for _, test := range []struct {
+		sql, mode string
+		reject    bool
+	}{
+		{"SELECT CURDATE(1)", "", true},
+		{"WITH c AS (SELECT CURDATE(1)) SELECT 1", "", true},
+		{"SELECT SUBSTRING(1)", "", true},
+		{"SELECT SUBSTRING(1,2,3)", "", false},
+		{"SELECT CURDATE (1)", "", false},
+		{"SELECT CURDATE (1)", "IGNORE_SPACE", true},
+		{"SELECT `CURDATE`(1)", "IGNORE_SPACE", false},
+		{"SELECT ABS()", "", true},
+		{"SELECT CONCAT()", "", true},
+		{"SELECT JSON_OBJECT(1)", "", true},
+		{"SELECT JSON_ARRAY()", "", false},
+		{"WITH c AS (SELECT ABS()) SELECT 1", "", false},
+		{"WITH c AS (SELECT ABS()) SELECT * FROM c", "", true},
+		{"WITH c AS (SELECT ABS()), d AS (SELECT * FROM c) SELECT 1", "", false},
+		{"WITH c AS (SELECT ABS()), d AS (SELECT * FROM c) SELECT * FROM d", "", true},
+		{"WITH c AS (SELECT CURRENT_ROLE(1)) SELECT 1", "", false},
+		{"WITH c AS (SELECT CURRENT_ROLE(1)) SELECT * FROM c", "", true},
+		{"WITH c AS (SELECT LOG()) SELECT 1", "", true},
+		{"WITH c AS (SELECT `LOG`()) SELECT 1", "", false},
+		{"SELECT NOW(ABS(1))", "", true},
+		{"SELECT NOW(7)", "", false},
+		{"SELECT NOW(2147483648)", "", true},
+		{"SELECT CURTIME(2147483648)", "", true},
+		{"SELECT LINESTRING()", "", true},
+		{"SELECT LINESTRING(1)", "", false},
+		{"SELECT GEOMETRYCOLLECTION()", "", false},
+		{"SELECT JSON_VALUE(1,_utf8mb3'$.a')", "", false},
+		{"SELECT JSON_VALUE(1,NULL)", "", true},
+		{"SELECT JSON_VALUE(1,_utf8mb4 X'61')", "", true},
+		{"SELECT _utf8mb4 X'73656C656374'", "", false},
+		{"SELECT WEIGHT_STRING(1,1.0,1e0,0x01)", "", false},
+		{"SELECT WEIGHT_STRING(1,ABS(1),1,1)", "", true},
+		{"SELECT MAKE_SET()", "", false},
+		{"SELECT POİNT()", "", false},
+	} {
+		t.Run(test.sql+"/"+test.mode, func(t *testing.T) {
+			for range 3 {
+				_, _, err := StatementDigest(t.Context(), test.sql, test.mode)
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				text, digest, err := StatementDigest(t.Context(), "SELECT 1", "")
+				require.NoError(t, err)
+				require.Equal(t, "SELECT ?", text)
+				require.Equal(t, "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae", digest)
+			}
+		})
+	}
+	// 普通 MO parser 的参数准入仍由原有 binder/function owner 处理。
+	for _, sql := range []string{"SELECT CURDATE(1)", "SELECT SUBSTRING(1)", "SELECT ABS()", "SELECT CONCAT()"} {
+		func() {
+			stmts, err := Parse(t.Context(), sql, 0)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+		}()
+	}
+}
+
 func TestDigestDateArithmeticArity(t *testing.T) {
 	for _, name := range []string{"ADDDATE", "SUBDATE"} {
 		for _, test := range []struct {
