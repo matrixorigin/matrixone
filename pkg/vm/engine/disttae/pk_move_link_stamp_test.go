@@ -338,30 +338,93 @@ func TestPairPkMoveLinkContinuations(t *testing.T) {
 		id2 := pkMoveStampTestLinkID(2)
 		tsCell := make([]byte, catalog.DataBranchUpdateLinkTSBytes)
 		tsCell[0] = 0xAB
-		// The same chain staged twice, once with commit_ts NULL and once
-		// with commit_ts already set: the persisted pairing is identical
-		// and the pass never touches the commit_ts cells.
+		// Pairing derives from the RECORDING transaction's own statement
+		// ledger, where commit_ts is always still NULL (stamping runs
+		// post-commit): the pass pairs the unstamped chain and never
+		// touches commit_ts cells. A later stamping UPDATE re-inserts the
+		// same rows with commit_ts and the recorded succ filled; the
+		// stamping transaction's commit must leave both cells verbatim —
+		// the stamp neither alters nor recomputes the pairing credential.
 		unstamped := pkMovePairingLinkEntry(t, mp, 7, []pkMovePairRow{
 			{tableID: 42, oldPK: []byte{2}, newPK: []byte{3}, linkID: id1, stmtSeq: 1},
 			{tableID: 42, oldPK: []byte{3}, newPK: []byte{4}, linkID: id2, stmtSeq: 2},
 		})
-		stamped := pkMovePairingLinkEntry(t, mp, 7, []pkMovePairRow{
-			{tableID: 42, oldPK: []byte{2}, newPK: []byte{3}, linkID: id1, stmtSeq: 1, commitTS: tsCell},
+		restaged := pkMovePairingLinkEntry(t, mp, 7, []pkMovePairRow{
+			{tableID: 42, oldPK: []byte{2}, newPK: []byte{3}, linkID: id1, stmtSeq: 1, succ: id2, commitTS: tsCell},
 			{tableID: 42, oldPK: []byte{3}, newPK: []byte{4}, linkID: id2, stmtSeq: 2, commitTS: tsCell},
 		})
 		txnUnstamped := &Transaction{proc: proc, writes: []Entry{unstamped}}
-		txnStamped := &Transaction{proc: proc, writes: []Entry{stamped}}
+		txnRestaged := &Transaction{proc: proc, writes: []Entry{restaged}}
 		require.NoError(t, txnUnstamped.pairPkMoveLinkContinuationsLocked())
-		require.NoError(t, txnStamped.pairPkMoveLinkContinuationsLocked())
+		require.NoError(t, txnRestaged.pairPkMoveLinkContinuationsLocked())
 		succA, okA := pkMoveSuccOf(t, &txnUnstamped.writes[0], 0)
-		succB, okB := pkMoveSuccOf(t, &txnStamped.writes[0], 0)
 		require.True(t, okA)
-		require.True(t, okB)
+		require.Equal(t, id2, succA, "the recording transaction pairs its own chain")
+		succB, okB := pkMoveSuccOf(t, &txnRestaged.writes[0], 0)
+		require.True(t, okB, "the re-inserted credential survives the stamping commit")
 		require.Equal(t, succA, succB, "identical pairing with and without stamps")
+		_, okC := pkMoveSuccOf(t, &txnRestaged.writes[0], 1)
+		require.False(t, okC, "the re-inserted terminal stays NULL")
 		commitVecA := pkMovePairColVec(t, &txnUnstamped.writes[0], catalog.DataBranchUpdateLinkColCommitTS)
 		require.True(t, commitVecA.IsNull(0), "the pass never stamps")
-		commitVecB := pkMovePairColVec(t, &txnStamped.writes[0], catalog.DataBranchUpdateLinkColCommitTS)
+		commitVecB := pkMovePairColVec(t, &txnRestaged.writes[0], catalog.DataBranchUpdateLinkColCommitTS)
 		require.Equal(t, tsCell, commitVecB.GetBytesAt(0), "a staged stamp survives the pass verbatim")
+	})
+
+	t.Run("re-inserted historical rows never pair across original transactions", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		mp := proc.Mp()
+		idA := pkMoveStampTestLinkID(1)
+		idB := pkMoveStampTestLinkID(2)
+		tsCell := make([]byte, catalog.DataBranchUpdateLinkTSBytes)
+		tsCell[0] = 0xCD
+		// One stamping UPDATE's chunk carries links recorded by TWO
+		// different original transactions: L_A moved 2->3 and was
+		// terminal (succ NULL), L_B moved 3->4. Original transaction
+		// scope is gone, so ordinal pairing would fabricate L_B as L_A's
+		// successor; both rows must keep their staged cells.
+		entry := pkMovePairingLinkEntry(t, mp, 7, []pkMovePairRow{
+			{tableID: 42, oldPK: []byte{2}, newPK: []byte{3}, linkID: idA, stmtSeq: 1, commitTS: tsCell},
+			{tableID: 42, oldPK: []byte{3}, newPK: []byte{4}, linkID: idB, stmtSeq: 2, commitTS: tsCell},
+		})
+		txn := &Transaction{proc: proc, writes: []Entry{entry}}
+		require.NoError(t, txn.pairPkMoveLinkContinuationsLocked())
+		_, ok := pkMoveSuccOf(t, &txn.writes[0], 0)
+		require.False(t, ok, "a historical terminal never gains another transaction's successor")
+		_, ok = pkMoveSuccOf(t, &txn.writes[0], 1)
+		require.False(t, ok, "the historical rows keep their staged NULL cells")
+	})
+
+	t.Run("a partial-chain re-insert preserves an existing successor verbatim", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		mp := proc.Mp()
+		idA1 := pkMoveStampTestLinkID(1)
+		idA2 := pkMoveStampTestLinkID(2)
+		idX := pkMoveStampTestLinkID(3)
+		idY := pkMoveStampTestLinkID(4)
+		tsCell := make([]byte, catalog.DataBranchUpdateLinkTSBytes)
+		tsCell[0] = 0xEF
+		// A stamping UPDATE re-inserts L_A1 ALONE (its recorded successor
+		// L_A2 is outside this chunk) alongside this transaction's own
+		// fresh links L_X->L_Y, which pair and force the succ column's
+		// one-shot rewrite. The rewrite must copy L_A1's staged succ
+		// verbatim: rebuilding it as NULL would erase a valid credential
+		// whose departure this transaction never staged.
+		entry := pkMovePairingLinkEntry(t, mp, 7, []pkMovePairRow{
+			{tableID: 42, oldPK: []byte{2}, newPK: []byte{3}, linkID: idA1, stmtSeq: 1, succ: idA2, commitTS: tsCell},
+			{tableID: 42, oldPK: []byte{5}, newPK: []byte{6}, linkID: idX, stmtSeq: 1},
+			{tableID: 42, oldPK: []byte{6}, newPK: []byte{7}, linkID: idY, stmtSeq: 2},
+		})
+		txn := &Transaction{proc: proc, writes: []Entry{entry}}
+		require.NoError(t, txn.pairPkMoveLinkContinuationsLocked())
+		succ, ok := pkMoveSuccOf(t, &txn.writes[0], 0)
+		require.True(t, ok, "the out-of-chunk successor credential is preserved")
+		require.Equal(t, idA2, succ)
+		succ, ok = pkMoveSuccOf(t, &txn.writes[0], 1)
+		require.True(t, ok, "the fresh arrival still pairs its own departure")
+		require.Equal(t, idY, succ)
+		_, ok = pkMoveSuccOf(t, &txn.writes[0], 2)
+		require.False(t, ok, "the fresh chain's terminal stays NULL")
 	})
 }
 

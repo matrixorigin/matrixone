@@ -4136,7 +4136,7 @@ func (txn *Transaction) pairPkMoveLinkContinuationsLocked() error {
 			!isPkMoveLinkTableInsert(we.databaseName, we.tableName) {
 			continue
 		}
-		tableIdx, oldPKIdx, newPKIdx, idIdx, stmtSeqIdx, succIdx := -1, -1, -1, -1, -1, -1
+		tableIdx, oldPKIdx, newPKIdx, idIdx, stmtSeqIdx, succIdx, commitTSIdx := -1, -1, -1, -1, -1, -1, -1
 		for j, attr := range we.bat.Attrs {
 			switch attr {
 			case catalog.DataBranchUpdateLinkColTableID:
@@ -4151,6 +4151,8 @@ func (txn *Transaction) pairPkMoveLinkContinuationsLocked() error {
 				stmtSeqIdx = j
 			case catalog.DataBranchUpdateLinkColSuccLinkID:
 				succIdx = j
+			case catalog.DataBranchUpdateLinkColCommitTS:
+				commitTSIdx = j
 			}
 		}
 		if tableIdx < 0 || oldPKIdx < 0 || newPKIdx < 0 || idIdx < 0 ||
@@ -4165,6 +4167,13 @@ func (txn *Transaction) pairPkMoveLinkContinuationsLocked() error {
 		tableIDs := vector.MustFixedColNoTypeCheck[uint64](we.bat.Vecs[tableIdx])
 		stmtSeqs := vector.MustFixedColNoTypeCheck[uint64](we.bat.Vecs[stmtSeqIdx])
 		oldPKVec, newPKVec, idVec := we.bat.Vecs[oldPKIdx], we.bat.Vecs[newPKIdx], we.bat.Vecs[idIdx]
+		// A staged batch without the commit_ts column predates the D225
+		// layout; treat every row as newly recorded, matching the stamp
+		// collector's drift posture.
+		var commitTSVec *vector.Vector
+		if commitTSIdx >= 0 && commitTSIdx < len(we.bat.Vecs) {
+			commitTSVec = we.bat.Vecs[commitTSIdx]
+		}
 		rowCount := we.bat.RowCount()
 		if len(tableIDs) < rowCount || len(stmtSeqs) < rowCount {
 			continue
@@ -4174,6 +4183,17 @@ func (txn *Transaction) pairPkMoveLinkContinuationsLocked() error {
 				// Unstamped statement ordinal: the fill hook stamps every
 				// surviving row, so zero marks evidence the pairing must
 				// not consume; the cell keeps its NULL terminal.
+				continue
+			}
+			if commitTSVec != nil && !commitTSVec.IsNull(uint64(r)) {
+				// A filled commit_ts marks a RE-INSERTED historical image
+				// staged by a commit-stamping or recovery UPDATE, not a
+				// link this transaction recorded (same qualifier as the
+				// D225 stamp collector). Pairing must not consume it: its
+				// original transaction scope is gone, so ordinal pairing
+				// could fabricate a cross-transaction successor, and its
+				// persisted succ_link_id credential is authoritative as
+				// staged.
 				continue
 			}
 			acct := pkMoveAcctTbl{account: we.accountId, table: tableIDs[r]}
@@ -4260,7 +4280,18 @@ func (txn *Transaction) pairPkMoveLinkContinuationsLocked() error {
 					if err := pkMoveVecAppendBytes(filled, []byte(succ), false, txn.proc.Mp()); err != nil {
 						return err
 					}
-				} else if err := pkMoveVecAppendBytes(filled, nil, true, txn.proc.Mp()); err != nil {
+					continue
+				}
+				// Unpaired rows keep their staged cell verbatim: a fresh
+				// link row stages NULL anyway, and a re-inserted historical
+				// row (excluded from pairing above) must not lose a
+				// successor credential whose departure is not in this
+				// transaction's staged set.
+				if old.IsNull(uint64(r)) {
+					if err := pkMoveVecAppendBytes(filled, nil, true, txn.proc.Mp()); err != nil {
+						return err
+					}
+				} else if err := pkMoveVecAppendBytes(filled, old.GetBytesAt(r), false, txn.proc.Mp()); err != nil {
 					return err
 				}
 			}

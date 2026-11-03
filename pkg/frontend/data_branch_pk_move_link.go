@@ -2115,11 +2115,19 @@ const (
 //     inheritance source is unprovable provenance: abort loudly.
 //   - STREAM-BOUND (a durable committed row identity): the move and its
 //     link commit atomically, so the linked row version dies exactly
-//     once. Exactly one untainted death of old_row_id HEALS the instant;
-//     zero deaths on the complete retained stream is proven window
-//     absence (EXCLUDED, never loud); two or more deaths, or a synthetic
+//     once. Exactly one untainted death of old_row_id INSIDE the link's
+//     own attributed window HEALS the instant; zero in-window deaths on
+//     the complete retained stream is proven window absence (EXCLUDED,
+//     never loud); two or more in-window deaths, or a synthetic
 //     (tainted) instant among them, is corrupt retained evidence and
-//     aborts loudly.
+//     aborts loudly. Deaths outside the attributed window belong to
+//     other generations of a shared row identity (an ancestor link and
+//     a descendant branch's move of the inherited row name the same
+//     row id) and never speak for THIS link: they neither heal nor
+//     taint, and above all they are never re-stamped onto this link —
+//     persisting another window's instant would poison the later apply
+//     of the link's own lineage (D227's outcome table is scoped to the
+//     candidate window's collected stream).
 //
 // The caller applies the D226 gate to a resolved instant: it must equal
 // the required departure instant AND fall inside the link's own
@@ -2151,11 +2159,17 @@ func (p *pkMoveLinkProvider) resolveLinkCommitLocked(
 		return types.TS{}, pkMoveCommitUnprovable
 	}
 	// Stream-bound: the linked row version's deaths in the protected
-	// stream decide. The stream is complete by the time any walk reads
-	// it (a stream-collection failure aborts the apply upstream).
+	// stream decide, scoped to the link's own attributed window. The
+	// stream is complete by the time any walk reads it (a
+	// stream-collection failure aborts the apply upstream).
 	var heal []types.TS
 	tainted := false
 	for _, ref := range view.deathRefsOf(link.oldPK, link.oldRowID) {
+		if link.hasWindow && !link.window.containsCommit(ref.cts) {
+			// Another generation's death of this shared identity: not
+			// this link's evidence.
+			continue
+		}
 		if pkMoveViewInstantTainted(view, ref.cts) {
 			// A synthetic window-end instant is a serving-handle stamp,
 			// never a recorded commit: it can neither heal nor prove
@@ -2210,6 +2224,12 @@ func (p *pkMoveLinkProvider) siblingCommitLocked(
 			var heal []types.TS
 			tainted := false
 			for _, ref := range view.deathRefsOf(sib.oldPK, sib.oldRowID) {
+				if sib.hasWindow && !sib.window.containsCommit(ref.cts) {
+					// Another generation's death of the sibling's shared
+					// identity: not this transaction's evidence, and never
+					// re-stamped onto the sibling.
+					continue
+				}
 				if pkMoveViewInstantTainted(view, ref.cts) {
 					tainted = true
 					continue
@@ -3592,7 +3612,15 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 						// already bound. Every other shape (a tainted
 						// reference, zero or several untainted deaths)
 						// is incomplete or contradictory retained
-						// evidence and fails the pairing closed.
+						// evidence and fails the pairing closed. The
+						// window gate runs FIRST: an out-of-window
+						// candidate neither binds nor poisons, and no
+						// re-stamp may be queued for it — persisting
+						// THIS departure's instant would stamp another
+						// window's history onto the link.
+						if cands[i].hasWindow && !cands[i].window.containsCommit(depCTS) {
+							continue
+						}
 						if cands[i].hasCommitTS {
 							if !cands[i].commitTS.EQ(&depCTS) {
 								continue
@@ -3601,6 +3629,12 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 							var heal []types.TS
 							tainted := false
 							for _, ref := range view.deathRefsOf(cands[i].oldPK, cands[i].oldRowID) {
+								if cands[i].hasWindow && !cands[i].window.containsCommit(ref.cts) {
+									// Another generation's death of this
+									// shared identity: not this
+									// candidate's evidence.
+									continue
+								}
 								if pkMoveViewInstantTainted(view, ref.cts) {
 									tainted = true
 									continue
@@ -3613,9 +3647,6 @@ func (p *pkMoveLinkProvider) resolvePkMoveChainVerdict(
 							p.mu.Lock()
 							p.queueRestampLocked(&cands[i], depCTS)
 							p.mu.Unlock()
-						}
-						if cands[i].hasWindow && !cands[i].window.containsCommit(depCTS) {
-							continue
 						}
 						admitted[pkMoveLinkDedupKey(&cands[i])] = cands[i]
 					}

@@ -7438,6 +7438,119 @@ func TestAnchorWindowedAdmissionExcludesStraddler(t *testing.T) {
 	})
 }
 
+// TestPkMoveRecoveryHealsOnlyInsideAttributedWindow pins the mo-bot
+// review's persistence defect (PR #31629, 2026-11-03): a parent move
+// commits AFTER the child forks and its commit stamp is missing; the
+// child then moves the inherited row, so the shared row identity dies
+// only inside the CHILD window's stream segment. The D227 recovery of
+// the parent's NULL stamp must scope its heal to the parent link's own
+// attributed (table, window): the child's out-of-window death neither
+// heals nor queues a re-stamp — persisting it would stamp the
+// ancestor with the child's instant, and a later apply of the parent's
+// own lineage would then find the stamp outside the departure instant
+// and return pkMoveProvenNone, losing the move's UPDATE provenance.
+func TestPkMoveRecoveryHealsOnlyInsideAttributedWindow(t *testing.T) {
+	// The review's exact schedule: fork at 30; the parent's 1->2 move
+	// (created at 20) commits at 40 stamp-pending; the child's 1->3
+	// move (created at 45) commits at 50 stamp-pending, killing the
+	// inherited rid1 inside the child segment (30, 50].
+	mkAncestor := func() pkMoveLink {
+		l := pkMoveWalkTestLink(1, 1, 2, 2, 20)
+		l.linkID[0] = 0xa1
+		l.hasLinkID = true
+		l.window = pkMoveLinkTableWindow{tableID: 7, end: types.BuildTS(30, 0)}
+		l.hasWindow = true
+		return l
+	}
+	mkChild := func() pkMoveLink {
+		l := pkMoveWalkTestLink(1, 1, 3, 3, 45)
+		l.linkID[0] = 0xc1
+		l.hasLinkID = true
+		l.window = pkMoveLinkTableWindow{tableID: 7, from: types.BuildTS(30, 0), end: types.BuildTS(50, 0)}
+		l.hasWindow = true
+		return l
+	}
+
+	t.Run("an out-of-window death neither heals nor re-stamps the ancestor link", func(t *testing.T) {
+		ancestor, child := mkAncestor(), mkChild()
+		p := pkMoveWalkTestProvider(ancestor, child)
+		// The child side's collected stream: the shared identity dies
+		// only at 50, inside the child's segment, OUTSIDE the
+		// ancestor's (.., 30].
+		view := pkMoveWalkTestStubView(
+			pkMoveTombRow(1, 0x01, 1, 50),
+			pkMoveDepartRow(1, 50, 5),     // rid1 was born pre-fork
+			pkMoveLiveRow(3, 0xaa, 3, 50), // the child's landed image
+		)
+		finalPK, finalRow, verdict := p.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 1))
+		require.Equal(t, pkMoveResolved, verdict,
+			"the child move heals from its own in-window death and resolves")
+		require.Equal(t, []byte{3}, finalPK)
+		require.Equal(t, []byte{0xaa}, finalRow)
+		_, poisoned := p.restamps[ancestor.linkID]
+		require.False(t, poisoned,
+			"the child's death is never re-stamped onto the ancestor link")
+		healed, ok := p.restamps[child.linkID]
+		require.True(t, ok, "the in-window heal still queues its D227(e) re-stamp")
+		require.Equal(t, types.BuildTS(50, 0), healed,
+			"the child link re-stamps its own window's instant")
+	})
+
+	t.Run("the unpolluted stamp lets the later parent apply resolve the move", func(t *testing.T) {
+		// The later apply of the PARENT lineage: the ancestor link is
+		// attributed to the parent segment that CONTAINS its true
+		// commit 40, and the parent side's stream carries the move's
+		// own departure tombstone at 40. The still-NULL stamp heals
+		// from that in-window death.
+		ancestor := mkAncestor()
+		ancestor.window = pkMoveLinkTableWindow{tableID: 7, end: types.BuildTS(40, 0)}
+		p := pkMoveWalkTestProvider(ancestor)
+		view := pkMoveWalkTestStubView(
+			pkMoveTombRow(1, 0x01, 1, 40), // the parent move's own departure
+			pkMoveDepartRow(1, 40, 5),
+			pkMoveLiveRow(2, 0xbb, 2, 40), // the parent's landed image
+		)
+		finalPK, finalRow, verdict := p.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 1))
+		require.Equal(t, pkMoveResolved, verdict,
+			"the parent apply heals the NULL stamp from its own window's death")
+		require.Equal(t, []byte{2}, finalPK)
+		require.Equal(t, []byte{0xbb}, finalRow)
+		healed, ok := p.restamps[ancestor.linkID]
+		require.True(t, ok, "the legitimate in-window heal re-stamps")
+		require.Equal(t, types.BuildTS(40, 0), healed,
+			"the persisted re-stamp carries the true commit instant")
+	})
+
+	t.Run("control: persisted metadata decides the parent apply", func(t *testing.T) {
+		// The defect's impact, pinned as the review's oracle: had the
+		// child merge persisted the poisoned 50 onto the ancestor link,
+		// the later parent apply would load that stamp and lose the
+		// move's UPDATE provenance; the correctly stamped row resolves.
+		view := pkMoveWalkTestStubView(
+			pkMoveTombRow(1, 0x01, 1, 40),
+			pkMoveDepartRow(1, 40, 5),
+			pkMoveLiveRow(2, 0xbb, 2, 40),
+		)
+		poisoned := mkAncestor()
+		poisoned.window = pkMoveLinkTableWindow{tableID: 7, end: types.BuildTS(40, 0)}
+		pp := pkMoveWalkTestProvider(poisoned)
+		pkMoveWalkStampCommits(pp, 20, 50) // the pre-fix re-stamp's persisted value
+		_, _, verdict := pp.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 1))
+		require.Equal(t, pkMoveProvenNone, verdict,
+			"a stamp carrying another window's instant loses the move's provenance")
+
+		stamped := mkAncestor()
+		stamped.window = pkMoveLinkTableWindow{tableID: 7, end: types.BuildTS(40, 0)}
+		pc := pkMoveWalkTestProvider(stamped)
+		pkMoveWalkStampCommits(pc, 20, 40) // the true commit instant
+		finalPK, finalRow, verdict := pc.resolvePkMoveChainVerdict(view, []byte{1}, mustRowID(t, 1))
+		require.Equal(t, pkMoveResolved, verdict,
+			"the correctly stamped control resolves the move")
+		require.Equal(t, []byte{2}, finalPK)
+		require.Equal(t, []byte{0xbb}, finalRow)
+	})
+}
+
 // TestSameKeyTailFailsClosedPastTruncatedForeignArrival pins r59 review
 // F1 at walk level under the D225/D227 commit resolution — the review's
 // counterexample: lineage A moved 1->2 at commit instant 10; one later
