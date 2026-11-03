@@ -49,6 +49,13 @@ func TestMaintenanceDescriptorFencesGeneratedConfig(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, roles, 2)
+	cfg.DictTable = "dict"
+	require.Error(t, h.ValidateIndexMaintenance(function, literal(), spec), "unattested dictionary")
+	spec.Targets = append(spec.Targets, executor.IndexMaintenanceTarget{Role: catalog.Hnsw_TblType_Dict, Name: "dict", ID: 6})
+	require.NoError(t, h.ValidateIndexMaintenance(function, literal(), spec))
+	roles, err = h.IndexMaintenanceRoles(function, map[string]*plan.IndexDef{catalog.Hnsw_TblType_Metadata: {}, catalog.Hnsw_TblType_Storage: {}, catalog.Hnsw_TblType_Dict: {}})
+	require.NoError(t, err)
+	require.Contains(t, roles, catalog.Hnsw_TblType_Dict)
 	cfg.IgnoredTable = "ignored"
 	require.Error(t, h.ValidateIndexMaintenance(function, literal(), spec), "unattested optional target")
 	spec.Targets = append(spec.Targets, executor.IndexMaintenanceTarget{Role: catalog.IndexIgnored_TblType, Name: "ignored", ID: 5})

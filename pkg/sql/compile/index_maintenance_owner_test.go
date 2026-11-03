@@ -18,7 +18,6 @@ import (
 	"context"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -64,7 +63,13 @@ func TestIndexMaintenanceOwnerDerivesRoles(t *testing.T) {
 				defs = append(defs, &plan.IndexDef{IndexName: "idx", IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString(), IndexAlgoTableType: role, IndexTableName: name})
 			}
 			if scenario == "missing role" {
-				defs = nil
+				kept := defs[:0]
+				for _, def := range defs {
+					if def.IndexAlgoTableType != catalog.SystemSI_IVFFLAT_TblType_Centroids {
+						kept = append(kept, def)
+					}
+				}
+				defs = kept
 			}
 			if scenario == "duplicate role" {
 				defs = append(defs, defs[0])
@@ -96,10 +101,7 @@ func TestIndexMaintenanceOwnerDerivesRoles(t *testing.T) {
 				return rel, nil
 			}).AnyTimes()
 			exec := &maintenanceOwnerExecutor{t: t}
-			rt := moruntime.ServiceRuntime(proc.GetService())
-			previous, _ := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
-			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
-			t.Cleanup(func() { rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous) })
+			installDropDDLExecutor(t, proc, exec)
 			err := owner.RunIndexMaintenanceSQL("select maintenance", "ivf_create", "idx")
 			if scenario == "current" || scenario == "create plan" {
 				require.NoError(t, err)
