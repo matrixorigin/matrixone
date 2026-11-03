@@ -215,13 +215,15 @@ func (p *LocalShuffleProducer) Complete(pass bool) error {
 	return nil
 }
 
-func (f *LocalShuffleFilter) Wait(ctx context.Context, stopped ...<-chan struct{}) (*bloomfilter.CBloomFilter, error) {
-	var stop <-chan struct{}
-	if len(stopped) > 0 {
-		stop = stopped[0]
+func (f *LocalShuffleFilter) Wait(ctx context.Context, stopped <-chan struct{}) (*bloomfilter.CBloomFilter, error) {
+	if ctx.Err() != nil {
+		return nil, context.Cause(ctx)
 	}
 	select {
-	case <-stop:
+	case <-stopped:
+		if ctx.Err() != nil {
+			return nil, context.Cause(ctx)
+		}
 		return nil, context.Canceled
 	case <-ctx.Done():
 		return nil, context.Cause(ctx)
@@ -229,6 +231,9 @@ func (f *LocalShuffleFilter) Wait(ctx context.Context, stopped ...<-chan struct{
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if ctx.Err() != nil {
+		return nil, context.Cause(ctx)
+	}
 	if f.closed || f.pass {
 		return nil, nil
 	}

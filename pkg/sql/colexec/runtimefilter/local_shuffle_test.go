@@ -56,14 +56,14 @@ func TestLocalShuffleFilterCompleteDomain(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = f.Wait(canceled)
+	_, err = f.Wait(canceled, nil)
 	require.ErrorIs(t, err, context.Canceled)
 	second, err := f.Begin(proc, 1, 2)
 	require.NoError(t, err)
 	second.AddVector(vec)
 	require.NoError(t, second.Complete(false))
 	require.NoError(t, first.Complete(true), "completion retry cannot alter the sealed filter")
-	bloom, err := f.Wait(context.Background())
+	bloom, err := f.Wait(context.Background(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, bloom)
 	output := make([]uint8, 2)
@@ -96,7 +96,7 @@ func TestLocalShuffleFilterFallbackAndPartialPrepare(t *testing.T) {
 			require.NoError(t, err)
 			if scenario == "partial" {
 				f.Close()
-				_, err = f.Wait(context.Background())
+				_, err = f.Wait(context.Background(), nil)
 				require.NoError(t, err)
 				require.Zero(t, g.Snapshot().Used)
 				return
@@ -105,7 +105,7 @@ func TestLocalShuffleFilterFallbackAndPartialPrepare(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, first.Complete(false))
 			require.NoError(t, second.Complete(scenario == "spill"))
-			bloom, err := f.Wait(context.Background())
+			bloom, err := f.Wait(context.Background(), nil)
 			require.NoError(t, err)
 			receiver := message.NewMessageReceiver([]int32{72}, message.AddrBroadCastOnCurrentCN(), proc.GetMessageBoard())
 			msgs, _, err := receiver.ReceiveMessage(false, context.Background())
@@ -144,7 +144,7 @@ func TestLocalShuffleFilterConcurrentCompletion(t *testing.T) {
 	for err := range errors {
 		require.NoError(t, err)
 	}
-	bloom, err := f.Wait(context.Background())
+	bloom, err := f.Wait(context.Background(), nil)
 	require.NoError(t, err)
 	output := make([]uint8, 3)
 	require.True(t, bloom.TestFixedVectorInto(vec, output))
@@ -160,4 +160,10 @@ func TestLocalShuffleFilterStoppedConsumer(t *testing.T) {
 	close(stopped)
 	_, err := f.Wait(context.Background(), stopped)
 	require.ErrorIs(t, err, context.Canceled)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.Close()
+	_, err = f.Wait(ctx, stopped)
+	require.ErrorIs(t, err, context.Canceled, "cancellation wins over a closed coordinator")
 }

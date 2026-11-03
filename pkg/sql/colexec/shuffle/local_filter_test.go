@@ -47,7 +47,7 @@ func TestLocalShuffleFilterConsumer(t *testing.T) {
 	require.NoError(t, err)
 	producer.AddVector(keys)
 	require.NoError(t, producer.Complete(false))
-	bloom, err := filter.Wait(proc.Ctx)
+	bloom, err := filter.Wait(proc.Ctx, nil)
 	require.NoError(t, err)
 	input := batch.NewWithSize(2)
 	t.Cleanup(func() { input.Clean(proc.Mp()) })
