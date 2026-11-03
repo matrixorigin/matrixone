@@ -34,7 +34,8 @@ import (
 )
 
 type HashmapBuilder struct {
-	needDupVec bool
+	localFilterProducer *runtimefilter.LocalShuffleProducer
+	needDupVec          bool
 	// InputBatchRowCount is the physical retained row count published with the JoinMap.
 	InputBatchRowCount int
 	TrackNullKeys      bool
@@ -785,6 +786,9 @@ buildUnits:
 				return err
 			}
 			hb.observeNullKeys(hb.curVecs)
+			if hb.localFilterProducer != nil && len(hb.curVecs) == 1 {
+				hb.localFilterProducer.AddVector(hb.curVecs[0])
+			}
 			lastBatch = vecIdx1
 		}
 		vals, zvals, err := itr.Insert(vecIdx2, n, hb.curVecs)

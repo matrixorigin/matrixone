@@ -84,6 +84,12 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 		return TerminalBudgetError(proc.Ctx, err)
 	}
 	hashBuild.ctr.hashmapBuilder.setBudget(budget)
+	if hashBuild.LocalFilter != nil {
+		hashBuild.ctr.hashmapBuilder.localFilterProducer, err = hashBuild.LocalFilter.Begin(proc, int(hashBuild.ParallelID), max(1, int(hashBuild.GetMaxParallel())))
+		if err != nil {
+			return err
+		}
+	}
 	if hashBuild.ctr.hashmapBuilder.mapAllocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -912,6 +918,11 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 ) (retErr error) {
 	ctr := &hashBuild.ctr
 	if hashBuild.IsShuffle {
+		if producer := ctr.hashmapBuilder.localFilterProducer; producer != nil {
+			err := producer.Complete(ctr.spillBundle != nil)
+			ctr.runtimeFilterDone = true
+			return err
+		}
 		//only support runtime filter pass for now in shuffle join
 		var runtimeFilter message.RuntimeFilterMessage
 		runtimeFilter.Tag = hashBuild.RuntimeFilterSpec.Tag

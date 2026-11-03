@@ -178,6 +178,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.NeedBatches = t.NeedBatches
 		op.NeedAllocateSels = t.NeedAllocateSels
 		op.IsShuffle = t.IsShuffle
+		op.LocalFilter = t.LocalFilter
 		op.Conditions = t.Conditions
 		op.OwnsConstantFilterDiagnostics = t.OwnsConstantFilterDiagnostics
 		op.JoinDiagnostic = t.JoinDiagnostic
@@ -509,6 +510,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ShuffleRangeInt64 = sourceArg.ShuffleRangeInt64
 		op.ShuffleRangeUint64 = sourceArg.ShuffleRangeUint64
 		op.ShuffleExpr = sourceArg.ShuffleExpr
+		op.LocalFilter = sourceArg.LocalFilter
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -287,6 +288,8 @@ type scopeContext struct {
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
+	localShuffleFilters     []*runtimefilter.LocalShuffleFilter
+	localShuffleFilterBytes uint64
 	// Unprepared source metadata owners, never scheduled or run.
 	dependentSourceScopes []*Scope
 	scopes                []*Scope

@@ -1684,3 +1684,26 @@ func TestSingletonRuntimeFilterBenefitBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestShuffleRuntimeFilterCandidateRespectsDisableHint(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(t, false)
+			join := builder.qry.Nodes[2]
+			join.JoinType = planpb.Node_INNER
+			join.Stats.HashmapStats.Shuffle = true
+			if disabled {
+				builder.optimizerHints = &OptimizerHints{runtimeFilter: 1}
+			}
+			builder.generateRuntimeFilters(2)
+			require.Len(t, join.RuntimeFilterBuildList, 1)
+			require.Len(t, join.RuntimeFilterProbeList, 1)
+			if disabled {
+				require.Nil(t, join.RuntimeFilterBuildList[0].BuildExpr)
+			} else {
+				require.NotNil(t, join.RuntimeFilterBuildList[0].BuildExpr)
+				require.NotNil(t, join.RuntimeFilterBuildList[0].ProbeType)
+			}
+		})
+	}
+}
