@@ -168,4 +168,52 @@ where id=(select min(id) from jdbc_enum_set_metadata);
 -- @metacmp(true)
 select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
 where id=(select count(*) from jdbc_enum_set_metadata);
+-- Access eligibility is distinct from mathematical cast injectivity.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where cast(id as signed)=(select count(*) from jdbc_enum_set_metadata where id<=1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where cast(id as signed)=1;
+-- Independent anti-existence and correlated global-group existence are not FROM providers.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and not exists(select 1 from (select id from jdbc_enum_set_metadata where id=100 limit 1)d);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and not exists(select 1 from (select id from jdbc_enum_set_metadata where id=1 limit 1)d);
+-- @metacmp(true)
+select min(l.e)over() as min_e,max(l.s)over() as max_s from jdbc_enum_set_metadata l where l.id=1
+and exists(select count(*) from jdbc_enum_set_metadata r where r.id>=l.id);
+-- @metacmp(true)
+select min(l.e)over() as min_e,max(l.s)over() as max_s from jdbc_enum_set_metadata l where l.id=1
+and not exists(select count(*) from jdbc_enum_set_metadata r where r.id>=l.id);
+-- @metacmp(true)
+select min(l.e)over() as min_e,max(l.s)over() as max_s from jdbc_enum_set_metadata l where l.id=1
+and exists(select count(*) from jdbc_enum_set_metadata r where r.id>=l.id having count(*)>0);
+-- Conjuncts compose through multiple generated scalar JOINs.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=(select min(id) from jdbc_enum_set_metadata) and id=(select min(id) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=coalesce((select min(id) from jdbc_enum_set_metadata),1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=(select min(id) from jdbc_enum_set_metadata where id=(select min(id) from jdbc_enum_set_metadata));
+-- Rejecting BETWEEN includes its lowered conjunction and NULL comparisons.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 2 and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between null and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 1 and null;
+create table jdbc_enum_set_composite(a int,b int,e enum('a','bb',''),s set('x','yy'),primary key(a,b));
+insert into jdbc_enum_set_composite select if(id=3,2,1),if(id=2,2,1),e,s from jdbc_enum_set_metadata;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_composite
+where a=(select min(id) from jdbc_enum_set_metadata) and b=(select min(id) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_composite
+where a=(select min(id) from jdbc_enum_set_metadata);
+drop table jdbc_enum_set_composite;
 drop table jdbc_enum_set_metadata;

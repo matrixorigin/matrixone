@@ -110,6 +110,8 @@ public final class EnumSetMetadataProbe {
                     setup.execute("USE " + db);
                     setup.execute("CREATE TABLE t (id INT PRIMARY KEY, e ENUM('a','bb',''), s SET('x','yy'), u INT UNIQUE)");
                     setup.execute("INSERT INTO t VALUES (1,'a','x,yy',1),(2,'','',NULL),(3,NULL,NULL,NULL)");
+                    setup.execute("CREATE TABLE c (a INT,b INT,e ENUM('a','bb',''),s SET('x','yy'),PRIMARY KEY(a,b))");
+                    setup.execute("INSERT INTO c SELECT IF(id=3,2,1),IF(id=2,2,1),e,s FROM t");
                     List<List<String>> rollup = Arrays.asList(
                             Arrays.asList("a", "x,yy"), Arrays.asList("a", null),
                             Arrays.asList("", ""), Arrays.asList("", null),
@@ -284,6 +286,37 @@ public final class EnumSetMetadataProbe {
                                 Collections.singletonList(Arrays.asList("a", "x,yy")));
                     }
                     query(connection, mode, "SELECT MIN(l.e)OVER(),MAX(l.s)OVER() FROM t l WHERE l.id=(SELECT MIN(r.id) FROM t r WHERE r.id>=l.id)",
+                            Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy")));
+                    for (String sql : new String[]{
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=(SELECT COUNT(*) FROM t WHERE id<=1)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND NOT EXISTS(SELECT 1 FROM (SELECT id FROM t WHERE id=100 LIMIT 1)d)",
+                            "SELECT MIN(l.e)OVER(),MAX(l.s)OVER() FROM t l WHERE l.id=1 AND EXISTS(SELECT COUNT(*) FROM t r WHERE r.id>=l.id)",
+                            "SELECT MIN(l.e)OVER(),MAX(l.s)OVER() FROM t l WHERE l.id=1 AND EXISTS(SELECT COUNT(*) FROM t r WHERE r.id>=l.id HAVING COUNT(*)>0)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=(SELECT MIN(id) FROM t) AND id=(SELECT MIN(id) FROM t)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=COALESCE((SELECT MIN(id) FROM t),1)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=(SELECT MIN(id) FROM t WHERE id=(SELECT MIN(id) FROM t))",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=(SELECT MIN(id) FROM t) AND id=COALESCE((SELECT MIN(id) FROM t),1)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM c WHERE a=(SELECT MIN(id) FROM t) AND b=(SELECT MIN(id) FROM t)"}) {
+                        query(connection, mode, sql, constantWindowType, Types.CHAR, false,
+                                Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    }
+                    for (String sql : new String[]{
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND NOT EXISTS(SELECT 1 FROM (SELECT id FROM t WHERE id=1 LIMIT 1)d)",
+                            "SELECT MIN(l.e)OVER(),MAX(l.s)OVER() FROM t l WHERE l.id=1 AND NOT EXISTS(SELECT COUNT(*) FROM t r WHERE r.id>=l.id)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN 2 AND 1",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN NULL AND 1",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN 1 AND NULL"}) {
+                        query(connection, mode, sql, constantWindowType, Types.CHAR, false, Collections.<List<String>>emptyList());
+                    }
+                    for (String sql : new String[]{
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE CAST(id AS SIGNED)=(SELECT COUNT(*) FROM t WHERE id<=1)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE CAST(id AS SIGNED)=1"}) {
+                        query(connection, mode, sql, Types.VARCHAR, Types.CHAR, false,
+                                Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    }
+                    query(connection, mode, "SELECT MIN(e)OVER(),MAX(s)OVER() FROM c WHERE a=(SELECT MIN(id) FROM t)",
+                            Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy")));
+                    query(connection, mode, "SELECT MIN(l.e)OVER(),MAX(l.s)OVER() FROM t l WHERE l.id=COALESCE((SELECT MIN(r.id) FROM t r WHERE r.id>=l.id),1)",
                             Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy")));
                     if (mode.equals("server-prepared") || mode.equals("cursor")) {
                         for (String key : new String[]{"id", "u"}) {

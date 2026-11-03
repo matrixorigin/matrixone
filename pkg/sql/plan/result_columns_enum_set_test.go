@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -155,6 +156,23 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false", true},
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t", true},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=1", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where cast(id as signed)=(select count(*) from enum_order_t where id<=1)", false},
+		{"select min(e) over(),max(s) over() from enum_order_t where cast(id as signed)=1", false},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=(select count(*) from enum_order_t where id<=1)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and not exists(select 1 from (select id from enum_order_t where id=100 limit 1)d)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and not exists(select 1 from (select id from enum_order_t where id=1 limit 1)d)", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and exists(select count(*) from enum_order_t r where r.id>=l.id)", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and not exists(select count(*) from enum_order_t r where r.id>=l.id)", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=1 and exists(select count(*) from enum_order_t r where r.id>=l.id having count(*)>0)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=(select min(id) from enum_order_t) and id=(select min(id) from enum_order_t)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=coalesce((select min(id) from enum_order_t),1)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=(select min(id) from enum_order_t where id=(select min(id) from enum_order_t))", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=(select min(id) from enum_order_t) and id=coalesce((select min(id) from enum_order_t),1)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id between 2 and 1", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id between null and 1", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id between 1 and null", true},
+		{"select min(e) over(),max(s) over() from enum_composite_t where id=(select min(id) from enum_order_t) and u=(select min(id) from enum_order_t)", true},
+		{"select min(e) over(),max(s) over() from enum_composite_t where id=(select min(id) from enum_order_t)", false},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and exists(select 1 from (select id from enum_order_t where id=1 limit 1)d)", false},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and exists(select count(*) from enum_order_t)", true},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and exists(select count(*) from enum_order_t where false)", true},
@@ -206,6 +224,12 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 			mock.ctxt.tables["enum_order_t"].Cols[0].Typ.Id = int32(types.T_int32)
 			mock.ctxt.tables["enum_order_t"].Cols = append(mock.ctxt.tables["enum_order_t"].Cols, &pb.ColDef{Name: "u", Typ: pb.Type{Id: int32(types.T_int64)}})
 			mock.ctxt.tables["enum_order_t"].Indexes = []*pb.IndexDef{{IndexName: "u_key", Unique: true, Parts: []string{"u"}}}
+			composite := DeepCopyTableDef(mock.ctxt.tables["enum_order_t"], true)
+			composite.Name = "enum_composite_t"
+			composite.Pkey = &pb.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"id", "u"}}
+			composite.Indexes = nil
+			mock.ctxt.tables[composite.Name] = composite
+			mock.ctxt.objects[composite.Name] = &pb.ObjectRef{ObjName: composite.Name, Obj: 99071}
 			p, err := runOneStmt(mock, t, tc.sql)
 			require.NoError(t, err)
 			snapshot := proto.Clone(p)

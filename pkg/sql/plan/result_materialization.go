@@ -91,7 +91,7 @@ func newResultMaterialization(query *plan.Query, values []any, scopes ...[]*Bind
 						result = min(result, 1)
 					}
 				}
-				if agg.NodeType == plan.Node_JOIN && r.joinKeyFilter(agg, node.FilterList) {
+				if agg.NodeType == plan.Node_JOIN && r.joinKeyFilter(agg, node.FilterList, 0) {
 					result = min(result, 1)
 				}
 				if agg.NodeType == plan.Node_JOIN && agg.JoinType == plan.Node_MARK && len(agg.Children) == 2 &&
@@ -174,7 +174,7 @@ func newResultMaterialization(query *plan.Query, values []any, scopes ...[]*Bind
 					// Its generated LIMIT/aggregate is not a source const-table fact.
 					if reject || left == 0 || right == 0 {
 						result = left
-					} else if r.constantProvider(node.Children[1]) && !resultMarkCorrelated(query, node) {
+					} else if r.existenceConstant(node, nil) {
 						result = left
 					}
 				case plan.Node_SINGLE:
@@ -222,7 +222,8 @@ func newResultMaterialization(query *plan.Query, values []any, scopes ...[]*Bind
 		}
 		// Grouping/aggregate/HAVING subqueries are independent existence
 		// consumers, not semijoin FROM providers. Their inputs need not be const.
-		if block == owner && !owner.isCorrelated && (len(owner.aggregates) > 0 || len(owner.groups) > 0 || owner.hasHaving) {
+		if block == owner && ((!owner.isCorrelated && (len(owner.aggregates) > 0 || len(owner.groups) > 0 || owner.hasHaving)) ||
+			len(owner.aggregates) > 0 && len(owner.groups) == 0) {
 			providers[address] = true
 			return true
 		}
@@ -270,67 +271,118 @@ func (r *resultMaterialization) materializedBlock(id int32, block *BindContext) 
 // Filters above generated joins still constrain the preserved scan. Import
 // literal/parameter constants, and the single output of an uncorrelated scalar,
 // only through the actual typed JOIN route. Existence keeps its separate scope rule.
-func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.Expr) bool {
-	if len(join.Children) != 2 {
+func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.Expr, depth int) bool {
+	if len(join.Children) != 2 || depth > len(r.query.Nodes) {
 		return false
 	}
 	rightOwner := r.blockOwner(join.Children[1])
 	scalar := rightOwner != nil && !rightOwner.isCorrelated && !resultMarkCorrelated(r.query, join) && r.bound(join.Children[1]) <= 1 &&
 		(join.JoinType == plan.Node_LEFT || join.JoinType == plan.Node_SINGLE || join.JoinType == plan.Node_INNER)
-	left := r.query.Nodes[join.Children[0]]
-	if left == nil || left.NodeType != plan.Node_TABLE_SCAN {
-		return false
-	}
-	scan := *left
-	scan.FilterList = append([]*plan.Expr(nil), left.FilterList...)
-	for _, filter := range filters {
-		fn := filter.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
-			continue
-		}
-		for side := 0; side < 2; side++ {
-			column := fn.Args[side]
-			if column.GetCol() == nil {
-				column = integerComparisonCastColumn(column)
-			}
-			lhs := column.GetCol()
-			if lhs == nil {
-				continue
-			}
-			l := resultColumnRouteAtJoin(r.query, join, lhs, true)
-			if l.childIdx != 0 || l.ref == nil {
-				continue
-			}
-			value := fn.Args[1-side]
-			if rhs := value.GetCol(); rhs != nil {
-				route := resultColumnRouteAtJoin(r.query, join, rhs, true)
-				if !scalar || route.childIdx != 1 {
-					continue
-				}
-				// Private proof symbol for a once-evaluated scalar, never data.
-				value = makePlan2Int64ConstExprWithType(0)
-			} else if !isRuntimeConstExpr(value) {
-				continue
-			}
-			key := &plan.Expr{Typ: fn.Args[side].Typ, Expr: &plan.Expr_Col{Col: l.ref}}
-			scan.FilterList = append(scan.FilterList, &plan.Expr{Typ: filter.Typ, Expr: &plan.Expr_F{F: &plan.Function{
-				Func: &plan.ObjectRef{ObjName: "="}, Args: []*plan.Expr{key, value},
-			}}})
-		}
-	}
-	if !r.scanSingleRow(&scan) {
-		return false
-	}
+	// A rejected outer-join provider cannot multiply its preserved input.
+	admitted := scalar || join.JoinType == plan.Node_LEFT && (resultFiltersRejectAll(join.OnList) || r.bound(join.Children[1]) == 0)
 	switch join.JoinType {
-	case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_INNER:
-		return scalar
 	case plan.Node_SEMI:
-		return r.constantProvider(join.Children[1])
+		admitted = r.constantProvider(join.Children[1])
 	case plan.Node_ANTI, plan.Node_MARK:
-		return r.constantProvider(join.Children[1]) && (!resultMarkCorrelated(r.query, join) ||
-			join.JoinType == plan.Node_MARK && resultPositiveExistenceFilter(filters, join))
+		admitted = r.existenceConstant(join, filters)
 	}
-	return false
+	if !admitted {
+		return false
+	}
+	proofs := make([]*plan.Expr, 0, len(filters)+len(join.FilterList))
+	for _, filter := range append(append([]*plan.Expr(nil), filters...), join.FilterList...) {
+		proofs = append(proofs, resultProofExpr(filter, func(e *plan.Expr) *plan.Expr {
+			route := resultColumnRouteAtJoin(r.query, join, e.GetCol(), true)
+			if route.childIdx == 1 && scalar {
+				// A statement-constant symbol, never a value installed in the plan.
+				return makePlan2Int64ConstExprWithType(0)
+			}
+			if route.childIdx == 0 && route.ref != nil {
+				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Col{Col: route.ref}}
+			}
+			return e
+		}))
+	}
+	return r.keyFilteredInput(join.Children[0], proofs, depth+1)
+}
+
+// Carry the same conjunct environment down the preserved input. Each scalar
+// JOIN discharges only its own producer; later joins can then combine all key
+// parts, including constants nested in deterministic scalar expressions.
+func (r *resultMaterialization) keyFilteredInput(id int32, filters []*plan.Expr, depth int) bool {
+	if id < 0 || int(id) >= len(r.query.Nodes) || depth > len(r.query.Nodes) {
+		return false
+	}
+	n := r.query.Nodes[id]
+	if n == nil {
+		return false
+	}
+	if n.NodeType == plan.Node_JOIN {
+		return r.joinKeyFilter(n, filters, depth+1)
+	}
+	filters = append(append([]*plan.Expr(nil), filters...), n.FilterList...)
+	if n.NodeType == plan.Node_TABLE_SCAN {
+		scan := *n
+		scan.FilterList = filters
+		return r.scanSingleRow(&scan)
+	}
+	if !isResultColumnTransparentNode(n.NodeType) || len(n.Children) != 1 {
+		return r.bound(id) <= 1
+	}
+	for i, filter := range filters {
+		filters[i] = resultProofExpr(filter, func(e *plan.Expr) *plan.Expr {
+			if projected := resultColumnProjectionAtNode(n, e.GetCol(), true); projected != nil {
+				return projected
+			}
+			return e
+		})
+	}
+	return r.keyFilteredInput(n.Children[0], filters, depth+1)
+}
+
+func resultProofExpr(e *plan.Expr, column func(*plan.Expr) *plan.Expr) *plan.Expr {
+	if e.GetCol() != nil {
+		return column(e)
+	}
+	fn := e.GetF()
+	if fn == nil {
+		return e
+	}
+	copyFn := *fn
+	copyFn.Args = make([]*plan.Expr, len(fn.Args))
+	for i, arg := range fn.Args {
+		copyFn.Args[i] = resultProofExpr(arg, column)
+	}
+	copyExpr := *e
+	copyExpr.Expr = &plan.Expr_F{F: &copyFn}
+	return &copyExpr
+}
+
+func (r *resultMaterialization) existenceConstant(join *plan.Node, filters []*plan.Expr) bool {
+	if len(join.Children) != 2 {
+		return false
+	}
+	owner := r.blockOwner(join.Children[1])
+	if owner == nil {
+		return false
+	}
+	// A correlated global group remains an independently evaluated existence
+	// consumer; it is not a row-producing semijoin FROM provider.
+	if len(owner.aggregates) > 0 && len(owner.groups) == 0 {
+		return true
+	}
+	correlated := owner.isCorrelated || resultMarkCorrelated(r.query, join)
+	negative := join.JoinType == plan.Node_ANTI
+	for _, filter := range filters {
+		if fn := filter.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "not" && len(fn.Args) == 1 &&
+			resultPositiveExistenceFilter(fn.Args, join) {
+			negative = true
+		}
+	}
+	if negative && !correlated {
+		return true
+	}
+	return r.constantProvider(join.Children[1]) && (!resultMarkCorrelated(r.query, join) || resultPositiveExistenceFilter(filters, join))
 }
 
 func (r *resultMaterialization) columnNotNull(n *plan.Node, col *plan.ColRef) bool {
@@ -450,7 +502,10 @@ func resultPositiveExistenceFilter(filters []*plan.Expr, mark *plan.Node) bool {
 // Adapt the existing key-equality proof to either logical binding positions or
 // the final pruned scan's physical positions, without mutating its table/filters.
 func (r *resultMaterialization) scanSingleRow(node *plan.Node) bool {
-	if node.TableDef == nil {
+	// Physical comparison/index rewrites may erase explicit-key transformations.
+	// Only the binding owner can establish const access; result extraction may
+	// still prove emptiness/pagination, but must not reconstruct lost eligibility.
+	if node.TableDef == nil || len(r.scopes) == 0 {
 		return false
 	}
 	scan := *node
@@ -462,6 +517,17 @@ func (r *resultMaterialization) scanSingleRow(node *plan.Node) bool {
 		fn := filter.GetF()
 		if fn == nil || fn.Func == nil {
 			continue
+		}
+		if (fn.Func.ObjName == "=" || fn.Func.ObjName == "<=>") && len(fn.Args) == 2 {
+			copyFn := *fn
+			copyFn.Args = append([]*plan.Expr(nil), fn.Args...)
+			for side, arg := range copyFn.Args {
+				if column := resultConstAccessColumn(arg); column != nil {
+					copyFn.Args[side] = column
+				}
+			}
+			fn = &copyFn
+			scan.FilterList[i] = &plan.Expr{Typ: filter.Typ, Expr: &plan.Expr_F{F: fn}}
 		}
 		var args []*plan.Expr
 		if fn.Func.ObjName == "<=>" && len(fn.Args) == 2 {
@@ -502,12 +568,127 @@ func (r *resultMaterialization) scanSingleRow(node *plan.Node) bool {
 		filterListHasConstEqualityOnCols(scan.FilterList, &table, scan.BindingTags[0], []string{table.Pkey.PkeyColName})
 }
 
+// Injectivity is necessary but not sufficient for const-table access: MySQL
+// does not use an explicitly transformed key as a direct field lookup.
+func resultConstAccessColumn(e *plan.Expr) *plan.Expr {
+	if e.GetCol() != nil {
+		return e
+	}
+	for next := e; next.GetF() != nil; {
+		fn := next.GetF()
+		if fn.Func == nil || fn.Func.ObjName != "cast" || fn.SyntaxExplicitCast || len(fn.Args) != 2 {
+			return nil
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload != 0 {
+			return nil
+		}
+		next = fn.Args[0]
+	}
+	return integerComparisonCastColumn(e)
+}
+
+func resultReversedIntegerBounds(lo, hi *plan.Expr) bool {
+	if lo.GetLit() == nil || hi.GetLit() == nil || lo.Typ.Id != hi.Typ.Id || !types.T(lo.Typ.Id).IsInteger() {
+		return false
+	}
+	integer := func(e *plan.Expr) (uint64, bool, bool) {
+		switch v := e.GetLit().Value.(type) {
+		case *plan.Literal_I64Val:
+			return uint64(v.I64Val), v.I64Val < 0, true
+		case *plan.Literal_U64Val:
+			return v.U64Val, false, true
+		case *plan.Literal_I32Val:
+			return uint64(v.I32Val), v.I32Val < 0, true
+		case *plan.Literal_I16Val:
+			return uint64(v.I16Val), v.I16Val < 0, true
+		case *plan.Literal_I8Val:
+			return uint64(v.I8Val), v.I8Val < 0, true
+		case *plan.Literal_U32Val:
+			return uint64(v.U32Val), false, true
+		case *plan.Literal_U16Val:
+			return uint64(v.U16Val), false, true
+		case *plan.Literal_U8Val:
+			return uint64(v.U8Val), false, true
+		}
+		return 0, false, false
+	}
+	l, ln, lok := integer(lo)
+	h, hn, hok := integer(hi)
+	return lok && hok && ((!ln && hn) || ln == hn && l > h)
+}
+
 func resultFiltersRejectAll(filters []*plan.Expr) bool {
+	// BETWEEN's binder fallback is a conjunction of >= and <=, including
+	// NULL and reversed bounds. Work on atoms without rewriting execution IR.
+	var atoms []*plan.Expr
+	var collect func(*plan.Expr)
+	collect = func(e *plan.Expr) {
+		if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "and" {
+			for _, arg := range fn.Args {
+				collect(arg)
+			}
+			return
+		}
+		atoms = append(atoms, e)
+	}
 	for _, filter := range filters {
+		collect(filter)
+	}
+	type column struct{ relation, position int32 }
+	type interval struct{ lower, upper *plan.Expr }
+	bounds := make(map[column]interval)
+	for _, filter := range atoms {
+		fn := filter.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+			continue
+		}
+		switch fn.Func.ObjName {
+		case "=", "!=", "<>", "<", ">", "<=", ">=":
+			for _, arg := range fn.Args {
+				if lit := arg.GetLit(); lit != nil && lit.Isnull {
+					return true
+				}
+			}
+		}
+		if fn.Func.ObjName != "<=" && fn.Func.ObjName != ">=" {
+			continue
+		}
+		ref := fn.Args[0].GetCol()
+		if ref == nil || fn.Args[1].GetLit() == nil {
+			continue
+		}
+		key := column{ref.RelPos, ref.ColPos}
+		bound := bounds[key]
+		if fn.Func.ObjName == ">=" {
+			if bound.lower == nil || resultReversedIntegerBounds(fn.Args[1], bound.lower) {
+				bound.lower = fn.Args[1]
+			}
+		} else {
+			if bound.upper == nil || resultReversedIntegerBounds(bound.upper, fn.Args[1]) {
+				bound.upper = fn.Args[1]
+			}
+		}
+		if resultReversedIntegerBounds(bound.lower, bound.upper) {
+			return true
+		}
+		bounds[key] = bound
+	}
+	for _, filter := range atoms {
 		// NULL and FALSE both reject a row in WHERE/HAVING/ON, but an outer
 		// join still preserves its designated side (handled by the caller).
 		if IsFalseExpr(filter) || filter.GetLit() != nil && filter.GetLit().Isnull {
 			return true
+		}
+		if fn := filter.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "between" && len(fn.Args) == 3 {
+			for _, arg := range fn.Args {
+				if lit := arg.GetLit(); lit != nil && lit.Isnull {
+					return true
+				}
+			}
+			if resultReversedIntegerBounds(fn.Args[1], fn.Args[2]) {
+				return true
+			}
 		}
 	}
 	return false
