@@ -213,6 +213,26 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, map[uint64]uint64{0: 1}, sizes, "a dropped table's stale statistics must be excluded")
 		})
+
+		t.Run("cross-product stale identity", func(t *testing.T) {
+			otherSchema := catalog.MockSchemaAll(3, 2)
+			otherSchema.Name = "account_size_other"
+			op := p.StartCNTxn()
+			defer op.Rollback(p.Ctx)
+			_, otherTable := p.CreateDBAndTable(op, "account_size_other_db", otherSchema)
+			require.NoError(t, op.Commit(p.Ctx))
+			otherDB, otherID := otherTable.GetDBID(p.Ctx), otherTable.GetTableID(p.Ctx)
+
+			// Every ID in the stale row is live, but this combination is not.
+			runSQL(fmt.Sprintf("delete from %s where account_id=0 and database_id=%d and table_id=%d", statsTable, dbID, firstID))
+			insert(0, dbID, firstID, `'{"table_size":1}'`)
+			insert(0, otherDB, otherID, `'{"table_size":4}'`)
+			insert(0, otherDB, firstID, `'{"table_size":9999}'`)
+			sizes, ok, err := e.QueryAccountTableSizes(p.Ctx, []uint64{0}, false)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, map[uint64]uint64{0: 5}, sizes)
+		})
 	})
 }
 
