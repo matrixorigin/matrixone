@@ -12103,7 +12103,16 @@ func (builder *QueryBuilder) appendWindowNode(
 			continue
 		}
 		if constantInput == nil {
-			constant := newResultMaterialization(builder.qry, nil).bound(nodeID) <= 1
+			state := preparedBindingState(builder.GetContext())
+			var values []any
+			if state != nil {
+				values = state.values
+			}
+			proof := newResultMaterialization(builder.qry, values, builder.ctxByNode)
+			constant := proof.bound(nodeID) <= 1
+			if proof.usedValues && state != nil {
+				state.valueDependent = true
+			}
 			constantInput = &constant
 		}
 		result.MaterializationElided = *constantInput

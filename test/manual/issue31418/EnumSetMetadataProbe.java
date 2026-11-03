@@ -263,7 +263,46 @@ public final class EnumSetMetadataProbe {
                             Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", ""),Arrays.asList("", "")));
                     query(connection, mode, "SELECT MIN(l.e) OVER(),MAX(l.s) OVER() FROM t l WHERE l.id=1 AND NOT EXISTS(SELECT 1 FROM t r WHERE r.id=1 AND r.id=l.id)",
                             Types.VARCHAR, Types.CHAR, false, Collections.<List<String>>emptyList());
+                    for (String sql : new String[]{
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT COUNT(*) FROM t)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT COUNT(*) FROM t WHERE FALSE)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT COUNT(*) FROM t GROUP BY id)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT COUNT(*) FROM t HAVING COUNT(*)>0)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=(SELECT MIN(id) FROM t)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=(SELECT id FROM t WHERE id=1)"}) {
+                        query(connection, mode, sql, constantWindowType, Types.CHAR, false,
+                                Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    }
+                    query(connection, mode, "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND NOT EXISTS(SELECT COUNT(*) FROM t)",
+                            constantWindowType, Types.CHAR, false, Collections.<List<String>>emptyList());
+                    query(connection, mode, "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=(SELECT COUNT(*) FROM t)",
+                            constantWindowType, Types.CHAR, false, Collections.singletonList(Arrays.asList(null, null)));
+                    for (String sql : new String[]{
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT 1 FROM (SELECT id FROM t WHERE id=1 LIMIT 1)d)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT 1 FROM (SELECT COUNT(*) n FROM t)d)"}) {
+                        query(connection, mode, sql, Types.VARCHAR, Types.CHAR, false,
+                                Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    }
+                    query(connection, mode, "SELECT MIN(l.e)OVER(),MAX(l.s)OVER() FROM t l WHERE l.id=(SELECT MIN(r.id) FROM t r WHERE r.id>=l.id)",
+                            Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy")));
                     if (mode.equals("server-prepared") || mode.equals("cursor")) {
+                        for (String key : new String[]{"id", "u"}) {
+                            try (PreparedStatement keyed = connection.prepareStatement("SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE " + key + "<=>?")) {
+                                keyed.setQueryTimeout(30);
+                                if (mode.equals("cursor")) keyed.setFetchSize(1);
+                                check(keyed.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"), "key prepare fell back");
+                                metadata(keyed.getMetaData(), Types.CHAR, false, "key prepare");
+                                for (int value : new int[]{1,2,1}) {
+                                    keyed.setInt(1,value);
+                                    try (ResultSet result=keyed.executeQuery()) {
+                                        List<List<String>> wanted=value==1 ? Collections.singletonList(Arrays.asList("a", "x,yy"))
+                                                : key.equals("id") ? Collections.singletonList(Arrays.asList("", "")) : Collections.<List<String>>emptyList();
+                                        rows(result, constantWindowType, false, wanted, "key " + key + "=" + value);
+                                        labelWidths(result.getMetaData());
+                                    }
+                                }
+                            }
+                        }
                         try (PreparedStatement nested = connection.prepareStatement("SELECT MIN(e) OVER(),MAX(s) OVER() FROM "
                                 + "(SELECT e,s,ROW_NUMBER() OVER(ORDER BY id)n FROM t ORDER BY id LIMIT ?)d WHERE n>0")) {
                             nested.setQueryTimeout(30);

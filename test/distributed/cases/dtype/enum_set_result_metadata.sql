@@ -143,4 +143,29 @@ select min(e) over() as min_e,max(s) over() as max_s from jdbc_enum_set_metadata
 -- @metacmp(true)
 select min(e) over() as min_e,max(s) over() as max_s,count(*) over() as null_matches
 from jdbc_enum_set_metadata where u<=>null;
+-- A derived provider is not const merely because its underlying scan is a point lookup.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select 1 from (select id from jdbc_enum_set_metadata where id=1 limit 1)d);
+-- Direct independent aggregate existence belongs to its own query block.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select count(*) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select count(*) from jdbc_enum_set_metadata where false);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and not exists(select count(*) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select 1 from (select count(*) as n from jdbc_enum_set_metadata)d);
+-- A once-evaluated scalar may supply a constant key through a generated JOIN.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=(select min(id) from jdbc_enum_set_metadata);
+-- A lossless widened key still admits the once-evaluated scalar value.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where id=(select count(*) from jdbc_enum_set_metadata);
 drop table jdbc_enum_set_metadata;

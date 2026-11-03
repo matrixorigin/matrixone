@@ -155,6 +155,16 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false", true},
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t", true},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=1", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and exists(select 1 from (select id from enum_order_t where id=1 limit 1)d)", false},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and exists(select count(*) from enum_order_t)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and exists(select count(*) from enum_order_t where false)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and not exists(select count(*) from enum_order_t)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and exists(select count(*) from enum_order_t group by id)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=1 and exists(select 1 from (select count(*) from enum_order_t)d)", false},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=(select min(id) from enum_order_t)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=(select count(*) from enum_order_t)", true},
+		{"select min(e) over(),max(s) over() from enum_order_t where id=(select id from enum_order_t where id=1)", true},
+		{"select min(l.e) over(),max(l.s) over() from enum_order_t l where l.id=(select min(r.id) from enum_order_t r where r.id>=l.id)", false},
 		{"select min(e) over(partition by id),max(s) over(partition by id) from enum_order_t where id=1", true},
 		{"select min(e) over(partition by id),max(s) over(partition by id) from enum_order_t where false", true},
 		{"select min(e) over(partition by id),max(s) over(partition by id) from enum_order_t", false},
@@ -193,6 +203,7 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		t.Run(tc.sql, func(t *testing.T) {
 			mock := newMySQLSpecialOrderMock(t)
 			mock.ctxt.tables["enum_order_t"].Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+			mock.ctxt.tables["enum_order_t"].Cols[0].Typ.Id = int32(types.T_int32)
 			mock.ctxt.tables["enum_order_t"].Cols = append(mock.ctxt.tables["enum_order_t"].Cols, &pb.ColDef{Name: "u", Typ: pb.Type{Id: int32(types.T_int64)}})
 			mock.ctxt.tables["enum_order_t"].Indexes = []*pb.IndexDef{{IndexName: "u_key", Unique: true, Parts: []string{"u"}}}
 			p, err := runOneStmt(mock, t, tc.sql)
@@ -240,6 +251,36 @@ func TestEnumSetParameterizedEmptyPublication(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestEnumSetNullSafeKeyParameters(t *testing.T) {
+	for _, key := range []string{"id", "u"} {
+		stmt, err := mysql.ParseOne(t.Context(), "select min(e)over(),max(s)over() from enum_order_t where "+key+"<=>?", 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		mock := newMySQLSpecialOrderMock(t)
+		table := mock.ctxt.tables["enum_order_t"]
+		table.Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+		table.Cols = append(table.Cols, &pb.ColDef{Name: "u", Typ: pb.Type{Id: int32(types.T_int64)}})
+		table.Indexes = []*pb.IndexDef{{IndexName: "u_key", Unique: true, Parts: []string{"u"}}}
+		proc := mock.ctxt.GetProcess()
+		params := vector.NewVec(types.T_int32.ToType())
+		t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+		require.NoError(t, vector.AppendFixed(params, int32(1), false, proc.Mp()))
+		proc.SetPrepareParams(params)
+		bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, []PreparedSourceBinding{{Position: 0, Type: types.T_int32.ToType()}}, []any{int32(1)})
+		require.NoError(t, err)
+		if key == "u" {
+			require.True(t, bound.ValueDependent, "parameter nullness must not enter the type-only plan cache")
+		}
+		snapshot := proto.Clone(bound.Plan)
+		for _, value := range []any{int32(1), int32(2), int32(1)} {
+			for _, col := range GetResultColumnsFromPlanWithParams(bound.Plan, []any{value}) {
+				require.True(t, col.MysqlSpecialResultType.MaterializationElided)
+			}
+			require.True(t, proto.Equal(snapshot, bound.Plan))
+		}
 	}
 }
 

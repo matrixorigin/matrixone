@@ -49,10 +49,16 @@ type resultMaterialization struct {
 	query            *plan.Query
 	bound            func(int32) uint8
 	constantProvider func(int32) bool
+	values           []any
+	scopes           []*BindContext
+	usedValues       bool
 }
 
-func newResultMaterialization(query *plan.Query, values []any) *resultMaterialization {
-	r := &resultMaterialization{query: query}
+func newResultMaterialization(query *plan.Query, values []any, scopes ...[]*BindContext) *resultMaterialization {
+	r := &resultMaterialization{query: query, values: values}
+	if len(scopes) > 0 {
+		r.scopes = scopes[0]
+	}
 	const unknown = uint8(2) // bounds are saturated at 0, 1, or unknown/many
 	memo := make(map[int32]uint8)
 	valid := func(id int32) bool { return id >= 0 && int(id) < len(query.Nodes) && query.Nodes[id] != nil }
@@ -81,12 +87,15 @@ func newResultMaterialization(query *plan.Query, values []any) *resultMaterializ
 				if agg.NodeType == plan.Node_TABLE_SCAN {
 					scan := *agg
 					scan.FilterList = append(append([]*plan.Expr(nil), agg.FilterList...), node.FilterList...)
-					if resultScanSingleRow(&scan) {
+					if r.scanSingleRow(&scan) {
 						result = min(result, 1)
 					}
 				}
+				if agg.NodeType == plan.Node_JOIN && r.joinKeyFilter(agg, node.FilterList) {
+					result = min(result, 1)
+				}
 				if agg.NodeType == plan.Node_JOIN && agg.JoinType == plan.Node_MARK && len(agg.Children) == 2 &&
-					bound(agg.Children[0]) <= 1 && bound(agg.Children[1]) <= 1 && r.constantProvider(agg.Children[1]) &&
+					bound(agg.Children[0]) <= 1 && r.constantProvider(agg.Children[1]) &&
 					resultPositiveExistenceFilter(node.FilterList, agg) {
 					result = bound(agg.Children[0])
 				}
@@ -119,7 +128,7 @@ func newResultMaterialization(query *plan.Query, values []any) *resultMaterializ
 		case plan.Node_TABLE_SCAN:
 			// At binding time names/tags still identify complete unique keys.
 			// Capture this fact before physical pruning and index rewrites.
-			if resultScanSingleRow(node) {
+			if r.scanSingleRow(node) {
 				result = 1
 			}
 		case plan.Node_VALUE_SCAN:
@@ -156,7 +165,7 @@ func newResultMaterialization(query *plan.Query, values []any) *resultMaterializ
 				case plan.Node_SEMI:
 					if reject || left == 0 || right == 0 {
 						result = 0
-					} else if right <= 1 && r.constantProvider(node.Children[1]) {
+					} else if r.constantProvider(node.Children[1]) {
 						result = left
 					}
 				case plan.Node_ANTI, plan.Node_MARK:
@@ -165,7 +174,7 @@ func newResultMaterialization(query *plan.Query, values []any) *resultMaterializ
 					// Its generated LIMIT/aggregate is not a source const-table fact.
 					if reject || left == 0 || right == 0 {
 						result = left
-					} else if right <= 1 && r.constantProvider(node.Children[1]) && !resultMarkCorrelated(query, node) {
+					} else if r.constantProvider(node.Children[1]) && !resultMarkCorrelated(query, node) {
 						result = left
 					}
 				case plan.Node_SINGLE:
@@ -189,41 +198,180 @@ func newResultMaterialization(query *plan.Query, values []any) *resultMaterializ
 		return result
 	}
 	r.bound = bound
-	providers := make(map[int32]bool)
-	r.constantProvider = func(id int32) bool {
-		if !valid(id) {
+	type providerAddress struct {
+		node  int32
+		owner *BindContext
+	}
+	providers := make(map[providerAddress]bool)
+	var provider func(int32, *BindContext) bool
+	provider = func(id int32, owner *BindContext) bool {
+		if !valid(id) || owner == nil {
 			return false
 		}
-		if value, ok := providers[id]; ok {
+		address := providerAddress{id, owner}
+		if value, ok := providers[address]; ok {
 			return value
 		}
-		providers[id] = false
+		providers[address] = false
+		block := r.blockOwner(id)
+		if block == nil {
+			return false
+		}
+		if block != owner && !block.integerPrecisionTransparentBoundary && r.materializedBlock(id, block) {
+			return false
+		}
+		// Grouping/aggregate/HAVING subqueries are independent existence
+		// consumers, not semijoin FROM providers. Their inputs need not be const.
+		if block == owner && !owner.isCorrelated && (len(owner.aggregates) > 0 || len(owner.groups) > 0 || owner.hasHaving) {
+			providers[address] = true
+			return true
+		}
 		n := query.Nodes[id]
 		value := false
 		switch n.NodeType {
 		case plan.Node_TABLE_SCAN:
-			value = resultScanSingleRow(n)
+			value = r.scanSingleRow(n)
 		case plan.Node_VALUE_SCAN:
 			value = n.TableDef == nil
 		case plan.Node_FILTER:
 			if len(n.Children) == 1 && valid(n.Children[0]) && query.Nodes[n.Children[0]].NodeType == plan.Node_TABLE_SCAN {
 				scan := *query.Nodes[n.Children[0]]
 				scan.FilterList = append(append([]*plan.Expr(nil), scan.FilterList...), n.FilterList...)
-				value = resultScanSingleRow(&scan)
+				value = r.scanSingleRow(&scan)
 			}
 		}
 		if !value && len(n.Children) > 0 {
 			value = true
 			for _, child := range n.Children {
-				value = value && r.constantProvider(child)
+				value = value && provider(child, owner)
 			}
 		}
-		// LIMIT/global aggregation may reduce rows, but cannot make a
-		// nonconstant EXISTS provider into a source const-table lookup.
-		providers[id] = value
+		providers[address] = value
 		return value
 	}
+	r.constantProvider = func(id int32) bool { return provider(id, r.blockOwner(id)) }
 	return r
+}
+
+func (r *resultMaterialization) blockOwner(id int32) *BindContext {
+	if id < 0 || int(id) >= len(r.scopes) || r.scopes[id] == nil {
+		return nil
+	}
+	return r.scopes[id].queryBlockOwner
+}
+
+func (r *resultMaterialization) materializedBlock(id int32, block *BindContext) bool {
+	n := r.query.Nodes[id]
+	return n.Limit != nil || n.Offset != nil || block.isDistinct || block.hasHaving ||
+		len(block.aggregates) > 0 || len(block.groups) > 0 || len(block.windows) > 0 || len(block.times) > 0 ||
+		n.NodeType == plan.Node_UNION || n.NodeType == plan.Node_UNION_ALL
+}
+
+// Filters above generated joins still constrain the preserved scan. Import
+// literal/parameter constants, and the single output of an uncorrelated scalar,
+// only through the actual typed JOIN route. Existence keeps its separate scope rule.
+func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.Expr) bool {
+	if len(join.Children) != 2 {
+		return false
+	}
+	rightOwner := r.blockOwner(join.Children[1])
+	scalar := rightOwner != nil && !rightOwner.isCorrelated && !resultMarkCorrelated(r.query, join) && r.bound(join.Children[1]) <= 1 &&
+		(join.JoinType == plan.Node_LEFT || join.JoinType == plan.Node_SINGLE || join.JoinType == plan.Node_INNER)
+	left := r.query.Nodes[join.Children[0]]
+	if left == nil || left.NodeType != plan.Node_TABLE_SCAN {
+		return false
+	}
+	scan := *left
+	scan.FilterList = append([]*plan.Expr(nil), left.FilterList...)
+	for _, filter := range filters {
+		fn := filter.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+			continue
+		}
+		for side := 0; side < 2; side++ {
+			column := fn.Args[side]
+			if column.GetCol() == nil {
+				column = integerComparisonCastColumn(column)
+			}
+			lhs := column.GetCol()
+			if lhs == nil {
+				continue
+			}
+			l := resultColumnRouteAtJoin(r.query, join, lhs, true)
+			if l.childIdx != 0 || l.ref == nil {
+				continue
+			}
+			value := fn.Args[1-side]
+			if rhs := value.GetCol(); rhs != nil {
+				route := resultColumnRouteAtJoin(r.query, join, rhs, true)
+				if !scalar || route.childIdx != 1 {
+					continue
+				}
+				// Private proof symbol for a once-evaluated scalar, never data.
+				value = makePlan2Int64ConstExprWithType(0)
+			} else if !isRuntimeConstExpr(value) {
+				continue
+			}
+			key := &plan.Expr{Typ: fn.Args[side].Typ, Expr: &plan.Expr_Col{Col: l.ref}}
+			scan.FilterList = append(scan.FilterList, &plan.Expr{Typ: filter.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "="}, Args: []*plan.Expr{key, value},
+			}}})
+		}
+	}
+	if !r.scanSingleRow(&scan) {
+		return false
+	}
+	switch join.JoinType {
+	case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_INNER:
+		return scalar
+	case plan.Node_SEMI:
+		return r.constantProvider(join.Children[1])
+	case plan.Node_ANTI, plan.Node_MARK:
+		return r.constantProvider(join.Children[1]) && (!resultMarkCorrelated(r.query, join) ||
+			join.JoinType == plan.Node_MARK && resultPositiveExistenceFilter(filters, join))
+	}
+	return false
+}
+
+func (r *resultMaterialization) columnNotNull(n *plan.Node, col *plan.ColRef) bool {
+	if n.TableDef == nil || col.ColPos < 0 || int(col.ColPos) >= len(n.TableDef.Cols) {
+		return false
+	}
+	def := n.TableDef.Cols[col.ColPos]
+	if def.Typ.NotNullable {
+		return true
+	}
+	if pk := n.TableDef.Pkey; pk != nil {
+		if pk.PkeyColName == def.Name {
+			return true
+		}
+		for _, name := range pk.Names {
+			if name == def.Name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *resultMaterialization) knownNonNull(e *plan.Expr) bool {
+	if lit := e.GetLit(); lit != nil {
+		return !lit.Isnull
+	}
+	if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+		(types.T(e.Typ.Id).IsInteger() || types.T(e.Typ.Id) == types.T_bool) {
+		return r.knownNonNull(fn.Args[0])
+	}
+	p := e.GetP()
+	if p == nil || p.Pos < 0 || int(p.Pos) >= len(r.values) {
+		return false
+	}
+	r.usedValues = true
+	value := r.values[p.Pos]
+	if typed, ok := value.(ParamValue); ok {
+		value = typed.Value
+	}
+	return value != nil
 }
 
 func (r *resultMaterialization) elided(root int32, expr *plan.Expr) bool {
@@ -301,7 +449,7 @@ func resultPositiveExistenceFilter(filters []*plan.Expr, mark *plan.Node) bool {
 
 // Adapt the existing key-equality proof to either logical binding positions or
 // the final pruned scan's physical positions, without mutating its table/filters.
-func resultScanSingleRow(node *plan.Node) bool {
+func (r *resultMaterialization) scanSingleRow(node *plan.Node) bool {
 	if node.TableDef == nil {
 		return false
 	}
@@ -318,7 +466,7 @@ func resultScanSingleRow(node *plan.Node) bool {
 		var args []*plan.Expr
 		if fn.Func.ObjName == "<=>" && len(fn.Args) == 2 {
 			for side := 0; side < 2; side++ {
-				if lit := fn.Args[1-side].GetLit(); fn.Args[side].GetCol() != nil && lit != nil && !lit.Isnull {
+				if col := fn.Args[side].GetCol(); col != nil && (r.columnNotNull(node, col) || r.knownNonNull(fn.Args[1-side])) {
 					args = fn.Args
 					break
 				}
