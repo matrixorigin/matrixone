@@ -2783,6 +2783,13 @@ var supportedOperators = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
 				newOp:      func() executeLogicOfOverload { return NewTemporalIntegerArgumentCast },
 			},
+			{
+				overloadId:      int(TemporalCastIntegerOverload),
+				volatile:        true,
+				executionStable: true,
+				retType:         func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:           func() executeLogicOfOverload { return NewTemporalCastInteger },
+			},
 		},
 	},
 
@@ -3104,7 +3111,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3125,7 +3132,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISNOTTRUE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_NOT_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3146,7 +3153,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3167,7 +3174,7 @@ var supportedOperators = []FuncNew{
 		functionId: ISNOTFALSE,
 		class:      plan.Function_PRODUCE_NO_NULL,
 		layout:     IS_NOT_EXPRESSION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    temporalPredicateTypeMatch,
 
 		Overloads: []overload{
 			{

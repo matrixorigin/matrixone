@@ -251,7 +251,7 @@ select count(*) from t1 where c3 between 100 and 200 and c5 =-1;
 ➤ count(*)[-5,64,0]  𝄀
 110
 explain select * from t1 where c3 between 200 and 300 and c2 <650;
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
         Join Type: INDEX  𝄀
@@ -259,7 +259,7 @@ Project  𝄀
         Runtime Filter Build: #[-1,0]  𝄀
         ->  Table Scan on d1.t1 [ForceOneCN]  𝄀
               Filter Cond: (t1.c2 < 650), t1.c3 BETWEEN 200 AND 300  𝄀
-              Block Filter Cond: (t1.c2 < 650)  𝄀
+              Block Filter Cond: (t1.c2 < 650), t1.c3 BETWEEN 200 AND 300  𝄀
               Runtime Filter Probe: t1.__mo_cpkey_col  𝄀
         ->  Index Table Scan on t1.t1i1 [ForceOneCN]  𝄀
               Filter Cond: prefix_between(__mo_index_idx_col), (serial_extract(__mo_index_pri_col, 1, INT)) < 650)  𝄀
@@ -284,11 +284,11 @@ select * from t1 where c3 between 200 and 300 and c2 <650;
 215  ¦  645  ¦  215  ¦  1  ¦  4  𝄀
 216  ¦  648  ¦  216  ¦  2  ¦  5
 explain select * from t1 where c3 between 100 and 500 and c2 in (271461, 271485, 271386);
-➤ TP QUERY PLAN[12,0,0]  𝄀
+➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Table Scan on d1.t1  𝄀
         Filter Cond: t1.c2 in ([271386 271461 271485]), t1.c3 BETWEEN 100 AND 500  𝄀
-        Block Filter Cond: t1.c2 in ([271386 271461 271485])
+        Block Filter Cond: t1.c2 in ([271386 271461 271485]), t1.c3 BETWEEN 100 AND 500
 select * from t1 where c3 between 100 and 500 and c2 in (271461, 271485, 271386);
 ➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  ¦  c4[4,32,0]  ¦  c5[4,32,0]  𝄀
 90462  ¦  271386  ¦  462  ¦  3  ¦  1  𝄀

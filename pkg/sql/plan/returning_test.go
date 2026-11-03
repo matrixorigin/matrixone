@@ -187,6 +187,18 @@ func TestRecordReturningIrregularMaintenance(t *testing.T) {
 	require.Error(t, builder.recordReturningIrregularMaintenance(indexes, &missingPkColumn, objRef, 3, false))
 }
 
+func TestDMLReturningAcceptsResolvedCastPolicy(t *testing.T) {
+	for _, sql := range []string{
+		"update nation set n_name = 'x' returning cast(n_nationkey as signed)",
+		"update nation set n_name = 'x' returning cast(cast('2024-02-29 23:59:59.500000' as datetime(6)) as signed)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestDMLReturningRejectsV1NonGoals(t *testing.T) {
 	tests := []struct {
 		sql     string
@@ -200,6 +212,7 @@ func TestDMLReturningRejectsV1NonGoals(t *testing.T) {
 		{"update low_priority nation set n_name = 'x' returning n_name", "LOW_PRIORITY UPDATE"},
 		{"update nation set n_name = 'x' returning rand()", "volatile function in RETURNING expression"},
 		{"update nation set n_name = 'x' returning sleep(0)", "volatile function in RETURNING expression"},
+		{"update nation set n_name = 'x' returning now()", "volatile function in RETURNING expression"},
 		{"update nation join region on nation.n_regionkey = region.r_regionkey set nation.n_name = 'x' returning nation.n_name", "joined UPDATE"},
 		{"update nation, region set nation.n_name = 'x' returning nation.n_name", "multi-table UPDATE"},
 		{"update nation set n_name = 'x' from region where nation.n_regionkey = region.r_regionkey returning nation.n_name", "UPDATE FROM"},

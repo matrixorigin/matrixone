@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -42,6 +43,9 @@ type Shuffle struct {
 	ShuffleExpr        *plan.Expr
 	DrainAllBuckets    bool
 	StringHashKey      bool
+	// ShuffleKeyColumns selects a complete equality tuple for local-only
+	// synchronous hash routing. It is not part of the remote pipeline format.
+	ShuffleKeyColumns []int32
 	vm.OperatorBase
 }
 
@@ -109,6 +113,8 @@ type container struct {
 	consumerDone  chan struct{}
 	consumerOnce  sync.Once
 	bufFromPool   bool
+	keyVectors    []*vector.Vector
+	keyHashes     *vector.Vector
 }
 
 type directHandoff struct {
@@ -196,6 +202,16 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.consumerDone = nil
 	shuffle.ctr.consumerOnce = sync.Once{}
 	shuffle.ctr.bufFromPool = false
+	shuffle.freeKeyScratch(proc)
+}
+
+func (shuffle *Shuffle) freeKeyScratch(proc *process.Process) {
+	clear(shuffle.ctr.keyVectors)
+	shuffle.ctr.keyVectors = nil
+	if shuffle.ctr.keyHashes != nil {
+		shuffle.ctr.keyHashes.Free(proc.Mp())
+		shuffle.ctr.keyHashes = nil
+	}
 }
 
 func (shuffle *Shuffle) closeLocalConsumer(proc *process.Process) {
@@ -228,6 +244,7 @@ func (shuffle *Shuffle) stopLocalProducer(failed bool, err error) {
 }
 
 func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err error) {
+	shuffle.freeKeyScratch(proc)
 	shuffle.ctr.buf = nil
 	shuffle.ctr.pendingBat = nil
 	shuffle.ctr.shufflePool = nil

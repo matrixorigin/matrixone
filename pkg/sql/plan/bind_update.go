@@ -263,13 +263,25 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[pos]))
 	}
 	for pos, col := range tableDef.Cols {
-		oldColName2Idx[alias+"."+col.Name] = int32(pos)
+		oldColName2Idx[alias+"."+col.Name] = int32(columnCount + pos)
 	}
 
 	currentProjectList := selectNode.ProjectList
 	currentNodeID := lastNodeID
 	currentNode := selectNode
 	currentTag := selectNodeTag
+	// Historical catalogs may exceed the expression-inlining limit. Their
+	// virtual values must be staged from the current row image before each RHS:
+	// an earlier assignment can change a dependency such as TIMESTAMP.
+	stageLegacy := mayHaveVirtualTimestampRead(tableDef) && len(VirtualTimestampExpansionFindings(tableDef)) > 0
+	var stageOrder []int32
+	if stageLegacy {
+		var err error
+		stageOrder, err = builder.virtualTimestampStageOrder(tableDef)
+		if err != nil {
+			return 0, nil, 0, err
+		}
+	}
 	for _, assignment := range assignments {
 		colName := assignment.Column
 		astExpr := assignment.Expr
@@ -278,8 +290,20 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		if !ok {
 			return 0, nil, 0, moerr.NewInternalErrorf(builder.GetContext(), "update column %s not found", colName)
 		}
+		if stageLegacy {
+			for _, generatedPos := range stageOrder {
+				var err error
+				currentNodeID, currentTag, err = builder.appendVirtualTimestampStage(
+					currentNodeID, currentTag, tableDef, generatedPos, bindCtx, true)
+				if err != nil {
+					return 0, nil, 0, err
+				}
+			}
+			currentNode = builder.qry.Nodes[currentNodeID]
+			currentProjectList = currentNode.ProjectList
+		}
 		rhsBindCtx, rhsBinder := builder.newSequentialUpdateProjectionBinder(
-			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList,
+			bindCtx, currentNodeID, currentTag, tableDef, alias, currentProjectList, stageLegacy,
 		)
 		if useNumericAssignmentContext(tableDef.Cols[columnIndex].Typ, ignore) && !isPreparedAssignmentParam(builder, astExpr) {
 			target := tableDef.Cols[columnIndex].Typ
@@ -367,6 +391,7 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	tableDef *plan.TableDef,
 	alias string,
 	currentProjectList []*plan.Expr,
+	staged bool,
 ) (*BindContext, *ProjectionBinder) {
 	ctx := NewBindContext(builder, parent)
 	cols := make([]string, len(tableDef.Cols))
@@ -387,6 +412,8 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 		builder.nameByColRef[[2]int32{tag, int32(i)}] = alias + "." + col.Name
 	}
 	binding := NewBinding(tag, nodeID, tableDef.DbName, alias, tableDef.TblId, cols, hidden, types, false, defaults)
+	binding.virtualTimestampTable = tableDef
+	binding.virtualTimestampStaged = staged
 	ctx.bindings = append(ctx.bindings, binding)
 	ctx.bindingByTag[tag] = binding
 	ctx.bindingByTable[alias] = binding
@@ -477,6 +504,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 		for _, col := range tableDef.Cols {
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectList))
 			e := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			if sequentialAssignments && isEnumOrSetPlanType(&col.Typ) {
+				// Sequential projections must retain the storage ordinal/bitmap.
+				// A display string cannot recover an empty-label ENUM member.
+				if bindCtx.physicalMySQLSpecialRefs == nil {
+					bindCtx.physicalMySQLSpecialRefs = make(map[*tree.UnresolvedName]struct{})
+				}
+				bindCtx.physicalMySQLSpecialRefs[e] = struct{}{}
+			}
+			if col.GeneratedCol != nil {
+				if bindCtx.physicalGeneratedRefs == nil {
+					bindCtx.physicalGeneratedRefs = make(map[*tree.UnresolvedName]struct{})
+				}
+				bindCtx.physicalGeneratedRefs[e] = struct{}{}
+			}
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
 			})
@@ -877,6 +918,10 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 				}
 			}
 			oldPos := oldColName2Idx[qualifiedName]
+			newPos := oldPos
+			if sequentialAssignments {
+				newPos = dmlCtx.tableDefs[i].Name2ColIndex[col.Name]
+			}
 			if changed := changedPredicates[alias]; changed != nil {
 				newDefExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
 					DeepCopyExpr(changed), newDefExpr, DeepCopyExpr(selectNode.ProjectList[oldPos]),
@@ -885,11 +930,13 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 					return 0, err
 				}
 			}
-			newColName2Idx[qualifiedName] = oldPos
-			automaticAssignments[qualifiedName] = oldPos
-			oldColName2Idx[qualifiedName] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
-			selectNode.ProjectList[oldPos] = newDefExpr
+			newColName2Idx[qualifiedName] = newPos
+			automaticAssignments[qualifiedName] = newPos
+			if !sequentialAssignments {
+				oldColName2Idx[qualifiedName] = int32(len(selectNode.ProjectList))
+				selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
+			}
+			selectNode.ProjectList[newPos] = newDefExpr
 		}
 	}
 	if err = guardAssignments(automaticAssignments, false); err != nil {
@@ -1086,14 +1133,22 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext,
 			genExpr = substituteColRefsInExpr(genExpr, selectNode.ProjectList, colOffsets[i])
 
 			oldPos := oldColName2Idx[alias+"."+col.Name]
-			newColName2Idx[alias+"."+col.Name] = oldPos
+			newPos := oldPos
+			if sequentialAssignments {
+				// The first half is the current row; the second half is the
+				// physical OLD image required by index maintenance.
+				newPos = tableDef.Name2ColIndex[col.Name]
+			}
+			newColName2Idx[alias+"."+col.Name] = newPos
 			if assignedColsByTarget[i] == nil {
 				assignedColsByTarget[i] = make(map[string]struct{})
 			}
 			assignedColsByTarget[i][col.Name] = struct{}{}
-			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
-			selectNode.ProjectList[oldPos] = genExpr
+			if !sequentialAssignments {
+				oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
+				selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
+			}
+			selectNode.ProjectList[newPos] = genExpr
 			if isMultiTargetUpdate {
 				targetSelected, buildErr := builder.buildTargetSelectedBelowAssignmentProject(
 					selectNode,
