@@ -839,7 +839,11 @@ func TestMemPKFilterINConcurrentFirstUseAndReplacement(t *testing.T) {
 	filter.SetFullData(function.IN, true, EncodePrimaryKey(int64(2), packer))
 	require.Nil(t, filter.lookup.set)
 	// Value copies share a holder; all first probes race at the same barrier.
-	copied := filter
+	require.False(t, filter.MayMatchKeyRange(EncodePrimaryKey(int64(99), packer), EncodePrimaryKey(int64(100), packer)))
+	require.Nil(t, filter.lookup.set, "range pruning must not initialize workspace lookup")
+	var equal MemPKFilter
+	equal.SetFullData(function.EQUAL, false, EncodePrimaryKey(int64(1), packer))
+	copied := MemPKFilter{disjuncts: []MemPKFilter{filter, equal}}
 	start := make(chan struct{})
 	counts := make(chan int, 16)
 	var wg sync.WaitGroup
@@ -853,14 +857,20 @@ func TestMemPKFilterINConcurrentFirstUseAndReplacement(t *testing.T) {
 			defer skip.Release()
 			<-start
 			copied.FilterVector(input, p, &skip)
-			counts <- skip.Count()
+			signature := 0
+			for row := 0; row < input.Length(); row++ {
+				if skip.Contains(uint64(row)) {
+					signature |= 1 << row
+				}
+			}
+			counts <- signature
 		}()
 	}
 	close(start)
 	wg.Wait()
 	close(counts)
 	for count := range counts {
-		require.Equal(t, 2, count)
+		require.Equal(t, 8, count, "only row 3 lies outside IN(2) OR =1")
 	}
 	old := filter.lookup
 	require.Len(t, old.set, 1)

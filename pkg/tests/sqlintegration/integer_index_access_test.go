@@ -227,6 +227,9 @@ func TestIntegerIndexAccess(t *testing.T) {
 					exec("delete from " + backfill.name + " where v=2")
 					exec("update " + backfill.name + " set k=1 where v=4")
 					exec("insert into " + backfill.name + "(k,v) values(0,100),(0,100)")
+					for _, predicate := range []string{"k=0 or k=1", "k in (0,1) or v=100"} {
+						require.Equal(t, query("select v from "+backfill.name+" ignore index(ix) where "+predicate+" order by v"), query("select v from "+backfill.name+" force index(ix) where "+predicate+" order by v"), predicate)
+					}
 					require.Equal(t, [][]string{{"32", "1250"}}, query("select count(*),sum(v) from "+backfill.name+" force index(ix) where k=0"))
 					require.Equal(t, query("select v from "+backfill.name+" ignore index(ix) where k=0 order by v"), query("select v from "+backfill.name+" force index(ix) where k=0 order by v"))
 				}()

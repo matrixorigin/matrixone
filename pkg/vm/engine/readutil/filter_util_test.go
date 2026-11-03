@@ -112,3 +112,48 @@ func TestEncodePrimaryKeyVectorShortenedFixedConstant(t *testing.T) {
 	v.SetLength(0)
 	require.Panics(t, func() { EncodePrimaryKeyVector(v, p) })
 }
+
+func TestEncodePrimaryKeyVectorTypeFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		oid   types.T
+		value any
+	}{
+		{types.T_bool, true}, {types.T_bit, uint64(17)},
+		{types.T_int8, int8(-7)}, {types.T_int16, int16(-129)}, {types.T_int32, int32(-65537)}, {types.T_int64, int64(-9007199254740993)},
+		{types.T_uint8, uint8(255)}, {types.T_uint16, uint16(256)}, {types.T_uint32, uint32(65536)}, {types.T_uint64, uint64(1 << 63)},
+		{types.T_float32, float32(-1.5)}, {types.T_float64, float64(-1.5)},
+		{types.T_date, types.Date(17)}, {types.T_time, types.Time(-17)}, {types.T_datetime, types.Datetime(17)}, {types.T_timestamp, types.Timestamp(17)},
+		{types.T_decimal64, types.Decimal64(17)}, {types.T_decimal128, types.Decimal128{}}, {types.T_decimal256, types.Decimal256{}},
+		{types.T_uuid, types.Uuid{}}, {types.T_enum, types.Enum(17)}, {types.T_year, types.MoYear(2024)},
+	} {
+		t.Run(tc.oid.String(), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			p := types.NewPacker()
+			t.Cleanup(p.Close)
+			v := vector.NewVec(tc.oid.ToType())
+			t.Cleanup(func() { v.Free(mp) })
+			require.NoError(t, vector.AppendAny(v, tc.value, false, mp))
+			require.NoError(t, vector.AppendAny(v, tc.value, false, mp))
+			want := EncodePrimaryKey(tc.value, p)
+			got := EncodePrimaryKeyVector(v, p)
+			p.Reset()
+			p.EncodeStringType([]byte("reuse"))
+			require.Equal(t, [][]byte{want, want}, got)
+			got[0][0] ^= 0xff
+			require.Equal(t, want, got[1])
+		})
+	}
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	p := types.NewPacker()
+	t.Cleanup(p.Close)
+	null := vector.NewConstNull(types.T_int64.ToType(), 0, mp)
+	t.Cleanup(func() { null.Free(mp) })
+	got := EncodePrimaryKeyVector(null, p)
+	require.NotNil(t, got)
+	require.Empty(t, got)
+	unsupported := vector.NewVec(types.T_any.ToType())
+	t.Cleanup(func() { unsupported.Free(mp) })
+	require.Panics(t, func() { EncodePrimaryKeyVector(unsupported, p) })
+}
