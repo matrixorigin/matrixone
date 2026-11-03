@@ -15,8 +15,9 @@
 package backup
 
 import (
-	"errors"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // backupSizeReader withholds the final byte until EOF is verified. Otherwise a
@@ -31,7 +32,7 @@ func (r *backupSizeReader) checkEOF() error {
 	var extra [1]byte
 	n, err := io.ReadFull(r.reader, extra[:])
 	if n != 0 {
-		return errors.New("backup source exceeds its stat size")
+		return moerr.NewInternalErrorNoCtx("backup source exceeds its stat size")
 	}
 	if err != io.EOF {
 		return err
