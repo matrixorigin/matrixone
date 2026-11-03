@@ -211,6 +211,34 @@ null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  0  𝄀
 null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  1  𝄀
 null  ¦  null  ¦  1  ¦  null  ¦  1  ¦  1
 truncate table t_rollup_sort;
+insert into t_rollup_sort values (1, 1, 10), (1, 1, null), (1, 2, 5), (2, 1, null);
+set session rollup_algorithm = 'SORT';
+select a, b, count(*) as cnt, sum(amount) as total,
+cast(avg(amount) as decimal(10,2)) as avg_amount, min(amount) as min_amount,
+max(amount) as max_amount, grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  avg_amount[3,10,2]  ¦  min_amount[4,32,0]  ¦  max_amount[4,32,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  10  ¦  10.00  ¦  10  ¦  10  ¦  0  ¦  0  𝄀
+1  ¦  2  ¦  1  ¦  5  ¦  5.00  ¦  5  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+1  ¦  null  ¦  3  ¦  15  ¦  7.50  ¦  5  ¦  10  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  4  ¦  15  ¦  7.50  ¦  5  ¦  10  ¦  1  ¦  1
+set session rollup_algorithm = 'HASH';
+select a, b, count(*) as cnt, sum(amount) as total,
+cast(avg(amount) as decimal(10,2)) as avg_amount, min(amount) as min_amount,
+max(amount) as max_amount, grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  avg_amount[3,10,2]  ¦  min_amount[4,32,0]  ¦  max_amount[4,32,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  10  ¦  10.00  ¦  10  ¦  10  ¦  0  ¦  0  𝄀
+1  ¦  2  ¦  1  ¦  5  ¦  5.00  ¦  5  ¦  5  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  0  𝄀
+1  ¦  null  ¦  3  ¦  15  ¦  7.50  ¦  5  ¦  10  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0  ¦  1  𝄀
+null  ¦  null  ¦  4  ¦  15  ¦  7.50  ¦  5  ¦  10  ¦  1  ¦  1
+truncate table t_rollup_sort;
 insert into t_rollup_sort values (1, 10, 0);
 set session rollup_algorithm = 'SORT';
 select a, sample(b, 100 percent) as sampled

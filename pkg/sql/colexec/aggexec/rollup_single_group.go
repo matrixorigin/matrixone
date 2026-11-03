@@ -69,6 +69,15 @@ func SupportsSingleGroupReuse(aggs []GroupAggFuncExec) bool {
 	return true
 }
 
+// SupportsSingleGroupReuseInput reports whether an initialized aggregate can
+// reuse its state for this input. Rich MIN/MAX metadata must use BulkFill.
+func SupportsSingleGroupReuseInput(agg AggFuncExec, vectors []*vector.Vector) bool {
+	if check, ok := agg.(interface{ singleGroupReuseInput([]*vector.Vector) bool }); ok {
+		return check.singleGroupReuseInput(vectors)
+	}
+	return true
+}
+
 // AppendSingleGroupResultAndReset copies the completed value into dst, then
 // resets the live state without allocation. A successful newly created vector
 // belongs to the caller. On failure a new vector is freed here; an existing dst
@@ -120,6 +129,9 @@ func BulkFillSingleGroupRange(agg AggFuncExec, offset, rows int, vectors []*vect
 	if _, star := agg.(*countStarExec); !star &&
 		(len(state.argTypes) != 1 || !vectors[0].GetType().Eq(state.argTypes[0])) {
 		return moerr.NewInternalErrorNoCtx("invalid single-group input type")
+	}
+	if !SupportsSingleGroupReuseInput(agg, vectors) {
+		return moerr.NewInternalErrorNoCtx("unsupported single-group input metadata")
 	}
 	return reuse.bulkFillSingleGroupRange(offset, rows, vectors)
 }
@@ -230,4 +242,72 @@ func (exec *sumAvgExec[T, A]) appendSingleGroupResult(dst *vector.Vector) error 
 	}
 	exec.windowNonNullCount = 0
 	return nil
+}
+
+func (exec *minMaxExecFixed[T]) singleGroupReuseState() (*aggExec, bool) {
+	if exec == nil || exec.hasExtra || exec.comp == nil || len(exec.state) != 1 ||
+		len(exec.state[0].vecs) != 1 || exec.state[0].vecs[0] == nil ||
+		len(exec.argTypes) != 1 || len(exec.stateTypes) != 1 ||
+		!exec.retType.Eq(exec.stateTypes[0]) || !exec.argTypes[0].Eq(exec.stateTypes[0]) ||
+		!hasDefaultFixedMinMaxMetadata(exec.state[0].vecs[0]) {
+		return nil, false
+	}
+	return &exec.aggExec, true
+}
+
+func (exec *minMaxExecFixed[T]) singleGroupReuseInput(vectors []*vector.Vector) bool {
+	return len(vectors) == 1 && vectors[0] != nil && hasDefaultFixedMinMaxMetadata(vectors[0])
+}
+
+func (exec *minMaxExecFixed[T]) appendSingleGroupResult(dst *vector.Vector) error {
+	state := exec.state[0].vecs[0]
+	if err := dst.UnionOne(state, 0, exec.mp); err != nil {
+		return err
+	}
+	values := vector.MustFixedColNoTypeCheck[T](state)
+	var zero T
+	values[0] = zero
+	state.CleanOnlyData()
+	state.SetLength(1)
+	state.SetNull(0)
+	return nil
+}
+
+func (exec *minMaxExecFixed[T]) bulkFillSingleGroupRange(offset, rows int, vectors []*vector.Vector) error {
+	input := vectors[0]
+	state := exec.state[0].vecs[0]
+	defer state.FinalizeStringSourcePreflight()
+	values := vector.MustFixedColNoTypeCheck[T](input)
+	var winner T
+	found := false
+	for i := 0; i < rows; i++ {
+		row := offset + i
+		if input.IsNull(uint64(row)) {
+			continue
+		}
+		if input.IsConst() {
+			row = 0
+		}
+		value := values[row]
+		if !found || exec.comp(value, winner) < 0 {
+			winner = value
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
+	current := vector.MustFixedColNoTypeCheck[T](state)
+	if state.IsNull(0) {
+		state.UnsetNull(0)
+		current[0] = winner
+	} else {
+		switch cmp := exec.comp(winner, current[0]); {
+		case cmp < 0:
+			current[0] = winner
+		case cmp > 0:
+			return nil
+		}
+	}
+	return state.SetPrepareParamKindAtWithMP(0, vector.PrepareParamNone, exec.mp)
 }

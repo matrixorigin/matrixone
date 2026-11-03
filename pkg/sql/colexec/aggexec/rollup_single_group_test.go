@@ -43,12 +43,30 @@ func TestSingleGroupReuseMatchesBulkFlush(t *testing.T) {
 		{"float32", types.T_float32.ToType(), []any{float32(9), float32(-1), float32(2), float32(0), float32(-7)}},
 		{"float64", types.T_float64.ToType(), []any{float64(9), float64(-1e20), float64(2), float64(0), float64(1e20)}},
 		{"varchar-count", types.T_varchar.ToType(), []any{[]byte("x"), []byte("a"), []byte("b"), []byte(""), []byte("c")}},
+		{"bool", types.T_bool.ToType(), []any{true, false, true, false, true}},
+		{"int64", types.T_int64.ToType(), []any{int64(9), int64(-1), int64(2), int64(0), int64(-7)}},
+		{"uint64", types.T_uint64.ToType(), []any{uint64(9), uint64(1), uint64(2), uint64(0), uint64(7)}},
+		{"date", types.T_date.ToType(), []any{types.Date(9), types.Date(1), types.Date(2), types.Date(0), types.Date(7)}},
+		{"time", types.T_time.ToType(), []any{types.Time(9), types.Time(1), types.Time(2), types.Time(0), types.Time(7)}},
+		{"datetime", types.T_datetime.ToType(), []any{types.Datetime(9), types.Datetime(1), types.Datetime(2), types.Datetime(0), types.Datetime(7)}},
+		{"timestamp", types.T_timestamp.ToType(), []any{types.Timestamp(9), types.Timestamp(1), types.Timestamp(2), types.Timestamp(0), types.Timestamp(7)}},
+		{"enum", types.T_enum.ToType(), []any{types.Enum(9), types.Enum(1), types.Enum(2), types.Enum(0), types.Enum(7)}},
+		{"decimal64", types.T_decimal64.ToType(), []any{types.Decimal64(9), types.Decimal64(1), types.Decimal64(2), types.Decimal64(0), types.Decimal64(7)}},
+		{"decimal128", types.T_decimal128.ToType(), []any{types.Decimal128FromInt64(9), types.Decimal128FromInt64(1), types.Decimal128FromInt64(2), types.Decimal128FromInt64(0), types.Decimal128FromInt64(7)}},
+		{"decimal256", types.T_decimal256.ToType(), []any{types.Decimal256FromInt64(9), types.Decimal256FromInt64(1), types.Decimal256FromInt64(2), types.Decimal256FromInt64(0), types.Decimal256FromInt64(7)}},
+		{"uuid", types.T_uuid.ToType(), []any{types.Uuid{9}, types.Uuid{1}, types.Uuid{2}, types.Uuid{}, types.Uuid{7}}},
 	} {
-		for _, id := range []int64{AggIdOfCountStar, AggIdOfCountColumn, AggIdOfSum, AggIdOfAvg} {
+		for _, id := range []int64{AggIdOfCountStar, AggIdOfCountColumn, AggIdOfSum, AggIdOfAvg, AggIdOfMin, AggIdOfMax} {
+			switch tc.typ.Oid {
+			case types.T_bool, types.T_int64, types.T_uint64, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_enum, types.T_decimal64, types.T_decimal128, types.T_decimal256, types.T_uuid:
+				if id != AggIdOfMin && id != AggIdOfMax {
+					continue
+				}
+			}
 			if tc.typ.Oid == types.T_varchar && id != AggIdOfCountColumn && id != AggIdOfCountStar {
 				continue
 			}
-			t.Run(fmt.Sprintf("%s/%s", tc.name, map[int64]string{AggIdOfCountStar: "count-star", AggIdOfCountColumn: "count-column", AggIdOfSum: "sum", AggIdOfAvg: "avg"}[id]), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/%s", tc.name, map[int64]string{AggIdOfCountStar: "count-star", AggIdOfCountColumn: "count-column", AggIdOfSum: "sum", AggIdOfAvg: "avg", AggIdOfMin: "min", AggIdOfMax: "max"}[id]), func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				defer mpool.DeleteMPool(mp)
 				registry, account, allocation := newTestAggregateAllocation(t)
@@ -167,7 +185,8 @@ func TestSingleGroupReuseRejectsUnsupported(t *testing.T) {
 		{"distinct", AggIdOfCountColumn, true, false, types.T_int32.ToType(), nil},
 		{"decimal-sum", AggIdOfSum, false, false, types.T_int64.ToType(), nil},
 		{"decimal-avg", AggIdOfAvg, false, false, types.T_decimal64.ToType(), nil},
-		{"min", AggIdOfMin, false, false, types.T_int32.ToType(), nil},
+		{"min-bytes", AggIdOfMin, false, false, types.T_varchar.ToType(), nil},
+		{"min-extra", AggIdOfMin, false, false, types.T_int32.ToType(), int32(2)},
 		{"extra", AggIdOfCountColumn, false, false, types.T_int32.ToType(), int64(2)},
 		{"star-extra", AggIdOfCountStar, false, false, types.T_int32.ToType(), int64(2)},
 		{"ordinary", AggIdOfAvg, false, true, types.T_int32.ToType(), nil},
@@ -245,6 +264,9 @@ func TestSingleGroupReuseAllocationFailure(t *testing.T) {
 		{"new-data", AggIdOfCountColumn, false, 1},
 		{"new-nulls", AggIdOfSum, true, 2},
 		{"existing-growth", AggIdOfAvg, false, 1},
+		{"min-new-data", AggIdOfMin, false, 1},
+		{"min-new-nulls", AggIdOfMin, true, 2},
+		{"min-existing-growth", AggIdOfMin, false, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
@@ -274,7 +296,7 @@ func TestSingleGroupReuseAllocationFailure(t *testing.T) {
 					dst.Free(mp)
 				}
 			}()
-			if tc.name == "existing-growth" {
+			if tc.name == "existing-growth" || tc.name == "min-existing-growth" {
 				dst, err = AppendSingleGroupResultAndReset(exec, nil)
 				require.NoError(t, err)
 				for dst.Length() < dst.Capacity() {
@@ -307,6 +329,8 @@ func TestSingleGroupReuseAllocationFailure(t *testing.T) {
 			if !tc.null {
 				if tc.id == AggIdOfCountColumn {
 					require.Equal(t, int64(1), vector.GetAny(dst, oldLen, false))
+				} else if tc.id == AggIdOfMin {
+					require.Equal(t, int32(7), vector.GetAny(dst, oldLen, false))
 				} else {
 					require.NoError(t, (&expectedResult{expected: float64(7)}).checkVecAt(dst, oldLen))
 				}
@@ -355,5 +379,79 @@ func TestSingleGroupReuseExactAvgRounding(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestSingleGroupMinMaxFloatSpecialValuesMatchBulkFill(t *testing.T) {
+	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+		for _, values := range [][]float64{
+			{1, math.NaN(), -1, math.Inf(1)},
+			{math.NaN(), 2, math.Inf(-1), 1},
+			{0, math.Copysign(0, -1), 0, math.Copysign(0, -1)},
+		} {
+			mp := mpool.MustNewZero()
+			makeExec := func() GroupAggFuncExec {
+				a, err := MakeSingleGroupAgg(mp, id, false, nil, nil, types.T_float64.ToType())
+				require.NoError(t, err)
+				SyncAggregatorsToChunkSize([]GroupAggFuncExec{a}, 1)
+				require.NoError(t, a.GroupGrow(1))
+				return a
+			}
+			fast, old := makeExec(), makeExec()
+			input := buildAvgFixedVector(t, mp, types.T_float64.ToType(), values)
+			for _, r := range [][2]int{{0, 1}, {1, 3}} {
+				require.NoError(t, BulkFillSingleGroupRange(fast, r[0], r[1], []*vector.Vector{input}))
+				window, err := input.WindowByLogicalRows(r[0], r[0]+r[1])
+				require.NoError(t, err)
+				require.NoError(t, old.BulkFill(0, []*vector.Vector{window}))
+				window.Free(mp)
+			}
+			out, err := AppendSingleGroupResultAndReset(fast, nil)
+			require.NoError(t, err)
+			ref, err := old.Flush()
+			require.NoError(t, err)
+			require.Equal(t, math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](ref[0], 0)), math.Float64bits(vector.GetFixedAtNoTypeCheck[float64](out, 0)))
+			out.Free(mp)
+			ref[0].Free(mp)
+			fast.Free()
+			old.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB())
+			mpool.DeleteMPool(mp)
+		}
+	}
+}
+
+func TestSingleGroupMinRejectsRichMetadata(t *testing.T) {
+	for _, source := range []bool{false, true} {
+		t.Run(fmt.Sprintf("source=%t", source), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			a, err := MakeSingleGroupAgg(mp, AggIdOfMin, false, nil, nil, types.T_int32.ToType())
+			require.NoError(t, err)
+			defer a.Free()
+			SyncAggregatorsToChunkSize([]GroupAggFuncExec{a}, 1)
+			require.NoError(t, a.GroupGrow(1))
+			v := buildAvgFixedVector(t, mp, types.T_int32.ToType(), []int32{7})
+			defer v.Free(mp)
+			if source {
+				require.NoError(t, v.SetStringSource(types.StringSourceSQLPrepare))
+			} else {
+				v.SetPrepareParamKind(vector.PrepareParamFloat)
+			}
+			require.False(t, SupportsSingleGroupReuseInput(a, []*vector.Vector{v}))
+			require.Error(t, BulkFillSingleGroupRange(a, 0, 1, []*vector.Vector{v}))
+			require.NoError(t, a.BulkFill(0, []*vector.Vector{v}))
+			out, err := a.Flush()
+			require.NoError(t, err)
+			defer out[0].Free(mp)
+			require.Equal(t, int32(7), vector.GetFixedAtNoTypeCheck[int32](out[0], 0))
+			if source {
+				require.Equal(t, types.StringSourceSQLPrepare, out[0].GetStringSourceAt(0))
+			} else {
+				require.Equal(t, vector.PrepareParamFloat, out[0].GetPrepareParamKindAt(0))
+			}
+		})
 	}
 }

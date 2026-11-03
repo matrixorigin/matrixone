@@ -148,6 +148,23 @@ from t_rollup_sort
 group by a, b with rollup
 order by grouping_a, grouping_b;
 
+-- Fixed MIN/MAX mixed with the reusable aggregates, including an all-NULL
+-- detail group and every rollup prefix.
+truncate table t_rollup_sort;
+insert into t_rollup_sort values (1, 1, 10), (1, 1, null), (1, 2, 5), (2, 1, null);
+set session rollup_algorithm = 'SORT';
+select a, b, count(*) as cnt, sum(amount) as total,
+       cast(avg(amount) as decimal(10,2)) as avg_amount, min(amount) as min_amount,
+       max(amount) as max_amount, grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+set session rollup_algorithm = 'HASH';
+select a, b, count(*) as cnt, sum(amount) as total,
+       cast(avg(amount) as decimal(10,2)) as avg_amount, min(amount) as min_amount,
+       max(amount) as max_amount, grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+
 -- SAMPLE owns a separate node and needs the legacy detail/grand-total
 -- branches even when SORT is requested or ordered input is eligible for COST.
 truncate table t_rollup_sort;

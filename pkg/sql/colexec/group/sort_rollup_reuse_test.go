@@ -16,6 +16,7 @@ package group
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -70,7 +71,7 @@ func TestSortRollupSingleGroupReuseAndMixedFallback(t *testing.T) {
 			second.SetRowCount(3)
 			child.WithBatchs([]*batch.Batch{first, second})
 			require.NoError(t, g.Prepare(proc))
-			require.Equal(t, name == "reuse", g.ctr.sortRollup.reuseSingleGroup)
+			require.Equal(t, name == "reuse" || name == "mixed-min", g.ctr.sortRollup.reuseSingleGroup)
 			result, err := vm.Exec(g, proc)
 			require.NoError(t, err)
 			require.NotNil(t, result.Batch)
@@ -125,7 +126,8 @@ func TestSortRollupAppendFailureAbortsAndReprepares(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			child := colexec.NewMockOperator()
 			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
-				[]aggexec.AggFuncExecExpression{countStarAgg(), sumAgg(0)})
+				[]aggexec.AggFuncExecExpression{countStarAgg(), sumAgg(0), aggexec.MakeAggFunctionExpression(
+					aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)})
 			g.SortRollup = true
 			g.AppendChild(child)
 			var allocation groupTestAllocation
@@ -168,7 +170,7 @@ func TestSortRollupAppendFailureAbortsAndReprepares(t *testing.T) {
 				if !growth {
 					return len(s.output.Vecs) == 2
 				}
-				return len(s.output.Vecs) == 3 && s.outputRows > 0 &&
+				return len(s.output.Vecs) == 4 && s.outputRows > 0 &&
 					s.output.Vecs[1].Length() == s.outputRows+1 &&
 					s.output.Vecs[2].Length() == s.outputRows
 			}
@@ -223,7 +225,8 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	proc.Ctx = ctx
 	child := colexec.NewMockOperator()
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
-		[]aggexec.AggFuncExecExpression{countStarAgg()})
+		[]aggexec.AggFuncExecExpression{countStarAgg(), aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)})
 	g.SortRollup = true
 	g.AppendChild(child)
 	var allocation groupTestAllocation
@@ -266,4 +269,104 @@ func TestSortRollupCancellationRetainsPublishedOutputForCleanup(t *testing.T) {
 	g.Reset(proc, true, err)
 	require.Nil(t, g.ctr.sortRollup)
 	require.Zero(t, allocation.account.Snapshot().Used)
+}
+
+func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T) {
+	for _, sameGroup := range []bool{false, true} {
+		for _, forceFallback := range []bool{false, true} {
+			t.Run(fmt.Sprintf("same=%t/fallback=%t", sameGroup, forceFallback), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				child := colexec.NewMockOperator()
+				minAgg := aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_int32)}, nil)
+				g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{minAgg})
+				g.SortRollup = true
+				g.AppendChild(child)
+				t.Cleanup(func() {
+					g.Free(proc, false, nil)
+					child.Free(proc, false, nil)
+					proc.Free()
+					require.Zero(t, proc.Mp().CurrNB())
+				})
+				first := batch.NewWithSize(2)
+				first.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+				first.Vecs[1] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+				first.SetRowCount(1)
+				key := int32(2)
+				if sameGroup {
+					key = 1
+				}
+				second := batch.NewWithSize(2)
+				second.Vecs[0] = testutil.MakeInt32Vector([]int32{key}, nil, proc.Mp())
+				second.Vecs[1] = testutil.MakeInt32Vector([]int32{3}, nil, proc.Mp())
+				second.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
+				second.SetRowCount(1)
+				child.WithBatchs([]*batch.Batch{first, second})
+				require.NoError(t, g.Prepare(proc))
+				require.True(t, g.ctr.sortRollup.reuseSingleGroup)
+				if forceFallback {
+					g.ctr.sortRollup.reuseSingleGroup = false
+				}
+				result, err := vm.Exec(g, proc)
+				require.NoError(t, err)
+				require.False(t, g.ctr.sortRollup.reuseSingleGroup)
+				out := result.Batch
+				if sameGroup {
+					require.Equal(t, 2, out.RowCount())
+					require.Equal(t, []int32{3, 3}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[1]))
+					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(0))
+				} else {
+					require.Equal(t, 3, out.RowCount())
+					require.Equal(t, []int32{7, 3, 3}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[1]))
+					require.Equal(t, vector.PrepareParamNone, out.Vecs[1].GetPrepareParamKindAt(0))
+					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(1))
+				}
+			})
+		}
+	}
+}
+
+func TestSortRollupMinDowngradeAtFullOutputBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	child := colexec.NewMockOperator()
+	minAgg := aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_int32)}, nil)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{minAgg})
+	g.SortRollup = true
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	keys := make([]int32, aggBatchSize)
+	for i := range keys {
+		keys[i] = int32(i)
+	}
+	first := batch.NewWithSize(2)
+	first.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	first.Vecs[1] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	first.SetRowCount(len(keys))
+	second := batch.NewWithSize(2)
+	second.Vecs[0] = testutil.MakeInt32Vector([]int32{int32(aggBatchSize)}, nil, proc.Mp())
+	second.Vecs[1] = testutil.MakeInt32Vector([]int32{-1}, nil, proc.Mp())
+	second.Vecs[1].SetPrepareParamKind(vector.PrepareParamFloat)
+	second.SetRowCount(1)
+	child.WithBatchs([]*batch.Batch{first, second})
+	require.NoError(t, g.Prepare(proc))
+	res, err := vm.Exec(g, proc)
+	require.NoError(t, err)
+	require.Equal(t, aggBatchSize, res.Batch.RowCount())
+	for i := range keys {
+		require.Equal(t, int32(i), vector.GetFixedAtNoTypeCheck[int32](res.Batch.Vecs[1], i))
+		require.Equal(t, vector.PrepareParamNone, res.Batch.Vecs[1].GetPrepareParamKindAt(i))
+	}
+	require.False(t, g.ctr.sortRollup.reuseSingleGroup)
+	res, err = vm.Exec(g, proc)
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Batch.RowCount())
+	require.Equal(t, []int32{-1, -1}, vector.MustFixedColNoTypeCheck[int32](res.Batch.Vecs[1]))
+	require.Equal(t, vector.PrepareParamFloat, res.Batch.Vecs[1].GetPrepareParamKindAt(0))
+	res, err = vm.Exec(g, proc)
+	require.NoError(t, err)
+	require.Nil(t, res.Batch)
 }
