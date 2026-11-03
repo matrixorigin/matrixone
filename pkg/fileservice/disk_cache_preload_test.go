@@ -218,6 +218,30 @@ func TestPreloadUsageObjectsAreBounded(t *testing.T) {
 	require.Len(t, p.objects, preloadObjectsMax)
 }
 
+func TestPreloadUsageGroupsAreBounded(t *testing.T) {
+	p, clock := newTestPreloadUsage()
+	for g := uint64(1); g <= preloadGroupsMax; g++ {
+		evict(p, g, 0, 0, 100)
+	}
+	for i := 1; i < preloadUsageMinSamples; i++ {
+		evict(p, 1, i, 0, 100)
+	}
+	require.True(t, p.narrowRead("/cache/x", 1))
+
+	evict(p, preloadGroupsMax+1, 0, 0, 100)
+	require.Len(t, p.groups, preloadGroupsMax, "no group is idle yet")
+	require.NotContains(t, p.groups, uint64(preloadGroupsMax+1))
+
+	for i := 0; i < 3; i++ {
+		clock.t = clock.t.Add(preloadQuietPeriod - time.Second)
+		evict(p, 1, preloadUsageMinSamples+i, 0, 100)
+	}
+	evict(p, preloadGroupsMax+1, 0, 0, 100)
+	require.Len(t, p.groups, 2, "idle groups are forgotten")
+	require.Contains(t, p.groups, uint64(preloadGroupsMax+1))
+	require.True(t, p.narrowRead("/cache/x", 1), "a thrashing group is kept")
+}
+
 func TestPreloadUsageIgnoresEntryFiles(t *testing.T) {
 	p, _ := newTestPreloadUsage()
 	p.cached("/cache/001/foo.mofscache")

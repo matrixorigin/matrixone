@@ -143,3 +143,6 @@ narrow and do not change.
 - A narrow read never fills whole objects while its table's signal is on, and always
   caches the ranges it reads instead.
 - A table's signal turns off only after a period with no eviction of its whole-object files.
+- The cache's record of tables and objects is bounded. A table idle for twice its quiet
+  period may be forgotten; a table whose signal is on is kept, and a table the cache
+  cannot record is treated as having no signal.

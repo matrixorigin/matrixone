@@ -44,6 +44,10 @@ const (
 	preloadQuietPeriodMax = 10 * time.Minute
 	// preloadObjectsMax objects are mapped to their group at most.
 	preloadObjectsMax = 1 << 16
+	// preloadGroupsMax groups are recorded at most. When it is reached, groups idle
+	// for twice their quiet period are forgotten, and a new group is not recorded
+	// while none is.
+	preloadGroupsMax = 1 << 12
 )
 
 type contextKeyPreloadGroup struct{}
@@ -158,6 +162,12 @@ func (p *preloadUsage) removed(diskPath string, size int64) {
 	share := min(float64(served)/float64(size), 1)
 	g := p.groups[group]
 	if g == nil {
+		if len(p.groups) >= preloadGroupsMax {
+			p.forgetIdleGroups(now)
+			if len(p.groups) >= preloadGroupsMax {
+				return
+			}
+		}
 		g = &groupUsage{average: share, quiet: preloadQuietPeriod}
 		p.groups[group] = g
 	} else if g.samples == 0 {
@@ -181,6 +191,20 @@ func (p *preloadUsage) removed(diskPath string, size int64) {
 			zap.Int("evictions", g.samples),
 			zap.Duration("quiet-period", g.quiet),
 		)
+	}
+}
+
+// forgetIdleGroups forgets the groups with no eviction, and no end of thrashing,
+// for twice their quiet period.
+func (p *preloadUsage) forgetIdleGroups(now time.Time) {
+	for group, g := range p.groups {
+		last := g.lastEvict
+		if g.ended.After(last) {
+			last = g.ended
+		}
+		if now.Sub(last) > 2*g.quiet {
+			delete(p.groups, group)
+		}
 	}
 }
 
