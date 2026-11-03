@@ -463,7 +463,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 	}
 	for _, table := range db.tables {
 		if err = table.ApplyCommit(); err != nil {
-			break
+			return err
 		}
 	}
 	if db.dropEntry != nil {
@@ -580,7 +580,7 @@ func (db *txnDB) PrepareCommit() (err error) {
 	}
 	for _, table := range db.tables {
 		if err = table.PrepareCommit(); err != nil {
-			break
+			return err
 		}
 	}
 	if db.dropEntry != nil {

@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"sync"
@@ -310,6 +311,83 @@ func TestAutoIncrementAlterDetectsAcceptedDMLAfterSnapshot(t *testing.T) {
 	safeTxn := newPreparingEpochTestTxn(t, "alter-safe", types.BuildTS(7, 0), types.BuildTS(8, 0))
 	safe := &txnTable{store: &txnStore{txn: safeTxn}, entry: entry, autoIncrementAlter: true}
 	assert.NoError(t, safe.validateAutoIncrementDMLOrder())
+}
+
+type prepareCommitProbeEntry struct {
+	txnif.TxnEntry
+	calls      int
+	applyCalls int
+	applyErr   error
+}
+
+func (e *prepareCommitProbeEntry) PrepareCommit() error {
+	e.calls++
+	return nil
+}
+
+func (e *prepareCommitProbeEntry) ApplyCommit(string) error {
+	e.applyCalls++
+	return e.applyErr
+}
+
+func TestTxnDBPrepareCommitPreservesTableErrorBeforeDrop(t *testing.T) {
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	entry.RecordKnownDMLPrepare(types.BuildTS(7, 0))
+
+	for _, tc := range []struct {
+		name      string
+		start     types.TS
+		wantRetry bool
+	}{
+		{name: "table conflict", start: types.BuildTS(6, 0), wantRetry: true},
+		{name: "no conflict", start: types.BuildTS(7, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := newPreparingEpochTestTxn(t, tc.name, tc.start, types.BuildTS(8, 0))
+			table := &txnTable{store: &txnStore{txn: txn}, entry: entry, autoIncrementAlter: true, txnEntries: newTxnEntries()}
+			drop := &prepareCommitProbeEntry{}
+			db := &txnDB{store: table.store, tables: map[uint64]*txnTable{42: table}, dropEntry: drop}
+			err := db.PrepareCommit()
+			if tc.wantRetry {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+				require.Zero(t, drop.calls)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 1, drop.calls)
+			}
+		})
+	}
+}
+
+func TestTxnDBApplyCommitPreservesTableErrorBeforeDrop(t *testing.T) {
+	entry := catalog.MockTableEntryWithDB(nil, 42)
+	wantErr := errors.New("table apply failed")
+	for _, tc := range []struct {
+		name     string
+		tableErr error
+	}{
+		{name: "table failure", tableErr: wantErr},
+		{name: "no failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := newPreparingEpochTestTxn(t, tc.name, types.BuildTS(6, 0), types.BuildTS(8, 0))
+			table := &txnTable{store: &txnStore{ctx: context.Background(), txn: txn}, entry: entry, txnEntries: newTxnEntries()}
+			tableEntry := &prepareCommitProbeEntry{applyErr: tc.tableErr}
+			table.txnEntries.Append(tableEntry)
+			drop := &prepareCommitProbeEntry{}
+			db := &txnDB{store: table.store, tables: map[uint64]*txnTable{42: table}, dropEntry: drop}
+
+			err := db.ApplyCommit()
+			require.Equal(t, 1, tableEntry.applyCalls)
+			if tc.tableErr != nil {
+				require.ErrorIs(t, err, tc.tableErr)
+				require.Zero(t, drop.applyCalls)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, 1, drop.applyCalls)
+			}
+		})
+	}
 }
 
 func TestReplayOnePCRebuildsAutoIncrementDMLWatermark(t *testing.T) {
