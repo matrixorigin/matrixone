@@ -146,3 +146,36 @@ func TestLocalShuffleFilterConsumer(t *testing.T) {
 	require.Equal(t, int64(32), arg.ctr.filterTested)
 	require.Equal(t, values, vector.MustFixedColNoTypeCheck[int64](input.Vecs[0]))
 }
+
+func TestFilteredIntegerRangeBuckets(t *testing.T) {
+	for _, signed := range []bool{true, false} {
+		for _, useBoundaries := range []bool{true, false} {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			s := NewArgument()
+			t.Cleanup(s.Release)
+			s.BucketNum = 2
+			s.ShuffleType = int32(plan.ShuffleType_Range)
+			s.ShuffleColMin, s.ShuffleColMax = -10, 10
+			selections := make([][]int32, 2)
+			mask := []uint8{1, 0, 1}
+			var vec *vector.Vector
+			if signed {
+				vec = testutil.MakeInt64Vector([]int64{-10, 0, 10}, nil, proc.Mp())
+				if useBoundaries {
+					s.ShuffleRangeInt64 = []int64{0}
+				}
+				routeFilteredIntegers[int64](s, vec, mask, selections, true)
+			} else {
+				vec = testutil.MakeUint64Vector([]uint64{0, 5, 10}, nil, proc.Mp())
+				s.ShuffleColMin = 0
+				if useBoundaries {
+					s.ShuffleRangeUint64 = []uint64{5}
+				}
+				routeFilteredIntegers[uint64](s, vec, mask, selections, false)
+			}
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			require.Equal(t, [][]int32{{0}, {2}}, selections, "the rejected middle row never enters a bucket")
+		}
+	}
+}

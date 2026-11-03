@@ -200,3 +200,54 @@ func TestLocalShuffleFilterIndependentProbeFanout(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalShuffleFilterRejectsInvalidRegistration(t *testing.T) {
+	for _, tc := range []struct {
+		typ     types.T
+		rows    int64
+		workers int
+	}{
+		{types.T_varchar, 1, 1}, {types.T_int64, 0, 1},
+		{types.T_int64, 1, 0}, {types.T_int64, 1_000_000_001, 1},
+		{types.T_int64, 1_000_000_000, 64},
+	} {
+		f, bytes := NewLocalShuffleFilter(90, tc.typ, tc.rows, tc.workers)
+		require.Nil(t, f)
+		require.Zero(t, bytes)
+	}
+	proc, g := newLocalFilterTestProcess(t, 16<<20)
+	f, _ := NewLocalShuffleFilter(91, types.T_int64, 10, 2)
+	t.Cleanup(f.Close)
+	for _, pair := range [][2]int{{-1, 2}, {2, 2}, {0, 0}, {0, 3}} {
+		_, err := f.Begin(proc, pair[0], pair[1])
+		require.Error(t, err)
+	}
+	p, err := f.Begin(proc, 0, 2)
+	require.NoError(t, err)
+	_, err = f.Begin(proc, 0, 2)
+	require.Error(t, err, "duplicate identity cannot contribute twice")
+	_, err = f.Begin(proc, 0, 1)
+	require.Error(t, err, "producer counts must agree")
+	_, err = f.PrepareProbe(proc, 0)
+	require.Error(t, err)
+	board := proc.GetMessageBoard()
+	proc.SetMessageBoard(message.NewMessageBoard())
+	_, err = f.PrepareProbe(proc, 2)
+	require.Error(t, err, "a different board cannot join this domain")
+	proc.SetMessageBoard(board)
+	p.AddVector(nil)
+	require.NoError(t, p.Complete(false))
+	second, err := f.Begin(proc, 1, 2)
+	require.NoError(t, err)
+	require.NoError(t, second.Complete(false))
+	bloom, err := f.Wait(proc.Ctx, nil)
+	require.NoError(t, err)
+	require.Nil(t, bloom, "unsupported input must fail open")
+	f.Close()
+	_, err = f.Begin(proc, 0, 2)
+	require.Error(t, err)
+	require.Zero(t, g.Snapshot().Used)
+	var absent *LocalShuffleProducer
+	absent.AddVector(nil)
+	require.NoError(t, absent.Complete(false))
+}
