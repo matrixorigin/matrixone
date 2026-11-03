@@ -16,8 +16,20 @@ package process
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 )
+
+// MemoryAdmissionNoWait prevents a transaction from waiting for workspace or
+// locks retained by its own earlier statements. A nil operator preserves the
+// isolated embedding/test contract.
+func (proc *Process) MemoryAdmissionNoWait() bool {
+	if proc == nil || proc.Base == nil || proc.GetTxnOperator() == nil {
+		return false
+	}
+	options := proc.GetTxnOperator().TxnOptions()
+	return options.ByBegin || !options.Autocommit
+}
 
 // ImportMemory is shared by the local pipelines of one execution. Admission
 // happens before execution locks; the compiler closes its root reference after
