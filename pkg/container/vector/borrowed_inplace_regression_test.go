@@ -241,3 +241,42 @@ func TestInplaceDataCOWKeepsSharedAreaLease(t *testing.T) {
 	require.EqualValues(t, 1, released.Load())
 	require.Zero(t, mp.CurrNB())
 }
+
+// A retained window may die before the mutated vector is reset and reused.
+func TestBorrowedInplaceWindowFirstReleaseAndReuse(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	data := types.EncodeSlice([]int64{9, 4, 7})
+	var releases atomic.Int32
+	lease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() { releases.Add(1) })
+	require.NoError(t, err)
+	vec, err := NewBorrowedFixedVector(types.T_int64.ToType(), 3, data, lease)
+	require.NoError(t, err)
+	lease.Release()
+	t.Cleanup(func() {
+		if vec != nil {
+			vec.Free(mp)
+		}
+	})
+	view, err := vec.Window(0, 3)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if view != nil {
+			view.Free(mp)
+		}
+	})
+	view.Free(mp)
+	view = nil
+	require.Zero(t, releases.Load())
+	require.NoError(t, vec.Shrink([]int64{1, 2}, false, mp))
+	require.EqualValues(t, 1, releases.Load())
+	require.Equal(t, []int64{4, 7}, MustFixedColNoTypeCheck[int64](vec))
+	vec.ResetWithNewType(&vec.typ)
+	require.NoError(t, AppendFixedList(vec, []int64{8, 2}, nil, mp))
+	require.NoError(t, vec.InplaceSort(mp))
+	require.Equal(t, []int64{2, 8}, MustFixedColNoTypeCheck[int64](vec))
+	vec.Free(mp)
+	vec = nil
+	require.EqualValues(t, 1, releases.Load())
+	require.Zero(t, mp.CurrNB())
+}
