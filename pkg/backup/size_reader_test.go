@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -104,6 +105,10 @@ func TestBackupSizeReader(t *testing.T) {
 					require.Error(t, err)
 					require.NotEqual(t, io.EOF, err)
 					require.Less(t, int64(got.Len()), tc.size)
+					if int64(len(tc.data)) > tc.size {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
+						require.False(t, fileservice.IsRetryableError(err))
+					}
 				} else {
 					require.ErrorIs(t, err, io.EOF)
 					require.Equal(t, tc.data, got.String())
