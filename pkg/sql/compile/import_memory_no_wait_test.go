@@ -51,7 +51,7 @@ func TestImportMemoryOriginWaitPolicy(t *testing.T) {
 			if !test.nilTxn {
 				c.proc.Base.TxnOperator = &importMemoryTxnOptions{options: test.options}
 			}
-			require.Equal(t, test.noWait, c.importMemoryNoWait())
+			require.Equal(t, test.noWait, c.proc.MemoryAdmissionNoWait())
 			local, err := c.localMemoryManifest(64 << 20)
 			require.NoError(t, err)
 			require.Equal(t, test.noWait, local.NoWait)

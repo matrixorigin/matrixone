@@ -518,6 +518,15 @@ func (writer *s3WriterDelegate) acquireMemory(proc *process.Process, analyzer pr
 	if proc.Base.ImportMemory != nil {
 		return errBorrowedSpill
 	}
+	if err := context.Cause(proc.Ctx); err != nil {
+		return err
+	}
+	if proc.MemoryAdmissionNoWait() {
+		if maximum := rscthrottler.MaxAcquire(writer.memController.throttler); size > maximum {
+			return &rscthrottler.RequestTooLargeError{Requested: size, Maximum: maximum}
+		}
+		return &rscthrottler.WorkingSetCapacityError{Minimum: size, Available: max(0, writer.memController.throttler.Available())}
+	}
 	// The coordinator coalesces process sampling and wakes from Release or
 	// reclaim. This path has no per-writer timer or periodic ForceRefresh.
 	if err := rscthrottler.AcquireContext(proc.Ctx, writer.memController.throttler, size); err != nil {

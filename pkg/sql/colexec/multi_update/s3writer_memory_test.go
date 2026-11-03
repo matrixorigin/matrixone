@@ -19,10 +19,13 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -31,6 +34,7 @@ import (
 
 type admissionThrottler struct {
 	capacity, reserved  int64
+	maximum             int64
 	granted, released   int64
 	acquires, refreshes int
 	invalidRelease      bool
@@ -54,7 +58,12 @@ func (m *admissionThrottler) Acquire(size int64) (int64, bool) {
 	m.granted += size
 	return m.Available(), true
 }
-func (m *admissionThrottler) MaxAcquire() int64 { return 1 << 40 }
+func (m *admissionThrottler) MaxAcquire() int64 {
+	if m.maximum > 0 {
+		return m.maximum
+	}
+	return 1 << 40
+}
 func (m *admissionThrottler) BatchBytes() int64 { return 64 << 20 }
 func (m *admissionThrottler) AcquireContext(ctx context.Context, size int64) error {
 	if m.beforeWait != nil {
@@ -124,7 +133,11 @@ type writeErrorFS struct {
 func (fs *writeErrorFS) Write(context.Context, fileservice.IOVector) error { return fs.err }
 
 func TestS3WriterMemoryPressure(t *testing.T) {
-	for _, mode := range []string{"flush and retry", "wait for capacity", "flush error", "cancel before growth"} {
+	for _, mode := range []string{
+		"flush and retry", "wait for capacity", "flush error", "cancel before growth",
+		"begin retries after flush", "autocommit waits", "begin capacity error",
+		"autocommit off capacity error", "begin canceled after retry", "begin oversized request",
+	} {
 		t.Run(mode, func(t *testing.T) {
 			_, ctrl, proc := prepareTestCtx(t, true)
 			t.Cleanup(proc.Free)
@@ -163,9 +176,37 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 			}
 			beforeReleased := m.released
 			m.capacity = m.reserved // the next growth must flush the previous owner
-			if mode == "wait for capacity" {
+			if mode == "begin retries after flush" || mode == "autocommit waits" ||
+				mode == "begin capacity error" || mode == "autocommit off capacity error" || mode == "begin canceled after retry" || mode == "begin oversized request" {
+				options := txn.TxnOptions{Autocommit: true, ByBegin: mode != "autocommit waits"}
+				if mode == "autocommit off capacity error" {
+					options = txn.TxnOptions{}
+				}
+				op := mock_frontend.NewMockTxnOperator(ctrl)
+				op.EXPECT().TxnOptions().Return(options).AnyTimes()
+				proc.Base.TxnOperator = op
+			}
+			if mode == "wait for capacity" || mode == "autocommit waits" {
 				m.capacity = 0
 				m.beforeWait = func(m *admissionThrottler) { m.capacity = 1 << 30 }
+			}
+			if mode == "begin capacity error" || mode == "autocommit off capacity error" || mode == "begin canceled after retry" || mode == "begin oversized request" {
+				m.capacity = 0
+				m.beforeWait = func(*admissionThrottler) { t.Fatal("a transaction must not enqueue behind its own live resources") }
+			}
+			if mode == "begin oversized request" {
+				m.maximum = 1
+			}
+			if mode == "begin canceled after retry" {
+				ctx, cancel := context.WithCancel(proc.Ctx)
+				t.Cleanup(cancel)
+				proc.Ctx = ctx
+				afterRetry := m.acquires + 2
+				m.beforeAcquire = func(m *admissionThrottler) {
+					if m.acquires == afterRetry {
+						cancel()
+					}
+				}
 			}
 			if mode == "cancel before growth" {
 				ctx, cancel := context.WithCancel(proc.Ctx)
@@ -178,6 +219,21 @@ func TestS3WriterMemoryPressure(t *testing.T) {
 				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), writeErr)
 				require.Equal(t, 2, m.acquires)
 				require.Equal(t, beforeReleased, m.released, "failed flush retains its private vector owner")
+			} else if mode == "begin capacity error" || mode == "autocommit off capacity error" {
+				var capacity *rscthrottler.WorkingSetCapacityError
+				require.ErrorAs(t, w.append(proc, tc.op.OpAnalyzer, bat), &capacity)
+				require.Positive(t, capacity.Minimum)
+				require.Less(t, capacity.Minimum, m.MaxAcquire(), "temporary pressure is not an oversized request")
+				require.Zero(t, capacity.Available)
+				require.Zero(t, m.reserved)
+				require.Equal(t, 2, bat.RowCount(), "the caller still owns the input when admission fails")
+			} else if mode == "begin canceled after retry" {
+				require.ErrorIs(t, w.append(proc, tc.op.OpAnalyzer, bat), context.Canceled)
+			} else if mode == "begin oversized request" {
+				var tooLarge *rscthrottler.RequestTooLargeError
+				require.ErrorAs(t, w.append(proc, tc.op.OpAnalyzer, bat), &tooLarge)
+				require.Greater(t, tooLarge.Requested, tooLarge.Maximum)
+				require.Equal(t, int64(1), tooLarge.Maximum)
 			} else {
 				require.NoError(t, w.append(proc, tc.op.OpAnalyzer, bat))
 				for i, sinker := range w.insertSinkers {
