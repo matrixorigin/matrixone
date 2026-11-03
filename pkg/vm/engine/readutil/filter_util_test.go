@@ -100,3 +100,15 @@ func TestEncodePrimaryKeyVectorVariableConstantOwnership(t *testing.T) {
 	require.Equal(t, want, keys[1])
 	require.Equal(t, want, keys[2])
 }
+
+func TestEncodePrimaryKeyVectorShortenedFixedConstant(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	p := types.NewPacker()
+	t.Cleanup(p.Close)
+	v, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 1, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { v.Free(mp) })
+	v.SetLength(0)
+	require.Panics(t, func() { EncodePrimaryKeyVector(v, p) })
+}

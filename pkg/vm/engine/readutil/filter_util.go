@@ -128,7 +128,7 @@ func visitEncodedPrimaryKeyVector(vec *vector.Vector, packer *types.Packer, visi
 	}
 	repeats := 1
 	if vec.IsConst() {
-		repeats = vec.Length()
+		repeats = max(1, vec.Length())
 	}
 
 	switch vec.GetType().Oid {
