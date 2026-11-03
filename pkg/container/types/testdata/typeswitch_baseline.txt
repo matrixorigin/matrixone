@@ -373,8 +373,6 @@ pkg/vm/engine/disttae/txn.go	checkPKDup	float	1
 pkg/vm/engine/disttae/txn.go	checkPKDup	vector	1
 pkg/vm/engine/disttae/util.go	LinearSearchOffsetByValFactory	float	2
 pkg/vm/engine/disttae/util.go	LinearSearchOffsetByValFactory	vector	2
-pkg/vm/engine/readutil/filter_util.go	EncodePrimaryKeyVector	float	1
-pkg/vm/engine/readutil/filter_util.go	EncodePrimaryKeyVector	vector	1
 pkg/vm/engine/readutil/pk_filter.go	basePKFilterHasNaN	float	1
 pkg/vm/engine/readutil/pk_filter.go	buildBlockPKSearchFuncs	float	5
 pkg/vm/engine/readutil/pk_filter.go	buildBlockPKSearchFuncs	vector	1
@@ -384,7 +382,6 @@ pkg/vm/engine/readutil/pk_filter.go	supportedPKInType	float	1
 pkg/vm/engine/readutil/pk_filter.go	supportedPKInType	vector	1
 pkg/vm/engine/readutil/pk_filter.go	validEncodedBasePKValue	float	1
 pkg/vm/engine/readutil/pk_filter.go	validEncodedBasePKValue	vector	1
-pkg/vm/engine/readutil/pk_filter_mem.go	NewMemPKFilter	float	1
 pkg/vm/engine/tae/common/print.go	MoVectorToString	float	1
 pkg/vm/engine/tae/common/print.go	TypeStringValue	float	1
 pkg/vm/engine/tae/compute/compute.go	GetOffsetByVal	float	1
