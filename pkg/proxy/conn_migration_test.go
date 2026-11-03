@@ -347,8 +347,7 @@ func TestQueryServiceDirectMigrationRejectsIncompleteStateBeforeMarker(t *testin
 		defer sc.Close()
 		info := &pb.MigrateConnFromResponse{LastInsertIDExported: true,
 			PrepareStmts: []*pb.PrepareStmt{{Name: "p", SQL: "select id from db.t",
-				RequiredProtocolVersion: defines.MORPCVersion136,
-				DirectTableSelect:       &pb.PreparedDirectTableSelectV1{Version: 1}}}}
+				DirectTableSelect: &pb.PreparedDirectTableSelectV1{Version: 1}}}}
 		for _, mutate := range []func(){
 			func() {},
 			func() { info.UserDefinedVarsExported = true },
@@ -390,18 +389,10 @@ func TestQueryServiceDirectMigrationCarriesDisposalAndProof(t *testing.T) {
 		info := &pb.MigrateConnFromResponse{LastInsertIDExported: true,
 			UserDefinedVarsExported: true, SystemVariablesExported: true,
 			PrepareStmts: []*pb.PrepareStmt{{Name: "p", SQL: "select id from db.t",
-				RequiredProtocolVersion: defines.MORPCVersion136, DirectTableSelect: proof}}}
+				DirectTableSelect: proof}}}
 		require.NoError(t, cc.migrateConnTo(sc, info))
 		require.True(t, called)
 		require.Equal(t, []string{"/* cloud_nonuser */ set transferred=1;"}, sc.statements)
-		target := runtime.ServiceRuntime(cn.ServiceID)
-		old, _ := target.GetGlobalVariables(runtime.MOProtocolVersion)
-		defer target.SetGlobalVariables(runtime.MOProtocolVersion, old)
-		target.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion135)
-		called, sc.statements = false, nil
-		require.Error(t, cc.migrateConnTo(sc, info))
-		require.False(t, called)
-		require.Empty(t, sc.statements, "old target sees no marker/raw replay/RPC")
 	})
 }
 

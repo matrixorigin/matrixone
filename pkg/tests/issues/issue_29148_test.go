@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -218,17 +217,6 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	client, err := queryclient.NewQueryClient(sourceCN.ServiceID(), sourceCN.GetServiceConfig().CN.RPC)
 	require.NoError(t, err)
 	defer client.Close()
-	// An old control client cannot promise the required target floor. Export
-	// refusal must not consume or invalidate the source's prepared handle.
-	legacy := client.NewRequest(query.CmdMethod_MigrateConnFrom)
-	legacy.MigrateConnFromRequest = &query.MigrateConnFromRequest{
-		ConnID: sourceID, TempTableMigrationSupported: true, LastInsertIDMigrationSupported: true,
-	}
-	legacyResponse, legacyErr := client.SendMessage(ctx, sourceAddress, legacy)
-	if legacyResponse != nil {
-		client.Release(legacyResponse)
-	}
-	require.True(t, moerr.IsMoErrCode(legacyErr, moerr.OkExpectedNotSafeToStartTransfer))
 	assertSourceUsable := func() {
 		t.Helper()
 		rows, err := source.QueryContext(ctx, "execute owner_handle")
@@ -246,9 +234,9 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	}
 	assertSourceUsable()
 	request := client.NewRequest(query.CmdMethod_MigrateConnFrom)
+	// The same-binary path does not require a feature-specific capability bit.
 	request.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 		ConnID: sourceID, TempTableMigrationSupported: true, LastInsertIDMigrationSupported: true,
-		PreparedStatementProtocolSupported: true,
 	}
 	response, err := client.SendMessage(ctx, sourceAddress, request)
 	require.NoError(t, err, "export must accept a procedure-created empty-policy handle")
@@ -274,7 +262,7 @@ func migrateIssue29148PreparedConnection(t *testing.T, ctx context.Context, sour
 	for _, c := range proof.Columns {
 		require.Equal(t, int32(22), c.TypeID)
 	}
-	require.GreaterOrEqual(t, snapshot.PrepareStmts[0].RequiredProtocolVersion, defines.MORPCVersion124)
+	require.Zero(t, snapshot.PrepareStmts[0].RequiredProtocolVersion)
 	type runtimeState struct {
 		value   any
 		present bool

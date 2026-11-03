@@ -133,8 +133,7 @@ func (c *clientConn) migrateConnToContext(
 	}
 	if certified && (!info.UserDefinedVarsExported || !info.SystemVariablesExported ||
 		info.UserDefinedVarsSnapshotTooLarge || info.SystemVariablesSnapshotTooLarge ||
-		len(info.TempTables) != 0 || len(info.UserLevelLocks) != 0 ||
-		requiredProtocol < defines.MORPCVersion136) {
+		len(info.TempTables) != 0 || len(info.UserLevelLocks) != 0) {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	if typedMigration || info.FoundRows != 0 || info.LastInsertID != 0 ||

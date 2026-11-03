@@ -259,9 +259,9 @@ func TestCRC32CopyRetainsBoundGeneratedIdentity(t *testing.T) {
 	proc.Ctx = context.Background()
 	got, err = buildGeneratedExpr(proc.Ctx, col, typ, owner.Cols, proc)
 	require.NoError(t, err)
-	features, err := planpb.RequiredRemoteExpressionFeatures(got)
+	containsText, err := planpb.ContainsCRC32JSONTextBytes(got)
 	require.NoError(t, err)
-	require.True(t, features.CRC32JSONTextBytes, "new DDL opts into text semantics")
+	require.True(t, containsText, "new DDL opts into text semantics")
 }
 
 func TestCRC32PreparedAndLegacyBinding(t *testing.T) {
@@ -332,9 +332,9 @@ func TestCRC32LegacyGeneratedDMLPlans(t *testing.T) {
 			base.Cols[mockTableColPos(t, base, "updated_at")].OnUpdate = nil
 			built, err := runOneStmt(mock, t, sql)
 			require.NoError(t, err)
-			features, err := planpb.RequiredRemoteExpressionFeatures(built)
+			containsText, err := planpb.ContainsCRC32JSONTextBytes(built)
 			require.NoError(t, err)
-			require.False(t, features.CRC32JSONTextBytes, "DML must not rebind legacy catalog expressions")
+			require.False(t, containsText, "DML must not rebind legacy catalog expressions")
 			found := false
 			for _, n := range built.GetQuery().Nodes {
 				for _, e := range n.ProjectList {
@@ -347,7 +347,7 @@ func TestCRC32LegacyGeneratedDMLPlans(t *testing.T) {
 	}
 }
 
-func TestCRC32PersistedDDLAdmissionBeforeFold(t *testing.T) {
+func TestCRC32PersistedDDLUsesExistingAdmission(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.ctxt.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -366,7 +366,7 @@ func TestCRC32PersistedDDLAdmissionBeforeFold(t *testing.T) {
 		`create view crc32_gate_view as select crc32(cast('{"a":1}' as json)) as c`,
 	} {
 		_, err := runOneStmt(mock, t, sql)
-		require.ErrorContains(t, err, "protocol version 135", sql)
+		require.NoError(t, err, sql)
 	}
 }
 
@@ -418,9 +418,9 @@ func TestCRC32LegacyCatalogLikeAndAlter(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			features, err := planpb.RequiredRemoteExpressionFeatures(built)
+			containsText, err := planpb.ContainsCRC32JSONTextBytes(built)
 			require.NoError(t, err)
-			require.False(t, features.CRC32JSONTextBytes)
+			require.False(t, containsText)
 			var target *planpb.TableDef
 			if create := built.GetDdl().GetCreateTable(); create != nil {
 				target = create.TableDef
@@ -473,7 +473,7 @@ func TestCRC32UnchangedDefaultClauseRetainsIdentity(t *testing.T) {
 	require.Nil(t, unchangedCRC32ColumnClauses(source, col, typ).Default)
 }
 
-func TestCRC32FoldedDefaultRetainsCapability(t *testing.T) {
+func TestCRC32FoldedDefaultRetainsIdentity(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	stmt, err := mysql.ParseOne(proc.Ctx, `create table t(c bigint unsigned default (crc32(cast('{"t1":"a"}' as json))))`, 1)
@@ -484,7 +484,7 @@ func TestCRC32FoldedDefaultRetainsCapability(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Expr.GetLit())
 	require.Equal(t, uint64(4012824821), got.Expr.GetLit().GetU64Val())
-	required, err := planpb.RequiresMORPCVersion135CRC32JSONTextBytes(got)
+	required, err := planpb.ContainsCRC32JSONTextBytes(got)
 	require.NoError(t, err)
 	require.True(t, required)
 }

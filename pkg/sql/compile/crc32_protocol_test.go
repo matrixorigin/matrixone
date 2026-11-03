@@ -15,8 +15,6 @@
 package compile
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"testing"
 
@@ -34,103 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
-
-func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
-	c, client := expressionProtocolTestCompile(t)
-	expr := &planpb.Expr{
-		Typ: planpb.Type{Id: int32(types.T_uint64)},
-		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{
-				Obj:     function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload),
-				ObjName: "crc32",
-			},
-		}},
-	}
-	op := projection.NewArgument()
-	defer op.Release()
-	op.ProjectList = []*planpb.Expr{expr}
-	scope := &Scope{
-		Magic:    Remote,
-		Proc:     c.proc,
-		NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
-		RootOp:   op,
-	}
-
-	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}}
-	// Main through v134 does not implement
-	// CRC32 overload 1.
-	for _, version := range []int64{defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
-		client.version = version
-		c.execType = plan2.ExecTypeAP_MULTICN
-		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		calls, releases := client.calls, client.releases
-		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-		require.Equal(t, 1, client.calls-calls, "placement shares one probe for all expression floors")
-		require.Equal(t, 1, client.releases-releases)
-		calls = client.calls
-		_, err := encodeRemoteScope(scope, c.proc)
-		require.ErrorContains(t, err, "remote destination")
-		require.Equal(t, 1, client.calls-calls)
-	}
-
-	client.version = defines.MORPCVersion135
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
-	calls := client.calls
-	data, err := encodeRemoteScope(scope, c.proc)
-	require.NoError(t, err)
-	require.NotEmpty(t, data)
-	require.Equal(t, 1, client.calls-calls, "CRC32 and its UINT64 result share the send probe")
-	// A downgrade after successful planning must fail at the send boundary.
-	client.version = defines.MORPCVersion129
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "remote destination")
-	// The old identity remains dispatchable to an actual old peer.
-	expr.GetF().Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32LegacyOverload)
-	data, err = encodeRemoteScope(scope, c.proc)
-	require.NoError(t, err)
-	decoded, err := decodeScope(data, c.proc, true, nil)
-	require.NoError(t, err)
-	decoded.release()
-	expr.GetF().Func.Obj = function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)
-	require.Equal(t, client.calls, client.releases)
-	client.customResponse = true
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "remote destination")
-	client.sendErr = errors.New("probe failed")
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorIs(t, err, client.sendErr)
-	ctx, cancel := context.WithCancel(c.proc.Ctx)
-	cancel()
-	c.proc.Ctx = ctx
-	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorIs(t, err, context.Canceled)
-}
-
-func TestCRC32JSONPlacementLocalFloor(t *testing.T) {
-	c, client := expressionProtocolTestCompile(t)
-	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
-		Obj: function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload),
-	}}}}
-	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}}
-	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
-		for _, kind := range []plan2.ExecType{plan2.ExecTypeTP, plan2.ExecTypeAP_ONECN, plan2.ExecTypeAP_MULTICN} {
-			c.execType = kind
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			require.ErrorContains(t, c.constrainRemoteExpressionWorkers(qry), "protocol version 135")
-			require.Equal(t, kind, c.execType)
-		}
-	}
-	require.Zero(t, client.calls)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-	c.execType = plan2.ExecTypeAP_ONECN
-	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-	require.Zero(t, client.calls)
-}
 
 func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 	mediumInt := &planpb.Expr{
@@ -162,12 +63,12 @@ func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 		version         int64
 	}{
 		{"mediumint_only", []*planpb.Expr{mediumInt}, true, false, false, defines.MORPCVersion110},
-		{"crc32_only", []*planpb.Expr{crc32JSON}, false, true, false, defines.MORPCVersion135},
-		{"mediumint_then_crc32", []*planpb.Expr{mediumInt, crc32JSON}, true, true, false, defines.MORPCVersion135},
-		{"crc32_then_mediumint", []*planpb.Expr{crc32JSON, mediumInt}, true, true, false, defines.MORPCVersion135},
+		{"crc32_only", []*planpb.Expr{crc32JSON}, false, true, false, defines.MORPCVersion80},
+		{"mediumint_then_crc32", []*planpb.Expr{mediumInt, crc32JSON}, true, true, false, defines.MORPCVersion110},
+		{"crc32_then_mediumint", []*planpb.Expr{crc32JSON, mediumInt}, true, true, false, defines.MORPCVersion110},
 		{"float_only", []*planpb.Expr{floatCast}, false, false, true, defines.MORPCVersion132},
-		{"float_then_crc32", []*planpb.Expr{floatCast, crc32JSON}, false, true, true, defines.MORPCVersion135},
-		{"crc32_then_float", []*planpb.Expr{crc32JSON, floatCast}, false, true, true, defines.MORPCVersion135},
+		{"float_then_crc32", []*planpb.Expr{floatCast, crc32JSON}, false, true, true, defines.MORPCVersion132},
+		{"crc32_then_float", []*planpb.Expr{crc32JSON, floatCast}, false, true, true, defines.MORPCVersion132},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -175,7 +76,9 @@ func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(qry)
 			require.NoError(t, err)
 			require.Equal(t, tc.mediumInt, features.MediumIntAssignmentBounds)
-			require.Equal(t, tc.crc32JSON, features.CRC32JSONTextBytes)
+			containsText, err := planpb.ContainsCRC32JSONTextBytes(qry)
+			require.NoError(t, err)
+			require.Equal(t, tc.crc32JSON, containsText)
 			require.Equal(t, tc.floatConversion, features.FloatConversionSemantics)
 			require.Equal(t, tc.version, remoteExpressionProtocolVersion(features))
 			owner := &planpb.TableDef{}
@@ -230,126 +133,30 @@ func TestCRC32JSONProtocolIncludesMergedMediumIntBounds(t *testing.T) {
 	}
 }
 
-func TestCRC32JSONProtocolIncludesMergedIndexSearchScan(t *testing.T) {
+func TestCRC32JSONWithIndexSearchRetainsExistingGate(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	require.Equal(t, int64(defines.MORPCVersion111), int64(vectorscan.IndexSearchScanProtocolVersion))
-	expr := &planpb.Expr{
-		Typ: planpb.Type{Id: int32(types.T_uint64)},
-		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)},
-			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
-		}},
-	}
-	p := &pipeline.Pipeline{
-		Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"},
-		DataSource: &pipeline.Source{Node: &planpb.Node{
-			NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
-			IndexSearchScan: &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`), AlgoExprs: []*planpb.Expr{expr}},
-		}},
-		InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}},
-	}
+	expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.CRC32, function.CRC32JSONTextOverload)},
+		Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_json)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}},
+	}}}
+	p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"},
+		DataSource: &pipeline.Source{Node: &planpb.Node{NodeType: planpb.Node_INDEX_SEARCH_SCAN,
+			IndexSearchScan: &planpb.IndexSearchScan{AlgoOptions: []byte(`{}`), AlgoExprs: []*planpb.Expr{expr}}}}}
 	features, err := planpb.RequiredRemoteExpressionFeatures(p)
 	require.NoError(t, err)
-	require.True(t, features.CRC32JSONTextBytes)
-	require.Equal(t, int64(defines.MORPCVersion135), remoteExpressionProtocolVersion(features))
-	// The merged algo_exprs owner must independently retain the CRC32 floor;
-	// the ordinary projection cannot hide a missing new-owner traversal.
-	p.InstructionList = nil
-	algoFeatures, err := planpb.RequiredRemoteExpressionFeatures(p)
-	require.NoError(t, err)
-	require.Equal(t, features, algoFeatures)
+	require.True(t, features.StringNumericResultContracts)
+	require.Equal(t, int64(defines.MORPCVersion80), remoteExpressionProtocolVersion(features))
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135} {
-		client.version = version
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		// Preserve the actual merged capability, not merely its version number.
-		require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, p))
-		require.NoError(t, validateVectorPartitionDestination(c.proc, p))
-		receive := validateRemoteExpressionPipelineProtocol(c.proc, p)
-		send := validateRemoteExpressionDestination(c.proc, p, features)
-		if version < defines.MORPCVersion135 {
-			require.ErrorContains(t, receive, "protocol version 135")
-			require.ErrorContains(t, send, "MORPC version 135")
-		} else {
-			require.NoError(t, receive)
-			require.NoError(t, send)
-		}
-	}
-	require.Equal(t, client.calls, client.releases)
-}
-
-func TestCRC32JSONProtocolPreservesMergedExpressionFloors(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		features planpb.RemoteExpressionFeatures
-		version  int64
-	}{
-		{"decimal_statistics", planpb.RemoteExpressionFeatures{DecimalStatisticalResultContracts: true}, defines.MORPCVersion113},
-		{"calendar_intervals", planpb.RemoteExpressionFeatures{CalendarIntervalNormalization: true}, defines.MORPCVersion115},
-		{"least_greatest_collation", planpb.RemoteExpressionFeatures{LeastGreatestCollationSemantics: true}, defines.MORPCVersion117},
-		{"timestamp_results", planpb.RemoteExpressionFeatures{TimestampDatetimeResultContracts: true}, defines.MORPCVersion122},
-		{"dynamic_time_results", planpb.RemoteExpressionFeatures{DynamicTimeResultContracts: true}, defines.MORPCVersion122},
-		{"incomplete_temporal_strings", planpb.RemoteExpressionFeatures{IncompleteTemporalStrings: true}, defines.MORPCVersion130},
-		{"float_conversion", planpb.RemoteExpressionFeatures{FloatConversionSemantics: true}, defines.MORPCVersion132},
-		{"typed_json_minmax", planpb.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}, defines.MORPCVersion133},
-		{"odku_result", planpb.RemoteExpressionFeatures{ODKUStatementResult: true}, defines.MORPCVersion134},
-		{"session_last_insert_id", planpb.RemoteExpressionFeatures{SessionLastInsertIDBaseline: true}, defines.MORPCVersion134},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.version, remoteExpressionProtocolVersion(tc.features))
-			tc.features.CRC32JSONTextBytes = true
-			require.Equal(t, int64(defines.MORPCVersion135), remoteExpressionProtocolVersion(tc.features))
-		})
-	}
-}
-
-func TestCRC32JSONProtocolIncludesMergedTemporalResults(t *testing.T) {
-	c, client := expressionProtocolTestCompile(t)
-	temporal, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "timestamp", []*planpb.Expr{{
-		Typ: types.T_datetime.ToTypeWithScale(3).PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
-	}})
-	require.NoError(t, err)
-	crc, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "crc32", []*planpb.Expr{{
-		Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
-	}})
-	require.NoError(t, err)
-	expressions := []*planpb.Expr{temporal, crc}
-	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: expressions}}, Steps: []int32{0}}
-	features, err := planpb.RequiredRemoteExpressionFeatures(qry)
-	require.NoError(t, err)
-	require.True(t, features.TimestampDatetimeResultContracts)
-	require.True(t, features.CRC32JSONTextBytes)
-	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(features))
-	persisted, err := plan2.RequiredPersistedExpressionProtocolVersion(qry)
-	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion135, persisted)
-	op := projection.NewArgument()
-	defer op.Release()
-	op.ProjectList = expressions
-	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	wire := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: expressions}}}
-	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135} {
-		client.version = version
-		// Placement runs on a capable coordinator; only the actual destination
-		// and then the receiving CN are downgraded for the negative controls.
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
-		c.execType = plan2.ExecTypeAP_MULTICN
-		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-		_, sendErr := encodeRemoteScope(scope, c.proc)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		receiveErr := validateRemoteExpressionPipelineProtocol(c.proc, wire)
-		if version < defines.MORPCVersion135 {
-			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			require.ErrorContains(t, sendErr, "version 135")
-			require.ErrorContains(t, receiveErr, "version 135")
-		} else {
-			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
-			require.NoError(t, sendErr)
-			require.NoError(t, receiveErr)
-		}
-	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
+	client.version = defines.MORPCVersion110
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+	require.Error(t, validateRemoteVectorPartitionProtocol(c.proc, p))
+	require.Error(t, validateVectorPartitionDestination(c.proc, p))
+	client.version = defines.MORPCVersion111
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, p))
+	require.NoError(t, validateVectorPartitionDestination(c.proc, p))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
 	require.Equal(t, client.calls, client.releases)
 }

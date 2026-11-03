@@ -25,7 +25,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -261,7 +260,7 @@ func TestDirectTableMigrationMissingDispositionPreservesTargetAndOnce(t *testing
 	rt.setSession(ses)
 	req := &query.MigrateConnToRequest{DB: "db", LastInsertIDExported: true,
 		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select id from db.t",
-			DirectTableSelect: directTestProof(t), RequiredProtocolVersion: defines.MORPCVersion136}}}
+			DirectTableSelect: directTestProof(t)}}}
 	err := rt.migrateConnectionTo(t.Context(), req)
 	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
 	require.Equal(t, "keep", ses.GetDatabaseName())

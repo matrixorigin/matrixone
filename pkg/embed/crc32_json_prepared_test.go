@@ -79,8 +79,8 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 		// Exercise the added function BVT's generated value and index contract
 		// through the same live SQL frontend, including every mutation form.
 		// The embedded cluster becomes query-ready before the durable catalog
-		// barrier finishes. Observe the real CN admission result; do not set a
-		// runtime version or floor to manufacture authoring permission.
+		// barrier finishes. Observe the existing UINT64 result admission; do not
+		// set a runtime version or floor to manufacture authoring permission.
 		require.Eventually(t, func() bool {
 			rt := moruntime.ServiceRuntime(cn.ServiceID())
 			if rt == nil {
@@ -88,8 +88,8 @@ func TestCRC32JSONBinaryPrepared(t *testing.T) {
 			}
 			value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
 			floor, valid := value.(int64)
-			return ok && valid && floor >= defines.MORPCVersion118
-		}, 90*time.Second, 100*time.Millisecond, "durable CRC32 catalog authoring admission did not complete")
+			return ok && valid && floor >= defines.MORPCVersion80
+		}, 90*time.Second, 100*time.Millisecond, "existing result-type authoring admission did not complete")
 		exec("create table generated_crc(id int primary key,j json,c bigint unsigned generated always as (crc32(j)) stored,index idx_crc(c))")
 		exec(`insert into generated_crc(id,j) values(1,'{"t1":"a"}')`)
 		exec("insert into generated_crc(id,j) select 2,j from generated_crc where id=1")

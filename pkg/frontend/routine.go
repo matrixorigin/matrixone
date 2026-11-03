@@ -873,8 +873,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 			if err := context.Cause(operationCtx); err != nil {
 				return err
 			}
-			if len(preparedStatementProtocolSupported) == 0 || !preparedStatementProtocolSupported[0] ||
-				len(prepareStmts) > directMigrationItemLimit || len(tempTables) != 0 {
+			if len(prepareStmts) > directMigrationItemLimit || len(tempTables) != 0 {
 				return directMigrationRefusal()
 			}
 			proof, err := sourceDirectTableSelectV1(operationCtx, ses, st)
@@ -882,7 +881,6 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 				return err
 			}
 			directProofs[i] = proof
-			requiredVersions[i] = defines.MORPCVersion136
 		}
 		features, err := plan.RequiredRemoteExpressionFeatures(st.PreparePlan)
 		if err != nil {

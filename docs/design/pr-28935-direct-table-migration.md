@@ -1,61 +1,50 @@
-# PR #28935 bounded migration repair
+# Bounded direct-table prepared migration
 
-Normative reviewed version: D2-DTS-1 with D2-DTS-1.1 saved-AST amendment.
-Scope is only fully qualified direct
-INT32 base-table SELECT with captured empty source/current target policy.
-All other table-backed replay remains fail-closed.
-
-The following artifacts are preserved byte-for-byte:
+This design admits a fully qualified direct INT32 base-table SELECT with an
+empty captured source and current target policy. Other table-backed replay
+remains fail-closed. The detailed bounded proof, failure ownership and saved-AST
+amendment are described in the preserved historical design artifacts:
 
 - [D2-DTS-1](pr-28935-direct-table-migration-d2.md), SHA-256
   `6f370b6097c9d892562355c83c8ee5b8ba815d564da51c42916c6c42a5f69a33`.
-- [Independent preimplementation decision](pr-28935-direct-table-migration-preimplementation-review.md),
+- [Preimplementation decision](pr-28935-direct-table-migration-preimplementation-review.md),
   SHA-256 `ba8e82bf1e0223a4a6e8de65e1c763163424120ee864563e5e647a9d59f6d790`.
-- [Independent saved-AST amendment decision](pr-28935-direct-table-migration-saved-ast-review.md),
+- [Saved-AST amendment](pr-28935-direct-table-migration-saved-ast-review.md),
   SHA-256 `f7058e4297cc0b5ebd84f616fce303cdcd9d4d14b4bbc8d1585101ddd32ab46c`.
 
-Decision PASS_FOR_BOUNDED_IMPLEMENTATION_ONLY is technical design acceptance,
-not test evidence, GitHub approval, or closure of broader CRC32 compatibility.
-Reviewed source: `2d616a3847a59cb09560fa119ff6b35b745d3caf`;
-base: `e0314478159c80b062483c307180b02dc009dbc0`.
-The reviewed D2 text's v123 CRC32 and provisional v124 direct-migration numbers
-are historical placeholders from its original base. Actual main
-`743e749a1e33d6c845bb73999e8c82d297a2b657` owns v123 for row-lock admission and
-v124 for fractional TIMESTAMPADD; this candidate provisionally assigns CRC32
-v129 and direct-table migration v130. Main through
-`e238964a7cafc963748830aa606c010085b6d37d` owns v125 LOAD IGNORE diagnostics,
-v126 VIEWS definitions, v127 IndexSearchScan search knobs, and v128 mixed
-JSON/numeric comparisons. The original D2 and review artifacts
-remain byte-for-byte unchanged; this allocation refresh does not change their
-bounded semantic design. These candidate-local numbers do not imply maintainer
-allocation approval or cross-branch deployment support and must be revalidated
-against authoritative main before final admission. Broader design acceptance,
-old-release lifecycle evidence and genuine older-CN rejoin evidence remain
-open.
+These artifacts document their original reviewed source and are retained
+unchanged. Their proposed CRC32 and direct-migration protocol allocations,
+feature-specific capability checks, mixed-version matrix and associated
+publication requirements are superseded by the current shutdown-only upgrade
+contract. They do not define the current deployment policy. Existing unrelated
+protocol checks are retained.
 
-The local uncommitted candidate passes the real issue29148 SQL/procedure
-migration fixtures, including the original transferred rows, later policy,
-NeedReprepare, explicit reprepare and cleanup assertions. The whole frontend
-package also passes (its existing TestRuleCacheDoubleCheckLocking remains
-skipped). These are local results, not current-head CI or publication acceptance.
+## Current admission and ownership
 
-The approved amendment permits only
-saved-AST exact same-table qualifiers introduced by the binder; raw SQL remains
-strictly unqualified. It does not remove any object/catalog/policy/generation/
-capability guard or expand the supported SQL language.
+The source checks the retained SQL and saved AST, bound plan, schema identity,
+current statement generation and empty policy. The bounded witness carries the
+account, database/table identity and version, columns, projection and order;
+it is not an executable plan or authorization grant. The target checks the
+witness, typed session snapshot, target catalog and current policy before
+replay. Its actual PREPARE still performs authorization and is guarded against
+binding a different object or publishing a stale generation. Later schema or
+policy drift requires an explicit reprepare.
 
-Two implementation corrections were necessary after source export became
-reachable: ordinary signed INT32 metadata from GetTypeFromAst uses Scale=-1,
-so only that sentinel and zero canonicalize to no decimal scale (other scales
-and hidden-type sentinels still reject); certified PREPARE skips its optional
-cached Compile because NewCompile would advance the already-owned statement
-boundary a second time. EXECUTE constructs its ordinary Compile later. The
-publication visibility/stamp checks remain unchanged. Neither correction is
-a generic SQL/catalog/plan transport or permission to admit other types.
+The target must be disposable if replay starts. Preflight rejection does not
+consume the once-only migration or mutate target user state. After replay begins,
+an error closes the disposable target after releasing the owned operation;
+the proxy retains the source until successful handoff. The source and target
+use the same binary under the supported contract, so this path does not require
+a new feature-specific MORPC floor or a new proxy capability check. Safety
+checks on witness completeness, typed state and failure disposition remain.
 
-Race and BVT qualification remain missing; no large race rebuild was attempted
-under the disk constraint. Real post-replay auth/cancel/panic disposal and
-fresh-target retry are not established by the synthetic lifecycle unit tests.
-Materialized CRC upgrade, nonempty-policy positive migration and preserving
-preexisting target state after replay remain open. Root independently reviews
-this candidate and its evidence before publication.
+The saved-AST amendment permits only exact qualifiers for the same table
+introduced by the binder; raw SQL remains within the narrow grammar. Ordinary
+signed INT32 metadata accepts the canonical scale sentinel -1 or zero. Certified
+PREPARE avoids advancing the already-owned statement boundary a second time;
+EXECUTE performs its ordinary compilation later.
+
+Regression coverage must exercise source refusal, proof/typed-state validation,
+post-replay disposal and the real issue29148 SQL/procedure migration and policy
+lifecycle. Test results and outstanding release-upgrade acceptance are recorded
+in task evidence, not inferred from this design.
