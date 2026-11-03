@@ -1036,6 +1036,32 @@ id
 select id from json_float_boundary where cast(1 as float)>json_extract(doc,'$.a') order by id;
 id
 4
+prepare json_float_boundary_stmt from 'select id from json_float_boundary where json_extract(doc,''$.a'')=? order by id';
+set @json_float_boundary_param=cast(1 as float);
+execute json_float_boundary_stmt using @json_float_boundary_param;
+id
+1
+set @json_float_boundary_param=cast(1 as double);
+execute json_float_boundary_stmt using @json_float_boundary_param;
+id
+1
+set @json_float_boundary_param=cast(1 as signed);
+execute json_float_boundary_stmt using @json_float_boundary_param;
+id
+1
+set @json_float_boundary_param=null;
+execute json_float_boundary_stmt using @json_float_boundary_param;
+id
+set @json_float_boundary_param=cast(1 as float);
+execute json_float_boundary_stmt using @json_float_boundary_param;
+id
+1
+deallocate prepare json_float_boundary_stmt;
+select cast(json_extract('1e100', '$') as float);
+invalid argument operator cast, bad value [JSON -> FLOAT]
+select cast(json_extract('1', '$') as float) as float_cast;
+float_cast
+1
 select count(*), sum(id) from json_float_boundary;
 count(*)	sum(id)
 4	10
