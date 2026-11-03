@@ -120,11 +120,12 @@ const (
 	// Keep the live catalog as the driving relation: statistics for dropped
 	// tables are removed asynchronously. Truncate each table's size before
 	// summing, as SHOW ACCOUNTS did in Go. Integer SUM is exact; the modulo
-	// preserves uint64 addition even when an account's total overflows.
+	// preserves uint64 addition even when an account's total overflows. Bound
+	// the stats scan by the requested account range without excluding gaps.
 	getAccountTableSizesSQL = `
 				select
 					m.account_id,
-					cast(sum(cast(floor(coalesce(json_extract_float64(s.table_stats, '$.table_size'), 0))
+					cast(sum(cast(truncate(coalesce(json_extract_float64(s.table_stats, '$.table_size'), 0), 0)
 						as unsigned)) %% 18446744073709551616 as unsigned),
 					count(*)
 				from %s.%s as m
@@ -132,6 +133,7 @@ const (
 					on m.account_id = s.account_id
 					and m.reldatabase_id = s.database_id
 					and m.rel_id = s.table_id
+					and s.account_id between %d and %d
 				where m.account_id in (%s)
 				group by m.account_id;`
 
@@ -1412,7 +1414,8 @@ func (d *dynamicCtx) QueryAccountTableSizes(
 		v2.MoTableSizeRowsNormalCountingHistogram.Observe(float64(tableCount))
 	}()
 	sql := fmt.Sprintf(getAccountTableSizesSQL,
-		catalog.MO_CATALOG, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_TABLE_STATS, accStr)
+		catalog.MO_CATALOG, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_TABLE_STATS,
+		slices.Min(accs), slices.Max(accs), accStr)
 	ret := d.executeSQL(ctx, sql, "query account table sizes")
 	if err = ret.Error(); err != nil {
 		return nil, false, err

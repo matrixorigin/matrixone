@@ -79,8 +79,8 @@ func TestQueryAccountTableSizesNormal(t *testing.T) {
 			for _, fragment := range []string{
 				"from mo_catalog.mo_tables as m", "left join mo_catalog.mo_table_stats_alpha as s",
 				"m.account_id = s.account_id", "m.reldatabase_id = s.database_id", "m.rel_id = s.table_id",
-				"where m.account_id in (7,9,11)", "group by m.account_id",
-				"sum(cast(floor(coalesce(json_extract_float64(s.table_stats, '$.table_size'), 0))",
+				"s.account_id between 7 and 11", "where m.account_id in (11,7,9)", "group by m.account_id",
+				"sum(cast(truncate(coalesce(json_extract_float64(s.table_stats, '$.table_size'), 0), 0)",
 			} {
 				require.Contains(t, sql, fragment)
 			}
@@ -93,7 +93,7 @@ func TestQueryAccountTableSizesNormal(t *testing.T) {
 			}}
 		}}
 	}
-	sizes, ok, err := d.QueryAccountTableSizes(defines.AttachAccountId(context.Background(), 7), []uint64{7, 9, 11}, false)
+	sizes, ok, err := d.QueryAccountTableSizes(defines.AttachAccountId(context.Background(), 7), []uint64{11, 7, 9}, false)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, map[uint64]uint64{7: 1<<53 + 1, 9: 0}, sizes)
@@ -133,6 +133,24 @@ func TestQueryAccountTableSizesAdmission(t *testing.T) {
 			require.Zero(t, calls)
 		})
 	}
+}
+
+func TestQueryAccountTableSizesWideAccountBounds(t *testing.T) {
+	d := &dynamicCtx{}
+	d.executorPool.New = func() any {
+		return accountSizeExecutor{query: func(ctx context.Context, sql string) ie.InternalExecResult {
+			require.Contains(t, sql, "s.account_id between 0 and 18446744073709551615")
+			require.Contains(t, sql, "m.account_id in (18446744073709551615,0,4294967295)")
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			return accountSizeResult{}
+		}}
+	}
+	sizes, ok, err := d.QueryAccountTableSizes(context.Background(), []uint64{^uint64(0), 0, 1<<32 - 1}, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Empty(t, sizes)
 }
 
 func TestQueryAccountTableSizesErrors(t *testing.T) {

@@ -165,6 +165,8 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 			want                uint64
 		}{
 			{"truncate before sum", `'{"table_size":1.8}'`, `'{"table_size":1.8}'`, 2},
+			{"negative fraction from older statistics", `'{"table_size":-0.5}'`, `'{"table_size":1.8}'`, 1},
+			{"negative fractions near zero and minus one", `'{"table_size":-0.0001}'`, `'{"table_size":-0.9999}'`, 0},
 			{"SQL and JSON null", "NULL", `'{"table_size":null}'`, 0},
 			{"missing field and row", `'{}'`, "", 0},
 			{"exact integer sum", `'{"table_size":9007199254740992}'`, `'{"table_size":1}'`, 9007199254740993},
@@ -225,13 +227,23 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 
 			// Every ID in the stale row is live, but this combination is not.
 			runSQL(fmt.Sprintf("delete from %s where account_id=0 and database_id=%d and table_id=%d", statsTable, dbID, firstID))
-			insert(0, dbID, firstID, `'{"table_size":1}'`)
 			insert(0, otherDB, otherID, `'{"table_size":4}'`)
 			insert(0, otherDB, firstID, `'{"table_size":9999}'`)
 			sizes, ok, err := e.QueryAccountTableSizes(p.Ctx, []uint64{0}, false)
 			require.NoError(t, err)
 			require.True(t, ok)
-			require.Equal(t, map[uint64]uint64{0: 5}, sizes)
+			require.Equal(t, map[uint64]uint64{0: 4}, sizes)
+
+			values, accounts, ok, err := e.QueryTableStatsByAccounts(p.Ctx, []int{disttae.TableStatsTableSize}, []uint64{0}, false, false)
+			require.NoError(t, err)
+			require.True(t, ok)
+			var legacy uint64
+			for i, account := range accounts {
+				if account == 0 {
+					legacy += uint64(values[0][i].(float64))
+				}
+			}
+			require.Equal(t, uint64(10003), legacy, "legacy independent IN filters admit the stale identity")
 		})
 	})
 }
