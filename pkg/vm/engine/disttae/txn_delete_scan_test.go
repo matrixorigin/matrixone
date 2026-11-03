@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -426,10 +428,27 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 	require.Equal(t, 2, bat.RowCount())
 	require.Empty(t, txn.deletedBlocks.offsets)
 
+	err = txn.mergeTxnWorkspaceLocked(context.Background())
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Equal(t, beforeSize, txn.workspaceSize)
+	require.Equal(t, beforeCount, txn.approximateInMemInsertCnt)
+	require.Equal(t, []int64{1, 0}, txn.batchSelectList[bat])
+	require.Equal(t, 2, bat.RowCount())
+
 	out, err := txn.deleteBatch(bat, 7, 42)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Same(t, bat, out)
 	require.Equal(t, beforeSize, txn.workspaceSize)
 	require.Equal(t, []int64{1, 0}, txn.batchSelectList[bat])
 	require.Empty(t, txn.deletedBlocks.offsets)
+
+	deleteTxn := newTransactionWithActivePKTableForTest(t, "pk")
+	deleteTxn.op.(*mock_frontend.MockTxnOperator).EXPECT().IsSnapOp().Return(false)
+	tbl := deleteTxn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	require.NotNil(t, tbl)
+	bat.Attrs = []string{catalog.Row_ID}
+	err = tbl.Delete(context.Background(), bat, "")
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.Empty(t, deleteTxn.writes)
+	require.Equal(t, 2, bat.RowCount())
 }
