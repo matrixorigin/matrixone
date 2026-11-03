@@ -797,7 +797,27 @@ SELECT id FROM jn WHERE d = CAST(1.5 AS FLOAT) ORDER BY id;
 ➤ id[4,32,0]  𝄀
 1
 SELECT id FROM jn WHERE CAST('7' AS JSON) = q;
-invalid argument operator cast, bad value [JSON -> FLOAT4]
+➤ id[4,32,0]
+SELECT id FROM jn WHERE CAST('7' AS JSON) > q ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+SELECT id FROM jn WHERE CAST('1e100' AS JSON) = f;
+➤ id[4,32,0]
+SELECT id FROM jn WHERE CAST('1e100' AS JSON) > f ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+SELECT id FROM jn WHERE CAST('1e100' AS JSON) > b ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
 DROP TABLE jn;
 CREATE TABLE uv (id INT, a bf16, f FLOAT);
 INSERT INTO uv VALUES (1, 1.5, 1.5);

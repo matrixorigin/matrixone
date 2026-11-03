@@ -165,6 +165,10 @@ func compareJSONNumeric(ctx context.Context, value bytejson.ByteJson, peer *json
 		}
 		if peer.typ == types.T_float32 && floatValue >= -math.MaxFloat32 && floatValue <= math.MaxFloat32 {
 			floatValue = float64(float32(floatValue))
+		} else if peer.typ.IsLowPrecisionFloat() {
+			if f := types.Float32RoundToOdd(floatValue); types.RejectNarrowFloatInput(f, peer.typ, floatValue, nil) == nil {
+				floatValue = float64(lowPrecisionFloatValue(peer.typ, f))
+			}
 		}
 		return compareFloat64Total(floatValue, peer.floatValue), false, nil
 	}

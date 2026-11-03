@@ -68,21 +68,24 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 		{"float32 negative overflow", "-1e100", "1", types.T_float32, -1, false},
 		{"double precision", "16777217", "16777216", types.T_float64, 1, false},
 		{"double fraction", "1.5", "1", types.T_float64, 1, false},
-		// bf16/float16/float8/float4 round a JSON number to the type's grid as CAST does,
-		// and reject it outside the type's finite range
+		// bf16/float16/float8/float4 round a JSON number inside the type's finite range
+		// to the type's grid as CAST does; outside it the JSON number compares unrounded
 		{"bf16 rounding", "0.3", "0.30078125", types.T_bf16, 0, false},
 		{"bf16 fraction", "1.5", "1", types.T_bf16, 1, false},
 		{"bf16 printed maximum", "3.3895314e38", "3.3895314e38", types.T_bf16, 0, false},
-		{"bf16 overflow", "3.4e38", "1", types.T_bf16, 0, true},
+		{"bf16 overflow", "3.4e38", "1", types.T_bf16, 1, false},
+		{"bf16 negative overflow", "-1e100", "1", types.T_bf16, -1, false},
 		{"float16 rounding", "0.1", "0.099975586", types.T_float16, 0, false},
 		{"float16 maximum", "65504", "65504", types.T_float16, 0, false},
-		{"float16 overflow", "65505", "1", types.T_float16, 0, true},
+		{"float16 overflow", "65505", "65504", types.T_float16, 1, false},
+		{"float16 negative overflow", "-65505", "-65504", types.T_float16, -1, false},
 		{"float8 rounding", "1.06", "1", types.T_float8, 0, false},
 		{"float8 maximum", "448", "448", types.T_float8, 0, false},
-		{"float8 overflow", "449", "1", types.T_float8, 0, true},
+		{"float8 overflow", "449", "448", types.T_float8, 1, false},
 		{"float4 rounding", "1.1", "1", types.T_float4, 0, false},
 		{"float4 ordering", "-6", "-4", types.T_float4, -1, false},
-		{"float4 overflow", "6.0000001", "1", types.T_float4, 0, true},
+		{"float4 overflow", "6.0000001", "6", types.T_float4, 1, false},
+		{"float4 negative overflow", "-6.0000001", "-6", types.T_float4, -1, false},
 		{"decimal64 exact", "9007199254740993", "9007199254740992", types.T_decimal64, 1, false},
 		{"decimal128 exact", "9007199254740993", "9007199254740992", types.T_decimal128, 1, false},
 		{"decimal256 exact", "9007199254740993", "9007199254740992", types.T_decimal256, 1, false},
@@ -114,6 +117,10 @@ func TestJSONNumericComparisonDomains(t *testing.T) {
 		{"float32 peer overflow", "1e100", types.T_float32, vector.PrepareParamFloat},
 		{"float32 peer underflow", "-1e100", types.T_float32, vector.PrepareParamFloat},
 		{"float32 peer nonnumeric", `"x"`, types.T_float32, vector.PrepareParamFloat},
+		{"bf16 peer overflow", "3.4e38", types.T_bf16, vector.PrepareParamNone},
+		{"float16 peer overflow", "65505", types.T_float16, vector.PrepareParamNone},
+		{"float8 peer overflow", "449", types.T_float8, vector.PrepareParamNone},
+		{"float4 peer overflow", "6.0000001", types.T_float4, vector.PrepareParamNone},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := makeJSONNumericPeer(context.Background(), parse(tc.value), tc.typ, tc.kind)

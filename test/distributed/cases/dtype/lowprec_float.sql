@@ -435,8 +435,12 @@ INSERT INTO jn VALUES (1, '1.5', 1.5, 1.5, 1.5, 1.5, 1.5), (2, '"1.5"', 1.5, 1.5
 SELECT id, d = f, d = b, d = h, d = e, d = q, b = d, d <=> q, d < b, d >= e FROM jn ORDER BY id;
 SELECT id FROM jn WHERE d = CAST(1.5 AS bf16) ORDER BY id;
 SELECT id FROM jn WHERE d = CAST(1.5 AS FLOAT) ORDER BY id;
--- a JSON number outside the type's finite range is an error, as CAST rejects it
+-- a JSON number outside the type's finite range compares unrounded, as outside FLOAT's range
 SELECT id FROM jn WHERE CAST('7' AS JSON) = q;
+SELECT id FROM jn WHERE CAST('7' AS JSON) > q ORDER BY id;
+SELECT id FROM jn WHERE CAST('1e100' AS JSON) = f;
+SELECT id FROM jn WHERE CAST('1e100' AS JSON) > f ORDER BY id;
+SELECT id FROM jn WHERE CAST('1e100' AS JSON) > b ORDER BY id;
 DROP TABLE jn;
 
 -- a user variable holding a narrow float computes in DOUBLE, as for FLOAT
