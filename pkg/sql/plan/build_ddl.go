@@ -2035,19 +2035,25 @@ func (d *ctasStorageDomain) envelopeOwned(expr *plan.Expr, owner *plan.Node) dec
 		}
 		if name == "/" {
 			// Mirror decimalDivisionReturnType rule-for-rule over the
-			// operand envelopes (design §4.1 divide bullet, revision 5
-			// F-CAPPED-CONSUMERS; decision log 74 (iii)): precision
-			// leftPrecision + rightScale + increment, scale
-			// leftScale + increment, the 65/30 caps and the
+			// operands' recovered original domains (design §4.1 divide
+			// bullet, revision 5 F-CAPPED-CONSUMERS; decision log 74
+			// (iii)): precision leftPrecision + rightScale + increment,
+			// scale leftScale + increment, the 65/30 caps and the
 			// precision < scale lift applied verbatim, with increment the
 			// same session div_precision_increment value the publication
-			// consumed.
+			// consumed. The typing owner derives from the ORIGINAL
+			// operands through exactDivisionOperandType - the implicit
+			// alignment casts describe storage, not SQL precision - so
+			// each operand recovers its original domain through
+			// decimalDivisionStorageOperandDomain; an operand whose
+			// original domain is unrecoverable keeps the authored type,
+			// exactly the parent's non-exact pass-through.
 			if len(e.F.Args) != 2 {
 				return decimalTypedEnvelope(expr.Typ)
 			}
-			left := d.envelopeOwned(e.F.Args[0], owner)
-			right := d.envelopeOwned(e.F.Args[1], owner)
-			if (left.integral == 0 && left.scale == 0) || (right.integral == 0 && right.scale == 0) {
+			leftPrecision, leftScale, lok := d.decimalDivisionStorageOperandDomain(expr, 0, owner)
+			_, rightScale, rok := d.decimalDivisionStorageOperandDomain(expr, 1, owner)
+			if !lok || !rok {
 				return decimalTypedEnvelope(expr.Typ)
 			}
 			// clampDivPrecisionIncrement verbatim
@@ -2062,11 +2068,11 @@ func (d *ctasStorageDomain) envelopeOwned(expr *plan.Expr, owner *plan.Node) dec
 			if increment > 30 {
 				increment = 30
 			}
-			precision := left.integral + left.scale + right.scale + increment
+			precision := leftPrecision + rightScale + increment
 			if precision > 65 {
 				precision = 65
 			}
-			scale := left.scale + increment
+			scale := leftScale + increment
 			if scale > 30 {
 				scale = 30
 			}
@@ -2531,11 +2537,113 @@ func (d *ctasStorageDomain) decimalModStorageOperandDomain(expr *plan.Expr, idx 
 	if !t.IsDecimal() {
 		return 0, 0, false, false
 	}
+	if operand == arg && arg.GetLit() != nil {
+		// A bare decimal literal at this position carries no recoverable
+		// original domain: the implicit <=65 alignment cast that produced
+		// it folded away (constant_fold re-homes the value into a decimal
+		// literal typed by the erased cast's declared target), and the
+		// fold changed the decision content, so the generation's decision
+		// ledger is keyed by the pre-fold tree and unreachable here. The
+		// literal's declared width describes the erased alignment target,
+		// not the operand the parent consumed - mod(d, 2) would otherwise
+		// contribute 38 instead of the parent's refined digit width. The
+		// parent's publication for such a provenance-free operand already
+		// encodes the original domain, so decline and keep the authored
+		// type (issue #30938, design decision log 75 (ii), invariant I2).
+		return 0, 0, true, false
+	}
 	env := d.envelopeOwned(operand, owner)
 	if env.integral == 0 && env.scale == 0 {
 		return 0, 0, true, false
 	}
 	return env.integral + env.scale, env.scale, true, true
+}
+
+// decimalDivisionStorageOperandDomain recovers one divide operand's original
+// domain for the storage-envelope mirror (design §4.1 divide bullet, revision
+// 5 F-CAPPED-CONSUMERS; decision log 74 (iii)): decimalDivisionReturnType
+// derives result metadata from the ORIGINAL operand types through
+// exactDivisionOperandType (decimal_division.go:64) because the implicit
+// alignment casts describe storage, not the operands' SQL precision, so a
+// ledger-verified decision-owned <=65 alignment cast is looked through to its
+// source. The exactness set mirrors the parent's verbatim: an integer source
+// contributes integerDecimalDigits (numeric_resolver.go:170, no mediumint
+// override, matching the parent), BIT 20, BOOL 1, a temporal source its
+// packed-calendar domain when the aligned type is decimal, an ANY source the
+// aligned decimal domain, and a decimal source its reconstructed envelope
+// width integral + scale. A bare decimal literal carries no recoverable
+// original domain - its implicit alignment cast folded away and the fold
+// moved the decision content beyond the ledger's reach, so its declared width
+// describes the erased alignment target rather than the operand the parent
+// consumed - and declines, keeping the authored type exactly as the parent's
+// non-exact pass-through keeps the selected type (issue #30938, design
+// decision log 75 (ii), invariant I2).
+func (d *ctasStorageDomain) decimalDivisionStorageOperandDomain(expr *plan.Expr, idx int, owner *plan.Node) (precision, scale int32, ok bool) {
+	arg := expr.GetF().Args[idx]
+	operand := arg
+	if source := d.decisionOwnedCastSource(expr, arg, idx); source != nil {
+		operand = source
+	}
+	t := types.T(operand.Typ.Id)
+	if t.IsInteger() {
+		// integerDecimalDigits (numeric_resolver.go:170) verbatim.
+		switch t {
+		case types.T_int8, types.T_uint8:
+			precision = 3
+		case types.T_int16, types.T_uint16:
+			precision = 5
+		case types.T_int32, types.T_uint32:
+			precision = 10
+		case types.T_int64:
+			precision = 19
+		case types.T_uint64:
+			precision = 20
+		default:
+			return 0, 0, false
+		}
+		return precision, 0, true
+	}
+	if t == types.T_bit {
+		return 20, 0, true
+	}
+	if t == types.T_bool {
+		// TRUE/FALSE divide as 1/0: exactly one integral digit, scale
+		// zero (exactDivisionOperandType verbatim).
+		return 1, 0, true
+	}
+	if t.IsDateRelate() && types.T(arg.Typ.Id).IsDecimal() {
+		// Temporal decimals contain packed calendar fields, not an
+		// arbitrary value spanning the storage width of the implicit
+		// decimal cast (exactDivisionOperandType verbatim).
+		s := max(operand.Typ.Scale, 0)
+		switch t {
+		case types.T_date:
+			return 8, 0, true
+		case types.T_year:
+			return 4, 0, true
+		case types.T_time, types.T_datetime, types.T_timestamp:
+			return 14 + s, s, true
+		}
+		return 0, 0, false
+	}
+	if t == types.T_any && types.T(arg.Typ.Id).IsDecimal() {
+		precision = arg.Typ.Width
+		if precision <= 0 {
+			precision = types.DecimalMaxPrecision(types.T(arg.Typ.Id))
+		}
+		return precision, max(arg.Typ.Scale, 0), true
+	}
+	if !t.IsDecimal() {
+		return 0, 0, false
+	}
+	if operand == arg && arg.GetLit() != nil {
+		return 0, 0, false
+	}
+	env := d.envelopeOwned(operand, owner)
+	if env.integral == 0 && env.scale == 0 {
+		return 0, 0, false
+	}
+	return env.integral + env.scale, env.scale, true
 }
 
 // decisionOwnedCastOperand reports whether the <=65-target decimal cast at

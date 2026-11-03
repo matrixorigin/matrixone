@@ -222,3 +222,88 @@ func TestDecimalSetOperationPlainTwinIssue30938(t *testing.T) {
 		types.T_decimal256, 66, 1,
 		"the plain-product branch set binds the parent's (66,1) merge common at statement time")
 }
+
+// buildModBoundarySelectCTAS registers the given fixture tables and runs one
+// single-projection CTAS, returning the built plan whose DDL record carries
+// the persisted storage tags.
+func buildModBoundarySelectCTAS(t *testing.T, tables []string, selectSQL string) *pb.Plan {
+	t.Helper()
+	proc := newPlanTestProcess(t)
+	t.Cleanup(proc.Free)
+	mock := NewMockOptimizer(false, proc)
+	for _, ddl := range tables {
+		registerModBoundaryTable(t, mock, ddl)
+	}
+	built, err := runOneStmt(mock, t, selectSQL)
+	require.NoError(t, err)
+	return built
+}
+
+// TestDecimalModStorageBoundaryFoldedLiteralIssue30938 pins the
+// folded-alignment-cast literal repair (issue #30938, design decision log 75
+// (ii), invariant I2: never author a schema wider than the parent's own
+// inference). The decimal128 MOD overloads align an integer literal through
+// an implicit cast(2 -> decimal(38,0)); constant_fold re-homes the value
+// into a bare decimal literal typed by the erased cast's declared target,
+// and the fold moves the decision content beyond the statement generation's
+// decision ledger, so no ledger-verified look-through can recover the
+// literal's original domain at the storage boundary. Before this repair the
+// mirror consumed the literal's declared (38,0), persisting decimal(38,2)
+// for MOD(c, 2) over DECIMAL(8,2) where the parent publishes decimal(8,2) -
+// the same divergence pkg/tests/sqlintegration's TestDecimalModMetadata
+// reported for MOD(d, 2) and MOD(narrow_d, 2) end to end. The mirror now
+// declines such operands and persists the parent's own publication:
+// DecimalModReturnType over the original operands refines integer literals
+// to their exact digit width, keeps an authored CAST's declared domain
+// verbatim, and the decimal256 route's >65 alignment cast never folds, so
+// its ledger-verified look-through recovers the integer domain as before.
+// Every expected tag below is derived from DecimalModReturnType
+// (decimal_mod.go:22-54) over the original operands, never from observed
+// candidate behavior; CTAS and view records alike.
+func TestDecimalModStorageBoundaryFoldedLiteralIssue30938(t *testing.T) {
+	tables := []string{
+		"create table m30938i(c decimal(8,2), mi mediumint, i int, bt bit)",
+		"create table m30938w50(e decimal(50,3))",
+	}
+	for _, tc := range []struct {
+		from  string
+		expr  string
+		id    types.T
+		width int32
+		scale int32
+	}{
+		// max((8,2), the literal's refined digit domain) keeps (8,2) for
+		// every plain integer literal shape; the erased alignment cast's
+		// declared (38,0) must never leak into the record.
+		{"m30938i", "mod(c, 2)", types.T_decimal128, 8, 2},
+		{"m30938i", "c % 2", types.T_decimal128, 8, 2},
+		{"m30938i", "mod(c, 0)", types.T_decimal128, 8, 2},
+		{"m30938i", "mod(2, c)", types.T_decimal128, 8, 2},
+		{"m30938i", "c % 1000", types.T_decimal128, 8, 2},
+		{"m30938i", "mod(c, -2)", types.T_decimal128, 8, 2},
+		// A 20-digit literal refines to (20,0): max((8,2), (20,0)) -> (20,2).
+		{"m30938i", "mod(c, 99999999999999999999)", types.T_decimal128, 20, 2},
+		// An authored CAST keeps its declared domain: max((8,2), (12,0)) ->
+		// (12,2) on the selected decimal64 carrier.
+		{"m30938i", "mod(c, cast(2 as decimal(12,0)))", types.T_decimal64, 12, 2},
+		// A decimal literal binds the decimal64 overload without an
+		// alignment cast: max((8,2), (3,2)) -> (8,2).
+		{"m30938i", "mod(c, 2.00)", types.T_decimal64, 8, 2},
+		// The decimal256 route's >65 alignment cast does not fold, so the
+		// ledger-verified look-through recovers the integer domain:
+		// max((50,3), (3,0)) -> (50,3).
+		{"m30938w50", "mod(e, 2)", types.T_decimal256, 50, 3},
+		{"m30938w50", "e % 2", types.T_decimal256, 50, 3},
+	} {
+		ctas := buildModBoundarySelectCTAS(t, tables,
+			"create table m30938fl_out as select "+tc.expr+" as v from "+tc.from)
+		requireModBoundaryTyp(t, ctas.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetTyp(),
+			tc.id, tc.width, tc.scale,
+			"CTAS persists the parent's tag for "+tc.expr)
+		view := buildModBoundarySelectCTAS(t, tables,
+			"create view m30938fl_out as select "+tc.expr+" as v from "+tc.from)
+		requireModBoundaryTyp(t, view.GetDdl().GetCreateView().GetTableDef().GetCols()[0].GetTyp(),
+			tc.id, tc.width, tc.scale,
+			"view persists the parent's tag for "+tc.expr)
+	}
+}
