@@ -78,6 +78,14 @@ func (p *Pipeline) Run(proc *process.Process) (end bool, err error) {
 	return true, err
 }
 
+// CleanupWithError uses the pipeline's existing panic boundary so an attempt
+// can preserve its execution error while still reporting a cleanup failure.
+func (p *Pipeline) CleanupWithError(proc *process.Process, pipelineFailed, isPrepare bool, cause error) (err error) {
+	defer catchPanic(proc.Ctx, &err)
+	p.Cleanup(proc, pipelineFailed, isPrepare, cause)
+	return nil
+}
+
 func catchPanic(ctx context.Context, errPtr *error) {
 	if e := recover(); e != nil {
 		*errPtr = moerr.ConvertPanicError(ctx, e)
