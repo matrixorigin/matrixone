@@ -1436,3 +1436,36 @@ CREATE TABLE tx1 (
 create dynamic table dt_test as select * from tx1;
 drop table tx1;
 drop database db9;
+
+-- CTAS uses result nullability, including UNION branches and null-extended joins.
+drop database if exists ctas_output_nullability;
+create database ctas_output_nullability;
+use ctas_output_nullability;
+create table l (id int primary key);
+create table r (id int primary key, v int not null default 7);
+insert into l values (1), (2);
+insert into r values (1, 10);
+create table count_only as select count(*) as c from l;
+create table union_null as select count(*) as c from l union all select null;
+create table null_union as select null as c union all select count(*) from l;
+create table union_cte as with u as (select count(*) as c from l union all select null union all select 3) select c from u;
+select c from count_only;
+select c from union_null order by c;
+select c from null_union order by c;
+select c from union_cte order by c;
+create table left_result as select l.id as l_id, r.v from l left join r on l.id=r.id;
+select * from left_result order by l_id;
+create table expression_result as select l.id as l_id, r.v+1 as v from l left join r on l.id=r.id;
+select * from expression_result order by l_id;
+create table coalesce_result as select l.id as l_id, coalesce(r.v,0) as v from l left join r on l.id=r.id;
+select * from coalesce_result order by l_id;
+create table scalar_result as select l.id, (select r.v from r where r.id=l.id) as v from l;
+select * from scalar_result order by id;
+create table source_default as select v from r;
+show create table source_default;
+select * from source_default order by v;
+select table_name, column_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
+create table explicit_guard (v int not null);
+insert into explicit_guard select r.v from l left join r on l.id=r.id;
+select count(*) from explicit_guard;
+drop database ctas_output_nullability;

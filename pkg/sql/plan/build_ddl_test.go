@@ -630,6 +630,84 @@ func TestCreateTableAsSelect(t *testing.T) {
 	runTestShouldPass(mock, t, sqls, false, false)
 }
 
+func TestCreateTableAsSelectOutputNullability(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		nullable []bool
+	}{
+		{"count control", "select count(*) as c from nation", []bool{false}},
+		{"union null right", "select count(*) as c from nation union all select null", []bool{true}},
+		{"union null left", "select null as c union all select count(*) from nation", []bool{true}},
+		{"union nonnull control", "select count(*) as c from nation union all select 1", []bool{false}},
+		{"union distinct", "select count(*) as c from nation union select null", []bool{true}},
+		{"union three branches", "select count(*) as c from nation union all select null union all select 1", []bool{true}},
+		{"union derived", "select c from (select count(*) as c from nation union all select null) u", []bool{true}},
+		{"union cte", "with u as (select count(*) as c from nation union all select null) select c from u", []bool{true}},
+		{"left join", "select n.n_nationkey as l, r.r_regionkey as r from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false, true}},
+		{"right join", "select n.n_nationkey as l, r.r_regionkey as r from nation n right join region r on n.n_regionkey=r.r_regionkey", []bool{true, false}},
+		{"full join", "select n.n_nationkey as l, r.r_regionkey as r from nation n full join region r on n.n_regionkey=r.r_regionkey", []bool{true, true}},
+		{"inner join control", "select n.n_nationkey as l, r.r_regionkey as r from nation n join region r on n.n_regionkey=r.r_regionkey", []bool{false, false}},
+		{"null extending expression", "select r.r_regionkey+1 as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"coalesce control", "select coalesce(r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"scalar subquery", "select (select r.r_regionkey from region r where r.r_regionkey=n.n_regionkey) as v from nation n", []bool{true}},
+		{"grouped null extension", "select r.r_regionkey as k, count(*) as c from nation n left join region r on n.n_regionkey=r.r_regionkey group by r.r_regionkey", []bool{true, false}},
+		{"distinct null extension", "select distinct r.r_regionkey as k from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{true}},
+		{"ifnull control", "select ifnull(r.r_regionkey,0) as v from nation n left join region r on n.n_regionkey=r.r_regionkey", []bool{false}},
+		{"intersect left control", "select count(*) as c from nation intersect select null", []bool{false}},
+		{"minus nullable left", "select null as c minus select count(*) from nation", []bool{true}},
+		{"union intersect precedence", "select null as c union all select count(*) from nation intersect select 1", []bool{true}},
+		{"pruned union output", "select c from (select 1 as k, count(*) as c from nation union all select 2, null) u", []bool{true}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			require.True(t, mock.ctxt.tables["nation"].Cols[0].Typ.NotNullable)
+			require.True(t, mock.ctxt.tables["region"].Cols[0].Typ.NotNullable)
+			p, err := buildSingleStmt(mock, t, "create table ctas_nullability as "+test.query)
+			require.NoError(t, err)
+			var cols []*plan.ColDef
+			for _, col := range p.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+				if !col.Hidden {
+					cols = append(cols, col)
+				}
+			}
+			require.Len(t, cols, len(test.nullable))
+			for i, nullable := range test.nullable {
+				require.Equal(t, nullable, cols[i].GetDefault().GetNullAbility(), "column %d default", i)
+				require.Equal(t, !nullable, cols[i].Typ.NotNullable, "column %d type", i)
+			}
+		})
+	}
+}
+
+func TestCreateTableAsSelectPreservesSourceMetadata(t *testing.T) {
+	for name, outerJoin := range map[string]bool{"direct": false, "null extended": true} {
+		t.Run(name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			source := mock.ctxt.tables["nation"].Cols[1]
+			source.Typ.Id = int32(types.T_enum)
+			source.Typ.Enumvalues = "low,high"
+			mock.ctxt.tables["nation"].Cols[0].Default = &plan.Default{OriginString: "7", NullAbility: false}
+			query := "select n.n_name as priority, n.n_nationkey as source_key from nation n"
+			if outerJoin {
+				query += " right join region r on n.n_regionkey=r.r_regionkey"
+			}
+			p, err := buildSingleStmt(mock, t, "create table ctas_metadata as "+query)
+			require.NoError(t, err)
+			col := p.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+			require.Equal(t, int32(types.T_enum), col.Typ.Id)
+			require.Equal(t, "low,high", col.Typ.Enumvalues)
+			key := p.GetDdl().GetCreateTable().GetTableDef().Cols[1]
+			require.Equal(t, "7", key.Default.OriginString)
+			require.Equal(t, outerJoin, key.Default.NullAbility)
+			require.Equal(t, outerJoin, col.Default.NullAbility)
+			require.Equal(t, !outerJoin, col.Typ.NotNullable)
+			require.True(t, source.Typ.NotNullable, "join must not mutate source metadata")
+		})
+	}
+}
+
 func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tests := []struct {

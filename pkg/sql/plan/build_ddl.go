@@ -261,6 +261,18 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 			},
 		}
 	}
+	// Preserve source defaults and special types before optimization remaps the
+	// binding tags, but derive constraints from the materialized query output.
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, err
+	}
+	output := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	for i, expr := range output {
+		cols[i].Typ.NotNullable = expr.Typ.NotNullable
+		cols[i].Default.NullAbility = !expr.Typ.NotNullable
+	}
 	return cols, nil
 }
 
