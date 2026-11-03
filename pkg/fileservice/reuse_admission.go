@@ -43,18 +43,18 @@ func (a *transientDecodeAllocator) BackingSize(size int) int {
 	return a.cache.uncachedAllocator.BackingSize(size)
 }
 
-func (e *IOEntry) allocatorForDecode(fallback CacheDataAllocator) CacheDataAllocator {
-	if e.cacheAdmissionBypass && e.cacheAdmissionOwner != nil {
-		return &e.cacheAdmissionOwner.transientDecoder
+func (i *IOEntry) allocatorForDecode(fallback CacheDataAllocator) CacheDataAllocator {
+	if i.cacheAdmissionBypass && i.cacheAdmissionOwner != nil {
+		return &i.cacheAdmissionOwner.transientDecoder
 	}
 	return fallback
 }
 
-func (v *IOVector) resetCacheAdmission() {
-	for i := range v.Entries {
-		e := &v.Entries[i]
-		e.cacheAdmissionOwner = nil
-		e.cacheAdmissionBypass = false
+func (i *IOVector) resetCacheAdmission() {
+	for idx := range i.Entries {
+		entry := &i.Entries[idx]
+		entry.cacheAdmissionOwner = nil
+		entry.cacheAdmissionBypass = false
 	}
 }
 

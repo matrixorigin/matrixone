@@ -1023,13 +1023,3 @@ func (c *Cache[K, V]) evictGhost() {
 		c.retireHistoryItem(item)
 	}
 }
-
-func (c *Cache[K, V]) deleteItem(item *_CacheItem[K, V]) {
-	shard := &c.shards[c.keyShardFunc(item.key)%numShards]
-	shard.Lock()
-	defer shard.Unlock()
-	// item may be replaced in set, check before delete
-	if shard.values[item.key] == item {
-		delete(shard.values, item.key)
-	}
-}
