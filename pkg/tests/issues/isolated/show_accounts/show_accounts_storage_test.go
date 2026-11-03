@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,14 +43,36 @@ type showAccountStorage struct {
 }
 
 func TestShowAccountsStorageAggregation(t *testing.T) {
+	// Own the parent directory even if cluster startup fails and rolls back.
+	root, err := os.MkdirTemp("", "show-accounts-test-")
+	require.NoError(t, err)
+	t.Setenv("TMPDIR", root)
+	var c embed.Cluster
+	var tmpFS *fileservice.TmpFileService
+	t.Cleanup(func() {
+		if c != nil {
+			if err := c.Close(); err != nil {
+				t.Errorf("close test cluster: %v", err)
+				return
+			}
+		}
+		if tmpFS != nil {
+			tmpFS.Close(context.Background())
+		}
+		assert.NoError(t, os.RemoveAll(root))
+	})
+	// The TMP service is process-global; give every test run a fresh instance.
+	tmpFS, err = fileservice.NewTestTmpFileService(defines.TmpFileServiceName, filepath.Join(root, "tmp"), fileservice.TmpFileGCInterval)
+	require.NoError(t, err)
+
 	// Disable periodic and correction work before startup so the forced and
 	// aggregate reads use the same statistics.
-	c, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(s embed.ServiceOperator) {
+	c, err = embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(s embed.ServiceOperator) {
 		s.Adjust(func(cfg *embed.ServiceConfig) {
 			// Keep the test cluster's TMP file service in its owned directory.
 			for i := range cfg.FileServices {
 				if strings.EqualFold(cfg.FileServices[i].Name, defines.TmpFileServiceName) {
-					cfg.FileServices[i].DataDir = filepath.Join(cfg.DataDir, "tmp")
+					cfg.FileServices[i].DataDir = filepath.Join(root, "tmp")
 				}
 			}
 			if s.ServiceType() == metadata.ServiceType_CN {
@@ -60,24 +83,6 @@ func TestShowAccountsStorageAggregation(t *testing.T) {
 			}
 		})
 	}))
-	if c != nil {
-		var dataDir string
-		c.ForeachServices(func(s embed.ServiceOperator) bool {
-			dataDir = s.GetServiceConfig().DataDir
-			return false
-		})
-		t.Cleanup(func() {
-			if err := c.Close(); err != nil {
-				t.Errorf("close test cluster: %v", err)
-				return
-			}
-			if filepath.Dir(dataDir) != os.TempDir() || !strings.HasPrefix(filepath.Base(dataDir), "mo-cluster-test-") {
-				t.Errorf("unexpected test cluster directory %q", dataDir)
-				return
-			}
-			assert.NoError(t, os.RemoveAll(dataDir))
-		})
-	}
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
