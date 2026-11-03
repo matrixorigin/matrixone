@@ -532,3 +532,35 @@ func TestSingleGroupDecimalSumFinalPrecisionAndRetry(t *testing.T) {
 	defer result.Free(mp)
 	require.Equal(t, maxValue, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 }
+
+func TestSingleGroupUint64Boundary(t *testing.T) {
+	for _, tc := range []struct {
+		id   int64
+		want string
+	}{{AggIdOfSum, "36893488147419103230"}, {AggIdOfAvg, "18446744073709551615.0000"}} {
+		t.Run(fmt.Sprint(tc.id), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			typ := types.T_uint64.ToType()
+			input := vector.NewVec(typ)
+			defer input.Free(mp)
+			for i := 0; i < 2; i++ {
+				require.NoError(t, vector.AppendAny(input, ^uint64(0), false, mp))
+			}
+			exec, err := MakeSingleGroupAgg(mp, tc.id, false, nil, nil, typ)
+			require.NoError(t, err)
+			defer exec.Free()
+			SyncAggregatorsToChunkSize([]GroupAggFuncExec{exec}, 1)
+			require.NoError(t, exec.GroupGrow(1))
+			require.True(t, SupportsSingleGroupReuse([]GroupAggFuncExec{exec}))
+			for i := 0; i < 2; i++ {
+				require.NoError(t, BulkFillSingleGroupRange(exec, i, 1, []*vector.Vector{input}))
+			}
+			result, err := AppendSingleGroupResultAndReset(exec, nil)
+			require.NoError(t, err)
+			defer result.Free(mp)
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[types.Decimal128](result, 0).Format(result.GetType().Scale))
+		})
+	}
+}

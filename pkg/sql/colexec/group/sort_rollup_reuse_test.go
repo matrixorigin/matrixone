@@ -320,13 +320,21 @@ func TestSortRollupMinMetadataDowngradesBeforeClosingPreviousBatch(t *testing.T)
 					require.Equal(t, 2, out.RowCount())
 					require.Equal(t, []int32{3, 3}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[1]))
 					require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(10), types.Decimal128FromInt64(10)}, vector.MustFixedColNoTypeCheck[types.Decimal128](out.Vecs[2]))
+					for row := 0; row < out.RowCount(); row++ {
+						require.Equal(t, "5.0000", vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[3], row).Format(out.Vecs[3].GetType().Scale))
+					}
 					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(0))
+					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(1))
 				} else {
 					require.Equal(t, 3, out.RowCount())
 					require.Equal(t, []int32{7, 3, 3}, vector.MustFixedColNoTypeCheck[int32](out.Vecs[1]))
 					require.Equal(t, []types.Decimal128{types.Decimal128FromInt64(7), types.Decimal128FromInt64(3), types.Decimal128FromInt64(10)}, vector.MustFixedColNoTypeCheck[types.Decimal128](out.Vecs[2]))
+					for row, want := range []string{"7.0000", "3.0000", "5.0000"} {
+						require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal128](out.Vecs[3], row).Format(out.Vecs[3].GetType().Scale))
+					}
 					require.Equal(t, vector.PrepareParamNone, out.Vecs[1].GetPrepareParamKindAt(0))
 					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(1))
+					require.Equal(t, vector.PrepareParamFloat, out.Vecs[1].GetPrepareParamKindAt(2))
 				}
 			})
 		}
