@@ -806,12 +806,17 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 
 			case JoinSideMark:
+				// Only existential markers may use the broader totality proof.
+				// Recheck the current inputs and predicates: earlier rewrites may
+				// have changed them since the marker was created. IN/ANY/ALL keep
+				// their existing three-valued conversion gate.
+				if !builder.subqueryPredicatePlanningDisabled() &&
+					!areTruncationSafePredicates(node.OnList) &&
+					!(node.MarkExistenceOnly && builder.existentialJoinPredicatesAreTotal(node.OnList, node.Children...)) {
+					cantPushdown = append(cantPushdown, filter)
+					break
+				}
 				if isMarkColumn(filter, node.BindingTags[0]) {
-					if !builder.subqueryPredicatePlanningDisabled() &&
-						!areTruncationSafePredicates(node.OnList) {
-						cantPushdown = append(cantPushdown, filter)
-						break
-					}
 					node.JoinType = plan.Node_SEMI
 					if !builder.subqueryPredicatePlanningDisabled() {
 						node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
@@ -823,11 +828,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					funcID, _ := function.DecodeOverloadID(fExpr.Func.GetObj())
 					if funcID == function.ISTRUE && len(fExpr.Args) == 1 &&
 						isMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
-						if !builder.subqueryPredicatePlanningDisabled() &&
-							!areTruncationSafePredicates(node.OnList) {
-							cantPushdown = append(cantPushdown, filter)
-							break
-						}
 						node.JoinType = plan.Node_SEMI
 						if !builder.subqueryPredicatePlanningDisabled() {
 							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
@@ -837,11 +837,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 					}
 					if filter.Typ.NotNullable && fExpr.Func.ObjName == "not" && len(fExpr.Args) == 1 &&
 						isTrueMarkColumn(fExpr.Args[0], node.BindingTags[0]) {
-						if !builder.subqueryPredicatePlanningDisabled() &&
-							!areTruncationSafePredicates(node.OnList) {
-							cantPushdown = append(cantPushdown, filter)
-							break
-						}
 						node.JoinType = plan.Node_ANTI
 						if !builder.subqueryPredicatePlanningDisabled() {
 							node.OnList = unwrapIsTrueFromMarkJoinEqualities(node.OnList, leftTags, rightTags, markTag)
@@ -1017,6 +1012,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		node.Children[1] = childID
 
 	case plan.Node_PROJECT:
+		// A predecessor catalog can have a compact generated-column DAG whose
+		// expansion is exponential. Keep predicates above its staged evaluation;
+		// rewriting through every projection would recreate the oversized tree.
+		if node.ExtraOptions == virtualTimestampStageOption {
+			cantPushdown = append(cantPushdown, filters...)
+			break
+		}
 		child := builder.qry.Nodes[node.Children[0]]
 		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
 			cantPushdown = append(cantPushdown, filters...)

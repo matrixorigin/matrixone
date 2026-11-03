@@ -193,7 +193,9 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 
 			// Nullable IN-lists must keep their null bitmap aligned with values.
 			if !vec.IsConstNull() && !vec.GetNulls().Any() {
-				vec.InplaceSortAndCompact()
+				if err := vec.InplaceSortAndCompact(proc.Mp()); err != nil {
+					return expr
+				}
 			}
 
 			data, err := vec.MarshalBinary()

@@ -1312,6 +1312,7 @@ func MakeForeachVectorOp(t types.T, overloads map[types.T]any, args ...any) any 
 func DedupSortedBatches(
 	uniqueIdx int,
 	batches []*batch.Batch,
+	mp *mpool.MPool,
 ) error {
 	if len(batches) == 0 {
 		return nil
@@ -1335,7 +1336,9 @@ func DedupSortedBatches(
 			}
 		}
 		if len(sels) > 0 {
-			batches[i].Shrink(sels, true)
+			if err := batches[i].Shrink(sels, true, mp); err != nil {
+				return err
+			}
 			sels = sels[:0]
 		}
 	}

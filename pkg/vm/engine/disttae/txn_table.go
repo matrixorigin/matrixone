@@ -253,6 +253,9 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 	if err != nil || strings.ToUpper(tbl.relKind) == "V" {
 		return published, err
 	}
+	if published != nil && len(published.ByteRangeMap) > 0 && (tbl.db.op.IsSnapOp() || !tbl.getTxn().Readonly()) {
+		published = transientTableStats(published, published.TableCnt)
+	}
 	if tbl.remoteWorkspace {
 		if plan2.StatsInfoUsableForCache(published) && tbl.getTxn().Readonly() {
 			return published, nil
@@ -333,6 +336,7 @@ func transientTableStats(published *pb.StatsInfo, rows float64) *pb.StatsInfo {
 			}
 		}
 	}
+	stats.ByteRangeMap = nil
 	stats.TableName = ""
 	stats.TableCnt = rows
 	return &stats
@@ -2408,7 +2412,11 @@ func (tbl *txnTable) Delete(
 
 	switch deletionTyp {
 	case catalog.Row_ID:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		var err error
+		bat, err = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if err != nil {
+			return err
+		}
 		if bat.RowCount() == 0 {
 			return nil
 		}
@@ -3059,7 +3067,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	primaryIdx := tbl.primaryIdx
 	// AnyIn/SubVecIn binary-search NULL-free vectors. Establish ordering
 	// before even the snapshot-only pruning, not just before row filtering.
-	keys.InplaceSort()
+	if err := keys.InplaceSort(tbl.proc.Load().GetMPool()); err != nil {
+		return false, err
+	}
 
 	var (
 		meta objectio.ObjectDataMeta

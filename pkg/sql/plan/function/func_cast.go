@@ -192,10 +192,41 @@ func numericToDecimalExplicit[S, D types.FixedSizeTExceptStrType](
 func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
 	from *vector.Vector, to *vector.FunctionResult[D], length int, proc *process.Process, selectList *FunctionSelectList,
 	parseString func(string) (D, error), fromFloat func(float64) (D, error),
-	clamp func(bool) (D, error),
+	fromDatetime func(types.Datetime) (D, error), clamp func(bool) (D, error),
 ) (bool, error) {
+	// Temporal DECIMAL256 casts are not part of the supported cast overloads.
+	if fromDatetime == nil {
+		switch from.GetType().Oid {
+		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+			return false, nil
+		}
+	}
 	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 	switch from.GetType().Oid {
+	case types.T_date:
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[types.Date](from), to, length, proc, selectList,
+			func(value types.Date) (D, error) { return parseString(strconv.FormatInt(packedDateInt64(value), 10)) },
+			func(types.Date) bool { return false }, nil, clamp)
+	case types.T_datetime:
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[types.Datetime](from), to, length, proc, selectList,
+			fromDatetime, func(types.Datetime) bool { return false }, nil, clamp)
+	case types.T_timestamp:
+		zone := time.Local
+		if proc != nil && proc.GetSessionInfo().TimeZone != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from), to, length, proc, selectList,
+			func(value types.Timestamp) (D, error) { return fromDatetime(value.ToDatetime(zone)) },
+			func(types.Timestamp) bool { return false }, nil, clamp)
+	case types.T_time:
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[types.Time](from), to, length, proc, selectList,
+			// Quantize once at the final scale, before checking the target width.
+			func(value types.Time) (D, error) { return parseString(value.NumericString(6)) },
+			func(value types.Time) bool { return value < 0 }, nil, clamp)
 	case types.T_bool:
 		// TRUE is exactly 1 and FALSE exactly 0, so the explicit cast reuses
 		// the integer parse path, including the out-of-range clamp that
@@ -300,6 +331,7 @@ func explicitNumericToDecimal(
 				}
 				return result, err
 			},
+			func(value types.Datetime) (types.Decimal64, error) { return packedDatetimeDecimal64(value, toType) },
 			func(negative bool) (types.Decimal64, error) {
 				return clampDecimal64Value(negative, toType.Width, toType.Scale)
 			})
@@ -317,6 +349,7 @@ func explicitNumericToDecimal(
 				}
 				return result, err
 			},
+			func(value types.Datetime) (types.Decimal128, error) { return packedDatetimeDecimal128(value, toType) },
 			func(negative bool) (types.Decimal128, error) {
 				return clampDecimal128Value(negative, toType.Width, toType.Scale)
 			})
@@ -334,6 +367,7 @@ func explicitNumericToDecimal(
 				}
 				return result, err
 			},
+			nil,
 			func(negative bool) (types.Decimal256, error) {
 				return clampDecimal256Value(negative, toType.Width, toType.Scale)
 			})
@@ -662,7 +696,8 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_date: {
-		types.T_int32, types.T_int64,
+		types.T_bool, types.T_float64,
+		types.T_int32, types.T_int64, types.T_uint64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp, types.T_year,
@@ -671,7 +706,8 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_datetime: {
-		types.T_int32, types.T_int64,
+		types.T_bool, types.T_float64,
+		types.T_int32, types.T_int64, types.T_uint64,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
@@ -680,7 +716,8 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_timestamp: {
-		types.T_int32, types.T_int64,
+		types.T_bool, types.T_float64,
+		types.T_int32, types.T_int64, types.T_uint64,
 		types.T_date, types.T_datetime, types.T_time,
 		types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
@@ -689,6 +726,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_time: {
+		types.T_bool, types.T_float64,
 		types.T_date, types.T_datetime,
 		types.T_time,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -1184,6 +1222,15 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		}
 	}
 	from := parameters[0]
+	if mode == castModeExplicit && (toType.Oid == types.T_int64 || toType.Oid == types.T_uint64) {
+		switch fromType.Oid {
+		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+			if toType.Oid == types.T_uint64 {
+				return explicitTemporalIntegerCast[uint64](parameters, result, proc, length, selectList, false)
+			}
+			return explicitTemporalIntegerCast[int64](parameters, result, proc, length, selectList, false)
+		}
+	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
 		switch fromType.Oid {
 		case types.T_float32:
@@ -1202,7 +1249,7 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), toType.Oid, result, length, selectList, decimal256RoundedIntegerString)
 		}
 	}
-	if mode == castModeExplicit && toType.IsDecimal() && (fromType.IsNumeric() || fromType.Oid == types.T_bool) {
+	if mode == castModeExplicit && toType.IsDecimal() {
 		if handled, err := explicitNumericToDecimal(from, *toType, result, length, proc, selectList); handled {
 			return err
 		}
@@ -1265,6 +1312,9 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		(proc == nil || proc.Ctx == nil || proc.Ctx.Value(defines.AlterCopyOpt{}) == nil)
 	if toType.Oid == types.T_decimal256 {
 		return castToDecimal256(proc, from, *toType, result, length, selectList, mode)
+	}
+	if isTemporalContextSource(fromType.Oid) && (toType.Oid == types.T_bool || toType.Oid == types.T_float64) {
+		return castTemporalContext(parameters, result, proc, length, selectList)
 	}
 	switch fromType.Oid {
 	case types.T_any: // scalar null
@@ -2399,6 +2449,9 @@ func dateToOthers(proc *process.Process,
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return dateToSigned(source, rs, length, selectList)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
+		return dateToSigned(source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return dateToDecimal64(source, rs, length, selectList)
@@ -2441,6 +2494,9 @@ func datetimeToOthers(proc *process.Process,
 		return datetimeToInt32(proc.Ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
+		return datetimeToInt64(source, rs, length, selectList)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
 		return datetimeToInt64(source, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
@@ -2489,6 +2545,9 @@ func timestampToOthers(proc *process.Process,
 		return timestampToInt32(proc.Ctx, source, rs, length, zone, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
+		return timestampToInt64(source, rs, length, zone, selectList)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
 		return timestampToInt64(source, rs, length, zone, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
@@ -5044,7 +5103,7 @@ func integerToEnum[T constraints.Integer](
 	return nil
 }
 
-func dateToSigned[T int32 | int64](
+func dateToSigned[T int32 | int64 | uint64](
 	from vector.FunctionParameterWrapper[types.Date],
 	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
 	var i uint64
@@ -5298,9 +5357,9 @@ func datetimeToInt32(
 	return nil
 }
 
-func datetimeToInt64(
+func datetimeToInt64[T int64 | uint64](
 	from vector.FunctionParameterWrapper[types.Datetime],
-	to *vector.FunctionResult[int64], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -5311,7 +5370,7 @@ func datetimeToInt64(
 			}
 		} else {
 			val := packedDatetimeInt64(v)
-			if err := to.Append(val, false); err != nil {
+			if err := to.Append(T(val), false); err != nil {
 				return err
 			}
 		}
@@ -5720,9 +5779,9 @@ func timestampToInt32(
 	return nil
 }
 
-func timestampToInt64(
+func timestampToInt64[T int64 | uint64](
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[int64], length int, zone *time.Location, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[T], length int, zone *time.Location, selectList *FunctionSelectList) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetValue(i)
@@ -5732,7 +5791,7 @@ func timestampToInt64(
 			}
 		} else {
 			val := packedDatetimeInt64(v.ToDatetime(zone))
-			if err := to.Append(val, false); err != nil {
+			if err := to.Append(T(val), false); err != nil {
 				return err
 			}
 		}
