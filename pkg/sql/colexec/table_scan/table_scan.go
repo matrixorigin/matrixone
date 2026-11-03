@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -267,18 +268,21 @@ func padCharColumnsToFullLength(bat *batch.Batch, proc *process.Process) error {
 // and shrinking it is precisely the crash. It cannot mask a real misalignment either --
 // any vector the reader DID fill is shrunk, so every populated column stays consistent
 // with the row count set below.
-func shrinkPopulatedVecs(bat *batch.Batch, sels []int64) {
+func shrinkPopulatedVecs(bat *batch.Batch, sels []int64, mp *mpool.MPool) error {
 	if len(sels) == bat.RowCount() {
-		return
+		return nil
 	}
 	rowCount := bat.RowCount()
 	for _, vec := range bat.Vecs {
 		if vec == nil || (vec.Length() == 0 && rowCount != 0) {
 			continue
 		}
-		vec.Shrink(sels, false)
+		if err := vec.Shrink(sels, false, mp); err != nil {
+			return err
+		}
 	}
 	bat.SetRowCount(len(sels))
+	return nil
 }
 
 // evalFilter evaluates inline filter expressions in-place. loadedColumns is
@@ -393,10 +397,14 @@ func (tableScan *TableScan) evalFilter(
 				}
 
 				if loadedColumns == nil {
-					shrinkPopulatedVecs(bat, sels)
+					if err := shrinkPopulatedVecs(bat, sels, proc.Mp()); err != nil {
+						return engine.ReaderFilterResult{}, err
+					}
 				} else {
 					for _, pos := range loadedColumns {
-						bat.Vecs[pos].Shrink(sels, false)
+						if err := bat.Vecs[pos].Shrink(sels, false, proc.Mp()); err != nil {
+							return engine.ReaderFilterResult{}, err
+						}
 					}
 					bat.SetRowCount(len(sels))
 				}
