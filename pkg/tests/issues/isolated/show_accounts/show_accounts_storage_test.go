@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package issues
+package showaccounts
 
 import (
 	"context"
@@ -25,7 +25,9 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
@@ -43,14 +45,20 @@ func TestShowAccountsStorageAggregation(t *testing.T) {
 	// Disable periodic and correction work before startup so the forced and
 	// aggregate reads use the same statistics.
 	c, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(s embed.ServiceOperator) {
-		if s.ServiceType() == metadata.ServiceType_CN {
-			s.Adjust(func(cfg *embed.ServiceConfig) {
+		s.Adjust(func(cfg *embed.ServiceConfig) {
+			// Keep the test cluster's TMP file service in its owned directory.
+			for i := range cfg.FileServices {
+				if strings.EqualFold(cfg.FileServices[i].Name, defines.TmpFileServiceName) {
+					cfg.FileServices[i].DataDir = filepath.Join(cfg.DataDir, "tmp")
+				}
+			}
+			if s.ServiceType() == metadata.ServiceType_CN {
 				cfg.CN.Frontend.SkipCheckUser = false
 				cfg.CN.SQLAddress = fmt.Sprintf("127.0.0.1:%d", cfg.CN.Frontend.Port)
 				cfg.CN.Engine.Stats.DisableStatsTask = true
 				cfg.CN.Engine.Stats.CorrectionDuration = 24 * time.Hour
-			})
-		}
+			}
+		})
 	}))
 	if c != nil {
 		var dataDir string
