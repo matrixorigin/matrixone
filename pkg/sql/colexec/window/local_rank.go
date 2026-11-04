@@ -64,6 +64,7 @@ func localRankValueIsNull(vec *vector.Vector, row int) bool {
 func localRankValueLess(vec *vector.Vector, rowA, rowB int) (bool, error) {
 	a := localRankRow(vec, rowA)
 	b := localRankRow(vec, rowB)
+	// typeswitch:partial bf16/float16/float8/float4 arguments are cast to float32 when the window function binds
 	switch vec.GetType().Oid {
 	case types.T_int8:
 		col := vector.MustFixedColNoTypeCheck[int8](vec)

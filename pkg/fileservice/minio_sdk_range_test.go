@@ -45,6 +45,7 @@ func TestMinioSDKReadRanges(t *testing.T) {
 		name, wantRange, identity, consumer string
 		min, max                            *int64
 		want                                string
+		policy                              Policy
 	}{
 		{name: "bounded", min: ptrTo[int64](1), max: ptrTo[int64](4), wantRange: "bytes=1-3", want: "123"},
 		{name: "zero start", min: ptrTo[int64](0), max: ptrTo[int64](4), wantRange: "bytes=0-3", want: "0123"},
@@ -58,8 +59,11 @@ func TestMinioSDKReadRanges(t *testing.T) {
 		{name: "etag", identity: "etag", min: ptrTo[int64](1), max: ptrTo[int64](4), wantRange: "bytes=1-3", want: "123"},
 		{name: "version", identity: "version", min: ptrTo[int64](1), max: ptrTo[int64](4), wantRange: "bytes=1-3", want: "123"},
 		{name: "identity nil start", identity: "etag", max: ptrTo[int64](4), wantRange: "bytes=0-3", want: "0123"},
-		{name: "file service buffered", consumer: "buffered", min: ptrTo[int64](1), max: ptrTo[int64](4), wantRange: "bytes=1-3", want: "123"},
-		{name: "file service stream", consumer: "stream", min: ptrTo[int64](1), max: ptrTo[int64](4), wantRange: "bytes=1-3", want: "123"},
+		{name: "file service buffered", consumer: "buffered", policy: SkipAllCache, min: ptrTo[int64](1), max: ptrTo[int64](4), wantRange: "bytes=1-3", want: "123"},
+		{name: "file service stream", consumer: "stream", policy: SkipAllCache, min: ptrTo[int64](1), max: ptrTo[int64](4), wantRange: "bytes=1-3", want: "123"},
+		{name: "file service default policy buffered", consumer: "buffered", min: ptrTo[int64](1), max: ptrTo[int64](4), wantRange: "bytes=1-3", want: "123"},
+		{name: "file service default policy stream", consumer: "stream", min: ptrTo[int64](1), max: ptrTo[int64](4), wantRange: "bytes=1-3", want: "123"},
+		{name: "file service default policy suffix", consumer: "buffered", min: ptrTo[int64](13), wantRange: "bytes=13-", want: "def"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			type transfer struct {
@@ -90,8 +94,18 @@ func TestMinioSDKReadRanges(t *testing.T) {
 			require.NoError(t, err)
 			var reader io.ReadCloser
 			if tc.consumer != "" {
-				fs := &S3FS{name: "range", storage: sdk, ioMerger: NewIOMerger()}
-				vector := &IOVector{FilePath: "object", Policy: SkipAllCache, Entries: []IOEntry{{Offset: *tc.min, Size: *tc.max - *tc.min}}}
+				fs, err := NewS3FS(ctx, ObjectStorageArguments{
+					Name: "range", Endpoint: server.URL, IsMinio: true,
+					Region: "us-east-1", Bucket: "bucket",
+					NoDefaultCredentials: true, NoBucketValidation: true,
+				}, DisabledCacheConfig, nil, false, false)
+				require.NoError(t, err)
+				t.Cleanup(func() { fs.Close(context.Background()) })
+				size := int64(-1)
+				if tc.max != nil {
+					size = *tc.max - *tc.min
+				}
+				vector := &IOVector{FilePath: "object", Policy: tc.policy, Entries: []IOEntry{{Offset: *tc.min, Size: size}}}
 				t.Cleanup(vector.Release)
 				if tc.consumer == "stream" {
 					vector.Entries[0].ReadCloserForRead = &reader

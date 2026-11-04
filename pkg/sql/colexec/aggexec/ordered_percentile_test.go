@@ -37,6 +37,8 @@ func TestPercentileDiscRejectsUnaccountedSortScratch(t *testing.T) {
 		types.T_array_float16,
 		types.T_array_int8,
 		types.T_array_uint8,
+		types.T_array_float8,
+		types.T_array_float4,
 	} {
 		require.False(t, PercentileDiscSupportedType(typ), "type=%s", typ)
 	}
