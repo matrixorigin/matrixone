@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -319,10 +320,32 @@ type nextvalBatch struct {
 	rows []int
 }
 
+// sequenceRelationName maps the raw string argument of nextval/currval/setval
+// onto the identifier form CREATE SEQUENCE stored it under, applying the
+// session's real lower_case_table_names policy (#31909): the parser
+// normalizes the identifiers of the CREATE statement the same way, while the
+// sequence functions receive an opaque string literal that bypasses that path
+// and misses the stored name. Only identifier resolution is normalized; the
+// allocation identity, its session caches and all access checks keep keying
+// on the real relation ids.
+func sequenceRelationName(proc *process.Process, name string) string {
+	// Default matches the frontend's lower_case_table_names fallback (1).
+	lowerCaseTableNames := int64(1)
+	if resolve := proc.GetResolveVariableFunc(); resolve != nil {
+		if value, err := resolve("lower_case_table_names", true, false); err == nil {
+			if lctn, ok := value.(int64); ok {
+				lowerCaseTableNames = lctn
+			}
+		}
+	}
+	return tree.NewCStr(name, lowerCaseTableNames).Compare()
+}
+
 // resolveNextval resolves and validates the sequence relation inside the
 // caller's transaction (preserving caller-visible errors) and captures the
 // generation identity the allocation route must match.
 func resolveNextval(tblname, db string, proc *process.Process, e engine.Engine, txn client.TxnOperator) (nextvalIdentity, error) {
+	tblname = sequenceRelationName(proc, tblname)
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return nextvalIdentity{}, err
@@ -421,6 +444,7 @@ func Setval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 // successful assignment clears the pass-scoped obligation (a deliberate
 // SETVAL boundary).
 func setval(tblname, setnum string, iscalled bool, db string, proc *process.Process, txn client.TxnOperator, e engine.Engine) (string, error) {
+	tblname = sequenceRelationName(proc, tblname)
 	dbHandler, err := e.Database(proc.Ctx, db, txn)
 	if err != nil {
 		return "", err
@@ -486,7 +510,7 @@ func Currval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				databasesByName[db] = dbHandler
 			}
 			var rel engine.Relation
-			rel, err = dbHandler.Relation(proc.Ctx, string(v), nil)
+			rel, err = dbHandler.Relation(proc.Ctx, sequenceRelationName(proc, string(v)), nil)
 			if err != nil {
 				return
 			}
