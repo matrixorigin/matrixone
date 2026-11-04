@@ -215,4 +215,57 @@ create index ix8 using ivfflat on u8(v) lists = 2 op_type 'vector_cosine_ops';
 -- @regex("Vector Index Scan on ix8 \[cosine_distance\]", true)
 explain select id from u8 order by cosine_distance(v, '[1,1,1]') limit 2;
 
+-- vecf8/vecf4: distances, pairing, precision
+create table vb (id bigint primary key, a8 vecf8(3), b8 vecf8(3), a4 vecf4(3), b4 vecf4(3), b32 vecf32(3), z8 vecf8(3));
+insert into vb values (1,'[1,2,3]','[4,5,6]','[1,2,3]','[4,6,6]','[4,5,6]','[0,0,0]');
+select inner_product(a8,b8) ip, cosine_similarity(a8,b8) cs, cosine_distance(a8,b8) cd, l2_distance(a8,b8) l2, l2_distance_sq(a8,b8) l2sq, l1_distance(a8,b8) l1 from vb;
+select inner_product(a4,b4) ip, cosine_similarity(a4,b4) cs, cosine_distance(a4,b4) cd, l2_distance(a4,b4) l2, l2_distance_sq(a4,b4) l2sq, l1_distance(a4,b4) l1 from vb;
+select inner_product(a8,b32) f8_f32, l2_distance(a8,b4) f8_f4, l2_distance(a4,b32) f4_f32, inner_product(a8,'[4,5,6]') f8_text from vb;
+select l2_distance(cast('[3,1]' as vecf8(2)), cast('[3,1]' as vecf64(2))) f8_f64;
+select l2_distance(cast('[3,1]' as vecf8(2)), cast('[3,1]' as vecbf16(2)));
+select inner_product(cast('[3,1]' as vecf4(2)), cast('[3,1]' as vecuint8(2)));
+select l2_distance(cast('[3,1]' as vecf8(2)), '[0,0]') l2_f8, l2_distance(cast('[3,1]' as vecf4(2)), '[0,0]') l2_f4, l2_distance(cast('[3,1]' as vecf32(2)), '[0,0]') l2_f32;
+select l2_distance_sq(cast('[0]' as vecf8(1)), cast('[3.1]' as vecf64(1))) l2sq_f8, l2_distance_sq(cast('[0]' as vecf32(1)), cast('[3.1]' as vecf32(1))) l2sq_f32, l2_distance(cast('[0]' as vecf8(1)), cast('[3.1]' as vecf64(1))) l2_f8;
+select inner_product(a8,z8) ip, cosine_distance(a8,z8) cd, cosine_distance(z8,z8) cd_both from vb;
+select cosine_similarity(a8,z8) from vb;
+select l2_distance(a8, null) l2, inner_product(null, a4) ip from vb;
+select inner_product(a8, cast('[1,2]' as vecf8(2))) from vb;
+select l2_distance(a4, '[1,2]') from vb;
+create table vbig (v vecf8(2));
+insert into vbig values ('[448,448]');
+select l2_distance_sq(v, '[-1e20,0]') from vbig;
+
+-- vecf8/vecf4: quantization and the stored cell
+select cast('[3000,-12,0.001,1000000]' as vecf8(4)) f8, cast('[3000,-12,0.001,1000000]' as vecf4(4)) f4;
+select vecblock_json(cast('[1,2,3]' as vecf8(3))) f8, vecblock_json(cast('[1,2,3]' as vecf4(3))) f4;
+select cast(vecblock_json(a4) as vecf4(3)) = a4 json_round_trip, cast(vecblock_binary(a8) as vecf8(3)) = a8 binary_round_trip from vb;
+create table vq (v vecf8(4));
+insert into vq values ('[3000,-12,0.001,1000000]');
+select v, v = '[3000,-12,0.001,1000000]' matches_inserted_text from vq;
+
+-- vecf8/vecf4: other functions and result types
+select summation(a8) s8, l1_norm(a8) n1, l2_norm(a8) n2, vector_dims(a8) d8, summation(a4) s4, vector_dims(a4) d4 from vb;
+select normalize_l2(a8) n8, normalize_l2(a4) n4, normalize_l2(z8) nz from vb;
+create table vr as select normalize_l2(a8) n8, normalize_l2(a4) n4, subvector(a8,2) s8, subvector(a4,1,2) s4, abs(a8) ab8, abs(a4) ab4, sqrt(a8) sq8, sqrt(a4) sq4, a8+b8 p8, a8*2 m8, a4-b32 d4, a8/b4 q84, coalesce(a8,b8) c8, if(id=1,a4,b4) i4, case when id=1 then a8 else b8 end k8 from vb;
+show create table vr;
+select * from vr;
+create table vr2 as select any_value(a8) av8, any_value(a4) av4 from vb group by a8, a4;
+show create table vr2;
+select hex(a8) from vb;
+select to_base64(a4) from vb;
+select a8 < b8 lt, a8 in ('[1,2,3]') in_list, a4 <> b4 ne from vb;
+select count(distinct a8) cd8, count(distinct a4) cd4 from vb;
+select min(a8) from vb;
+select avg(a4) from vb;
+select cast(a8 as vecf32(3)) to_f32, cast(a8 as vecf4(3)) to_f4, cast(a4 as vecf8(3)) to_f8, cast(b32 as vecf8(3)) from_f32 from vb;
+select cast(a8 as vecf64(3)) from vb;
+select cast(a4 as vecbf16(3)) from vb;
+select cast(cast('[1,2,3]' as vecint8(3)) as vecf8(3));
+
+-- vecf8/vecf4: no index
+create index ix_vb using ivfflat on vb(a8) lists = 1 op_type 'vector_l2_ops';
+create index ix_vb using hnsw on vb(a4) op_type 'vector_l2_ops';
+create index ix_vb on vb(a8);
+create table vpk (v vecf8(3) primary key);
+
 drop database vec_distance_semantics;
