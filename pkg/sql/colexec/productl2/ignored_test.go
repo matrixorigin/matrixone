@@ -164,22 +164,23 @@ func TestPkLiteral(t *testing.T) {
 	require.Equal(t, "(1, x)", ig.pkString(serial, 0, lit))
 	require.Equal(t, "7", (&Ignored{}).pkString(serial, 0, "7"))
 
-	// an ENUM key is its ordinal, whether the probe carries the value or its serial
+	// an ENUM key is its stored number, whether the probe carries the value or its serial
 	ig = &Ignored{Enum: true, EnumValues: "a,b,c"}
 	enum := vector.NewVec(types.T_enum.ToType())
 	require.NoError(t, vector.AppendFixed(enum, types.Enum(2), false, mp))
+	require.NoError(t, vector.AppendFixed(enum, types.Enum(0), false, mp))
 	lit, err = ig.pkLiteral(proc, enum, 0)
 	require.NoError(t, err)
-	require.Equal(t, "2", lit)
+	require.Equal(t, "SERIAL_EXTRACT(X'503d1502', 0 AS ENUM('a','b','c'))", lit)
 	require.Equal(t, "b", ig.pkString(enum, 0, lit), "users read the member")
-	require.Equal(t, "9", ig.pkString(enum, 0, "9"), "no such member")
+	require.Equal(t, "0", ig.pkString(enum, 1, ""), "no such member")
 	p.Reset()
 	p.EncodeEnum(types.Enum(3))
 	enumSerial := vector.NewVec(types.T_varbinary.ToType())
 	require.NoError(t, vector.AppendBytes(enumSerial, p.GetBuf(), false, mp))
 	lit, err = ig.pkLiteral(proc, enumSerial, 0)
 	require.NoError(t, err)
-	require.Equal(t, "3", lit)
+	require.Equal(t, "SERIAL_EXTRACT(X'503d1503', 0 AS ENUM('a','b','c'))", lit)
 	_, err = ig.pkLiteral(proc, serial, 0)
 	require.Error(t, err, "a serial of other parts")
 	_, err = ig.pkLiteral(proc, vec, 0)

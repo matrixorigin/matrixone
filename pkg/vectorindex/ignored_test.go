@@ -28,6 +28,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// An ENUM key keeps its stored number, 0 included, which names no member.
+func TestEnumPkLiteral(t *testing.T) {
+	require.Equal(t, "SERIAL_EXTRACT(X'503d14', 0 AS ENUM('a','b'))", EnumPkLiteral(0, "a,b"))
+	require.Equal(t, "SERIAL_EXTRACT(X'503d1502', 0 AS ENUM('a','it''s'))", EnumPkLiteral(2, "a,it's"))
+}
+
 func TestIgnoredRowsSql(t *testing.T) {
 	cols := IgnoredColumns{Pk: "__mo_index_pk", Code: "__mo_index_code", Reason: "__mo_index_reason", Ts: "__mo_index_ts"}
 	require.Empty(t, IgnoredRowsSql("db", "t", cols, nil))

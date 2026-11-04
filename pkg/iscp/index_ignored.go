@@ -97,6 +97,15 @@ func (g *ignoredRows) pkString(pk any) string {
 	return fmt.Sprint(pk)
 }
 
+// pkLiteral returns the SQL literal of the primary key pk.
+func (g *ignoredRows) pkLiteral(ctx context.Context, pk any) (string, error) {
+	if e, ok := pk.(types.Enum); ok {
+		return vectorindex.EnumPkLiteral(e, g.pkEnum), nil
+	}
+	lit, err := convertColIntoSql(ctx, pk, g.pkType, nil)
+	return string(lit), err
+}
+
 // ignoredKey returns a map key equal for equal primary keys.
 func ignoredKey(pk any) any {
 	if b, ok := pk.([]byte); ok {
@@ -160,11 +169,11 @@ func (g *ignoredRows) ignore(pk any, err error) error {
 	if g.count > g.limit {
 		return NewPermanentError(moerr.NewIndexTooManyBadRecordsNoCtx(g.limit, g.pkString(pk), err.Error()))
 	}
-	lit, cerr := convertColIntoSql(g.ctx, pk, g.pkType, nil)
+	lit, cerr := g.pkLiteral(g.ctx, pk)
 	if cerr != nil {
 		return cerr
 	}
-	return g.spill.Add(string(lit), code, vectorindex.IgnoredReason(err))
+	return g.spill.Add(lit, code, vectorindex.IgnoredReason(err))
 }
 
 // indexed records that the row with key pk is in the index or no longer exists.
@@ -285,12 +294,12 @@ func (g *ignoredRows) flush(ctx context.Context, service string, txn client.TxnO
 	}
 	rows := make([]vectorindex.IgnoredRow, 0, len(ignored))
 	for _, k := range ignored {
-		lit, err := convertColIntoSql(ctx, g.changes[k].pk, g.pkType, nil)
+		lit, err := g.pkLiteral(ctx, g.changes[k].pk)
 		if err != nil {
 			return err
 		}
 		c := g.changes[k]
-		rows = append(rows, vectorindex.IgnoredRow{Pk: string(lit), Code: c.code, Reason: c.reason, Ts: c.ts.Physical()})
+		rows = append(rows, vectorindex.IgnoredRow{Pk: lit, Code: c.code, Reason: c.reason, Ts: c.ts.Physical()})
 	}
 	for _, sql := range vectorindex.IgnoredRowsSql(g.db, g.tbl, vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Reason: catalog.IndexIgnored_TblCol_Reason, Ts: catalog.IndexIgnored_TblCol_Ts}, rows) {
 		if err := exec(sql); err != nil {

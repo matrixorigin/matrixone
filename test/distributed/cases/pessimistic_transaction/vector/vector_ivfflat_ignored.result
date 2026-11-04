@@ -133,6 +133,27 @@ insert into ea values ('c','[200000,1]');
 show index status from ea;
 ➤ Key_name[12,65535,0]  ¦  Table[12,65535,0]  ¦  State[12,7,0]  ¦  Error_message[12,167,0]  ¦  Ignored_rows[-5,64,0]  ¦  Max_bad_records[-5,64,0]  ¦  Synced_at[93,19,0]  𝄀
 iea  ¦  ea  ¦  stopped  ¦  the index cannot store more than max_bad_records = 1 rows; row c: vector element is out of the range the index stores: vector element 200000 cannot be stored as vecf16  ¦  1  ¦  1  ¦  2026-11-03 15:09:11
+create table e0(k enum('a','b') primary key, v vecf32(2));
+insert ignore into e0 values ('zz','[100000,1]');
+insert into e0 values ('a','[1,1]');
+create index ie0 using ivfflat on e0(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1;
+select cast(k as int) from e0;
+➤ cast(k as int)[4,32,0]  𝄀
+0  𝄀
+1
+show index ignored from e0;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+ie0  ¦    ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-04 20:10:46
+create table ea0(k enum('a','b') primary key, v vecf32(2));
+insert into ea0 values ('a','[1,1]');
+create index iea0 using ivfflat on ea0(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1 async;
+insert ignore into ea0 values ('zz','[100000,1]');
+show index ignored from ea0;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]  𝄀
+iea0  ¦    ¦  20348  ¦  vector element is out of the range the index stores  ¦  2026-11-04 20:11:05
+delete from ea0 where cast(k as int) = 0;
+show index ignored from ea0;
+➤ Key_name[12,65535,0]  ¦  Primary_key[12,65535,0]  ¦  Error_code[4,32,0]  ¦  Reason[12,65535,0]  ¦  Ignored_at[93,19,0]
 create table ce(a int, e enum('x','y'), v vecf32(2), primary key(a, e));
 insert into ce values (1,'x','[1,1]'),(2,'y','[100000,1]');
 create index ice using ivfflat on ce(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 5;

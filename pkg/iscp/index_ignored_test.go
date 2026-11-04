@@ -353,6 +353,12 @@ func TestIgnoredRowsPkString(t *testing.T) {
 	require.Equal(t, "7", (&ignoredRows{}).pkString(int64(7)))
 	require.Equal(t, "b", (&ignoredRows{pkEnum: "a,b"}).pkString(types.Enum(2)), "users read the member")
 	require.Equal(t, "3", (&ignoredRows{pkEnum: "a,b"}).pkString(types.Enum(3)), "no such member")
+	lit, err := (&ignoredRows{pkEnum: "a,b"}).pkLiteral(context.Background(), types.Enum(0))
+	require.NoError(t, err)
+	require.Equal(t, "SERIAL_EXTRACT(X'503d14', 0 AS ENUM('a','b'))", lit, "a key that names no member")
+	lit, err = (&ignoredRows{pkType: &types.Type{Oid: types.T_int64}}).pkLiteral(context.Background(), int64(7))
+	require.NoError(t, err)
+	require.Equal(t, "7", lit)
 
 	tabledef := newTestHnswIgnoredTableDef("float16", 0)
 	tabledef.Pkey = &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"pk", "pk"}}

@@ -111,6 +111,26 @@ insert into ea values ('c','[200000,1]');
 -- @wait_expect(2, 60)
 show index status from ea;
 
+-- an ENUM key that names no member, as INSERT IGNORE stores it, is recorded in strict mode
+create table e0(k enum('a','b') primary key, v vecf32(2));
+insert ignore into e0 values ('zz','[100000,1]');
+insert into e0 values ('a','[1,1]');
+create index ie0 using ivfflat on e0(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1;
+select cast(k as int) from e0;
+-- @ignore:4
+show index ignored from e0;
+create table ea0(k enum('a','b') primary key, v vecf32(2));
+insert into ea0 values ('a','[1,1]');
+create index iea0 using ivfflat on ea0(v) lists 1 op_type 'vector_l2_ops' quantization 'float16' max_bad_records 1 async;
+insert ignore into ea0 values ('zz','[100000,1]');
+-- @ignore:4
+-- @wait_expect(2, 60)
+show index ignored from ea0;
+delete from ea0 where cast(k as int) = 0;
+-- @ignore:4
+-- @wait_expect(2, 60)
+show index ignored from ea0;
+
 -- a composite key with an ENUM part reads as its members
 create table ce(a int, e enum('x','y'), v vecf32(2), primary key(a, e));
 insert into ce values (1,'x','[1,1]'),(2,'y','[100000,1]');

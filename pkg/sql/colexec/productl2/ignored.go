@@ -135,22 +135,37 @@ func (ig *Ignored) pkLiteral(proc *process.Process, vec *vector.Vector, j int) (
 	if ig.Serial {
 		return "X'" + hex.EncodeToString(vec.GetBytesAt(j)) + "'", nil
 	}
-	if ig.Enum && vec.GetType().Oid != types.T_enum {
-		tp, err := types.Unpack(vec.GetBytesAt(j))
+	if ig.Enum {
+		e, err := enumKey(vec, j)
 		if err != nil {
 			return "", err
 		}
-		var e types.Enum
-		ok := len(tp) == 1
-		if ok {
-			e, ok = tp[0].(types.Enum)
-		}
-		if !ok {
-			return "", moerr.NewInternalErrorNoCtxf("product_l2: the ENUM primary key is serial %v", tp)
-		}
-		return strconv.FormatUint(uint64(e), 10), nil
+		return vectorindex.EnumPkLiteral(e, ig.EnumValues), nil
 	}
 	return iscp.SqlLiteral(proc.Ctx, vec, j)
+}
+
+// enumKey returns the ENUM primary key in row j of vec, which carries the key or its serial.
+func enumKey(vec *vector.Vector, j int) (types.Enum, error) {
+	if vec.IsConst() {
+		j = 0
+	}
+	if vec.GetType().Oid == types.T_enum {
+		return vector.GetFixedAtNoTypeCheck[types.Enum](vec, j), nil
+	}
+	tp, err := types.Unpack(vec.GetBytesAt(j))
+	if err != nil {
+		return 0, err
+	}
+	var e types.Enum
+	ok := len(tp) == 1
+	if ok {
+		e, ok = tp[0].(types.Enum)
+	}
+	if !ok {
+		return 0, moerr.NewInternalErrorNoCtxf("product_l2: the ENUM primary key is serial %v", tp)
+	}
+	return e, nil
 }
 
 // pkString returns the primary key in row j of vec, whose literal is lit, as users read it.
@@ -159,10 +174,11 @@ func (ig *Ignored) pkString(vec *vector.Vector, j int, lit string) string {
 		return vectorindex.SerialPkString(vec.GetBytesAt(j), ig.PkScales)
 	}
 	if ig.Enum {
-		if n, err := strconv.ParseUint(lit, 10, 16); err == nil {
-			if label, err := types.ParseEnumIndex(ig.EnumValues, types.Enum(n)); err == nil {
+		if e, err := enumKey(vec, j); err == nil {
+			if label, err := types.ParseEnumIndex(ig.EnumValues, e); err == nil {
 				return label
 			}
+			return strconv.FormatUint(uint64(e), 10)
 		}
 	}
 	return lit

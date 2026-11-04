@@ -52,6 +52,19 @@ func IgnoredReason(err error) string {
 	return ""
 }
 
+// EnumPkLiteral returns the SQL literal of the ENUM key e whose members are members. It holds the
+// stored number, so it writes a number that names no member, as INSERT IGNORE stores, in strict mode.
+func EnumPkLiteral(e types.Enum, members string) string {
+	p := types.NewPacker()
+	defer p.Close()
+	p.EncodeEnum(e)
+	quoted := strings.Split(members, ",")
+	for i, m := range quoted {
+		quoted[i] = sqlquote.String(m)
+	}
+	return fmt.Sprintf("SERIAL_EXTRACT(X'%s', 0 AS ENUM(%s))", hex.EncodeToString(p.GetBuf()), strings.Join(quoted, ","))
+}
+
 // SerialPkString returns the composite primary key whose serial is b as (a, b), the parts formatted
 // with the scales of their columns, or b in hex when b is no serial.
 func SerialPkString(b []byte, scales []int32) string {
