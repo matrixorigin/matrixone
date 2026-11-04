@@ -253,3 +253,133 @@ func TestWriteNoSortFailureThenReset(t *testing.T) {
 	require.Equal(t, int(objectio.BlockMaxRows), input.RowCount())
 	require.NoError(t, sinker.Close())
 }
+
+type panicFetchBuffer struct {
+	*ownershipBuffer
+	remaining int
+}
+
+func (b *panicFetchBuffer) FetchWithSchema(attrs []string, typs []types.Type) *batch.Batch {
+	if b.remaining == 0 {
+		panic(spillInjectedError)
+	}
+	b.remaining--
+	return b.ownershipBuffer.FetchWithSchema(attrs, typs)
+}
+
+func TestMergeReplacementPanicOwnership(t *testing.T) {
+	for _, pipeline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pipeline=%t", pipeline), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			attrs, typs, _ := mockSchema(3, 2)
+			base := &ownershipBuffer{IBatchBuffer: containers.NewOneSchemaBatchBuffer(mpool.MB, attrs, typs, true), active: make(map[*batch.Batch]bool), t: t}
+			pool := &panicFetchBuffer{ownershipBuffer: base, remaining: 100}
+			options := []SinkerOption{WithMemorySizeThreshold(100 * mpool.MB), WithBuffer(pool, true)}
+			if pipeline {
+				options = append(options, WithPipelineFlush())
+			} else {
+				options = append(options, WithDedupAll())
+			}
+			file := &spillFailureSink{}
+			sinker := NewSinker(2, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, proc.Mp(), nil, options...)
+			t.Cleanup(func() {
+				if sinker.buf.buffers != nil {
+					_ = sinker.Close()
+				}
+			})
+			before := proc.Mp().CurrNB()
+			source := containers.MockBatch(typs, 2*int(objectio.BlockMaxRows), 2, nil)
+			defer source.Close()
+			require.NoError(t, sinker.Write(context.Background(), containers.ToCNBatch(source)))
+			pool.remaining = 2 // panic fetching the second replacement, after two transfers
+			require.PanicsWithValue(t, spillInjectedError, func() { _ = sinker.trySpill(context.Background()) })
+			require.Empty(t, base.active)
+			require.NoError(t, sinker.Close())
+			require.Equal(t, before, proc.Mp().CurrNB())
+		})
+	}
+}
+
+type lifecycleSink struct {
+	spillFailureSink
+	syncMode string
+	resets   int
+}
+
+func (s *lifecycleSink) Sync(context.Context) (*objectio.ObjectStats, error) {
+	if s.syncMode == "panic" {
+		panic(spillInjectedError)
+	}
+	if s.syncMode == "error" {
+		return nil, spillInjectedError
+	}
+	return &objectio.ObjectStats{}, nil
+}
+func (s *lifecycleSink) Reset() { s.resets++ }
+
+func TestSyncExecutorResetOnFailure(t *testing.T) {
+	for _, path := range []string{"streaming", "dedup", "unsorted"} {
+		for _, stage := range []string{"sink", "sync"} {
+			for _, mode := range []string{"error", "panic"} {
+				t.Run(path+"/"+stage+"/"+mode, func(t *testing.T) {
+					proc := testutil.NewProc(t)
+					attrs, typs, _ := mockSchema(3, 2)
+					file := &lifecycleSink{}
+					if stage == "sink" {
+						file.mode = mode
+					} else {
+						file.syncMode = mode
+					}
+					key := 2
+					options := []SinkerOption{WithMemorySizeThreshold(1), WithOffHeap()}
+					if path == "unsorted" {
+						key = -1
+					}
+					if path == "dedup" {
+						options = append(options, WithDedupAll())
+					}
+					sinker := NewSinker(key, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, proc.Mp(), nil, options...)
+					t.Cleanup(func() {
+						if sinker.buf.buffers != nil {
+							_ = sinker.Close()
+						}
+					})
+					before := proc.Mp().CurrNB()
+					source := containers.MockBatch(typs, int(objectio.BlockMaxRows), 2, nil)
+					defer source.Close()
+					if mode == "panic" {
+						require.PanicsWithValue(t, spillInjectedError, func() { _ = sinker.Write(context.Background(), containers.ToCNBatch(source)) })
+					} else {
+						require.ErrorIs(t, sinker.Write(context.Background(), containers.ToCNBatch(source)), spillInjectedError)
+					}
+					require.Equal(t, 1, file.resets)
+					require.NoError(t, sinker.Close())
+					require.Equal(t, before, proc.Mp().CurrNB())
+				})
+			}
+		}
+	}
+}
+
+func TestPipelineRejectedSubmissionReleasesBatches(t *testing.T) {
+	proc := testutil.NewProc(t)
+	attrs, typs, _ := mockSchema(3, 2)
+	sinker := NewSinker(2, attrs, typs, nil, proc.Mp(), nil, WithMemorySizeThreshold(100*mpool.MB), WithOffHeap(), WithPipelineFlush())
+	t.Cleanup(func() {
+		if sinker.buf.buffers != nil {
+			_ = sinker.Close()
+		}
+	})
+	before := proc.Mp().CurrNB()
+	source := containers.MockBatch(typs, int(objectio.BlockMaxRows), 2, nil)
+	defer source.Close()
+	require.NoError(t, sinker.Write(context.Background(), containers.ToCNBatch(source)))
+	sinker.staged.memorySizeThreshold = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, sinker.trySpillMergeSortPipeline(ctx), context.Canceled)
+	sinker.cleanupInMemoryStaged()
+	sinker.Reset()
+	require.NoError(t, sinker.Close())
+	require.Equal(t, before, proc.Mp().CurrNB())
+}
