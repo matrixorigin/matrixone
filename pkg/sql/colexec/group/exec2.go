@@ -505,19 +505,23 @@ func (ctr *container) appendGroupByBatch(
 	offset int,
 	insertList []uint8) (int, error) {
 
-	// first find the target batch.
+	spaceLeft := aggBatchSize
+	if n := len(ctr.groupByBatches); n > 0 {
+		if remaining := aggBatchSize - ctr.groupByBatches[n-1].RowCount(); remaining > 0 {
+			spaceLeft = remaining
+		}
+	}
+	toIncrease, kth := countNonZeroAndFindKth(insertList, spaceLeft)
+	if toIncrease == 0 {
+		return 0, nil
+	}
+
+	// Allocate a new batch only when at least one group will be inserted.
 	if len(ctr.groupByBatches) == 0 ||
 		ctr.groupByBatches[len(ctr.groupByBatches)-1].RowCount() >= aggBatchSize {
 		ctr.groupByBatches = append(ctr.groupByBatches, ctr.createNewGroupByBatch(vs, aggBatchSize))
 	}
 	currBatch := ctr.groupByBatches[len(ctr.groupByBatches)-1]
-	spaceLeft := aggBatchSize - currBatch.RowCount()
-
-	toIncrease, kth := countNonZeroAndFindKth(insertList, spaceLeft)
-	if toIncrease == 0 {
-		// there is nothing in the insertList
-		return 0, nil
-	}
 
 	thisTime := insertList
 	addedRows := toIncrease
@@ -586,8 +590,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		return vm.CancelResult, false, nil
 	}
 	curr := group.ctr.currBatchIdx
-	group.ctr.currBatchIdx += 1
-	hasMore := group.ctr.currBatchIdx < len(group.ctr.groupByBatches)
+	hasMore := curr+1 < len(group.ctr.groupByBatches)
 
 	batch := group.ctr.groupByBatches[curr]
 
@@ -601,9 +604,12 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	nAggs := int32(len(group.ctr.aggList))
 	buf.Write(types.EncodeInt32(&nAggs))
 	for _, ag := range group.ctr.aggList {
-		ag.SaveIntermediateResultOfChunk(curr, &buf)
+		if err := ag.SaveIntermediateResultOfChunk(curr, &buf); err != nil {
+			return vm.CancelResult, false, err
+		}
 	}
 	batch.ExtraBuf = buf.Bytes()
+	group.ctr.currBatchIdx++
 
 	res := vm.NewCallResult()
 	res.Batch = batch

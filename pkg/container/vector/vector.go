@@ -3818,6 +3818,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	return nil
 }
 
+// UnionBatch appends selected rows. If it fails, the destination may be
+// partially modified; before reuse, roll back an append checkpoint or reset
+// the vector.
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
 	return v.unionBatch(w, offset, cnt, flags, -1, mp)
 }

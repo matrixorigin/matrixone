@@ -57,13 +57,56 @@ func writeRuntimeAggGroup(group encoding.BinaryMarshaler, writer io.Writer) erro
 	return types.WriteSizeBytes(data, writer)
 }
 
+// Aggregate selections omit missing or empty chunks. This differs from
+// Vector.UnionBatch, where a nil selection means all rows.
+func validateRuntimeAggSelection(cnt int64, flags [][]uint8, ret *optSplitResult, groupCount int) error {
+	if cnt <= 0 || ret == nil {
+		return moerr.NewInvalidInputNoCtx("invalid aggregate selection")
+	}
+	if len(ret.emptyList) != 0 && len(ret.emptyList) != len(ret.resultList) {
+		return moerr.NewInvalidInputNoCtx("aggregate result and empty chunks do not match")
+	}
+	var selected int64
+	rows := 0
+	for i, result := range ret.resultList {
+		n := result.Length()
+		rows += n
+		if len(ret.emptyList) != 0 && ret.emptyList[i].Length() != n {
+			return moerr.NewInvalidInputNoCtx("aggregate result and empty rows do not match")
+		}
+		if i >= len(flags) {
+			continue
+		}
+		if len(flags[i]) > n {
+			return moerr.NewInvalidInputNoCtx("aggregate selection exceeds chunk length")
+		}
+		ones := bytes.Count(flags[i], []byte{1})
+		if ones+bytes.Count(flags[i], []byte{0}) != len(flags[i]) {
+			return moerr.NewInvalidInputNoCtx("aggregate selection flag must be zero or one")
+		}
+		selected += int64(ones)
+	}
+	for i := len(ret.resultList); i < len(flags); i++ {
+		if len(flags[i]) != 0 {
+			return moerr.NewInvalidInputNoCtx("aggregate selection exceeds chunk count")
+		}
+	}
+	if selected != cnt {
+		return moerr.NewInvalidInputNoCtx("aggregate selection count does not match")
+	}
+	if groupCount != 0 && groupCount != rows {
+		return moerr.NewInvalidInputNoCtx("aggregate group and result counts do not match")
+	}
+	return nil
+}
+
 func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 	cnt int64, flags [][]uint8, buf *bytes.Buffer,
 	ret *optSplitResult, groups []T, extra [][]byte) error {
-	types.WriteInt64(buf, cnt)
-	if cnt == 0 {
-		return nil
+	if err := validateRuntimeAggSelection(cnt, flags, ret, len(groups)); err != nil {
+		return err
 	}
+	types.WriteInt64(buf, cnt)
 	if err := ret.marshalToBuffers(flags, buf); err != nil {
 		return err
 	}
@@ -73,15 +116,17 @@ func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 	} else {
 		types.WriteInt64(buf, cnt)
 		groupIdx := 0
-		for i := range flags {
-			for j := range flags[i] {
-				if flags[i][j] == 1 {
-					if err := writeRuntimeAggGroup(groups[groupIdx], buf); err != nil {
-						return err
+		for i, result := range ret.resultList {
+			if i < len(flags) {
+				for j, selected := range flags[i] {
+					if selected == 1 {
+						if err := writeRuntimeAggGroup(groups[groupIdx+j], buf); err != nil {
+							return err
+						}
 					}
 				}
-				groupIdx += 1
 			}
+			groupIdx += result.Length()
 		}
 	}
 
@@ -98,12 +143,12 @@ func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 func marshalChunkToBuffer[T encoding.BinaryMarshaler](
 	chunk int, buf *bytes.Buffer,
 	ret *optSplitResult, groups []T, extra [][]byte) error {
+	if chunk < 0 || chunk >= len(ret.resultList) {
+		return moerr.NewInternalErrorNoCtx("invalid chunk number")
+	}
 	chunkSz := ret.optInformation.chunkSize
 	start := chunkSz * chunk
 	chunkNGroup := ret.getNthChunkSize(chunk)
-	if chunkSz < 0 {
-		return moerr.NewInternalErrorNoCtx("invalid chunk number.")
-	}
 
 	cnt := int64(chunkNGroup)
 	buf.Write(types.EncodeInt64(&cnt))
