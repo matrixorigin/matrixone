@@ -160,11 +160,15 @@ func TestHashmapUniqueKeyChunking(t *testing.T) {
 type keyAppendCapacity struct {
 	calls, failAt int
 	used          uint64
+	onFailure     func()
 }
 
 func (c *keyAppendCapacity) AcquireAllocationCapacity(bytes uint64) error {
 	c.calls++
 	if c.failAt > 0 && c.calls == c.failAt {
+		if c.onFailure != nil {
+			c.onFailure()
+		}
 		return mpool.ErrAllocationAccountCapacity
 	}
 	c.used += bytes
@@ -214,6 +218,44 @@ func TestUniqueKeyAppendRollbackAcrossChunks(t *testing.T) {
 	for failAt := 1; failAt <= calls; failAt++ {
 		t.Run(fmt.Sprint(failAt), func(t *testing.T) { run(t, failAt) })
 	}
+}
+
+func TestUniqueKeyRollbackInvariantDiscardsCollection(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	control := &keyAppendCapacity{}
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4096)
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<30, control)
+	require.NoError(t, err)
+	hb := &HashmapBuilder{}
+	require.NoError(t, hb.SetAllocationAccount(account))
+	t.Cleanup(func() {
+		hb.curVecs = nil
+		hb.Free(proc)
+		require.Zero(t, account.Snapshot().Used)
+		require.Zero(t, control.used)
+	})
+	input := vector.NewVec(types.T_int64.ToType())
+	t.Cleanup(func() { input.Free(proc.Mp()) })
+	require.NoError(t, vector.AppendFixedList(input, make([]int64, 8193), nil, proc.Mp()))
+	hb.curVecs = []*vector.Vector{input, input}
+	require.NoError(t, hb.appendUniqueKeys(proc, 0, 8191, nil))
+	control.calls, control.failAt = 0, 1
+	control.onFailure = func() {
+		// Keep the backing owned but invalidate a captured logical checkpoint.
+		// Use the real account rejection boundary, not a production test hook.
+		hb.uniqueKeys.first.vecs[0].SetLength(0)
+	}
+	err = hb.appendUniqueKeys(proc, 8191, 2, nil)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.False(t, mpool.IsRetryableAllocationCapacity(err))
+	require.ErrorIs(t, hb.fallbackOptionalRuntimeFilterCollection(proc, err), mpool.ErrAllocationAccountInvariant)
+	require.Empty(t, hb.uniqueKeys.first.vecs)
+	require.Empty(t, hb.uniqueKeys.rest)
+	require.Zero(t, hb.uniqueKeys.count())
+	require.Zero(t, account.Snapshot().Used)
+	require.Zero(t, control.used)
 }
 
 func TestUniqueKeyBatchesAligned(t *testing.T) {

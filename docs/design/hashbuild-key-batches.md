@@ -10,6 +10,10 @@ failure restores the previous tail and destroys unpublished batches. Variable
 payload and encoded size are checked before growth; a byte boundary may produce
 a shorter batch. One indivisible oversized key remains a size refusal.
 
+Rollback failures join the original append error after attempting every column's
+restoration. An invalid checkpoint discards the entire collected-key owner and
+remains terminal; it cannot fall back to PASS or retry a partially restored set.
+
 Ordinary IN keeps its existing wire/probe contract and its single-batch fast path.
 Numeric values are copied and sorted directly in the final admitted encoding;
 other sorted runs are merged into that encoding without constructing a

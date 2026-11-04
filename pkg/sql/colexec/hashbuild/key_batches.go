@@ -279,10 +279,12 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		if err == nil {
 			return
 		}
+		var rollbackErr error
 		if oldFirst {
 			for i, v := range checkpoint.vecs {
 				if v != nil {
-					v.RollbackAppend(checkpoint.checkpoints[i], oldTailAttemptedRows)
+					rollbackErr = vector.JoinAppendRollbackError(rollbackErr,
+						v.RollbackAppend(checkpoint.checkpoints[i], oldTailAttemptedRows))
 				}
 			}
 		}
@@ -292,6 +294,13 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		b.rest = b.rest[:oldChunks]
 		if !oldFirst {
 			b.first.free(proc.Mp())
+		}
+		if rollbackErr != nil {
+			// An invalid checkpoint is terminal. Do not retain a partially
+			// restored collection for a capacity retry or later publication.
+			b.free(proc.Mp())
+			err = vector.JoinAppendRollbackError(err, rollbackErr)
+			return
 		}
 		b.rows = oldRows
 	}()
