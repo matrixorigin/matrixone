@@ -1824,12 +1824,6 @@ func doSetVar(
 			if err != nil {
 				return err
 			}
-		} else if assign.System && name == "optimizer_hints" {
-			err = setVarFunc(assign.System, assign.Global, name, value, sql)
-			if err != nil {
-				return err
-			}
-			ses.applySessionSysVarSideEffects(name, value)
 		} else if assign.System && name == "runtime_filter_limit_in" {
 			err = setVarFunc(assign.System, assign.Global, name, value, sql)
 			if err != nil {
