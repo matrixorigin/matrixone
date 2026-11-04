@@ -59,8 +59,8 @@ func TestExactDataSortersMatchVectorOrdering(t *testing.T) {
 	checkExactDataSorter(t, types.T_year.ToType(), []types.MoYear{2026, 0, 1990})
 	checkExactDataSorter(t, types.T_enum.ToType(), []types.Enum{3, 1, 2})
 	checkExactDataSorter(t, types.T_decimal64.ToType(), []types.Decimal64{7, 0, types.Decimal64(^uint64(0))})
-	checkExactDataSorter(t, types.T_decimal128.ToType(), []types.Decimal128{{7, 0}, {1, 0}, {0, 0}})
-	checkExactDataSorter(t, types.T_decimal256.ToType(), []types.Decimal256{{7, 0, 0, 0}, {1, 0, 0, 0}, {0, 0, 0, 0}})
+	checkExactDataSorter(t, types.T_decimal128.ToType(), []types.Decimal128{{B0_63: 7}, {B0_63: 1}, {}})
+	checkExactDataSorter(t, types.T_decimal256.ToType(), []types.Decimal256{{B0_63: 7}, {B0_63: 1}, {}})
 	checkExactDataSorter(t, types.T_uuid.ToType(), []types.Uuid{{7}, {1}, {0}})
 	require.Nil(t, ExactFilterDataSorter(types.T_varchar.ToType()))
 }
@@ -121,4 +121,48 @@ func TestMarshalExactFilterRuns(t *testing.T) {
 			require.True(t, actual.GetSorted())
 		})
 	}
+}
+
+func TestMarshalExactFilterRunsSharedArea(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 4096)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	runs := make([]*vector.Vector, 2)
+	t.Cleanup(func() {
+		for _, v := range runs {
+			if v != nil {
+				v.Free(mp)
+			}
+		}
+		require.Zero(t, mp.CurrNB())
+		require.Zero(t, account.Snapshot().Used)
+	})
+	for i := range runs {
+		func() {
+			value := make([]byte, 64)
+			for j := range value {
+				value[j] = byte('a' + i)
+			}
+			source, err := vector.NewConstBytes(types.T_varchar.ToType(), value, 3, mp)
+			require.NoError(t, err)
+			defer source.Free(mp)
+			runs[i] = vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, runs[i].UnionBatch(source, 0, 3, nil, mp))
+			require.Len(t, runs[i].GetArea(), 64, "three descriptors share one value")
+		}()
+	}
+	data, release, err := MarshalExactFilterRuns(context.Background(), runs, mp, account, mpool.AllocationOwnerHashBuild, mpool.AllocationSiteMin)
+	require.NoError(t, err)
+	defer release()
+	var actual vector.Vector
+	require.NoError(t, actual.UnmarshalBinary(data))
+	defer actual.Free(nil)
+	require.Equal(t, 6, actual.Length())
+	require.Len(t, actual.GetArea(), 128, "keep the shared area instead of copying it for every row")
+	for row := 0; row < actual.Length(); row++ {
+		require.Equal(t, runs[row/3].GetRawBytesAt(0), actual.GetRawBytesAt(row))
+	}
+	require.True(t, actual.GetSorted())
 }

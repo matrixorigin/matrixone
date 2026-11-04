@@ -30,9 +30,10 @@ import (
 )
 
 type mergeRun struct {
-	vec *vector.Vector
-	row int
-	key []byte
+	vec      *vector.Vector
+	row      int
+	key      []byte
+	areaBase uint32
 }
 
 // ExactFilterDataSorter selects the native IN ordering for fixed-width
@@ -115,12 +116,7 @@ func MarshalExactFilterRuns(ctx context.Context, runs []*vector.Vector, mp *mpoo
 		}
 		rows += uint64(v.Length())
 		if typ.IsVarlen() {
-			for row := 0; row < v.Length(); row++ {
-				n := len(v.GetRawBytesAt(row))
-				if n > types.VarlenaInlineSize {
-					areaBytes += uint64(n)
-				}
-			}
+			areaBytes += uint64(len(v.GetArea()))
 		}
 	}
 	dataBytes := rows * uint64(width)
@@ -162,22 +158,20 @@ func MarshalExactFilterRuns(ctx context.Context, runs []*vector.Vector, mp *mpoo
 	}
 	defer lease.Release()
 	heap := make([]mergeRun, 0, len(runs))
-	comparator := compare.New(typ, false, false)
-	less := func(a, b mergeRun) bool {
-		// IN wire vectors use InplaceSort's raw-byte string order and Go's
-		// NaN-first floating order, not SQL collation/ORDER BY comparators.
-		if typ.IsVarlen() {
-			return bytes.Compare(a.key, b.key) < 0
+	// Compare heap positions rather than copying two run descriptors per
+	// comparison. Choose the key domain once, outside the per-row merge loop.
+	less := func(a, b int) bool {
+		// IN encodings use raw-byte string order, not SQL collation order.
+		return bytes.Compare(heap[a].key, heap[b].key) < 0
+	}
+	if !typ.IsVarlen() {
+		comparator := compare.New(typ, false, false)
+		less = func(a, b int) bool {
+			left, right := &heap[a], &heap[b]
+			comparator.Set(0, left.vec)
+			comparator.Set(1, right.vec)
+			return comparator.Compare(0, 1, int64(left.row), int64(right.row)) < 0
 		}
-		if typ.Oid == types.T_float32 {
-			return cmp.Compare(vector.MustFixedColNoTypeCheck[float32](a.vec)[a.row], vector.MustFixedColNoTypeCheck[float32](b.vec)[b.row]) < 0
-		}
-		if typ.Oid == types.T_float64 {
-			return cmp.Compare(vector.MustFixedColNoTypeCheck[float64](a.vec)[a.row], vector.MustFixedColNoTypeCheck[float64](b.vec)[b.row]) < 0
-		}
-		comparator.Set(0, a.vec)
-		comparator.Set(1, b.vec)
-		return comparator.Compare(0, 1, int64(a.row), int64(b.row)) < 0
 	}
 	down := func(root int) {
 		for {
@@ -185,23 +179,27 @@ func MarshalExactFilterRuns(ctx context.Context, runs []*vector.Vector, mp *mpoo
 			if child >= len(heap) {
 				return
 			}
-			if child+1 < len(heap) && less(heap[child+1], heap[child]) {
+			if child+1 < len(heap) && less(child+1, child) {
 				child++
 			}
-			if !less(heap[child], heap[root]) {
+			if !less(child, root) {
 				return
 			}
 			heap[root], heap[child] = heap[child], heap[root]
 			root = child
 		}
 	}
+	var areaBase uint32
 	for _, v := range runs {
 		if v.Length() != 0 {
-			run := mergeRun{vec: v}
+			run := mergeRun{vec: v, areaBase: areaBase}
 			if typ.IsVarlen() {
 				run.key = v.GetRawBytesAt(0)
 			}
 			heap = append(heap, run)
+		}
+		if typ.IsVarlen() {
+			areaBase += uint32(len(v.GetArea()))
 		}
 	}
 	for i := len(heap)/2 - 1; i >= 0; i-- {
@@ -217,7 +215,19 @@ func MarshalExactFilterRuns(ctx context.Context, runs []*vector.Vector, mp *mpoo
 		}
 	}()
 	areaStart := header + int(dataBytes) + 4
-	dataPos, areaPos := header, 0
+	// Keep each run's area layout, including shared values. Bulk copies avoid
+	// a sizing scan and one tiny payload copy per key; the merge only rebases
+	// the sorted descriptors into these admitted backing spans.
+	if typ.IsVarlen() {
+		areaPos := areaStart
+		for _, v := range runs {
+			if err = ctx.Err(); err != nil {
+				return nil, nil, err
+			}
+			areaPos += copy(out[areaPos:], v.GetArea())
+		}
+	}
+	dataPos := header
 	for row := uint64(0); row < rows; row++ {
 		if row&8191 == 0 {
 			if err = ctx.Err(); err != nil {
@@ -226,15 +236,10 @@ func MarshalExactFilterRuns(ctx context.Context, runs []*vector.Vector, mp *mpoo
 		}
 		run := &heap[0]
 		if typ.IsVarlen() {
-			value := run.key
-			var descriptor types.Varlena
-			if len(value) <= types.VarlenaInlineSize {
-				descriptor[0] = byte(len(value))
-				copy(descriptor[1:], value)
-			} else {
-				descriptor.SetOffsetLen(uint32(areaPos), uint32(len(value)))
-				copy(out[areaStart+areaPos:], value)
-				areaPos += len(value)
+			descriptor := vector.MustFixedColNoTypeCheck[types.Varlena](run.vec)[run.row]
+			if !descriptor.IsSmall() {
+				offset, length := descriptor.OffsetLen()
+				descriptor.SetOffsetLen(run.areaBase+offset, length)
 			}
 			copy(out[dataPos:], descriptor[:])
 		} else {
