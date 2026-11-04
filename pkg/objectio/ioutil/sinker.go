@@ -857,6 +857,11 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if buffer != nil {
+			sinker.putBackBuffer(buffer)
+		}
+	}()
 	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sinkStart := time.Now()
 		if err := fSinker.Sink(ctx, data); err != nil {
@@ -875,7 +880,6 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 		sinker.mp,
 		sinker.putBackOneInMemory,
 	)
-	sinker.putBackBuffer(buffer)
 	return err
 }
 
@@ -885,9 +889,13 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 	ctx context.Context, fSinker FileSinker,
 ) error {
 	var sorted []*batch.Batch
+	var buffer *batch.Batch
 	innersinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sorted = append(sorted, data)
-		return sinker.fetchBuffer()
+		buffer = nil // sorted owns data now.
+		var err error
+		buffer, err = sinker.fetchBuffer()
+		return buffer, err
 	}
 	defer func() {
 		for i, bat := range sorted {
@@ -897,10 +905,16 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 		sorted = sorted[:0]
 	}()
 
-	buffer, err := sinker.fetchBuffer()
+	var err error
+	buffer, err = sinker.fetchBuffer()
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if buffer != nil {
+			sinker.putBackBuffer(buffer)
+		}
+	}()
 	buffer, err = mergeutil.MergeSortBatches(
 		sinker.staged.inMemory,
 		sinker.schema.sortKeyIdx,
@@ -909,7 +923,10 @@ func (sinker *Sinker) trySpillMergeSortAccumulate(
 		sinker.mp,
 		sinker.putBackOneInMemory,
 	)
-	sinker.putBackBuffer(buffer)
+	if buffer != nil {
+		sinker.putBackBuffer(buffer)
+		buffer = nil
+	}
 	if err != nil {
 		return err
 	}
@@ -948,6 +965,7 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 	var (
 		pending     []*batch.Batch
 		pendingSize int
+		buffer      *batch.Batch
 	)
 	cleanupPending := func() {
 		for _, bat := range pending {
@@ -958,11 +976,7 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 		pending = nil
 		pendingSize = 0
 	}
-	defer func() {
-		if err != nil {
-			cleanupPending()
-		}
-	}()
+	defer cleanupPending()
 
 	submitPending := func() error {
 		if len(pending) == 0 {
@@ -976,19 +990,26 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 
 	streamSubmit := func(data *batch.Batch) (*batch.Batch, error) {
 		pending = append(pending, data)
+		buffer = nil // pending owns data now.
 		pendingSize += data.Size()
 		if pendingSize >= submitThreshold {
 			if err := submitPending(); err != nil {
 				return nil, err
 			}
 		}
-		return sinker.fetchBuffer()
+		buffer, err = sinker.fetchBuffer()
+		return buffer, err
 	}
 
-	buffer, err := sinker.fetchBuffer()
+	buffer, err = sinker.fetchBuffer()
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if buffer != nil {
+			sinker.putBackBuffer(buffer)
+		}
+	}()
 	buffer, err = mergeutil.MergeSortBatches(
 		sinker.staged.inMemory,
 		sinker.schema.sortKeyIdx,
@@ -999,6 +1020,7 @@ func (sinker *Sinker) trySpillMergeSortPipeline(ctx context.Context) (err error)
 	)
 	if buffer != nil {
 		sinker.putBackBuffer(buffer)
+		buffer = nil
 	}
 	if err != nil {
 		return err
