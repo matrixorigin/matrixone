@@ -21,6 +21,88 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDigestWindowArgumentDomains(t *testing.T) {
+	for _, test := range []struct {
+		sql, mode string
+		reject    bool
+	}{
+		{"SELECT NTILE(1+1) OVER ()", "", true},
+		{"WITH c AS (SELECT NTILE(1+1) OVER ()) SELECT 1", "", true},
+		{"SELECT NTILE(0) OVER ()", "", false},
+		{"SELECT NTILE(18446744073709551615) OVER ()", "", false},
+		{"SELECT NTILE(18446744073709551616) OVER ()", "", true},
+		{"SELECT NTILE(-1) OVER ()", "", true},
+		{"SELECT NTILE((1)) OVER ()", "", true},
+		{"SELECT NTILE(@v) OVER ()", "", false},
+		{"SELECT NTILE(@@session.sql_mode) OVER ()", "", true},
+		{"SELECT NTILE(?) OVER ()", "", true},
+		{"SELECT NTILE(a) OVER ()", "", true},
+		{"WITH c AS (SELECT NTILE(a) OVER ()) SELECT 1", "", false},
+		{"WITH c AS (SELECT NTILE(a) OVER ()) SELECT * FROM c", "", true},
+		{"WITH c AS (SELECT NTILE(a) OVER ()), d AS (WITH c AS (SELECT 1) SELECT * FROM c) SELECT * FROM d", "", false},
+		{"SELECT LEAD(1,1+1) OVER ()", "", true},
+		{"SELECT LAG(1,(1),2) OVER ()", "", true},
+		{"SELECT LEAD(1+1,1,1+1) OVER ()", "", false},
+		{"WITH c AS (SELECT LEAD(1,a) OVER ()) SELECT 1", "", false},
+		{"WITH c AS (SELECT LEAD(1,a) OVER ()) SELECT * FROM c", "", true},
+		{"SELECT NTH_VALUE(1,1+1) OVER ()", "", true},
+		{"SELECT NTH_VALUE(1,(1+1)) OVER ()", "", false},
+		{"SELECT NTH_VALUE(1,a) OVER ()", "", false},
+		{"SELECT NTH_VALUE(1,-1) OVER ()", "", false},
+		{"SELECT NTH_VALUE(1,NOT 1) OVER ()", "", true},
+		{"SELECT NTH_VALUE(1,!1) OVER ()", "", false},
+		{"SELECT FIRST_VALUE(1+1) IGNORE NULLS OVER ()", "", false},
+		{"SELECT LAST_VALUE(NULL) IGNORE NULLS OVER ()", "", false},
+		{"SELECT NTH_VALUE(1,1) FROM LAST IGNORE NULLS OVER ()", "", false},
+		{"SELECT NTILE(1) IGNORE NULLS OVER ()", "", true},
+		{"SELECT `NTILE`(1+1)", "", false},
+		{"SELECT `NTILE`(1+1) OVER ()", "", true},
+		{"SELECT NTH_VALUE(1,1||2) OVER ()", "", true},
+		{"SELECT NTH_VALUE(1,1||2) OVER ()", "PIPES_AS_CONCAT", false},
+	} {
+		t.Run(test.sql+"/"+test.mode, func(t *testing.T) {
+			for range 3 {
+				_, _, err := StatementDigest(t.Context(), test.sql, test.mode)
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				text, digest, err := StatementDigest(t.Context(), "SELECT 1", "")
+				require.NoError(t, err)
+				require.Equal(t, "SELECT ?", text)
+				require.Equal(t, "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae", digest)
+			}
+		})
+	}
+	for _, test := range []struct {
+		sql    string
+		reject bool
+	}{
+		{"SELECT NTILE(1+1) OVER ()", false},
+		{"SELECT LEAD(1,1+1) OVER ()", false},
+		{"SELECT LAG(1,(1),2) OVER ()", false},
+		{"SELECT NTH_VALUE(1,1+1) OVER ()", false},
+		{"SELECT FIRST_VALUE(1) IGNORE NULLS OVER ()", true},
+		{"SELECT NTH_VALUE(1,1) FROM LAST OVER ()", true},
+	} {
+		func() {
+			stmts, err := Parse(t.Context(), test.sql, 0)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			if test.reject {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, stmts, 1)
+			}
+		}()
+	}
+}
+
 func TestDigestAggregateArgumentDomains(t *testing.T) {
 	for _, test := range []struct {
 		sql, mode string

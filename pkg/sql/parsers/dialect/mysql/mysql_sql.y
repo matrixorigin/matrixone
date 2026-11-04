@@ -676,6 +676,7 @@ func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
 %token <str> SEPARATOR TIMESTAMPDIFF TIMESTAMPADD
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
 %token <str> DIGEST_JSON_VALUE
+%token <str> DIGEST_NTILE DIGEST_LEAD DIGEST_LAG DIGEST_NTH_VALUE DIGEST_FIRST_VALUE DIGEST_LAST_VALUE
 
 // Time unit
 %token <str> SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND
@@ -996,7 +997,7 @@ func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
-%type <expr> literal num_literal
+%type <expr> literal num_literal integral_literal digest_stable_integer
 %type <expr> predicate
 %type <expr> bit_expr interval_expr ordinary_interval_expr digest_interval_expr text_literal json_text_literal
 %type <expr> simple_expr else_opt
@@ -13573,7 +13574,27 @@ search_pattern:
     }
 
 function_call_window:
-	RANK '(' ')' window_spec
+    DIGEST_NTILE '(' digest_stable_integer ')' window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $5, 0) }
+|   DIGEST_LEAD '(' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $6, -1) }
+|   DIGEST_LEAD '(' expression ',' digest_stable_integer ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5}, $8, 1) }
+|   DIGEST_LEAD '(' expression ',' digest_stable_integer ',' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5, $7}, $10, 1) }
+|   DIGEST_LAG '(' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $6, -1) }
+|   DIGEST_LAG '(' expression ',' digest_stable_integer ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5}, $8, 1) }
+|   DIGEST_LAG '(' expression ',' digest_stable_integer ',' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5, $7}, $10, 1) }
+|   DIGEST_NTH_VALUE '(' expression ',' simple_expr ')' digest_nth_from_opt digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3, $5}, $9, -1) }
+|   DIGEST_FIRST_VALUE '(' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $6, -1) }
+|   DIGEST_LAST_VALUE '(' expression ')' digest_null_treatment_opt window_spec
+    { $$ = digestWindowCall(yylex, $1, tree.Exprs{$3}, $6, -1) }
+|   RANK '(' ')' window_spec
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -15689,7 +15710,18 @@ keys:
         $$ = tree.NewAttributeKey()
     }
 
-num_literal:
+// Native window offsets are stable_integer, not arbitrary expressions.
+digest_stable_integer:
+    integral_literal
+    { $$ = $1 }
+|   VALUE_ARG
+    { $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()) }
+|   ident
+    { $$ = tree.NewUnresolvedName($1) }
+|   user_variable
+    { $$ = $1 }
+
+integral_literal:
     INTEGRAL
     {
         str := $<str>1
@@ -15703,6 +15735,10 @@ num_literal:
             goto ret1
         }
     }
+
+num_literal:
+    integral_literal
+    { $$ = $1 }
 |   FLOAT
     {
         fval := $1.(float64)
@@ -17719,6 +17755,18 @@ not_keyword:
 |   EWM_STD
 |   EWM_COV
 |   EWM_CORR
+
+digest_null_treatment_opt:
+    value_window_null_treatment_opt
+    {}
+|   IGNORE NULLS
+    {}
+
+digest_nth_from_opt:
+    nth_value_from_first_opt
+    {}
+|   FROM LAST
+    {}
 
 value_window_null_treatment_opt:
     {

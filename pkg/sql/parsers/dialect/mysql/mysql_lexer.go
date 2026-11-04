@@ -575,6 +575,18 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			typ = DIGEST_INTERVAL
 		}
 		switch typ {
+		case NTILE:
+			typ = DIGEST_NTILE
+		case LEAD:
+			typ = DIGEST_LEAD
+		case LAG:
+			typ = DIGEST_LAG
+		case NTH_VALUE:
+			typ = DIGEST_NTH_VALUE
+		case FIRST_VALUE:
+			typ = DIGEST_FIRST_VALUE
+		case LAST_VALUE:
+			typ = DIGEST_LAST_VALUE
 		case GEOMETRYCOLLECTION, LINESTRING, MULTILINESTRING, MULTIPOINT, MULTIPOLYGON, POLYGON:
 			// These nonreserved native constructor names are type tokens in MO.
 			// Adapt only the call role; retain the existing CAST/DDL type owner.

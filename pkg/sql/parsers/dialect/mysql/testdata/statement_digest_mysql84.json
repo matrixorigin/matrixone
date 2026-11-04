@@ -69568,5 +69568,3003 @@
     "sql_mode": "",
     "sql": "SELECT GROUP_CONCAT(ALL 1 ORDER BY 1 SEPARATOR 'x')",
     "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(0) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(0) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE (?) OVER ( ) ) SELECT ?",
+    "digest": "399bd725d015af150fc69e551f4fecb60b2d8fd48138f426b2db5a60c4dda309"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,0) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,0) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD (...) OVER ( ) ) SELECT ?",
+    "digest": "02aa81a9196c44ac099b807f9b7550aa2fb8d8df36975cc7bb64c6e1158083c5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,0,2) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,0,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG (...) OVER ( ) ) SELECT ?",
+    "digest": "136941ab8fcd8a85f1c2d6b4e2796989d4eb81e1980a71d170da003fa3d7f792"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,0) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,0) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE (?) OVER ( ) ) SELECT ?",
+    "digest": "399bd725d015af150fc69e551f4fecb60b2d8fd48138f426b2db5a60c4dda309"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD (...) OVER ( ) ) SELECT ?",
+    "digest": "02aa81a9196c44ac099b807f9b7550aa2fb8d8df36975cc7bb64c6e1158083c5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1,2) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,1,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG (...) OVER ( ) ) SELECT ?",
+    "digest": "136941ab8fcd8a85f1c2d6b4e2796989d4eb81e1980a71d170da003fa3d7f792"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(00) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(00) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE (?) OVER ( ) ) SELECT ?",
+    "digest": "399bd725d015af150fc69e551f4fecb60b2d8fd48138f426b2db5a60c4dda309"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,00) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,00) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD (...) OVER ( ) ) SELECT ?",
+    "digest": "02aa81a9196c44ac099b807f9b7550aa2fb8d8df36975cc7bb64c6e1158083c5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,00,2) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,00,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG (...) OVER ( ) ) SELECT ?",
+    "digest": "136941ab8fcd8a85f1c2d6b4e2796989d4eb81e1980a71d170da003fa3d7f792"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,00) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,00) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(2147483648) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(2147483648) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE (?) OVER ( ) ) SELECT ?",
+    "digest": "399bd725d015af150fc69e551f4fecb60b2d8fd48138f426b2db5a60c4dda309"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,2147483648) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,2147483648) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD (...) OVER ( ) ) SELECT ?",
+    "digest": "02aa81a9196c44ac099b807f9b7550aa2fb8d8df36975cc7bb64c6e1158083c5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,2147483648,2) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,2147483648,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG (...) OVER ( ) ) SELECT ?",
+    "digest": "136941ab8fcd8a85f1c2d6b4e2796989d4eb81e1980a71d170da003fa3d7f792"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,2147483648) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,2147483648) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(9223372036854775807) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(9223372036854775807) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE (?) OVER ( ) ) SELECT ?",
+    "digest": "399bd725d015af150fc69e551f4fecb60b2d8fd48138f426b2db5a60c4dda309"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,9223372036854775807) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,9223372036854775807) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD (...) OVER ( ) ) SELECT ?",
+    "digest": "02aa81a9196c44ac099b807f9b7550aa2fb8d8df36975cc7bb64c6e1158083c5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,9223372036854775807,2) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,9223372036854775807,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG (...) OVER ( ) ) SELECT ?",
+    "digest": "136941ab8fcd8a85f1c2d6b4e2796989d4eb81e1980a71d170da003fa3d7f792"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,9223372036854775807) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,9223372036854775807) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(9223372036854775808) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(9223372036854775808) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE (?) OVER ( ) ) SELECT ?",
+    "digest": "399bd725d015af150fc69e551f4fecb60b2d8fd48138f426b2db5a60c4dda309"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,9223372036854775808) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,9223372036854775808) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD (...) OVER ( ) ) SELECT ?",
+    "digest": "02aa81a9196c44ac099b807f9b7550aa2fb8d8df36975cc7bb64c6e1158083c5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,9223372036854775808,2) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,9223372036854775808,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG (...) OVER ( ) ) SELECT ?",
+    "digest": "136941ab8fcd8a85f1c2d6b4e2796989d4eb81e1980a71d170da003fa3d7f792"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,9223372036854775808) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,9223372036854775808) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(18446744073709551615) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(18446744073709551615) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE (?) OVER ( ) ) SELECT ?",
+    "digest": "399bd725d015af150fc69e551f4fecb60b2d8fd48138f426b2db5a60c4dda309"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,18446744073709551615) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,18446744073709551615) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD (...) OVER ( ) ) SELECT ?",
+    "digest": "02aa81a9196c44ac099b807f9b7550aa2fb8d8df36975cc7bb64c6e1158083c5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,18446744073709551615,2) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,18446744073709551615,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG (...) OVER ( ) ) SELECT ?",
+    "digest": "136941ab8fcd8a85f1c2d6b4e2796989d4eb81e1980a71d170da003fa3d7f792"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,18446744073709551615) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,18446744073709551615) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(18446744073709551616) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(18446744073709551616) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,18446744073709551616) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,18446744073709551616) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,18446744073709551616,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,18446744073709551616,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,18446744073709551616) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,18446744073709551616) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(+1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,+1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,+1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,+1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,+1) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,+1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(-1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(-1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,-1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,-1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,-1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,-1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,-1) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,-1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(~1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(~1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,~1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,~1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,~1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,~1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,~1) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , ~ ? ) OVER ( )",
+    "digest": "fd37668ab1c7aa08a96734685ace411d719cc40836d419bd8af57c857b1bd027"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,~1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , ~ ? ) OVER ( ) ) SELECT ?",
+    "digest": "6ec91c7ac8c10b6533057d81caf2d53346e32b617456ae786c613fbff3dc09f3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(!1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(!1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,!1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,!1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,!1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,!1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,!1) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , ! ? ) OVER ( )",
+    "digest": "dc165096c96b48fcd1e6c2874517186ed61e35dd09ac0ff25686112b4516cda8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,!1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , ! ? ) OVER ( ) ) SELECT ?",
+    "digest": "2f77916363e45e2cb94d9a342391a19ab1682abdf4a086ea06adaca3c8ada0ed"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(NOT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(NOT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,NOT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,NOT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,NOT 1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,NOT 1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,NOT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,NOT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1+1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1+1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1+1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,1+1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1+1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1*2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1*2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1*2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1*2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1*2,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,1*2,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1*2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1*2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1 AND 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1 AND 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1 AND 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1 AND 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1 AND 1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,1 AND 1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1 AND 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1 AND 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1||2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1||2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1||2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1||2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1||2,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,1||2,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1||2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1||2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE((1)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE((1)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,(1)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,(1)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,(1),2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,(1),2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,(1)) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , (?) ) OVER ( )",
+    "digest": "18fca4278512511c1ce43f413f8e2449405817acb6f03111f0c0d830ad254cb6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,(1)) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , (?) ) OVER ( ) ) SELECT ?",
+    "digest": "82e62dd4f624be51ab7c7733ca4fcb2f9c2b5d78727584e7d568f2da9f7ea70e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE((1+1)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE((1+1)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,(1+1)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,(1+1)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,(1+1),2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,(1+1),2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,(1+1)) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , ( ? + ? ) ) OVER ( )",
+    "digest": "e5fe7aeba53813ec78dfab27111a1b90f8a6a897634403671daedb4e2bb3ba66"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,(1+1)) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , ( ? + ? ) ) OVER ( ) ) SELECT ?",
+    "digest": "6dde7b84ba65b203c8a50e1ece7367425d7423b47b310443db5571f2be1a6810"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE((1,2)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE((1,2)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,(1,2)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,(1,2)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,(1,2),2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,(1,2),2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,(1,2)) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , (...) ) OVER ( )",
+    "digest": "79c72e4739ab9dcde167174463b3a869690c1abd3a5834ae03ba8fd46241827b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,(1,2)) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , (...) ) OVER ( ) ) SELECT ?",
+    "digest": "23a67bbbcc22c29cb97d809495a40dab4cfadcdfd4e1eb7d9a9668b3d9be6bce"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(NULL) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(NULL) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,NULL) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,NULL) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,NULL,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,NULL,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,NULL) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,NULL) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(TRUE) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(TRUE) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,TRUE) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,TRUE) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,TRUE,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,TRUE,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,TRUE) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , TRUE ) OVER ( )",
+    "digest": "116504a3f397fea12c0cf31517e9925cf730ba7b786336169a4cbcca5a49a279"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,TRUE) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , TRUE ) OVER ( ) ) SELECT ?",
+    "digest": "86929e669f9cbce9979dd517e64de60fd5bdb60df53e412406e38cfe7c6dfb08"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(FALSE) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(FALSE) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,FALSE) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,FALSE) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,FALSE,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,FALSE,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,FALSE) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , FALSE ) OVER ( )",
+    "digest": "87fc2cd46c549ff34a60c29a2fe39757a49d0d312b11e986f8a78c83e7fd3a3b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,FALSE) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , FALSE ) OVER ( ) ) SELECT ?",
+    "digest": "de9ce4bccc2377b6cd42ae40b3d4ab2848b5d570c50338698ffe83a7dfe2bd93"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE('1') OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE('1') OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,'1') OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,'1') OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,'1',2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,'1',2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,'1') OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,'1') OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1.0) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1.0) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1.0) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1.0) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1.0,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,1.0,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1.0) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1.0) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1e0) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1e0) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1e0) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1e0) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1e0,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,1e0,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1e0) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1e0) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(0x01) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(0x01) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,0x01) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,0x01) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,0x01,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,0x01,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,0x01) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,0x01) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(X'01') OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(X'01') OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,X'01') OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,X'01') OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,X'01',2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,X'01',2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,X'01') OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,X'01') OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(B'1') OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(B'1') OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,B'1') OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,B'1') OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,B'1',2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,B'1',2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,B'1') OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,B'1') OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE (...) OVER ( ) ) SELECT ?",
+    "digest": "4a3b679aad62d5378839911b0ecd9f483d47548e862ae6b4369e48f63c892b9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(ABS(1)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(ABS(1)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,ABS(1)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,ABS(1)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,ABS(1),2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,ABS(1),2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,ABS(1)) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , `ABS` (?) ) OVER ( )",
+    "digest": "2af4f6b0131040f123ffd08ae199242a65c87f7014d5835e6f9095d229a4a731"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,ABS(1)) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `ABS` (?) ) OVER ( ) ) SELECT ?",
+    "digest": "0a15cd26755a66368431b20a11082a2caa5ffd9010edc71b859470fff66400e8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(CAST(1 AS UNSIGNED)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(CAST(1 AS UNSIGNED)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,CAST(1 AS UNSIGNED)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,CAST(1 AS UNSIGNED)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,CAST(1 AS UNSIGNED),2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,CAST(1 AS UNSIGNED),2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,CAST(1 AS UNSIGNED)) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , CAST ( ? AS UNSIGNED ) ) OVER ( )",
+    "digest": "d7b504c61a892d19ef58e0e23b2436fd3f2568cca81b8765f051e79173bef648"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,CAST(1 AS UNSIGNED)) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , CAST ( ? AS UNSIGNED ) ) OVER ( ) ) SELECT ?",
+    "digest": "71ac5dd9200db2cee418676e03f707eed4ed6a25847374bd8f49375c2bbf9d11"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(?) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(?) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,?) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,?) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,?,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,?,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,?) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,?) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(@v) OVER ()",
+    "text": "SELECT NTILE ( @? ) OVER ( )",
+    "digest": "a8d9d2c3ac2f082c85c805a6ceb142063a3ca057d69f7ad0ed68d6a6d4c05387"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(@v) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( @? ) OVER ( ) ) SELECT ?",
+    "digest": "2b03a095c62ddbb21b3a14d5a9df8dd7e1b2cedb437a7e51b12271ae64b8e483"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,@v) OVER ()",
+    "text": "SELECT LEAD ( ? , @? ) OVER ( )",
+    "digest": "5875857290a1ea1d28c49f43d31e160f0de6bc0a9d0ea5b433b0581eabd00906"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,@v) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD ( ? , @? ) OVER ( ) ) SELECT ?",
+    "digest": "b30cabec5a01d7b81910d41b24ba45e8b6a11bf11885043f9a8c1eac5f347c62"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,@v,2) OVER ()",
+    "text": "SELECT LAG ( ? , @?, ... ) OVER ( )",
+    "digest": "465d457d0f89eea92eeaff190e9fe56c35ddc644c696dddc93ca7c980e98578d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,@v,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG ( ? , @?, ... ) OVER ( ) ) SELECT ?",
+    "digest": "f5d018b1a22738b239ba71d83193ebf307aeab7157f8c91f3be684bebabbf5a0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,@v) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , @? ) OVER ( )",
+    "digest": "1f87e965fd8d6d0e4b8b2cb87b282d489a1002eacdcf0eabe444d70f685a7fb2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,@v) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , @? ) OVER ( ) ) SELECT ?",
+    "digest": "4878e07edcc971566e05a0b133e99688ec9928b0a72b1a62a53d59bc1ce4dba0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(@'v') OVER ()",
+    "text": "SELECT NTILE ( @? ) OVER ( )",
+    "digest": "a8d9d2c3ac2f082c85c805a6ceb142063a3ca057d69f7ad0ed68d6a6d4c05387"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(@'v') OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( @? ) OVER ( ) ) SELECT ?",
+    "digest": "2b03a095c62ddbb21b3a14d5a9df8dd7e1b2cedb437a7e51b12271ae64b8e483"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,@'v') OVER ()",
+    "text": "SELECT LEAD ( ? , @? ) OVER ( )",
+    "digest": "5875857290a1ea1d28c49f43d31e160f0de6bc0a9d0ea5b433b0581eabd00906"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,@'v') OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD ( ? , @? ) OVER ( ) ) SELECT ?",
+    "digest": "b30cabec5a01d7b81910d41b24ba45e8b6a11bf11885043f9a8c1eac5f347c62"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,@'v',2) OVER ()",
+    "text": "SELECT LAG ( ? , @?, ... ) OVER ( )",
+    "digest": "465d457d0f89eea92eeaff190e9fe56c35ddc644c696dddc93ca7c980e98578d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,@'v',2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG ( ? , @?, ... ) OVER ( ) ) SELECT ?",
+    "digest": "f5d018b1a22738b239ba71d83193ebf307aeab7157f8c91f3be684bebabbf5a0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,@'v') OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , @? ) OVER ( )",
+    "digest": "1f87e965fd8d6d0e4b8b2cb87b282d489a1002eacdcf0eabe444d70f685a7fb2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,@'v') OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , @? ) OVER ( ) ) SELECT ?",
+    "digest": "4878e07edcc971566e05a0b133e99688ec9928b0a72b1a62a53d59bc1ce4dba0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(@@session.sql_mode) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(@@session.sql_mode) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,@@session.sql_mode) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,@@session.sql_mode) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,@@session.sql_mode,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,@@session.sql_mode,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,@@session.sql_mode) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , @@SESSION . `sql_mode` ) OVER ( )",
+    "digest": "49123dc0de7078ae4ebc2b76495d30c9e3918d2722e7d83505638a939f2b377a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,@@session.sql_mode) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , @@SESSION . `sql_mode` ) OVER ( ) ) SELECT ?",
+    "digest": "0ee58d3b7ca021e9416a156edb1a0cf360f1997631b7b736ec016cff1d90a468"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(a) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(a) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( `a` ) OVER ( ) ) SELECT ?",
+    "digest": "20f20449682cbd8a59f7611f63cf42beb8c8e04461b9c2705a001c874dfdf264"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,a) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,a) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD ( ? , `a` ) OVER ( ) ) SELECT ?",
+    "digest": "cbaf30e6fed218875cfeab693760f5aef4fc821214a8bfa5b9c976811ae7d09c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,a,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,a,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG ( ? , `a` , ? ) OVER ( ) ) SELECT ?",
+    "digest": "a825529f529ece4250feef18b7a99216019edb84109f0f02c4ac91edeb72d504"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,a) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , `a` ) OVER ( )",
+    "digest": "2f81693ab310b75ef8f2c3882d8bd852e041896037552bc34230912f2883ad1d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,a) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `a` ) OVER ( ) ) SELECT ?",
+    "digest": "e77b20ff66f4a3ce3e3fc3850568812f88bea1bed19f455dda1dff9da9bc86be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(`a`) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(`a`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( `a` ) OVER ( ) ) SELECT ?",
+    "digest": "20f20449682cbd8a59f7611f63cf42beb8c8e04461b9c2705a001c874dfdf264"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,`a`) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,`a`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD ( ? , `a` ) OVER ( ) ) SELECT ?",
+    "digest": "cbaf30e6fed218875cfeab693760f5aef4fc821214a8bfa5b9c976811ae7d09c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,`a`,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,`a`,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG ( ? , `a` , ? ) OVER ( ) ) SELECT ?",
+    "digest": "a825529f529ece4250feef18b7a99216019edb84109f0f02c4ac91edeb72d504"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,`a`) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , `a` ) OVER ( )",
+    "digest": "2f81693ab310b75ef8f2c3882d8bd852e041896037552bc34230912f2883ad1d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,`a`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `a` ) OVER ( ) ) SELECT ?",
+    "digest": "e77b20ff66f4a3ce3e3fc3850568812f88bea1bed19f455dda1dff9da9bc86be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(`😀`) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(`😀`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( ) OVER ( ) ) SELECT ?",
+    "digest": "859882d4a5b0e6c9b6a65fd755d1814e4b4a8a8f16aef27d6910f9b130f3ad30"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,`😀`) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,`😀`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD ( ? , ) OVER ( ) ) SELECT ?",
+    "digest": "7d2591a5edd6f012e3598be19bc238036eb2f1ba1b1481f7430791e454cdf3c3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,`😀`,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,`😀`,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG ( ? , , ? ) OVER ( ) ) SELECT ?",
+    "digest": "b373ae79be0f9c885ee6f0b7ec02c402bf1b9ec995f42229a481346426f1acbf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,`😀`) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , ) OVER ( )",
+    "digest": "3b0bc1d7322d71bb1298abdb9905e0bb2b0880310930854a78e8d080f18f07b6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,`😀`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , ) OVER ( ) ) SELECT ?",
+    "digest": "44ad51d6b51d5bdfa873eb5c3dc640c3ca63dfdd8143d557e1abd270ce19c61a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(`a b`) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(`a b`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( `a b` ) OVER ( ) ) SELECT ?",
+    "digest": "2441a91bcc783b339b0513e8d86e01313215c5473b156ff4b84453db27619c00"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,`a b`) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,`a b`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD ( ? , `a b` ) OVER ( ) ) SELECT ?",
+    "digest": "51393c4a1837a0ee9a7dea8101a30a6729ec9536fbda3bea8b804135d2152c7f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,`a b`,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,`a b`,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG ( ? , `a b` , ? ) OVER ( ) ) SELECT ?",
+    "digest": "888ccb1f28fff25e48c2230e7db3c03e56fa1a5f7a24799e967b1fa91ab41405"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,`a b`) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , `a b` ) OVER ( )",
+    "digest": "7e86c934a8a7848078263933dc87783b8698bdfcce3820ffbea58bb4506e029e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,`a b`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `a b` ) OVER ( ) ) SELECT ?",
+    "digest": "15b2fb9a5e5f7117a92b1feee6b75fdf11024182bc3a97773c348b65befef367"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(`select`) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(`select`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( `select` ) OVER ( ) ) SELECT ?",
+    "digest": "ba17c7f64af1463b60c4c478e1686d8b74c7c6d1c571a67dad3e5e69d9472125"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,`select`) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,`select`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD ( ? , `select` ) OVER ( ) ) SELECT ?",
+    "digest": "1b9e3cfe9d6d6e926c98c1d05501a01d887a17ce5298888e766a04dad5084834"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,`select`,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,`select`,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG ( ? , `select` , ? ) OVER ( ) ) SELECT ?",
+    "digest": "a754401d2ca6589dc88746a4a11b08da5261aac1636c680bc8562b10928204e0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,`select`) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , `select` ) OVER ( )",
+    "digest": "0f6ebe8934ac9700671a3a1d8249e347c3fe952434df12204b4ed31283f5f2bc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,`select`) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `select` ) OVER ( ) ) SELECT ?",
+    "digest": "3c02b643c7fc4c9dcdb83b825d4d0e6cb941ebf63519dcf242e079f1724128b6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(é) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(é) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( `é` ) OVER ( ) ) SELECT ?",
+    "digest": "554f71b720efe94d33fa54d21d5f350e3162536db3e552357680d809d2d85af4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,é) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,é) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LEAD ( ? , `é` ) OVER ( ) ) SELECT ?",
+    "digest": "14a0250738f108272d861a1fb2fbde8bd02e5e3c8f4ce152bd966d54ba086ab9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,é,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,é,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT LAG ( ? , `é` , ? ) OVER ( ) ) SELECT ?",
+    "digest": "0ab6287a81d15528770162012d6c49d401f8d840fe6e9a55c8ce53a3f5d97014"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,é) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , `é` ) OVER ( )",
+    "digest": "4551213ebb54f90a2a13df688f407e6085056e8715dcba893d95c958c9b73c44"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,é) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `é` ) OVER ( ) ) SELECT ?",
+    "digest": "59fef4d1f4d12f5bce64ffb92057e2212a2686428351f2822216d863bf728b7d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(t.a) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(t.a) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,t.a) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,t.a) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,t.a,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,t.a,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,t.a) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , `t` . `a` ) OVER ( )",
+    "digest": "433be7deb5c4b528bd91fd661fe62dab4409efeb9c8c7709e16ca1c18889da2b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,t.a) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `t` . `a` ) OVER ( ) ) SELECT ?",
+    "digest": "31f0101d207e006fe463548ecb82d555133859474d55ad155a4970bad7513c9f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE((SELECT 1)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE((SELECT 1)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,(SELECT 1)) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,(SELECT 1)) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,(SELECT 1),2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,(SELECT 1),2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,(SELECT 1)) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , ( SELECT ? ) ) OVER ( )",
+    "digest": "98b721f78e1e922e39a7eb786d527476f8d190884e3aa2f9f51533d65bc27862"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,(SELECT 1)) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , ( SELECT ? ) ) OVER ( ) ) SELECT ?",
+    "digest": "621a03cfc17f1be5a999474099fb36a93d6117bd4a738319c5e2a5570b2ab6d6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1+1) OVER ()",
+    "text": "SELECT LEAD ( ? + ? ) OVER ( )",
+    "digest": "c83104e607896f547ad2d9e3675656ec2c838e7c866762cd0e7b30fca09d7034"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1+1,1,1+1) OVER ()",
+    "text": "SELECT LEAD ( ? + ?, ... + ? ) OVER ( )",
+    "digest": "e822ea5a0ac6147150212af1ed17bb533a5ec7ec68bcd0f6c35ccfcaadcfe66f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD((SELECT 1)) OVER ()",
+    "text": "SELECT LEAD ( ( SELECT ? ) ) OVER ( )",
+    "digest": "30b30f1043be0dfb364db2bff454f0b5db90b420225395a8c21a2fc0e4c206b7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD((SELECT 1),1,1+1) OVER ()",
+    "text": "SELECT LEAD ( ( SELECT ? ) , ?, ... + ? ) OVER ( )",
+    "digest": "cc97e82e418abd908a107a22c99897d20c4b3e1d215ba48f0d9b213c6cbf14db"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(NULL) OVER ()",
+    "text": "SELECT LEAD (?) OVER ( )",
+    "digest": "bd2ee76fef7ca6cc5197dca0ddec4423100ab3ff283cbb84019c830d83765c6b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(NULL,1,1+1) OVER ()",
+    "text": "SELECT LEAD ( ?, ... + ? ) OVER ( )",
+    "digest": "efdad0ff72390ac08a29601b7fdb37b3de0637fb23d897b64eb8e128d49824e6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD('x') OVER ()",
+    "text": "SELECT LEAD (?) OVER ( )",
+    "digest": "bd2ee76fef7ca6cc5197dca0ddec4423100ab3ff283cbb84019c830d83765c6b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD('x',1,1+1) OVER ()",
+    "text": "SELECT LEAD ( ?, ... + ? ) OVER ( )",
+    "digest": "efdad0ff72390ac08a29601b7fdb37b3de0637fb23d897b64eb8e128d49824e6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(ABS(1)) OVER ()",
+    "text": "SELECT LEAD ( `ABS` (?) ) OVER ( )",
+    "digest": "ea94430dcc63b24a1a6ecff2d55a10065a27336e72a7a835f825db747a4c9f85"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(ABS(1),1,1+1) OVER ()",
+    "text": "SELECT LEAD ( `ABS` (?) , ?, ... + ? ) OVER ( )",
+    "digest": "2d5dbf3de63b91d699ea60df700c78c761d2836a2ca12fa4e4460f2c7f431975"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1+1) OVER ()",
+    "text": "SELECT LAG ( ? + ? ) OVER ( )",
+    "digest": "7d40352b87de615b513592a2bc3252d2865c38d0268b86b31df3df7556a80a82"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1+1,1,1+1) OVER ()",
+    "text": "SELECT LAG ( ? + ?, ... + ? ) OVER ( )",
+    "digest": "0151a4e5207aa8bbc6dff184583f2db6c83720ba966082a5a9b3a3b64d2907fa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG((SELECT 1)) OVER ()",
+    "text": "SELECT LAG ( ( SELECT ? ) ) OVER ( )",
+    "digest": "2f0d74a86eab163b5d2ac79b615463707e330ed7b480197809b45f610ee906be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG((SELECT 1),1,1+1) OVER ()",
+    "text": "SELECT LAG ( ( SELECT ? ) , ?, ... + ? ) OVER ( )",
+    "digest": "dbda913917d7c720368fbe3b6371b2f16a10d8a4df560e9d81b2d347f6ab8a19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(NULL) OVER ()",
+    "text": "SELECT LAG (?) OVER ( )",
+    "digest": "c8bd914025ad6a42b807fc43bf3adca56e96185af554edebe74a650d5a13b7c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(NULL,1,1+1) OVER ()",
+    "text": "SELECT LAG ( ?, ... + ? ) OVER ( )",
+    "digest": "daa94db4e37624aa782e4990d8ff19cd4706ef167adbae7f8a11c4d97a2d8570"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG('x') OVER ()",
+    "text": "SELECT LAG (?) OVER ( )",
+    "digest": "c8bd914025ad6a42b807fc43bf3adca56e96185af554edebe74a650d5a13b7c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG('x',1,1+1) OVER ()",
+    "text": "SELECT LAG ( ?, ... + ? ) OVER ( )",
+    "digest": "daa94db4e37624aa782e4990d8ff19cd4706ef167adbae7f8a11c4d97a2d8570"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(ABS(1)) OVER ()",
+    "text": "SELECT LAG ( `ABS` (?) ) OVER ( )",
+    "digest": "b11b31cf421d04afdea5e612139de053741248f246fc4d257874e2a069511b4d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(ABS(1),1,1+1) OVER ()",
+    "text": "SELECT LAG ( `ABS` (?) , ?, ... + ? ) OVER ( )",
+    "digest": "ee030bd81ac5fc2b4b7df1b8b61f377cb69af1f8dc461f16d3d5318286b16c97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1+1) OVER ()",
+    "text": "SELECT FIRST_VALUE ( ? + ? ) OVER ( )",
+    "digest": "4306605b4e2741b4d984a54452356f244d445589f4f099f2d64fa21e2d0d3026"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE((SELECT 1)) OVER ()",
+    "text": "SELECT FIRST_VALUE ( ( SELECT ? ) ) OVER ( )",
+    "digest": "c336f13747e660b6f6239a94d2d6815d35a899b24cbb4659d80fe04bf41fb710"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(NULL) OVER ()",
+    "text": "SELECT FIRST_VALUE (?) OVER ( )",
+    "digest": "ae6a645eed83e3fb4006497fa5a96816557cb4e81e97416c501cd625688bf5ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE('x') OVER ()",
+    "text": "SELECT FIRST_VALUE (?) OVER ( )",
+    "digest": "ae6a645eed83e3fb4006497fa5a96816557cb4e81e97416c501cd625688bf5ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(ABS(1)) OVER ()",
+    "text": "SELECT FIRST_VALUE ( `ABS` (?) ) OVER ( )",
+    "digest": "98ba09c31ba238f80f6cd581a722de74d0b6e6f8bb18a9be260c871393fdcca7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(1+1) OVER ()",
+    "text": "SELECT LAST_VALUE ( ? + ? ) OVER ( )",
+    "digest": "ad6b3c7a185e6c3fc34e186de384c493a11de0d4d9668de07e831e8ef59265a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE((SELECT 1)) OVER ()",
+    "text": "SELECT LAST_VALUE ( ( SELECT ? ) ) OVER ( )",
+    "digest": "8fd6c0acfff763f52c4e4b445840d77f9063082b7d5a53e9b786721c793de631"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(NULL) OVER ()",
+    "text": "SELECT LAST_VALUE (?) OVER ( )",
+    "digest": "b034af7177bc6b4a8fa22af883a3a9d5dabc6591b218dcd3cb5d51ab046a9b6c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE('x') OVER ()",
+    "text": "SELECT LAST_VALUE (?) OVER ( )",
+    "digest": "b034af7177bc6b4a8fa22af883a3a9d5dabc6591b218dcd3cb5d51ab046a9b6c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(ABS(1)) OVER ()",
+    "text": "SELECT LAST_VALUE ( `ABS` (?) ) OVER ( )",
+    "digest": "7e2d9a39fcb51e0ec3781f2c1c02ea2a0f60566f0989297429ae1c42a4528ef9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1) RESPECT NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1) IGNORE NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1) FROM FIRST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1) FROM LAST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1) FROM FIRST RESPECT NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1) FROM LAST IGNORE NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT NTILE(1) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE (1) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT NTILE (1) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE/*gap*/(1) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT NTILE/*gap*/(1) OVER ()",
+    "text": "SELECT NTILE (?) OVER ( )",
+    "digest": "b0763a34c46d06f3a2ff0c37e09d573bbb4021ed4d13cf1f4cfed7f3330d0de4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `NTILE`(1)",
+    "text": "SELECT `NTILE` (?)",
+    "digest": "cd3c684952eb26f846ef7c4b6b7974e1a379fe43fed67bdf3bc0a92fafe072c2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `NTILE`(1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1) RESPECT NULLS OVER ()",
+    "text": "SELECT LEAD (...) RESPECT NULLS OVER ( )",
+    "digest": "ca6ab1d576613e0d143279f24ca99aaf553458e89d35f52f1bb080046875fa89"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1) IGNORE NULLS OVER ()",
+    "text": "SELECT LEAD (...) IGNORE NULLS OVER ( )",
+    "digest": "ea9310f29b56ff4a1a19b9724f18f4f924f68cf0d561af87411f3ac104f0a4dc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1) FROM FIRST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1) FROM LAST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1) FROM FIRST RESPECT NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1) FROM LAST IGNORE NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT LEAD(1,1) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD (1,1) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT LEAD (1,1) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD/*gap*/(1,1) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT LEAD/*gap*/(1,1) OVER ()",
+    "text": "SELECT LEAD (...) OVER ( )",
+    "digest": "cb311c416e679f28b53c7fcd5a64fc820607f3ecb52aa1734b6e67b9661e0f03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `LEAD`(1,1)",
+    "text": "SELECT `LEAD` (...)",
+    "digest": "ac57759b0d26c4d727ee1c6a8a403642ab48ebf136ba2953e303735affc6318b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `LEAD`(1,1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LEAD(1,1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1) RESPECT NULLS OVER ()",
+    "text": "SELECT LAG (...) RESPECT NULLS OVER ( )",
+    "digest": "a953524d426f41f5bfe686da97f63ec93e9032a5f123b851ce9ef6bbe6604246"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1) IGNORE NULLS OVER ()",
+    "text": "SELECT LAG (...) IGNORE NULLS OVER ( )",
+    "digest": "31f59045537ffeffe923c1e75c1b63754d850a7da79d8afe54537b5545b1f10f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1) FROM FIRST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1) FROM LAST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1) FROM FIRST RESPECT NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1) FROM LAST IGNORE NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT LAG(1,1) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG (1,1) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT LAG (1,1) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG/*gap*/(1,1) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT LAG/*gap*/(1,1) OVER ()",
+    "text": "SELECT LAG (...) OVER ( )",
+    "digest": "c445920071662eb7fae41e5847da601db2a363a5334c6d1e789e17cdb1f99e77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `LAG`(1,1)",
+    "text": "SELECT `LAG` (...)",
+    "digest": "8b548add56c86b21fb2546b5606f34ff80de32558b090cde7f13e019f02b9307"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `LAG`(1,1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAG(1,1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1) OVER ()",
+    "text": "SELECT FIRST_VALUE (?) OVER ( )",
+    "digest": "ae6a645eed83e3fb4006497fa5a96816557cb4e81e97416c501cd625688bf5ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1) RESPECT NULLS OVER ()",
+    "text": "SELECT FIRST_VALUE (?) RESPECT NULLS OVER ( )",
+    "digest": "15ebfb61f94683df55ea33d9b0ade5769dc79813ff03026663dd79ca184511fc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1) IGNORE NULLS OVER ()",
+    "text": "SELECT FIRST_VALUE (?) IGNORE NULLS OVER ( )",
+    "digest": "159be19ed95716963711d3467d6372217b0557455d1e25244f9e5946f8242529"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1) FROM FIRST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1) FROM LAST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1) FROM FIRST RESPECT NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1) FROM LAST IGNORE NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT FIRST_VALUE(1) OVER ()",
+    "text": "SELECT FIRST_VALUE (?) OVER ( )",
+    "digest": "ae6a645eed83e3fb4006497fa5a96816557cb4e81e97416c501cd625688bf5ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE (1) OVER ()",
+    "text": "SELECT FIRST_VALUE (?) OVER ( )",
+    "digest": "ae6a645eed83e3fb4006497fa5a96816557cb4e81e97416c501cd625688bf5ab"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT FIRST_VALUE (1) OVER ()",
+    "text": "SELECT FIRST_VALUE (?) OVER ( )",
+    "digest": "ae6a645eed83e3fb4006497fa5a96816557cb4e81e97416c501cd625688bf5ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE/*gap*/(1) OVER ()",
+    "text": "SELECT FIRST_VALUE (?) OVER ( )",
+    "digest": "ae6a645eed83e3fb4006497fa5a96816557cb4e81e97416c501cd625688bf5ab"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT FIRST_VALUE/*gap*/(1) OVER ()",
+    "text": "SELECT FIRST_VALUE (?) OVER ( )",
+    "digest": "ae6a645eed83e3fb4006497fa5a96816557cb4e81e97416c501cd625688bf5ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `FIRST_VALUE`(1)",
+    "text": "SELECT `FIRST_VALUE` (?)",
+    "digest": "353b0bc688349e3a34a4c414db3f0ce5a2997c316c7626e67b2c74b27e6d72be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `FIRST_VALUE`(1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(1) OVER ()",
+    "text": "SELECT LAST_VALUE (?) OVER ( )",
+    "digest": "b034af7177bc6b4a8fa22af883a3a9d5dabc6591b218dcd3cb5d51ab046a9b6c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(1) RESPECT NULLS OVER ()",
+    "text": "SELECT LAST_VALUE (?) RESPECT NULLS OVER ( )",
+    "digest": "f807ee75ab93568781638eb8ba2bf34eb09bf3aebea60e805fb67dc0e11d1c74"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(1) IGNORE NULLS OVER ()",
+    "text": "SELECT LAST_VALUE (?) IGNORE NULLS OVER ( )",
+    "digest": "9cabbca8dff885e0f84e8fac0a84a9bbb21530f20e0387c4539e2f61211fd78c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(1) FROM FIRST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(1) FROM LAST OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(1) FROM FIRST RESPECT NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(1) FROM LAST IGNORE NULLS OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT LAST_VALUE(1) OVER ()",
+    "text": "SELECT LAST_VALUE (?) OVER ( )",
+    "digest": "b034af7177bc6b4a8fa22af883a3a9d5dabc6591b218dcd3cb5d51ab046a9b6c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE (1) OVER ()",
+    "text": "SELECT LAST_VALUE (?) OVER ( )",
+    "digest": "b034af7177bc6b4a8fa22af883a3a9d5dabc6591b218dcd3cb5d51ab046a9b6c"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT LAST_VALUE (1) OVER ()",
+    "text": "SELECT LAST_VALUE (?) OVER ( )",
+    "digest": "b034af7177bc6b4a8fa22af883a3a9d5dabc6591b218dcd3cb5d51ab046a9b6c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE/*gap*/(1) OVER ()",
+    "text": "SELECT LAST_VALUE (?) OVER ( )",
+    "digest": "b034af7177bc6b4a8fa22af883a3a9d5dabc6591b218dcd3cb5d51ab046a9b6c"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT LAST_VALUE/*gap*/(1) OVER ()",
+    "text": "SELECT LAST_VALUE (?) OVER ( )",
+    "digest": "b034af7177bc6b4a8fa22af883a3a9d5dabc6591b218dcd3cb5d51ab046a9b6c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `LAST_VALUE`(1)",
+    "text": "SELECT `LAST_VALUE` (?)",
+    "digest": "2a77e8446a6ffbf3e0950b72c736e3b10404a1c83baa5fcb1bac22a663bc6af3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `LAST_VALUE`(1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1) RESPECT NULLS OVER ()",
+    "text": "SELECT NTH_VALUE (...) RESPECT NULLS OVER ( )",
+    "digest": "224bab294ed231ee80df38e9eebf3334341bdcc271b68aa13717db02572f2127"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1) IGNORE NULLS OVER ()",
+    "text": "SELECT NTH_VALUE (...) IGNORE NULLS OVER ( )",
+    "digest": "883b8f885df912835a0e22821d3ef03720a9f9ea7a2746a9d7997acee8503c9b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1) FROM FIRST OVER ()",
+    "text": "SELECT NTH_VALUE (...) FROM FIRST OVER ( )",
+    "digest": "f7fd506d1b444ba1e0c25b0803b7df1207ccd86a93dfd1319e095495b9cc1bb0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1) FROM LAST OVER ()",
+    "text": "SELECT NTH_VALUE (...) FROM LAST OVER ( )",
+    "digest": "f5dc07871153c68300e42aea6298a0bbf1b073e9e32d38e6021c422bd59da421"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1) FROM FIRST RESPECT NULLS OVER ()",
+    "text": "SELECT NTH_VALUE (...) FROM FIRST RESPECT NULLS OVER ( )",
+    "digest": "23f6b8eb5f30b76d009ca85f36aa33133af74e22e6b5ce4da71295b30d906dac"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1) FROM LAST IGNORE NULLS OVER ()",
+    "text": "SELECT NTH_VALUE (...) FROM LAST IGNORE NULLS OVER ( )",
+    "digest": "cf315f205bfd326c84ce3aab0a5fdc09aa9ac8c7122a8100e3cc51eed9d156c7"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT NTH_VALUE(1,1) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE (1,1) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT NTH_VALUE (1,1) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE/*gap*/(1,1) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT NTH_VALUE/*gap*/(1,1) OVER ()",
+    "text": "SELECT NTH_VALUE (...) OVER ( )",
+    "digest": "398d9ee1d0da302a25a4666735a3f5aba18f32a24a26b8aa951989302041bbba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `NTH_VALUE`(1,1)",
+    "text": "SELECT `NTH_VALUE` (...)",
+    "digest": "ba6e87d9d577af5792c876817cde1a9e291bc979c0ba53a05318ffb8cff3b0c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `NTH_VALUE`(1,1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1+1) OVER ()) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT NTILE(1+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT NTILE(1+1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT NTILE(1+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT NTILE(1+1) OVER ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1+1) OVER ()), d AS (SELECT * FROM c) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(1+1) OVER ()), d AS (SELECT * FROM c) SELECT * FROM d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(a) OVER ()) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT NTILE(a) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT NTILE(a) OVER ()) SELECT 1",
+    "text": "CREATE VIEW `v` AS WITH `c` AS ( SELECT NTILE ( `a` ) OVER ( ) ) SELECT ?",
+    "digest": "f6fd21c6e452e9223ab4d99a9a375e3f8cd3f05d1bc5bbbc68a242eba961bf54"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT NTILE(a) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT NTILE(a) OVER ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(a) OVER ()), d AS (SELECT * FROM c) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( `a` ) OVER ( ) ) , `d` AS ( SELECT * FROM `c` ) SELECT ?",
+    "digest": "dc27800ffec180cfe4fcd113d4c6066e98fa16397c897554cad4a557c72be6e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(a) OVER ()), d AS (SELECT * FROM c) SELECT * FROM d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(@v) OVER ()) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT NTILE ( @? ) OVER ( ) ) SELECT * FROM `c`",
+    "digest": "a1e6d3d79f48a9246746f4ff37fab585fac7c25bbdafef42ec59ee20c2570d97"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT NTILE(@v) OVER ()",
+    "text": "EXPLAIN SELECT NTILE ( @? ) OVER ( )",
+    "digest": "b67eb71ae7b21650b3a33b1c4fa68570803c94504db3176907a326e208440f6f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT NTILE(@v) OVER ()) SELECT 1",
+    "text": "CREATE VIEW `v` AS WITH `c` AS ( SELECT NTILE ( @? ) OVER ( ) ) SELECT ?",
+    "digest": "1715b97f2b373a5fc8891dec765d33f9fc4b74d937936964fa26d6c1892b490f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT NTILE(@v) OVER ()",
+    "text": "INSERT INTO `t` SELECT NTILE ( @? ) OVER ( )",
+    "digest": "b661efb5f55e4f41c66676c6fabc32d38afeb78c5afb2bb59d79ebce75b19181"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT NTILE(@v) OVER ())",
+    "text": "SELECT ( SELECT NTILE ( @? ) OVER ( ) )",
+    "digest": "35cfae6be29ace2e4edc3026f56f176afff55996feaf2f478aadfdda5691ed4d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(@v) OVER ()), d AS (SELECT * FROM c) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( @? ) OVER ( ) ) , `d` AS ( SELECT * FROM `c` ) SELECT ?",
+    "digest": "e7f3fd58c8004b7b8ab859cb8b717aa502acbc0cd0af464a321f34807ebf9c63"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(@v) OVER ()), d AS (SELECT * FROM c) SELECT * FROM d",
+    "text": "WITH `c` AS ( SELECT NTILE ( @? ) OVER ( ) ) , `d` AS ( SELECT * FROM `c` ) SELECT * FROM `d`",
+    "digest": "7cc70368dd50145a36b1c85c340497b902b98abeff853f9f0a8232d85b0a2d54"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(?) OVER ()) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT NTILE(?) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT NTILE(?) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT NTILE(?) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT NTILE(?) OVER ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(?) OVER ()), d AS (SELECT * FROM c) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(?) OVER ()), d AS (SELECT * FROM c) SELECT * FROM d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1+1) OVER ()) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT LEAD(1,1+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT LEAD(1,1+1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT LEAD(1,1+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT LEAD(1,1+1) OVER ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1+1) OVER ()), d AS (SELECT * FROM c) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,1+1) OVER ()), d AS (SELECT * FROM c) SELECT * FROM d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,(1),2) OVER ()) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT LAG(1,(1),2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT LAG(1,(1),2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT LAG(1,(1),2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT LAG(1,(1),2) OVER ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,(1),2) OVER ()), d AS (SELECT * FROM c) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LAG(1,(1),2) OVER ()), d AS (SELECT * FROM c) SELECT * FROM d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1+1) OVER ()) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT NTH_VALUE(1,1+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT NTH_VALUE(1,1+1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT NTH_VALUE(1,1+1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT NTH_VALUE(1,1+1) OVER ())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1+1) OVER ()), d AS (SELECT * FROM c) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,1+1) OVER ()), d AS (SELECT * FROM c) SELECT * FROM d",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,(1+1)) OVER ()) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , ( ? + ? ) ) OVER ( ) ) SELECT * FROM `c`",
+    "digest": "fb07bf7eb6aac92a56d2c0fb5ff2757412a07597487588e40b06b6c7d3820cf0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT NTH_VALUE(1,(1+1)) OVER ()",
+    "text": "EXPLAIN SELECT NTH_VALUE ( ? , ( ? + ? ) ) OVER ( )",
+    "digest": "a6e2338028e2672546733493d9c12cbef2f041281036aaedf2ebccd059b0005e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT NTH_VALUE(1,(1+1)) OVER ()) SELECT 1",
+    "text": "CREATE VIEW `v` AS WITH `c` AS ( SELECT NTH_VALUE ( ? , ( ? + ? ) ) OVER ( ) ) SELECT ?",
+    "digest": "4d72139e5153734118c3093d60c68be3718d25f710a69173585573119884a16e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT NTH_VALUE(1,(1+1)) OVER ()",
+    "text": "INSERT INTO `t` SELECT NTH_VALUE ( ? , ( ? + ? ) ) OVER ( )",
+    "digest": "ce5e7ad16d4a21d6c55ff13a8fbf8ab9d042aaeb145dee5376d0c5ce010a6c24"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT NTH_VALUE(1,(1+1)) OVER ())",
+    "text": "SELECT ( SELECT NTH_VALUE ( ? , ( ? + ? ) ) OVER ( ) )",
+    "digest": "bf1b90a50a5e68a8a6c4ecc112e42444955c1a10194c8d6e008950bb018cf167"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,(1+1)) OVER ()), d AS (SELECT * FROM c) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , ( ? + ? ) ) OVER ( ) ) , `d` AS ( SELECT * FROM `c` ) SELECT ?",
+    "digest": "c35301e6ba145c0b24c6096ca8dd7e256c7be7b07bb5f85a2e38427114003dd5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,(1+1)) OVER ()), d AS (SELECT * FROM c) SELECT * FROM d",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , ( ? + ? ) ) OVER ( ) ) , `d` AS ( SELECT * FROM `c` ) SELECT * FROM `d`",
+    "digest": "fba619959f2614c41f6301953e88440aaacbc6862024184f1791522d840fb138"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,a) OVER ()) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `a` ) OVER ( ) ) SELECT * FROM `c`",
+    "digest": "3de27163cfbe0bc134506a0826e85cf3f36e0463d75428d383a557636c0c4389"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT NTH_VALUE(1,a) OVER ()",
+    "text": "EXPLAIN SELECT NTH_VALUE ( ? , `a` ) OVER ( )",
+    "digest": "f4b90b2f2f0e40ad851cb84332ccbc1b658a187d23560939fa8f106fa9824c7a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT NTH_VALUE(1,a) OVER ()) SELECT 1",
+    "text": "CREATE VIEW `v` AS WITH `c` AS ( SELECT NTH_VALUE ( ? , `a` ) OVER ( ) ) SELECT ?",
+    "digest": "292d0e72dec1e3823093af80e080b201410edec88bb723fa0e8395ce8e0a29b1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT NTH_VALUE(1,a) OVER ()",
+    "text": "INSERT INTO `t` SELECT NTH_VALUE ( ? , `a` ) OVER ( )",
+    "digest": "cc695ef2750266e64d86947fb13338fe467509b0945e9e9871afe92d9939d03e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT NTH_VALUE(1,a) OVER ())",
+    "text": "SELECT ( SELECT NTH_VALUE ( ? , `a` ) OVER ( ) )",
+    "digest": "21604f0a13a26981453d1c45b965a7007e18cf82887a0885252089efd5e7b9c3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,a) OVER ()), d AS (SELECT * FROM c) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `a` ) OVER ( ) ) , `d` AS ( SELECT * FROM `c` ) SELECT ?",
+    "digest": "9fba4a2d9a4027a46a2a768e157c27b215015b5ed4df4dde77733dc449b16981"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,a) OVER ()), d AS (SELECT * FROM c) SELECT * FROM d",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `a` ) OVER ( ) ) , `d` AS ( SELECT * FROM `c` ) SELECT * FROM `d`",
+    "digest": "14001b60d05027f36d6b3214c9f864cf62af40b5306cd5ce9fa673064e5cc1f8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(a) OVER ()), d AS (WITH c AS (SELECT 1) SELECT * FROM c) SELECT * FROM d",
+    "text": "WITH `c` AS ( SELECT NTILE ( `a` ) OVER ( ) ) , `d` AS ( WITH `c` AS ( SELECT ? ) SELECT * FROM `c` ) SELECT * FROM `d`",
+    "digest": "7aba96b53c3c6c2101c7a768cec166d31da4c8a813456a1a1dde3cc1a563ca9f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,a) OVER ()), d AS (WITH c AS (SELECT 1) SELECT * FROM c) SELECT * FROM d",
+    "text": "WITH `c` AS ( SELECT LEAD ( ? , `a` ) OVER ( ) ) , `d` AS ( WITH `c` AS ( SELECT ? ) SELECT * FROM `c` ) SELECT * FROM `d`",
+    "digest": "de47cb38622d14786948722fc3afc23e7f42f06c253995647155a2ad88fec518"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTH_VALUE(1,a) OVER ()), d AS (WITH c AS (SELECT 1) SELECT * FROM c) SELECT * FROM d",
+    "text": "WITH `c` AS ( SELECT NTH_VALUE ( ? , `a` ) OVER ( ) ) , `d` AS ( WITH `c` AS ( SELECT ? ) SELECT * FROM `c` ) SELECT * FROM `d`",
+    "digest": "9654cfc501274095fb18d999efdcffc52d0a0c70cc92901130ac7bf7a62a2ee8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(@'😀') OVER ()",
+    "text": "SELECT NTILE ( @? ) OVER ( )",
+    "digest": "a8d9d2c3ac2f082c85c805a6ceb142063a3ca057d69f7ad0ed68d6a6d4c05387"
+  },
+  {
+    "sql_mode": "PIPES_AS_CONCAT",
+    "sql": "SELECT NTILE(@'😀') OVER ()",
+    "text": "SELECT NTILE ( @? ) OVER ( )",
+    "digest": "a8d9d2c3ac2f082c85c805a6ceb142063a3ca057d69f7ad0ed68d6a6d4c05387"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(@`a`) OVER ()",
+    "text": "SELECT NTILE ( @`a` ) OVER ( )",
+    "digest": "7b57912b15367955cf5245e3cad9f72bce5de02be4abf95b6566949bc351a0ac"
+  },
+  {
+    "sql_mode": "PIPES_AS_CONCAT",
+    "sql": "SELECT NTILE(@`a`) OVER ()",
+    "text": "SELECT NTILE ( @`a` ) OVER ( )",
+    "digest": "7b57912b15367955cf5245e3cad9f72bce5de02be4abf95b6566949bc351a0ac"
+  },
+  {
+    "sql_mode": "PIPES_AS_CONCAT",
+    "sql": "SELECT NTILE(`select`) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTH_VALUE(1,+1) FROM LAST IGNORE NULLS OVER ()",
+    "text": "SELECT NTH_VALUE (...) FROM LAST IGNORE NULLS OVER ( )",
+    "digest": "cf315f205bfd326c84ce3aab0a5fdc09aa9ac8c7122a8100e3cc51eed9d156c7"
+  },
+  {
+    "sql_mode": "PIPES_AS_CONCAT",
+    "sql": "SELECT NTH_VALUE(1,+1) FROM LAST IGNORE NULLS OVER ()",
+    "text": "SELECT NTH_VALUE (...) FROM LAST IGNORE NULLS OVER ( )",
+    "digest": "cf315f205bfd326c84ce3aab0a5fdc09aa9ac8c7122a8100e3cc51eed9d156c7"
+  },
+  {
+    "sql_mode": "PIPES_AS_CONCAT",
+    "sql": "SELECT NTH_VALUE(1,!1) OVER ()",
+    "text": "SELECT NTH_VALUE ( ? , ! ? ) OVER ( )",
+    "digest": "dc165096c96b48fcd1e6c2874517186ed61e35dd09ac0ff25686112b4516cda8"
+  },
+  {
+    "sql_mode": "PIPES_AS_CONCAT",
+    "sql": "SELECT NTH_VALUE(1,NOT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "PIPES_AS_CONCAT",
+    "sql": "SELECT NTH_VALUE(1,1||2) OVER ()",
+    "text": "SELECT NTH_VALUE ( ?, ... || ? ) OVER ( )",
+    "digest": "fbf066208b35f72bf716dd41035cfef419b4b6341da71349c67763b49fcf5743"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1) OVER w WINDOW w AS ()",
+    "text": "SELECT NTILE (?) OVER `w` WINDOW `w` AS ( )",
+    "digest": "ac1cf0ef7e72ce936e1a5fce6ae1e5b43ecaaee69d45cf1b433c92240ae881e8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT NTILE(1+1) OVER w WINDOW w AS ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(a) OVER w WINDOW w AS ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT NTILE ( `a` ) OVER `w` WINDOW `w` AS ( ) ) SELECT ?",
+    "digest": "972e88117b07ac416889e62c8d22588b7fe672e310257f4f8f0a7b88c0f9a176"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT NTILE(a) OVER w WINDOW w AS ()) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT LEAD(1,a) OVER ()) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT FIRST_VALUE(1+1) IGNORE NULLS OVER ()",
+    "text": "SELECT FIRST_VALUE ( ? + ? ) IGNORE NULLS OVER ( )",
+    "digest": "7c278cde1c92729818c8c39fbcc4c1b35084beac236767cf60c3d4c1d8be7f39"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT LAST_VALUE(NULL) IGNORE NULLS OVER ()",
+    "text": "SELECT LAST_VALUE (?) IGNORE NULLS OVER ( )",
+    "digest": "9cabbca8dff885e0f84e8fac0a84a9bbb21530f20e0387c4539e2f61211fd78c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `NTILE`(1+1)",
+    "text": "SELECT `NTILE` ( ? + ? )",
+    "digest": "97dbe0141e34c1c6ace1af8ca725a982b56a28dcec04723ec88aa08d1651def5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `NTILE`(1+1) OVER ()",
+    "error_code": 3677
   }
 ]

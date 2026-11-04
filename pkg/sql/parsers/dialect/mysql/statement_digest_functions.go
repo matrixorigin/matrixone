@@ -107,6 +107,21 @@ func digestAggregateArgs(yylex yyLexer, name string, quantifier tree.FuncType, c
 	return valid
 }
 
+// 稳定整数中的裸ident是原生SP局部变量，不是当前行的列。
+// 无SP上下文的digest仅在该调用实际itemize时拒绝它，unused CTE保留。
+func digestWindowCall(yylex yyLexer, name string, args tree.Exprs, window *tree.WindowSpec, stableIndex int) *tree.FuncExpr {
+	node := &tree.FuncExpr{
+		Func:     tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(name)),
+		FuncName: tree.NewCStr(name, 1), Exprs: args, WindowSpec: window,
+	}
+	if stableIndex >= 0 {
+		if _, local := args[stableIndex].(*tree.UnresolvedName); local {
+			yylex.(*Lexer).digest.rejectExpression(node)
+		}
+	}
+	return node
+}
+
 // MySQL func_datetime_precision 要求 NUM（有符号32位非负整数字面量），
 // 不是任意 expression，也不是运行时 FSP 0..6 校验；例如 NOW(7) 可以生成 digest。
 func digestDatetimePrecision(expr tree.Expr) bool {
