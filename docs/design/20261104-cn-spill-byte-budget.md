@@ -1,6 +1,7 @@
 # CN spill-run byte budget
 
-Issue: [#32146](https://github.com/matrixorigin/matrixone/issues/32146)  
+Issue: [#32146](https://github.com/matrixorigin/matrixone/issues/32146)
+
 Implementation: [PR #32155](https://github.com/matrixorigin/matrixone/pull/32155)
 
 ## Problem and contract
