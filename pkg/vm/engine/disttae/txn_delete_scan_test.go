@@ -259,8 +259,9 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	segment[0] = 2
 	spilled.SetSegment(segment)
 	spilled.SetRowOffset(3)
-	server.PutCnSegment(op.Txn().ID, 42, spilled.BorrowSegmentID(), colexec.TxnWorkspaceUnCommitType)
-	t.Cleanup(func() { server.DeleteTxnSegmentIds(op.Txn().ID) })
+	server.PutCnSegment(&txn.workspaceSegments, op.Txn().ID, 42,
+		spilled.BorrowSegmentID(), colexec.TxnWorkspaceUnCommitType)
+	t.Cleanup(func() { server.RetireTxnWorkspaceSegments(&txn.workspaceSegments) })
 	makeBatch := func(ids ...types.Rowid) *batch.Batch {
 		bat := batch.NewWithSize(1)
 		bat.Attrs = []string{objectio.PhysicalAddr_Attr}
@@ -421,7 +422,9 @@ func TestBorrowedWorkspacePreparationFailurePreservesState(t *testing.T) {
 		deletedBlocks:   &deletedBlocks{offsets: make(map[types.Blockid][]int64)}}
 	txn.accountWorkspaceEntryLocked(&txn.writes[0])
 	beforeSize, beforeCount := txn.workspaceSize, txn.approximateInMemInsertCnt
-	require.ErrorIs(t, txn.shrinkWorkspaceEntryBatchLocked(0, txn.batchSelectList[bat]), mpool.ErrAllocationAccountCapacity)
+	retired, err := txn.shrinkWorkspaceEntryBatchLocked(0, txn.batchSelectList[bat])
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+	require.False(t, retired)
 	require.Equal(t, beforeSize, txn.workspaceSize)
 	require.Equal(t, beforeCount, txn.approximateInMemInsertCnt)
 	require.Equal(t, []int64{1, 0}, txn.batchSelectList[bat])

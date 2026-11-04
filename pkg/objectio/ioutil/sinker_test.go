@@ -237,3 +237,30 @@ func TestSinkerDeletePersistedAfterAmbiguousSyncFailure(t *testing.T) {
 	_, err = baseFS.StatFile(ctx, fs.persisted)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
+
+func TestSinkerResetDiscardsTransferredFailureNames(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProc(t)
+	baseFS, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { baseFS.Close(ctx) })
+	fs := &persistThenErrorFS{FileService: baseFS}
+	_, typs, _, sinker := makeTestSinker(proc.Mp(), fs)
+	t.Cleanup(func() { require.NoError(t, sinker.Close()) })
+	bat := containers.MockBatch(typs, 2, 2, nil)
+	t.Cleanup(bat.Close)
+	require.NoError(t, sinker.Write(ctx, containers.ToCNBatch(bat)))
+	require.ErrorContains(t, sinker.Sync(ctx), "injected post-persist sync failure")
+	owned := sinker.PersistedNames()
+	require.Equal(t, []string{fs.persisted}, owned)
+	require.Equal(t, owned, sinker.GetUnpublishedFiles())
+
+	sinker.Reset()
+	require.Empty(t, sinker.PersistedNames())
+	require.Empty(t, sinker.GetUnpublishedFiles())
+	require.Equal(t, []string{fs.persisted}, owned, "the transferred snapshot is independent")
+	_, err = baseFS.StatFile(ctx, fs.persisted)
+	require.NoError(t, err, "Reset must leave physical cleanup to the owner")
+	sinker.Reset()
+	require.Empty(t, sinker.PersistedNames())
+}

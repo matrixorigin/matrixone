@@ -1114,7 +1114,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	}
 
 	min, max, readFullObject := vector.readRange()
-	if readFullObject && forceMinimalRangeRead {
+	// The full-object policy is a disk-cache fill optimization, not a request
+	// to download unused bytes when no disk cache can retain them.
+	if readFullObject && (forceMinimalRangeRead || s.diskCache == nil) {
 		min, max = vector.readMinimalRange()
 		readFullObject = false
 	}
