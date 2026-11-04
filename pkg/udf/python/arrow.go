@@ -82,6 +82,7 @@ func NewTypeDescriptor(typ types.Type) (TypeDescriptor, error) {
 	// persisted/Arrow descriptor have one stable representation.
 	width := typ.Width
 	scale := typ.Scale
+	// typeswitch:partial only vecf32/vecf64 have metadata in the current Python ABI.
 	switch typ.Oid {
 	case types.T_decimal64, types.T_decimal128:
 		if scale < 0 {
@@ -100,6 +101,7 @@ func NewTypeDescriptor(typ types.Type) (TypeDescriptor, error) {
 		scale = 0
 	}
 	d := TypeDescriptor{TypeID: int32(typ.Oid), Width: width, Scale: scale, Charset: typ.Charset, OffsetWidth: 32}
+	// typeswitch:partial the Python ABI admits float32/64 and vecf32/64; default rejects other floats/vectors.
 	switch typ.Oid {
 	case types.T_json:
 		d.JSONEncoding = "canonical_text"
@@ -114,6 +116,7 @@ func NewTypeDescriptor(typ types.Type) (TypeDescriptor, error) {
 	default:
 		return TypeDescriptor{}, udferr.Newf("python udf does not support MatrixOne type %s", typ.String())
 	}
+	// typeswitch:partial only admitted vecf32/vecf64 use the fixed-size-list dimension contract.
 	if typ.Oid == types.T_array_float32 || typ.Oid == types.T_array_float64 {
 		if typ.Width <= 0 {
 			return TypeDescriptor{}, udferr.Newf("python udf requires a positive vector dimension for %s", typ.String())
@@ -170,6 +173,7 @@ func (d TypeDescriptor) Validate() error {
 		return udferr.Newf("TYPE_CONTRACT: descriptor scale must be non-negative")
 	}
 	expectedOffsetWidth := int32(32)
+	// typeswitch:partial only vecf32/vecf64 are supported vector descriptors; other vector IDs are rejected below.
 	if oid == types.T_uuid || oid == types.T_array_float32 || oid == types.T_array_float64 {
 		expectedOffsetWidth = 0
 	}
@@ -189,6 +193,7 @@ func (d TypeDescriptor) Validate() error {
 		return udferr.Newf("TYPE_CONTRACT: temporal descriptor must use sql_zero_struct encoding")
 	}
 
+	// typeswitch:partial validate the frozen Python ABI; default rejects unsupported float/vector IDs.
 	switch oid {
 	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -246,6 +251,7 @@ func (d TypeDescriptor) Validate() error {
 }
 
 func (d TypeDescriptor) arrowType() (arrow.DataType, error) {
+	// typeswitch:partial only float32/64 and vecf32/64 have Python Arrow mappings; default rejects others.
 	switch types.T(d.TypeID) {
 	case types.T_bool:
 		return arrow.FixedWidthTypes.Boolean, nil
@@ -659,6 +665,7 @@ func appendBulkFixedInputValue(
 		return false, udferr.Newf("input column is missing")
 	}
 
+	// typeswitch:partial bulk encoding is limited to admitted primitive ABI types; other cases use the checked scalar path.
 	switch typ.Oid {
 	case types.T_bool:
 		values, err := bulkFixedInputWindow[bool](v, start, length)
@@ -843,6 +850,7 @@ func (e *inputBatchEncoder) canBuildFullBatch(start, length, maxBytes int64) boo
 }
 
 func arrayElementByteWidth(oid types.T) (int64, bool) {
+	// typeswitch:partial only vecf32/vecf64 are admitted; no width is inferred for unsupported vector layouts.
 	switch oid {
 	case types.T_array_float32:
 		return 4, true
@@ -894,6 +902,7 @@ func appendInputValue(
 		}
 		return nil
 	}
+	// typeswitch:partial encode only validated Python ABI float32/64 and vecf32/64, rejecting other types.
 	switch typ.Oid {
 	case types.T_bool:
 		b := builder.(*array.BooleanBuilder)
@@ -1273,6 +1282,7 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 	}
 	result.GetResultVector().SetTypeScale(descriptor.Scale)
 	typ := types.T(descriptor.TypeID)
+	// typeswitch:partial validated float32/64 results use bulk append; unsupported float IDs cannot reach this boundary.
 	switch typ {
 	case types.T_bool:
 		return appendBoolArrowResult(input.(*array.Boolean), result)
@@ -1305,6 +1315,7 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 	}
 	for i := 0; i < input.Len(); i++ {
 		null := input.IsNull(i)
+		// typeswitch:partial validated vecf32/vecf64 use fixed-size lists; other vector IDs have already been rejected.
 		switch typ {
 		case types.T_decimal64:
 			var value types.Decimal64
@@ -1497,6 +1508,7 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 		if input.IsNull(row) {
 			continue
 		}
+		// typeswitch:partial only admitted vecf32/vecf64 have child-domain checks; unsupported vector IDs fail descriptor validation.
 		switch types.T(descriptor.TypeID) {
 		case types.T_text:
 			if descriptor.Width > 0 && len(input.(*array.String).Value(row)) > int(descriptor.Width) {

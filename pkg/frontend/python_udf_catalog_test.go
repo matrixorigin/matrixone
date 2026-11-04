@@ -137,14 +137,26 @@ func TestInitPythonFunctionValidatesArtifactBeforeCatalogReadiness(t *testing.T)
 
 	tenant := &TenantInfo{User: "root", TenantID: 27, DefaultRoleID: accountAdminRoleID}
 	session := &Session{feSessionImpl: feSessionImpl{service: service, tenant: tenant}}
-	for _, test := range []struct {
-		name, argument, result string
-	}{
-		{"signed_argument", "mediumint", "bigint"},
-		{"unsigned_argument", "mediumint unsigned", "bigint"},
-		{"signed_result", "bigint", "mediumint"},
-		{"unsigned_result", "bigint", "mediumint unsigned"},
-	} {
+	type typeCase struct {
+		name, argument, result, wantError string
+	}
+	tests := make([]typeCase, 0, 16)
+	tests = append(tests,
+		typeCase{"signed_argument", "mediumint", "bigint", "python udf does not support MEDIUMINT"},
+		typeCase{"unsigned_argument", "mediumint unsigned", "bigint", "python udf does not support MEDIUMINT"},
+		typeCase{"signed_result", "bigint", "mediumint", "python udf does not support MEDIUMINT"},
+		typeCase{"unsigned_result", "bigint", "mediumint unsigned", "python udf does not support MEDIUMINT"},
+	)
+	// These SQL types have no representation in the current Python ABI.
+	// Reject both positions before worker validation or persistent publication.
+	for _, sqlType := range []string{"bf16", "float16", "float8", "float4", "vecf8(3)", "vecf4(3)"} {
+		tests = append(tests, typeCase{
+			sqlType + "_argument", sqlType, "bigint", "python udf does not support MatrixOne type",
+		}, typeCase{
+			sqlType + "_result", "bigint", sqlType, "python udf does not support MatrixOne type",
+		})
+	}
+	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			statement, err := parsers.ParseOne(ctx, dialect.MYSQL, fmt.Sprintf(
 				"create function app.py_echo(value %s) returns %s language python as 'def py_echo(ctx, value): return value' handler 'py_echo'",
@@ -154,7 +166,7 @@ func TestInitPythonFunctionValidatesArtifactBeforeCatalogReadiness(t *testing.T)
 			runtime.definition = nil
 			background.executedSqls = nil
 			err = InitFunction(session, &ExecCtx{reqCtx: ctx}, tenant, statement.(*tree.CreateFunction))
-			require.ErrorContains(t, err, "python udf does not support MEDIUMINT")
+			require.ErrorContains(t, err, test.wantError)
 			require.Nil(t, runtime.definition, "unsupported types must fail before worker validation")
 			require.Empty(t, background.executedSqls, "unsupported types must fail before catalog access")
 		})

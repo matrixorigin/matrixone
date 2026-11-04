@@ -135,6 +135,7 @@ func pythonSameOIDCanNormalize(from, to types.Type) bool {
 	if from.Oid != to.Oid || pythonTypesEqual(from, to) {
 		return false
 	}
+	// typeswitch:partial only vecf32/vecf64 can appear in validated Python definitions; their dimensions must match.
 	switch from.Oid {
 	case types.T_array_float32, types.T_array_float64:
 		return false
