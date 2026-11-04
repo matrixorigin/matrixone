@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,28 @@ func TestDescFile(t *testing.T) {
 	require.Equal(t, path.Join(dir, "a.pdf"), s.batch.Vecs[1].GetStringAt(0))
 	require.Equal(t, int64(5), vector.GetFixedAtNoTypeCheck[int64](s.batch.Vecs[2], 0))
 
+	// a NULL or empty path returns no rows; a path that is not a string is an error
+	null := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+	defer null.Free(proc.Mp())
+	empty, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(""), 1, proc.Mp())
+	require.NoError(t, err)
+	defer empty.Free(proc.Mp())
+	for _, v := range []*vector.Vector{null, empty} {
+		tf.ctr.argVecs = []*vector.Vector{v}
+		sn := &descFileState{}
+		require.NoError(t, sn.start(tf, proc, 0, nil))
+		require.Zero(t, sn.batch.RowCount())
+		sn.free(tf, proc, false, nil)
+	}
+	num, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	defer num.Free(proc.Mp())
+	tf.ctr.argVecs = []*vector.Vector{num}
+	sn := &descFileState{}
+	require.ErrorContains(t, sn.start(tf, proc, 0, nil), "filepath must be string")
+	sn.free(tf, proc, false, nil)
+	tf.ctr.argVecs = []*vector.Vector{arg}
+
 	tf.Attrs = []string{"owner"}
 	tf.ctr.retSchema = []types.Type{types.T_varchar.ToType()}
 	s2 := &descFileState{}
@@ -96,8 +119,26 @@ func TestDescFile(t *testing.T) {
 
 func TestTableFunctionPrepareDescFile(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	tf := newStubTableFunction("desc_file")
+	tf := &TableFunction{
+		FuncName: "desc_file",
+		Attrs:    []string{"file"},
+		Rets:     []*plan.ColDef{{Name: "file", Typ: plan.Type{Id: int32(types.T_varchar)}}},
+	}
 	require.NoError(t, tf.Prepare(proc))
 	require.IsType(t, &descFileState{}, tf.ctr.state)
 	tf.ctr.state.free(tf, proc, false, nil)
+}
+
+// desc_file admits a CN path only for the sys account's moadmin role, like stage_list.
+func TestDescFileRequiresServerFileAuthority(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "acc1"
+	proc.Base.SessionInfo.Role = "accountadmin"
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.pdf"), []byte("12345"), 0600))
+	proc.GetStageCache().Set("docs", stage.StageDef{Id: 1, Name: "docs", Url: &url.URL{Scheme: stage.FILE_PROTOCOL, Path: dir}})
+	for _, u := range []string{"stage://docs/a.pdf", "stage://docs/", "stage://docs/*.pdf", "stage://docs/missing"} {
+		_, err := descFileEntries(proc, u)
+		require.ErrorContains(t, err, "only the sys account moadmin role can access SQL file paths", u)
+	}
 }

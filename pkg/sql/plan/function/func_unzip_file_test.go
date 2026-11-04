@@ -19,11 +19,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -96,4 +98,65 @@ func TestUnzipFileOverloads(t *testing.T) {
 		exec, _, _, _ := ov.GetExecuteMethod()
 		require.NotNil(t, exec, typ.String())
 	}
+}
+
+// unzip_file admits a CN path only for the sys account's moadmin role, like load_file.
+func TestUnzipFileRequiresServerFileAuthority(t *testing.T) {
+	dir := t.TempDir()
+	docs := filepath.Join(dir, "docs.zip")
+	writeTestZip(t, docs, [2]string{"a.txt", "hello zip"})
+	proc := newSQLFileAccessTestProc(t)
+	proc.Base.SessionInfo.Account = "acc1"
+	proc.Base.SessionInfo.Role = "accountadmin"
+	proc.Ctx = process.SQLFileAccessContext(context.Background(), proc)
+	for _, tc := range []struct {
+		typ  types.T
+		path string
+		open func(string, *process.Process) (io.ReadCloser, error)
+	}{
+		{types.T_varchar, docs, openUnzipFilePath},
+		{types.T_datalink, "file://" + docs, openUnzipFileDatalink},
+	} {
+		input := NewFunctionTestInput(tc.typ.ToType(), []string{tc.path}, nil)
+		expect := NewFunctionTestResult(types.T_blob.ToType(), true, []string{""}, nil)
+		fcTC := NewFunctionTestCase(proc, []FunctionTestInput{input}, expect, unzipFile(tc.open))
+		s, info := fcTC.RunAndFree()
+		require.True(t, s, info)
+		_, err := tc.open(tc.path, proc)
+		require.ErrorContains(t, err, "only the sys account moadmin role can access SQL file paths")
+	}
+}
+
+// unzip_file reads at most the blob limit plus one byte of the decompressed file.
+func TestUnzipFileBlobLimit(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("big.bin")
+	require.NoError(t, err)
+	zeros := make([]byte, 1<<20)
+	for written := 0; written <= types.MaxBlobLen; written += len(zeros) {
+		_, err = w.Write(zeros)
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	big := filepath.Join(t.TempDir(), "big.zip")
+	require.NoError(t, os.WriteFile(big, buf.Bytes(), 0o600))
+
+	proc := newSQLFileAccessTestProc(t)
+	r, err := openUnzipFilePath(big, proc)
+	require.NoError(t, err)
+	_, err = unzipContents(r, proc)
+	require.ErrorContains(t, err, "Data too long for blob")
+}
+
+// A canceled statement fails the archive read instead of returning its contents.
+func TestUnzipFileCanceled(t *testing.T) {
+	docs := filepath.Join(t.TempDir(), "docs.zip")
+	writeTestZip(t, docs, [2]string{"a.txt", "hello zip"})
+	proc := newSQLFileAccessTestProc(t)
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+	_, err := openUnzipFilePath(docs, proc)
+	require.ErrorIs(t, err, context.Canceled)
 }

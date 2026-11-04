@@ -45,4 +45,19 @@ func TestNewReader(t *testing.T) {
 
 	_, _, err = NewReader(t.Context(), bytes.NewReader([]byte("plain text")))
 	require.ErrorContains(t, err, "not a zip archive")
+
+	// A stored entry written with a data descriptor before the file to load cannot be skipped.
+	buf.Reset()
+	zw = zip.NewWriter(&buf)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: ".hidden", Method: zip.Store})
+	require.NoError(t, err)
+	_, err = w.Write([]byte("skip"))
+	require.NoError(t, err)
+	w, err = zw.Create("a.txt")
+	require.NoError(t, err)
+	_, err = w.Write([]byte("first"))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	_, _, err = NewReader(t.Context(), bytes.NewReader(buf.Bytes()))
+	require.ErrorContains(t, err, "cannot be skipped in a stream")
 }
