@@ -661,6 +661,20 @@ func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	require.False(t, ProducesNoNull(-1))
 }
 
+func TestDeduceNotNullableForZeroDivisorFunctions(t *testing.T) {
+	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
+	for _, fid := range []int32{DIV, INTEGER_DIV, MOD} {
+		fn := allSupportedFunctions[fid]
+		require.NotEmpty(t, fn.Overloads)
+		for _, overload := range fn.Overloads {
+			require.False(t, DeduceNotNullable(EncodeOverloadID(fid, int32(overload.overloadId)), []*plan.Expr{notNull, notNull}),
+				"function %d overload %d may return NULL for a zero divisor", fid, overload.overloadId)
+		}
+	}
+	require.True(t, DeduceNotNullable(EncodeOverloadID(PLUS, 0), []*plan.Expr{notNull, notNull}))
+	require.True(t, DeduceNotNullable(EncodeOverloadID(ISNULL, 0), []*plan.Expr{{}}))
+}
+
 func TestDeduceNotNullableForValueWindowFunctions(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 	nullable := &plan.Expr{Typ: plan.Type{NotNullable: false}}

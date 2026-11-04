@@ -285,6 +285,10 @@ func GetAggFunctionNameByID(overloadID int64) string {
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
 	switch fid {
+	case DIV, INTEGER_DIV, MOD:
+		// A zero divisor produces NULL even when both operands are NOT NULL.
+		// STRICT describes NULL-input propagation, not a non-NULL output proof.
+		return false
 	case CASE:
 		if caseHasTemporalPromotion(args) {
 			return false

@@ -303,7 +303,21 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			},
 		}
 	}
-	return cols, builder.qry, nil
+	// Capture source defaults and special types before optimization remaps the
+	// bindings, but derive constraints from the final materialized output.
+	query, err := builder.createQuery()
+	if err != nil {
+		return nil, nil, err
+	}
+	output := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	for i, expr := range output {
+		// Preserve CTAS-only nullability (explicit DATETIME casts) even if
+		// optimization folds the expression into a non-NULL literal.
+		ctasNullable := cols[i].Typ.NotNullable && cols[i].Default.NullAbility
+		cols[i].Typ.NotNullable = expr.Typ.NotNullable
+		cols[i].Default.NullAbility = ctasNullable || ctasExprCanBeNull(expr)
+	}
+	return cols, query, nil
 }
 
 func ctasExprCanBeNull(expr *Expr) bool {
