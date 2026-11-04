@@ -435,6 +435,9 @@ func (r *optSplitResult) flushAll() []*vector.Vector {
 //
 // do not call this method directly, plz use the preExtend and extendResult.
 func (r *optSplitResult) extendResultPurely(more int) error {
+	if more == 0 {
+		return nil
+	}
 
 	// try tp full the using part first.
 	l1 := r.resultList[r.nowIdx1].Length()
@@ -447,11 +450,14 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 		r.setLengthPartK(r.nowIdx1, l1+more)
 		return nil
 	}
-	if err := r.extendMoreToKthGroup(r.nowIdx1, maxToExtendWithinTheUsingPart); err != nil {
-		return err
+	// Vector.PreExtend(0) reserves one row, so skip an already full chunk.
+	if maxToExtendWithinTheUsingPart > 0 {
+		if err := r.extendMoreToKthGroup(r.nowIdx1, maxToExtendWithinTheUsingPart); err != nil {
+			return err
+		}
+		r.setLengthPartK(r.nowIdx1, r.optInformation.chunkSize)
+		more -= maxToExtendWithinTheUsingPart
 	}
-	r.setLengthPartK(r.nowIdx1, r.optInformation.chunkSize)
-	more -= maxToExtendWithinTheUsingPart
 
 	// try to full the allocated part first.
 	maxToExtendWithoutPartAppend := (len(r.resultList) - 1 - r.nowIdx1) * r.optInformation.chunkSize
@@ -472,6 +478,8 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 				return err
 			}
 			r.setLengthPartK(r.nowIdx1, rowMore)
+		} else {
+			r.nowIdx1 += fullPart - 1
 		}
 		return nil
 	}

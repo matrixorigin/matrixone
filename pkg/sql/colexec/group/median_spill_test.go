@@ -121,35 +121,89 @@ func TestGroupIntermediateSerializationFailureIsNotPublished(t *testing.T) {
 	require.Contains(t, string(result.Batch.ExtraBuf), "state")
 }
 
-func TestGroupStreamingDoesNotEmitEmptyTrailingChunk(t *testing.T) {
+func TestGroupMedianPartialMergeAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, []aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMedian, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil),
-	})
-	g.NeedEval = false
-	g.SpillMem = 1000000000
-	t.Cleanup(func() { g.Free(proc, false, nil); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
-	values := make([]int32, 8192)
-	for i := range values {
-		values[i] = int32(i + 1)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	const count = 8193
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(aggexec.AggIdOfMedian, false, []*plan.Expr{colExpr(1, types.T_int32)}, nil),
 	}
-	first := batch.NewWithSize(1)
-	first.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
-	first.SetRowCount(len(values))
-	duplicate := batch.NewWithSize(1)
-	duplicate.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
-	duplicate.SetRowCount(1)
-	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, duplicate}))
-	require.NoError(t, g.Prepare(proc))
-	count := 0
-	for {
-		result, err := vm.Exec(g, proc)
-		require.NoError(t, err)
-		if result.Status == vm.ExecStop || result.Batch == nil {
-			break
+	var partials []*batch.Batch
+	for pass := 0; pass < 2; pass++ {
+		func() {
+			groupCount := count - pass
+			keys, values := make([]int32, groupCount), make([]int32, groupCount)
+			var nulls []uint64
+			for i := range keys {
+				keys[i] = int32(i + 1)
+				values[i] = keys[i] + int32(pass*2)
+				if keys[i]%17 == 0 {
+					nulls = append(nulls, uint64(i))
+				}
+			}
+			input := batch.NewWithSize(2)
+			input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+			input.Vecs[1] = testutil.MakeInt32Vector(values, nulls, proc.Mp())
+			input.SetRowCount(groupCount)
+			inputs := []*batch.Batch{input}
+			if pass == 1 {
+				// A duplicate after a full chunk must not create an empty batch.
+				duplicate := batch.NewWithSize(2)
+				duplicate.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+				duplicate.Vecs[1] = testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
+				duplicate.SetRowCount(1)
+				inputs = append(inputs, duplicate)
+			}
+			child := colexec.NewMockOperator().WithBatchs(inputs)
+			defer child.Free(proc, false, nil)
+			partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, aggs)
+			partial.NeedEval = false
+			partial.SpillMem = 1000000000
+			partial.AppendChild(child)
+			defer partial.Free(proc, false, nil)
+			require.NoError(t, partial.Prepare(proc))
+			batches := collectBatches(t, partial, proc)
+			require.Len(t, batches, 2-pass)
+			for _, bat := range batches {
+				require.Positive(t, bat.RowCount())
+				copied := cloneBatch(t, proc, bat)
+				t.Cleanup(func() { copied.Clean(proc.Mp()) })
+				partials = append(partials, copied)
+			}
+		}()
+	}
+	require.Len(t, partials, 3)
+
+	merge := newMergeGroupOp(aggs)
+	merge.SpillMem = 1000000000
+	merge.AppendChild(colexec.NewMockOperator().WithBatchs(partials))
+	t.Cleanup(func() { merge.Free(proc, false, nil) })
+	require.NoError(t, merge.Prepare(proc))
+	seen := make([]bool, count)
+	rows := 0
+	for _, result := range collectBatches(t, merge, proc) {
+		keys := vector.MustFixedColNoTypeCheck[int32](result.Vecs[0])
+		values := vector.MustFixedColNoTypeCheck[float64](result.Vecs[1])
+		for i, key := range keys {
+			if key < 1 || key > count || seen[key-1] {
+				t.Fatalf("invalid or duplicate key %d", key)
+			}
+			seen[key-1] = true
+			if key%17 == 0 {
+				if !result.Vecs[1].IsNull(uint64(i)) {
+					t.Fatalf("key %d: expected NULL", key)
+				}
+			} else {
+				want := float64(key + 1)
+				if key == count {
+					want = float64(key)
+				}
+				if result.Vecs[1].IsNull(uint64(i)) || values[i] != want {
+					t.Fatalf("key %d: got %v, null %v; want %v", key, values[i], result.Vecs[1].IsNull(uint64(i)), want)
+				}
+			}
+			rows++
 		}
-		require.Positive(t, result.Batch.RowCount())
-		count += result.Batch.RowCount()
 	}
-	require.Equal(t, len(values), count)
+	require.Equal(t, count, rows)
 }

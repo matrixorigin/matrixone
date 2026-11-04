@@ -60,7 +60,7 @@ func writeRuntimeAggGroup(group encoding.BinaryMarshaler, writer io.Writer) erro
 // Aggregate selections omit missing or empty chunks. This differs from
 // Vector.UnionBatch, where a nil selection means all rows.
 func validateRuntimeAggSelection(cnt int64, flags [][]uint8, ret *optSplitResult, groupCount int) error {
-	if cnt < 0 || ret == nil {
+	if cnt <= 0 || ret == nil {
 		return moerr.NewInvalidInputNoCtx("invalid aggregate selection")
 	}
 	if len(ret.emptyList) != 0 && len(ret.emptyList) != len(ret.resultList) {
@@ -80,12 +80,11 @@ func validateRuntimeAggSelection(cnt int64, flags [][]uint8, ret *optSplitResult
 		if len(flags[i]) > n {
 			return moerr.NewInvalidInputNoCtx("aggregate selection exceeds chunk length")
 		}
-		for _, flag := range flags[i] {
-			if flag > 1 {
-				return moerr.NewInvalidInputNoCtx("aggregate selection flag must be zero or one")
-			}
-			selected += int64(flag)
+		ones := bytes.Count(flags[i], []byte{1})
+		if ones+bytes.Count(flags[i], []byte{0}) != len(flags[i]) {
+			return moerr.NewInvalidInputNoCtx("aggregate selection flag must be zero or one")
 		}
+		selected += int64(ones)
 	}
 	for i := len(ret.resultList); i < len(flags); i++ {
 		if len(flags[i]) != 0 {
@@ -108,9 +107,6 @@ func marshalRetAndGroupsToBuffer[T encoding.BinaryMarshaler](
 		return err
 	}
 	types.WriteInt64(buf, cnt)
-	if cnt == 0 {
-		return nil
-	}
 	if err := ret.marshalToBuffers(flags, buf); err != nil {
 		return err
 	}

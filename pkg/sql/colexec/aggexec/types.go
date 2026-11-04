@@ -132,10 +132,12 @@ type AggFuncExec interface {
 	// TypesInfo return the argument types and return type of the function.
 	TypesInfo() ([]types.Type, types.Type)
 
-	// GroupGrow increases the number of groups in the aggregation.
+	// GroupGrow increases the number of groups in the aggregation. On error the
+	// executor may be partially grown and must be freed rather than reused.
 	GroupGrow(more int) error
 
-	// PreAllocateGroups pre-allocates more additional groups to reduce garbage collection overhead.
+	// PreAllocateGroups pre-allocates additional groups to reduce garbage
+	// collection overhead. As with GroupGrow, an error requires freeing the executor.
 	PreAllocateGroups(more int) error
 
 	// XXX: WTF.
@@ -168,7 +170,8 @@ type AggFuncExec interface {
 
 	// Serialize the selected intermediate groups in chunk and row order. A
 	// missing or empty flags chunk selects no rows; nonempty flags contain 0/1
-	// selectors. On error the caller must discard any partial record in buf.
+	// selectors. MEDIAN and window executors require a positive selected count.
+	// On error the caller must discard any partial record in buf.
 	SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error
 	SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error
 	UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error

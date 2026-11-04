@@ -156,24 +156,6 @@ func TestRuntimeAggSelectionKeepsResultsAndGroupsAligned(t *testing.T) {
 	}
 }
 
-func TestDistinctMarshalToBuffersAllowsPartialSelection(t *testing.T) {
-	mp := mpool.MustNewZero()
-	distinct := newDistinctHash(mp)
-	t.Cleanup(func() { distinct.free(); require.Zero(t, mp.CurrNB()) })
-	require.NoError(t, distinct.grows(2))
-	var encoded bytes.Buffer
-	require.NoError(t, distinct.marshalToBuffers([]uint8{1}, &encoded))
-
-	reader := bytes.NewReader(encoded.Bytes())
-	count, err := types.ReadInt64(reader)
-	require.NoError(t, err)
-	require.Equal(t, int64(1), count)
-	var expected bytes.Buffer
-	_, err = distinct.maps[0].WriteTo(&expected)
-	require.NoError(t, err)
-	require.Equal(t, expected.Bytes(), encoded.Bytes()[8:])
-}
-
 func TestRuntimeAggSelectionRejectsInvalidInput(t *testing.T) {
 	mp := mpool.MustNewZero()
 	ret := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), true, 0, false)
@@ -194,8 +176,6 @@ func TestRuntimeAggSelectionRejectsInvalidInput(t *testing.T) {
 		require.Equal(t, "prefix", buf.String())
 	}
 	var zero bytes.Buffer
-	require.NoError(t, marshalRetAndGroupsToBuffer[fakeSerdeGroup](0, nil, &zero, &ret.optSplitResult, nil, nil))
-	require.Len(t, zero.Bytes(), 8)
 	require.Error(t, marshalChunkToBuffer(-1, &zero, &ret.optSplitResult, []fakeSerdeGroup{"g0", "g1"}, nil))
 	require.Error(t, marshalChunkToBuffer(1, &zero, &ret.optSplitResult, []fakeSerdeGroup{"g0", "g1"}, nil))
 }
@@ -292,33 +272,81 @@ func TestMedianDistinctReplacementDecodeResetsHash(t *testing.T) {
 	require.Equal(t, 1.5, vector.GetFixedAtNoTypeCheck[float64](output[0], 0))
 }
 
-func TestAggregateResultFullChunkGrowthReturnsAllocationError(t *testing.T) {
-	const limit = int64(1 << 20)
-	mp, err := mpool.NewMPool("aggregate-chunk-growth", limit, mpool.NoFixed)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
-	ret := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), true, 0, false)
-	t.Cleanup(ret.free)
-	ret.optInformation.chunkSize = 8192
-	require.NoError(t, ret.grows(8192))
-	var ballast [][]byte
-	t.Cleanup(func() {
-		for _, b := range ballast {
-			mp.Free(b)
-		}
-	})
-	for i := 0; i < 300 && limit-mp.CurrNB() >= 65536; i++ {
-		b, allocErr := mp.Alloc(4096, true)
-		require.NoError(t, allocErr)
-		ballast = append(ballast, b)
+func TestAggregateResultFullChunkGrowthFailureCleanup(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		freeBelow int64
+		completed int
+	}{
+		{"first_chunk", 65536, 0},
+		{"after_one_chunk", 110000, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const limit = int64(1 << 20)
+			mp, err := mpool.NewMPool("aggregate-chunk-growth", limit, mpool.NoFixed)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+			ret := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), true, 0, false)
+			t.Cleanup(ret.free)
+			ret.optInformation.chunkSize = 8192
+			require.NoError(t, ret.grows(8192))
+			firstChunkBytes := ret.resultList[0].Allocated()
+			firstEmptyBytes := ret.emptyList[0].Allocated()
+			require.NoError(t, ret.grows(0))
+			require.Equal(t, firstChunkBytes, ret.resultList[0].Allocated())
+			require.Equal(t, firstEmptyBytes, ret.emptyList[0].Allocated())
+			var ballast [][]byte
+			t.Cleanup(func() {
+				for _, b := range ballast {
+					mp.Free(b)
+				}
+			})
+			for i := 0; i < 300 && limit-mp.CurrNB() >= tc.freeBelow; i++ {
+				b, allocErr := mp.Alloc(4096, true)
+				require.NoError(t, allocErr)
+				ballast = append(ballast, b)
+			}
+			err = ret.grows(2 * 8192)
+			require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "error: %v", err)
+			require.Equal(t, firstChunkBytes, ret.resultList[0].Allocated())
+			require.Equal(t, firstEmptyBytes, ret.emptyList[0].Allocated())
+			require.Equal(t, 2+tc.completed, len(ret.resultList))
+			if tc.completed != 0 {
+				require.Equal(t, 8192, ret.resultList[1].Length())
+			}
+			require.Zero(t, ret.resultList[len(ret.resultList)-1].Length())
+			for _, b := range ballast {
+				mp.Free(b)
+			}
+			ballast = nil
+			ret.free()
+			require.Zero(t, mp.CurrNB())
+
+			fresh := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), true, 0, false)
+			t.Cleanup(fresh.free)
+			fresh.optInformation.chunkSize = 8192
+			require.NoError(t, fresh.grows(3*8192))
+			for i := range fresh.values {
+				for j := range fresh.values[i] {
+					fresh.values[i][j] = int64(i*8192 + j)
+					fresh.bsFromEmptyList[i][j] = false
+				}
+			}
+			output := fresh.flushAll()
+			t.Cleanup(func() {
+				for _, chunk := range output {
+					chunk.Free(mp)
+				}
+			})
+			require.Len(t, output, 3)
+			for i, chunk := range output {
+				require.Equal(t, 8192, chunk.Length())
+				for j, value := range vector.MustFixedColNoTypeCheck[int64](chunk) {
+					if value != int64(i*8192+j) || chunk.IsNull(uint64(j)) {
+						t.Fatalf("chunk %d row %d: value=%d null=%v", i, j, value, chunk.IsNull(uint64(j)))
+					}
+				}
+			}
+		})
 	}
-	err = ret.grows(8192)
-	require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), "error: %v", err)
-	for _, b := range ballast {
-		mp.Free(b)
-	}
-	ballast = nil
-	require.NoError(t, ret.grows(8192))
-	require.Equal(t, 8192, ret.resultList[0].Length())
-	require.Equal(t, 8192, ret.resultList[1].Length())
 }

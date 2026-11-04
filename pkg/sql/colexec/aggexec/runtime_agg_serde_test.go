@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -84,8 +85,10 @@ func TestRuntimeAggSerdeChunkAndNoGroupPaths(t *testing.T) {
 	ret.bsFromEmptyList[1][0] = false
 
 	var zero bytes.Buffer
-	require.NoError(t, marshalRetAndGroupsToBuffer[fakeSerdeGroup](0, nil, &zero, &ret.optSplitResult, nil, nil))
-	require.Equal(t, 8, zero.Len())
+	zero.WriteString("prefix")
+	err := marshalRetAndGroupsToBuffer[fakeSerdeGroup](0, nil, &zero, &ret.optSplitResult, nil, nil)
+	require.Truef(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "error: %v", err)
+	require.Equal(t, "prefix", zero.String())
 
 	var chunkBuf bytes.Buffer
 	require.NoError(t, marshalChunkToBuffer(0, &chunkBuf, &ret.optSplitResult, []fakeSerdeGroup{"x", "y", "z"}, [][]byte{[]byte("meta")}))
@@ -104,6 +107,6 @@ func TestRuntimeAggSerdeChunkAndNoGroupPaths(t *testing.T) {
 	require.Equal(t, "c", string(restored.resultList[0].GetBytesAt(2)))
 
 	empty := initAggResultWithBytesTypeResult(mp, types.T_varchar.ToType(), true, "", false)
-	err := unmarshalFromReaderNoGroup(bytes.NewReader([]byte{1, 2, 3}), &empty.optSplitResult)
+	err = unmarshalFromReaderNoGroup(bytes.NewReader([]byte{1, 2, 3}), &empty.optSplitResult)
 	require.Error(t, err)
 }
