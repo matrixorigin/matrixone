@@ -15,12 +15,15 @@
 package logservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -453,6 +456,126 @@ func (c *closeTrackingRPCClient) Close() error {
 
 func (c *closeTrackingRPCClient) CloseBackend() error {
 	return nil
+}
+
+// The proxy keeps forwarding requests but drops responses after CONNECT has
+// succeeded. This models a blackholed established connection: APPEND may
+// commit even though its caller cannot learn the result.
+func startDroppingResponseProxy(t *testing.T, target string) (string, *atomic.Bool, func()) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var drop atomic.Bool
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	connections := make(map[net.Conn]struct{})
+	track := func(conn net.Conn, add bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if add {
+			connections[conn] = struct{}{}
+		} else {
+			delete(connections, conn)
+		}
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			clientConn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			serverConn, err := net.DialTimeout("tcp", target, time.Second)
+			if err != nil {
+				clientConn.Close()
+				continue
+			}
+			track(clientConn, true)
+			track(serverConn, true)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer track(clientConn, false)
+				defer track(serverConn, false)
+				defer clientConn.Close()
+				defer serverConn.Close()
+				forwardDone := make(chan struct{})
+				go func() {
+					_, _ = io.Copy(serverConn, clientConn)
+					close(forwardDone)
+				}()
+				buf := make([]byte, 64*1024)
+				for {
+					n, err := serverConn.Read(buf)
+					if err != nil {
+						break
+					}
+					if !drop.Load() {
+						if _, err := clientConn.Write(buf[:n]); err != nil {
+							break
+						}
+					}
+				}
+				clientConn.Close()
+				serverConn.Close()
+				<-forwardDone
+			}()
+		}
+	}()
+	cleanup := func() {
+		listener.Close()
+		mu.Lock()
+		for conn := range connections {
+			conn.Close()
+		}
+		mu.Unlock()
+		wg.Wait()
+	}
+	return listener.Addr().String(), &drop, cleanup
+}
+
+func TestAppendBlackholedResponseReturnsUnknownBeforeCallerDeadline(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, s *Service, cfg ClientConfig, healthy Client) {
+		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())
+		defer cleanup()
+		cfg.ServiceAddresses = []string{address}
+		cfg.DiscoveryAddress = ""
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		throughProxy, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, throughProxy.Close()) }()
+		// After the unknown result, the next request may choose a live address.
+		throughProxy.(*managedClient).cfg.ServiceAddresses = []string{s.cfg.LogServiceServiceAddr()}
+		drop.Store(true)
+
+		record := throughProxy.GetLogRecord(8)
+		copy(record.Data[12:], "first123")
+		started := time.Now()
+		_, err = throughProxy.Append(ctx, record)
+		require.Error(t, err)
+		// The socket can first finish an idle read window and then one full
+		// request window. Both together must leave room to reconcile before
+		// the outer attempt deadline.
+		require.Less(t, time.Since(started), 3*defaultLogServiceBackendReadTimeout)
+		require.NoError(t, ctx.Err(), "the outer attempt still has time to reconcile")
+
+		records, _, err := healthy.Read(ctx, 1, 1<<20)
+		require.NoError(t, err)
+		committed := 0
+		for _, got := range records {
+			if bytes.Equal(got.Data, record.Data) {
+				committed++
+			}
+		}
+		require.Equal(t, 1, committed, "the client must not silently replay an ambiguous Append")
+
+		next := throughProxy.GetLogRecord(8)
+		copy(next.Data[12:], "next4567")
+		_, err = throughProxy.Append(ctx, next)
+		require.NoError(t, err)
+	})
 }
 
 func startHangingTCPServer(t *testing.T) (string, func()) {
