@@ -907,6 +907,11 @@ func decodeColumnAttribute(col catalog.Column) (*engine.AttributeDef, error) {
 	if err := attr.Type.Unmarshal(col.Typ); err != nil {
 		return nil, err
 	}
+	// att_is_unsigned is a legacy boolean for unsigned integers; for DECIMAL
+	// columns it carries the UNSIGNED(bit 0)/ZEROFILL(bit 1) attribute mask.
+	if col.IsUnsigned != 0 && attr.Type.Oid.IsDecimal() {
+		attr.NumericAttributes = uint8(uint32(col.IsUnsigned) & types.NumericAttributeMask)
+	}
 	attr.Default = new(plan.Default)
 	if col.HasDef == 1 {
 		if err := types.Decode(col.DefaultExpr, attr.Default); err != nil {
@@ -958,15 +963,16 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 				Name:       name,
 				OriginName: attr.Attr.Name,
 				Typ: plan.Type{
-					Id:               int32(attr.Attr.Type.Oid),
-					Width:            attr.Attr.Type.Width,
-					Scale:            attr.Attr.Type.Scale,
-					AutoIncr:         attr.Attr.AutoIncrement,
-					Table:            tblItem.Name,
-					NotNullable:      attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-					Enumvalues:       attr.Attr.EnumVlaues,
-					Charset:          uint32(attr.Attr.Type.Charset),
-					CollationVersion: uint32(attr.Attr.Type.CollationVersion),
+					Id:                int32(attr.Attr.Type.Oid),
+					Width:             attr.Attr.Type.Width,
+					Scale:             attr.Attr.Type.Scale,
+					AutoIncr:          attr.Attr.AutoIncrement,
+					Table:             tblItem.Name,
+					NotNullable:       attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+					Enumvalues:        attr.Attr.EnumVlaues,
+					Charset:           uint32(attr.Attr.Type.Charset),
+					CollationVersion:  uint32(attr.Attr.Type.CollationVersion),
+					NumericAttributes: uint32(attr.Attr.NumericAttributes),
 				},
 				Primary:      attr.Attr.Primary,
 				Default:      attr.Attr.Default,

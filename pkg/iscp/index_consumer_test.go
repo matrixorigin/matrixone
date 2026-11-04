@@ -374,7 +374,6 @@ func TestIndexConsumerConsumeReturnsExecErrorAfterRunnerExit(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    cnUUID,
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		rowdelete: make([]any, 1),
@@ -603,7 +602,6 @@ func TestIndexConsumerWorkerErrorCancelsBlockedNext(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    "a-b-c-d",
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		algo:      testDeadlockAlgo,
@@ -707,7 +705,6 @@ func TestIndexConsumerInFlightSnapshotExecUsesParentContext(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    "a-b-c-d",
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		algo:      testDeadlockAlgo,
@@ -744,7 +741,6 @@ func TestIndexConsumerTailFinalizationUsesParentContext(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    "a-b-c-d",
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		rowdelete: make([]any, 1),
@@ -1024,7 +1020,6 @@ func TestIndexConsumerTailProducerErrorRollsBackPartialSQL(t *testing.T) {
 	consumer := &IndexConsumer{
 		cnUUID:    "a-b-c-d",
 		info:      newTestIvfConsumerInfo(),
-		tableDef:  tblDef,
 		sqlWriter: &flushEveryRowWriter{toSqlErr: nil, failAtSeq: 2},
 		rowdata:   make([]any, len(tblDef.Cols)),
 		rowdelete: make([]any, 1),

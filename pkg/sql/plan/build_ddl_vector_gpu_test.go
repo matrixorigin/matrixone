@@ -165,10 +165,11 @@ func TestBuildCagraSecondaryIndexDef_OK(t *testing.T) {
 		vectorIndexInfoFixture("v", tree.INDEX_TYPE_CAGRA, "price"),
 		vectorColMap(), nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
-	require.Len(t, tblDefs, 2)
+	require.Len(t, idxDefs, 3)
+	require.Len(t, tblDefs, 3)
 	require.Equal(t, catalog.Cagra_TblType_Metadata, tblDefs[0].TableType)
 	require.Equal(t, catalog.Cagra_TblType_Storage, tblDefs[1].TableType)
+	require.Equal(t, catalog.IndexIgnored_TblType, tblDefs[2].TableType)
 }
 
 // IVFPQ --------------------------------------------------------------------
@@ -253,8 +254,9 @@ func TestBuildIvfpqSecondaryIndexDef_OK(t *testing.T) {
 	idxDefs, tblDefs, err := buildIvfpqSecondaryIndexDef(ctx,
 		idx, vectorColMap(), nil, "id")
 	require.NoError(t, err)
-	require.Len(t, idxDefs, 2)
-	require.Len(t, tblDefs, 2)
+	require.Len(t, idxDefs, 3)
+	require.Len(t, tblDefs, 3)
 	require.Equal(t, catalog.Ivfpq_TblType_Metadata, tblDefs[0].TableType)
 	require.Equal(t, catalog.Ivfpq_TblType_Storage, tblDefs[1].TableType)
+	require.Equal(t, catalog.IndexIgnored_TblType, tblDefs[2].TableType)
 }

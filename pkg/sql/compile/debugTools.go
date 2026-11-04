@@ -195,65 +195,11 @@ func ShowPipelineTree(
 	level DebugLevel,
 	buffer *bytes.Buffer,
 ) {
-	if node == nil {
-		return
+	option := ExplainOption{
+		Verbose: level == VerboseLevel || level == AnalyzeLevel,
+		Analyze: level == AnalyzeLevel,
 	}
-
-	id := node.OpType()
-	name, ok := debugInstructionNames[id]
-	if !ok {
-		name = "unknown"
-	}
-
-	analyzeStr := ""
-	if level == VerboseLevel || level == AnalyzeLevel {
-		analyzeStr = fmt.Sprintf("(idx:%v, isFirst:%v, isLast:%v)",
-			node.GetOperatorBase().Idx,
-			node.GetOperatorBase().IsFirst,
-			node.GetOperatorBase().IsLast)
-	}
-	if level == AnalyzeLevel {
-		analyzer := node.GetOperatorBase().OpAnalyzer
-		if analyzer != nil && analyzer.GetOpStats() != nil {
-			analyzeStr += analyzer.GetOpStats().String()
-		}
-	}
-
-	// Write to the current node
-	if isRoot {
-		headPrefix := "  Pipeline: └── "
-		fmt.Fprintf(buffer, "%s%s%s", headPrefix, name, analyzeStr)
-		hanldeTailNodeReceiver(node, mp, buffer)
-		buffer.WriteString("\n")
-		// Ensure that child nodes are properly indented
-		prefix += "   "
-	} else {
-		if isTail {
-			fmt.Fprintf(buffer, "%s└── %s%s", prefix, name, analyzeStr)
-			hanldeTailNodeReceiver(node, mp, buffer)
-			buffer.WriteString("\n")
-		} else {
-			fmt.Fprintf(buffer, "%s├── %s%s\n", prefix, name, analyzeStr)
-		}
-	}
-
-	// Calculate new prefix
-	newPrefix := prefix
-	if isTail {
-		newPrefix += "    "
-	} else {
-		newPrefix += "│   "
-	}
-
-	// Write to child node
-	for i := 0; i < len(node.GetOperatorBase().Children); i++ {
-		isLast := i == len(node.GetOperatorBase().Children)-1
-		ShowPipelineTree(node.GetOperatorBase().GetChildren(i), newPrefix, false, isLast, mp, level, buffer)
-	}
-
-	if isRoot {
-		trimLastNewline(buffer)
-	}
+	explainPipeline(node, prefix, isRoot, isTail, mp, &option, buffer)
 }
 
 func ShowPipelineLink(node vm.Operator, mp map[*process.WaitRegister]int, buffer *bytes.Buffer) {

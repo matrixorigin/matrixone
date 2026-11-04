@@ -173,6 +173,7 @@ func ConvertScalarWithContext(ctx context.Context, value bytejson.ByteJson, targ
 		return Result{Status: StatusStatementError, Err: err}
 	}
 
+	// typeswitch:partial JSON_TABLE targets; buildJSONTable admits no low-precision float type
 	switch target.Oid {
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
@@ -777,22 +778,9 @@ func decimalResult(value any, target types.Type, truncated bool) Result {
 	return result
 }
 
-func decimalWidthLimit(oid types.T) int32 {
-	switch oid {
-	case types.T_decimal64:
-		return 18
-	case types.T_decimal128:
-		return 38
-	case types.T_decimal256:
-		return 76
-	default:
-		return 0
-	}
-}
-
 func decimalRangeError(text string, target types.Type) error {
 	width := target.Width
-	if limit := decimalWidthLimit(target.Oid); width > limit {
+	if limit := types.DecimalMaxPrecision(target.Oid); width > limit {
 		width = limit
 	}
 	switch target.Oid {
@@ -813,7 +801,7 @@ func decimalHexValueWithinWidth(text string, target types.Type) (isHexadecimal, 
 		return false, true
 	}
 	width := target.Width
-	if limit := decimalWidthLimit(target.Oid); width > limit {
+	if limit := types.DecimalMaxPrecision(target.Oid); width > limit {
 		width = limit
 	}
 	integerDigits := width - target.Scale
@@ -889,7 +877,7 @@ func decimal256PowerOfTen(width int32) (types.Decimal256, bool) {
 // decimal parser and an optional leading plus sign. It never allocates based
 // on an exponent or retains more than width+1 significant digits.
 func canonicalDecimalInput(text string, target types.Type) (canonical string, truncated, known, outOfRange bool) {
-	widthLimit := decimalWidthLimit(target.Oid)
+	widthLimit := types.DecimalMaxPrecision(target.Oid)
 	if widthLimit == 0 || target.Width <= 0 || target.Scale < 0 || target.Scale > widthLimit {
 		return "", false, false, false
 	}
@@ -914,7 +902,7 @@ func canonicalDecimalInput(text string, target types.Type) (canonical string, tr
 // zero is bounded by the representation width even for a huge source scale.
 func canonicalLegacyDecimalInput(text string, target types.Type) (string, bool, bool, bool) {
 	width := target.Width
-	limit := decimalWidthLimit(target.Oid)
+	limit := types.DecimalMaxPrecision(target.Oid)
 	if limit == 0 || width <= 0 || target.Scale < 0 || target.Scale > limit {
 		return "", false, false, false
 	}
@@ -1221,6 +1209,7 @@ func truncateText(text string, target types.Type) (string, bool) {
 }
 
 func appendValueCompatible(oid types.T, value any) bool {
+	// typeswitch:partial JSON_TABLE targets; buildJSONTable admits no low-precision float type
 	switch oid {
 	case types.T_bool:
 		_, ok := value.(bool)

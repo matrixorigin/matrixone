@@ -314,7 +314,9 @@ func GetTombstonesByBlockId(
 			// Shrink the tombstone batch, Because the rowid in the tombstone is no longer needed after apply,
 			// it cannot be written to disk
 			if needShrink {
-				oData.data[idx].Shrink(deleteRows, true)
+				if err := oData.data[idx].Shrink(deleteRows, true, common.DebugAllocator); err != nil {
+					return false, err
+				}
 			}
 		}
 		return true, nil
@@ -359,7 +361,10 @@ func (d *BackupDeltaLocDataSource) GetTombstones(
 							return false, err
 						}
 						if len(visibleRows) != bat.Vecs[0].Length() {
-							bat.Shrink(visibleRows, false)
+							if err := bat.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+								bat.Clean(common.DebugAllocator)
+								return false, err
+							}
 						}
 					}
 					if id == 0 {
@@ -472,7 +477,10 @@ func trimTombstoneData(
 			return err
 		}
 		if len(visibleRows) != bat.Vecs[0].Length() {
-			bat.Shrink(visibleRows, false)
+			if err := bat.Shrink(visibleRows, false, common.DebugAllocator); err != nil {
+				bat.Clean(common.DebugAllocator)
+				return err
+			}
 		}
 		canonical, err := canonicalizeBackupTombstone(ctx, bat, layout)
 		if err != nil {

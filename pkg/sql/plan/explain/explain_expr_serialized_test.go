@@ -337,6 +337,94 @@ func TestLiteralVecExplainPreservesTypedScaleBoundariesAndNulls(t *testing.T) {
 	}
 }
 
+func TestLiteralVecExplainRendersLowPrecisionTypes(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	cell := func(f types.BlockScaledFormat) []byte {
+		data, err := types.AppendBlockScaled(nil, f, []float32{6, 3, -2, 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+
+	for name, test := range map[string]struct {
+		typ  types.T
+		data []byte
+		want string
+	}{
+		"bf16":    {types.T_bf16, marshalFixedAndNull(t, mp, types.T_bf16, types.BF16FromFloat32(1.5)), "[1.5, NULL]"},
+		"float16": {types.T_float16, marshalFixedAndNull(t, mp, types.T_float16, types.Float16FromFloat32(-0.25)), "[-0.25, NULL]"},
+		"float8":  {types.T_float8, marshalFixedAndNull(t, mp, types.T_float8, types.Float8FromFloat32(3)), "[3, NULL]"},
+		"float4":  {types.T_float4, marshalFixedAndNull(t, mp, types.T_float4, types.Float4FromFloat32(-6)), "[-6, NULL]"},
+		"vecf8":   {types.T_array_float8, marshalCells(t, mp, types.T_array_float8, cell(types.BlockScaledMXFP8), cell(types.BlockScaledMXFP8)), "[[6 3 -2 1], [6 3 -2 1]]"},
+		"vecf4":   {types.T_array_float4, marshalCells(t, mp, types.T_array_float4, cell(types.BlockScaledNVFP4), cell(types.BlockScaledNVFP4)), "[[6 3 -2 1], [6 3 -2 1]]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			expr := &planpb.Expr{
+				Typ: planpb.Type{Id: int32(test.typ)},
+				Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+					Len:  2,
+					Data: test.data,
+				}},
+			}
+			var buf bytes.Buffer
+			if err := describeExpr(t.Context(), expr, &ExplainOptions{
+				Format:                 EXPLAIN_FORMAT_JSON,
+				CompleteLiteralVectors: true,
+			}, &buf); err != nil {
+				t.Fatal(err)
+			}
+			if got := buf.String(); got != test.want {
+				t.Fatalf("low-precision literal vector rendering: got %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	// an invalid vecf8 cell renders as its bytes
+	vec := vector.NewVec(types.T_array_float8.ToType())
+	defer vec.Free(mp)
+	if err := vector.AppendBytes(vec, []byte{1, 2, 3}, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if got := literalVecElementText(vec, 0); got != "0x010203" {
+		t.Fatalf("invalid vecf8 cell rendering: got %q", got)
+	}
+}
+
+// marshalFixedAndNull returns a marshaled vector of typ holding v and a NULL.
+func marshalFixedAndNull[T any](t *testing.T, mp *mpool.MPool, typ types.T, v T) []byte {
+	vec := vector.NewVec(typ.ToType())
+	defer vec.Free(mp)
+	var zero T
+	if err := vector.AppendFixed(vec, v, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err := vector.AppendFixed(vec, zero, true, mp); err != nil {
+		t.Fatal(err)
+	}
+	data, err := vec.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// marshalCells returns a marshaled vector of typ holding cells.
+func marshalCells(t *testing.T, mp *mpool.MPool, typ types.T, cells ...[]byte) []byte {
+	vec := vector.NewVec(typ.ToType())
+	defer vec.Free(mp)
+	for _, c := range cells {
+		if err := vector.AppendBytes(vec, c, false, mp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := vec.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestPublicSerializedINListExplainIsOpaqueAndPrintable(t *testing.T) {
 	planText := explainSQLForSerializedTest(
 		t,

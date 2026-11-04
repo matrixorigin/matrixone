@@ -1312,7 +1312,6 @@ func newServiceForTest(
 	opts ...Option,
 ) *service {
 	s := &service{
-		sid:     sid,
 		clock:   clock,
 		exec:    exec,
 		lock:    lock,

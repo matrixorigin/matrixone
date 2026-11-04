@@ -521,8 +521,20 @@ func Test_GetFunctionByName(t *testing.T) {
 		},
 
 		{
+			// This change adds the two-argument label-aware overload of
+			// internal_numeric_scale: the exact probe that the one-argument
+			// era rejected as an unknown arity now resolves to label-aware
+			// metadata. A scalar INT64 label argument casts through the
+			// base formatted-scalar text width (varchar(20)) rather than the
+			// default maximum VARCHAR width.
 			name: "internal_numeric_scale", args: []types.Type{types.T_char.ToType(), types.T_int64.ToType()},
-			shouldErr: true,
+			shouldErr:  false,
+			requireFid: INTERNAL_NUMERIC_SCALE, requireOid: 1,
+			shouldCast: true, requireTyp: []types.Type{
+				types.T_varchar.ToType(),
+				formattedScalarStringType(types.T_int64.ToType()),
+			},
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "char_length", args: []types.Type{types.T_binary.ToType()},
@@ -706,7 +718,8 @@ func TestMakeTimeReturnScale(t *testing.T) {
 func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, name := range []string{"addtime", "subtime"} {
-		for _, floatType := range []types.T{types.T_float32, types.T_float64} {
+		for _, floatType := range []types.T{types.T_float32, types.T_float64,
+			types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
 			result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
 				types.T_time.ToType(), floatType.ToType(),
 			})
@@ -1457,16 +1470,23 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 		CONVERT: true, DATEDIFF: true, UNIX_TIMESTAMP: true,
 		EXTRACTVALUE: true, UPDATEXML: true, UNCOMPRESS: true, UNCOMPRESSED_LENGTH: true,
 		AES_ENCRYPT: true, AES_DECRYPT: true, CAST_ASSIGN: true, CAST_IGNORE: true,
+		CAST:                true, // TemporalCastIntegerOverload reads a statement-stable session mode.
 		CAST_INDEX_TO_VALUE: true, CAST_VALUE_TO_INDEX: true, CAST_INDEX_VALUE_TO_INDEX: true,
 		CAST_INDEX_TO_SET_VALUE: true, CAST_SET_VALUE_TO_INDEX: true, CAST_SET_INDEX_VALUE_TO_INDEX: true,
 		CAST_GEOMETRY_TO_SUBTYPE: true, CAST_JSON_TO_ARRAY: true, CAST_NANO_TO_TIMESTAMP: true,
 		INTERNAL_CHAR_LENGTH: true, INTERNAL_CHAR_SIZE: true, INTERNAL_TABLE_COLLATION: true,
 		INTERNAL_COLUMN_CHARACTER_SET: true, INTERNAL_DATETIME_SCALE: true,
 		INTERNAL_NUMERIC_PRECISION: true, INTERNAL_NUMERIC_SCALE: true,
+		MO_INDEX_SUB_PART:   true,
 		MO_SHOW_VISIBLE_BIN: true, MO_SHOW_VISIBLE_BIN_ENUM: true, MO_SHOW_COL_UNIQUE: true,
 		MO_LOG_DATE: true, MO_WIN_TRUNCATE: true, MO_WIN_DIVISOR: true, MO_EXPLAIN_PHY: true,
 		DATABASE: true, USER: true, FOUND_ROWS: true, ROW_COUNT: true, LAST_INSERT_ID: true, LAST_QUERY_ID: true,
 		CHECK_CONSTRAINT_ASSERT: true, LOAD_FK_IGNORE_CHECK: true,
+		// Admission entries mirror cast_assign/cast_ignore: volatile so
+		// sql_mode resolves at execution, execution-stable within one
+		// statement.
+		UNSIGNED_DECIMAL_ADMISSION: true, UNSIGNED_DECIMAL_ADMISSION_STRICT: true,
+		UNSIGNED_DECIMAL_ADMISSION_IGNORE: true,
 	}
 	annotated := 0
 	for _, fn := range allSupportedFunctions {

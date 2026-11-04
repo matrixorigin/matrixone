@@ -137,6 +137,9 @@ type AutoIncrementService interface {
 	DiscardOffsetReset(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// Close close the auto increment service
 	Close()
+	// ReloadForPKRetry invalidates only the expected committed allocation
+	// generation. False preserves transaction-private CREATE/ALTER state unchanged.
+	ReloadForPKRetry(ctx context.Context, tableID uint64, expectedEpoch uint32, txn client.TxnOperator) (bool, error)
 	// GetLastAllocateTS gets the oldest allocation timestamp that can still
 	// issue a value from the transaction-private or committed column cache.
 	GetLastAllocateTS(ctx context.Context, tableID uint64, autoIncrEpoch uint32, txn client.TxnOperator, colName string) (timestamp.Timestamp, error)

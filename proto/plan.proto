@@ -48,6 +48,11 @@ message Type {
   bool collation_merge_conflict = 12;
   // Zero retains the historical meaning of charset. New semantics stay gated.
   uint32 collation_version = 13;
+  // Numeric type attribute bitmask; bit 0 = UNSIGNED, bit 1 = ZEROFILL.
+  // Legal only on T_decimal64/128/256 OIDs; every other OID must carry 0.
+  // Declared ZEROFILL is normalized to 3 at authoring (unsigned is implied),
+  // so bit 1 never appears without bit 0 in persisted metadata.
+  uint32 numeric_attributes = 14;
 }
 
 message msgHeader {
@@ -1372,6 +1377,13 @@ message Node {
   // survive pruning and are evaluated only when rendering a diagnostic;
   // on_list continues to use the opaque physical comparison key.
   repeated Expr dedup_key_exprs = 95;
+
+  // MARK only: a proven Boolean existence consumer with total, pure predicates.
+  // Permits Boolean membership lowering; the generated IS TRUE consumer stays.
+  bool mark_existence_only = 96;
+
+  // TABLE_SCAN only: the scan reads a small share of each object it touches.
+  bool narrow_scan = 97;
 }
 
 message SnapshotExtraInfo {
@@ -1898,6 +1910,8 @@ message Query {
   repeated ViewReference view_references = 18;
   CorrelationSpec correlation = 19;
   IntegerPrecisionGraph integer_precision = 20;
+  // Logical targets of exclusive SELECT locks, retained across optimization.
+  repeated SelectLockReference select_lock_references = 21;
 }
 
 message TransationControl {
@@ -2608,4 +2622,11 @@ message DatabaseDefaults {
   uint64 version = 4;
   uint32 collation_id = 5;
   uint32 collation_revision = 6;
+}
+
+// Binding identity only; grants and view principals are checked at execution.
+message SelectLockReference {
+  ObjectRef object_ref = 1;
+  repeated ViewStep view_path = 2;
+  bool is_cluster_table = 3;
 }

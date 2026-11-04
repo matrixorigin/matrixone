@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -45,7 +46,7 @@ type container struct {
 	filterReadMetrics         bool
 	filterLateMaterialized    bool
 	filterActiveDuration      time.Duration
-	readerFilter              engine.ReaderFilter
+	readerFilter              *engine.ReaderFilterRequest
 	metricView                *batch.Batch
 	padCharToFullLength       bool
 	subjectReuseAdmissionDone bool
@@ -61,8 +62,9 @@ type TableScan struct {
 	Attrs              []string
 	Types              []plan.Type
 	TableID            uint64
-	FilterExprs        []*plan.Expr // static inline filters (from plan.Node.FilterList, set at compile time)
-	RuntimeFilterExprs []*plan.Expr // runtime inline filters (set by handleRuntimeFilters before Prepare)
+	FilterExprs        []*plan.Expr       // static inline filters (from plan.Node.FilterList, set at compile time)
+	RuntimeFilterExprs []*plan.Expr       // runtime inline filters (set by handleRuntimeFilters before Prepare)
+	ReadPolicy         fileservice.Policy // added to the read context's fileservice policy
 
 	vm.OperatorBase
 	colexec.Projection
@@ -130,6 +132,9 @@ func (tableScan *TableScan) Reset(proc *process.Process, pipelineFailed bool, er
 	tableScan.ctr.filterReadMetrics = false
 	tableScan.ctr.filterLateMaterialized = false
 	tableScan.ctr.filterActiveDuration = 0
+	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
+		tableScan.ctr.readerFilter.Exact.Close()
+	}
 	tableScan.ctr.readerFilter = nil
 	tableScan.RuntimeFilterExprs = nil
 	tableScan.ctr.maxAllocSize = 0
@@ -170,6 +175,9 @@ func (tableScan *TableScan) Free(proc *process.Process, pipelineFailed bool, err
 	tableScan.ctr.filterReadMetrics = false
 	tableScan.ctr.filterLateMaterialized = false
 	tableScan.ctr.filterActiveDuration = 0
+	if tableScan.ctr.readerFilter != nil && tableScan.ctr.readerFilter.Exact != nil {
+		tableScan.ctr.readerFilter.Exact.Close()
+	}
 	tableScan.ctr.readerFilter = nil
 	if tableScan.ctr.metricView != nil {
 		tableScan.ctr.metricView.Vecs = nil

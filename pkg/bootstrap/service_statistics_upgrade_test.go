@@ -23,6 +23,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -51,6 +52,7 @@ func TestPublishedCatalogUpgradeRoutes(t *testing.T) {
 	}{
 		{name: "4.1", version: "4.0.1", offset: 1, hops: [][2]string{{"4.0.1", "4.0.2"}, {"4.0.2", "4.0.3"}, {"4.0.3", "4.0.4"}, {"4.0.4", "4.0.5"}, {"4.0.5", "4.0.6"}, {"4.0.6", "4.0.7"}}},
 		{name: "4.2", version: "4.0.6", offset: 5, hops: [][2]string{{"4.0.6", "4.0.7"}}},
+		{name: "already_current", version: "4.0.7", offset: v4_0_7.Handler.Metadata().VersionOffset},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {

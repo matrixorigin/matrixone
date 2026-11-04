@@ -560,6 +560,14 @@ func TestRunSQLWithFrontend(t *testing.T) {
 				name, query string
 				want        []string
 			}{
+				{"future comment has no result", "/*!99999 select 42 */;", nil},
+				{"future comment in mixed statements", "select 1; /*!99999 select 2; select 3 */; select 4", []string{"1", "4"}},
+				{"overlong version", "select 2 /*!999999999 */", []string{"2"}},
+				{"whole long guard with matching five-digit prefix", "select 2 /*!800300 + 1 */", []string{"2"}},
+				{"current version", "select /*!80030 6 */", []string{"6"}},
+				{"unversioned comment", "select /*! 6 */", []string{"6"}},
+				{"future SET has no mode side effect", "/*!99999 set sql_mode='ANSI_QUOTES' */; select @@sql_mode", []string{""}},
+				{"future SET during staged execution", "set sql_mode='NO_BACKSLASH_ESCAPES'; /*!99999 set sql_mode='ANSI_QUOTES'; select 99 */; select @@sql_mode", []string{"NO_BACKSLASH_ESCAPES"}},
 				{"versioned comment", "/*!50000 select 1; select 2 */;", []string{"1", "2"}},
 				{"ordinary prefix", "select 1; /*!50000 select 2; select 3 */;", []string{"1", "2", "3"}},
 				{"final inner delimiter", "/*! select 1; select 2; */;", []string{"1", "2"}},
@@ -599,22 +607,31 @@ func TestRunSQLWithFrontend(t *testing.T) {
 					})
 				}
 			}
-			// A failed continuation must leave the connection and parser reusable.
-			t.Run("invalid continuation and recovery", func(t *testing.T) {
-				rows, err := conn.QueryContext(ctx, "/*! set sql_mode='ANSI_QUOTES'; select from */")
-				if err == nil {
-					defer rows.Close()
-					for rows.NextResultSet() {
-						for rows.Next() {
+			// Errors may arrive in a later result set; drain before checking recovery.
+			for _, query := range []string{
+				"/*! set sql_mode='ANSI_QUOTES'; select from */",
+				"select /*!99999 6 */",
+				"select 1; select /*!99999 6 */",
+			} {
+				t.Run("invalid query and recovery/"+query, func(t *testing.T) {
+					rows, err := conn.QueryContext(ctx, query)
+					if err == nil {
+						defer rows.Close()
+						for {
+							for rows.Next() {
+							}
+							if !rows.NextResultSet() {
+								break
+							}
 						}
+						err = rows.Err()
 					}
-					err = rows.Err()
-				}
-				require.Error(t, err)
-				var value int
-				require.NoError(t, conn.QueryRowContext(ctx, "select 9").Scan(&value))
-				require.Equal(t, 9, value)
-			})
+					require.Error(t, err)
+					var value int
+					require.NoError(t, conn.QueryRowContext(ctx, "select 9").Scan(&value))
+					require.Equal(t, 9, value)
+				})
+			}
 		},
 	)
 }

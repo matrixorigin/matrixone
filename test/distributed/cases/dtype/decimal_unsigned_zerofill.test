@@ -1,0 +1,202 @@
+-- DECIMAL UNSIGNED/ZEROFILL acceptance: enforced domain, metadata retention,
+-- zero-fill presentation, and CAST grammar parity (#30940, #30941).
+drop database if exists deuz;
+create database deuz;
+
+-- metadata: SHOW CREATE retains the declared attributes
+create table deuz.zf (x decimal(10,2) unsigned zerofill);
+create table deuz.u (x decimal(10,2) unsigned);
+create table deuz.plain (x decimal(10,2));
+show create table deuz.zf;
+show create table deuz.u;
+show create table deuz.plain;
+
+-- metadata: base-table I_S.COLUMN_TYPE decoration (fresh clusters author the
+-- decorated view at bootstrap; clusters upgraded from <= 4.0.17 recreate it
+-- once through the v4_0_18 forward upgrade entry — relaunch scenarios in
+-- pkg/embed/upgrade_columns_4_0_18_test.go)
+-- @wait_expect(5, 120)
+select column_type from information_schema.columns where table_schema='deuz' and table_name='zf' and column_name='x';
+select column_type from information_schema.columns where table_schema='deuz' and table_name='u' and column_name='x';
+select column_type from information_schema.columns where table_schema='deuz' and table_name='plain' and column_name='x';
+
+-- CAST grammar: MySQL's restricted cast_type admits no DECIMAL attributes
+select cast(-1.5 as decimal(10,2) unsigned);
+select cast(-1.5 as decimal(10,2) zerofill);
+select cast(-1.5 as decimal(10,2));
+
+-- strict: persistent authoritative enforcement with atomicity
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u values (-1.5);
+select count(*) from deuz.u;
+insert into deuz.u values (1.5),(-2.5),(3.5);
+select count(*) from deuz.u;
+
+-- strict + IGNORE: one out-of-range warning per adjusted row, statement commits
+insert ignore into deuz.u values (-1.5);
+show warnings;
+select x from deuz.u;
+delete from deuz.u;
+
+-- scalar NULL assignments: the rowset layer degrades to the plain cast
+-- wrapper, so the executor allocates the attributed DECIMAL result type; the
+-- typed policy admission still stands at the projection layer (review F1)
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u values (null);
+select x from deuz.u;
+insert ignore into deuz.u values (null);
+insert into deuz.u values (null),(2.5);
+select x from deuz.u order by x;
+select count(x), count(*) from deuz.u;
+update deuz.u set x = null where x = 2.5;
+select x from deuz.u order by x;
+delete from deuz.u;
+
+-- non-strict: clip with warning
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.u values (-1.5);
+show warnings;
+select x from deuz.u;
+delete from deuz.u;
+
+-- sign admission is evaluated before scale quantization
+set session sql_mode='STRICT_TRANS_TABLES';
+create table deuz.pr (x decimal(10,0) unsigned);
+insert into deuz.pr values (-0.01);
+insert ignore into deuz.pr values (-0.01);
+select x from deuz.pr;
+drop table deuz.pr;
+
+-- zerofill rows: stored values and ordering (wire-level 00000000.50-style
+-- padding is erased by JDBC numeric decoding, so presentation padding is
+-- pinned by SHOW CREATE/I_S above plus unit/probe evidence outside BVT)
+insert into deuz.zf values (123.45),(0.5);
+select x from deuz.zf order by x;
+
+-- unattributed decimals are byte-identical: negatives accepted, no padding
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.plain values (-1.5);
+select x from deuz.plain;
+delete from deuz.plain;
+insert into deuz.plain values (123.45);
+select x from deuz.plain;
+
+-- width families: decimal64/128/256 enforce identically
+set session sql_mode='STRICT_TRANS_TABLES';
+create table deuz.w20 (x decimal(20,2) unsigned);
+insert into deuz.w20 values (-1.5);
+insert into deuz.w20 values (1.5);
+create table deuz.w65 (x decimal(65,6) unsigned);
+insert into deuz.w65 values (-1.5);
+insert into deuz.w65 values (1.5);
+
+-- update path: strict rejects, statement stays atomic
+insert into deuz.u values (5.5);
+update deuz.u set x = -1 where x = 5.5;
+select x from deuz.u;
+update deuz.u set x = 7.5 where x = 5.5;
+select x from deuz.u;
+
+-- diagnostics: rejections carry wire 1264/22003 with the destination column
+-- name; the row ordinal is the admission evaluation index, which is 1 under
+-- the per-row VALUES evaluation this engine performs
+-- (MySQL reports the VALUES-tuple index instead; residual parity gap)
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u values (1.5),(-2.5);
+insert into deuz.u values (1.5),(2.5),(-3.5);
+select count(*) from deuz.u;
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.u values (1.5),(-2.5);
+show warnings;
+select x from deuz.u;
+delete from deuz.u;
+
+-- alter narrowing: gaining UNSIGNED on stored data validates every row
+-- before metadata publishes; a rejected narrowing is atomic
+set session sql_mode='STRICT_TRANS_TABLES';
+create table deuz.alt (x decimal(10,2));
+insert into deuz.alt values (-1);
+alter table deuz.alt modify x decimal(10,2) unsigned;
+show create table deuz.alt;
+select x from deuz.alt;
+set session sql_mode='ONLY_FULL_GROUP_BY';
+alter table deuz.alt modify x decimal(10,2) unsigned;
+show warnings;
+show create table deuz.alt;
+select x from deuz.alt;
+
+-- alter widening: dropping the attribute restores signed acceptance
+set session sql_mode='STRICT_TRANS_TABLES';
+alter table deuz.alt modify x decimal(10,2);
+show create table deuz.alt;
+insert into deuz.alt values (-2.5);
+select x from deuz.alt order by x;
+drop table deuz.alt;
+
+-- alter narrowing via ZEROFILL (implied UNSIGNED) follows the same contract
+create table deuz.altz (x decimal(10,2));
+insert into deuz.altz values (-1);
+set session sql_mode='STRICT_TRANS_TABLES';
+alter table deuz.altz modify x decimal(10,2) zerofill;
+show create table deuz.altz;
+select x from deuz.altz;
+set session sql_mode='ONLY_FULL_GROUP_BY';
+alter table deuz.altz modify x decimal(10,2) zerofill;
+show create table deuz.altz;
+select x from deuz.altz;
+drop table deuz.altz;
+
+-- typed sources: TIME carries a sign into the decimal domain per sql_mode
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u select cast('-00:00:01' as time);
+insert into deuz.u select cast('00:00:01' as time);
+insert into deuz.u select cast(null as time);
+select x from deuz.u;
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.u select cast('-00:00:01' as time);
+show warnings;
+select x from deuz.u;
+delete from deuz.u;
+
+-- typed sources: encoded JSON numerics join the domain after decoding
+create table deuz.j (v json);
+insert into deuz.j values ('-2.5');
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u select v from deuz.j;
+set session sql_mode='ONLY_FULL_GROUP_BY';
+insert into deuz.u select v from deuz.j;
+show warnings;
+select x from deuz.u;
+delete from deuz.u;
+delete from deuz.j;
+insert into deuz.j values ('3.5');
+set session sql_mode='STRICT_TRANS_TABLES';
+insert into deuz.u select v from deuz.j;
+select x from deuz.u;
+delete from deuz.u;
+delete from deuz.j;
+insert into deuz.j values ('null');
+insert into deuz.u select v from deuz.j;
+select x from deuz.u;
+delete from deuz.u;
+drop table deuz.j;
+
+-- typed sources: YEAR is a non-negative domain on every path
+create table deuz.yr (y year);
+insert into deuz.yr values (2024);
+insert into deuz.u select y from deuz.yr;
+select x from deuz.u;
+delete from deuz.u;
+drop table deuz.yr;
+
+-- snapshot compatibility: a snapshot taken on this binary serves the same
+-- decorated I_S.COLUMN_TYPE under snapshot reads, and a pre-change snapshot
+-- restores through the historical-definition adapter (adapter identity pinned
+-- by pkg/util/sysview and pkg/sql/plan history tests)
+create snapshot deuz_snap for account;
+select column_type from information_schema.columns {snapshot='deuz_snap'} where table_schema='deuz' and table_name='u' and column_name='x';
+select column_type from information_schema.columns {snapshot='deuz_snap'} where table_schema='deuz' and table_name='zf' and column_name='x';
+drop snapshot deuz_snap;
+
+set session sql_mode=default;
+drop database deuz;

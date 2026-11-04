@@ -807,44 +807,6 @@ var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
 	return nil
 }
 
-func escapeJSONControlChars(s string) string {
-	var builder strings.Builder
-	builder.Grow(len(s))
-
-	// \\t
-	// \\\\t
-	// abc\t
-	// {"a": "abc", "b": "abc\t"}
-	for i := 0; i < len(s); {
-		if i+2 > len(s) {
-			builder.WriteString(s[i:])
-			break
-		}
-		switch s[i : i+2] {
-		case `\t`:
-			i += 2
-			builder.WriteString(`\\t`)
-		case `\n`:
-			i += 2
-			builder.WriteString(`\\n`)
-		case `\r`:
-			i += 2
-			builder.WriteString(`\\r`)
-		case `\f`:
-			i += 2
-			builder.WriteString(`\\f`)
-		case `\\`:
-			i += 2
-			builder.WriteString(`\\\\`)
-		default:
-			builder.WriteString(s[i : i+1])
-			i++
-		}
-	}
-
-	return builder.String()
-}
-
 func sendExportBatchByte(
 	ctx context.Context,
 	byteChan chan *BatchByte,
@@ -856,6 +818,30 @@ func sendExportBatchByte(
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// exportDecimalZerofillPadDigits maps each output vector index to its result
+// column's ZEROFILL integer-part digit target (#30940). Exports gate on the
+// same plan-propagated MysqlColumn flags as the protocol serializers; plain
+// and derived decimals keep digit target zero, so their text is unchanged.
+func exportDecimalZerofillPadDigits(ep *ExportConfig, n int) []int {
+	if ep == nil || ep.mrs == nil || n <= 0 {
+		return nil
+	}
+	pads := make([]int, n)
+	for j := 0; j < n && j < len(ep.mrs.Columns); j++ {
+		if mc, mok := ep.mrs.Columns[j].(*MysqlColumn); mok && mc != nil {
+			pads[j] = mc.zerofillPadDigitsForRender()
+		}
+	}
+	return pads
+}
+
+func exportDecimalPadAt(pads []int, j int) int {
+	if j >= 0 && j < len(pads) {
+		return pads[j]
+	}
+	return 0
 }
 
 func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index int32, ByteChan chan *BatchByte, ep *ExportConfig) {
@@ -907,6 +893,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	if getEffectiveMaxFileSize(ep) != 0 {
 		rowEnds = make([]int, 0, rowCount)
 	}
+	decimalPads := exportDecimalZerofillPadDigits(ep, len(bat.Vecs))
 	for i := 0; i < rowCount; i++ {
 		if len(startingBy) > 0 {
 			buffer.Write(startingBy)
@@ -961,6 +948,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_uint64:
 				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
 				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
+			case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+				val, _ := vector.GetLowPrecisionFloatAt(vec, i)
+				out([]byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_float32:
 				val := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
@@ -992,6 +982,15 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float64:
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
+				value := util2.UnsafeStringToBytes(arrStr)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
+			case types.T_array_float8, types.T_array_float4:
+				// the exact text, which LOAD reads back as the same cell
+				arrStr, err := types.BlockScaledToJSON(vec.GetBytesAt(i))
+				if err != nil {
+					sendExportBatchByte(ctx, ByteChan, &BatchByte{err: err})
+					return
+				}
 				value := util2.UnsafeStringToBytes(arrStr)
 				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_bf16:
@@ -1039,15 +1038,15 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_decimal64:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale)
-				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
+				out([]byte(padZerofillDecimalText(val, exportDecimalPadAt(decimalPads, j))), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal128:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale)
-				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
+				out([]byte(padZerofillDecimalText(val, exportDecimalPadAt(decimalPads, j))), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal256:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, i).Format(scale)
-				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
+				out([]byte(padZerofillDecimalText(val, exportDecimalPadAt(decimalPads, j))), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uuid:
 				val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()
 				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
@@ -1344,6 +1343,22 @@ func addEscapeToString(ep *ExportConfig, s []byte, enclosed byte) []byte {
 		result = append(result, b)
 	}
 	return result
+}
+
+// setVecBlockExactText replaces the decoded values of row j's vecf8/vecf4 cells in row with
+// their exact text, which LOAD rebuilds into the same cells.
+func setVecBlockExactText(bat *batch.Batch, j int, row []any) error {
+	for i, vec := range bat.Vecs {
+		if !vec.GetType().Oid.IsBlockScaledArray() || vec.IsNull(uint64(j)) {
+			continue
+		}
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(j))
+		if err != nil {
+			return err
+		}
+		row[i] = []byte(text)
+	}
+	return nil
 }
 
 func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
@@ -2051,6 +2066,7 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 		return
 	}
 
+	decimalPads := exportDecimalZerofillPadDigits(ep, len(bat.Vecs))
 	for i := 0; i < bat.RowCount(); i++ {
 		if ctx.Err() != nil {
 			return
@@ -2070,6 +2086,14 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 					return
 				}
 				return
+			}
+			if digits := exportDecimalPadAt(decimalPads, j); digits > 0 {
+				switch vec.GetType().Oid {
+				case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+					if s, isStr := val.(string); isStr {
+						val = padZerofillDecimalText(s, digits)
+					}
+				}
 			}
 			row[colName] = val
 		}
@@ -2132,6 +2156,9 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return vector.GetFixedAtNoTypeCheck[uint64](vec, i), nil
 	case types.T_float32:
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		val, _ := vector.GetLowPrecisionFloatAt(vec, i)
+		return val, nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
@@ -2152,6 +2179,13 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return types.BytesToArray[float32](vec.GetBytesAt(i)), nil
 	case types.T_array_float64:
 		return types.BytesToArray[float64](vec.GetBytesAt(i)), nil
+	case types.T_array_float8, types.T_array_float4:
+		// the exact text as a JSON object, which LOAD reads back as the same cell
+		text, err := types.BlockScaledToJSON(vec.GetBytesAt(i))
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(text), nil
 	case types.T_array_bf16:
 		// bf16/f16 are uint16-backed; widen to float32 so JSON emits their float values
 		// (a raw []BF16 would marshal the uint16 bit patterns).
