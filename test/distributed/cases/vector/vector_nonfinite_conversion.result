@@ -10,7 +10,7 @@ internal error: vector element cannot be NaN or Inf: NaN
 select cast(cast('[1e300,-1e300]' as vecf64(2)) as vecf32(2));
 internal error: vector element cannot be NaN or Inf: +Inf
 select cast(cast('[1e10,-1e10]' as vecf32(2)) as vecf16(2));
-internal error: vector element cannot be NaN or Inf: +Inf
+Data truncation: data out of range: data type VECF16, element 1e+10
 select cast(cast('[1e300,-1e300]' as vecf64(2)) as vecbf16(2));
 internal error: vector element cannot be NaN or Inf: +Inf
 select vecf32_from_base64('AACAfw==');

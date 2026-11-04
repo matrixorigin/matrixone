@@ -104,6 +104,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -513,6 +514,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets
 		op.StringHashKey = sourceArg.StringHashKey
+		op.ShuffleKeyColumns = append([]int32(nil), sourceArg.ShuffleKeyColumns...)
 		op.SetInfo(&info)
 		return op
 	case vm.Dispatch:
@@ -631,6 +633,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ProjectList = t.ProjectList
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
+		op.ReadPolicy = t.ReadPolicy
 		op.SetInfo(&info)
 		return op
 	case vm.ValueScan:
@@ -2128,6 +2131,45 @@ func constructAggregateConfigWithError(
 			return args, config, nil
 		}
 
+	case plan2.NameVectorMatmul:
+		if len(args) != 4 && len(args) != 5 {
+			return nil, nil, moerr.NewInvalidInputNoCtxf(
+				"vector_matmul requires 4 or 5 arguments, got %d", len(args))
+		}
+		for _, i := range plan2.VectorMatmulConfigArgs(len(args)) {
+			if args[i] == nil || !plan2.IsVectorMatmulConfigExpr(args[i]) {
+				return nil, nil, moerr.NewInvalidInputNoCtx(
+					"topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables")
+			}
+		}
+		topk, err := evaluateAggregateConfigInt64(proc, args[0])
+		if err != nil {
+			return nil, nil, err
+		}
+		queries, queriesOid, isNull, err := evaluateAggregateConfigNullable(proc, args[3])
+		if err != nil {
+			return nil, nil, err
+		}
+		if isNull {
+			return nil, nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must not be NULL")
+		}
+		options := ""
+		if len(args) == 5 {
+			// an omitted options argument selects the defaults; a supplied one is a JSON object
+			if options, _, isNull, err = evaluateAggregateConfigNullable(proc, args[4]); err != nil {
+				return nil, nil, err
+			}
+			if isNull || options == "" {
+				return nil, nil, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
+			}
+		}
+		gpu := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
+		if queriesOid == types.T_blob {
+			// a BLOB holds the queries as little-endian float32 values
+			return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulBinaryConfig(topk, []byte(queries), options, gpu), nil
+		}
+		return []*plan.Expr{args[1], args[2]}, aggexec.EncodeVectorMatmulConfig(topk, queries, options, gpu), nil
+
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 		args, config, err := constructOrderedPercentileConfig(f, proc)
 		if err != nil {
@@ -2340,6 +2382,9 @@ func ewmEvaluateConstantArg(
 		out.num = float64(vector.MustFixedColWithTypeCheck[float32](vec)[0])
 	case types.T_float64:
 		out.num = vector.MustFixedColWithTypeCheck[float64](vec)[0]
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, 0)
+		out.num = float64(v)
 	case types.T_decimal64:
 		out.num = types.Decimal64ToFloat64(
 			vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0], vec.GetType().Scale)
@@ -2445,6 +2490,9 @@ func ewmResolveMinPeriods(
 	case types.T_float64:
 		return ewmFloatPeriodsThreshold(
 			vector.MustFixedColWithTypeCheck[float64](vec)[0], family)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		v, _ := vector.GetLowPrecisionFloatAt(vec, 0)
+		return ewmFloatPeriodsThreshold(float64(v), family)
 	case types.T_decimal64:
 		v := vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0]
 		return ewmDecimalPeriodsThreshold(
@@ -2616,8 +2664,9 @@ func validateEwmEventTimeOrder(w *plan.WindowSpec) error {
 	switch types.T(w.OrderBy[0].Expr.Typ.Id) {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64, types.T_decimal64,
-		types.T_decimal128, types.T_decimal256,
+		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_timestamp, types.T_datetime, types.T_date:
 	default:
 		return moerr.NewInvalidInputNoCtx(
@@ -2752,15 +2801,42 @@ func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan
 }
 
 func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (string, error) {
+	s, _, _, err := evaluateAggregateConfigNullable(proc, expr)
+	return s, err
+}
+
+// evaluateAggregateConfigNullable evaluates a string configuration argument and returns its
+// value, its evaluated type and whether it is NULL.
+func evaluateAggregateConfigNullable(proc *process.Process, expr *plan.Expr) (string, types.T, bool, error) {
 	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
 	if err != nil {
-		return "", err
+		return "", 0, false, err
+	}
+	defer free()
+	oid := vec.GetType().Oid
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
+		return "", oid, true, nil
+	}
+	if oid == types.T_json {
+		return types.DecodeJson(vec.GetBytesAt(0)).String(), oid, false, nil
+	}
+	return vec.GetStringAt(0), oid, false, nil
+}
+
+// evaluateAggregateConfigInt64 evaluates an int64 configuration argument; NULL is an error.
+func evaluateAggregateConfigInt64(proc *process.Process, expr *plan.Expr) (int64, error) {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		return 0, err
 	}
 	defer free()
 	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
-		return "", nil
+		return 0, moerr.NewInvalidInputNoCtx("aggregate integer configuration must not be NULL")
 	}
-	return vec.GetStringAt(0), nil
+	if vec.GetType().Oid != types.T_int64 {
+		return 0, moerr.NewInvalidInputNoCtxf("aggregate integer configuration has type %s", vec.GetType().Oid)
+	}
+	return vector.GetFixedAtNoTypeCheck[int64](vec, 0), nil
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {

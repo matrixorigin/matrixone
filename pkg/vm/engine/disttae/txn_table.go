@@ -2423,7 +2423,11 @@ func (tbl *txnTable) Delete(
 
 	switch deletionTyp {
 	case catalog.Row_ID:
-		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		var err error
+		bat, err = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		if err != nil {
+			return err
+		}
 		if bat.RowCount() == 0 {
 			return nil
 		}
@@ -3074,7 +3078,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	primaryIdx := tbl.primaryIdx
 	// AnyIn/SubVecIn binary-search NULL-free vectors. Establish ordering
 	// before even the snapshot-only pruning, not just before row filtering.
-	keys.InplaceSort()
+	if err := keys.InplaceSort(tbl.proc.Load().GetMPool()); err != nil {
+		return false, err
+	}
 
 	var (
 		meta objectio.ObjectDataMeta

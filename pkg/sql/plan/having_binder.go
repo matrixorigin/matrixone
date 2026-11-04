@@ -43,7 +43,10 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
 		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
-			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+			if !aliasProjectionNeedsRebind(b.ctx.projects[projectPos]) {
+				return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+			}
+			aliasExpr = &tree.ParenExpr{Expr: cloneTreeExpr(aliasExpr.Expr)}
 		}
 		previous := b.bindingProjectedAlias
 		b.bindingProjectedAlias = true
@@ -235,7 +238,11 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 				// not to a direct outer-column aggregate in this query block.
 				return expr, nil
 			}
-			if b.builder.mysqlFullGroupByCompat && b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
+			// A rebound SELECT alias already passed projection validation. Its
+			// scalar child may capture this query's input without turning that
+			// capture into a new correlated aggregate argument.
+			if (b.builder.mysqlFullGroupByCompat || b.bindingProjectedAlias && !b.insideAgg) &&
+				b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
 				return expr, nil
 			}
 			if b.bindingHaving && depth > 0 && b.builder.mysqlFullGroupByCompat &&

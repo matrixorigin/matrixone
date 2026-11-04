@@ -58,6 +58,11 @@ func canSaveQueryResult(ctx context.Context, ses *Session) bool {
 	if ses.ast == nil {
 		return false
 	}
+	// A saved result is read back without the SELECT check on the table these show.
+	switch ses.ast.(type) {
+	case *tree.ShowIndexIgnored, *tree.ShowIndexStatus:
+		return false
+	}
 
 	stmtProfile := ses.GetStmtProfile()
 	sqlSourceType := stmtProfile.GetSqlSourceType()
@@ -946,6 +951,10 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				}
 
 				err = extractRowFromEveryVector(ctx, ses, tmpBatch, j, mrs.Data[0], false)
+				if err != nil {
+					return err
+				}
+				err = setVecBlockExactText(tmpBatch, j, mrs.Data[0])
 				if err != nil {
 					return err
 				}
