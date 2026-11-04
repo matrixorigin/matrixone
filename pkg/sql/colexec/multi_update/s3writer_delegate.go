@@ -574,12 +574,12 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 			rowIDCheckpoint := rowIDDst.MakeAppendCheckpoint()
 			pkCheckpoint := pkDst.MakeAppendCheckpoint()
 			if err := vector.AppendFixed(rowIDDst, rowID, false, proc.GetMPool()); err != nil {
-				rowIDDst.RollbackAppend(rowIDCheckpoint, 1)
+				err = vector.JoinAppendRollbackError(err, rowIDDst.RollbackAppend(rowIDCheckpoint, 1))
 				return nil, err
 			}
 			if err := pkDst.UnionOne(bat.GetVector(PkIdx), int64(i), proc.GetMPool()); err != nil {
-				rowIDDst.RollbackAppend(rowIDCheckpoint, 1)
-				pkDst.RollbackAppend(pkCheckpoint, 1)
+				err = vector.JoinAppendRollbackError(err, rowIDDst.RollbackAppend(rowIDCheckpoint, 1))
+				err = vector.JoinAppendRollbackError(err, pkDst.RollbackAppend(pkCheckpoint, 1))
 				return nil, err
 			}
 			block.bat.SetRowCount(rowIDDst.Length())

@@ -104,6 +104,9 @@ func (bs *Batches) CopyIntoBatchesWithAllocation(
 			tailCheckpoints = localTailCheckpoints[:len(originalTail.Vecs)]
 		}
 		for i := range originalTail.Vecs {
+			if err := originalTail.Vecs[i].MaterializeOwned(proc.Mp()); err != nil {
+				return err
+			}
 			tailCheckpoints[i] = originalTail.Vecs[i].MakeAppendCheckpoint()
 		}
 	}
@@ -118,13 +121,14 @@ func (bs *Batches) CopyIntoBatchesWithAllocation(
 		bs.Buf = nil
 	}
 	if originalTail != nil {
+		var rollbackErr error
 		for i := range originalTail.Vecs {
-			originalTail.Vecs[i].RollbackAppend(
-				tailCheckpoints[i],
-				DefaultBatchSize-originalTailRows,
-			)
+			rollbackErr = vector.JoinAppendRollbackError(rollbackErr, originalTail.Vecs[i].RollbackAppend(tailCheckpoints[i], DefaultBatchSize-originalTailRows))
 		}
-		originalTail.SetRowCount(originalTailRows)
+		if rollbackErr == nil {
+			originalTail.SetRowCount(originalTailRows)
+		}
+		err = vector.JoinAppendRollbackError(err, rollbackErr)
 	}
 	bs.MemSize = originalMemSize
 	return err
@@ -301,12 +305,15 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 		checkpoints = localCheckpoints[:len(dst.Vecs)]
 	}
 	for i := range dst.Vecs {
+		if err := dst.Vecs[i].MaterializeOwned(proc.Mp()); err != nil {
+			return 0, err
+		}
 		checkpoints[i] = dst.Vecs[i].MakeAppendCheckpoint()
 	}
 	for i := range dst.Vecs {
 		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
 			for j := 0; j <= i; j++ {
-				dst.Vecs[j].RollbackAppend(checkpoints[j], length)
+				err = vector.JoinAppendRollbackError(err, dst.Vecs[j].RollbackAppend(checkpoints[j], length))
 			}
 			return 0, err
 		}

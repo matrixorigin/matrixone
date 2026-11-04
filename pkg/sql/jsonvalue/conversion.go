@@ -435,7 +435,7 @@ func AppendResult(vec *vector.Vector, result Result, mp *mpool.MPool) (err error
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, 1)
+			err = vector.JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 		}
 	}()
 	if result.Status == StatusJSONNull {
