@@ -947,6 +947,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		if err != nil || !ok {
 			return nodeID, err
 		}
+		// The join reads only the candidate rows of the base table; the filter scan
+		// copied from it reads the whole table.
+		scanNode.NarrowScan = true
 		joinRootID = preJoinID
 	} else {
 		outerScanNodeID := scanNode.NodeId

@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -124,6 +125,15 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		return m.ResolveVariableFunc(varName, isSystemVar, isGlobalVar)
 	}
 	switch varName {
+	case "optimizer_hints":
+		proc := m.GetProcess()
+		if proc == nil {
+			return "", nil
+		}
+		if value, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(varName); ok {
+			return value, nil
+		}
+		return "", nil
 	case "str_var":
 		return "str", nil
 	case "int_var":
@@ -1408,6 +1418,22 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 		pks:       []int{0},
 		autoIncrs: []string{"seq"},
+	}
+
+	// vecf8/vecf4 and bf16 columns.
+	constraintTestSchema["vecblock_t"] = &Schema{
+		tblId: 88970,
+		cols: []col{
+			{"id", types.T_int32, false, 32, 0},
+			{"a", types.T_array_float8, true, 4, 0},
+			{"b", types.T_array_float4, true, 4, 0},
+			{"f", types.T_bf16, true, 16, 0},
+			{"g", types.T_float8, true, 8, 0},
+			{"h", types.T_float4, true, 8, 0},
+			{"k", types.T_float16, true, 16, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
 	}
 
 	constraintTestSchema["docs_ft"] = &Schema{
