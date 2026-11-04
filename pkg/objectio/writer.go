@@ -143,7 +143,7 @@ func arenaNextPow2(n int) int {
 
 // CompressBuf returns a scratch buffer for LZ4 compression, growing as needed.
 // The buffer is retained across arena Reset() calls.  We round up to the next
-// power of 2 so that minor size variations don't trigger repeated allocations.
+// power of 2 unless that capacity exceeds mpool's single-allocation limit.
 func (a *WriteArena) CompressBuf(minSize int) []byte {
 	if len(a.compressBuf) < minSize {
 		if a.compressBuf != nil {
@@ -151,12 +151,21 @@ func (a *WriteArena) CompressBuf(minSize int) []byte {
 			a.compressBuf = nil // nil immediately so a panic in Alloc doesn't leave a dangling pointer
 		}
 		var err error
-		a.compressBuf, err = arenaMPool.Alloc(arenaNextPow2(minSize), true)
+		a.compressBuf, err = arenaMPool.Alloc(arenaCompressBufSize(minSize), true)
 		if err != nil {
 			panic(err)
 		}
 	}
 	return a.compressBuf[:minSize]
+}
+
+func arenaCompressBufSize(minSize int) int {
+	size := arenaNextPow2(minSize)
+	limit := mpool.MaxAllocationSize()
+	if int64(minSize) <= limit && int64(size) > limit {
+		return minSize
+	}
+	return size
 }
 
 // FreeBuffers releases the off-heap allocations and serialization scratch.
@@ -816,6 +825,12 @@ func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []by
 }
 
 func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, bat *batch.Batch, seqnums *Seqnums) (int, error) {
+	// Reject unresolved types before serializing or changing block metadata.
+	for i, vec := range bat.Vecs {
+		if vec.GetType().Oid == types.T_any {
+			return 0, moerr.NewNotSupportedNoCtxf("object column %d has unresolved ANY type", i)
+		}
+	}
 	// CHANGE ME
 	// block.BlockHeader()return w.WriteWithCompress(offset, buf.Bytes()).SetBlockID(w.lastId)
 	blockMeta.BlockHeader().SetSequence(uint16(w.lastId))
@@ -891,9 +906,6 @@ func (w *objectWriterV1) addBlock(blocks *[]blockData, blockMeta BlockObject, ba
 		block.data = append(block.data, data)
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).setLocation(ext)
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).setDataType(uint8(vec.GetType().Oid))
-		if vec.GetType().Oid == types.T_any {
-			panic("any type batch")
-		}
 		blockMeta.ColumnMeta(seqnums.Seqs[i]).SetNullCnt(uint32(vec.GetNulls().GetCardinality()))
 		w.originSize += ext.OriginSize()
 	}

@@ -15,7 +15,6 @@
 package testutil
 
 import (
-	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -122,9 +121,6 @@ var (
 
 // functions to make a scalar vector for test.
 var (
-	MakeScalarNull = func(t testing.TB, typ types.T, length int, mp *mpool.MPool) *vector.Vector {
-		return vector.NewConstNull(typ.ToType(), length, NewProc(t).Mp())
-	}
 	MakeScalarInt64 = func(v int64, length int, mp *mpool.MPool) *vector.Vector {
 		return makeScalar(v, length, int64Type, mp)
 	}

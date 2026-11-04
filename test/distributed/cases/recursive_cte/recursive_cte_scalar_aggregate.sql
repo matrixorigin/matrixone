@@ -1,5 +1,5 @@
 -- @case
--- @desc:Independent scalar aggregates in recursive-member subqueries
+-- @desc:Independent scalar aggregates, GROUP BY and HAVING in recursive-member subqueries
 -- @label:bvt
 
 DROP DATABASE IF EXISTS cte_recursive_scalar_agg_29135;
@@ -93,6 +93,119 @@ EXECUTE p_29135 USING @limit_29135;
 SET @limit_29135 = 4;
 EXECUTE p_29135 USING @limit_29135;
 DEALLOCATE PREPARE p_29135;
+
+-- GROUP BY and HAVING in the anchor are legal; the recursive member itself
+-- only propagates the grouped values.
+WITH RECURSIVE grouped_anchor(n, row_count) AS (
+    SELECT limit_n, COUNT(*) FROM limits_29135
+    WHERE limit_n = 2 GROUP BY limit_n HAVING COUNT(*) > 0
+    UNION ALL
+    SELECT n + 1, row_count FROM grouped_anchor WHERE n < 4
+)
+SELECT n, row_count FROM grouped_anchor ORDER BY n;
+
+-- Both sales dates belong to the same year, so the grouped scalar is one row.
+WITH RECURSIVE grouped_projection(n, row_count) AS (
+    SELECT 1, 0
+    UNION ALL
+    SELECT n + 1, (SELECT COUNT(*) FROM sales_29135 GROUP BY YEAR(dt))
+    FROM grouped_projection WHERE n < 3
+)
+SELECT n, row_count FROM grouped_projection ORDER BY n;
+
+-- HAVING without GROUP BY must work independently of the grouping guard.
+-- A filtered-out aggregate row becomes scalar NULL, rather than COUNT's zero.
+WITH RECURSIVE scalar_having(n, present_count, absent_count) AS (
+    SELECT 1, 0, 0
+    UNION ALL
+    SELECT n + 1,
+           (SELECT COUNT(*) FROM sales_29135 HAVING COUNT(*) > 0),
+           (SELECT COUNT(*) FROM sales_29135 HAVING COUNT(*) > 2)
+    FROM scalar_having WHERE n < 2
+)
+SELECT n, present_count, absent_count FROM scalar_having ORDER BY n;
+
+-- A grouped scalar predicate with HAVING controls recursive termination.
+WITH RECURSIVE grouped_predicate(n) AS (
+    SELECT 1
+    UNION ALL
+    SELECT n + 1 FROM grouped_predicate
+    WHERE n < (SELECT MAX(limit_n) FROM limits_29135
+               GROUP BY limit_n HAVING limit_n = 2)
+)
+SELECT n FROM grouped_predicate ORDER BY n;
+
+-- Correlation reads the current recursive row, while grouping belongs to the
+-- child SELECT. No matching group returns NULL (the ungrouped control above
+-- returns zero instead).
+WITH RECURSIVE correlated_group(n, row_count) AS (
+    SELECT 1, 0
+    UNION ALL
+    SELECT n + 1, (SELECT COUNT(*) FROM limits_29135
+                   WHERE limit_n = correlated_group.n GROUP BY limit_n)
+    FROM correlated_group WHERE n < 4
+)
+SELECT n, row_count FROM correlated_group ORDER BY n;
+
+-- NULL keys form a group; an empty input produces no grouped scalar row.
+WITH RECURSIVE group_boundaries(n, null_count, empty_count) AS (
+    SELECT 1, 0, 0
+    UNION ALL
+    SELECT n + 1,
+           (SELECT COUNT(*) FROM null_bounds_29135 GROUP BY dt),
+           (SELECT COUNT(*) FROM empty_bounds_29135 GROUP BY dt)
+    FROM group_boundaries WHERE n < 2
+)
+SELECT n, null_count, empty_count FROM group_boundaries ORDER BY n;
+
+-- Every nested SELECT owns its grouping independently.
+WITH RECURSIVE nested_group(n, row_count) AS (
+    SELECT 1, 0
+    UNION ALL
+    SELECT n + 1, (SELECT (SELECT COUNT(*) FROM sales_29135 GROUP BY YEAR(dt)))
+    FROM nested_group WHERE n < 2
+)
+SELECT n, row_count FROM nested_group ORDER BY n;
+
+-- Rebinding a grouped predicate must handle a value, another value, and then
+-- an empty group on successive executions of the same prepared statement.
+PREPARE grouped_23077 FROM 'WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < (SELECT MAX(limit_n) FROM limits_29135 WHERE limit_n = ? GROUP BY limit_n HAVING COUNT(*) > 0)) SELECT n FROM r ORDER BY n';
+SET @grouped_limit = 2;
+EXECUTE grouped_23077 USING @grouped_limit;
+SET @grouped_limit = 4;
+EXECUTE grouped_23077 USING @grouped_limit;
+SET @grouped_limit = 3;
+EXECUTE grouped_23077 USING @grouped_limit;
+DEALLOCATE PREPARE grouped_23077;
+
+-- More than one group must retain the ordinary scalar cardinality error.
+-- @regex("Subquery returns more than 1 row", true)
+WITH RECURSIVE multiple_groups(n, row_count) AS (
+    SELECT 1, 0
+    UNION ALL
+    SELECT n + 1, (SELECT COUNT(*) FROM limits_29135 GROUP BY limit_n)
+    FROM multiple_groups WHERE n < 2
+)
+SELECT n, row_count FROM multiple_groups;
+
+-- Direct recursive grouping remains prohibited.
+-- @regex("not support group by in recursive cte", true)
+WITH RECURSIVE direct_group(n) AS (
+    SELECT 1 UNION ALL SELECT n + 1 FROM direct_group WHERE n < 3 GROUP BY n
+)
+SELECT * FROM direct_group;
+
+-- Grouping cannot make a nested recursive source legal.
+-- @regex("not in any subquery", true)
+WITH RECURSIVE nested_source(n, row_count) AS (
+    SELECT 1, 0
+    UNION ALL
+    SELECT n + 1, (SELECT COUNT(*) FROM nested_source GROUP BY n)
+    FROM nested_source WHERE n < 2
+)
+SELECT * FROM nested_source;
+
+SELECT 'after grouped scalar errors' AS service_status;
 
 -- Aggregation directly in the recursive query block remains rejected.
 -- @regex("not support aggregate function recursive cte", true)

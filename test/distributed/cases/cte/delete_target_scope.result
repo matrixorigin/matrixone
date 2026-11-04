@@ -1,0 +1,28 @@
+drop database if exists cte_delete_target;
+create database cte_delete_target;
+use cte_delete_target;
+create table t(id int primary key);
+insert into t values (1),(2);
+begin;
+with x as (select 99 as id) delete x from t as x where x.id=1;
+select id from t order by id;
+➤ id[4,32,0]  𝄀
+2
+rollback;
+with t as (select 1 as id) delete from t where id=1;
+invalid input: cannot delete from CTE t
+select id from t order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+create table s(id int primary key);
+insert into s values (1),(2);
+with x as (select 99 as id), y as (select 99 as id)
+delete x,y from t as x join s as y on x.id=y.id where x.id=1;
+select id from t order by id;
+➤ id[4,32,0]  𝄀
+2
+select id from s order by id;
+➤ id[4,32,0]  𝄀
+2
+drop database cte_delete_target;

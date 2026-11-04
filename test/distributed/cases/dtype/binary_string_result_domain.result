@@ -45,8 +45,8 @@ select length(converted) from converted_blob_ctas;
 ➤ length(converted)[-5,64,0]  𝄀
 70000
 desc converted_blob_ctas;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-converted  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+converted  ¦  longblob  ¦  YES  ¦    ¦  null  ¦    ¦  
 create table binary_result_ctas as
 select repeat(X'61', 70000) as repeated,
 concat(cast(X'61' as binary(65535)), repeat(X'62', 4465)) as concatenated;
@@ -54,14 +54,14 @@ select length(repeated), length(concatenated) from binary_result_ctas;
 ➤ length(repeated)[-5,64,0]  ¦  length(concatenated)[-5,64,0]  𝄀
 70000  ¦  70000
 desc binary_result_ctas;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-repeated  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-concatenated  ¦  BLOB(0)  ¦  NO  ¦    ¦  null  ¦    ¦  
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+repeated  ¦  longblob  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+concatenated  ¦  longblob  ¦  NO  ¦    ¦  null  ¦    ¦  
 select column_name, data_type, character_maximum_length, character_set_name, collation_name
 from information_schema.columns
 where table_schema = 'binary_string_result_domain' and table_name = 'binary_result_ctas'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
-repeated  ¦  blob  ¦  0  ¦  binary  ¦  binary  𝄀
-concatenated  ¦  blob  ¦  0  ¦  binary  ¦  binary
+repeated  ¦  blob  ¦  0  ¦  null  ¦  null  𝄀
+concatenated  ¦  blob  ¦  0  ¦  null  ¦  null
 drop database binary_string_result_domain;

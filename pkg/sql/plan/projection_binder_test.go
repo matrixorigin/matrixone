@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,278 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
-
-// Helper function to create a float64 constant expression
-func makeFloat64ConstForProjection(val float64) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Dval{
-					Dval: val,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_float64),
-			NotNullable: true,
-		},
-	}
-}
-
-// Helper function to create a decimal64 constant expression
-func makeDecimal64ConstForProjection(val float64, scale int32) *plan.Expr {
-	d64, _ := types.Decimal64FromFloat64(val, 18, scale)
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Decimal64Val{
-					Decimal64Val: &plan.Decimal64{A: int64(d64)},
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_decimal64),
-			NotNullable: true,
-			Scale:       scale,
-		},
-	}
-}
-
-// Helper function to create a decimal128 constant expression
-func makeDecimal128ConstForProjection(val float64, scale int32) *plan.Expr {
-	d128, _ := types.Decimal128FromFloat64(val, 38, scale)
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Decimal128Val{
-					Decimal128Val: &plan.Decimal128{
-						A: int64(d128.B0_63),
-						B: int64(d128.B64_127),
-					},
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_decimal128),
-			NotNullable: true,
-			Scale:       scale,
-		},
-	}
-}
-
-// Helper function to create a string constant expression
-func makeStringConstForProjection(s string) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Sval{
-					Sval: s,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_char),
-			NotNullable: true,
-			Width:       int32(len(s)),
-		},
-	}
-}
-
-// Helper function to create INTERVAL expression
-func makeIntervalExprForProjection(valueExpr *plan.Expr, unit string) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: []*plan.Expr{
-					valueExpr,
-					makeStringConstForProjection(unit),
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id: int32(types.T_interval),
-		},
-	}
-}
-
-// TestProjectionBinderResetIntervalDecimal tests that ProjectionBinder.resetInterval correctly handles
-// decimal/float interval values by converting them to microseconds and setting the interval type to MicroSecond.
-// This is critical for SELECT DATE_SUB(a, INTERVAL 1.1 SECOND) FROM t1 scenarios.
-func TestProjectionBinderResetIntervalDecimal(t *testing.T) {
-	// Create a minimal ProjectionBinder setup
-	// Note: This test requires a QueryBuilder and Process, but we'll test the logic directly
-	// by creating the necessary expressions and verifying the conversion logic
-
-	testCases := []struct {
-		name                 string
-		intervalValueExpr    *plan.Expr
-		intervalUnit         string
-		expectedIntervalVal  int64
-		expectedIntervalType types.IntervalType
-		skip                 bool // Skip if requires full ProjectionBinder setup
-	}{
-		{
-			name:                 "INTERVAL 1.1 SECOND (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.1),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  1100000,
-			expectedIntervalType: types.MicroSecond,
-			skip:                 true, // Requires executor
-		},
-		{
-			name:                 "INTERVAL 1.000009 SECOND (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.000009),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  1000009,
-			expectedIntervalType: types.MicroSecond,
-			skip:                 true, // Requires executor
-		},
-		{
-			name:                 "INTERVAL 1.5 MINUTE (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
-			intervalUnit:         "MINUTE",
-			expectedIntervalVal:  90000000, // 1.5 * 60 * 1000000
-			expectedIntervalType: types.MicroSecond,
-			skip:                 true, // Requires executor
-		},
-		{
-			name:                 "INTERVAL 0.5 HOUR (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(0.5),
-			intervalUnit:         "HOUR",
-			expectedIntervalVal:  1800000000, // 0.5 * 3600 * 1000000
-			expectedIntervalType: types.MicroSecond,
-			skip:                 true, // Requires executor
-		},
-		{
-			name:                 "INTERVAL 1.1 SECOND (decimal64)",
-			intervalValueExpr:    makeDecimal64ConstForProjection(1.1, 1),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  1100000,
-			expectedIntervalType: types.MicroSecond,
-			skip:                 true, // Requires executor
-		},
-		{
-			name:                 "INTERVAL 1.1 SECOND (decimal128)",
-			intervalValueExpr:    makeDecimal128ConstForProjection(1.1, 1),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  1100000,
-			expectedIntervalType: types.MicroSecond,
-			skip:                 true, // Requires executor
-		},
-		{
-			name: "INTERVAL 1 SECOND (integer, no conversion)",
-			intervalValueExpr: &plan.Expr{
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Isnull: false,
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-				Typ: plan.Type{
-					Id:          int32(types.T_int64),
-					NotNullable: true,
-				},
-			},
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  1,
-			expectedIntervalType: types.Second, // Should remain Second, not MicroSecond
-			skip:                 true,         // Requires executor
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			intervalExpr := makeIntervalExprForProjection(tc.intervalValueExpr, tc.intervalUnit)
-
-			// Verify the interval expression structure
-			require.NotNil(t, intervalExpr)
-			require.NotNil(t, intervalExpr.Expr)
-			listExpr, ok := intervalExpr.Expr.(*plan.Expr_List)
-			require.True(t, ok, "Interval expression should be a list")
-			require.Len(t, listExpr.List.List, 2, "Interval expression should have 2 elements")
-
-			// Verify the first element (value)
-			firstExpr := listExpr.List.List[0]
-			require.Equal(t, tc.intervalValueExpr, firstExpr, "First element should match input")
-
-			// Verify the second element (unit)
-			secondExpr := listExpr.List.List[1]
-			require.NotNil(t, secondExpr)
-			litExpr, ok := secondExpr.Expr.(*plan.Expr_Lit)
-			require.True(t, ok, "Second element should be a literal")
-			sval, ok := litExpr.Lit.Value.(*plan.Literal_Sval)
-			require.True(t, ok, "Second element should be a string literal")
-			require.Equal(t, tc.intervalUnit, sval.Sval, "Unit should match")
-
-			// For tests that require executor, verify the structure is correct
-			// The actual conversion will be tested in integration tests
-			if tc.skip {
-				t.Logf("Test case structure verified. Full execution test requires ProjectionBinder with executor.")
-			}
-		})
-	}
-}
-
-// Helper function to create a float32 constant expression
-func makeFloat32ConstForProjection(val float32) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Fval{
-					Fval: val,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_float32),
-			NotNullable: true,
-		},
-	}
-}
-
-// Helper function to create a varchar constant expression
-func makeVarcharConstForProjection(s string) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Sval{
-					Sval: s,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_varchar),
-			NotNullable: true,
-			Width:       int32(len(s)),
-		},
-	}
-}
-
-// Helper function to create an int64 constant expression
-func makeInt64ConstForProjection(val int64) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_I64Val{
-					I64Val: val,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int64),
-			NotNullable: true,
-		},
-	}
-}
 
 // Helper function to create a decimal64 constant expression with negative scale (to test scale < 0 branch)
 func makeDecimal64ConstForProjectionWithNegativeScale(val float64, scale int32) *plan.Expr {
@@ -342,91 +69,15 @@ func makeDecimal128ConstForProjectionWithNegativeScale(val float64, scale int32)
 	}
 }
 
-// Helper function to create a null constant expression for decimal64 type
-func makeNullDecimal64ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_decimal64),
-			NotNullable: false,
-			Scale:       1,
-		},
-	}
-}
-
-// Helper function to create a null constant expression for decimal128 type
-func makeNullDecimal128ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_decimal128),
-			NotNullable: false,
-			Scale:       1,
-		},
-	}
-}
-
-// Helper function to create a null constant expression for float64 type
-func makeNullFloat64ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_float64),
-			NotNullable: false,
-		},
-	}
-}
-
-// Helper function to create a null constant expression for float32 type
-func makeNullFloat32ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_float32),
-			NotNullable: false,
-		},
-	}
-}
-
-// Helper function to create a null constant expression for int64 type
-func makeNullInt64ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int64),
-			NotNullable: false,
-		},
-	}
-}
-
 // Helper to extract int64 value from a constant expression
-func extractInt64ValueFromExpr(expr *plan.Expr) int64 {
-	if lit, ok := expr.Expr.(*plan.Expr_Lit); ok {
-		if i64val, ok := lit.Lit.Value.(*plan.Literal_I64Val); ok {
-			return i64val.I64Val
-		}
-	}
-	return 0
+func extractInt64ValueFromExpr(t *testing.T, expr *plan.Expr) int64 {
+	t.Helper()
+	require.NotNil(t, expr)
+	lit := expr.GetLit()
+	require.NotNil(t, lit)
+	value, ok := lit.Value.(*plan.Literal_I64Val)
+	require.True(t, ok, "expected an int64 literal, got %T", lit.Value)
+	return value.I64Val
 }
 
 // TestProjectionBinderResetIntervalComprehensive tests resetInterval with full ProjectionBinder setup
@@ -450,64 +101,64 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test varchar/char string interval values
 		{
 			name:                 "INTERVAL '1' SECOND (varchar)",
-			intervalValueExpr:    makeVarcharConstForProjection("1"),
+			intervalValueExpr:    makeVarcharConst("1"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  1,
-			expectedIntervalType: types.Second,
+			expectedIntervalVal:  1000000,
+			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL '1.5' SECOND (varchar)",
-			intervalValueExpr:    makeVarcharConstForProjection("1.5"),
+			intervalValueExpr:    makeVarcharConst("1.5"),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1500000, // fractional SECOND text is normalized to microseconds
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL '1' DAY (char)",
-			intervalValueExpr:    makeStringConstForProjection("1"),
+			intervalValueExpr:    makeStringConst("1"),
 			intervalUnit:         "DAY",
 			expectedIntervalVal:  1,
 			expectedIntervalType: types.Day,
 		},
 		{
 			name:                 "INTERVAL 'invalid' SECOND (varchar, invalid string)",
-			intervalValueExpr:    makeVarcharConstForProjection("invalid"),
+			intervalValueExpr:    makeVarcharConst("invalid"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // Invalid string returns MaxInt64
-			expectedIntervalType: types.Second,
+			expectedIntervalVal:  0, // Invalid numeric prefix is a zero interval
+			expectedIntervalType: types.MicroSecond,
 		},
 		// Test float64 time units
 		{
 			name:                 "INTERVAL 1.1 SECOND (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.1),
+			intervalValueExpr:    makeFloat64Const(1.1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1100000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 1.000009 SECOND (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.000009),
+			intervalValueExpr:    makeFloat64Const(1.000009),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1000009,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 1.5 MINUTE (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  90000000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 0.5 HOUR (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(0.5),
+			intervalValueExpr:    makeFloat64Const(0.5),
 			intervalUnit:         "HOUR",
 			expectedIntervalVal:  1800000000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 1.1 DAY (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.1),
+			intervalValueExpr:    makeFloat64Const(1.1),
 			intervalUnit:         "DAY",
 			expectedIntervalVal:  95040000000, // 1.1 * 86400 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -515,14 +166,14 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test float32 time units
 		{
 			name:                 "INTERVAL 1.1 SECOND (float32)",
-			intervalValueExpr:    makeFloat32ConstForProjection(1.1),
+			intervalValueExpr:    makeFloat32Const(1.1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1100000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 2.5 MINUTE (float32)",
-			intervalValueExpr:    makeFloat32ConstForProjection(2.5),
+			intervalValueExpr:    makeFloat32Const(2.5),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  150000000, // 2.5 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -530,14 +181,14 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test decimal64 time units
 		{
 			name:                 "INTERVAL 1.1 SECOND (decimal64)",
-			intervalValueExpr:    makeDecimal64ConstForProjection(1.1, 1),
+			intervalValueExpr:    makeDecimal64Const(1.1, 1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1100000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 1.5 MINUTE (decimal64)",
-			intervalValueExpr:    makeDecimal64ConstForProjection(1.5, 1),
+			intervalValueExpr:    makeDecimal64Const(1.5, 1),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  90000000,
 			expectedIntervalType: types.MicroSecond,
@@ -545,14 +196,14 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test decimal128 time units
 		{
 			name:                 "INTERVAL 1.1 SECOND (decimal128)",
-			intervalValueExpr:    makeDecimal128ConstForProjection(1.1, 1),
+			intervalValueExpr:    makeDecimal128Const(1.1, 1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1100000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 0.5 HOUR (decimal128)",
-			intervalValueExpr:    makeDecimal128ConstForProjection(0.5, 1),
+			intervalValueExpr:    makeDecimal128Const(0.5, 1),
 			intervalUnit:         "HOUR",
 			expectedIntervalVal:  1800000000,
 			expectedIntervalType: types.MicroSecond,
@@ -560,14 +211,14 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test int64 (no conversion for time units, returns constant)
 		{
 			name:                 "INTERVAL 1 SECOND (int64)",
-			intervalValueExpr:    makeInt64ConstForProjection(1),
+			intervalValueExpr:    makeInt64Const(1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1,
 			expectedIntervalType: types.Second,
 		},
 		{
 			name:                 "INTERVAL 2 MINUTE (int64)",
-			intervalValueExpr:    makeInt64ConstForProjection(2),
+			intervalValueExpr:    makeInt64Const(2),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  2,
 			expectedIntervalType: types.Minute,
@@ -575,21 +226,21 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test non-time units with float64 (converted to int64 via executor)
 		{
 			name:                 "INTERVAL 1.5 MONTH (float64, non-time unit)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "MONTH",
 			expectedIntervalVal:  2, // 1.5 cast to int64 = 2
 			expectedIntervalType: types.Month,
 		},
 		{
 			name:                 "INTERVAL 1.5 YEAR (float64, non-time unit)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "YEAR",
 			expectedIntervalVal:  2, // 1.5 cast to int64 = 2
 			expectedIntervalType: types.Year,
 		},
 		{
 			name:                 "INTERVAL 1.5 WEEK (float64, non-time unit)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "WEEK",
 			expectedIntervalVal:  2, // 1.5 cast to int64 = 2
 			expectedIntervalType: types.Week,
@@ -597,7 +248,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test error cases
 		{
 			name:              "Invalid interval unit",
-			intervalValueExpr: makeInt64ConstForProjection(1),
+			intervalValueExpr: makeInt64Const(1),
 			intervalUnit:      "INVALID_UNIT",
 			expectError:       true,
 			errorContains:     "invalid interval type",
@@ -605,7 +256,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test DAY unit with float64
 		{
 			name:                 "INTERVAL 1.5 DAY (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "DAY",
 			expectedIntervalVal:  129600000000, // 1.5 * 24 * 60 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -613,7 +264,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test HOUR unit with float32
 		{
 			name:                 "INTERVAL 0.5 HOUR (float32)",
-			intervalValueExpr:    makeFloat32ConstForProjection(0.5),
+			intervalValueExpr:    makeFloat32Const(0.5),
 			intervalUnit:         "HOUR",
 			expectedIntervalVal:  1800000000, // 0.5 * 60 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -621,7 +272,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test decimal64 with DAY unit
 		{
 			name:                 "INTERVAL 2.5 DAY (decimal64)",
-			intervalValueExpr:    makeDecimal64ConstForProjection(2.5, 1),
+			intervalValueExpr:    makeDecimal64Const(2.5, 1),
 			intervalUnit:         "DAY",
 			expectedIntervalVal:  216000000000, // 2.5 * 24 * 60 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -629,7 +280,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test decimal128 with HOUR unit
 		{
 			name:                 "INTERVAL 1.5 HOUR (decimal128)",
-			intervalValueExpr:    makeDecimal128ConstForProjection(1.5, 1),
+			intervalValueExpr:    makeDecimal128Const(1.5, 1),
 			intervalUnit:         "HOUR",
 			expectedIntervalVal:  5400000000, // 1.5 * 60 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -638,7 +289,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			intervalExpr := makeIntervalExprForProjection(tc.intervalValueExpr, tc.intervalUnit)
+			intervalExpr := makeIntervalExpr(tc.intervalValueExpr, tc.intervalUnit)
 
 			result, err := projectionBinder.resetInterval(intervalExpr)
 
@@ -664,13 +315,13 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 				require.True(t, isFuncExpr, "Expected cast expression (Expr_F) for %s", tc.name)
 			} else {
 				// Verify the interval value is a constant
-				intervalValue := extractInt64ValueFromExpr(listExpr.List.List[0])
+				intervalValue := extractInt64ValueFromExpr(t, listExpr.List.List[0])
 				require.Equal(t, tc.expectedIntervalVal, intervalValue,
 					"Interval value mismatch for %s", tc.name)
 			}
 
 			// Verify the interval type
-			intervalType := extractInt64ValueFromExpr(listExpr.List.List[1])
+			intervalType := extractInt64ValueFromExpr(t, listExpr.List.List[1])
 			require.Equal(t, int64(tc.expectedIntervalType), intervalType,
 				"Interval type mismatch for %s", tc.name)
 		})
@@ -713,37 +364,37 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			expectedIntervalType: types.MicroSecond,
 		},
 		// Test null decimal64 constant - goes through fallback executor path
-		// NULL values return MaxInt64 marker for consistent handling at execution time
+		// Actual SQL NULL is an illegal frame argument.
 		{
-			name:                 "INTERVAL NULL SECOND (decimal64, null value)",
-			intervalValueExpr:    makeNullDecimal64ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
+			name:              "INTERVAL NULL SECOND (decimal64, null value)",
+			intervalValueExpr: makeNullConst(types.T_decimal64, 1),
+			intervalUnit:      "SECOND",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 		// Test null decimal128 constant - goes through fallback executor path
 		{
-			name:                 "INTERVAL NULL SECOND (decimal128, null value)",
-			intervalValueExpr:    makeNullDecimal128ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
+			name:              "INTERVAL NULL SECOND (decimal128, null value)",
+			intervalValueExpr: makeNullConst(types.T_decimal128, 1),
+			intervalUnit:      "SECOND",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 		// Test null float64 constant - goes through fallback executor path
 		{
-			name:                 "INTERVAL NULL SECOND (float64, null value)",
-			intervalValueExpr:    makeNullFloat64ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
+			name:              "INTERVAL NULL SECOND (float64, null value)",
+			intervalValueExpr: makeNullConst(types.T_float64, 0),
+			intervalUnit:      "SECOND",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 		// Test null float32 constant - goes through fallback executor path
 		{
-			name:                 "INTERVAL NULL SECOND (float32, null value)",
-			intervalValueExpr:    makeNullFloat32ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
+			name:              "INTERVAL NULL SECOND (float32, null value)",
+			intervalValueExpr: makeNullConst(types.T_float32, 0),
+			intervalUnit:      "SECOND",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 		// Test fallback branch: when cast to float64 returns unexpected type
 		// This tests the else branch at line 387-409
@@ -752,35 +403,24 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 		// This test case attempts to trigger the fallback branch by using a special scenario
 		{
 			name:                 "INTERVAL 1 SECOND (decimal64, fallback to int64)",
-			intervalValueExpr:    makeDecimal64ConstForProjection(1.0, 0),
+			intervalValueExpr:    makeDecimal64Const(1.0, 0),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1000000,
 			expectedIntervalType: types.MicroSecond,
 		},
-		// Test fallback path with null decimal64 - returns MaxInt64 marker
+		// Actual SQL NULL is also rejected for non-time units.
 		{
-			name:                 "INTERVAL NULL SECOND (decimal64, fallback returns null marker)",
-			intervalValueExpr:    makeNullDecimal64ConstForProjection(),
-			intervalUnit:         "SECOND",
-			expectError:          false,
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Second,
-		},
-		// Test NULL handling for non-time units: returns MaxInt64 marker
-		// The MaxInt64 marker will be detected at execution time and return NULL
-		{
-			name:                 "INTERVAL NULL WEEK (int64, null value)",
-			intervalValueExpr:    makeNullInt64ConstForProjection(),
-			intervalUnit:         "WEEK",
-			expectError:          false,
-			expectedIntervalVal:  math.MaxInt64, // NULL marker
-			expectedIntervalType: types.Week,
+			name:              "INTERVAL NULL WEEK (int64, null value)",
+			intervalValueExpr: makeNullConst(types.T_int64, 0),
+			intervalUnit:      "WEEK",
+			expectError:       true,
+			errorContains:     "frame start or end is negative, NULL",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			intervalExpr := makeIntervalExprForProjection(tc.intervalValueExpr, tc.intervalUnit)
+			intervalExpr := makeIntervalExpr(tc.intervalValueExpr, tc.intervalUnit)
 
 			result, err := projectionBinder.resetInterval(intervalExpr)
 
@@ -801,106 +441,14 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			require.Len(t, listExpr.List.List, 2, "Result should have 2 elements")
 
 			// Verify the interval value
-			intervalValue := extractInt64ValueFromExpr(listExpr.List.List[0])
+			intervalValue := extractInt64ValueFromExpr(t, listExpr.List.List[0])
 			require.Equal(t, tc.expectedIntervalVal, intervalValue,
 				"Interval value mismatch for %s", tc.name)
 
 			// Verify the interval type
-			intervalType := extractInt64ValueFromExpr(listExpr.List.List[1])
+			intervalType := extractInt64ValueFromExpr(t, listExpr.List.List[1])
 			require.Equal(t, int64(tc.expectedIntervalType), intervalType,
 				"Interval type mismatch for %s", tc.name)
-		})
-	}
-}
-
-// TestProjectionBinderResetIntervalDecimalTypeCheck tests that the type checking logic
-// in resetInterval correctly identifies decimal/float types that need microsecond conversion.
-func TestProjectionBinderResetIntervalDecimalTypeCheck(t *testing.T) {
-	testCases := []struct {
-		name                       string
-		intervalValueType          types.T
-		intervalUnit               string
-		shouldConvertToMicrosecond bool
-	}{
-		{
-			name:                       "float64 SECOND should convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "decimal64 SECOND should convert",
-			intervalValueType:          types.T_decimal64,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "decimal128 SECOND should convert",
-			intervalValueType:          types.T_decimal128,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "float32 SECOND should convert",
-			intervalValueType:          types.T_float32,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "float64 MINUTE should convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "MINUTE",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "float64 HOUR should convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "HOUR",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "float64 DAY should convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "DAY",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "int64 SECOND should NOT convert",
-			intervalValueType:          types.T_int64,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: false,
-		},
-		{
-			name:                       "float64 MONTH should NOT convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "MONTH",
-			shouldConvertToMicrosecond: false,
-		},
-		{
-			name:                       "float64 YEAR should NOT convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "YEAR",
-			shouldConvertToMicrosecond: false,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Simulate the type checking logic from resetInterval
-			intervalType, err := types.IntervalTypeOf(tc.intervalUnit)
-			require.NoError(t, err)
-
-			isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
-				intervalType == types.Hour || intervalType == types.Day
-			isDecimalOrFloat := tc.intervalValueType == types.T_decimal64 ||
-				tc.intervalValueType == types.T_decimal128 ||
-				tc.intervalValueType == types.T_float32 ||
-				tc.intervalValueType == types.T_float64
-
-			needsMicrosecondConversion := isTimeUnit && isDecimalOrFloat
-
-			require.Equal(t, tc.shouldConvertToMicrosecond, needsMicrosecondConversion,
-				"Type check should correctly identify if microsecond conversion is needed")
 		})
 	}
 }
@@ -1181,7 +729,6 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 		cols:           []string{"a", "b", "c"},
 		colIsHidden:    []bool{false, false, false},
 		types:          []*plan.Type{&plan2Type, &plan2Type, &varcharPlan2Type},
-		refCnts:        []uint{0, 0, 0},
 		colIdByName:    map[string]int32{"a": 0, "b": 1, "c": 2},
 		isClusterTable: false,
 		defaults:       []string{"", "", ""},
@@ -1289,7 +836,7 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "frame start or end is negative",
+			errorContains: "frame start cannot be after frame end.",
 		},
 		{
 			name:     "Window function with CURRENT ROW start and PRECEDING end - should return error",
@@ -1307,7 +854,7 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: "frame start or end is negative",
+			errorContains: "frame start cannot be after frame end.",
 		},
 		{
 			name:     "Window function with GROUPS frame - should return error",

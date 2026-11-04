@@ -103,12 +103,23 @@ SELECT TIME_FORMAT('15:30:45.123456', '%H:%i:%s.%f') AS complex_format;
 SELECT TIME_FORMAT('15:30:45', 'Time is %H:%i:%s') AS with_text;
 ➤ with_text[12,25,0]  𝄀
 Time is 15:30:45
+SELECT HEX(TIME_FORMAT('12:34:56', '%')) AS lone_percent, HEX(TIME_FORMAT('12:34:56', 'abc%')) AS literal_suffix, HEX(TIME_FORMAT('12:34:56', '%%%')) AS odd_percent_run, HEX(TIME_FORMAT('12:34:56', '%%')) AS escaped_percent, HEX(TIME_FORMAT('12:34:56', '%q')) AS unknown_directive, HEX(DATE_FORMAT('2024-03-01', '%')) AS date_control;
+➤ lone_percent[12,16,0]  ¦  literal_suffix[12,40,0]  ¦  odd_percent_run[12,24,0]  ¦  escaped_percent[12,16,0]  ¦  unknown_directive[12,16,0]  ¦  date_control[12,8,0]  𝄀
+25  ¦  61626325  ¦  2525  ¦  25  ¦  71  ¦  25
 CREATE TABLE temporal_time_format_rows(id INT, tm TIME, fmt VARCHAR(32));
 INSERT INTO temporal_time_format_rows VALUES
 (1, '03:04:05.000006', '%H'),
 (2, '14:05:06.000007', '%i'),
 (3, '23:06:07.000008', '%s.%f'),
-(4, '12:00:00', NULL);
+(4, '12:00:00', NULL),
+(5, '12:34:56', '%'),
+(6, '12:34:56', 'abc%'),
+(7, '12:34:56', '%%%'),
+(8, '12:34:56', '%%'),
+(9, '12:34:56', '%H%M%'),
+(10, '-12:34:56', '%H%'),
+(11, '12:34:56', '时刻%'),
+(12, NULL, '%');
 SELECT id, TIME_FORMAT(tm, fmt) AS formatted
 FROM temporal_time_format_rows
 ORDER BY id;
@@ -116,5 +127,24 @@ ORDER BY id;
 1  ¦  03  𝄀
 2  ¦  05  𝄀
 3  ¦  07.000000  𝄀
-4  ¦  null
+4  ¦  null  𝄀
+5  ¦  %  𝄀
+6  ¦  abc%  𝄀
+7  ¦  %%  𝄀
+8  ¦  %  𝄀
+9  ¦  null  𝄀
+10  ¦  -12%  𝄀
+11  ¦  时刻%  𝄀
+12  ¦  null
 DROP TABLE temporal_time_format_rows;
+PREPARE time_format_percent_stmt FROM 'SELECT HEX(TIME_FORMAT(?, ?)) AS formatted';
+SET @tf_time = '12:34:56';
+SET @tf_format = 'abc%';
+EXECUTE time_format_percent_stmt USING @tf_time, @tf_format;
+➤ formatted[-1,16383,0]  𝄀
+61626325
+SET @tf_format = '%%';
+EXECUTE time_format_percent_stmt USING @tf_time, @tf_format;
+➤ formatted[-1,16383,0]  𝄀
+25
+DEALLOCATE PREPARE time_format_percent_stmt;

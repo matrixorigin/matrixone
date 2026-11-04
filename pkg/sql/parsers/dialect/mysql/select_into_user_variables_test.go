@@ -31,6 +31,11 @@ func TestSelectIntoUserVariablesParse(t *testing.T) {
 		deprecatedInto bool
 	}{
 		{
+			sql:     "select 'owned' collate utf8mb4_bin into @collated",
+			wantSQL: "select (owned) collate utf8mb4_bin into @collated",
+			vars:    []string{"collated"},
+		},
+		{
 			sql:     "select abs(-5), 'ok' into @out, @label",
 			wantSQL: "select abs(-5), ok into @out, @label",
 			vars:    []string{"out", "label"},
@@ -112,6 +117,9 @@ func TestSelectIntoUserVariablesRejectsMisplacedUnionInto(t *testing.T) {
 func TestSelectIntoUserVariablesRejectsNestedInto(t *testing.T) {
 	testCases := []string{
 		"select (select 1 into @bad_scalar)",
+		"select (select 'a' into @bad_scalar) collate utf8mb4_bin",
+		"select ((select 'a' into @bad_scalar) collate utf8mb4_bin) collate utf8mb4_bin",
+		"select (select 'a' into outfile '/tmp/mo_bad_collated_outfile') collate utf8mb4_bin",
 		"select * from (select 1 into @bad_derived) as d",
 		"with d as (select 1 into @bad_cte) select * from d",
 		"select exists(select 1 into @bad_exists)",
@@ -141,6 +149,7 @@ func TestSelectIntoUserVariablesRejectsNestedInto(t *testing.T) {
 func TestSelectIntoUserVariablesRejectsOwnerlessEnclosingStatements(t *testing.T) {
 	testCases := []string{
 		"create view uv_bad_view as select 1 into @bad_view",
+		"create view uv_bad_view as select (select 'a' into @bad_view) collate utf8mb4_bin",
 		"with d as (select 1 into @bad_insert_cte) insert into uv_target select * from d",
 		"update uv_target set a = (select 1 into @bad_update)",
 		"delete from uv_target where a = (select 1 into @bad_delete)",
@@ -148,6 +157,7 @@ func TestSelectIntoUserVariablesRejectsOwnerlessEnclosingStatements(t *testing.T
 		"insert into uv_target values (1) returning (select 1 into @bad_returning)",
 		"replace into uv_target values (1) returning (select 1 into @bad_replace_returning)",
 		"set @bad_outer = (select 1 into @bad_inner)",
+		"set @bad_outer = (select 'a' into @bad_inner) collate utf8mb4_bin",
 		"do (select 1 into @bad_do)",
 		"call uv_proc((select 1 into @bad_call))",
 		"set @bad_outer = sample((select 1 into @bad_sample_set), 1 rows)",
@@ -174,6 +184,9 @@ func TestSelectIntoUserVariablesAllowsOwnedSourceContexts(t *testing.T) {
 		"create table uv_ctas_cols (a int) select 1 into @ctas_cols_source",
 		"explain select 1 into @explain_source",
 		"explain analyze select 1 into @explain_analyze_source",
+		"select (select 'a') collate utf8mb4_bin",
+		"set @ordinary_collated = (select 'a') collate utf8mb4_bin",
+		"create view uv_collated_view as select (select 'a') collate utf8mb4_bin",
 	}
 
 	for _, testCase := range testCases {

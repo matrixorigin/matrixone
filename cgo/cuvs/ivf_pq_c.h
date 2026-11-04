@@ -17,6 +17,7 @@
 #ifndef IVF_PQ_C_H
 #define IVF_PQ_C_H
 
+#include "../membership.h"
 #include "helper.h"
 #include "cuvs_types.h"
 #include <stdbool.h>
@@ -196,16 +197,19 @@ void gpu_ivf_pq_add_filter_chunk(gpu_ivf_pq_c index_c, uint32_t col_idx,
                                   const void* data, const uint32_t* null_bitmap,
                                   uint64_t nrows, void* errmsg);
 
+// Filtered search. preds_json: JSON predicate array, NULL or "" for none.
+// membership: primary keys ANDed into the filter mask (cbitmap, CRoaring or sorted64,
+// see ../membership.h); a NULL filter is none, any other kind is an error.
 gpu_ivf_pq_search_res_t gpu_ivf_pq_search_with_filter(gpu_ivf_pq_c index_c, const void* queries_data,
                                                        uint64_t num_queries, uint32_t query_dimension,
                                                        uint32_t limit, ivf_pq_search_params_t search_params,
-                                                       const char* preds_json, void* errmsg);
+                                                       const char* preds_json, mo_membership_t membership, void* errmsg);
 
 // Query in the BASE element type B (float or half); converted to storage T internally.
 gpu_ivf_pq_search_res_t gpu_ivf_pq_search_quantize_with_filter(gpu_ivf_pq_c index_c, const void* queries_data,
                                                              uint64_t num_queries, uint32_t query_dimension,
                                                              uint32_t limit, ivf_pq_search_params_t search_params,
-                                                             const char* preds_json, void* errmsg);
+                                                             const char* preds_json, mo_membership_t membership, void* errmsg);
 
 // Async variant of gpu_ivf_pq_search_quantize_with_filter. Returns a job_id that
 // is collected with the existing gpu_ivf_pq_search_wait. Lets multi-index
@@ -213,7 +217,29 @@ gpu_ivf_pq_search_res_t gpu_ivf_pq_search_quantize_with_filter(gpu_ivf_pq_c inde
 uint64_t gpu_ivf_pq_search_quantize_with_filter_async(gpu_ivf_pq_c index_c, const void* queries_data,
                                                     uint64_t num_queries, uint32_t query_dimension,
                                                     uint32_t limit, ivf_pq_search_params_t search_params,
-                                                    const char* preds_json, void* errmsg);
+                                                    const char* preds_json, mo_membership_t membership, void* errmsg);
+
+// gpu_ivf_pq_prepare_bitset builds the filter masks of a search once, from
+// preds_json and membership as gpu_ivf_pq_search_quantize_with_filter, for the
+// gpu_ivf_pq_search_quantize_with_bitset calls of this index to reuse. Returns
+// NULL with errmsg set on failure; free it with gpu_bitset_free. The membership
+// is not referenced after it returns.
+gpu_bitset_c gpu_ivf_pq_prepare_bitset(gpu_ivf_pq_c index_c, const char* preds_json,
+                                       mo_membership_t membership, void* errmsg);
+
+// gpu_ivf_pq_search_quantize_with_filter on a bitset from gpu_ivf_pq_prepare_bitset
+// of this index.
+gpu_ivf_pq_search_res_t gpu_ivf_pq_search_quantize_with_bitset(gpu_ivf_pq_c index_c, const void* queries_data,
+                                                             uint64_t num_queries, uint32_t query_dimension,
+                                                             uint32_t limit, ivf_pq_search_params_t search_params,
+                                                             gpu_bitset_c bitset, void* errmsg);
+
+// Async variant of gpu_ivf_pq_search_quantize_with_bitset, collected with
+// gpu_ivf_pq_search_wait.
+uint64_t gpu_ivf_pq_search_quantize_with_bitset_async(gpu_ivf_pq_c index_c, const void* queries_data,
+                                                    uint64_t num_queries, uint32_t query_dimension,
+                                                    uint32_t limit, ivf_pq_search_params_t search_params,
+                                                    gpu_bitset_c bitset, void* errmsg);
 
 
 

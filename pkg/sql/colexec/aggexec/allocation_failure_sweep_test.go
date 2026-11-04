@@ -199,6 +199,38 @@ func allocationFailureCases(long string) []allocationFailureCase {
 			},
 		},
 		{
+			// The exact weighted percentile keeps typed (value, weight) pairs
+			// in the saved-argument arena, so every physical fill, merge and
+			// finalization allocation is accountable and rollback-correct.
+			name: "quantile-exact-weighted", groupCount: 2,
+			mergeName: "quantile-exact-weighted",
+			id:        AggIdOfQuantileExactWeighted,
+			extra:     EncodeQuantileExactWeightedConfig([]byte("0.5")),
+			params:    []types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+			build: func(t *testing.T, mp *mpool.MPool, own func(*vector.Vector)) []*vector.Vector {
+				return []*vector.Vector{
+					buildFixedVec(t, mp, types.T_int64.ToType(),
+						[]int64{9, 1, 5, 8}, own),
+					buildFixedVec(t, mp, types.T_int64.ToType(),
+						[]int64{1, 2, 1, 3}, own),
+				}
+			},
+		},
+		{
+			name: "quantile-exact-weighted-distinct", groupCount: 2,
+			id: AggIdOfQuantileExactWeighted, distinct: true,
+			extra:  EncodeQuantileExactWeightedConfig([]byte("0.5")),
+			params: []types.Type{types.T_int64.ToType(), types.T_int64.ToType()},
+			build: func(t *testing.T, mp *mpool.MPool, own func(*vector.Vector)) []*vector.Vector {
+				return []*vector.Vector{
+					buildFixedVec(t, mp, types.T_int64.ToType(),
+						[]int64{9, 1, 5, 8}, own),
+					buildFixedVec(t, mp, types.T_int64.ToType(),
+						[]int64{1, 2, 1, 3}, own),
+				}
+			},
+		},
+		{
 			name: "var-pop-int64-origin", groupCount: 3, id: AggIdOfVarPop,
 			params: []types.Type{types.T_int64.ToType()},
 			build: func(t *testing.T, mp *mpool.MPool, own func(*vector.Vector)) []*vector.Vector {

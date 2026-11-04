@@ -70,9 +70,15 @@ set @single_var1 = (select a from seq_t1 limit 1),@single_var2 = (select b from 
 select @single_var1,@single_var2;
 
 set @single_var2 = (select a from seq_t1 limit 2);
+select @single_var2;
+-- Scalar assignments require one column; failed assignments preserve the value.
+set @single_var3 = (select a from seq_t1 limit 1);
 set @single_var3 = (select a,b from seq_t1 limit 1);
 select @single_var3;
+set @single_var3 = (select b from seq_t1 limit 1);
 set @single_var3 = (select b,a from seq_t1 limit 1);
+select @single_var3;
+set @single_var3 = (select a,b from seq_t1 where a < 0);
 select @single_var3;
 
 set @single_var4 = (select count(a) from seq_t1 limit 1),@single_var5 = (select min(b) from seq_t1 limit 1),@single_var6 = (select max(a) from seq_t1 limit 1);

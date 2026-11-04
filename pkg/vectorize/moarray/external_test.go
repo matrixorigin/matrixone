@@ -383,18 +383,39 @@ func TestAbs(t *testing.T) {
 			args:    args{argF64: []float64{-1, 0, 3}},
 			wantF64: []float64{1, 0, 3},
 		},
+		{
+			name: "signed zero",
+			args: args{
+				argF32: []float32{float32(math.Copysign(0, -1)), 0, -2.5},
+				argF64: []float64{math.Copysign(0, -1), 0, -2.5},
+			},
+			wantF32: []float32{0, 0, 2.5},
+			wantF64: []float64{0, 0, 2.5},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 
 			if tt.args.argF32 != nil {
-				if gotRes, err := Abs[float32](tt.args.argF32); err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
+				gotRes, err := Abs[float32](tt.args.argF32)
+				if err != nil || !reflect.DeepEqual(gotRes, tt.wantF32) {
 					t.Errorf("Abs() = %v, want %v", gotRes, tt.wantF32)
+				}
+				for _, v := range gotRes {
+					if math.Signbit(float64(v)) {
+						t.Errorf("Abs() returned a negative sign for %g", v)
+					}
 				}
 			}
 			if tt.args.argF64 != nil {
-				if gotRes, err := Abs[float64](tt.args.argF64); err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
+				gotRes, err := Abs[float64](tt.args.argF64)
+				if err != nil || !assertx.InEpsilonF64Slice(tt.wantF64, gotRes) {
 					t.Errorf("Abs() = %v, want %v", gotRes, tt.wantF64)
+				}
+				for _, v := range gotRes {
+					if math.Signbit(v) {
+						t.Errorf("Abs() returned a negative sign for %g", v)
+					}
 				}
 			}
 		})
@@ -1136,4 +1157,17 @@ func TestVectorVectorArithmeticRejectsOverflow(t *testing.T) {
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), wantErr)
 	})
+}
+
+// Positions at the ends of the int64 range slice nothing out of range: subvector(v, 2,
+// MaxInt64) keeps the rest of the vector, and subvector(v, MinInt64) is empty.
+func TestSubArrayExtremePositions(t *testing.T) {
+	s := []int8{1, 2, 3}
+	require.Equal(t, []int8{2, 3}, SubArrayFromLeftWithLength(s, 1, math.MaxInt64))
+	require.Equal(t, []int8{2, 3}, SubArrayFromRightWithLength(s, 2, math.MaxInt64))
+	require.Empty(t, SubArrayFromRightWithLength(s, math.MinInt64, 1))
+	require.Empty(t, SubArrayFromRight(s, math.MinInt64))
+	require.Empty(t, SubArrayFromLeft(s, math.MaxInt64))
+	require.Equal(t, []int8{3}, SubArrayFromRight(s, 1))
+	require.Equal(t, []float32{2}, SubArrayFromLeftWithLength([]float32{1, 2, 3}, 1, 1))
 }

@@ -16,6 +16,8 @@ package external
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -150,6 +152,8 @@ func TestGetColDataDecimal256NullEmptyInvalidAndOverflow(t *testing.T) {
 	for _, value := range []string{
 		"not-a-decimal",
 		"12345678901234567890123456789012345678.90",
+		"0." + strings.Repeat("1", 77) + "z",
+		"0." + strings.Repeat("1", 80) + ".1",
 	} {
 		t.Run(value, func(t *testing.T) {
 			bat := batch.NewWithSize(1)
@@ -159,6 +163,7 @@ func TestGetColDataDecimal256NullEmptyInvalidAndOverflow(t *testing.T) {
 			err := getColData(bat, []csvparser.Field{{Val: value}}, 0, param, proc.Mp(), param.Attrs[0], proc)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "invalid Decimal256 type")
+			require.Zero(t, bat.Vecs[0].Length())
 		})
 	}
 }
@@ -177,6 +182,8 @@ func TestIsLegalLineDecimal256AndParallelBoundary(t *testing.T) {
 	require.True(t, isLegalLine(param, cols, []csvparser.Field{{Val: valid}}))
 	require.False(t, isLegalLine(param, cols, []csvparser.Field{{Val: "not-a-decimal"}}))
 	require.False(t, isLegalLine(param, cols, []csvparser.Field{{Val: "12345678901234567890123456789012345678.90"}}))
+	require.False(t, isLegalLine(param, cols, []csvparser.Field{{Val: "0." + strings.Repeat("1", 77) + "z"}}))
+	require.True(t, isLegalLine(param, cols, []csvparser.Field{{Val: "0." + strings.Repeat("1", 80) + "e1"}}))
 	require.True(t, isLegalLine(param, cols, []csvparser.Field{{IsNull: true}}))
 	require.True(t, isLoadNumericZeroFillType(types.T_decimal256))
 	require.True(t, isLoadNumericAdjustedValueType(types.T_decimal256))
@@ -236,5 +243,63 @@ func TestDecimal256CSVAndJSONLineObjectArray(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Decimal256](bat.Vecs[0], 0))
 		})
+	}
+}
+
+func TestDecimal256CSVAndJSONLineDroppedTail(t *testing.T) {
+	for _, format := range []struct {
+		name     string
+		format   string
+		jsonData string
+	}{
+		{name: "csv", format: tree.CSV},
+		{name: "json object", format: tree.JSONLINE, jsonData: tree.OBJECT},
+		{name: "json array", format: tree.JSONLINE, jsonData: tree.ARRAY},
+	} {
+		for _, width := range []int32{39, 65} {
+			for _, tc := range []struct {
+				name  string
+				value string
+				want  string
+			}{
+				{"invalid at boundary", "0." + strings.Repeat("1", 76) + "z", ""},
+				{"invalid dropped tail", "0." + strings.Repeat("1", 77) + "z", ""},
+				{"second point", "0." + strings.Repeat("1", 80) + ".1", ""},
+				{"invalid exponent", "0." + strings.Repeat("1", 77) + "e+", ""},
+				{"valid dropped tail", "0." + strings.Repeat("1", 80), "0.11"},
+				{"valid exponent", "-0." + strings.Repeat("1", 77) + "E+1", "-1.11"},
+			} {
+				t.Run(fmt.Sprintf("%s/width%d/%s", format.name, width, tc.name), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					defer proc.Free()
+					typ := plan.Type{Id: int32(types.T_decimal256), Width: width, Scale: 2}
+					param := decimal256ExternalParam(format.format, format.jsonData, typ)
+					param.Extern.ExternType = int32(plan.ExternType_LOAD)
+					bat := batch.NewWithSize(1)
+					bat.Vecs[0] = vector.NewVec(types.New(types.T_decimal256, width, 2))
+					defer bat.Clean(proc.Mp())
+
+					content := tc.value + "\n"
+					if format.format == tree.JSONLINE {
+						if format.jsonData == tree.OBJECT {
+							content = fmt.Sprintf("{\"d\":%q}\n", tc.value)
+						} else {
+							content = fmt.Sprintf("[%q]\n", tc.value)
+						}
+					}
+					err := readAllText(t, param, proc, bat, content)
+					if tc.want == "" {
+						require.Error(t, err)
+						require.Contains(t, err.Error(), "invalid Decimal256 type")
+						require.Zero(t, bat.Vecs[0].Length())
+						require.Zero(t, bat.RowCount())
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, 1, bat.RowCount())
+					require.Equal(t, tc.want, vector.GetFixedAtWithTypeCheck[types.Decimal256](bat.Vecs[0], 0).Format(2))
+				})
+			}
+		}
 	}
 }

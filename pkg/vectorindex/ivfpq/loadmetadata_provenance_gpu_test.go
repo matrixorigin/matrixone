@@ -58,7 +58,7 @@ func makeMetaBatch6(proc *process.Process, id, checksum string, timestamp, files
 // still presents four columns and loads with the new fields left at 0.
 func TestIvfpqLoadMetadataProvenanceColumns(t *testing.T) {
 	m := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", m)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	orig := runSql

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -155,6 +156,14 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if err = group.prepareGroupAndAggArg(proc); err != nil {
 		return err
 	}
+	if group.SortRollup {
+		if group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag) {
+			return moerr.NewInternalErrorNoCtx("sort rollup does not support dynamic grouping metadata")
+		}
+		if err = group.prepareSortRollup(proc); err != nil {
+			return err
+		}
+	}
 
 	if err = group.PrepareProjectionWithAllocation(
 		proc, group.ctr.expressionAllocation); err != nil {
@@ -203,13 +212,21 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 				variableLengthKey = true
 			}
 			width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
-			group.ctr.keyWidth += int32(width)
+			// Width only selects the hash-key codec. A LONGTEXT key plus its
+			// NULL marker already exceeds int32; wrapping a composite width can
+			// misclassify real keys as H0 or legacy H8. Saturate wide estimates
+			// while preserving exact widths for the eight-byte fast path.
+			if width < 0 || width > math.MaxInt32-int(group.ctr.keyWidth) {
+				group.ctr.keyWidth = math.MaxInt32
+			} else {
+				group.ctr.keyWidth += int32(width)
+			}
 		}
 
 		legacyShortVariableKey := variableLengthKey && group.ctr.keyWidth <= 8 &&
 			!groupHashStringWireEnabled(proc)
 		group.ctr.legacyH8CharSemantics = legacyShortVariableKey
-		if group.ctr.keyWidth == 0 {
+		if hashKeyCount == 0 {
 			group.ctr.mtyp = H0
 		} else if (compactHashKey || legacyShortVariableKey) && group.ctr.keyWidth <= 8 {
 			group.ctr.mtyp = H8
@@ -292,6 +309,12 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
+			for i, arg := range ag.GetArgExpressions() {
+				// Most aggregate arguments need no specialization discovery.
+				if f := arg.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "*" && types.T(arg.Typ.Id) == types.T_decimal128 {
+					e.Executor[i] = colexec.FuseDecimalAggregateArgument(arg, e.Executor[i])
+				}
+			}
 			group.ctr.aggArgEvaluate = append(group.ctr.aggArgEvaluate, e)
 		}
 	}
@@ -373,6 +396,9 @@ func (group *Group) Call(
 	defer func() {
 		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "group", callErr)
 	}()
+	if group.SortRollup {
+		return group.callSortRollup(proc)
+	}
 	var err error
 
 	var isCancel bool
@@ -386,6 +412,9 @@ func (group *Group) Call(
 			group.ctr.resetForSpill()
 			group.ctr.state = vm.Build
 		}
+		if err = group.ctr.ensureMemoryGrowthParticipant(); err != nil {
+			return vm.CancelResult, err
+		}
 
 		// receive all data, loop till exhuasted.
 		for !group.ctr.inputDone {
@@ -393,6 +422,9 @@ func (group *Group) Call(
 			r, err = vm.ChildrenCall(group.GetChildren(0), proc, group.OpAnalyzer)
 			if err != nil {
 				return vm.CancelResult, err
+			}
+			if r.Status == vm.ExecYield {
+				return r, nil
 			}
 
 			// all handled, going to eval mode.
@@ -461,19 +493,15 @@ func (group *Group) Call(
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if group.ctr.distinctSpill != nil {
-				if _, err = group.ctr.drainExactCountDistinct(
-					proc, group.OpAnalyzer); err != nil {
-					return vm.CancelResult, err
-				}
-			}
 			if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				group.OpAnalyzer.Spill(bytes)
 				group.OpAnalyzer.SpillRows(rows)
 			}
-			if group.ctr.distinctSpill != nil && group.ctr.mtyp != H0 {
+			// Only final evaluation may reduce exact keys to cardinalities.
+			// Partials retain identities for downstream DISTINCT deduplication.
+			if group.NeedEval && group.ctr.distinctSpill != nil && group.ctr.mtyp != H0 {
 				if err = group.ctr.prepareGroupedDistinctContributions(proc); err != nil {
 					return vm.CancelResult, err
 				}
@@ -487,6 +515,9 @@ func (group *Group) Call(
 				proc, group.OpAnalyzer); err != nil {
 				return vm.CancelResult, err
 			}
+		}
+		if !group.NeedEval && group.ctr.state != vm.Build {
+			group.ctr.releaseMemoryGrowthParticipant()
 		}
 
 		return group.outputOneBatch(proc)
@@ -634,7 +665,13 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
 			var preview groupInsertPreview
-			var aggregateGroupScratch [hashmap.UnitLimit]uint64
+			// Only dynamic grouping needs to mask synthetic rows. Passing this
+			// scratch to aggregate interfaces makes it escape, so ordinary GROUP
+			// BY must not allocate a row-sized array for every input chunk.
+			var aggregateGroupScratch []uint64
+			if group.DynamicGrouping {
+				aggregateGroupScratch = make([]uint64, n)
+			}
 			for {
 				err = nil
 				if !evaluated {
@@ -664,6 +701,23 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 						preview.values = group.ctr.hr.insertPlan.Values()
 						preview.inserted = group.ctr.hr.insertPlan.Inserted()
 						preview.newGroups = int(group.ctr.hr.insertPlan.NewGroups())
+					}
+					if err == nil && preview.newGroups > 0 {
+						var growth uint64
+						growth, err = group.ctr.recoveryCapacityGrowth(preview.newGroups)
+						if err == nil {
+							var spill bool
+							spill, err = group.ctr.needAdaptiveSpillForGrowth(
+								group.OpAnalyzer, growth)
+							if err == nil && spill {
+								if retried, retryErr := group.retryBuildBatchAfterCapacity(
+									proc, mpool.ErrAllocationAccountCapacity); !retried {
+									return false, retryErr
+								}
+								evaluated = false
+								continue
+							}
+						}
 					}
 					// Reserve only for the groups the immutable preview proved this
 					// unit will publish. Rejection is still before hash/key/aggregate
@@ -765,7 +819,10 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		// Compact group state may still require existing group-hash spill. Before
 		// its first record is written, move every eligible exact key to the
 		// independent spool so no pre-activation hot-group record can survive.
-		needSpill := group.ctr.needSpill(group.OpAnalyzer)
+		needSpill, err := group.ctr.shouldSpill(group.OpAnalyzer)
+		if err != nil {
+			return false, err
+		}
 		if needSpill && group.ctr.distinctSpill == nil {
 			hasDistinct, err := group.ctr.hasExactCountDistinctArguments()
 			if err != nil {
@@ -776,7 +833,10 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					proc, group.OpAnalyzer); err != nil {
 					return false, err
 				}
-				needSpill = group.ctr.needSpill(group.OpAnalyzer)
+				needSpill, err = group.ctr.shouldSpill(group.OpAnalyzer)
+				if err != nil {
+					return false, err
+				}
 			}
 		}
 		group.ctr.inputRowCount += uint64(bat.RowCount())
@@ -807,23 +867,45 @@ func dynamicGroupingAggregateGroups(
 	if marker == nil || marker.GetType().Oid != types.T_bool || offset < 0 || offset+len(groups) > marker.Length() {
 		return nil, moerr.NewInvalidInputNoCtx("invalid dynamic grouping aggregate marker")
 	}
+	if len(groups) == 0 {
+		return groups, nil
+	}
 
-	hasSynthetic := false
-	for i := range groups {
-		row := offset + i
-		if marker.IsNull(uint64(row)) {
+	// Projection produces constant markers, while shuffle can materialize them.
+	// Avoid inspecting every row of the ordinary constant-false marker.
+	if marker.IsConst() {
+		if marker.IsConstNull() {
 			return nil, moerr.NewInvalidInputNoCtx("dynamic grouping aggregate marker cannot be NULL")
 		}
-		if vector.GetFixedAtNoTypeCheck[bool](marker, row) {
-			hasSynthetic = true
+		if !vector.GetFixedAtNoTypeCheck[bool](marker, 0) {
+			return groups, nil
+		}
+		for i := range groups {
+			scratch[i] = aggexec.GroupNotMatched
+		}
+		return scratch[:len(groups)], nil
+	}
+
+	// Validate the entire selected window before changing scratch. NULLs outside
+	// this mini-batch are checked when their own window is consumed.
+	if nulls := marker.GetNulls(); nulls.Any() {
+		for i := range groups {
+			if nulls.Contains(uint64(offset + i)) {
+				return nil, moerr.NewInvalidInputNoCtx("dynamic grouping aggregate marker cannot be NULL")
+			}
 		}
 	}
-	if !hasSynthetic {
+	markers := vector.MustFixedColNoTypeCheck[bool](marker)[offset : offset+len(groups)]
+	firstSynthetic := 0
+	for firstSynthetic < len(markers) && !markers[firstSynthetic] {
+		firstSynthetic++
+	}
+	if firstSynthetic == len(markers) {
 		return groups, nil
 	}
 	copy(scratch, groups)
-	for i := range groups {
-		if vector.GetFixedAtNoTypeCheck[bool](marker, offset+i) {
+	for i := firstSynthetic; i < len(markers); i++ {
+		if markers[i] {
 			scratch[i] = aggexec.GroupNotMatched
 		}
 	}
@@ -1162,26 +1244,20 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 	return b, nil
 }
 
-func (ctr *container) appendGroupByBatch(
-	vs []*vector.Vector,
-	offset int,
-	insertList []uint8,
-) (int, error) {
-	return ctr.appendGroupByBatchWithStringSources(vs, offset, insertList, nil, 0)
-}
-
+// toIncrease is the exact selection count validated before hash publication.
+// Keep that count when splitting a chunk across output batches.
 func (ctr *container) appendGroupByBatchWithStringSources(
 	vs []*vector.Vector,
 	offset int,
 	insertList []uint8,
+	toIncrease int,
 	stringSources [][]types.StringSource,
 	stringSourceOffset int,
-) (int, error) {
-	toIncrease, _ := countNonZeroAndFindKth(insertList, len(insertList)+1)
+) error {
 	if toIncrease == 0 {
 		// A duplicate-only chunk must not create a fresh retained batch after
 		// the hash preview has committed no new groups.
-		return 0, nil
+		return nil
 	}
 
 	// first find the target batch.
@@ -1193,7 +1269,7 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 			var err error
 			groupByBatch, err = ctr.createNewGroupByBatch(vs, aggBatchSize)
 			if err != nil {
-				return 0, err
+				return err
 			}
 		}
 		ctr.groupByBatches = append(ctr.groupByBatches, groupByBatch)
@@ -1205,7 +1281,7 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 	addedRows := toIncrease
 	kth := -1
 	if toIncrease > spaceLeft {
-		_, kth = countNonZeroAndFindKth(insertList, spaceLeft)
+		kth = findKthNonZero(insertList, spaceLeft)
 		thisTime = insertList[:kth+1]
 		addedRows = spaceLeft
 	}
@@ -1218,14 +1294,14 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 				vs[i], int64(offset), len(thisTime), thisTime, ctr.mp)
 		} else if i >= len(stringSources) || stringSourceOffset < 0 ||
 			stringSourceOffset+len(thisTime) > len(stringSources[i]) {
-			return 0, mpool.ErrAllocationAccountInvariant
+			return mpool.ErrAllocationAccountInvariant
 		} else {
 			err = vec.UnionBatchPreflightedWithStringSourcesDeferredNormalization(
 				vs[i], int64(offset), len(thisTime), thisTime,
 				stringSources[i][stringSourceOffset:stringSourceOffset+len(thisTime)], ctr.mp)
 		}
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 	currBatch.AddRowCount(addedRows)
@@ -1233,14 +1309,11 @@ func (ctr *container) appendGroupByBatchWithStringSources(
 	if toIncrease > spaceLeft {
 		// there is not enough space in the current batch to insert thisTime.
 		// so we need to append the rest of the insertList to the next batch.
-		_, err := ctr.appendGroupByBatchWithStringSources(
-			vs, offset+kth+1, insertList[kth+1:], stringSources,
+		return ctr.appendGroupByBatchWithStringSources(
+			vs, offset+kth+1, insertList[kth+1:], toIncrease-spaceLeft, stringSources,
 			stringSourceOffset+kth+1)
-		if err != nil {
-			return 0, err
-		}
 	}
-	return toIncrease, nil
+	return nil
 }
 
 func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error) {
@@ -1255,28 +1328,36 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 	if group.NeedEval {
 		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer, group.Aggs)
 	} else {
-		// The previous partial batch has returned to the caller. Only now may we
-		// release its state and materialize the next exact-key leaf.
-		if group.ctr.inputDone &&
-			group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) &&
-			group.ctr.distinctSpill != nil {
-			loaded, err := group.ctr.loadNextDistinctPartialLeaf(proc)
-			if err != nil {
-				return vm.CancelResult, err
-			}
-			if !loaded {
-				group.ctr.state = vm.End
-				return vm.CancelResult, nil
+		// Retire the previous batch only after it has returned to the caller.
+		// Generic reload can drain more exact keys, so finish its queue before
+		// consuming exact-key leaves. Those leaves remain deferred until EOF.
+		if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) {
+			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+				if _, err := group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
+					return vm.CancelResult, err
+				}
+			} else if group.ctr.inputDone && group.ctr.distinctSpill != nil {
+				loaded, err := group.ctr.loadNextDistinctPartialLeaf(proc)
+				if err != nil {
+					return vm.CancelResult, err
+				}
+				if !loaded {
+					group.ctr.state = vm.End
+					return vm.CancelResult, nil
+				}
 			}
 		}
-		// no need to eval, we are in streaming mode.  spill never happen
-		// here.
+		// Publish intermediate aggregate state rather than final values.
 		res, hasMore, err := group.getNextIntermediateResult(proc)
 		if err != nil {
 			return vm.CancelResult, err
 		}
 		if !hasMore {
-			if group.ctr.inputDone {
+			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+				// Keep Eval until all generic spill buckets have been returned.
+				// Resetting or ending here would discard every remaining bucket.
+				group.ctr.state = vm.Eval
+			} else if group.ctr.inputDone {
 				if group.ctr.distinctSpill != nil {
 					// Keep Eval so the next Call can safely retire this returned
 					// batch before loading another exact-key leaf.

@@ -100,10 +100,16 @@ func ViewMetadataRequireRevalidationSQL() []string {
 }
 
 // RequireViewMetadataRevalidation durably records that lifecycle DDL may be
-// skipped while lifecycle activation is unavailable.
+// skipped while lifecycle activation is unavailable. The operation owner's
+// deadline covers lock acquisition and Commit; only unbounded callers receive
+// the default recovery timeout. Background recovery pages retain their own bound.
 func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQLExecutor) error {
-	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
-	defer cancel()
+	callCtx := ctx
+	if _, bounded := ctx.Deadline(); !bounded {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
+		defer cancel()
+	}
 	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
 		statements := viewMetadataRequireRevalidationSQL()
 		result, err := txn.Exec(statements[0], executor.StatementOption{})
@@ -657,6 +663,11 @@ func (c *recoveryCompilerContext) DatabaseExists(
 		exists = c.compilerContext.DatabaseExists(databaseName, snapshot)
 	})
 	return exists
+}
+
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *recoveryCompilerContext) ResolveWithoutTemporaryAlias(string, string, *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
 }
 
 func (c *recoveryCompilerContext) Resolve(

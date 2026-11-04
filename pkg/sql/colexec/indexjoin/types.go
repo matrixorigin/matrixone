@@ -76,7 +76,8 @@ func (indexJoin *IndexJoin) Release() {
 func (indexJoin *IndexJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	indexJoin.ctr.state = Probe
 	if indexJoin.ctr.buf != nil {
-		indexJoin.ctr.buf.CleanOnlyData()
+		indexJoin.ctr.buf.Clean(proc.Mp())
+		indexJoin.ctr.buf = nil
 	}
 }
 
@@ -85,8 +86,4 @@ func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err
 		indexJoin.ctr.buf.Clean(proc.Mp())
 		indexJoin.ctr.buf = nil
 	}
-}
-
-func (indexJoin *IndexJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }

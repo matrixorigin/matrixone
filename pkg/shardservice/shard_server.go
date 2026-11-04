@@ -16,6 +16,7 @@ package shardservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -37,14 +38,20 @@ type server struct {
 	filters            []filter
 	stopper            *stopper.Stopper
 	rpc                morpc.MethodBasedServer[*pb.Request, *pb.Response]
+	closeOnce          sync.Once
+	closeErr           error
 }
 
 func NewShardServer(
 	cfg Config,
 	logger *log.MOLogger,
+	publish func(ShardServer),
 	opts ...ServerOption,
 ) ShardServer {
 	cfg.Validate()
+	if publish == nil {
+		panic("shard server requires an owner")
+	}
 	env := NewEnv(cfg.ServiceID, cfg.SelectCNLabel)
 	s := &server{
 		cfg: cfg,
@@ -56,6 +63,13 @@ func NewShardServer(
 		),
 		initReplicaVersion: uint64(time.Now().UnixNano()),
 	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			_ = s.Close()
+		}
+	}()
+	publish(s)
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -70,15 +84,18 @@ func NewShardServer(
 	if err := s.rpc.Start(); err != nil {
 		panic(err)
 	}
+	constructed = true
 	return s
 }
 
 func (s *server) Close() error {
-	if err := s.rpc.Close(); err != nil {
-		return err
-	}
-	s.stopper.Stop()
-	return nil
+	s.closeOnce.Do(func() {
+		if s.rpc != nil {
+			s.closeErr = s.rpc.Close()
+		}
+		s.stopper.Stop()
+	})
+	return s.closeErr
 }
 
 func (s *server) initSchedulers() {

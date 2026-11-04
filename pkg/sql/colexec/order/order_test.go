@@ -109,7 +109,7 @@ func TestOrder(t *testing.T) {
 }
 
 func TestOrderResetReleasesPartiallyAccumulatedAccountedBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)

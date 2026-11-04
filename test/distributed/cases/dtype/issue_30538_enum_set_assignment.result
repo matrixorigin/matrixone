@@ -1,0 +1,163 @@
+set @enum_set_saved_mode=@@session.sql_mode;
+set @enum_set_saved_limit=@@session.max_error_count;
+drop database if exists enum_set_assignment_30538;
+create database enum_set_assignment_30538;
+use enum_set_assignment_30538;
+create table t(id int primary key,e enum('xs','s','m'),s set('a','b','c'));
+set sql_mode='STRICT_TRANS_TABLES';
+insert into t values(1,'xs ','a,c '),(2,'0','0');
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select id,e,e+0,s,s+0 from t order by id;
+➤ id[4,32,0]  ¦  e[12,65535,0]  ¦  e + 0[-5,64,0]  ¦  s[12,65535,0]  ¦  s + 0[-5,64,0]  𝄀
+1  ¦  xs  ¦  1  ¦  a,c  ¦  5  𝄀
+2  ¦    ¦  0  ¦    ¦  0
+set sql_mode='';
+insert into t values(3,'zz','a,c,x'),(4,'1_0','a,,c');
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+4
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for ENUM value: 'zz'  𝄀
+Warning  ¦  1265  ¦  Data truncated for ENUM value: '1_0'  𝄀
+Warning  ¦  1265  ¦  Data truncated for SET value: 'a,c,x'  𝄀
+Warning  ¦  1265  ¦  Data truncated for SET value: 'a,,c'
+select id,e,e+0,s,s+0 from t where id>=3 order by id;
+➤ id[4,32,0]  ¦  e[12,65535,0]  ¦  e + 0[-5,64,0]  ¦  s[12,65535,0]  ¦  s + 0[-5,64,0]  𝄀
+3  ¦    ¦  0  ¦  a,c  ¦  5  𝄀
+4  ¦    ¦  0  ¦  a,c  ¦  5
+set sql_mode='STRICT_TRANS_TABLES';
+insert ignore into t values(5,'bad','a,2'),(6,'xs',9),(7,'xs','9');
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+4
+select id,e+0,s+0 from t where id>=5 order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  ¦  s + 0[-5,64,0]  𝄀
+5  ¦  0  ¦  1  𝄀
+6  ¦  1  ¦  1  𝄀
+7  ¦  1  ¦  0
+insert into t values(20,'xs','a'),(21,'bad','b');
+Data truncated for ENUM value: 'bad'
+select count(*) from t where id>=20;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table u(id int primary key,e enum('xs','s','m'));
+insert into u values(1,'xs'),(2,'s');
+update u set e='bad';
+Data truncated for ENUM value: 'bad'
+select id,e from u order by id;
+➤ id[4,32,0]  ¦  e[12,65535,0]  𝄀
+1  ¦  xs  𝄀
+2  ¦  s
+create table src(id int primary key);
+insert into src values(1),(2),(3);
+set sql_mode='';
+insert into t select id+100,'bad','a,x,y' from src;
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+6
+select id,e+0,s+0 from t where id>=100 order by id;
+➤ id[4,32,0]  ¦  e + 0[-5,64,0]  ¦  s + 0[-5,64,0]  𝄀
+101  ¦  0  ¦  1  𝄀
+102  ¦  0  ¦  1  𝄀
+103  ¦  0  ¦  1
+create table one_enum(e enum('xs','s','m'));
+insert into one_enum select 'bad' from src;
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+set max_error_count=0;
+insert into one_enum select 'bad' from src;
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set max_error_count=1;
+insert into one_enum select 'bad' from src;
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for ENUM value: 'bad'
+set max_error_count=1024;
+prepare enum_mode_reuse from 'insert into t values(200,?,?)';
+set @ev='bad',@sv='a,c,x';
+execute enum_mode_reuse using @ev,@sv;
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+select e+0,s+0 from t where id=200;
+➤ e + 0[-5,64,0]  ¦  s + 0[-5,64,0]  𝄀
+0  ¦  5
+delete from t where id=200;
+set sql_mode='STRICT_TRANS_TABLES';
+execute enum_mode_reuse using @ev,@sv;
+Data truncated for ENUM value: 'bad'
+select count(*) from t where id=200;
+➤ count(*)[-5,64,0]  𝄀
+0
+set sql_mode='';
+execute enum_mode_reuse using @ev,@sv;
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+2
+select e+0,s+0 from t where id=200;
+➤ e + 0[-5,64,0]  ¦  s + 0[-5,64,0]  𝄀
+0  ¦  5
+deallocate prepare enum_mode_reuse;
+create table reads(id int primary key,e enum('z','a'),s set('a','','b'));
+insert ignore into reads values(1,'bad',2),(2,'z',7),(3,'a',3),(4,null,null);
+select e from reads group by e order by e;
+➤ e[12,65535,0]  𝄀
+null  𝄀
+  𝄀
+z  𝄀
+a
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select d.e from(select e from reads group by e)d order by d.e;
+➤ e[12,65535,0]  𝄀
+null  𝄀
+  𝄀
+z  𝄀
+a
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select e,e+0 from reads group by e order by e+0;
+➤ e[12,65535,0]  ¦  e + 0[-5,64,0]  𝄀
+null  ¦  null  𝄀
+  ¦  0  𝄀
+z  ¦  1  𝄀
+a  ¦  2
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select d.s,d.s+0 from(select distinct s from reads)d order by d.s;
+➤ s[12,65535,0]  ¦  d.s + 0[-5,64,0]  𝄀
+null  ¦  null  𝄀
+  ¦  0  𝄀
+a,  ¦  3  𝄀
+a,,b  ¦  7
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+create table sink(n bigint);
+insert into sink select e+0 from reads group by e;
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select n from sink order by n;
+➤ n[-5,64,0]  𝄀
+null  𝄀
+0  𝄀
+1  𝄀
+2
+set sql_mode=@enum_set_saved_mode;
+set max_error_count=@enum_set_saved_limit;
+drop database enum_set_assignment_30538;

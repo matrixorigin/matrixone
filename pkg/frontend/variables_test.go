@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +27,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/smartystreets/goconvey/convey"
 )
+
+func TestRollupAlgorithmVariable(t *testing.T) {
+	sv, ok := gSysVarsDefs["rollup_algorithm"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, sv.Scope)
+	assert.True(t, sv.Dynamic)
+	assert.False(t, sv.SetVarHintApplies)
+	assert.Equal(t, "COST", sv.Default)
+
+	for _, value := range []string{"cost", "sort", "hash"} {
+		converted, err := sv.Type.Convert(value)
+		assert.NoError(t, err)
+		assert.Equal(t, strings.ToUpper(value), converted)
+	}
+	_, err := sv.Type.Convert("invalid")
+	assert.Error(t, err)
+}
 
 func TestEventSchedulerDefaultDisabled(t *testing.T) {
 	convey.Convey("event_scheduler default should be DISABLED", t, func() {
@@ -37,6 +55,39 @@ func TestEventSchedulerDefaultDisabled(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(got, convey.ShouldEqual, "DISABLED")
 	})
+}
+
+func TestRemovedSidecarVariable(t *testing.T) {
+	ses := &Session{}
+	ctx := context.Background()
+	for _, name := range []string{"sidecar_url", "SIDECAR_URL"} {
+		t.Run(name, func(t *testing.T) {
+			assert.NotContains(t, gSysVarsDefs, name)
+			_, err := ses.GetSessionSysVar(name)
+			assert.ErrorContains(t, err, errorSystemVariableDoesNotExist())
+			_, err = ses.GetGlobalSysVar(name)
+			assert.ErrorContains(t, err, errorSystemVariableDoesNotExist())
+			assert.ErrorContains(t, ses.SetSessionSysVar(ctx, name, "http://unused"), errorSystemVariableDoesNotExist())
+			assert.ErrorContains(t, ses.SetGlobalSysVar(ctx, name, "http://unused"), errorSystemVariableDoesNotExist())
+		})
+	}
+}
+
+func TestWindowPartitionAlgorithmVariable(t *testing.T) {
+	sv, ok := gSysVarsDefs["window_partition_algorithm"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, sv.Scope)
+	assert.True(t, sv.Dynamic)
+	assert.False(t, sv.SetVarHintApplies)
+	assert.Equal(t, "SORT", sv.Default)
+
+	for _, value := range []string{"cost", "sort", "hash"} {
+		converted, err := sv.Type.Convert(value)
+		assert.NoError(t, err)
+		assert.Equal(t, strings.ToUpper(value), converted)
+	}
+	_, err := sv.Type.Convert("invalid")
+	assert.Error(t, err)
 }
 
 func TestSystemVariableSetTypeBits2String(t *testing.T) {
@@ -72,6 +123,54 @@ func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(got, convey.ShouldEqual, defaultLockWaitTimeoutSeconds)
 	})
+}
+
+func TestInnoDBLockWaitTimeoutAlias(t *testing.T) {
+	ctx := context.Background()
+	native := gSysVarsDefs["lock_wait_timeout"]
+	alias := gSysVarsDefs["innodb_lock_wait_timeout"]
+	assert.Equal(t, "innodb_lock_wait_timeout", alias.Name)
+	native.Name = alias.Name
+	assert.Equal(t, native, alias)
+	assert.Equal(t, "lock_wait_timeout", canonicalSystemVariableName("InnoDB_LOCK_WAIT_TIMEOUT"))
+
+	ses := &Session{}
+	for _, name := range []string{"lock_wait_timeout", "INNODB_LOCK_WAIT_TIMEOUT"} {
+		got, err := ses.GetSessionSysVar(name)
+		assert.NoError(t, err)
+		assert.Equal(t, defaultLockWaitTimeoutSeconds, got)
+		got, err = ses.GetGlobalSysVar(name)
+		assert.NoError(t, err)
+		assert.Equal(t, defaultLockWaitTimeoutSeconds, got)
+	}
+	global := &SystemVariables{mp: map[string]interface{}{"lock_wait_timeout": int64(7)}}
+	ses.gSysVars, ses.sesSysVars = global, global
+	other := &Session{}
+	other.sesSysVars = global.Clone()
+	for _, value := range []int64{1, 31536000, 2} {
+		assert.NoError(t, ses.SetSessionSysVar(ctx, "INNODB_LOCK_WAIT_TIMEOUT", value))
+		for _, name := range []string{"lock_wait_timeout", "innodb_lock_wait_timeout"} {
+			got, err := ses.GetSessionSysVar(name)
+			assert.NoError(t, err)
+			assert.Equal(t, value, got)
+		}
+	}
+	for _, value := range []interface{}{int64(0), int64(31536001), "bad", nil} {
+		assert.Error(t, ses.SetSessionSysVar(ctx, "innodb_lock_wait_timeout", value))
+		got, err := ses.GetSessionSysVar("lock_wait_timeout")
+		assert.NoError(t, err)
+		assert.Equal(t, int64(2), got)
+	}
+	assert.NoError(t, ses.SetSessionSysVar(ctx, "lock_wait_timeout", int64(3)))
+	got, err := ses.GetSessionSysVar("innodb_lock_wait_timeout")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), got)
+	assert.Equal(t, int64(7), global.Get("innodb_lock_wait_timeout"))
+	got, err = other.GetSessionSysVar("innodb_lock_wait_timeout")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(7), got)
+	_, err = ses.GetSessionSysVar("unknown_lock_wait_timeout")
+	assert.Error(t, err)
 }
 
 func TestGroupConcatMaxLenDefault(t *testing.T) {
@@ -607,4 +706,35 @@ func TestIndexCacheSizeVariablesStayGlobalScope(t *testing.T) {
 			"%s must stay dynamic: a cache budget an operator can only change by restarting "+
 				"every CN is not usable during the memory pressure that prompts the change", name)
 	}
+}
+
+// MySQL 8.0 declares information_schema_stats_expiry in both global and
+// session scopes, and mysqldump issues
+// `SET SESSION information_schema_stats_expiry=0` unconditionally against any
+// server that reports 8.0.x. Declaring the variable global-only makes that
+// statement fail with "the system variable is global" and aborts the dump.
+// The variable is a pure compatibility stub here (nothing reads it), so the
+// whole contract is: accept the session-scope assignment and remember it for
+// the rest of the session, without touching the global value.
+func TestInformationSchemaStatsExpirySessionScope(t *testing.T) {
+	def, ok := gSysVarsDefs["information_schema_stats_expiry"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeBoth, def.Scope,
+		"mysqldump sets information_schema_stats_expiry at session scope")
+	assert.True(t, def.Dynamic)
+	assert.Equal(t, int64(86400), def.Default)
+
+	// the statement mysqldump actually sends
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	assert.NoError(t, ses.SetSessionSysVar(context.Background(),
+		"information_schema_stats_expiry", int64(0)))
+	got, err := ses.GetSessionSysVar("information_schema_stats_expiry")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), got)
+
+	// the assignment is session-local: a fresh session still sees the default
+	fresh := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	got, err = fresh.GetSessionSysVar("information_schema_stats_expiry")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(86400), got)
 }

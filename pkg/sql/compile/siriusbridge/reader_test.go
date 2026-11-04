@@ -127,14 +127,6 @@ func TestRunArbitratesReaderRetirementAtEOF(t *testing.T) {
 				_, err = p.RunWithReader(reader, 0, child)
 				return err
 			}}}
-			var releases atomic.Int32
-			req.Release = func(context.Context) error {
-				if reader.closes.Load() != 1 {
-					return errors.New("query release preceded reader cleanup")
-				}
-				releases.Add(1)
-				return nil
-			}
 			q, err := r.Prepare(ctx, req)
 			require.NoError(t, err)
 			err = q.Run(ctx, func(Result) error { return nil })
@@ -151,7 +143,6 @@ func TestRunArbitratesReaderRetirementAtEOF(t *testing.T) {
 			require.Equal(t, int32(1), reader.closes.Load(), "Run must join reader cleanup")
 			require.Zero(t, proc.Mp().CurrNB())
 			require.NoError(t, q.Close(guard))
-			require.Equal(t, int32(1), releases.Load())
 			require.Equal(t, int32(1), d.q.closes.Load())
 		})
 	}

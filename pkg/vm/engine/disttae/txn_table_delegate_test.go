@@ -26,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -74,28 +72,6 @@ func TestTxnTableDelegate_CollectChanges(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, handle)
 	assert.NoError(t, handle.Close())
-}
-
-func TestTxnTableDelegateRejectsDelegatedSnapshotReads(t *testing.T) {
-	table := &txnTableDelegate{origin: &txnTable{tableId: 42}}
-	table.shard.is = true
-	table.shard.policy = shard.Policy_Hash
-	table.shard.tableID = 42
-
-	local, err := table.CanVisitSnapshotLocally()
-	require.NoError(t, err)
-	require.False(t, local)
-	require.ErrorContains(t, table.VisitSnapshotObjects(context.Background(), types.TS{}, func(objectio.ObjectStats, bool) error {
-		t.Fatal("delegated snapshot must not enumerate the origin relation")
-		return nil
-	}), "delegated snapshot")
-	_, err = table.HasSnapshotTombstones(context.Background(), 0, types.TS{})
-	require.ErrorContains(t, err, "delegated snapshot")
-
-	table.shard.policy = shard.Policy_Partition
-	local, err = table.CanVisitSnapshotLocally()
-	require.NoError(t, err)
-	require.True(t, local)
 }
 
 func TestTxnTableDelegate_UpdateConstraint(t *testing.T) {
@@ -233,4 +209,31 @@ func TestRemoteStatsPreserveByteWidth(t *testing.T) {
 			require.ErrorIs(t, err, failure)
 		})
 	}
+}
+
+func TestRemoteStatsSampleVisibility(t *testing.T) {
+	txn := newTransactionWithActivePKTableForTest(t, "pk")
+	origin := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+	op := txn.op.(*mock_frontend.MockTxnOperator)
+	op.EXPECT().Snapshot().Return(txnpb.CNTxnSnapshot{}, nil).AnyTimes()
+	op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
+	op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+	txn.proc.Base.TxnOperator = op
+	origin.proc.Store(txn.proc)
+	observation := &statsinfo.StatsInfo{TableName: "tbl", TableCnt: 5, ByteRangeMap: map[string]*statsinfo.ByteRangeDistribution{"v": {Version: 1}}}
+	response, err := observation.Marshal()
+	require.NoError(t, err)
+	tbl := &txnTableDelegate{origin: origin, isLocal: func() (bool, error) { return false, nil }}
+	tbl.shard.service = statsReadService{response: response}
+	txn.readOnly.Store(true)
+	got, err := tbl.Stats(t.Context(), true)
+	require.NoError(t, err)
+	require.NotEmpty(t, got.ByteRangeMap)
+	txn.readOnly.Store(false)
+	txn.writes = []Entry{{typ: DELETE, databaseId: 7, tableId: 42}}
+	got, err = tbl.Stats(t.Context(), true)
+	require.NoError(t, err)
+	require.Empty(t, got.ByteRangeMap, "delete-only workspace is invisible to the remote readonly owner")
+	require.Equal(t, 5.0, got.TableCnt)
+	require.NotEmpty(t, observation.ByteRangeMap)
 }

@@ -424,7 +424,12 @@ func (h *handler) rejectBeforeSession(conn net.Conn) {
 
 func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID uint64, goId int64) error {
 	skipCacheQuit := false
-	if getErrorCode(err) == codeClientDisconnect {
+	clientDisconnect := getErrorCode(err) == codeClientDisconnect
+	if !clientDisconnect && t != nil && t.hasInFlightClientRequest() {
+		clientDisconnect = (isEOFErr(err) || isConnEndErr(err)) &&
+			getErrorCode(err) != codeServerDisconnect
+	}
+	if clientDisconnect {
 		skipCacheQuit = h.cleanupBackendOnClientDisconnect(err, cc, t)
 	}
 	if isEOFErr(err) || isConnEndErr(err) {
@@ -463,11 +468,15 @@ func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID
 // cleanupBackendOnClientDisconnect returns true when the caller must not run
 // the conn-cache QUIT/cache path for this backend connection.
 func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) bool {
-	if cc == nil || getErrorCode(err) != codeClientDisconnect {
+	if cc == nil || getErrorCode(err) == codeServerDisconnect ||
+		(getErrorCode(err) != codeClientDisconnect && !isEOFErr(err) && !isConnEndErr(err)) {
 		return false
 	}
 	var currentSC ServerConn
 	if t != nil {
+		// Error publication can precede Close. Seal migration publication before
+		// selecting the terminal backend for synchronous disconnect cleanup.
+		_ = t.Close()
 		currentSC = t.getServerConn()
 	}
 	if t != nil && t.hasExpectedCacheQuit() {
@@ -483,13 +492,16 @@ func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *
 			return true
 		}
 	}
+	// Close the captured backend before any control-plane notification. The
+	// notification is bounded and best-effort, but it must not keep the CN
+	// transport (and its processlist row) alive while it waits.
+	h.closeBackendAfterClientDisconnect(cc, currentSC)
 	if err := cc.KillCurrentBackendConn(currentSC); err != nil {
 		h.logger.Warn("failed to kill backend connection after client disconnect",
 			zap.Uint32("Conn ID", cc.ConnID()),
 			zap.Error(err),
 		)
 	}
-	h.closeBackendAfterClientDisconnect(cc, currentSC)
 	return true
 }
 

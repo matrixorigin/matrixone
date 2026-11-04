@@ -55,16 +55,3 @@ func InitTestEnv(module string, t *testing.T) string {
 	RemoveDefaultTestPath(module, t)
 	return MakeDefaultTestPath(module, t)
 }
-
-func EnsureNoLeak(t *testing.T) {
-	// assert.Zerof(t, common.DefaultAllocator.CurrNB(), common.DefaultAllocator.Stats().Report(""))
-	// XXX MPOOL: Too noisy
-	// if common.DefaultAllocator.CurrNB() != 0 {
-	// 	t.Log(common.DefaultAllocator.Stats().Report(""))
-	// }
-}
-
-func AfterTest(t *testing.T) func() {
-	return func() {}
-	// return leaktest.AfterTest(t)
-}

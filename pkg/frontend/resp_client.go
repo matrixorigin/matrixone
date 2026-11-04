@@ -232,10 +232,10 @@ func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
 }
 
 func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
-	// Output.Reset cannot propagate errors from its terminal nil callback. PERFORM
-	// finalizes saved-result metadata explicitly after runner.Run succeeds, where
-	// the error can still prevent the OK response.
-	if isPerformStatement(execCtx.stmt) && bat == nil {
+	// Output.Reset also invokes nil callbacks on failed attempts and cannot
+	// propagate their errors. PERFORM and deferred SELECT metadata finalize
+	// saved results explicitly after Run succeeds with the final schema.
+	if bat == nil && (isPerformStatement(execCtx.stmt) || execCtx.resultMetadata != nil) {
 		return nil
 	}
 	if bat != nil {
@@ -247,6 +247,21 @@ func (resper *MysqlResp) RespResult(execCtx *ExecCtx, crs *perfcounter.CounterSe
 	}
 
 	return resper.writeClientBatch(execCtx, crs, bat)
+}
+
+// markSequenceRetryPublished sets the statement's tier-2 publication flag
+// (design §4 D, G1/F1) exactly once — the first batch that passes the
+// writeClientBatch early-outs marks the statement published before any of
+// its bytes reach the wire, which is what makes "publication wins"
+// enforceable at the retry quiescence boundary. Background/internal
+// statements carry no state and skip the mark (default-deny).
+func markSequenceRetryPublished(execCtx *ExecCtx) {
+	if execCtx == nil || execCtx.proc == nil {
+		return
+	}
+	if retryState := execCtx.proc.GetSequenceRetryState(); retryState != nil {
+		retryState.MarkPublished()
+	}
 }
 
 // saveResultBatch persists a result batch without writing it to the client.
@@ -267,6 +282,14 @@ func (resper *MysqlResp) writeClientBatch(execCtx *ExecCtx, crs *perfcounter.Cou
 	if bat == nil {
 		return nil
 	}
+
+	// Tier-2 publication flag (design §4 D, G1/F1): the first result batch
+	// entering the client write path marks the statement published BEFORE
+	// any of its bytes are written, so tier-2 retry arbitration can never
+	// replay a delivered prefix. This is the single publication point for
+	// result batches; the unsynchronized ResultRows accounting in RespResult
+	// stays ordinary statistics and is never consulted for admission.
+	markSequenceRetryPublished(execCtx)
 
 	ses := execCtx.ses.(*Session)
 	ec := ses.GetExportConfig()
@@ -318,7 +341,7 @@ func (resper *MysqlResp) finalizeQueryResult(execCtx *ExecCtx) error {
 	return resper.binWr.Write(execCtx, nil, nil)
 }
 
-func finalizePerformQueryResult(execCtx *ExecCtx) error {
+func finalizeQueryResult(execCtx *ExecCtx) error {
 	finalizer, ok := execCtx.resper.(queryResultFinalizer)
 	if !ok {
 		return nil

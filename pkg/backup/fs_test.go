@@ -16,11 +16,14 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,10 +40,10 @@ func Test_writeFile(t *testing.T) {
 	tPath := tDir + "/" + "test"
 	err := os.RemoveAll(tPath)
 	assert.NoError(t, err)
-	etlFS, _, err := setupFilesystem(context.Background(), tPath, true, "DISK")
+	etlFS, _, err := setupFilesystem(fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin"), tPath, true, "DISK")
 	assert.NoError(t, err)
 
-	etlFS2, _, err := setupFilesystem(context.Background(), tPath, true, "DISK")
+	etlFS2, _, err := setupFilesystem(fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin"), tPath, true, "DISK")
 	assert.NoError(t, err)
 
 	data1 := []byte("abc")
@@ -95,7 +98,7 @@ func Test_writeFile(t *testing.T) {
 
 func getTestFs(t *testing.T, forEtl bool) fileservice.FileService {
 	tPath := getTempDir(t, "test")
-	etlFS, _, err := setupFilesystem(context.Background(), tPath, forEtl, "DISK")
+	etlFS, _, err := setupFilesystem(fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin"), tPath, forEtl, "DISK")
 	assert.NoError(t, err)
 	return etlFS
 }
@@ -119,4 +122,47 @@ func getTempFile(t *testing.T, dir, name, content string) *os.File {
 	err = file.Close()
 	assert.NoError(t, err)
 	return file
+}
+
+func hexStr(d []byte) string {
+	return fmt.Sprintf("%x", d)
+}
+
+// readFileAndCheck reads data and compare the checksum with the one in checksum file.
+// if the checksum is equal, it returns the data of the file.
+func readFileAndCheck(ctx context.Context, fs fileservice.FileService, path string) ([]byte, error) {
+	var (
+		err               error
+		data              []byte
+		savedChecksumData []byte
+		newChecksumData   []byte
+		savedChecksum     string
+		newChecksum       string
+	)
+	data, err = readFile(ctx, fs, path)
+	if err != nil {
+		return nil, err
+	}
+
+	//calculate the checksum
+	hash := sha256.New()
+	hash.Write(data)
+	newChecksumData = hash.Sum(nil)
+	newChecksum = hexStr(newChecksumData)
+
+	checksumFile := path + ".sha256"
+	savedChecksumData, err = readFile(ctx, fs, checksumFile)
+	if err != nil {
+		return nil, err
+	}
+	savedChecksum = hexStr(savedChecksumData)
+	//3. compare the checksum
+	if strings.Compare(savedChecksum, newChecksum) != 0 {
+		return nil, moerr.NewInternalError(ctx, checksumErrorInfo(newChecksum, savedChecksum, path))
+	}
+	return data, err
+}
+
+func checksumErrorInfo(newChecksum, savedChecksum, path string) string {
+	return fmt.Sprintf("checksum %s of %s is not equal to %s ", newChecksum, path, savedChecksum)
 }

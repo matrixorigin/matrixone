@@ -37,7 +37,7 @@ type aggregateAllocationTestCase struct {
 }
 
 func newTestAggregateAllocation(
-	t *testing.T,
+	t testing.TB,
 ) (*mpool.AllocationAccountRegistry, *mpool.AllocationAccount, *AllocationAccount) {
 	t.Helper()
 	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
@@ -57,7 +57,7 @@ func newTestAggregateAllocation(
 }
 
 func finishTestAggregateAllocation(
-	t *testing.T,
+	t testing.TB,
 	registry *mpool.AllocationAccountRegistry,
 	account *mpool.AllocationAccount,
 ) {

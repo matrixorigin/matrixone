@@ -325,6 +325,11 @@ func TestVectorMatmulResolution(t *testing.T) {
 		}
 		_, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{i64, i64, vb, types.T_json.ToType(), vc})
 		require.NoError(t, err)
+		// options as a JSON object, beside text queries or JSON queries
+		_, err = GetFunctionByName(ctx, "vector_matmul", []types.Type{i64, i64, vb, vc, types.T_json.ToType()})
+		require.NoError(t, err)
+		_, err = GetFunctionByName(ctx, "vector_matmul", []types.Type{i64, i64, vb, types.T_json.ToType(), types.T_json.ToType()})
+		require.NoError(t, err)
 		// a non-int64 topk, untyped queries and options are cast
 		r, err := GetFunctionByName(ctx, "vector_matmul", []types.Type{types.T_uint8.ToType(), i64, vb, types.T_any.ToType(), types.T_any.ToType()})
 		require.NoError(t, err)
@@ -347,7 +352,7 @@ func TestVectorMatmulResolution(t *testing.T) {
 			{i64, i64, vb},
 			{types.T_float64.ToType(), i64, vb, vc},
 			{i64, i64, vb, i64},
-			{i64, i64, vb, vc, types.T_json.ToType()},
+			{i64, i64, vb, vc, types.T_blob.ToType()},
 			{i64, types.T_float64.ToType(), vb, vc},
 			{i64, i64, types.New(types.T_array_float64, 4, 0), vc},
 			{i64, i64, vb, vc, vc, vc},
@@ -358,8 +363,9 @@ func TestVectorMatmulResolution(t *testing.T) {
 	}
 }
 
-// TestVecBlockDistanceOverflow checks float32 overflow: inner product is an error, cosine
-// recomputes in float64 (the vectors are orthogonal).
+// TestVecBlockDistanceOverflow checks float32 lane overflow: the distances are recomputed in
+// float64, so x . y (products that cancel) is exactly 0 and cosine finds the vectors
+// orthogonal; x . x is beyond the float32 range, an error.
 func TestVecBlockDistanceOverflow(t *testing.T) {
 	const m = 3e38
 	x, y := make([]float32, 32), make([]float32, 32)
@@ -373,8 +379,11 @@ func TestVecBlockDistanceOverflow(t *testing.T) {
 	for _, oid := range vecBlockOids {
 		a := vecBlockCellVector(t, proc, oid, 32, [][]float32{x}, nil)
 		b := vecBlockCellVector(t, proc, oid, 32, [][]float32{y}, nil)
-		_, err := runVecBlockFn(t, proc, InnerProductVecBlock, types.T_float64.ToType(), a, b)
-		require.Error(t, err, "inner_product %s", oid)
+		res, err := runVecBlockFn(t, proc, InnerProductVecBlock, types.T_float64.ToType(), a, b)
+		require.NoError(t, err, "inner_product %s", oid)
+		require.Zero(t, vector.MustFixedColNoTypeCheck[float64](res)[0], "inner_product %s", oid)
+		_, err = runVecBlockFn(t, proc, InnerProductVecBlock, types.T_float64.ToType(), a, a)
+		require.Error(t, err, "inner_product %s of x with itself", oid)
 		for _, d := range []struct {
 			name string
 			op   executeLogicOfOverload

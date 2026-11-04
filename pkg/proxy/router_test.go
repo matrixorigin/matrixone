@@ -625,10 +625,14 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	hc.updateCN("cn3", addr3, map[string]metadata.LabelList{
 		tenantLabelKey: {Labels: []string{"t1"}},
 	})
+	// Hold the handshake until teardown. The connection deadline, rather than
+	// an overshooting server sleep, determines the retryable timeout.
+	releaseHandshake := make(chan struct{})
 	stopFn3 := startTestCNServer(t, ctx, addr3, nil, withBeforeHandle(func() {
-		time.Sleep(defaultAuthTimeout/3 + time.Second)
+		<-releaseHandshake
 	}))
 	defer func() {
+		close(releaseHandshake)
 		require.NoError(t, stopFn3())
 	}()
 

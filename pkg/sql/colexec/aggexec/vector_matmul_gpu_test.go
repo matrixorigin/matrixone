@@ -219,7 +219,8 @@ func TestVectorMatmulGPUPlainTypesMatchCPU(t *testing.T) {
 					continue
 				}
 				// the CPU computes 1 - cos in float64 as cosine_distance (2.2e-16 for parallel
-				// vectors), the GPU from the fp32 GEMM: the same rows in the same order
+				// vectors), the GPU from the fp32 GEMM and returns float32: the same rows in the
+				// same order, scores within float32 rounding
 				require.Len(t, gpu, len(cpu))
 				for g := range cpu {
 					want, got := vmGPUParse(t, cpu[g]), vmGPUParse(t, gpu[g])
@@ -228,7 +229,7 @@ func TestVectorMatmulGPUPlainTypesMatchCPU(t *testing.T) {
 						require.Len(t, got[q], len(want[q]))
 						for i := range want[q] {
 							require.Equal(t, want[q][i].id, got[q][i].id, "%s %s groups %d", options, c.oid, groups)
-							require.InDelta(t, want[q][i].score, got[q][i].score, 1e-9)
+							require.InDelta(t, want[q][i].score, got[q][i].score, 1e-7)
 						}
 					}
 				}

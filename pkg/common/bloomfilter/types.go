@@ -16,10 +16,19 @@ package bloomfilter
 
 import (
 	"math/rand"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 )
+
+// InitialMemoryCapacity describes the backing created by New, excluding the
+// input-dependent encoded-key buffers. Owners can admit it before construction.
+func InitialMemoryCapacity(rowCount int64, probability float64) uint64 {
+	bits, seeds := computeMemAndHashCount(rowCount, probability)
+	return uint64((bits+63)/64)*8 + uint64(seeds)*8 + uint64(unsafe.Sizeof(sharedData{})) +
+		uint64(hashmap.UnitLimit)*(72+uint64(seeds)*48)
+}
 
 // sharedData holds the actual bloom filter data that can be shared among multiple handles.
 type sharedData struct {

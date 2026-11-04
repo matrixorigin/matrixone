@@ -18,5 +18,19 @@ delete from vec_table;
 load data infile '$resources/into_outfile/array_out.csv' into table vec_table fields terminated by ',' ignore 1 lines;
 select * from vec_table;
 
+-- Native JSON arrays retain their element boundaries in both JSONLine record shapes.
+truncate table vec_table;
+load data infile {'filepath'='$resources/load_data/vector_array_object.jl','format'='jsonline','jsondata'='object'} into table vec_table;
+select a, b, c, vector_dims(b), vector_dims(c) from vec_table order by a;
+truncate table vec_table;
+load data infile {'filepath'='$resources/load_data/vector_array_array.jl','format'='jsonline','jsondata'='array'} into table vec_table parallel 'true';
+select a, b, c, vector_dims(b), vector_dims(c) from vec_table order by a;
+
+-- Direct external scans use the same conversion, including projected vector columns.
+create external table json_object_vectors(a int, b vecf32(3), c vecf64(3)) infile {'filepath'='$resources/load_data/vector_array_object.jl','format'='jsonline','jsondata'='object'};
+select c from json_object_vectors where a = 1;
+create external table json_array_vectors(a int, b vecf32(3), c vecf64(3)) infile {'filepath'='$resources/load_data/vector_array_array.jl','format'='jsonline','jsondata'='array'};
+select a, b, c from json_array_vectors order by a;
+
 -- post
 drop database vecdb2;

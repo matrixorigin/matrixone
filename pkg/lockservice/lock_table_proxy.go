@@ -75,7 +75,7 @@ func (lp *localLockTableProxy) lock(
 	// semantics; routing them through the singleton cache would either panic or
 	// lose transaction-bookkeeping replacement.
 	// Exact-row admission must validate the real transaction at its owner.
-	if options.KeepRows || options.Mode != pb.LockMode_Shared || len(rows) != 1 {
+	if options.NoWait || options.KeepRows || options.Mode != pb.LockMode_Shared || len(rows) != 1 {
 		lp.remote.lock(ctx, txn, rows, options, cb)
 		return
 	}

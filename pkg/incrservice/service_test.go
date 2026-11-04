@@ -953,6 +953,63 @@ func TestSetOffsetPreservesMaxUint64TerminalValue(t *testing.T) {
 		})
 }
 
+// #29903: only a user-visible auto_increment column may surface as LAST_INSERT_ID.
+// InsertValues returns the first generated value among non-internal columns; the
+// allocator-owned hidden fake primary key (isInternal) is still generated and the
+// column populated, but its value must never be returned.
+func TestInsertValuesExcludesInternalFakePKFromLastInsertID(t *testing.T) {
+	runServiceTests(
+		t,
+		1,
+		func(ctx context.Context, ss []*service, ops []client.TxnOperator) {
+			s := ss[0]
+			op := ops[0]
+			u64 := types.New(types.T_uint64, 0, 0)
+			gen := func() *vector.Vector { return newTestVector[uint64](1, u64, nil, nil) }
+			explicit := func(v uint64) *vector.Vector { return newTestVector[uint64](1, u64, []uint64{v}, []int{0}) }
+
+			require.NoError(t, s.Create(ctx, 1,
+				[]AutoColumn{{ColName: catalog.FakePrimaryKeyColName, ColIndex: 0, Step: 1, isInternal: true}}, op))
+			require.NoError(t, s.Create(ctx, 2,
+				[]AutoColumn{{ColName: "id", ColIndex: 0, Step: 1}}, op))
+			require.NoError(t, s.Create(ctx, 3,
+				[]AutoColumn{{ColName: catalog.FakePrimaryKeyColName, ColIndex: 0, Step: 1, isInternal: false}}, op))
+			require.NoError(t, s.Create(ctx, 4, []AutoColumn{
+				{ColName: "id", ColIndex: 0, Step: 1},
+				{ColName: catalog.FakePrimaryKeyColName, ColIndex: 1, Step: 1, isInternal: true},
+			}, op))
+			require.NoError(t, op.Commit(ctx))
+
+			// internal-only (a PK-less table's hidden fake primary key): not returned
+			v := gen()
+			last, err := s.InsertValues(ctx, 1, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), last, "hidden fake PK must not surface as LAST_INSERT_ID")
+			require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](v)[0], "fake PK column still populated")
+
+			// user-visible auto column: returned
+			v = gen()
+			last, err = s.InsertValues(ctx, 2, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), last)
+
+			// a user column named like the fake PK but visible (isInternal=false): returned (P2-1)
+			v = gen()
+			last, err = s.InsertValues(ctx, 3, 0, nil, []*vector.Vector{v}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), last, "a visible column named __mo_fake_pk_col must still surface")
+
+			// mixed: user auto column given an explicit value, only the hidden fake PK
+			// generates -> LAST_INSERT_ID stays unchanged (P2-2)
+			idVec := explicit(100)
+			fakeVec := gen()
+			last, err = s.InsertValues(ctx, 4, 0, nil, []*vector.Vector{idVec, fakeVec}, 1, 0)
+			require.NoError(t, err)
+			require.Equal(t, uint64(0), last, "when only the hidden fake PK generates, nothing surfaces")
+			require.NotEqual(t, uint64(0), vector.MustFixedColWithTypeCheck[uint64](fakeVec)[0], "fake PK still populated")
+		})
+}
+
 func TestSetOffsetDoesNotReadCommittedColumns(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	store := &setOffsetStore{t: t}
@@ -2808,11 +2865,11 @@ func TestInsertValuesRejectsOlderBuilderFinishingAfterNewerEpoch(t *testing.T) {
 }
 
 func TestInsertValuesBuilderCannotReviveCacheAfterReload(t *testing.T) {
-	testBlockedBuilderInvalidation(t, false)
+	testBlockedBuilderInvalidation(t, false, false)
 }
 
 func TestInsertValuesBuilderCannotReviveCacheAfterClose(t *testing.T) {
-	testBlockedBuilderInvalidation(t, true)
+	testBlockedBuilderInvalidation(t, true, false)
 }
 
 func TestSetOffsetWaitsForQueuedOldAllocation(t *testing.T) {
@@ -2942,7 +2999,7 @@ func TestRetiredTableCacheCannotQueueAllocation(t *testing.T) {
 	c := &tableCache{}
 	c.mu.cols = map[string]*columnCache{"auto": col}
 	c.retire()
-	col.preAllocate(context.Background(), 1, 2, nil)
+	col.preAllocate(context.Background(), 1, 2, nil, false)
 	require.Zero(t, allocator.asyncCalls.Load())
 }
 
@@ -2955,14 +3012,14 @@ func TestPreAllocateClearsStateWhenEnqueueFails(t *testing.T) {
 		allocator: allocator,
 		committed: true,
 	}
-	col.preAllocate(context.Background(), 1, 2, nil)
+	col.preAllocate(context.Background(), 1, 2, nil, false)
 	col.Lock()
 	allocating := col.allocating
 	col.Unlock()
 	require.False(t, allocating)
 }
 
-func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
+func testBlockedBuilderInvalidation(t *testing.T, closeService, pkRetry bool) {
 	client.RunTxnTests(func(tc client.TxnClient, _ rpc.TxnSender) {
 		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
 		defer cancel()
@@ -2976,6 +3033,9 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 		require.NoError(t, s.Create(ctx, 0, newTestTableDef(1), op))
 		require.NoError(t, op.Commit(ctx))
 
+		if pkRetry {
+			require.NoError(t, s.Reload(ctx, 0))
+		}
 		started, release := store.blockNext()
 		defer release()
 		result := make(chan error, 1)
@@ -3008,7 +3068,13 @@ func testBlockedBuilderInvalidation(t *testing.T, closeService bool) {
 			release()
 			<-closed
 		} else {
-			require.NoError(t, s.Reload(ctx, 0))
+			if pkRetry {
+				refreshed, err := s.ReloadForPKRetry(ctx, 0, 8, nil)
+				require.NoError(t, err)
+				require.True(t, refreshed)
+			} else {
+				require.NoError(t, s.Reload(ctx, 0))
+			}
 			require.True(t, moerr.IsMoErrCode(<-waiterResult, moerr.ErrTxnNeedRetryWithDefChanged))
 			release()
 		}

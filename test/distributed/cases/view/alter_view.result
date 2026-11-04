@@ -179,3 +179,37 @@ table t2 already exists
 DROP VIEW IF EXISTS t2;
 DROP TABLE t1;
 DROP TABLE t2;
+
+drop database if exists alter_view_shared;
+drop database if exists alter_view_db1;
+drop database if exists alter_view_db2;
+create database alter_view_shared;
+create database alter_view_db1;
+create database alter_view_db2;
+create table alter_view_db1.src(id int primary key, v varchar(8));
+insert into alter_view_db1.src values (1,'db1'),(2,'db1x');
+create table alter_view_db2.src(id int primary key, v varchar(8));
+insert into alter_view_db2.src values (1,'db2'),(2,'db2x');
+use alter_view_db1;
+create view alter_view_shared.v as select id, v from src;
+use alter_view_db2;
+alter view alter_view_shared.v as select id, v from src;
+select id, v from alter_view_shared.v order by id;
+id	v
+1	db2
+2	db2x
+create view v as select 'collision' as w;
+alter view alter_view_shared.v as select id, v from alter_view_db1.src;
+select w from v;
+w
+collision
+select id, v from alter_view_shared.v order by id;
+id	v
+1	db1
+2	db1x
+alter view alter_view_shared.not_here as select 1;
+invalid view 'alter_view_shared.not_here'
+drop view v;
+drop database alter_view_shared;
+drop database alter_view_db1;
+drop database alter_view_db2;

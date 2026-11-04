@@ -35,6 +35,7 @@ def    mo_catalog    mo_cdc_watermark    BASE TABLE    Tae
 def    mo_catalog    mo_columns    BASE TABLE    Tae
 def    mo_catalog    mo_data_key    BASE TABLE    Tae
 def    mo_catalog    mo_database    BASE TABLE    Tae
+def    mo_catalog    mo_database_defaults    BASE TABLE    Tae
 def    mo_catalog    mo_feature_limit    BASE TABLE    Tae
 def    mo_catalog    mo_feature_registry    BASE TABLE    Tae
 def    mo_catalog    mo_foreign_keys    BASE TABLE    Tae
@@ -143,11 +144,11 @@ and table_name = 'type_probe'
 and column_name in ('c_bool', 'c_tiny_unsigned', 'c_small_unsigned', 'c_int_unsigned', 'c_big_unsigned')
 order by ordinal_position;
 column_name    data_type    column_type
-c_tiny_unsigned    tinyint    TINYINT UNSIGNED(8)
-c_small_unsigned    smallint    SMALLINT UNSIGNED(16)
-c_int_unsigned    int    INT UNSIGNED(32)
-c_big_unsigned    bigint    BIGINT UNSIGNED(64)
-c_bool    tinyint    BOOL(0)
+c_tiny_unsigned    tinyint    tinyint unsigned
+c_small_unsigned    smallint    smallint unsigned
+c_int_unsigned    int    int unsigned
+c_big_unsigned    bigint    bigint unsigned
+c_bool    tinyint    boolean
 create table information_schema_data_type_case.composite_pk_probe (
 a int not null,
 b int not null,
@@ -174,4 +175,65 @@ execute metadata_limit_reuse using @metadata_schema, @metadata_table, @metadata_
 column_name
 v
 deallocate prepare metadata_limit_reuse;
+set @column_default_sql_mode = @@session.sql_mode;
+set sql_mode = '';
+create table information_schema_data_type_case.default_probe (
+missing varchar(32),
+explicit_null varchar(32) default null,
+empty_value varchar(32) default '',
+quoted_null varchar(32) default 'NULL',
+quote_value varchar(32) default 'it''s',
+slash_value varchar(32) default 'a\\b',
+newline_value varchar(32) default 'a\nb',
+pattern_value varchar(32) default 'a\%b',
+numeric_value int default 9,
+date_value date default '2024-01-01',
+expression_value json default (json_array())
+);
+select column_name, hex(column_default) as default_hex,
+column_default is null as default_is_null
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case' and table_name = 'default_probe'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  default_hex[-1,16383,0]  ¦  default_is_null[-6,8,0]  𝄀
+missing  ¦  null  ¦  1  𝄀
+explicit_null  ¦  null  ¦  1  𝄀
+empty_value  ¦    ¦  0  𝄀
+quoted_null  ¦  4E554C4C  ¦  0  𝄀
+quote_value  ¦  69742773  ¦  0  𝄀
+slash_value  ¦  615C62  ¦  0  𝄀
+newline_value  ¦  610A62  ¦  0  𝄀
+pattern_value  ¦  615C2562  ¦  0  𝄀
+numeric_value  ¦  39  ¦  0  𝄀
+date_value  ¦  323032342D30312D3031  ¦  0  𝄀
+expression_value  ¦  286A736F6E5F6172726179282929  ¦  0
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select column_name, hex(column_default) as default_hex,
+column_default is null as default_is_null
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case' and table_name = 'default_probe'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  default_hex[-1,16383,0]  ¦  default_is_null[-6,8,0]  𝄀
+missing  ¦  null  ¦  1  𝄀
+explicit_null  ¦  null  ¦  1  𝄀
+empty_value  ¦    ¦  0  𝄀
+quoted_null  ¦  4E554C4C  ¦  0  𝄀
+quote_value  ¦  69742773  ¦  0  𝄀
+slash_value  ¦  615C62  ¦  0  𝄀
+newline_value  ¦  610A62  ¦  0  𝄀
+pattern_value  ¦  615C2562  ¦  0  𝄀
+numeric_value  ¦  39  ¦  0  𝄀
+date_value  ¦  323032342D30312D3031  ¦  0  𝄀
+expression_value  ¦  286A736F6E5F6172726179282929  ¦  0
+alter table information_schema_data_type_case.default_probe
+add mode_value varchar(32) default 'a\b';
+set sql_mode = '';
+select column_name, hex(column_default) as default_hex,
+column_default is null as default_is_null
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case' and table_name = 'default_probe'
+and column_name = 'mode_value';
+➤ column_name[12,256,0]  ¦  default_hex[-1,16383,0]  ¦  default_is_null[-6,8,0]  𝄀
+mode_value  ¦  615C62  ¦  0
+set sql_mode = @column_default_sql_mode;
 drop database information_schema_data_type_case;

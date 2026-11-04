@@ -550,6 +550,8 @@ func TestDivisionByZeroSQLModes(t *testing.T) {
 				{"Select", tree.QueryTypeDQL, false, false},
 				{"Update", tree.QueryTypeDML, false, true},
 				{"Insert", tree.QueryTypeDML, true, false},
+				{"Load Data", tree.QueryTypeDML, tree.IsIgnoreStatement(&tree.Load{Local: true}), true},
+				{"Load Data", tree.QueryTypeDML, tree.IsIgnoreStatement(&tree.Load{Local: true, DuplicateHandling: &tree.DuplicateKeyReplace{}}), true},
 				{"Execute", tree.QueryTypeDML, false, true},
 			} {
 				profile := &process.StmtProfile{}

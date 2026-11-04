@@ -53,14 +53,12 @@ type TaskScheduler interface {
 
 type BaseScheduler struct {
 	ops.OpWorker
-	idAlloc     *common.IdAllocator
 	Dispatchers map[TaskType]Dispatcher
 }
 
 func NewBaseScheduler(ctx context.Context, name string) *BaseScheduler {
 	scheduler := &BaseScheduler{
 		OpWorker:    *ops.NewOpWorker(ctx, name),
-		idAlloc:     common.NewIdAllocator(1),
 		Dispatchers: make(map[TaskType]Dispatcher),
 	}
 	scheduler.ExecFunc = scheduler.doDispatch
@@ -72,7 +70,6 @@ func (s *BaseScheduler) RegisterDispatcher(t TaskType, dispatcher Dispatcher) {
 }
 
 func (s *BaseScheduler) Schedule(task Task) error {
-	// task.AttachID(s.idAlloc())
 	if !s.SendOp(task) {
 		return ErrSchedule
 	}

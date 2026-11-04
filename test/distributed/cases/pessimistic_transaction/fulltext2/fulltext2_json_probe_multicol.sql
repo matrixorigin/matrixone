@@ -29,7 +29,7 @@ deallocate prepare wait_ftj;
 -- predicate -- the non-indexed conjunct is enforced on the base rows, not delegated to the index.
 -- @separator:table
 -- @wait_expect(2, 120)
--- @regex("Table Function on fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select id from t where json_extract_string(j,'$.foo') = 'needle' and status = 'active';
 -- @separator:table
 -- @regex("status = 'active'", true)

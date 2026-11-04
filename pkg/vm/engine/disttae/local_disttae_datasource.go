@@ -481,9 +481,7 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 
 	// bathed prefetch block data and deletes
-	if !fileservice.GetFileServicePolicy(ctx).Any(fileservice.SkipFullFilePreloads) {
-		ls.batchPrefetch(seqNums)
-	}
+	ls.batchPrefetch(ctx, seqNums)
 
 	for {
 		switch ls.iteratePhase {
@@ -725,29 +723,84 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		// Note: this implementation depends on that the offsets from rowids is a 0-based consecutive seq.
 		// Refer to genBlock and genRowid method.
 
-		// apply pk filter on workspace entries
-		if enableFilter {
-			skipMask = objectio.GetReusableBitmap()
-			put := ls.table.db.getEng().packerPool.Get(&packer)
-			ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
-			put.Put()
+		// Skip whole batches whose encoded-PK envelope provably misses this
+		// filter before the per-row encode+probe pass. Without this, every
+		// point read re-encoded every workspace batch's primary keys, so
+		// single-row UPDATE statements slowed down linearly with the number
+		// of rows already modified by the transaction (issue 26796).
+		if enableFilter && entry.pkRange.inited &&
+			!ls.memPKFilter.MayMatchKeyRange(entry.pkRange.min, entry.pkRange.max) {
+			ls.wsCursor++
+			continue
 		}
 
-		// apply bf filter on workspace entries
-		if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
-			if skipMask.IsEmpty() {
-				skipMask = objectio.GetReusableBitmap()
-			}
-			bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
-			ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
-				if !exist {
-					skipMask.Add(uint64(row))
+		// Exact single-key probes answer through the per-batch key index: the
+		// definitive hit/miss avoids re-encoding the whole batch's primary
+		// keys, which kept growing single-row UPDATE statement cost with the
+		// transaction's size (issue 26796). The answer stays equivalent to
+		// the FilterVector path only while both provisos hold:
+		//
+		//   - no independent membership filter is attached to this scan: a
+		//     membership filter binds its own column (e.g. __mo_index_pri_col)
+		//     and its set can be exact, so a primary-key hit alone never
+		//     proves the row may surface;
+		//   - the filter's bound column matches the column the index was
+		//     built on, so index and filter encode the same key domain.
+		//
+		// Both fail closed to the FilterVector plus membership path below.
+		if exactKey, isExact := ls.memPKFilter.ExactPointKey(); isExact &&
+			entry.pkRange.inited &&
+			!ls.memPKFilter.HasMemberFilter() &&
+			entry.pkCheckPos == int(pkSeqNums) {
+			index, built := ls.table.getTxn().ensureInsertKeyOffsetsLocked(&writes[ls.wsCursor])
+			if built {
+				readutil.RecordIndexProbeForTest()
+				rowOffs := index.offsets[string(exactKey)]
+				if len(rowOffs) == 0 {
+					ls.wsCursor++
+					continue
 				}
-			})
+				offsets = make([]int64, 0, len(rowOffs))
+				for _, off := range rowOffs {
+					offsets = append(offsets, int64(off))
+				}
+				// shared tail below consumes offsets and applies tombstones
+			} else {
+				offsets = nil
+			}
+		} else {
+			offsets = nil
 		}
 
-		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
-		skipMask.Release()
+		if offsets == nil {
+			func() {
+				defer func() { skipMask.Release() }()
+				// apply pk filter on workspace entries
+				if enableFilter {
+					skipMask = objectio.GetReusableBitmap()
+					func() {
+						put := ls.table.db.getEng().packerPool.Get(&packer)
+						defer put.Put()
+						ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
+					}()
+				}
+
+				// apply bf filter on workspace entries
+				if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+					if !skipMask.IsValid() {
+						skipMask = objectio.GetReusableBitmap()
+					}
+					bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
+					ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
+						if !exist {
+							skipMask.Add(uint64(row))
+						}
+					})
+				}
+
+				offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
+			}()
+		}
 
 		if len(offsets) == 0 {
 			ls.wsCursor++
@@ -818,12 +871,18 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		summaryBuf = v.(*bytes.Buffer)
 	}
 	if ls.pStateRows.insIter == nil {
-		if !ls.memPKFilter.Valid() {
-			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
-		} else {
+		switch {
+		case ls.memPKFilter.Valid():
 			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIterWithFilters(
 				ls.memPKFilter.TS,
 				ls.memPKFilter.Specs())
+		case ls.memPKFilter.ClusterKeyValid():
+			ls.pStateRows.insIter = ls.pState.NewClusterKeyIterWithFilters(
+				ls.memPKFilter.ClusterKeyTS(),
+				ls.memPKFilter.ClusterKeyDescriptor(),
+				ls.memPKFilter.ClusterKeySpecs())
+		default:
+			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -859,6 +918,8 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	)
 	if ls.memPKFilter.Valid() {
 		iterKind = "primary-key"
+	} else if ls.memPKFilter.ClusterKeyValid() {
+		iterKind = "cluster-key"
 	}
 
 	var (
@@ -917,16 +978,16 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 				if i == physicalColumnPos {
 					continue
 				}
-
-				var idx uint16
-				switch seqNums[i] {
-				case objectio.SEQNUM_COMMITTS:
-					// in-memory committed row batch layout:
-					// [0]=rowid, [1]=commitTS, [2+seq]=user columns
-					idx = 1
-				default:
-					idx = 2 /*rowid and commits*/ + seqNums[i]
+				if seqNums[i] == objectio.SEQNUM_COMMITTS {
+					// Replayed rows keep commit time on RowEntry, not in the
+					// retained batch's zero-length timestamp vector.
+					if err = vector.AppendFixed(outBatch.Vecs[i], entry.Time, false, mp); err != nil {
+						return err
+					}
+					continue
 				}
+
+				idx := 2 /*rowid and commits*/ + seqNums[i]
 
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {
@@ -960,12 +1021,21 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		if deletedMask.Count() > 0 {
 			delInFile += deletedMask.Count()
 			if physicalColumnPos == -1 {
-				physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
+				if err := physicalColumnPtr.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), mp); err != nil {
+					deletedMask.Release()
+					return err
+				}
 
 				// negative shrink requires the bat sorted already
-				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt))
+				if err := outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset+inputRowCnt), mp); err != nil {
+					deletedMask.Release()
+					return err
+				}
 			} else {
-				outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset))
+				if err := outBatch.ShrinkByMask(deletedMask.Bitmap(), true, uint64(applyOffset), mp); err != nil {
+					deletedMask.Release()
+					return err
+				}
 			}
 		}
 
@@ -1643,7 +1713,7 @@ func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
 	return &i.current, nil
 }
 
-func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
+func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
 	if ls.rc.prefetchDisabled {
 		return
 	}
@@ -1657,6 +1727,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize
 
+	policy := fileservice.GetFileServicePolicy(ctx)
 	var preObj types.Objectid
 	for idx := begin; idx < end; idx++ {
 		blk := ls.rangeSlice.Get(idx)
@@ -1665,6 +1736,9 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 		}
 
 		preObj = *blk.BlockID.Object()
+		if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
+			continue
+		}
 
 		// prefetch blk data
 		err := ioutil.Prefetch(

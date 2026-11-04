@@ -47,21 +47,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
 )
 
 const (
-	tableDumpFormatVersion      = 1
-	tableDumpBoundFormatVersion = 2
-	tableDumpManifestName       = "manifest.json"
-	tableDumpReadyName          = "READY"
-	tableDumpMaxManifest        = 64 << 20
-	tableDumpMaxRelations       = 4_096
-	tableDumpMaxObjects         = 250_000
-	tableDumpMaxBlocks          = 1_000_000
-	tableDumpMaxAutoIncr        = tableDumpMaxRelations * 16
+	tableDumpFormatVersion            = 1
+	tableDumpLegacyBoundFormatVersion = 2
+	tableDumpBoundFormatVersion       = 3
+	tableDumpManifestName             = "manifest.json"
+	tableDumpReadyName                = "READY"
+	tableDumpMaxManifest              = 64 << 20
+	tableDumpMaxRelations             = 4_096
+	tableDumpMaxObjects               = 250_000
+	tableDumpMaxBlocks                = 1_000_000
+	tableDumpMaxAutoIncr              = tableDumpMaxRelations * 16
 
 	// Keep LOAD object installation separate from real catalog table locks.
 	// The high synthetic table ID follows the existing user-level-lock
@@ -131,11 +134,19 @@ func openTableDumpFS(
 	if decoded, ok, err := tryDecodeStagePath(ses, dumpPath); err != nil {
 		return nil, nil, err
 	} else if ok {
-		etlFS, root, err := fileservice.GetForETL(ctx, nil, decoded)
+		if err := process.AuthorizeSQLFileAccess(ses.proc, decoded); err != nil {
+			return nil, nil, err
+		}
+		etlFS, root, err := fileservice.GetForETL(process.SQLFileAccessContext(ctx, ses.proc), nil, decoded)
 		if err != nil {
 			return nil, nil, err
 		}
 		return fileservice.SubPath(etlFS, root), func() { etlFS.Close(ctx) }, nil
+	}
+	// This branch always opens a local directory. Filename spelling must not
+	// reclassify its provider through the generic ETL service-path parser.
+	if err := process.AuthorizeSQLFileAccessPath(ses.proc, fileservice.Path{File: dumpPath}); err != nil {
+		return nil, nil, err
 	}
 	fs, err := openLocalTableDump(dumpPath)
 	if err != nil {
@@ -348,7 +359,9 @@ func tableSchemaHashWithOptions(
 		clone.Name = "__table_dump_target__"
 		clone.DbName = ""
 		clone.Createsql = ""
-		canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, &clone, nil, false, nil)
+		// This is persisted fingerprint input, not the replayable manifest DDL.
+		// Keep the historical comment and default bytes so existing archives remain loadable.
+		canonical, err := sqlplan.ConstructCreateTableSQLForSchemaHash(&clone)
 		if err != nil {
 			return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 		}
@@ -497,14 +510,16 @@ func normalizeTableDumpLegacyTextMetadata(def *plan.TableDef) {
 	if def.DefaultCharset == uint32(types.CharsetLegacy) {
 		def.DefaultCharset = uint32(types.CharsetUTF8MB4Bin)
 	}
-	for _, col := range def.Cols {
+	for i, col := range def.Cols {
 		if col == nil {
 			continue
 		}
 		switch types.T(col.Typ.Id) {
 		case types.T_char, types.T_varchar, types.T_text:
 			if col.Typ.Charset == uint32(types.CharsetLegacy) {
-				col.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+				cloned := *col
+				cloned.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+				def.Cols[i] = &cloned
 			}
 		}
 	}
@@ -821,7 +836,7 @@ func writeTableDumpJSON(ctx context.Context, fs fileservice.FileService, name st
 			"table dump manifest exceeds %d bytes", tableDumpMaxManifest,
 		)
 	}
-	return fs.Write(ctx, fileservice.IOVector{
+	return fileservice.WriteExclusive(ctx, fs, fileservice.IOVector{
 		FilePath: name,
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(data)), ReaderForWrite: bytes.NewReader(data)}},
 	})
@@ -845,10 +860,10 @@ func readTableDumpManifest(ctx context.Context, fs fileservice.FileService) (*ta
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid table dump manifest: %v", err)
 	}
-	if manifest.Version != tableDumpFormatVersion && manifest.Version != tableDumpBoundFormatVersion {
+	if manifest.Version != tableDumpFormatVersion && manifest.Version != tableDumpLegacyBoundFormatVersion && manifest.Version != tableDumpBoundFormatVersion {
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported table dump format version %d", manifest.Version)
 	}
-	if manifest.Version == tableDumpBoundFormatVersion &&
+	if (manifest.Version == tableDumpLegacyBoundFormatVersion || manifest.Version == tableDumpBoundFormatVersion) &&
 		(len(manifest.BoundExpressions) == 0 || manifest.ExpressionHash == "") {
 		return nil, moerr.NewInvalidInputNoCtx("table dump is missing bound expression metadata")
 	}
@@ -1237,6 +1252,21 @@ func dumpTableRelationObjects(
 }
 
 func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) error {
+	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
+	if err != nil {
+		return err
+	}
+	defer closeDumpFS()
+	if err = fileservice.CheckExclusiveWrite(dumpFS); err != nil {
+		return err
+	}
+	for _, name := range []string{tableDumpManifestName, tableDumpReadyName} {
+		if _, err = dumpFS.StatFile(ctx, name); err == nil {
+			return moerr.NewFileAlreadyExistsNoCtx(name)
+		} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return err
+		}
+	}
 	dbName, tableName, rel, err := getTableForDump(ctx, ses, stmt.Table)
 	if err != nil {
 		return err
@@ -1264,7 +1294,7 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		CreateSQL: manifestCreateSQL, SchemaHash: refs[0].SchemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
 	}
-	if tableDumpMayDependOnDivision(def) {
+	if tableDumpHasBoundExpressions(def) {
 		var sensitive bool
 		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), def, def)
 		if err != nil {
@@ -1278,18 +1308,13 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 			}
 		}
 	}
-	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
-	if err != nil {
-		return err
-	}
-	defer closeDumpFS()
 	sourceFS, err := GetObjectFSProvider(ses)
 	if err != nil {
 		return err
 	}
 
-	// A stage path can be targeted concurrently by multiple CNs, and object
-	// stores do not give this workflow an exclusive create token. Do not delete
+	// Multiple CNs may copy immutable source objects before one exclusively
+	// creates the manifest. Object copies have no publication ownership. Do not delete
 	// copied fixture objects on failure: that could remove files published by a
 	// concurrent successful DUMP. Failed fixtures are reclaimed with the stage
 	// fixture lifecycle.
@@ -1314,11 +1339,21 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		}
 		manifest.Relations = append(manifest.Relations, relationDump)
 	}
+	// These context-aware barriers let integration tests hold real SQL requests
+	// at the publication boundaries without replacing storage operations.
+	fault.TriggerFaultWithContext(ctx, "table_dump_before_manifest")
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	if err = writeTableDumpJSON(ctx, dumpFS, tableDumpManifestName, manifest); err != nil {
 		return err
 	}
+	fault.TriggerFaultWithContext(ctx, "table_dump_after_manifest")
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	if !stmt.MetadataOnly {
-		if err = dumpFS.Write(ctx, fileservice.IOVector{FilePath: tableDumpReadyName, Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}}}); err != nil {
+		if err = fileservice.WriteExclusive(ctx, dumpFS, fileservice.IOVector{FilePath: tableDumpReadyName, Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}}}); err != nil {
 			return err
 		}
 	}
@@ -1549,7 +1584,7 @@ func validateTableDumpAutoIncrementRestore(
 			offset = max(offset, def.AutoIncrOffset)
 			schemaOffset = max(schemaOffset, offset)
 		}
-		if err := incrservice.ValidateAutoColumnOffset(ctx, types.T(colDef.Typ.Id), offset); err != nil {
+		if err := incrservice.ValidateAutoColumnOffset(ctx, types.MustTypeFromPlan(colDef.Typ), offset); err != nil {
 			return nil, 0, err
 		}
 		restores = append(restores, tableDumpAutoIncrRestore{column: column, offset: offset})
@@ -1693,7 +1728,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	}
 	var restoredDef *plan.TableDef
 	var restoreExpressions bool
-	if manifest.Version == tableDumpBoundFormatVersion {
+	if manifest.Version == tableDumpLegacyBoundFormatVersion || manifest.Version == tableDumpBoundFormatVersion {
 		restoredDef, restoreExpressions, err = tableDumpRestoredExpressions(
 			targetDef, manifest.BoundExpressions, manifest.ExpressionHash)
 		if err != nil {
@@ -1702,7 +1737,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
 			return err
 		}
-	} else if tableDumpMayDependOnDivision(targetDef) {
+	} else if tableDumpHasBoundExpressions(targetDef) {
 		var sensitive bool
 		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, nil)
 		if err != nil {
@@ -1710,7 +1745,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		if sensitive {
 			return moerr.NewInvalidInputNoCtx(
-				"legacy table dump cannot verify persisted division bindings; create a new dump")
+				"legacy table dump cannot verify persisted expression bindings; create a new dump")
 		}
 	}
 	if len(targetRefs) != len(manifest.Relations) {

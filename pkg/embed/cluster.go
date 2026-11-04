@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
+	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
@@ -42,11 +43,10 @@ const (
 )
 
 var (
-	minPort = uint64(10000)
-	maxPort = uint64(60000)
+	clusterPortAllocator = portlease.Allocator{}
 
 	basePortStep  = uint64(20)
-	portLeaseSpan = uint64(1000)
+	portLeaseSpan = portlease.Span
 
 	clusterID = getInitValue("mo-test.cluster")
 )
@@ -57,7 +57,7 @@ const (
 	cnPortBaseCount                    = uint64(2)
 
 	// ArrowLoadRolloutShutdown is a test-only boundary at the beginning of
-	// Cluster.Close. It is inactive unless a test installs the matching fault
+	// Cluster.Stop or Cluster.Close. It is inactive unless a test installs the matching fault
 	// point, and lets a lifecycle test observe that shutdown has actually
 	// entered before it releases an admitted statement.
 	ArrowLoadRolloutShutdown = "fj/embed/arrow_load_rollout_shutdown"
@@ -66,11 +66,12 @@ const (
 type clusterPortLease struct {
 	base uint64
 	next atomic.Uint64
-	lock *flock.Flock
+	lock *portlease.Lease
 }
 
 type cluster struct {
 	sync.RWMutex
+	startup startControl
 
 	id       uint64
 	state    state
@@ -87,10 +88,11 @@ type cluster struct {
 	options struct {
 		dataPath                    string
 		cn                          int
-		withProxy                   bool
 		preStart                    func(ServiceOperator)
 		testing                     bool
+		testTCPOnly                 bool
 		allowConcurrentTestClusters bool
+		testAdmissionContext        context.Context
 		heartbeatTimeout            time.Duration
 		storeTimeout                time.Duration
 	}
@@ -107,9 +109,8 @@ func NewCluster(
 ) (Cluster, error) {
 	started := time.Now()
 	c := &cluster{
-		id:      atomic.AddUint64(&clusterID, 1),
-		state:   stopped,
-		startFn: func(op *operator) error { return op.Start() },
+		id:    atomic.AddUint64(&clusterID, 1),
+		state: stopped,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -152,8 +153,16 @@ func (c *cluster) ID() uint64 {
 }
 
 func (c *cluster) Start() (err error) {
+	startCtx, err := c.startup.begin(context.Background())
+	if err != nil {
+		return err
+	}
+	defer func() { c.startup.finish(startCtx, err) }()
 	c.Lock()
 	defer c.Unlock()
+	if err = startCtx.Err(); err != nil {
+		return err
+	}
 
 	if c.state == started {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
@@ -174,12 +183,24 @@ func (c *cluster) Start() (err error) {
 				"embedded test cluster cleanup is incomplete",
 			)
 		}
+		// The scheduler selects process admission at the lifecycle owner, covering
+		// both StartTestCluster and direct NewCluster(WithTesting()) callers.
 		mode := clusteradmission.Exclusive
+		if concurrentTestClusterProcessesEnabled() {
+			mode |= clusteradmission.AllowConcurrentProcesses
+		}
 		if c.options.allowConcurrentTestClusters {
-			mode = clusteradmission.AllowConcurrent
+			mode |= clusteradmission.AllowConcurrent
 		}
 		admissionStarted := time.Now()
-		admission, acquireErr := clusteradmission.Acquire(context.Background(), mode)
+		admissionCtx := startCtx
+		if c.options.testAdmissionContext != nil {
+			var cancel context.CancelFunc
+			admissionCtx, cancel = context.WithCancel(c.options.testAdmissionContext)
+			stopCancel := context.AfterFunc(startCtx, cancel)
+			defer func() { stopCancel(); cancel() }()
+		}
+		admission, acquireErr := clusteradmission.Acquire(admissionCtx, mode)
 		if acquireErr != nil {
 			c.logTestSetup("admission-acquire", time.Since(admissionStarted), acquireErr)
 			return acquireErr
@@ -235,7 +256,7 @@ func (c *cluster) startServiceLocked(op *operator) error {
 	if c.startFn != nil {
 		err = c.startFn(op)
 	} else {
-		err = op.Start()
+		err = op.StartContext(c.startup.context())
 	}
 	if err != nil {
 		return errors.Join(
@@ -247,13 +268,26 @@ func (c *cluster) startServiceLocked(op *operator) error {
 	return nil
 }
 
+// Stop shuts down services and releases test admission while retaining the
+// port lease for Start, including configuration changes made while stopped.
+// The caller must eventually call Close to release the retained lease.
+func (c *cluster) Stop() error {
+	return c.shutdown(false)
+}
+
 func (c *cluster) Close() error {
+	return c.shutdown(true)
+}
+
+func (c *cluster) shutdown(releasePorts bool) error {
 	// Keep this before the cluster lock and service teardown. A WAIT fault here
-	// observes the real Close invocation, rather than merely the launch of a
+	// observes the real shutdown invocation, rather than merely the launch of a
 	// goroutine that may not have entered shutdown yet.
 	if c.options.testing {
 		fault.TriggerFault(ArrowLoadRolloutShutdown)
 	}
+	c.startup.stop()
+	defer c.startup.stopped()
 
 	c.Lock()
 	defer c.Unlock()
@@ -266,7 +300,7 @@ func (c *cluster) Close() error {
 	}
 	admissionErr := c.releaseTestAdmissionLocked()
 	err = errors.Join(err, admissionErr)
-	if admissionErr == nil {
+	if admissionErr == nil && releasePorts {
 		started = time.Now()
 		portErr := c.releasePortLeaseLocked()
 		c.logTestSetup("port-lease-release", time.Since(started), portErr)
@@ -380,8 +414,12 @@ func (c *cluster) GetCNService(
 }
 
 func (c *cluster) StartNewCNService(n int) error {
+	ctx := c.startup.context()
 	c.Lock()
 	defer c.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if c.state != started {
 		panic("cannot start cn services in stopped cluster")
@@ -526,8 +564,13 @@ func (c *cluster) createServiceOperators(from int) error {
 			})
 		}
 		if c.options.testing {
-			adjustTestingClusterStartup(s)
+			adjustTestingClusterTiming(s)
 			s.Adjust(applyTestingHAKeeperBackendReadTimeout)
+			if c.options.testTCPOnly && s.serviceType == metadata.ServiceType_CN {
+				s.Adjust(func(cfg *ServiceConfig) {
+					cfg.CN.Frontend.UnixSocketAddress = ""
+				})
+			}
 		}
 
 		if c.options.preStart != nil {
@@ -643,34 +686,25 @@ func (c *cluster) initTNServiceConfig() error {
 }
 
 func acquireClusterPortLease() (*clusterPortLease, error) {
-	for base := minPort; base+portLeaseSpan <= maxPort; base += portLeaseSpan {
-		lease, locked, err := tryAcquireClusterPortLease(base)
-		if err != nil {
-			return nil, err
-		}
-		if locked {
-			return lease, nil
-		}
+	lease, err := clusterPortAllocator.Acquire()
+	if err != nil {
+		return nil, err
 	}
-	return nil, moerr.NewInternalErrorNoCtx("no embedded-test port range is available")
+	return wrapClusterPortLease(lease), nil
 }
 
 func tryAcquireClusterPortLease(base uint64) (*clusterPortLease, bool, error) {
-	dir := filepath.Join(os.TempDir(), "mo-test-port-leases")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, false, err
+	lease, locked, err := clusterPortAllocator.TryAcquire(base)
+	if err != nil || !locked {
+		return nil, locked, err
 	}
-	fl := flock.New(filepath.Join(dir, fmt.Sprintf("%d.lock", base)))
-	locked, err := fl.TryLock()
-	if err != nil {
-		return nil, false, err
-	}
-	if !locked {
-		return nil, false, fl.Close()
-	}
-	lease := &clusterPortLease{base: base, lock: fl}
-	lease.next.Store(base)
-	return lease, true, nil
+	return wrapClusterPortLease(lease), true, nil
+}
+
+func wrapClusterPortLease(lease *portlease.Lease) *clusterPortLease {
+	result := &clusterPortLease{base: lease.Base(), lock: lease}
+	result.next.Store(lease.Base())
+	return result
 }
 
 func portBaseCapacity() (uint64, error) {
@@ -909,12 +943,12 @@ func getInitValue(name string) uint64 {
 	if err != nil && err != io.EOF {
 		panic(err)
 	}
-	value := minPort
+	value := portlease.MinPort
 	if n > 0 {
 		value = binary.BigEndian.Uint64(data)
 	}
-	if value > maxPort {
-		value = minPort
+	if value > portlease.MaxPort {
+		value = portlease.MinPort
 	}
 	binary.BigEndian.PutUint64(data, value+1000)
 

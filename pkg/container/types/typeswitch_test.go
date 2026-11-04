@@ -179,29 +179,10 @@ func scanTypeSwitches(t *testing.T, root string, families map[string][]string) (
 			}
 		}
 		var fn string
-		ast.Inspect(f, func(n ast.Node) bool {
-			if d, ok := n.(*ast.FuncDecl); ok {
-				fn = d.Name.Name
-			}
-			sw, ok := n.(*ast.SwitchStmt)
-			if !ok {
-				return true
-			}
-			names := map[string]bool{}
-			for _, st := range sw.Body.List {
-				for _, e := range st.(*ast.CaseClause).List {
-					ast.Inspect(e, func(m ast.Node) bool {
-						switch x := m.(type) {
-						case *ast.SelectorExpr:
-							names[x.Sel.Name] = true
-						case *ast.Ident:
-							names[x.Name] = true
-						}
-						return true
-					})
-				}
-			}
-			line := fset.Position(sw.Pos()).Line
+		// check reports the construct at pos when it names part of a family; a chain or a
+		// list must name at least minNamed members to count
+		check := func(pos token.Pos, kind string, names map[string]bool, minNamed int) {
+			line := fset.Position(pos).Line
 			for _, fam := range typeSwitchFamilies {
 				var named, missing []string
 				for _, m := range families[fam.name] {
@@ -211,7 +192,7 @@ func scanTypeSwitches(t *testing.T, root string, families map[string][]string) (
 						missing = append(missing, m)
 					}
 				}
-				if len(named) == 0 || len(missing) == 0 || namesWholeSubfamily(fam.subfamilies, families[fam.name], names) {
+				if len(named) < minNamed || len(missing) == 0 || namesWholeSubfamily(fam.subfamilies, families[fam.name], names) {
 					continue
 				}
 				if reason, ok := tagOf(line); ok {
@@ -220,9 +201,45 @@ func scanTypeSwitches(t *testing.T, root string, families map[string][]string) (
 					}
 					continue
 				}
-				key := rel + "\t" + fn + "\t" + fam.name
-				found[key] = append(found[key], fmt.Sprintf("%s:%d %s: %s switch misses %s",
-					rel, line, fn, fam.name, strings.Join(missing, ", ")))
+				family := fam.name
+				if kind != "switch" {
+					family += " " + kind
+				}
+				key := rel + "\t" + fn + "\t" + family
+				found[key] = append(found[key], fmt.Sprintf("%s:%d %s: %s %s misses %s",
+					rel, line, fn, fam.name, kind, strings.Join(missing, ", ")))
+			}
+		}
+		inChain := map[ast.Node]bool{}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.FuncDecl:
+				fn = x.Name.Name
+			case *ast.SwitchStmt:
+				names := map[string]bool{}
+				for _, st := range x.Body.List {
+					for _, e := range st.(*ast.CaseClause).List {
+						collectTypeNames(e, names)
+					}
+				}
+				check(x.Pos(), "switch", names, 1)
+			case *ast.BinaryExpr:
+				if (x.Op == token.LOR || x.Op == token.LAND) && !inChain[x] {
+					if names, ok := typeComparisonChain(x, families, inChain); ok {
+						check(x.Pos(), "chain", names, 2)
+					}
+				}
+			case *ast.CompositeLit:
+				if isTypeListLiteral(x.Type) {
+					names := map[string]bool{}
+					for _, e := range x.Elts {
+						if kv, ok := e.(*ast.KeyValueExpr); ok {
+							e = kv.Key
+						}
+						collectTypeNames(e, names)
+					}
+					check(x.Pos(), "list", names, 2)
+				}
 			}
 			return true
 		})
@@ -230,6 +247,100 @@ func scanTypeSwitches(t *testing.T, root string, families map[string][]string) (
 	})
 	require.NoError(t, err)
 	return found, bare
+}
+
+func collectTypeNames(e ast.Node, names map[string]bool) {
+	ast.Inspect(e, func(m ast.Node) bool {
+		switch x := m.(type) {
+		case *ast.SelectorExpr:
+			names[x.Sel.Name] = true
+		case *ast.Ident:
+			names[x.Name] = true
+		}
+		return true
+	})
+}
+
+// typeComparisonChain returns the type constants a || chain of == comparisons (or a && chain
+// of != comparisons) names; IsFloat, IsLowPrecisionFloat, IsArray and IsArrayRelate calls in
+// the chain name their members. ok is false when no leaf is such a comparison. The nested
+// binary expressions of the chain are marked in seen.
+func typeComparisonChain(e *ast.BinaryExpr, families map[string][]string, seen map[ast.Node]bool) (map[string]bool, bool) {
+	cmp := token.EQL
+	if e.Op == token.LAND {
+		cmp = token.NEQ
+	}
+	names := map[string]bool{}
+	found := false
+	var walk func(n ast.Expr)
+	walk = func(n ast.Expr) {
+		for {
+			p, ok := n.(*ast.ParenExpr)
+			if !ok {
+				break
+			}
+			n = p.X
+		}
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			if x.Op == e.Op {
+				seen[x] = true
+				walk(x.X)
+				walk(x.Y)
+				return
+			}
+			if x.Op == cmp {
+				before := len(names)
+				collectTypeNames(x, names)
+				found = found || len(names) > before
+			}
+		case *ast.CallExpr:
+			sel, ok := x.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return
+			}
+			switch sel.Sel.Name {
+			case "IsFloat":
+				for _, m := range families["float"] {
+					names[m] = true
+				}
+			case "IsLowPrecisionFloat":
+				for _, m := range families["float"] {
+					if m != "T_float32" && m != "T_float64" {
+						names[m] = true
+					}
+				}
+			case "IsArray", "IsArrayRelate":
+				for _, m := range families["vector"] {
+					names[m] = true
+				}
+			}
+		}
+	}
+	walk(e)
+	return names, found
+}
+
+// isTypeListLiteral reports whether t is []T, [N]T or map[T]V, with T this package's type or
+// types.T.
+func isTypeListLiteral(t ast.Expr) bool {
+	isT := func(e ast.Expr) bool {
+		switch x := e.(type) {
+		case *ast.Ident:
+			return x.Name == "T"
+		case *ast.SelectorExpr:
+			id, ok := x.X.(*ast.Ident)
+			return ok && id.Name == "types" && x.Sel.Name == "T"
+		}
+		return false
+	}
+	switch x := t.(type) {
+	case *ast.ArrayType:
+		return isT(x.Elt)
+	case *ast.MapType:
+		return isT(x.Key)
+	}
+	return false
 }
 
 // namesWholeSubfamily reports whether the switch names every member of one subfamily and no

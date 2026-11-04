@@ -1,0 +1,74 @@
+[
+  {
+    "Name": "'it''s'",
+    "Definition": "EgZsZWdhY3kiIxIBYSoECD0gIDoYCgsKABIHWgV2YWx1ZRIHJ2l0JydzJxgB",
+    "PhysicalHash": "df80088deb6f9d4b45c007e8ce4857bfe82217a938775fef3eb8819424da910a",
+    "LogicalHash": "15428b70a4f4eb08017996f85a16773c5aace47a7397722f255116bd1ddde62f"
+  },
+  {
+    "Name": "'x`y'",
+    "Definition": "EgZsZWdhY3kiIRIBYSoECD0gIDoWCgsKABIHWgV2YWx1ZRIFJ3hgeScYAQ==",
+    "PhysicalHash": "f1d591f71d96e5c81d831d5293ec243908f4f990c17f336afaeeb89b28657f8e",
+    "LogicalHash": "58ada28fcbb15a9c01ddf846ab2713b8456ad4e1901eb3f964175f1c116c7685"
+  },
+  {
+    "Name": " 'it''s' ",
+    "Definition": "EgZsZWdhY3kiGBIBYSoECD0gIDoNEgkgJ2l0JydzJyAYAQ==",
+    "PhysicalHash": "b7f7212234370ed4613bd5585cd3f41b2abcb81ef2fcaf5b34e485ab84b99e31",
+    "LogicalHash": "eac4630dee7d3a6bfb68e2d30334295c16f349fc26abdf5d9b16c783c719dc7d"
+  },
+  {
+    "Name": " (concat('it''s','!')) ",
+    "Definition": "EgZsZWdhY3kiMxIBYSoECD0gIDooCgsKABIHWgV2YWx1ZRIXIChjb25jYXQoJ2l0JydzJywnIScpKSAYAQ==",
+    "PhysicalHash": "106c5051e5a4a2a2d7eb0593765a93968e2e7b7a42f0e792f1cf4d13fec4614b",
+    "LogicalHash": "be52752739137156c3197c3cbc6828b5404d49a0bcba090231790100437ff1c2"
+  },
+  {
+    "Name": " current_timestamp() ",
+    "Definition": "EgZsZWdhY3kiKhIBYSoECD0gIDofCgQKADoAEhUgY3VycmVudF90aW1lc3RhbXAoKSAYAQ==",
+    "PhysicalHash": "99c10d82842c3f2831398e7f1e876bcf6eb32da4dfbe7dcfa379aa375d6d44a5",
+    "LogicalHash": "40b0623444cd32085263fbd51a46b89492c8090bf77f2a872ca356a279d43857"
+  },
+  {
+    "Name": "''",
+    "Definition": "EgZsZWdhY3kiHhIBYSoECD0gIDoTCgsKABIHWgV2YWx1ZRICJycYAQ==",
+    "PhysicalHash": "f4b0862ff005d6fec43a109dc2bea348a92b0fc874c89ba3cefb4e51ab224302",
+    "LogicalHash": "558ef3cc4ab6aadc098821ca1406e9429d937d3c46584568ff614152fe6e244c"
+  },
+  {
+    "Name": "'a\\b'",
+    "Definition": "EgZsZWdhY3kiIRIBYSoECD0gIDoWCgsKABIHWgV2YWx1ZRIFJ2FcYicYAQ==",
+    "PhysicalHash": "450582d6f0ad99317a53cacab1375d4feb9ebb7f28e307f039641706aab6868d",
+    "LogicalHash": "f01aae33decef3391a8b8d6c1183e5adfec822930f5b56194f473fb0bece1c80"
+  },
+  {
+    "Name": "NULL",
+    "Definition": "EgZsZWdhY3kiIBIBYSoECD0gIDoVCgsKABIHWgV2YWx1ZRIETlVMTBgB",
+    "PhysicalHash": "8b7db07697ce9e07607431feecd1d2967a964e61e8690108ff3aea87d1474e48",
+    "LogicalHash": "799b1594dc0a8739733ef0fd4c81fa9d0b5c540cbb1b014b11a955f43df3467a"
+  },
+  {
+    "Name": "7",
+    "Definition": "EgZsZWdhY3kiHRIBYSoECD0gIDoSCgsKABIHWgV2YWx1ZRIBNxgB",
+    "PhysicalHash": "03f1403f40b60419f49abddef420f552b258ada102636c16b27cf813dd09626a",
+    "LogicalHash": "fe08f872a936e0a88618bc8d4959ae65d67c9fdd46b49d6760e90494db70d44d"
+  },
+  {
+    "Name": "'2024-01-01'",
+    "Definition": "EgZsZWdhY3kiKBIBYSoECD0gIDodCgsKABIHWgV2YWx1ZRIMJzIwMjQtMDEtMDEnGAE=",
+    "PhysicalHash": "2896fa61a24e860286aad93d7c4d479629b7dfea3a3c01c6ce0f93b55b933ee3",
+    "LogicalHash": "558e8b51311c2605d47f19ceafd6edeb91bd9d96977259d101350c05ff62775b"
+  },
+  {
+    "Name": "fallback:create table old(a int default 7)",
+    "Definition": "EgNvbGQiBRIBYSoAMiFjcmVhdGUgdGFibGUgb2xkKGEgaW50IGRlZmF1bHQgNyk=",
+    "PhysicalHash": "727a098c03e80230b2f51900bbb3d519f54f7401bf47fa8809ece9df05aced05",
+    "LogicalHash": "21d47c3c72c3e1a3a0df252dd628f81f4a4060d245621664f95f819315d6fe05"
+  },
+  {
+    "Name": "fallback:",
+    "Definition": "EgNvbGQiBRIBYSoA",
+    "PhysicalHash": "21d47c3c72c3e1a3a0df252dd628f81f4a4060d245621664f95f819315d6fe05",
+    "LogicalHash": "21d47c3c72c3e1a3a0df252dd628f81f4a4060d245621664f95f819315d6fe05"
+  }
+]

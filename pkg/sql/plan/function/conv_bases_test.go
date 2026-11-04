@@ -54,6 +54,8 @@ func TestConvRowDependentBases(t *testing.T) {
 }
 
 func TestConvDynamicBasesPreserveTypedInputs(t *testing.T) {
+	// Children are sequential and contain no timestamp/session-dependent input.
+	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name  string
 		input FunctionTestInput
@@ -77,8 +79,6 @@ func TestConvDynamicBasesPreserveTypedInputs(t *testing.T) {
 		{"time", NewFunctionTestConstInput(types.T_time.ToType(), []types.Time{types.TimeFromClock(false, 12, 34, 56, 0)}, nil), []string{"1", "C", "18"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			defer proc.Free()
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input,
 				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2, 10, 16, 1, 2, 2}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 16, 10, 10, 10, 37}, []bool{false, false, false, false, true, false})},

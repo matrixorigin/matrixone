@@ -62,12 +62,6 @@ type CDCDao struct {
 	sqlExecutor taskservice.SqlExecutor
 }
 
-type DeleteCDCArtifactsResult struct {
-	TaskRows       int64
-	WatermarkRows  int64
-	LocalTxnOpened bool
-}
-
 func NewCDCDao(
 	ses *Session,
 	opts ...CDCDaoOption,
@@ -81,7 +75,7 @@ func NewCDCDao(
 
 func (t *CDCDao) MustGetTaskService() taskservice.TaskService {
 	if t.ts == nil && t.ses != nil {
-		t.ts = getPu(t.ses.GetService()).TaskService
+		t.ts = getPu(t.ses.GetService()).GetTaskService()
 	}
 	if t.ts == nil {
 		panic("taskService is nil")
@@ -131,7 +125,7 @@ func (t *CDCDao) CreateTask(
 
 	// Get TaskService - handle nil case gracefully instead of panicking
 	if t.ts == nil && t.ses != nil {
-		t.ts = getPu(t.ses.GetService()).TaskService
+		t.ts = getPu(t.ses.GetService()).GetTaskService()
 	}
 	if t.ts == nil {
 		return moerr.NewInternalError(ctx, "TaskService is not available. CDC task creation requires TaskService to be initialized.")
@@ -438,47 +432,6 @@ func (t *CDCDao) DeleteTaskByName(
 	return
 }
 
-func (t *CDCDao) DeleteTaskAndWatermark(
-	ctx context.Context,
-	accountId uint64,
-	taskName string,
-	keys map[taskservice.CDCTaskKey]struct{},
-) (res DeleteCDCArtifactsResult, err error) {
-	var (
-		executor = t.MustGetSQLExecutor(ctx)
-	)
-
-	_, isTxn := executor.(*sql.Tx)
-	res.LocalTxnOpened = false
-
-	logutil.Debug(
-		"cdc.dao.delete_task_and_watermark.begin",
-		zap.Uint64("account-id", accountId),
-		zap.String("task-name", taskName),
-		zap.Int("key-count", len(keys)),
-		zap.Bool("executor-is-tx", isTxn),
-	)
-
-	if res.TaskRows, err = t.DeleteTaskByName(ctx, accountId, taskName); err != nil {
-		return
-	}
-
-	if res.WatermarkRows, err = t.DeleteManyWatermark(ctx, keys); err != nil {
-		return
-	}
-
-	logutil.Debug(
-		"cdc.dao.delete_task_and_watermark.done",
-		zap.Uint64("account-id", accountId),
-		zap.String("task-name", taskName),
-		zap.Int64("task-rows", res.TaskRows),
-		zap.Int64("watermark-rows", res.WatermarkRows),
-		zap.Bool("executor-is-tx", isTxn),
-	)
-
-	return
-}
-
 func (t *CDCDao) GetTaskKeys(
 	ctx context.Context,
 	accountId uint64,
@@ -640,34 +593,4 @@ func (t *CDCDao) syncCommitTimestamp(ctx context.Context) error {
 	return nil
 }
 
-var ForeachQueriedRow = func(
-	ctx context.Context,
-	tx taskservice.SqlExecutor,
-	query string,
-	onEachRow func(context.Context, *sql.Rows) (bool, error),
-) (cnt int64, err error) {
-	var (
-		ok   bool
-		rows *sql.Rows
-	)
-	if rows, err = tx.QueryContext(ctx, query); err != nil {
-		return
-	}
-	if rows.Err() != nil {
-		err = rows.Err()
-		return
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	for rows.Next() {
-		if ok, err = onEachRow(ctx, rows); err != nil {
-			return
-		}
-		if ok {
-			cnt++
-		}
-	}
-	return
-}
+var ForeachQueriedRow = taskservice.ForeachQueriedRow

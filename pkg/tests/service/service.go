@@ -16,6 +16,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -27,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -248,6 +251,8 @@ type testCluster struct {
 	logger  *zap.Logger
 	stopper *stopper.Stopper
 	clock   clock.Clock
+	// Registered runtimes remain available until their service owners drain.
+	runtimes map[string]runtime.Runtime
 
 	tn struct {
 		sync.Mutex
@@ -306,6 +311,12 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	}
 	c.logger = logutil.Adjust(opt.logger).With(zap.String("testcase", t.Name())).With(zap.String("test-id", c.testID))
 	c.opt.rootDataDir = filepath.Join(c.opt.rootDataDir, c.testID, t.Name())
+	constructed := false
+	defer func() {
+		if !constructed {
+			_ = c.Close()
+		}
+	}()
 	if c.clock == nil {
 		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, 0)
 	}
@@ -324,6 +335,7 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 
 	// build cn service configurations
 	c.buildCNConfigs(c.opt.initial.cnServiceNum)
+	constructed = true
 	return c, nil
 }
 
@@ -390,37 +402,41 @@ func (c *testCluster) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.mu.running {
-		return c.releaseAdmissionLocked()
-	}
-
-	// close all cn services first
-	if err := c.closeCNServices(); err != nil {
-		return err
+	// A diagnostic does not retain dependencies after local CN retirement.
+	complete, closeErr := c.closeCNServices()
+	if !complete {
+		return closeErr
 	}
 
 	// close all tn services
 	if err := c.closeTNServices(); err != nil {
-		return err
+		return errors.Join(closeErr, err)
 	}
 
 	// close all log services
 	if err := c.closeLogServices(); err != nil {
-		return err
+		return errors.Join(closeErr, err)
 	}
 
 	c.mu.running = false
-	if err := c.releaseAdmissionLocked(); err != nil {
-		return err
+	if c.fileservices != nil {
+		c.fileservices.Close(context.Background())
 	}
 	c.stopper.Stop()
+	for sid, rt := range c.runtimes {
+		runtime.CompareAndDeleteServiceBasedRuntime(sid, rt)
+		delete(c.runtimes, sid)
+	}
+	if err := c.releaseAdmissionLocked(); err != nil {
+		return errors.Join(closeErr, err)
+	}
 
 	if !c.opt.keepData {
 		if err := os.RemoveAll(c.opt.rootDataDir); err != nil {
-			return err
+			return errors.Join(closeErr, err)
 		}
 	}
-	return nil
+	return closeErr
 }
 
 func (c *testCluster) releaseAdmissionLocked() error {
@@ -911,22 +927,7 @@ func (c *testCluster) WaitCNStoreTaskServiceCreated(ctx context.Context, uuid st
 	ds, err := c.GetCNService(uuid)
 	require.NoError(c.t, err)
 
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(
-				c.t,
-				"terminated when waiting task service created on cn store",
-				"cn store %s, error: %s", uuid, ctx.Err(),
-			)
-		default:
-			_, ok := ds.GetTaskService()
-			if ok {
-				return
-			}
-			time.Sleep(defaultWaitInterval)
-		}
-	}
+	require.NoError(c.t, testutil.WaitTaskServiceReady(ctx, ds, defaultWaitInterval))
 }
 
 func (c *testCluster) WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
@@ -939,22 +940,7 @@ func (c *testCluster) WaitTNStoreTaskServiceCreated(ctx context.Context, uuid st
 	ds, err := c.GetTNService(uuid)
 	require.NoError(c.t, err)
 
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(
-				c.t,
-				"terminated when waiting task service created on tn store",
-				"dn store %s, error: %s", uuid, ctx.Err(),
-			)
-		default:
-			_, ok := ds.GetTaskService()
-			if ok {
-				return
-			}
-			time.Sleep(defaultWaitInterval)
-		}
-	}
+	require.NoError(c.t, testutil.WaitTaskServiceReady(ctx, ds, defaultWaitInterval))
 }
 
 func (c *testCluster) WaitTNStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
@@ -967,22 +953,7 @@ func (c *testCluster) WaitLogStoreTaskServiceCreated(ctx context.Context, uuid s
 	ls, err := c.GetLogService(uuid)
 	require.NoError(c.t, err)
 
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(
-				c.t,
-				"terminated when waiting task service created on log store",
-				"log store %s, error: %s", uuid, ctx.Err(),
-			)
-		default:
-			_, ok := ls.GetTaskService()
-			if ok {
-				return
-			}
-			time.Sleep(defaultWaitInterval)
-		}
-	}
+	require.NoError(c.t, testutil.WaitTaskServiceReady(ctx, ls, defaultWaitInterval))
 }
 
 func (c *testCluster) WaitLogStoreTaskServiceCreatedIndexed(ctx context.Context, index int) {
@@ -1065,7 +1036,7 @@ func (c *testCluster) WaitLogStoreReportedIndexed(ctx context.Context, index int
 // The following are implements for interface `ClusterAwareness`.
 // --------------------------------------------------------------
 func (c *testCluster) ListTNServices() []string {
-	ids := make([]string, 0, len(c.tn.svcs))
+	ids := make([]string, 0, len(c.tn.cfgs))
 	for _, cfg := range c.tn.cfgs {
 		ids = append(ids, cfg.UUID)
 	}
@@ -1081,8 +1052,11 @@ func (c *testCluster) ListLogServices() []string {
 }
 
 func (c *testCluster) ListCnServices() []string {
-	ids := make([]string, 0, len(c.cn.svcs))
-	for _, svc := range c.cn.svcs {
+	c.cn.Lock()
+	svcs := append([]CNService(nil), c.cn.svcs...)
+	c.cn.Unlock()
+	ids := make([]string, 0, len(svcs))
+	for _, svc := range svcs {
 		ids = append(ids, svc.ID())
 	}
 	return ids
@@ -1096,9 +1070,9 @@ func (c *testCluster) GetTNService(uuid string) (TNService, error) {
 	c.tn.Lock()
 	defer c.tn.Unlock()
 
-	for i, cfg := range c.tn.cfgs {
-		if cfg.UUID == uuid {
-			return c.tn.svcs[i], nil
+	for _, svc := range c.tn.svcs {
+		if svc.ID() == uuid {
+			return svc, nil
 		}
 	}
 	return nil, moerr.NewNoServiceNoCtx(uuid)
@@ -1117,10 +1091,11 @@ func (c *testCluster) GetLogService(uuid string) (LogService, error) {
 }
 
 func (c *testCluster) GetCNService(uuid string) (CNService, error) {
-	c.log.Lock()
-	defer c.log.Unlock()
+	c.cn.Lock()
+	svcs := append([]CNService(nil), c.cn.svcs...)
+	c.cn.Unlock()
 
-	for _, svc := range c.cn.svcs {
+	for _, svc := range svcs {
 		if svc.ID() == uuid {
 			return svc, nil
 		}
@@ -1149,8 +1124,8 @@ func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
 }
 
 func (c *testCluster) GetCNServiceIndexed(index int) (CNService, error) {
-	c.log.Lock()
-	defer c.log.Unlock()
+	c.cn.Lock()
+	defer c.cn.Unlock()
 
 	if index >= len(c.cn.svcs) || index < 0 {
 		return nil, moerr.NewInvalidServiceIndexNoCtx(index)
@@ -1267,6 +1242,11 @@ func (c *testCluster) StartCNServiceIndexed(index int) error {
 }
 
 func (c *testCluster) StartCNServices(n int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.mu.running {
+		return moerr.NewInternalErrorNoCtx("cannot expand a stopped cluster")
+	}
 	offset := len(c.cn.svcs)
 	c.buildCNConfigs(n)
 	c.initCNServices(c.fileservices, offset)
@@ -1364,6 +1344,14 @@ func (c *testCluster) buildCNConfigs(n int) {
 	c.network.addresses.buildCNAddress(c.t, batch, c.opt.hostAddr)
 	for i := 0; i < batch; i++ {
 		cfg := buildCNConfig(i+offset, c.opt, c.network.addresses)
+		// CN validation publishes service-scoped settings, just as the real
+		// launcher does. Register the runtime before filling configuration and
+		// constructing options; validating a new UUID without it dereferences
+		// a missing runtime before any service is created.
+		c.newRuntime(metadata.ServiceType_CN, cfg.UUID)
+		if err := cfg.Validate(); err != nil {
+			panic(fmt.Sprintf("fatal when building cnservice.Config: %s", err))
+		}
 		c.cn.cfgs = append(c.cn.cfgs, cfg)
 		var opt cnOptions
 		if c.opt.cn.optionFunc != nil {
@@ -1372,38 +1360,48 @@ func (c *testCluster) buildCNConfigs(n int) {
 		opt = append(opt, cnservice.WithLogger(c.logger))
 		c.cn.opts = append(c.cn.opts, opt)
 
-		c.fileservices.cnLocalFSs = append(c.fileservices.cnLocalFSs,
-			c.createFS(context.Background(), filepath.Join(c.opt.rootDataDir, cfg.UUID), defines.LocalFileServiceName))
+		fs := c.createFS(context.Background(), filepath.Join(c.opt.rootDataDir, cfg.UUID), defines.LocalFileServiceName)
+		c.fileservices.Lock()
+		c.fileservices.cnLocalFSs = append(c.fileservices.cnLocalFSs, fs)
 		c.fileservices.cnServiceNum++
+		c.fileservices.Unlock()
 	}
 }
 
 // initTNServices builds all tn services.
 //
 // Before initializing tn service, log service must be started already.
-func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
+func (c *testCluster) initTNServices(fileservices *fileServices) error {
 	batch := c.opt.initial.tnServiceNum
 
 	c.logger.Info("initialize tn services", zap.Int("batch", batch))
 
-	svcs := make([]TNService, 0, batch)
 	for i := 0; i < batch; i++ {
 		cfg := c.tn.cfgs[i]
 		opt := c.tn.opts[i]
+		rt := c.newRuntime(metadata.ServiceType_TN, cfg.UUID)
 		fs, err := fileservice.NewFileServices(
 			"",
 			fileservices.getTNLocalFileService(i),
 			fileservices.getS3FileService(),
+			fileservices.getTmpFileService(),
 		)
 		if err != nil {
-			panic(err)
+			return err
 		}
-		ds, err := newTNService(
+		_, err = newTNService(
 			cfg,
-			c.newRuntime(cfg.UUID),
+			rt,
 			fs,
+			func(owner TNService) {
+				c.tn.Lock()
+				c.tn.svcs = append(c.tn.svcs, owner)
+				c.tn.Unlock()
+			},
 			opt)
-		require.NoError(c.t, err)
+		if err != nil {
+			return err
+		}
 
 		c.logger.Info(
 			"dn service initialized",
@@ -1411,10 +1409,9 @@ func (c *testCluster) initTNServices(fileservices *fileServices) []TNService {
 			zap.Any("config", cfg),
 		)
 
-		svcs = append(svcs, ds)
 	}
 
-	return svcs
+	return nil
 }
 
 // initLogServices builds all log services.
@@ -1427,6 +1424,8 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
+		rt := c.newRuntime(metadata.ServiceType_LOG, cfg.UUID)
+		opt = append(opt, logservice.WithRuntime(rt))
 		ls, err := newLogService(cfg, testutil.NewFS(c.t), opt)
 		require.NoError(c.t, err)
 
@@ -1455,16 +1454,27 @@ func (c *testCluster) initCNServices(
 			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
 			fileservices.getETLFileService(),
+			fileservices.getTmpFileService(),
 		)
 		if err != nil {
 			panic(err)
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		cs, err := newCNService(cfg, ctx, fs, opt)
+		_, err = newCNService(
+			cfg,
+			ctx,
+			cancel,
+			fs,
+			func(owner CNService) {
+				c.cn.Lock()
+				c.cn.svcs = append(c.cn.svcs, owner)
+				c.cn.Unlock()
+			},
+			opt,
+		)
 		if err != nil {
 			panic(err)
 		}
-		cs.SetCancel(cancel)
 
 		c.logger.Info(
 			"cn service initialized",
@@ -1472,14 +1482,15 @@ func (c *testCluster) initCNServices(
 			zap.Any("config", cfg),
 		)
 
-		c.cn.svcs = append(c.cn.svcs, cs)
 	}
 }
 
 // startTNServices initializes and starts all tn services.
 func (c *testCluster) startTNServices(ctx context.Context) error {
 	// initialize all tn services
-	c.tn.svcs = c.initTNServices(c.fileservices)
+	if err := c.initTNServices(c.fileservices); err != nil {
+		return err
+	}
 
 	// start tn services
 	for _, ds := range c.tn.svcs {
@@ -1560,18 +1571,20 @@ func (c *testCluster) closeLogServices() error {
 	return nil
 }
 
-func (c *testCluster) closeCNServices() error {
+func (c *testCluster) closeCNServices() (bool, error) {
 	defer logutil.LogClose(c.logger, "tests-framework/cnservices")()
-
+	var closeErr error
 	for i, cs := range c.cn.svcs {
 		c.logger.Info("close cn service", zap.Int("index", i))
 		if err := cs.Close(); err != nil {
-			return err
+			closeErr = errors.Join(closeErr, err)
+			if cs.Status() != ServiceClosed {
+				return false, closeErr
+			}
 		}
 		c.logger.Info("cn service closed", zap.Int("index", i))
 	}
-
-	return nil
+	return true, closeErr
 }
 
 // getClusterState fetches cluster state from arbitrary hakeeper.
@@ -1650,8 +1663,15 @@ func (c *testCluster) rangeHAKeeperService(
 	}
 }
 
-func (c *testCluster) newRuntime(sid string) runtime.Runtime {
-	return runtime.NewRuntime(metadata.ServiceType_CN, sid, c.logger, runtime.WithClock(c.clock))
+func (c *testCluster) newRuntime(kind metadata.ServiceType, sid string) runtime.Runtime {
+	rt := runtime.NewRuntime(kind, sid, c.logger, runtime.WithClock(c.clock))
+	if c.runtimes == nil {
+		c.runtimes = make(map[string]runtime.Runtime)
+	}
+	c.runtimes[sid] = rt
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	catalog.SetupDefines(sid)
+	return rt
 }
 
 // FilterFunc returns true if traffic was allowed.

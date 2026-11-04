@@ -131,14 +131,14 @@ func TestGetIvfflatTblFuncParams_Error(t *testing.T) {
 }
 
 func TestBuildIvfflatCreate_TooFewArgs(t *testing.T) {
-	_, err := buildIvfflatCreate(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(1), nil)
+	_, err := buildIvfflatCreate(newStubPlanBuilder(), makeNumValTblFunc(`{}`), nil, makeBuildArgs(1), nil, nil)
 	require.Error(t, err)
 }
 
 func TestBuildIvfflatCreate_BadParams(t *testing.T) {
 	un := tree.NewUnresolvedName(tree.NewCStr("x", 0))
 	tbl := &tree.TableFunction{Func: &tree.FuncExpr{Exprs: tree.Exprs{un}}}
-	_, err := buildIvfflatCreate(newStubPlanBuilder(), tbl, nil, makeBuildArgs(2), nil)
+	_, err := buildIvfflatCreate(newStubPlanBuilder(), tbl, nil, makeBuildArgs(2), nil, nil)
 	require.Error(t, err)
 }
 
@@ -146,7 +146,7 @@ func TestBuildIvfflatCreate_BadParams(t *testing.T) {
 // and marks the node single-threaded (centroid computation is not parallel).
 func TestBuildIvfflatCreate_OK(t *testing.T) {
 	b := newStubPlanBuilder()
-	id, err := buildIvfflatCreate(b, makeNumValTblFunc(`{"lists":"4"}`), nil, makeBuildArgs(3), nil)
+	id, err := buildIvfflatCreate(b, makeNumValTblFunc(`{"lists":"4"}`), nil, makeBuildArgs(3), nil, nil)
 	require.NoError(t, err)
 	node := b.nodes[id]
 	require.Equal(t, plan.Node_FUNCTION_SCAN, node.NodeType)

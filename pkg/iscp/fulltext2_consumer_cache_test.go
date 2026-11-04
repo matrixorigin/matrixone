@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	executortest "github.com/matrixorigin/matrixone/pkg/util/executor/test"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -48,6 +49,7 @@ import (
 // results that the callback needs and records the real tail INSERT statement.
 type fulltext2FlushSQLExecutor struct {
 	mp         *mpool.MPool
+	txn        executor.TxnExecutor
 	nextChunk  int64
 	insertOnce sync.Once
 	insertSeen chan string
@@ -70,8 +72,8 @@ func (e *fulltext2FlushSQLExecutor) Exec(_ context.Context, sql string, _ execut
 	return executor.Result{}, nil
 }
 
-func (e *fulltext2FlushSQLExecutor) ExecTxn(context.Context, func(executor.TxnExecutor) error, executor.Options) error {
-	return nil
+func (e *fulltext2FlushSQLExecutor) ExecTxn(_ context.Context, fn func(executor.TxnExecutor) error, _ executor.Options) error {
+	return fn(e.txn)
 }
 
 // cacheFlushProbe is a complete VectorIndexSearchIf implementation so the test
@@ -124,19 +126,19 @@ func (p *cacheFlushProbe) Destroy() { p.destroys.Add(1) }
 var _ veccache.VectorIndexSearchIf = (*cacheFlushProbe)(nil)
 var _ executor.SQLExecutor = (*fulltext2FlushSQLExecutor)(nil)
 
-// TestRunFulltext2KeepsWarmCacheAfterNonEmptyCDCFlush proves the #28005
-// read-only cache contract through the real consumer path. A non-empty encoded
-// writer blob is consumed by RunFulltext2; the tail INSERT and watermark happen
-// before a commit barrier. Two properties are asserted:
+// TestRunFulltext2RefreshesIdleCacheAfterNonEmptyCDCFlush proves the #30401
+// read-your-writes path through the real consumer. A non-empty encoded writer blob
+// is consumed by RunFulltext2; the tail INSERT and watermark happen before a commit
+// barrier. Two properties are asserted:
 //
-//   - both while the flush is blocked and after it commits, a reader of the exact
-//     index key keeps using the same warm object. CDC does not destroy or reload
-//     the object; normal generation/stale/TTL handling remains responsible for
-//     eventual refresh.
-//   - crossing the ordinary idle TTL boundary destroys that generation once;
-//     the next Load observes the committed row, and final cleanup releases the
-//     replacement once. A permanently retained generation fails this oracle.
-func TestRunFulltext2KeepsWarmCacheAfterNonEmptyCDCFlush(t *testing.T) {
+//   - while the flush is blocked, a reader of the exact index key keeps using the
+//     same warm object: the idle-evict is a post-commit RemoveIdle, never a mid-flush
+//     yank out from under a concurrent reader.
+//   - after the flush commits, the now-idle warm entry is evicted (RemoveIdle) so the
+//     next query reloads the just-appended tail and observes the committed row
+//     immediately -- without waiting for the ordinary TTL/stale sweep. The read-only
+//     contract is unchanged: the reloaded generation is a fresh read-only object.
+func TestRunFulltext2RefreshesIdleCacheAfterNonEmptyCDCFlush(t *testing.T) {
 	const (
 		indexKey    = "__store"
 		serviceID   = "ft2-cache-contract-28005"
@@ -179,6 +181,19 @@ func TestRunFulltext2KeepsWarmCacheAfterNonEmptyCDCFlush(t *testing.T) {
 	})
 
 	ctrl := gomock.NewController(t)
+	tx := executortest.NewMockTxnExecutor(ctrl)
+	exec.txn = tx
+	tx.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(sql string, opt executor.StatementOption) (executor.Result, error) {
+		if opt.HasParams() {
+			v, err := opt.Params(exec.mp)
+			require.NoError(t, err)
+			defer v.Free(exec.mp)
+			require.Positive(t, v.Length())
+			require.NotEmpty(t, v.GetRawBytesAt(1))
+		}
+		return exec.Exec(runCtx, sql, executor.Options{}.WithStatementOption(opt))
+	}).AnyTimes()
+
 	// This cleanup must be registered after runtime teardown and gomock's
 	// controller cleanup so it runs first. Assertion failures and timeouts can
 	// otherwise finish the executor/mocks while RunFulltext2 is still in its txn.
@@ -327,38 +342,27 @@ func TestRunFulltext2KeepsWarmCacheAfterNonEmptyCDCFlush(t *testing.T) {
 	require.Equal(t, serviceID, watermarkService.Load())
 	require.Same(t, txnOp, watermarkTxn.Load())
 
-	// CDC does not evict the idle warm entry after commit. The resident object is
-	// still owned by the cache and will be refreshed by the normal lifecycle.
+	// The committed non-empty CDC flush drops the now-idle warm entry (RemoveIdle)
+	// so the next query reloads the appended tail (#30401). The evict is idle-only:
+	// the blocked-commit reader above kept the entry busy and was never yanked; only
+	// now, with no search in flight, is it removed. destroyed exactly once.
 	require.Equal(t, int32(1), warm.loads.Load())
-	require.Equal(t, int32(0), warm.destroys.Load(), "CDC flush must not destroy an idle warm backend")
+	require.Equal(t, int32(1), warm.destroys.Load(), "a committed CDC flush evicts the idle warm backend")
 	_, stillWarm := testCache.IndexMap.Load(indexKey)
-	require.True(t, stillWarm, "CDC flush must keep the idle warm entry resident")
+	require.False(t, stillWarm, "the idle warm entry is evicted so the next query reloads the tail")
 
+	// The next reader reloads a fresh generation that observes the committed CDC row
+	// immediately -- no manual TTL expiry or housekeeping needed.
 	replacement := &cacheFlushProbe{committed: &committed}
 	keys, _, err := testCache.Search(nil, indexKey, replacement, nil, vectorindex.RuntimeConfig{})
 	require.NoError(t, err)
-	require.Equal(t, []int64{42}, keys, "the warm generation deliberately retains its pre-commit snapshot")
-	require.Equal(t, int32(0), replacement.loads.Load(), "the next reader reuses the warm generation")
+	require.Equal(t, []int64{42, 101}, keys, "the reloaded generation observes the committed CDC row")
+	require.Equal(t, int32(1), replacement.loads.Load(), "the next reader reloads after the idle evict")
 	value, ok = testCache.IndexMap.Load(indexKey)
 	require.True(t, ok)
 	replacementEntry, ok := value.(*veccache.VectorIndexSearch)
 	require.True(t, ok)
-	require.Same(t, warm, replacementEntry.Algo)
-
-	// Advance only this idle entry across its TTL boundary, then invoke the real
-	// housekeeping path. No Remove/Destroy or CDC invalidation forces replacement.
-	// This is deterministic and does not shorten the process-global cache TTL.
-	warmEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
-	testCache.HouseKeeping()
-	_, ok = testCache.IndexMap.Load(indexKey)
-	require.False(t, ok, "ordinary TTL housekeeping must remove the old generation")
-	require.Equal(t, int32(1), warm.destroys.Load())
-	keys, _, err = testCache.Search(nil, indexKey, replacement, nil, vectorindex.RuntimeConfig{})
-	require.NoError(t, err)
-	require.Equal(t, []int64{42, 101}, keys, "replacement Load must observe the committed CDC row")
-	require.Equal(t, int32(1), replacement.loads.Load())
-	require.Equal(t, int32(1), warm.loads.Load())
-	require.Equal(t, int32(0), replacement.destroys.Load())
+	require.Same(t, replacement, replacementEntry.Algo)
 
 	// Final cleanup destroys each loaded generation exactly once, including if
 	// teardown is repeated; unused candidates were never loaded or destroyed.

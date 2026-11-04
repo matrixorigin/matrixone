@@ -28,7 +28,7 @@ type SetOperationKeyEvaluator struct {
 	eval ExprEvalVector
 }
 
-func (e *SetOperationKeyEvaluator) Prepare(proc *process.Process, exprs []*plan.Expr) error {
+func (e *SetOperationKeyEvaluator) Prepare(proc *process.Process, exprs []*plan.Expr, allocations ...*vector.AllocationAccountSelection) error {
 	if len(exprs) == 0 {
 		e.eval.Free()
 		return nil
@@ -39,7 +39,11 @@ func (e *SetOperationKeyEvaluator) Prepare(proc *process.Process, exprs []*plan.
 	}
 	e.eval.Free()
 	var err error
-	e.eval, err = MakeEvalVector(proc, exprs)
+	var allocation *vector.AllocationAccountSelection
+	if len(allocations) > 0 {
+		allocation = allocations[0]
+	}
+	e.eval, err = MakeEvalVectorWithAllocation(proc, exprs, allocation)
 	return err
 }
 

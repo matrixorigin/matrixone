@@ -55,8 +55,8 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 	if apply.Source == nil {
 		if apply.TableFunction != nil {
 			apply.Source = apply.TableFunction
-		} else if apply.VectorIndexScan != nil {
-			source := NewVectorSource(apply.VectorIndexScan, apply.VectorAttrs, apply.Typs).(*vectorSource)
+		} else if apply.IndexSearchScan != nil {
+			source := NewVectorSource(apply.IndexSearchScan, apply.VectorAttrs, apply.Typs).(*vectorSource)
 			source.txnOffset = apply.TxnOffset
 			apply.Source = source
 		}
@@ -68,6 +68,10 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 		return moerr.NewInvalidState(proc.Ctx, "apply operator missing parameterized source")
 	}
 
+	apply.ctr.preserveSourceBatch = false
+	if source, ok := apply.Source.(interface{ ApplyPreserveBatch() bool }); ok {
+		apply.ctr.preserveSourceBatch = source.ApplyPreserveBatch()
+	}
 	err = apply.Source.ApplyPrepare(proc)
 	if err != nil {
 		return
@@ -91,6 +95,9 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			input, err = vm.ChildrenCall(apply.GetChildren(0), proc, analyzer)
 			if err != nil {
 				return result, err
+			}
+			if input.Status == vm.ExecYield {
+				return input, nil
 			}
 			ctr.inbat = input.Batch
 			if ctr.inbat == nil {
@@ -196,7 +203,7 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 				}
 			}
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-			if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
+			if ctr.preserveSourceBatch || ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 				ctr.batIdx = i
 				break
 			}

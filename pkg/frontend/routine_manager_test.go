@@ -552,7 +552,8 @@ func TestAccountRoutineManagerRecordDeleteAndCopies(t *testing.T) {
 
 func TestRoutineManagerKillAndCleanKillQueue(t *testing.T) {
 	rt, _ := newUnitTestRoutine(t, 1003)
-	ses := &Session{}
+	ses := &Session{tenant: &TenantInfo{Tenant: "sys", User: "owner", UserID: 10, DefaultRole: "public"}}
+	principal := killPrincipal(ses.tenant)
 	rt.setSession(ses)
 	rm := &RoutineManager{
 		ctx:                    context.Background(),
@@ -565,17 +566,23 @@ func TestRoutineManagerKillAndCleanKillQueue(t *testing.T) {
 		},
 	}
 
-	require.ErrorContains(t, rm.kill(context.Background(), false, 1, 9999, ""), "Unknown connection id")
+	found, err := rm.killLocal(context.Background(), principal, 1, 9999, false, "")
+	require.NoError(t, err)
+	require.False(t, found)
 
 	ses.SetQueryInExecute(true)
 	reqCtx, cancelReq := context.WithCancel(context.Background())
 	rt.setCancelRequestFunc(cancelReq)
-	require.NoError(t, rm.kill(context.Background(), false, 1, 1003, "stmt"))
+	found, err = rm.killLocal(context.Background(), principal, 1, 1003, false, "stmt")
+	require.NoError(t, err)
+	require.True(t, found)
 	require.ErrorIs(t, reqCtx.Err(), context.Canceled)
 	require.False(t, ses.GetQueryInExecute())
 
 	rt.setCancelled(false)
-	require.NoError(t, rm.kill(context.Background(), true, 1, 1003, ""))
+	found, err = rm.killLocal(context.Background(), principal, 1, 1003, true, "")
+	require.NoError(t, err)
+	require.True(t, found)
 	require.True(t, rt.isCancelled())
 
 	rm.accountRoutine.killIdQueue[1] = NewKillRecord(time.Now().Add(-2*time.Minute), 1)

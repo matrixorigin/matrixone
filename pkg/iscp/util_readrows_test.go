@@ -98,7 +98,7 @@ func TestGetTaskRunnerQueriesMOTaskWithSystemAccount(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	}()
 
-	ExecWithResult = func(ctx context.Context, sql string, cnUUID string, txn client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(ctx context.Context, sql string, cnUUID string, txn client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		accountID, err := defines.GetAccountId(ctx)
 		require.NoError(t, err)
 		require.Equal(t, uint32(catalog.System_Account), accountID)

@@ -370,6 +370,7 @@ func TestLocalFSFallsBackAfterInvalidRemoteCacheHit(t *testing.T) {
 		FilePath: "foo",
 		Entries:  []IOEntry{{Offset: 0, Size: 3}},
 	}
+	defer vector.Release()
 	require.NoError(t, fs.Read(ctx, vector))
 	require.Equal(t, []byte{1, 2, 3}, vector.Entries[0].Data)
 	require.Nil(t, vector.Entries[0].fromCache)

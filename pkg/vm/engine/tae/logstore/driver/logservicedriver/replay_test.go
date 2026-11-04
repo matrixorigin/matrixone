@@ -1554,19 +1554,6 @@ func Test_Replayer9(t *testing.T) {
 		)
 	}()
 
-	// entries = entries[:0]
-	// for i := 0; i < entryCnt; i++ {
-	// 	v := uint64(entryCnt*2 + i)
-	// 	e := entry.MockEntryWithPayload(types.EncodeUint64(&v))
-	// 	err := producer.Append(e)
-	// 	assert.NoError(t, err)
-	// 	entries = append(entries, e)
-	// }
-	// for _, e := range entries {
-	// 	err := e.WaitDone()
-	// 	assert.NoError(t, err)
-	// }
-
 	testutils.WaitExpect(10000, func() bool {
 		return maxReadDSN.Load() == uint64(entryCnt*2)
 	})

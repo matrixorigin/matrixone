@@ -204,6 +204,53 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	return types.New(types.T_varbinary, width, 0), true
 }
 
+// MixedTextBinaryCommonType returns a binary common type only when a set
+// column contains both character and binary strings. Other combinations keep
+// their existing common-type rules.
+func MixedTextBinaryCommonType(source []types.Type) (types.Type, bool) {
+	hasText, hasBinary := false, false
+	needsBlob, unknownWidth := false, false
+	var byteWidth int64
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_char, types.T_varchar:
+			hasText = true
+			// Character widths count code points; TEXT widths count bytes.
+			if typ.Width > 0 {
+				byteWidth = max(byteWidth, int64(typ.Width)*utf8.UTFMax)
+			}
+		case types.T_text:
+			hasText, needsBlob = true, true
+			byteWidth = max(byteWidth, int64(typ.Width))
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			hasBinary = true
+			needsBlob = needsBlob || typ.Oid == types.T_blob
+			byteWidth = max(byteWidth, int64(typ.Width))
+		case types.T_any:
+			// An untyped NULL contributes no width.
+		default:
+			return types.Type{}, false
+		}
+		unknownWidth = unknownWidth || typ.Oid != types.T_any && typ.Width <= 0
+	}
+	if !hasText || !hasBinary {
+		return types.Type{}, false
+	}
+	if unknownWidth || byteWidth > types.MaxVarBinaryLen || needsBlob {
+		// A zero width is unknown, not empty. Keep the materialized BLOB/TEXT
+		// capacity large enough for the largest possible input byte value.
+		capacity := int32(types.MaxStringSize)
+		switch {
+		case unknownWidth || byteWidth > types.MaxMediumTextLen:
+			capacity = types.MaxLongTextLen
+		case byteWidth > types.MaxStringSize:
+			capacity = types.MaxMediumTextLen
+		}
+		return types.New(types.T_blob, capacity, 0), true
+	}
+	return binaryStringCommonType(source)
+}
+
 func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
 	if !target.Oid.IsDecimal() {
 		return false
@@ -243,6 +290,9 @@ func textStringCommonType(source []types.Type) (types.Type, bool, bool) {
 		case types.T_text:
 			hasString = true
 			hasText = true
+		case types.T_uuid:
+			// A real text branch selects text; UUID/NULL-only stays native.
+			aligned = false
 		case types.T_any:
 			aligned = false
 		case types.T_char, types.T_varchar:
@@ -338,8 +388,206 @@ func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, v
 }
 
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
-func caseCheck(_ []overload, inputs []types.Type) checkResult {
+// caseConditionFinalType returns the execution type for a searched CASE
+// condition slot. MySQL evaluates a JSON condition with conditional numeric
+// coercion per row (the same kernel IF uses), so it stays in-domain; every
+// other non-BOOL condition casts to BOOL.
+func caseConditionFinalType(inputs []types.Type, i int) types.Type {
+	if inputs[i].Oid == types.T_json {
+		return inputs[i]
+	}
+	return types.T_bool.ToType()
+}
+
+// isEnumToBoolCastFunctionId reports whether the function id resolves
+// explicit cast applications over the supportedTypeCast table. The D11 gate
+// in getFunctionByName consults it to keep the ENUM -> BOOL cast pair - added
+// only for the conditional storage-truth contracts - unresolvable for a
+// native-mode statement, exactly as the pre-contract table admitted no such
+// pair at all.
+func isEnumToBoolCastFunctionId(id int32) bool {
+	switch id {
+	case CAST, CAST_STRICT, CAST_ASSIGN, CAST_IGNORE:
+		return true
+	}
+	return false
+}
+
+// legacyConditionalBooleanCheck reproduces the pre-contract IF/CASE condition
+// admission for native-mode statements (D11): JSON conditions reject, and an
+// ENUM/SET operand keeps the ordinary string/numeric typing base produced.
+// The bodies are byte-for-byte the pre-contract checkers; only their names
+// differ, so native-mode parity is constructional.
+func legacyConditionalBooleanCheck(id int32, _ []overload, inputs []types.Type) (checkResult, bool) {
+	switch id {
+	case IFF:
+		return legacyIffBooleanCheck(inputs), true
+	case CASE:
+		return legacyCaseBooleanCheck(inputs), true
+	}
+	return checkResult{}, false
+}
+
+func legacyIffBooleanCheck(inputs []types.Type) checkResult {
+	// iff(x, y, z)
+	if len(inputs) == 3 {
+		if widened, ok := widenMixedLowPrecisionFloats(inputs, func(i int) bool { return i > 0 }); ok {
+			return castFromWidened(legacyIffBooleanCheck(widened), widened)
+		}
+		conditionType := inputs[0]
+		needCast := conditionType.Oid == types.T_any
+		if needCast {
+			conditionType = types.T_bool.ToType()
+		} else if conditionType.Oid != types.T_bool &&
+			!conditionType.IsNumeric() && !conditionType.Oid.IsMySQLString() {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+
+		source := []types.Type{inputs[1], inputs[2]}
+		if retType, ok := CommonMediumIntType(source); ok {
+			finalTypes := []types.Type{conditionType, retType, retType}
+			shouldCast := needCast ||
+				!sameMediumIntCommonType(source[0], retType) ||
+				!sameMediumIntCommonType(source[1], retType)
+			if shouldCast {
+				return newCheckResultWithCast(0, finalTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		}
+		if retType, ok := conditionalTemporalCommonType(source); ok {
+			finalTypes := []types.Type{conditionType, retType, retType}
+			shouldCast := needCast
+			for i := range inputs {
+				if inputs[i].Oid != finalTypes[i].Oid || inputs[i].Scale != finalTypes[i].Scale {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+		sameCollatedText := false
+		switch source[0].Oid {
+		case types.T_char, types.T_varchar, types.T_text:
+			sameCollatedText = source[0].Eq(source[1])
+		}
+		if sameCollatedText {
+			// Matching text branches already have a common collation identity.
+			// Preserve it instead of rebuilding the same OID with ToType(), which
+			// would turn legacy or utf8mb4_bin metadata into general_ci.
+			if needCast {
+				return newCheckResultWithCast(0, []types.Type{conditionType, source[0], source[1]})
+			}
+			return newCheckResultWithSuccess(0)
+		}
+		if lowPrecType, ok := sameLowPrecisionFloatType(source); ok {
+			if needCast || source[0].Oid != lowPrecType.Oid || source[1].Oid != lowPrecType.Oid {
+				return newCheckResultWithCast(0, []types.Type{conditionType, lowPrecType, lowPrecType})
+			}
+			return newCheckResultWithSuccess(0)
+		}
+		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
+			if !ok {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			finalTypes := []types.Type{conditionType, retType, retType}
+			if needCast || source[0] != retType || source[1] != retType {
+				return newCheckResultWithCast(0, finalTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		}
+		if source[0].Oid == types.T_binary || source[0].Oid == types.T_varbinary ||
+			source[1].Oid == types.T_binary || source[1].Oid == types.T_varbinary {
+			binaryIdx := 0
+			if source[0].Oid == types.T_any {
+				binaryIdx = 1
+			}
+			otherIdx := 1 - binaryIdx
+			if source[otherIdx].Oid == types.T_any {
+				retType := source[binaryIdx]
+				setMaxWidthFromSource(&retType, source)
+				finalTypes := []types.Type{conditionType, retType, retType}
+				return newCheckResultWithCast(0, finalTypes)
+			}
+		}
+		if retType, ok := binaryStringCommonType(source); ok {
+			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
+		}
+		if retType, ok := mixedStringNumericToVarchar(source); ok {
+			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
+		}
+		if retType, ok := signedUnsignedIntegerCommonType(source); ok {
+			return newCheckResultWithCast(0, []types.Type{conditionType, retType, retType})
+		}
+		if retType, resultAligned, ok := textStringCommonType(source); ok {
+			finalTypes := []types.Type{conditionType, retType, retType}
+			shouldCast := needCast || !resultAligned
+			for i := range inputs {
+				if inputs[i].Oid != finalTypes[i].Oid {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
+		minCost := math.MaxInt32
+		retType := types.Type{}
+
+		target := make([]types.T, 2)
+		decimalReturnRequired := requireDecimalReturn(source)
+		for _, rett := range retOperatorIffSupports {
+			if decimalReturnRequired && !rett.IsDecimal() {
+				continue
+			}
+			target[0], target[1] = rett, rett
+
+			c, cost := tryToMatch(source, target)
+			if c == matchFailed {
+				continue
+			}
+			if cost < minCost {
+				retType = rett.ToType()
+				if retType.Oid.IsDecimal() {
+					if !setSafeDecimalWidthAndScaleFromSource(&retType, source) {
+						continue
+					}
+				} else if retType.Oid.IsMySQLString() {
+					retType = commonConditionalStringType(retType, source)
+				}
+				retType = commonTemporalType(retType, source)
+				minCost = cost
+			}
+		}
+
+		if minCost == math.MaxInt32 {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		finalTypes := []types.Type{conditionType, retType, retType}
+		shouldCast := needCast || retType.Oid.IsMySQLString() ||
+			needDecimalMetadataCast(source, retType) || needTemporalMetadataCast(source, retType)
+		for i := range inputs {
+			if inputs[i].Oid != finalTypes[i].Oid {
+				shouldCast = true
+			}
+		}
+		if !shouldCast {
+			return newCheckResultWithSuccess(0)
+		}
+		return newCheckResultWithCast(0, finalTypes)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+func legacyCaseBooleanCheck(inputs []types.Type) checkResult {
 	l := len(inputs)
+	isValue := func(i int) bool { return i%2 == 1 || (l%2 == 1 && i == l-1) }
+	if widened, ok := widenMixedLowPrecisionFloats(inputs, isValue); ok {
+		return castFromWidened(legacyCaseBooleanCheck(widened), widened)
+	}
 
 	needCast := false
 	if l >= 2 {
@@ -356,39 +604,10 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 		}
 
-		// Y should be cast to a same type.
-		//allYSame := true
-		//t := inputs[1]
-		//
-		//if l%2 == 1 {
-		//	if inputs[l-1].Oid != t.Oid {
-		//		allYSame = false
-		//	}
-		//}
-		//if allYSame {
-		//	for i := 1; i < l; i += 2 {
-		//		if t.Oid != inputs[i].Oid {
-		//			allYSame = false
-		//			break
-		//		}
-		//	}
-		//}
-
 		// XXX choose a supported Y type.
 		var source []types.Type
 		minCost := math.MaxInt32
 		retType := types.Type{}
-		//if allYSame {
-		//	source = []types.Type{inputs[1]}
-		//} else {
-		//	source = make([]types.Type, 0, (l+1)/2)
-		//	for j := 1; j < l; j += 2 {
-		//		source = append(source, inputs[j])
-		//	}
-		//	if l%2 == 1 {
-		//		source = append(source, inputs[l-1])
-		//	}
-		//}
 
 		source = make([]types.Type, 0, (l+1)/2)
 		for j := 1; j < l; j += 2 {
@@ -396,6 +615,25 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 		if l%2 == 1 {
 			source = append(source, inputs[l-1])
+		}
+
+		if retType, ok := CommonMediumIntType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range inputs {
+				isValue := i%2 == 1 || (len(inputs)%2 == 1 && i == len(inputs)-1)
+				if !isValue {
+					finalTypes[i] = types.T_bool.ToType()
+					shouldCast = shouldCast || inputs[i].Oid != types.T_bool
+					continue
+				}
+				finalTypes[i] = retType
+				shouldCast = shouldCast || !sameMediumIntCommonType(inputs[i], retType)
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
 		}
 
 		if retType, ok := conditionalTemporalCommonType(source); ok {
@@ -570,6 +808,265 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
+func caseCheck(_ []overload, inputs []types.Type) checkResult {
+	l := len(inputs)
+	isValue := func(i int) bool { return i%2 == 1 || (l%2 == 1 && i == l-1) }
+	if widened, ok := widenMixedLowPrecisionFloats(inputs, isValue); ok {
+		return castFromWidened(caseCheck(nil, widened), widened)
+	}
+
+	needCast := false
+	if l >= 2 {
+		// Each searched CASE condition is a boolean context. Accept every type
+		// that the type system can implicitly convert to BOOL, including the
+		// untyped NULL literal, whose cast remains NULL and therefore does not
+		// select its branch. A JSON condition stays in-domain and evaluates
+		// per row with conditional numeric coercion, so admission is decided
+		// here rather than through the general implicit-cast table (which keeps
+		// no T_json -> T_bool row) and it schedules no cast. A recovered ENUM
+		// condition is admitted the same way: its stored ordinal becomes BOOL
+		// through the conditional storage-truth CAST contract, never through a
+		// general implicit-cast table row that would also leak admission into
+		// native-mode statements.
+		for i := 0; i < l-1; i += 2 {
+			if inputs[i].Oid != types.T_bool {
+				if inputs[i].Oid != types.T_json && inputs[i].Oid != types.T_enum {
+					if canCast, _ := fixedImplicitTypeCast(inputs[i], types.T_bool); !canCast {
+						return newCheckResultWithFailure(failedFunctionParametersWrong)
+					}
+					needCast = true
+				}
+			}
+		}
+
+		// XXX choose a supported Y type.
+		var source []types.Type
+		minCost := math.MaxInt32
+		retType := types.Type{}
+
+		source = make([]types.Type, 0, (l+1)/2)
+		for j := 1; j < l; j += 2 {
+			source = append(source, inputs[j])
+		}
+		if l%2 == 1 {
+			source = append(source, inputs[l-1])
+		}
+
+		if retType, ok := CommonMediumIntType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range inputs {
+				isValue := i%2 == 1 || (len(inputs)%2 == 1 && i == len(inputs)-1)
+				if !isValue {
+					finalTypes[i] = caseConditionFinalType(inputs, i)
+					shouldCast = shouldCast || finalTypes[i].Oid != inputs[i].Oid
+					continue
+				}
+				finalTypes[i] = retType
+				shouldCast = shouldCast || !sameMediumIntCommonType(inputs[i], retType)
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
+		if retType, ok := conditionalTemporalCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = caseConditionFinalType(inputs, i)
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			shouldCast := needCast
+			for i := range inputs {
+				if inputs[i].Oid != finalTypes[i].Oid || inputs[i].Scale != finalTypes[i].Scale {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
+		if lowPrecType, ok := sameLowPrecisionFloatType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = caseConditionFinalType(inputs, i)
+				} else {
+					finalTypes[i] = lowPrecType
+				}
+				if inputs[i].Oid != finalTypes[i].Oid {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
+		if vectorType, hasVector, valid := caseVectorCommonType(source); hasVector {
+			if !valid {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = caseConditionFinalType(inputs, i)
+					if finalTypes[i].Oid != inputs[i].Oid {
+						shouldCast = true
+					}
+				} else {
+					finalTypes[i] = vectorType
+					if inputs[i] != vectorType {
+						shouldCast = true
+					}
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
+		if retType, ok := binaryStringCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = caseConditionFinalType(inputs, i)
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+		if retType, ok := mixedStringNumericToVarchar(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 {
+					finalTypes[i] = caseConditionFinalType(inputs, i)
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			if len(inputs)%2 == 1 {
+				finalTypes[len(finalTypes)-1] = retType
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+		if retType, ok := signedUnsignedIntegerCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = caseConditionFinalType(inputs, i)
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+		if retType, resultAligned, ok := textStringCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			shouldCast := needCast || !resultAligned
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = caseConditionFinalType(inputs, i)
+				} else {
+					finalTypes[i] = retType
+				}
+				if finalTypes[i].Oid != inputs[i].Oid {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
+
+		target := make([]types.T, len(source))
+		decimalReturnRequired := requireDecimalReturn(source)
+
+		for _, rett := range retOperatorCaseSupports {
+			if decimalReturnRequired && !rett.IsDecimal() {
+				continue
+			}
+			for i := range target {
+				target[i] = rett
+			}
+			c, cost := tryToMatch(source, target)
+			if c == matchFailed {
+				continue
+			}
+			if cost < minCost {
+				retType = rett.ToType()
+				if retType.Oid.IsDecimal() {
+					if !setSafeDecimalWidthAndScaleFromSource(&retType, source) {
+						continue
+					}
+				} else if retType.Oid.IsMySQLString() {
+					retType = commonConditionalStringType(retType, source)
+				}
+				retType = commonTemporalType(retType, source)
+				minCost = cost
+			}
+		}
+		if minCost == math.MaxInt32 {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		finalTypes := make([]types.Type, len(inputs))
+		shouldCast := needCast || retType.Oid.IsMySQLString() ||
+			needDecimalMetadataCast(source, retType) || needTemporalMetadataCast(source, retType)
+		for i := range finalTypes {
+			if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+				finalTypes[i] = caseConditionFinalType(inputs, i)
+			} else {
+				finalTypes[i] = retType
+			}
+			if finalTypes[i].Oid != inputs[i].Oid {
+				shouldCast = true
+			}
+		}
+		if !shouldCast {
+			return newCheckResultWithSuccess(0)
+		}
+
+		return newCheckResultWithCast(0, finalTypes)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+// caseConditionTruth adapts a searched CASE condition slot for execution:
+// BOOL conditions read their cast value; JSON conditions stay in-domain and
+// evaluate per row with the same conditional numeric coercion IF uses, instead
+// of the strict JSON-to-BOOL cast that explicit CAST ... AS BOOL keeps.
+type caseConditionTruth struct {
+	cond vector.FunctionParameterWrapper[bool]
+	json *vector.Vector
+}
+
+func newCaseConditionTruth(vec *vector.Vector) caseConditionTruth {
+	if vec.GetType().Oid == types.T_json {
+		return caseConditionTruth{json: vec}
+	}
+	return caseConditionTruth{cond: vector.GenerateFunctionFixedTypeParameter[bool](vec)}
+}
+
+func (c caseConditionTruth) truth(mode SQLCompatibilityMode, row uint64) (bool, error) {
+	if c.json != nil {
+		return IffConditionTruthyAt(c.json, row, mode)
+	}
+	v, null := c.cond.GetValue(row)
+	return !null && v, nil
+}
+
 func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	t := result.GetResultVector().GetType()
 	switch t.Oid {
@@ -635,14 +1132,45 @@ func caseFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date | types.Datetime |
-	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	// JSON conditions retain their in-domain truth and compatibility checks below.
+	if len(vecs) == 3 && vecs[0].GetType().Oid == types.T_bool && vecs[2].IsConstNull() {
+		cond := vector.GenerateFunctionFixedTypeParameter[bool](vecs[0])
+		value := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
+		rs := vector.MustFunctionResult[T](result)
+		var zero T
+		nullStart := uint64(0)
+		inNull := false
+		for i := uint64(0); i < uint64(length); i++ {
+			if c, n := cond.GetValue(i); !n && c {
+				if v, n := value.GetValue(i); !n {
+					if inNull {
+						rs.AddNullRange(nullStart, i)
+						inNull = false
+					}
+					rs.AppendMustValue(v)
+					continue
+				}
+			}
+			if !inNull {
+				nullStart = i
+				inNull = true
+			}
+			rs.AppendMustValue(zero)
+		}
+		if inNull {
+			rs.AddNullRange(nullStart, uint64(length))
+		}
+		return nil
+	}
 	// case Xn then Yn else Z
-	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
+	mode := CompatibilityModeFromProcess(proc)
+	xs := make([]caseConditionTruth, 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[T], 0, len(vecs)/2)
 
 	l := len(vecs)
 	for i := 0; i < l-1; i += 2 {
-		xs = append(xs, vector.GenerateFunctionFixedTypeParameter[bool](vecs[i]))
+		xs = append(xs, newCaseConditionTruth(vecs[i]))
 	}
 	for j := 1; j < l; j += 2 {
 		ys = append(ys, vector.GenerateFunctionFixedTypeParameter[T](vecs[j]))
@@ -655,7 +1183,11 @@ func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date
 		for i := uint64(0); i < uint64(length); i++ {
 			matchElse := true
 			for j := range xs {
-				if v, null := xs[j].GetValue(i); !null && v {
+				truth, err := xs[j].truth(mode, i)
+				if err != nil {
+					return err
+				}
+				if truth {
 					if err := rs.Append(ys[j].GetValue(i)); err != nil {
 						return err
 					}
@@ -675,7 +1207,11 @@ func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date
 		for i := uint64(0); i < uint64(length); i++ {
 			matchElse := true
 			for j := range xs {
-				if v, null := xs[j].GetValue(i); !null && v {
+				truth, err := xs[j].truth(mode, i)
+				if err != nil {
+					return err
+				}
+				if truth {
 					if err := rs.Append(ys[j].GetValue(i)); err != nil {
 						return err
 					}
@@ -693,14 +1229,15 @@ func generalCaseFn[T constraints.Integer | constraints.Float | bool | types.Date
 	return nil
 }
 
-func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	// case Xn then Yn else Z
-	xs := make([]vector.FunctionParameterWrapper[bool], 0, len(vecs)/2)
+	mode := CompatibilityModeFromProcess(proc)
+	xs := make([]caseConditionTruth, 0, len(vecs)/2)
 	ys := make([]vector.FunctionParameterWrapper[types.Varlena], 0, len(vecs)/2)
 
 	l := len(vecs)
 	for i := 0; i < l-1; i += 2 {
-		xs = append(xs, vector.GenerateFunctionFixedTypeParameter[bool](vecs[i]))
+		xs = append(xs, newCaseConditionTruth(vecs[i]))
 	}
 	for j := 1; j < l; j += 2 {
 		ys = append(ys, vector.GenerateFunctionStrParameter(vecs[j]))
@@ -713,7 +1250,11 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		for i := uint64(0); i < uint64(length); i++ {
 			matchElse := true
 			for j := range xs {
-				if v, null := xs[j].GetValue(i); !null && v {
+				truth, err := xs[j].truth(mode, i)
+				if err != nil {
+					return err
+				}
+				if truth {
 					if err := rs.AppendBytes(ys[j].GetStrValue(i)); err != nil {
 						return err
 					}
@@ -731,7 +1272,11 @@ func strCaseFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, _ *pr
 		for i := uint64(0); i < uint64(length); i++ {
 			matchElse := true
 			for j := range xs {
-				if v, null := xs[j].GetValue(i); !null && v {
+				truth, err := xs[j].truth(mode, i)
+				if err != nil {
+					return err
+				}
+				if truth {
 					if err := rs.AppendBytes(ys[j].GetStrValue(i)); err != nil {
 						return err
 					}
@@ -769,16 +1314,31 @@ var (
 func iffCheck(_ []overload, inputs []types.Type) checkResult {
 	// iff(x, y, z)
 	if len(inputs) == 3 {
+		if widened, ok := widenMixedLowPrecisionFloats(inputs, func(i int) bool { return i > 0 }); ok {
+			return castFromWidened(iffCheck(nil, widened), widened)
+		}
 		conditionType := inputs[0]
 		needCast := conditionType.Oid == types.T_any
 		if needCast {
 			conditionType = types.T_bool.ToType()
 		} else if conditionType.Oid != types.T_bool &&
+			conditionType.Oid != types.T_enum &&
+			conditionType.Oid != types.T_json &&
 			!conditionType.IsNumeric() && !conditionType.Oid.IsMySQLString() {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
+		if retType, ok := CommonMediumIntType(source); ok {
+			finalTypes := []types.Type{conditionType, retType, retType}
+			shouldCast := needCast ||
+				!sameMediumIntCommonType(source[0], retType) ||
+				!sameMediumIntCommonType(source[1], retType)
+			if shouldCast {
+				return newCheckResultWithCast(0, finalTypes)
+			}
+			return newCheckResultWithSuccess(0)
+		}
 		if retType, ok := conditionalTemporalCommonType(source); ok {
 			finalTypes := []types.Type{conditionType, retType, retType}
 			shouldCast := needCast
@@ -917,6 +1477,36 @@ func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityM
 		return vector.GetFixedAtNoTypeCheck[bool](vec, int(row)), nil
 	case types.T_bit:
 		return vector.GetFixedAtNoTypeCheck[uint64](vec, int(row)) != 0, nil
+	case types.T_enum:
+		// The binder keeps ENUM storage in the condition. MySQL truth for an
+		// ENUM is its numeric ordinal, exactly as BIT truth is its payload.
+		// Native mode keeps the pre-contract behavior: storage-typed ENUM
+		// conditions never bind there (legacy admission), so this stays the
+		// base diagnostic.
+		if mode != SQLCompatibilityMySQL {
+			return false, moerr.NewInvalidArgNoCtx("IF condition", vec.GetType().String())
+		}
+		return vector.GetFixedAtNoTypeCheck[types.Enum](vec, int(row)) != 0, nil
+	case types.T_json:
+		// MySQL conditional truth coerces a JSON scalar numerically: strings
+		// use their leading numeric prefix ("2tail" is true like 2, "abc" and
+		// the string "true" are false like 0), numbers compare against zero,
+		// and JSON null selects the ELSE branch the same way a SQL NULL
+		// condition does. Explicit CAST ... AS BOOL keeps the strict kernel.
+		// Native mode keeps the pre-contract behavior: JSON conditions never
+		// bind there (legacy admission makes base reject them), so this stays
+		// the base diagnostic.
+		if mode != SQLCompatibilityMySQL {
+			return false, moerr.NewInvalidArgNoCtx("IF condition", vec.GetType().String())
+		}
+		value, isNull, err := jsonScalarConditionalTruthy(types.DecodeJson(vec.GetBytesAt(int(row))))
+		if err != nil {
+			return false, err
+		}
+		if isNull {
+			return false, nil
+		}
+		return value, nil
 	case types.T_int8:
 		return vector.GetFixedAtNoTypeCheck[int8](vec, int(row)) != 0, nil
 	case types.T_int16:
@@ -1209,12 +1799,13 @@ func operatorUnaryMinusDecimal256(parameters []*vector.Vector, result vector.Fun
 }
 
 func funcBitInversion[T constraints.Integer](x T) uint64 {
-	if x > 0 {
-		n := uint64(x)
-		return ^n
-	} else {
-		return uint64(^x)
-	}
+	// The numeric unary bit inversion is evaluated in the unsigned 64-bit
+	// domain, so widen first and complement once. Complementing at the storage
+	// width of T leaked that width for unsigned zero values: ~tinyint_unsigned
+	// 0 returned 255 instead of 18446744073709551615 (issue #31905). For
+	// signed x the two's-complement sign extension makes ^uint64(x) equal to
+	// the old uint64(^x), so their behavior is unchanged.
+	return ^uint64(x)
 }
 
 func operatorUnaryTilde[T constraints.Integer](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -118,6 +119,12 @@ func TestPreflightLogicalRestoreDatabases(t *testing.T) {
 	require.Equal(t, []string{"ordinary", "branch_db"}, loaded)
 
 	loaded = nil
-	require.NoError(t, preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion75, load))
-	require.Empty(t, loaded)
+	require.NoError(t, preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion118, load))
+	require.Equal(t, []string{"ordinary", "branch_db", "not_reached"}, loaded)
+
+	injected := moerr.NewInternalError(ctx, "source definition unavailable")
+	err = preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion118, func(string) (logicalRestoreDatabaseDefinition, error) {
+		return logicalRestoreDatabaseDefinition{}, injected
+	})
+	require.ErrorIs(t, err, injected, "capability must not bypass source metadata validation")
 }

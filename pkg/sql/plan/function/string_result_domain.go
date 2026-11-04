@@ -114,13 +114,13 @@ func formattedStringByteBound(typ types.Type) stringResultBound {
 	case types.T_uint64, types.T_bit:
 		width = 20
 	case types.T_float32:
-		// floatToBytes uses fixed notation for values in [1e-13, 1e15).
-		// Keep room for the sign, the decimal point, leading fractional
-		// zeroes, and the maximum exact FLOAT32 digits.
+		// AppendMySQLFloat uses six significant digits for FLOAT. Keep this
+		// conservative bound above its 23-byte longest fixed representation.
 		width = 24
 	case types.T_float64:
-		// See FLOAT32 above. DOUBLE needs up to 17 exact significant digits.
-		width = 32
+		// AppendMySQLFloat keeps fixed notation down to 1e-15. The longest
+		// DOUBLE text needs a sign, "0.", 14 zeroes and 17 significant digits.
+		width = 34
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if typ.Width <= 0 {
 			return unknownStringResultBound()
@@ -154,6 +154,13 @@ func formattedScalarStringType(typ types.Type) types.Type {
 		result.Width = int32(bound.bytes)
 	}
 	return result
+}
+
+// StringResultByteBound exposes the planner's declared/formatted byte bound.
+// known distinguishes an exact zero-width result from an unbounded declaration.
+func StringResultByteBound(typ types.Type) (bytes uint64, known bool) {
+	bound := formattedStringByteBound(typ)
+	return bound.bytes, !bound.unknown
 }
 
 func binaryStringResultType(bound stringResultBound) types.Type {
@@ -380,9 +387,7 @@ func aesEncryptReturnType(parameters []types.Type) types.Type {
 
 func textStringResultType(bound stringResultBound, charset uint8) types.Type {
 	if bound.unknown || bound.bytes > uint64(types.MaxVarcharLen) {
-		result := types.T_text.ToType()
-		result.Charset = charset
-		return result
+		return types.NewWithCharset(types.T_text, 0, 0, charset)
 	}
 	result := types.NewWithCharset(types.T_varchar, int32(bound.bytes), 0, charset)
 	return result

@@ -29,7 +29,7 @@ where match(d.title) against('alpha' in boolean mode) order by d.id;
 
 -- the preserved-side MATCH is served by the fulltext2 index scan, nested under the LEFT join.
 -- @separator:table
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select d.id, b.name from docs d left join base b on b.id = d.base_id
 where match(d.title) against('alpha' in boolean mode) order by d.id;
 

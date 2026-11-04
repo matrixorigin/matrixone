@@ -17,6 +17,38 @@ rename table t_live to t_tmp, t_shadow to t_live, t_tmp to t_shadow;
 select * from t_live;
 select * from t_shadow;
 
+
+-- Reuse the historical bindings (#25120).
+rename table t_live to t_tmp, t_shadow to t_live, t_tmp to t_shadow;
+select * from t_live;
+select * from t_shadow;
+select count(*) from information_schema.tables where table_schema = 'test_rename_chain' and table_name = 't_tmp';
+
+-- Reuse the historical bindings (#25120).
+rename table t_live to t_tmp, t_shadow to t_live, t_tmp to t_shadow;
+select * from t_live;
+select * from t_shadow;
+select count(*) from information_schema.tables where table_schema = 'test_rename_chain' and table_name = 't_tmp';
+
+-- Separate statements commit each intermediate binding.
+rename table t_live to t_tmp;
+rename table t_shadow to t_live;
+rename table t_tmp to t_shadow;
+select * from t_live;
+select * from t_shadow;
+rename table t_live to t_tmp;
+rename table t_shadow to t_live;
+rename table t_tmp to t_shadow;
+select * from t_live;
+select * from t_shadow;
+
+-- Planning rejection preserves committed state; no rename pair executes.
+-- Real admission/abort coverage is in TestHistoricalRenameRollback.
+rename table t_live to t_tmp, missing_source to t_live;
+select * from t_live;
+select * from t_shadow;
+select count(*) from information_schema.tables where table_schema = 'test_rename_chain' and table_name = 't_tmp';
+
 -- #24499: a destination can be the source of the next rename pair
 create table t1 (a int, b int);
 insert into t1 values (24499, 3);

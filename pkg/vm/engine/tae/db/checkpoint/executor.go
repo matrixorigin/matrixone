@@ -258,11 +258,12 @@ func (job *checkpointJob) doGlobalCheckpoint(
 // checkpoint that immediately precedes entry. A GCKP intent is published before
 // its table-ID index is durable, so it must never participate in this handoff.
 //
-// The underlying ICKP is preferred while checkpoint GC still retains it. If it
-// has already been collected, a current-format GCKP is used and its coverage is
-// validated by SyncTableIDBatchWithHistory while the rows are streamed. Legacy
-// checkpoints can legitimately have no table-ID index; returning an empty
-// location starts a new, explicitly partial range. doGlobalCheckpoint keeps
+// Prefer a matching current-format GCKP: its validated index supersedes the
+// underlying ICKP index, which checkpoint compaction may have already deleted
+// while the store still retains its metadata. Validate coverage while streaming
+// with SyncTableIDBatchWithHistory. Legacy checkpoints can legitimately have
+// no table-ID index; returning an empty location starts an explicitly partial
+// range. doGlobalCheckpoint keeps
 // publication fail-closed until that range spans the configured history window.
 func (job *checkpointJob) resolveICKPTableIDPredecessor(
 	entry *CheckpointEntry,
@@ -276,6 +277,9 @@ func (job *checkpointJob) resolveICKPTableIDPredecessor(
 		globalLocation = global.GetTableIDLocation()
 	}
 	globalMatches := global != nil && globalEnd.EQ(&entry.start)
+	if globalMatches && globalLocation.Len() > 0 {
+		return globalLocation, entry.start.Prev(), nil
+	}
 
 	if !entry.start.IsEmpty() {
 		incremental := runner.store.MaxIncrementalCheckpoint()
@@ -293,13 +297,9 @@ func (job *checkpointJob) resolveICKPTableIDPredecessor(
 	}
 
 	if globalMatches {
-		// Empty table-ID metadata identifies a legacy checkpoint. Recover by
-		// beginning a new partial range; never convert unreadable or malformed
-		// non-empty metadata into an apparently valid range.
-		if globalLocation.Len() == 0 {
-			return nil, types.TS{}, nil
-		}
-		return globalLocation, entry.start.Prev(), nil
+		// Empty table-ID metadata identifies a legacy checkpoint. Begin a
+		// partial range only when neither predecessor has a usable index.
+		return nil, types.TS{}, nil
 	}
 	if entry.start.IsEmpty() {
 		return nil, types.TS{}, nil

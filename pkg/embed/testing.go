@@ -24,7 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
@@ -34,9 +34,9 @@ var (
 )
 
 // SharedTestCluster serializes tests that reuse an expensive embedded cluster
-// and preserves the first initialization result. Initialization callbacks must
-// return errors instead of failing the current test from inside sync.Once, so a
-// failed startup is reported consistently to every later caller.
+// and reuses each successfully initialized generation. Initialization callbacks
+// must return an error and any incomplete cleanup owner. A failed root retains
+// its diagnostic; a later root may start fresh only after cleanup is complete.
 type SharedTestCluster struct {
 	mu          sync.Mutex
 	runCondOnce sync.Once
@@ -186,6 +186,11 @@ func (c *SharedTestCluster) Run(
 		c.mu.Lock()
 		defer func() {
 			if activeClaimed && !setupComplete {
+				// A panic/Goexit during rollback has not established cleanup
+				// completion. Retain the owner for explicit recovery.
+				if c.cluster != nil {
+					c.closed = true
+				}
 				c.releaseRunLocked()
 			}
 			c.mu.Unlock()
@@ -216,7 +221,15 @@ func (c *SharedTestCluster) Run(
 		c.once.Do(func() {
 			initialized = true
 			c.generation++
+			returned := false
+			defer func() {
+				if !returned {
+					// Panic/Goexit supplies no affirmative cleanup completion.
+					c.closed = true
+				}
+			}()
 			c.cluster, c.err = init()
+			returned = true
 			if c.err == nil && c.cluster == nil {
 				c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
 			}
@@ -230,24 +243,31 @@ func (c *SharedTestCluster) Run(
 				"MO_UT_SETUP fixture=shared-cluster phase=initialize-total duration=%s status=%s",
 				time.Since(initStarted), status)
 		}
-		if c.err != nil && c.cluster != nil {
-			cleanupStarted := time.Now()
-			cleanupErr := c.cluster.Close()
-			cleanupStatus := "ready"
-			if cleanupErr != nil {
-				cleanupStatus = "error"
-			}
-			logTestSetup(t,
-				"MO_UT_SETUP fixture=shared-cluster phase=rollback-cleanup duration=%s status=%s",
-				time.Since(cleanupStarted), cleanupStatus)
-			complete := closeComplete(c.cluster, cleanupErr)
-			c.err = errors.Join(c.err, cleanupErr)
-			if complete {
-				c.cluster = nil
-			}
-		}
 		if c.err != nil {
 			initErr = c.err
+			complete := c.cluster == nil
+			if c.cluster != nil {
+				cleanupStarted := time.Now()
+				cleanupErr := c.cluster.Close()
+				complete = closeComplete(c.cluster, cleanupErr)
+				cleanupStatus := "ready"
+				if cleanupErr != nil || !complete {
+					cleanupStatus = "error"
+				}
+				logTestSetup(t,
+					"MO_UT_SETUP fixture=shared-cluster phase=rollback-cleanup duration=%s status=%s complete=%t",
+					time.Since(cleanupStarted), cleanupStatus, complete)
+				initErr = errors.Join(initErr, cleanupErr)
+			}
+			if complete {
+				c.resetGenerationLocked()
+			} else {
+				// Retain ownership and prevent implicit retries by later roots.
+				// CloseIfActive is the explicit path to complete this cleanup.
+				c.closed = true
+				c.err = errors.Join(initErr, moerr.NewInvalidStateNoCtx("failed shared cluster initialization cleanup is incomplete"))
+				initErr = c.err
+			}
 			return
 		}
 
@@ -403,13 +423,7 @@ func (c *SharedTestCluster) finishFailureCleanup(
 	// The old generation has released all resources, including admission and
 	// ports. Reset only after CloseComplete; a later Run can safely initialize a
 	// new generation without paying this cost on successful tests.
-	c.cluster = nil
-	c.err = nil
-	c.once = sync.Once{}
-	c.closed = c.terminalClose
-	c.sealed = false
-	c.cleanupTried = false
-	c.cleanupRegistrations = nil
+	c.resetGenerationLocked()
 	return err
 }
 
@@ -436,7 +450,7 @@ func (c *SharedTestCluster) Close() error {
 	err := c.cluster.Close()
 	if !closeComplete(c.cluster, err) {
 		c.closed = true
-		return err
+		return errors.Join(err, moerr.NewInvalidStateNoCtx("shared cluster cleanup is incomplete"))
 	}
 	c.cluster = nil
 	c.closed = true
@@ -449,10 +463,19 @@ func (c *SharedTestCluster) Close() error {
 // own topology. Callers must invoke it only after Run has returned; Run holds
 // callback admission while the scenario body is executing.
 func (c *SharedTestCluster) CloseIfActive() error {
+	return c.closeIfActive(true)
+}
+
+// A topology switch may release an idle fixture, but must not wait for a
+// callback that could be making the switch itself or bypass its cleanup.
+func (c *SharedTestCluster) closeIfActive(waitForCallback bool) error {
 	c.initializeRunCondition()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for c.runActive {
+		if !waitForCallback {
+			return moerr.NewInvalidStateNoCtx("shared cluster callback is still active")
+		}
 		c.runCond.Wait()
 	}
 	if c.cluster == nil {
@@ -464,6 +487,9 @@ func (c *SharedTestCluster) CloseIfActive() error {
 	// automatic attempt has happened, this method remains the explicit retry
 	// path for incomplete cleanup.
 	if c.sealed && !c.cleanupTried && len(c.cleanupRegistrations) > 0 {
+		if !waitForCallback {
+			return moerr.NewInvalidStateNoCtx("shared cluster callback cleanup is still pending")
+		}
 		return nil
 	}
 	err := c.cluster.Close()
@@ -472,15 +498,9 @@ func (c *SharedTestCluster) CloseIfActive() error {
 		// scenario from observing a partially closed fixture. A subsequent
 		// CloseIfActive call can retry the underlying cleanup.
 		c.closed = true
-		return err
+		return errors.Join(err, moerr.NewInvalidStateNoCtx("shared cluster cleanup is incomplete"))
 	}
-	c.cluster = nil
-	c.err = nil
-	c.once = sync.Once{}
-	c.closed = c.terminalClose
-	c.sealed = false
-	c.cleanupTried = false
-	c.cleanupRegistrations = nil
+	c.resetGenerationLocked()
 	return err
 }
 
@@ -514,6 +534,8 @@ const (
 	basicClusterHAKeeperBootstrapRetryInterval = 500 * time.Millisecond
 	basicClusterServiceStartupRetryInterval    = 100 * time.Millisecond
 	basicClusterTaskServiceReadyTimeout        = 30 * time.Second
+	testLockBindTimeout                        = 5 * time.Second
+	testLockBindHeartbeatInterval              = 100 * time.Millisecond
 )
 
 func startBasicCluster(
@@ -554,6 +576,9 @@ func adjustBasicClusterService(svc ServiceOperator) {
 				config.CN.LockService.MaxFixedSliceSize = 10001
 				config.CN.LockService.MaxLockRowCount = 10000
 				config.CN.Frontend.SkipCheckUser = false
+				// Bounded success-path tests own their spill allowance instead of
+				// depending on the production policy's 16 GiB free-disk headroom.
+				config.CN.Frontend.ProcessLimitationSpillSize = 64 << 20
 				// The shared feature-test fixture is a fully upgraded cluster.
 				config.CN.AutoIncrement.EnableAutoIDCache = true
 				config.CN.Frontend.Iceberg.Enable = true
@@ -576,10 +601,10 @@ func adjustBasicClusterService(svc ServiceOperator) {
 	}
 }
 
-// adjustTestingClusterStartup applies local test-cluster Raft timing
-// and readiness polling before scenario overrides. Readiness conditions,
-// store liveness, and bootstrap failure budgets are unchanged.
-func adjustTestingClusterStartup(svc ServiceOperator) {
+// adjustTestingClusterTiming applies local Raft, readiness, task discovery and
+// lock-bind timing before scenario overrides. Lock expiry keeps its grace period
+// and authoritative validation; healthy CNs refresh well inside that period.
+func adjustTestingClusterTiming(svc ServiceOperator) {
 	switch svc.ServiceType() {
 	case metadata.ServiceType_LOG:
 		svc.Adjust(func(config *ServiceConfig) {
@@ -591,16 +616,36 @@ func adjustTestingClusterStartup(svc ServiceOperator) {
 	case metadata.ServiceType_TN:
 		svc.Adjust(func(config *ServiceConfig) {
 			config.HAKeeperRunningRetryInterval.Duration = basicClusterServiceStartupRetryInterval
+			tn := config.TN_please_use_getTNServiceConfig
+			if tn == nil {
+				tn = config.TNCompatible
+			}
+			if tn != nil {
+				tn.LockService.KeepBindTimeout.Duration = testLockBindTimeout
+				// Functional fixtures use small object sets; explicit estimates
+				// remain available for capacity and large-data scenarios.
+				if tn.GCCfg.GCestimateRows == 0 {
+					tn.GCCfg.GCestimateRows = 100_000
+				}
+			}
 		})
 	case metadata.ServiceType_CN:
 		svc.Adjust(func(config *ServiceConfig) {
 			config.TNShardReadyRetryInterval.Duration = basicClusterServiceStartupRetryInterval
+			config.CN.LockService.KeepBindDuration.Duration = testLockBindHeartbeatInterval
+			// Functional task tests need transitions, not production polling delays.
+			config.CN.TaskRunner.FetchInterval.Duration = time.Second
+			// Keep real index discovery and durable-watermark transitions on the
+			// same cadence as local BVT. Explicit timing scenarios retain their
+			// configuration, and WithPreStart can override these defaults.
+			if config.CN.ISCP.SyncTaskInterval.Duration == 0 {
+				config.CN.ISCP.SyncTaskInterval.Duration = time.Second
+			}
+			if config.CN.ISCP.IndexFlushWatermarkInterval.Duration == 0 {
+				config.CN.ISCP.IndexFlushWatermarkInterval.Duration = time.Second
+			}
 		})
 	}
-}
-
-type taskServiceGetter interface {
-	GetTaskService() (taskservice.TaskService, bool)
 }
 
 func waitBasicClusterTaskServices(ctx context.Context, c Cluster, cnCount int) error {
@@ -609,44 +654,17 @@ func waitBasicClusterTaskServices(ctx context.Context, c Cluster, cnCount int) e
 		if err != nil {
 			return err
 		}
-		getter, ok := svc.RawService().(taskServiceGetter)
+		getter, ok := svc.RawService().(testutil.TaskServiceGetter)
 		if !ok {
 			return moerr.NewInternalErrorNoCtxf(
 				"CN %s does not expose its task service", svc.ServiceID())
 		}
-		if err := waitTaskServiceReady(ctx, getter, basicClusterServiceStartupRetryInterval); err != nil {
+		if err := testutil.WaitTaskServiceReady(ctx, getter, basicClusterServiceStartupRetryInterval); err != nil {
 			return errors.Join(moerr.NewInternalErrorNoCtxf(
 				"CN %s task service did not become ready", svc.ServiceID()), err)
 		}
 	}
 	return nil
-}
-
-func waitTaskServiceReady(
-	ctx context.Context,
-	getter taskServiceGetter,
-	retryInterval time.Duration,
-) error {
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if service, ok := getter.GetTaskService(); ok && service != nil {
-			// Holder publication does not imply backing storage availability.
-			// Ping also succeeds with no store; a bounded read observes the real
-			// boundary and requests refresh without retrying any business write.
-			_, err := service.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, 0))
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if err == nil || !errors.Is(err, taskservice.ErrNotReady) {
-				return err
-			}
-		}
-		if err := waitStartupRetry(ctx, retryInterval); err != nil {
-			return err
-		}
-	}
 }
 
 func basicClusterSetupTracer(t testReporter, cnCount int) func(string, time.Duration, error) {
@@ -670,6 +688,10 @@ func RunBaseClusterTests(
 	fn func(Cluster),
 ) {
 	t.Helper()
+	if err := singleCNClusterState.closeIfActive(false); err != nil {
+		t.Fatalf("release single-CN shared fixture: %v", err)
+		return
+	}
 	basicClusterState.Run(t, func() (Cluster, error) {
 		return startBasicCluster(basicClusterCNCount, basicClusterSetupTracer(t, basicClusterCNCount))
 	}, func(c Cluster) {
@@ -679,20 +701,23 @@ func RunBaseClusterTests(
 
 // CloseBaseClusterTests releases and resets the process-local shared two-CN
 // fixture if it was initialized. Call only after RunBaseClusterTests returns,
-// because Run holds the fixture mutex for the duration of its callback.
+// because Run retains callback admission for the duration of its callback.
 func CloseBaseClusterTests() error {
 	return basicClusterState.CloseIfActive()
 }
 
 // RunSingleCNBaseClusterTests reuses the same base-cluster configuration with
-// one CN. A test package should use this only when every shared-cluster case in
-// that package is single-CN; mixing both helpers would start two fixtures and
-// defeat the lifecycle saving.
+// one CN. Switching topology releases the other idle shared fixture first;
+// successful tests with the same topology keep reusing their generation.
 func RunSingleCNBaseClusterTests(
 	t testReporter,
 	fn func(Cluster),
 ) {
 	t.Helper()
+	if err := basicClusterState.closeIfActive(false); err != nil {
+		t.Fatalf("release two-CN shared fixture: %v", err)
+		return
+	}
 	singleCNClusterState.Run(t, func() (Cluster, error) {
 		return startBasicCluster(1, basicClusterSetupTracer(t, 1))
 	}, func(c Cluster) {
@@ -708,4 +733,17 @@ func RunSingleCNBaseClusterTests(
 // later shared test still initializes normally.
 func CloseSingleCNBaseClusterTests() error {
 	return singleCNClusterState.CloseIfActive()
+}
+
+// Admission is exclusive and all owners of this generation have completed
+// cleanup. Keep the generation number monotonic so stale finalizers cannot
+// affect a replacement fixture.
+func (c *SharedTestCluster) resetGenerationLocked() {
+	c.cluster = nil
+	c.err = nil
+	c.once = sync.Once{}
+	c.closed = c.terminalClose
+	c.sealed = false
+	c.cleanupTried = false
+	c.cleanupRegistrations = nil
 }

@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -36,10 +35,7 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 	snapshot := timestamp.Timestamp{PhysicalTime: 20}
 	ctrl := gomock.NewController(t)
 	cli := mock_frontend.NewMockTxnClient(ctrl)
-	op := mock_frontend.NewMockTxnOperator(ctrl)
-	cli.EXPECT().New(ctx, timestamp.Timestamp{}, gomock.Any()).Return(op, nil).AnyTimes()
-	op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: snapshot}).AnyTimes()
-	op.EXPECT().Commit(ctx).Return(nil).AnyTimes()
+	cli.EXPECT().GetLatestSnapshot(ctx, timestamp.Timestamp{}).Return(snapshot, nil).AnyTimes()
 	e := &Engine{cli: cli, partitions: make(map[[2]uint64]*logtailreplay.Partition)}
 	e.catalog.Store(cache.NewCatalog())
 	e.pClient.eng = e
@@ -47,7 +43,7 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 	e.pClient.subscribed = subscribedTable{eng: e, m: make(map[uint64]*subEntry)}
 	workspace := &Transaction{proc: testutil.NewProc(t)}
 	defer workspace.proc.Free()
-	for i, name := range []string{catalog.MO_DATABASE, catalog.MO_TABLES, "mo_user", "mo_role", "mo_user_grant", "mo_role_grant", "mo_role_privs"} {
+	for i, name := range []string{catalog.MO_DATABASE, catalog.MO_TABLES, "mo_user", "mo_role", "mo_user_grant", "mo_role_grant", "mo_role_privs", catalog.MO_ROLE_RULE} {
 		id := uint64(i + 1)
 		account := uint32(0)
 		if i >= 2 {
@@ -70,11 +66,38 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 	}
 	original := read()
 	require.True(t, original != (PrivilegeCacheVersion{}))
+	accessTime := e.pClient.subscribed.m[catalog.MO_DATABASE_ID].lastTs.Load()
+	require.NotZero(t, accessTime)
+	for _, entry := range e.pClient.subscribed.m {
+		require.Equal(t, accessTime, entry.lastTs.Load(), "one proof shares idle bookkeeping across all eight tables")
+	}
 	require.True(t, original == read())
 	e.pClient.subscribed.setTablePendingUpdate(1, 1, timestamp.Timestamp{PhysicalTime: 15})
 	require.True(t, read() == (PrivilegeCacheVersion{}), "pending catalog application must not authorize reuse")
 	e.pClient.subscribed.clearTablePendingUpdate(1, 1, timestamp.Timestamp{PhysicalTime: 15})
 	require.True(t, original == read())
+	// Advancing a physical applied watermark, without inserting/deleting any
+	// catalog row, still invalidates this conservative authorization proof.
+	state, done := e.GetOrCreateLatestPart(ctx, 0, 1, 1).MutateState()
+	state.UpdateAppliedTo(types.BuildTS(11, 0))
+	done()
+	advanced := read()
+	require.True(t, advanced != (PrivilegeCacheVersion{}))
+	require.True(t, original != advanced, "unchanged rows do not imply unchanged physical version")
+	require.True(t, advanced == read(), "a stable proven state permits reuse")
+	// Role-rule contents participate in the same proof as active-role grants.
+	state, done = e.GetOrCreateLatestPart(ctx, 7, catalog.MO_CATALOG_ID, 18).MutateState()
+	state.UpdateAppliedTo(types.BuildTS(12, 0))
+	done()
+	changedRule := read()
+	require.NotEqual(t, advanced, changedRule)
+	require.Equal(t, changedRule, read())
+	delete(e.partitions, [2]uint64{catalog.MO_CATALOG_ID, 18})
+	state, done = e.GetOrCreateLatestPart(ctx, 7, catalog.MO_CATALOG_ID, 18).MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	state.UpdateAppliedTo(types.BuildTS(12, 0))
+	done()
+	require.True(t, changedRule != read(), "reconstructed role-rule partition has a new identity")
 	e.pClient.receivedLogTailTime.ready.Store(false)
 	unready, observed, err := e.GetPrivilegeCacheVersion(ctx, 7, snapshot)
 	require.NoError(t, err)
@@ -82,7 +105,7 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 	require.True(t, unready == (PrivilegeCacheVersion{}), "reconnect admission is closed")
 	e.pClient.receivedLogTailTime.ready.Store(true)
 	delete(e.partitions, [2]uint64{1, 1})
-	state, done := e.GetOrCreateLatestPart(ctx, 0, 1, 1).MutateState()
+	state, done = e.GetOrCreateLatestPart(ctx, 0, 1, 1).MutateState()
 	state.UpdateDuration(types.TS{}, types.MaxTs())
 	state.UpdateAppliedTo(types.BuildTS(10, 0))
 	done()
@@ -96,27 +119,21 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 }
 
 func TestPrivilegeCacheVersionPreservesSnapshotErrors(t *testing.T) {
-	for _, atCommit := range []bool{false, true} {
-		t.Run(map[bool]string{false: "admission", true: "release"}[atCommit], func(t *testing.T) {
-			ctx := context.Background()
-			ctrl := gomock.NewController(t)
-			cli := mock_frontend.NewMockTxnClient(ctrl)
-			failed := errors.New("snapshot unavailable")
-			minimum := timestamp.Timestamp{PhysicalTime: 10}
-			if atCommit {
-				op := mock_frontend.NewMockTxnOperator(ctrl)
-				cli.EXPECT().New(ctx, minimum, gomock.Any()).Return(op, nil)
-				op.EXPECT().Txn().Return(txn.TxnMeta{SnapshotTS: minimum.Next()})
-				op.EXPECT().Commit(ctx).Return(failed)
-			} else {
-				cli.EXPECT().New(ctx, minimum, gomock.Any()).Return(nil, failed)
-			}
-			eng := &Engine{cli: cli}
-			eng.pClient.receivedLogTailTime.ready.Store(true)
-			version, observed, err := eng.GetPrivilegeCacheVersion(ctx, 7, minimum)
-			require.ErrorIs(t, err, failed)
-			require.Equal(t, minimum, observed)
-			require.True(t, version == (PrivilegeCacheVersion{}))
-		})
+	for _, failure := range []error{errors.New("snapshot unavailable"), context.Canceled, nil} {
+		ctx := context.Background()
+		ctrl := gomock.NewController(t)
+		cli := mock_frontend.NewMockTxnClient(ctrl)
+		minimum := timestamp.Timestamp{PhysicalTime: 10}
+		cli.EXPECT().GetLatestSnapshot(ctx, minimum).Return(timestamp.Timestamp{}, failure)
+		eng := &Engine{cli: cli}
+		eng.pClient.receivedLogTailTime.ready.Store(true)
+		version, observed, err := eng.GetPrivilegeCacheVersion(ctx, 7, minimum)
+		if failure == nil {
+			require.NoError(t, err)
+		} else {
+			require.ErrorIs(t, err, failure)
+		}
+		require.Equal(t, minimum, observed)
+		require.Equal(t, PrivilegeCacheVersion{}, version, "an unknown snapshot cannot authorize cache reuse")
 	}
 }

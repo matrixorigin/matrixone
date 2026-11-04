@@ -130,10 +130,6 @@ func (mergeTop *MergeTop) Free(proc *process.Process, pipelineFailed bool, err e
 	mergeTop.ctr.free(proc)
 }
 
-func (mergeTop *MergeTop) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (mergeTop *MergeTop) SetAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {

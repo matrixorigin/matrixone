@@ -15,6 +15,8 @@
 package checkers
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/cnservice"
@@ -84,6 +86,17 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 
 	// check whether system health or not.
 	if operators, health := syshealth.Check(c.cfg, cluster, tnState, logState, currentTick); !health {
+		// TN starts have a report/target lifetime. Teardown ends their ownership
+		// before ordinary checks stop running.
+		for _, record := range cluster.TNShards {
+			for _, op := range slices.Clone(c.OperatorController.GetOperators(record.ShardID)) {
+				if steps := op.OpSteps(); len(steps) == 1 {
+					if _, ok := steps[0].(operator.AddTnReplica); ok {
+						c.OperatorController.RemoveOperator(op)
+					}
+				}
+			}
+		}
 		c.teardown = true
 		c.teardownOps = operators
 		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)
@@ -113,12 +126,27 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 			state.NonVotingLocality,
 			standbyEnabled,
 		),
-		tnservice.NewTNServiceChecker(commonFields, tnState),
+		tnservice.NewTNServiceChecker(commonFields, tnState, c.OperatorController),
 		cnservice.NewCNServiceChecker(commonFields, cnState),
 		proxy.NewProxyServiceChecker(commonFields, proxyState),
 	}
 	for _, checker := range checkers {
 		operators = append(operators, checker.Check()...)
+	}
+	// A TN retry must not replace suppressed, still-desired Log commands with
+	// a TN-only legacy batch. Eligibility stays with the Log checker policy.
+	if c.OperatorController.HasTNStartRetry(operators) {
+		shardIDs := make([]uint64, 0, len(cluster.LogShards))
+		for _, shard := range cluster.LogShards {
+			shardIDs = append(shardIDs, shard.ShardID)
+		}
+		slices.Sort(shardIDs)
+		var existing []*operator.Operator
+		for _, shardID := range slices.Compact(shardIDs) {
+			existing = append(existing, c.OperatorController.GetOperators(shardID)...)
+		}
+		pending := logservice.PendingOperators(commonFields, logState, state.NonVotingReplicaNum, existing)
+		operators = append(pending, operators...)
 	}
 	return c.OperatorController.Dispatch(operators, logState, tnState, cnState, proxyState)
 }

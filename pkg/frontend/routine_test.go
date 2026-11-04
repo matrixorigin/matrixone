@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -46,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -811,8 +813,9 @@ func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	prepared := &PrepareStmt{
-		Name:                GetPrepareStmtName(41),
-		getFromSendLongData: map[int]struct{}{0: {}},
+		Name:                  GetPrepareStmtName(41),
+		rewritePolicyCaptured: true,
+		getFromSendLongData:   map[int]struct{}{0: {}},
 	}
 	require.NoError(t, ses.SetPrepareStmt(context.Background(), prepared.Name, prepared))
 	rt := &Routine{mc: newMigrateController()}
@@ -840,14 +843,16 @@ func TestMigrateConnectionFromRejectsActivePreparedCursors(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	first := &PrepareStmt{
-		Name: GetPrepareStmtName(41),
-		Sql:  "select 1",
+		Name:                  GetPrepareStmtName(41),
+		Sql:                   "select 1",
+		rewritePolicyCaptured: true,
 		// An empty result is still fetchable until FETCH closes its cursor.
 		cursor: &preparedStmtCursor{result: &MysqlResultSet{}},
 	}
 	second := &PrepareStmt{
-		Name: GetPrepareStmtName(42),
-		Sql:  "select 2",
+		Name:                  GetPrepareStmtName(42),
+		Sql:                   "select 2",
+		rewritePolicyCaptured: true,
 		cursor: &preparedStmtCursor{
 			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}, {int64(2)}}},
 			offset: 1,
@@ -880,8 +885,9 @@ func TestMigrateConnectionFromWaitsForCursorCloseRequest(t *testing.T) {
 	const cursorBytes = 128
 	require.True(t, ses.tryReservePreparedCursorBytes(cursorBytes, cursorBytes))
 	stmt := &PrepareStmt{
-		Name: GetPrepareStmtName(41),
-		Sql:  "select 1",
+		Name:                  GetPrepareStmtName(41),
+		Sql:                   "select 1",
+		rewritePolicyCaptured: true,
 		cursor: &preparedStmtCursor{
 			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
 			owner:  ses,
@@ -930,6 +936,59 @@ func TestMigrateConnectionFromWaitsForCursorCloseRequest(t *testing.T) {
 	}
 	require.True(t, resp.PreparedStmtCursorsChecked)
 	require.Len(t, resp.PrepareStmts, 1)
+}
+
+func TestMigrateConnectionFromRejectsInvalidatedRewritePreparedStmt(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(true)
+	prepared := &PrepareStmt{
+		Name:                    GetPrepareStmtName(41),
+		Sql:                     "select 1",
+		rewritePolicyCaptured:   true,
+		rewritePolicyEnabled:    true,
+		rewritePolicyGeneration: ses.rewritePolicyGeneration,
+	}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), prepared.Name, prepared))
+	ses.SetLastStmtID(41)
+	ses.InvalidatePrivilegeCache()
+
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+
+	// The client must explicitly close the invalidated handle before migration;
+	// the next binary PREPARE must not reuse its statement ID.
+	require.True(t, ses.RemovePrepareStmt(prepared.Name))
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Empty(t, resp.PrepareStmts)
+	require.Equal(t, uint32(41), ses.GetLastStmtId())
+	require.Equal(t, uint32(42), ses.GenNewStmtId())
+}
+
+func TestMigrateConnectionFromRejectsUnvalidatedRewriteGeneration(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ses.prepareStmts = map[string]*PrepareStmt{
+		"old": {Name: "old", Sql: "select 1", rewritePolicyCaptured: true},
+	}
+	ses.rewritePolicyGeneration = 1
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	// A failed role switch can leave this disabled handle awaiting cache reload.
+	for _, rules := range []map[string]string{nil, {"db.t": "select * from db.t where tenant = 1"}} {
+		ses.ruleCache = rules
+		err := rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	}
+	ses.ruleCache = map[string]string{}
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Len(t, resp.PrepareStmts, 1, "known empty policy remains safe to migrate")
 }
 
 func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
@@ -1915,10 +1974,10 @@ func wireOKPacketStatus(t *testing.T, payload []byte) uint16 {
 }
 
 func wireHandshakeResponse(username string) []byte {
-	return wireHandshakeResponseWithDatabase(username, "")
+	return wireHandshakeResponseWithCollation(username, "", Utf8mb4CollationID)
 }
 
-func wireHandshakeResponseWithDatabase(username, database string) []byte {
+func wireHandshakeResponseWithCollation(username, database string, collationID uint8) []byte {
 	capability := uint32(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH)
 	if database != "" {
 		capability |= CLIENT_CONNECT_WITH_DB
@@ -1926,7 +1985,7 @@ func wireHandshakeResponseWithDatabase(username, database string) []byte {
 	payload := make([]byte, 4+4+1+23)
 	binary.LittleEndian.PutUint32(payload, capability)
 	binary.LittleEndian.PutUint32(payload[4:], 1<<24)
-	payload[8] = byte(Utf8mb4CollationID)
+	payload[8] = byte(collationID)
 	payload = append(payload, username...)
 	payload = append(payload, 0, 0) // username terminator and empty auth response
 	if database != "" {
@@ -1944,6 +2003,22 @@ func wireChangeUserRequest(username, plugin string) []byte {
 	payload = append(payload, byte(Utf8mb4CollationID), 0)
 	payload = append(payload, plugin...)
 	return append(payload, 0)
+}
+
+func assertNegotiatedSessionCharset(t *testing.T, ses *Session, charset, collation string) {
+	t.Helper()
+	for _, name := range []string{
+		"character_set_client",
+		"character_set_connection",
+		"character_set_results",
+	} {
+		got, err := ses.GetSessionSysVar(name)
+		require.NoError(t, err)
+		require.Equal(t, charset, got, name)
+	}
+	got, err := ses.GetSessionSysVar("collation_connection")
+	require.NoError(t, err)
+	require.Equal(t, collation, got)
 }
 
 func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
@@ -1984,6 +2059,9 @@ func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
 	_, response := readWirePacket(t, clientConn)
 	require.NotEmpty(t, response)
 	require.Equal(t, byte(defines.OKHeader), response[0])
+	routine := rm.getRoutineByConnID(connectionID)
+	require.NotNil(t, routine)
+	assertNegotiatedSessionCharset(t, routine.getSession(), "utf8mb4", "utf8mb4_general_ci")
 
 	// Connector/J 8.0.15 falls back to COM_CHANGE_USER and has to answer the
 	// server's mysql_native_password authentication-switch packet. Exercise the
@@ -2005,6 +2083,7 @@ func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
 		require.NotNil(t, routine)
 		require.Equal(t, connectionID, routine.getConnectionID())
 		require.Equal(t, "dump", routine.getSession().GetTenantInfo().GetUser())
+		assertNegotiatedSessionCharset(t, routine.getSession(), "utf8mb4", "utf8mb4_general_ci")
 	}
 
 	require.NoError(t, clientConn.Close())
@@ -2049,7 +2128,7 @@ func TestMySQLWireResetConnectionPreservesDatabase(t *testing.T) {
 	}
 	require.Greater(t, len(handshake), versionEnd+4)
 	connectionID := binary.LittleEndian.Uint32(handshake[versionEnd+1:])
-	writeWirePacket(t, clientConn, 1, wireHandshakeResponseWithDatabase("dump", "db1"))
+	writeWirePacket(t, clientConn, 1, wireHandshakeResponseWithCollation("dump", "db1", utf8mb4UnicodeCollationID))
 	_, response := readWirePacket(t, clientConn)
 	require.NotEmpty(t, response)
 	require.Equal(t, byte(defines.OKHeader), response[0])
@@ -2059,6 +2138,7 @@ func TestMySQLWireResetConnectionPreservesDatabase(t *testing.T) {
 	// transaction merely to populate it.
 	routine := rm.getRoutineByConnID(connectionID)
 	require.NotNil(t, routine)
+	assertNegotiatedSessionCharset(t, routine.getSession(), "utf8mb4", "utf8mb4_unicode_ci")
 	routine.getSession().gSysVars = &SystemVariables{mp: map[string]interface{}{}}
 
 	// Connector/J 8.4 and later use COM_RESET_CONNECTION before exposing each
@@ -2074,6 +2154,7 @@ func TestMySQLWireResetConnectionPreservesDatabase(t *testing.T) {
 		require.NotNil(t, routine)
 		require.Equal(t, connectionID, routine.getConnectionID())
 		require.Equal(t, "db1", routine.getSession().GetDatabaseName())
+		assertNegotiatedSessionCharset(t, routine.getSession(), "utf8mb4", "utf8mb4_unicode_ci")
 	}
 
 	require.NoError(t, clientConn.Close())
@@ -2409,6 +2490,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 		panic(fmt.Sprintf("there is no mysqlResultset for the sql %s", sql))
 	}
 	uuid, _ := uuid.NewV7()
+	var execCtx *ExecCtx
 	runner := mock_frontend.NewMockComputationRunner(ctrl)
 	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) (*util.RunResult, error) {
 		proto := ses.GetResponser().MysqlRrWr()
@@ -2429,6 +2511,13 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 					res.resultX.Store(contextCancel)
 				}
 			}
+			// This fake writes prebuilt rows directly rather than through the
+			// pipeline callback, so it must honor the same metadata boundary.
+			if mrs.GetRowCount() > 0 && execCtx.resultMetadata != nil {
+				if err = execCtx.resultMetadata.publish(); err != nil {
+					return nil, err
+				}
+			}
 			err = proto.WriteResultSetRow(mrs, mrs.GetRowCount())
 			if err != nil {
 				logutil.Errorf("flush error %v", err)
@@ -2441,7 +2530,10 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
 	mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
 	mcw.EXPECT().GetColumns(gomock.Any()).Return(columns, nil).AnyTimes()
-	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
+	mcw.EXPECT().Compile(gomock.Any(), gomock.Any()).DoAndReturn(func(ec any, _ func(*batch.Batch, *perfcounter.CounterSet) error) (any, error) {
+		execCtx = ec.(*ExecCtx)
+		return runner, nil
+	}).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()
 	mcw.EXPECT().RecordExecPlan(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().RecordCompoundStmt(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()

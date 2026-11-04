@@ -82,7 +82,7 @@ func drainCol(t *testing.T, arg *Fill, proc *process.Process, col int) []cell {
 // is the regression the reviewer asked for — an outer LIMIT 1 could stop the
 // child right here.
 func TestFillNextStreamsWithoutBuffering(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const n = 5
 	bats := make([]*batch.Batch, 0, n)
@@ -122,7 +122,7 @@ func TestFillNextStreamsWithoutBuffering(t *testing.T) {
 // pins the last non-NULL as a possible left endpoint, so it emits batch k only
 // after batch k+1 arrives — bounded, not the whole input.
 func TestFillLinearStreamsBounded(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const n = 5
 	bats := make([]*batch.Batch, 0, n)
@@ -160,7 +160,7 @@ func TestFillLinearStreamsBounded(t *testing.T) {
 // A NULL that spans several batches is filled by the value that finally arrives
 // downstream, no matter how far away it is.
 func TestFillNextLongCrossBatchGap(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	bats := []*batch.Batch{
 		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
@@ -180,7 +180,7 @@ func TestFillNextLongCrossBatchGap(t *testing.T) {
 }
 
 func TestFillNextLongGapSpillsPendingSuffix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const nullBatches = 64
 	bats := make([]*batch.Batch, 0, nullBatches+2)
@@ -224,7 +224,7 @@ func TestFillNextLongGapSpillsPendingSuffix(t *testing.T) {
 }
 
 func TestFillNextSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bats := []*batch.Batch{
 		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
 		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
@@ -258,7 +258,7 @@ func TestFillNextSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
 }
 
 func TestFillNextSpillPartitionBoundaryClosesSegment(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bats := []*batch.Batch{
 		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
 		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
@@ -292,7 +292,7 @@ func TestFillNextSpillPartitionBoundaryClosesSegment(t *testing.T) {
 // Trailing NULLs with no following value in the stream stay NULL at EOF rather
 // than being dropped or hanging the operator.
 func TestFillNextEOFTail(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	bats := []*batch.Batch{
 		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
@@ -310,7 +310,7 @@ func TestFillNextEOFTail(t *testing.T) {
 }
 
 func TestFillNextSpillKeepsEOFTailNull(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bats := []*batch.Batch{
 		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
 		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
@@ -336,7 +336,7 @@ func TestFillNextSpillKeepsEOFTailNull(t *testing.T) {
 // every filled column has a value, and each column's gap is closed by its own
 // next value.
 func TestFillNextMultiColumnGap(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	// col0: [1, NULL, 3]; col1: [NULL, 20, 30]; part all 1.
 	bat := batch.NewWithSize(3)
@@ -370,7 +370,7 @@ func TestFillNextMultiColumnGap(t *testing.T) {
 }
 
 func TestFillNextSpillMultiColumnAndPartitionBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	makeBatch := func(col0, col1 []int64, null0, null1 []uint64, parts []int64) *batch.Batch {
 		bat := batch.NewWithSize(3)
 		bat.SetVector(0, testutil.MakeInt64Vector(col0, null0, proc.Mp()))
@@ -418,7 +418,7 @@ func TestFillNextSpillMultiColumnAndPartitionBoundary(t *testing.T) {
 }
 
 func TestFillNextSpillAlternatingColumnsAdvancesWatermark(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	makeBatch := func(col0, col1 int64, null0, null1 bool) *batch.Batch {
 		bat := batch.NewWithSize(3)
 		var nulls0, nulls1 []uint64
@@ -472,7 +472,7 @@ func TestFillNextSpillAlternatingColumnsAdvancesWatermark(t *testing.T) {
 }
 
 func TestFillLinearSpillAlternatingColumnsAdvancesWatermark(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	makeBatch := func(col0, col1 int64, null0, null1 bool) *batch.Batch {
 		bat := batch.NewWithSize(3)
 		var nulls0, nulls1 []uint64
@@ -538,7 +538,7 @@ func TestFillLinearSpillAlternatingColumnsAdvancesWatermark(t *testing.T) {
 func TestFillSpillWatermarkSplitsBatch(t *testing.T) {
 	for _, fillType := range []plan.Node_FillType{plan.Node_NEXT, plan.Node_LINEAR} {
 		t.Run(fillType.String(), func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			firstInput := batch.NewWithSize(3)
 			firstInput.SetVector(0, testutil.MakeInt64Vector([]int64{10, 0}, []uint64{1}, proc.Mp()))
 			firstInput.SetVector(1, testutil.MakeInt64Vector([]int64{0, 20}, []uint64{0}, proc.Mp()))
@@ -600,7 +600,7 @@ func TestFillSpillWatermarkSplitsBatch(t *testing.T) {
 // divide the interval between 10 and 40 into thirds, even when the run spans
 // several child batches.
 func TestFillLinearCrossBatchGap(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	typ := types.New(types.T_decimal128, 38, 0)
 	set := func(vec *vector.Vector, v int64, isNull bool) {
@@ -656,7 +656,7 @@ func TestFillLinearCrossBatchGap(t *testing.T) {
 }
 
 func TestFillLinearLongGapSpillsPendingSuffix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 
 	const nullBatches = 64
 	typ := types.New(types.T_decimal128, 38, 0)
@@ -740,7 +740,7 @@ func TestFillLinearDecimal256SpillMatchesGapLength(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			typ := types.New(types.T_decimal256, 65, 0)
 			bats := make([]*batch.Batch, 0, len(test.values))
 			for row, value := range test.values {
@@ -784,7 +784,7 @@ func TestFillLinearDecimal256SpillMatchesGapLength(t *testing.T) {
 
 func TestFillLinearConsecutiveSpillsPreserveSegmentEntry(t *testing.T) {
 	t.Run("single decimal column", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		typ := types.New(types.T_decimal128, 38, 0)
 		makeBatch := func(values []int64, nulls []uint64, parts []int64) *batch.Batch {
 			vec := vector.NewVec(typ)
@@ -836,7 +836,7 @@ func TestFillLinearConsecutiveSpillsPreserveSegmentEntry(t *testing.T) {
 	})
 
 	t.Run("multiple columns and partition boundary", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		makeBatch := func(col0, col1 []int64, nulls0, nulls1 []uint64, parts []int64) *batch.Batch {
 			bat := batch.NewWithSize(3)
 			bat.SetVector(0, testutil.MakeInt64Vector(col0, nulls0, proc.Mp()))
@@ -882,7 +882,7 @@ func TestFillLinearConsecutiveSpillsPreserveSegmentEntry(t *testing.T) {
 }
 
 func TestFillLinearSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bats := []*batch.Batch{
 		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
 		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
@@ -916,7 +916,7 @@ func TestFillLinearSpillReplaysClosedSegmentBeforeChildEOF(t *testing.T) {
 }
 
 func TestFillLinearSpillSeedStopsAtPartitionBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bats := []*batch.Batch{
 		partitionedBatch(proc.Mp(), []int64{10}, nil, []int64{1}),
 		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
@@ -948,7 +948,7 @@ func TestFillLinearSpillSeedStopsAtPartitionBoundary(t *testing.T) {
 }
 
 func TestFillSpillResetReleasesState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	bats := []*batch.Batch{
 		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
 		partitionedBatch(proc.Mp(), []int64{0}, []uint64{0}, []int64{1}),
@@ -978,7 +978,7 @@ func TestFillSpillResetReleasesState(t *testing.T) {
 }
 
 func TestFillSpillResetReleasesWatermarkSuffix(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(3)
 	input.SetVector(0, testutil.MakeInt64Vector([]int64{10, 0}, []uint64{1}, proc.Mp()))
 	input.SetVector(1, testutil.MakeInt64Vector([]int64{0, 20}, []uint64{0}, proc.Mp()))

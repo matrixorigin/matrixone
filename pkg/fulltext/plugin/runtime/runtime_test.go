@@ -53,10 +53,6 @@ func TestFullTextAlterTableCloneBehavior(t *testing.T) {
 		CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
-func TestFullTextDefaultOptions(t *testing.T) {
-	require.Nil(t, CatalogHooks{}.DefaultOptions())
-}
-
 func TestFullTextExperimentalFlag(t *testing.T) {
 	require.Equal(t, "", CatalogHooks{}.ExperimentalFlag())
 }

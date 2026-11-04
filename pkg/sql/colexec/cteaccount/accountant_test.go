@@ -28,7 +28,7 @@ import (
 
 func newAccountantTestProcess(t *testing.T, limit int64) *process.Process {
 	t.Helper()
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return limit, nil })
 	return proc
 }

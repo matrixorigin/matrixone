@@ -119,7 +119,7 @@ func TestJSONNumericAggregateBindingRejectsWrongShapes(t *testing.T) {
 			})
 			require.Error(t, err)
 			_, err = BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{{
-				Typ:  planpb.Type{Id: int32(types.T_bool)},
+				Typ:  planpb.Type{Id: int32(types.T_uuid)},
 				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 1}},
 			}})
 			require.Error(t, err)

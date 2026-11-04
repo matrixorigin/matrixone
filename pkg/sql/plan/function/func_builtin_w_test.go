@@ -22,12 +22,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWasmVarlenaProducerMatrix(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newSQLFileAccessTestProc(t)
 	wasmPath, err := filepath.Abs("../../../../test/distributed/resources/plugin/cat.wasm")
 	require.NoError(t, err)
 	wasmURL := "file://" + wasmPath

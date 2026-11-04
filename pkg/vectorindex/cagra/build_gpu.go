@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 // CagraBuild manages bulk index construction across one or more CagraModel sub-indexes.
@@ -34,7 +35,7 @@ import (
 // temp tar and released (saveToFile), and a new sub-index is created, mirroring the
 // HnswBuild pattern.
 //
-// Retiring a sub-index at rotation rather than at ToInsertSql is what makes IndexCapacity
+// Retiring a sub-index at rotation rather than at PreparePersistence is what makes IndexCapacity
 // bound the build. Build() already frees the sub-index's host dataset
 // (flattened_host_dataset, cleared at the end of cgo/cuvs/cagra.hpp build()), but the cuVS
 // index and its device-side build matrix (dataset_device_ptr_) live until destroy().
@@ -240,9 +241,9 @@ func (b *CagraBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 	return nil
 }
 
-// ToInsertSql finalizes any in-progress sub-index, serializes all sub-indexes to the
+// PreparePersistence finalizes any in-progress sub-index, serializes all sub-indexes to the
 // storage table, and returns INSERT SQL statements (storage chunks + single metadata row).
-func (b *CagraBuild[B, Q]) ToInsertSql(ts int64, buildTS int64, provenance bool) ([]string, error) {
+func (b *CagraBuild[B, Q]) PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error) {
 	// Finalize the current sub-index if it contains vectors.
 	if b.current != nil && b.count > 0 {
 		// VRAM for this build is claimed in C++, around the device upload itself
@@ -268,14 +269,18 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64, buildTS int64, provenance bool)
 	for _, idx := range b.indexes {
 		// ToSql calls saveToFile which packs the index to a tar file,
 		// frees GPU memory, and sets idx.Checksum / idx.FileSize.
-		indexsqls, err := idx.ToSql(b.tblcfg)
-		if err != nil {
+		if err := idx.PreparePersistence(); err != nil {
 			return nil, err
 		}
-		sqls = append(sqls, indexsqls...)
+		if idx.FileSize == 0 {
+			continue
+		}
 		metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, idx.Checksum, ts, idx.FileSize, int64(idx.Len), buildTS))
 	}
 
+	if len(metas) == 0 {
+		return nil, nil
+	}
 	metasql := catalog.IndexMetadataInsertSql(b.tblcfg.DbName, b.tblcfg.MetadataTable, provenance, metas)
 	sqls = append(sqls, metasql)
 	return sqls, nil
@@ -292,7 +297,17 @@ func (b *CagraBuild[B, Q]) ToInsertSql(ts int64, buildTS int64, provenance bool)
 // the simulated case by the shard count.
 //
 // Excludes the host-only members of each tar (ids.bin, INCLUDE blobs), which never
-// reach the GPU. Valid only after ToInsertSql, which packs and stamps the sizes.
+// reach the GPU. Valid only after PreparePersistence, which packs and stamps the sizes.
+// PersistChunks runs only after preparation and any device admission succeeds.
+func (b *CagraBuild[B, Q]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	for _, idx := range b.indexes {
+		if err := idx.PersistChunks(writer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (b *CagraBuild[B, Q]) DeviceDemand() map[int]int64 {
 	comps := make([]map[string]int64, 0, len(b.indexes))
 	for _, idx := range b.indexes {

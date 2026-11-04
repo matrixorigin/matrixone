@@ -16,16 +16,21 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -38,13 +43,24 @@ type lifecycleDatabaseName struct {
 // admitBroadTableLifecycleRC enters the broad gate before COPY ALTER or
 // TRUNCATE takes table locks. Re-resolve after the applied frontier: the
 // relation read before admission cannot establish its current identity.
-func (c *Compile) admitBroadTableLifecycleRC(database, table string, expectedID uint64, fastFailFresh bool) (engine.Database, engine.Relation, error) {
+func (c *Compile) admitBroadTableLifecycleRC(
+	database, table string, expectedID uint64, privatePreparationLockTables ...uint64,
+) (engine.Database, engine.Relation, error) {
+	return c.admitTableLifecycleRC(database, table, expectedID, true, privatePreparationLockTables...)
+}
+
+func (c *Compile) admitTableLifecycleRC(
+	database, table string, expectedID uint64, exclusive bool, privatePreparationLockTables ...uint64,
+) (engine.Database, engine.Relation, error) {
 	ctx := c.proc.Ctx
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err = c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}}, true, fastFailFresh); err != nil {
+	if err = c.admitLifecycleRC(
+		[]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}},
+		exclusive, privatePreparationLockTables...,
+	); err != nil {
 		return nil, nil, err
 	}
 	db, err := c.e.Database(ctx, database, c.proc.GetTxnOperator())
@@ -70,7 +86,9 @@ func (c *Compile) admitBroadTableLifecycleRC(database, table string, expectedID 
 // admitLifecycleRC takes the stable registry identity, the SNAPSHOT key, and
 // complete database-name domain before the caller reads mutable catalog facts.
 // All locks remain owned by the caller's transaction until its terminal path.
-func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnapshotGate, fastFailFresh bool) error {
+func (c *Compile) admitLifecycleRC(
+	names []lifecycleDatabaseName, exclusiveSnapshotGate bool, allowedRetainedLockTables ...uint64,
+) error {
 	ctx := c.proc.Ctx
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
@@ -90,11 +108,20 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 		}
 		return names[i].mode == lock.LockMode_Exclusive && names[j].mode != lock.LockMode_Exclusive
 	})
+	// Inspect retained ownership before adding C. Retained data/database/name
+	// locks can form a reverse edge even without a prior registry-key lock.
+	// Only a caller that can prove every lock belongs to private preparation
+	// may wait behind the broad gate.
+	retained, err := txnOp.Snapshot()
+	if err != nil {
+		return err
+	}
+	waitPolicy := []lock.WaitPolicy{lifecycleAdmissionWaitPolicy(retained.LockTables, allowedRetainedLockTables...)}
 	systemCtx := context.WithValue(
 		defines.AttachAccountId(ctx, catalog.System_Account),
 		defines.LockWriterFairKey{}, false,
 	)
-	if err := c.lockLifecycleIdentityRC(); err != nil {
+	if err := c.lockLifecycleIdentityRC(waitPolicy...); err != nil {
 		return err
 	}
 	systemDB, err := c.e.Database(systemCtx, catalog.MO_CATALOG, txnOp)
@@ -113,17 +140,10 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 		return err
 	}
 	gateMode := lock.LockMode_Shared
-	var waitPolicy []lock.WaitPolicy
 	if exclusiveSnapshotGate {
 		gateMode = lock.LockMode_Exclusive
-		// An existing holder can create an upgrade wait cycle with its
-		// retained database/component keys. Public TRUNCATE also promises a
-		// prompt conflict. Fresh owners of other operations can wait for
-		// readers instead of failing ordinary concurrent DDL or DML.
-		if txnOp.HasLockTable(registry.GetTableID(systemCtx)) || fastFailFresh {
-			waitPolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
-		}
 	}
+
 	_, err = lockop.LockRowsForAdmissionWithContext(systemCtx, c.e, c.proc,
 		registry.GetTableID(systemCtx), registryKeys, 0, *registryKeys.Vecs[0].GetType(),
 		gateMode, catalog.System_Account, waitPolicy...)
@@ -133,6 +153,10 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 	}
 
 	if len(names) > 0 {
+		databasePolicy := waitPolicy
+		if exclusiveSnapshotGate {
+			databasePolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
+		}
 		dbRel, err := systemDB.Relation(systemCtx, catalog.MO_DATABASE, nil)
 		if err != nil {
 			return err
@@ -147,7 +171,7 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 			}
 			_, err = lockop.LockRowsForAdmissionWithContext(ctx, c.e, c.proc,
 				dbRel.GetTableID(systemCtx), keys, 0, *keys.Vecs[0].GetType(),
-				name.mode, name.accountID)
+				name.mode, name.accountID, databasePolicy...)
 			keys.Vecs[0].Free(c.proc.Mp())
 			if err != nil {
 				return err
@@ -173,9 +197,73 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 	return c.verifyLifecycleRegistryRow()
 }
 
+func lifecycleAdmissionWaitPolicy(retained []lock.LockTable, allowed ...uint64) lock.WaitPolicy {
+	if len(retained) > 0 && !allRetainedLockTablesAllowed(retained, allowed) {
+		return lock.WaitPolicy_FastFail
+	}
+	return lock.WaitPolicy_Wait
+}
+
+func allRetainedLockTablesAllowed(
+	retained []lock.LockTable, allowedRetainedLockTables []uint64,
+) bool {
+	if len(allowedRetainedLockTables) == 0 {
+		return false
+	}
+	allowed := make(map[uint64]struct{}, len(allowedRetainedLockTables))
+	for _, tableID := range allowedRetainedLockTables {
+		allowed[tableID] = struct{}{}
+	}
+	for _, table := range retained {
+		if _, ok := allowed[table.Table]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Compile) retainedLockTableIDs() (map[uint64]struct{}, error) {
+	snapshot, err := c.proc.GetTxnOperator().Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[uint64]struct{}, len(snapshot.LockTables))
+	for _, table := range snapshot.LockTables {
+		ids[table.Table] = struct{}{}
+	}
+	return ids, nil
+}
+
+func (c *Compile) privatePreparationLockTables(
+	before map[uint64]struct{},
+) ([]uint64, error) {
+	if before == nil {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "missing ALTER COPY preparation lock baseline")
+	}
+	current, err := c.retainedLockTableIDs()
+	if err != nil {
+		return nil, err
+	}
+	workspace, ok := c.proc.GetTxnOperator().GetWorkspace().(client.TableCreationView)
+	if !ok {
+		return nil, nil
+	}
+	private := make([]uint64, 0, len(current))
+	for tableID := range current {
+		if _, preexisting := before[tableID]; preexisting {
+			continue
+		}
+		if workspace.IsTableCreatedInTxn(tableID) {
+			private = append(private, tableID)
+		}
+	}
+	sort.Slice(private, func(i, j int) bool { return private[i] < private[j] })
+	return private, nil
+}
+
 // lockLifecycleIdentityRC pins the registry's physical relation before any
 // caller resolves or locks its row. Broad owners also use this before G X.
-func (c *Compile) lockLifecycleIdentityRC() error {
+func (c *Compile) lockLifecycleIdentityRC(waitPolicy ...lock.WaitPolicy) error {
 	ctx := context.WithValue(
 		defines.AttachAccountId(c.proc.Ctx, catalog.System_Account),
 		defines.LockWriterFairKey{}, false,
@@ -196,7 +284,7 @@ func (c *Compile) lockLifecycleIdentityRC() error {
 	defer keys.Vecs[0].Free(c.proc.Mp())
 	_, err = lockop.LockRowsForAdmissionWithContext(ctx, c.e, c.proc,
 		relation.GetTableID(ctx), keys, 0, *keys.Vecs[0].GetType(),
-		lock.LockMode_Shared, catalog.System_Account)
+		lock.LockMode_Shared, catalog.System_Account, waitPolicy...)
 	return err
 }
 
@@ -234,4 +322,216 @@ func (c *Compile) verifyLifecycleRegistryRow() error {
 		return moerr.NewInternalError(c.proc.Ctx, "missing or duplicate SNAPSHOT lifecycle registry row")
 	}
 	return nil
+}
+
+// Scalar replacement consumes no external constraints or owned descendants.
+// Inspect live constraints as well as the planner-facing definition.
+func scalarReplacementShape(ctx context.Context, rel engine.Relation) (bool, error) {
+	def := rel.GetTableDef(ctx)
+	if def == nil || def.TableType != catalog.SystemOrdinaryRel || def.IsTemporary ||
+		def.Partition != nil || len(def.Indexes) != 0 || len(def.Fkeys) != 0 || len(def.RefChildTbls) != 0 {
+		return false, nil
+	}
+	extra := rel.GetExtraInfo()
+	if extra == nil || extra.FeatureFlag != 0 || extra.ParentTableID != 0 || len(extra.IndexTables) != 0 {
+		return false, nil
+	}
+	ct, err := GetConstraintDef(ctx, rel)
+	if err != nil {
+		return false, err
+	}
+	for _, constraint := range ct.Cts {
+		switch value := constraint.(type) {
+		case *engine.ForeignKeyDef:
+			if len(value.Fkeys) != 0 {
+				return false, nil
+			}
+		case *engine.RefChildTableDef:
+			if len(value.Tables) != 0 {
+				return false, nil
+			}
+		case *engine.IndexDef:
+			if len(value.Indexes) != 0 {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+// These nonlocking reads overlay the caller's workspace. G/D/K/T ownership and
+// the applied frontier make the final negative result authoritative.
+func (c *Compile) scalarReplacementProtected(database, table string, physicalID, logicalID uint64) (bool, error) {
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return false, err
+	}
+	accountName, err := c.lifecycleAccountName()
+	if err != nil {
+		return false, err
+	}
+	dbName, tableName := sqlquote.String(database), sqlquote.String(table)
+	fkSQL := fmt.Sprintf("select 1 from mo_catalog.mo_foreign_keys where (db_name=%s and table_name=%s) or (refer_db_name=%s and refer_table_name=%s) limit 1", dbName, tableName, dbName, tableName)
+	fk, err := alterDataBranchHistoricalSourceExists(func(sql string) (executor.Result, error) {
+		return c.runSqlWithResultAndOptions(sql, int32(accountID), executor.StatementOption{}.WithDisableLog())
+	}, []string{fkSQL})
+	if err != nil || fk {
+		return fk, err
+	}
+	// User snapshots are owned by the actor catalog. SYS also contains
+	// cross-account history and the reserved branch protection snapshots.
+	if accountID != catalog.System_Account {
+		protected, err := alterDataBranchHistoricalSourceExists(func(sql string) (executor.Result, error) {
+			return c.runSqlWithResultAndOptions(sql, int32(accountID), executor.StatementOption{}.WithDisableLog())
+		}, []string{alterDataBranchHistoricalSnapshotSourceProbeSQL(accountName, database, table, physicalID, false, logicalID)})
+		if err != nil || protected {
+			return protected, err
+		}
+	}
+	sqls := []string{
+		alterDataBranchParticipationSQL(physicalID),
+		alterDataBranchHistoricalSnapshotSourceProbeSQL(accountName, database, table, physicalID, false, logicalID),
+		alterDataBranchHistoricalPitrSourceProbeSQL(accountName, database, table, physicalID, false, logicalID),
+		fmt.Sprintf("select 1 from mo_catalog.mo_snapshots where kind='branch' and sname in (%s,%s) limit 1", sqlquote.String(fmt.Sprintf("__mo_branch_%d", physicalID)), sqlquote.String(fmt.Sprintf("__mo_branch_%d", logicalID))),
+	}
+	return alterDataBranchHistoricalSourceExists(func(sql string) (executor.Result, error) {
+		return c.runSqlWithResultAndOptions(sql, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+	}, sqls)
+}
+
+func (c *Compile) retryBroadReplacement() error {
+	if err := c.admitLifecycleRC(nil, true); err != nil {
+		return err
+	}
+	return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+}
+
+// Both generations must originate here. A replacement of a published table
+// has a local physical ID but retains the published logical ID.
+func (c *Compile) transactionLocalReplacement(rel engine.Relation) bool {
+	return c.transactionLocalTableIDs(rel.GetTableID(c.proc.Ctx), plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx)))
+}
+
+func (c *Compile) transactionLocalTableIDs(physicalID, logicalID uint64) bool {
+	workspace, ok := c.proc.GetTxnOperator().GetWorkspace().(client.TableCreationView)
+	return ok && workspace.IsTableCreatedInTxn(physicalID) && workspace.IsTableCreatedInTxn(logicalID)
+}
+
+func (c *Compile) admitScalarReplacementRC(database, table string, original engine.Relation) (engine.Database, engine.Relation, *dropLifecycleAdmission, error) {
+	ctx := c.proc.Ctx
+	eligible, err := scalarReplacementShape(ctx, original)
+	if err != nil || !eligible {
+		return nil, nil, nil, err
+	}
+	id := original.GetTableID(ctx)
+	logicalID := plan2.SnapshotTableID(original.GetTableDef(ctx))
+	protected, err := c.scalarReplacementProtected(database, table, id, logicalID)
+	if err != nil || protected {
+		return nil, nil, nil, err
+	}
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	local := c.transactionLocalReplacement(original)
+	if local {
+		// Unpublished scalar tables cannot be discovered by another transaction.
+		// Their workspace checks above remain authoritative without late G admission.
+		databases, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if _, err = c.lockCatalogName(databases, accountID, []string{database}, lock.LockMode_Shared, lock.WaitPolicy_FastFail); err != nil {
+			return nil, nil, nil, err
+		}
+	} else {
+		if err := c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}}, false); err != nil {
+			return nil, nil, nil, err
+		}
+		dag, err := c.loadBranchReclaimComponentsRC([]uint64{id})
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if len(dag.Info) != 0 {
+			return nil, nil, nil, c.retryBroadReplacement()
+		}
+	}
+	catalogRel, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	keys, err := getLockBatch(c.proc, accountID, []string{database, table})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var policy []lock.WaitPolicy
+	if local {
+		policy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
+	}
+	_, err = lockop.LockRowsForAdmissionWithContext(ctx, c.e, c.proc,
+		catalogRel.GetTableID(ctx), keys, 0, *keys.Vecs[0].GetType(), lock.LockMode_Exclusive, accountID, policy...)
+	keys.Vecs[0].Free(c.proc.Mp())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	// Nested DROP borrows this destructive lock, including its definition-change fence.
+	if err := lockTable(ctx, c.e, c.proc, original, database, true); err != nil {
+		return nil, nil, nil, err
+	}
+	if !local {
+		if err := c.advanceLifecycleAdmissionSnapshot(); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	db, err := c.e.Database(ctx, database, c.proc.GetTxnOperator())
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	rel, err := db.Relation(ctx, table, nil)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	eligible, err = scalarReplacementShape(ctx, rel)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if !eligible || rel.GetTableID(ctx) != id || rel.GetDBID(ctx) != original.GetDBID(ctx) || plan2.SnapshotTableID(rel.GetTableDef(ctx)) != logicalID {
+		return nil, nil, nil, c.retryBroadReplacement()
+	}
+	protected, err = c.scalarReplacementProtected(database, table, id, logicalID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if protected {
+		return nil, nil, nil, c.retryBroadReplacement()
+	}
+	admission := &dropLifecycleAdmission{rootID: id, accountID: accountID,
+		root: dropLifecycleIdentity{database: database, table: table, databaseID: rel.GetDBID(ctx), logicalID: logicalID}}
+	return db, rel, admission, nil
+}
+
+func (c *Compile) lifecycleAccountName() (string, error) {
+	accountID, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return "", err
+	}
+	account, err := c.runSqlWithResultAndOptions(
+		fmt.Sprintf("select account_name from mo_catalog.mo_account where account_id=%d", accountID),
+		int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+	if err != nil {
+		account.Close()
+		return "", err
+	}
+	accountName := ""
+	account.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows != 0 {
+			accountName = executor.GetStringRows(cols[0])[0]
+		}
+		return false
+	})
+	account.Close()
+	if accountName == "" {
+		return "", moerr.NewInternalError(c.proc.Ctx, "missing lifecycle account identity")
+	}
+	return accountName, nil
 }

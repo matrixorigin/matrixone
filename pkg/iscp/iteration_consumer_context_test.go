@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -341,24 +342,36 @@ func TestRunInitSQLTransactionRollsBackStatementsWhenStageWriteFails(t *testing.
 }
 
 func TestRunInitSQLTransactionDoesNotWriteStageAfterStatementFailure(t *testing.T) {
-	txn := &iscpTxnForTest{}
-	wantErr := errors.New("init statement failed")
-	stageWritten := false
-
-	err := runInitSQLTransaction(
-		context.Background(),
-		txn,
-		func(context.Context, client.TxnOperator) error { return wantErr },
-		func(context.Context, client.TxnOperator) error {
-			stageWritten = true
-			return nil
-		},
-	)
-
-	require.ErrorIs(t, err, wantErr)
-	require.False(t, stageWritten)
-	require.False(t, txn.committed)
-	require.True(t, txn.rolledBack)
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"fatal", errors.New("init statement failed")},
+		{"rc_retry", moerr.NewTxnNeedRetryNoCtx()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			txn := &iscpTxnForTest{}
+			stageWritten := false
+			attempts := 0
+			err := runInitSQLTransaction(
+				context.Background(),
+				txn,
+				func(context.Context, client.TxnOperator) error {
+					attempts++
+					return tc.err
+				},
+				func(context.Context, client.TxnOperator) error {
+					stageWritten = true
+					return nil
+				},
+			)
+			require.ErrorIs(t, err, tc.err)
+			require.Equal(t, 1, attempts, "the caller retries with a new transaction")
+			require.False(t, stageWritten)
+			require.False(t, txn.committed)
+			require.True(t, txn.rolledBack)
+		})
+	}
 }
 
 func TestRunInitSQLTransactionRollsBackCancellationBeforeStageWrite(t *testing.T) {

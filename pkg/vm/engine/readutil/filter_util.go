@@ -15,164 +15,11 @@
 package readutil
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
-
-/* DONT remove me, will be used later
-
-import (
-	"context"
-	"sort"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-)
-
-// Either len(val) == 0 or vec == nil
-// inVec should be sorted
-func CompilePrimaryKeyEqualFilter(
-	ctx context.Context,
-	val []byte,
-	inVec *vector.Vector,
-	colSeqnum uint16,
-	isFakePK bool,
-	skipBloomFilter bool,
-	fs fileservice.FileService,
-) (
-	fastFilterOp FastFilterOp,
-	loadOp LoadOp,
-	objectFilterOp ObjectFilterOp,
-	blockFilterOp BlockFilterOp,
-	seekOp SeekFirstBlockOp,
-	err error,
-) {
-	if skipBloomFilter {
-		loadOp = loadMetadataOnlyOpFactory(fs)
-	} else {
-		loadOp = loadMetadataAndBFOpFactory(fs)
-	}
-
-	// Here process the pk in filter
-	if inVec != nil {
-		if !isFakePK {
-			fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
-				if obj.ZMIsEmpty() {
-					return true, nil
-				}
-				return obj.SortKeyZoneMap().AnyIn(inVec), nil
-			}
-		}
-
-		objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-			if !isFakePK {
-				return true, nil
-			}
-			dataMeta := meta.MustDataMeta()
-			return dataMeta.MustGetColumn(colSeqnum).ZoneMap().AnyIn(inVec), nil
-		}
-
-		blockFilterOp = func(
-			blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-		) (bool, bool, error) {
-			// TODO: support skipFollowing
-			zm := blkMeta.MustGetColumn(colSeqnum).ZoneMap()
-			if !zm.AnyIn(inVec) {
-				return false, false, nil
-			}
-
-			if skipBloomFilter || bf.Size() == 0 {
-				return false, true, nil
-			}
-
-			buf := bf.GetBloomFilter(uint32(blkIdx))
-			var blkBF index.BloomFilter
-			if err := blkBF.Unmarshal(buf); err != nil {
-				return false, false, err
-			}
-			lb, ub := zm.SubVecIn(inVec)
-			if exist := blkBF.MayContainsAny(
-				inVec, lb, ub,
-			); !exist {
-				return false, false, nil
-			}
-			return false, true, nil
-		}
-
-		return
-	}
-
-	// Here process the pk equal filter
-
-	// for non-fake PK, we can use the object stats sort key zone map
-	// to filter as the fastFilterOp
-	if !isFakePK {
-		fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
-			if obj.ZMIsEmpty() {
-				return true, nil
-			}
-			return obj.SortKeyZoneMap().ContainsKey(val), nil
-		}
-	}
-
-	objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
-		if !isFakePK {
-			return true, nil
-		}
-		dataMeta := meta.MustDataMeta()
-		return dataMeta.MustGetColumn(colSeqnum).ZoneMap().ContainsKey(val), nil
-	}
-
-	blockFilterOp = func(
-		blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
-	) (bool, bool, error) {
-		var (
-			skipFollowing, ok bool
-		)
-		zm := blkMeta.MustGetColumn(colSeqnum).ZoneMap()
-		if isFakePK {
-			skipFollowing = false
-			ok = zm.ContainsKey(val)
-		} else {
-			skipFollowing = !zm.AnyLEByValue(val)
-			if skipFollowing {
-				ok = false
-			} else {
-				ok = zm.ContainsKey(val)
-			}
-		}
-		if !ok || skipBloomFilter || bf.Size() == 0 {
-			return skipFollowing, ok, nil
-		}
-
-		// check bloom filter here
-		blkBFBuf := bf.GetBloomFilter(uint32(blkIdx))
-		var blkBF index.BloomFilter
-		if err := blkBF.Unmarshal(blkBFBuf); err != nil {
-			return false, false, err
-		}
-		exist, err := blkBF.MayContainsKey(val)
-		if err != nil || !exist {
-			return false, false, err
-		}
-
-		return false, true, nil
-	}
-	if !isFakePK {
-		seekOp = func(meta objectio.ObjectDataMeta) int {
-			blockCnt := int(meta.BlockCount())
-			blkIdx := sort.Search(blockCnt, func(i int) bool {
-				return meta.GetBlockMeta(uint32(i)).MustGetColumn(colSeqnum).ZoneMap().AnyGEByValue(val)
-			})
-			return blkIdx
-		}
-	}
-	return
-}
-*/
 
 func EncodePrimaryKey(v any, packer *types.Packer) []byte {
 	packer.Reset()
@@ -257,19 +104,41 @@ func EncodePrimaryKey(v any, packer *types.Packer) []byte {
 }
 
 func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]byte) {
+	if vec.Length() > 0 || vec.IsConstNull() {
+		ret = make([][]byte, 0, vec.Length())
+	}
+	visitEncodedPrimaryKeyVector(vec, packer, func(key []byte, repeats int) {
+		owned := bytes.Clone(key)
+		for i := 0; i < repeats; i++ {
+			ret = append(ret, owned)
+		}
+	})
+	if len(ret) != vec.Length() {
+		panic(fmt.Sprintf("bad result, expecting %v, got %v", vec.Length(), len(ret)))
+	}
+	return
+}
+func visitEncodedPrimaryKeyVector(vec *vector.Vector, packer *types.Packer, visit func([]byte, int)) {
+	encodePKRowsForTest.Add(uint64(vec.Length()))
 	packer.Reset()
 
 	if vec.IsConstNull() {
-		return make([][]byte, vec.Length())
+		visit(nil, vec.Length())
+		return
+	}
+	repeats := 1
+	if vec.IsConst() {
+		repeats = max(1, vec.Length())
 	}
 
+	// typeswitch:partial bf16/float16/float8/float4 and VECTOR columns cannot be in a primary key (rejected at DDL)
 	switch vec.GetType().Oid {
 
 	case types.T_bool:
 		s := vector.MustFixedColNoTypeCheck[bool](vec)
 		for _, v := range s {
 			packer.EncodeBool(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -277,7 +146,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[uint64](vec)
 		for _, v := range s {
 			packer.EncodeUint64(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -285,7 +154,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[int8](vec)
 		for _, v := range s {
 			packer.EncodeInt8(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -293,7 +162,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[int16](vec)
 		for _, v := range s {
 			packer.EncodeInt16(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -301,7 +170,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[int32](vec)
 		for _, v := range s {
 			packer.EncodeInt32(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -309,7 +178,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[int64](vec)
 		for _, v := range s {
 			packer.EncodeInt64(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -317,7 +186,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[uint8](vec)
 		for _, v := range s {
 			packer.EncodeUint8(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -325,7 +194,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[uint16](vec)
 		for _, v := range s {
 			packer.EncodeUint16(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -333,7 +202,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[uint32](vec)
 		for _, v := range s {
 			packer.EncodeUint32(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -341,7 +210,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[uint64](vec)
 		for _, v := range s {
 			packer.EncodeUint64(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -349,7 +218,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[float32](vec)
 		for _, v := range s {
 			packer.EncodeFloat32(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -357,7 +226,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[float64](vec)
 		for _, v := range s {
 			packer.EncodeFloat64(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -365,7 +234,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Date](vec)
 		for _, v := range s {
 			packer.EncodeDate(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -373,7 +242,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Time](vec)
 		for _, v := range s {
 			packer.EncodeTime(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -381,7 +250,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 		for _, v := range s {
 			packer.EncodeDatetime(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -389,7 +258,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 		for _, v := range s {
 			packer.EncodeTimestamp(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -397,7 +266,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Enum](vec)
 		for _, v := range s {
 			packer.EncodeEnum(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -405,7 +274,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.MoYear](vec)
 		for _, v := range s {
 			packer.EncodeMoYear(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -413,7 +282,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)
 		for _, v := range s {
 			packer.EncodeDecimal64(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -421,7 +290,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)
 		for _, v := range s {
 			packer.EncodeDecimal128(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -429,7 +298,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
 		for _, v := range s {
 			packer.EncodeDecimal256(v)
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -437,7 +306,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		s := vector.MustFixedColNoTypeCheck[types.Uuid](vec)
 		for _, v := range s {
 			packer.EncodeStringType(v[:])
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), repeats)
 			packer.Reset()
 		}
 
@@ -446,7 +315,7 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 		types.T_array_float32, types.T_array_float64, types.T_datalink:
 		for i := 0; i < vec.Length(); i++ {
 			packer.EncodeStringType(vec.GetBytesAt(i))
-			ret = append(ret, packer.Bytes())
+			visit(packer.GetBuf(), 1)
 			packer.Reset()
 		}
 	default:
@@ -454,17 +323,4 @@ func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]b
 
 	}
 
-	l := vec.Length()
-
-	if vec.IsConst() {
-		for len(ret) < l {
-			ret = append(ret, ret[0])
-		}
-	}
-
-	if len(ret) != l {
-		panic(fmt.Sprintf("bad result, expecting %v, got %v", l, len(ret)))
-	}
-
-	return
 }

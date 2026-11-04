@@ -28,7 +28,6 @@ type ObjectColumnMetasBuilder struct {
 	metas    []objectio.ColumnMeta
 	sks      []*hll.Sketch
 	zms      []index.ZM
-	pkData   []containers.Vector
 }
 
 func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
@@ -37,10 +36,9 @@ func NewObjectColumnMetasBuilder(colIdx int) *ObjectColumnMetasBuilder {
 		metas[i] = objectio.BuildObjectColumnMeta()
 	}
 	return &ObjectColumnMetasBuilder{
-		metas:  metas,
-		sks:    make([]*hll.Sketch, colIdx),
-		zms:    make([]index.ZM, colIdx),
-		pkData: make([]containers.Vector, 0),
+		metas: metas,
+		sks:   make([]*hll.Sketch, colIdx),
+		zms:   make([]index.ZM, colIdx),
 	}
 }
 
@@ -48,28 +46,25 @@ func (b *ObjectColumnMetasBuilder) AddRowCnt(rows int) {
 	b.totalRow += uint32(rows)
 }
 
-func (b *ObjectColumnMetasBuilder) AddPKData(data containers.Vector) {
-	b.pkData = append(b.pkData, data)
-}
-
 func (b *ObjectColumnMetasBuilder) InspectVector(idx int, vec containers.Vector, isPK bool) {
+	nulls := 0
 	if vec.HasNull() {
+		nulls = vec.NullCount()
 		cnt := b.metas[idx].NullCnt()
-		cnt += uint32(vec.NullCount())
+		cnt += uint32(nulls)
 		b.metas[idx].SetNullCnt(cnt)
 	}
 
 	if b.zms[idx] == nil {
 		b.zms[idx] = index.NewZM(vec.GetType().Oid, vec.GetType().Scale)
 	}
-	if isPK {
+	// Empty and all-NULL batches contribute no distinct values. Keep any
+	// sketch from earlier batches without allocating or scanning a new one.
+	if isPK || nulls == vec.Length() {
 		return
 	}
 	if b.sks[idx] == nil {
 		b.sks[idx] = hll.NewNoSparse()
-	}
-	if vec.GetDownstreamVector().IsConstNull() {
-		return
 	}
 	containers.ForeachWindowBytes(vec.GetDownstreamVector(), 0, vec.Length(), func(v []byte, isNull bool, row int) (err error) {
 		if isNull {
@@ -95,10 +90,6 @@ func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm index.ZM) {
 		b.zms[idx].SetMaxTruncated()
 	}
 	b.zms[idx].SetSum(zm.GetSumBuf())
-}
-
-func (b *ObjectColumnMetasBuilder) GetPKData() []containers.Vector {
-	return b.pkData
 }
 
 func (b *ObjectColumnMetasBuilder) SetPKNdv(idx uint16, ndv uint32) {

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -72,7 +73,7 @@ func TestRollupRemoteGroupingProvenance(t *testing.T) {
 				// combined result rather than restarting at each grouping branch.
 				require.Equal(t, [][]string{{"NULL", "35", "1"}, {"20", "20", "2"}, {"10", "10", "3"}, {"5", "5", "4"}}, queryStringRows(t, ctx, db,
 					"select v,sum(v),row_number() over(order by sum(v) desc) from src group by v with rollup order by sum(v) desc"))
-				require.Equal(t, [][]string{{"NULL", "1", "0", "NULL"}}, queryStringRows(t, ctx, db,
+				require.Empty(t, queryStringRows(t, ctx, db,
 					"select k,grouping(k),count(*),sum(v) from src where v<0 group by k with rollup"))
 				require.Empty(t, queryStringRows(t, ctx, db, "select k,count(*) from src where v<0 group by k"))
 				require.Equal(t, [][]string{{"1", "35"}}, queryStringRows(t, ctx, db,
@@ -83,5 +84,103 @@ func TestRollupRemoteGroupingProvenance(t *testing.T) {
 					"select a.k as label,grouping(a.k),sum(a.v) from src a join src b on a.v=b.v group by a.k with rollup order by grouping(a.k),a.k"))
 			})
 		require.NoError(t, err)
+	})
+}
+
+func TestRollupEmptyInput(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		db := openRetestSQLDB(t, c)
+		defer db.Close()
+		const name = "rollup_empty_input"
+		defer cleanupTestDatabases(t, db, name)
+		execSQLDB(t, ctx, db, "create database "+name)
+		execSQLDB(t, ctx, db, "use "+name)
+		execSQLDB(t, ctx, db, "create table src(k int,v int)")
+		const rolled = "select k,sum(v) s,count(*) c,grouping(k) g from src group by k with rollup"
+		for _, test := range []struct{ name, query string }{
+			{"empty table", rolled},
+			{"constant false", "select k from src where 1=0 group by k with rollup"},
+			{"functional spelling", "select k,sum(v) from src group by rollup(k)"},
+			{"no user aggregate", "select k,grouping(k) from src group by k with rollup"},
+			{"having zero", rolled + " having count(*)=0"},
+			{"having OR", rolled + " having count(*)=0 or sum(v)>0"},
+			{"window", "select k,sum(v),row_number() over(order by sum(v)) from src group by k with rollup"},
+			{"empty SAMPLE with rollup", "select k,sample(v,1 rows) from src group by k with rollup"},
+			{"empty SAMPLE functional", "select k,sample(v,1 rows) from src group by rollup(k)"},
+			{"alias with window", "select k as x,sum(v) as s,row_number() over(order by sum(v)) as rn from src group by x with rollup"},
+			{"derived", "select * from (" + rolled + ") r"},
+			{"CTE reused", "with r as (" + rolled + ") select * from r union all select * from r"},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				require.Empty(t, queryStringRows(t, ctx, db, test.query))
+			})
+		}
+		t.Run("SAMPLE keeps its sampling path", func(t *testing.T) {
+			execSQLDB(t, ctx, db, "insert into src values(1,10)")
+			t.Cleanup(func() { execSQLDB(t, ctx, db, "delete from src") })
+			for _, spelling := range []string{"group by k with rollup", "group by rollup(k)"} {
+				for _, sampling := range []string{"1 rows", "100 percent"} {
+					query := "select k,sample(v," + sampling + ") from src " + spelling
+					require.Equal(t, [][]string{{"1", "10"}, {"1", "10"}}, queryStringRows(t, ctx, db, query))
+				}
+				require.Empty(t, queryStringRows(t, ctx, db,
+					"select k,sample(v,1 rows) from src where false "+spelling))
+			}
+			require.Equal(t, [][]string{{"1", "10"}}, queryStringRows(t, ctx, db,
+				"select k,sample(v,1 rows) from src group by k"))
+			require.Equal(t, [][]string{{"1", "10"}, {"1", "10"}}, queryStringRows(t, ctx, db,
+				"select k,sample(v,1 rows) from src group by grouping sets ((k),())"))
+			_, err := db.ExecContext(ctx, "select k,sample(v,1 rows),count(*) from src group by k with rollup")
+			require.ErrorContains(t, err, "cannot fixed non-scalar function and scalar function in the same query")
+		})
+		require.Equal(t, [][]string{{"99", "99", "99", "0"}}, queryStringRows(t, ctx, db, rolled+" union all select 99,99,99,0"))
+		require.Equal(t, [][]string{{"NULL", "0"}}, queryStringRows(t, ctx, db, "select sum(v),count(*) from src"))
+		require.Equal(t, [][]string{{"NULL", "NULL", "0", "1"}}, queryStringRows(t, ctx, db,
+			"select k,sum(v),count(*),grouping(k) from src group by grouping sets ((k),())"))
+		require.Equal(t, [][]string{{"NULL", "0"}}, queryStringRows(t, ctx, db, "select k,count(*) from src group by cube(k)"))
+		execSQLDB(t, ctx, db, "create table copied as "+rolled)
+		require.Equal(t, [][]string{{"0"}}, queryStringRows(t, ctx, db, "select count(*) from copied"))
+		execSQLDB(t, ctx, db, "insert into copied "+rolled)
+		require.Equal(t, [][]string{{"0"}}, queryStringRows(t, ctx, db, "select count(*) from copied"))
+
+		// A real NULL row must retain both groups even though COUNT(v) is zero.
+		execSQLDB(t, ctx, db, "insert into src values(null,null)")
+		require.Equal(t, [][]string{{"NULL", "0", "1", "0"}, {"NULL", "1", "1", "0"}}, queryStringRows(t, ctx, db,
+			"select k,grouping(k),count(*),count(v) from src group by k with rollup order by grouping(k)"))
+		require.Equal(t, [][]string{{"NULL", "0"}, {"NULL", "0"}}, queryStringRows(t, ctx, db,
+			"select k,count(v) from src group by k with rollup having count(v)=0 or count(*)=0"))
+		execSQLDB(t, ctx, db, "insert into src values(1,10)")
+		require.Equal(t, [][]string{{"1", "10"}, {"NULL", "10"}}, queryStringRows(t, ctx, db,
+			"select k,sum(v) s from src group by k with rollup having s>0 order by grouping(k),k"))
+
+		// Reuse the same prepared plan across empty -> nonempty -> empty input.
+		stmt, err := db.PrepareContext(ctx, "select count(*) from (select k from src where v>? group by k with rollup) r")
+		require.NoError(t, err)
+		defer stmt.Close()
+		for _, test := range []struct{ cutoff, rows int }{{20, 0}, {0, 2}, {20, 0}} {
+			var rows int
+			require.NoError(t, stmt.QueryRowContext(ctx, test.cutoff).Scan(&rows))
+			require.Equal(t, test.rows, rows)
+		}
+		t.Run("shared computation rollback", func(t *testing.T) {
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+			rt := runtime.ServiceRuntime(cn.ServiceID())
+			old, existed := rt.GetGlobalVariables("optimizer_hints")
+			rt.SetGlobalVariables("optimizer_hints", "sharedComputation=1")
+			defer func() {
+				if existed {
+					rt.SetGlobalVariables("optimizer_hints", old)
+				} else {
+					rt.CompareAndDeleteGlobalVariables("optimizer_hints", "sharedComputation=1")
+				}
+			}()
+			require.Empty(t, queryStringRows(t, ctx, db,
+				"select k,count(v),grouping(k) from src where v>20 group by k with rollup"))
+			require.Equal(t, [][]string{{"NULL", "0", "0"}, {"1", "1", "0"}, {"NULL", "1", "1"}}, queryStringRows(t, ctx, db,
+				"select k,count(v),grouping(k) from src group by k with rollup order by grouping(k),k"))
+		})
 	})
 }

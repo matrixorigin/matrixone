@@ -27,8 +27,8 @@ import (
 // carrying a PROBE PAYLOAD instead of a text pattern: a set of exact tuple terms
 // plus a set of inclusive term ranges, whose UNION the document must intersect.
 //
-// It rides the ordinary MATCH surface (fulltext_match → fulltext2_search) so the
-// whole scan-to-TVF rewrite is reused, and is told apart by its mode. The
+// It rides the ordinary MATCH surface (fulltext_match → fulltext2 search scan) so the
+// whole MATCH rewrite is reused, and is told apart by its mode. The
 // payload is binary — tuple terms contain 0x00 and BOOLEAN-mode metacharacters —
 // so it must never reach the pattern parser, which is exactly what the distinct
 // mode prevents.

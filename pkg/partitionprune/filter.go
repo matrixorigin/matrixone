@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -148,10 +149,10 @@ func hashFilterExpr(
 			if !ok {
 				return nil, false, nil
 			}
-			if !matchesPartitionColumn(left.Col, colPosition, metadata.Partitions[0].Expr) {
+			if !matchesPartitionColumns(left.Col, colPosition, metadata) {
 				return nil, false, nil
 			}
-			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1])
+			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1], proc.Mp())
 			if !canPrune {
 				return nil, false, nil
 			}
@@ -162,7 +163,11 @@ func hashFilterExpr(
 				exprs[i] = p.DeepCopyExpr(pt.Expr)
 			}
 			for i := range exprs {
-				mustReplaceCol(exprs[i], value)
+				var err error
+				exprs[i], err = mustReplaceCol(proc.Ctx, exprs[i], value)
+				if err != nil {
+					return nil, false, err
+				}
 			}
 			targets, err := filterResult(proc, exprs, metadata)
 			if err != nil {
@@ -263,10 +268,10 @@ func rangeFilterExpr(
 			if !ok {
 				return nil, false, nil
 			}
-			if !matchesPartitionColumn(left.Col, colPosition, metadata.Partitions[0].Expr) {
+			if !matchesPartitionColumns(left.Col, colPosition, metadata) {
 				return nil, false, nil
 			}
-			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1])
+			value, canPrune := normalizePartitionValue(exprImpl.F.Args[1], proc.Mp())
 			if !canPrune {
 				return nil, false, nil
 			}
@@ -279,7 +284,11 @@ func rangeFilterExpr(
 			for i := range exprs {
 				// a = 1 =>
 				// p1 <= 1 < p2
-				mustReplaceCol(exprs[i], value)
+				var err error
+				exprs[i], err = mustReplaceCol(proc.Ctx, exprs[i], value)
+				if err != nil {
+					return nil, false, err
+				}
 			}
 			targets, err := filterResult(proc, exprs, metadata)
 			if err != nil {
@@ -399,49 +408,52 @@ func filterResult(
 // The general expression executor intentionally does not own Fold values. A
 // clone keeps this storage optimization from mutating the reusable scan filter.
 // False means that pruning must conservatively scan every partition.
-func normalizePartitionValue(value *plan.Expr) (*plan.Expr, bool) {
+func normalizePartitionValue(value *plan.Expr, mp *mpool.MPool) (*plan.Expr, bool) {
 	if !p.HasFoldValExpr(value) {
 		return value, true
 	}
-	return convertFoldExprToNormal(p.DeepCopyExpr(value))
+	normalized, ok, _ := convertFoldExprWithPool(p.DeepCopyExpr(value), mp)
+	return normalized, ok
 }
 
-// mustReplaceCol replaces column references in an expression with a given value expression.
-// It recursively traverses the expression tree to find and replace column references.
-func mustReplaceCol(expr, value *plan.Expr) {
+// mustReplaceCol substitutes every reference after callers establish that all
+// partition expressions depend on the matched filter column. Cast each value
+// to the original reference type and propagate construction failures.
+func mustReplaceCol(ctx context.Context, expr, value *plan.Expr) (*plan.Expr, error) {
 	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return appendCastBeforeExpr(ctx, value, expr.Typ)
 	case *plan.Expr_F:
-		for i := range e.F.Args {
-			switch e.F.Args[i].Expr.(type) {
-			case *plan.Expr_Col:
-				e.F.Args[i], _ = appendCastBeforeExpr(context.Background(), value, e.F.Args[i].Typ)
-				return
-			case *plan.Expr_F:
-				mustReplaceCol(e.F.Args[i], value)
+		for i, arg := range e.F.Args {
+			replacement, err := mustReplaceCol(ctx, arg, value)
+			if err != nil {
+				return nil, err
 			}
+			e.F.Args[i] = replacement
 		}
 	}
+	return expr, nil
 }
 
-// mustReplaceColPos recursively traverses the expression tree to find and replace
-// the column position with the specified position. This is used in list partitioning
-// to reset column positions when evaluating expressions against constructed batches.
+// mustReplaceColPos remaps every occurrence of the first source column. Other
+// columns keep their schema positions. RowID offsets are already represented
+// by the metadata expression selected by the caller.
 func mustReplaceColPos(expr *plan.Expr, pos int32) {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			switch col := e.F.Args[i].Expr.(type) {
-			case *plan.Expr_Col:
-				if pos == -1 {
-					pos = col.Col.ColPos + 1
-				}
-				col.Col.ColPos = pos
-				return
-			case *plan.Expr_F:
-				mustReplaceColPos(e.F.Args[i], pos)
+	source := mustGetColPosition(expr)
+	var replace func(*plan.Expr)
+	replace = func(expr *plan.Expr) {
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			if e.Col.ColPos == source {
+				e.Col.ColPos = pos
+			}
+		case *plan.Expr_F:
+			for _, arg := range e.F.Args {
+				replace(arg)
 			}
 		}
 	}
+	replace(expr)
 }
 
 // mustGetColPosition extracts the column position from an expression.
@@ -459,6 +471,40 @@ func mustGetColPosition(expr *plan.Expr) int32 {
 		}
 	}
 	return -1
+}
+
+// A single equality value can be substituted only when every partition uses
+// that column. Named scans use column identity; legacy nameless scans must also
+// establish that every reference has the same schema position.
+func matchesPartitionColumns(col *plan.ColRef, position int32, metadata partition.PartitionMetadata) bool {
+	for _, pt := range metadata.Partitions {
+		if !matchesPartitionColumn(col, position, pt.Expr) {
+			return false
+		}
+		if col.Name == "" {
+			var samePosition func(*plan.Expr) bool
+			samePosition = func(expr *plan.Expr) bool {
+				if expr == nil {
+					return false
+				}
+				if ref := expr.GetCol(); ref != nil {
+					return ref.ColPos == position
+				}
+				if fn := expr.GetF(); fn != nil {
+					for _, arg := range fn.Args {
+						if !samePosition(arg) {
+							return false
+						}
+					}
+				}
+				return true
+			}
+			if !samePosition(pt.Expr) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Scan column positions are compacted independently of the stored partition
@@ -607,7 +653,7 @@ func listFilterExpr(
 	metadata partition.PartitionMetadata,
 ) ([]int, bool, error) {
 	expr = p.DeepCopyExpr(expr)
-	expr, canPrune := convertFoldExprToNormal(expr)
+	expr, canPrune, _ := convertFoldExprWithPool(expr, proc.Mp())
 	if !canPrune {
 		return nil, false, nil
 	}
@@ -772,48 +818,47 @@ func appendCastBeforeExpr(ctx context.Context, expr *plan.Expr, typ plan.Type) (
 // general expression executor. The boolean is false when a Fold value cannot
 // be represented losslessly. Partition pruning is optional, so callers must
 // fail open instead of evaluating a partial or ambiguous conversion.
-func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
+func convertFoldExprWithPool(expr *plan.Expr, mp *mpool.MPool) (*plan.Expr, bool, error) {
 	switch ef := expr.Expr.(type) {
 	case *plan.Expr_Fold:
 		if ef.Fold == nil {
-			return nil, false
+			return nil, false, nil
 		}
 		if ef.Fold.IsConst {
 			c, ok := getConstantFromBytes(ef.Fold.Data, expr.Typ)
 			if !ok {
-				return nil, false
+				return nil, false, nil
 			}
 			return &plan.Expr{
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Lit{
 					Lit: c,
 				},
-			}, true
+			}, true, nil
 		} else {
-			vec := vector.NewVec(types.T_any.ToType())
+			vec := vector.NewOffHeapVecWithType(types.T_any.ToType())
+			defer vec.Free(mp)
 			err := vec.UnmarshalBinary(ef.Fold.Data)
 			if err != nil {
-				return nil, false
+				return nil, false, nil
 			}
 			vecType := vec.GetType()
 			if int32(vecType.Oid) != expr.Typ.Id || vecType.Scale != expr.Typ.Scale ||
 				(expr.Typ.Width != 0 && vecType.Width != expr.Typ.Width) ||
 				(expr.Typ.Charset != 0 && uint32(vecType.Charset) != expr.Typ.Charset) {
-				return nil, false
+				return nil, false, nil
 			}
-			// InplaceSortAndCompact's ordinary value-only path does not move the
-			// null bitmap with the reordered payload. A nullable Fold could
-			// therefore turn {1, NULL} into {0, NULL} and make pruning omit the
-			// partition that contains 1. Nullable predicates retain their SQL
-			// residual filter, so failing open is both safe and cheaper than
-			// materializing a null-aware copy solely for optional pruning.
+			// Preserve the existing conservative nullable-fold boundary: the SQL
+			// residual evaluates NULL semantics when pruning cannot represent it.
 			if vec.IsConstNull() || vec.GetNulls().Any() {
-				return nil, false
+				return nil, false, nil
 			}
-			vec.InplaceSortAndCompact()
+			if err := vec.InplaceSortAndCompact(mp); err != nil {
+				return nil, false, err
+			}
 			data, err := vec.MarshalBinary()
 			if err != nil {
-				return nil, false
+				return nil, false, nil
 			}
 			return &plan.Expr{
 				Typ: expr.Typ,
@@ -823,21 +868,24 @@ func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
 						Data: data,
 					},
 				},
-			}, true
+			}, true, nil
 		}
 
 	case *plan.Expr_F:
 		for i := range ef.F.Args {
-			newExpr, ok := convertFoldExprToNormal(ef.F.Args[i])
+			newExpr, ok, err := convertFoldExprWithPool(ef.F.Args[i], mp)
+			if err != nil {
+				return nil, false, err
+			}
 			if !ok {
-				return nil, false
+				return nil, false, nil
 			}
 			ef.F.Args[i] = newExpr
 		}
-		return expr, true
+		return expr, true, nil
 
 	default:
-		return expr, true
+		return expr, true, nil
 	}
 }
 
@@ -846,7 +894,16 @@ func convertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, bool) {
 // boolean form above because an unrepresentable optimization input is a safe
 // reason to scan all partitions, not a query error.
 func ConvertFoldExprToNormal(expr *plan.Expr) (*plan.Expr, error) {
-	normalized, ok := convertFoldExprToNormal(expr)
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	return convertFoldExprStrictWithPool(expr, mp)
+}
+
+func convertFoldExprStrictWithPool(expr *plan.Expr, mp *mpool.MPool) (*plan.Expr, error) {
+	normalized, ok, err := convertFoldExprWithPool(expr, mp)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, moerr.NewInvalidInputNoCtx("fold expression cannot be converted losslessly")
 	}

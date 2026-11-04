@@ -27,6 +27,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -35,7 +37,7 @@ import (
 
 // insertIntoFullTextIndexTableFormat is the populate-SQL template,
 // lifted verbatim from pkg/sql/compile/util.go:113.
-const insertIntoFullTextIndexTableFormat = "INSERT INTO `%s`.`%s` SELECT f.* FROM `%s`.`%s` AS %s CROSS APPLY fulltext_index_tokenize('%s', %s, %s) AS f;"
+const insertIntoFullTextIndexTableFormat = "INSERT INTO %s SELECT f.* FROM %s AS %s CROSS APPLY fulltext_index_tokenize(%s, %s, %s) AS f;"
 
 // Compile-time interface check.
 var _ compileplugin.Hooks = Hooks{}
@@ -88,6 +90,22 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 
 	// 3a. async: register a CDC task; data syncs via ISCP.
 	if async {
+		var checks []string
+		for _, part := range indexDef.Parts {
+			for _, col := range originalTableDef.Cols {
+				if col.Name == catalog.ResolveAlias(part) && col.Typ.Id == int32(types.T_datalink) {
+					// Consume every source value while returning one aggregate row;
+					// RunSql otherwise retains all discarded per-row check results.
+					checks = append(checks, "sum(cast(_check_async_datalink_source("+sqlquote.Ident(col.Name)+",true) as unsigned))")
+					break
+				}
+			}
+		}
+		if len(checks) > 0 {
+			if err := ctx.RunSql("select " + strings.Join(checks, ",") + " from " + sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name)); err != nil {
+				return err
+			}
+		}
 		logutil.Infof("fulltext index Async is true")
 		sinkerType := ctx.SinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
 		return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
@@ -156,20 +174,20 @@ func (Hooks) IdxcronMetadata(_ compileplugin.CompileContext) ([]byte, error) {
 // (genInsertIndexTableSqlForFullTextIndex).
 func genInsertSQL(originalTableDef *plan.TableDef, indexDef *plan.IndexDef, qryDatabase string) ([]string, error) {
 	const srcAlias = "src"
-	pkColName := srcAlias + "." + originalTableDef.Pkey.PkeyColName
+	pkColName := sqlquote.QualifiedIdent(srcAlias, originalTableDef.Pkey.PkeyColName)
 	tblname := indexDef.IndexTableName
 
 	parts := make([]string, 0, len(indexDef.Parts))
 	for _, p := range indexDef.Parts {
-		parts = append(parts, srcAlias+"."+p)
+		parts = append(parts, sqlquote.QualifiedIdent(srcAlias, p))
 	}
 	concat := strings.Join(parts, ",")
 
 	sql := fmt.Sprintf(insertIntoFullTextIndexTableFormat,
-		qryDatabase, tblname,
-		qryDatabase, originalTableDef.Name,
-		srcAlias,
-		indexDef.IndexAlgoParams,
+		sqlquote.QualifiedIdent(qryDatabase, tblname),
+		sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name),
+		sqlquote.Ident(srcAlias),
+		sqlquote.String(indexDef.IndexAlgoParams),
 		pkColName,
 		concat)
 

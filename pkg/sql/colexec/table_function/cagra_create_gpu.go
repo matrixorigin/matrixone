@@ -33,6 +33,7 @@ import (
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	cagrart "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
@@ -53,7 +54,7 @@ var cagra_runSql = sqlexec.RunSql
 // cagraBuilder is the (B, Q)-erased build interface the create state drives.
 // *cagraPkg.CagraBuild[B, Q] satisfies it for every wired (base, storage)
 // combo. GetIndexes is [B,Q]-typed and intentionally NOT on the interface —
-// end() routes through ToInsertSql instead.
+// end() routes through PreparePersistence instead.
 type cagraBuilder interface {
 	// AddRow takes the raw base-type bytes of one vector (4*dim for an f32 base,
 	// 2*dim for an f16 base); the concrete builder reinterprets them to its
@@ -62,9 +63,10 @@ type cagraBuilder interface {
 	AddRow(id int64, vecBytes []byte) error
 	SetFilterColumns(colMetaJSON string)
 	AddFilterChunk(colIdx uint32, data []byte, nullBitmap []uint32, nrows uint64) error
-	ToInsertSql(ts int64, buildTS int64, provenance bool) ([]string, error)
+	PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error)
+	PersistChunks(writer *sqlexec.ChunkInserter) error
 	// DeviceDemand is what EACH device must hold to serve this index, valid after
-	// ToInsertSql. end() checks it against the hardware so CREATE cannot succeed
+	// PreparePersistence. end() checks it against the hardware so CREATE cannot succeed
 	// for an index no query could ever load.
 	DeviceDemand() map[int]int64
 	Destroy() error
@@ -108,13 +110,23 @@ type cagraCreateState struct {
 	// at init time returned zero — nothing to build, nothing to CDC.
 	srcEmpty bool
 
+	// ignoredRows leaves out the rows the index cannot store; nil without an ignored table.
+	ignoredRows *cuvsIgnoredRows
+
 	// holding one call batch, cagraCreateState owns it.
 	batch *batch.Batch
 }
 
 func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
-	if u.srcEmpty {
+	// A parallel instance that received no rows never created a builder.
+	if u.srcEmpty || u.builder == nil {
 		return nil
+	}
+	if u.ignoredRows != nil {
+		if err := u.ignoredRows.allBad(); err != nil {
+			return err
+		}
+		u.cdcTail = append(u.cdcTail, u.ignoredRows.tail()...)
 	}
 
 	var (
@@ -123,12 +135,8 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	)
 
 	ts := time.Now().UnixMicro()
-	if u.builder != nil {
-		sqls, err = u.builder.ToInsertSql(ts, buildSnapshotTS(proc),
-			metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable))
-	}
-	// No builder selected → init didn't set one. Nothing to do for the cuvs
-	// side; the CDC tail (if any) below still emits.
+	sqls, err = u.builder.PreparePersistence(ts, buildSnapshotTS(proc),
+		metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable))
 	if err != nil {
 		return err
 	}
@@ -146,7 +154,7 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// escape: every query reads all sub-indexes at once, and distribution_mode is
 	// persisted, so no future device set redistributes it.
 	//
-	// Placed after ToInsertSql (which packs and stamps the sizes) and before the
+	// Placed after PreparePersistence (which packs and stamps the sizes) and before the
 	// statements are executed, so a refusal persists nothing.
 	if demand := u.builder.DeviceDemand(); len(demand) > 0 {
 		// This algorithm's own fraction, read from its cost class, so the gate
@@ -195,20 +203,33 @@ func (u *cagraCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 	logutil.Infof("CAGRA create: executing %d SQLs (total %d bytes) for `%s`.`%s`",
 		len(sqls), totalBytes, u.tblcfg.DbName, u.tblcfg.IndexTable)
-	for i, s := range sqls {
-		logutil.Infof("CAGRA create: SQL %d/%d start (%d bytes)", i+1, len(sqls), len(s))
-		t0 := time.Now()
-		res, err := cagra_runSql(sqlexec.NewSqlProcess(proc), s)
-		if err != nil {
-			logutil.Errorf("CAGRA create: SQL %d/%d FAILED after %v: %v", i+1, len(sqls), time.Since(t0), err)
+	storageProc := sqlexec.NewSqlProcess(proc)
+	return sqlexec.RunTxn(storageProc, func(exec executor.TxnExecutor) error {
+		stmt := storageProc.StatementOption()
+		if u.builder != nil {
+			writer, err := sqlexec.NewChunkInserter(storageProc.GetContext(), exec, stmt, u.tblcfg.DbName, u.tblcfg.IndexTable, 2000)
+			if err != nil {
+				return err
+			}
+			if err := u.builder.PersistChunks(writer); err != nil {
+				return err
+			}
+		}
+		run := func(sql string) error {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
 			return err
 		}
-		logutil.Infof("CAGRA create: SQL %d/%d done in %v", i+1, len(sqls), time.Since(t0))
-		res.Close()
-	}
-	logutil.Infof("CAGRA create: all %d SQLs committed for `%s`.`%s`",
-		len(sqls), u.tblcfg.DbName, u.tblcfg.IndexTable)
-	return nil
+		for _, sql := range sqls {
+			if err := run(sql); err != nil {
+				return err
+			}
+		}
+		if u.ignoredRows != nil {
+			return u.ignoredRows.sqls(u.tblcfg, buildSnapshotTS(proc), run)
+		}
+		return nil
+	})
 }
 
 func (u *cagraCreateState) reset(tf *TableFunction, proc *process.Process) {
@@ -232,6 +253,7 @@ func (u *cagraCreateState) free(tf *TableFunction, proc *process.Process, pipeli
 	if u.builder != nil {
 		u.builder.Destroy()
 	}
+	u.ignoredRows.close()
 }
 
 func cagraCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -530,8 +552,23 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		// per-card capacity -- is applied by rows_fitting() in C++, which knows
 		// the distribution mode and the distinct device count. Scaling again here
 		// would double it.
+		// A build that leaves out rows holds the first holdRows rows of each sub-index in Go.
+		sharded := u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED)
+		holdRows := minSubIndexRows(threshold, sharded, len(u.devices))
+		if u.tblcfg.IgnoredTable != "" {
+			baseElem := uint64(4)
+			if u.baseOid == types.T_array_float16 {
+				baseElem = 2
+			}
+			heldRowBytes := uint64(u.idxcfg.CuvsCagra.Dimensions)*baseElem +
+				uint64(includeBytesPerRowFromCols(u.filterCols)) + heldRowOverhead
+			if hostRowsFit, err = reserveHeldRows(hostRowsFit, holdRows, heldRowBytes, hostPerRow, "cagra"); err != nil {
+				return err
+			}
+		}
+
 		plan, err := planCapacity(srcRowCount, requestedCapacity, rowsFit, hostRowsFit, threshold,
-			u.idxcfg.CuvsCagra.DistributionMode == uint16(vectorindex.DistributionMode_SHARDED),
+			sharded,
 			len(u.devices), "cagra", "max_index_capacity")
 		if err != nil {
 			return err
@@ -553,6 +590,11 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 		spillDir := vimemory.HostSpillDir(proc.Ctx, proc.Base.FileService, proc.GetService())
 		if spillDir == "" {
 			logutil.Infof("CAGRA create: no LOCAL fileservice; index tars will use $TMPDIR")
+		}
+		u.ignoredRows = newCuvsIgnoredRows(u.tblcfg, spillDir,
+			u.baseOid == types.T_array_float32 && qt == metric.Quantization_F16)
+		if u.ignoredRows != nil {
+			u.ignoredRows.setPlan(plan.Capacity, holdRows)
 		}
 
 		// ---- create builder ----
@@ -618,8 +660,8 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 
 	// Build-stream position over indexable (non-NULL) rows only — matches the
 	// COUNT(... WHERE vec IS NOT NULL) basis that cdcCutoff was derived from.
+	// A row the index cannot store does not advance it, like a NULL vector.
 	srcPos := u.rowsSeen
-	u.rowsSeen++
 
 	id := vector.GetFixedAtNoTypeCheck[int64](tf.ctr.argVecs[1], nthRow)
 
@@ -627,9 +669,10 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	// rationale). f16 base -> native []cuvs.Float16 for both the direct (half)
 	// add and the CDC tail (stored as native half bytes — no f32 detour).
 	var fa []float32
+	var h []types.Float16
 	var hf []cuvs.Float16
 	if u.baseOid == types.T_array_float16 {
-		h := types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
+		h = types.BytesToArray[types.Float16](faVec.GetBytesAt(nthRow))
 		if uint(len(h)) != u.idxcfg.CuvsCagra.Dimensions {
 			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
 		}
@@ -640,6 +683,20 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")
 		}
 	}
+
+	if u.ignoredRows != nil {
+		var skip bool
+		if u.baseOid == types.T_array_float16 {
+			skip, err = checkCuvsRow(u.ignoredRows, id, h)
+		} else {
+			skip, err = checkCuvsRow(u.ignoredRows, id, fa)
+		}
+		if err != nil || skip {
+			return err
+		}
+	}
+
+	u.rowsSeen++
 
 	// Trailing rows below the cuvs threshold route to the CDC tail
 	// (search-side brute-force replay) instead of the cuvs builder.
@@ -673,6 +730,9 @@ func (u *cagraCreateState) start(tf *TableFunction, proc *process.Process, nthRo
 	vecBytes := util.UnsafeSliceToBytes(fa)
 	if u.baseOid == types.T_array_float16 {
 		vecBytes = util.UnsafeSliceToBytes(hf)
+	}
+	if u.ignoredRows != nil {
+		return u.ignoredRows.route(u.builder, u.filterCols, tf.ctr.argVecs, nthRow, id, vecBytes)
 	}
 	if err = u.builder.AddRow(id, vecBytes); err != nil {
 		return err

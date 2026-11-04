@@ -64,6 +64,10 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkColDef(p)
 	case *Column:
 		return true, v.walkColumn(p)
+	case *CorrelationProgram:
+		return true, v.walkCorrelationProgram(p)
+	case *CorrelationSpec:
+		return true, v.walkCorrelationSpec(p)
 	case *CreateIndex:
 		return true, v.walkCreateIndex(p)
 	case *CreateSequence:
@@ -112,6 +116,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkDefault(p)
 	case *DeleteCtx:
 		return true, v.walkDeleteCtx(p)
+	case *DependentExpr:
+		return true, v.walkDependentExpr(p)
 	case *DistRange:
 		return true, v.walkDistRange(p)
 	case *DropTable:
@@ -122,6 +128,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkExpr(p)
 	case *ExprList:
 		return true, v.walkExprList(p)
+	case *Expr_Dependent:
+		return true, v.walkExpr_Dependent(p)
 	case *Expr_F:
 		return true, v.walkExpr_F(p)
 	case *Expr_List:
@@ -144,8 +152,12 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkGeneratedCol(p)
 	case *IndexDef:
 		return true, v.walkIndexDef(p)
+	case *IndexHiddenTableRef:
+		return true, v.walkIndexHiddenTableRef(p)
 	case *IndexReaderParam:
 		return true, v.walkIndexReaderParam(p)
+	case *IndexSearchScan:
+		return true, v.walkIndexSearchScan(p)
 	case *InsertCtx:
 		return true, v.walkInsertCtx(p)
 	case *Literal:
@@ -216,10 +228,6 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkType(p)
 	case *UpdateCtx:
 		return true, v.walkUpdateCtx(p)
-	case *VectorIndexScan:
-		return true, v.walkVectorIndexScan(p)
-	case *VectorIndexTableRef:
-		return true, v.walkVectorIndexTableRef(p)
 	case *WindowSpec:
 		return true, v.walkWindowSpec(p)
 	case Type:
@@ -416,6 +424,33 @@ func (v *legacyCollationVisitor) walkColumn(p *Column) error {
 	}
 	for _, item0 := range p.Column {
 		if err := v.walkExpr(item0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkCorrelationProgram(p *CorrelationProgram) error {
+	if p == nil {
+		return nil
+	}
+	for _, item0 := range p.InputTypes {
+		if err := v.walkType(&item0); err != nil {
+			return err
+		}
+	}
+	for _, item0 := range p.OutputTypes {
+		if err := v.walkType(&item0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkCorrelationSpec(p *CorrelationSpec) error {
+	if p == nil {
+		return nil
+	}
+	for _, item0 := range p.Programs {
+		if err := v.walkCorrelationProgram(item0); err != nil {
 			return err
 		}
 	}
@@ -708,6 +743,25 @@ func (v *legacyCollationVisitor) walkDeleteCtx(p *DeleteCtx) error {
 	}
 	return nil
 }
+func (v *legacyCollationVisitor) walkDependentExpr(p *DependentExpr) error {
+	if p == nil {
+		return nil
+	}
+	for _, item0 := range p.Inputs {
+		if err := v.walkExpr(item0); err != nil {
+			return err
+		}
+	}
+	for _, item0 := range p.Lhs {
+		if err := v.walkExpr(item0); err != nil {
+			return err
+		}
+	}
+	if err := v.walkExpr(p.Comparison); err != nil {
+		return err
+	}
+	return nil
+}
 func (v *legacyCollationVisitor) walkDistRange(p *DistRange) error {
 	if p == nil {
 		return nil
@@ -759,6 +813,10 @@ func (v *legacyCollationVisitor) walkExpr(p *Expr) error {
 		return err
 	}
 	switch x := p.Expr.(type) {
+	case *Expr_Dependent:
+		if err := v.walkExpr_Dependent(x); err != nil {
+			return err
+		}
 	case *Expr_F:
 		if err := v.walkExpr_F(x); err != nil {
 			return err
@@ -793,6 +851,15 @@ func (v *legacyCollationVisitor) walkExprList(p *ExprList) error {
 		if err := v.walkExpr(item0); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkExpr_Dependent(p *Expr_Dependent) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkDependentExpr(p.Dependent); err != nil {
+		return err
 	}
 	return nil
 }
@@ -900,6 +967,15 @@ func (v *legacyCollationVisitor) walkIndexDef(p *IndexDef) error {
 	}
 	return nil
 }
+func (v *legacyCollationVisitor) walkIndexHiddenTableRef(p *IndexHiddenTableRef) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkTableDef(p.Table); err != nil {
+		return err
+	}
+	return nil
+}
 func (v *legacyCollationVisitor) walkIndexReaderParam(p *IndexReaderParam) error {
 	if p == nil {
 		return nil
@@ -914,6 +990,42 @@ func (v *legacyCollationVisitor) walkIndexReaderParam(p *IndexReaderParam) error
 	}
 	if err := v.walkDistRange(p.DistRange); err != nil {
 		return err
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkIndexSearchScan(p *IndexSearchScan) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkTableDef(p.SourceTableDef); err != nil {
+		return err
+	}
+	if err := v.walkIndexDef(p.Index); err != nil {
+		return err
+	}
+	for _, item0 := range p.HiddenTables {
+		if err := v.walkIndexHiddenTableRef(item0); err != nil {
+			return err
+		}
+	}
+	if err := v.walkExpr(p.QueryPayload); err != nil {
+		return err
+	}
+	if err := v.walkExpr(p.CandidateLimit); err != nil {
+		return err
+	}
+	if err := v.walkDistRange(p.DistanceRange); err != nil {
+		return err
+	}
+	for _, item0 := range p.PreFilters {
+		if err := v.walkExpr(item0); err != nil {
+			return err
+		}
+	}
+	for _, item0 := range p.AlgoExprs {
+		if err := v.walkExpr(item0); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1124,10 +1236,15 @@ func (v *legacyCollationVisitor) walkNode(p *Node) error {
 	if err := v.walkExpr(p.GapFillEnd); err != nil {
 		return err
 	}
-	if err := v.walkVectorIndexScan(p.VectorIndexScan); err != nil {
+	if err := v.walkIndexSearchScan(p.IndexSearchScan); err != nil {
 		return err
 	}
 	for _, item0 := range p.PhysicalEqualityKeyList {
+		if err := v.walkExpr(item0); err != nil {
+			return err
+		}
+	}
+	for _, item0 := range p.DedupKeyExprs {
 		if err := v.walkExpr(item0); err != nil {
 			return err
 		}
@@ -1263,6 +1380,11 @@ func (v *legacyCollationVisitor) walkPreInsertUkCtx(p *PreInsertUkCtx) error {
 			return err
 		}
 	}
+	for _, item0 := range p.KeyDiagnosticExprs {
+		if err := v.walkExprList(item0); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func (v *legacyCollationVisitor) walkPrepare(p *Prepare) error {
@@ -1299,6 +1421,9 @@ func (v *legacyCollationVisitor) walkQuery(p *Query) error {
 	if v.visited(p) {
 		return nil
 	}
+	if err := p.ValidateIntegerPrecision(); err != nil {
+		return err
+	}
 	for _, item0 := range p.Nodes {
 		if err := v.walkNode(item0); err != nil {
 			return err
@@ -1313,6 +1438,9 @@ func (v *legacyCollationVisitor) walkQuery(p *Query) error {
 		if err := v.walkQuery(item0); err != nil {
 			return err
 		}
+	}
+	if err := v.walkCorrelationSpec(p.Correlation); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1425,7 +1553,7 @@ func (v *legacyCollationVisitor) walkTableDef(p *TableDef) error {
 	if p == nil {
 		return nil
 	}
-	if err := requireLegacySchema(p.DefaultCharset, p.CollationVersion, p.KeyFormat); err != nil {
+	if err := requireLegacyTable(p); err != nil {
 		return err
 	}
 	for _, item0 := range p.Cols {
@@ -1437,7 +1565,7 @@ func (v *legacyCollationVisitor) walkTableDef(p *TableDef) error {
 		return err
 	}
 	for _, item0 := range p.Indexes {
-		if err := v.walkIndexDef(item0); err != nil {
+		if err := requireLegacyTableIndex(p, item0); err != nil {
 			return err
 		}
 	}
@@ -1474,49 +1602,6 @@ func (v *legacyCollationVisitor) walkUpdateCtx(p *UpdateCtx) error {
 		return nil
 	}
 	if err := v.walkTableDef(p.TableDef); err != nil {
-		return err
-	}
-	return nil
-}
-func (v *legacyCollationVisitor) walkVectorIndexScan(p *VectorIndexScan) error {
-	if p == nil {
-		return nil
-	}
-	if err := v.walkTableDef(p.SourceTableDef); err != nil {
-		return err
-	}
-	if err := v.walkIndexDef(p.Index); err != nil {
-		return err
-	}
-	for _, item0 := range p.HiddenTables {
-		if err := v.walkVectorIndexTableRef(item0); err != nil {
-			return err
-		}
-	}
-	if err := v.walkExpr(p.QueryVector); err != nil {
-		return err
-	}
-	if err := v.walkExpr(p.CandidateLimit); err != nil {
-		return err
-	}
-	if err := v.walkDistRange(p.DistanceRange); err != nil {
-		return err
-	}
-	for _, item0 := range p.PreFilters {
-		if err := v.walkExpr(item0); err != nil {
-			return err
-		}
-	}
-	if err := v.walkExpr(p.FirstRoundLimit); err != nil {
-		return err
-	}
-	return nil
-}
-func (v *legacyCollationVisitor) walkVectorIndexTableRef(p *VectorIndexTableRef) error {
-	if p == nil {
-		return nil
-	}
-	if err := v.walkTableDef(p.Table); err != nil {
 		return err
 	}
 	return nil

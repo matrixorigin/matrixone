@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	ivfflatplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfflat/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -52,7 +53,6 @@ import (
 )
 
 type scriptedRelationScanner struct {
-	t        *testing.T
 	requests []sqlexec.RelationScanRequest
 	run      func(sqlexec.RelationScanRequest) executor.Result
 }
@@ -76,8 +76,8 @@ func (s *scriptedRelationScanner) ScanRelation(req sqlexec.RelationScanRequest) 
 
 func TestGetVersionUsesTypedRelationScan(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.Equal(t, "db1", req.Schema)
 		require.Equal(t, "meta1", req.Table)
@@ -108,8 +108,8 @@ func TestRelationScanPolicyAssignsInMemoryRowsOnlyToCoordinator(t *testing.T) {
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(1, false))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectAllData), relationScanPolicy(2, true))
 	require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), relationScanPolicy(2, false))
-	advancePlanCursor(nil)
-	advancePlanCursor(&vectorindex.IvfSearchCursor{Exhausted: true})
+	advancePlanCursor(nil, 1)
+	advancePlanCursor(&vectorindex.IvfSearchCursor{Exhausted: true}, 1)
 }
 
 func TestValidateIvfQueryDimensions(t *testing.T) {
@@ -122,10 +122,10 @@ func TestValidateIvfQueryDimensions(t *testing.T) {
 
 func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
-		require.Zero(t, req.ReadPolicy)
+		require.Equal(t, fileservice.Policy(fileservice.NarrowRead), req.ReadPolicy)
 		require.Equal(t, "entries1", req.Table)
 		require.NotNil(t, req.Filter)
 		require.NotNil(t, req.IndexParam)
@@ -208,12 +208,63 @@ func TestScanEntriesUsesTypedFilterAndPhysicalTop(t *testing.T) {
 	require.Equal(t, int32(9), vector.GetFixedAtNoTypeCheck[int32](res.Batches[0].Vecs[2], 0))
 }
 
+// TestScanEntriesOversizedLimitKeepsStorageTopK scans with a limit of the largest uint
+// (an oversized itopk): storage receives a Top-K limit it accepts (at most the largest
+// int) and returns the distance column.
+func TestScanEntriesOversizedLimitKeepsStorageTopK(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	scanner := &scriptedRelationScanner{}
+	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
+		require.NotNil(t, req.IndexParam)
+		require.Equal(t, uint64(math.MaxInt), req.IndexParam.GetLimit().GetLit().GetU64Val())
+
+		bat := batch.NewWithSize(7) // version, centroid, pk, entry, include, cpkey, distance
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[3] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+		bat.Vecs[4] = vector.NewVec(types.T_int32.ToType())
+		bat.Vecs[5] = vector.NewVec(types.T_varchar.ToType())
+		bat.Vecs[6] = vector.NewVec(types.T_float64.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(4), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(2), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int64(7), false, mp))
+		require.NoError(t, vector.AppendArray(bat.Vecs[3], []float32{1, 2}, false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[4], int32(9), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[5], []byte("cpkey"), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[6], float64(5), false, mp))
+		bat.SetRowCount(1)
+		return executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+	}
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	sqlproc.RelationScanner = scanner
+	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
+		OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_ASC}},
+	}
+	idx := &IvfflatSearchIndex[float32]{Version: 4, QuantMul: 1}
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+	idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
+
+	res, err := idx.scanEntries(sqlproc, idxcfg, vectorindex.IndexTableConfig{
+		DbName:         "db1",
+		EntriesTable:   "entries1",
+		IncludeColumns: []string{"payload"},
+	}, []float32{0, 0}, 4, []int64{2, 3}, []string{"payload"}, nil, ^uint(0))
+	require.NoError(t, err)
+	defer res.Close()
+	require.Len(t, res.Batches, 1)
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](res.Batches[0].Vecs[0], 0))
+	require.Equal(t, float64(5), vector.GetFixedAtNoTypeCheck[float64](res.Batches[0].Vecs[1], 0))
+}
+
 func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 	require.NoError(t, err)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.True(t, req.PostFilterTopOnly)
 		require.Nil(t, req.IndexParam.OrderBy[0].Expr)
@@ -260,10 +311,10 @@ func TestScanEntriesKeepsPostFilterTopKForResiduals(t *testing.T) {
 
 func TestScanEntriesPrunesFilteredSearchToSelectedCentroids(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 	require.NoError(t, err)
-	scanner := &scriptedRelationScanner{t: t}
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.False(t, req.PostFilterTopOnly)
 		require.True(t, req.FilterBeforeTopK)
@@ -301,7 +352,7 @@ func TestScanEntriesPrunesFilteredSearchToSelectedCentroids(t *testing.T) {
 }
 
 func TestStorageTopKEligibility(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	centroids := []int64{1}
 	require.True(t, canUseStorageTopK(sqlproc, centroids, nil, 1, true))
@@ -455,8 +506,8 @@ func TestScanEntriesPushesDistanceRangeToStorageTopK(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
-			scanner := &scriptedRelationScanner{t: t}
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			scanner := &scriptedRelationScanner{}
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.False(t, req.PostFilterTopOnly)
 				require.Equal(t, metric.DistFn_L2Distance, req.IndexParam.OrigFuncName)
@@ -582,8 +633,8 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mp := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", mp)
-			scanner := &scriptedRelationScanner{t: t}
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			scanner := &scriptedRelationScanner{}
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.True(t, req.PostFilterTopOnly)
 				require.Nil(t, req.IndexParam.DistRange)
@@ -635,8 +686,8 @@ func TestScanEntriesFallsBackForUnsafeDistanceRanges(t *testing.T) {
 
 func TestScanEntriesFallsBackBeforeL2LowerBoundTopK(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	scanner := &scriptedRelationScanner{}
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		require.True(t, req.PostFilterTopOnly)
 		require.Nil(t, req.IndexParam.DistRange)
@@ -682,7 +733,7 @@ func TestScanEntriesFallsBackBeforeL2LowerBoundTopK(t *testing.T) {
 
 func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	baseConfig := func() vectorindex.IndexConfig {
 		cfg := vectorindex.IndexConfig{}
 		cfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
@@ -711,7 +762,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	})
 
 	t.Run("storage omits distance", func(t *testing.T) {
-		scanner := &scriptedRelationScanner{t: t, run: func(req sqlexec.RelationScanRequest) executor.Result {
+		scanner := &scriptedRelationScanner{run: func(req sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(len(req.Columns))
 			for i := range bat.Vecs {
 				bat.Vecs[i] = vector.NewVec(types.T_int64.ToType())
@@ -730,7 +781,7 @@ func TestScanEntriesFailsClosedAtTopKBoundaries(t *testing.T) {
 	t.Run("local distance evaluation fails", func(t *testing.T) {
 		residual, err := ivfFuncExpr(proc.Ctx, "=", ivfInt64Expr(1), ivfInt64Expr(1))
 		require.NoError(t, err)
-		scanner := &scriptedRelationScanner{t: t, run: func(sqlexec.RelationScanRequest) executor.Result {
+		scanner := &scriptedRelationScanner{run: func(sqlexec.RelationScanRequest) executor.Result {
 			bat := batch.NewWithSize(5)
 			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
@@ -765,7 +816,7 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 	require.NoError(t, vector.AppendFixedList(keys, []int32{3, 4}, nil, mp))
 	data, err := keys.MarshalBinary()
 	require.NoError(t, err)
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	expr, err := ivfRuntimeMembershipExpr(proc.Ctx, data,
 		ivfColExpr(2, plan.Type{Id: int32(types.T_int32)}))
@@ -798,7 +849,7 @@ func TestRuntimeMembershipLowersToTypedSourcePkPredicate(t *testing.T) {
 
 func TestPlanReaderSortsAndBoundsCandidates(t *testing.T) {
 	r := &planReader{
-		spec:         &plan.VectorIndexScan{},
+		spec:         &plan.IndexSearchScan{},
 		req:          searchplugin.Request{CandidateBudget: 2},
 		keys:         []any{int64(3), int64(1), int64(2)},
 		distances:    []float64{3, 1, 2},
@@ -813,7 +864,7 @@ func TestPlanReaderSortsAndBoundsCandidates(t *testing.T) {
 
 func TestPlanReaderSortAndLimitHandlesMaxUint64(t *testing.T) {
 	r := &planReader{
-		spec:         &plan.VectorIndexScan{},
+		spec:         &plan.IndexSearchScan{},
 		keys:         []any{int64(1)},
 		distances:    []float64{1},
 		includeData:  map[string][]any{},
@@ -830,18 +881,18 @@ func TestAdvancePlanCursorExpandsDisjointCentroidWindows(t *testing.T) {
 		NextBucketOffset:   0,
 		CurrentBucketCount: 2,
 	}
-	advancePlanCursor(cursor)
+	advancePlanCursor(cursor, 4)
 	require.Equal(t, uint(2), cursor.NextBucketOffset)
 	require.Equal(t, uint(4), cursor.CurrentBucketCount)
 	require.False(t, cursor.Exhausted)
 
 	cursor.Round++
-	advancePlanCursor(cursor)
+	advancePlanCursor(cursor, 8)
 	require.Equal(t, uint(6), cursor.NextBucketOffset)
 	require.Equal(t, uint(4), cursor.CurrentBucketCount)
 
 	cursor.Round++
-	advancePlanCursor(cursor)
+	advancePlanCursor(cursor, 8)
 	require.True(t, cursor.Exhausted)
 	require.Equal(t, uint(10), cursor.NextBucketOffset)
 }
@@ -907,7 +958,7 @@ func TestDistanceRangeFiltersBeforeTopInSourceUnits(t *testing.T) {
 	}
 
 	require.NoError(t, idx.filterEntryDistanceRange(
-		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance, nil))
+		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance, nil, mp))
 	require.NoError(t, compactRelationTop(&res, 2, false))
 
 	require.Equal(t, []int64{2, 3}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
@@ -918,7 +969,7 @@ func TestDistanceRangeFiltersBeforeTopInSourceUnits(t *testing.T) {
 
 func TestFilterRelationBatchAppliesResidualBeforeTop(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
@@ -945,7 +996,7 @@ func TestFilterRelationBatchAppliesResidualBeforeTop(t *testing.T) {
 
 func TestRelationFilterAndTopHelpersCoverEmptyAndDescendingCases(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	filter, err := ivfFuncExpr(proc.Ctx, "=",
 		ivfColExpr(0, plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}),
 		ivfStringExpr("keep"))
@@ -980,7 +1031,7 @@ func TestRelationFilterAndTopHelpersCoverEmptyAndDescendingCases(t *testing.T) {
 
 func TestRelationSearchBoundaryBranches(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	floatLiteral := func(value float64) *plan.Expr {
 		return &plan.Expr{
 			Typ: plan.Type{Id: int32(types.T_float64)},
@@ -1030,15 +1081,15 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 	}
 	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
-	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
+	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil, mp))
 	unbounded := &plan.DistRange{LowerBoundType: plan.BoundType_UNBOUNDED, UpperBoundType: plan.BoundType_UNBOUNDED}
 	all := newResult(1, 2)
-	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil, mp))
 	require.Equal(t, 2, all.Batches[0].RowCount())
 	all.Close()
 	all = newResult(1, 2)
 	noneRange := &plan.DistRange{LowerBoundType: plan.BoundType_INCLUSIVE, LowerBound: floatLiteral(3), UpperBoundType: plan.BoundType_UNBOUNDED}
-	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil, mp))
 	require.Zero(t, all.Batches[0].RowCount())
 	all.Close()
 
@@ -1129,7 +1180,7 @@ func TestPlanReaderReadRejectsCancelledAndInvalidOutput(t *testing.T) {
 
 func TestPlanReaderPureHelpersCoverDecodedQueriesAndScanBatches(t *testing.T) {
 	r := &planReader{
-		spec: &plan.VectorIndexScan{HiddenTables: []*plan.VectorIndexTableRef{{
+		spec: &plan.IndexSearchScan{HiddenTables: []*plan.IndexHiddenTableRef{{
 			Role:   "entries",
 			Object: &plan.ObjectRef{ObjName: "entries_hidden"},
 		}}},
@@ -1138,13 +1189,13 @@ func TestPlanReaderPureHelpersCoverDecodedQueriesAndScanBatches(t *testing.T) {
 	require.Empty(t, r.hiddenTable("missing"))
 
 	r.req.QueryType = plan.Type{Id: int32(types.T_array_float32)}
-	r.req.QueryVector = types.ArrayToBytes([]float32{1, 2})
+	r.req.QueryPayload = types.ArrayToBytes([]float32{1, 2})
 	query32, err := r.queryFloat32()
 	require.NoError(t, err)
 	require.Equal(t, []float32{1, 2}, query32)
 
 	r.req.QueryType = plan.Type{Id: int32(types.T_array_float64)}
-	r.req.QueryVector = types.ArrayToBytes([]float64{1.5, 2.5})
+	r.req.QueryPayload = types.ArrayToBytes([]float64{1.5, 2.5})
 	query32, err = r.queryFloat32()
 	require.NoError(t, err)
 	require.Equal(t, []float32{1.5, 2.5}, query32)
@@ -1168,7 +1219,7 @@ func TestPlanReaderPureHelpersCoverDecodedQueriesAndScanBatches(t *testing.T) {
 		{types.T_array_uint8, types.ArrayToBytes([]uint8{1, 2})},
 	} {
 		r.req.QueryType = plan.Type{Id: int32(test.typ)}
-		r.req.QueryVector = test.data
+		r.req.QueryPayload = test.data
 		query32, err = r.queryFloat32()
 		require.NoError(t, err)
 		require.Equal(t, []float32{1, 2}, query32)
@@ -1347,7 +1398,7 @@ func (r *lateFilterRelationReader) ReadWithFilter(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	mp *mpool.MPool,
 	out *batch.Batch,
 ) (bool, error) {
@@ -1384,7 +1435,7 @@ func (r *lateFilterRelationReader) ReadWithFilter(
 	}
 	out.SetRowCount(len(rows))
 	r.wideWasDeferred = out.Vecs[3].Length() == 0
-	filtered, err := filter(out, earlyColumns)
+	filtered, err := filter.Apply(out, earlyColumns)
 	if err != nil {
 		return false, err
 	}
@@ -1428,7 +1479,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 	_ context.Context,
 	_ []string,
 	earlyColumns []int,
-	filter engine.ReaderFilter,
+	filter *engine.ReaderFilterRequest,
 	indexParam *plan.IndexReaderParam,
 	mp *mpool.MPool,
 	out *batch.Batch,
@@ -1450,7 +1501,7 @@ func (r *filteredTopKRelationReader) ReadWithFilterAndTopK(
 		}
 	}
 	out.SetRowCount(2)
-	filtered, err := filter(out, earlyColumns)
+	filtered, err := filter.Apply(out, earlyColumns)
 	if err != nil {
 		return false, false, err
 	}
@@ -1483,6 +1534,7 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	proc.Ctx = fileservice.WithFileServicePolicy(proc.Ctx, fileservice.SkipDiskCacheWrites)
 	checkPolicy := func(ctx context.Context) {
 		require.Equal(t, fileservice.Policy(fileservice.SkipDiskCacheWrites|fileservice.SkipFullFilePreloads), fileservice.GetFileServicePolicy(ctx))
+		require.Equal(t, uint64(9), fileservice.GetPreloadGroup(ctx), "reads are grouped by the entries table")
 	}
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
@@ -1490,7 +1542,8 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	proc.Base.SessionInfo.StorageEngine = eng
 
 	tableDef := &plan.TableDef{
-		Name: "entries",
+		TblId: 9,
+		Name:  "entries",
 		Cols: []*plan.ColDef{
 			{Name: "version", Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},
@@ -1569,7 +1622,7 @@ func TestRelationScannerUsesSnapshotCloneAndPublisherAccount(t *testing.T) {
 	db.EXPECT().Relation(gomock.Any(), "entries", proc).Return(nil, errors.New("snapshot relation unavailable"))
 
 	accountID := uint32(42)
-	reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+	reader, err := NewPlanReader(proc, &plan.IndexSearchScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
 		ScanSnapshot: &plan.Snapshot{
@@ -1606,7 +1659,7 @@ func TestRelationScannerKeepsCurrentTxnForEqualAndAheadSnapshots(t *testing.T) {
 			eng.EXPECT().Database(gomock.Any(), "db", original).
 				Return(nil, errors.New("current relation unavailable"))
 
-			reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+			reader, err := NewPlanReader(proc, &plan.IndexSearchScan{
 				Index:       &plan.IndexDef{},
 				SourceTable: &plan.ObjectRef{},
 			}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
@@ -1961,17 +2014,17 @@ func TestPlanReaderShortCircuitsEmptySearches(t *testing.T) {
 	r.req = searchplugin.Request{CandidateBudget: 1, HasMembershipFilter: true}
 	require.NoError(t, r.initialize())
 	r.req = searchplugin.Request{CandidateBudget: 1}
-	r.spec = &plan.VectorIndexScan{Index: &plan.IndexDef{IndexAlgoParams: "not-json"}}
+	r.spec = &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgoParams: "not-json"}}
 	require.Error(t, r.initialize())
 
-	r = &planReader{req: searchplugin.Request{CandidateBudget: 0}, spec: &plan.VectorIndexScan{}}
+	r = &planReader{req: searchplugin.Request{CandidateBudget: 0}, spec: &plan.IndexSearchScan{}}
 	require.NoError(t, searchPlanReader(r, nil, vectorindex.IndexConfig{}, vectorindex.IndexTableConfig{}, []float32{1}, false))
 	require.Empty(t, r.keys)
 }
 
 func TestPlanReaderRejectsMalformedIndexMetadataBeforeStorageAccess(t *testing.T) {
-	base := func() *plan.VectorIndexScan {
-		return &plan.VectorIndexScan{
+	base := func() *plan.IndexSearchScan {
+		return &plan.IndexSearchScan{
 			Index: &plan.IndexDef{
 				IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`,
 				Parts:           []string{"embedding"},
@@ -1986,7 +2039,7 @@ func TestPlanReaderRejectsMalformedIndexMetadataBeforeStorageAccess(t *testing.T
 				Name2ColIndex: map[string]int32{"pk": 0, "embedding": 1},
 				Pkey:          &plan.PrimaryKeyDef{PkeyColName: "pk"},
 			},
-			HiddenTables: []*plan.VectorIndexTableRef{
+			HiddenTables: []*plan.IndexHiddenTableRef{
 				{Role: catalog.SystemSI_IVFFLAT_TblType_Metadata, Object: &plan.ObjectRef{ObjName: "metadata"}},
 				{Role: catalog.SystemSI_IVFFLAT_TblType_Centroids, Object: &plan.ObjectRef{ObjName: "centroids"}},
 				{Role: catalog.SystemSI_IVFFLAT_TblType_Entries, Object: &plan.ObjectRef{ObjName: "entries"}},
@@ -1995,54 +2048,54 @@ func TestPlanReaderRejectsMalformedIndexMetadataBeforeStorageAccess(t *testing.T
 	}
 	tests := []struct {
 		name   string
-		mutate func(*plan.VectorIndexScan)
+		mutate func(*plan.IndexSearchScan)
 		want   string
 	}{
 		{
 			name: "invalid lists",
-			mutate: func(spec *plan.VectorIndexScan) {
+			mutate: func(spec *plan.IndexSearchScan) {
 				spec.Index.IndexAlgoParams = `{"lists":"0","op_type":"vector_l2_ops"}`
 			},
 			want: "invalid IVF lists",
 		},
 		{
 			name: "invalid metric",
-			mutate: func(spec *plan.VectorIndexScan) {
+			mutate: func(spec *plan.IndexSearchScan) {
 				spec.Index.IndexAlgoParams = `{"lists":"1","op_type":"not-a-metric"}`
 			},
 			want: "invalid IVF op_type",
 		},
 		{
 			name: "missing index part",
-			mutate: func(spec *plan.VectorIndexScan) {
+			mutate: func(spec *plan.IndexSearchScan) {
 				spec.Index.Parts = nil
 			},
 			want: "incomplete IVF source/index metadata",
 		},
 		{
 			name: "missing hidden table",
-			mutate: func(spec *plan.VectorIndexScan) {
+			mutate: func(spec *plan.IndexSearchScan) {
 				spec.HiddenTables = nil
 			},
 			want: "missing hidden-table references",
 		},
 		{
 			name: "missing vector column",
-			mutate: func(spec *plan.VectorIndexScan) {
+			mutate: func(spec *plan.IndexSearchScan) {
 				spec.Index.Parts = []string{"missing"}
 			},
 			want: "source vector column \"missing\" not found",
 		},
 		{
 			name: "missing primary key column",
-			mutate: func(spec *plan.VectorIndexScan) {
+			mutate: func(spec *plan.IndexSearchScan) {
 				spec.SourceTableDef.Pkey.PkeyColName = "missing"
 			},
 			want: "source primary key \"missing\" not found",
 		},
 		{
 			name: "missing included column",
-			mutate: func(spec *plan.VectorIndexScan) {
+			mutate: func(spec *plan.IndexSearchScan) {
 				spec.Index.IncludedColumns = []string{"missing"}
 			},
 			want: "included column \"missing\" not found",
@@ -2062,18 +2115,20 @@ func TestSearchPlanReaderValidatesRoundLimitsBeforeScanning(t *testing.T) {
 	idxcfg := vectorindex.IndexConfig{}
 	tblcfg := vectorindex.IndexTableConfig{IndexTable: "round_limit_validation"}
 	reader := &planReader{
-		spec: &plan.VectorIndexScan{},
+		spec: &plan.IndexSearchScan{},
 		req: searchplugin.Request{
 			CandidateBudget: 1,
-			HasFirstRound:   true,
-			FirstRoundLimit: math.MaxUint64,
+			AlgoValues: []searchplugin.AlgoValue{{
+				Name:  ivfflatplan.FirstRoundLimitExpr,
+				Value: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: math.MaxUint64}},
+			}},
 		},
 	}
 	err := searchPlanReader(reader, nil, idxcfg, tblcfg, []float32{0}, false)
 	require.ErrorContains(t, err, "first-round limit is not a platform uint")
 
 	reader = &planReader{
-		spec: &plan.VectorIndexScan{SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 7}}},
+		spec: &plan.IndexSearchScan{SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 7}}},
 		req: searchplugin.Request{Identity: searchplugin.ScanIdentity{
 			PartitionCount: 2,
 			PartitionIndex: 1,
@@ -2088,8 +2143,8 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 	t.Cleanup(func() { cache.Cache.Remove(cacheKey) })
 
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
-	scanner := &scriptedRelationScanner{t: t}
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	scanner := &scriptedRelationScanner{}
 	currentFunction := metric.DistFn_L2Distance
 	scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 		switch req.Table {
@@ -2194,11 +2249,11 @@ func TestSearchPlanReaderUsesBoundedMembershipStorageTopK(t *testing.T) {
 		for _, requestFunction := range []string{cachedFunction, metric.DistFn_L2Distance, metric.DistFn_L2sqDistance, cachedFunction} {
 			currentFunction = requestFunction
 			r := &planReader{
-				spec: &plan.VectorIndexScan{
-					InitialProbeCount: 1,
-					DistanceFunction:  requestFunction,
-					IncludedColumns:   []string{"payload"},
-					SourceTable:       &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
+				opts: ivfflatplan.ScanOptions{InitialProbeCount: 1},
+				spec: &plan.IndexSearchScan{
+					DistanceFunction: requestFunction,
+					IncludedColumns:  []string{"payload"},
+					SourceTable:      &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
 				},
 				req: searchplugin.Request{
 					ResultLimit:         2,
@@ -2446,7 +2501,7 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 			}
 		}).AnyTimes()
 
-	spec := &plan.VectorIndexScan{
+	spec := &plan.IndexSearchScan{
 		Index: &plan.IndexDef{
 			IndexAlgoParams: `{"lists":"1","op_type":"vector_l2_ops"}`,
 			Parts:           []string{"embedding"},
@@ -2461,21 +2516,21 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 			Name2ColIndex: map[string]int32{"pk": 0, "embedding": 1},
 			Pkey:          &plan.PrimaryKeyDef{PkeyColName: "pk"},
 		},
-		HiddenTables: []*plan.VectorIndexTableRef{
+		HiddenTables: []*plan.IndexHiddenTableRef{
 			{Role: catalog.SystemSI_IVFFLAT_TblType_Metadata, Object: &plan.ObjectRef{ObjName: "metadata_init"}},
 			{Role: catalog.SystemSI_IVFFLAT_TblType_Centroids, Object: &plan.ObjectRef{ObjName: "centroids_init"}},
 			{Role: catalog.SystemSI_IVFFLAT_TblType_Entries, Object: &plan.ObjectRef{ObjName: "entries_init"}},
 		},
-		QueryVector:       &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2}},
-		InitialProbeCount: 1,
-		DistanceFunction:  metric.DistFn_L2Distance,
+		QueryPayload:     &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2}},
+		DistanceFunction: metric.DistFn_L2Distance,
 	}
 	r := &planReader{
+		opts: ivfflatplan.ScanOptions{InitialProbeCount: 1},
 		proc: proc,
 		spec: spec,
 		req: searchplugin.Request{
-			QueryVector:     types.ArrayToBytes([]float32{0, 0}),
-			QueryType:       spec.QueryVector.Typ,
+			QueryPayload:    types.ArrayToBytes([]float32{0, 0}),
+			QueryType:       spec.QueryPayload.Typ,
 			ResultLimit:     2,
 			CandidateBudget: 2,
 		},
@@ -2494,7 +2549,7 @@ func testTypedPlanReaders(t *testing.T, parallelism int, identity ...searchplugi
 		if parallelism > 1 {
 			r.req.Identity.Snapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 10}}
 		}
-		spec.ScanWork = &plan.VectorIndexScanWork{Rows: 2, Blocks: 2, Objects: 2, VectorBytesPerRow: 8}
+		spec.ScanWork = &plan.IndexSearchScanWork{Rows: 2, Blocks: 2, Objects: 2, VectorBytesPerRow: 8}
 		if len(identity) != 0 {
 			r.req.Identity = identity[0]
 		}
@@ -2612,17 +2667,17 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	proc.Base.SessionInfo.StorageEngine = mock_frontend.NewMockEngine(ctrl)
 	_, err := NewPlanReader(proc, nil, searchplugin.Request{})
 	require.ErrorContains(t, err, "missing source or index metadata")
-	_, err = NewPlanReader(proc, &plan.VectorIndexScan{
+	_, err = NewPlanReader(proc, &plan.IndexSearchScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{},
 	}, searchplugin.Request{MembershipFilterRequired: true})
 	require.ErrorContains(t, err, "required membership filter is unavailable")
-	_, err = NewPlanReader(proc, &plan.VectorIndexScan{
+	_, err = NewPlanReader(proc, &plan.IndexSearchScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{},
 	}, searchplugin.Request{ResultLimit: 2, CandidateBudget: 1})
 	require.ErrorContains(t, err, "candidate budget is smaller")
-	reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+	reader, err := NewPlanReader(proc, &plan.IndexSearchScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{},
 	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
@@ -2640,7 +2695,7 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	require.NoError(t, r.Close())
 
 	publisherID := uint32(42)
-	reader, err = NewPlanReader(proc, &plan.VectorIndexScan{
+	reader, err = NewPlanReader(proc, &plan.IndexSearchScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 42}},
 	}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
@@ -2651,7 +2706,7 @@ func TestNewPlanReaderOwnsItsExecutionState(t *testing.T) {
 	require.Equal(t, uint32(42), *reader.(*planReader).scanner.accountID)
 	snapshotTS := &timestamp.Timestamp{PhysicalTime: 8}
 	snapshotPublisherID := uint32(3)
-	snapshotReader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+	snapshotReader, err := NewPlanReader(proc, &plan.IndexSearchScan{
 		Index:       &plan.IndexDef{},
 		SourceTable: &plan.ObjectRef{PubInfo: &plan.PubInfo{TenantId: 3}},
 		ScanSnapshot: &plan.Snapshot{
@@ -2690,7 +2745,7 @@ func TestNewPlanReaderExecutionRouteOwnsMemory(t *testing.T) {
 		{"replicated", 1, 0, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			reader, err := NewPlanReader(proc, &plan.VectorIndexScan{
+			reader, err := NewPlanReader(proc, &plan.IndexSearchScan{
 				Index: &plan.IndexDef{}, SourceTable: &plan.ObjectRef{},
 			}, searchplugin.Request{Identity: searchplugin.ScanIdentity{
 				PartitionCount: tc.count, PartitionIndex: tc.index, IsRemote: tc.remote,

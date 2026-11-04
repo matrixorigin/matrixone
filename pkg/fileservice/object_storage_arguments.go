@@ -28,6 +28,8 @@ import (
 )
 
 type ObjectStorageArguments struct {
+	// Set only by the SQL acquisition owner, never parsed from provider options.
+	callerCredentialsOnly bool
 	// misc
 	Name                 string       `toml:"name"`
 	KeyPrefix            string       `toml:"key-prefix"`
@@ -91,35 +93,45 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 			o.SharedConfigProfile = value
 		case "no-bucket-validation":
 			b, err := types.ParseBool(value)
-			if err == nil {
-				o.NoBucketValidation = b
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("invalid S3 option: %s", key)
 			}
+			o.NoBucketValidation = b
 		case "no-default-credentials":
 			b, err := types.ParseBool(value)
-			if err == nil {
-				o.NoDefaultCredentials = b
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("invalid S3 option: %s", key)
 			}
+			o.NoDefaultCredentials = b
 		case "concurrency":
 			n, err := strconv.ParseInt(value, 10, 64)
-			if err == nil {
-				o.Concurrency = n
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("invalid S3 option: %s", key)
 			}
+			o.Concurrency = n
 		case "max-conns-per-host":
 			n, err := strconv.Atoi(value)
-			if err == nil {
-				o.MaxConnsPerHost = n
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("invalid S3 option: %s", key)
 			}
+			o.MaxConnsPerHost = n
 		case "parallel-mode", "parallel":
-			if mode, ok := parseParallelMode(value); ok {
-				o.ParallelMode = mode
+			mode, ok := parseParallelMode(value)
+			if !ok {
+				return moerr.NewInvalidInputNoCtxf("invalid S3 option: %s", key)
 			}
+			o.ParallelMode = mode
 
 		case "bucket":
 			o.Bucket = value
 		case "endpoint":
 			o.Endpoint = value
 		case "is-minio", "minio":
-			o.IsMinio = value != "false" && value != "0"
+			b, err := types.ParseBool(value)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("invalid S3 option: %s", key)
+			}
+			o.IsMinio = b
 		case "region":
 			o.Region = value
 		case "cert-files":
@@ -147,7 +159,11 @@ func (o *ObjectStorageArguments) SetFromString(arguments []string) error {
 		case "user":
 			o.User = value
 		case "is-hdfs":
-			o.IsHDFS = value != "false" && value != "0"
+			b, err := types.ParseBool(value)
+			if err != nil {
+				return moerr.NewInvalidInputNoCtxf("invalid S3 option: %s", key)
+			}
+			o.IsHDFS = b
 
 		case "kerberos-service-principle-name":
 			o.KerberosServicePrincipleName = value
@@ -247,16 +263,5 @@ func probeAWSRegionWithClient(
 }
 
 func (o *ObjectStorageArguments) shouldLoadDefaultCredentials() bool {
-
-	// default credentials enabled
-	if !o.NoDefaultCredentials {
-		return true
-	}
-
-	// default credentials disabled, but role arn is not empty
-	if o.RoleARN != "" {
-		return true
-	}
-
-	return false
+	return !o.NoDefaultCredentials
 }

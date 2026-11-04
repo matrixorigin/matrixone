@@ -254,31 +254,41 @@ func vecBlockOverflowPair(dim int) ([]float32, []float32) {
 	return x, y
 }
 
-func TestVecBlockOverflowNaNMapsToPosInf(t *testing.T) {
+// TestVecBlockLaneOverflowRecomputesInFloat64 checks that a float32 lane overflow is
+// recomputed in float64 over the decoded values: the products of x and y overflow float32
+// and cancel pairwise, so the dot product is 0, as the float64 reference computes it.
+func TestVecBlockLaneOverflowRecomputesInFloat64(t *testing.T) {
 	xv, yv := vecBlockOverflowPair(32)
 	for _, fx := range vecBlockKinds[1:] {
 		for _, fy := range vecBlockKinds {
 			x, _ := vecBlockTestOperand(t, fx, xv)
 			y, _ := vecBlockTestOperand(t, fy, yv)
 			msg := fx.String() + " x " + fy.String()
-			dot, err := VecBlockDot(x, y)
+			var dot, l2, l1 float64
+			for i := 0; i < x.Dim(); i++ {
+				a, b := x.at(i), y.at(i)
+				dot += a * b
+				l2 += (a - b) * (a - b)
+				l1 += math.Abs(a - b)
+			}
+			if l2 > math.MaxFloat32 {
+				l2 = math.Inf(1)
+			}
+			got, err := VecBlockDot(x, y)
 			require.NoError(t, err)
-			require.True(t, math.IsNaN(dot), msg)
-
+			require.Equal(t, dot, got, msg)
 			d, err := VecBlockInnerProduct(x, y)
 			require.NoError(t, err)
-			require.True(t, math.IsInf(d, 1), msg)
-			// cosine recomputes in float64
+			require.Equal(t, -dot, d, msg)
 			d, err = VecBlockCosineDistance(x, y)
 			require.NoError(t, err)
 			require.True(t, d >= 0 && d <= 2, msg)
-
-			// L2 and L1 are sums of non-negative terms: never NaN
-			for _, fn := range []func(x, y *VecBlockOperand) (float64, error){VecBlockL2DistanceSq, VecBlockL1Distance} {
-				d, err := fn(x, y)
-				require.NoError(t, err)
-				require.False(t, math.IsNaN(d), msg)
-			}
+			d, err = VecBlockL2DistanceSq(x, y)
+			require.NoError(t, err)
+			require.Equal(t, l2, d, msg)
+			d, err = VecBlockL1Distance(x, y)
+			require.NoError(t, err)
+			require.Equal(t, l1, d, msg)
 		}
 	}
 	// finite results are unchanged
@@ -287,8 +297,6 @@ func TestVecBlockOverflowNaNMapsToPosInf(t *testing.T) {
 	d, err := VecBlockInnerProduct(x, y)
 	require.NoError(t, err)
 	require.Equal(t, -5.0, d)
-	require.Equal(t, 1.0, vecBlockNaNToPosInf(1))
-	require.True(t, math.IsInf(vecBlockNaNToPosInf(math.Inf(-1)), -1))
 }
 
 // TestVecBlockSelfDistance checks that a stored vector is at distance 0 from itself, with

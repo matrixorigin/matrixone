@@ -84,11 +84,23 @@ select @single_var1,@single_var2;
 1  ¦  2
 set @single_var2 = (select a from seq_t1 limit 2);
 Subquery returns more than 1 row
+select @single_var2;
+➤ @single_var2[4,32,0]  𝄀
+2
+set @single_var3 = (select a from seq_t1 limit 1);
 set @single_var3 = (select a,b from seq_t1 limit 1);
+invalid input: subquery should return 1 column
 select @single_var3;
 ➤ @single_var3[4,32,0]  𝄀
 1
+set @single_var3 = (select b from seq_t1 limit 1);
 set @single_var3 = (select b,a from seq_t1 limit 1);
+invalid input: subquery should return 1 column
+select @single_var3;
+➤ @single_var3[4,32,0]  𝄀
+2
+set @single_var3 = (select a,b from seq_t1 where a < 0);
+invalid input: subquery should return 1 column
 select @single_var3;
 ➤ @single_var3[4,32,0]  𝄀
 2
@@ -97,9 +109,9 @@ select @single_var4,@single_var5,@single_var6;
 ➤ @single_var4[-5,64,0]  ¦  @single_var5[4,32,0]  ¦  @single_var6[4,32,0]  𝄀
 2  ¦  2  ¦  1
 set @single_var7 = (select a,b from seq_t1);
-Subquery returns more than 1 row
+invalid input: subquery should return 1 column
 set @single_var8 = (select b,a from seq_t1);
-Subquery returns more than 1 row
+invalid input: subquery should return 1 column
 drop table if exists seq_t1;
 create sequence seq1;
 set @seq_var1 = nextval('seq1'),@seq_var2 = nextval('seq1'),@seq_var3 = nextval('seq1');

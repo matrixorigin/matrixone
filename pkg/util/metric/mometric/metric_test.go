@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -36,22 +37,33 @@ import (
 )
 
 func TestMPoolRelatedMetricsIncludesOnHeapOwnership(t *testing.T) {
-	mp := mpool.MustNew("mometric-onheap-ownership")
-	defer mpool.DeleteMPool(mp)
-	buf, err := mp.Alloc(96, false)
-	require.NoError(t, err)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		startCrossServicesMetricsTask(ctx)
+		mp := mpool.MustNew("mometric-onheap-ownership")
+		defer mpool.DeleteMPool(mp)
+		buf, err := mp.Alloc(96, false)
+		require.NoError(t, err)
+		defer func() { mp.Free(buf) }()
 
-	mpoolRelatedMetrics()
-	require.Equal(t,
-		float64(mpool.GlobalOnHeapStats().NumCurrBytes.Load()),
-		promtest.ToFloat64(v2.MemMPoolOnHeapOutstandingBytesGauge))
-	require.Equal(t, float64(mpool.GlobalOnHeapStats().NumCurrObjects.Load()),
-		promtest.ToFloat64(v2.MemMPoolOnHeapOutstandingObjectsGauge))
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		require.Equal(t,
+			float64(mpool.GlobalOnHeapStats().NumCurrBytes.Load()),
+			promtest.ToFloat64(v2.MemMPoolOnHeapOutstandingBytesGauge))
+		require.Equal(t, float64(mpool.GlobalOnHeapStats().NumCurrObjects.Load()),
+			promtest.ToFloat64(v2.MemMPoolOnHeapOutstandingObjectsGauge))
 
-	mp.Free(buf)
-	mpoolRelatedMetrics()
-	require.Equal(t, float64(mpool.GlobalOnHeapStats().NumCurrBytes.Load()),
-		promtest.ToFloat64(v2.MemMPoolOnHeapOutstandingBytesGauge))
+		mp.Free(buf)
+		buf = nil
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+		require.Equal(t, float64(mpool.GlobalOnHeapStats().NumCurrBytes.Load()),
+			promtest.ToFloat64(v2.MemMPoolOnHeapOutstandingBytesGauge))
+		cancel()
+		synctest.Wait()
+	})
 }
 
 func TestMetric(t *testing.T) {
@@ -61,15 +73,18 @@ func TestMetric(t *testing.T) {
 	runtime.SetupServiceBasedRuntime("", runtime.NewRuntime(metadata.ServiceType_CN, "", logutil.GetGlobalLogger()))
 
 	withModifiedConfig(func() {
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
 		SV := config.NewObservabilityParameters()
 		SV.SetDefaultValues("test")
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = true
 		SV.MetricExportInterval = 1
-		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
+		SV.MetricGatherInterval = 1
+		defer metric.SetGatherInterval(metric.GetGatherInterval())
 		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, SV, "", "test", WithInitAction(true))
+		require.True(t, InitMetric(ctx, factory, SV, "", "test", WithInitAction(true)))
 		defer StopMetricSync()
 
 		const (
@@ -80,7 +95,13 @@ func TestMetric(t *testing.T) {
 			insertRow  = "insert into"
 		)
 		prevSqlKind := none
-		for sql := range sqlch {
+		for {
+			var sql string
+			select {
+			case sql = <-sqlch:
+			case <-ctx.Done():
+				t.Fatal("metrics did not reach SQL export: ", ctx.Err())
+			}
 			t.Logf("sql: %s", sql)
 			if strings.HasPrefix(sql, prevSqlKind) {
 				continue
@@ -108,9 +129,11 @@ func TestMetric(t *testing.T) {
 		}
 		r, err := client.Get("http://127.0.0.1:7001/metrics")
 		require.Nil(t, err)
+		defer r.Body.Close()
 		require.Equal(t, r.StatusCode, 200)
 
-		content, _ := io.ReadAll(r.Body)
+		content, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
 		require.Contains(t, string(content), "# HELP") // check we have metrics output
 	})
 }
@@ -126,7 +149,7 @@ func TestMetricNoProm(t *testing.T) {
 		SV.StatusPort = 7001
 		SV.EnableMetricToProm = false
 
-		defer metric.SetGatherInterval(metric.SetGatherInterval(30 * time.Millisecond))
+		defer metric.SetGatherInterval(metric.GetGatherInterval())
 		defer metric.SetRawHistBufLimit(metric.SetRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "", "test", WithInitAction(true))
 		defer StopMetricSync()

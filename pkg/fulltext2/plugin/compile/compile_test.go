@@ -112,4 +112,23 @@ func TestValidateReindexParamsMergePositionFree(t *testing.T) {
 	got, err = Hooks{}.ValidateReindexParams(posFree, upM(nil, true))
 	require.NoError(t, err)
 	require.Equal(t, posFree, got)
+
+	// REBUILD turning position_free OFF on a token_filter index → rejected: it is
+	// bag-of-words only, and a positional rebuild would leave NL/boolean queries unable
+	// to match the stripped stopwords (this closes the CREATE-guard bypass via REINDEX).
+	tokFilter := map[string]string{
+		"parser":                           "gojieba",
+		catalog.IndexAlgoParamPositionFree: "true",
+		catalog.IndexAlgoParamTokenFilter:  "stop",
+	}
+	_, err = Hooks{}.ValidateReindexParams(tokFilter, upM(map[string]string{
+		catalog.IndexAlgoParamPositionFree: "false"}, false))
+	require.ErrorContains(t, err, "token_filter")
+
+	// REBUILD re-asserting position_free TRUE on a token_filter index → allowed.
+	got, err = Hooks{}.ValidateReindexParams(tokFilter, upM(map[string]string{
+		catalog.IndexAlgoParamPositionFree: "true"}, false))
+	require.NoError(t, err)
+	require.Equal(t, "stop", got[catalog.IndexAlgoParamTokenFilter])
+	require.Equal(t, "true", got[catalog.IndexAlgoParamPositionFree])
 }

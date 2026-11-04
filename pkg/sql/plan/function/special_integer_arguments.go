@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -93,7 +94,7 @@ func makeTimeIntegerCheck(overloads []overload, inputs []types.Type) checkResult
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func formatIntegerPrecision(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func formatIntegerPrecision(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	precision := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	numeric := ivecs[0].GetType().IsNumeric()
@@ -134,8 +135,15 @@ func formatIntegerPrecision(ivecs []*vector.Vector, result vector.FunctionResult
 		localeValue := "en_US"
 		if locale != nil {
 			value, isNull := locale.GetStrValue(i)
-			if !isNull {
+			switch {
+			case isNull:
+				// #30217: MySQL warns (1649) on a NULL locale, then falls
+				// back to en_US.
+				appendLocaleUnknownWarning(proc, "NULL")
+			case format.IsValidLocale(functionUtil.QuickBytesToStr(value)):
 				localeValue = string(value)
+			default:
+				appendLocaleUnknownWarning(proc, functionUtil.QuickBytesToStr(value))
 			}
 		}
 		// The formatter's string API is a rendering boundary, not source coercion:

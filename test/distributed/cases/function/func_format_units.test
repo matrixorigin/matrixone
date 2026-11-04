@@ -1,0 +1,55 @@
+-- Issue #29998: native Performance Schema formatting functions.
+-- Delimit strings so comparison preserves MySQL's base-unit padding.
+-- @metacmp(true)
+SELECT FORMAT_BYTES(1024) AS bytes, FORMAT_PICO_TIME(1000000000) AS latency;
+SELECT CONCAT('[',FORMAT_BYTES(0),']') AS zero_bytes, CONCAT('[',FORMAT_BYTES(512),']') AS bytes, CONCAT('[',FORMAT_PICO_TIME(0),']') AS zero_time, CONCAT('[',FORMAT_PICO_TIME(12.9),']') AS fraction;
+SELECT FORMAT_BYTES(1023) AS below_kib, FORMAT_BYTES(1048575) AS below_mib, FORMAT_BYTES(1048576) AS mib, FORMAT_PICO_TIME(999) AS below_ns, FORMAT_PICO_TIME(999999999999) AS below_s, FORMAT_PICO_TIME(1000000000000) AS seconds;
+SELECT FORMAT_BYTES(-1048576) AS negative_bytes, FORMAT_PICO_TIME(-1010000) AS negative_time, FORMAT_BYTES(NULL) AS null_bytes, FORMAT_PICO_TIME(NULL) AS null_time;
+SELECT FORMAT_BYTES(1152) AS bytes_tie, FORMAT_PICO_TIME(1125) AS time_tie, FORMAT_PICO_TIME(60000000000000) AS minutes, FORMAT_PICO_TIME(3600000000000000) AS hours, FORMAT_PICO_TIME(86400000000000000) AS days;
+SELECT FORMAT_BYTES(CAST(18446744073709551615 AS UNSIGNED)) AS unsigned_bytes, FORMAT_PICO_TIME(CAST(18446744073709551615 AS UNSIGNED)) AS unsigned_time, FORMAT_BYTES(1152921504606846975) AS double_threshold;
+SELECT FORMAT_BYTES(118059162071741143500099) AS exponent_bytes, FORMAT_PICO_TIME(-8650000000000000000099) AS exponent_time;
+SELECT FORMAT_BYTES(CAST(1024 AS DECIMAL(20,2))) AS decimal_bytes, FORMAT_PICO_TIME(CAST(3501 AS DECIMAL(20,2))) AS decimal_time, FORMAT_BYTES('1024') AS text_bytes, FORMAT_PICO_TIME('1e9') AS text_time;
+SELECT CONCAT('[',FORMAT_BYTES(TRUE),']') AS bool_bytes, CONCAT('[',FORMAT_PICO_TIME(FALSE),']') AS bool_time, CONCAT('[',FORMAT_BYTES(''),']') AS empty_bytes, CONCAT('[',FORMAT_PICO_TIME(''),']') AS empty_time;
+
+-- Reuse existing MySQL numeric-prefix conversion and diagnostics.
+SET @format_units_sql_mode=@@sql_mode;
+SET sql_mode='';
+SELECT FORMAT_BYTES('40000 foo 2000') AS prefix_bytes;
+SHOW WARNINGS;
+SELECT FORMAT_PICO_TIME('40000 foo 2000') AS prefix_time;
+SHOW WARNINGS;
+SELECT CONCAT('[',FORMAT_BYTES('foo'),']') AS invalid_bytes;
+SHOW WARNINGS;
+SELECT CONCAT('[',FORMAT_PICO_TIME('foo'),']') AS invalid_time;
+SHOW WARNINGS;
+SET sql_mode='MATRIXONE_NATIVE';
+SELECT FORMAT_BYTES('foo');
+SELECT FORMAT_PICO_TIME('foo');
+SET sql_mode=@format_units_sql_mode;
+
+-- Column batches, NULL followed by a value, aggregate expressions and masking.
+DROP DATABASE IF EXISTS format_units_bvt;
+CREATE DATABASE format_units_bvt;
+USE format_units_bvt;
+CREATE TABLE samples(id INT PRIMARY KEY, bytes BIGINT UNSIGNED, latency DOUBLE);
+INSERT INTO samples VALUES (1,1024,3501),(2,NULL,NULL),(3,1048576,1000000000);
+SELECT id, FORMAT_BYTES(bytes) AS bytes, FORMAT_PICO_TIME(latency) AS latency FROM samples ORDER BY id;
+SELECT FORMAT_BYTES(SUM(bytes)) AS total_bytes, FORMAT_PICO_TIME(MAX(latency)) AS max_latency, COUNT(FORMAT_BYTES(bytes)) AS bytes_count, COUNT(FORMAT_PICO_TIME(latency)) AS latency_count FROM samples;
+SELECT id, CASE WHEN id=1 THEN FORMAT_BYTES(bytes) ELSE FORMAT_PICO_TIME(latency) END AS selected FROM samples ORDER BY id;
+
+-- Prepared DOUBLE parameters must retain conversion and NULL behavior on reuse.
+PREPARE format_units_stmt FROM 'SELECT FORMAT_BYTES(?) AS bytes, FORMAT_PICO_TIME(?) AS latency';
+SET @format_units_bytes='1024', @format_units_time='1000000000';
+EXECUTE format_units_stmt USING @format_units_bytes, @format_units_time;
+SET @format_units_bytes=NULL, @format_units_time=NULL;
+EXECUTE format_units_stmt USING @format_units_bytes, @format_units_time;
+SET @format_units_bytes=1048576, @format_units_time=3501;
+EXECUTE format_units_stmt USING @format_units_bytes, @format_units_time;
+DEALLOCATE PREPARE format_units_stmt;
+
+-- Arity errors use ordinary overload resolution.
+SELECT FORMAT_BYTES();
+SELECT FORMAT_BYTES(1,2);
+SELECT FORMAT_PICO_TIME();
+SELECT FORMAT_PICO_TIME(1,2);
+DROP DATABASE format_units_bvt;

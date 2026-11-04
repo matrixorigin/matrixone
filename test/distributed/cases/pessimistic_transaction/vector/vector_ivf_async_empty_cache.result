@@ -36,13 +36,13 @@ execute wait_ix;
 ➤ active_entries[-5,64,0]  𝄀
 100
 deallocate prepare wait_ix;
-SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=include';
+SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=iterative';
 ➤ id[-5,64,0]  𝄀
 50
-SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=include';
+SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=iterative';
 ➤ id[-5,64,0]  𝄀
 50
-SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=include';
+SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=iterative';
 ➤ id[-5,64,0]  𝄀
 50
 drop database ivf_async_partial_cache;

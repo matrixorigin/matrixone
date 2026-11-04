@@ -163,7 +163,3 @@ func (merge *Merge) cleanMaterializedBatch(proc *process.Process) {
 		merge.ctr.materializedBatch = nil
 	}
 }
-
-func (merge *Merge) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

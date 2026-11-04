@@ -1,19 +1,15 @@
 # GROUP_CONCAT limits and execution-attempt diagnostics
 
-Design revision: 1 (2026-09-10). Owner: XuPeng-SH.
 Issues: [#28252](https://github.com/matrixorigin/matrixone/issues/28252),
 [#28253](https://github.com/matrixorigin/matrixone/issues/28253).
 Implementation: [#28504](https://github.com/matrixorigin/matrixone/pull/28504).
-
-This document makes the design reviewable before renewed implementation
-approval. It was written after implementation commit `fcb92061cf`; it does not
-retroactively establish that the earlier implementation was design-first.
-The exact document commit and a separate review decision must be linked in the
-PR before the implementation is accepted.
+The current owners are [execution attempts](../../pkg/sql/compile/warning_attempt.go),
+[warning collection](../../pkg/sql/compile/remote_warnings.go) and
+[process diagnostics](../../pkg/vm/process/warnings.go).
 
 ## Problem and acceptance contract
 
-Truncating GROUP_CONCAT must produce warning 1260, without duplicate warnings
+GROUP_CONCAT truncation reports diagnostic 1260, without duplicate warnings
 when materialized results are revisited or when execution retries. A prepared
 statement must retain its original group_concat_max_len floor even if its
 physical compile is discarded or rebuilt. An execution with a larger limit
@@ -100,7 +96,23 @@ Outside Run, GetWarningSink falls back to Session, preserving the existing
 parse/compile/direct-expression path. Consequently initial compilation and
 retry compilation do not have identical diagnostics publication boundaries;
 full statement-wide diagnostic transactions are outside this design. Background
-processes without a compatible destination do not allocate an attempt collector.
+processes without a compatible destination or required cut reporting can skip
+attempt collection.
+
+## Internal SQL handoff
+
+Internal SQL that creates a new top-level Process captures the explicit
+`Process.WarningSink`, not its Session fallback or the mutable Process itself.
+The [typed context carrier](../../pkg/vm/process/warning_context.go) installs
+that captured destination before child planning. An explicit nil masks a stale
+inherited binding; nil with no inherited binding adds no carrier. Session
+identity and its other interfaces remain unchanged. Old contexts retain their
+original sealed sink, while each retry captures its own generation.
+
+Both the [internal executor](../../pkg/sql/compile/sql_executor.go) and
+[frontend bridge](../../pkg/frontend/back_exec.go) honor this handoff.
+`TestInternalSQLWarningAttemptOutcomes` crosses the real executor boundary;
+manually wiring a collector into child finish is not equivalent coverage.
 
 ## Aggregate identity, counts and row numbers
 
@@ -173,23 +185,35 @@ previous binding maps and record slices; only already outstanding callbacks can
 retain a sealed old collector until their existing RPC lifecycle ends. No new
 goroutine, queue, timer, retry, or log is added.
 
-Retained record count is bounded independently of total count. Retained *bytes*
-are O(`max_error_count` times maximum produced message length), while terminal
-serialization applies a separate conservative frame byte budget:
-GROUP_CONCAT messages contain only a row number, while existing scalar conversion
-messages can contain input text. This design does not newly cap scalar message
-length, and does not claim to bound the existing aggregate payload/spill memory.
-The remote receiver uses the smaller of the configured MORPC body limit and the
-existing 64 MiB result-fragment limit as the terminal budget (and subtracts
-protobuf message overhead). Receivers created outside an RPC server use the
-default 100 MiB MORPC body limit as the compatibility fallback.
-Plan size and simultaneously live fragments also multiply the per-owner bound.
+Retained detail is bounded by both `max_error_count` and the existing shared
+statement/session diagnostic account. Messages are owned, UTF-8-safe copies of
+at most 4 KiB. The compatibility byte budget is 256 KiB and a smaller positive
+process limit narrows it; record overhead is charged as well. Nested attempts
+share the captured account, transfer existing charges at publication, and release
+them on discard rather than creating a fresh per-retry allowance. Exact warning
+totals remain independent of retained messages. This bounds diagnostic payload,
+not aggregate value/spill memory or every allocation in the plan.
+
+Terminal serialization also applies the smaller of the configured MORPC body
+limit and the 64 MiB result-fragment limit, subtracting protobuf overhead.
+Receivers outside an RPC server use the existing 100 MiB MORPC fallback. A
+retained-record or frame limit can shorten the diagnostic prefix without losing
+the exact total. The process/scope binding maps retain their existing plan-size
+bounds; outstanding callbacks can retain sealed collectors until RPC cleanup.
+
+The cut marker is independent of retained warning records. Strict-mode
+non-IGNORE INSERT/UPDATE, REPLACE and CTAS use the existing compile policy to
+promote truncation to error 1260; `max_error_count=0`, nested handoff and remote
+transport cannot hide that condition. Incomplete required cut reporting fails
+closed. Ordinary warning-detail compatibility with older CNs does not imply
+complete strict-write cut reporting; these remain separate protocol contracts.
 
 The per-contributing-row addition is counter arithmetic. Message formatting and
 batch publication occur at warning/finalization boundaries. Collectors use a
 short mutex section and copy/transfer at most `max_error_count` records.
-No-warning foreground Run still pays for a collector and binding traversal;
-no-sink background Run skips it. Independent duplicate GROUP_CONCAT calls now pay for independent
+Foreground Run can pay for a collector and binding traversal even without
+warnings. Background Run can skip collection only when neither a compatible
+destination nor required cut reporting needs it. Independent duplicate GROUP_CONCAT calls now pay for independent
 aggregate evaluation; this is the accepted cost of preserving their diagnostic
 effects. Avoid claiming measured speedups without comparative evidence.
 
@@ -208,16 +232,22 @@ effects. Avoid claiming measured speedups without comparative evidence.
 
 Acceptance requires relevant package tests, focused race evidence for collector
 and retry ownership, and public SQL regression evidence. Reuse evidence only
-when code, base dependencies, flags and test selection remain applicable. Existing
-reported Linux results are provenance, not a new run performed for this document.
-After rebase, inspect dependency changes before deciding what must run again.
+when code, base dependencies, flags and test selection remain applicable. The historical results below are provenance, not a new run performed for this
+document; they do not establish current-head CI or complete mixed-version coverage.
 
 No new rollout flag is needed. Diagnose a report by recording prepared/current
 limits, statement/attempt outcome, physical topology, full warning count versus
 retained messages, and whether the cluster is mixed-version. Do not infer a
 production fault from unrelated CI timeout or missing test artifacts.
 
-Open non-blocking limits owned by the PR owner: migration floor transfer,
-globally ordered distributed warning positions, full statement-wide diagnostics,
-and byte-capping of existing scalar messages require separate scoped decisions
-if their contracts are expanded. They are not silently promised by this patch.
+Migration floor transfer, globally ordered distributed warning positions and
+full statement-wide diagnostics remain separate contracts. The existing byte
+bounds above supersede the original uncapped-message limitation.
+
+## Historical design and review
+
+The [original design](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/GROUP_CONCAT_EXECUTION_DIAGNOSTICS.md)
+and [independent review record](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/GROUP_CONCAT_EXECUTION_DIAGNOSTICS_REVIEW.md)
+preserve approval provenance, implementation amendments and their evidence
+limits. The internal-SQL handoff is incorporated above. Historical design-only
+approval is not a claim of current implementation or CI validation.

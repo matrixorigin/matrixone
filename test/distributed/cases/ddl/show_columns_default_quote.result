@@ -1,0 +1,46 @@
+drop database if exists show_columns_default_quote;
+create database show_columns_default_quote;
+use show_columns_default_quote;
+create table t (
+a varchar(32) default 'it''s',
+b varchar(32) default '',
+c varchar(32) default 'n',
+d varchar(32) default 'x`y',
+e varchar(32) default 'a\\b',
+f int default null,
+g int default 9,
+h varchar(32)
+);
+show columns from t;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+a  ¦  varchar(32)  ¦  YES  ¦    ¦  it's  ¦    ¦    𝄀
+b  ¦  varchar(32)  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+c  ¦  varchar(32)  ¦  YES  ¦    ¦  n  ¦    ¦    𝄀
+d  ¦  varchar(32)  ¦  YES  ¦    ¦  x`y  ¦    ¦    𝄀
+e  ¦  varchar(32)  ¦  YES  ¦    ¦  a\b  ¦    ¦    𝄀
+f  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+g  ¦  int  ¦  YES  ¦    ¦  9  ¦    ¦    𝄀
+h  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+desc t;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+a  ¦  varchar(32)  ¦  YES  ¦    ¦  it's  ¦    ¦    𝄀
+b  ¦  varchar(32)  ¦  YES  ¦    ¦    ¦    ¦    𝄀
+c  ¦  varchar(32)  ¦  YES  ¦    ¦  n  ¦    ¦    𝄀
+d  ¦  varchar(32)  ¦  YES  ¦    ¦  x`y  ¦    ¦    𝄀
+e  ¦  varchar(32)  ¦  YES  ¦    ¦  a\b  ¦    ¦    𝄀
+f  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+g  ¦  int  ¦  YES  ¦    ¦  9  ¦    ¦    𝄀
+h  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select column_name, column_default, hex(column_default) from information_schema.columns
+where table_schema='show_columns_default_quote' and table_name='t'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_default[12,65535,0]  ¦  hex(column_default)[-1,16383,0]  𝄀
+a  ¦  it's  ¦  69742773  𝄀
+b  ¦    ¦    𝄀
+c  ¦  n  ¦  6E  𝄀
+d  ¦  x`y  ¦  786079  𝄀
+e  ¦  a\b  ¦  615C62  𝄀
+f  ¦  null  ¦  null  𝄀
+g  ¦  9  ¦  39  𝄀
+h  ¦  null  ¦  null
+drop database show_columns_default_quote;

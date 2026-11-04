@@ -94,7 +94,7 @@ func TestBlockScaledVectorOps(t *testing.T) {
 			require.NoError(t, err)
 			requireBlockScaledRows(t, dup, texts)
 
-			dup.Shrink([]int64{0, 3}, false)
+			require.NoError(t, dup.Shrink([]int64{0, 3}, false, mp))
 			requireBlockScaledRows(t, dup, []string{texts[0], texts[3]})
 			dup.Free(mp)
 

@@ -17,11 +17,12 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -162,6 +163,56 @@ func TestNullableExistsMarkKeepsHashEqualityAndBooleanResults(t *testing.T) {
 		fallibleExistsPlan := explainSQL(t, ctx, db, "explain "+fallibleExists)
 		require.Contains(t, fallibleExistsPlan, "IS TRUE")
 		requireQueryError(fallibleExists)
+
+		readBooleans := func(query string) ([]bool, error) {
+			rows, err := db.QueryContext(ctx, query)
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			var values []bool
+			for rows.Next() {
+				var value bool
+				if err := rows.Scan(&value); err != nil {
+					return nil, err
+				}
+				values = append(values, value)
+			}
+			return values, rows.Err()
+		}
+		for _, predicate := range []string{
+			"hll_cardinality(cast(h.payload as varbinary)) = p.id",
+			"coalesce(hll_cardinality(cast(h.payload as varbinary)), 0) = coalesce(p.id, 0)",
+		} {
+			for _, outer := range []string{"p.id < 0", "p.id = 1"} {
+				// Explicit IS TRUE supplies the historical non-hash predicate
+				// control; empty filters do not universally suppress legacy errors.
+				query := "select exists(select h.payload from invalid_hll h where " + predicate +
+					" order by h.payload) from probe p where " + outer
+				control := "select exists(select h.payload from invalid_hll h where (" + predicate +
+					") is true order by h.payload) from probe p where " + outer
+				require.Contains(t, explainSQL(t, ctx, db, "explain "+query), "IS TRUE")
+				want, controlErr := readBooleans(control)
+				got, queryErr := readBooleans(query)
+				if controlErr != nil {
+					require.Error(t, queryErr)
+					var expected, actual *mysql.MySQLError
+					require.True(t, errors.As(controlErr, &expected))
+					require.True(t, errors.As(queryErr, &actual))
+					require.Equal(t, expected.Number, actual.Number)
+					require.Equal(t, expected.SQLState, actual.SQLState)
+				} else {
+					require.NoError(t, queryErr)
+					require.Equal(t, want, got)
+				}
+				if outer == "p.id = 1" {
+					require.Error(t, queryErr, "active malformed HLL must still fail")
+				}
+				var healthy int
+				require.NoError(t, db.QueryRowContext(ctx, "select 1").Scan(&healthy))
+				require.Equal(t, 1, healthy)
+			}
+		}
 
 		const fallibleOrExists = `select p.id from probe p where p.id < 0 and (
 			exists(select 1 from invalid_hll h1

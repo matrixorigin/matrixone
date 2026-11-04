@@ -83,7 +83,7 @@ func (c *Compile) constrainGroupConcatTimeZoneWorkers(qry *plan.Query) error {
 	}
 	if named && !local {
 		var supported bool
-		supported, err = remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion67)
+		supported, err = remoteWorkersSupportProtocolForPlacement(c.proc, c.cnList, defines.MORPCVersion67)
 		if err != nil {
 			return err
 		}

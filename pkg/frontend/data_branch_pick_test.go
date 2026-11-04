@@ -1028,7 +1028,7 @@ func TestPKFilterPruning_SinglePK_Int32(t *testing.T) {
 	for _, v := range []int32{10, 20, 30, 50, 51, 52} {
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, pkSeqnum)
 	vec.Free(mp)
@@ -1070,7 +1070,7 @@ func TestPKFilterPruning_SinglePK_Varchar(t *testing.T) {
 	for _, s := range []string{"apple", "banana", "mango"} {
 		require.NoError(t, vector.AppendBytes(vec, []byte(s), false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, pkSeqnum)
 	vec.Free(mp)
@@ -1107,7 +1107,7 @@ func TestPKFilterPruning_Decimal64(t *testing.T) {
 		require.NoError(t, parseErr)
 		require.NoError(t, vector.AppendFixed(vec, v, false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, pkSeqnum)
 	vec.Free(mp)
@@ -1143,7 +1143,7 @@ func TestPKFilterPruning_SeqnumPreserved(t *testing.T) {
 
 	vec := vector.NewVec(pkType)
 	require.NoError(t, vector.AppendFixed(vec, int64(100), false, mp))
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	// Simulate a schema where PK is at column index 2 but seqnum 5
 	// (e.g., after dropping columns).
@@ -1168,7 +1168,7 @@ func TestPKFilterPruning_LargeKeySet(t *testing.T) {
 	for i := int64(0); i < 1000; i++ {
 		require.NoError(t, vector.AppendFixed(vec, i*10, false, mp))
 	}
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, 0)
 	vec.Free(mp)
@@ -1243,7 +1243,7 @@ func TestPKFilterPruning_CompositePK_IntVarchar(t *testing.T) {
 	require.Equal(t, 3, encodedVec.Length())
 
 	// Sort (lexicographic order on serial-encoded bytes).
-	encodedVec.InplaceSort()
+	require.NoError(t, encodedVec.InplaceSort(mp))
 
 	// The __mo_cpkey_col type in production is T_varchar.
 	cpkType := types.T_varchar.ToType()
@@ -1310,7 +1310,7 @@ func TestPKFilterPruning_CompositePK_IntInt(t *testing.T) {
 	col1.Free(mp)
 	col2.Free(mp)
 
-	encodedVec.InplaceSort()
+	require.NoError(t, encodedVec.InplaceSort(mp))
 
 	cpkType := types.T_varchar.ToType()
 	pkFilter := buildPKFilterFromVec(encodedVec, cpkType, 0)
@@ -1438,7 +1438,7 @@ func TestAppendStrValToVec_PrunesCorrectly(t *testing.T) {
 	}
 	require.Equal(t, 3, vec.Length())
 
-	vec.InplaceSort()
+	require.NoError(t, vec.InplaceSort(mp))
 
 	pkFilter := buildPKFilterFromVec(vec, pkType, 0)
 	require.NotNil(t, pkFilter)
@@ -1571,6 +1571,77 @@ func TestExtractPKValYear(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(vec, pkVal, false, mp))
 
 	require.Equal(t, pkVal, extractPKVal(vec, 0))
+}
+
+func TestExtractPKValArrayTypes(t *testing.T) {
+	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mp.Free(nil)
+
+	tests := []struct {
+		name   string
+		typ    types.Type
+		append func(*vector.Vector) error
+		want   any
+	}{
+		{
+			name: "float32",
+			typ:  types.New(types.T_array_float32, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []float32{1, 2}, false, mp)
+			},
+			want: []float32{1, 2},
+		},
+		{
+			name: "float64",
+			typ:  types.New(types.T_array_float64, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []float64{1, 2}, false, mp)
+			},
+			want: []float64{1, 2},
+		},
+		{
+			name: "bf16",
+			typ:  types.New(types.T_array_bf16, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []types.BF16{1, 2}, false, mp)
+			},
+			want: []types.BF16{1, 2},
+		},
+		{
+			name: "float16",
+			typ:  types.New(types.T_array_float16, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []types.Float16{1, 2}, false, mp)
+			},
+			want: []types.Float16{1, 2},
+		},
+		{
+			name: "int8",
+			typ:  types.New(types.T_array_int8, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []int8{1, 2}, false, mp)
+			},
+			want: []int8{1, 2},
+		},
+		{
+			name: "uint8",
+			typ:  types.New(types.T_array_uint8, 2, 0),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendArray(vec, []uint8{1, 2}, false, mp)
+			},
+			want: []uint8{1, 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vec := vector.NewVec(tt.typ)
+			t.Cleanup(func() { vec.Free(mp) })
+			require.NoError(t, tt.append(vec))
+			require.Equal(t, tt.want, extractPKVal(vec, 0))
+		})
+	}
 }
 
 func TestMaterializeSubqueryUnified_AuthFailureShortCircuits(t *testing.T) {

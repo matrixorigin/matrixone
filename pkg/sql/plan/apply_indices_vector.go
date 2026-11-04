@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
 func decodeVectorIndexAlgoParams(value string) (map[string]json.RawMessage, error) {
@@ -320,7 +321,7 @@ func (builder *QueryBuilder) buildVectorSortContextThroughMembershipJoin(
 	if scanNode == nil || scanNode.TableDef == nil || orderExpr == nil || joinNode.Children[0] != scanNode.NodeId || len(joinNode.OnList) == 0 {
 		return nil
 	}
-	if !hasIvfFlatIndex(scanNode.TableDef) {
+	if !hasMembershipVectorIndex(scanNode.TableDef) {
 		return nil
 	}
 	distFnExpr := orderExpr.GetF()
@@ -437,12 +438,14 @@ func (builder *QueryBuilder) tryJoinThroughVectorSide(
 	return scanNode, vecArgExpr
 }
 
-func hasIvfFlatIndex(tableDef *plan.TableDef) bool {
+// hasMembershipVectorIndex reports whether tableDef has an index whose algorithm has the
+// membership capability (indexplugin.SupportsMembership).
+func hasMembershipVectorIndex(tableDef *plan.TableDef) bool {
 	if tableDef == nil {
 		return false
 	}
 	for _, idx := range tableDef.Indexes {
-		if idx != nil && idx.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() {
+		if idx != nil && indexplugin.SupportsMembership(idx.IndexAlgo) {
 			return true
 		}
 	}
@@ -980,9 +983,14 @@ func (builder *QueryBuilder) resolveProjectedVectorSortTiebreak(projectNode *pla
 // three bits of context needed to recognize its own `distfn(col, vec_lit)`
 // expression.
 func (builder *QueryBuilder) getDistRangeFromFilters(
-	filters []*plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr,
+	filters []*plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr, scanTags ...int32,
 ) ([]*plan.Expr, *plan.DistRange) {
 	var distRange *plan.DistRange
+	var scanTag int32
+	hasScanTag := len(scanTags) > 0
+	if hasScanTag {
+		scanTag = scanTags[0]
+	}
 
 	currIdx := 0
 	for _, filter := range filters {
@@ -1001,7 +1009,8 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 			goto NO_RANGE
 		}
 
-		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos {
+		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos ||
+			(hasScanTag && partCol.RelPos != scanTag) {
 			goto NO_RANGE
 		}
 
@@ -1073,6 +1082,100 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 	}
 
 	return filters[:currIdx], distRange
+}
+
+// filtersContainIndexedDistanceExpr reports whether a residual filter still
+// depends on a vector distance over the indexed scan column.  Any such
+// predicate cannot run after the index has truncated its candidate stream:
+// even a different query vector or metric can accept a row outside the
+// nearest K candidates for the ORDER BY distance.  The walk is deliberately
+// recursive so wrappers such as BETWEEN, NOT, OR, and reversed comparisons
+// are covered without trying to normalize their SQL three-valued semantics
+// into a range.
+func filtersContainIndexedDistanceExpr(
+	filters []*plan.Expr,
+	scanTag, partPos int32,
+	_ string,
+	_ *plan.Expr,
+) bool {
+	for _, filter := range filters {
+		if exprContainsIndexedDistanceExpr(filter, scanTag, partPos) {
+			return true
+		}
+	}
+	return false
+}
+
+func exprContainsIndexedDistanceExpr(
+	expr *plan.Expr,
+	scanTag, partPos int32,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if indexedDistanceExprMatches(fn, scanTag, partPos) {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if exprContainsIndexedDistanceExpr(arg, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprContainsIndexedDistanceExpr(item, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func exprDependsOnIndexedColumn(
+	expr *plan.Expr,
+	scanTag, partPos int32,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if col := expr.GetCol(); col != nil {
+		return col.RelPos == scanTag && col.ColPos == partPos
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if exprDependsOnIndexedColumn(arg, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if exprDependsOnIndexedColumn(item, scanTag, partPos) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func indexedDistanceExprMatches(
+	fn *plan.Function,
+	scanTag, partPos int32,
+) bool {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+		return false
+	}
+	if _, ok := metric.DistFuncOpTypes[fn.Func.ObjName]; !ok {
+		return false
+	}
+	for _, arg := range fn.Args {
+		if exprDependsOnIndexedColumn(arg, scanTag, partPos) {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeUpperBound folds a new upper bound into dr, keeping the tighter (smaller,
@@ -1191,48 +1294,50 @@ func (builder *QueryBuilder) peelAndRewriteDistFnFilters(
 
 	currIdx := 0
 	for _, filter := range filters {
-		var (
-			vecLit string
-			fdist  *plan.Function
-		)
-
-		f := filter.GetF()
-		if f == nil || len(f.Args) != 2 {
-			goto KEEP
+		if !isDistFnRangeFilter(filter, partPos, origFuncName, vecLitArg) {
+			filters[currIdx] = filter
+			currIdx++
+			continue
 		}
-		switch f.Func.ObjName {
-		case "<", "<=", ">", ">=":
-		default:
-			goto KEEP
-		}
-
-		fdist = f.Args[0].GetF()
-		if fdist == nil || len(fdist.Args) != 2 {
-			goto KEEP
-		}
-		if fdist.Func.ObjName != origFuncName {
-			goto KEEP
-		}
-		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos {
-			goto KEEP
-		}
-		vecLit = fdist.Args[1].GetLit().GetVecVal()
-		if vecLit == "" || vecLit != vecLitArg.GetLit().GetVecVal() {
-			goto KEEP
-		}
-
-		{
-			rewritten := DeepCopyExpr(filter)
-			rewritten.GetF().Args[0] = makeScoreCol()
-			peeled = append(peeled, rewritten)
-		}
-		continue
-
-	KEEP:
-		filters[currIdx] = filter
-		currIdx++
+		rewritten := DeepCopyExpr(filter)
+		rewritten.GetF().Args[0] = makeScoreCol()
+		peeled = append(peeled, rewritten)
 	}
 	return filters[:currIdx], peeled
+}
+
+// isDistFnRangeFilter reports whether filter is `origFuncName(col[partPos], vecLitArg)
+// OP K` with OP one of `<`, `<=`, `>`, `>=`, the shape peelAndRewriteDistFnFilters
+// moves onto the index search.
+func isDistFnRangeFilter(filter *plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr) bool {
+	f := filter.GetF()
+	if f == nil || len(f.Args) != 2 {
+		return false
+	}
+	switch f.Func.ObjName {
+	case "<", "<=", ">", ">=":
+	default:
+		return false
+	}
+	fdist := f.Args[0].GetF()
+	if fdist == nil || len(fdist.Args) != 2 || fdist.Func.ObjName != origFuncName {
+		return false
+	}
+	if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos {
+		return false
+	}
+	vecLit := fdist.Args[1].GetLit().GetVecVal()
+	return vecLit != "" && vecLit == vecLitArg.GetLit().GetVecVal()
+}
+
+// hasNonDistFnFilter reports whether filters has a filter isDistFnRangeFilter rejects.
+func hasNonDistFnFilter(filters []*plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr) bool {
+	for _, filter := range filters {
+		if !isDistFnRangeFilter(filter, partPos, origFuncName, vecLitArg) {
+			return true
+		}
+	}
+	return false
 }
 
 // replaceDistFnExprsWithScoreCol walks each expression in exprs and substitutes every distance call
@@ -1247,7 +1352,7 @@ func (builder *QueryBuilder) peelAndRewriteDistFnFilters(
 // distance is the sortIdx entry in childNode.ProjectList; this walker covers the other combinations.
 //
 // A candidate distance (right column + origFuncName metric) is rewritten only when it is against the
-// SAME query vector as vecLitArg — see sameQueryVector. This is a real value comparison: a distance
+// SAME query vector as vecLitArg — see sameQueryPayload. This is a real value comparison: a distance
 // on the same column but a DIFFERENT vector must NOT become this index's score (that would silently
 // report the wrong distance).
 func replaceDistFnExprsWithScoreCol(
@@ -1276,7 +1381,7 @@ func replaceDistFnInExpr(
 		return expr
 	}
 	if isVectorDistanceExpr(expr, scanBindingTag, partPos) && expr.GetF().Func.ObjName == origFuncName &&
-		sameQueryVector(expr.GetF(), scanBindingTag, partPos, vecLitArg) {
+		sameQueryPayload(expr.GetF(), scanBindingTag, partPos, vecLitArg) {
 		return &plan.Expr{
 			Typ: scoreColType,
 			Expr: &plan.Expr_Col{
@@ -1299,7 +1404,7 @@ func replaceDistFnInExpr(
 	return expr
 }
 
-// sameQueryVector reports whether the distance function fn (already known to reference the base scan's
+// sameQueryPayload reports whether the distance function fn (already known to reference the base scan's
 // vector column and use the index's metric) is computed against the SAME query vector as vecLitArg —
 // the vector the index/ORDER BY search key uses. The query vector is the arg that is NOT the base-scan
 // column. A distance on a DIFFERENT vector must NOT be rewritten to this index's score (it would
@@ -1308,7 +1413,7 @@ func replaceDistFnInExpr(
 // possibly-unfolded SELECT-side cast('[...]') resolve to the same canonical byte encoding, so format
 // differences don't matter while distinct vectors never collide. A non-constant (param) query vector
 // yields no key and is left alone (fail-safe).
-func sameQueryVector(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg *plan.Expr) bool {
+func sameQueryPayload(fn *plan.Function, scanBindingTag, partPos int32, vecLitArg *plan.Expr) bool {
 	if fn == nil || len(fn.Args) != 2 || vecLitArg == nil {
 		return false
 	}

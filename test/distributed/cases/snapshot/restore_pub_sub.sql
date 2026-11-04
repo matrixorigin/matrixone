@@ -526,6 +526,7 @@ use sub_pull01;
 select * from src;
 -- @session
 
+drop publication if exists pub_full01;
 drop database pub_fulltext_table;
 drop snapshot sp_pub01;
 drop publication pub_full01;

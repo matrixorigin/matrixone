@@ -148,7 +148,7 @@ func benchmarkHashBuildNonSpillE2E(
 	if batchCount == 0 {
 		batchCount = nonSpillBenchmarkBatchCount
 	}
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	proc.SetMessageBoard(message.NewMessageBoard())
 	proc.Base.Lim.Size = 4 << 30
 	proc.Base.Lim.BatchRows = nonSpillBenchmarkBatchRows

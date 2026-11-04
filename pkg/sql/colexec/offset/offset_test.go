@@ -98,7 +98,7 @@ func TestOffset(t *testing.T) {
 }
 
 func TestOffsetResetReleasesCopiedAllocationAccountData(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -160,7 +160,7 @@ func TestSQLCalcFoundRowsRecordsInputAtEnd(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			proc.BeginFoundRowsStatement(true)
 
@@ -187,7 +187,7 @@ func TestSQLCalcFoundRowsRecordsInputAtEnd(t *testing.T) {
 }
 
 func TestNestedOffsetDoesNotPublishFoundRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.BeginFoundRowsStatement(true)
 

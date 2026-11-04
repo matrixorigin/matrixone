@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -305,26 +307,26 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 		{
 			name:          "top level",
 			baseSQL:       "create table source_t(a int)",
-			legacySQL:     "create table source_t(a int, constraint legacy_positive check (a > 0))",
-			checkName:     "legacy_positive",
+			legacySQL:     "create table source_t(a int, constraint clone_t_chk_1 check (a > 0))",
+			checkName:     "clone_t_chk_1",
 			checkOrigin:   "`a` > 0",
-			persistedText: "constraint legacy_positive check (`a` > 0) enforced",
+			persistedText: "constraint clone_t_chk_1 check (`a` > 0) enforced",
 		},
 		{
 			name:          "column level",
 			baseSQL:       "create table source_t(a int)",
 			legacySQL:     "create table source_t(a int check (a > 0))",
-			checkName:     "__mo_chk_1",
+			checkName:     "clone_t_chk_1",
 			checkOrigin:   "`a` > 0",
-			persistedText: "constraint __mo_chk_1 check (`a` > 0) enforced",
+			persistedText: "constraint clone_t_chk_1 check (`a` > 0) enforced",
 		},
 		{
 			name:          "comment before top level",
 			baseSQL:       "create table source_t(a int)",
-			legacySQL:     "create table source_t(a int, /* retained */ constraint c check (a > 0))",
-			checkName:     "c",
+			legacySQL:     "create table source_t(a int, /* retained */ constraint clone_t_chk_1 check (a > 0))",
+			checkName:     "clone_t_chk_1",
 			checkOrigin:   "`a` > 0",
-			persistedText: "constraint c check (`a` > 0) enforced",
+			persistedText: "constraint clone_t_chk_1 check (`a` > 0) enforced",
 		},
 		{
 			name:          "no backslash escapes source",
@@ -354,9 +356,9 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 			name:          "real as float uses catalog column type",
 			baseSQL:       "create table source_t(r float)",
 			legacySQL:     "create table source_t(r real, check (r > 0))",
-			checkName:     "__mo_chk_1",
+			checkName:     "clone_t_chk_1",
 			checkOrigin:   "`r` > 0",
-			persistedText: "constraint __mo_chk_1 check (`r` > 0) enforced",
+			persistedText: "constraint clone_t_chk_1 check (`r` > 0) enforced",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -394,6 +396,65 @@ func TestCreateTableLikePreservesLegacyCheck(t *testing.T) {
 				}
 			}
 			require.Contains(t, createSQL, tc.persistedText)
+		})
+	}
+}
+
+// Snapshot/account restore reuses the LIKE planner branch but must keep the
+// captured constraint identity: a restored table has to come back with its
+// original explicit CHECK names, while an ordinary LIKE (and an ordinary
+// CLONE) regenerates <dst>_chk_<n>.
+func TestCloneRestorePreservesExplicitCheckNames(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		restore        bool
+		sessionRestore bool
+		cloneLevel     tree.CloneLevelType
+		wantName       string
+	}{
+		{name: "like regenerates", wantName: "clone_t_chk_1"},
+		{name: "restore preserves", restore: true, wantName: "ck_positive"},
+		{name: "background restore preserves", sessionRestore: true, wantName: "ck_positive"},
+		{name: "data branch table regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelTable, wantName: "clone_t_chk_1"},
+		{name: "data branch database regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelDatabase, wantName: "clone_t_chk_1"},
+		{name: "normal account clone regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelAccount, wantName: "clone_t_chk_1"},
+		{name: "normal cluster clone regenerates", restore: true, sessionRestore: true, cloneLevel: tree.NormalCloneLevelCluster, wantName: "clone_t_chk_1"},
+		{name: "table restore preserves", cloneLevel: tree.RestoreCloneLevelTable, wantName: "ck_positive"},
+		{name: "database restore preserves", cloneLevel: tree.RestoreCloneLevelDatabase, wantName: "ck_positive"},
+		{name: "account restore preserves", cloneLevel: tree.RestoreCloneLevelAccount, wantName: "ck_positive"},
+		{name: "cluster restore preserves", cloneLevel: tree.RestoreCloneLevelCluster, wantName: "ck_positive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			mock.ctxt.GetProcess().GetSessionInfo().IsRestore = tc.sessionRestore
+			if tc.cloneLevel != 0 {
+				mock.ctxt.SetContext(context.WithValue(mock.ctxt.GetContext(), tree.CloneLevelCtxKey{}, tc.cloneLevel))
+			}
+			require.Equal(t, tc.wantName == "ck_positive",
+				IsCheckConstraintRestoreReplay(mock.ctxt.GetContext(), tc.restore || tc.sessionRestore))
+			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int, constraint ck_positive check (a > 0))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			source := built.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, source.Checks, 1)
+			mock.ctxt.tables["source_t"] = source
+
+			raw, err := mysql.ParseOne(t.Context(), "create table clone_t like source_t", 1)
+			require.NoError(t, err)
+			defer raw.Free()
+			createStmt := raw.(*tree.CreateTable)
+			var cloneStmt *tree.CloneTable
+			if tc.restore {
+				cloneStmt = &tree.CloneTable{IsRestore: true}
+			}
+			got, err := buildCreateTable(mock.CurrentContext(), createStmt, cloneStmt, false)
+			require.NoError(t, err)
+			clone := got.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, clone.Checks, 1)
+			require.Equal(t, tc.wantName, clone.Checks[0].Name)
+			require.Equal(t, "`a` > 0", clone.Checks[0].OriginSql)
 		})
 	}
 }

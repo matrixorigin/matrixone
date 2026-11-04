@@ -108,8 +108,8 @@ func TestGetExecTypeAdaptiveTopIgnoresDeferredForceOneCN(t *testing.T) {
 	qry := &planpb.Query{
 		Steps: []int32{3},
 		Nodes: []*planpb.Node{
-			{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: DeepCopyStats(large)},
-			{NodeId: 1, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{ForceOneCN: true}},
+			{NodeId: 0, NodeType: planpb.Node_INDEX_SEARCH_SCAN, Stats: DeepCopyStats(large)},
+			{NodeId: 1, NodeType: planpb.Node_INDEX_SEARCH_SCAN, Stats: &planpb.Stats{ForceOneCN: true}},
 			{NodeId: 2, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{}},
 			{NodeId: 3, NodeType: planpb.Node_ADAPTIVE_TOP, Children: []int32{0, 1, 2}, Stats: DeepCopyStats(large)},
 		},
@@ -312,6 +312,71 @@ func TestAssertStatsInheritChildWithoutSelectivityDiscount(t *testing.T) {
 
 	require.Equal(t, childStats, builder.qry.Nodes[1].Stats)
 	require.NotSame(t, childStats, builder.qry.Nodes[1].Stats)
+}
+
+func TestResidualInequalityUsesInputAsHashBuildCapacityBound(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		operator          string
+		wantCapacityBound float64
+		wantBound         bool
+	}{
+		{name: "inequality uses input bound", operator: "<>", wantCapacityBound: 1_000, wantBound: true},
+		{name: "other residual has no bound", operator: ">"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, &MockCompilerContext{ctx: context.Background()}, false, false)
+			left := &planpb.Node{
+				NodeType: planpb.Node_VALUE_SCAN,
+				Stats:    &planpb.Stats{Outcnt: 10_000, Cost: 10_000, Selectivity: 1},
+			}
+			input := &planpb.Node{
+				NodeType: planpb.Node_VALUE_SCAN,
+				Stats:    &planpb.Stats{Outcnt: 1_000, Cost: 1_000, Selectivity: 1},
+			}
+			filter := &planpb.Node{
+				NodeType: planpb.Node_FILTER,
+				Children: []int32{1},
+				FilterList: []*planpb.Expr{{
+					Expr: &planpb.Expr_F{F: &planpb.Function{
+						Func: &planpb.ObjectRef{ObjName: test.operator},
+						Args: []*planpb.Expr{
+							{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}},
+							{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}},
+						},
+					}},
+				}},
+			}
+			join := &planpb.Node{
+				NodeType: planpb.Node_JOIN,
+				JoinType: planpb.Node_INNER,
+				Children: []int32{0, 2},
+			}
+			builder.qry.Nodes = []*planpb.Node{left, input, filter, join}
+
+			ReCalcNodeStats(2, builder, false, false, false)
+			ReCalcNodeStats(3, builder, false, false, false)
+
+			require.Equal(t, 0.05, filter.Stats.Selectivity)
+			require.Equal(t, float64(50), filter.Stats.Outcnt)
+			require.Equal(t, float64(50), join.Stats.HashmapStats.HashmapSize)
+			capacityBound, ok := residualInequalityBuildCapacityBound(2, builder)
+			require.Equal(t, test.wantBound, ok)
+			require.Equal(t, test.wantCapacityBound, capacityBound)
+		})
+	}
+}
+
+func TestContainsResidualInequalityIgnoresNestedScalarComparison(t *testing.T) {
+	inequality := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "<>"},
+	}}}
+	comparison := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: ">"},
+		Args: []*planpb.Expr{inequality},
+	}}}
+
+	require.False(t, containsInequalityExpr(comparison))
 }
 
 func TestSafeStatsRatiosAvoidNonFiniteSelectivity(t *testing.T) {
@@ -786,6 +851,30 @@ func TestEstimateAndSelectivityNormalizesSameColumnRanges(t *testing.T) {
 	require.Equal(t, 1.0, estimateExprSelectivity(redundantUpperBounds, builder, stats))
 }
 
+func TestEstimateConjunctiveYearRange(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.DataTypeMap["d"] = uint64(types.T_date)
+	stats.MinValMap["d"] = float64(types.DateFromCalendar(2020, 1, 1))
+	stats.MaxValMap["d"] = float64(types.DateFromCalendar(2030, 1, 1))
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{MockCompilerContext: &MockCompilerContext{ctx: context.Background()}, statsCache: statsCache}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &planpb.TableDef{TblId: 1, Cols: []*planpb.ColDef{{Name: "d", Typ: planpb.Type{Id: int32(types.T_date)}}}}
+	col := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "d"}}}
+	year := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "year"}, Args: []*planpb.Expr{col}}}}
+	lit := func(value int64) *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}}}}
+	}
+	between := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "between"}, Args: []*planpb.Expr{year, lit(2022), lit(2025)}}}}
+	got, ok := estimateConjunctiveRangeSelectivity([]*planpb.Expr{between}, builder)
+	require.True(t, ok)
+	require.InDelta(t, 0.4, got, 1e-12)
+	between.GetF().Args[2] = &planpb.Expr{}
+	_, ok = estimateConjunctiveRangeSelectivity([]*planpb.Expr{between}, builder)
+	require.False(t, ok)
+}
+
 func TestEstimateIntervalSelectivityPreservesClippedBoundaryMembership(t *testing.T) {
 	const emptySelectivity = 0.00000001
 	tests := []struct {
@@ -1046,28 +1135,28 @@ func TestGetExecType_NonVectorTable_NotForcedByRowsize(t *testing.T) {
 	}
 }
 
-func TestGetExecType_VectorIndexScanUsesMultiCN(t *testing.T) {
+func TestGetExecType_IndexSearchScanUsesMultiCN(t *testing.T) {
 	query := &planpb.Query{
 		Steps: []int32{0},
 		Nodes: []*planpb.Node{{
 			NodeId:          0,
-			NodeType:        planpb.Node_VECTOR_INDEX_SCAN,
+			NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
 			Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1},
-			VectorIndexScan: &planpb.VectorIndexScan{},
+			IndexSearchScan: &planpb.IndexSearchScan{Index: testIvfIndex},
 		}},
 	}
 	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(query, false, false))
 }
 
-func TestGetExecType_VectorIndexScanRespectsOneCNAndDDL(t *testing.T) {
+func TestGetExecType_IndexSearchScanRespectsOneCNAndDDL(t *testing.T) {
 	makeQuery := func(force bool) *planpb.Query {
 		return &planpb.Query{
 			Steps: []int32{0},
 			Nodes: []*planpb.Node{{
 				NodeId:          0,
-				NodeType:        planpb.Node_VECTOR_INDEX_SCAN,
+				NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
 				Stats:           &planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1, ForceOneCN: force},
-				VectorIndexScan: &planpb.VectorIndexScan{},
+				IndexSearchScan: &planpb.IndexSearchScan{Index: testIvfIndex},
 			}},
 		}
 	}
@@ -1078,7 +1167,7 @@ func TestGetExecType_VectorIndexScanRespectsOneCNAndDDL(t *testing.T) {
 func TestDetermineBuildSidePreservesDeclaredRuntimeFilterDependency(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
 	builder.qry.Nodes = []*planpb.Node{
-		{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{Outcnt: 2}},
+		{NodeId: 0, NodeType: planpb.Node_INDEX_SEARCH_SCAN, Stats: &planpb.Stats{Outcnt: 2}},
 		{NodeId: 1, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{Outcnt: 100}},
 		{
 			NodeId:                 2,
@@ -1984,6 +2073,12 @@ func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
 		builder.determineBuildAndProbeSide(2, false)
 		require.False(t, builder.qry.Nodes[2].IsRightJoin)
 	})
+	t.Run("marked SINGLE build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].JoinType = planpb.Node_SINGLE
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
 }
 
 func TestDetermineInnerBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
@@ -2819,6 +2914,15 @@ func TestGetExprNdv(t *testing.T) {
 		require.True(t, ndv > 0 || ndv == -1)
 	})
 
+	t.Run("registered synthetic column carries estimate", func(t *testing.T) {
+		col := &planpb.ColRef{RelPos: 999, ColPos: 3}
+		expr := &planpb.Expr{Ndv: 73, Expr: &planpb.Expr_Col{Col: col}}
+		require.Equal(t, -1.0, getExprNdv(expr, builder))
+
+		builder.syntheticNDVCols = map[[2]int32]struct{}{{col.RelPos, col.ColPos}: {}}
+		require.Equal(t, 73.0, getExprNdv(expr, builder))
+	})
+
 	t.Run("unsupported expr type", func(t *testing.T) {
 		expr := &planpb.Expr{
 			Expr: &planpb.Expr_Lit{
@@ -3134,4 +3238,25 @@ func TestCachedPlanStrictStatsReachability(t *testing.T) {
 			require.True(t, changed, "background contracts retain exact admission")
 		})
 	}
+}
+
+func TestGetExecType_UnpartitionedIndexSearchScanPlansLikeATableFunction(t *testing.T) {
+	query := func(stats *planpb.Stats) *planpb.Query {
+		return &planpb.Query{
+			Steps: []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeId:          0,
+				NodeType:        planpb.Node_INDEX_SEARCH_SCAN,
+				Stats:           stats,
+				IndexSearchScan: &planpb.IndexSearchScan{Index: &planpb.IndexDef{IndexAlgo: "hnsw"}},
+				RuntimeFilterProbeList: []*planpb.RuntimeFilterSpec{
+					{MustApply: true, UseMembershipFilter: true},
+				},
+			}},
+		}
+	}
+	require.Equal(t, ExecTypeTP, GetExecType(query(&planpb.Stats{BlockNum: 1, Cost: 1, Outcnt: 1}), false, false))
+	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(query(&planpb.Stats{
+		BlockNum: int32(BlockThresholdForOneCN) + 1, Cost: float64(costThresholdForOneCN) + 1,
+	}), false, false), "a large query can still use every CN")
 }

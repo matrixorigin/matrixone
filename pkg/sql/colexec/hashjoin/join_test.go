@@ -48,7 +48,7 @@ type joinTestCase struct {
 }
 
 func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	typ := types.T_int32.ToType()
 	valid := newExpr(0, typ)
 	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
@@ -72,7 +72,7 @@ func TestHashJoinPrepareFailureCanRetry(t *testing.T) {
 }
 
 func TestHashMarkJoinRejectsResidualCondition(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := NewArgument()
 	arg.JoinType = plan.Node_MARK
 	arg.NonEqCond = newExpr(0, types.T_int32.ToType())
@@ -84,9 +84,10 @@ func TestHashMarkJoinRejectsResidualCondition(t *testing.T) {
 }
 
 func TestHashMarkJoinRejectsInvalidOperatorContracts(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	key := newExpr(0, types.T_int32.ToType())
+	floatKey := newExpr(0, types.T_float64.ToType())
 
 	tests := []struct {
 		name string
@@ -109,6 +110,26 @@ func TestHashMarkJoinRejectsInvalidOperatorContracts(t *testing.T) {
 				JoinType: plan.Node_MARK,
 				EqConds:  [][]*plan.Expr{{key, key}, {key, key}},
 			},
+		},
+		{
+			name: "existence mode on inner join",
+			arg:  &HashJoin{JoinType: plan.Node_INNER, ExistenceOnly: true},
+		},
+		{
+			name: "existence mode on shuffle",
+			arg:  &HashJoin{JoinType: plan.Node_MARK, ExistenceOnly: true, IsShuffle: true, EqConds: [][]*plan.Expr{{key, key}, {key, key}}},
+		},
+		{
+			name: "existence mode on right join",
+			arg:  &HashJoin{JoinType: plan.Node_MARK, ExistenceOnly: true, IsRightJoin: true, EqConds: [][]*plan.Expr{{key, key}, {key, key}}},
+		},
+		{
+			name: "existence mode with floating-point keys",
+			arg:  &HashJoin{JoinType: plan.Node_MARK, ExistenceOnly: true, EqConds: [][]*plan.Expr{{floatKey, floatKey}, {floatKey, floatKey}}},
+		},
+		{
+			name: "existence mode with PK shortcut",
+			arg:  &HashJoin{JoinType: plan.Node_MARK, ExistenceOnly: true, HashOnPK: true, EqConds: [][]*plan.Expr{{key, key}, {key, key}}},
 		},
 		{
 			name: "build-side result column",
@@ -185,7 +206,7 @@ func TestString(t *testing.T) {
 }
 
 func TestAsofPhysicalContractValidation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	arg := NewArgument()
@@ -978,7 +999,7 @@ func TestHashJoinSingleRejectsMultipleRows(t *testing.T) {
 }
 
 func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	localMatches := new(bitmap.Bitmap)
 	localMatches.InitWithSize(1)
 	localMatches.Add(0)
@@ -1007,7 +1028,7 @@ func TestHashJoinSingleRejectsDuplicateMatchesAcrossWorkers(t *testing.T) {
 // remaining worker messages so a later run over the same channel does not
 // observe stale bitmaps.
 func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
 
 	matched := new(bitmap.Bitmap)
@@ -1084,7 +1105,7 @@ func TestHashJoinMergerSyncBitmapAborted(t *testing.T) {
 }
 
 func TestHashJoinMergerFinalizeEmitsUnmatchedBuildRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rightBat := makeInt32Batch(proc, []int32{10, 20, 30, 40})
 
 	matched := new(bitmap.Bitmap)
@@ -1807,7 +1828,7 @@ func makeAsofConditionWithRightLowerBound(
 }
 
 func TestFindAsofPredecessor(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	arg := &HashJoin{
@@ -1878,7 +1899,7 @@ func TestFindAsofPredecessor(t *testing.T) {
 }
 
 func TestAsofIndexChoosesOrderedOrAdaptiveSearch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	arg := &HashJoin{
@@ -1982,7 +2003,7 @@ func TestAsofIndexChoosesOrderedOrAdaptiveSearch(t *testing.T) {
 }
 
 func TestAsofUnorderedIndexPromotesAfterAmortizationAndReusesAllocation(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	arg := &HashJoin{
@@ -2113,7 +2134,7 @@ func TestAsofIndexPromotionScansBalancesReuseAndBuildCost(t *testing.T) {
 }
 
 func TestAsofSortedIndexAllocationFailureKeepsLinearState(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
 	require.NoError(t, err)
 	account, err := registry.Open(1)
@@ -2170,7 +2191,7 @@ func BenchmarkAsofUnorderedGroupLookup(b *testing.B) {
 }
 
 func benchmarkAsofUnorderedGroupLookup(b *testing.B, rowCount, stride int) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	arg := &HashJoin{AsofRightCol: 1}
 	installTestAllocation(b, arg)
 
@@ -2224,7 +2245,7 @@ func benchmarkAsofUnorderedGroupLookup(b *testing.B, rowCount, stride int) {
 }
 
 func TestAsofIndexMetadataGrowsAmortizedAndCleans(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
 	arg := &HashJoin{
@@ -2296,7 +2317,7 @@ func TestAsofTemporalMetadataFindsNestedAndCommutedPredicate(t *testing.T) {
 }
 
 func TestAsofPrepareRejectsMismatchedRightTemporalColumn(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	keyType := types.T_int32.ToType()
 	timeType := types.T_timestamp.ToType()
@@ -2621,7 +2642,7 @@ func TestHashJoinGetOperatorBase(t *testing.T) {
 }
 
 func TestHashJoinExecProjection(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := NewArgument()
 	bat := testutil.NewBatch([]types.Type{types.T_int32.ToType()}, false, 10, proc.Mp())
 	result, err := arg.ExecProjection(proc, bat)

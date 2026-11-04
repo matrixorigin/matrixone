@@ -21,10 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -357,65 +355,45 @@ func (idx *CagraModel[B, Q]) saveToFile() error {
 
 // ToSql generates INSERT SQL statements to store the model in the secondary index storage table.
 // Mirrors HnswModel.ToSql — callers are responsible for generating the metadata INSERT.
-func (idx *CagraModel[B, Q]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
+// PreparePersistence finishes the model artifact before SQL or admission checks.
+func (idx *CagraModel[B, Q]) PreparePersistence() error {
 	if err := idx.saveToFile(); err != nil {
-		return nil, err
+		return err
 	}
-	if len(idx.Path) == 0 {
-		return []string{}, nil
+	if idx.Path == "" {
+		idx.FileSize = 0
+		return nil
 	}
-
 	fi, err := os.Stat(idx.Path)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	filesz := fi.Size()
-	idx.FileSize = filesz
-
-	if filesz == 0 {
-		return []string{}, nil
+	if !fi.Mode().IsRegular() {
+		return moerr.NewInvalidInputNoCtx("index artifact must be a regular file")
 	}
-
-	logutil.Infof("CagraModel.ToSql idx %s, len = %d\n", idx.Id, idx.Len)
-
-	sqls := make([]string, 0, 5)
-	sqlPrefix := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable))
-	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
-	n := 0
-	chunkid := int64(0)
-	for offset := int64(0); offset < filesz; {
-		chunksz := int64(vectorindex.MaxChunkSize)
-		if offset+chunksz > filesz {
-			chunksz = filesz - offset
-		}
-		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), %d)", idx.Id, chunkid, url, vectorindex.Tag_ModelChunk)
-		values = append(values, tuple)
-		offset += chunksz
-		chunkid++
-		n++
-		if n == 2000 {
-			sqls = append(sqls, sqlPrefix+strings.Join(values, ", "))
-			values = values[:0]
-			n = 0
-		}
+	idx.FileSize = fi.Size()
+	if idx.Checksum == "" {
+		idx.Checksum, err = vectorindex.CheckSum(idx.Path)
 	}
-	if len(values) > 0 {
-		sqls = append(sqls, sqlPrefix+strings.Join(values, ", "))
-	}
-	return sqls, nil
+	return err
 }
 
-// chargeIdMap adds the delete id-map's host footprint to this sub-index, once.
-//
-// The FIRST replayed delete materialises id_to_index_ for EVERY row of the index and it stays
-// resident for the index's life (cgo/cuvs/index_base.hpp, ensure_id_index). The native side
-// reserves that allocation and releases the claim as soon as it succeeds, so nothing downstream
-// tracks it -- uncharged, the governor evicts against a host figure short by 40 bytes per row.
-//
-// Deletes arrive by two paths and either can be the one that builds the map: this model's own
-// events during LoadIndex, and the SHARED cdc_tail replayed afterwards by the search's
-// loadCdcTail. Both call here; the flag makes the charge exactly once.
+// PersistChunks opens only the artifact prepared by this model's native owner.
+func (idx *CagraModel[B, Q]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	if idx.Path == "" || idx.FileSize == 0 {
+		return nil
+	}
+	fp, err := os.Open(idx.Path)
+	if err != nil {
+		return err
+	}
+	defer fp.Close()
+	if _, err = writer.WriteRange(fp, 0, idx.FileSize, idx.Id, 0, int(vectorindex.Tag_ModelChunk)); err != nil {
+		return err
+	}
+	return writer.Flush()
+}
+
 func (idx *CagraModel[B, Q]) chargeIdMap(rows uint64) {
 	if idx.idMapCharged || rows == 0 {
 		return

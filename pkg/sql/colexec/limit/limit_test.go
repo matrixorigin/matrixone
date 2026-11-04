@@ -94,7 +94,7 @@ func TestLimit(t *testing.T) {
 }
 
 func TestLimitDoesNotMutateInputBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	input := colexec.MakeMockBatchs(proc.Mp())
 	input.ShuffleIDX = 3
 	inputRows := input.RowCount()
@@ -143,7 +143,7 @@ func TestLimitDoesNotMutateInputBatch(t *testing.T) {
 }
 
 func TestSQLCalcFoundRowsDrainsInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.BeginFoundRowsStatement(true)
 
@@ -173,7 +173,7 @@ func TestSQLCalcFoundRowsDrainsInput(t *testing.T) {
 }
 
 func TestNestedLimitDoesNotPublishFoundRows(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.BeginFoundRowsStatement(true)
 
@@ -195,7 +195,7 @@ func TestNestedLimitDoesNotPublishFoundRows(t *testing.T) {
 }
 
 func TestFoundRowsDrainOnlyConsumesInputWithoutPublishing(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.BeginFoundRowsStatement(true)
 
@@ -229,7 +229,7 @@ func TestFoundRowsDrainOnlyConsumesInputWithoutPublishing(t *testing.T) {
 }
 
 func TestSQLCalcFoundRowsZeroLimitStillDrainsInput(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.BeginFoundRowsStatement(true)
 
@@ -255,7 +255,7 @@ func TestSQLCalcFoundRowsZeroLimitStillDrainsInput(t *testing.T) {
 }
 
 func TestSQLCalcFoundRowsDrainsEmptyAndLastBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	proc.BeginFoundRowsStatement(true)
 
@@ -283,7 +283,7 @@ func TestSQLCalcFoundRowsDrainsEmptyAndLastBatch(t *testing.T) {
 }
 
 func TestLimitResetReleasesCopiedAllocationAccountData(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)

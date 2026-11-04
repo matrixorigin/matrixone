@@ -1,0 +1,53 @@
+drop database if exists issue_28582_prepared_numeric_cast;
+create database issue_28582_prepared_numeric_cast;
+use issue_28582_prepared_numeric_cast;
+prepare cast_numeric from
+'select cast(? as signed) as signed_value, cast(? as unsigned) as unsigned_value';
+set @decimal_value = 1.5;
+execute cast_numeric using @decimal_value, @decimal_value;
+➤ signed_value[-5,64,0]  ¦  unsigned_value[-5,64,0]  𝄀
+2  ¦  2
+set @decimal_value = -1.5;
+execute cast_numeric using @decimal_value, @decimal_value;
+➤ signed_value[-5,64,0]  ¦  unsigned_value[-5,64,0]  𝄀
+-2  ¦  18446744073709551614
+set @decimal_value = 2.5;
+execute cast_numeric using @decimal_value, @decimal_value;
+➤ signed_value[-5,64,0]  ¦  unsigned_value[-5,64,0]  𝄀
+3  ¦  3
+set @decimal_value = -2.5;
+execute cast_numeric using @decimal_value, @decimal_value;
+➤ signed_value[-5,64,0]  ¦  unsigned_value[-5,64,0]  𝄀
+-3  ¦  18446744073709551613
+set @float_value = 2.5e0;
+execute cast_numeric using @float_value, @float_value;
+➤ signed_value[-5,64,0]  ¦  unsigned_value[-5,64,0]  𝄀
+2  ¦  2
+set @float_value = -2.5e0;
+execute cast_numeric using @float_value, @float_value;
+➤ signed_value[-5,64,0]  ¦  unsigned_value[-5,64,0]  𝄀
+-2  ¦  18446744073709551614
+set @string_value = '1.5';
+execute cast_numeric using @string_value, @string_value;
+➤ signed_value[-5,64,0]  ¦  unsigned_value[-5,64,0]  𝄀
+1  ¦  1
+set @string_value = '-1.5';
+execute cast_numeric using @string_value, @string_value;
+➤ signed_value[-5,64,0]  ¦  unsigned_value[-5,64,0]  𝄀
+-1  ¦  18446744073709551615
+deallocate prepare cast_numeric;
+create table cast_target (id int primary key, value decimal(10,1));
+prepare cast_insert from
+'insert into cast_target values (?, cast(? as signed))';
+set @id = 1;
+set @decimal_value = 1.5;
+execute cast_insert using @id, @decimal_value;
+set @id = 2;
+set @decimal_value = -1.5;
+execute cast_insert using @id, @decimal_value;
+deallocate prepare cast_insert;
+select id, value from cast_target order by id;
+➤ id[4,32,0]  ¦  value[3,10,1]  𝄀
+1  ¦  2.0  𝄀
+2  ¦  -2.0
+drop database issue_28582_prepared_numeric_cast;

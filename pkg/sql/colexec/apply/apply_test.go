@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -242,6 +243,55 @@ func TestApplyUsesParameterizedSourceLifecycle(t *testing.T) {
 	require.Equal(t, 2, source.starts)
 }
 
+type boundedAppliedSource struct{ scriptedAppliedSource }
+
+func (*boundedAppliedSource) ApplyPreserveBatch() bool { return true }
+
+func TestApplyPreservesBoundedSourcePages(t *testing.T) {
+	for _, early := range []bool{false, true} {
+		t.Run(fmt.Sprint("early=", early), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+			input.SetRowCount(2)
+			source := &boundedAppliedSource{}
+			arg := NewArgument()
+			arg.Source = source
+			arg.Result = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}
+			arg.Typs = []types.Type{types.T_int64.ToType()}
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			arg.AppendChild(child)
+			t.Cleanup(func() {
+				arg.Reset(proc, false, nil)
+				arg.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				arg.Release()
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			require.NoError(t, arg.Prepare(proc))
+			for row := 0; row < 2; row++ {
+				result, err := arg.Call(proc)
+				require.NoError(t, err)
+				require.Equal(t, 1, result.Batch.RowCount(), "do not coalesce bounded pages across candidates")
+				require.Equal(t, []int64{int64(row + 10)}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+				if early {
+					return
+				}
+			}
+			for attempts := 0; attempts < 3; attempts++ {
+				result, err := arg.Call(proc)
+				require.NoError(t, err)
+				if result.Batch.IsDone() {
+					return
+				}
+				require.Zero(t, result.Batch.RowCount())
+			}
+			t.Fatal("bounded source did not terminate")
+		})
+	}
+}
+
 func makeColumnExpr(pos int32, typ types.T) *plan.Expr {
 	return &plan.Expr{
 		Typ:  plan.Type{Id: int32(typ)},
@@ -282,12 +332,13 @@ func (*scriptedVectorReader) SetIndexParam(*plan.IndexReaderParam) {
 }
 func (*scriptedVectorReader) SetFilterZM(objectio.ZoneMap) {}
 
-func vectorSourceSpec() *plan.VectorIndexScan {
-	return &plan.VectorIndexScan{
-		Index:           &plan.IndexDef{IndexAlgo: "ivfflat"},
-		QueryVector:     plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
-		CandidateLimit:  plan2.MakePlan2Uint64ConstExprWithType(3),
-		FirstRoundLimit: plan2.MakePlan2Uint64ConstExprWithType(1),
+func vectorSourceSpec() *plan.IndexSearchScan {
+	return &plan.IndexSearchScan{
+		Index:          &plan.IndexDef{IndexAlgo: "ivfflat"},
+		QueryPayload:   plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2),
+		CandidateLimit: plan2.MakePlan2Uint64ConstExprWithType(3),
+		AlgoExprs:      []*plan.Expr{plan2.MakePlan2Uint64ConstExprWithType(1)},
+		AlgoExprNames:  []string{"first_round_limit"},
 	}
 }
 
@@ -308,8 +359,9 @@ func TestVectorSourceEvaluatesArgumentsAndUsesSearchPlugin(t *testing.T) {
 	require.True(t, hasQuery)
 	require.Equal(t, uint64(3), req.ResultLimit)
 	require.Equal(t, uint64(3), req.CandidateBudget)
-	require.Equal(t, uint64(1), req.FirstRoundLimit)
-	require.True(t, req.HasFirstRound)
+	firstRound, ok := req.AlgoValue("first_round_limit")
+	require.True(t, ok)
+	require.Equal(t, uint64(1), firstRound.GetU64Val())
 
 	// The registered IVF plugin is reached. The test process deliberately has
 	// no transaction, so NewPlanReader rejects it after ApplyStart has passed
@@ -321,7 +373,7 @@ func TestVectorSourceEvaluatesArgumentsAndUsesSearchPlugin(t *testing.T) {
 func TestApplyCarriesStatementTxnOffsetIntoVectorSource(t *testing.T) {
 	proc := testutil.NewProc(t)
 	apply := NewArgument()
-	apply.VectorIndexScan = vectorSourceSpec()
+	apply.IndexSearchScan = vectorSourceSpec()
 	apply.VectorAttrs = []string{"pkid"}
 	apply.Typs = []types.Type{types.T_int64.ToType()}
 	apply.TxnOffset = 17
@@ -363,7 +415,7 @@ func TestApplyPreparedVectorSourceRebindsPreFiltersPerGeneration(t *testing.T) {
 	spec.PreFilters = []*plan.Expr{preFilter}
 
 	arg := NewArgument()
-	arg.VectorIndexScan = spec
+	arg.IndexSearchScan = spec
 	arg.VectorAttrs = []string{"pkid"}
 	arg.Typs = []types.Type{types.T_int64.ToType()}
 	t.Cleanup(func() {
@@ -432,7 +484,7 @@ func TestVectorSourceReaderLifecycle(t *testing.T) {
 func TestVectorSourceHandlesNullQueryAndCleansUp(t *testing.T) {
 	proc := testutil.NewProc(t)
 	spec := vectorSourceSpec()
-	spec.QueryVector = &plan.Expr{
+	spec.QueryPayload = &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2},
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 			Isnull: true,

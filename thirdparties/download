@@ -255,10 +255,11 @@ else
 fi
 
 # A GitHub LFS media endpoint can be supplied as a second, immutable source.
-# Only fail over after a connection/TLS timeout; checksums still authenticate
-# the received bytes, and normal HTTP/status failures remain visible.
-if [ "$status" -eq 28 ] && [ -n "$fallback_url" ]; then
-	echo "dependency download timed out; trying configured HTTPS fallback" >&2
+# Fail over after a connection/TLS timeout or HTTP failure (including a proxy
+# 504). The fallback must pass the same checksum/byte checks before publication;
+# successful but corrupt responses never reach this transport-error path.
+if { [ "$status" -eq 28 ] || [ "$status" -eq 22 ]; } && [ -n "$fallback_url" ]; then
+	echo "dependency download failed with curl exit code $status; trying configured HTTPS fallback" >&2
 	url=$fallback_url
 	if "$download"; then
 		status=0

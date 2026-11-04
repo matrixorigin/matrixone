@@ -24,8 +24,8 @@ select st_astext(cast('POLYGON((0 0,1 0,1 1,0 1,0 0))' as geometry)) as cast_pol
 -- ST_AsWKT is a synonym for ST_AsText.
 select st_aswkt(st_geomfromtext('POINT(1 2)')) as aswkt_point;
 
--- A geometry-typed column renders directly as WKT.
-select st_geomfromtext('POINT(7 8)') as direct_geom;
+-- Use ST_AsText for readable output; direct GEOMETRY uses MySQL SRID+WKB.
+select st_astext(st_geomfromtext('POINT(7 8)')) as direct_geom;
 
 -- WKB binary I/O: ST_GeomFromWKB(ST_AsWKB(g)) round-trips.
 select st_astext(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')))) as wkb_point;
@@ -47,3 +47,12 @@ select st_astext(cast('POINT(1' as geometry));
 select st_astext(cast('POINT(NaN 1)' as geometry));
 -- @regex("invalid geometry type",true)
 select st_astext(st_geomfromtext('CIRCLE(0 0,1)'));
+
+-- Ring structure is checked at admission, while topology remains separate.
+-- @regex("invalid geometry payload",true)
+select st_geomfromtext('POLYGON((0 0,1 0,1 1))',0);
+-- @regex("invalid geometry payload",true)
+select cast('POLYGON((0 0,1 0,1 1,0 0.0000000001))' as geometry32);
+-- @regex("invalid geometry payload",true)
+select st_geomfromgeojson('{"type":"Polygon","coordinates":[[]]}');
+select st_astext(st_geomfromtext('MULTIPOLYGON(EMPTY,((0 0,1 0,0 1,0 0)))',0)) as empty_member;

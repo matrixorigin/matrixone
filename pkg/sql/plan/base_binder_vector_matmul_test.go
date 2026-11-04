@@ -64,3 +64,36 @@ func TestBindVectorMatmulRequiresConstantConfig(t *testing.T) {
 	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{topk, id, f32, queries})
 	require.Error(t, err)
 }
+
+func TestVectorMatmulConfigRejectsUnstableFunctions(t *testing.T) {
+	ctx := context.Background()
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	param := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}}
+	stable := bind("json_array", bind("json_array", param, param))
+	require.True(t, IsVectorMatmulConfigExpr(stable))
+	require.True(t, IsVectorMatmulConfigExpr(bind("json_array", bind("json_array", makePlan2Int64ConstExprWithType(1)))))
+
+	for _, unstable := range []*planpb.Expr{
+		bind("rand"),
+		bind("json_array", bind("json_array", bind("rand"), bind("rand"))),
+		bind("json_array", bind("json_array", bind("uuid"))),
+		bind("json_array", bind("json_array", bind("sysdate"))),
+	} {
+		require.False(t, IsVectorMatmulConfigExpr(unstable))
+	}
+
+	id := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	vec := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_array_float32), Width: 2}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}
+	_, err := BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(3), id, vec, bind("json_array", bind("json_array", bind("rand"), bind("rand"))),
+	})
+	require.ErrorContains(t, err, "must be non-null constants, parameters or variables")
+	_, err = BindFuncExprImplByPlanExpr(ctx, NameVectorMatmul, []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(3), id, vec, stable,
+	})
+	require.NoError(t, err)
+}

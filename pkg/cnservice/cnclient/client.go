@@ -56,9 +56,7 @@ func GetPipelineClient(
 }
 
 type pipelineClient struct {
-	localServiceAddress string
-	config              *PipelineConfig
-	client              morpc.RPCClient
+	client morpc.RPCClient
 }
 
 func pipelineBackendCreateOptions(cfg *PipelineConfig) []morpc.ClientOption {
@@ -83,10 +81,7 @@ func NewPipelineClient(
 
 	cfg.fill()
 
-	c := &pipelineClient{
-		localServiceAddress: localServiceAddress,
-		config:              cfg,
-	}
+	c := &pipelineClient{}
 
 	codec := morpc.NewMessageCodec(
 		sid,

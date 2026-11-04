@@ -1,0 +1,17 @@
+drop database if exists qa_bug31163;
+create database qa_bug31163;
+create table qa_bug31163.t(id int primary key, v int);
+create view qa_bug31163.v1 as select id from qa_bug31163.t;
+select count(*) from information_schema.tables where table_schema='qa_bug31163' and create_time is not null and update_time is null and check_time is null;
+➤ count(*)[-5,64,0]  𝄀
+2
+select count(*) from information_schema.tables where table_schema='qa_bug31163' and table_type='BASE TABLE' and update_time is null and check_time is null;
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from information_schema.tables where table_schema='qa_bug31163' and (update_time is not null or check_time is not null);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from information_schema.tables where table_schema='qa_bug31163' and create_time is null;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop database qa_bug31163;

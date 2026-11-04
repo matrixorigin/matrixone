@@ -38,6 +38,10 @@ const (
 type activeTxnWaiter struct {
 	doneC chan struct{}
 
+	// Queue membership is owned exclusively by client.mu, independently of mu.
+	queue      *activeTxnQueue
+	prev, next *txnOperator
+
 	mu struct {
 		sync.Mutex
 		state activeTxnWaiterState

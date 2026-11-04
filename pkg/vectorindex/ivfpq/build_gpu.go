@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 // IvfpqBuild manages bulk index construction across one or more IvfpqModel sub-indexes.
@@ -34,7 +35,7 @@ import (
 // temp tar and released (saveToFile), and a new sub-index is created, mirroring the
 // CagraBuild pattern.
 //
-// Retiring a sub-index at rotation rather than at ToInsertSql is what makes IndexCapacity
+// Retiring a sub-index at rotation rather than at PreparePersistence is what makes IndexCapacity
 // bound the build. Build() already frees the sub-index's host dataset
 // (flattened_host_dataset, cleared at the end of cgo/cuvs/ivf_pq.hpp build()), but the
 // cuVS index and its device-side build matrix (dataset_device_ptr_) live until destroy().
@@ -226,7 +227,7 @@ func (b *IvfpqBuild[B, Q]) AddRow(id int64, vecBytes []byte) error {
 	return nil
 }
 
-func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64, buildTS int64, provenance bool) ([]string, error) {
+func (b *IvfpqBuild[B, Q]) PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error) {
 	if b.current != nil && b.count > 0 {
 		// VRAM for this build is claimed in C++, around the device upload itself
 		// (cagra.hpp). A Go-side claim could only wrap the whole Build() call,
@@ -249,14 +250,18 @@ func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64, buildTS int64, provenance bool)
 	metas := make([]string, 0, len(b.indexes))
 
 	for _, idx := range b.indexes {
-		indexsqls, err := idx.ToSql(b.tblcfg)
-		if err != nil {
+		if err := idx.PreparePersistence(); err != nil {
 			return nil, err
 		}
-		sqls = append(sqls, indexsqls...)
+		if idx.FileSize == 0 {
+			continue
+		}
 		metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, idx.Checksum, ts, idx.FileSize, int64(idx.Len), buildTS))
 	}
 
+	if len(metas) == 0 {
+		return nil, nil
+	}
 	metasql := catalog.IndexMetadataInsertSql(b.tblcfg.DbName, b.tblcfg.MetadataTable, provenance, metas)
 	sqls = append(sqls, metasql)
 	return sqls, nil
@@ -272,7 +277,17 @@ func (b *IvfpqBuild[B, Q]) ToInsertSql(ts int64, buildTS int64, provenance bool)
 // the simulated case by the shard count.
 //
 // Excludes the host-only members of each tar (ids.bin, INCLUDE blobs), which never
-// reach the GPU. Valid only after ToInsertSql, which packs and stamps the sizes.
+// reach the GPU. Valid only after PreparePersistence, which packs and stamps the sizes.
+// PersistChunks runs only after preparation and any device admission succeeds.
+func (b *IvfpqBuild[B, Q]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	for _, idx := range b.indexes {
+		if err := idx.PersistChunks(writer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (b *IvfpqBuild[B, Q]) DeviceDemand() map[int]int64 {
 	comps := make([]map[string]int64, 0, len(b.indexes))
 	for _, idx := range b.indexes {

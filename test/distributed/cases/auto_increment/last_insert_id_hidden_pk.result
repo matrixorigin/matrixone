@@ -1,0 +1,52 @@
+drop table if exists li_p1;
+create table li_p1(pk int primary key, `__mo_fake_pk_col` bigint unsigned auto_increment unique key, v int default 0);
+insert into li_p1(pk) values(10);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+select pk, `__mo_fake_pk_col` from li_p1 order by pk;
+➤ pk[4,32,0]  ¦  __mo_fake_pk_col[-5,64,0]  𝄀
+10  ¦  1
+drop table if exists li_odku_marker;
+create table li_odku_marker(id int primary key auto_increment) auto_increment = 700;
+insert into li_odku_marker values();
+insert into li_p1(pk, v) values(10, 1) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+700
+insert into li_p1(pk, v) values(11, 2) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+3
+insert into li_p1(pk, `__mo_fake_pk_col`, v) values(12, 100, 3) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+3
+insert into li_p1(pk, `__mo_fake_pk_col`, v) values(11, 3, 2) on duplicate key update v = values(v);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+3
+insert into li_p1(pk, v) values(10, 9) on duplicate key update `__mo_fake_pk_col` = 999;
+unsupported DML: update unique key on duplicate
+select pk, `__mo_fake_pk_col`, v from li_p1 order by pk;
+➤ pk[4,32,0]  ¦  __mo_fake_pk_col[-5,64,0]  ¦  v[4,32,0]  𝄀
+10  ¦  1  ¦  1  𝄀
+11  ¦  3  ¦  2  𝄀
+12  ¦  100  ¦  3
+drop table li_odku_marker;
+drop table if exists li_p2;
+create table li_p2(id bigint auto_increment, v int, unique key uk(id));
+insert into li_p2(v) values(1);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+insert into li_p2(id,v) values(100,2);
+select last_insert_id();
+➤ last_insert_id()[-5,64,0]  𝄀
+1
+select id, v from li_p2 order by id;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+100  ¦  2
+drop table if exists li_p1;
+drop table if exists li_p2;

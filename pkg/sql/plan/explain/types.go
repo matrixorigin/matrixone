@@ -46,8 +46,6 @@ type NodeElemDescribe interface {
 
 type FormatSettings struct {
 	buffer *ExplainDataBuffer
-	offset int
-	indent int
 	level  int
 }
 
@@ -144,6 +142,10 @@ type ExplainOptions struct {
 	Format    ExplainFormat
 	NodeType  plan.Node_NodeType
 	CheckExpr []string
+	// CompleteLiteralVectors keeps SQL JSON literals and their function arguments
+	// complete, including serialized scalars/vectors. Text EXPLAIN retains its
+	// existing redaction and bounded vector rendering.
+	CompleteLiteralVectors bool
 }
 
 func NewExplainDefaultOptions() *ExplainOptions {

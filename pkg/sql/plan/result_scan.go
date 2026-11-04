@@ -28,6 +28,9 @@ import (
 )
 
 func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+	if len(tbl.Func.Exprs) == 0 {
+		return 0, moerr.NewInvalidArg(builder.GetContext(), "result_scan", "missing query id")
+	}
 	var err error
 	val, err := builder.compCtx.ResolveVariable("save_query_result", true, false)
 	if err == nil {
@@ -82,8 +85,13 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	}
 	builder.compCtx.GetProcess().GetSessionInfo().ResultColTypes = typs
 	name2ColIndex := map[string]int32{}
+	// tbColToDataCol is a separate map: TableDef.Name2ColIndex may be
+	// rewritten by later optimizer passes, while the file-column index must
+	// stay fixed at the positions of the saved schema.
+	tbColToDataCol := map[string]int32{}
 	for i := 0; i < len(cols); i++ {
 		name2ColIndex[cols[i].Name] = int32(i)
+		tbColToDataCol[cols[i].Name] = int32(i)
 	}
 	tableDef := &plan.TableDef{
 		Name:          uuid.String(),
@@ -126,6 +134,12 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		NodeType: plan.Node_EXTERNAL_SCAN,
 		ExternScan: &plan.ExternScan{
 			Type: int32(plan.ExternType_RESULT_SCAN),
+			// The saved-result file stores all meta columns in order, so
+			// tbColToDataCol records name -> file-column index over the saved
+			// schema. A query may later prune TableDef.Cols; file readers
+			// must use ColFieldIndex to locate data columns in the file
+			// (issue #30571).
+			TbColToDataCol: tbColToDataCol,
 		},
 		Stats:        &plan.Stats{},
 		TableDef:     tableDef,

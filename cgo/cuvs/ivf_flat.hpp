@@ -922,6 +922,13 @@ public:
             if (local_index) handle.set_index_ptr(static_cast<const ivf_flat_index*>(local_index));
         }
 
+        // Set when the search ran with a bitset filter; the host post-filter
+        // below then re-tests the raw results (apply_host_post_filter_locked).
+        bool post_filter = false;
+        uint64_t pf_start_row = 0, pf_shard_sz = 0;
+        std::vector<uint32_t> local_user_mask;
+        const std::vector<uint32_t>* user_mask_ptr = nullptr;
+
         if (local_index) {
             uint64_t start_row = 0, shard_sz = this->count;
             if (this->dist_mode == DistributionMode_SHARDED) {
@@ -954,12 +961,17 @@ public:
                 if (prebuilt) {
                     if (prebuilt->has_filter) {
                         bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
+                        user_mask_ptr = &prebuilt->mask;
                     } else if (prebuilt->deletes_only) {
                         bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
                     }
                 } else {
-                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask);
+                    if (!local_user_mask.empty()) user_mask_ptr = &local_user_mask;
                 }
+                post_filter = bs_ptr != nullptr;
+                pf_start_row = start_row;
+                pf_shard_sz = shard_sz;
 
                 if (bs_ptr) {
                     auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
@@ -1016,6 +1028,11 @@ public:
         // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (post_filter) {
+                static const std::vector<uint32_t> kEmptyMask;
+                this->apply_host_post_filter_locked(search_res, pf_start_row, pf_shard_sz,
+                    user_mask_ptr ? *user_mask_ptr : kEmptyMask);
+            }
             int64_t offset = 0;
             int64_t data_size = static_cast<int64_t>(this->count);
             if (this->dist_mode == DistributionMode_SHARDED) {
@@ -1122,6 +1139,13 @@ public:
             if (local_index) handle.set_index_ptr(static_cast<const ivf_flat_index*>(local_index));
         }
 
+        // Set when the search ran with a bitset filter; the host post-filter
+        // below then re-tests the raw results (apply_host_post_filter_locked).
+        bool post_filter = false;
+        uint64_t pf_start_row = 0, pf_shard_sz = 0;
+        std::vector<uint32_t> local_user_mask;
+        const std::vector<uint32_t>* user_mask_ptr = nullptr;
+
         if (local_index) {
             uint64_t start_row = 0, shard_sz = this->count;
             if (this->dist_mode == DistributionMode_SHARDED) {
@@ -1152,12 +1176,17 @@ public:
                 if (prebuilt) {
                     if (prebuilt->has_filter) {
                         bs_ptr = this->upload_host_mask(handle, prebuilt->mask, shard_sz);
+                        user_mask_ptr = &prebuilt->mask;
                     } else if (prebuilt->deletes_only) {
                         bs_ptr = this->acquire_delete_bitset_device(handle, start_row, shard_sz);
                     }
                 } else {
-                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz);
+                    bs_ptr = this->build_search_bitset(handle, preds_json, start_row, shard_sz, &local_user_mask);
+                    if (!local_user_mask.empty()) user_mask_ptr = &local_user_mask;
                 }
+                post_filter = bs_ptr != nullptr;
+                pf_start_row = start_row;
+                pf_shard_sz = shard_sz;
 
                 if (bs_ptr) {
                     auto filter = cuvs::neighbors::filtering::bitset_filter(bs_ptr->view());
@@ -1214,6 +1243,11 @@ public:
         // so that concurrent extend() calls (which write host_ids under unique_lock) are safe.
         {
             std::shared_lock<std::shared_mutex> lock(this->mutex_);
+            if (post_filter) {
+                static const std::vector<uint32_t> kEmptyMask;
+                this->apply_host_post_filter_locked(search_res, pf_start_row, pf_shard_sz,
+                    user_mask_ptr ? *user_mask_ptr : kEmptyMask);
+            }
             int64_t offset = 0;
             int64_t data_size = static_cast<int64_t>(this->count);
             if (this->dist_mode == DistributionMode_SHARDED) {

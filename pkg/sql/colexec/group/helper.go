@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -270,13 +271,10 @@ func (ctr *container) commitGroupByChunk(
 		return nil, 0, &groupPrePublicationError{cause: err}
 	}
 
-	more, err := ctr.appendGroupByBatchWithStringSources(
-		vectors, offset, preview.inserted, sourcePublication.overrides, 0)
+	err = ctr.appendGroupByBatchWithStringSources(
+		vectors, offset, preview.inserted, preview.newGroups, sourcePublication.overrides, 0)
 	if err != nil {
 		return nil, 0, err
-	}
-	if more != preview.newGroups {
-		return nil, 0, mpool.ErrAllocationAccountInvariant
 	}
 	if hasStringSourceMetadata {
 		if err := ctr.applyPreviewGroupKeyStringSources(vectors, offset, values); err != nil {
@@ -284,7 +282,7 @@ func (ctr *container) commitGroupByChunk(
 		}
 		ctr.groupKeyStringSourceMetadata = true
 	}
-	return values, more, nil
+	return values, preview.newGroups, nil
 }
 
 func (ctr *container) previewGroupDestination(groupIndex int) (*batch.Batch, int, error) {
@@ -584,43 +582,17 @@ func (hr *ResHashRelated) Free0() {
 	hr.mp = nil
 }
 
-// countNonZeroAndFindKth is a helper function to count the number of non-zero values
-// and find index of values, that is the kth non-zero, -1 if there are less than k
-// non-zero values.
-func countNonZeroAndFindKth(values []uint8, k int) (count int, kth int) {
-	count = 0
-	kth = -1
-	if len(values) < k {
-		for _, v := range values {
-			if v == 0 {
-				continue
+// findKthNonZero returns the row of the kth selected value, or -1 if absent.
+func findKthNonZero(values []uint8, k int) int {
+	for row, flag := range values {
+		if flag != 0 {
+			k--
+			if k == 0 {
+				return row
 			}
-			count++
-		}
-		return count, kth
-	}
-
-	for i, v := range values {
-		if v == 0 {
-			continue
-		}
-
-		count++
-		if count == k {
-			kth = i
-			break
 		}
 	}
-
-	if kth != -1 {
-		for i := kth + 1; i < len(values); i++ {
-			if values[i] == 0 {
-				continue
-			}
-			count++
-		}
-	}
-	return count, kth
+	return -1
 }
 
 func resizeGroupScratch[T any](
@@ -742,7 +714,7 @@ func (ctr *container) openSpillBucket(
 			return err
 		}
 	}
-	file, err := spillfs.CreateAndRemoveFile(proc.Ctx, bkt.name)
+	file, err := spillfs.CreateFile(proc.Ctx, bkt.name)
 	if err != nil {
 		if fdToken != nil {
 			fdToken.Release()
@@ -753,20 +725,14 @@ func (ctr *container) openSpillBucket(
 		return err
 	}
 	bkt.file = file
-	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
-	if err != nil {
-		_ = file.Close()
-		bkt.file = nil
-		if fdToken != nil {
-			fdToken.Release()
-		}
-		if diskToken != nil {
-			diskToken.Release()
-		}
-		return err
-	}
+	bkt.fileFS = spillfs
 	bkt.fdToken = fdToken
 	bkt.diskToken = diskToken
+	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
+	if err != nil {
+		_ = bkt.free()
+		return err
+	}
 	return nil
 }
 
@@ -1399,7 +1365,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 				if err, canceled := vm.CancelCheck(proc); canceled {
 					return false, err
 				}
-				if err := bkt.flushWriter(); err != nil {
+				if err := bkt.finishWriting(); err != nil {
 					bkt.free()
 					ctr.currentSpillBkt[i] = nil
 					return false, err
@@ -1427,6 +1393,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	// popped bkt must be defer freed.
 	bkt := ctr.spillBkts.PopBack().Value
 	defer func() {
+		spillio.DropReadCache(bkt.file)
 		if err := bkt.free(); err != nil && retErr == nil {
 			retErr = err
 		}
@@ -1456,6 +1423,9 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	}
 	defer recordReloadTime()
 
+	if err := bkt.openReader(proc.Ctx, ctr.budget); err != nil {
+		return false, err
+	}
 	// reposition to the start of the file.
 	if _, err := bkt.file.Seek(0, io.SeekStart); err != nil {
 		return false, err
@@ -1582,7 +1552,11 @@ reloadLoop:
 		observeHashGrowth(opStats, "GroupHashReload", hashBytesBefore, ctr.hr.Hash.Size())
 		hashMergeNanos += time.Since(mergeStart).Nanoseconds()
 
-		if ctr.needSpill(opAnalyzer) && canRepartitionGroupSpill(bkt) {
+		needSpill, err := ctr.shouldSpill(opAnalyzer)
+		if err != nil {
+			return false, err
+		}
+		if needSpill && canRepartitionGroupSpill(bkt) {
 			ctr.freeSpillReloadStaging()
 			if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 				return false, err
@@ -1783,8 +1757,79 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 	return memUsed > ctr.spillMem
 }
 
+// needAdaptiveSpill divides the live query/CN/physical growth headroom among
+// every spill-capable operator which can still retain input. The decision is
+// advisory; the execution-resource ledger remains the hard allocation gate.
+// An empty hash has nothing useful to externalize, so it is always allowed to
+// establish a new resident prefix.
+func (ctr *container) needAdaptiveSpill(
+	opAnalyzer process.Analyzer,
+) (bool, error) {
+	return ctr.needAdaptiveSpillForGrowth(opAnalyzer, 0)
+}
+
+func (ctr *container) needAdaptiveSpillForGrowth(
+	opAnalyzer process.Analyzer,
+	projectedGrowth uint64,
+) (bool, error) {
+	if ctr == nil || !ctr.autoSpill || ctr.mtyp == H0 ||
+		ctr.memoryGrowthParticipant == nil || ctr.hr.IsEmpty() ||
+		ctr.hr.Hash.GroupCount() == 0 {
+		return false, nil
+	}
+	used := ctr.memUsed()
+	if used < 0 {
+		return false, process.ErrExecutionResourceInvalid
+	}
+	limit, err := ctr.memoryGrowthParticipant.RetainedLimit(uint64(used))
+	if err != nil {
+		return false, err
+	}
+	if opAnalyzer != nil {
+		stats := opAnalyzer.GetOpStats()
+		stats.AddExtraStat("GroupAdaptiveSpillChecks", 1)
+		stats.SetMaxExtraStat("GroupAdaptiveRetainedBytes", used)
+		stats.SetMaxExtraStat(
+			"GroupAdaptiveLimitBytes", int64(min(limit, uint64(math.MaxInt64))))
+	}
+	projected := uint64(used)
+	if projectedGrowth > math.MaxUint64-projected {
+		projected = math.MaxUint64
+	} else {
+		projected += projectedGrowth
+	}
+	spill := projected >= limit
+	if spill && opAnalyzer != nil {
+		opAnalyzer.GetOpStats().AddExtraStat("GroupAdaptiveSpillTriggers", 1)
+	}
+	return spill, nil
+}
+
+func (ctr *container) shouldSpill(
+	opAnalyzer process.Analyzer,
+) (bool, error) {
+	staticSpill := ctr.needSpill(opAnalyzer)
+	adaptiveSpill, err := ctr.needAdaptiveSpill(opAnalyzer)
+	if err != nil {
+		return false, err
+	}
+	return staticSpill || adaptiveSpill, nil
+}
+
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.GroupAggFuncExec, error) {
 	return ctr.makeAggListForMode(aggExprs, ctr.aggregateAllocation, ctr.mtyp == H0)
+}
+
+// makeSingleGroupAggList constructs the bounded aggregate state used by an
+// ordered ROLLUP prefix.  The ordinary GROUP BY path chooses the aggregate
+// representation from ctr.mtyp; that representation is intentionally not
+// reused here because every live ROLLUP prefix owns exactly one group even
+// when the input relation has an unbounded number of groups.
+func (ctr *container) makeSingleGroupAggList(
+	aggExprs []aggexec.AggFuncExecExpression,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocationMode(
+		aggExprs, ctr.aggregateAllocation, true)
 }
 
 func (ctr *container) makeSpillAggList(
@@ -1833,6 +1878,15 @@ func (ctr *container) buildSpillReloadHashTable(
 }
 
 func (ctr *container) makeAggListWithAllocation(
+	aggExprs []aggexec.AggFuncExecExpression,
+	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocationMode(
+		aggExprs, allocation, singleGroup)
+}
+
+func (ctr *container) makeAggListWithAllocationMode(
 	aggExprs []aggexec.AggFuncExecExpression,
 	allocation *aggexec.AllocationAccount,
 	singleGroup bool,

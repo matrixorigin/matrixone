@@ -184,14 +184,16 @@ fields terminated by ',';
 insert into t_cr values (1, 'abc\r'), (2, 'x\ry');
 select a, replace(b, '\r', '<CR>') as b from t_cr order by a;
 
--- ---------- values no encoding can round-trip are rejected ----------
--- a string of exactly \N null-matches on read outside the default escape
+-- ---------- CSV values no encoding can round-trip are rejected ----------
+-- under a custom escape, a string of exactly \N null-matches on read
 insert into t_bang values (99, '\\N');
--- and always under jsonline
+
+-- ---------- JSONLINE preserves literal \N text and actual NULL separately ----------
 drop table if exists t_jln;
 create external table t_jln(a int, b varchar(20))
 infile{'filepath'='stage://cstage/copt_jln_*.jl', 'format'='jsonline', 'jsondata'='object', 'write_file_pattern'='stage://cstage/copt_jln_%U.jl'};
-insert into t_jln values (1, '\\N');
+insert into t_jln values (1, '\\N'), (2, null);
+select a, coalesce(hex(b), 'NULL') as b_hex, b is null as is_null from t_jln order by a;
 drop table if exists t_jln;
 
 -- ---------- NULL vs empty string under custom options ----------

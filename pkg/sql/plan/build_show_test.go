@@ -15,8 +15,12 @@
 package plan
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/assert"
@@ -38,6 +42,8 @@ func TestCoverage_buildShowGrants_ForUser(t *testing.T) {
 	// The mock optimizer doesn't have mo_user_grant table, so this should fail with a known error
 	sqls := []string{
 		"show grants for 'testuser'@'localhost'",
+		"show grants for current_user",
+		"show grants for current_user()",
 	}
 	// This is expected to fail in mock because mo_user_grant doesn't exist
 	for _, sql := range sqls {
@@ -175,9 +181,28 @@ func TestShowKeysUsesMySQLIndexOrder(t *testing.T) {
 			}
 			require.Len(t, sortNodes, 1)
 			require.Len(t, sortNodes[0].GetOrderBy(), 3)
-			require.Equal(t, "case", sortNodes[0].GetOrderBy()[0].GetExpr().GetF().GetFunc().GetObjName())
-			require.Equal(t, "MIN(idx.id)", sortNodes[0].GetOrderBy()[1].GetExpr().GetCol().GetName())
-			require.Equal(t, "idx.ordinal_position", sortNodes[0].GetOrderBy()[2].GetExpr().GetCol().GetName())
+			// The Expression output introduces a projection below SORT. Resolve
+			// its column references rather than requiring expressions inline.
+			require.Len(t, sortNodes[0].Children, 1)
+			child := logicPlan.GetQuery().GetNodes()[sortNodes[0].Children[0]]
+			orderExpr := func(i int) *plan.Expr {
+				expr := sortNodes[0].GetOrderBy()[i].GetExpr()
+				if child.NodeType == plan.Node_PROJECT && expr.GetCol() != nil {
+					pos := int(expr.GetCol().ColPos)
+					require.GreaterOrEqual(t, pos, 0)
+					require.Less(t, pos, len(child.ProjectList))
+					return child.ProjectList[pos]
+				}
+				return expr
+			}
+			class := orderExpr(0).GetF()
+			require.Equal(t, "case", class.GetFunc().GetObjName())
+			require.Len(t, class.Args, 5)
+			require.Equal(t, int64(0), class.Args[1].GetLit().GetI64Val())
+			require.Equal(t, int64(1), class.Args[3].GetLit().GetI64Val())
+			require.Equal(t, int64(2), class.Args[4].GetLit().GetI64Val())
+			require.Equal(t, "MIN(idx.id)", orderExpr(1).GetCol().GetName())
+			require.Equal(t, "idx.ordinal_position", orderExpr(2).GetCol().GetName())
 		})
 	}
 }
@@ -278,8 +303,80 @@ func TestCoverage_buildShowTables(t *testing.T) {
 		"show tables",
 		"show tables from tpch",
 		"show tables like '%dd'",
+		"show full tables from tpch",
+		"show tables from tpch where Tables_in_tpch = 'nation'",
+		"show full tables from tpch where Table_type = 'VIEW'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+// Bootstrap discovers catalog tables before the privilege catalogs exist.
+type showTablesBootstrapContext struct {
+	CompilerContext
+	privilegeLookups int
+}
+
+func (c *showTablesBootstrapContext) Resolve(database, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	if database == "mo_catalog" && (table == "mo_role_privs" || table == "mo_role_grant") {
+		c.privilegeLookups++
+		return nil, nil, nil
+	}
+	return c.CompilerContext.Resolve(database, table, snapshot)
+}
+
+func TestShowTablesBeforePrivilegeCatalogs(t *testing.T) {
+	for _, sql := range []string{
+		"show tables from mo_catalog",
+		"show full tables from mo_catalog",
+		"show tables from mo_catalog like 'mo_%'",
+		"show full tables from mo_catalog where Table_type = 'BASE TABLE'",
+	} {
+		for _, mode := range []string{"internal", "unmarked", "explicit false"} {
+			t.Run(mode+"/"+sql, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				setPlanTestGlobalVariable(t, mock.ctxt.GetProcess().GetService(), moruntime.MOProtocolVersion, int64(defines.MORPCVersion41))
+				if mode != "unmarked" {
+					mock.ctxt.SetContext(context.WithValue(mock.ctxt.GetContext(), defines.InternalExecutorKey{}, mode == "internal"))
+				}
+				ctx := &showTablesBootstrapContext{CompilerContext: mock.CurrentContext()}
+				stmt, err := mysql.ParseOne(ctx.GetContext(), sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				built, err := BuildPlan(ctx, stmt, false)
+				if mode == "internal" {
+					require.NoError(t, err)
+					require.NotNil(t, built.GetQuery())
+					require.Zero(t, ctx.privilegeLookups)
+				} else {
+					// Missing catalogs must not turn ordinary user queries into
+					// unfiltered internal discovery, including for account 0.
+					require.Error(t, err)
+					require.Positive(t, ctx.privilegeLookups)
+				}
+			})
+		}
+	}
+}
+
+func TestShowTablesUserVisibilityPlan(t *testing.T) {
+	for _, version := range []int64{defines.MORPCVersion40, defines.MORPCVersion41} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			setPlanTestGlobalVariable(t, mock.ctxt.GetProcess().GetService(), moruntime.MOProtocolVersion, version)
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "show tables from tpch", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			filtered := false
+			for _, node := range built.GetQuery().GetNodes() {
+				if node.GetNodeType() == plan.Node_TABLE_SCAN && node.GetTableDef().GetName() == "mo_role_privs" {
+					filtered = true
+				}
+			}
+			require.Equal(t, version >= defines.MORPCVersion41, filtered)
+		})
+	}
 }
 
 func TestCoverage_buildShowColumns(t *testing.T) {
@@ -369,6 +466,68 @@ func TestShowColumnsSkipsNilIndexMetadata(t *testing.T) {
 	require.True(t, queryContainsStringLiteral(got.GetQuery(), "MUL"))
 }
 
+func addMockShowTable(t *testing.T, mock *MockOptimizer, alias, physical string, temporary bool, indexedColumn string) {
+	t.Helper()
+	tableDef := DeepCopyTableDef(mock.ctxt.tables["nation"], true)
+	tableDef.Name = physical
+	tableDef.IsTemporary = temporary
+	if indexedColumn != "" {
+		tableDef.Cols[1].Name = indexedColumn
+		tableDef.Cols[1].OriginName = indexedColumn
+		tableDef.Indexes = []*plan.IndexDef{{
+			IndexName: "ix_quoted",
+			Parts:     []string{indexedColumn},
+		}}
+	}
+	objRef := &ObjectRef{SchemaName: "tpch", ObjName: alias, Obj: int64(tableDef.TblId)}
+	qualifiedName := mockQualifiedTableName("tpch", alias)
+	mock.ctxt.tables[alias] = tableDef
+	mock.ctxt.objects[alias] = objRef
+	mock.ctxt.tablesByQualifiedName[qualifiedName] = tableDef
+	mock.ctxt.objectsByQualifiedName[qualifiedName] = objRef
+	mock.ctxt.legacyTableOwners[alias] = qualifiedName
+	mock.ctxt.legacyObjectOwners[alias] = qualifiedName
+}
+
+func TestShowMetadataEscapesQuotedIdentifiers(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	addMockShowTable(t, mock, "a'b", "a'b", false, "")
+	addMockShowTable(t, mock, "quote_col", "quote_col", false, "x'y")
+
+	for _, sql := range []string{
+		"show columns from `a'b`",
+		"show full columns from `a'b`",
+		"show index from `a'b`",
+		"show columns from quote_col",
+		"show index from quote_col",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestShowColumnsUsesTemporaryPhysicalName(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	addMockShowTable(t, mock, "temp_alias", "__mo_tmp_physical_temp_alias", true, "")
+
+	for _, sql := range []string{
+		"desc temp_alias",
+		"describe temp_alias",
+		"show columns from temp_alias",
+		"show fields from temp_alias",
+		"show full columns from temp_alias",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			require.True(t, queryContainsStringLiteral(logicPlan.GetQuery(), "__mo_tmp_physical_temp_alias"),
+				"temporary SHOW metadata must query the physical catalog relation")
+		})
+	}
+}
+
 func TestCoverage_buildShowTableStatus(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 
@@ -415,4 +574,24 @@ func TestCoverage_buildShowColumnNumber(t *testing.T) {
 		"show column_number from nation",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestShowTablesLiteralInternalIndexPrefix(t *testing.T) {
+	for _, statement := range []string{
+		"show tables from tpch",
+		"show full tables from tpch",
+		"show table_number from tpch",
+		"show table status from tpch",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), statement, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(mock.CurrentContext(), stmt, false)
+			require.NoError(t, err)
+			require.True(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_"))
+			require.False(t, queryContainsStringLiteral(built.GetQuery(), "__mo_index_%"))
+		})
+	}
 }

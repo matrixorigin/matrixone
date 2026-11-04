@@ -107,6 +107,16 @@ type ResultSet interface {
 type MysqlColumn struct {
 	ColumnImpl
 
+	// Immutable source metadata retained for geometry wire encoding, including cursors.
+	geometryOid   types.T
+	geometryWidth int32
+
+	// zerofillPadIntDigits is the integer-part digit target of the shared
+	// ZEROFILL pad helper. It is set only for result DECIMAL columns whose
+	// plan type carries the ZEROFILL numeric attribute; zero disables
+	// padding so derived expressions and plain decimals keep plain text.
+	zerofillPadIntDigits int32
+
 	//schema name
 	schema string
 
@@ -137,6 +147,10 @@ type MysqlColumn struct {
 
 func (mc *MysqlColumn) DefaultValue() []byte {
 	return mc.defaultValue
+}
+
+func (mc *MysqlColumn) geometrySourceType() types.Type {
+	return types.Type{Oid: mc.geometryOid, Width: mc.geometryWidth}
 }
 
 func (mc *MysqlColumn) SetDefaultValue(defaultValue []byte) {
@@ -199,6 +213,16 @@ func (mc *MysqlColumn) Schema() string {
 
 func (mc *MysqlColumn) SetSchema(schema string) {
 	mc.schema = schema
+}
+
+// zerofillPadDigitsForRender reports the integer-part digit target for the
+// shared ZEROFILL pad helper, or zero when the column is not an attributed
+// ZEROFILL DECIMAL (flag and digits are installed together).
+func (mc *MysqlColumn) zerofillPadDigitsForRender() int {
+	if mc.flag&uint16(defines.ZEROFILL_FLAG) == 0 || mc.zerofillPadIntDigits <= 0 {
+		return 0
+	}
+	return int(mc.zerofillPadIntDigits)
 }
 
 func (mc *MysqlColumn) SetSigned(s bool) {

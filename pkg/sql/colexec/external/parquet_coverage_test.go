@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -67,7 +68,7 @@ func TestParquetHasPhysicalAttrsCoverageHack(t *testing.T) {
 }
 
 func TestParquetOpenFileCoverageHack(t *testing.T) {
-	ctx := context.Background()
+	ctx := fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin")
 	data := parquetCoverageBytes(t)
 
 	localPath := filepath.Join(t.TempDir(), "data.parquet")
@@ -75,7 +76,7 @@ func TestParquetOpenFileCoverageHack(t *testing.T) {
 	param := &ExternalParam{
 		ExParamConst: ExParamConst{
 			Ctx:      ctx,
-			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INFILE}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INFILE}, ExParam: tree.ExParam{Ctx: ctx}},
 			FileSize: []int64{int64(len(data))},
 		},
 		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 0, FileCnt: 1, Filepath: localPath}},
@@ -96,6 +97,7 @@ func TestParquetOpenFileCoverageHack(t *testing.T) {
 				ExParamConst: tree.ExParamConst{ScanType: tree.S3},
 				ExParam: tree.ExParam{
 					S3Param: &tree.S3Parameter{Endpoint: "disk", Bucket: bucket},
+					Ctx:     ctx,
 				},
 			},
 			FileSize: []int64{int64(len(data))},

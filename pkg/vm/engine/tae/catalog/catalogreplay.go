@@ -125,13 +125,6 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 
 func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], _ wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.ID.TableID)
-	// prepareTS := cmd.GetTs()
-	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-	// 	if observer != nil {
-	// 		observer.OnStaleIndex(idx)
-	// 	}
-	// 	return
-	// }
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
 		panic(err)
@@ -144,6 +137,8 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		defer db.Unlock()
 		tbl = NewReplayTableEntry()
 		tbl.ID = cmd.ID.TableID
+		tbl.dataObjects.SetTableID(tbl.ID)
+		tbl.tombstoneObjects.SetTableID(tbl.ID)
 		tbl.db = db
 		tbl.tableData = catalog.MakeTableFactory()(tbl)
 		tbl.TableNode = cmd.node
@@ -185,8 +180,10 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		tbl.TableNode.schema.Store(schema)
 		// alter table rename
 		if schema.Extra.OldName != "" && un.DeletedAt.IsEmpty() {
-			if err := tbl.db.RenameTableInTxn(
-				schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true,
+			// WAL replays each table's final name independently. Another table in
+			// the same committed swap may still have its old name, so skip admission.
+			if err := tbl.db.replayRenameTable(
+				schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, nil, true,
 			); err != nil {
 				logutil.Warn(schema.String())
 				panic(err)
@@ -539,7 +536,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 		tbl.TableNode.schema.Store(schema)
 		if schema.Extra.OldName != "" {
 			logutil.Infof("replay rename %v from %v -> %v", tid, schema.Extra.OldName, schema.Name)
-			err := tbl.db.RenameTableInTxn(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
+			err := tbl.db.replayRenameTable(schema.Extra.OldName, schema.Name, tbl.ID, schema.AcInfo.TenantID, un.GetTxn(), true)
 			if err != nil {
 				logutil.Warn(schema.String())
 				panic(err)
@@ -553,6 +550,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.TableNode.schema.Store(schema)
 	tbl.db = db
 	tbl.ID = tid
+	tbl.dataObjects.SetTableID(tbl.ID)
+	tbl.tombstoneObjects.SetTableID(tbl.ID)
 	tbl.tableData = catalog.MakeTableFactory()(tbl)
 	_ = db.AddEntryLocked(tbl, nil, true)
 	un := &MVCCNode[*TableMVCCNode]{
@@ -667,6 +666,11 @@ func (catalog *Catalog) OnReplayObjectBatch_V2(
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
 			obj.objData.TryUpgrade()
 		}
+	}
+	// A first-seen delete record creates both versions before initializing data.
+	// Both versions must share the same object, as in onReplayCheckpointObject.
+	if next := obj.GetNextVersion(); next != nil {
+		next.objData = obj.objData
 	}
 }
 func (catalog *Catalog) OnReplayObjectBatch(

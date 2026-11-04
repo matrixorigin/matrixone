@@ -89,14 +89,20 @@ EOF
 export PIXI_PROJECT_ROOT="$work/pixi-project"
 export PIXI_ENVIRONMENT_NAME=mo
 export CONDA_PREFIX="$PIXI_PROJECT_ROOT/.pixi/envs/mo"
+case "${MO_TEST_HOST_ARCH:-x86_64}" in
+    x86_64) test_compiler_arch=x86_64; test_cuda_target=x86_64; test_goarch=amd64 ;;
+    aarch64) test_compiler_arch=aarch64; test_cuda_target=sbsa; test_goarch=arm64 ;;
+    *) echo "unsupported fixture architecture" >&2; exit 1 ;;
+esac
+export MO_TEST_GOARCH=$test_goarch
 mkdir -p "$CONDA_PREFIX/conda-meta"
 for gpu_input in pixi.lock \
-    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-cc \
-    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-c++ \
+    .pixi/envs/mo/bin/$test_compiler_arch-conda-linux-gnu-cc \
+    .pixi/envs/mo/bin/$test_compiler_arch-conda-linux-gnu-c++ \
     .pixi/envs/mo/bin/nvcc \
-    .pixi/envs/mo/targets/x86_64-linux/include/cuda.h \
-    .pixi/envs/mo/targets/x86_64-linux/lib/libcudart.so \
-    .pixi/envs/mo/targets/x86_64-linux/lib/stubs/libcuda.so \
+    .pixi/envs/mo/targets/$test_cuda_target-linux/include/cuda.h \
+    .pixi/envs/mo/targets/$test_cuda_target-linux/lib/libcudart.so \
+    .pixi/envs/mo/targets/$test_cuda_target-linux/lib/stubs/libcuda.so \
     .pixi/envs/mo/include/cuvs/core/c_api.h \
     .pixi/envs/mo/lib/libcuvs.so \
     .pixi/envs/mo/lib/libcuvs_c.so \
@@ -113,7 +119,7 @@ while [ $# -gt 0 ]; do
     env)
       case "$2" in
         GOOS|GOHOSTOS) echo linux ;;
-        GOARCH|GOHOSTARCH) echo amd64 ;;
+        GOARCH|GOHOSTARCH) echo "$MO_TEST_GOARCH" ;;
         CGO_ENABLED) echo 1 ;;
         *) echo "" ;;
       esac
@@ -125,6 +131,15 @@ while [ $# -gt 0 ]; do
 done
 STUB
 chmod +x "$work/bin/go"
+cat > "$work/bin/uname" <<EOF
+#!/bin/sh
+case "\$1" in
+    -s) echo Linux ;;
+    -m) echo $test_compiler_arch ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$work/bin/uname"
 
 failures=0
 

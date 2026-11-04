@@ -97,7 +97,7 @@ select id, rn from v_window_plain order by id;
 2  ¦  2  𝄀
 3  ¦  3
 explain select id from v_good_filter;
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -108,9 +108,10 @@ Project  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft_view_ddl.docs  𝄀
                     Runtime Filter Probe: docs.id  𝄀
-              ->  Table Function on fulltext_index_scan
+              ->  Fulltext Index Scan on ft_body  𝄀
+                    Fulltext Index: ft_body
 explain select id from v_good_score where score > 0;
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -123,7 +124,8 @@ Project  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ft_view_ddl.docs  𝄀
                           Runtime Filter Probe: docs.id  𝄀
-                    ->  Table Function on fulltext_index_scan
+                    ->  Fulltext Index Scan on ft_body  𝄀
+                          Fulltext Index: ft_body
 select id from v_good_score where score > 0 order by id;
 ➤ id[4,32,0]  𝄀
 1  𝄀

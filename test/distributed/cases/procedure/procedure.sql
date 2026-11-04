@@ -181,4 +181,121 @@ call test_sql_mode_pipes();
 drop procedure test_sql_mode_pipes;
 set sql_mode = default;
 
+-- @case
+-- @desc:recursion counts active instances per routine and uses the caller session limit
+-- @label:bvt
+set @saved_sp_recursion_depth = @@session.max_sp_recursion_depth;
+set max_sp_recursion_depth = 0;
+create table recursion_effects(n int);
+create procedure recursion_self(in n int) 'begin insert into recursion_effects values(n); if n > 0 then call recursion_self(n-1); end if; end';
+call recursion_self(0);
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+call recursion_self(1);
+-- The rejected child is not entered; the existing top-level CALL transaction rolls back.
+select n from recursion_effects order by n;
+call recursion_self(0);
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+set max_sp_recursion_depth = 1;
+call recursion_self(1);
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+call recursion_self(2);
+select n from recursion_effects order by n;
+set max_sp_recursion_depth = 2;
+call recursion_self(2);
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+
+-- Different routines can nest at limit zero, and sibling calls do not retain depth.
+set max_sp_recursion_depth = 0;
+create procedure recursion_leaf() 'begin insert into recursion_effects values(30); end';
+create procedure recursion_middle() 'begin call recursion_leaf(); call recursion_leaf(); end';
+create procedure recursion_outer() 'begin call recursion_middle(); end';
+call recursion_outer();
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+
+-- Mutual recursion is limited per routine, rather than by total CALL depth.
+create procedure recursion_a(in n int) 'begin insert into recursion_effects values(n); if n > 0 then call recursion_b(n-1); end if; end';
+create procedure recursion_b(in n int) 'begin insert into recursion_effects values(n); if n > 0 then call recursion_a(n-1); end if; end';
+call recursion_a(1);
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+call recursion_a(2);
+select n from recursion_effects order by n;
+set max_sp_recursion_depth = 1;
+call recursion_a(3);
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+call recursion_a(4);
+select n from recursion_effects order by n;
+
+-- Identically named routines in different schemas have independent allowances.
+drop database if exists procedure_recursion_other;
+create database procedure_recursion_other;
+create procedure procedure_recursion_other.recursion_same() 'begin insert into procedure_test.recursion_effects values(40); end';
+create procedure recursion_same() 'begin call procedure_recursion_other.recursion_same(); end';
+set max_sp_recursion_depth = 0;
+call recursion_same();
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+drop procedure procedure_recursion_other.recursion_same;
+create procedure procedure_recursion_other.recursion_same() 'begin call procedure_test.recursion_same(); end';
+call recursion_same();
+select n from recursion_effects order by n;
+drop database procedure_recursion_other;
+
+-- A second connection has its own default zero limit; failure leaves it reusable.
+set max_sp_recursion_depth = 1;
+-- @session:id=1{
+use procedure_test;
+call recursion_self(1);
+select n from recursion_effects order by n;
+call recursion_self(0);
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+-- @session}
+call ReCuRsIoN_SeLf(1);
+select n from recursion_effects order by n;
+truncate table recursion_effects;
+set max_sp_recursion_depth = 0;
+call recursion_self(1);
+select n from recursion_effects order by n;
+call recursion_self(0);
+select n from recursion_effects order by n;
+-- Starlark CALLs share the per-routine bound, including SQL bridge re-entry.
+-- mo.sql reports a rejected child as a value; the script may handle it.
+create procedure recursion_starlark(in n int) language 'starlark' $$
+mo.setvar("st_entered", n)
+rows, err = mo.sql("call recursion_starlark({})".format(n-1)) if n > 0 else [None, None]
+code = mo.errno()
+state = mo.sqlstate()
+mo.setvar("st_errno", code) if err else None
+mo.setvar("st_state", state) if err else None
+$$;
+set @st_entered = -1, @st_errno = 0, @st_state = '';
+call recursion_starlark(3);
+select @st_entered = 3 as stopped_at_entry, @st_errno = 1456 as recursion_error, @st_state = 'HY000' as recursion_state;
+set max_sp_recursion_depth = 1;
+set @st_entered = -1, @st_errno = 0, @st_state = '';
+call recursion_starlark(3);
+select @st_entered = 2 as one_reentry, @st_errno = 1456 as recursion_error;
+set @st_entered = -1, @st_errno = 0, @st_state = '';
+call recursion_starlark(0);
+select @st_entered = 0 as reusable, @st_errno = 0 as no_error;
+create procedure recursion_starlark_bridge(in n int) 'begin call recursion_starlark_mixed(n); end';
+create procedure recursion_starlark_mixed(in n int) language 'starlark' $$
+mo.setvar("st_entered", n)
+rows, err = mo.sql("call recursion_starlark_bridge({})".format(n-1)) if n > 0 else [None, None]
+code = mo.errno()
+mo.setvar("st_errno", code) if err else None
+$$;
+set max_sp_recursion_depth = 0;
+set @st_entered = -1, @st_errno = 0;
+call recursion_starlark_mixed(3);
+select @st_entered = 3 as mixed_stopped_at_entry, @st_errno = 1456 as recursion_error;
+set max_sp_recursion_depth = @saved_sp_recursion_depth;
+
 drop database if exists procedure_test;

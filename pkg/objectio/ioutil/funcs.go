@@ -182,17 +182,6 @@ func GetTombstonesByBlockId(
 	return
 }
 
-/*
-func FindTombstonesOfBlock(
-	ctx context.Context,
-	blockId objectio.Blockid,
-	tombstoneObjects []objectio.ObjectStats,
-	fs fileservice.FileService,
-) (sels bitmap.Bitmap, err error) {
-	return findTombstoneOfXXX(ctx, blockId[:], tombstoneObjects, fs)
-}
-*/
-
 func FindTombstonesOfObject(
 	ctx context.Context,
 	objectId *objectio.ObjectId,

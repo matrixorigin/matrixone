@@ -149,6 +149,12 @@ type InternalType struct {
 	//type id
 	Oid uint32
 
+	// CastCharsetSpecified distinguishes an omitted CHARACTER SET clause from
+	// an explicitly empty name on expression CHAR casts. CastCharsetName is
+	// resolved through the same admission policy as CONVERT(... USING charset).
+	CastCharsetSpecified bool
+	CastCharsetName      string
+
 	EnumValues []string
 
 	//the type of array elements.

@@ -256,7 +256,9 @@ func (insert *Insert) checkExternalNotNull(proc *process.Process, bat *batch.Bat
 // The file is finalized when the input stream ends (nil batch).
 func (insert *Insert) insert_external(proc *process.Process, analyzer process.Analyzer) (vm.CallResult, error) {
 	input, err := vm.ChildrenCall(insert.GetChildren(0), proc, analyzer)
-	if err != nil {
+	// A dependent child may suspend with no batch. Only EOF transfers the
+	// writer to Close; suspension must preserve it for the resumed input.
+	if err != nil || input.Status == vm.ExecYield {
 		return input, err
 	}
 

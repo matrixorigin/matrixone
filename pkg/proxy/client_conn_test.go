@@ -191,14 +191,6 @@ func (c *mockClientConn) BuildConnWithServer(_ context.Context, _ string) (Serve
 func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
 	defer e.notify()
 	switch ev := e.(type) {
-	case *killEvent:
-		cn, err := c.router.SelectByConnID(ev.connID)
-		if err != nil {
-			sendResp([]byte(err.Error()), resp)
-			return err
-		}
-		sendResp([]byte(cn.addr), resp)
-		return nil
 	case *setVarEvent:
 		c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: ev.stmt})
 		sendResp([]byte("ok"), resp)
@@ -390,37 +382,76 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 	}
 }
 
-func TestClientConn_KillCurrentBackendConn(t *testing.T) {
-	currentCN := &CNServer{
-		connID:              10,
-		uuid:                "cn1",
-		addr:                "127.0.0.1:6001",
-		salt:                testSlat,
-		admissionGeneration: 23,
-	}
-	execSC := &killExecServerConn{}
-	activeTunnel := &tunnel{}
-	router := &killTestRouter{
-		connectFn: func(c *CNServer, handshakeResp *frontend.Packet, tun *tunnel) (ServerConn, []byte, error) {
-			require.Equal(t, currentCN.uuid, c.uuid)
-			require.Equal(t, currentCN.addr, c.addr)
-			require.Equal(t, currentCN.salt, c.salt)
-			require.Equal(t, currentCN.admissionGeneration, c.admissionGeneration)
-			require.NotZero(t, c.connID)
-			require.Nil(t, tun, "temporary admin connections must not borrow the active session tunnel")
-			return execSC, makeOKPacket(8), nil
-		},
-	}
+type disconnectQueryClient struct {
+	client.QueryClient
+	send     func(context.Context, string, *query.Request) (*query.Response, error)
+	released int
+}
 
-	c := &clientConn{
-		connID: 42,
-		router: router,
-		tun:    activeTunnel,
+func (c *disconnectQueryClient) NewRequest(method query.CmdMethod) *query.Request {
+	return &query.Request{CmdMethod: method}
+}
+func (c *disconnectQueryClient) SendMessage(ctx context.Context, addr string, req *query.Request) (*query.Response, error) {
+	return c.send(ctx, addr, req)
+}
+func (c *disconnectQueryClient) Release(*query.Response) { c.released++ }
+
+type disconnectMOCluster struct{ clusterservice.MOCluster }
+
+func (disconnectMOCluster) GetCNService(_ clusterservice.Selector, apply func(metadata.CNService) bool) {
+	apply(metadata.CNService{ServiceID: "cn1", SQLAddress: "127.0.0.1:6001", QueryAddress: "query-current"})
+}
+func disconnectCluster() clusterservice.MOCluster { return disconnectMOCluster{} }
+
+func TestClientConn_KillCurrentBackendConn(t *testing.T) {
+	for _, mode := range []string{"success", "error", "nil", "malformed"} {
+		t.Run(mode, func(t *testing.T) {
+			parent, cancel := context.WithCancel(context.Background())
+			cancel()
+			called := 0
+			qc := &disconnectQueryClient{send: func(ctx context.Context, addr string, req *query.Request) (*query.Response, error) {
+				called++
+				require.NoError(t, ctx.Err(), "disconnect cancellation must not pre-cancel cleanup")
+				_, bounded := ctx.Deadline()
+				require.True(t, bounded)
+				require.Equal(t, "query-current", addr)
+				require.Equal(t, query.CmdMethod_DisconnectSession, req.CmdMethod)
+				require.Equal(t, uint32(42), req.DisconnectSessionRequest.ConnID)
+				switch mode {
+				case "error":
+					return &query.Response{}, moerr.NewInternalErrorNoCtx("unsupported peer")
+				case "nil":
+					return nil, nil
+				case "malformed":
+					return &query.Response{}, nil
+				}
+				return &query.Response{DisconnectSessionResponse: &query.DisconnectSessionResponse{}}, nil
+			}}
+			c := &clientConn{ctx: parent, connID: 42, queryClient: qc, moCluster: disconnectCluster(), router: &killTestRouter{connectFn: func(*CNServer, *frontend.Packet, *tunnel) (ServerConn, []byte, error) {
+				t.Fatal("must never replay original login")
+				return nil, nil, nil
+			}}}
+			// The local ServerConn ID is 0 and cached CNServer's original frontend ID is 10.
+			// Neither is the current client's immutable logical ID 42.
+			sc := newMockServerConn(nil)
+			sc.setCN(&CNServer{connID: 10, uuid: "cn1", addr: "127.0.0.1:6001"})
+			err := c.KillCurrentBackendConn(sc)
+			if mode == "success" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			require.Equal(t, 1, called)
+			releases := 1
+			if mode == "nil" {
+				releases = 0
+			}
+			require.Equal(t, releases, qc.released)
+		})
 	}
-	err := c.KillCurrentBackendConn(&killCurrentServerConn{cn: currentCN})
-	require.NoError(t, err)
-	require.Equal(t, cmdQuery, execSC.stmt.cmdType)
-	require.Equal(t, "kill connection 42", execSC.stmt.s)
+	c := &clientConn{connID: 42}
+	require.NoError(t, c.KillCurrentBackendConn(nil))
+	require.Error(t, c.KillCurrentBackendConn(&killCurrentServerConn{cn: &CNServer{addr: "unknown"}}))
 }
 
 func TestBackgroundExecDoesNotStarveCriticalProtocolAdmission(t *testing.T) {

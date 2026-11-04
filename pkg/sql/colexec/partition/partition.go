@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partitionhash"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -79,15 +80,30 @@ func (partition *Partition) Prepare(proc *process.Process) (err error) {
 	ctr.batchList = make([]*batch.Batch, 0, 16)
 	ctr.orderCols = make([][]*vector.Vector, 0, 16)
 
-	partition.ctr.executors = make([]colexec.ExpressionExecutor, len(partition.OrderBySpecs))
+	// Literal keys are equal across rows and batches; omit them from both
+	// execution and comparison without changing the operator's plan specs.
+	specs := nonLiteralOrderSpecs(partition.OrderBySpecs)
+	partition.ctr.executors = make([]colexec.ExpressionExecutor, len(specs))
 	for i := range partition.ctr.executors {
-		partition.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, partition.OrderBySpecs[i].Expr)
+		partition.ctr.executors[i], err = colexec.NewExpressionExecutor(proc, specs[i].Expr)
 		if err != nil {
 			return err
 		}
 	}
-	ctr.generateCompares(partition.OrderBySpecs)
+	ctr.generateCompares(specs)
 	return nil
+}
+
+// nonLiteralOrderSpecs keeps evaluator and comparator positions aligned.
+// Literals are equal across batches; runtime constant columns need not be.
+func nonLiteralOrderSpecs(specs []*plan2.OrderBySpec) []*plan2.OrderBySpec {
+	keys := make([]*plan2.OrderBySpec, 0, len(specs))
+	for _, spec := range specs {
+		if spec.Expr.GetLit() == nil {
+			keys = append(keys, spec)
+		}
+	}
+	return keys
 }
 
 func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
@@ -107,10 +123,16 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
+			if result.Status == vm.ExecYield {
+				return result, nil
+			}
 			if result.Batch == nil {
 				ctr.indexList = make([]int64, len(ctr.batchList))
 				ctr.status = eval
 			} else {
+				if result.Batch.IsEmpty() {
+					continue
+				}
 				if len(ctr.batchList) > ctr.i {
 					if ctr.batchList[ctr.i] != nil {
 						ctr.batchList[ctr.i].CleanOnlyData()
@@ -182,6 +204,9 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 	var desc, nullsLast bool
 
 	ctr.compares = make([]compare.Compare, len(fs))
+	// The legacy comparison for floats (notably NaN), JSON and arrays does
+	// not provide the strict ordering needed by a heap. Keep their old path.
+	ctr.useMergeHeap = true
 	for i := range ctr.compares {
 		desc = fs[i].Flag&plan2.OrderBySpec_DESC != 0
 		if fs[i].Flag&plan2.OrderBySpec_NULLS_FIRST != 0 {
@@ -195,10 +220,14 @@ func (ctr *container) generateCompares(fs []*plan.OrderBySpec) {
 		exprTyp := fs[i].Expr.Typ
 		typ := types.MustTypeFromPlan(exprTyp)
 		ctr.compares[i] = compare.New(typ, desc, nullsLast)
+		ctr.useMergeHeap = ctr.useMergeHeap && partitionhash.Compatible(typ.Oid)
 	}
 }
 
 func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) (sendOver bool, err error) {
+	if ctr.useMergeHeap {
+		return ctr.pickAndSendHeap(proc, result)
+	}
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	} else {
@@ -221,7 +250,7 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 		if wholeLength == 0 || fromRemoveBatch {
 			choice = ctr.pickFirstRow()
 		} else {
-			if choice, hasSame = ctr.pickSameRow(row, cols); !hasSame {
+			if choice, hasSame = ctr.pickSameRow(row, cols, choice); !hasSame {
 				break
 			}
 		}
@@ -261,6 +290,167 @@ func (ctr *container) pickAndSend(proc *process.Process, result *vm.CallResult) 
 	return sendOver, nil
 }
 
+// compareRunRows deliberately uses the same comparison as the legacy path.
+// The heap's stable run-ID tie breaker is separate from group equality.
+func (ctr *container) compareRunRows(left int, leftRow int64, right int, rightRow int64) int {
+	for k, cmp := range ctr.compares {
+		cmp.Set(0, ctr.orderCols[left][k])
+		cmp.Set(1, ctr.orderCols[right][k])
+		if result := cmp.Compare(0, 1, leftRow, rightRow); result != 0 {
+			return result
+		}
+	}
+	return 0
+}
+
+func (ctr *container) lessRun(left, right int) bool {
+	result := ctr.compareRunRows(left, ctr.indexList[left], right, ctr.indexList[right])
+	return result < 0 || result == 0 && left < right
+}
+
+func (ctr *container) fixMergeHeap(root int) {
+	for {
+		child := 2*root + 1
+		if child >= len(ctr.mergeHeap) {
+			return
+		}
+		if child+1 < len(ctr.mergeHeap) && ctr.lessRun(ctr.mergeHeap[child+1], ctr.mergeHeap[child]) {
+			child++
+		}
+		if !ctr.lessRun(ctr.mergeHeap[child], ctr.mergeHeap[root]) {
+			return
+		}
+		ctr.mergeHeap[root], ctr.mergeHeap[child] = ctr.mergeHeap[child], ctr.mergeHeap[root]
+		root = child
+	}
+}
+
+func (ctr *container) initMergeHeap(proc *process.Process) error {
+	ctr.mergeHeap = make([]int, 0, len(ctr.batchList))
+	for i, bat := range ctr.batchList {
+		if err := checkCanceled(proc, i); err != nil {
+			return err
+		}
+		if bat == nil {
+			continue
+		}
+		if ctr.indexList[i] >= int64(bat.RowCount()) {
+			ctr.releaseRun(proc, i)
+			continue
+		}
+		ctr.mergeHeap = append(ctr.mergeHeap, i)
+	}
+	for i := len(ctr.mergeHeap)/2 - 1; i >= 0; i-- {
+		if err := checkCanceled(proc, len(ctr.mergeHeap)/2-1-i); err != nil {
+			return err
+		}
+		ctr.fixMergeHeap(i)
+	}
+	return nil
+}
+
+// sameGroupRun bounds both comparison work and a single vector copy between
+// cancellation checks. A logical group may span any number of these chunks.
+func (ctr *container) sameGroupRun(run int, start int64) int {
+	limit := min(int64(cancellationCheckInterval), int64(ctr.batchList[run].RowCount())-start)
+	if len(ctr.compares) == 0 {
+		return int(limit)
+	}
+	for k, cmp := range ctr.compares {
+		cmp.Set(0, ctr.orderCols[run][k])
+		cmp.Set(1, ctr.orderCols[run][k])
+	}
+	for n := int64(1); n < limit; n++ {
+		for _, cmp := range ctr.compares {
+			if cmp.Compare(0, 1, start, start+n) != 0 {
+				return int(n)
+			}
+		}
+	}
+	return int(limit)
+}
+
+func (ctr *container) releaseRun(proc *process.Process, run int) {
+	ctr.batchList[run].Clean(proc.Mp())
+	ctr.batchList[run] = nil
+	for _, col := range ctr.orderCols[run] {
+		col.Free(proc.Mp())
+	}
+	ctr.orderCols[run] = nil
+}
+
+func (ctr *container) pickAndSendHeap(proc *process.Process, result *vm.CallResult) (bool, error) {
+	if err := checkCanceled(proc, 0); err != nil {
+		return false, err
+	}
+	if ctr.mergeHeap == nil {
+		if err := ctr.initMergeHeap(proc); err != nil {
+			return false, err
+		}
+	}
+	if len(ctr.mergeHeap) == 0 {
+		ctr.batchList = nil
+		ctr.orderCols = nil
+		ctr.indexList = nil
+		ctr.mergeHeap = nil
+		return true, nil
+	}
+	if ctr.buf == nil {
+		first := ctr.batchList[ctr.mergeHeap[0]]
+		ctr.buf = batch.NewOffHeapWithSize(first.VectorCount())
+		for i := range ctr.buf.Vecs {
+			ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(*first.Vecs[i].GetType())
+		}
+	} else {
+		ctr.buf.CleanOnlyData()
+	}
+	rows := 0
+	for {
+		if err := checkCanceled(proc, 0); err != nil {
+			return false, err
+		}
+		run := ctr.mergeHeap[0]
+		start := ctr.indexList[run]
+		count := ctr.sameGroupRun(run, start)
+		for col := range ctr.buf.Vecs {
+			if err := ctr.buf.Vecs[col].UnionBatch(ctr.batchList[run].Vecs[col], start, count, nil, proc.Mp()); err != nil {
+				return false, err
+			}
+		}
+		rows += count
+		ctr.indexList[run] += int64(count)
+		exhausted := ctr.indexList[run] == int64(ctr.batchList[run].RowCount())
+		if exhausted {
+			last := len(ctr.mergeHeap) - 1
+			ctr.mergeHeap[0] = ctr.mergeHeap[last]
+			ctr.mergeHeap = ctr.mergeHeap[:last]
+		}
+		ctr.fixMergeHeap(0)
+		sameGroup := false
+		if len(ctr.mergeHeap) > 0 {
+			next := ctr.mergeHeap[0]
+			sameGroup = ctr.compareRunRows(run, start, next, ctr.indexList[next]) == 0
+		}
+		// Keep the previous key alive until the next group boundary is decided.
+		if exhausted {
+			ctr.releaseRun(proc, run)
+		}
+		if !sameGroup {
+			break
+		}
+	}
+	ctr.buf.SetRowCount(rows)
+	result.Batch = ctr.buf
+	done := len(ctr.mergeHeap) == 0
+	if done {
+		ctr.batchList = nil
+		ctr.orderCols = nil
+		ctr.indexList = nil
+		ctr.mergeHeap = nil
+	}
+	return done, nil
+}
+
 func (ctr *container) pickFirstRow() (batIndex int) {
 	l := len(ctr.indexList)
 
@@ -284,10 +474,13 @@ func (ctr *container) pickFirstRow() (batIndex int) {
 	return i
 }
 
-func (ctr *container) pickSameRow(row int64, cols []*vector.Vector) (batIndex int, hasSame bool) {
+func (ctr *container) pickSameRow(row int64, cols []*vector.Vector, first int) (batIndex int, hasSame bool) {
 	l := len(ctr.indexList)
 
-	j := 0
+	// Only the previously selected batch advanced. Earlier heads were already
+	// different from this group and cannot become equal without advancing.
+	// A new group or removal restarts through pickFirstRow in pickAndSend.
+	j := first
 	for ; j < l; j++ {
 		hasSame = true
 		for k := 0; k < len(ctr.compares); k++ {

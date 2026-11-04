@@ -34,6 +34,7 @@ mo_columns
 mo_configurations
 mo_data_key
 mo_database
+mo_database_defaults
 mo_feature_limit
 mo_feature_registry
 mo_foreign_keys
@@ -127,7 +128,7 @@ drop table A;
 grant drop table on database t to r1;
 use t;
 drop table A;
-no such table t.a
+Unknown table 't.a'
 create database s;
 use s;
 create table B(b int);
@@ -149,7 +150,7 @@ drop table B;
 grant drop table on database s to r1;
 use s;
 drop table B;
-no such table s.b
+Unknown table 's.b'
 drop database t;
 drop database s;
 create database v;

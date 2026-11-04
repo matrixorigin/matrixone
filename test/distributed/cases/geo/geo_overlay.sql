@@ -39,3 +39,7 @@ select st_area(st_union(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))'), st_ge
 -- Non-areal input is rejected.
 -- @regex("POLYGON or MULTIPOLYGON",true)
 select st_union(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'));
+
+-- Boundary-only intersection retains dimension, including endpoint contact.
+select st_astext(st_intersection(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))',0),st_geomfromtext('POLYGON((1 0,2 0,2 1,1 1,1 0))',0))) as shared_edge;
+select st_astext(st_intersection(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))',0),st_geomfromtext('POLYGON((1 1,2 1,2 2,1 2,1 1))',0))) as shared_corner;

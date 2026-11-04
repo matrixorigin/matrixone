@@ -47,7 +47,7 @@ from a join b on a.id=b.id
 where match(a.body) against('hello') and match(b.body) against('hello') order by a.id;
 
 -- @separator:table
--- @regex("Table Function on fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 explain select a.id, match(a.body) against('hello') as sa, match(b.body) against('hello') as sb
 from a join b on a.id=b.id
 where match(a.body) against('hello') and match(b.body) against('hello');

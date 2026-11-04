@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -35,14 +36,14 @@ func TestParquetOpenFileCanceledBySibling(t *testing.T) {
 	localPath := filepath.Join(t.TempDir(), "data.parquet")
 	require.NoError(t, os.WriteFile(localPath, data, 0644))
 
-	ctx, cancel := context.WithCancelCause(context.Background())
+	ctx, cancel := context.WithCancelCause(fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin"))
 	siblingErr := moerr.NewInvalidInputNoCtx("column name not found")
 	cancel(siblingErr)
 
 	param := &ExternalParam{
 		ExParamConst: ExParamConst{
 			Ctx:      ctx,
-			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INFILE}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INFILE}, ExParam: tree.ExParam{Ctx: ctx}},
 			FileSize: []int64{int64(len(data))},
 		},
 		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1, Filepath: localPath}},

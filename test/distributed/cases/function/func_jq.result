@@ -27,7 +27,7 @@ jq({"id": "sample", "10": {"b": 42}}, {(.id): .["10"].b})
 {"sample":42}
 select jq('[{"id":1},{"id":2},{"id":3}]', '.[] | .id');
 jq([{"id":1},{"id":2},{"id":3}], .[] | .id)
-123
+1\n2\n3
 select jq('{"a":1, "b":2}', '.a += 1 | .b *= 2');
 jq({"a":1, "b":2}, .a += 1 | .b *= 2)
 {"a":2,"b":4}
@@ -35,10 +35,57 @@ select jq('{"a":1} [2] 3', '. as {$a} ?// [$a] ?// $a | $a');
 invalid character '[' after top-level value
 select jq('{"foo": 4722366482869645213696}', '.foo');
 jq({"foo": 4722366482869645213696}, .foo)
-4.722366482869645e+21
+4722366482869645213696
 select jq('1', 'def fact($n): if $n < 1 then 1 else $n * fact($n - 1) end; fact(50)');
 jq(1, def fact($n): if $n < 1 then 1 else $n * fact($n - 1) end; fact(50))
 30414093201713378043612608166064768844377641568960512000000000000
+select jq('[1,2,3,4,5]', '.[]');
+jq([1,2,3,4,5], .[])
+1\n2\n3\n4\n5
+select jq('[1,2,3]', '.[] | . * 10');
+jq([1,2,3], .[] | . * 10)
+10\n20\n30
+select jq('[1,2,3,4,5]', '.[] | select(. > 2)');
+jq([1,2,3,4,5], .[] | select(. > 2))
+3\n4\n5
+select jq('[1,2,3]', '.[] | select(. > 10)');
+jq([1,2,3], .[] | select(. > 10))
+
+select jq('{"n":9007199254740993}', '.n');
+jq({"n":9007199254740993}, .n)
+9007199254740993
+select jq('{"n":-9007199254740993}', '.n');
+jq({"n":-9007199254740993}, .n)
+-9007199254740993
+select jq('{"n":9007199254740993}', '.n * 1000000000000');
+jq({"n":9007199254740993}, .n * 1000000000000)
+9007199254740993000000000000
+select jq('{"n":4722366482869645213696}', '.n + 1');
+jq({"n":4722366482869645213696}, .n + 1)
+4722366482869645213697
+select try_jq('{"n":4722366482869645213696}', '.n');
+try_jq({"n":4722366482869645213696}, .n)
+4722366482869645213696
+select jq('[9007199254740993,4722366482869645213696]', '.[]');
+jq([9007199254740993,4722366482869645213696], .[])
+9007199254740993\n4722366482869645213696
+select jq('{"n":1e309}', '.n');
+json: cannot unmarshal number 1e309 into Go struct field .n of type float64
+select try_jq('{"n":1e309}', '.n');
+try_jq({"n":1e309}, .n)
+null
+select jq('{"n":-1e309}', '.n');
+json: cannot unmarshal number -1e309 into Go struct field .n of type float64
+select try_jq('{"n":-1e309}', '.n');
+try_jq({"n":-1e309}, .n)
+null
+select jq('{"a":{"b":[1e309,2]}}', '.[]');
+json: cannot unmarshal number 1e309 into .a.b.0 of type float64
+select jq('{"n":10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}', '.n');
+json: cannot unmarshal number 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 into Go struct field .n of type float64
+select try_jq('{"n":10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}', '.n');
+try_jq({"n":10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}, .n)
+null
 select jq('[1, 2, 3]', '.foo & .bar');
 unexpected token "&"
 select try_jq('[1, 2, 3]', '.foo & .bar');
@@ -84,22 +131,22 @@ jq(["a", "b", "c", "d", "e"], .[-2:])
 ["d","e"]
 select jq('["a", "b", "c", "d", "e"]', '.[]');
 jq(["a", "b", "c", "d", "e"], .[])
-"a""b""c""d""e"
+"a"\n"b"\n"c"\n"d"\n"e"
 select jq('[]', '.[]');
 jq([], .[])
 
 select jq('{"foo": ["a", "b", "c", "d", "e"]}', '.foo[]');
 jq({"foo": ["a", "b", "c", "d", "e"]}, .foo[])
-"a""b""c""d""e"
+"a"\n"b"\n"c"\n"d"\n"e"
 select jq('{"a":1, "b":2}', '.[]');
 jq({"a":1, "b":2}, .[])
-12
+1\n2
 select jq('{"a":1, "b":2}', '.a, .b');
 jq({"a":1, "b":2}, .a, .b)
-12
+1\n2
 select jq('["a", "b", "c", "d", "e"]', '.[4,2]');
 jq(["a", "b", "c", "d", "e"], .[4,2])
-"e""c"
+"e"\n"c"
 select jq('{"a": 1, "b": [2, 3]}', '[.a, .b[]]');
 jq({"a": 1, "b": [2, 3]}, [.a, .b[]])
 [1,2,3]
@@ -111,7 +158,7 @@ jq({"a":1, "b":2}, {aa: .a, bb: .b})
 {"aa":1,"bb":2}
 select jq('{"user":"stedolan","titles":["JQ Primer", "More JQ"]}', '{user, title: .titles[]}');
 jq({"user":"stedolan","titles":["JQ Primer", "More JQ"]}, {user, title: .titles[]})
-{"title":"JQ Primer","user":"stedolan"}{"title":"More JQ","user":"stedolan"}
+{"title":"JQ Primer","user":"stedolan"}\n{"title":"More JQ","user":"stedolan"}
 select jq('[[{"a":1}]]', '.. | .a');
 expected an object but got: array ([[{"a":1}]])
 select jq('{"a":1, "b":2}', '.a + .b');
@@ -149,7 +196,7 @@ jq([1, 2, 3], reduce .[] as $item (0; + $item))
 3
 select jq('[1, 2, 3]', 'foreach .[] as $item(0; . + $item; [$item, . * 2])');
 jq([1, 2, 3], foreach .[] as $item(0; . + $item; [$item, . * 2]))
-[1,2][2,6][3,12]
+[1,2]\n[2,6]\n[3,12]
 create table jqt(id int, data varchar(255), jq varchar(255));
 insert into jqt values
 (1, '{"foo": 128}', '.foo'),
@@ -201,7 +248,7 @@ id    try_jq(data, .)
 8    [{"id":1},{"id":2},{"id":3}]
 9    {"a":1,"b":2}
 10    null
-11    {"foo":4.722366482869645e+21}
+11    {"foo":4722366482869645213696}
 12    1
 100    [1,2,3]
 101    [1,2,3]
@@ -284,10 +331,10 @@ id    try_jq(data, jq)
 5    null
 6    null
 7    {"sample":42}
-8    123
+8    1\n2\n3
 9    {"a":2,"b":4}
 10    null
-11    4.722366482869645e+21
+11    4722366482869645213696
 12    30414093201713378043612608166064768844377641568960512000000000000
 100    null
 101    null
@@ -304,6 +351,63 @@ id    try_jq(data, jq)
 208    [null,1]
 209    [null,". is not an object",1]
 drop table jqt;
+create table jq_num(id int, data varchar(255), query varchar(255));
+insert into jq_num values
+(1, '{"n": 9007199254740993}', '.n'),
+(2, '{"n": -9007199254740993}', '.n'),
+(3, '{"n": 4722366482869645213696}', '.n'),
+(4, '[4722366482869645213696, 1]', '.[]'),
+(5, '[1,2,3,4,5]', '.[] | select(. > 2)'),
+(6, '{"n": 1.5}', '.n');
+select id, jq(data, query) from jq_num order by id;
+id    jq(data, query)
+1    9007199254740993
+2    -9007199254740993
+3    4722366482869645213696
+4    4722366482869645213696\n1
+5    3\n4\n5
+6    1.5
+drop table jq_num;
+prepare jq_p from 'select concat(''v='', jq(?, ?)) as jq_val';
+prepare try_jq_p from 'select concat(''t='', try_jq(?, ?)) as jq_val';
+set @js1 = '{"n":9007199254740993}';
+set @qe = '.n';
+execute jq_p using @js1, @qe;
+jq_val
+v=9007199254740993
+execute try_jq_p using @js1, @qe;
+jq_val
+t=9007199254740993
+set @js2 = '{"n":-9007199254740993}';
+execute jq_p using @js2, @qe;
+jq_val
+v=-9007199254740993
+execute try_jq_p using @js2, @qe;
+jq_val
+t=-9007199254740993
+set @js3 = '{"n":4722366482869645213696}';
+execute jq_p using @js3, @qe;
+jq_val
+v=4722366482869645213696
+execute try_jq_p using @js3, @qe;
+jq_val
+t=4722366482869645213696
+set @jm = '{"a":1,"b":2}';
+set @qq = '.a, .b';
+execute jq_p using @jm, @qq;
+jq_val
+v=1\n2
+execute try_jq_p using @jm, @qq;
+jq_val
+t=1\n2
+set @bad = 'oops';
+execute jq_p using @bad, @qe;
+invalid character 'o' looking for beginning of value
+execute try_jq_p using @bad, @qe;
+jq_val
+null
+deallocate prepare jq_p;
+deallocate prepare try_jq_p;
 drop table if exists jq_const_order_probe;
 create table jq_const_order_probe(id int);
 insert into jq_const_order_probe values (1), (2);
@@ -316,3 +420,5 @@ const_result
 128
 128
 drop table jq_const_order_probe;
+select table_name from information_schema.tables where table_schema = database() and table_name in ('jqt', 'jq_num', 'jq_const_order_probe') order by table_name;
+table_name

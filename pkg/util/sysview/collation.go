@@ -37,7 +37,9 @@ type CollationDefinition struct {
 }
 
 // SupportedCollationDefinitions is a presentation of the common capability
-// owner, not a second registry. Native-but-disabled domains are not advertised.
+// owner, not a second registry. Every native domain that is executable is
+// advertised with its own protocol identity; legacy aliases use their effective
+// admitted semantics.
 var SupportedCollationDefinitions = func() []CollationDefinition {
 	advertised := collation.Advertised()
 	result := make([]CollationDefinition, 0, len(advertised))
@@ -82,6 +84,133 @@ func InformationSchemaCharacterSetsCheckSQL() string {
 			charset, DefaultCollationForCharset(charset), characterSetMaxBytes(charset)))
 	}
 	return "SELECT 1 WHERE " + strings.Join(clauses, " AND ")
+}
+
+// InformationSchemaCollationsCheckSQL verifies the complete advertised metadata,
+// including row count, so stale, missing and duplicate rows require a refresh.
+func InformationSchemaCollationsCheckSQL() string {
+	if len(SupportedCollationDefinitions) == 0 {
+		return "SELECT 1 WHERE FALSE"
+	}
+
+	conditions := make([]string, 0, len(SupportedCollationDefinitions))
+	for _, collation := range SupportedCollationDefinitions {
+		conditions = append(conditions, fmt.Sprintf(
+			"COLLATION_NAME = '%s' AND CHARACTER_SET_NAME = '%s' AND ID = %d AND IS_DEFAULT = '%s' AND IS_COMPILED = '%s' AND SORTLEN = %d AND PAD_ATTRIBUTE = '%s'",
+			collation.Name,
+			collation.Charset,
+			collation.ID,
+			collation.IsDefault,
+			collation.IsCompiled,
+			collation.SortLen,
+			collation.PadAttribute,
+		))
+	}
+
+	checks := make([]string, 0, len(conditions))
+	checks = append(checks, conditions[0])
+	for _, condition := range conditions[1:] {
+		checks = append(checks, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM information_schema.COLLATIONS WHERE %s)", condition,
+		))
+	}
+	return fmt.Sprintf("SELECT 1 FROM information_schema.COLLATIONS WHERE (SELECT COUNT(*) FROM information_schema.COLLATIONS) = %d AND %s LIMIT 1", len(SupportedCollationDefinitions), strings.Join(checks, " AND "))
+}
+
+// databaseDefaultsMetadataSQL projects admitted effective identities, not SQL
+// aliases. Unknown/corrupt metadata returns NULL rather than a server fallback.
+func databaseDefaultsMetadataSQL(charset bool) string {
+	var sql strings.Builder
+	sql.WriteString("case")
+	for _, definition := range collation.Definitions() {
+		for revision := uint32(0); revision <= uint32(collation.RevisionV1); revision++ {
+			identity := uint32(definition.Identity)
+			if err := collation.RequireLegacy(identity, revision, collation.KeyFormatLegacy); err != nil {
+				continue
+			}
+			effective, err := collation.EffectiveDefinition(identity, revision)
+			if err != nil {
+				continue
+			}
+			name := effective.Name
+			if charset {
+				name = effective.Charset.Name()
+			}
+			fmt.Fprintf(&sql, " when dd.version > 0 and dd.collation_id = %d and dd.collation_revision = %d then '%s'", identity, revision, name)
+		}
+	}
+	sql.WriteString(" else NULL end")
+	return sql.String()
+}
+
+// ColumnCollationSQL projects effective domains for information_schema.COLUMNS.
+// The expression is a planner-owned encoded type.
+func ColumnCollationSQL(encodedType string) string {
+	return columnDomainMetadataSQL(encodedType, false, true)
+}
+
+// ShowColumnCollationSQL preserves SHOW's NULL for non-character binary types.
+func ShowColumnCollationSQL(encodedType string) string {
+	return columnDomainMetadataSQL(encodedType, false, false)
+}
+
+func columnDomainMetadataSQL(encodedType string, charset, includeBinary bool) string {
+	var sql strings.Builder
+	fmt.Fprintf(&sql, "(case internal_column_character_set(%s)", encodedType)
+	// These are classifier presentation codes, not persisted identities.
+	for code, identity := range []collation.Identity{collation.UTF8MB4GeneralCIIdentity, collation.UTF8MB4BinIdentity,
+		collation.BinaryIdentity, collation.UTF8MB4GeneralCIIdentity, collation.UTF8UnicodeCIIdentity, collation.UTF8MB4UnicodeCIIdentity} {
+		if code == 2 && !includeBinary {
+			continue
+		}
+		revision := uint32(collation.RevisionLegacy)
+		if code >= 4 {
+			revision = uint32(collation.RevisionV1)
+		}
+		if err := collation.RequireLegacy(uint32(identity), revision, collation.KeyFormatLegacy); err != nil {
+			continue
+		}
+		definition, err := collation.EffectiveDefinition(uint32(identity), revision)
+		if err != nil {
+			continue
+		}
+		if code == 0 {
+			// This classifier code is absent historical column metadata, not
+			// the persisted modern default. Keep its released spelling.
+			definition, _ = collation.Lookup("utf8_general_ci")
+		}
+		name := definition.Name
+		if charset {
+			name = definition.Charset.Name()
+		}
+		fmt.Fprintf(&sql, " WHEN %d then '%s'", code, name)
+	}
+	sql.WriteString(" else NULL end)")
+	return sql.String()
+}
+
+// Legacy databases have no persisted pair. Project the effective server
+// domain, including compatibility aliases, instead of advertising the spelling.
+func databaseServerMetadataSQL(charset bool) string {
+	var sql strings.Builder
+	sql.WriteString("case lower(@@session.collation_server)")
+	for _, definition := range collation.Advertised() {
+		identity, revision := uint32(definition.LegacyIdentity), uint32(0)
+		if definition.Semantics == collation.UCA400 {
+			identity, revision = uint32(definition.Identity), uint32(collation.RevisionV1)
+		}
+		effective, err := collation.EffectiveDefinition(identity, revision)
+		if err != nil {
+			continue
+		}
+		name := effective.Name
+		if charset {
+			name = effective.Charset.Name()
+		}
+		fmt.Fprintf(&sql, " when '%s' then '%s'", definition.Name, name)
+	}
+	sql.WriteString(" else NULL end")
+	return sql.String()
 }
 
 // Report the admitted encoding's capacity, not the strict native domain's.

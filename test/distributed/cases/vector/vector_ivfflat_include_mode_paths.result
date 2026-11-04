@@ -46,7 +46,7 @@ explain select id, title, category
 from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 -- @regex("Vector Index Scan", true)
 ➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
 Project  𝄀
@@ -59,7 +59,7 @@ select id, title, category
 from vector_ivfflat_include_phase6
 where category >= 20
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 ➤ id[4,32,0]  ¦  title[12,20,0]  ¦  category[4,32,0]  𝄀
 2  ¦  beta  ¦  20  𝄀
 4  ¦  delta  ¦  40
@@ -67,7 +67,7 @@ explain select id, title, note
 from vector_ivfflat_include_phase6
 where category >= 20 and note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 -- @regex("Vector Index Scan", true)
 ➤ AP QUERY PLAN ON ONE CN(32 core)[12,-1,0]  𝄀
 Project  𝄀
@@ -94,7 +94,7 @@ select id, title, note
 from vector_ivfflat_include_phase6
 where category >= 20 and note in ("n2", "n4")
 order by l2_distance(embedding, "[1,2,3]")
-limit 2 by rank with option 'mode=include';
+limit 2 by rank with option 'mode=iterative';
 ➤ id[4,32,0]  ¦  title[12,20,0]  ¦  note[12,20,0]  𝄀
 2  ¦  beta  ¦  n2  𝄀
 4  ¦  delta  ¦  n4

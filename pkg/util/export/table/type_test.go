@@ -92,7 +92,7 @@ func TestPathBuilder(t *testing.T) {
 			args: args{
 				account:  "user",
 				typ:      MergeLogTypeLogs,
-				ts:       time.Unix(0, 0),
+				ts:       time.Unix(0, 0).UTC(),
 				db:       "db",
 				name:     "table",
 				nodeUUID: "123456",
@@ -109,7 +109,7 @@ func TestPathBuilder(t *testing.T) {
 			args: args{
 				account:  "user",
 				typ:      MergeLogTypeLogs,
-				ts:       time.Unix(0, 0),
+				ts:       time.Unix(0, 0).UTC(),
 				db:       "db",
 				name:     "table",
 				nodeUUID: "123456",
@@ -119,6 +119,18 @@ func TestPathBuilder(t *testing.T) {
 			wantDir:     `user/logs` + `/1970/01/01` + `/table`,
 			wantETLPath: `/*/*` + `/*/*/*` + `/table/*`,
 			wantLogFN:   `0_123456_node_0.tae`,
+		},
+		{
+			name:  "account_date/negative_offset",
+			field: field{builder: NewAccountDatePathBuilder()},
+			args: args{
+				account: "user", typ: MergeLogTypeLogs,
+				ts: time.Unix(0, 0).In(time.FixedZone("west", -5*60*60)),
+				db: "db", name: "table", nodeUUID: "123456", nodeType: "node", ext: CsvExtension,
+			},
+			wantDir:     "user/logs/1969/12/31/table",
+			wantETLPath: "/*/*/*/*/*/table/*",
+			wantLogFN:   "0_123456_node_0.csv",
 		},
 	}
 

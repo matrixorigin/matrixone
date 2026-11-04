@@ -16,9 +16,16 @@ package frontend
 
 import (
 	"bytes"
+	cryptorand "crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"math/rand"
 	"net"
 	"reflect"
@@ -182,6 +189,18 @@ func TestConnCountsPartialWriteFacts(t *testing.T) {
 	assert.Equal(t, int64(1), ses.GetFlushPacketCnt())
 }
 
+// Make elapsed-time assertions independent of clock resolution: an immediate
+// in-memory append may legitimately take zero ticks. Delay inside Write (not
+// before Flush), so only the measured physical operation includes the delay.
+type measuredOutputWriteConn struct {
+	net.Conn
+}
+
+func (c *measuredOutputWriteConn) Write(p []byte) (int, error) {
+	time.Sleep(time.Millisecond)
+	return c.Conn.Write(p)
+}
+
 func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 	underlying := &partialWriteConn{limit: 5}
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -190,6 +209,7 @@ func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 	conn, err := NewIOSession(underlying, config.NewParameterUnit(sv, nil, nil, nil), "")
 	assert.NoError(t, err)
 	defer conn.Close()
+	conn.conn = &measuredOutputWriteConn{Conn: conn.conn}
 
 	tracker := new(responseOutputWaitTracker)
 	conn.setResponseOutputWaitTracker(tracker)
@@ -209,6 +229,7 @@ func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 func TestConnMeasuresDelayedBufferedFlush(t *testing.T) {
 	underlying, conn := newTestConn(t, NewLeakCheckAllocator())
 	defer conn.Close()
+	conn.conn = &measuredOutputWriteConn{Conn: conn.conn}
 
 	tracker := new(responseOutputWaitTracker)
 	conn.setResponseOutputWaitTracker(tracker)
@@ -810,6 +831,152 @@ func TestNewIOSessionWithOptions(t *testing.T) {
 	})
 }
 
+func TestConnForTLSPreservesBufferedBytes(t *testing.T) {
+	rawConn, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+
+	clientHello := []byte("coalesced client hello")
+	rawConn.data = append(makePacket([]byte("ssl request"), 1), clientHello...)
+	payload, err := conn.Read()
+	require.NoError(t, err)
+	require.Equal(t, []byte("ssl request"), payload)
+
+	tlsConn := conn.connForTLS()
+	require.NotSame(t, rawConn, tlsConn)
+	require.Empty(t, conn.fixBuf.AvailableData())
+
+	got := make([]byte, len(clientHello))
+	_, err = io.ReadFull(tlsConn, got)
+	require.NoError(t, err)
+	require.Equal(t, clientHello, got)
+
+	nextPacket := []byte("next encrypted packet")
+	rawConn.data = append(rawConn.data, nextPacket...)
+	got = make([]byte, len(nextPacket))
+	_, err = io.ReadFull(tlsConn, got)
+	require.NoError(t, err)
+	require.Equal(t, nextPacket, got)
+}
+
+func TestConnForTLSWithoutBufferedBytesUsesRawConnection(t *testing.T) {
+	rawConn, conn := newTestConn(t, NewLeakCheckAllocator())
+	defer conn.Close()
+
+	require.Same(t, rawConn, conn.connForTLS())
+}
+
+func TestConnForTLSCoalescedClientHello(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	allocator := NewLeakCheckAllocator()
+	conn, err := NewIOSessionWithOptions(
+		serverConn,
+		pu,
+		"",
+		WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = conn.Close()
+		require.True(t, allocator.CheckBalance())
+	})
+
+	certificate := newTestTLSCertificate(t)
+	clientTLS := tls.Client(&prefixWriteConn{
+		Conn:   clientConn,
+		prefix: makePacket(bytes.Repeat([]byte{0x01}, 32), 1),
+	}, &tls.Config{
+		InsecureSkipVerify: true, // test certificate is intentionally self-signed
+		MinVersion:         tls.VersionTLS12,
+	})
+
+	serverConn.SetDeadline(time.Now().Add(5 * time.Second))
+	clientConn.SetDeadline(time.Now().Add(5 * time.Second))
+	clientHandshake := make(chan error, 1)
+	go func() {
+		clientHandshake <- clientTLS.Handshake()
+	}()
+
+	payload, err := conn.Read()
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte{0x01}, 32), payload)
+
+	serverTLS := tls.Server(conn.connForTLS(), &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		MinVersion:   tls.VersionTLS12,
+	})
+	require.NoError(t, serverTLS.Handshake())
+	require.NoError(t, <-clientHandshake)
+
+	want := []byte("post-handshake packet")
+	clientWrite := make(chan error, 1)
+	go func() {
+		_, writeErr := clientTLS.Write(want)
+		clientWrite <- writeErr
+	}()
+	got := make([]byte, len(want))
+	_, err = io.ReadFull(serverTLS, got)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NoError(t, <-clientWrite)
+}
+
+type prefixWriteConn struct {
+	net.Conn
+	prefix      []byte
+	prefixWrote bool
+}
+
+func (c *prefixWriteConn) Write(p []byte) (int, error) {
+	if c.prefixWrote || len(c.prefix) == 0 {
+		return c.Conn.Write(p)
+	}
+	c.prefixWrote = true
+	combined := make([]byte, 0, len(c.prefix)+len(p))
+	combined = append(combined, c.prefix...)
+	combined = append(combined, p...)
+	n, err := c.Conn.Write(combined)
+	if err != nil {
+		return 0, err
+	}
+	if n != len(combined) {
+		return 0, io.ErrShortWrite
+	}
+	return len(p), nil
+}
+
+func newTestTLSCertificate(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := rsa.GenerateKey(cryptorand.Reader, 2048)
+	require.NoError(t, err)
+	serial, err := cryptorand.Int(cryptorand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	require.NoError(t, err)
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+	}
+	der, err := x509.CreateCertificate(cryptorand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+	certificate, err := tls.X509KeyPair(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}),
+	)
+	require.NoError(t, err)
+	return certificate
+}
+
 func testDefer1(t *testing.T) {
 	var err error
 	a := 5
@@ -889,6 +1056,51 @@ func newTestConn(t *testing.T, leakAlloc *LeakCheckAllocator) (*testConn, *Conn)
 	return tConn, conn
 }
 
+func TestConn_DiscardLoadLocalPacketPanic(t *testing.T) {
+	for _, phase := range []string{"header", "allocation", "payload"} {
+		t.Run(phase, func(t *testing.T) {
+			alloc := NewLeakCheckAllocator()
+			wire := &testConn{mod: testConnModReadPanic}
+			conn := &Conn{
+				conn:              wire,
+				allocator:         &BufferAllocator{allocator: alloc},
+				allowedPacketSize: 10,
+			}
+			t.Cleanup(func() {
+				conn.FreeLoadLocal()
+				require.True(t, alloc.CheckBalance())
+			})
+			if phase != "header" {
+				// Resume a previously interrupted frame at its payload boundary.
+				conn.loadLocalFrame = loadLocalFrameProgress{
+					headerBytes: HeaderLengthOfTheProtocol, payloadLength: 1,
+					decoded: true, interrupted: true,
+				}
+				conn.loadLocalFrameBroken.Store(true)
+			}
+			message := "test conn read panic"
+			if phase == "allocation" {
+				alloc.mod = leakCheckAllocatorModeAllocPanic
+				message = "leak check allocator panic"
+			}
+			n, eof, err := conn.DiscardLoadLocalPacket(time.Second, time.Now().Add(time.Second), 10)
+			var panicErr *moerr.Error
+			require.ErrorAs(t, err, &panicErr)
+			require.True(t, moerr.IsMoErrCode(panicErr, moerr.ErrInternal))
+			require.ErrorContains(t, err, message)
+			require.Zero(t, n)
+			require.False(t, eof)
+			require.True(t, conn.LoadLocalFramingBroken())
+			require.False(t, conn.loadLocalFrame.interrupted)
+			// A panic must not authorize another drain or normal packet read.
+			_, _, err = conn.DiscardLoadLocalPacket(time.Second, time.Now().Add(time.Second), 10)
+			require.ErrorContains(t, err, "framing is broken")
+			_, err = conn.ReadLoadLocalPacket()
+			require.ErrorContains(t, err, "unfinished LOCAL frame")
+		})
+	}
+}
+
 func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 	leakAlloc := NewLeakCheckAllocator()
 	var err error
@@ -911,9 +1123,12 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 	tConn, conn = newTestConn(t, leakAlloc)
 
 	resetFunc := func() {
+		// A fatal allocation/transport error retires that framing generation.
+		// Each independent failure scenario starts on a fresh connection.
+		_ = conn.Close()
+		assert.True(t, leakAlloc.CheckBalance())
 		leakAlloc.mod = 0
-		tConn.mod = 0
-		tConn.data = nil
+		tConn, conn = newTestConn(t, leakAlloc)
 	}
 
 	for loop := 0; loop < 2; loop++ {
@@ -1013,9 +1228,11 @@ func TestConn_ReadLoadLocalPacketErr(t *testing.T) {
 					assert.NotNil(t, err)
 					assert.Nil(t, read)
 					assert.Nil(t, conn.loadLocalBuf.data)
-					//skip payload1 data
-					buf := make([]byte, payload1Len)
-					_, _ = tConn.Read(buf)
+					// A failed allocation consumed the header; do not reuse its
+					// unfinished frame by manually skipping untracked bytes.
+					assert.True(t, conn.LoadLocalFramingBroken())
+					resetFunc()
+					_, _ = tConn.Write(makePacket(payload2, 3))
 				} else if i == 1 {
 					assert.Nil(t, err)
 					assert.True(t, bytes.Equal(payload2, read))

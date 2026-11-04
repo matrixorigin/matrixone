@@ -65,26 +65,28 @@ func Float32RoundToOddString(s string) (float32, float64, error) {
 	return math.Float32frombits(math.Float32bits(math.Nextafter32(f, 0)) | 1), d, nil
 }
 
-// decimalSide compares the exact value of decimal text s with d, its float64 parse: -1, 0 or
-// +1, and whether s is negative. s is text strconv.ParseFloat accepted; its digit
-// separators are dropped. A text of zero float64 is compared by its digits; otherwise the
-// exponent field is within len(s)+400 of the value's decimal exponent, which bounds the
-// rational arithmetic. Hexadecimal text is taken as d. Text whose exact value cannot be read
-// is a syntax error.
+// decimalSide compares the exact value of decimal or hexadecimal text s with d, its float64
+// parse: -1, 0 or +1, and whether s is negative. s is text strconv.ParseFloat accepted; its
+// digit separators are dropped. A text of zero float64 is compared by its digits; otherwise
+// the exponent field is within len(s)+400 of the value's decimal exponent (4*len(s)+1100 of
+// its binary exponent for hexadecimal text), which bounds the rational arithmetic. Text
+// whose exact value cannot be read is a syntax error.
 func decimalSide(s string, d float64) (int, bool, error) {
 	s = strings.ReplaceAll(s, "_", "")
 	syntax := &strconv.NumError{Func: "ParseFloat", Num: s, Err: strconv.ErrSyntax}
 	neg := strings.HasPrefix(s, "-")
 	body := strings.TrimLeft(s, "+-")
+	expMarks, digits, expBound := "eE", "123456789", len(s)+400
 	if len(body) > 1 && body[0] == '0' && (body[1] == 'x' || body[1] == 'X') {
-		return 0, neg, nil
+		body = body[2:]
+		expMarks, digits, expBound = "pP", "123456789abcdefABCDEF", 4*len(s)+1100
 	}
 	mant, exp := body, ""
-	if i := strings.IndexAny(body, "eE"); i >= 0 {
+	if i := strings.IndexAny(body, expMarks); i >= 0 {
 		mant, exp = body[:i], body[i+1:]
 	}
 	if d == 0 {
-		if !strings.ContainsAny(mant, "123456789") {
+		if !strings.ContainsAny(mant, digits) {
 			return 0, neg, nil
 		}
 		if neg {
@@ -94,7 +96,7 @@ func decimalSide(s string, d float64) (int, bool, error) {
 	}
 	if exp != "" {
 		e, err := strconv.Atoi(exp)
-		if err != nil || e > len(s)+400 || e < -(len(s)+400) {
+		if err != nil || e > expBound || e < -expBound {
 			return 0, neg, syntax
 		}
 	}
@@ -128,8 +130,13 @@ func Float32RoundToOddInt(v int64) float32 {
 }
 
 // RejectNarrowFloatInput is RejectNonFiniteNarrowFloat for f rounded from a finite input d;
-// an out-of-range error names input, the value the user gave.
+// an out-of-range error names input, the value the user gave. A bf16 input is checked by
+// its float32 value: bf16 values print as float32 text, and the largest one,
+// 3.3895314e+38, is above the exact maximum.
 func RejectNarrowFloatInput(f float32, oid T, d float64, input any) error {
+	if oid == T_bf16 && !math.IsNaN(d) && !math.IsInf(d, 0) {
+		f = float32(d)
+	}
 	err := RejectNonFiniteNarrowFloat(f, oid)
 	if err == nil || math.IsNaN(d) || math.IsInf(d, 0) {
 		return err
@@ -140,10 +147,9 @@ func RejectNarrowFloatInput(f float32, oid T, d float64, input any) error {
 // RejectNonFiniteNarrowFloat returns an error if v (widened to float32) is NaN, Inf,
 // or outside the finite range of the low-precision float type oid. Strict SQL string
 // parsing and LOAD use it so an out-of-range value errors -- MySQL-style -- instead of
-// silently saturating (bf16/float16 have Inf, so overflow is detected as Inf after
-// narrowing; float8/float4 saturate, so their input magnitude is range-checked). This
-// mirrors the narrow-vector element parser's rejectNonFiniteArrayElem. oid must be one
-// of T_bf16/T_float16/T_float8/T_float4.
+// silently saturating. The input magnitude is compared with the type's largest finite
+// value: a value just above it rounds to it (bf16, float16) or saturates (float8,
+// float4). oid must be one of T_bf16/T_float16/T_float8/T_float4.
 func RejectNonFiniteNarrowFloat(v float32, oid T) error {
 	f := float64(v)
 	if math.IsNaN(f) || math.IsInf(f, 0) {
@@ -151,11 +157,11 @@ func RejectNonFiniteNarrowFloat(v float32, oid T) error {
 	}
 	switch oid {
 	case T_bf16:
-		if math.IsInf(float64(BF16FromFloat32(v).ToFloat32()), 0) {
+		if v > BF16MaxFinite || v < -BF16MaxFinite {
 			return moerr.NewOutOfRangeNoCtxf(oid.String(), "value %v", v)
 		}
 	case T_float16:
-		if math.IsInf(float64(Float16FromFloat32(v).ToFloat32()), 0) {
+		if v > Float16MaxFinite || v < -Float16MaxFinite {
 			return moerr.NewOutOfRangeNoCtxf(oid.String(), "value %v", v)
 		}
 	case T_float8:
@@ -188,6 +194,22 @@ const (
 	f8e4m3MaxBits = 0x7e  // x.1111.110 = 448
 	f8e4m3MantW   = 3     // mantissa bits
 )
+
+// String formats the value as its float32, so %v prints the number, not the code.
+func (b BF16) String() string { return formatNarrowFloat(b.ToFloat32()) }
+
+// String formats the value as its float32, so %v prints the number, not the code.
+func (h Float16) String() string { return formatNarrowFloat(h.ToFloat32()) }
+
+// String formats the value as its float32, so %v prints the number, not the code.
+func (f Float8) String() string { return formatNarrowFloat(f.ToFloat32()) }
+
+// String formats the value as its float32, so %v prints the number, not the code.
+func (f Float4) String() string { return formatNarrowFloat(f.ToFloat32()) }
+
+func formatNarrowFloat(f float32) string {
+	return strconv.FormatFloat(float64(f), 'g', -1, 32)
+}
 
 // ToFloat32 widens an E4M3 value to float32 exactly (every E4M3 value is
 // representable in float32).

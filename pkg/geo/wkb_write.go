@@ -27,7 +27,110 @@ import (
 // An empty point is encoded as POINT(NaN NaN); empty lines/polygons/collections
 // are encoded with a zero element count.
 func WriteWKB(g Geometry) []byte {
-	return appendGeom(nil, g, false)
+	return AppendWKB(nil, g)
+}
+
+// AppendWKB appends standard WKB to dst, reusing its capacity when possible.
+// The caller owns dst; g is read-only. Like WriteWKB, unsupported geometries
+// contribute no bytes.
+func AppendWKB(dst []byte, g Geometry) []byte {
+	return appendWKB(dst, g, false)
+}
+
+func appendWKB(dst []byte, g Geometry, f32 bool) []byte {
+	ordinateSize := 8
+	if f32 {
+		ordinateSize = 4
+	}
+	size, ok := wkbSize(g, ordinateSize, 1)
+	if ok && size > cap(dst)-len(dst) && size <= int(^uint(0)>>1)-len(dst) {
+		out := make([]byte, len(dst), len(dst)+size)
+		copy(out, dst)
+		dst = out
+	}
+	return appendGeom(dst, g, f32)
+}
+
+// Sizing only visits structure, not coordinates. It is an optimization, not
+// validation: unrepresentable sizes or unusually deep direct writer inputs
+// fall back to the existing growing encoder.
+func wkbSize(g Geometry, ordinateSize, depth int) (int, bool) {
+	coordSize := 2 * ordinateSize
+	switch v := g.(type) {
+	case Point:
+		return 5 + coordSize, true
+	case LineString:
+		return wkbCountSize(9, len(v.Points), coordSize)
+	case Polygon:
+		size := 9
+		for _, ring := range v.Rings {
+			ringSize, ok := wkbCountSize(4, len(ring), coordSize)
+			if !ok {
+				return 0, false
+			}
+			size, ok = wkbCountSize(size, 1, ringSize)
+			if !ok {
+				return 0, false
+			}
+		}
+		return size, true
+	case MultiPoint:
+		return wkbCountSize(9, len(v.Points), 5+coordSize)
+	case MultiLineString:
+		size := 9
+		for _, line := range v.Lines {
+			child, ok := wkbSize(line, ordinateSize, depth)
+			if !ok {
+				return 0, false
+			}
+			size, ok = wkbCountSize(size, 1, child)
+			if !ok {
+				return 0, false
+			}
+		}
+		return size, true
+	case MultiPolygon:
+		size := 9
+		for _, polygon := range v.Polygons {
+			child, ok := wkbSize(polygon, ordinateSize, depth)
+			if !ok {
+				return 0, false
+			}
+			size, ok = wkbCountSize(size, 1, child)
+			if !ok {
+				return 0, false
+			}
+		}
+		return size, true
+	case GeometryCollection:
+		if depth > maxGeometryNestingDepth {
+			return 0, false
+		}
+		size := 9
+		for _, g := range v.Geometries {
+			child, ok := wkbSize(g, ordinateSize, depth+1)
+			if !ok {
+				return 0, false
+			}
+			size, ok = wkbCountSize(size, 1, child)
+			if !ok {
+				return 0, false
+			}
+		}
+		return size, true
+	default:
+		return 0, true
+	}
+}
+
+func wkbCountSize(prefix, count, elementSize int) (int, bool) {
+	if elementSize == 0 {
+		return prefix, true
+	}
+	if count > (int(^uint(0)>>1)-prefix)/elementSize {
+		return 0, false
+	}
+	return prefix + count*elementSize, true
 }
 
 // appendGeom appends the WKB encoding of g to b. When f32 is true, each ordinate

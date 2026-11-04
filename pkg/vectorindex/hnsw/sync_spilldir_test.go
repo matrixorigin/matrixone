@@ -50,7 +50,7 @@ func countHnswSpillFiles(t *testing.T, dir string) int {
 // reclaims. Both metadata models load here; their files must appear under spillDir, and Destroy must
 // remove them.
 func TestDownloadAllPlacesModelsInResolvedSpillDir(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	oldRunSql, oldStreaming := runSql, runSql_streaming
@@ -76,7 +76,7 @@ func TestDownloadAllPlacesModelsInResolvedSpillDir(t *testing.T) {
 // Destroys a non-nil sync). Model abc-0 loads and commits its file; model abc-1's stream fails; the
 // resolved spill dir must be clean afterward.
 func TestNewHnswSyncRemovesCommittedFilesOnDownloadAllError(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	oldRunSql, oldStreaming := runSql, runSql_streaming

@@ -40,6 +40,8 @@ type embeddedRuntimeTestRecorder struct {
 
 func (*embeddedRuntimeTestRecorder) Accepting() bool { return true }
 
+func (*embeddedRuntimeTestRecorder) Capabilities() uint64 { return 0 }
+
 func (r *embeddedRuntimeTestRecorder) Close(context.Context) error {
 	r.closed = true
 	return nil
@@ -53,20 +55,18 @@ func (r *embeddedRuntimeTestRecorder) Prepare(
 	return nil, r.err
 }
 
-func TestEmbeddedSiriusConfigurationDoesNotRequireFlight(t *testing.T) {
-	config := SiriusConfig{Backend: "embedded", NativeConfigPath: "sirius.conf"}
+func TestSiriusEmbeddedConfiguration(t *testing.T) {
+	config := SiriusConfig{NativeConfigPath: "sirius.conf"}
 	if err := validateSiriusEmbeddedConfig(&config); err != nil {
 		t.Fatal(err)
 	}
-	if config.InputMode != "mo" || config.GPUStreams != 2 || config.MaxWaitingQueries != 16 {
+	if config.GPUStreams != 2 || config.MaxWaitingQueries != 16 {
 		t.Fatalf("defaults: %+v", config)
 	}
 	for _, modify := range []func(*SiriusConfig){
-		func(c *SiriusConfig) { c.InputMode = "tae" },
 		func(c *SiriusConfig) { c.NativeConfigPath = "" },
 		func(c *SiriusConfig) { c.GPUStreams = 129 },
 		func(c *SiriusConfig) { c.MaxWaitingQueries = 17 },
-		func(c *SiriusConfig) { c.BenchmarkNoGC = true },
 	} {
 		invalid := config
 		modify(&invalid)
@@ -76,13 +76,11 @@ func TestEmbeddedSiriusConfigurationDoesNotRequireFlight(t *testing.T) {
 	}
 }
 
-func TestEmbeddedSiriusBackendMapsRequestAndDelegates(t *testing.T) {
+func TestEmbeddedSiriusEngineMapsRequestAndDelegates(t *testing.T) {
 	wantErr := errors.New("prepare failed")
 	recorder := &embeddedRuntimeTestRecorder{err: wantErr}
-	backend := &embeddedBackend{native: recorder}
+	backend := &siriusEngine{native: recorder}
 	require.True(t, backend.Accepting())
-	require.False(t, backend.CanFallbackBeforeVisibility(wantErr))
-	require.ErrorContains(t, backend.Reconcile(1, nil, nil), "no external execution")
 	require.NoError(t, backend.Close(t.Context()))
 	require.True(t, recorder.closed)
 
@@ -134,12 +132,18 @@ func TestEmbeddedSiriusBackendMapsRequestAndDelegates(t *testing.T) {
 	require.Equal(t, 1, producerCalls)
 }
 
-func TestEmbeddedSiriusStubFailsClosed(t *testing.T) {
-	if siriusbridge.Available() {
-		t.Skip("native Sirius build exercises the tagged launcher")
-	}
+func TestEmbeddedSiriusBuildEntryFailsClosed(t *testing.T) {
 	s := &service{}
-	require.ErrorContains(t, s.startEmbeddedSiriusRuntime(t.Context()), "not available")
+	if !siriusbridge.Available() {
+		require.ErrorContains(t, s.startEmbeddedSiriusRuntime(t.Context()), "not available")
+		return
+	}
+	// A native bridge must select the native CN entry too. A cancelled start
+	// must fail before allocating or publishing a runtime, even with no config.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, s.startEmbeddedSiriusRuntime(ctx), context.Canceled)
+	require.Nil(t, s.siriusRuntime)
 }
 
 type embeddedLeaseRecorder struct {

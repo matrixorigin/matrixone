@@ -1,7 +1,7 @@
 use mo_catalog;
 show table status like 'mo_table_stats_alpha';
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-mo_table_stats_alpha    Tae    Dynamic    93    0    9994    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+mo_table_stats_alpha    Tae    Dynamic    93    0    9994    0    0    NULL    0    2025-11-21 09:44:39    NULL    NULL    utf8mb4_general_ci    NULL            0    moadmin
 drop database if exists testdb;
 create database testdb;
 use testdb;
@@ -9,7 +9,7 @@ create table t1 (a int);
 insert into t1 select * from generate_series(1, 100*1000)g;
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
-t1    Tae    Dynamic    100000    0    804690    0    0    NULL    0    2025-11-24 13:57:41    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
+t1    Tae    Dynamic    100000    0    804690    0    0    NULL    0    2025-11-24 13:57:41    NULL    NULL    utf8mb4_general_ci    NULL            0    moadmin
 drop database testdb;
 select mo_ctl("cn", "MoTableStats", "recomputing:acc.0");
 mo_ctl(cn, MoTableStats, recomputing:acc.0)

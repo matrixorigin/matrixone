@@ -18,18 +18,76 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
 type rollbackCleanupErrorStore struct {
 	NoopTxnStore
 	err error
+}
+
+type oversizeWALTestStore struct {
+	NoopTxnStore
+	reject           bool
+	preparedRollback bool
+	appliedRollback  bool
+}
+
+func (s *oversizeWALTestStore) PrepareWAL() error {
+	if s.reject {
+		return wal.NewRecordTooLargeError(101, 100)
+	}
+	return nil
+}
+
+func (s *oversizeWALTestStore) PrepareRollback() error {
+	s.preparedRollback = true
+	return nil
+}
+
+func (s *oversizeWALTestStore) ApplyRollback() error {
+	s.appliedRollback = true
+	return nil
+}
+
+func TestOversizeWALRollsBackBeforeAppend(t *testing.T) {
+	firstStore := &oversizeWALTestStore{reject: true}
+	secondStore := &oversizeWALTestStore{}
+	var started atomic.Int32
+	mgr := NewTxnManager(func() txnif.TxnStore {
+		if started.Add(1) == 1 {
+			return firstStore
+		}
+		return secondStore
+	}, nil, types.NewMockHLCClock(1), WithTxnSkipFlag(TxnFlag_Heartbeat))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+
+	first, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	err = first.Commit(context.Background())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal), "%v", err)
+	require.ErrorContains(t, err, "WAL record is too large")
+	require.True(t, firstStore.preparedRollback)
+	require.True(t, firstStore.appliedRollback)
+	require.Equal(t, txnif.TxnStateRollbacked, first.GetTxnState(false))
+
+	second, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, second.Commit(context.Background()))
+	require.Equal(t, txnif.TxnStateCommitted, second.GetTxnState(false))
 }
 
 func (store *rollbackCleanupErrorStore) Close() error {
@@ -179,6 +237,28 @@ func TestTryUpdateMaxCommittedTSNeverMovesBackward(t *testing.T) {
 	mgr.TryUpdateMaxCommittedTS(older)
 
 	require.Equal(t, newer, *mgr.MaxCommittedTS.Load())
+}
+
+func TestHeartbeatCompletionAcrossTxnModes(t *testing.T) {
+	mgr := &TxnManager{}
+	mgr.initMaxCommittedTS()
+	heartbeat := NewTxn(mgr, &heartbeatStore{}, []byte("in-flight-heartbeat"), MinCommittedTS, types.TS{})
+	committed := types.BuildTS(10, 0)
+	require.NoError(t, heartbeat.SetCommitTS(committed))
+
+	// A heartbeat admitted before a mode switch may still complete afterwards.
+	// Stopping new heartbeats must not replace the completion-side mode check.
+	WithReadonlyMode(mgr)
+	mgr.OnCommitTxn(heartbeat)
+	require.Equal(t, MinCommittedTS, *mgr.MaxCommittedTS.Load())
+	WithReplayMode(mgr)
+	mgr.OnCommitTxn(heartbeat)
+	require.Equal(t, MinCommittedTS, *mgr.MaxCommittedTS.Load())
+
+	// Resuming writes must allow heartbeat progress again.
+	WithWriteMode(mgr)
+	mgr.OnCommitTxn(heartbeat)
+	require.Equal(t, committed, *mgr.MaxCommittedTS.Load())
 }
 
 func TestTryUpdateMaxCommittedTSConcurrent(t *testing.T) {
@@ -398,4 +478,43 @@ func TestSingleTNInvalidStateAndReplayRollback(t *testing.T) {
 	require.Panics(t, func() {
 		_ = replayTxn.rollback1PC(context.Background())
 	})
+}
+
+func TestCommitQueueStageMetricsFollowExecutedWork(t *testing.T) {
+	mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+	waitTxnManagerEmpty(t, mgr)
+	stages := []string{"pre_wal_queue_wait", "pre_prepare", "prepare_ts", "prepare_commit", "pre_apply_commit", "wal_queue_wait", "prepare_wal", "apply_queue_wait", "wait_wal_and_tail", "apply_commit"}
+	count := func(stage string) uint64 {
+		var metric dto.Metric
+		child := v2.TxnTNCommitQueueStageDurationHistogram.WithLabelValues(stage).(prometheus.Metric)
+		require.NoError(t, child.Write(&metric))
+		return metric.GetHistogram().GetSampleCount()
+	}
+	before := make(map[string]uint64, len(stages))
+	for _, stage := range stages {
+		before[stage] = count(stage)
+	}
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(context.Background()))
+	waitTxnManagerEmpty(t, mgr)
+	for _, stage := range stages {
+		require.Equal(t, before[stage]+1, count(stage), stage)
+		before[stage] = count(stage)
+	}
+	txn, err = mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, txn.Rollback(context.Background()))
+	waitTxnManagerEmpty(t, mgr)
+	for _, stage := range stages {
+		want := before[stage]
+		switch stage {
+		case "pre_wal_queue_wait", "prepare_ts", "wal_queue_wait", "apply_queue_wait":
+			want++ // Rollback traverses the queues but skips commit work.
+		}
+		require.Equal(t, want, count(stage), stage)
+	}
 }

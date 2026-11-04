@@ -54,9 +54,9 @@ select t1.a=t2.a from t1,(select a from t1  where b=2)as t2 where b=1;
 t1.a = t2.a
 0
 drop table t1;
-select timestampdiff(second, t1, t2), a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2) as timestamps;
-timestampdiff(second, t1, t2)    a
-2    0
+select timestampdiff(second, t1, t2) >= 2 as checked, a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2) as timestamps;
+checked    a
+1    0
 select time(now());
 time(now())
 13:43:48

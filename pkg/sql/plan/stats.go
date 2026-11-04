@@ -599,14 +599,6 @@ func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
 	return ndv
 }
 
-//func (builder *QueryBuilder) getColOverlap(col *plan.ColRef) float64 {
-//	s := builder.getStatsInfoByCol(col)
-//	if s == nil || s.ShuffleRangeMap[col.Name] == nil {
-//		return 1.0
-//	}
-//	return s.ShuffleRangeMap[col.Name].Overlap
-//}
-
 func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
 	switch exprImpl := arg.Expr.(type) {
 	case *plan.Expr_Col:
@@ -714,7 +706,16 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
 	case *plan.Expr_Col:
-		return builder.getColNdv(exprImpl.Col)
+		ndv := builder.getColNdv(exprImpl.Col)
+		if ndv >= 0 {
+			return ndv
+		}
+		if _, ok := builder.syntheticNDVCols[[2]int32{
+			exprImpl.Col.RelPos, exprImpl.Col.ColPos,
+		}]; ok && expr.Ndv > 0 {
+			return expr.Ndv
+		}
+		return ndv
 	}
 	return -1
 }
@@ -1081,11 +1082,6 @@ type rangeSelectivityKey struct {
 	colFnName string
 }
 
-type rangeSelectivityGroup struct {
-	key   rangeSelectivityKey
-	exprs []*plan.Expr
-}
-
 // estimateAndSelectivity treats constant ranges on the same column as one
 // interval. Multiplying nested predicates such as x >= 35, x >= 36, x <= 45,
 // x <= 50 counts the same restriction four times and makes estimates depend on
@@ -1095,7 +1091,7 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 	for _, arg := range args {
 		flattenAndConjuncts(arg, &conjuncts)
 	}
-	groups := make([]rangeSelectivityGroup, 0)
+	groups := make([][]*plan.Expr, 0)
 	groupByKey := make(map[rangeSelectivityKey]int)
 	groupForConjunct := make([]int, len(conjuncts))
 	for i := range groupForConjunct {
@@ -1110,9 +1106,9 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 		if !exists {
 			groupIndex = len(groups)
 			groupByKey[key] = groupIndex
-			groups = append(groups, rangeSelectivityGroup{key: key})
+			groups = append(groups, nil)
 		}
-		groups[groupIndex].exprs = append(groups[groupIndex].exprs, conjunct)
+		groups[groupIndex] = append(groups[groupIndex], conjunct)
 		groupForConjunct[i] = groupIndex
 	}
 
@@ -1120,7 +1116,7 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 	emitted := make([]bool, len(groups))
 	for i, conjunct := range conjuncts {
 		groupIndex := groupForConjunct[i]
-		if groupIndex < 0 || len(groups[groupIndex].exprs) == 1 {
+		if groupIndex < 0 || len(groups[groupIndex]) == 1 {
 			ret = andSelectivity(ret, estimateExprSelectivity(conjunct, builder, s))
 			continue
 		}
@@ -1129,9 +1125,9 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 		}
 		emitted[groupIndex] = true
 		groupSelectivity, ok := estimateConjunctiveRangeSelectivity(
-			groups[groupIndex].exprs, builder)
+			groups[groupIndex], builder)
 		if !ok {
-			for _, grouped := range groups[groupIndex].exprs {
+			for _, grouped := range groups[groupIndex] {
 				ret = andSelectivity(ret, estimateExprSelectivity(grouped, builder, s))
 			}
 			continue
@@ -1215,10 +1211,7 @@ func estimateConjunctiveRangeSelectivity(
 		if fn == nil {
 			return 0, false
 		}
-		first, ok := rangeLiteralAsFloat64(fn.Args[1], types.T(typeID))
-		if colFnName == "year" {
-			first, ok = rangeLiteralAsFloat64(fn.Args[1], typ)
-		}
+		first, ok := rangeLiteralAsFloat64(fn.Args[1], typ)
 		if !ok {
 			return 0, false
 		}
@@ -1240,10 +1233,7 @@ func estimateConjunctiveRangeSelectivity(
 				upperInclusive = false
 			}
 		case "between":
-			second, secondOK := rangeLiteralAsFloat64(fn.Args[2], types.T(typeID))
-			if colFnName == "year" {
-				second, secondOK = rangeLiteralAsFloat64(fn.Args[2], typ)
-			}
+			second, secondOK := rangeLiteralAsFloat64(fn.Args[2], typ)
 			if !secondOK {
 				return 0, false
 			}
@@ -1263,58 +1253,6 @@ func estimateConjunctiveRangeSelectivity(
 		minValue, maxValue,
 		lower, hasLower, lowerInclusive,
 		upper, hasUpper, upperInclusive), true
-}
-
-// numericLiteralFloat64 returns the value of a numeric literal by its payload, including a
-// decimal literal bound as a cast of its digits; ok is false for a NULL, a non-literal or a
-// non-numeric literal.
-func numericLiteralFloat64(expr *plan.Expr) (float64, bool) {
-	// a decimal literal binds as CAST('<digits>' AS DECIMAL(w, s))
-	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
-		lit := fn.Args[0].GetLit()
-		sval, isStr := lit.GetValue().(*plan.Literal_Sval)
-		if lit == nil || lit.Isnull || !isStr {
-			return 0, false
-		}
-		switch t := expr.Typ; types.T(t.Id) {
-		case types.T_decimal64, types.T_decimal128:
-			d, err := types.ParseDecimal128(sval.Sval, t.Width, t.Scale)
-			if err != nil {
-				return 0, false
-			}
-			return types.Decimal128ToFloat64(d, t.Scale), true
-		}
-		return 0, false
-	}
-	lit := expr.GetLit()
-	if lit == nil || lit.Isnull {
-		return 0, false
-	}
-	switch v := lit.Value.(type) {
-	case *plan.Literal_Dval:
-		return v.Dval, true
-	case *plan.Literal_Fval:
-		return float64(v.Fval), true
-	case *plan.Literal_I8Val:
-		return float64(v.I8Val), true
-	case *plan.Literal_I16Val:
-		return float64(v.I16Val), true
-	case *plan.Literal_I32Val:
-		return float64(v.I32Val), true
-	case *plan.Literal_I64Val:
-		return float64(v.I64Val), true
-	case *plan.Literal_U8Val:
-		return float64(v.U8Val), true
-	case *plan.Literal_U16Val:
-		return float64(v.U16Val), true
-	case *plan.Literal_U32Val:
-		return float64(v.U32Val), true
-	case *plan.Literal_U64Val:
-		return float64(v.U64Val), true
-	case *plan.Literal_Decimal64Val, *plan.Literal_Decimal128Val:
-		return getDecimalLiteralValue(lit, expr.Typ.Scale)
-	}
-	return 0, false
 }
 
 func rangeLiteralAsFloat64(expr *plan.Expr, typ types.T) (float64, bool) {
@@ -1425,9 +1363,9 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 		return 1
 	}
 	col := extractColRefInFilter(expr)
-	if col != nil {
+	if col != nil && col.ColPos >= 0 && int(col.ColPos) < len(tableDef.Cols) {
 		sortOrder := GetSortOrder(tableDef, col.ColPos)
-		blocksel := calcBlockSelectivityUsingShuffleRange(s, col.Name, expr)
+		blocksel := calcBlockSelectivityUsingShuffleRange(s, tableDef.Cols[col.ColPos].Name, expr)
 		switch sortOrder {
 		case 0:
 			blocksel = math.Min(blocksel, 0.2)
@@ -1468,7 +1406,63 @@ func sortFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuil
 	}
 }
 
+// residualInequalityBuildCapacityBound separates join-order cardinality from the
+// capacity envelope used to select a spillable hash-build topology. Residual
+// inequality filters currently use a heuristic 5% selectivity, but != and <>
+// can retain nearly every input row. When such a filter is the direct build
+// child, its input cardinality is a more conservative planning bound that does
+// not require accurate predicate statistics.
+func residualInequalityBuildCapacityBound(nodeID int32, builder *QueryBuilder) (float64, bool) {
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.Stats == nil {
+		return 0, false
+	}
+	cardinality := node.Stats.Outcnt
+	if node.NodeType != plan.Node_FILTER || len(node.Children) != 1 ||
+		!containsResidualInequality(node.FilterList) {
+		return 0, false
+	}
+	child := builder.qry.Nodes[node.Children[0]]
+	if child != nil && child.Stats != nil && child.Stats.Outcnt > cardinality {
+		return child.Stats.Outcnt, true
+	}
+	return cardinality, true
+}
+
+func containsResidualInequality(filters []*plan.Expr) bool {
+	for _, filter := range filters {
+		if containsInequalityExpr(filter) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInequalityExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "!=", "<>":
+		return true
+	case "and", "or":
+		for _, arg := range fn.Args {
+			if containsInequalityExpr(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNode bool, needResetHashMapStats bool) {
+	if builder.isViewSchemaMemoScan(nodeID) {
+		return
+	}
 	node := builder.qry.Nodes[nodeID]
 	if recursive {
 		if len(node.Children) > 0 {
@@ -1781,7 +1775,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			}
 		}
 
-	case plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_INDEX_SEARCH_SCAN:
 		// The index plugin computes this leaf's access-path cardinality and cost
 		// before join ordering. Recalculation must not replace it with child or
 		// synthetic-table statistics.
@@ -1820,10 +1814,6 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			applyScanPaginationToStats(node.Stats, node.Limit, node.Offset, builder)
 		} else {
 			applyLimitToStats(node.Stats, node.Limit, builder)
-		}
-	} else if node.NodeType == plan.Node_FUNCTION_SCAN && node.IndexReaderParam != nil {
-		if node.IndexReaderParam.Limit != nil {
-			applyLimitToStats(node.Stats, node.IndexReaderParam.Limit, builder)
 		}
 	}
 }
@@ -1939,7 +1929,7 @@ func antiJoinLeftKeysArePrimaryKey(
 	leftKeyCols := make([]int32, 0, len(left.TableDef.Pkey.Names))
 	for _, condition := range node.OnList {
 		fn := condition.GetF()
-		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) || isJSONNumericComparisonArgs(fn.Args) {
 			continue
 		}
 		first, second := fn.Args[0].GetCol(), fn.Args[1].GetCol()
@@ -2192,6 +2182,34 @@ func recalcStatsByRuntimeFilter(scanNode *plan.Node, joinNode *plan.Node, builde
 	scanNode.Stats.Selectivity = andSelectivity(scanNode.Stats.Selectivity, runtimeFilterSel)
 }
 
+// isSimpleZoneMapFilter 只识别可将边界值一次性物化的直接列比较。
+// 准入仍须通过 ExprIsZonemappable；这不是复杂表达式的安全性证明。
+func isSimpleZoneMapFilter(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	argCount := 2
+	switch fn.GetFunc().GetObjName() {
+	case "=", "<", "<=", ">", ">=":
+	case "between":
+		argCount = 3
+	case "in_range":
+		argCount = 4
+	default:
+		return false
+	}
+	if !hasNonNilFunctionArgs(fn, argCount) {
+		return false
+	}
+	if fn.Args[0].GetCol() == nil {
+		return argCount == 2 && fn.Args[1].GetCol() != nil && isRuntimeConstExpr(fn.Args[0])
+	}
+	for _, bound := range fn.Args[1:] {
+		if !isRuntimeConstExpr(bound) {
+			return false
+		}
+	}
+	return true
+}
+
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if builder.isRestore {
 		return DefaultHugeStats()
@@ -2203,11 +2221,6 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		return DefaultStats()
 	}
 
-	//ts := timestamp.Timestamp{}
-	//if node.ScanTS != nil {
-	//	ts = *node.ScanTS
-	//}
-
 	var scanSnapshot *plan.Snapshot
 	if node.ScanSnapshot != nil {
 		scanSnapshot = node.ScanSnapshot
@@ -2215,53 +2228,46 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 
 	s, err := statsForTableDef(
 		builder.compCtx, node.ObjRef, node.TableDef, scanSnapshot)
-	if err != nil || s == nil {
-		return DefaultStats()
+	if err != nil {
+		s = nil
 	}
 
-	stats := new(plan.Stats)
-	stats.TableCnt = s.TableCnt
+	hint := 0
+	if builder.optimizerHints != nil {
+		hint = builder.optimizerHints.blockFilter
+	}
 	var blockSel float64 = 1
 	var preservedCompositeFilters []*plan.Expr
-	if builder.optimizerHints == nil || builder.optimizerHints.blockFilter != 2 {
+	if hint != 2 {
 		preservedCompositeFilters = existingCompositeBlockFilters(node)
 	}
 
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
-		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder, s)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
-		if builder.optimizerHints != nil {
-			if builder.optimizerHints.blockFilter == 1 { //always trying to pushdown blockfilters if zonemappable
-				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
-				}
-			} else if builder.optimizerHints.blockFilter == 2 { // never pushdown blockfilters
-				node.BlockFilterList = nil
-			} else {
-				if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-					if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-						copyOfExpr := DeepCopyExpr(node.FilterList[i])
-						copyOfExpr.Selectivity = currentBlockSel
-						blockExprList = append(blockExprList, copyOfExpr)
-					}
-				}
-			}
-		} else {
-			if currentBlockSel < 1 || strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) {
-				if ExprIsZonemappable(builder.GetContext(), node.FilterList[i]) {
-					copyOfExpr := DeepCopyExpr(node.FilterList[i])
-					copyOfExpr.Selectivity = currentBlockSel
-					blockExprList = append(blockExprList, copyOfExpr)
-				}
-			}
+		filter := node.FilterList[i]
+		currentBlockSel := 1.0
+		if s != nil {
+			filter.Selectivity = estimateExprSelectivity(filter, builder, s)
+			currentBlockSel = estimateFilterBlockSelectivity(builder.GetContext(), filter, node.TableDef, s)
+		}
+		// overlap/选择率是成本估算，不是普通列缺少可用块统计的证明。
+		// 简单比较仍下推；其余表达式保留既有成本策略及语义安全检查。
+		if hint != 2 && (hint == 1 || isSimpleZoneMapFilter(filter) || currentBlockSel < 1 ||
+			strings.HasPrefix(node.TableDef.Name, catalog.IndexTableNamePrefix) || logicalPrefixOnTable(filter.GetF(), node.TableDef)) &&
+			ExprIsZonemappable(builder.GetContext(), filter) {
+			copyOfExpr := DeepCopyExpr(filter)
+			copyOfExpr.Selectivity = currentBlockSel
+			blockExprList = append(blockExprList, copyOfExpr)
 		}
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	blockExprList = append(blockExprList, preservedCompositeFilters...)
 	node.BlockFilterList = deduplicateBlockFilterList(blockExprList)
+	if s == nil {
+		return DefaultStats()
+	}
+	stats := new(plan.Stats)
+	stats.TableCnt = s.TableCnt
 	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder, s)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
@@ -2414,9 +2420,9 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	switch node.JoinType {
 	case plan.Node_INNER, plan.Node_OUTER:
 		if node.JoinType == plan.Node_INNER {
-			leftMarked := builder.subtreeContainsCTEHashBuildScan(
+			leftMarked := builder.joinInputContainsCTEHashBuildScan(
 				node.Children[0], make(map[int32]bool))
-			rightMarked := builder.subtreeContainsCTEHashBuildScan(
+			rightMarked := builder.joinInputContainsCTEHashBuildScan(
 				node.Children[1], make(map[int32]bool))
 			if leftMarked || rightMarked {
 				// CTE drain admission marked one exact equality-hash build.
@@ -2479,8 +2485,8 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 		// SEMI join must fully consume their build input. Preserve that proof: a
 		// right-sided choice would turn the marked reader into the probe input,
 		// which may stop without draining it.
-		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI) &&
-			builder.subtreeContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
+		if (node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI || node.JoinType == plan.Node_SINGLE) &&
+			builder.joinInputContainsCTEHashBuildScan(node.Children[1], make(map[int32]bool)) {
 			node.IsRightJoin = false
 			break
 		}
@@ -2868,7 +2874,7 @@ func estimatedRetainedBytes(rows, rowSize float64) (float64, bool) {
 	return rows * rowSize, true
 }
 
-func (builder *QueryBuilder) subtreeContainsCTEHashBuildScan(nodeID int32, seen map[int32]bool) bool {
+func (builder *QueryBuilder) joinInputContainsCTEHashBuildScan(nodeID int32, seen map[int32]bool) bool {
 	if seen[nodeID] {
 		return false
 	}
@@ -2878,8 +2884,14 @@ func (builder *QueryBuilder) subtreeContainsCTEHashBuildScan(nodeID int32, seen 
 		node.ExtraOptions == materialized.CTEHashBuildScanOption {
 		return true
 	}
+	// A marker below another join pins that nested join, not this ancestor.
+	// Looking through the boundary can make two independent build requirements
+	// appear to conflict and reject an otherwise safe shared computation.
+	if node.NodeType == plan.Node_JOIN {
+		return false
+	}
 	for _, childID := range node.Children {
-		if builder.subtreeContainsCTEHashBuildScan(childID, seen) {
+		if builder.joinInputContainsCTEHashBuildScan(childID, seen) {
 			return true
 		}
 	}
@@ -3285,8 +3297,8 @@ func setNodeDOP(p *plan.Plan, rootID int32, dop int32) {
 		setNodeDOP(p, node.Children[1], dop)
 	}
 	if node.Stats != nil {
-		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-			dop = min(dop, vectorScanDOP(dop, node.VectorIndexScan, p.IsPrepare))
+		if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+			dop = min(dop, vectorScanDOP(dop, node.IndexSearchScan, p.IsPrepare))
 		}
 		node.Stats.Dop = dop
 	}
@@ -3298,11 +3310,11 @@ func CalcNodeDOP(p *plan.Plan, rootID int32, ncpu int32, lencn int) {
 	for i := range node.Children {
 		CalcNodeDOP(p, node.Children[i], ncpu, lencn)
 	}
-	if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
 		if node.Stats == nil {
 			node.Stats = DefaultStats()
 		}
-		node.Stats.Dop = vectorScanDOP(ncpu, node.VectorIndexScan, p.IsPrepare)
+		node.Stats.Dop = vectorScanDOP(ncpu, node.IndexSearchScan, p.IsPrepare)
 		return
 	}
 
@@ -3415,7 +3427,7 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				hasForceOneCN = true
 			}
 		}
-		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN && !distributedPRE {
+		if node.NodeType == plan.Node_INDEX_SEARCH_SCAN && !distributedPRE && IndexSearchScanPartitioned(node.IndexSearchScan) {
 			for _, spec := range node.RuntimeFilterProbeList {
 				if spec != nil && spec.MustApply && spec.UseMembershipFilter {
 					hasForceOneCN = true
@@ -3477,7 +3489,9 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 				ret = ExecTypeAP_ONECN
 			}
 		}
-		if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		// A partitioned index search runs on every CN of an AP plan; any other
+		// search plans like the table function it replaced.
+		if node.NodeType == plan.Node_INDEX_SEARCH_SCAN && IndexSearchScanPartitioned(node.IndexSearchScan) {
 			execType := ExecTypeAP_MULTICN
 			if (stats.GetForceOneCN() && !(distributedPRE && int32(id) == vectorID)) || !canUseMultiCN {
 				execType = ExecTypeAP_ONECN

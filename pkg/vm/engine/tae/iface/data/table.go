@@ -29,6 +29,8 @@ type TableHandle interface {
 }
 
 type Table interface {
+	LockAppend()
+	UnlockAppend()
 	GetHandle(bool) TableHandle
 	ApplyHandle(TableHandle, bool)
 }

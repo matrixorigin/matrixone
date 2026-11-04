@@ -60,9 +60,36 @@ func TestCommitWaitInjectedTargetsTenant(t *testing.T) {
 	require.NoError(t, fault.AddFaultPoint(t.Context(), FJ_CommitWaitTargetTenant, ":::", "ECHO", 7, "", false))
 	require.NoError(t, fault.AddFaultPoint(t.Context(), FJ_CommitWait, "1:1::", "ECHO", 0, "target", false))
 
-	_, injected := CommitWaitInjected(8)
+	_, injected := CommitWaitInjected(8, "other")
 	require.False(t, injected)
-	message, injected := CommitWaitInjected(7)
+	message, injected := CommitWaitInjected(7, "target")
 	require.True(t, injected)
 	require.Equal(t, "target", message)
+}
+
+func TestCommitWaitInjectedTargetsTransaction(t *testing.T) {
+	faultEnabledHere := fault.Enable()
+	t.Cleanup(func() {
+		for _, point := range []string{FJ_CommitWait, FJ_CommitWaitTargetTenant, FJ_CommitWaitTargetTxn} {
+			_, _ = fault.RemoveFaultPoint(t.Context(), point)
+		}
+		if faultEnabledHere {
+			fault.Disable()
+		}
+	})
+	require.NoError(t, fault.AddFaultPoint(t.Context(), FJ_CommitWaitTargetTenant, ":::", "ECHO", 7, "", false))
+	require.NoError(t, fault.AddFaultPoint(t.Context(), FJ_CommitWaitTargetTxn, ":::", "ECHO", 0, "accepted", false))
+	require.NoError(t, fault.AddFaultPoint(t.Context(), FJ_CommitWait, "1:1::", "ECHO", 0, "barrier", false))
+
+	// Neither an unrelated tenant nor an earlier transaction of the same tenant
+	// may consume the single-shot barrier before the accepted commit arrives.
+	_, injected := CommitWaitInjected(8, "accepted")
+	require.False(t, injected)
+	_, injected = CommitWaitInjected(7, "earlier")
+	require.False(t, injected)
+	message, injected := CommitWaitInjected(7, "accepted")
+	require.True(t, injected)
+	require.Equal(t, "barrier", message)
+	_, injected = CommitWaitInjected(7, "accepted")
+	require.False(t, injected)
 }

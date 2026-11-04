@@ -105,6 +105,7 @@ type container struct {
 	probeMark              bool
 	buildHasNullKey        bool
 	asofLeftCol            int
+	asofResidualEquality   bool
 	asofStrict             bool
 	asofIndexes            []asofIndex
 	asofIndexCount         int
@@ -171,6 +172,7 @@ type container struct {
 	// spill support
 	spillEngine       *spillutil.SpillEngine
 	spillThreshold    int64
+	autoSpill         bool
 	probeBucketActive bool // true while reading probe batches from a bucket
 }
 
@@ -217,7 +219,10 @@ type asofBuildLeftGroup struct {
 }
 
 type HashJoin struct {
-	ctr container
+	// ExistenceOnly emits a Boolean marker for a proven EXISTS consumer.
+	// Ordinary MARK retains its three-valued comparison contract.
+	ExistenceOnly bool
+	ctr           container
 
 	JoinType    plan.Node_JoinType
 	IsRightJoin bool
@@ -394,10 +399,6 @@ func (hashJoin *HashJoin) Release() {
 	}
 }
 
-func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
@@ -419,11 +420,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.cleanNonEqCondExecutor()
 	ctr.joinDiagnosticActivation = nil
 	ctr.joinDiagnosticActivated = false
-	if ctr.resBat != nil {
-		ctr.resBat.Clean(proc.GetMPool())
-		ctr.resBat = nil
-	}
-	ctr.freeRightRowsMatched(proc)
+	ctr.cleanBatch(proc)
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false
 	ctr.bitmapSynced = false
@@ -431,6 +428,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.buildHasNullKey = false
 	ctr.asofLeftCol = -1
 	ctr.asofStrict = false
+	ctr.asofResidualEquality = false
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch
@@ -530,6 +528,8 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 			ctr.joinBats[i] = nil
 		}
 	}
+	ctr.cfs1 = nil
+	ctr.cfs2 = nil
 	ctr.freeRightRowsMatched(proc)
 }
 
@@ -641,5 +641,6 @@ func (hashJoin *HashJoin) EmitUnmatchedBuild() bool {
 }
 
 func (ctr *container) setSpillThreshold(threshold int64) {
+	ctr.autoSpill = threshold == 0
 	ctr.spillThreshold = colexec.ResolveSpillThreshold(threshold)
 }

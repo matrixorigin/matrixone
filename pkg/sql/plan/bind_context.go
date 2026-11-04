@@ -16,17 +16,21 @@ package plan
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	bc := &BindContext{
+		builder:             builder,
 		groupByAst:          make(map[string]int32),
 		groupByCanonicalAst: make(map[string]int32),
 		groupByParamAst:     make(map[string]int32),
@@ -40,28 +44,46 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 		projectColByAst: make(map[string]int32),
 
-		aliasMap:       make(map[string]*aliasItem),
-		aliasFrequency: make(map[string]int),
-		bindingByTag:   make(map[int32]*Binding),
-		bindingByTable: make(map[string]*Binding),
-		bindingByCol:   make(map[string]*Binding),
-		outerUsingCols: make(map[string][]string),
-		sqlUdfArgs:     make(map[string]*plan.Expr),
-		parent:         parent,
-		boundCtes:      make(map[string]*CTERef),
-		boundViews:     make(map[[2]string]*tree.CreateView),
+		aliasMap:         make(map[string]*aliasItem),
+		aliasFrequency:   make(map[string]int),
+		bindingByTag:     make(map[int32]*Binding),
+		nullExtendedTags: make(map[int32]bool),
+		bindingByTable:   make(map[string]*Binding),
+		bindingByCol:     make(map[string]*Binding),
+		outerUsingCols:   make(map[string][]string),
+		sqlUdfArgs:       make(map[string]*plan.Expr),
+		parent:           parent,
+		boundCtes:        make(map[string]*CTERef),
+		boundViews:       make(map[[2]string]*tree.CreateView),
 	}
 
 	if builder != nil {
+		if builder.integerPrecision == nil {
+			builder.integerPrecision = newIntegerPrecisionBuilder()
+		}
+		bc.integerPrecision = builder.integerPrecision
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
+		if parent == nil && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
+			bc.defaultDatabase = builder.compCtx.DefaultDatabase()
+		}
 		if parent == nil && builder.persistedViewTarget != "" {
 			requiredProtocol := int64(0)
 			bc.persistedExpressionProtocolRequirement = &requiredProtocol
+		}
+		if parent == nil {
+			// D11 carrier one: resolve the statement compatibility scalar once
+			// at (root) BindContext entry from the session flag the executors
+			// read. Children inherit it below.
+			bc.mysqlConditionalBooleanContracts = function.MySQLConditionalBooleanContractsFromProcess(builder.compCtx.GetProcess())
+			bc.mysqlConditionalBooleanContractsValid = true
 		}
 	}
 
 	if parent != nil {
 		bc.persistedExpressionProtocolRequirement = parent.persistedExpressionProtocolRequirement
+		bc.ctasExecutionProtocolRequirement = parent.ctasExecutionProtocolRequirement
+		bc.mysqlConditionalBooleanContracts = parent.mysqlConditionalBooleanContracts
+		bc.mysqlConditionalBooleanContractsValid = parent.mysqlConditionalBooleanContractsValid
 		bc.existentialBlock = parent.existentialBlock
 		bc.subqueryNestingDepth = parent.subqueryNestingDepth
 		bc.lower = parent.lower
@@ -276,6 +298,12 @@ func (bc *BindContext) recordViews(views []string) {
 func (bc *BindContext) mergeContexts(ctx context.Context, left, right *BindContext) error {
 	left.parent = bc
 	right.parent = bc
+	for tag := range left.nullExtendedTags {
+		bc.nullExtendedTags[tag] = true
+	}
+	for tag := range right.nullExtendedTags {
+		bc.nullExtendedTags[tag] = true
+	}
 
 	for _, binding := range left.bindings {
 		bc.bindings = append(bc.bindings, binding)
@@ -442,6 +470,11 @@ func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinType, left, rig
 func (bc *BindContext) buildUsingEqOperand(col string, binding *Binding, coalesceArms []string) (*plan.Expr, error) {
 	if len(coalesceArms) < 2 {
 		colPos := binding.colIdByName[col]
+		if read, affected, err := bc.bindVirtualTimestampRead(binding, colPos, 0); err != nil {
+			return nil, err
+		} else if affected {
+			return read, nil
+		}
 		return &plan.Expr{
 			Typ: *binding.types[colPos],
 			Expr: &plan.Expr_Col{
@@ -456,6 +489,12 @@ func (bc *BindContext) buildUsingEqOperand(col string, binding *Binding, coalesc
 	for _, t := range coalesceArms {
 		b := bc.bindingByTable[t]
 		colPos := b.colIdByName[col]
+		if read, affected, err := bc.bindVirtualTimestampRead(b, colPos, 0); err != nil {
+			return nil, err
+		} else if affected {
+			args = append(args, read)
+			continue
+		}
 		args = append(args, &plan.Expr{
 			Typ: *b.types[colPos],
 			Expr: &plan.Expr_Col{
@@ -683,6 +722,15 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 		exprImpl.Right, err = bc.qualifyColumnNames(exprImpl.Right, expandAlias)
 
 	case *tree.FuncExpr:
+		if having, ok := bc.binder.(*HavingBinder); ok &&
+			expandAlias == AliasAfterColumn && having.resolvesAggregateAliases() {
+			name, _ := exprImpl.Func.FunctionReference.(*tree.UnresolvedName)
+			if exprImpl.WindowSpec != nil || name != nil && function.GetFunctionIsAggregateByName(strings.ToLower(name.ColName())) {
+				// Aggregate/window inputs use source names, including when a
+				// projected alias collides. Qualify before aggregate AST reuse.
+				expandAlias = NoAlias
+			}
+		}
 		for i := range exprImpl.Exprs {
 			exprImpl.Exprs[i], err = bc.qualifyColumnNames(exprImpl.Exprs[i], expandAlias)
 			if err != nil {
@@ -724,6 +772,14 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 		}
 		if !exprImpl.Star && exprImpl.NumParts == 1 {
 			col := exprImpl.ColName()
+			if having, ok := bc.binder.(*HavingBinder); ok &&
+				expandAlias == AliasAfterColumn && having.resolvesAggregateAliases() {
+				if _, candidate := bc.aliasMap[col]; candidate {
+					// HavingBinder checks GROUP BY identity before the output name.
+					// Qualifying here would irreversibly choose the source column.
+					return astExpr, nil
+				}
+			}
 			if expandAlias == AliasBeforeColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
 					if selectItem.astExpr != nil {
@@ -788,6 +844,8 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 		}
 
 	case *tree.CastExpr:
+		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
+	case *tree.CollateExpr:
 		exprImpl.Expr, err = bc.qualifyColumnNames(exprImpl.Expr, expandAlias)
 
 	case *tree.IsNullExpr:
@@ -864,6 +922,18 @@ func (bc *BindContext) isAliasExpansion(expr tree.Expr) (*tree.ParenExpr, int32,
 	}
 	projectPos, ok := bc.aliasExpandedExprs[wrapper]
 	return wrapper, projectPos, ok
+}
+
+// DeepCopyExpr does not detach the query/program graph behind a scalar call.
+// Rebind such aliases from their AST before a consumer can lower their output
+// or decorrelate them; the published projection must retain its own graph.
+func aliasProjectionNeedsRebind(expr *plan.Expr) bool {
+	needsRebind := false
+	_ = plan.VisitExprTree(expr, func(e *plan.Expr) error {
+		needsRebind = needsRebind || e.GetSub() != nil || e.GetDependent() != nil
+		return nil
+	})
+	return needsRebind
 }
 
 func (bc *BindContext) projectedExprPosition(expr tree.Expr) int32 {
@@ -1008,10 +1078,13 @@ func (bc *BindContext) havingProjectedColumnExpr(ref *tree.UnresolvedName) (tree
 // (or vice versa); both references must resolve to the same binding and column.
 func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedName) bool {
 	if ctx != nil {
-		leftBinding, leftPos, leftOK := resolveHavingColumnIdentity(ctx, left)
-		rightBinding, rightPos, rightOK := resolveHavingColumnIdentity(ctx, right)
+		leftBinding, leftPos, leftOK := resolveColumnIdentity(ctx, left)
+		rightBinding, rightPos, rightOK := resolveColumnIdentity(ctx, right)
 		if leftOK && rightOK {
 			return leftBinding.tag == rightBinding.tag && leftPos == rightPos
+		}
+		if leftOK || rightOK {
+			return false
 		}
 	}
 
@@ -1026,7 +1099,25 @@ func sameHavingColumnReference(ctx *BindContext, left, right *tree.UnresolvedNam
 			strings.EqualFold(left.DbName(), right.DbName()))
 }
 
-func resolveHavingColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {
+// resolveTableBinding resolves only this scope. A different explicit database
+// is a miss, so the binder can continue through its existing parent traversal.
+func (bc *BindContext) resolveTableBinding(db, table string) *Binding {
+	binding := bc.bindingByTable[table]
+	if db == "" {
+		return binding
+	}
+	if binding != nil && binding.db != "" &&
+		(db == binding.db || db == tree.NewCStr(binding.db, bc.lower).Compare() ||
+			(slices.Contains(mysql.CaseInsensitiveDbs, binding.db) && strings.EqualFold(db, binding.db))) {
+		return binding
+	}
+	if bc.remapOption != nil {
+		return bc.bindingByTable[db+"."+table]
+	}
+	return nil
+}
+
+func resolveColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*Binding, int32, bool) {
 	if ctx == nil || ref == nil || ref.Star || ref.NumParts == 0 {
 		return nil, 0, false
 	}
@@ -1035,12 +1126,7 @@ func resolveHavingColumnIdentity(ctx *BindContext, ref *tree.UnresolvedName) (*B
 	if ref.TblName() == "" {
 		binding = ctx.bindingByCol[ref.ColName()]
 	} else {
-		// Match baseBindColRef: a table name is the primary lookup key, while
-		// the database-qualified key is used by remapped contexts.
-		binding = ctx.bindingByTable[ref.TblName()]
-		if binding == nil && ref.DbName() != "" {
-			binding = ctx.bindingByTable[ref.DbName()+"."+ref.TblName()]
-		}
+		binding = ctx.resolveTableBinding(ref.DbName(), ref.TblName())
 	}
 	if binding == nil {
 		return nil, 0, false

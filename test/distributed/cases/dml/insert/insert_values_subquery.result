@@ -1,0 +1,162 @@
+drop database if exists insert_values_subquery;
+drop user if exists values_lookup_user;
+drop role if exists values_lookup_role;
+create database insert_values_subquery;
+use insert_values_subquery;
+create table `user`(id int primary key,`user` varchar(64) unique);
+insert into `user` values(1,'alice'),(2,'bob');
+create table user_access(user_id int not null,topic varchar(255),`read` bool,`write` bool,owner_user_id int null,provisioned bool,primary key(user_id,topic));
+insert into user_access(user_id,topic,`read`,`write`,owner_user_id,provisioned)
+values((select id from `user` where `user`='alice'),'owned_topic',true,true,(select if(''='',null,(select id from `user` where `user`=''))),false)
+on duplicate key update `read`=values(`read`),`write`=values(`write`),owner_user_id=values(owner_user_id),provisioned=values(provisioned);
+select * from user_access order by user_id,topic;
+➤ user_id[4,32,0]  ¦  topic[12,255,0]  ¦  read[-7,1,0]  ¦  write[-7,1,0]  ¦  owner_user_id[4,32,0]  ¦  provisioned[-7,1,0]  𝄀
+1  ¦  owned_topic  ¦  1  ¦  1  ¦  null  ¦  0
+insert into user_access(user_id,topic,`read`,`write`,owner_user_id,provisioned)
+values((select id from `user` where `user`='alice'),'owned_topic',false,true,(select if('bob'='',null,(select id from `user` where `user`='bob'))),true)
+on duplicate key update `read`=values(`read`),`write`=values(`write`),owner_user_id=values(owner_user_id),provisioned=values(provisioned);
+select * from user_access order by user_id,topic;
+➤ user_id[4,32,0]  ¦  topic[12,255,0]  ¦  read[-7,1,0]  ¦  write[-7,1,0]  ¦  owner_user_id[4,32,0]  ¦  provisioned[-7,1,0]  𝄀
+1  ¦  owned_topic  ¦  0  ¦  1  ¦  2  ¦  1
+create table dest(id int primary key,v tinyint null,label varchar(20),key idx_v(v));
+insert into dest values(100,50,'sentinel');
+insert into dest values(1,10,'literal'),(2,(select id from `user` where `user`='alice'),'one'),(3,(select id from `user` where `user`='missing'),'zero');
+insert into dest values(4,(select if(''='',null,(select id from `user` where `user`='alice'))),'nested');
+insert into dest values(5,case when false then (select id from `user` where `user`='alice') else (select id from `user` where `user`='bob') end,'case');
+insert into dest values(6,10,'six'),(7,(select id from `user` where `user`='alice'),'seven'),(8,20,'eight');
+select * from dest order by id;
+➤ id[4,32,0]  ¦  v[-6,8,0]  ¦  label[12,20,0]  𝄀
+1  ¦  10  ¦  literal  𝄀
+2  ¦  1  ¦  one  𝄀
+3  ¦  null  ¦  zero  𝄀
+4  ¦  null  ¦  nested  𝄀
+5  ¦  2  ¦  case  𝄀
+6  ¦  10  ¦  six  𝄀
+7  ¦  1  ¦  seven  𝄀
+8  ¦  20  ¦  eight  𝄀
+100  ¦  50  ¦  sentinel
+insert into dest values(10,(select id from `user` where `user`='alice'),'first'),(10,20,'middle'),(10,(select id from `user` where `user`='bob'),'last')
+on duplicate key update v=values(v),label=values(label);
+select * from dest where id=10;
+➤ id[4,32,0]  ¦  v[-6,8,0]  ¦  label[12,20,0]  𝄀
+10  ¦  2  ¦  last
+insert ignore into dest values(10,(select id from `user` where `user`='alice'),'ignored'),(12,(select id from `user` where `user`='bob'),'new');
+select * from dest where id in (10,12) order by id;
+➤ id[4,32,0]  ¦  v[-6,8,0]  ¦  label[12,20,0]  𝄀
+10  ¦  2  ¦  last  𝄀
+12  ¦  2  ¦  new
+insert into dest values(13,(select id from `user` where id=1),'before-card'),(14,(select id from `user`),'bad-card');
+Subquery returns more than 1 row
+select count(*) as partial_rows from dest where id in (13,14);
+➤ partial_rows[-5,64,0]  𝄀
+0
+insert into dest values(13,(select id from `user` where id=1),'before-cast'),(14,(select max(id)+200 from `user`),'bad-cast');
+Data truncation: data out of range: data type int8, value '202'
+select count(*) as partial_rows from dest where id in (13,14);
+➤ partial_rows[-5,64,0]  𝄀
+0
+select * from dest where id=100;
+➤ id[4,32,0]  ¦  v[-6,8,0]  ¦  label[12,20,0]  𝄀
+100  ¦  50  ¦  sentinel
+select id from dest force index(idx_v) where v=1 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+7
+select id from dest ignore index(idx_v) where v=1 order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+7
+prepare values_lookup_stmt from 'insert into dest values(?,(select id from `user` where id<=?),?)';
+set @lookup_id=9;
+set @lookup_bound=0;
+set @lookup_label='prepared';
+execute values_lookup_stmt using @lookup_id,@lookup_bound,@lookup_label;
+select * from dest where id=9;
+➤ id[4,32,0]  ¦  v[-6,8,0]  ¦  label[12,20,0]  𝄀
+9  ¦  null  ¦  prepared
+delete from dest where id=9;
+set @lookup_bound=2;
+execute values_lookup_stmt using @lookup_id,@lookup_bound,@lookup_label;
+Subquery returns more than 1 row
+select count(*) as partial_rows from dest where id=9;
+➤ partial_rows[-5,64,0]  𝄀
+0
+set @lookup_bound=1;
+execute values_lookup_stmt using @lookup_id,@lookup_bound,@lookup_label;
+select * from dest where id=9;
+➤ id[4,32,0]  ¦  v[-6,8,0]  ¦  label[12,20,0]  𝄀
+9  ¦  1  ¦  prepared
+deallocate prepare values_lookup_stmt;
+create table defaults_dest(id int primary key,v int default 7,g int generated always as(v+1) stored);
+insert into defaults_dest(id,v) values((select id from `user` where id=1),default);
+select * from defaults_dest;
+➤ id[4,32,0]  ¦  v[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  7  ¦  8
+insert into dest values(20,(select id from `user` where id=2),'rollback');
+begin;
+insert into dest values(21,(select id from `user` where id=1),'transaction');
+rollback;
+select count(*) as rollback_rows from dest where id=21;
+➤ rollback_rows[-5,64,0]  𝄀
+0
+create table udf_dest(v int);
+create function values_lookup() returns int language sql as 'select max(id) from `user`';
+create function values_nested_lookup() returns int language sql as 'values_lookup()';
+create function values_constant() returns int language sql as '1+1';
+create function values_upper_lookup() returns int language sql as '(SELECT max(id) FROM `user`)';
+create function values_wrapped_lookup() returns int language sql as 'coalesce((SeLeCt max(id) FrOm `user`),0)';
+insert into udf_dest values(values_upper_lookup());
+not supported: SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery
+insert into udf_dest values(values_wrapped_lookup());
+not supported: SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery
+select count(*) as udf_expression_partial_rows from udf_dest;
+➤ udf_expression_partial_rows[-5,64,0]  𝄀
+0
+insert into udf_dest values(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup()),(values_lookup());
+not supported: SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery
+select count(*) as udf_partial_rows from udf_dest;
+➤ udf_partial_rows[-5,64,0]  𝄀
+0
+insert into udf_dest values(values_nested_lookup());
+not supported: SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery
+insert into udf_dest values((select 1)),(values_lookup());
+not supported: SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery
+select count(*) as udf_partial_rows from udf_dest;
+➤ udf_partial_rows[-5,64,0]  𝄀
+0
+insert into udf_dest values(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant()),(values_constant());
+select count(*) as expression_rows,sum(v) as expression_sum from udf_dest;
+➤ expression_rows[-5,64,0]  ¦  expression_sum[-5,64,0]  𝄀
+33  ¦  66
+insert into udf_dest values((select values_lookup()));
+select count(*) as bounded_lookup_rows from udf_dest where v=2;
+➤ bounded_lookup_rows[-5,64,0]  𝄀
+34
+insert into udf_dest values((select values_upper_lookup()));
+select count(*) as bounded_upper_lookup_rows from udf_dest where v=2;
+➤ bounded_upper_lookup_rows[-5,64,0]  𝄀
+35
+drop function values_upper_lookup();
+drop function values_wrapped_lookup();
+drop function values_nested_lookup();
+drop function values_lookup();
+drop function values_constant();
+drop table udf_dest;
+create role values_lookup_role;
+create user values_lookup_user identified by 'values_lookup_test' default role values_lookup_role;
+grant connect on account * to values_lookup_role;
+grant insert on table insert_values_subquery.dest to values_lookup_role;
+grant values_lookup_role to values_lookup_user;
+insert into insert_values_subquery.dest values(200,(select id from insert_values_subquery.`user` where id=1),'denied');
+internal error: do not have privilege to execute the statement
+select count(*) as denied_rows from dest where id=200;
+➤ denied_rows[-5,64,0]  𝄀
+0
+grant select on table insert_values_subquery.`user` to values_lookup_role;
+insert into insert_values_subquery.dest values(200,(select id from insert_values_subquery.`user` where id=1),'allowed');
+select * from dest where id=200;
+➤ id[4,32,0]  ¦  v[-6,8,0]  ¦  label[12,20,0]  𝄀
+200  ¦  1  ¦  allowed
+drop user values_lookup_user;
+drop role values_lookup_role;
+drop database insert_values_subquery;

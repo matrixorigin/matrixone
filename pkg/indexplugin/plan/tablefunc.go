@@ -21,11 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-// TableFuncBuilder is the signature a vector-index plugin's table-function
-// builder (e.g. ivfpq_create / ivfpq_search) must satisfy. Construct and
-// append the FUNCTION_SCAN node; return its node ID. Use the PlanBuilder
-// facade for any bind-tag / node-assembly primitives.
-type TableFuncBuilder func(pb PlanBuilder, tbl *tree.TableFunction, ctx BindContext, exprs []*plan.Expr, children []int32) (int32, error)
+// TableFuncBuilder is the signature an index plugin's table-function builder
+// (e.g. ivfpq_create) must satisfy. Construct and append the FUNCTION_SCAN node;
+// return its node ID. Use the PlanBuilder facade for any bind-tag /
+// node-assembly primitives. input is the node of the relation the function is
+// applied to (planning metadata, not an execution child), or nil.
+type TableFuncBuilder func(pb PlanBuilder, tbl *tree.TableFunction, ctx BindContext, exprs []*plan.Expr, children []int32, input *plan.Node) (int32, error)
 
 var (
 	tableFuncMu sync.RWMutex

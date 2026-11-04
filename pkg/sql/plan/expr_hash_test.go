@@ -15,7 +15,10 @@
 package plan
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -883,4 +886,145 @@ func TestApplyDistributivityRollbackUsesLegacyRelationGate(t *testing.T) {
 	result := applyDistributivity(ctx, orExpr, false)
 	require.Equal(t, "or", result.GetF().Func.ObjName,
 		"the rollback path must retain the pre-feature DNF relation heuristic")
+}
+
+// Compare against the original complete-wire oracle, including the local-buffer
+// boundary and nested/unknown metadata that must not collapse function identity.
+func TestObjectRefEqualWireBoundaries(t *testing.T) {
+	for _, size := range []int{0, 63, 64, 65, 1024} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			a := &planpb.ObjectRef{}
+			if size > 0 {
+				a.ObjName = strings.Repeat("a", size-2)
+				if size >= 128 {
+					a.ObjName = strings.Repeat("a", size-3)
+				}
+			}
+			require.Equal(t, size, a.ProtoSize())
+			wire, err := a.Marshal()
+			require.NoError(t, err)
+			b := &planpb.ObjectRef{}
+			require.NoError(t, b.Unmarshal(wire))
+			require.True(t, objectRefEqual(a, b))
+			if size > 0 {
+				b.ObjName = "b" + b.ObjName[1:]
+			} else {
+				b.Obj = 1
+			}
+			other, err := b.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, bytes.Equal(wire, other), objectRefEqual(a, b))
+		})
+	}
+	a := &planpb.ObjectRef{PubInfo: &planpb.PubInfo{TenantId: 1}, Snapshot: &planpb.Snapshot{XXX_unrecognized: []byte{0x78, 1}}, XXX_unrecognized: []byte{0x78, 1}}
+	wire, err := a.Marshal()
+	require.NoError(t, err)
+	b := &planpb.ObjectRef{}
+	require.NoError(t, b.Unmarshal(wire))
+	require.True(t, objectRefEqual(a, b))
+	b.XXX_unrecognized[1] = 2
+	require.False(t, objectRefEqual(a, b))
+	b.XXX_unrecognized[1] = 1
+	b.Snapshot.XXX_unrecognized[1] = 2
+	require.False(t, objectRefEqual(a, b))
+	b.Snapshot = nil
+	require.False(t, objectRefEqual(a, b))
+	b.Snapshot = a.Snapshot
+	b.PubInfo.TenantId = 2
+	require.False(t, objectRefEqual(a, b))
+}
+
+func BenchmarkObjectRefEqual(b *testing.B) {
+	for _, size := range []int{8, 62, 1024} {
+		a := &planpb.ObjectRef{ObjName: strings.Repeat("a", size)}
+		c := &planpb.ObjectRef{ObjName: a.ObjName}
+		for _, legacy := range []bool{false, true} {
+			b.Run(fmt.Sprintf("%d/legacy=%t", size, legacy), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					equal := false
+					if legacy {
+						ab, aerr := a.Marshal()
+						cb, cerr := c.Marshal()
+						equal = aerr == nil && cerr == nil && bytes.Equal(ab, cb)
+					} else {
+						equal = objectRefEqual(a, c)
+					}
+					if !equal {
+						b.Fatal("unequal")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestExprWireEqualMatchesMarshal(t *testing.T) {
+	for _, size := range []int{63, 64, 65, 1024} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			a := &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}}
+			a.Typ.Table = strings.Repeat("a", size-a.ProtoSize()-2)
+			for a.ProtoSize() > size {
+				a.Typ.Table = a.Typ.Table[1:]
+			}
+			require.Equal(t, size, a.ProtoSize())
+			wire, err := a.Marshal()
+			require.NoError(t, err)
+			b := &planpb.Expr{}
+			require.NoError(t, b.Unmarshal(wire))
+			require.True(t, exprStructuralEqual(a, b))
+			b.GetP().Pos = 2
+			other, err := b.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, bytes.Equal(wire, other), exprStructuralEqual(a, b))
+		})
+	}
+	a := &planpb.Expr{Typ: planpb.Type{Table: "a"}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}},
+		AuxId: 1, Ndv: 1, Selectivity: 1, PreparedNumeric: &planpb.PreparedNumericMetadata{ParamPos: 1}, XXX_unrecognized: []byte{0xa0, 0x06, 1}}
+	wire, err := a.Marshal()
+	require.NoError(t, err)
+	for name, mutate := range map[string]func(*planpb.Expr){
+		"type":        func(e *planpb.Expr) { e.Typ.Table = "b" },
+		"aux":         func(e *planpb.Expr) { e.AuxId = 2 },
+		"ndv":         func(e *planpb.Expr) { e.Ndv = 2 },
+		"selectivity": func(e *planpb.Expr) { e.Selectivity = 2 },
+		"prepared":    func(e *planpb.Expr) { e.PreparedNumeric.ParamPos = 2 },
+		"unknown":     func(e *planpb.Expr) { e.XXX_unrecognized[2] = 2 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := &planpb.Expr{}
+			require.NoError(t, b.Unmarshal(wire))
+			require.True(t, exprStructuralEqual(a, b))
+			mutate(b)
+			other, err := b.Marshal()
+			require.NoError(t, err)
+			require.False(t, bytes.Equal(wire, other))
+			require.Equal(t, bytes.Equal(wire, other), exprStructuralEqual(a, b))
+		})
+	}
+}
+
+func BenchmarkExprWireEqual(b *testing.B) {
+	for _, width := range []int{0, 56, 1024} {
+		a := &planpb.Expr{Typ: planpb.Type{Table: strings.Repeat("a", width)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}}}
+		c := DeepCopyExpr(a)
+		for _, legacy := range []bool{false, true} {
+			b.Run(fmt.Sprintf("size=%d/legacy=%t", a.ProtoSize(), legacy), func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					equal := false
+					if legacy {
+						ab, aerr := a.Marshal()
+						cb, cerr := c.Marshal()
+						equal = aerr == nil && cerr == nil && bytes.Equal(ab, cb)
+					} else {
+						equal = exprWireEqual(a, c)
+					}
+					if !equal {
+						b.Fatal("unequal")
+					}
+				}
+			})
+		}
+	}
 }

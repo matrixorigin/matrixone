@@ -418,12 +418,43 @@ func BlockScaledTables() (f8 *[256]float32, e8 *[256]float32, f4 *[256][2]float3
 	return &f8e4m3Values, &e8m0Values, &f4e2m1Pairs
 }
 
-// At returns the dequantized element i.
+// smallestNormalFloat32 is 2^-126, the smallest positive normal float32. A block scale at or above
+// it cannot underflow any nonzero element (the smallest, 0.5, times it is still representable).
+const smallestNormalFloat32 = 0x1p-126
+
+// blockScaledElem is the one decoded-value contract for a block-scaled element: its value is
+// element*blockScale*global. The fast path is the plain float32 product element*(global*blockScale)
+// and is left unchanged whenever the block scale global*blockScale is a NORMAL float32, so every
+// ordinary value keeps its exact rounding. When global*blockScale is SUBNORMAL (or zero), folding it
+// in float32 first is wrong: element*scale then lands in the subnormal range, where per-element
+// rounding either zeros a representable value or distorts the decoded direction (e.g. 1.5*s rounds to
+// 2s but 6*s stays 6s, decoding direction 1:3 for a 1:4 vector). In that case the global is applied in
+// float64 so element*blockScale stays in normal range first -- matching the GPU, which keeps
+// element*blockScale in float and applies the global in double on the row norm. This makes the decoded
+// value (and hence the zero/nonzero classification and the direction) a property of the cell,
+// consistent on CPU and GPU within tolerance and independent of which executor runs. A value that is
+// genuinely below float32 range still rounds to 0.
+func blockScaledElem(element, global, blockScale float32) float32 {
+	scale := global * blockScale
+	if scale < smallestNormalFloat32 {
+		// global*blockScale is subnormal (or zero), so folding it in float32 first lands
+		// element*scale in the subnormal range, where per-element rounding distorts the decoded
+		// DIRECTION (e.g. 1.5*s rounds to 2s but 6*s stays 6s, giving direction 1:3 instead of the
+		// true 1:4) or zeros a representable value. Apply the global in float64 so element*blockScale
+		// stays in normal range first; the result then matches the GPU, which keeps element*blockScale
+		// in float and applies the global in double on the row norm. A genuinely tiny value still
+		// rounds to 0.
+		return float32(float64(element) * float64(blockScale) * float64(global))
+	}
+	return element * scale
+}
+
+// At returns the dequantized element i (element*blockScale*global).
 func (c *BlockScaledCell) At(i int) float32 {
 	if c.Format == BlockScaledMXFP8 {
-		return f8e4m3Values[c.Elems[i]] * (c.Global * e8m0Values[c.Scales[i/32]])
+		return blockScaledElem(f8e4m3Values[c.Elems[i]], c.Global, e8m0Values[c.Scales[i/32]])
 	}
-	return f4e2m1Pairs[c.Elems[i/2]][i%2] * (c.Global * f8e4m3Values[c.Scales[i/16]])
+	return blockScaledElem(f4e2m1Pairs[c.Elems[i/2]][i%2], c.Global, f8e4m3Values[c.Scales[i/16]])
 }
 
 // Dequantize writes the dequantized elements into dst, which must hold Dim values.
@@ -436,6 +467,9 @@ func (c *BlockScaledCell) Dequantize(dst []float32) {
 func (c *BlockScaledCell) DequantizeRange(off int, dst []float32) {
 	end := off + len(dst)
 	if c.Format == BlockScaledMXFP8 {
+		// vecf8 global is always 1, block scales are powers of two >= 2^-127 and e4m3 values are
+		// multiples of 2^-9, so element*blockScale is a multiple of 2^-136: exact in float32 and equal
+		// to blockScaledElem, with no underflow recovery needed.
 		for lo := off; lo < end; lo += 32 {
 			scale := c.Global * e8m0Values[c.Scales[lo/32]]
 			d := dst[lo-off:]
@@ -457,8 +491,20 @@ func (c *BlockScaledCell) DequantizeRange(off int, dst []float32) {
 		return
 	}
 	for lo := off; lo < end; lo += 16 {
-		scale := c.Global * f8e4m3Values[c.Scales[lo/16]]
+		bs := f8e4m3Values[c.Scales[lo/16]]
+		scale := c.Global * bs
 		d := dst[lo-off:]
+		// A subnormal (or zero) block scale can underflow element*scale to zero in float32 while the
+		// true value is a representable subnormal; decode this rare block through blockScaledElem,
+		// which recovers in float64 and matches At. A normal block scale cannot: the smallest nonzero
+		// element (0.5) times a normal scale is still a representable (subnormal) float32, so the
+		// unrolled float32 fast path below is exact there -- and bit-identical to blockScaledElem.
+		if scale < smallestNormalFloat32 && c.Global != 0 && bs != 0 {
+			for i := lo; i < min(lo+16, end); i++ {
+				d[i-lo] = blockScaledElem(f4e2m1Pairs[c.Elems[i/2]][i%2], c.Global, bs)
+			}
+			continue
+		}
 		if lo+16 <= end {
 			e := (*[8]byte)(c.Elems[lo/2 : lo/2+8])
 			d := (*[16]float32)(d[:16])

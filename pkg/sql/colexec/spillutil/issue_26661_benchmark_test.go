@@ -31,7 +31,7 @@ import (
 // produced by a low-threshold shuffled join. One logical output batch requires
 // decoding and merging 64 physical records.
 func BenchmarkSpillReadMergedSmallRecords(b *testing.B) {
-	proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	values := make([]int64, 128)

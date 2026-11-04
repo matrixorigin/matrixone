@@ -69,6 +69,8 @@ func (proc *Process) BuildProcessInfo(
 		// semantics with the process so those casts take the same adjustment
 		// path as they do on the coordinating CN.
 		procInfo.StatementRuntimeIgnore = proc.GetStmtProfile().GetStatementIgnore()
+		procInfo.StatementRuntimeSelect = proc.IsSelectStatement()
+		procInfo.StatementRuntimeDml = proc.IsDMLStatement()
 		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
 			procInfo.PlanSnapshotTs = &planSnapshotTS
 		}
@@ -164,6 +166,7 @@ func (proc *Process) BuildProcessInfo(
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
+			Account:                proc.Base.SessionInfo.Account,
 			User:                   proc.Base.SessionInfo.GetUser(),
 			Host:                   proc.Base.SessionInfo.GetHost(),
 			Role:                   proc.Base.SessionInfo.GetRole(),
@@ -179,6 +182,8 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:                resolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			LastInsertId:           proc.GetLastInsertID(),
+			LastInsertIdSet:        proc.Base.LastInsertID != nil,
 			MaxErrorCount:          uint32(maxErrorCount),
 			MaxErrorCountSet:       maxErrorCountSet,
 		}
@@ -282,6 +287,9 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	if err := ValidateStatementRuntimeClassification(value.StatementRuntimeSelect, value.StatementRuntimeDml); err != nil {
+		return nil, err
+	}
 	stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
 		value.StringShuffleHashAlgorithm,
 	)
@@ -362,6 +370,11 @@ func (c *codecService) Decode(
 	proc.SetAffectedRows(value.AffectedRows)
 	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
 	stmtProfile.SetStatementRuntimeProfile("", "", value.StatementRuntimeIgnore)
+	if value.StatementRuntimeSelect {
+		stmtProfile.SetStatementRuntimeProfile("Select", "DQL", value.StatementRuntimeIgnore)
+	} else if value.StatementRuntimeDml {
+		stmtProfile.SetStatementRuntimeProfile("", "DML", value.StatementRuntimeIgnore)
+	}
 	proc.Base.StmtProfile = stmtProfile
 	if value.PrepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
@@ -497,6 +510,8 @@ func ConvertToProcessSessionInfo(
 		LCTimeNames:                         sei.LcTimeNames,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+		LastInsertID:                        sei.LastInsertId,
+		LastInsertIDSet:                     sei.LastInsertIdSet,
 		MaxErrorCount:                       int(sei.MaxErrorCount),
 		MaxErrorCountSet:                    sei.MaxErrorCountSet,
 	}
@@ -625,4 +640,13 @@ func lockWaitTimeoutSeconds(v any) int64 {
 		}
 	}
 	return 0
+}
+
+// ValidateStatementRuntimeClassification rejects contradictory wire intent
+// before a receiver allocates a process or takes ownership of parameters.
+func ValidateStatementRuntimeClassification(selectStatement, dml bool) error {
+	if selectStatement && dml {
+		return moerr.NewInvalidInputNoCtx("conflicting SELECT and DML statement classifications")
+	}
+	return nil
 }

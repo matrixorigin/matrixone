@@ -108,7 +108,7 @@ EXECUTE p_field_boundary USING @char_needle, @fallback, @nested;
 DEALLOCATE PREPARE p_field_boundary;
 SELECT FIELD(x'0062', x'61', x'0062'), FIELD(x'0062', x'62'), FIELD(x'41', x'61');
 ➤ FIELD(0x0062, 0x61, 0x0062)[-5,64,0]  ¦  FIELD(0x0062, 0x62)[-5,64,0]  ¦  FIELD(0x41, 0x61)[-5,64,0]  𝄀
-2  ¦  0  ¦  1
+2  ¦  0  ¦  0
 PREPARE p_binary FROM 'SELECT FIELD(?, ?, ?), FIELD(?, ?), FIELD(?, ?)';
 SET @binary = x'0062', @binary_first = x'61', @binary_second = x'0062';
 SET @short = x'62', @upper = x'41', @lower = x'61';
@@ -159,3 +159,58 @@ EXECUTE p_having USING @exact;
 ➤ kept[-5,64,0]  𝄀
 1
 DEALLOCATE PREPARE p_having;
+PREPARE p_field_strings FROM 'SELECT FIELD(?, ''A'', ''a'') AS text_peer,
+FIELD(?, _binary ''A'', _binary ''a'') AS binary_peer,
+FIELD(CAST(? AS BINARY), ''A'', ''a'') AS explicit_binary,
+FIELD(CAST(? AS CHAR), ''A'', ''a'') AS explicit_text,
+FIELD(COALESCE(?, NULL), ''A'', ''a'') AS null_peer,
+FIELD(IF(TRUE, ?, NULL), ''A'', ''a'') AS fixed_if,
+FIELD(NULLIF(?, ''x''), ''A'', ''a'') AS return_domain,
+FIELD(NULLIF(''a'', ?), ''A'', ''a'') AS comparison_domain';
+SET @field_string = _binary 'a';
+EXECUTE p_field_strings USING @field_string, @field_string, @field_string, @field_string,
+@field_string, @field_string, @field_string, @field_string;
+➤ text_peer[-5,64,0]  ¦  binary_peer[-5,64,0]  ¦  explicit_binary[-5,64,0]  ¦  explicit_text[-5,64,0]  ¦  null_peer[-5,64,0]  ¦  fixed_if[-5,64,0]  ¦  return_domain[-5,64,0]  ¦  comparison_domain[-5,64,0]  𝄀
+1  ¦  2  ¦  2  ¦  1  ¦  2  ¦  2  ¦  1  ¦  0
+SET @field_string = 'a';
+EXECUTE p_field_strings USING @field_string, @field_string, @field_string, @field_string,
+@field_string, @field_string, @field_string, @field_string;
+➤ text_peer[-5,64,0]  ¦  binary_peer[-5,64,0]  ¦  explicit_binary[-5,64,0]  ¦  explicit_text[-5,64,0]  ¦  null_peer[-5,64,0]  ¦  fixed_if[-5,64,0]  ¦  return_domain[-5,64,0]  ¦  comparison_domain[-5,64,0]  𝄀
+1  ¦  2  ¦  2  ¦  1  ¦  2  ¦  2  ¦  1  ¦  0
+SET @field_string = NULL;
+EXECUTE p_field_strings USING @field_string, @field_string, @field_string, @field_string,
+@field_string, @field_string, @field_string, @field_string;
+➤ text_peer[-5,64,0]  ¦  binary_peer[-5,64,0]  ¦  explicit_binary[-5,64,0]  ¦  explicit_text[-5,64,0]  ¦  null_peer[-5,64,0]  ¦  fixed_if[-5,64,0]  ¦  return_domain[-5,64,0]  ¦  comparison_domain[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  1
+SET @field_string = _binary 'a';
+EXECUTE p_field_strings USING @field_string, @field_string, @field_string, @field_string,
+@field_string, @field_string, @field_string, @field_string;
+➤ text_peer[-5,64,0]  ¦  binary_peer[-5,64,0]  ¦  explicit_binary[-5,64,0]  ¦  explicit_text[-5,64,0]  ¦  null_peer[-5,64,0]  ¦  fixed_if[-5,64,0]  ¦  return_domain[-5,64,0]  ¦  comparison_domain[-5,64,0]  𝄀
+1  ¦  2  ¦  2  ¦  1  ¦  2  ¦  2  ¦  1  ¦  0
+DEALLOCATE PREPARE p_field_strings;
+PREPARE p_field_outputs FROM 'SELECT
+FIELD((SELECT ? LIMIT 1), ''A'', ''a'') AS scalar_marker,
+FIELD((SELECT CASE WHEN TRUE THEN ? ELSE NULL END LIMIT 1), ''A'', ''a'') AS scalar_case,
+FIELD(x, ''A'', ''a'') AS derived_return
+FROM (SELECT NULLIF(?, ''x'') AS x LIMIT 1) d';
+EXECUTE p_field_outputs USING @field_string, @field_string, @field_string;
+➤ scalar_marker[-5,64,0]  ¦  scalar_case[-5,64,0]  ¦  derived_return[-5,64,0]  𝄀
+1  ¦  2  ¦  1
+SET @field_string = 'a';
+EXECUTE p_field_outputs USING @field_string, @field_string, @field_string;
+➤ scalar_marker[-5,64,0]  ¦  scalar_case[-5,64,0]  ¦  derived_return[-5,64,0]  𝄀
+1  ¦  2  ¦  1
+DEALLOCATE PREPARE p_field_outputs;
+PREPARE p_field_binary_union FROM 'SELECT FIELD(x, ''A'', ''a'') AS binary_union
+FROM (SELECT ? AS x UNION ALL SELECT _binary ''a'') d';
+EXECUTE p_field_binary_union USING @field_string;
+➤ binary_union[-5,64,0]  𝄀
+2  𝄀
+2
+SET @field_string = _binary 'a';
+EXECUTE p_field_binary_union USING @field_string;
+➤ binary_union[-5,64,0]  𝄀
+2  𝄀
+2
+DEALLOCATE PREPARE p_field_binary_union;
+SET @field_string = NULL;

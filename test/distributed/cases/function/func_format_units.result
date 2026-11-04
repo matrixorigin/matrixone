@@ -1,0 +1,100 @@
+SELECT FORMAT_BYTES(1024) AS bytes, FORMAT_PICO_TIME(1000000000) AS latency;
+➤ bytes[12,65535,0]  ¦  latency[12,65535,0]  𝄀
+1.00 KiB  ¦  1.00 ms
+SELECT CONCAT('[',FORMAT_BYTES(0),']') AS zero_bytes, CONCAT('[',FORMAT_BYTES(512),']') AS bytes, CONCAT('[',FORMAT_PICO_TIME(0),']') AS zero_time, CONCAT('[',FORMAT_PICO_TIME(12.9),']') AS fraction;
+➤ zero_bytes[-1,16383,0]  ¦  bytes[-1,16383,0]  ¦  zero_time[-1,16383,0]  ¦  fraction[-1,16383,0]  𝄀
+[   0 bytes]  ¦  [ 512 bytes]  ¦  [  0 ps]  ¦  [ 12 ps]
+SELECT FORMAT_BYTES(1023) AS below_kib, FORMAT_BYTES(1048575) AS below_mib, FORMAT_BYTES(1048576) AS mib, FORMAT_PICO_TIME(999) AS below_ns, FORMAT_PICO_TIME(999999999999) AS below_s, FORMAT_PICO_TIME(1000000000000) AS seconds;
+➤ below_kib[12,65535,0]  ¦  below_mib[12,65535,0]  ¦  mib[12,65535,0]  ¦  below_ns[12,65535,0]  ¦  below_s[12,65535,0]  ¦  seconds[12,65535,0]  𝄀
+1023 bytes  ¦  1024.00 KiB  ¦  1.00 MiB  ¦  999 ps  ¦  1000.00 ms  ¦  1.00 s
+SELECT FORMAT_BYTES(-1048576) AS negative_bytes, FORMAT_PICO_TIME(-1010000) AS negative_time, FORMAT_BYTES(NULL) AS null_bytes, FORMAT_PICO_TIME(NULL) AS null_time;
+➤ negative_bytes[12,65535,0]  ¦  negative_time[12,65535,0]  ¦  null_bytes[12,65535,0]  ¦  null_time[12,65535,0]  𝄀
+-1.00 MiB  ¦  -1.01 us  ¦  null  ¦  null
+SELECT FORMAT_BYTES(1152) AS bytes_tie, FORMAT_PICO_TIME(1125) AS time_tie, FORMAT_PICO_TIME(60000000000000) AS minutes, FORMAT_PICO_TIME(3600000000000000) AS hours, FORMAT_PICO_TIME(86400000000000000) AS days;
+➤ bytes_tie[12,65535,0]  ¦  time_tie[12,65535,0]  ¦  minutes[12,65535,0]  ¦  hours[12,65535,0]  ¦  days[12,65535,0]  𝄀
+1.12 KiB  ¦  1.12 ns  ¦  1.00 min  ¦  1.00 h  ¦  1.00 d
+SELECT FORMAT_BYTES(CAST(18446744073709551615 AS UNSIGNED)) AS unsigned_bytes, FORMAT_PICO_TIME(CAST(18446744073709551615 AS UNSIGNED)) AS unsigned_time, FORMAT_BYTES(1152921504606846975) AS double_threshold;
+➤ unsigned_bytes[12,65535,0]  ¦  unsigned_time[12,65535,0]  ¦  double_threshold[12,65535,0]  𝄀
+16.00 EiB  ¦  213.50 d  ¦  1.00 EiB
+SELECT FORMAT_BYTES(118059162071741143500099) AS exponent_bytes, FORMAT_PICO_TIME(-8650000000000000000099) AS exponent_time;
+➤ exponent_bytes[12,65535,0]  ¦  exponent_time[12,65535,0]  𝄀
+1.02e+05 EiB  ¦  -1.00e+05 d
+SELECT FORMAT_BYTES(CAST(1024 AS DECIMAL(20,2))) AS decimal_bytes, FORMAT_PICO_TIME(CAST(3501 AS DECIMAL(20,2))) AS decimal_time, FORMAT_BYTES('1024') AS text_bytes, FORMAT_PICO_TIME('1e9') AS text_time;
+➤ decimal_bytes[12,65535,0]  ¦  decimal_time[12,65535,0]  ¦  text_bytes[12,65535,0]  ¦  text_time[12,65535,0]  𝄀
+1.00 KiB  ¦  3.50 ns  ¦  1.00 KiB  ¦  1.00 ms
+SELECT CONCAT('[',FORMAT_BYTES(TRUE),']') AS bool_bytes, CONCAT('[',FORMAT_PICO_TIME(FALSE),']') AS bool_time, CONCAT('[',FORMAT_BYTES(''),']') AS empty_bytes, CONCAT('[',FORMAT_PICO_TIME(''),']') AS empty_time;
+➤ bool_bytes[-1,16383,0]  ¦  bool_time[-1,16383,0]  ¦  empty_bytes[-1,16383,0]  ¦  empty_time[-1,16383,0]  𝄀
+[   1 bytes]  ¦  [  0 ps]  ¦  [   0 bytes]  ¦  [  0 ps]
+SET @format_units_sql_mode=@@sql_mode;
+SET sql_mode='';
+SELECT FORMAT_BYTES('40000 foo 2000') AS prefix_bytes;
+➤ prefix_bytes[12,65535,0]  𝄀
+39.06 KiB
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '40000 foo 2000'
+SELECT FORMAT_PICO_TIME('40000 foo 2000') AS prefix_time;
+➤ prefix_time[12,65535,0]  𝄀
+40.00 ns
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '40000 foo 2000'
+SELECT CONCAT('[',FORMAT_BYTES('foo'),']') AS invalid_bytes;
+➤ invalid_bytes[-1,16383,0]  𝄀
+[   0 bytes]
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'foo'
+SELECT CONCAT('[',FORMAT_PICO_TIME('foo'),']') AS invalid_time;
+➤ invalid_time[-1,16383,0]  𝄀
+[  0 ps]
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'foo'
+SET sql_mode='MATRIXONE_NATIVE';
+SELECT FORMAT_BYTES('foo');
+invalid input: "foo" is invalid numeric string
+SELECT FORMAT_PICO_TIME('foo');
+invalid input: "foo" is invalid numeric string
+SET sql_mode=@format_units_sql_mode;
+DROP DATABASE IF EXISTS format_units_bvt;
+CREATE DATABASE format_units_bvt;
+USE format_units_bvt;
+CREATE TABLE samples(id INT PRIMARY KEY, bytes BIGINT UNSIGNED, latency DOUBLE);
+INSERT INTO samples VALUES (1,1024,3501),(2,NULL,NULL),(3,1048576,1000000000);
+SELECT id, FORMAT_BYTES(bytes) AS bytes, FORMAT_PICO_TIME(latency) AS latency FROM samples ORDER BY id;
+➤ id[4,32,0]  ¦  bytes[12,65535,0]  ¦  latency[12,65535,0]  𝄀
+1  ¦  1.00 KiB  ¦  3.50 ns  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  1.00 MiB  ¦  1.00 ms
+SELECT FORMAT_BYTES(SUM(bytes)) AS total_bytes, FORMAT_PICO_TIME(MAX(latency)) AS max_latency, COUNT(FORMAT_BYTES(bytes)) AS bytes_count, COUNT(FORMAT_PICO_TIME(latency)) AS latency_count FROM samples;
+➤ total_bytes[12,65535,0]  ¦  max_latency[12,65535,0]  ¦  bytes_count[-5,64,0]  ¦  latency_count[-5,64,0]  𝄀
+1.00 MiB  ¦  1.00 ms  ¦  2  ¦  2
+SELECT id, CASE WHEN id=1 THEN FORMAT_BYTES(bytes) ELSE FORMAT_PICO_TIME(latency) END AS selected FROM samples ORDER BY id;
+➤ id[4,32,0]  ¦  selected[12,65535,0]  𝄀
+1  ¦  1.00 KiB  𝄀
+2  ¦  null  𝄀
+3  ¦  1.00 ms
+PREPARE format_units_stmt FROM 'SELECT FORMAT_BYTES(?) AS bytes, FORMAT_PICO_TIME(?) AS latency';
+SET @format_units_bytes='1024', @format_units_time='1000000000';
+EXECUTE format_units_stmt USING @format_units_bytes, @format_units_time;
+➤ bytes[12,65535,0]  ¦  latency[12,65535,0]  𝄀
+1.00 KiB  ¦  1.00 ms
+SET @format_units_bytes=NULL, @format_units_time=NULL;
+EXECUTE format_units_stmt USING @format_units_bytes, @format_units_time;
+➤ bytes[12,65535,0]  ¦  latency[12,65535,0]  𝄀
+null  ¦  null
+SET @format_units_bytes=1048576, @format_units_time=3501;
+EXECUTE format_units_stmt USING @format_units_bytes, @format_units_time;
+➤ bytes[12,65535,0]  ¦  latency[12,65535,0]  𝄀
+1.00 MiB  ¦  3.50 ns
+DEALLOCATE PREPARE format_units_stmt;
+SELECT FORMAT_BYTES();
+invalid argument function format_bytes, bad value []
+SELECT FORMAT_BYTES(1,2);
+invalid argument function format_bytes, bad value [BIGINT BIGINT]
+SELECT FORMAT_PICO_TIME();
+invalid argument function format_pico_time, bad value []
+SELECT FORMAT_PICO_TIME(1,2);
+invalid argument function format_pico_time, bad value [BIGINT BIGINT]
+DROP DATABASE format_units_bvt;

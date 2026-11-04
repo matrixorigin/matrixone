@@ -66,7 +66,6 @@ func newTxnTableWithItem(
 		tableDef:      item.TableDef,
 		primaryIdx:    item.PrimaryIdx,
 		primarySeqnum: item.PrimarySeqnum,
-		clusterByIdx:  item.ClusterByIdx,
 		relKind:       item.Kind,
 		viewdef:       item.ViewDef,
 		comment:       item.Comment,
@@ -148,47 +147,19 @@ func (tbl *txnTableDelegate) CollectChanges(ctx context.Context, from, to types.
 	return tbl.origin.CollectChanges(ctx, from, to, skipDeletes, mp)
 }
 
+func (tbl *txnTableDelegate) CreatedInCurrentTxn(ctx context.Context) (bool, error) {
+	if tbl.combined.is {
+		return tbl.combined.tbl.CreatedInCurrentTxn(ctx)
+	}
+	return tbl.origin.CreatedInCurrentTxn(ctx)
+}
+
 func (tbl *txnTableDelegate) CollectObjectList(ctx context.Context, from, to types.TS, bat *batch.Batch, mp *mpool.MPool) error {
 	if tbl.combined.is {
 		return tbl.combined.tbl.CollectObjectList(ctx, from, to, bat, mp)
 	}
 
 	return tbl.origin.CollectObjectList(ctx, from, to, bat, mp)
-}
-
-// VisitSnapshotObjects is the bounded sidecar-read path. The callback owns no
-// storage memory and may stop enumeration as soon as its wire-size budget is
-// exhausted.
-func (tbl *txnTableDelegate) VisitSnapshotObjects(
-	ctx context.Context,
-	to types.TS,
-	visit func(objectio.ObjectStats, bool) error,
-) error {
-	local, err := tbl.CanVisitSnapshotLocally()
-	if err != nil {
-		return err
-	}
-	if !local {
-		return moerr.NewInternalErrorNoCtx("delegated snapshot object visitation is unsupported")
-	}
-	return tbl.origin.visitSnapshotObjects(ctx, to, visit)
-}
-
-// HasSnapshotTombstones performs a presence-only probe over the same local TAE
-// relation used by VisitSnapshotObjects. Delegated shard reads fail closed.
-func (tbl *txnTableDelegate) HasSnapshotTombstones(
-	ctx context.Context,
-	txnOffset int,
-	snapshot types.TS,
-) (bool, error) {
-	local, err := tbl.CanVisitSnapshotLocally()
-	if err != nil {
-		return false, err
-	}
-	if !local {
-		return false, moerr.NewInternalErrorNoCtx("delegated snapshot tombstone probing is unsupported")
-	}
-	return tbl.origin.hasSnapshotTombstones(ctx, txnOffset, snapshot)
 }
 
 func (tbl *txnTableDelegate) Stats(
@@ -246,6 +217,12 @@ func (tbl *txnTableDelegate) Stats(
 		return transientTableStats(&stats, float64(^uint64(0))), nil
 	}
 
+	// A readonly remote owner cannot see this CN's delete/update workspace.
+	// The decoded response is owned here, so clearing its sample cannot mutate
+	// the published generation at either CN.
+	if len(stats.ByteRangeMap) > 0 && (!tbl.origin.getTxn().Readonly() || tbl.origin.db.op.IsSnapOp()) {
+		stats.ByteRangeMap = nil
+	}
 	return &stats, nil
 }
 
@@ -1098,19 +1075,6 @@ func (tbl *txnTableDelegate) GetExtraInfo() *api.SchemaExtra {
 // partition or partition-index tables instead of one TAE relation.
 func (tbl *txnTableDelegate) IsPartitionedRelation() bool {
 	return tbl != nil && tbl.combined.is
-}
-
-// CanVisitSnapshotLocally is true only when one origin relation covers the
-// complete logical table. Hash-sharded and delegated partition reads require a
-// shard-wide manifest protocol and are rejected by the current sidecar format.
-func (tbl *txnTableDelegate) CanVisitSnapshotLocally() (bool, error) {
-	if tbl == nil || tbl.origin == nil || tbl.combined.is {
-		return false, nil
-	}
-	if !tbl.shard.is {
-		return true, nil
-	}
-	return tbl.shard.policy == shard.Policy_Partition && tbl.origin.tableId == tbl.shard.tableID, nil
 }
 
 func (tbl *txnTableDelegate) GetFlushTS(

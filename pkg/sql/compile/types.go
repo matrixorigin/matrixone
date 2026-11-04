@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -78,6 +77,7 @@ const (
 	AlterSequence
 	Replace
 	TableClone
+	AlterDatabase
 )
 
 func (m magicType) String() string {
@@ -90,6 +90,8 @@ func (m magicType) String() string {
 		return "Remote"
 	case CreateDatabase:
 		return "CreateDatabase"
+	case AlterDatabase:
+		return "AlterDatabase"
 	case CreateTable:
 		return "CreateTable"
 	case CreateView:
@@ -142,9 +144,9 @@ type Source struct {
 	// nil means not initialized; non-nil empty means this execution admitted no block filters.
 	remoteBlockFilters []*plan.Expr
 	node               *plan.Node
-	// vectorIndexScanTemplate retains the immutable prepared-plan expressions.
-	// Each execution folds a fresh copy into node.VectorIndexScan.
-	vectorIndexScanTemplate *plan.VectorIndexScan
+	// indexSearchScanTemplate retains the immutable prepared-plan expressions.
+	// Each execution folds a fresh copy into node.IndexSearchScan.
+	indexSearchScanTemplate *plan.IndexSearchScan
 	TableDef                *plan.TableDef
 	Timestamp               timestamp.Timestamp
 	AccountId               *plan.PubInfo
@@ -227,6 +229,9 @@ type Scope struct {
 	Proc *process.Process
 
 	ScopeAnalyzer *ScopeAnalyzer
+	// roleRuleRenameAdmissionChecked certifies that a complete RENAME TABLE
+	// batch passed admission before any child rename mutates catalog state.
+	roleRuleRenameAdmissionChecked bool
 
 	// resourceExecutedLocally distinguishes a planned remote scope that fell
 	// back to MergeRun from a scope that was actually dispatched. It is
@@ -277,14 +282,15 @@ type scopeContext struct {
 	root     *scopeContext
 	parent   *scopeContext
 	children []*scopeContext
-	pipe     *pipeline.Pipeline
 	regs     map[*process.WaitRegister]int32
 }
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scopes []*Scope
-	// Shared Product producers are attached after downstream placement.
+	// Unprepared source metadata owners, never scheduled or run.
+	dependentSourceScopes []*Scope
+	scopes                []*Scope
+	// Shared broadcast HashBuild producers are attached after downstream placement.
 	pendingProductBuilds []*pendingProductBuild
 	// Non-owning producer regions: true marks an independent auxiliary job;
 	// false marks its result owner for original-error arbitration.
@@ -333,6 +339,8 @@ type Compile struct {
 	// retaining the physical plan built at this timestamp.
 	planSnapshotTS    timestamp.Timestamp
 	hasPlanSnapshotTS bool
+	// Fixed CREATE target/declared-parent pins survive only this statement retry.
+	createNamePinsAdmitted bool
 	// planGenerationReused is true only when this execution admitted an
 	// existing session/prepared generation. A definition rebuild clears it;
 	// data-only retries retain it with the same logical generation.
@@ -345,7 +353,7 @@ type Compile struct {
 	// resultMetadataFrozen is set once a streaming consumer has materialized or
 	// sent the current result schema. A definition retry may continue only when
 	// the rebuilt logical plan exposes identical result metadata.
-	resultMetadataFrozen bool
+	resultMetadataFrozen atomic.Bool
 	// planGenerationRebuilt is sticky for this Compile. Once a retry rebuilds
 	// its logical plan, any frontend-owned prepared plan or physical topology
 	// from the previous generation must not be reused.
@@ -414,6 +422,9 @@ type Compile struct {
 	// runtime-filter producers which were actually visited by compilePlanScope.
 	// It is statement-local and excludes physically pruned subtrees.
 	compiledLocalRuntimeFilterNodes []int32
+	// Non-owning, compileQuery-generation evidence for optional deep filters.
+	deepRuntimeFilterTags           map[int32]bool
+	completeDeepRuntimeFilterBuilds map[vm.Operator]bool
 
 	needLockMeta bool
 	needBlock    bool
@@ -452,9 +463,13 @@ type Compile struct {
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
-	ignorePublish            bool
-	ignoreCheckExperimental  bool
-	disableLock              bool
+	// lastInsertIDBaseline is the session-visible LAST_INSERT_ID when this
+	// statement started; a retry restores it.
+	lastInsertIDBaseline      uint64
+	ignorePublish             bool
+	ignoreCheckExperimental   bool
+	skipIndexTaskRegistration bool
+	disableLock               bool
 
 	icebergScanPlanner icebergapi.ScanPlanner
 	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan

@@ -218,6 +218,13 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 		if err != nil {
 			return err
 		}
+		if !source.GetIsBin() {
+			// Keep the original value policy and diagnose only successfully
+			// evaluated text arguments. Binary literals carry numeric bytes.
+			text := convertByteSliceToString(value)
+			prefix := leadingDecimalIntegerPrefix(text)
+			appendIntegerNumericCoercionWarning(proc, text, prefix, prefix != "", false)
+		}
 		if err = result.Append(integer, false); err != nil {
 			return err
 		}
@@ -356,26 +363,11 @@ func NewTextIntegerBitsCast(parameters []*vector.Vector, result vector.FunctionR
 // Temporal values are rounded in their clock/calendar domain before decimal
 // packing. Rounding HHMMSS directly would produce invalid minute/hour carries.
 func timeIntegerArgument(value types.Time) (integerArgumentValue, error) {
-	n, _ := signedIntegerArgument(value)
-	seconds := (n.magnitude + 500000) / 1000000
-	// Preserve MySQL's TIME ceiling when fractional rounding crosses it, but
-	// do not saturate MatrixOne's independently supported extended TIME domain.
-	const mysqlLastSecond = 838*3600 + 59*60 + 59
-	if n.magnitude/1000000 == mysqlLastSecond && seconds > mysqlLastSecond {
-		seconds = mysqlLastSecond
-	}
-	n.magnitude = seconds/3600*10000 + (seconds/60)%60*100 + seconds%60
-	return n, nil
+	return signedIntegerArgument(roundedTimeInteger(value))
 }
 
 func datetimeIntegerArgument(value types.Datetime) (integerArgumentValue, error) {
-	rounded := value.TruncateToScale(0)
-	if rounded.Year() > types.MaxDatetimeYear {
-		// MySQL val_int retains the original date with a zero clock when
-		// fractional carry cannot advance the maximum calendar date.
-		rounded = value.ToDate().ToDatetime()
-	}
-	return signedIntegerArgument(packedDatetimeInt64(rounded))
+	return signedIntegerArgument(roundedDatetimeInteger(value))
 }
 
 // NewTemporalIntegerArgumentCast is selected only by temporal-capable roles.

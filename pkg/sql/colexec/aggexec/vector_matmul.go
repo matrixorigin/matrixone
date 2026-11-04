@@ -16,21 +16,27 @@ package aggexec
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"unsafe"
+	"unicode/utf8"
 
 	"github.com/bytedance/sonic"
+	"github.com/bytedance/sonic/ast"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -123,6 +129,15 @@ func encodeVectorMatmulConfig(topk int64, queries, options string, gpu, binaryQu
 }
 
 func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gpu, binaryQueries bool, err error) {
+	return decodeVectorMatmulConfigFields(b, func(v []byte) string { return string(v) })
+}
+
+// decodeVectorMatmulConfigView is decodeVectorMatmulConfig with queries and options viewing b.
+func decodeVectorMatmulConfigView(b []byte) (topk int64, queries, options string, gpu, binaryQueries bool, err error) {
+	return decodeVectorMatmulConfigFields(b, util.UnsafeBytesToString)
+}
+
+func decodeVectorMatmulConfigFields(b []byte, str func([]byte) string) (topk int64, queries, options string, gpu, binaryQueries bool, err error) {
 	read := func() (string, bool) {
 		if len(b) < 4 {
 			return "", false
@@ -131,13 +146,13 @@ func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gp
 		if uint64(len(b)-4) < uint64(n) {
 			return "", false
 		}
-		s := string(b[4 : 4+n])
+		s := str(b[4 : 4+n])
 		b = b[4+n:]
 		return s, true
 	}
-	malformed := moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration")
+	malformed := func() error { return moerr.NewInternalErrorNoCtx("vector_matmul: malformed configuration") }
 	if len(b) < 8 {
-		return 0, "", "", false, false, malformed
+		return 0, "", "", false, false, malformed()
 	}
 	topk = int64(binary.LittleEndian.Uint64(b))
 	b = b[8:]
@@ -145,7 +160,7 @@ func decodeVectorMatmulConfig(b []byte) (topk int64, queries, options string, gp
 	queries, ok1 = read()
 	options, ok2 = read()
 	if !ok1 || !ok2 || len(b) != 1 || b[0]&^(vectorMatmulFlagGPU|vectorMatmulFlagBinaryQueries) != 0 {
-		return 0, "", "", false, false, malformed
+		return 0, "", "", false, false, malformed()
 	}
 	return topk, queries, options, b[0]&vectorMatmulFlagGPU != 0, b[0]&vectorMatmulFlagBinaryQueries != 0, nil
 }
@@ -164,8 +179,9 @@ type vectorMatmulConfig struct {
 	cellBytes int
 	// engineFormat is the GPU engine format of the column type.
 	engineFormat int
-	// score validates a cell and writes its dot product with each query into out.
-	score func(cell []byte, out []float64) error
+	// score validates a cell and writes its dot product with each query into out; row is the
+	// caller's scratch for the cell's operand.
+	score func(cell []byte, row *metric.VecBlockOperand, out []float64) error
 	// gpu reports that the session allows the GPU.
 	gpu bool
 	// metric is the distance: vectorMatmulInnerProduct, vectorMatmulCosine or
@@ -189,37 +205,123 @@ func parseVectorMatmulOptions(options string) (metric int, vecblockQueries bool,
 	if options == "" {
 		return vectorMatmulInnerProduct, false, nil
 	}
-	var fields map[string]json.RawMessage
-	if err := sonic.UnmarshalString(options, &fields); err != nil || fields == nil {
+	// json.Valid checks the whole text, trailing text included, without recursion and with
+	// a nesting limit, so the visitor below walks a bounded document
+	v := &vectorMatmulOptionsVisitor{}
+	if !json.Valid(util.UnsafeStringToBytes(options)) ||
+		ast.Preorder(options, v, vectorMatmulNumberText) != nil || !v.object {
 		return 0, false, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
 	}
 	metric = vectorMatmulInnerProduct
-	if raw, ok := fields["metric"]; ok {
-		var name string
-		_ = sonic.Unmarshal(raw, &name)
-		switch name {
+	if v.metric.set {
+		switch v.metric.str {
 		case "inner_product":
 		case "cosine":
 			metric = vectorMatmulCosine
 		case "l2sq":
 			metric = vectorMatmulL2sq
 		default:
-			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: metric %s is not inner_product, cosine or l2sq", raw)
+			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: metric %s is not inner_product, cosine or l2sq", v.metric.text(options, "metric"))
 		}
 	}
-	if raw, ok := fields["query_format"]; ok {
-		var name string
-		_ = sonic.Unmarshal(raw, &name)
-		switch name {
+	if v.format.set {
+		switch v.format.str {
 		case "float32":
 		case "vecblock":
 			vecblockQueries = true
 		default:
-			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: query_format %s is not float32 or vecblock", raw)
+			return 0, false, moerr.NewInvalidInputNoCtxf("vector_matmul: query_format %s is not float32 or vecblock", v.format.text(options, "query_format"))
 		}
 	}
 	return metric, vecblockQueries, nil
 }
+
+// vectorMatmulNumberText makes ast.Preorder pass numbers as their text only.
+var vectorMatmulNumberText = &ast.VisitorOptions{OnlyNumber: true}
+
+// vectorMatmulOption is one option's value as an options object last sets it: str is the
+// value when it is a JSON string, empty for any other value, and raw its JSON text when
+// it is a string or a scalar.
+type vectorMatmulOption struct {
+	set bool
+	str string
+	raw string
+}
+
+// text is the option's JSON text for an error message; an object or array value is read
+// from the options again.
+func (o vectorMatmulOption) text(options, key string) string {
+	if o.raw != "" {
+		return o.raw
+	}
+	if node, err := sonic.GetFromString(options, key); err == nil {
+		if raw, err := node.Raw(); err == nil {
+			return raw
+		}
+	}
+	return `""`
+}
+
+// vectorMatmulOptionsVisitor reads the options object in one pass without building it: it
+// keeps the top-level "metric" and "query_format" values and skips the others.
+type vectorMatmulOptionsVisitor struct {
+	depth          int
+	object         bool
+	key            string
+	metric, format vectorMatmulOption
+}
+
+// value records a value at depth 1: str for a string, raw its JSON text when known.
+func (v *vectorMatmulOptionsVisitor) value(str, raw string) {
+	if v.depth != 1 {
+		return
+	}
+	switch v.key {
+	case "metric":
+		v.metric = vectorMatmulOption{set: true, str: str, raw: raw}
+	case "query_format":
+		v.format = vectorMatmulOption{set: true, str: str, raw: raw}
+	}
+}
+
+func (v *vectorMatmulOptionsVisitor) OnNull() error { v.value("", "null"); return nil }
+func (v *vectorMatmulOptionsVisitor) OnBool(b bool) error {
+	v.value("", strconv.FormatBool(b))
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnString(s string) error {
+	v.value(s, strconv.Quote(s))
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnInt64(_ int64, n json.Number) error {
+	v.value("", string(n))
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnFloat64(_ float64, n json.Number) error {
+	v.value("", string(n))
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnObjectKey(k string) error {
+	if v.depth == 1 {
+		v.key = k
+	}
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnObjectBegin(int) error {
+	if v.depth == 0 {
+		v.object = true
+	}
+	v.value("", "")
+	v.depth++
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnObjectEnd() error { v.depth--; return nil }
+func (v *vectorMatmulOptionsVisitor) OnArrayBegin(int) error {
+	v.value("", "")
+	v.depth++
+	return nil
+}
+func (v *vectorMatmulOptionsVisitor) OnArrayEnd() error { v.depth--; return nil }
 
 // vectorMatmulConfigs shares a parsed configuration between the executors holding the same
 // configuration bytes for the same column type: a query's pipeline executors and the
@@ -271,7 +373,264 @@ func acquireVectorMatmulConfig(raw []byte, vecType types.Type) (cfg *vectorMatmu
 	return e.cfg, release, nil
 }
 
+// vectorMatmulParseBound returns an upper bound of the bytes parseVectorMatmulConfig allocates
+// for raw and vecType, the transient decoding and the retained configuration together, plus
+// the executor's score scratch. It decodes no query: it rejects a topk, query count or
+// dimension outside the limits from the configuration's lengths and a scan of JSON queries,
+// so the account admits the bound before parsing allocates.
+func vectorMatmulParseBound(raw []byte, vecType types.Type) (uint64, error) {
+	topk, queries, options, _, binaryQueries, err := decodeVectorMatmulConfigView(raw)
+	if err != nil {
+		return 0, err
+	}
+	if topk < 1 || topk > vectorMatmulMaxTopK {
+		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: topk %d out of range [1, %d]", topk, vectorMatmulMaxTopK)
+	}
+	dim := int(vecType.Width)
+	if dim < 1 || dim > types.MaxArrayDimension {
+		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: dimension %d out of range [1, %d]", dim, types.MaxArrayDimension)
+	}
+	cellSize := 4 * dim
+	if f, ok := vecType.Oid.BlockScaledFormat(); ok {
+		cellSize = types.BlockScaledCellSize(f, dim)
+	}
+	// the options are read only after admission, so the bound covers either query format:
+	// the escaped strings of the options, and the copy of the queries
+	bound := 2*uint64(len(options)) + 2*uint64(len(queries)) + 4096
+	var nq int
+	if binaryQueries {
+		// float32 values or cells: the larger count that divides the length; parsing
+		// reports a length that divides neither, and a count beyond the limit
+		for _, width := range []int{4 * dim, cellSize} {
+			if n := len(queries) / width; len(queries)%width == 0 && n >= 1 && n <= vectorMatmulMaxQueries {
+				nq = max(nq, n)
+			}
+		}
+		if nq == 0 {
+			return bound, nil
+		}
+		// the decoded values and their slice headers
+		bound += uint64(len(queries)) + uint64(nq)*24
+	} else {
+		var total, vecblock uint64
+		rows, ok := vectorMatmulJSONRows(queries, func(_, n, _ int, value string) {
+			total += uint64(n)
+			// a cell's JSON decoding grows with its text, the cell with the dimension
+			vecblock += max(2048+uint64(cellSize)+256*uint64(dim), 64*uint64(len(value)))
+		})
+		if !ok {
+			return bound, nil
+		}
+		nq = rows
+		// float queries: the values and the query views; vecblock queries: the cells
+		bound += max(4*total+24*uint64(nq), vecblock)
+	}
+	// JSON queries have the same count in either format; parsing checks binary ones
+	if !binaryQueries && (nq < 1 || nq > vectorMatmulMaxQueries) {
+		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", nq, vectorMatmulMaxQueries)
+	}
+	if !binaryQueries && nq*int(topk) > vectorMatmulMaxEntries {
+		return 0, moerr.NewInvalidInputNoCtxf("vector_matmul: queries x topk exceeds %d", vectorMatmulMaxEntries)
+	}
+	// the converted storage (cells built from vectors, then copied back to back), the
+	// scorer views and the score scratch
+	opSize := uint64(reflect.TypeFor[metric.VecBlockOperand]().Size())
+	bound += uint64(nq) * (64 + 4*uint64(cellSize) + 8*uint64(dim) + opSize + 8)
+	// a margin for the decoder's own allocation; the commit returns what is not retained
+	return 2 * bound, nil
+}
+
+// vectorMatmulJSONRows scans text as a JSON array of arrays without decoding it: it returns
+// the number of rows and calls row, when not nil, with each row's element count, the index
+// of its first null element (-1 when none) and its text. ok is false when text is not
+// well-formed JSON of that shape; the decoder then reports the error. An element of the
+// outer array that is not an array counts as a row of one element; a null one has null at -2.
+func vectorMatmulJSONRows(text string, row func(i, n, null int, value string)) (rows int, ok bool) {
+	sc := vectorMatmulJSONScanner{text: text, depth: 1}
+	sc.ws()
+	if sc.i >= len(text) || text[sc.i] != '[' {
+		return 0, false
+	}
+	sc.i++
+	sc.ws()
+	if sc.i < len(text) && text[sc.i] == ']' {
+		sc.i++
+		sc.ws()
+		return 0, sc.i == len(text)
+	}
+	for {
+		sc.ws()
+		start := sc.i
+		isArray := sc.i < len(text) && text[sc.i] == '['
+		null := -1
+		if !isArray && sc.isNull() {
+			null = -2
+		}
+		n, ok := sc.skipValue()
+		if !ok {
+			return 0, false
+		}
+		if isArray {
+			null = sc.firstNull
+		} else {
+			n = 1
+		}
+		if row != nil {
+			row(rows, n, null, text[start:sc.i])
+		}
+		rows++
+		sc.ws()
+		if sc.i >= len(text) {
+			return 0, false
+		}
+		if text[sc.i] == ']' {
+			sc.i++
+			sc.ws()
+			return rows, sc.i == len(text)
+		}
+		if text[sc.i] != ',' {
+			return 0, false
+		}
+		sc.i++
+	}
+}
+
+// vectorMatmulJSONMaxDepth bounds the nesting the row scan follows: queries nest at most
+// three deep (vecblock cells are objects holding arrays); deeper text is rejected.
+const vectorMatmulJSONMaxDepth = 8
+
+// vectorMatmulJSONScanner walks JSON text at i without decoding it.
+type vectorMatmulJSONScanner struct {
+	text  string
+	i     int
+	depth int
+	// firstNull is the index of the first null element of the array skipValue last left.
+	firstNull int
+}
+
+func (sc *vectorMatmulJSONScanner) ws() {
+	for sc.i < len(sc.text) {
+		switch sc.text[sc.i] {
+		case ' ', '\t', '\n', '\r':
+			sc.i++
+		default:
+			return
+		}
+	}
+}
+
+// isNull reports whether the value at i is the literal null.
+func (sc *vectorMatmulJSONScanner) isNull() bool {
+	sc.ws()
+	t := sc.text[sc.i:]
+	if len(t) < 4 || t[:4] != "null" {
+		return false
+	}
+	if len(t) == 4 {
+		return true
+	}
+	switch t[4] {
+	case ',', ']', '}', ' ', '\t', '\n', '\r':
+		return true
+	}
+	return false
+}
+
+// skipString moves i past the string starting at i.
+func (sc *vectorMatmulJSONScanner) skipString() bool {
+	for sc.i++; sc.i < len(sc.text); sc.i++ {
+		switch sc.text[sc.i] {
+		case '\\':
+			sc.i++
+		case '"':
+			sc.i++
+			return true
+		}
+	}
+	return false
+}
+
+// skipValue moves i past one value, counting the elements of an array.
+func (sc *vectorMatmulJSONScanner) skipValue() (int, bool) {
+	sc.ws()
+	if sc.i >= len(sc.text) {
+		return 0, false
+	}
+	switch sc.text[sc.i] {
+	case '"':
+		return 1, sc.skipString()
+	case '[', '{':
+		if sc.depth++; sc.depth > vectorMatmulJSONMaxDepth {
+			return 0, false
+		}
+		defer func() { sc.depth-- }()
+		open, closer := sc.text[sc.i], byte(']')
+		if open == '{' {
+			closer = '}'
+		}
+		sc.i++
+		sc.ws()
+		if sc.i < len(sc.text) && sc.text[sc.i] == closer {
+			sc.i++
+			sc.firstNull = -1
+			return 0, true
+		}
+		n, null := 0, -1
+		for {
+			if open == '{' {
+				sc.ws()
+				if sc.i >= len(sc.text) || sc.text[sc.i] != '"' || !sc.skipString() {
+					return 0, false
+				}
+				sc.ws()
+				if sc.i >= len(sc.text) || sc.text[sc.i] != ':' {
+					return 0, false
+				}
+				sc.i++
+			}
+			if null < 0 && open == '[' && sc.isNull() {
+				null = n
+			}
+			if _, ok := sc.skipValue(); !ok {
+				return 0, false
+			}
+			n++
+			sc.ws()
+			if sc.i >= len(sc.text) {
+				return 0, false
+			}
+			if sc.text[sc.i] == closer {
+				sc.i++
+				sc.firstNull = -1
+				if open == '{' {
+					return 1, true
+				}
+				sc.firstNull = null
+				return n, true
+			}
+			if sc.text[sc.i] != ',' {
+				return 0, false
+			}
+			sc.i++
+		}
+	default:
+		start := sc.i
+		for sc.i < len(sc.text) {
+			switch sc.text[sc.i] {
+			case ',', ']', '}', ' ', '\t', '\n', '\r':
+				return 1, sc.i > start
+			}
+			sc.i++
+		}
+		return 1, sc.i > start
+	}
+}
+
 func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfig, error) {
+	// the limits the bound checks come first, with or without an account
+	if _, err := vectorMatmulParseBound(raw, vecType); err != nil {
+		return nil, err
+	}
 	topk, queriesText, options, gpu, binaryQueries, err := decodeVectorMatmulConfig(raw)
 	if err != nil {
 		return nil, err
@@ -302,8 +661,8 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 		if queries, err = decodeVectorMatmulBinaryQueries(queriesText, int(vecType.Width)); err != nil {
 			return nil, err
 		}
-	} else if err := sonic.UnmarshalString(queriesText, &queries); err != nil {
-		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+	} else if queries, err = decodeVectorMatmulJSONQueries(queriesText); err != nil {
+		return nil, err
 	}
 	if len(queries) == 0 || len(queries) > vectorMatmulMaxQueries {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(queries), vectorMatmulMaxQueries)
@@ -324,9 +683,13 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 	case types.T_array_float32:
 		err = setVectorMatmulPlain(cfg, vectorMatmulEngineF32, queries, func(v float32) (float32, bool) { return v, true })
 	case types.T_array_float16:
-		err = setVectorMatmulPlain(cfg, vectorMatmulEngineF16, queries, func(v float32) (types.Float16, bool) { return types.Float16FromFloat32(v), true })
+		err = setVectorMatmulPlain(cfg, vectorMatmulEngineF16, queries, func(v float32) (types.Float16, bool) {
+			return types.Float16FromFloat32(v), v >= -types.Float16MaxFinite && v <= types.Float16MaxFinite
+		})
 	case types.T_array_bf16:
-		err = setVectorMatmulPlain(cfg, vectorMatmulEngineBF16, queries, func(v float32) (types.BF16, bool) { return types.BF16FromFloat32(v), true })
+		err = setVectorMatmulPlain(cfg, vectorMatmulEngineBF16, queries, func(v float32) (types.BF16, bool) {
+			return types.BF16FromFloat32(v), v >= -types.BF16MaxFinite && v <= types.BF16MaxFinite
+		})
 	case types.T_array_int8:
 		err = setVectorMatmulPlain(cfg, vectorMatmulEngineI8, queries, func(v float32) (int8, bool) {
 			return int8(v), v == float32(math.Trunc(float64(v))) && v >= math.MinInt8 && v <= math.MaxInt8
@@ -371,6 +734,91 @@ func decodeVectorMatmulBinaryQueries(b string, dim int) ([][]float32, error) {
 	return queries, nil
 }
 
+// decodeVectorMatmulJSONQueries reads a JSON array of vectors in one pass into one backing,
+// each number rounded once from its text to float32. A null query or coordinate is an error.
+func decodeVectorMatmulJSONQueries(text string) ([][]float32, error) {
+	total, nullRow, nullAt := 0, -1, -1
+	rows, ok := vectorMatmulJSONRows(text, func(row, n, null int, _ string) {
+		total += n
+		if nullRow < 0 && null != -1 {
+			nullRow, nullAt = row, null
+		}
+	})
+	if !ok {
+		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+	}
+	v := &vectorMatmulQueryVisitor{values: make([]float32, 0, total), queries: make([][]float32, 0, rows)}
+	if err := ast.Preorder(text, v, vectorMatmulNumberText); err != nil {
+		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+	}
+	switch {
+	case nullRow < 0:
+		return v.queries, nil
+	case nullAt == -2:
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d is null", nullRow)
+	default:
+		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d: coordinate %d is null", nullRow, nullAt)
+	}
+}
+
+// vectorMatmulQueryVisitor reads an array of arrays of numbers into values, a query per
+// inner array viewing it; a null query is nil and a null coordinate 0, which the caller
+// reports. Any other value is an error.
+type vectorMatmulQueryVisitor struct {
+	values  []float32
+	queries [][]float32
+	depth   int
+	start   int
+}
+
+var errVectorMatmulQueryValue = moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+
+func (v *vectorMatmulQueryVisitor) number(n json.Number) error {
+	if v.depth != 2 {
+		return errVectorMatmulQueryValue
+	}
+	f, err := strconv.ParseFloat(string(n), 32)
+	if err != nil {
+		return errVectorMatmulQueryValue
+	}
+	v.values = append(v.values, float32(f))
+	return nil
+}
+
+func (v *vectorMatmulQueryVisitor) OnNull() error {
+	switch v.depth {
+	case 1:
+		v.queries = append(v.queries, nil)
+	case 2:
+		v.values = append(v.values, 0)
+	default:
+		return errVectorMatmulQueryValue
+	}
+	return nil
+}
+func (v *vectorMatmulQueryVisitor) OnBool(bool) error                        { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnString(string) error                    { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnInt64(_ int64, n json.Number) error     { return v.number(n) }
+func (v *vectorMatmulQueryVisitor) OnFloat64(_ float64, n json.Number) error { return v.number(n) }
+func (v *vectorMatmulQueryVisitor) OnObjectBegin(int) error                  { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnObjectKey(string) error                 { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnObjectEnd() error                       { return errVectorMatmulQueryValue }
+func (v *vectorMatmulQueryVisitor) OnArrayBegin(int) error {
+	v.depth++
+	if v.depth > 2 {
+		return errVectorMatmulQueryValue
+	}
+	v.start = len(v.values)
+	return nil
+}
+func (v *vectorMatmulQueryVisitor) OnArrayEnd() error {
+	if v.depth == 2 {
+		v.queries = append(v.queries, v.values[v.start:len(v.values):len(v.values)])
+	}
+	v.depth--
+	return nil
+}
+
 // decodeVectorMatmulCells reads query_format vecblock queries for a vecf8/vecf4 column of
 // vecType: a BLOB of cells back to back, or a JSON array of vecblock JSON objects. Every
 // cell must be a valid cell of the column's format and dimension.
@@ -391,23 +839,35 @@ func decodeVectorMatmulCells(queries string, binaryQueries bool, vecType types.T
 			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", n, vectorMatmulMaxQueries)
 		}
 		b := []byte(queries)
+		cells = make([][]byte, 0, len(b)/size)
 		for off := 0; off < len(b); off += size {
 			cells = append(cells, b[off:off+size:off+size])
 		}
 	} else {
-		var texts []json.RawMessage
-		if err := sonic.UnmarshalString(queries, &texts); err != nil {
+		// validate and count before collecting: a malformed or over-limit text allocates
+		// nothing for its elements
+		rows, ok := vectorMatmulJSONRows(queries, nil)
+		if !ok || !json.Valid(util.UnsafeStringToBytes(queries)) {
 			return nil, moerr.NewInvalidInputNoCtx("vector_matmul: vecblock queries must be a JSON array of vecblock JSON objects")
 		}
-		if len(texts) == 0 || len(texts) > vectorMatmulMaxQueries {
-			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(texts), vectorMatmulMaxQueries)
+		if rows == 0 || rows > vectorMatmulMaxQueries {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", rows, vectorMatmulMaxQueries)
 		}
-		for i, text := range texts {
-			cell, err := types.BlockScaledFromJSON(format, string(text))
+		cells = make([][]byte, 0, rows)
+		var cellErr error
+		vectorMatmulJSONRows(queries, func(i, _, _ int, value string) {
+			if cellErr != nil {
+				return
+			}
+			cell, err := types.BlockScaledFromJSON(format, value)
 			if err != nil {
-				return nil, vectorMatmulQueryError(i, err)
+				cellErr = vectorMatmulQueryError(i, err)
+				return
 			}
 			cells = append(cells, cell)
+		})
+		if cellErr != nil {
+			return nil, cellErr
 		}
 	}
 	for i, cell := range cells {
@@ -462,24 +922,28 @@ func (cfg *vectorMatmulConfig) setBlockScaledCells(oid types.T, dim int, cells [
 			return err
 		}
 	}
-	cfg.retained = cap(cfg.queryCells) + cap(ops)*int(unsafe.Sizeof(metric.VecBlockOperand{}))
-	// the distance as inner_product, cosine_distance and l2_distance_sq compute it; an
+	cfg.retained = cap(cfg.queryCells) + cap(ops)*int(reflect.TypeFor[metric.VecBlockOperand]().Size())
+	// the distance as inner_product, cosine_distance and l2_distance_sq return it; an
 	// inner product overflow NaN ranks last
-	distance := metric.VecBlockInnerProduct
+	m := metric.Metric_InnerProduct
 	switch cfg.metric {
 	case vectorMatmulCosine:
-		distance = metric.VecBlockCosineDistance
+		m = metric.Metric_CosineDistance
 	case vectorMatmulL2sq:
-		distance = metric.VecBlockL2DistanceSq
+		m = metric.Metric_L2sqDistance
 	}
-	cfg.score = func(cell []byte, out []float64) error {
+	distance, err := metric.VecBlockSQLDistance(m)
+	if err != nil {
+		return err
+	}
+	cfg.score = func(cell []byte, row *metric.VecBlockOperand, out []float64) error {
 		c, err := types.ParseBlockScaledCell(cell)
 		if err != nil {
 			return err
 		}
-		row := metric.VecBlockOperand{Cell: c}
+		*row = metric.VecBlockOperand{Cell: c}
 		for j := range ops {
-			dist, err := distance(&row, &ops[j])
+			dist, err := distance(row, &ops[j])
 			if err != nil {
 				return err
 			}
@@ -520,7 +984,7 @@ func setVectorMatmulPlain[T types.ArrayElement](cfg *vectorMatmulConfig, engineF
 	cfg.retained = cap(cfg.queryCells)
 	cfg.engineFormat = engineFormat
 	cfg.cellBytes = len(cfg.queryCells) / len(queries)
-	cfg.score = func(cell []byte, out []float64) error {
+	cfg.score = func(cell []byte, _ *metric.VecBlockOperand, out []float64) error {
 		if len(cell) != cfg.cellBytes {
 			return moerr.NewInvalidInputNoCtxf("vector_matmul: cell is %d bytes, want %d", len(cell), cfg.cellBytes)
 		}
@@ -545,6 +1009,12 @@ type vectorMatmulEntry struct {
 	n     uint32
 }
 
+// vectorMatmulSpan identifies the arena text of an entry. An empty id takes the offset the
+// next id is stored at, so the offset alone does not identify a span.
+type vectorMatmulSpan struct{ off, n uint32 }
+
+func (e vectorMatmulEntry) span() vectorMatmulSpan { return vectorMatmulSpan{e.off, e.n} }
+
 // vectorMatmulState is one group's state: per query a min-heap of at most k entries
 // ordered worst first, and an arena holding the id text of the entries.
 type vectorMatmulState struct {
@@ -553,6 +1023,9 @@ type vectorMatmulState struct {
 	entries []vectorMatmulEntry // q*k; heap of query j at [j*k, j*k+counts[j])
 	arena   []byte              // used prefix [0, used)
 	used    int
+	// order is q*k entry indices, sorted by arena span for compaction and merge;
+	// allocated on first use.
+	order []uint32
 	// pending is the id text of this group's rows waiting in the GPU tile; preflight
 	// reserves arena space for it.
 	pending    int
@@ -578,7 +1051,7 @@ func newVectorMatmulState(mp *mpool.MPool, allocation *AllocationAccount, q, k i
 
 // hits returns query j's heap.
 func (s *vectorMatmulState) hits(j int) []vectorMatmulEntry {
-	if s.counts[j] == 0 {
+	if s.counts == nil || s.counts[j] == 0 {
 		return nil
 	}
 	return s.entries[j*s.k : j*s.k+int(s.counts[j])]
@@ -639,34 +1112,62 @@ func (s *vectorMatmulState) insert(j int, e vectorMatmulEntry) {
 	}
 }
 
+// ensureOrder allocates the order scratch used by compaction and merge.
+func (s *vectorMatmulState) ensureOrder() error {
+	if s.q*s.k == 0 || s.order != nil {
+		return nil
+	}
+	order, err := makeAccountedScratch[uint32](s.allocation, s.mp, s.q*s.k)
+	if err != nil {
+		return err
+	}
+	s.order = order
+	return nil
+}
+
+// spanOrder returns the indices of src's live entries sorted by arena span, in s.order.
+func (s *vectorMatmulState) spanOrder(src *vectorMatmulState) ([]uint32, error) {
+	if s.q*s.k == 0 {
+		return nil, nil
+	}
+	if err := s.ensureOrder(); err != nil {
+		return nil, err
+	}
+	order := s.order[:0]
+	for j := 0; j < src.q; j++ {
+		for i := 0; i < int(src.counts[j]); i++ {
+			order = append(order, uint32(j*src.k+i))
+		}
+	}
+	slices.SortFunc(order, func(a, b uint32) int {
+		x, y := src.entries[a], src.entries[b]
+		if c := cmp.Compare(x.off, y.off); c != 0 {
+			return c
+		}
+		return cmp.Compare(x.n, y.n)
+	})
+	return order, nil
+}
+
 // compact moves the referenced id text to the front of the arena in offset order.
-func (s *vectorMatmulState) compact() {
-	type ref struct{ off, n uint32 }
-	var refs []ref
-	seen := make(map[uint32]struct{})
-	for j := 0; j < s.q; j++ {
-		for _, e := range s.hits(j) {
-			if _, ok := seen[e.off]; !ok {
-				seen[e.off] = struct{}{}
-				refs = append(refs, ref{e.off, e.n})
-			}
-		}
+func (s *vectorMatmulState) compact() error {
+	order, err := s.spanOrder(s)
+	if err != nil {
+		return err
 	}
-	slices.SortFunc(refs, func(a, b ref) int { return int(a.off) - int(b.off) })
-	moved := make(map[uint32]uint32, len(refs))
-	w := 0
-	for _, r := range refs {
-		copy(s.arena[w:], s.arena[r.off:r.off+r.n])
-		moved[r.off] = uint32(w)
-		w += int(r.n)
-	}
-	for j := 0; j < s.q; j++ {
-		h := s.hits(j)
-		for i := range h {
-			h[i].off = moved[h[i].off]
+	w, off := 0, uint32(0)
+	var last vectorMatmulSpan
+	for i, idx := range order {
+		e := &s.entries[idx]
+		if sp := e.span(); i == 0 || sp != last {
+			copy(s.arena[w:], s.arena[sp.off:sp.off+sp.n])
+			last, off = sp, uint32(w)
+			w += int(sp.n)
 		}
+		e.off = off
 	}
 	s.used = w
+	return nil
 }
 
 // reserve makes room for extra more arena bytes, compacting before growing.
@@ -674,7 +1175,11 @@ func (s *vectorMatmulState) reserve(extra int) error {
 	if s.used+extra <= len(s.arena) {
 		return nil
 	}
-	s.compact()
+	if s.used > 0 {
+		if err := s.compact(); err != nil {
+			return err
+		}
+	}
 	need := s.used + extra
 	if need <= len(s.arena) {
 		return nil
@@ -756,48 +1261,40 @@ func (s *vectorMatmulState) Merge(other *vectorMatmulState) error {
 	if other.q != s.q || other.k != s.k {
 		return moerr.NewInvalidInputNoCtx("vector_matmul: cannot merge different query configurations")
 	}
-	// reserve up front: a compaction inside the loop would move offsets cached in moved
+	// reserve up front: a compaction inside the loop would move the cached offsets
 	if err := s.reserve(other.used); err != nil {
 		return err
 	}
-	moved := make(map[uint32]uint32)
-	for j := 0; j < other.q; j++ {
-		for _, e := range other.hits(j) {
-			id := other.id(e)
-			if !s.admits(j, e.score, id) {
-				continue
-			}
-			off, ok := moved[e.off]
-			if !ok {
-				var err error
-				if off, err = s.appendID(id); err != nil {
-					return err
-				}
-				moved[e.off] = off
-			}
-			s.insert(j, vectorMatmulEntry{score: e.score, off: off, n: e.n})
+	order, err := s.spanOrder(other)
+	if err != nil {
+		return err
+	}
+	var last vectorMatmulSpan
+	off := int64(-1)
+	for i, idx := range order {
+		e := other.entries[idx]
+		if sp := e.span(); i == 0 || sp != last {
+			last, off = sp, -1
 		}
+		j := int(idx) / other.k
+		id := other.id(e)
+		if !s.admits(j, e.score, id) {
+			continue
+		}
+		if off < 0 {
+			stored, err := s.appendID(id)
+			if err != nil {
+				return err
+			}
+			off = int64(stored)
+		}
+		s.insert(j, vectorMatmulEntry{score: e.score, off: uint32(off), n: e.n})
 	}
 	return nil
 }
 
-// sorted returns query j's hits best first.
-func (s *vectorMatmulState) sorted(j int) []vectorMatmulEntry {
-	out := slices.Clone(s.hits(j))
-	slices.SortFunc(out, func(a, b vectorMatmulEntry) int {
-		if s.worse(b, a, s.id(b), s.id(a)) {
-			return -1
-		}
-		if s.worse(a, b, s.id(a), s.id(b)) {
-			return 1
-		}
-		return 0
-	})
-	return out
-}
-
 func (s *vectorMatmulState) Size() int64 {
-	return int64(cap(s.counts))*4 + int64(cap(s.entries))*16 + int64(cap(s.arena))
+	return int64(cap(s.counts))*4 + int64(cap(s.entries))*16 + int64(cap(s.arena)) + int64(cap(s.order))*4
 }
 
 func (s *vectorMatmulState) Free() {
@@ -810,7 +1307,10 @@ func (s *vectorMatmulState) Free() {
 	if cap(s.arena) > 0 {
 		mpool.FreeSlice(s.mp, s.arena)
 	}
-	s.counts, s.entries, s.arena, s.used = nil, nil, nil, 0
+	if cap(s.order) > 0 {
+		mpool.FreeSlice(s.mp, s.order)
+	}
+	s.counts, s.entries, s.arena, s.order, s.used = nil, nil, nil, nil, 0
 }
 
 // Encoding: version byte, q uint32, k uint32, then per query a count uint32 and per hit
@@ -836,7 +1336,7 @@ func (s *vectorMatmulState) MarshalTo(w io.Writer) error {
 		return err
 	}
 	for j := 0; j < s.q; j++ {
-		binary.LittleEndian.PutUint32(buf[:4], s.counts[j])
+		binary.LittleEndian.PutUint32(buf[:4], uint32(len(s.hits(j))))
 		if _, err := w.Write(buf[:4]); err != nil {
 			return err
 		}
@@ -920,39 +1420,187 @@ func (s *vectorMatmulState) UnmarshalFromReader(r io.Reader) error {
 	return nil
 }
 
-// appendJSON appends the group's result to out.
-func (s *vectorMatmulState) appendJSON(out []byte) ([]byte, error) {
-	out = append(out, '[')
+// vectorMatmulJSON encodes one group's result, [[["id", distance], ...], ...] with one
+// inner array per query, straight into the result vector as the ByteJson value
+// ParseSliceToByteJson gives for the result's JSON text. sorted is scratch for one query's
+// hits; it is allocated through the allocation account.
+type vectorMatmulJSON struct {
+	s      *vectorMatmulState
+	sorted []vectorMatmulEntry
+	size   uint32
+}
+
+var _ bytejson.ByteJsonDataValidator = (*vectorMatmulJSON)(nil)
+
+// ByteJson array layout: element count and data size (uint32 each), one value entry per
+// element (type code and uint32 offset from the array's start), then the element data.
+const (
+	vectorMatmulJSONHeader = 8
+	vectorMatmulJSONEntry  = 5
+	// a pair holds the id string and the distance, an 8-byte number
+	vectorMatmulJSONPairFixed = vectorMatmulJSONHeader + 2*vectorMatmulJSONEntry + 8
+)
+
+func (e *vectorMatmulJSON) TypeCode() bytejson.TpCode { return bytejson.TpCodeArray }
+
+func (e *vectorMatmulJSON) DataSize() uint32 { return e.size }
+
+// ValidateData checks every distance is finite and computes the data size.
+func (e *vectorMatmulJSON) ValidateData() error {
+	s := e.s
+	total := uint64(vectorMatmulJSONHeader + s.q*vectorMatmulJSONEntry)
 	for j := 0; j < s.q; j++ {
-		if j > 0 {
-			out = append(out, ',')
+		hits := s.hits(j)
+		total += uint64(vectorMatmulJSONHeader + len(hits)*vectorMatmulJSONEntry)
+		for _, h := range hits {
+			if math.IsInf(h.score, 0) || math.IsNaN(h.score) {
+				return moerr.NewInvalidInputNoCtx("vector_matmul: the distance overflows the float32 domain")
+			}
+			n := vectorMatmulJSONStringLen(s.id(h))
+			total += uint64(vectorMatmulJSONPairFixed + vectorMatmulUvarintLen(n) + n)
 		}
-		out = append(out, '[')
-		for i, e := range s.sorted(j) {
-			if i > 0 {
-				out = append(out, ',')
-			}
-			id, err := json.Marshal(string(s.id(e)))
-			if err != nil {
-				return nil, err
-			}
-			if math.IsInf(e.score, 0) || math.IsNaN(e.score) {
-				return nil, moerr.NewInvalidInputNoCtx("vector_matmul: the distance overflows the float32 domain")
-			}
-			// the rank score is the negated distance
-			dist := -e.score
-			if dist == 0 {
-				dist = 0
-			}
-			out = append(out, '[')
-			out = append(out, id...)
-			out = append(out, ',')
-			out = strconv.AppendFloat(out, dist, 'g', -1, 32)
-			out = append(out, ']')
-		}
-		out = append(out, ']')
 	}
-	return append(out, ']'), nil
+	if total > math.MaxUint32 {
+		return moerr.NewInvalidInputNoCtx("json value is too large")
+	}
+	e.size = uint32(total)
+	return nil
+}
+
+func (e *vectorMatmulJSON) EncodeDataInto(dst []byte) (int, error) {
+	s := e.s
+	if len(dst) != int(e.size) {
+		return 0, moerr.NewInternalErrorNoCtxf("vector_matmul: json size %d, want %d", len(dst), e.size)
+	}
+	off := vectorMatmulJSONArrayStart(dst, s.q)
+	for j := 0; j < s.q; j++ {
+		inner := dst[off:]
+		vectorMatmulJSONSetEntry(dst, j, bytejson.TpCodeArray, off)
+		sorted := e.sortedHits(j)
+		in := vectorMatmulJSONArrayStart(inner, len(sorted))
+		for i, h := range sorted {
+			pair := inner[in:]
+			vectorMatmulJSONSetEntry(inner, i, bytejson.TpCodeArray, in)
+			p := vectorMatmulJSONArrayStart(pair, 2)
+			vectorMatmulJSONSetEntry(pair, 0, bytejson.TpCodeString, p)
+			id := s.id(h)
+			p += binary.PutUvarint(pair[p:], uint64(vectorMatmulJSONStringLen(id)))
+			p += vectorMatmulJSONPutString(pair[p:], id)
+			vectorMatmulJSONSetEntry(pair, 1, vectorMatmulJSONPutDistance(pair[p:p+8], -h.score), p)
+			p += 8
+			binary.LittleEndian.PutUint32(pair[4:], uint32(p))
+			in += p
+		}
+		binary.LittleEndian.PutUint32(inner[4:], uint32(in))
+		off += in
+	}
+	binary.LittleEndian.PutUint32(dst[4:], uint32(off))
+	if off != len(dst) {
+		return 0, moerr.NewInternalErrorNoCtxf("vector_matmul: json size %d, wrote %d", len(dst), off)
+	}
+	return off, nil
+}
+
+// sortedHits returns query j's hits best first, in e.sorted.
+func (e *vectorMatmulJSON) sortedHits(j int) []vectorMatmulEntry {
+	s := e.s
+	out := append(e.sorted[:0], s.hits(j)...)
+	slices.SortFunc(out, func(a, b vectorMatmulEntry) int {
+		if s.worse(b, a, s.id(b), s.id(a)) {
+			return -1
+		}
+		if s.worse(a, b, s.id(a), s.id(b)) {
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
+// vectorMatmulJSONArrayStart writes the element count of an array at dst and returns the
+// offset its element data starts at.
+func vectorMatmulJSONArrayStart(dst []byte, count int) int {
+	binary.LittleEndian.PutUint32(dst, uint32(count))
+	return vectorMatmulJSONHeader + count*vectorMatmulJSONEntry
+}
+
+// vectorMatmulJSONSetEntry writes value entry i of the array at dst.
+func vectorMatmulJSONSetEntry(dst []byte, i int, tp bytejson.TpCode, off int) {
+	entry := dst[vectorMatmulJSONHeader+i*vectorMatmulJSONEntry:]
+	entry[0] = tp
+	binary.LittleEndian.PutUint32(entry[1:], uint32(off))
+}
+
+// vectorMatmulJSONPutDistance writes dist as the 8-byte number its JSON text parses to, as
+// bytejson.AppendBinaryNumber reads it: text that parses as an int64 or uint64 is that
+// integer, other text a float64. The text is the shortest float32 text when dist is a float32
+// value (GPU, float32 kernels), float64 text otherwise. Text with a '.' or an exponent goes
+// to ParseFloat without the integer parsers.
+func vectorMatmulJSONPutDistance(dst []byte, dist float64) bytejson.TpCode {
+	if dist == 0 {
+		dist = 0
+	}
+	bitSize := 64
+	if float64(float32(dist)) == dist {
+		bitSize = 32
+	}
+	var buf [32]byte
+	text := util.UnsafeBytesToString(strconv.AppendFloat(buf[:0], dist, 'g', -1, bitSize))
+	if !strings.ContainsAny(text, ".eE") {
+		if v, err := strconv.ParseInt(text, 10, 64); err == nil {
+			binary.LittleEndian.PutUint64(dst, uint64(v))
+			return bytejson.TpCodeInt64
+		}
+		if v, err := strconv.ParseUint(text, 10, 64); err == nil {
+			binary.LittleEndian.PutUint64(dst, v)
+			return bytejson.TpCodeUint64
+		}
+	}
+	v, _ := strconv.ParseFloat(text, 64)
+	binary.LittleEndian.PutUint64(dst, math.Float64bits(v))
+	return bytejson.TpCodeFloat64
+}
+
+// vectorMatmulJSONStringLen is the length of id as a JSON string value: JSON text replaces
+// each byte that is not part of valid UTF-8 with U+FFFD.
+func vectorMatmulJSONStringLen(id []byte) int {
+	if utf8.Valid(id) {
+		return len(id)
+	}
+	n := 0
+	for i := 0; i < len(id); {
+		r, size := utf8.DecodeRune(id[i:])
+		if r == utf8.RuneError && size == 1 {
+			n += utf8.RuneLen(utf8.RuneError)
+		} else {
+			n += size
+		}
+		i += size
+	}
+	return n
+}
+
+// vectorMatmulJSONPutString writes id as a JSON string value and returns its length.
+func vectorMatmulJSONPutString(dst, id []byte) int {
+	if utf8.Valid(id) {
+		return copy(dst, id)
+	}
+	n := 0
+	for i := 0; i < len(id); {
+		r, size := utf8.DecodeRune(id[i:])
+		if r == utf8.RuneError && size == 1 {
+			n += utf8.EncodeRune(dst[n:], utf8.RuneError)
+		} else {
+			n += copy(dst[n:], id[i:i+size])
+		}
+		i += size
+	}
+	return n
+}
+
+func vectorMatmulUvarintLen(n int) int {
+	var b [binary.MaxVarintLen64]byte
+	return binary.PutUvarint(b[:], uint64(n))
 }
 
 // appendVectorMatmulID appends the JSON-string text of the id at row.
@@ -975,7 +1623,18 @@ func appendVectorMatmulID(dst []byte, vec *vector.Vector, row int) []byte {
 	case types.T_uint64:
 		return strconv.AppendUint(dst, vector.GetFixedAtNoTypeCheck[uint64](vec, row), 10)
 	case types.T_uuid:
-		return append(dst, vector.GetFixedAtNoTypeCheck[types.Uuid](vec, row).String()...)
+		u := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, row)
+		var text [36]byte
+		hex.Encode(text[0:8], u[0:4])
+		text[8] = '-'
+		hex.Encode(text[9:13], u[4:6])
+		text[13] = '-'
+		hex.Encode(text[14:18], u[6:8])
+		text[18] = '-'
+		hex.Encode(text[19:23], u[8:10])
+		text[23] = '-'
+		hex.Encode(text[24:], u[10:])
+		return append(dst, text[:]...)
 	default:
 		return append(dst, vec.GetBytesAt(row)...)
 	}
@@ -1037,7 +1696,11 @@ type vectorMatmulExec struct {
 	cfg *vectorMatmulConfig
 
 	scores []float64
-	idBuf  []byte
+	// row is the operand of the cell being scored on the CPU.
+	row metric.VecBlockOperand
+	// idText holds the text of a fixed-size id while it is offered; a string id is offered
+	// from the input vector.
+	idText [vectorMatmulMaxFixedIDLen]byte
 
 	// releaseCfg drops the hold on cfg in vectorMatmulConfigs.
 	releaseCfg func()
@@ -1083,12 +1746,11 @@ func makeVectorMatmul(mp *mpool.MPool, id int64, isDistinct bool, params []types
 	return exec, nil
 }
 
-// emptyState is a group with no rows; it owns no pool memory and is never freed.
+// emptyState is a group with no rows; it owns no memory and is never freed.
 func (exec *vectorMatmulExec) emptyState() *vectorMatmulState {
 	empty := &vectorMatmulState{}
 	if exec.cfg != nil {
 		empty.q, empty.k = exec.cfg.nq, exec.cfg.topk
-		empty.counts = make([]uint32, empty.q)
 	}
 	return empty
 }
@@ -1100,18 +1762,43 @@ func (exec *vectorMatmulExec) newState(mp *mpool.MPool, allocation *AllocationAc
 	return newVectorMatmulState(mp, allocation, exec.cfg.nq, exec.cfg.topk)
 }
 
+// SetExtraInformation parses the configuration. With an account attached, which the
+// aggregate factories attach first, the account admits the bound of the parse before it
+// allocates, and keeps the configuration's charge after it.
 func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) error {
 	raw, ok := partialResult.([]byte)
 	if !ok {
 		return moerr.NewInternalErrorNoCtxf("vector_matmul: unexpected configuration %T", partialResult)
 	}
+	// a new configuration replaces the held one; its charge is returned first
+	exec.releaseConfig()
+	var reservation *mpool.CapacityReservation
+	if exec.allocation != nil {
+		bound, err := vectorMatmulParseBound(raw, exec.argTypes[1])
+		if err != nil {
+			return err
+		}
+		if reservation, err = exec.allocation.reserveCapacity(bound); err != nil {
+			return err
+		}
+	}
 	cfg, release, err := acquireVectorMatmulConfig(raw, exec.argTypes[1])
 	if err != nil {
+		reservation.Abort()
 		return err
 	}
-	exec.releaseConfig()
 	exec.cfg, exec.releaseCfg = cfg, release
 	exec.scores = make([]float64, cfg.nq)
+	if reservation != nil {
+		lease, err := reservation.Commit(exec.configBytes())
+		if err != nil {
+			reservation.Abort()
+			exec.releaseConfig()
+			return err
+		}
+		exec.cfgLease = lease
+		return nil
+	}
 	if err := exec.chargeConfig(); err != nil {
 		exec.releaseConfig()
 		return err
@@ -1119,8 +1806,7 @@ func (exec *vectorMatmulExec) SetExtraInformation(partialResult any, _ int) erro
 	return nil
 }
 
-// SetAllocationAccount attaches the account and charges it for the configuration, which
-// the aggregate factory sets first.
+// SetAllocationAccount attaches the account and charges it for a configuration set before.
 func (exec *vectorMatmulExec) SetAllocationAccount(allocation *AllocationAccount) error {
 	if err := exec.aggExec.SetAllocationAccount(allocation); err != nil {
 		return err
@@ -1236,22 +1922,26 @@ func (exec *vectorMatmulExec) fillRow(group uint64, row int, vectors []*vector.V
 		}
 		return exec.enqueue(group, raw, ids, idRow)
 	}
-	if err := exec.cfg.score(raw, exec.scores); err != nil {
+	if err := exec.cfg.score(raw, &exec.row, exec.scores); err != nil {
 		return err
 	}
 	for j, score := range exec.scores {
 		// an overflow NaN ranks last
 		if math.IsNaN(score) {
-			score = math.Inf(-1)
+			exec.scores[j] = math.Inf(-1)
 		}
-		exec.scores[j] = float64(float32(score))
 	}
 	s, err := exec.stateAt(group)
 	if err != nil {
 		return err
 	}
-	exec.idBuf = appendVectorMatmulID(exec.idBuf[:0], ids, idRow)
-	return s.offer(exec.scores, exec.idBuf)
+	var id []byte
+	if ids.GetType().IsVarlen() {
+		id = ids.GetBytesAt(idRow)
+	} else {
+		id = appendVectorMatmulID(exec.idText[:0], ids, idRow)
+	}
+	return s.offer(exec.scores, id)
 }
 
 // ensureEngine creates the GPU engine on first use when the session allows the GPU and
@@ -1667,7 +2357,8 @@ func (exec *vectorMatmulExec) BatchMerge(next AggFuncExec, offset int, groups []
 	return nil
 }
 
-// PreflightBatchMerge creates the target states and reserves each source's arena bytes.
+// PreflightBatchMerge creates the target states, reserves each source's arena bytes and
+// allocates each target's order scratch.
 func (exec *vectorMatmulExec) PreflightBatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	if exec.allocation == nil {
 		return nil
@@ -1714,6 +2405,9 @@ func (exec *vectorMatmulExec) PreflightBatchMerge(next AggFuncExec, offset int, 
 		if err := s.reserve(extra[i]); err != nil {
 			return err
 		}
+		if err := s.ensureOrder(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1735,8 +2429,13 @@ func (exec *vectorMatmulExec) Flush() (_ []*vector.Vector, retErr error) {
 			}
 		}
 	}()
+	sorted, err := makeAccountedScratch[vectorMatmulEntry](exec.allocation, exec.mp, exec.cfg.topk)
+	if err != nil {
+		return nil, err
+	}
+	defer mpool.FreeSlice(exec.mp, sorted)
+	enc := &vectorMatmulJSON{sorted: sorted}
 	empty := exec.emptyState()
-	var buf []byte
 	for x, state := range exec.state {
 		result, err := exec.allocation.newVector(exec.retType)
 		if err != nil {
@@ -1747,18 +2446,11 @@ func (exec *vectorMatmulExec) Flush() (_ []*vector.Vector, retErr error) {
 			return nil, err
 		}
 		for y := 0; y < int(state.length); y++ {
-			s := empty
+			enc.s = empty
 			if state.mobs[y] != nil {
-				s = state.mobs[y].(*vectorMatmulState)
+				enc.s = state.mobs[y].(*vectorMatmulState)
 			}
-			if buf, err = s.appendJSON(buf[:0]); err != nil {
-				return nil, err
-			}
-			bj, err := types.ParseSliceToByteJson(buf)
-			if err != nil {
-				return nil, err
-			}
-			if err := vector.AppendByteJson(result, bj, false, exec.mp); err != nil {
+			if err := vector.AppendByteJsonEncoded(result, enc, exec.mp); err != nil {
 				return nil, err
 			}
 		}

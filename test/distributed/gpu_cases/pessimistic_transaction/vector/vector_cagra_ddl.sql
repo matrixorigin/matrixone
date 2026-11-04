@@ -18,7 +18,6 @@
 
 SET experimental_cagra_index = 1;
 SET cagra_threads_build = 7;
-SET cagra_max_index_capacity = 99999;
 
 drop database if exists cagra_ddl;
 create database cagra_ddl;
@@ -47,7 +46,7 @@ insert into t values
     (19, '[19,19,19,19,19,19,19,19]', 0),
     (20, '[20,20,20,20,20,20,20,20]', 0);
 
-create index ix using cagra on t (v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+create index ix using cagra on t (v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32 max_index_capacity 99999;
 
 -- 1. baseline
 select id from t order by l2_distance(v, '[5,5,5,5,5,5,5,5]') asc limit 1;
@@ -94,7 +93,7 @@ select id from t order by l2_distance(v, '[5,5,5,5,5,5,5,5]') asc limit 1;
 
 -- 6. reindex (synchronous drop + recreate)
 drop index ix on t;
-create index ix using cagra on t (v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32;
+create index ix using cagra on t (v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8 itopk_size=32 max_index_capacity 99999;
 select id from t order by l2_distance(v, '[5,5,5,5,5,5,5,5]') asc limit 1;
 
 drop database cagra_ddl;

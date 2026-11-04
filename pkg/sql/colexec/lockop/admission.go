@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,22 +58,75 @@ func LockRowsForAdmissionWithContext(
 	mode lock.LockMode, group uint32,
 	waitPolicy ...lock.WaitPolicy,
 ) (timestamp.Timestamp, error) {
+	result, err := LockRowsForAdmissionResult(ctx, eng, proc, tableID, bat, idx, pkType, mode, group, waitPolicy...)
+	return result.Timestamp, err
+}
+
+// LockRowsForAdmissionResult exposes the checked owner and watermark from the
+// same admission grant. The watermark invalidates facts; it is not visibility.
+func LockRowsForAdmissionResult(
+	ctx context.Context, eng engine.Engine, proc *process.Process,
+	tableID uint64, bat *batch.Batch, idx int32, pkType types.Type,
+	mode lock.LockMode, group uint32,
+	waitPolicy ...lock.WaitPolicy,
+) (lock.Result, error) {
+	return lockRowsForAdmissionResult(ctx, eng, proc, tableID, bat, idx, pkType, mode, group, true, waitPolicy...)
+}
+
+// LockRowsForFixedSnapshotAdmissionResult reserves namespace keys in a
+// pessimistic SI transaction without advancing its snapshot. Unlike ordinary
+// row locking, opaque namespace keys have no MVCC row to probe. A table-wide
+// grant watermark newer than the fixed snapshot therefore conservatively
+// invalidates admission, even if acquiring this particular key did not wait.
+// The watermark may include cold lock-table creation or unrelated commits;
+// callers must retry those conflicts in a new transaction, not refresh SI.
+// On success the caller must still validate names at its original snapshot.
+// Ownership, binding validation, cancellation and terminal release are the
+// same as the RC admission API; its RC-only contract remains unchanged.
+func LockRowsForFixedSnapshotAdmissionResult(
+	ctx context.Context, eng engine.Engine, proc *process.Process,
+	tableID uint64, bat *batch.Batch, idx int32, pkType types.Type,
+	mode lock.LockMode, group uint32,
+	waitPolicy ...lock.WaitPolicy,
+) (lock.Result, error) {
+	if proc == nil || proc.GetTxnOperator() == nil || proc.GetTxnOperator().Txn().Isolation != txn.TxnIsolation_SI {
+		return lock.Result{}, moerr.NewInternalError(ctx, "fixed snapshot admission requires SI")
+	}
+	result, err := lockRowsForAdmissionResult(ctx, eng, proc, tableID, bat, idx, pkType, mode, group, false, waitPolicy...)
+	if err != nil {
+		return lock.Result{}, err
+	}
+	if result.Timestamp.IsEmpty() {
+		return lock.Result{}, moerr.NewLockTableBindChangedNoCtx()
+	}
+	if proc.GetTxnOperator().Txn().SnapshotTS.Less(result.Timestamp) {
+		return lock.Result{}, moerr.NewTxnWWConflict(ctx, tableID, "catalog namespace snapshot is stale")
+	}
+	return result, nil
+}
+
+func lockRowsForAdmissionResult(
+	ctx context.Context, eng engine.Engine, proc *process.Process,
+	tableID uint64, bat *batch.Batch, idx int32, pkType types.Type,
+	mode lock.LockMode, group uint32, requireRC bool,
+	waitPolicy ...lock.WaitPolicy,
+) (lock.Result, error) {
 	if len(waitPolicy) > 1 {
-		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "invalid lifecycle lock wait policy")
+		return lock.Result{}, moerr.NewInternalError(ctx, "invalid lifecycle lock wait policy")
 	}
 	if bat == nil || idx < 0 || int(idx) >= len(bat.Vecs) || bat.Vecs[idx] == nil ||
 		bat.Vecs[idx].Length() == 0 || bat.Vecs[idx].HasNull() ||
 		bat.Vecs[idx].GetType().Oid != pkType.Oid {
-		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "invalid lifecycle admission keys")
+		return lock.Result{}, moerr.NewInternalError(ctx, "invalid lifecycle admission keys")
 	}
 	if proc == nil || proc.GetTxnOperator() == nil || !proc.GetTxnOperator().Txn().IsPessimistic() ||
-		!proc.GetTxnOperator().Txn().IsRCIsolation() ||
+		(requireRC && !proc.GetTxnOperator().Txn().IsRCIsolation()) ||
 		tableID == 0 || (mode != lock.LockMode_Shared && mode != lock.LockMode_Exclusive) ||
 		getFetchRowsFunc(pkType) == nil {
-		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "invalid lifecycle lock admission")
+		return lock.Result{}, moerr.NewInternalError(ctx, "invalid lifecycle lock admission")
 	}
 	if err := ctx.Err(); err != nil {
-		return timestamp.Timestamp{}, err
+		return lock.Result{}, err
 	}
 	packer := types.NewPacker()
 	defer packer.Close()
@@ -83,7 +137,9 @@ func LockRowsForAdmissionWithContext(
 	}()
 	opts := DefaultLockOptions(packer).WithLockMode(mode).WithLockGroup(group).
 		WithLockTable(false, false)
+	var result lock.Result
 	opts.admissionOnly = true
+	opts.admissionResult = &result
 	if len(waitPolicy) == 1 {
 		opts.waitPolicy = &waitPolicy[0]
 	}
@@ -93,6 +149,6 @@ func LockRowsForAdmissionWithContext(
 	if value, ok := ctx.Deadline(); ok {
 		deadline = value.UnixNano()
 	}
-	_, _, grantedAt, err := doLock(ctx, eng, analyzer, nil, tableID, proc, bat, idx, pkType, -1, opts, deadline)
-	return grantedAt, err
+	_, _, _, err := doLock(ctx, eng, analyzer, nil, tableID, proc, bat, idx, pkType, -1, opts, deadline)
+	return result, err
 }

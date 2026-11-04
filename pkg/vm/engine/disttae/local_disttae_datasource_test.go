@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -133,6 +135,37 @@ func TestLocalDisttaeDataSourceUsesTombstoneObjectIndex(t *testing.T) {
 
 	require.NoError(t, ls.initPStateTombstoneObjectIndex())
 	require.Len(t, ls.pStateTombstoneObjects.index.objects, 1)
+}
+
+func TestLocalCommittedInsertReadsTimeFromRowEntry(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	commitTS := types.BuildTS(12, 0)
+	pState := newTestMaterializedSnapshotPartitionState(t, mp, []testMaterializedSnapshotRow{
+		{rowID: buildTestMaterializedSnapshotRowID(t, 3), ts: commitTS, id: 7, payload: 42},
+	})
+	ls := &LocalDisttaeDataSource{
+		ctx:             context.Background(),
+		pState:          pState,
+		snapshotTS:      types.BuildTS(13, 0),
+		tombstonePolicy: engine.Policy_SkipAll,
+		memPKFilter:     &readutil.MemPKFilter{},
+	}
+	defer ls.Close()
+	out := batch.NewWithSize(2)
+	out.SetAttributes([]string{"id", objectio.DefaultCommitTS_Attr})
+	out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	out.Vecs[1] = vector.NewVec(types.T_TS.ToType())
+	defer out.Clean(mp)
+
+	require.NoError(t, ls.filterInMemCommittedInserts(
+		context.Background(),
+		[]types.Type{types.T_int64.ToType(), types.T_TS.ToType()},
+		[]uint16{0, objectio.SEQNUM_COMMITTS}, mp, out,
+	))
+	require.Equal(t, 1, out.RowCount())
+	require.Equal(t, int64(7), vector.GetFixedAtNoTypeCheck[int64](out.Vecs[0], 0))
+	require.Equal(t, commitTS, vector.GetFixedAtNoTypeCheck[types.TS](out.Vecs[1], 0))
 }
 
 func TestRelationDataV2_MarshalAndUnMarshal(t *testing.T) {
@@ -308,6 +341,117 @@ func TestBigS3WorkspaceIterMissingData(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, outBatch.RowCount())
 	require.Equal(t, 1, outBatch.Vecs[0].Length())
+}
+
+// Membership must not change which workspace vector ordinary centroid pruning
+// reads: workspace batches prepend rowid to the physical column sequence.
+func TestIvfWorkspaceReaderPreservesPhysicalPK(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		membership  bool
+		memberStart int32
+		centroid    int64
+		wantRows    int
+	}{
+		{"without_membership", false, 1, 0, 1},
+		{"matching_membership", true, 1, 0, 1},
+		{"excluded_source_key", true, 100, 0, 0},
+		{"excluded_centroid", true, 1, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+			txnOp, closeTxn := client.NewTestTxnOperator(ctx)
+			defer closeTxn()
+			tableDef := &plan.TableDef{
+				Name:      "__mo_index_ivf_workspace_entries",
+				TableType: catalog.SystemSI_IVFFLAT_TblType_Entries,
+				Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName,
+					Names: []string{"version", "centroid", catalog.IndexTablePrimaryColName}},
+				Name2ColIndex: make(map[string]int32),
+				Cols: []*plan.ColDef{
+					{Name: "version", Seqnum: 0, Typ: plan.Type{Id: int32(types.T_int64)}},
+					{Name: "centroid", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+					{Name: catalog.IndexTablePrimaryColName, Seqnum: 2, Typ: plan.Type{Id: int32(types.T_int32)}},
+					{Name: "entry", Seqnum: 3, Typ: plan.Type{Id: int32(types.T_array_float32)}},
+					{Name: catalog.CPrimaryKeyColName, Seqnum: 4, Typ: plan.Type{Id: int32(types.T_varchar)}},
+				},
+			}
+			cols := make([]string, len(tableDef.Cols))
+			in := batch.NewWithSize(len(cols) + 1)
+			defer in.Clean(mp)
+			out := batch.NewWithSize(len(cols))
+			defer out.Clean(mp)
+			in.Vecs[0] = vector.NewVec(types.T_Rowid.ToType())
+			require.NoError(t, vector.AppendFixed(in.Vecs[0], types.Rowid{}, false, mp))
+			for i, col := range tableDef.Cols {
+				cols[i] = col.Name
+				tableDef.Name2ColIndex[col.Name] = int32(i)
+				typ := plan2.ExprType2Type(&col.Typ)
+				in.Vecs[i+1] = vector.NewVec(typ)
+				out.Vecs[i] = vector.NewVec(typ)
+			}
+			in.SetAttributes(append([]string{catalog.Row_ID}, cols...))
+			require.NoError(t, vector.AppendFixed(in.Vecs[1], int64(0), false, mp))
+			require.NoError(t, vector.AppendFixed(in.Vecs[2], int64(0), false, mp))
+			require.NoError(t, vector.AppendFixed(in.Vecs[3], int32(42), false, mp))
+			require.NoError(t, vector.AppendBytes(in.Vecs[4], types.ArrayToBytes([]float32{1, 0}), false, mp))
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeInt64(0)
+			packer.EncodeInt64(0)
+			packer.EncodeInt32(42)
+			require.NoError(t, vector.AppendBytes(in.Vecs[5], packer.GetBuf(), false, mp))
+			in.SetRowCount(1)
+			packer.Reset()
+			packer.EncodeInt64(0)
+			packer.EncodeInt64(tc.centroid)
+			prefixes := vector.NewVec(types.T_varchar.ToType())
+			defer prefixes.Free(mp)
+			require.NoError(t, vector.AppendBytes(prefixes, packer.GetBuf(), false, mp))
+			data, err := prefixes.MarshalBinary()
+			require.NoError(t, err)
+			expr := plan2.MakeInExpr(ctx, &plan.Expr{
+				Typ:  tableDef.Cols[4].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 4, Name: catalog.CPrimaryKeyColName}},
+			}, 1, data, true)
+			pool := fileservice.NewPool(1, func() *types.Packer { return packer },
+				func(p *types.Packer) { p.Reset() }, func(*types.Packer) {})
+			txn := &Transaction{op: txnOp, engine: &Engine{packerPool: pool},
+				writes: []Entry{{typ: INSERT, databaseId: 11, tableId: 22, bat: in}}}
+			txnOp.AddWorkspace(txn)
+			source := &LocalDisttaeDataSource{ctx: ctx, txnOffset: len(txn.writes),
+				table:    &txnTable{db: &txnDatabase{op: txnOp, databaseId: 11}, tableId: 22},
+				category: engine.ShardingLocalDataSource, iteratePhase: engine.InMem,
+				tombstonePolicy: engine.Policy_SkipAll,
+				rangeSlice:      readutil.NewBlockListRelationData(0).GetBlockInfoSlice()}
+			hint := engine.FilterHint{}
+			if tc.membership {
+				keys := vector.NewVec(types.T_int32.ToType())
+				defer keys.Free(mp)
+				for i := int32(0); i < 101; i++ {
+					require.NoError(t, vector.AppendFixed(keys, tc.memberStart+i, false, mp))
+				}
+				payload, err := docfilter.Build(keys)
+				require.NoError(t, err)
+				hint.BF, err = docfilter.New(payload)
+				require.NoError(t, err)
+			}
+			// NewReader consumes source and the membership filter on all paths.
+			r, err := readutil.NewReader(ctx, mp, pool, nil, tableDef,
+				types.MaxTs().ToTimestamp(), expr, source, 0, hint)
+			require.NoError(t, err)
+			defer r.Close()
+			end, err := r.Read(ctx, cols, nil, mp, out)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRows == 0, end)
+			require.Equal(t, tc.wantRows, out.RowCount())
+			if tc.wantRows > 0 {
+				require.Equal(t, []int32{42}, vector.MustFixedColWithTypeCheck[int32](out.Vecs[2]))
+			}
+		})
+	}
 }
 
 func TestLocalDatasourceWorkspaceDeleteEntriesSortsWithoutMutatingBatch(t *testing.T) {
@@ -1011,9 +1155,12 @@ func TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction(t *testing.T) {
 
 type filteredPrefetchFS struct {
 	fileservice.FileService
-	calls atomic.Int32
-	done  chan struct{}
+	calls   atomic.Int32
+	done    chan struct{}
+	evicted bool
 }
+
+func (fs *filteredPrefetchFS) WholeObjectPreloadSkipped(string, uint64) bool { return fs.evicted }
 
 func (fs *filteredPrefetchFS) PrefetchFile(context.Context, string) error {
 	fs.calls.Add(1)
@@ -1025,8 +1172,20 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 	table := &txnTable{db: &txnDatabase{}}
 	table.proc.Store(proc)
 	for _, count := range []int{3, 4} {
-		for _, skip := range []bool{false, true} {
-			t.Run(fmt.Sprintf("blocks=%d/skip=%v", count, skip), func(t *testing.T) {
+		for _, tc := range []struct {
+			name           string
+			skip           bool // the read policy skips whole-object preloads
+			narrow         bool // the read is narrow
+			evicted        bool // the disk cache reports the table thrashing
+			wantPrefetches bool
+		}{
+			{name: "scan", wantPrefetches: true},
+			{name: "skip", skip: true},
+			{name: "narrow-kept", narrow: true, wantPrefetches: true},
+			{name: "narrow-evicted", narrow: true, evicted: true},
+			{name: "scan-evicted", evicted: true, wantPrefetches: true},
+		} {
+			t.Run(fmt.Sprintf("blocks=%d/%s", count, tc.name), func(t *testing.T) {
 				data := readutil.NewBlockListRelationData(0)
 				for i := 0; i < count; i++ {
 					loc := objectio.NewRandomLocation(uint16(i), 1)
@@ -1034,17 +1193,21 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 					block := objectio.BlockInfo{BlockID: types.NewBlockidWithObjectID(&oid, uint16(i)), MetaLoc: objectio.ObjectLocation(loc)}
 					data.AppendBlockInfo(&block)
 				}
-				fs := &filteredPrefetchFS{done: make(chan struct{}, 4)}
+				fs := &filteredPrefetchFS{done: make(chan struct{}, 4), evicted: tc.evicted}
 				ls := &LocalDisttaeDataSource{table: table, fs: fs, rangeSlice: data.GetBlockInfoSlice(), iteratePhase: engine.Persisted, memPKFilter: &readutil.MemPKFilter{}}
 				ls.rc.prefetchDisabled = count < 4
 				ctx := proc.Ctx
-				if skip {
+				if tc.skip {
 					ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipFullFilePreloads)
 				}
+				if tc.narrow {
+					ctx = fileservice.WithFileServicePolicy(ctx, fileservice.NarrowRead)
+				}
+				prefetches := count >= 4 && tc.wantPrefetches
 				rt.SetupServiceBasedRuntime(t.Name(), rt.DefaultRuntime())
 				proc.Base.LockService = &prefetchTestLockService{id: t.Name()}
 				t.Cleanup(func() { proc.Base.LockService = nil })
-				if !skip {
+				if prefetches {
 					ioutil.Start(proc.GetService())
 					t.Cleanup(func() { ioutil.Stop(proc.GetService()) })
 				}
@@ -1054,7 +1217,7 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 					require.Equal(t, engine.Persisted, state)
 					require.Equal(t, data.GetBlockInfo(i).BlockID, blk.BlockID)
 				}
-				if count >= 4 && !skip {
+				if prefetches {
 					for i := 0; i < count; i++ {
 						select {
 						case <-fs.done:
@@ -1062,16 +1225,14 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 							t.Fatal("data prefetch did not execute")
 						}
 					}
-				}
-				if !skip {
 					ioutil.Stop(proc.GetService())
 				}
 				expected := int32(0)
-				if count >= 4 && !skip {
+				if prefetches {
 					expected = int32(count)
 				}
 				require.Equal(t, expected, fs.calls.Load())
-				if !skip && count >= 4 {
+				if count >= 4 {
 					require.Equal(t, count, ls.rc.batchPrefetchCursor)
 				} else {
 					require.Zero(t, ls.rc.batchPrefetchCursor)

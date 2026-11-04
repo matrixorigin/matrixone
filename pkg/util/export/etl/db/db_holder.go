@@ -80,7 +80,7 @@ func GetSQLWriterDBUser() (*DBUser, error) {
 	if dbUser == nil {
 		return nil, errNotReady
 	} else {
-		return sqlWriterDBUser.Load().(*DBUser), nil
+		return dbUser.(*DBUser), nil
 
 	}
 }
@@ -302,19 +302,17 @@ func putBuffer(buf *bytes.Buffer) {
 var _ table.RowWriter = (*CSVWriter)(nil)
 
 type CSVWriter struct {
-	ctx       context.Context
 	formatter *csv.Writer
 	buf       *bytes.Buffer
 	release   func(buffer *bytes.Buffer)
 }
 
-func NewCSVWriter(ctx context.Context) *CSVWriter {
+func NewCSVWriter(_ context.Context) *CSVWriter {
 	buf := getBuffer()
 	buf.Reset()
 	writer := csv.NewWriter(buf)
 
 	w := &CSVWriter{
-		ctx:       ctx,
 		buf:       buf,
 		formatter: writer,
 		release:   putBuffer,
@@ -322,11 +320,10 @@ func NewCSVWriter(ctx context.Context) *CSVWriter {
 	return w
 }
 
-func NewCSVWriterWithBuffer(ctx context.Context, buf *bytes.Buffer) *CSVWriter {
+func NewCSVWriterWithBuffer(_ context.Context, buf *bytes.Buffer) *CSVWriter {
 	writer := csv.NewWriter(buf)
 
 	w := &CSVWriter{
-		ctx:       ctx,
 		buf:       buf,
 		formatter: writer,
 		release:   nil,
@@ -378,11 +375,28 @@ func bulkInsert(ctx context.Context, sqlDb *sql.DB, records [][]string, tbl *tab
 		return nil
 	}
 
+	diagnosticColumns, err := statementInfoDiagnosticColumns(tbl)
+	if err != nil {
+		return err
+	}
+
 	csvWriter := NewCSVWriter(ctx)
 	defer csvWriter.Release() // Ensures that the buffer is returned to the pool
 
 	// Write each record of the chunk to the CSVWriter
 	for _, record := range records {
+		if diagnosticColumns[0] >= 0 {
+			if len(record) != len(tbl.Columns) {
+				return moerr.NewInternalErrorNoCtx("invalid statement_info record width")
+			}
+			for _, idx := range diagnosticColumns[:2] {
+				record[idx] = CapStatementInfoText(record[idx], StatementInfoTextLimit)
+			}
+			idx := diagnosticColumns[2]
+			if len(record[idx]) > StatementInfoTextLimit {
+				record[idx] = string(StatementInfoPlanSummary(len(record[idx])))
+			}
+		}
 		for i, col := range record {
 			record[i] = strings.ReplaceAll(strings.ReplaceAll(col, "\\", "\\\\"), "'", "''")
 		}

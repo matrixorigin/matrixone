@@ -40,10 +40,10 @@ select * from app.checkpoint_like;
 3
 create table app.checked_like like app.checked_values;
 insert into app.checked_like values (-1);
-constraint violation: Check constraint 'positive_id' is violated
+constraint violation: Check constraint 'checked_like_chk_1' is violated
 insert into app.checked_like values (null), (2);
 insert into app.checked_like values (3), (0);
-constraint violation: Check constraint 'positive_id' is violated
+constraint violation: Check constraint 'checked_like_chk_1' is violated
 select * from app.checked_like order by id;
 ➤ id[4,32,0]  𝄀
 null  𝄀

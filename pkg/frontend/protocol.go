@@ -240,12 +240,62 @@ func snapshotServiceContext(ses *Session) context.Context {
 	return rm.ctx
 }
 
+// queryErrorIdentity distinguishes cancellation fallout from an execution
+// failure. errors.Is alone would hide a failure joined with cancellation;
+// errors.As alone could select a converted cancellation before that failure.
+func queryErrorIdentity(err error) (*moerr.Error, bool) {
+	if err == nil {
+		return nil, false
+	}
+	// Some execution errors expose their public moerr through As while Unwrap
+	// retains a raw context cause. Keep that owner's identity unless its whole
+	// subtree is cancellation fallout.
+	var own *moerr.Error
+	if custom, ok := err.(interface{ As(any) bool }); ok {
+		if !custom.As(&own) || (own != nil && errors.Is(own, context.Canceled)) {
+			own = nil
+		}
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		onlyCanceled := len(children) > 0
+		var first *moerr.Error
+		for _, child := range children {
+			identity, canceled := queryErrorIdentity(child)
+			if first == nil {
+				first = identity
+			}
+			onlyCanceled = onlyCanceled && canceled
+		}
+		if !onlyCanceled && own != nil {
+			return own, false
+		}
+		return first, onlyCanceled
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			identity, canceled := queryErrorIdentity(child)
+			if !canceled && own != nil {
+				return own, false
+			}
+			return identity, canceled
+		}
+	}
+	if errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return nil, true
+	}
+	var identity *moerr.Error
+	errors.As(err, &identity)
+	return identity, false
+}
+
 func (mp *MysqlProtocolImpl) sendErrorResponse(resp *Response) error {
 	err := resp.data.(error)
 	if err == nil {
+		status := mp.responseStatus(uint16(resp.status))
 		mp.m.Lock()
 		defer mp.m.Unlock()
-		return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+		return mp.sendOKPacket(0, 0, status, 0, "")
 	}
 
 	// Snapshot the session without holding the protocol lock while consulting
@@ -261,8 +311,11 @@ func (mp *MysqlProtocolImpl) sendErrorResponse(resp *Response) error {
 		sqlState = shutdown.SqlStates[0]
 		errMsg = shutdown.ErrorMsgOrFormat
 	} else {
-		var myerr *moerr.Error
-		if errors.As(err, &myerr) {
+		myerr, onlyCanceled := queryErrorIdentity(err)
+		if onlyCanceled {
+			myerr = moerr.ConvertGoError(context.Background(), err).(*moerr.Error)
+		}
+		if myerr != nil {
 			if myerr.MySQLCode() != moerr.ER_UNKNOWN_ERROR {
 				code = myerr.MySQLCode()
 			} else {
@@ -292,26 +345,27 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 		return mp.sendErrorResponse(resp)
 	}
 
+	status := mp.responseStatus(uint16(resp.status))
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	switch resp.category {
 	case OkResponse:
 		s, ok := resp.data.(string)
 		if !ok {
-			return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, "")
+			return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, status, resp.warnings, "")
 		}
-		return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, s)
+		return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, status, resp.warnings, s)
 	case EoFResponse:
-		return mp.sendEOFPacket(0, uint16(resp.status))
+		return mp.sendEOFPacket(0, status)
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil {
-			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+			return mp.sendOKPacket(0, 0, status, 0, "")
 		}
 		if mer.Mrs() == nil {
-			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
+			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), status, mer.Warnings(), "")
 		}
-		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
+		return mp.sendResultSet(ctx, mer.Mrs(), resp.cmd, mer.Warnings(), status)
 	case LocalInfileRequest:
 		s, _ := resp.data.(string)
 		return mp.WriteLocalInfileRequest(s)

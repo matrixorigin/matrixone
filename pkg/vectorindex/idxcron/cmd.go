@@ -17,13 +17,14 @@ package idxcron
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -60,12 +61,12 @@ func RegisterUpdate(ctx context.Context,
 	sql := fmt.Sprintf("REPLACE INTO mo_catalog.mo_index_update VALUES (%d, %d, '%s', '%s', '%s', '%s', '%s', '%s', now(), now())",
 		tenantId,
 		tableId,
-		dbname,
-		tablename,
-		indexname,
-		action,
-		metadata,
-		string(bytes))
+		sqlquote.EscapeString(dbname),
+		sqlquote.EscapeString(tablename),
+		sqlquote.EscapeString(indexname),
+		sqlquote.EscapeString(action),
+		sqlquote.EscapeString(metadata),
+		sqlquote.EscapeString(string(bytes)))
 
 	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
@@ -100,14 +101,11 @@ func UnregisterUpdate(ctx context.Context,
 	var sql string
 	if action == Action_Wildcard {
 		sql = fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND table_id = %d AND index_name = '%s'",
-			tenantId, tableId, indexname)
+			tenantId, tableId, sqlquote.EscapeString(indexname))
 	} else {
 		sql = fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND table_id = %d AND index_name = '%s' AND action = '%s'",
-			tenantId, tableId, indexname, action)
+			tenantId, tableId, sqlquote.EscapeString(indexname), sqlquote.EscapeString(action))
 	}
-
-	os.Stderr.WriteString(sql)
-	os.Stderr.WriteString("\n")
 
 	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
@@ -144,11 +142,16 @@ func UnregisterUpdateByDbName(ctx context.Context,
 		return
 	}
 	if len(res.Batches) == 0 {
+		res.Close()
 		return
 	}
+	exists := executor.GetFixedRows[int64](res.Batches[0].Vecs[0])[0] > 0
 	res.Close()
+	if !exists {
+		return
+	}
 
-	sql = fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND db_name = '%s'", tenantId, dbName)
+	sql = fmt.Sprintf("DELETE FROM mo_catalog.mo_index_update WHERE account_id = %d AND db_name = '%s'", tenantId, sqlquote.EscapeString(dbName))
 	res, err = runCmdSql(sqlproc, sql)
 	if err != nil {
 		return
@@ -204,7 +207,7 @@ func RenameSrcTable(ctx context.Context,
 	sqlproc := sqlexec.NewSqlProcessWithContext(sqlctx)
 
 	sql := fmt.Sprintf("UPDATE mo_catalog.mo_index_update SET table_name = '%s' WHERE account_id = %d AND table_id = %d AND table_name = '%s'",
-		newTablename, tenantId, tableId, oldTableName)
+		sqlquote.EscapeString(newTablename), tenantId, tableId, sqlquote.EscapeString(oldTableName))
 	res, err := runCmdSql(sqlproc, sql)
 	if err != nil {
 		return

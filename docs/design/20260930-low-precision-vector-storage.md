@@ -59,9 +59,10 @@ bit for bit. The only difference is NaN encoding (Go keeps the sign for FP8 and 
 NaN to +0; CUDA returns `0x7f` / `0x7`); non-finite values are never stored.
 
 **Quantizer (ours, not NVIDIA's).** NVFP4 and MXFP8 define how a cell decodes, not how
-its scales are chosen; a cell written here decodes identically on the CPU and the tensor
-cores, but it is not byte-identical to what NVIDIA's quantizers (TensorRT Model
-Optimizer, Transformer Engine) or the OCP MX reference produce for the same input:
+its scales are chosen; a cell written here decodes the same way on the CPU and the tensor
+cores (up to float32 rounding; see the decoded-value rule below), but it is not byte-identical
+to what NVIDIA's quantizers (TensorRT Model Optimizer, Transformer Engine) or the OCP MX
+reference produce for the same input:
 
 - Block scales round up: the smallest unsigned E4M3 (vecf4) or E8M0 (vecf8) scale whose
   product with the element maximum (6 or 448) covers the block's largest magnitude, so no
@@ -72,6 +73,17 @@ Optimizer, Transformer Engine) or the OCP MX reference produce for the same inpu
   round-to-nearest-even with the CUDA tie and saturation rules: the float64 quotient
   cannot fall on an E2M1/E4M3 midpoint unless the exact quotient is that midpoint.
 - Encoding is deterministic: equal inputs give equal cells.
+- **Decoded value.** A cell's element decodes to `element × blockScale × global`. The CPU
+  returns one float32 per element (`blockScaledElem`, applied by `At`, `Dequantize` and the
+  generated full-unit metric kernels, `TestVecBlockMetricsUseAtDecode`): the float32 product
+  `element × (global × blockScale)` when `global × blockScale` is a normal float32, and the
+  float64 product rounded once when it is subnormal (a tiny vecf4 global), so `element ×
+  blockScale` is not rounded in the subnormal range first. The GPU multiplies `element ×
+  blockScale` on the tensor cores and applies the global scales in double. CPU and GPU agree on
+  the decoded vector when every nonzero decoded value is at least 2^-126 (a normal float32).
+  Below that the CPU rounds each value to the float32 subnormal grid: a vecf4 vector whose
+  largest magnitude is below 2688 × 2^-150 is stored with the global 2^-149, its values (for
+  example 7.5 × 2^-149) round on the CPU (to 8 × 2^-149), and its direction can change.
 
 ## Cell format
 
@@ -145,7 +157,7 @@ product of the block-scaled values, and the caller multiplies it by `g_d × g_q`
   finite is rejected. Only blocks whose largest element code could overflow are scanned.
   Every accepted cell therefore renders as finite text and parses back.
 - **One zero.** The encoder stores an element that quantizes to zero of either sign as
-  code 0. Equality, hashing (`GROUP BY`, `DISTINCT`, joins) and ordering peers compare the
+  code 0. A cell given as bytes or exact text (a cast, an insert, or a CSV/JSONL `LOAD`) keeps a negative-zero code. Equality, hashing (`GROUP BY`, `DISTINCT`, joins) and ordering peers compare the
   decoded values, not the bytes (see Column operations), so cells that encode equal values
   with other scales are equal.
 
@@ -227,18 +239,20 @@ Device kernels around the matmul, on the engine's stream:
   rescale launch. Measured alternatives: float accumulation and 16-byte vector loads were
   not faster; a thread per row is 2–3× slower above 768 elements.
 - A fix-up kernel turns the matmul output into rank scores. The inner product is
-  `acc × fp32(g_row × g_query)` in fp32, as cuBLASLt applies `alpha = G_a × G_b` to a GEMM
-  with per-tensor global scales; cosine and squared L2 take the dot product with the
-  global scales in double, with the squared norms: `1 − x·q / (|x||q|)` and
+  `acc × g_row × g_query` in double for every metric, so a product of global scales outside the
+  float range neither overflows nor flushes to zero; cosine and squared L2 combine it with the
+  squared norms: `1 − x·q / (|x||q|)` and
   `|x|² + |q|² − 2·x·q` (integer formats take the corrected int64 sums, which are exact).
   The rank is rounded once to
   fp32; −Inf for NaN and for the padding rows. A zero vector has cosine distance 1, as
   `cosine_distance` returns.
 - With one global scale for all rows and one for all queries, the cells are exactly
-  NVIDIA's NVFP4 / MXFP8 operands, and the inner-product scores equal a direct cuBLASLt
-  block-scaled GEMM on the same bytes bit for bit at the same GEMM shape (another shape
-  can select another cuBLASLt algorithm and fp32 summation order);
-  `MatchesNvidiaBlockScaledGemm` in `cgo/cuvs/test/blockscaled_matmul_test.cu` checks it.
+  NVIDIA's NVFP4 / MXFP8 operands. At the same GEMM shape the inner-product scores equal a
+  direct cuBLASLt block-scaled GEMM on the same bytes bit for bit for MXFP8 (global scales 1)
+  and within 2 ulp for NVFP4, whose GEMM applies `alpha = G_a × G_b` in fp32 where the engine
+  applies the global scales in double; another shape can select another cuBLASLt algorithm and
+  fp32 summation order. `MatchesNvidiaBlockScaledGemm` in `cgo/cuvs/test/blockscaled_matmul_test.cu`
+  checks it.
 
 Two ways to read a tile's scores, both after the fix-up kernel:
 
@@ -277,7 +291,7 @@ cuBLASLt call sequence:
 | 4 | `cublasLtMatrixLayoutCreate` | A: element type, K × rows(D), ld = K; B: K × rows(Q), ld = K; D: `CUDA_R_32F` (`CUDA_R_32I` for integer formats), rows(D) × rows(Q) |
 | 5 | `cublasLtMatmulPreferenceCreate` / `SetAttribute` | workspace limit (32 MiB) |
 | 6 | `cublasLtMatmulAlgoGetHeuristic` | at construction, for each tile row bucket (128 × 2^i up to the tile capacity); a bucket without an algorithm fails the engine's creation |
-| 7 | `cublasLtMatmul` | alpha = 1, beta = 0, the bucket's cached algorithm; the per-vector `g` of row and query is applied by the fix-up kernel, in fp32 for the inner product and in double for cosine and squared L2 (plain formats have `g` = 1) |
+| 7 | `cublasLtMatmul` | alpha = 1, beta = 0, the bucket's cached algorithm; the per-vector `g` of row and query is applied by the fix-up kernel in double (plain formats have `g` = 1) |
 
 Contract (each point measured on sm_120 with cuBLASLt 13.6):
 
@@ -299,9 +313,9 @@ Contract (each point measured on sm_120 with cuBLASLt 13.6):
   The engine writes each row's scales to these offsets on the host while packing the tile.
 - **K padding.** The dimension is padded with zero elements to a multiple of 32 (NVFP4 at
   K = 48 has no algorithm; 32, 96, 512, 768, 1536 run). Storage keeps the true `N`.
-- **Precision.** Against a double-precision CPU reference: MXFP8 relative error ≤ 1e-6,
-  NVFP4 exact, at fp32 output; `vecint8`/`vecuint8` exact; `vecf32`/`vecf16`/`vecbf16`
-  within fp32 summation-order tolerance.
+- **Precision.** Against a double-precision reference over the dequantized values, both
+  block-scaled formats are within `1e-5 × max(1, Σ|xᵢqᵢ|)` (`check_engine`); `vecint8`/`vecuint8`
+  are exact; `vecf32`/`vecf16`/`vecbf16` are within fp32 summation-order tolerance.
 
 Engine state, per `vector_matmul` executor: a CUDA stream, the cuBLASLt handle and
 workspace, the queries on the device, and host and device buffers for one tile. No
@@ -366,18 +380,20 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `if`, `case`, `coalesce`, `ifnull` over one `vecf8(N)`/`vecf4(N)` type (text branches are quantized to it) | the column's type, cells copied as stored |
 | `case`/`coalesce` mixing vector types, `greatest`, `least`, `json_object`, `json_array`, `JSON_ARRAYAGG`, `JSON_OBJECTAGG` | on the values dequantized to `vecf32`; results as for `vecf32` |
 | `SUM`/`AVG`/`MIN`/`MAX` over vectors | not supported (no vector type has them) |
-| `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise |
-| `GROUP BY`, `DISTINCT`, hash joins, set operations, `IN (subquery)`, `COUNT(DISTINCT)`, `approx_count_distinct` | by the decoded values, as `=` compares: the equality key (`keycodec.AppendCanonicalVecBlock`) is the cell's decoded float32 values, so cells that encode equal values with other block or global scales (vecf8 `[447]` and `[449]` both store 448) are one key |
+| `ORDER BY`, window `ORDER BY` | as for `vecf32`: by the dequantized values, element-wise, comparing the cells in place (no decoded copy of the column) |
+| `GROUP BY`, `DISTINCT`, hash joins, set operations, `IN (subquery)`, `COUNT(DISTINCT)`, `approx_count_distinct` | by the decoded values, as `=` compares: the equality key (`keycodec.AppendCanonicalVecBlock`) is the cell's decoded float32 values, so cells that encode equal values with other block or global scales (vecf8 `[447]` and `[449]` both store 448) are one key; the hash-key preflight reserves that decoded length (4 bytes per element), not the cell's |
 | window `PARTITION BY`, `ORDER BY` | by the decoded values, element-wise |
-| `subvector` | not supported (as for the other narrow vector types) |
+| `subvector(v, start[, len])` | returns `vecf32`: the result equals `subvector(CAST(v AS vecf32(N)), start[, len])` for every `start` and `len` (1-based, negative from the end; a start of 0 or past the end gives `[]`, a NULL gives NULL), and its dimension is unknown at planning time, as for `vecf32` (see Decisions) |
 | comparison operators (`=`, `<>`, `<`, `<=`, `>`, `>=`, `<=>`, `IN`, `BETWEEN`) | as for `vecbf16`: a text literal is quantized to the column's type, as a stored value is, so a row matches the text it was inserted from (`'[3000, -12, 0.001, 1000000]'` matches the cell that displays as `[3072, -16, 0, 983040]`), and text of another dimension is rejected; cells compare by their dequantized values, element-wise |
 | `hex`, `to_base64` | not supported, as for the other narrow vector types (`vecf32` only) |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
 | `LOAD` | CSV text `"[…]"`, JSONL arrays; Parquet `LIST<FLOAT/DOUBLE>` and `STRING`/`JSON` columns, quantized per row. The exact text (CSV text, a JSONL object value, a Parquet `STRING`/`JSON` value) loads without quantization. A Parquet `BYTE_ARRAY`/`FIXED_LEN_BYTE_ARRAY` column without a logical type is binary, read as a `BLOB` casts: a value of cell length is the stored cell, a value of `4N` bytes is float32 elements |
-| `INTO OUTFILE`, external-table writes | the exact text, in CSV as a quoted field and in JSONL as an object value, so an export reloads to the same cells |
+| `INTO OUTFILE`, external-table writes | the exact text, in CSV as a quoted field, in JSONL as an object value and in Parquet as a `STRING` value, so an export reloads to the same cell bytes, a negative-zero element included |
 | binary input | a `BLOB` of little-endian float32 elements, as for `vecf32` (`CAST(UNHEX('0000803F…') AS BLOB)` or a BLOB parameter), quantized per row; a length that is not a multiple of 4 or another dimension is rejected |
+| empty input | an empty string or an empty `BLOB` is not a vector: a cast, an insert (literal, `INSERT … SELECT`, prepared parameter) or an update with it is an error, for every vector type (`vecf32` and the narrow types included), as an empty string is for an `INT` column; NULL stays NULL. `LOAD` reads an empty field as NULL, as for `INT` |
 | exact binary | `vecblock_binary(v)` returns the stored cell as a `BLOB` (§Cell format); a `BLOB` of a cell casts, inserts or binds back to the same bytes without quantization, and a `BLOB` of cell length that is not a valid cell of the target is an error |
-| exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "s": [scales], "v": [values]}`, the parts in the cell's order: `g` the global scale (1 for `vecf8`), `s` one scale per block of 32 (`vecf8`) / 16 (`vecf4`) values, the last block shorter, `v` the element values; casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Element `i` is `v[i] · s[i / blockSize] · g`; `g` is required, `s` must hold `ceil(len(v) / blockSize)` scale code values (E8M0 / UE4M3), `v` element code values (E4M3 / E2M1); anything else is an error, never rounded |
+| exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "s": [scales], "v": [values]}`, the parts in the cell's order: `g` the global scale (1 for `vecf8`), `s` one scale per block of 32 (`vecf8`) / 16 (`vecf4`) values, the last block shorter, `v` the element values; casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Element `i` is `v[i] · s[i / blockSize] · g`; `g` is required, `s` must hold `ceil(len(v) / blockSize)` scale code values (E8M0 / UE4M3), `v` element code values (E4M3 / E2M1), `-0` the negative-zero code. Each number must denote its float32 value without rounding: the exact value, or the shortest float32 or float64 text of that value, in any notation (`1`, `1.0`, `1e0`; `5.877472e-39` for the scale 2^-127); anything else (`1.00000001`, which float32 parsing rounds to `1`) is an error, never rounded |
+| `serial_extract(t, i AS vecf8(N))` / `vecf4(N)` | the tuple element as the stored cell; an element that is not a valid cell of the target format, or of dimension `N`, is an error |
 
 The promotion is implemented in these operations only: function resolution dequantizes a
 `vecf8`/`vecf4` argument to `vecf32` for the functions listed above, and every other
@@ -406,11 +422,12 @@ folds into float64; elements past the last full unit take a per-element path.
 
 Parsing a cell (header and validation) adds 52 ns for `vecf4` and 186 ns for `vecf8`.
 
-Overflow: a unit accumulates in float32 lanes, so finite products can overflow one lane
-to +Inf and another to −Inf, whose sum is NaN. Following the metric package's
-non-finite contract, the inner product and cosine distances map NaN to +Inf (the largest
-distance); L2 and L1 are sums of non-negative terms and cannot produce NaN. The SQL
-functions report any non-finite result as an overflow error.
+Overflow: a unit accumulates in float32 lanes, so finite products can overflow a lane. Every
+metric then recomputes the distance in float64 over the decoded values (the cosine parts also
+when a squared norm underflows), where the products of float32 values are finite
+(`TestVecBlockLaneOverflowRecomputesInFloat64`). A non-finite result therefore means the
+distance itself is outside the float32 range; the SQL functions report it as an overflow
+error.
 
 ### Batch nearest-neighbour search
 
@@ -425,11 +442,13 @@ vector_matmul(topk, src_id, src_vec, queries [, options]) → JSON
 | `topk` | constant integer | the hits kept per query, 1–16384 |
 | `src_id` | column | the row key: an integer, `char`/`varchar`/`text` or `uuid` column |
 | `src_vec` | column | `vecf8(N)`, `vecf4(N)`, `vecf32(N)`, `vecf16(N)`, `vecbf16(N)`, `vecint8(N)` or `vecuint8(N)`; `vecf64` is rejected |
-| `queries` | constant string or JSON, or `BLOB` | array of query vectors `[[…], …]`, each of length `N`; or a `BLOB` of little-endian float32 values, `N` per query back to back (`CAST(? AS BLOB)` for a client's bytes), whose length must be a non-zero multiple of `4·N` and whose values must be finite. Converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, otherwise an error. With `"query_format":"vecblock"` (a `vecf8`/`vecf4` column only) the queries are cells used as given: a `BLOB` of cells back to back (`vecblock_binary`), its length a non-zero multiple of the cell size, or a JSON array of vecblock JSON objects; every cell must be a valid cell of the column's format and dimension |
-| `options` | optional constant JSON object | `"metric"`: `inner_product` (the default), `cosine` or `l2sq`; `"query_format"`: `float32` (the default, float values) or `vecblock` (cells); other keys are ignored; text that is not a JSON object, or another value of either key, is an error. Dispatch follows the session's `gpu_mode` |
+| `queries` | constant string or JSON, or `BLOB` | array of query vectors `[[…], …]`, each of length `N`, a `null` coordinate or a `NULL` argument an error; or a `BLOB` of little-endian float32 values, `N` per query back to back (`CAST(? AS BLOB)` for a client's bytes), whose length must be a non-zero multiple of `4·N` and whose values must be finite. Converted once to the column's type (quantized for `vecf8`/`vecf4`); for `vecint8`/`vecuint8` every value is an integer in the type's range, and for `vecf16`/`vecbf16` every converted value is finite (a float32 query above the type's range is an error), otherwise an error. With `"query_format":"vecblock"` (a `vecf8`/`vecf4` column only) the queries are cells used as given: a `BLOB` of cells back to back (`vecblock_binary`), its length a non-zero multiple of the cell size, or a JSON array of vecblock JSON objects; every cell must be a valid cell of the column's format and dimension |
+| `options` | optional constant JSON object, as text or a `JSON` value | `"metric"`: `inner_product` (the default), `cosine` or `l2sq`; `"query_format"`: `float32` (the default, float values) or `vecblock` (cells); other keys are ignored; text that is not a JSON object (empty text and `NULL` included), or another value of either key, is an error; omitting the argument selects the defaults. Dispatch follows the session's `gpu_mode` |
 
 An aggregate: one result per group (one row without `GROUP BY`), of MO's `JSON` type.
-`topk`, `queries` and `options` are constants, prepared parameters or user variables; the
+`topk`, `queries` and `options` are constants, prepared parameters or user variables, or
+functions of them that are neither volatile nor real-time (`RAND()`, `UUID()`, `SYSDATE()`
+are rejected, as each executor would evaluate its own); the
 compiler moves them into the aggregate's configuration, so each executor receives only
 `src_id` and `src_vec`. A scalar subquery is planned as a join and arrives as a column,
 so query vectors stored in a table go through a user variable:
@@ -464,7 +483,16 @@ as an `x'…'` literal is again part of the statement and its plan, at twice its
 Per group the state holds, for each query, a heap of at most `topk` hits, plus an arena
 with the hits' id text (a row that enters several queries stores its id once). All of it
 is charged to the aggregate's allocation account; preflight reserves the arena space for
-a batch before the batch is filled, and the arena compacts in place.
+a batch before the batch is filled, and the arena compacts in place. Compaction and merge
+order the hits by arena offset in one array of `q` × `topk` entry indices, allocated through
+the account on the first compaction or merge, and by merge preflight for every merge
+target; a refused allocation fails the fill or merge and leaves the hits unchanged.
+A fill offers a string id from the input vector and formats a numeric or UUID id in a
+fixed 36-byte buffer, and the CPU scorer reuses one operand per executor, so a fill
+allocates nothing on the Go heap. Flush writes each group's result straight into the
+accounted result vector, in the binary JSON layout its text parses to, sorting each query's
+hits in one accounted `topk` scratch; no JSON text is built, and a distance is encoded
+without a Go heap allocation.
 
 Instances on one CN share its GPU: each uses its own CUDA stream and cuBLASLt
 handle/workspace, and host and device tile memory scale with the instance count
@@ -478,7 +506,7 @@ kernel (`metric.ResolveDistanceFn`) for the other types, as `inner_product`,
 function on the same row and query, including the float64 cosine recompute and the
 squared L2 of differences. The GPU's cosine and squared L2 are those of the fp32 GEMM
 expansion (see Decisions): within fp32 summation-order tolerance of the scalar function,
-relative to the squared norms. An overflowing score (NaN) ranks last; a non-finite score in
+relative to the squared norms. A GPU score that is NaN (an fp32 GEMM overflow) ranks last; a non-finite score in
 the result is an overflow error, since JSON has no infinity.
 
 #### Result format
@@ -497,7 +525,10 @@ the result is an overflow error, since JSON has no infinity.
 - Hit: a pair `[id, score]`.
   - Position 0, `id`: the source key as a JSON string (exact for 64-bit integers and
     non-integer keys).
-  - Position 1, `score`: the distance of the metric, a JSON number.
+  - Position 1, `score`: the distance of the metric, a JSON number: the shortest text of
+    the float32 value when the distance is one (the GPU, and the float32-domain CPU
+    distances), otherwise of the float64 value. On the CPU it is the value the scalar
+    function returns, so `l2sq` over `vecf8`/`vecf4` prints the unrounded square.
   - A field added later takes position 2; positions 0 and 1 keep their meaning.
 
 #### Usage
@@ -565,6 +596,16 @@ and L2 (the square root) are not provided.
 - Merging partial states is order-independent: the final result does not depend on how
   rows were split across pipelines and CNs (ties are broken by `id`).
 
+## Compatibility and rollout
+
+The rules of the scalar types apply unchanged (see "Compatibility and rollout" in
+`20260929-low-precision-scalar-floats.md`): upgrade is by full-cluster shutdown, so
+`vecf8`/`vecf4`, `VECTOR_MATMUL`, `VECBLOCK_JSON`, `VECBLOCK_BINARY`, the overload slots this
+design appends to existing functions (`IN`, `NOT IN`, `COALESCE`, `VECTOR_DIMS`,
+`NORMALIZE_L2`) and the `vector_matmul` partial state need no MORPC version or capability
+check. The version byte of the partial state and the version-1 cell header version those
+encodings among binaries that have these types.
+
 ## Phasing
 
 - **P1 — storage (CPU):** `vecf8`/`vecf4` types, header codec, E8M0 scale codec,
@@ -597,7 +638,15 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   empty groups (`[]` per query); several groups; merge of three partial states in both
   orders against a brute-force reference; intermediate-result round trip; accounted fill
   and merge under an allocation account (preflight, in-place arena compaction, no leaked
-  bytes); state codec including malformed input; id text of every supported id type;
+  bytes); a fill with 64 KiB to 8 MiB string ids and a UUID-id fill with no Go heap copy;
+  the flushed result equal, byte for byte, to its JSON text parsed (escapes, invalid UTF-8,
+  empty ids, integral, float32, float64 and signed-zero distances, empty groups) and its
+  Go heap allocation independent of `topk` for integral, fractional and exponent-form
+  distances, with each distance encoded without a Go heap allocation; compaction of 32,768 retained distinct hits with no Go heap allocation, the
+  index array counted by `Size`; a fill and a merge refused when the account cannot admit
+  the index array; at every account limit, a merge into an empty destination or one with
+  spare arena room succeeds whenever its preflight succeeds; an empty string id next to the id stored at the same arena offset,
+  through merge and compaction; state codec including malformed input; id text of every supported id type;
   configuration errors; executors share one parsed configuration (parsed once under
   concurrent first use, dropped after the last executor is freed, errors not kept).
   Binder and compile tests cover the constant-argument rule and the configuration
@@ -618,18 +667,70 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   round-trips; ±MaxFloat32 is rejected in MXFP8 and accepted in NVFP4; crafted cells
   (MXFP8 scale 2^120 with element 256; NVFP4 global × block scale overflowing) are
   rejected, with a finite neighbour accepted.
+- **Export and reload** (`externalwrite/vecblock_test.go`, `external/vecblock_test.go`,
+  BVT `dtype/vecblock.sql`): CSV and JSONL writes carry the exact text; a JSONL object
+  value (object and array line formats) and CSV text load back to the same cell bytes; a
+  cell with a negative-zero element writes `-0` and reloads through CSV and JSONL to its
+  negative-zero code, not the `+0` cell, in `vecf8` and `vecf4`.
+- **Exact-text admission** (`types/vecblock_json_test.go`, BVT `dtype/vecblock.sql`): a
+  number that float32 parsing rounds to a code value (`1.00000001`, `6.0000001`,
+  `448.00001`, a scale `0.50000001`, a global `1.00000001`) is rejected; `1.0`, `1e0`,
+  `-0.0`, the scale 2^-127 as `5.877472e-39` and as its float64 text, and a global as its
+  float64 or exact text are accepted and write back as the shortest float32 text.
+- **SERIAL_EXTRACT** (`function/func_builtin_test.go` `TestSerialExtractBlockScaledCell`, BVT
+  `dtype/vecblock.sql`): a `vecf8`/`vecf4` element round-trips through `serial` with a
+  constant and a per-row index; a string element (short, or of cell length), a cell of the
+  other format and a dimension mismatch are errors, and so is a cell with a NaN scale.
+- **Empty input** (`function/func_cast_test.go` `TestCastEmptyToVectorErrors`, every vector
+  type from `VARCHAR`, `TEXT` and `BLOB`; BVT `vector/vector_empty_input.sql`): an empty
+  string or `BLOB` errors through a literal, `INSERT … SELECT`, a prepared parameter and a
+  cast, where `INSERT … SELECT ''` and a prepared `''` stored NULL before; `LOAD` of an empty
+  field stores NULL.
+- **UPDATE change detection** (`plan/build_test.go`): with changed-row counting on, an
+  `UPDATE` of a `vecf8` and a `vecf4` column plans one `<=>` per column over the cells,
+  with no cast to `vecf32`.
 - **Memory admission** (`aggexec/vector_matmul_test.go`, CPU build, shape-only fake engine
   through the real preflight/fill path under an allocation account): with room, the native
   host bytes and tile buffers are charged, counted in `Size` and released by `Free` (account
   and pool back to zero); without room for the native memory, or for the tile after the
   native memory, or when the engine cannot be created, the fill fails (the created engine is
   closed and its charge released).
+- **Configuration admission** (`aggexec/vector_matmul_test.go`): a 64 × 8192 configuration,
+  binary or JSON, `vecf32` or `vecf8`, refused by a 64 KiB account allocates under 64 KiB
+  of Go heap (5 to 18 MB when parsed first); the parse bound is at least the parse's Go
+  allocation for JSON (with and without `null`), binary and vecblock queries of every
+  supported type at 32 × 256, 2 × 4096 and 500 × 3; a query count above 4096, an empty
+  array, a dimension mismatch, `queries × topk` beyond the limit and topk 0 fail before
+  decoding with the parse's errors; the JSON row scan (`vectorMatmulJSONRows`) on nested,
+  spaced, string, object and malformed text. Binder (`plan/base_binder_vector_matmul_test.go`):
+  `RAND()`, `UUID()` and `SYSDATE()` configurations are rejected, parameters and constants
+  accepted; function resolution accepts JSON options and rejects BLOB options. The bound
+  makes no allocation with 20,000 escaped option keys (`testing.AllocsPerRun`), and such
+  options beyond a 64 KiB account are refused; the options visitor's cases (duplicate keys
+  take the last, nested keys are ignored, escapes, non-objects and invalid values with
+  their texts); JSON query values round once (`1.00000005960464478` is `1.0000001`, also in
+  BVT `vector/vector_matmul.sql`), with the parse's errors for non-numbers, nesting and
+  nulls; ten million `[` in the queries or options fail with an error (the row scan's
+  depth limit, `json.Valid`); options followed by more text or a second object are
+  rejected, and an invalid duplicate key's error names the value it checked; a vecblock
+  cell's bound grows with its text (64 bytes per byte); a binary length bounds the float32
+  query count within the limit when its cell count is beyond it; the limits are reported
+  before the options with or without an account; a malformed or over-limit vecblock JSON text
+  is rejected before its elements are collected (the decode allocates the same for 100 complete
+  objects before the error as for 10,000).
+- **Sort and hash keys** (`sort/vecblock_test.go`, `hashmap/strhashmap_test.go`): `ORDER BY k, v`
+  over 150 peer groups sorts each group by the decoded values with under 64 KiB of Go heap
+  (16.8 MB decoding the column per group); a `vecf8`/`vecf4(768)` hash key, flat, nullable
+  or constant, is encoded inside its preflight reservation.
 - **Unit, plain types** (`aggexec/vector_matmul_test.go`): `vecf32`, `vecf16`, `vecbf16`,
   `vecint8`, `vecuint8` against a brute-force dot-product reference; integer queries out
   of range or fractional are rejected. Function resolution and binder tests accept the
   plain types and reject `vecf64`.
 - **Unit, metrics** (`aggexec/vector_matmul_test.go`): the options parse (`metric` values,
-  ignored keys, non-object text and unknown metrics rejected); the reported distances of
+  ignored keys, non-object text and unknown metrics rejected); at compile
+  (`compile/vector_matmul_config_test.go`, BVT `vector/vector_matmul.sql`) a supplied
+  options argument of empty text or `NULL` (a literal or a user variable) and a `NULL`
+  queries argument are rejected, while an omitted options argument selects the defaults; the reported distances of
   each metric over `vecf32`, `vecf8` and `vecint8` against a float64 reference computed
   directly (`−dot`, `1 − cos` with 1 for a zero vector, `Σ(x − q)²`), nearest first, a row
   equal to a query at distance 0. The GPU-against-CPU tests run every metric: block-scaled
@@ -647,10 +748,20 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   the C API and its errors (an unknown metric included); the device baseline (compute capability 7–9 rejected, 10–12 accepted), the
   eligible-device count against the visible devices, and `host_bytes` for two shapes
   computed by hand.
-- **GPU binding** (`pkg/cuvs/blockscaled_matmul_test.go`): engine scores equal the CPU
-  kernel (`VecBlockDot`) over the same cells for both formats, dimensions 4–768, 1 and 5
-  queries; `RunTopK` against `Run` for MXFP8, NVFP4, int8 and uint8, including tied
-  queries; buffer and argument errors.
+- **GPU binding** (`pkg/cuvs/blockscaled_matmul_test.go`): engine scores within
+  `1e-4 × max(1, |score|)` of the CPU kernel (`VecBlockDot`) over the same cells for both
+  formats, dimensions 4–768, 1 and 5 queries; `RunTopK` against `Run` for MXFP8, NVFP4, int8
+  and uint8, including tied queries; buffer and argument errors.
+  `TestBlockScaledMatmulAgreesAcrossMagnitudes`: encoder-produced cells with element
+  magnitudes from 1e-41 to 1e36 (a query equal to a row included) and hand-built cells (vecf4
+  with a subnormal `global × blockScale`, vecf4 global scales whose float product overflows,
+  vecf8 with E8M0 codes 0–120 and E4M3 subnormal elements), inner product, cosine and squared
+  L2 from the engine and from the CPU functions against the exact float64 distance. Where every
+  nonzero decoded value is a normal float32: an exact distance in the float32 normal range is
+  matched by both (inner product within `1e-4 × Σ|xᵢqᵢ|`, squared L2 within `1e-4` of the
+  squared norms, cosine within `1e-4`); above the range both are infinite; below it both are
+  under 2^-100. Squared L2 of a row and an equal query is the GEMM expansion near 0 (see
+  Decisions) and is not compared.
 - **GPU aggregate** (`aggexec/vector_matmul_gpu_test.go`): the executor with `gpu_mode`
   on and off over the same rows — one group (GPU top-k) and three groups (full scores),
   tiles drained mid-batch, a merge from an executor whose rows are still in its tile, an
@@ -761,7 +872,30 @@ cosine divides the norm out and squared L2 includes it.
   executor holding the configuration charges its allocation account for the retained
   query storage and its score scratch, so a shared configuration is charged to each
   holder; a denial fails the aggregate's creation, and the charge returns when the
-  executor is freed.
+  executor is freed. Every aggregate factory attaches the account before the
+  configuration (as the window and time-window operators bind it), so the configuration
+  is parsed with the account in place: it first admits an upper bound of the parse (the
+  decoded queries, the converted storage and the score scratch, from the configuration's
+  lengths and a non-allocating scan of JSON queries that also checks the query count and
+  `queries × topk`; a vecblock cell's share grows with its JSON text, which its decoding
+  allocates for); the parse runs the same checks first without an account,
+  then keeps only the retained bytes, so a configuration beyond the account is refused
+  before its queries are decoded. The bound reads neither the options nor the query values,
+  so it covers either query format. The options and JSON queries are parsed in one SAX pass
+  (`sonic/ast.Preorder`) without building a map or nested slices: the options visitor keeps
+  the top-level `metric` and `query_format` after `encoding/json.Valid` checks the whole
+  text (trailing text included) without recursion, and the query visitor writes each value,
+  rounded once from its text to float32 (`strconv.ParseFloat(text, 32)`, as `encoding/json`
+  does), into one backing sized by the row scan. Measured against `Unmarshal` (64 × 768
+  queries; options with 10,002 keys): the SAX parse holds 197 KB against 610 KB to 3.15 MB
+  for the queries and 64 B against 1.9 to 3.4 MB for the options, and takes 1.8 to 1.9 ms
+  against 0.87 ms (native sonic) or 3.9 ms (the `encoding/json` fallback sonic v1.15.2 uses
+  on Go 1.27) for the queries and 0.8 to 1.2 ms against 1.6 to 3.5 ms for the options.
+  Native sonic's `Unmarshal` into float32 rounds through float64 (1.00000005960464478 reads
+  as 1, not 1.0000001); the SAX parse keeps the single rounding on any sonic version.
+  The row scan follows at most 8 levels of nesting and rejects deeper text, and the query
+  visitor rejects a value deeper than a query's coordinates, so nested input fails with
+  an error rather than deep recursion.
 - v1 is a function call per tile with no index, residency or dataset cache; the cuVS
   brute-force index is unchanged.
 - SQL surface = one aggregate, `vector_matmul`; partials per pipeline and the cross-CN
@@ -798,7 +932,8 @@ cosine divides the norm out and squared L2 includes it.
     vectors are close the terms cancel and that rounding is what remains. The scalar
     functions do not have this: `Σ(xᵢ − qᵢ)²` subtracts first, a difference of close values
     is exact, and the result's error is relative to the distance itself; the CPU's cosine
-    takes `x·q` and the norms by the same operations, so equal vectors give exactly 0.
+    takes `x·q` and the norms by the same operations, so equal vectors give 0 up to float32
+    rounding (never below 0) — exactly 0 for squared L2, which subtracts first.
   - *Decision.* The GPU's cosine and squared L2 are the expansion's: within fp32
     summation-order tolerance of the scalar function, relative to the squared norms. The
     GEMM is kept in the fp32 range by exact power-of-two rescaling (rows outside
@@ -822,6 +957,14 @@ cosine divides the norm out and squared L2 includes it.
   - *Exact results* are the CPU path's (`gpu_mode = 0`), which computes each distance with
     the scalar functions' kernels, and the scalar functions themselves: ordering near-ties
     exactly takes re-ranking the top-k rows with `cosine_distance` / `l2_distance_sq`.
+- `subvector` on `vecf8`/`vecf4` returns `vecf32`, not the column's type (the other narrow
+  vector types keep theirs, #31775). A block-scaled cell fixes the block size by format (32
+  elements for `vecf8`, 16 for `vecf4`), and every element of a block shares the block's
+  scale. A slice starting inside a block would put elements of two source blocks into one
+  block of the result, which has one scale, so the slice cannot be stored by copying the
+  codes; storing it in the same type would re-quantize it and change its values. The
+  dequantized `vecf32` slice holds every selected value exactly. `CAST(subvector(...) AS
+  vecf8(M))` quantizes it as any `vecf32` value is quantized.
 - The engine looks up a cuBLASLt algorithm for every tile shape it can run (rows in
   buckets of 128 × 2^i up to the tile capacity) when it is created, so a shape the device
   has no algorithm for fails before any row is scored.

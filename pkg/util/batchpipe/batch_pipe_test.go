@@ -145,7 +145,6 @@ type testCollector struct {
 	*BaseBatchPipe[*TestItem, string]
 	receivedString []string
 	posBufWakeupCh chan time.Time
-	notify4Batch   func()
 }
 
 // create a new buffer for one kind of Item
@@ -171,9 +170,6 @@ func (c *testCollector) NewItemBatchHandler(ctx context.Context) func(batch stri
 		c.Lock()
 		defer c.Unlock()
 		c.receivedString = append(c.receivedString, batch)
-		if c.notify4Batch != nil {
-			c.notify4Batch()
-		}
 	}
 }
 

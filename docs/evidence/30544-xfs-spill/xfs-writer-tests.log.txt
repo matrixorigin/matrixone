@@ -1,0 +1,27 @@
+=== RUN   TestWritePreextendedXFSAllocation
+--- PASS: TestWritePreextendedXFSAllocation (0.00s)
+=== RUN   TestWritePreextendedRoundTrip
+--- PASS: TestWritePreextendedRoundTrip (0.00s)
+=== RUN   TestWritePreextendedXFSAllocation
+--- PASS: TestWritePreextendedXFSAllocation (0.00s)
+=== RUN   TestWritePreextendedRoundTrip
+--- PASS: TestWritePreextendedRoundTrip (0.00s)
+=== RUN   TestWritePreextendedXFSAllocation
+--- PASS: TestWritePreextendedXFSAllocation (0.00s)
+=== RUN   TestWritePreextendedRoundTrip
+--- PASS: TestWritePreextendedRoundTrip (0.00s)
+goos: linux
+goarch: amd64
+pkg: github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio
+cpu: Intel(R) Xeon(R) Silver 4314 CPU @ 2.40GHz
+BenchmarkAppendXFS
+BenchmarkAppendXFS/raw
+BenchmarkAppendXFS/raw-4         	    1025	     27329 ns/op	2398.02 MB/s
+BenchmarkAppendXFS/raw-4         	    1025	     29351 ns/op	2232.85 MB/s
+BenchmarkAppendXFS/raw-4         	    1025	     30381 ns/op	2157.15 MB/s
+BenchmarkAppendXFS/preextend
+BenchmarkAppendXFS/preextend-4   	    1025	     32883 ns/op	1992.98 MB/s
+BenchmarkAppendXFS/preextend-4   	    1025	     31893 ns/op	2054.89 MB/s
+BenchmarkAppendXFS/preextend-4   	    1025	     32867 ns/op	1993.96 MB/s
+PASS
+ok  	github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio	0.251s

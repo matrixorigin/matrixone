@@ -67,6 +67,29 @@ func TestBuildInsertOverwriteBuildsIcebergOverwriteIntent(t *testing.T) {
 	require.NotNil(t, insertNode.GetInsertCtx())
 }
 
+func TestBuildDependentIcebergInsert(t *testing.T) {
+	for _, verb := range []string{"insert into", "insert overwrite"} {
+		t.Run(verb, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), verb+" gold_orders select (select (select s.id)) from (select 1 as id) s", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := buildInsert(stmt.(*tree.Insert), newIcebergTestCompilerContext(t, nil), false, false)
+			require.NoError(t, err)
+			q := p.GetQuery()
+			require.NotNil(t, q.Correlation)
+			require.NoError(t, q.ValidateCorrelation())
+			sink := q.Nodes[q.Steps[q.MainOutputStep()]]
+			require.Equal(t, pbplan.Node_INSERT, sink.NodeType)
+			iceberg, err := IsIcebergTableDef(context.Background(), sink.InsertCtx.TableDef)
+			require.NoError(t, err)
+			require.True(t, iceberg)
+			if verb == "insert overwrite" {
+				require.Equal(t, icebergapi.DMLOverwritePlanExtraOptions, sink.ExtraOptions)
+			}
+		})
+	}
+}
+
 func TestBuildInsertOverwritePartitionBuildsIcebergOverwriteIntent(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "insert overwrite gold_orders partition(region = 'ksa', day = 20260624) select 1", 1)
 	require.NoError(t, err)

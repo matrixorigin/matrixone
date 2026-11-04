@@ -30,6 +30,7 @@ import (
 // fileServices contains all FileService instances.
 type fileServices struct {
 	sync.RWMutex
+	closeOnce sync.Once
 
 	t            *testing.T
 	tnServiceNum int
@@ -39,12 +40,45 @@ type fileServices struct {
 	cnLocalFSs []fileservice.FileService
 	s3FS       fileservice.FileService
 	etlFS      fileservice.FileService
+	tmpFS      fileservice.FileService
+}
+
+// Close releases the file services owned by the test cluster. The composite
+// services handed to TN and CN are borrowers; only these root services own the
+// caches and directory handles. Close is idempotent so a failed cluster start
+// and a later cleanup cannot double-retire a backend.
+func (f *fileServices) Close(ctx context.Context) {
+	f.closeOnce.Do(func() {
+		f.RLock()
+		services := make([]fileservice.FileService, 0, len(f.tnLocalFSs)+len(f.cnLocalFSs)+3)
+		services = append(services, f.tnLocalFSs...)
+		services = append(services, f.cnLocalFSs...)
+		services = append(services, f.s3FS, f.etlFS, f.tmpFS)
+		f.RUnlock()
+
+		closed := make(map[fileservice.FileService]struct{}, len(services))
+		for _, service := range services {
+			if service == nil {
+				continue
+			}
+			if _, ok := closed[service]; ok {
+				continue
+			}
+			closed[service] = struct{}{}
+			service.Close(ctx)
+		}
+	})
 }
 
 func (c *testCluster) createFS(
 	ctx context.Context,
 	dir string,
 	name string) fileservice.FileService {
+	if name == defines.TmpFileServiceName {
+		fs, err := fileservice.NewTmpFileService(name, filepath.Join(dir, name), fileservice.TmpFileGCInterval)
+		require.NoError(c.t, err)
+		return fs
+	}
 	if c.opt.keepData {
 		fs, err := fileservice.NewLocalFS(ctx, name, filepath.Join(dir, name), fileservice.CacheConfig{}, nil)
 		require.NoError(c.t, err)
@@ -61,18 +95,17 @@ func (c *testCluster) createFS(
 func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
 	tnServiceNum := c.opt.initial.tnServiceNum
 
-	tnLocals := make([]fileservice.FileService, 0, tnServiceNum)
+	owned := &fileServices{t: c.t, tnServiceNum: tnServiceNum}
+	// Publish the cleanup owner before constructing backends with workers.
+	// NewCluster's failure defer can then retire a partially built graph.
+	c.fileservices = owned
 	for i := 0; i < tnServiceNum; i++ {
-		tnLocals = append(tnLocals, c.createFS(ctx, c.tn.cfgs[i].DataDir, defines.LocalFileServiceName))
+		owned.tnLocalFSs = append(owned.tnLocalFSs, c.createFS(ctx, c.tn.cfgs[i].DataDir, defines.LocalFileServiceName))
 	}
-
-	return &fileServices{
-		t:            c.t,
-		tnServiceNum: tnServiceNum,
-		tnLocalFSs:   tnLocals,
-		s3FS:         c.createFS(ctx, c.opt.rootDataDir, defines.SharedFileServiceName),
-		etlFS:        c.createFS(ctx, c.opt.rootDataDir, defines.ETLFileServiceName),
-	}
+	owned.s3FS = c.createFS(ctx, c.opt.rootDataDir, defines.SharedFileServiceName)
+	owned.etlFS = c.createFS(ctx, c.opt.rootDataDir, defines.ETLFileServiceName)
+	owned.tmpFS = c.createFS(ctx, c.opt.rootDataDir, defines.TmpFileServiceName)
+	return owned
 }
 
 // assertFileServiceLocked asserts constructed file services.
@@ -120,4 +153,10 @@ func (f *fileServices) getETLFileService() fileservice.FileService {
 	defer f.RUnlock()
 	f.assertFileServiceLocked()
 	return f.etlFS
+}
+
+func (f *fileServices) getTmpFileService() fileservice.FileService {
+	f.RLock()
+	defer f.RUnlock()
+	return f.tmpFS
 }

@@ -1,0 +1,209 @@
+drop database if exists cte_projection_pruning;
+create database cte_projection_pruning;
+use cte_projection_pruning;
+create table small(g int,h int,v int);
+insert into small values (1,7,10);
+select max(h) from small;
+➤ max(h)[4,32,0]  𝄀
+7
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0;
+➤ c0[4,32,0]  ¦  c2[4,32,0]  ¦  c2[4,32,0]  𝄀
+1  ¦  7  ¦  7
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c1,a.c2,b.c2 from r a join r b on a.c0=b.c0;
+➤ c0[4,32,0]  ¦  c1[-5,64,0]  ¦  c2[4,32,0]  ¦  c2[4,32,0]  𝄀
+1  ¦  10  ¦  7  ¦  7
+prepare cte_narrow from 'with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g) select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0';
+execute cte_narrow;
+➤ c0[4,32,0]  ¦  c2[4,32,0]  ¦  c2[4,32,0]  𝄀
+1  ¦  7  ¦  7
+execute cte_narrow;
+➤ c0[4,32,0]  ¦  c2[4,32,0]  ¦  c2[4,32,0]  𝄀
+1  ¦  7  ¦  7
+deallocate prepare cte_narrow;
+create table narrow_rows(g int,ah int,bh int);
+insert into narrow_rows values (-1,999,999);
+insert into narrow_rows
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0;
+select * from narrow_rows order by g;
+➤ g[4,32,0]  ¦  ah[4,32,0]  ¦  bh[4,32,0]  𝄀
+-1  ¦  999  ¦  999  𝄀
+1  ¦  7  ¦  7
+drop table narrow_rows;
+update small set h=null;
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0;
+➤ c0[4,32,0]  ¦  c2[4,32,0]  ¦  c2[4,32,0]  𝄀
+1  ¦  null  ¦  null
+with r as (select g,v total,h n,v mx from small where v>0)
+select a.g,a.mx,a.total,b.g,b.mx,b.total
+from r a join r b on a.g<=>b.g and a.mx=b.mx;
+➤ g[4,32,0]  ¦  mx[4,32,0]  ¦  total[4,32,0]  ¦  g[4,32,0]  ¦  mx[4,32,0]  ¦  total[4,32,0]  𝄀
+1  ¦  10  ¦  10  ¦  1  ¦  10  ¦  10
+with r as (select g,v total,h n,v mx from small where v>0)
+select a.*,b.* from r a join r b on a.g<=>b.g and a.mx=b.mx;
+➤ g[4,32,0]  ¦  total[4,32,0]  ¦  n[4,32,0]  ¦  mx[4,32,0]  ¦  g[4,32,0]  ¦  total[4,32,0]  ¦  n[4,32,0]  ¦  mx[4,32,0]  𝄀
+1  ¦  10  ¦  null  ¦  10  ¦  1  ¦  10  ¦  null  ¦  10
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g)
+select a.g,a.mx,a.total,b.g,b.mx,b.total
+from r a join r b on a.g<=>b.g and a.mx=b.mx;
+➤ g[4,32,0]  ¦  mx[4,32,0]  ¦  total[-5,64,0]  ¦  g[4,32,0]  ¦  mx[4,32,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  10  ¦  10  ¦  1  ¦  10  ¦  10
+insert into small values (1,5,4),(2,8,7),(2,9,20),(null,3,6),(null,4,null);
+with r as (select g,sum(v) total,max(h) mh,max(v) mv from small group by g)
+select a.g,a.mh,b.mv from r a join r b on a.g<=>b.g and a.mh=b.mh order by a.g;
+➤ g[4,32,0]  ¦  mh[4,32,0]  ¦  mv[4,32,0]  𝄀
+null  ¦  4  ¦  6  𝄀
+1  ¦  5  ¦  10  𝄀
+2  ¦  9  ¦  20
+with r as (select g,sum(v) total,count(*) n,max(v) mx,min(v) mn from small group by g)
+select a.g,a.total,a.mx,a.mn,b.mx
+from r a join r b on a.g<=>b.g and a.mx=b.mx order by a.g;
+➤ g[4,32,0]  ¦  total[-5,64,0]  ¦  mx[4,32,0]  ¦  mn[4,32,0]  ¦  mx[4,32,0]  𝄀
+null  ¦  6  ¦  6  ¦  6  ¦  6  𝄀
+1  ¦  14  ¦  10  ¦  4  ¦  10  𝄀
+2  ¦  27  ¦  20  ¦  7  ¦  20
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g)
+select a.g,a.total,b.g,b.mx
+from r a join r b on a.g<=>b.g and a.total=b.total order by a.g;
+➤ g[4,32,0]  ¦  total[-5,64,0]  ¦  g[4,32,0]  ¦  mx[4,32,0]  𝄀
+null  ¦  6  ¦  null  ¦  6  𝄀
+1  ¦  14  ¦  1  ¦  10  𝄀
+2  ¦  27  ¦  2  ¦  20
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g)
+select a.total,a.mx,b.total,b.mx
+from r a join r b on a.mx=b.mx order by a.mx;
+➤ total[-5,64,0]  ¦  mx[4,32,0]  ¦  total[-5,64,0]  ¦  mx[4,32,0]  𝄀
+6  ¦  6  ¦  6  ¦  6  𝄀
+14  ¦  10  ¦  14  ¦  10  𝄀
+27  ¦  20  ¦  27  ¦  20
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g)
+select a.g,a.mx,a.total,b.n
+from r a join r b on a.g<=>b.g and a.mx=b.mx order by a.g;
+➤ g[4,32,0]  ¦  mx[4,32,0]  ¦  total[-5,64,0]  ¦  n[-5,64,0]  𝄀
+null  ¦  6  ¦  6  ¦  2  𝄀
+1  ¦  10  ¦  14  ¦  2  𝄀
+2  ¦  20  ¦  27  ¦  2
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g)
+select count(*) x from r union all select max(mx) from r order by x;
+➤ x[-5,64,0]  𝄀
+3  𝄀
+20
+with r as (select g,max(cast(h as varchar(10))) payload from small group by g)
+select count(*) x from r union all select max(g) from r order by x;
+➤ x[-5,64,0]  𝄀
+2  𝄀
+3
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g having total>6)
+select a.g,a.total,a.mx,b.mx
+from r a join r b on a.g<=>b.g and a.mx=b.mx order by a.g;
+➤ g[4,32,0]  ¦  total[-5,64,0]  ¦  mx[4,32,0]  ¦  mx[4,32,0]  𝄀
+1  ¦  14  ¦  10  ¦  10  𝄀
+2  ¦  27  ¦  20  ¦  20
+with r as (select g,v total,h n,v+1 mx from small limit 10)
+select a.g,a.total,a.mx,b.mx
+from r a join r b on a.g<=>b.g and a.mx=b.mx order by a.g,a.mx;
+➤ g[4,32,0]  ¦  total[4,32,0]  ¦  mx[-5,64,0]  ¦  mx[-5,64,0]  𝄀
+null  ¦  6  ¦  7  ¦  7  𝄀
+1  ¦  4  ¦  5  ¦  5  𝄀
+1  ¦  10  ¦  11  ¦  11  𝄀
+2  ¦  7  ¦  8  ¦  8  𝄀
+2  ¦  20  ¦  21  ¦  21
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g)
+select g,sum(total) total,max(mx) mx
+from (select * from r union all select * from r) u group by g order by g;
+➤ g[4,32,0]  ¦  total[3,38,0]  ¦  mx[4,32,0]  𝄀
+null  ¦  12  ¦  6  𝄀
+1  ¦  28  ¦  10  𝄀
+2  ¦  54  ¦  20
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g),
+s as (select a.g,a.total,a.mx,b.total btotal from r a join r b on a.g<=>b.g and a.mx=b.mx)
+select x.g,x.mx,y.total from s x join s y on x.g<=>y.g and x.mx=y.mx order by x.g;
+➤ g[4,32,0]  ¦  mx[4,32,0]  ¦  total[-5,64,0]  𝄀
+null  ¦  6  ¦  6  𝄀
+1  ¦  10  ¦  14  𝄀
+2  ¦  20  ¦  27
+with r as (select g,sum(v) total,count(*) n,max(v) mx,grouping(g) gm from small group by g with rollup)
+select a.g,a.gm,a.total,a.mx,b.mx
+from r a join r b on a.g<=>b.g and a.gm=b.gm and a.mx=b.mx order by a.gm,a.g;
+➤ g[4,32,0]  ¦  gm[-5,64,0]  ¦  total[-5,64,0]  ¦  mx[4,32,0]  ¦  mx[4,32,0]  𝄀
+null  ¦  0  ¦  6  ¦  6  ¦  6  𝄀
+1  ¦  0  ¦  14  ¦  10  ¦  10  𝄀
+2  ¦  0  ¦  27  ¦  20  ¦  20  𝄀
+null  ¦  1  ¦  47  ¦  20  ¦  20
+with r as (select g,sum(v) total,count(*) n,max(v) mx,grouping(g) gm from small group by cube(g))
+select a.g,a.gm,a.total,a.mx,b.mx
+from r a join r b on a.g<=>b.g and a.gm=b.gm and a.mx=b.mx order by a.gm,a.g;
+➤ g[4,32,0]  ¦  gm[-5,64,0]  ¦  total[-5,64,0]  ¦  mx[4,32,0]  ¦  mx[4,32,0]  𝄀
+null  ¦  0  ¦  6  ¦  6  ¦  6  𝄀
+1  ¦  0  ¦  14  ¦  10  ¦  10  𝄀
+2  ¦  0  ¦  27  ¦  20  ¦  20  𝄀
+null  ¦  1  ¦  47  ¦  20  ¦  20
+with r as (select g,sum(v) total,count(*) n,max(v) mx,grouping(g) gm from small group by grouping sets ((g),()))
+select a.g,a.gm,a.total,a.mx,b.mx
+from r a join r b on a.g<=>b.g and a.gm=b.gm and a.mx=b.mx order by a.gm,a.g;
+➤ g[4,32,0]  ¦  gm[-5,64,0]  ¦  total[-5,64,0]  ¦  mx[4,32,0]  ¦  mx[4,32,0]  𝄀
+null  ¦  0  ¦  6  ¦  6  ¦  6  𝄀
+1  ¦  0  ¦  14  ¦  10  ¦  10  𝄀
+2  ¦  0  ¦  27  ¦  20  ¦  20  𝄀
+null  ¦  1  ¦  47  ¦  20  ¦  20
+with r as (select g,sum(v) total,count(*) n,max(v) mx,grouping(g) gm from small group by g with rollup)
+select g,gm,sum(total) total,max(mx) mx
+from (select * from r union all select * from r) u group by g,gm order by gm,g;
+➤ g[4,32,0]  ¦  gm[-5,64,0]  ¦  total[3,38,0]  ¦  mx[4,32,0]  𝄀
+null  ¦  0  ¦  12  ¦  6  𝄀
+1  ¦  0  ¦  28  ¦  10  𝄀
+2  ¦  0  ¦  54  ¦  20  𝄀
+null  ¦  1  ¦  94  ¦  20
+with r as (select g,sum(v) total,max(h) mh,grouping(g) gm from small group by g with rollup)
+select a.g,a.gm,a.mh,b.mh
+from r a join r b on a.g<=>b.g and a.gm=b.gm order by a.gm,a.g;
+➤ g[4,32,0]  ¦  gm[-5,64,0]  ¦  mh[4,32,0]  ¦  mh[4,32,0]  𝄀
+null  ¦  0  ¦  4  ¦  4  𝄀
+1  ¦  0  ¦  5  ¦  5  𝄀
+2  ¦  0  ¦  9  ¦  9  𝄀
+null  ¦  1  ¦  9  ¦  9
+prepare cte_stmt from 'with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g) select a.g,a.mx,a.total,b.g,b.mx,b.total from r a join r b on a.g<=>b.g and a.mx=b.mx order by a.g';
+execute cte_stmt;
+➤ g[4,32,0]  ¦  mx[4,32,0]  ¦  total[-5,64,0]  ¦  g[4,32,0]  ¦  mx[4,32,0]  ¦  total[-5,64,0]  𝄀
+null  ¦  6  ¦  6  ¦  null  ¦  6  ¦  6  𝄀
+1  ¦  10  ¦  14  ¦  1  ¦  10  ¦  14  𝄀
+2  ¦  20  ¦  27  ¦  2  ¦  20  ¦  27
+execute cte_stmt;
+➤ g[4,32,0]  ¦  mx[4,32,0]  ¦  total[-5,64,0]  ¦  g[4,32,0]  ¦  mx[4,32,0]  ¦  total[-5,64,0]  𝄀
+null  ¦  6  ¦  6  ¦  null  ¦  6  ¦  6  𝄀
+1  ¦  10  ¦  14  ¦  1  ¦  10  ¦  14  𝄀
+2  ¦  20  ¦  27  ¦  2  ¦  20  ¦  27
+deallocate prepare cte_stmt;
+create table output_rows(g int,mx int,total int,gg int,bmx int,btotal int);
+insert into output_rows values (-1,999,999,-1,999,999);
+insert into output_rows
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g)
+select a.g,a.mx,a.total,b.g,b.mx,b.total
+from r a join r b on a.g<=>b.g and a.mx=b.mx;
+select * from output_rows order by g;
+➤ g[4,32,0]  ¦  mx[4,32,0]  ¦  total[4,32,0]  ¦  gg[4,32,0]  ¦  bmx[4,32,0]  ¦  btotal[4,32,0]  𝄀
+null  ¦  6  ¦  6  ¦  null  ¦  6  ¦  6  𝄀
+-1  ¦  999  ¦  999  ¦  -1  ¦  999  ¦  999  𝄀
+1  ¦  10  ¦  14  ¦  1  ¦  10  ¦  14  𝄀
+2  ¦  20  ¦  27  ¦  2  ¦  20  ¦  27
+delete from small;
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0;
+➤ c0[4,32,0]  ¦  c2[4,32,0]  ¦  c2[4,32,0]
+with r as (select g,v total,h n,v mx from small where v>0)
+select a.g,a.mx,a.total,b.g,b.mx,b.total
+from r a join r b on a.g<=>b.g and a.mx=b.mx;
+➤ g[4,32,0]  ¦  mx[4,32,0]  ¦  total[4,32,0]  ¦  g[4,32,0]  ¦  mx[4,32,0]  ¦  total[4,32,0]
+with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g)
+select count(*) x from r union all select max(mx) from r order by x;
+➤ x[-5,64,0]  𝄀
+null  𝄀
+0
+with r as (select 1 g,sum(v) total,count(*) n,max(v) mx from small)
+select a.g,a.total,a.mx,b.mx from r a join r b on a.g=b.g and a.mx<=>b.mx;
+➤ g[-5,64,0]  ¦  total[-5,64,0]  ¦  mx[4,32,0]  ¦  mx[4,32,0]  𝄀
+1  ¦  null  ¦  null  ¦  null
+drop database cte_projection_pruning;

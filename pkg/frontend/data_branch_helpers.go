@@ -237,11 +237,6 @@ func runSqlWithMode(
 		if forceBackExec && realBackExec {
 			bh.ClearExecResultBatches()
 		}
-		// export as CSV need this
-		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
-		//for range tblStuff.def.visibleIdxes {
-		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
-		//}
 		if err = bh.Exec(ctx, sql); err != nil {
 			if forceBackExec && realBackExec {
 				bh.ClearExecResultBatches()
@@ -376,7 +371,13 @@ func scanSnapshotRelationByID(
 // fall back to a relation that was already opened at snapshotTS. ALTER drops
 // replaced physical generations from the current catalog, while bounded data
 // branch operations may still need to hydrate rows from such a generation.
-func scanSnapshotRelationByIDWithFallback(
+//
+// It is a var so unit tests can substitute a deterministic blocked reader
+// (the reopenDataBranchRelationByID precedent) and prove cancellation and
+// owner routing through the LCA scan without a storage engine.
+var scanSnapshotRelationByIDWithFallback = scanSnapshotRelationByIDWithFallbackImpl
+
+func scanSnapshotRelationByIDWithFallbackImpl(
 	ctx context.Context,
 	caller string,
 	ses *Session,
@@ -548,7 +549,7 @@ func formatValIntoStringWithFloatCast(
 	}
 
 	writeFloat := func(v float64, bits uint64, bitSize int, sqlType string) {
-		if math.IsNaN(v) || (v == 0 && math.Signbit(v)) {
+		if math.IsNaN(v) || math.IsInf(v, 0) || (v == 0 && math.Signbit(v)) {
 			var raw [8]byte
 			if bitSize == 32 {
 				binary.LittleEndian.PutUint32(raw[:4], uint32(bits))
@@ -559,14 +560,6 @@ func formatValIntoStringWithFloatCast(
 			buf.WriteString(hex.EncodeToString(raw[:bitSize/8]))
 			buf.WriteString("')")
 			buf.WriteString(" as ")
-			buf.WriteString(sqlType)
-			buf.WriteByte(')')
-			return
-		}
-		if math.IsInf(v, 0) {
-			buf.WriteString("cast('")
-			buf.Write(strconv.AppendFloat(scratch[:0], v, 'g', -1, bitSize))
-			buf.WriteString("' as ")
 			buf.WriteString(sqlType)
 			buf.WriteByte(')')
 			return
@@ -617,6 +610,10 @@ func formatValIntoStringWithFloatCast(
 		if t.Oid == types.T_binary || t.Oid == types.T_varbinary || t.Oid == types.T_blob {
 			writeBytes = writeSQLHexLiteral
 		}
+		if t.Oid == types.T_binary {
+			// Decode with the column type so replay preserves already stored bytes.
+			buf.WriteString("serial_extract(serial(")
+		}
 		switch x := val.(type) {
 		case []byte:
 			writeBytes(buf, x)
@@ -624,6 +621,11 @@ func formatValIntoStringWithFloatCast(
 			writeBytes(buf, []byte(x))
 		default:
 			return moerr.NewInternalErrorNoCtxf("formatValIntoString: unexpected string type %T", val)
+		}
+		if t.Oid == types.T_binary {
+			buf.WriteString("),0 as ")
+			buf.WriteString(t.DescString())
+			buf.WriteByte(')')
 		}
 	case types.T_datalink:
 		buf.WriteString("cast(")

@@ -43,7 +43,7 @@ b varchar(10)
 );
 insert into no_key_odku(a, b) values (-1, 'bad')
 on duplicate key update b = 'updated';
-constraint violation: Check constraint '__mo_chk_1' is violated
+constraint violation: Check constraint 'no_key_odku_chk_1' is violated
 select * from no_key_odku;
 a    b
 create table replace_check(

@@ -28,7 +28,7 @@ import (
 )
 
 const groupingSetMaterializedFanoutBody = `
-select gs.k, count(gs.payload) as n
+select gs.k, count(gs.payload) as n, grouping(gs.k) as gid
 from grouping_source gs
 group by rollup(gs.k)`
 
@@ -119,6 +119,8 @@ func TestGroupingSetMaterializedFanoutWithLazyUnion(t *testing.T) {
 		}, nestedResults,
 			"an inherited rollup sentinel must not split the outer SQL NULL group")
 
+		// GROUPING is branch-specific, so this fixture still needs independent
+		// materialized readers even when equivalent branch projects can stream.
 		planText := explainSQL(t, ctx, db,
 			"explain "+groupingSetMaterializedFanoutBody)
 		require.Equal(t, 2, strings.Count(planText, "Sink Scan"),
@@ -136,9 +138,17 @@ func TestGroupingSetMaterializedFanoutWithLazyUnion(t *testing.T) {
 		defer rows.Close()
 		var key sql.NullInt64
 		var count int64
+		var groupingID int64
 		rowCount := 0
 		for rows.Next() {
-			require.NoError(t, rows.Scan(&key, &count))
+			require.NoError(t, rows.Scan(&key, &count, &groupingID))
+			if key.Valid {
+				require.Equal(t, int64(0), groupingID)
+				require.Equal(t, int64(1), count)
+			} else {
+				require.Equal(t, int64(1), groupingID)
+				require.Equal(t, int64(10000), count)
+			}
 			rowCount++
 		}
 		require.NoError(t, rows.Err())
@@ -153,7 +163,7 @@ func TestGroupingSetMaterializedFanoutWithLazyUnion(t *testing.T) {
 		require.NoError(t, err)
 		defer earlyRows.Close()
 		require.True(t, earlyRows.Next())
-		require.NoError(t, earlyRows.Scan(&key, &count))
+		require.NoError(t, earlyRows.Scan(&key, &count, &groupingID))
 		require.NoError(t, earlyRows.Close())
 		require.NoError(t, earlyRows.Err())
 

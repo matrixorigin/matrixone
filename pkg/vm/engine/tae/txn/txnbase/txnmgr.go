@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"runtime"
@@ -31,11 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -541,6 +544,7 @@ func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
 	if op.Txn.GetStore().IsOffline() {
 		panic("offline txn should not be here")
 	}
+	op.preWalEnqueuedAt = time.Now()
 	_, err = mgr.preWalQueue.Enqueue(op)
 	return
 }
@@ -556,16 +560,21 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare(op.ctx))
+	v2.TxnTNPrePrepareDurationHistogram.Observe(time.Since(now).Seconds())
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
 	})
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
+	started := time.Now()
 	txn.SetError(txn.PrepareCommit())
+	v2.TxnTNPrepareCommitDurationHistogram.Observe(time.Since(started).Seconds())
 }
 
 func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
+	started := time.Now()
+	defer func() { v2.TxnTNPreApplyCommitDurationHistogram.Observe(time.Since(started).Seconds()) }()
 	if err := txn.PreApplyCommit(); err != nil {
 		txn.SetError(err)
 		mgr.OnException(err)
@@ -650,7 +659,10 @@ func (mgr *TxnManager) on1PCApply(op *OpTxn) {
 	switch op.Op {
 	case OpCommit:
 		isAbort = false
-		if err = op.Txn.ApplyCommit(); err != nil {
+		started := time.Now()
+		err = op.Txn.ApplyCommit()
+		v2.TxnTNApplyCommitDurationHistogram.Observe(time.Since(started).Seconds())
+		if err != nil {
 			panic(err)
 		}
 	case OpRollback:
@@ -691,7 +703,9 @@ func (mgr *TxnManager) preWal(op *OpTxn) bool {
 	//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 	//1. Allocate a timestamp , set it to txn's prepare timestamp and commit timestamp,
 	//2. Set transaction's state to Preparing or Rollbacking if op.Op is OpRollback.
+	started := time.Now()
 	ts := mgr.onBindPrepareTimeStamp(op)
+	v2.TxnTNPrepareTSDurationHistogram.Observe(time.Since(started).Seconds())
 
 	mgr.onPrepare1PC(op, ts)
 	if !op.Txn.IsReplay() {
@@ -716,7 +730,28 @@ func (mgr *TxnManager) onWal(op *OpTxn) bool {
 		return false
 	}
 
-	if err := op.Txn.PrepareWAL(); err != nil {
+	started := time.Now()
+	err := op.Txn.PrepareWAL()
+	v2.TxnTNPrepareWalDurationHistogram.Observe(time.Since(started).Seconds())
+	if err != nil {
+		var tooLarge *wal.RecordTooLargeError
+		if errors.As(err, &tooLarge) {
+			// No WAL LSN or driver DSN has been allocated. Unlike an append
+			// failure, this outcome is known and the prepared txn can roll back.
+			// Keep the moerr itself as the client-visible result; RPC error
+			// conversion does not recognize a wrapper as a native moerr.
+			op.Txn.SetError(tooLarge.MoErr())
+			op.Op = OpRollback
+			prepareTS := op.Txn.GetPrepareTS()
+			op.Txn.Lock()
+			stateErr := op.Txn.ToRollbackingLocked(prepareTS)
+			op.Txn.Unlock()
+			if stateErr != nil {
+				panic(stateErr)
+			}
+			mgr.onPreparRollback(op.Txn)
+			return false
+		}
 		panic(err)
 	}
 
@@ -743,13 +778,19 @@ func (mgr *TxnManager) onApply(items ...any) {
 		store := op.Txn.GetStore()
 		store.TriggerTrace(txnif.TraceOnApply)
 		mgr.workers.Submit(func() {
+			if !op.applyEnqueuedAt.IsZero() {
+				v2.TxnTNApplyQueueWaitDurationHistogram.Observe(time.Since(op.applyEnqueuedAt).Seconds())
+			}
+			started := time.Now()
 			//Notice that WaitWalAndTail do nothing when op is OpRollback
 			if err := op.Txn.WaitWalAndTail(op.ctx); err != nil {
 				// v0.6 TODO: Error handling
 				panic(err)
 			}
-
-			if _, injected := objectio.CommitWaitInjected(op.Txn.GetTenantID()); injected {
+			if op.Op == OpCommit {
+				v2.TxnTNWaitWalAndTailDurationHistogram.Observe(time.Since(started).Seconds())
+			}
+			if _, injected := objectio.CommitWaitInjected(op.Txn.GetTenantID(), op.Txn.GetID()); injected {
 				duration := time.Millisecond * time.Duration(rand.Intn(10))
 				time.Sleep(duration)
 			}
@@ -812,6 +853,11 @@ func (mgr *TxnManager) ResetHeartbeat() {
 		"TxnManager-HB",
 		time.Millisecond*2,
 		func(ctx context.Context) {
+			// Replay/readonly modes must not fill the commit pipeline with
+			// local heartbeats that cannot advance the committed frontier.
+			if mgr.GetTxnSkipFlags().Skip(TxnFlag_Heartbeat) {
+				return
+			}
 			op := mgr.newHeartbeatOpTxn(ctx)
 			op.Txn.(*Txn).Add(1)
 			if err := mgr.OnOpTxn(op); err != nil {
@@ -866,10 +912,14 @@ func (mgr *TxnManager) onPreWalStage(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
+		if !op.preWalEnqueuedAt.IsZero() {
+			v2.TxnTNPreWalQueueWaitDurationHistogram.Observe(time.Since(op.preWalEnqueuedAt).Seconds())
+		}
 		op.Txn.GetStore().TriggerTrace(txnif.TracePreWal)
 		if !mgr.preWal(op) {
 			continue
 		}
+		op.walEnqueuedAt = time.Now()
 		if _, err := mgr.walQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
@@ -887,6 +937,9 @@ func (mgr *TxnManager) onWalStage(items ...any) {
 	for _, item := range items {
 		t1 := time.Now()
 		op := item.(*OpTxn)
+		if !op.walEnqueuedAt.IsZero() {
+			v2.TxnTNWalQueueWaitDurationHistogram.Observe(time.Since(op.walEnqueuedAt).Seconds())
+		}
 		op.Txn.GetStore().TriggerTrace(txnif.TraceOnWal)
 		inWal := mgr.onWal(op)
 		t2 := time.Now()
@@ -920,6 +973,7 @@ func (mgr *TxnManager) postWal(op *OpTxn, inWal bool) {
 	}
 
 	// waiting for all things done and then to apply this commit/rollback
+	op.applyEnqueuedAt = time.Now()
 	if _, err := mgr.applyQueue.Enqueue(op); err != nil {
 		panic(err)
 	}

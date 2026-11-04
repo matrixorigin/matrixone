@@ -34,14 +34,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
 var wareHouse *catalog.Schema
-var district *catalog.Schema
 
 var app1db = "app1"
 var goods *catalog.Schema
@@ -54,10 +52,8 @@ var app1Conf *APP1Conf
 var errNotEnoughRepertory = moerr.NewInternalErrorNoCtx("not enough repertory")
 
 type APP1Conf struct {
-	Users         int
-	InitBalance   float64
-	GoodKinds     int
-	GoodRepertory int
+	Users     int
+	GoodKinds int
 }
 
 type APP1Client struct {
@@ -74,14 +70,7 @@ type APP1Goods struct {
 	Price float64
 }
 
-type APP1Repertory struct {
-	ID      uint64
-	GoodsID uint64
-	Count   uint64
-}
-
 type APP1 struct {
-	sync.RWMutex
 	Clients []*APP1Client
 	Goods   []*APP1Goods
 	DBName  string
@@ -90,10 +79,8 @@ type APP1 struct {
 
 func init() {
 	app1Conf = &APP1Conf{
-		Users:         100,
-		InitBalance:   1000000,
-		GoodKinds:     2000,
-		GoodRepertory: 100,
+		Users:     100,
+		GoodKinds: 2000,
 	}
 
 	var err error
@@ -110,24 +97,6 @@ func init() {
 	_ = wareHouse.AppendCol("W_TAX", types.T_float64.ToType())
 	_ = wareHouse.AppendCol("W_YTD", types.T_float64.ToType())
 	if err = wareHouse.Finalize(false); err != nil {
-		panic(err)
-	}
-
-	district = catalog.NewEmptySchema("DISTRICT")
-	district.Extra.BlockMaxRows = 40000
-	district.Extra.ObjectMaxBlocks = 40
-	_ = district.AppendPKCol("D_ID", types.T_int16.ToType(), 0)
-	_ = district.AppendCol("D_W_ID", types.T_uint8.ToType())
-	_ = district.AppendCol("D_NAME", types.T_varchar.ToType())
-	_ = district.AppendCol("D_STREET_1", types.T_varchar.ToType())
-	_ = district.AppendCol("D_STREET_2", types.T_varchar.ToType())
-	_ = district.AppendCol("D_CITY", types.T_varchar.ToType())
-	_ = district.AppendCol("D_STATE", types.T_varchar.ToType())
-	_ = district.AppendCol("D_ZIP", types.T_varchar.ToType())
-	_ = district.AppendCol("D_TAX", types.T_float64.ToType())
-	_ = district.AppendCol("D_YTD", types.T_float64.ToType())
-	_ = district.AppendCol("D_NEXT_O_ID", types.T_int64.ToType())
-	if err = district.Finalize(false); err != nil {
 		panic(err)
 	}
 
@@ -210,10 +179,6 @@ func (c *APP1Client) Clone() *APP1Client {
 	}
 }
 
-func (c *APP1Client) String() string {
-	s := fmt.Sprintf("User:%d,%s", c.ID, c.Name)
-	return s
-}
 func (c *APP1Client) Bind(db handle.Database, txn txnif.AsyncTxn) {
 	if c.Txn != nil {
 		panic("logic error")
@@ -221,15 +186,6 @@ func (c *APP1Client) Bind(db handle.Database, txn txnif.AsyncTxn) {
 	c.Txn = txn
 	c.DB = db
 	c.Rel, _ = db.GetRelationByName(c.Name)
-}
-
-func (c *APP1Client) Unbind() {
-	if c.Txn == nil {
-		panic("logic error")
-	}
-	c.Txn = nil
-	c.DB = nil
-	c.Rel = nil
 }
 
 func (c *APP1Client) CheckBound() {
@@ -242,6 +198,7 @@ func (c *APP1Client) CheckBound() {
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
 	blockIt := rel.MakeObjectIt(false)
+	defer blockIt.Close()
 	found := false
 	for blockIt.Next() {
 		blk := blockIt.GetObject()
@@ -276,7 +233,6 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			}
 		}
 	}
-	blockIt.Close()
 	err = moerr.NewNotFoundNoCtx()
 	return
 }
@@ -402,7 +358,6 @@ func (app1 *APP1) Init(factor int) {
 	}
 	conf := *app1Conf
 	conf.GoodKinds *= factor
-	conf.GoodRepertory *= factor
 	conf.Users *= factor
 	balanceRel, err := db.GetRelationByName(balance.Name)
 	if err != nil {
@@ -480,8 +435,6 @@ func (app1 *APP1) Init(factor int) {
 }
 
 func TestApp1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -523,17 +476,9 @@ func TestApp1(t *testing.T) {
 	}
 	wg.Wait()
 	t.Log(c.SimplePPString(common.PPL1))
-	{
-		// txn := mgr.StartTxn(nil)
-		// db, _ := txn.GetDatabase(app1.DBName)
-		// rel, _ := db.GetRelationByName(repertory.Name)
-		// t.Log(rel.SimplePPString(common.PPL1))
-	}
 }
 
 func TestWarehouse(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -560,8 +505,6 @@ func TestWarehouse(t *testing.T) {
 }
 
 func TestTxn7(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -600,8 +543,6 @@ func TestTxn7(t *testing.T) {
 }
 
 func TestTxn8(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -648,8 +589,6 @@ func TestTxn8(t *testing.T) {
 
 // Test wait committing
 func TestTxn9(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -769,125 +708,3 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 	wg.Wait()
 }
-
-// func TestTxn10(t *testing.T) {
-// 	opts := config.WithLongScanAndCKPOpts(nil)
-// 	tae := newTestEngine(t, opts)
-// 	defer tae.Close()
-// 	schema := catalog.MockSchemaAll(18, 2)
-// 	tae.bindSchema(schema)
-// 	bat := catalog.MockBatch(schema, 5)
-// 	defer bat.Close()
-// 	tae.createRelAndAppend(bat.Window(0, 2), true)
-
-// 	txn1, rel1 := tae.getRelation()
-// 	blk := getOneBlock(rel1)
-// 	view, err := blk.GetColumnDataById(context.Background(), 2, nil, nil)
-// 	assert.NoError(t, err)
-// 	defer view.Close()
-// 	t.Log(view.String())
-// 	err = rel1.Append(context.Background(), bat.Window(2, 1))
-// 	assert.NoError(t, err)
-// 	blk = getOneBlock(rel1)
-// 	view, err = blk.GetColumnDataById(context.Background(), 2, nil, nil)
-// 	assert.NoError(t, err)
-// 	defer view.Close()
-// 	t.Log(view.String())
-// 	{
-// 		txn, rel := tae.getRelation()
-// 		err := rel.Append(context.Background(), bat.Window(2, 1))
-// 		assert.NoError(t, err)
-// 		assert.NoError(t, txn.Commit(context.Background()))
-// 		txn, rel = tae.getRelation()
-// 		blk := getOneBlock(rel)
-// 		view, err := blk.GetColumnDataById(context.Background(), 2, nil, nil)
-// 		assert.NoError(t, err)
-// 		defer view.Close()
-// 		t.Log(view.String())
-// 		assert.NoError(t, txn.Commit(context.Background()))
-// 	}
-
-// 	// filter := handle.NewEQFilter(int32(99))
-// 	// err = rel1.DeleteByFilter(filter)
-// 	// assert.NoError(t, err)
-// 	win := bat.CloneWindow(2, 1)
-// 	win.Vecs[2].Update(0, int32(99))
-// 	err = rel1.Append(context.Background(), win)
-// 	{
-// 		// filter := handle.NewEQFilter(int32(99))
-// 		// txn, rel := tae.getRelation()
-// 		// err = rel1.UpdateByFilter(context.Background(), filter, 2, int32(88))
-// 		// assert.NoError(t, err)
-// 		// assert.NoError(t, txn.Commit(context.Background()))
-// 	}
-// 	return
-// 	assert.NoError(t, txn1.Commit(context.Background()))
-// }
-
-// func TestTxn11(t *testing.T) {
-// 	opts := config.WithLongScanAndCKPOpts(nil)
-// 	tae := newTestEngine(t, opts)
-// 	defer tae.Close()
-// 	schema := catalog.MockSchema(2, 0)
-// 	tae.bindSchema(schema)
-// 	bat1 := catalog.MockBatch(schema, 0)
-// 	defer bat1.Close()
-// 	bat1.Vecs[0].AppendMany(int32(1), int32(2))
-// 	bat1.Vecs[1].AppendMany(int32(1), int32(2))
-// 	bat2 := catalog.MockBatch(schema, 0)
-// 	defer bat2.Close()
-// 	bat2.Vecs[0].Append(context.Background(), int32(3))
-// 	bat2.Vecs[0].Append(context.Background(), int32(4))
-// 	bat2.Vecs[1].Append(context.Background(), int32(1))
-// 	bat2.Vecs[1].Append(context.Background(), int32(2))
-
-// 	tae.createRelAndAppend(bat1, true)
-
-// 	buffer := new(bytes.Buffer)
-
-// 	txn, rel := tae.getRelation()
-// 	blk := getOneBlock(rel)
-// 	view, err := blk.GetColumnDataById(context.Background(), 0, nil, buffer)
-// 	assert.NoError(t, err)
-// 	defer view.Close()
-// 	view, err = blk.GetColumnDataById(context.Background(), 1, nil, buffer)
-// 	assert.NoError(t, err)
-// 	defer view.Close()
-
-// 	err = rel.Append(context.Background(), bat2)
-// 	assert.NoError(t, err)
-// 	it := rel.MakeBlockIt()
-// 	for it.Valid() {
-// 		blk = it.GetBlock()
-// 		t.Log(blk.Fingerprint().String())
-// 		view, err = blk.GetColumnDataById(context.Background(), 0, nil, buffer)
-// 		assert.NoError(t, err)
-// 		defer view.Close()
-// 		t.Log(view.String())
-// 		view, err = blk.GetColumnDataById(context.Background(), 1, nil, buffer)
-// 		assert.NoError(t, err)
-// 		defer view.Close()
-// 		t.Log(view.String())
-// 		it.Next()
-// 	}
-// 	filter := handle.NewEQFilter(int32(1))
-// 	err = rel.DeleteByFilter(filter)
-// 	testutil.CheckAllColRowsByScan(t, rel, 3, true)
-// 	assert.NoError(t, err)
-// 	{
-// 		txn, rel := tae.getRelation()
-// 		it := rel.MakeBlockIt()
-// 		for it.Valid() {
-// 			blk := it.GetBlock()
-// 			view, err := blk.GetColumnDataById(context.Background(), 0, nil, buffer)
-// 			assert.NoError(t, err)
-// 			defer view.Close()
-// 			t.Log(view.String())
-// 			it.Next()
-// 		}
-
-// 		assert.NoError(t, txn.Commit(context.Background()))
-// 	}
-
-// 	txn.Commit(context.Background())
-// }

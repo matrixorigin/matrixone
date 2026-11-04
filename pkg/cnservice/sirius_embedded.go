@@ -39,15 +39,6 @@ func validateSiriusEmbeddedBuild() error {
 }
 
 func validateSiriusEmbeddedConfig(c *SiriusConfig) error {
-	if c.InputMode == "" {
-		c.InputMode = "mo"
-	}
-	if c.InputMode != "mo" {
-		return moerr.NewBadConfigNoCtx("embedded Sirius TAE admission is not yet available")
-	}
-	if c.BenchmarkNoGC {
-		return moerr.NewBadConfigNoCtx("embedded MO input does not use benchmark-no-gc")
-	}
 	if c.GPUStreams == 0 {
 		c.GPUStreams = 2
 	}
@@ -58,27 +49,25 @@ func validateSiriusEmbeddedConfig(c *SiriusConfig) error {
 }
 
 type embeddedRuntime interface {
+	Capabilities() uint64
 	Accepting() bool
 	Close(context.Context) error
 	Prepare(context.Context, siriusbridge.Request) (*siriusbridge.Query, error)
 }
 
-type embeddedBackend struct {
+type siriusEngine struct {
 	native  embeddedRuntime
 	streams uint32
 }
 
-func (b *embeddedBackend) Accepting() bool { return b.native.Accepting() }
+func (b *siriusEngine) Accepting() bool { return b.native.Accepting() }
 
-func (b *embeddedBackend) Close(ctx context.Context) error      { return b.native.Close(ctx) }
-func (*embeddedBackend) CanFallbackBeforeVisibility(error) bool { return false }
-func (*embeddedBackend) Reconcile(uint64, []byte, func(context.Context) error) error {
-	return moerr.NewNotSupportedNoCtx("embedded Sirius has no external execution to reconcile")
-}
+func (b *siriusEngine) Capabilities() uint64 { return b.native.Capabilities() }
 
-func (b *embeddedBackend) Prepare(ctx context.Context, req compile.SiriusPrepareRequest) (compile.SiriusExecution, error) {
+func (b *siriusEngine) Close(ctx context.Context) error { return b.native.Close(ctx) }
+func (b *siriusEngine) Prepare(ctx context.Context, req compile.SiriusPrepareRequest) (compile.SiriusExecution, error) {
 	counters := &embeddedExecutionCounters{}
-	nativeReq := siriusbridge.Request{AccountID: req.AccountID, QueryID: req.QueryID, Snapshot: req.Snapshot, Plan: req.Plan, Deadline: req.Deadline, Release: req.Release}
+	nativeReq := siriusbridge.Request{AccountID: req.AccountID, QueryID: req.QueryID, Snapshot: req.Snapshot, Plan: req.Plan, Deadline: req.Deadline}
 	if len(req.OutputTypes) == len(req.Headings) {
 		for i, t := range req.OutputTypes {
 			nativeReq.Columns = append(nativeReq.Columns, siriusbridge.Column{OID: uint32(t.Id), Width: t.Width, Scale: t.Scale, Nullable: !t.NotNullable, Name: req.Headings[i]})
@@ -228,9 +217,12 @@ func (e *embeddedExecution) Cleanup(ctx context.Context) error {
 			if stats.Fatal {
 				health = "unavailable"
 			}
+			schema, schemaDigest := embeddedSchemaEvidence(e.request)
 			logutil.Info("Sirius embedded execution",
 				zap.String("query_id", hex.EncodeToString(e.request.QueryID)), zap.Uint64("account_id", e.request.AccountID),
 				zap.String("backend", "embedded"), zap.String("scan_mode", "mo"), zap.Bool("fallback", false),
+				zap.Uint64("native_capabilities", e.request.NativeCapabilities), zap.String("numeric_profile", e.request.NumericProfile),
+				zap.Any("verified_output_schema", schema), zap.String("output_schema_sha256", schemaDigest),
 				zap.Uint32("gpu_streams", e.streams), zap.Int("read_bindings", len(e.request.Reads)),
 				zap.Uint64("input_rows", e.counters.inputRows.Load()), zap.Uint64("input_payload_bytes", e.counters.inputBytes.Load()),
 				zap.Float64("first_row_seconds", firstRow.Seconds()), zap.Float64("wall_seconds", wall.Seconds()),
@@ -243,5 +235,5 @@ func (e *embeddedExecution) CleanupAfterRun(ctx context.Context, _ error) error 
 	return e.Cleanup(ctx)
 }
 
-var _ compile.SiriusBackend = (*embeddedBackend)(nil)
+var _ compile.SiriusEngine = (*siriusEngine)(nil)
 var _ compile.SiriusExecution = (*embeddedExecution)(nil)

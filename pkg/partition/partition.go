@@ -143,10 +143,14 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 }
 
 // cellsEqual reports whether two non-null cells are equal: by decoded value for vecf8/vecf4
-// cells (decoded), as = compares them, and by bytes otherwise.
-func cellsEqual(decoded bool, v, w []byte) bool {
+// cells (decoded), by collation for a unicode charset, and by bytes otherwise. decoded and
+// unicode are mutually exclusive (a block-scaled vector is not a unicode string).
+func cellsEqual(typ types.Type, decoded, unicode bool, v, w []byte) bool {
 	if decoded {
 		return types.CompareBlockScaledFromBytes(v, w, false) == 0
+	}
+	if unicode {
+		return types.CompareStringValues(typ, v, w) == 0
 	}
 	return bytes.Equal(v, w)
 }
@@ -165,6 +169,8 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 	if !vec.IsConst() {
 		var n bool
 		var v []byte
+		typ := *vec.GetType()
+		unicode := types.IsUnicodeCollation(typ.Charset)
 
 		vs, area := vector.MustVarlenaRawData(vec)
 		nsp := vec.GetNulls()
@@ -175,7 +181,7 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 				if n != isNull {
 					diffs[i] = true
 				} else if !isNull && i > 0 {
-					diffs[i] = diffs[i] || !cellsEqual(decoded, v, w)
+					diffs[i] = diffs[i] || !cellsEqual(typ, decoded, unicode, v, w)
 				}
 				// else: both NULL → equal, preserve diffs[i]
 				n = isNull
@@ -185,7 +191,7 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 			for i, sel := range sels {
 				w := vs[sel].GetByteSlice(area)
 				if i > 0 {
-					diffs[i] = diffs[i] || !cellsEqual(decoded, v, w)
+					diffs[i] = diffs[i] || !cellsEqual(typ, decoded, unicode, v, w)
 				}
 				v = w
 			}
@@ -205,6 +211,21 @@ func bytesPartitionBy(sels []int64, diffs []bool, partitions []int64, vec *vecto
 // by default, the 0th row is always not equal to the one before it
 // (though it doesn't exist)
 func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {
+	// A constant NULL has no payload domain (a literal NULL can be ANY).
+	// It contributes no new boundaries, but must retain earlier sort keys.
+	if vec.IsConstNull() {
+		partitions = partitions[:0]
+		if len(sels) == 0 {
+			return partitions
+		}
+		diffs[0] = true
+		for i, different := range diffs[:len(sels)] {
+			if different {
+				partitions = append(partitions, int64(i))
+			}
+		}
+		return partitions
+	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return genericPartition[bool](sels, diffs, partitions, vec)
@@ -264,19 +285,31 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.Float8])
 	case types.T_float4:
 		return floatOrderPartition(sels, diffs, partitions, vec, lowPrecisionIdentity[types.Float4])
-	case types.T_char, types.T_varchar, types.T_json, types.T_text,
+	case types.T_json:
+		// Partition identity for JSON follows MySQL JSON value semantics,
+		// matching how GROUP BY, DISTINCT and the comparison operators treat
+		// the type: 1, 1.0 and 1e0 are one value, not byte-distinct
+		// partitions. Reuses the JSON peer-group detector ORDER BY already
+		// applies, so PARTITION BY and ORDER BY agree on grouped values.
+		return jsonOrderPartition(sels, diffs, partitions, vec)
+	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
 		types.T_datalink:
-		return bytesPartition(sels, diffs, partitions, vec)
 		//Used by ORDER_BY SQL clause.
 		//Byte partition logic doesn't use byte.Compare or Str.
 		//Hence, we can use bytesPartition here.
+		return bytesPartition(sels, diffs, partitions, vec)
 	case types.T_array_float8, types.T_array_float4:
 		// vecf8/vecf4 cells are equal when their decoded values are
 		return bytesPartitionBy(sels, diffs, partitions, vec, true)
 	default:
+		if vec.IsConst() {
+			// Even untyped NULL contributes no boundaries. This path never
+			// reads values, so the helper's type parameter is immaterial.
+			return genericPartition[bool](sels, diffs, partitions, vec)
+		}
 		panic(moerr.NewNotSupportedNoCtx(vec.GetType().Oid.String()))
 	}
 }

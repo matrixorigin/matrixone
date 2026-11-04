@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,6 +40,88 @@ func setupInDomainRewriteTest(t *testing.T) (*MockCompilerContext, *QueryBuilder
 		},
 	}
 	return ctx, builder, tag, colExpr
+}
+
+func TestRewriteInDomainMaximalOR(t *testing.T) {
+	for _, size := range []int{32, 2048} {
+		for _, shape := range []string{"flat", "balanced"} {
+			t.Run(fmt.Sprintf("%s/%d", shape, size), func(t *testing.T) {
+				ctx, builder, _, outerCol := setupInDomainRewriteTest(t)
+				fact := DeepCopyExpr(outerCol)
+				fact.GetCol().ColPos = 1
+				terms := make([]*planpb.Expr, size)
+				values := make([]int64, size)
+				for i := range terms {
+					values[i] = int64(i + 1)
+					terms[i] = makeInt64EqualExpr(t, ctx, fact, values[i])
+				}
+				var predicate *planpb.Expr
+				var err error
+				if shape == "balanced" {
+					predicate, err = combinePlanExprsBalanced(ctx.GetContext(), "or", terms)
+				} else {
+					predicate, err = combinePlanDisjunction(ctx.GetContext(), terms)
+				}
+				require.NoError(t, err)
+				filters := builder.normalizeColumnDomain([]*planpb.Expr{makeInt64EqualExpr(t, ctx, outerCol, 191), predicate})
+				require.Len(t, filters, 2)
+				requireInValues(t, filters[1], values...)
+				// A second pass must be stable, rather than report an IN
+				// expansion or reconstruction as fresh fixed-point progress.
+				again := builder.normalizeColumnDomain(filters)
+				require.Equal(t, filters, again)
+			})
+		}
+	}
+}
+
+func TestRewriteInDomainORResidualsAndNull(t *testing.T) {
+	ctx, builder, _, outer := setupInDomainRewriteTest(t)
+	fact := DeepCopyExpr(outer)
+	fact.GetCol().ColPos = 1
+	residual, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "<", []*planpb.Expr{fact, MakePlan2Int64ConstExprWithType(0)})
+	require.NoError(t, err)
+	null := MakePlan2Int64ConstExprWithType(0)
+	null.GetLit().Isnull = true
+	nullable, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{DeepCopyExpr(fact), null})
+	require.NoError(t, err)
+	terms := []*planpb.Expr{residual, nullable}
+	for i := 0; i < 64; i++ {
+		terms = append(terms, makeInt64EqualExpr(t, ctx, fact, int64(i%2+1)))
+	}
+	predicate, err := combinePlanDisjunction(ctx.GetContext(), terms)
+	require.NoError(t, err)
+	result, changed := builder.rewriteExprByInDomains(predicate, map[[2]int32]*inFilterDomain{
+		{outer.GetCol().RelPos, outer.GetCol().ColPos}: {colExpr: outer, values: []*planpb.Expr{MakePlan2Int64ConstExprWithType(191)}},
+	})
+	require.True(t, changed)
+	var leaves []*planpb.Expr
+	flattenLogicalExpressions(result, "or", &leaves)
+	require.Len(t, leaves, 3)
+	require.Same(t, residual, leaves[0])
+	require.Same(t, nullable, leaves[1])
+	requireInValues(t, leaves[2], 1, 2)
+}
+
+func TestRewriteInDomainORUnchangedIdentity(t *testing.T) {
+	ctx, builder, _, outer := setupInDomainRewriteTest(t)
+	fact := DeepCopyExpr(outer)
+	fact.GetCol().ColPos = 1
+	terms := make([]*planpb.Expr, 2)
+	for i := range terms {
+		expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "<", []*planpb.Expr{DeepCopyExpr(fact), MakePlan2Int64ConstExprWithType(int64(i))})
+		require.NoError(t, err)
+		terms[i] = expr
+	}
+	expr, err := combinePlanDisjunction(ctx.GetContext(), terms)
+	require.NoError(t, err)
+	expr.AuxId = 42
+	result, changed := builder.rewriteExprByInDomains(expr, map[[2]int32]*inFilterDomain{
+		{outer.GetCol().RelPos, outer.GetCol().ColPos}: {colExpr: outer, values: []*planpb.Expr{MakePlan2Int64ConstExprWithType(191)}},
+	})
+	require.False(t, changed)
+	require.Same(t, expr, result)
+	require.Equal(t, int32(42), result.AuxId)
 }
 
 func makeInt64InExpr(t *testing.T, ctx *MockCompilerContext, colExpr *planpb.Expr, values ...int64) *planpb.Expr {

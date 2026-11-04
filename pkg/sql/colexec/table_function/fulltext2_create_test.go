@@ -15,6 +15,10 @@
 package table_function
 
 import (
+	"context"
+	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bytedance/sonic"
@@ -26,8 +30,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +42,7 @@ import (
 func ft2CreateCfg(t *testing.T, parser string, positionFree bool) string {
 	t.Helper()
 	b, err := sonic.Marshal(fulltext2.TableConfig{
+		ThreadsBuild: 1,
 		DbName:       "db",
 		IndexTable:   "__idx",
 		Parser:       parser,
@@ -111,7 +118,7 @@ func TestFulltext2CreatePrepare(t *testing.T) {
 
 func TestFulltext2CreateStartValidation(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	// non-varchar config.
 	{
@@ -157,7 +164,7 @@ func TestFulltext2CreateStartValidation(t *testing.T) {
 // builder accumulates docs (below capacity ⇒ no seal, so no DB access).
 func TestFulltext2CreateStartFeedsBuilder(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	st := &fulltext2CreateState{}
 	tf, _ := ft2CreateArgVecs(t, mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "hello world")
@@ -183,11 +190,36 @@ func TestFulltext2CreateStartFeedsBuilder(t *testing.T) {
 	st.free(tf, proc, false, nil)
 }
 
+func TestFulltext2CreateLongPhysicalIdentity(t *testing.T) {
+	var ids []string
+	for _, suffix := range []string{"first", "second"} {
+		t.Run(suffix, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: strings.Repeat("long_physical_generation_", 8) + suffix, Parser: fulltext2.ParserNgram})
+			require.NoError(t, err)
+			tf, vecs := ft2CreateArgVecs(t, mp, string(cfg), 1, "apple")
+			defer func() {
+				for _, vec := range vecs {
+					vec.Free(mp)
+				}
+			}()
+			st := &fulltext2CreateState{}
+			defer st.free(tf, proc, false, nil)
+			require.NoError(t, st.start(tf, proc, 0, nil))
+			require.LessOrEqual(t, len(fulltext2.SubIndexId(st.uid, int(^uint(0)>>1))), 128)
+			ids = append(ids, strings.Split(st.uid, ":")[0])
+		})
+	}
+	require.NotEqual(t, ids[0], ids[1], "do not truncate distinct physical identities to a shared prefix")
+}
+
 func TestFulltext2CreatePartialNullKeepsInclude(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	cfg, err := sonic.Marshal(fulltext2.TableConfig{
-		DbName: "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram,
+		ThreadsBuild: 1,
+		DbName:       "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram,
 		IncludeTypes: []int32{int32(types.T_varchar)},
 	})
 	require.NoError(t, err)
@@ -226,7 +258,7 @@ func TestFulltext2CreatePartialNullKeepsInclude(t *testing.T) {
 // ngram / json / json_value parsers and NULL/empty inputs, without touching the DB.
 func TestFulltext2CreateRowTerms(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	run := func(parser string, texts ...string) ([]fulltext2.WordPos, error) {
 		st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: parser}}
@@ -276,7 +308,7 @@ func TestFulltext2CreateRowTerms(t *testing.T) {
 
 func TestFulltext2CreateRowTermsNullColumnMatrix(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 
 	tests := []struct {
 		name       string
@@ -384,7 +416,7 @@ func TestFulltext2CreateRowTermsNullColumnMatrix(t *testing.T) {
 
 func TestFulltext2CreateRowTermsJSONTupleSkipsNull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON}}
 	tf, _ := ft2CreateNullableArgVecs(t, mp, "{}", 1, `{"a":"left"}`, nil, `{"b":"right"}`)
 
@@ -401,7 +433,7 @@ func TestFulltext2CreateRowTermsJSONTupleSkipsNull(t *testing.T) {
 
 func TestFulltext2CreateRowTermsBinaryJSONNullSibling(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON}}
 
 	pk := vector.NewVec(types.T_int64.ToType())
@@ -423,7 +455,7 @@ func TestFulltext2CreateRowTermsBinaryJSONNullSibling(t *testing.T) {
 
 func TestFulltext2CreateRowTermsNullBitmapAndConstNull(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserNgram}}
 
 	// Two rows carry opposite NULL patterns. Each row must use its own bitmap;
@@ -466,7 +498,7 @@ func TestFulltext2CreateRowTermsNullBitmapAndConstNull(t *testing.T) {
 
 func TestFulltext2CreateRowTermsMalformedJSONWithNullSibling(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSONValue}}
 	for _, values := range [][]any{
 		{nil, "{bad"},
@@ -507,39 +539,254 @@ func TestFulltext2CreateEndNotInited(t *testing.T) {
 }
 
 // TestFulltext2CreateSealAndEnd forces a seal (capacity=1) so the persistence path runs:
-// DeleteAllBasesSqls + ToInsertSqls (spilling to an os temp file, since no LOCAL
-// fileservice) are captured by a stubbed fulltext2_runSql, then end() seals the final
+// DeleteAllBasesSqls + Persist (spilling to an os temp file, since no LOCAL
+// fileservice) are captured at the borrowed executor boundary, then end() seals the final
 // (empty) segment and evicts the cache.
 func TestFulltext2CreateSealAndEnd(t *testing.T) {
-	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"success", nil},
+		{"storage error", errors.New("storage write failed")},
+		{"cancelled storage", context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			proc.Base.SessionInfo.Account = "tenant"
+			proc.Base.SessionInfo.Role = "accountadmin"
+			prev := fulltext2_runSql
+			t.Cleanup(func() { fulltext2_runSql = prev })
+			var ran int
+			dir := t.TempDir()
+			t.Setenv("TMPDIR", dir)
+			proc.Base.FileService = nil
+			fulltext2_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				ran++
+				account, role := sqlproc.StatementOption().SessionIdentity()
+				require.Equal(t, "tenant", account)
+				require.Equal(t, "accountadmin", role)
+				return executor.Result{}, nil
+			}
+			mockIndexTxn(t, proc, func(sql string, opts executor.StatementOption) (executor.Result, error) {
+				ran++
+				account, role := opts.SessionIdentity()
+				require.Equal(t, "tenant", account)
+				require.Equal(t, "accountadmin", role)
+				require.NotContains(t, sql, "load_file")
+				files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
+				require.NoError(t, err)
+				require.Empty(t, files, "the spill is unlinked while its handle serves the insert")
+				if opts.HasParams() {
+					vec, err := opts.Params(mp)
+					require.NoError(t, err)
+					require.NotEmpty(t, vec.GetRawBytesAt(1))
+					vec.Free(mp)
+					return executor.Result{}, tc.err
+				}
+				return executor.Result{}, nil
+			})
 
-	prev := fulltext2_runSql
-	defer func() { fulltext2_runSql = prev }()
-	var ran int
-	fulltext2_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		ran++
-		return executor.Result{}, nil
+			// capacity=1 seals one real spill without additional data or services.
+			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", MetadataTable: "__meta", Parser: fulltext2.ParserNgram, Capacity: 1, ThreadsBuild: 1})
+			require.NoError(t, err)
+			st := &fulltext2CreateState{}
+			tf, vecs := ft2CreateArgVecs(t, mp, string(cfg), 1, "hello world")
+			t.Cleanup(func() {
+				st.free(tf, proc, false, nil)
+				for _, v := range vecs {
+					v.Free(mp)
+				}
+			})
+			err = st.start(tf, proc, 0, nil)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+			} else {
+				require.NoError(t, err)
+				require.NotNil(t, st.cur)
+				require.Zero(t, st.cur.NumDocs())
+				// The final empty segment adds no storage statements.
+				before := ran
+				require.NoError(t, st.end(tf, proc))
+				require.Equal(t, before, ran)
+			}
+			require.Equal(t, int64(1), st.capacity)
+			require.Equal(t, 1, st.segIdx)
+			require.True(t, st.basesCleared)
+			files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
+			require.NoError(t, err)
+			require.Empty(t, files, "success/error/cancellation removes the owned spill")
+			require.Equal(t, "tenant", proc.GetSessionInfo().Account)
+			require.Equal(t, "accountadmin", proc.GetSessionInfo().Role)
+		})
 	}
+}
 
-	// capacity=1 ⇒ each doc seals its own segment.
-	cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram, Capacity: 1})
-	require.NoError(t, err)
+// ft2PipelineHarness drives the create TVF with threads_build through the pipelined build
+// and records the metadata inserts the build writes.
+type ft2PipelineHarness struct {
+	t        *testing.T
+	mp       *mpool.MPool
+	proc     *process.Process
+	dir      string
+	metaSQLs []string
+	writeErr error
+}
 
+func newFT2PipelineHarness(t *testing.T, writeErr error) *ft2PipelineHarness {
+	h := &ft2PipelineHarness{t: t, mp: mpool.MustNewZero(), dir: t.TempDir(), writeErr: writeErr}
+	h.proc = testutil.NewProcessWithOwnedMPool(t, "", h.mp)
+	h.proc.Base.FileService = nil
+	t.Setenv("TMPDIR", h.dir)
+	prev := fulltext2_runSql
+	t.Cleanup(func() { fulltext2_runSql = prev })
+	fulltext2_runSql = func(*sqlexec.SqlProcess, string) (executor.Result, error) { return executor.Result{}, nil }
+	mockIndexTxn(t, h.proc, func(sql string, opts executor.StatementOption) (executor.Result, error) {
+		if opts.HasParams() {
+			return executor.Result{}, h.writeErr
+		}
+		if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "INSERT ") {
+			return executor.Result{}, nil
+		}
+		h.metaSQLs = append(h.metaSQLs, sql)
+		return executor.Result{}, nil
+	})
+	return h
+}
+
+func (h *ft2PipelineHarness) feed(st *fulltext2CreateState, threads int64, rows int) error {
+	cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: "__idx", MetadataTable: "__meta",
+		Parser: fulltext2.ParserNgram, Capacity: 2, ThreadsBuild: threads})
+	require.NoError(h.t, err)
+	for i := 0; i < rows; i++ {
+		tf, vecs := ft2CreateArgVecs(h.t, h.mp, string(cfg), int64(i+1), "hello world row")
+		err := st.start(tf, h.proc, 0, nil)
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *ft2PipelineHarness) spillFiles() []string {
+	files, err := filepath.Glob(filepath.Join(h.dir, "ft2build*"))
+	require.NoError(h.t, err)
+	return files
+}
+
+func TestFulltext2CreatePipelinedBuild(t *testing.T) {
+	h := newFT2PipelineHarness(t, nil)
 	st := &fulltext2CreateState{}
-	tf, _ := ft2CreateArgVecs(t, mp, string(cfg), 1, "hello world")
-	require.NoError(t, st.start(tf, proc, 0, nil))
-	require.Equal(t, int64(1), st.capacity)
-	// the doc reached capacity ⇒ its segment was sealed and persisted.
-	require.Equal(t, 1, st.segIdx)
+	require.NoError(t, h.feed(st, 4, 10))
+	require.Equal(t, 4, st.threads)
+	require.NotNil(t, st.pipe)
+	require.Nil(t, st.cur)
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	require.NoError(t, st.end(tf, h.proc))
+	require.Nil(t, st.pipe)
+	require.Equal(t, 5, st.segIdx)
 	require.True(t, st.basesCleared)
-	require.NotNil(t, st.cur) // a fresh empty builder replaces the sealed one
-	require.Equal(t, 0, st.cur.NumDocs())
-	require.Positive(t, ran)
+	require.Len(t, h.metaSQLs, 5)
+	for i, sql := range h.metaSQLs {
+		require.Contains(t, sql, fulltext2.SubIndexId(st.uid, i))
+	}
+	require.Empty(t, h.spillFiles())
+	st.reset(tf, h.proc)
+	st.free(tf, h.proc, false, nil)
+}
 
-	// end() seals the (empty) trailing segment and evicts the cache; segIdx stays 1.
-	require.NoError(t, st.end(tf, proc))
-	require.Equal(t, 1, st.segIdx)
+func TestFulltext2CreatePipelinedBuildWriteError(t *testing.T) {
+	boom := errors.New("chunk write failed")
+	h := newFT2PipelineHarness(t, boom)
+	st := &fulltext2CreateState{}
+	err := h.feed(st, 4, 10)
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	if err == nil {
+		err = st.end(tf, h.proc)
+	}
+	require.ErrorIs(t, err, boom)
+	st.free(tf, h.proc, true, err)
+	require.Nil(t, st.pipe)
+	require.Empty(t, h.spillFiles())
+}
 
-	st.free(tf, proc, false, nil)
+func TestFulltext2CreatePipelinedBuildAbortBeforeEnd(t *testing.T) {
+	h := newFT2PipelineHarness(t, nil)
+	st := &fulltext2CreateState{}
+	require.NoError(t, h.feed(st, 4, 9))
+	require.NotNil(t, st.pipe)
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	st.reset(tf, h.proc)
+	require.Nil(t, st.pipe)
+	st.free(tf, h.proc, true, nil)
+	require.Empty(t, h.spillFiles())
+}
+
+func TestFulltext2CreateThreadsBuildResolution(t *testing.T) {
+	h := newFT2PipelineHarness(t, nil)
+	serial := &fulltext2CreateState{}
+	require.NoError(t, h.feed(serial, 1, 1))
+	require.Equal(t, 1, serial.threads)
+	require.Nil(t, serial.pipe)
+	require.NotNil(t, serial.cur)
+
+	auto := &fulltext2CreateState{}
+	require.NoError(t, h.feed(auto, 0, 1))
+	require.Equal(t, int(vectorindex.GetConcurrencyForBuild(0)), auto.threads)
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	serial.free(tf, h.proc, false, nil)
+	auto.free(tf, h.proc, false, nil)
+
+	require.Equal(t, 1, fulltext2BuildMaxFinishing(1))
+	require.Equal(t, 1, fulltext2BuildMaxFinishing(3))
+	require.Equal(t, 2, fulltext2BuildMaxFinishing(8))
+}
+
+func TestFulltext2CreatePipelinedRerunContinuesSegmentIds(t *testing.T) {
+	h := newFT2PipelineHarness(t, nil)
+	st := &fulltext2CreateState{}
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	require.NoError(t, h.feed(st, 4, 6))
+	require.NoError(t, st.end(tf, h.proc))
+	require.Equal(t, 3, st.segIdx)
+	st.reset(tf, h.proc)
+
+	require.NoError(t, h.feed(st, 4, 6))
+	require.NoError(t, st.end(tf, h.proc))
+	require.Equal(t, 6, st.segIdx)
+	require.Len(t, h.metaSQLs, 6)
+	for i, sql := range h.metaSQLs {
+		require.Contains(t, sql, "'"+fulltext2.SubIndexId(st.uid, i)+"'")
+	}
+	st.free(tf, h.proc, false, nil)
+	require.Empty(t, h.spillFiles())
 }

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -39,6 +41,15 @@ import (
 type divPrecisionCompilerContext struct {
 	CompilerContext
 	increment int64
+}
+
+func (c divPrecisionCompilerContext) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
+	if provider, ok := c.CompilerContext.(interface {
+		getInternalSQLExecutor(*process.Process) (executor.SQLExecutor, bool)
+	}); ok {
+		return provider.getInternalSQLExecutor(proc)
+	}
+	return nil, false
 }
 
 func (c divPrecisionCompilerContext) ResolveVariable(name string, system, global bool) (any, error) {
@@ -537,6 +548,31 @@ func TestDivisionSQLBoundaries(t *testing.T) {
 			} else {
 				require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[types.Decimal256](result)[0].Format(test.scale))
 			}
+		})
+	}
+}
+
+func TestResolveDivPrecisionIncrementFallback(t *testing.T) {
+	readErr := errors.New("read session variable")
+	for _, tc := range []struct {
+		name  string
+		value any
+		err   error
+		want  int32
+	}{
+		{name: "session value", value: int64(10), want: 10},
+		{name: "read error", err: readErr, want: function.DefaultDivPrecisionIncrement},
+		{name: "wrong runtime type", value: int(10), want: function.DefaultDivPrecisionIncrement},
+		{name: "unset value", want: function.DefaultDivPrecisionIncrement},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &MockCompilerContext{ResolveVariableFunc: func(name string, system, global bool) (any, error) {
+				require.Equal(t, "div_precision_increment", name)
+				require.True(t, system)
+				require.False(t, global)
+				return tc.value, tc.err
+			}}
+			require.Equal(t, tc.want, resolveDivPrecisionIncrement(ctx))
 		})
 	}
 }

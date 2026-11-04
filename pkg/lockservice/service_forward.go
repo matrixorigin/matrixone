@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
 
@@ -51,6 +52,9 @@ func (s *service) forwardLock(
 	defer releaseRequest(req)
 
 	req.Method = pb.Method_ForwardLock
+	if opts.NoWait {
+		req.Method = pb.Method_ForwardTryLock
+	}
 	req.LockTable = l.getBind()
 	req.Lock.Options = opts
 	req.Lock.TxnID = txnID
@@ -66,8 +70,36 @@ func (s *service) forwardLock(
 	}
 	resp, err := s.remote.client.Send(rpcCtx, req)
 	if err != nil {
+		if opts.NoWait && moerr.IsMoErrCode(err, moerr.ErrLockConflict) {
+			// A forwarded FastFail conflict is recoverable only when its typed
+			// response proves the physical owner and cleanup capabilities. A raw
+			// application error from an older or malformed peer is ambiguous.
+			return pb.Result{LockedOn: l.getBind()}, ErrLockTableBindChanged
+		}
+		if opts.NoWait {
+			// Once the forwarding RPC was sent, its owner may have acquired a
+			// prefix before the response was lost. Return the known physical route
+			// so the transaction client can retain an unlock binding.
+			return pb.Result{LockedOn: l.getBind()}, err
+		}
 		return pb.Result{}, err
 	}
 	defer releaseResponse(resp)
+	if resp.NewBind != nil {
+		return pb.Result{}, ErrLockTableBindChanged
+	}
+	if resp.Lock.NoWaitConflict {
+		result := resp.Lock.Result
+		if !opts.NoWait ||
+			!validNoWaitLockOptions(opts) ||
+			!supportsNonblockingLockProtocol(s.cfg.ServiceID) ||
+			!resp.Lock.TxnWaitingListOnLockTableSupported ||
+			!resp.Lock.BatchUnlockSupported ||
+			!result.LockedOn.Valid ||
+			result.LockedOn.Changed(l.getBind()) {
+			return result, ErrLockTableBindChanged
+		}
+		return result, ErrLockConflict
+	}
 	return resp.Lock.Result, nil
 }

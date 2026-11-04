@@ -91,6 +91,8 @@ func siriusElementSize(oid types.T) (int, error) {
 		return 8, nil
 	case types.T_decimal128:
 		return 16, nil
+	case types.T_decimal256:
+		return 32, nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		return types.VarlenaSize, nil
 	default:

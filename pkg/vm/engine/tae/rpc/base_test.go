@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,19 +41,6 @@ type mockHandle struct {
 	m *mpool.MPool
 }
 
-type CmdType int32
-
-const (
-	CmdPreCommitWrite CmdType = iota
-	CmdCommit
-	CmdRollback
-)
-
-type txnCommand struct {
-	typ CmdType
-	cmd any
-}
-
 func (h *mockHandle) runInspectCmd(cmd string) (resp *cmd_util.InspectResp, err error) {
 	resp = &cmd_util.InspectResp{}
 	_, err = h.HandleInspectTN(context.Background(), txn.TxnMeta{}, &cmd_util.InspectTN{
@@ -64,9 +50,10 @@ func (h *mockHandle) runInspectCmd(cmd string) (resp *cmd_util.InspectResp, err 
 	return
 }
 
+// Resolve the current Handle at cleanup: restart tests replace the embedded
+// pointer after registering a deferred Close on this fixture.
 func (h *mockHandle) HandleClose(ctx context.Context) error {
-	err := h.Handle.HandleClose(ctx)
-	return err
+	return h.Handle.HandleClose(ctx)
 }
 
 func (h *mockHandle) HandleCommit(ctx context.Context, meta *txn.TxnMeta, response *txn.TxnResponse, req *txn.TxnCommitRequest) (timestamp.Timestamp, error) {
@@ -86,53 +73,18 @@ func (h *mockHandle) HandlePreCommit(
 	return h.Handle.HandlePreCommitWrite(ctx, *meta, req, resp)
 }
 
-func (h *mockHandle) handleCmds(
-	ctx context.Context,
-	txn *txn.TxnMeta,
-	cmds []txnCommand) (err error) {
-	for _, e := range cmds {
-		switch e.typ {
-		case CmdPreCommitWrite:
-			cmd, ok := e.cmd.(api.PrecommitWriteCmd)
-			if !ok {
-				return moerr.NewInfo(ctx, "cmd is not PreCommitWriteCmd")
-			}
-			if err = h.Handle.HandlePreCommitWrite(ctx, *txn,
-				&cmd, new(api.TNStringResponse)); err != nil {
-				return
-			}
-		case CmdCommit:
-			if _, err = h.HandleCommit(ctx, txn, nil, nil); err != nil {
-				return
-			}
-		case CmdRollback:
-			if err = h.HandleRollback(ctx, txn); err != nil {
-				return
-			}
-		default:
-			panic(moerr.NewInfo(ctx, "Invalid CmdType"))
-		}
-	}
-	return
-}
-
-func initDB(ctx context.Context, t *testing.T, opts *options.Options) *db.DB {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	db, _ := db.Open(ctx, dir, opts)
-	return db
-}
-
 func mockTAEHandle(ctx context.Context, t *testing.T, opts *options.Options) *mockHandle {
+	t.Helper()
 	ioutil.Start("")
-	tae := initDB(ctx, t, opts)
-	mh := &mockHandle{
-		m: mpool.MustNewZero(),
+	dir := testutils.InitTestEnv(ModuleName, t)
+	tae, err := db.Open(ctx, dir, opts)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	mh.Handle = &Handle{
-		db: tae,
+	return &mockHandle{
+		Handle: &Handle{db: tae},
+		m:      mpool.MustNewZero(),
 	}
-	return mh
 }
 
 func mock1PCTxn(db *db.DB) *txn.TxnMeta {

@@ -259,6 +259,7 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 			unixTime:                   time.Now().Unix(),
 			affectedRows:               42,
 			statementRuntimeIgnore:     true,
+			statementRuntimeSelect:     true,
 			planSnapshotTS:             timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
 			hasPlanSnapshotTS:          true,
 			planGenerationReused:       true,
@@ -301,6 +302,9 @@ func TestNewCompile_CreatesCorrectStructure(t *testing.T) {
 	require.False(t, compile.proc.GetPrepareParamIsBinaryString(1))
 	require.Equal(t, int64(42), compile.proc.GetAffectedRows())
 	require.True(t, compile.proc.GetStmtProfile().GetStatementIgnore())
+	require.True(t, compile.proc.IsSelectStatement())
+	compile.proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
+	requireRemoteDivisionWarning(t, compile.proc)
 	planSnapshot, ok := compile.proc.GetPlanSnapshotTS()
 	require.True(t, ok)
 	require.Equal(t, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4}, planSnapshot)
@@ -389,6 +393,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 		UnixTime:                   time.Now().Unix(),
 		AffectedRows:               42,
 		StatementRuntimeIgnore:     true,
+		StatementRuntimeSelect:     true,
 		PlanSnapshotTs:             &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
 		PlanGenerationReused:       true,
 		StringShuffleHashAlgorithm: uint32(process.StringShuffleHashComplete),
@@ -420,6 +425,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.Equal(t, procInfo.PrepareParams.Area, helper.prepareParams.Area)
 	require.Equal(t, int64(42), helper.affectedRows)
 	require.True(t, helper.statementRuntimeIgnore)
+	require.True(t, helper.statementRuntimeSelect)
 	require.True(t, helper.hasPlanSnapshotTS)
 	require.Equal(t, *procInfo.PlanSnapshotTs, helper.planSnapshotTS)
 	require.True(t, helper.planGenerationReused)

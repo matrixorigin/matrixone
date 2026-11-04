@@ -15,41 +15,41 @@ insert into t_ref select id, v, tag from t_ivfpq;
 create table meta(id bigint primary key, name varchar(20));
 insert into meta values (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e'),(6,'f');
 explain select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @regex("Table Function on ivfpq_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+              Join Cond: (t_ivfpq.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ivfpq_topk_consumers.t_ivfpq  𝄀
                     Runtime Filter Probe: t_ivfpq.id  𝄀
-              ->  Table Function on ivfpq_search  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on i_ivfpq [l2_distance]  𝄀
+                    Vector Index: i_ivfpq, Metric: l2_distance, Candidate Limit: 3
 explain with knn as (
 select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
 order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select id, d from knn order by d;
--- @regex("Table Function on ivfpq_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: knn.d INTERNAL  𝄀
         ->  Project  𝄀
               ->  Sort  𝄀
-                    Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+                    Sort Key: #[0,1] INTERNAL  𝄀
                     Limit: 3  𝄀
                     ->  Join  𝄀
                           Join Type: INNER  𝄀
-                          Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+                          Join Cond: (t_ivfpq.id = #[1,0])  𝄀
                           Runtime Filter Build: #[-1,0]  𝄀
                           ->  Table Scan on ivfpq_topk_consumers.t_ivfpq  𝄀
                                 Runtime Filter Probe: t_ivfpq.id  𝄀
-                          ->  Table Function on ivfpq_search  𝄀
-                                Limit: 3
+                          ->  Vector Index Scan on i_ivfpq [l2_distance]  𝄀
+                                Vector Index: i_ivfpq, Metric: l2_distance, Candidate Limit: 3
 with knn as (
 select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -86,7 +86,7 @@ explain with knn as (
 select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
 order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select k.id, m.name from knn k left join meta m on k.id = m.id;
--- @regex("Table Function on ivfpq_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
@@ -96,16 +96,16 @@ Project  𝄀
         ->  Table Scan on ivfpq_topk_consumers.meta [ForceOneCN]  𝄀
               Runtime Filter Probe: m.id  𝄀
         ->  Sort  𝄀
-              Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
               Limit: 3  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
-                    Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+                    Join Cond: (t_ivfpq.id = #[1,0])  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ivfpq_topk_consumers.t_ivfpq [ForceOneCN]  𝄀
                           Runtime Filter Probe: t_ivfpq.id  𝄀
-                    ->  Table Function on ivfpq_search  𝄀
-                          Limit: 3
+                    ->  Vector Index Scan on i_ivfpq [l2_distance]  𝄀
+                          Vector Index: i_ivfpq, Metric: l2_distance, Candidate Limit: 3
 with knn as (
 select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -126,7 +126,7 @@ explain with knn as (
 select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
 order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select k.id, m.name from knn k inner join meta m on k.id = m.id;
--- @regex("Table Function on ivfpq_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Join  𝄀
@@ -136,16 +136,16 @@ Project  𝄀
         ->  Table Scan on ivfpq_topk_consumers.meta  𝄀
               Runtime Filter Probe: m.id  𝄀
         ->  Sort  𝄀
-              Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+              Sort Key: #[0,1] INTERNAL  𝄀
               Limit: 3  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
-                    Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+                    Join Cond: (t_ivfpq.id = #[1,0])  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
                     ->  Table Scan on ivfpq_topk_consumers.t_ivfpq  𝄀
                           Runtime Filter Probe: t_ivfpq.id  𝄀
-                    ->  Table Function on ivfpq_search  𝄀
-                          Limit: 3
+                    ->  Vector Index Scan on i_ivfpq [l2_distance]  𝄀
+                          Vector Index: i_ivfpq, Metric: l2_distance, Candidate Limit: 3
 with knn as (
 select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -170,7 +170,7 @@ explain with knn as (
 select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
 order by l2_distance(v,'[1,1,1,1]') limit 3
 ) select k.id, m.name from knn k left join meta m on k.id = m.id order by k.d desc;
--- @regex("Table Function on ivfpq_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -182,16 +182,16 @@ Project  𝄀
               ->  Table Scan on ivfpq_topk_consumers.meta [ForceOneCN]  𝄀
                     Runtime Filter Probe: m.id  𝄀
               ->  Sort  𝄀
-                    Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+                    Sort Key: #[0,2] INTERNAL  𝄀
                     Limit: 3  𝄀
                     ->  Join  𝄀
                           Join Type: INNER  𝄀
-                          Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+                          Join Cond: (t_ivfpq.id = #[1,0])  𝄀
                           Runtime Filter Build: #[-1,0]  𝄀
                           ->  Table Scan on ivfpq_topk_consumers.t_ivfpq [ForceOneCN]  𝄀
                                 Runtime Filter Probe: t_ivfpq.id  𝄀
-                          ->  Table Function on ivfpq_search  𝄀
-                                Limit: 3
+                          ->  Vector Index Scan on i_ivfpq [l2_distance]  𝄀
+                                Vector Index: i_ivfpq, Metric: l2_distance, Candidate Limit: 3
 with knn as (
 select id, round(l2_distance(v,'[1,1,1,1]'),4) as d from t_ivfpq
 order by l2_distance(v,'[1,1,1,1]') limit 3
@@ -201,20 +201,20 @@ order by l2_distance(v,'[1,1,1,1]') limit 3
 2  ¦  b  𝄀
 1  ¦  a
 explain select l2_distance(v,'[1,1,1,1]') as d from t_ivfpq order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @regex("Table Function on ivfpq_search", true)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_ivfpq_alias_0.score INTERNAL  𝄀
+        Sort Key: #[0,0] INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
-              Join Cond: (t_ivfpq.id = mo_ivfpq_alias_0.pkid)  𝄀
+              Join Cond: (t_ivfpq.id = #[1,0])  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ivfpq_topk_consumers.t_ivfpq  𝄀
                     Runtime Filter Probe: t_ivfpq.id  𝄀
-              ->  Table Function on ivfpq_search  𝄀
-                    Limit: 3
+              ->  Vector Index Scan on i_ivfpq [l2_distance]  𝄀
+                    Vector Index: i_ivfpq, Metric: l2_distance, Candidate Limit: 3
 select count(*) as n from (
 select l2_distance(v,'[1,1,1,1]') as d from t_ivfpq order by l2_distance(v,'[1,1,1,1]') limit 3
 ) x;

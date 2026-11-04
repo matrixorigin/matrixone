@@ -118,7 +118,7 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 	for i := range partitionExprs {
 		partitionExprs[i] = partition.OrderBySpecs[i].Expr
 	}
-	orderSpecs := partition.OrderBySpecs[partition.PartitionByCount:]
+	orderSpecs := nonLiteralOrderSpecs(partition.OrderBySpecs[partition.PartitionByCount:])
 	orderExprs := make([]*plan.Expr, len(orderSpecs))
 	for i := range orderExprs {
 		orderExprs[i] = orderSpecs[i].Expr
@@ -173,6 +173,9 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 		// In particular, native float comparison is not a strict weak order for
 		// NaNs and can make the heap discard rows from the SQL-order prefix.
 		ctr.compares[i] = compare.NewOrder(typ, desc, nullsLast)
+		if ctr.compares[i] == nil {
+			return moerr.NewNotSupported(proc.Ctx, "unsupported partition Top-N order type "+typ.Oid.String())
+		}
 	}
 	return nil
 }
@@ -184,6 +187,9 @@ func (partition *Partition) callTopN(proc *process.Process) (vm.CallResult, erro
 			result, err := vm.ChildrenCall(partition.GetChildren(0), proc, partition.OpAnalyzer)
 			if err != nil {
 				return result, err
+			}
+			if result.Status == vm.ExecYield {
+				return result, nil
 			}
 			if result.Batch == nil {
 				if err, canceled := vm.CancelCheck(proc); canceled {
@@ -278,6 +284,7 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 	}
 	defer freeNormalizedHashPartitionKeys(ownedPartitionKeys, proc.Mp())
 
+	reduceSingleRuns := ctr.limit == 1 && !ctr.withTies
 	for start := 0; start < input.RowCount(); start += hashmap.UnitLimit {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return err
@@ -287,12 +294,50 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 		if err != nil {
 			return err
 		}
-		for offset, groupID := range groupIDs[:count] {
+		for offset := 0; offset < count; offset++ {
+			groupID := groupIDs[offset]
 			for len(ctr.groups) < int(groupID) {
 				ctr.groups = append(ctr.groups, &partitionHeap{ctr: ctr, tieHead: -1})
 			}
-			row := int64(start + offset)
 			groupHeap := ctr.groups[groupID-1]
+			row := int64(start + offset)
+			if reduceSingleRuns {
+				if groupHeap.Len() != 0 {
+					// Keep the retained winner as the baseline until an input
+					// improves it. Comparing losing inputs with one another can
+					// needlessly scan long common prefixes of ORDER keys.
+					for ctr.compareInput(row, groupHeap.slots[0]) >= 0 {
+						if offset+1 == count || groupIDs[offset+1] != groupID {
+							row = -1
+							break
+						}
+						offset++
+						row = int64(start + offset)
+					}
+					if row < 0 {
+						continue
+					}
+				}
+				// Pick the first best row in this contiguous group run before
+				// copying it. Increasing input otherwise replaces the retained
+				// row (including all payload metadata) for every incoming row.
+				// The candidate never outlives this hash chunk or input batch.
+				for offset+1 < count && groupIDs[offset+1] == groupID {
+					offset++
+					candidate := int64(start + offset)
+					if ctr.compareInputRows(candidate, row) < 0 {
+						row = candidate
+					}
+				}
+				if groupHeap.Len() != 0 {
+					// The candidate already strictly improves the retained row.
+					// A single-slot heap needs no reordering after replacement.
+					if err := ctr.replaceRow(proc, input, row, groupHeap.slots[0]); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if uint64(groupHeap.Len()) < ctr.limit {
 				slot, err := ctr.retainRow(proc, input, row)
 				if err != nil {
@@ -469,6 +514,15 @@ func compactTopNVector(proc *process.Process, bat *batch.Batch, index int, deadB
 func (ctr *topNContainer) compareInput(inputRow, retainedRow int64) int {
 	for _, cmp := range ctr.compares {
 		if result := cmp.Compare(1, 0, inputRow, retainedRow); result != 0 {
+			return result
+		}
+	}
+	return 0
+}
+
+func (ctr *topNContainer) compareInputRows(left, right int64) int {
+	for _, cmp := range ctr.compares {
+		if result := cmp.Compare(1, 1, left, right); result != 0 {
 			return result
 		}
 	}

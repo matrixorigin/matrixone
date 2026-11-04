@@ -32,18 +32,18 @@ create index ACT_IDX_IDENT_LNK_SCOPE on ACT_RU_IDENTITYLINK(SCOPE_ID_, SCOPE_TYP
 create index ACT_IDX_IDENT_LNK_SUB_SCOPE on ACT_RU_IDENTITYLINK(SUB_SCOPE_ID_, SCOPE_TYPE_);
 desc ACT_RU_IDENTITYLINK;
 Field    Type    Null    Key    Default    Extra    Comment
-ID_    VARCHAR(64)    NO    PRI    null        
-REV_    INT(32)    YES        null        
-GROUP_ID_    VARCHAR(255)    YES    MUL    null        
-TYPE_    VARCHAR(255)    YES        null        
-USER_ID_    VARCHAR(255)    YES    MUL    null        
-TASK_ID_    VARCHAR(64)    YES        null        
-PROC_INST_ID_    VARCHAR(64)    YES        null        
-PROC_DEF_ID_    VARCHAR(64)    YES        null        
-SCOPE_ID_    VARCHAR(255)    YES    MUL    null        
-SUB_SCOPE_ID_    VARCHAR(255)    YES    MUL    null        
-SCOPE_TYPE_    VARCHAR(255)    YES        null        
-SCOPE_DEFINITION_ID_    VARCHAR(255)    YES        null        
+ID_    varchar(64)    NO    PRI    null        
+REV_    int    YES        null        
+GROUP_ID_    varchar(255)    YES    MUL    null        
+TYPE_    varchar(255)    YES        null        
+USER_ID_    varchar(255)    YES    MUL    null        
+TASK_ID_    varchar(64)    YES        null        
+PROC_INST_ID_    varchar(64)    YES        null        
+PROC_DEF_ID_    varchar(64)    YES        null        
+SCOPE_ID_    varchar(255)    YES    MUL    null        
+SUB_SCOPE_ID_    varchar(255)    YES    MUL    null        
+SCOPE_TYPE_    varchar(255)    YES        null        
+SCOPE_DEFINITION_ID_    varchar(255)    YES        null        
 SELECT @@session.transaction_read_only;
 @@transaction_read_only
 0

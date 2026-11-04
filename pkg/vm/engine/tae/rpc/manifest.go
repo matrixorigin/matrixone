@@ -158,18 +158,3 @@ func GenerateManifestPretty(table *catalog.TableEntry, dataDir string) ([]byte, 
 	}
 	return buf.Bytes(), nil
 }
-
-// GenerateManifestForTxn currently behaves the same as GenerateManifest.
-// The provided transaction is accepted for API compatibility but is NOT
-// used to determine object visibility — this always uses the latest
-// committed snapshot. MVCC-bound visibility is not yet implemented.
-func GenerateManifestForTxn(
-	table *catalog.TableEntry,
-	txn *txnbase.TxnMVCCNode,
-	dataDir string,
-) ([]byte, error) {
-	// TODO: implement MVCC-bound variant using txn snapshot
-	// For now, delegate to the snapshot-less version.
-	_ = txn
-	return GenerateManifest(table, dataDir)
-}

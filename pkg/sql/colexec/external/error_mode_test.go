@@ -203,6 +203,17 @@ func TestCSVErrorModeTolerates(t *testing.T) {
 	})
 	require.Equal(t, "/tmp/rows.dat", string(bat.Vecs[colPath].GetBytesAt(1)),
 		"__mo_filepath is set on a failed row too")
+	t.Run("rounded overflow rolls back partial row", func(t *testing.T) {
+		param, proc, bat := errorModeParam(t, tree.CSV, "", numTestCols)
+		// Materialize the string column first so a numeric failure must roll it back.
+		param.Attrs[0], param.Attrs[1] = param.Attrs[1], param.Attrs[0]
+		require.NoError(t, readAllText(t, param, proc, bat, "42949672960e-10,alpha\n2147483647.5,beta\n25000000000e-10,gamma\n"))
+		requireRows(t, bat, []wantRow{
+			{a: 4, s: "alpha", line: 1},
+			{line: 2, message: "is not int32 type", text: "2147483647.5,beta"},
+			{a: 3, s: "gamma", line: 3},
+		})
+	})
 }
 
 // TestCSVWithoutErrorColumnsStillFails: with the error columns pruned the scan
@@ -217,12 +228,29 @@ func TestCSVWithoutErrorColumnsStillFails(t *testing.T) {
 // TestCSVErrorModeReportsRecordStartLine: a quoted field spanning lines makes
 // the record's line differ from the record's ordinal.
 func TestCSVErrorModeReportsRecordStartLine(t *testing.T) {
-	param, proc, bat := errorModeParam(t, tree.CSV, "", numTestCols)
-	require.NoError(t, readAllText(t, param, proc, bat, "1,\"al\npha\"\nnotanint,beta\n"))
-	require.Equal(t, 2, bat.RowCount())
-	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[colLine], 0))
-	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[colLine], 1),
-		"the record after a 2-line record starts on line 3")
+	for _, tc := range []struct {
+		name       string
+		content    string
+		comment    string
+		startingBy string
+		lines      []int64
+	}{
+		{"multiline", "1,\"al\npha\"\nnotanint,beta\n", "", "", []int64{1, 3}},
+		{"comments", "#header\n1,\"al\npha\"\n#comment\nnotanint,beta\n", "#", "", []int64{2, 5}},
+		{"starting by", "junk1\njunk2\nxxx1,\"al\npha\"\njunk3\nxxxnotanint,beta", "", "xxx", []int64{3, 6}},
+		{"comments and starting by", "#header\njunk\nxxx1,\"al\npha\"\n#comment\nxxxnotanint,beta\n", "#", "xxx", []int64{3, 6}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			param, proc, bat := errorModeParam(t, tree.CSV, "", numTestCols)
+			param.Extern.Option = []string{"comment", tc.comment}
+			param.Extern.Tail.Lines = &tree.Lines{StartingBy: tc.startingBy}
+			require.NoError(t, readAllText(t, param, proc, bat, tc.content))
+			requireRows(t, bat, []wantRow{
+				{a: 1, s: "al\npha", line: tc.lines[0]},
+				{line: tc.lines[1], message: "is not int32 type", text: "notanint,beta"},
+			})
+		})
+	}
 }
 
 // TestJSONLineErrorModeTolerates covers the three ways a JSONLINE record
@@ -288,6 +316,80 @@ func TestJSONLineWithoutErrorColumnsStillFails(t *testing.T) {
 		`{"a":1,"s":"alpha"}`+"\nthis is not json\n")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not a well-formed json object")
+}
+
+func TestJSONLineWhitespaceRecords(t *testing.T) {
+	for _, shape := range []struct {
+		name, jsonData, first, second string
+	}{
+		{"object", tree.OBJECT, `{"a":1,"s":"alpha"}`, `{"a":2,"s":"beta"}`},
+		{"array", tree.ARRAY, `[1,"alpha"]`, `[2,"beta"]`},
+	} {
+		for _, keep := range []int{colMsg, numTestCols} {
+			name := "ordinary"
+			if keep == numTestCols {
+				name = "tolerant"
+			}
+			t.Run(shape.name+"/"+name, func(t *testing.T) {
+				param, proc, bat := errorModeParam(t, tree.JSONLINE, shape.jsonData, keep)
+				content := "   \r\n" + shape.first + "\r\n   \r\n\r\n" + shape.second + "\r\n  \n"
+				require.NoError(t, readAllText(t, param, proc, bat, content))
+				require.Equal(t, 2, bat.RowCount())
+				for i, line := range []int64{2, 5} {
+					require.False(t, bat.Vecs[colA].IsNull(uint64(i)))
+					require.Equal(t, int32(i+1), vector.GetFixedAtWithTypeCheck[int32](bat.Vecs[colA], i))
+					require.Equal(t, []string{"alpha", "beta"}[i], string(bat.Vecs[colS].GetBytesAt(i)))
+					require.Equal(t, line, vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[colLine], i))
+					if keep == numTestCols {
+						require.True(t, bat.Vecs[colMsg].IsNull(uint64(i)))
+						require.True(t, bat.Vecs[colText].IsNull(uint64(i)))
+					}
+				}
+			})
+		}
+	}
+
+	// A quoted empty scalar and a tab-delimited malformed record must still
+	// reach JSON validation, even though the first decoded field is empty.
+	for _, content := range []string{"\"\"\n", "\"   \"\n", "\tbad\n"} {
+		t.Run("invalid/"+content, func(t *testing.T) {
+			param, proc, bat := errorModeParam(t, tree.JSONLINE, tree.OBJECT, colMsg)
+			require.Error(t, readAllText(t, param, proc, bat, content))
+			param, proc, bat = errorModeParam(t, tree.JSONLINE, tree.OBJECT, numTestCols)
+			require.NoError(t, readAllText(t, param, proc, bat, content))
+			require.Equal(t, 1, bat.RowCount())
+			require.True(t, bat.Vecs[colA].IsNull(0))
+			require.False(t, bat.Vecs[colMsg].IsNull(0))
+		})
+	}
+
+	for _, tc := range []struct {
+		name, content string
+		prevStr       string
+		ignore        int
+		maxBytes      uint64
+		want          []wantRow
+	}{
+		{"ignored records", "   \n{\"a\":1,\"s\":\"alpha\"}\n   \n{\"a\":2,\"s\":\"beta\"}\n", "", 1, 1 << 20, []wantRow{{a: 2, s: "beta", line: 4}}},
+		{"continuation", "   \n123}\n", `{"a":1,"s":`, 0, 1 << 20, []wantRow{{a: 1, s: "123", line: 2}}},
+		{"batch bytes", strings.Repeat(" ", 80) + "\n{\"a\":1,\"s\":\"alpha\"}\n{\"a\":2,\"s\":\"beta\"}\n", "", 0, 40, []wantRow{{a: 1, s: "alpha", line: 2}, {a: 2, s: "beta", line: 3}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			param, proc, bat := errorModeParam(t, tree.JSONLINE, tree.OBJECT, numTestCols)
+			param.maxBatchSize = tc.maxBytes
+			if tc.name == "continuation" {
+				param.ErrorMode.Tolerate = false
+			}
+			r := &CsvReader{param: param, prevStr: tc.prevStr, ignoreLine: tc.ignore, reader: io.NopCloser(strings.NewReader(tc.content))}
+			t.Cleanup(func() { require.NoError(t, r.Close()) })
+			parser, err := newCSVParserFromReader(param.Extern, r.reader)
+			require.NoError(t, err)
+			r.plh = &ParseLineHandler{csvReader: parser}
+			_, err = r.makeBatchRows(proc, bat)
+			require.NoError(t, err)
+			requireRows(t, bat, tc.want)
+		})
+	}
 }
 
 // kafkaErrorModeParam declares `(a int, s varchar)` plus __mo_message_id, the

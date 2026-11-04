@@ -305,7 +305,7 @@ func fullGroupByStableReferences(expr *Expr, columns map[fullGroupByColumn]pbpla
 			return false
 		}
 		overload, ok := function.GetFunctionByIdWithoutError(f.Func.Obj)
-		if !ok || overload.CannotFold() {
+		if !ok || overload.IsVolatile() {
 			return false
 		}
 		for _, arg := range f.Args {

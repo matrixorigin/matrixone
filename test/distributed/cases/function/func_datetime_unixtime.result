@@ -289,12 +289,12 @@ AND table_name = 'temporal_ctas'
 AND column_name IN ('from_d3', 'from_d9', 'from_float', 'add_us', 'sub_us', 'timestampadd_us')
 ORDER BY ordinal_position;
 column_name    column_type    is_nullable
-from_d3    DATETIME(3)    YES
-from_d9    DATETIME(6)    YES
-from_float    DATETIME(6)    YES
-add_us    DATETIME(6)    YES
-sub_us    DATETIME(6)    YES
-timestampadd_us    DATETIME(6)    YES
+from_d3    datetime(3)    YES
+from_d9    datetime(6)    YES
+from_float    datetime(6)    YES
+add_us    datetime(6)    YES
+sub_us    datetime(6)    YES
+timestampadd_us    datetime(6)    YES
 INSERT INTO temporal_ctas VALUES
 (2,
 FROM_UNIXTIME(CAST(1704067201.234 AS DECIMAL(20,3))),
@@ -309,4 +309,13 @@ id    from_d3    from_d9    from_float    add_us    sub_us    timestampadd_us   
 1    2024-01-01 00:00:00.123000000    2024-01-01 00:00:00.123457000    2024-01-01 00:00:00.123456000    2024-01-01 00:00:00.123457000    2024-01-01 00:00:00.123455000    2024-01-01 00:00:00.123457000    123457
 2    2024-01-01 00:00:01.234000000    2024-01-01 00:00:01.234568000    2024-01-01 00:00:01.234567000    2024-01-01 00:00:01.234568000    2024-01-01 00:00:01.234566000    2024-01-01 00:00:01.234568000    234568
 DROP DATABASE pr28316_temporal;
+SET time_zone = 'America/New_York';
+SELECT UNIX_TIMESTAMP('2024-03-10 02:30:00') AS string_gap,
+UNIX_TIMESTAMP(CAST('2024-03-10 02:30:00' AS DATETIME)) AS datetime_gap,
+UNIX_TIMESTAMP(DATE_ADD(CAST('2024-03-10 01:30:00' AS DATETIME), INTERVAL 1 HOUR)) AS arithmetic_gap;
+string_gap    datetime_gap    arithmetic_gap
+1710054000    1710054000    1710054000
+SELECT UNIX_TIMESTAMP(CAST('2024-03-10 03:30:00' AS DATETIME)) AS valid_datetime;
+valid_datetime
+1710055800
 SET TIME_ZONE = "SYSTEM";

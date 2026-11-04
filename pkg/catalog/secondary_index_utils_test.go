@@ -51,6 +51,31 @@ func TestIndexBuildParamsRoundTrip(t *testing.T) {
 	require.False(t, strings.Contains(s, IndexAlgoParamMaxIndexCapacity), s)
 }
 
+func TestIndexParamMaxBadRecords(t *testing.T) {
+	for _, c := range []struct {
+		params string
+		want   int64
+		err    bool
+	}{
+		{"", 0, false},
+		{`{"op_type":"vector_l2_ops"}`, 0, false},
+		{`{"max_bad_records":"0"}`, 0, false},
+		{`{"max_bad_records":"1000"}`, 1000, false},
+		{`{"max_bad_records":"-1"}`, 0, true},
+		{`{"max_bad_records":"x"}`, 0, true},
+		{`not json`, 0, true},
+	} {
+		got, err := IndexParamMaxBadRecords(c.params)
+		require.Equal(t, c.err, err != nil, c.params)
+		require.Equal(t, c.want, got, c.params)
+	}
+
+	// SHOW CREATE renders it, 0 included
+	s, err := IndexParamsToStringList(`{"max_bad_records":"0"}`)
+	require.NoError(t, err)
+	require.Contains(t, s, IndexAlgoParamMaxBadRecords+" = 0")
+}
+
 func newPrefixKeyPart(colName string, length int) *tree.KeyPart {
 	return &tree.KeyPart{
 		ColName: tree.NewUnresolvedColName(colName),
@@ -335,4 +360,23 @@ func TestParseIncludeColumnsValue_BackwardCompatible(t *testing.T) {
 	cols, err = ParseIncludeColumnsValue("[legacy,other")
 	require.NoError(t, err)
 	require.Equal(t, []string{"[legacy", "other"}, cols)
+}
+
+func TestIncludeColumnsFromIndexParams(t *testing.T) {
+	cols, err := IncludeColumnsFromIndexParams(`{"op_type":"vector_l2_ops","lists":4,"included_columns":"category,note"}`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"category", "note"}, cols)
+	cols, err = IncludeColumnsFromIndexParams(`{"include_columns":"price"}`)
+	require.NoError(t, err)
+	require.Equal(t, []string{"price"}, cols)
+	cols, err = IncludeColumnsFromIndexParams(`{"op_type":"vector_l2_ops"}`)
+	require.NoError(t, err)
+	require.Empty(t, cols)
+	cols, err = IncludeColumnsFromIndexParams("")
+	require.NoError(t, err)
+	require.Empty(t, cols)
+	_, err = IncludeColumnsFromIndexParams("{")
+	require.Error(t, err)
+	_, err = IncludeColumnsFromIndexParams(`{"included_columns":3}`)
+	require.Error(t, err)
 }

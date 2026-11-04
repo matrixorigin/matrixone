@@ -24,6 +24,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
+func (builder *QueryBuilder) metadataViewColumnsSQL(schema, table, definition string, snapshot *Snapshot) (string, error) {
+	definition, err := builder.historicalViewColumnsSQL(schema, table, definition, snapshot)
+	if err != nil || !HasViewMetadataRequest(builder.GetContext()) ||
+		!strings.EqualFold(schema, "information_schema") || !strings.EqualFold(table, "columns") {
+		return definition, err
+	}
+	adapted, ok := sysview.ViewMetadataColumnsDDL(definition)
+	if !ok {
+		return "", moerr.NewNotSupported(builder.GetContext(), "unsupported derived information_schema.COLUMNS definition")
+	}
+	return adapted, nil
+}
+
 // historicalViewColumnsSQL adapts a historical system template only after the
 // tenant's current COLUMNS view has migrated to the existing on-demand format.
 // It neither persists SQL nor changes the snapshot used to bind user objects.
@@ -68,7 +81,7 @@ func (builder *QueryBuilder) historicalViewColumnsSQL(
 	if err := json.Unmarshal([]byte(currentDef.ViewSql.View), &current); err != nil {
 		return "", err
 	}
-	if !sysview.IsCurrentInformationSchemaColumnsDDL(current.Stmt) {
+	if !sysview.IsInformationSchemaColumnsMigrationDDL(current.Stmt) {
 		return definition, nil
 	}
 	if err := RequirePersistedProtocolVersion(builder.GetContext(), ctx.GetProcess(), defines.MORPCVersion100); err != nil {

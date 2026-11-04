@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -158,6 +159,16 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 func (b *LimitBinder) foldConstant(expr *plan.Expr) (*plan.Expr, error) {
 	proc := b.builder.compCtx.GetProcess()
 	if proc == nil || expr == nil || expr.GetF() == nil || containsDynamicParam(expr) {
+		return expr, nil
+	}
+	if defines.IsPublicationViewBinding(b.GetContext()) {
+		// Publication scope validation (#27767) binds the LIMIT/OFFSET of a
+		// stored definition without evaluating it: folding here would execute
+		// every function of the bound expression during validation. The
+		// bound expression itself proves the clause binds, the marker keeps
+		// the optimizer's rewrite pipeline from running at all, and the
+		// subscriber's own compile folds as usual. A literal LIMIT - the
+		// probe's own shape - never reaches the executor fold below.
 		return expr, nil
 	}
 	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)

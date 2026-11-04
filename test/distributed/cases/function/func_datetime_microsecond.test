@@ -40,3 +40,7 @@ DROP TABLE t1;
 # Range check (should return 0-999999)
 SELECT MICROSECOND('15:30:45.123456') AS result1, MICROSECOND('15:30:45.000000') AS result2, MICROSECOND('15:30:45.999999') AS result3;
 
+
+# Negative TIME values: MySQL reports the unsigned fractional part 0-999999
+SELECT MICROSECOND(CAST('-00:00:01.123456' AS TIME(6))) AS negative_time_value;
+SELECT MICROSECOND('-00:00:01.123456') AS negative_time_string;

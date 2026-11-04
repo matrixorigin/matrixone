@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"go/format"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -121,7 +122,8 @@ func vbGenLoad(w *bytes.Buffer, o vbGenOperand, v string) {
 		fmt.Fprintf(w, "%ss := %s.Global * e8[%s.Scales[off>>5]]\n", v, v, v)
 		fmt.Fprintf(w, "%se := (*[%d]byte)(%s.Elems[off : off+%d])\n", v, vbGenUnit, v, vbGenUnit)
 	case "F4":
-		fmt.Fprintf(w, "%ss := %s.Global * f8[%s.Scales[off>>4]]\n", v, v, v)
+		fmt.Fprintf(w, "%sbs := f8[%s.Scales[off>>4]]\n", v, v)
+		fmt.Fprintf(w, "%ss := %s.Global * %sbs\n", v, v, v)
 		fmt.Fprintf(w, "%se := (*[%d]byte)(%s.Elems[off>>1 : off>>1+%d])\n", v, vbGenUnit/2, v, vbGenUnit/2)
 	case "F32":
 		fmt.Fprintf(w, "%sv := (*[%d]float32)(%s[off : off+%d])\n", v, vbGenUnit, v, vbGenUnit)
@@ -150,6 +152,31 @@ func vbGenElems(w *bytes.Buffer, o vbGenOperand, v string, g int) []string {
 	case "F32":
 		for k := 0; k < 4; k++ {
 			fmt.Fprintf(w, "%s := %sv[%d]\n", names[k], v, g+k)
+		}
+	}
+	return names
+}
+
+// vbGenSubnormalScale returns the condition under which F4 operand v's unit can underflow a
+// decoded element to zero in float32: the same test types.BlockScaledCell.DequantizeRange applies.
+// An F8 global*blockScale is never subnormal, so F8 operands have no such condition.
+func vbGenSubnormalScale(o vbGenOperand, v string) string {
+	if o.name != "F4" {
+		return ""
+	}
+	return fmt.Sprintf("(%ss < 0x1p-126 && %s.Global != 0 && %sbs != 0)", v, v, v)
+}
+
+// vbGenSlowElems emits elements [g, g+4) of operand v read from its decoded unit array and returns
+// their names.
+func vbGenSlowElems(w *bytes.Buffer, o vbGenOperand, v string, g int) []string {
+	names := make([]string, 4)
+	for k := 0; k < 4; k++ {
+		names[k] = fmt.Sprintf("%s%d", v, g+k)
+		if o.name == "F32" {
+			fmt.Fprintf(w, "%s := %sv[%d]\n", names[k], v, g+k)
+		} else {
+			fmt.Fprintf(w, "%s := %sd[%d]\n", names[k], v, g+k)
 		}
 	}
 	return names
@@ -198,6 +225,32 @@ var _ = math.Float32bits
 			fmt.Fprintf(&w, "for u := 0; u < units; u++ {\noff := u * %d\n", vbGenUnit)
 			vbGenLoad(&w, p[0], "x")
 			vbGenLoad(&w, p[1], "y")
+			var conds []string
+			for i, v := range []string{"x", "y"} {
+				if c := vbGenSubnormalScale(p[i], v); c != "" {
+					conds = append(conds, c)
+				}
+			}
+			if len(conds) > 0 {
+				// A unit whose F4 scale is subnormal decodes through At, the authoritative decode, and
+				// runs the same arithmetic on the decoded values.
+				fmt.Fprintf(&w, "if %s {\n", strings.Join(conds, " || "))
+				for i, v := range []string{"x", "y"} {
+					if p[i].name != "F32" {
+						fmt.Fprintf(&w, "var %sd [%d]float32\nfor i := range %sd {\n%sd[i] = %s.At(off + i)\n}\n", v, vbGenUnit, v, v, v)
+					}
+				}
+				fmt.Fprintf(&w, "var %s float32\n", vbGenJoin(m.accs))
+				for g := 0; g < vbGenUnit; g += 4 {
+					xa := vbGenSlowElems(&w, p[0], "x", g)
+					yb := vbGenSlowElems(&w, p[1], "y", g)
+					for k := 0; k < 4; k++ {
+						w.WriteString(m.elem(xa[k], yb[k], g+k))
+					}
+				}
+				w.WriteString(m.fold)
+				w.WriteString("continue\n}\n")
+			}
 			fmt.Fprintf(&w, "var %s float32\n", vbGenJoin(m.accs))
 			for g := 0; g < vbGenUnit; g += 4 {
 				xa := vbGenElems(&w, p[0], "x", g)

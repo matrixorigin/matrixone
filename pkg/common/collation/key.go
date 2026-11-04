@@ -32,7 +32,9 @@ const (
 	UTF8MB4GeneralCI
 	UTF8MB40900AI
 	UTF8MB40900Bin
-	// Foundation only: not admitted by SQL or persisted schema metadata.
+	// Native UCA 4.0.0 domains. SQL metadata maps utf8_unicode_ci and
+	// utf8mb4_unicode_ci to these identities; they remain distinct from the
+	// compatibility general_ci domain.
 	UTF8MB4UnicodeCI
 	UTF8MB3UnicodeCI
 )
@@ -132,6 +134,32 @@ func (d Domain) Key(scratch, value []byte) ([]byte, error) {
 	// Trailing spaces are implicit. The terminator is in the middle of
 	// the weight order, unlike a zero terminator or a shorter byte slice.
 	return append(out, 0x22), nil
+}
+
+// ValidateValue checks whether value can be encoded in this collation domain
+// without materializing its comparison key. Raw preserves arbitrary bytes,
+// while every transformed domain applies the same size/UTF-8/repertoire checks
+// as Key. Physical-key callers use this as an abortable admission check
+// immediately before encoding; keeping validation separate avoids constructing
+// and discarding the same UCA key twice.
+func (d Domain) ValidateValue(value []byte) error {
+	if d == Raw {
+		return nil
+	}
+	if _, err := d.KeySizeUpperBound(len(value)); err != nil {
+		return err
+	}
+	if !utf8.Valid(value) {
+		return ErrUTF8
+	}
+	if d == UTF8MB3UnicodeCI {
+		for _, r := range string(value) {
+			if r > 0xffff {
+				return ErrRepertoire
+			}
+		}
+	}
+	return nil
 }
 
 func (d Domain) next(value []byte) (uint32, int) {

@@ -254,16 +254,13 @@ func TestInternalExecSQLInDB_PausedInRetryLoop(t *testing.T) {
 	defer ctrl.Finish()
 	e, _ := newTestInternalExecutor(t, ctrl)
 	e.retryOpt.MaxRetries = 2
+	e.retryOpt.Classifier = &mockClassifier{retryable: true}
 	ar := NewActiveRoutine()
-	// Don't close pause yet - let the first check pass, then close in retry
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		close(ar.Pause)
-	}()
-	// First attempt will succeed the initial ar check, but fail in retry loop ar check
+	// The first attempt passes the pause check, then the retry sees it closed.
 	e.utHelper = &testUTHelper{
 		onSQLExecFailed: func(ctx context.Context, query string, errorCount int) error {
 			if errorCount == 0 {
+				ar.ClosePause()
 				return moerr.NewInternalErrorNoCtx("retry me")
 			}
 			return nil
@@ -271,6 +268,7 @@ func TestInternalExecSQLInDB_PausedInRetryLoop(t *testing.T) {
 	}
 	_, _, err := e.ExecSQLInDatabase(context.Background(), ar, InvalidAccountID, "SELECT 1", "mydb", false, false, 0)
 	assert.Error(t, err)
+	assert.ErrorContains(t, err, "paused")
 }
 
 // ============================================================
@@ -303,97 +301,6 @@ func TestInternalResult_Scan_InvalidRowIndex(t *testing.T) {
 	err := r.Scan(&s)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid row index")
-}
-
-// ============================================================
-// ParseUpstreamConn tests
-// ============================================================
-
-func TestParseUpstreamConn_Empty(t *testing.T) {
-	_, err := ParseUpstreamConn("")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "empty")
-}
-
-func TestParseUpstreamConn_NoMysqlPrefix(t *testing.T) {
-	_, err := ParseUpstreamConn("postgres://user:pass@host:3306")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "expected mysql://")
-}
-
-func TestParseUpstreamConn_NoAtSign(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://userpass")
-	assert.Error(t, err)
-}
-
-func TestParseUpstreamConn_NoColon(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://user@host:3306")
-	assert.Error(t, err)
-}
-
-func TestParseUpstreamConn_EmptyUser(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://:pass@host:3306")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "user cannot be empty")
-}
-
-func TestParseUpstreamConn_EmptyPassword(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://user:@host:3306")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "password cannot be empty")
-}
-
-func TestParseUpstreamConn_EmptyHost(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://user:pass@:3306")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "host cannot be empty")
-}
-
-func TestParseUpstreamConn_InvalidPort(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://user:pass@host:abc")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid port")
-}
-
-func TestParseUpstreamConn_Valid(t *testing.T) {
-	cfg, err := ParseUpstreamConn("mysql://user:pass@127.0.0.1:6001")
-	require.NoError(t, err)
-	assert.Equal(t, "", cfg.Account)
-	assert.Equal(t, "user", cfg.User)
-	assert.Equal(t, "pass", cfg.Password)
-	assert.Equal(t, "127.0.0.1", cfg.Host)
-	assert.Equal(t, 6001, cfg.Port)
-}
-
-func TestParseUpstreamConn_WithAccount(t *testing.T) {
-	cfg, err := ParseUpstreamConn("mysql://acc#user:pass@127.0.0.1:6001")
-	require.NoError(t, err)
-	assert.Equal(t, "acc", cfg.Account)
-	assert.Equal(t, "user", cfg.User)
-}
-
-func TestParseUpstreamConn_AccountEmptyUser(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://acc#:pass@127.0.0.1:6001")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "user cannot be empty")
-}
-
-func TestParseUpstreamConn_WithPath(t *testing.T) {
-	cfg, err := ParseUpstreamConn("mysql://user:pass@127.0.0.1:6001/mydb")
-	require.NoError(t, err)
-	assert.Equal(t, "127.0.0.1", cfg.Host)
-	assert.Equal(t, 6001, cfg.Port)
-}
-
-func TestParseUpstreamConn_PasswordWithColon(t *testing.T) {
-	cfg, err := ParseUpstreamConn("mysql://user:pa:ss:word@127.0.0.1:6001")
-	require.NoError(t, err)
-	assert.Equal(t, "pa:ss:word", cfg.Password)
-}
-
-func TestParseUpstreamConn_BadHostPort(t *testing.T) {
-	_, err := ParseUpstreamConn("mysql://user:pass@host")
-	assert.Error(t, err)
 }
 
 // ============================================================

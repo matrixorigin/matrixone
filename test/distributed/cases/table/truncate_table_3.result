@@ -14,7 +14,7 @@ count(*)
 0
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 create table t2(a int,b int);
 show tables;
 Tables_in_truncate_table_3
@@ -36,7 +36,7 @@ count(*)
 0
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 show tables;
 Tables_in_truncate_table_3
 t1
@@ -57,7 +57,7 @@ count(*)
 0
 show columns from t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES        null        
+a    int    YES        null        
 show tables;
 Tables_in_truncate_table_3
 t1

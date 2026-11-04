@@ -18,7 +18,6 @@ import (
 	"context"
 	"math"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -63,7 +62,7 @@ func (m mockMessage) Destroy() {
 
 func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 	t.Run("return nil when RuntimeFilterSpecs is empty", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		sqlproc := NewSqlProcess(proc)
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{}
 		result, err := WaitUniqueJoinKeys(sqlproc)
@@ -79,7 +78,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 	})
 
 	t.Run("return nil when UseMembershipFilter is false", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		sqlproc := NewSqlProcess(proc)
 		sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 			{
@@ -93,7 +92,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 	})
 
 	t.Run("return data when BLOOMFILTER message found", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		mb := message.NewMessageBoard()
 		proc.SetMessageBoard(mb)
 		sqlproc := NewSqlProcess(proc)
@@ -130,7 +129,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 	})
 
 	t.Run("return nil when no matching message found", func(t *testing.T) {
-		testProc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		testProc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		mb := message.NewMessageBoard()
 		testProc.SetMessageBoard(mb)
 		sqlproc := NewSqlProcess(testProc)
@@ -154,29 +153,16 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		testProc.Ctx = ctx
-
-		go func() {
-			time.Sleep(100 * time.Millisecond)
-			cancel()
-		}()
-
-		done := make(chan bool)
-		var result []byte
-		var err error
-		go func() {
-			result, err = WaitUniqueJoinKeys(sqlproc)
-			done <- true
-		}()
-
-		<-done
 		cancel()
+
+		result, err := WaitUniqueJoinKeys(sqlproc)
 
 		require.NoError(t, err)
 		require.Nil(t, result)
 	})
 
 	t.Run("continue when message is not RuntimeFilterMessage", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		mb := message.NewMessageBoard()
 		proc.SetMessageBoard(mb)
 		sqlproc := NewSqlProcess(proc)
@@ -219,7 +205,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 	})
 
 	t.Run("skip non-BLOOMFILTER runtime filter types", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		mb := message.NewMessageBoard()
 		proc.SetMessageBoard(mb)
 		sqlproc := NewSqlProcess(proc)
@@ -267,7 +253,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 
 func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
 	t.Run("none", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		sqlproc := NewSqlProcess(proc)
 		data, status, err := WaitUniqueJoinKeysWithStatus(sqlproc)
 		require.NoError(t, err)
@@ -276,7 +262,7 @@ func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
 	})
 
 	t.Run("available", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		mb := message.NewMessageBoard()
 		proc.SetMessageBoard(mb)
 		sqlproc := NewSqlProcess(proc)
@@ -304,7 +290,7 @@ func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
 		{name: "drop", typ: message.RuntimeFilter_DROP, status: UniqueJoinKeysDrop},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			mb := message.NewMessageBoard()
 			proc.SetMessageBoard(mb)
 			sqlproc := NewSqlProcess(proc)
@@ -324,7 +310,7 @@ func TestWaitUniqueJoinKeysWithStatus(t *testing.T) {
 
 func TestBuildExactPkFilter(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	ctx := context.Background()
 
 	t.Run("int64 values", func(t *testing.T) {
@@ -416,7 +402,7 @@ func TestAppendHex(t *testing.T) {
 
 func TestAppendVectorSQLLiteral(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	ctx := context.Background()
 
 	t.Run("bool", func(t *testing.T) {

@@ -1,0 +1,25 @@
+drop database if exists truncate_lifecycle_wait_a;
+drop database if exists truncate_lifecycle_wait_b;
+create database truncate_lifecycle_wait_a;
+create database truncate_lifecycle_wait_b;
+create table truncate_lifecycle_wait_a.t (id int primary key);
+create table truncate_lifecycle_wait_b.t (id int primary key);
+insert into truncate_lifecycle_wait_a.t values (1);
+insert into truncate_lifecycle_wait_b.t values (2);
+begin;
+select feature_code from mo_catalog.mo_feature_registry where feature_code = 'SNAPSHOT' for update;
+feature_code
+SNAPSHOT
+truncate table truncate_lifecycle_wait_a.t;
+select count(*) as remaining from truncate_lifecycle_wait_a.t;
+remaining
+0
+select count(*) as remaining from truncate_lifecycle_wait_b.t;
+remaining
+1
+truncate table truncate_lifecycle_wait_b.t;
+select count(*) as remaining from truncate_lifecycle_wait_b.t;
+remaining
+0
+drop database truncate_lifecycle_wait_a;
+drop database truncate_lifecycle_wait_b;

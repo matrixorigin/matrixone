@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -315,16 +316,21 @@ func TestCompileResetBeginsSQLCalcFoundRowsExecution(t *testing.T) {
 func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 	targetRef := &plan.ObjectRef{SchemaName: "db", ObjName: "target"}
 	sourceRef := &plan.ObjectRef{SchemaName: "db", ObjName: "source"}
+	indexRef := &plan.ObjectRef{SchemaName: "db", ObjName: "__mo_index_unique_target"}
+	indexScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: indexRef}
 	targetScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef}
 	sourceScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: sourceRef}
 	write := &plan.Node{
 		NodeType: plan.Node_MULTI_UPDATE,
 		UpdateCtxList: []*plan.UpdateCtx{{
 			ObjRef: targetRef,
+		}, {
+			ObjRef: indexRef,
 		}},
 	}
 	query := &plan.Query{Nodes: []*plan.Node{
 		targetScan,
+		indexScan,
 		sourceScan,
 		{NodeType: plan.Node_TABLE_SCAN},
 		write,
@@ -333,6 +339,10 @@ func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 	markInsertTableScansNotLockMeta(query)
 
 	require.NotSame(t, targetRef, targetScan.ObjRef)
+	require.NotSame(t, indexRef, indexScan.ObjRef)
+	require.True(t, indexScan.ObjRef.NotLockMeta)
+	require.False(t, indexRef.NotLockMeta)
+	require.Same(t, indexRef, write.UpdateCtxList[1].ObjRef)
 	require.NotSame(t, sourceRef, sourceScan.ObjRef)
 	require.True(t, targetScan.ObjRef.NotLockMeta)
 	require.True(t, sourceScan.ObjRef.NotLockMeta)
@@ -342,9 +352,11 @@ func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
 
 	c := &Compile{needLockMeta: true, lockMeta: NewLockMeta()}
 	c.appendMetaTables(targetScan.ObjRef)
+	c.appendMetaTables(indexScan.ObjRef)
+	c.appendMetaTables(write.UpdateCtxList[1].ObjRef)
 	c.appendMetaTables(sourceScan.ObjRef)
 	c.appendMetaTables(write.UpdateCtxList[0].ObjRef)
-	require.Equal(t, map[string]struct{}{"db target": {}}, c.lockMeta.metaTables)
+	require.Equal(t, map[string]struct{}{"db target": {}, "db __mo_index_unique_target": {}}, c.lockMeta.metaTables)
 }
 
 func TestSelectMetaLockRequirement(t *testing.T) {
@@ -398,8 +410,7 @@ func TestSelectMetaLockRequirement(t *testing.T) {
 		{
 			name: "rewritten fulltext plan",
 			query: &plan.Query{Nodes: []*plan.Node{{
-				NodeType:    plan.Node_FUNCTION_SCAN,
-				ProjectList: []*plan.Expr{call("fulltext_index_scan")},
+				NodeType: plan.Node_INDEX_SEARCH_SCAN,
 			}}},
 		},
 	}
@@ -551,31 +562,31 @@ func TestNodeContainsUnresolvedFullTextRuntimeSlots(t *testing.T) {
 		},
 		{
 			name: "vector query vector",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{QueryVector: match()}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{QueryPayload: match()}},
 		},
 		{
 			name: "vector candidate limit",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{CandidateLimit: match()}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{CandidateLimit: match()}},
 		},
 		{
 			name: "vector first round limit",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{FirstRoundLimit: match()}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{AlgoExprs: []*plan.Expr{match()}, AlgoExprNames: []string{"first_round_limit"}}},
 		},
 		{
 			name: "vector lower distance bound",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{
 				DistanceRange: &plan.DistRange{LowerBound: match()},
 			}},
 		},
 		{
 			name: "vector upper distance bound",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{
 				DistanceRange: &plan.DistRange{UpperBound: match()},
 			}},
 		},
 		{
 			name: "vector prefilter",
-			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{PreFilters: []*plan.Expr{match()}}},
+			node: &plan.Node{IndexSearchScan: &plan.IndexSearchScan{PreFilters: []*plan.Expr{match()}}},
 		},
 		{
 			name: "runtime filter probe expression",
@@ -605,8 +616,8 @@ func TestNodeContainsUnresolvedFullTextIgnoresSourceTableDefaults(t *testing.T) 
 		Func: &plan.ObjectRef{ObjName: "fulltext_match"},
 	}}}
 	node := &plan.Node{
-		NodeType: plan.Node_VECTOR_INDEX_SCAN,
-		VectorIndexScan: &plan.VectorIndexScan{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
 			SourceTableDef: &plan.TableDef{Cols: []*plan.ColDef{{
 				Default: &plan.Default{Expr: match},
 			}}},
@@ -650,489 +661,150 @@ func TestSelectMetaLockRequirementReachability(t *testing.T) {
 	require.False(t, unresolved)
 }
 
-// ============================================================================
-// Tests for rewriteAutoModeToPre
-// ============================================================================
-
-func TestRewriteAutoModeToPre_Select(t *testing.T) {
-	tests := []struct {
-		name     string
-		stmt     tree.Statement
-		expected bool
-		validate func(t *testing.T, stmt tree.Statement)
-	}{
-		{
-			name: "rewrite select with mode=auto",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{
-					Option: map[string]string{"mode": "auto"},
-				},
-			},
-			expected: true,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Equal(t, "pre", sel.RankOption.Option["mode"])
-			},
-		},
-		{
-			name: "rewrite select with mode=AUTO (case insensitive)",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{
-					Option: map[string]string{"mode": "AUTO"},
-				},
-			},
-			expected: true,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Equal(t, "pre", sel.RankOption.Option["mode"])
-			},
-		},
-		{
-			name: "no rewrite for mode=post",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{
-					Option: map[string]string{"mode": "post"},
-				},
-			},
-			expected: false,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Equal(t, "post", sel.RankOption.Option["mode"])
-			},
-		},
-		{
-			name: "no rewrite for mode=pre",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{
-					Option: map[string]string{"mode": "pre"},
-				},
-			},
-			expected: false,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Equal(t, "pre", sel.RankOption.Option["mode"])
-			},
-		},
-		{
-			name: "no rewrite for mode=force",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{
-					Option: map[string]string{"mode": "force"},
-				},
-			},
-			expected: false,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Equal(t, "force", sel.RankOption.Option["mode"])
-			},
-		},
-		{
-			name:     "no rewrite for nil RankOption",
-			stmt:     &tree.Select{},
-			expected: false,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Nil(t, sel.RankOption)
-			},
-		},
-		{
-			name: "no rewrite for empty Option map",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{
-					Option: map[string]string{},
-				},
-			},
-			expected: false,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				_, exists := sel.RankOption.Option["mode"]
-				assert.False(t, exists)
-			},
-		},
-		{
-			name: "no rewrite for nil Option map",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{},
-			},
-			expected: false,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Nil(t, sel.RankOption.Option)
-			},
-		},
+func TestPreparedOuterLimitZeroMaterialization(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.isPrepare = false
+	params := vector.NewVec(types.T_text.ToType())
+	defer func() { c.proc.SetPrepareParams(nil); params.Free(c.proc.Mp()) }()
+	require.NoError(t, vector.AppendBytes(params, []byte("0"), false, c.proc.Mp()))
+	c.proc.SetPrepareParams(params)
+	stmt, err := mysql.Parse(c.proc.Ctx, "select 1 limit ?", 1)
+	require.NoError(t, err)
+	defer stmt[0].Free()
+	c.stmt = stmt[0]
+	source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	limit, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "cast", []*plan.Expr{source, target})
+	require.NoError(t, err)
+	limited := &plan.Node{NodeType: plan.Node_SORT, Limit: limit}
+	root := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{0}}
+	q := &plan.Query{StmtType: plan.Query_SELECT, Nodes: []*plan.Node{limited, root}, Steps: []int32{0, 1}}
+	pn := &plan.Plan{IsPrepare: true, Plan: &plan.Plan_Query{Query: q}}
+	for _, value := range []string{"2", "0", "1", "0"} {
+		params.Reset(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(params, []byte(value), false, c.proc.Mp()))
+		restore, err := c.materializePreparedLimitZero(pn)
+		require.NoError(t, err)
+		if value == "0" {
+			require.NotNil(t, restore)
+			require.Equal(t, 1, c.firstStepToCompile(q))
+			require.True(t, c.canUseLiteralLimitZeroFastPath(root))
+			restore()
+		} else {
+			require.Nil(t, restore)
+			require.Zero(t, c.firstStepToCompile(q))
+		}
+		require.Nil(t, root.Limit)
+		require.Same(t, limit, limited.Limit)
 	}
+	params.Reset(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("0"), false, c.proc.Mp()))
+	c.isPrepare = true
+	restore, err := c.materializePreparedLimitZero(pn)
+	require.NoError(t, err)
+	require.Nil(t, restore)
+	c.isPrepare = false
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	restore, err = c.materializePreparedLimitZero(pn)
+	require.NoError(t, err)
+	require.Nil(t, restore)
+	c.stmt = stmt[0]
+	limited.NodeType = plan.Node_RECURSIVE_CTE
+	restore, err = c.materializePreparedLimitZero(pn)
+	require.NoError(t, err)
+	require.Nil(t, restore)
+	limited.NodeType = plan.Node_SORT
+	params.Reset(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("-1"), false, c.proc.Mp()))
+	restore, err = c.materializePreparedLimitZero(pn)
+	require.Error(t, err)
+	require.Nil(t, restore)
+	require.Nil(t, root.Limit)
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := rewriteAutoModeToPre(tt.stmt)
-			assert.Equal(t, tt.expected, result)
-			if tt.validate != nil {
-				tt.validate(t, tt.stmt)
+func TestPreparedParenthesizedLimitZeroProducerOmission(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want bool
+	}{
+		{"select 1 limit ?", true},
+		{"(select 1 limit ?)", true},
+		{"((select 1 limit ?))", true},
+		{"(select 1) limit ?", true},
+		{"select * from (select 1 limit ?) s", false},
+		{"(select 1 limit ?) union all select 2", false},
+		{"((select 1 limit ?) union all select 2)", false},
+		{"(select sql_calc_found_rows 1 limit ?)", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			c := newLazyUnionAllTestCompile(t)
+			c.isPrepare = false
+			params := vector.NewVec(types.T_text.ToType())
+			c.proc.SetPrepareParams(params)
+			defer func() { c.proc.SetPrepareParams(nil); params.Free(c.proc.Mp()) }()
+			stmts, err := mysql.Parse(c.proc.Ctx, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmts[0].Free()
+			c.stmt = stmts[0]
+			source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+			target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			limit, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "cast", []*plan.Expr{source, target})
+			require.NoError(t, err)
+			// This child cannot compile. Empty rows alone would not prove that
+			// the zero execution omitted the blocking producer graph.
+			producer := &plan.Node{NodeId: 0, NodeType: plan.Node_UNKNOWN}
+			root := &plan.Node{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, Limit: limit}
+			q := &plan.Query{StmtType: plan.Query_SELECT, Nodes: []*plan.Node{producer, root}, Steps: []int32{0, 1}}
+			pn := &plan.Plan{IsPrepare: true, Plan: &plan.Plan_Query{Query: q}}
+			c.pn = pn
+			for _, value := range []string{"2", "0", "1", "0"} {
+				params.Reset(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, c.proc.Mp()))
+				restore, err := c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				if tc.want && value == "0" {
+					require.NotNil(t, restore)
+					require.Equal(t, 1, c.firstStepToCompile(q))
+					scopes, compileErr := c.compilePlanScope(1, 1, q.Nodes)
+					restore()
+					require.NoError(t, compileErr)
+					require.Len(t, scopes, 1)
+					require.Empty(t, scopes[0].PreScopes)
+					ReleaseScopes(scopes)
+				} else {
+					require.Nil(t, restore)
+					require.Zero(t, c.firstStepToCompile(q))
+					if tc.want {
+						scopes, compileErr := c.compilePlanScope(1, 1, q.Nodes)
+						require.Error(t, compileErr, "positive bounds must still compile the producer")
+						require.Empty(t, scopes)
+					}
+				}
+				require.Same(t, limit, root.Limit, "borrowed plan restored between executions")
+			}
+			if tc.want {
+				params.Reset(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, nil, true, c.proc.Mp()))
+				restore, err := c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				require.Nil(t, restore, "NULL retains ordinary execution")
+				params.Reset(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, []byte("0"), false, c.proc.Mp()))
+				c.isPrepare = true
+				restore, err = c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				require.Nil(t, restore)
+				c.isPrepare = false
+				root.NodeType = plan.Node_RECURSIVE_CTE
+				restore, err = c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				require.Nil(t, restore, "recursive receiver lifecycle retained")
+				c.stmt = (*tree.Select)(nil)
+				restore, err = c.materializePreparedLimitZero(pn)
+				require.NoError(t, err)
+				require.Nil(t, restore)
+				require.Same(t, limit, root.Limit)
 			}
 		})
 	}
-}
-
-func TestRewriteAutoModeToPre_ExplainStmts(t *testing.T) {
-	// Test that rewrite works through ExplainStmt wrapper
-	innerSelect := &tree.Select{
-		RankOption: &tree.RankOption{
-			Option: map[string]string{"mode": "auto"},
-		},
-	}
-	explainStmt := tree.NewExplainStmt(innerSelect, "text")
-
-	result := rewriteAutoModeToPre(explainStmt)
-	assert.True(t, result)
-	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
-}
-
-func TestRewriteAutoModeToPre_ExplainAnalyze(t *testing.T) {
-	innerSelect := &tree.Select{
-		RankOption: &tree.RankOption{
-			Option: map[string]string{"mode": "auto"},
-		},
-	}
-	explainAnalyze := tree.NewExplainAnalyze(innerSelect, "text")
-
-	result := rewriteAutoModeToPre(explainAnalyze)
-	assert.True(t, result)
-	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
-}
-
-func TestRewriteAutoModeToPre_Insert(t *testing.T) {
-	// Test INSERT ... SELECT with mode=auto
-	innerSelect := &tree.Select{
-		RankOption: &tree.RankOption{
-			Option: map[string]string{"mode": "auto"},
-		},
-	}
-	insertStmt := &tree.Insert{
-		Rows: innerSelect,
-	}
-
-	result := rewriteAutoModeToPre(insertStmt)
-	assert.True(t, result)
-	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
-}
-
-func TestRewriteAutoModeToPre_MultiInsert(t *testing.T) {
-	// Test INSERT ALL ... SELECT with mode=auto: the rewrite reaches the source query.
-	innerSelect := &tree.Select{
-		RankOption: &tree.RankOption{
-			Option: map[string]string{"mode": "auto"},
-		},
-	}
-	multiInsert := &tree.MultiInsert{
-		Targets: []*tree.MultiInsertTarget{{Table: tree.NewTableName("t", tree.ObjectNamePrefix{}, nil)}},
-		Source:  innerSelect,
-	}
-
-	result := rewriteAutoModeToPre(multiInsert)
-	assert.True(t, result)
-	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
-
-	forced := &tree.Select{}
-	multiInsert.Source = forced
-	assert.True(t, forceModePre(multiInsert))
-	assert.NotNil(t, forced.RankOption)
-	assert.Equal(t, "pre", forced.RankOption.Option["mode"])
-}
-
-func TestRewriteAutoModeToPre_Replace(t *testing.T) {
-	// Test REPLACE ... SELECT with mode=auto
-	innerSelect := &tree.Select{
-		RankOption: &tree.RankOption{
-			Option: map[string]string{"mode": "auto"},
-		},
-	}
-	replaceStmt := &tree.Replace{
-		Rows: innerSelect,
-	}
-
-	result := rewriteAutoModeToPre(replaceStmt)
-	assert.True(t, result)
-	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
-}
-
-func TestRewriteAutoModeToPre_NilStatement(t *testing.T) {
-	result := rewriteAutoModeToPre(nil)
-	assert.False(t, result)
-}
-
-func TestRewriteAutoModeToPre_UnsupportedStatement(t *testing.T) {
-	// CreateTable should not be affected
-	createTable := &tree.CreateTable{}
-	result := rewriteAutoModeToPre(createTable)
-	assert.False(t, result)
-}
-
-// ============================================================================
-// Tests for forceModePre
-// ============================================================================
-
-func TestForceModePre_Select(t *testing.T) {
-	tests := []struct {
-		name     string
-		stmt     tree.Statement
-		expected bool
-		validate func(t *testing.T, stmt tree.Statement)
-	}{
-		{
-			name:     "force mode on select with nil RankOption",
-			stmt:     &tree.Select{},
-			expected: true,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				require.NotNil(t, sel.RankOption)
-				assert.Equal(t, "pre", sel.RankOption.Option["mode"])
-			},
-		},
-		{
-			name: "force mode on select with empty Option",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{},
-			},
-			expected: true,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Equal(t, "pre", sel.RankOption.Option["mode"])
-			},
-		},
-		{
-			name: "force mode overwrites existing mode=post",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{
-					Option: map[string]string{"mode": "post"},
-				},
-			},
-			expected: true,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Equal(t, "pre", sel.RankOption.Option["mode"])
-			},
-		},
-		{
-			name: "force mode preserves other options",
-			stmt: &tree.Select{
-				RankOption: &tree.RankOption{
-					Option: map[string]string{"mode": "post", "other": "value"},
-				},
-			},
-			expected: true,
-			validate: func(t *testing.T, stmt tree.Statement) {
-				sel := stmt.(*tree.Select)
-				assert.Equal(t, "pre", sel.RankOption.Option["mode"])
-				assert.Equal(t, "value", sel.RankOption.Option["other"])
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := forceModePre(tt.stmt)
-			assert.Equal(t, tt.expected, result)
-			if tt.validate != nil {
-				tt.validate(t, tt.stmt)
-			}
-		})
-	}
-}
-
-func TestForceModePre_ExplainStmts(t *testing.T) {
-	innerSelect := &tree.Select{}
-	explainStmt := tree.NewExplainStmt(innerSelect, "text")
-
-	result := forceModePre(explainStmt)
-	assert.True(t, result)
-	require.NotNil(t, innerSelect.RankOption)
-	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
-}
-
-func TestForceModePre_Insert(t *testing.T) {
-	innerSelect := &tree.Select{}
-	insertStmt := &tree.Insert{
-		Rows: innerSelect,
-	}
-
-	result := forceModePre(insertStmt)
-	assert.True(t, result)
-	require.NotNil(t, innerSelect.RankOption)
-	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
-}
-
-func TestForceModePre_NilStatement(t *testing.T) {
-	result := forceModePre(nil)
-	assert.False(t, result)
-}
-
-func TestForceModePre_NilRows(t *testing.T) {
-	insertStmt := &tree.Insert{
-		Rows: nil,
-	}
-	result := forceModePre(insertStmt)
-	assert.False(t, result)
-}
-
-// ============================================================================
-// Tests for rewriteAutoModeInSelect
-// ============================================================================
-
-func TestRewriteAutoModeInSelect_NilSelect(t *testing.T) {
-	result := rewriteAutoModeInSelect(nil)
-	assert.False(t, result)
-}
-
-// ============================================================================
-// Tests for recursive rewrite functions
-// ============================================================================
-
-func TestRewriteAutoModeToPre_Complex(t *testing.T) {
-	// 1. Test UnionClause
-	unionSelect := &tree.Select{
-		Select: &tree.UnionClause{
-			Left: &tree.Select{
-				RankOption: &tree.RankOption{Option: map[string]string{"mode": "auto"}},
-			},
-			Right: &tree.Select{
-				RankOption: &tree.RankOption{Option: map[string]string{"mode": "auto"}},
-			},
-			Type: tree.UNION,
-		},
-	}
-	assert.True(t, rewriteAutoModeToPre(unionSelect))
-	left := unionSelect.Select.(*tree.UnionClause).Left.(*tree.Select)
-	right := unionSelect.Select.(*tree.UnionClause).Right.(*tree.Select)
-	assert.Equal(t, "pre", left.RankOption.Option["mode"])
-	assert.Equal(t, "pre", right.RankOption.Option["mode"])
-
-	// 2. Test Subquery in FROM clause (AliasedTableExpr -> Subquery)
-	subquerySelect := &tree.Select{
-		Select: &tree.SelectClause{
-			From: &tree.From{
-				Tables: []tree.TableExpr{
-					&tree.AliasedTableExpr{
-						Expr: &tree.Subquery{
-							Select: &tree.Select{
-								RankOption: &tree.RankOption{Option: map[string]string{"mode": "auto"}},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	assert.True(t, rewriteAutoModeToPre(subquerySelect))
-	tbl := subquerySelect.Select.(*tree.SelectClause).From.Tables[0].(*tree.AliasedTableExpr)
-	inner := tbl.Expr.(*tree.Subquery).Select.(*tree.Select)
-	assert.Equal(t, "pre", inner.RankOption.Option["mode"])
-
-	// 3. Test JoinTableExpr
-	joinSelect := &tree.Select{
-		Select: &tree.SelectClause{
-			From: &tree.From{
-				Tables: []tree.TableExpr{
-					&tree.JoinTableExpr{
-						Left: &tree.AliasedTableExpr{
-							Expr: &tree.Subquery{
-								Select: &tree.Select{
-									RankOption: &tree.RankOption{Option: map[string]string{"mode": "auto"}},
-								},
-							},
-						},
-						Right: &tree.AliasedTableExpr{
-							Expr: &tree.Subquery{
-								Select: &tree.Select{
-									RankOption: &tree.RankOption{Option: map[string]string{"mode": "auto"}},
-								},
-							},
-						},
-						JoinType: tree.JOIN_TYPE_INNER,
-					},
-				},
-			},
-		},
-	}
-	assert.True(t, rewriteAutoModeToPre(joinSelect))
-	jt := joinSelect.Select.(*tree.SelectClause).From.Tables[0].(*tree.JoinTableExpr)
-	leftSub := jt.Left.(*tree.AliasedTableExpr).Expr.(*tree.Subquery).Select.(*tree.Select)
-	rightSub := jt.Right.(*tree.AliasedTableExpr).Expr.(*tree.Subquery).Select.(*tree.Select)
-	assert.Equal(t, "pre", leftSub.RankOption.Option["mode"])
-	assert.Equal(t, "pre", rightSub.RankOption.Option["mode"])
-
-	// 4. Test ParenSelect and ParenTableExpr
-	parenSelect := &tree.Select{
-		Select: &tree.ParenSelect{
-			Select: &tree.Select{
-				Select: &tree.SelectClause{
-					From: &tree.From{
-						Tables: []tree.TableExpr{
-							&tree.ParenTableExpr{
-								Expr: &tree.AliasedTableExpr{
-									Expr: &tree.Subquery{
-										Select: &tree.Select{
-											RankOption: &tree.RankOption{Option: map[string]string{"mode": "auto"}},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	assert.True(t, rewriteAutoModeToPre(parenSelect))
-	innerParen := parenSelect.Select.(*tree.ParenSelect).Select.Select.(*tree.SelectClause)
-	innerTable := innerParen.From.Tables[0].(*tree.ParenTableExpr).Expr.(*tree.AliasedTableExpr)
-	finalInner := innerTable.Expr.(*tree.Subquery).Select.(*tree.Select)
-	assert.Equal(t, "pre", finalInner.RankOption.Option["mode"])
-}
-
-func TestForceModePre_EdgeCases(t *testing.T) {
-	// explain wrappers
-	assert.True(t, forceModePre(tree.NewExplainPhyPlan(&tree.Select{}, "text")))
-
-	// ExplainFor usually has nil statement in NewExplainFor, so it returns false
-	assert.False(t, forceModePre(tree.NewExplainFor("text", 1)))
-
-	// unsupported
-	assert.False(t, forceModePre(&tree.ShowDatabases{}))
-
-	// ExplainStmt through unsupported
-	assert.False(t, forceModePre(tree.NewExplainStmt(&tree.ShowDatabases{}, "text")))
-}
-
-func TestRewriteAutoModeInTableExpr_StatementSource(t *testing.T) {
-	stmtSource := &tree.StatementSource{
-		Statement: &tree.Select{
-			RankOption: &tree.RankOption{Option: map[string]string{"mode": "auto"}},
-		},
-	}
-	assert.True(t, rewriteAutoModeInTableExpr(stmtSource))
-	assert.Equal(t, "pre", stmtSource.Statement.(*tree.Select).RankOption.Option["mode"])
-}
-
-func TestRewriteAutoModeInTableExpr_ApplyTableExpr(t *testing.T) {
-	applyExpr := &tree.ApplyTableExpr{
-		Left: &tree.AliasedTableExpr{
-			Expr: &tree.Subquery{
-				Select: &tree.Select{
-					RankOption: &tree.RankOption{Option: map[string]string{"mode": "auto"}},
-				},
-			},
-		},
-		Right: &tree.AliasedTableExpr{
-			Expr: &tree.Subquery{
-				Select: &tree.Select{
-					RankOption: &tree.RankOption{Option: map[string]string{"mode": "auto"}},
-				},
-			},
-		},
-	}
-	assert.True(t, rewriteAutoModeInTableExpr(applyExpr))
-	left := applyExpr.Left.(*tree.AliasedTableExpr).Expr.(*tree.Subquery).Select.(*tree.Select)
-	right := applyExpr.Right.(*tree.AliasedTableExpr).Expr.(*tree.Subquery).Select.(*tree.Select)
-	assert.Equal(t, "pre", left.RankOption.Option["mode"])
-	assert.Equal(t, "pre", right.RankOption.Option["mode"])
 }

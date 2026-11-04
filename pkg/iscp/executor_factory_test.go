@@ -30,19 +30,41 @@ func TestExecutorFactoryReturnsAttachErrorAndReleasesAdmission(t *testing.T) {
 	t.Cleanup(func() { running.Store(false) })
 
 	attachErr := errors.New("attach failed")
-	factory := ISCPTaskExecutorFactory(
-		nil,
-		nil,
-		func(context.Context, uint64, taskservice.ActiveRoutine) error {
-			return attachErr
-		},
-		"",
-		nil,
-		nil,
-	)
-
-	for range 2 {
-		require.ErrorIs(t, factory(context.Background(), &task.DaemonTask{}), attachErr)
+	for _, tc := range []struct {
+		name    string
+		option  ISCPExecutorOption
+		sync    time.Duration
+		persist time.Duration
+	}{
+		{"defaults", ISCPExecutorOption{}, 10 * time.Second, 5 * time.Second},
+		{"configured", ISCPExecutorOption{SyncTaskInterval: 11 * time.Millisecond, IndexFlushWatermarkInterval: 23 * time.Millisecond}, 11 * time.Millisecond, 23 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := tc.option
+			var owner context.Context
+			factory := ISCPTaskExecutorFactory(
+				nil, nil,
+				func(_ context.Context, _ uint64, routine taskservice.ActiveRoutine) error {
+					exec := routine.(*ISCPTaskExecutor)
+					owner = exec.ownerCtx
+					require.Equal(t, tc.sync, exec.option.SyncTaskInterval)
+					require.Equal(t, tc.persist, exec.option.IndexFlushWatermarkInterval)
+					// A later attempt must receive a fresh option value.
+					exec.option.SyncTaskInterval = time.Hour
+					return attachErr
+				}, "", nil, nil, tc.option,
+			)
+			for range 2 {
+				require.ErrorIs(t, factory(context.Background(), &task.DaemonTask{}), attachErr)
+				require.NotNil(t, owner)
+				select {
+				case <-owner.Done():
+				default:
+					t.Fatal("attach failure retained the executor lifetime")
+				}
+				require.Equal(t, original, tc.option)
+			}
+		})
 	}
 }
 

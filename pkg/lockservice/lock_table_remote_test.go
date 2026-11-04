@@ -17,10 +17,12 @@ package lockservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -63,6 +65,30 @@ func (c *deterministicUnlockErrorClient) AsyncSend(
 }
 
 func (c *deterministicUnlockErrorClient) Close() error { return nil }
+
+type connectionUnlockErrorClient struct {
+	deterministicUnlockErrorClient
+	bind        pb.LockTable
+	bindCalls   atomic.Int32
+	failUnlocks int32
+}
+
+func (c *connectionUnlockErrorClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
+	switch req.Method {
+	case pb.Method_Unlock:
+		if c.calls.Add(1) <= c.failUnlocks {
+			return nil, c.err
+		}
+		return &pb.Response{}, nil
+	case pb.Method_GetBind:
+		c.bindCalls.Add(1)
+		resp := &pb.Response{}
+		resp.GetBind.LockTable = c.bind
+		return resp, nil
+	default:
+		return nil, errors.New("unexpected request")
+	}
+}
 
 func TestIsRetryErrorTreatsLocalBackendGenerationErrorsAsAmbiguous(t *testing.T) {
 	tests := []struct {
@@ -121,11 +147,15 @@ func (c *blockingUnlockClient) Close() error { return nil }
 
 type blockingBindRefreshClient struct {
 	bindRefreshStarted chan struct{}
+	unlockError        error
 }
 
 func (c *blockingBindRefreshClient) Send(ctx context.Context, req *pb.Request) (*pb.Response, error) {
 	switch req.Method {
 	case pb.Method_Unlock, pb.Method_GetTxnLock:
+		if c.unlockError != nil {
+			return nil, c.unlockError
+		}
 		return nil, io.ErrUnexpectedEOF
 	case pb.Method_GetBind:
 		select {
@@ -293,7 +323,6 @@ func TestRemoteWriterFairLockFallsBackToExclusiveBeforeLegacyAdmission(t *testin
 		client := &writerFairFallbackClient{}
 		remote := newRemoteLockTable(
 			"new-origin",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -344,7 +373,6 @@ func TestRemoteWriterFairLockDoesNotFallbackAfterTransportError(t *testing.T) {
 		client := &writerFairTransportErrorClient{bind: bind}
 		remote := newRemoteLockTable(
 			"new-origin",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -398,7 +426,6 @@ func TestRemoteWriterFairExclusiveFallbackPreservesBindChange(t *testing.T) {
 		var observedBind pb.LockTable
 		remote := newRemoteLockTable(
 			"new-origin",
-			time.Second,
 			bind,
 			client,
 			func(value pb.LockTable) { observedBind = value },
@@ -606,7 +633,6 @@ func TestRemoteCoarsenedLockTransportFailureKeepsBoundedRouting(t *testing.T) {
 		}
 		remote := newRemoteLockTable(
 			"origin",
-			time.Second,
 			bind,
 			&lostCoarsenedLockClient{bind: bind},
 			func(pb.LockTable) {},
@@ -1007,7 +1033,6 @@ func TestRemoteTxnSnapshotUsesNegotiatedOwnerLocalRPC(t *testing.T) {
 		client := &ownerTxnSnapshotClient{waiter: waiter}
 		remote := newRemoteLockTable(
 			"origin",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -1070,7 +1095,6 @@ func TestOwnerSnapshotCapabilityLossFencesTransaction(t *testing.T) {
 		}
 		remote := newRemoteLockTable(
 			"snapshot-origin",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -1125,7 +1149,6 @@ func TestNewOriginKeepsExactTraversalAgainstLegacyOwner(t *testing.T) {
 		client := &legacyLockOwnerClient{bind: bind, waiter: waiter}
 		remote := newRemoteLockTable(
 			"new-origin",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -1217,7 +1240,6 @@ func TestLegacyOwnerRetryRepairsExactProbeLedger(t *testing.T) {
 		}
 		remote := newRemoteLockTable(
 			"new-origin",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -1303,7 +1325,6 @@ func TestLegacyOwnerProbeCapacityFailureFencesTransaction(t *testing.T) {
 		client := &legacyLockOwnerClient{bind: bind}
 		remote := newRemoteLockTable(
 			"smaller-new-origin",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -1350,7 +1371,6 @@ func TestNegotiatedOwnerSnapshotCapabilityCannotDowngradeInTxn(t *testing.T) {
 		client := &changingOwnerCapabilityClient{}
 		remote := newRemoteLockTable(
 			"origin",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -1405,7 +1425,6 @@ func TestProxyPhysicalHolderRequiresV28OwnerCapability(t *testing.T) {
 		client := &legacyLockOwnerClient{bind: bind}
 		remote := newRemoteLockTable(
 			"proxy-origin",
-			time.Second,
 			bind,
 			client,
 			func(pb.LockTable) {},
@@ -1454,7 +1473,6 @@ func TestRemoteMixedModeTransportFailureKeepsExistingCleanupRoute(t *testing.T) 
 		}
 		remote := newRemoteLockTable(
 			"origin",
-			time.Second,
 			bind,
 			&lostCoarsenedLockClient{bind: bind},
 			func(pb.LockTable) {},
@@ -1515,7 +1533,6 @@ func TestRemoteGetLockWithContextStopsOnCancellation(t *testing.T) {
 	client := &blockingGetLockClient{started: make(chan struct{}, 1)}
 	remote := newRemoteLockTable(
 		"s1",
-		time.Second,
 		pb.LockTable{ServiceID: "s2", Table: 1, Valid: true},
 		client,
 		func(pb.LockTable) {},
@@ -1539,7 +1556,6 @@ func TestRemoteGetLockPreservesCancellationDuringBindRefresh(t *testing.T) {
 	client := &blockingBindRefreshClient{bindRefreshStarted: make(chan struct{}, 1)}
 	remote := newRemoteLockTable(
 		"s1",
-		time.Second,
 		pb.LockTable{ServiceID: "s2", Table: 1, OriginTable: 1, Valid: true},
 		client,
 		func(pb.LockTable) {},
@@ -1572,7 +1588,6 @@ func TestDeadlockDetectorCloseCancelsRemoteGetLockRetry(t *testing.T) {
 	}
 	remote := newRemoteLockTable(
 		"s1",
-		time.Second,
 		bind,
 		client,
 		func(pb.LockTable) {},
@@ -1631,7 +1646,6 @@ func TestDeadlockDetectorRemoteGetLockTimeoutReleasesWorkers(t *testing.T) {
 	client := &blockingGetLockClient{started: make(chan struct{}, deadlockCheckTaskCount+1)}
 	remote := newRemoteLockTable(
 		"s1",
-		time.Second,
 		pb.LockTable{ServiceID: "s2", Table: 1, Valid: true},
 		client,
 		func(pb.LockTable) {},
@@ -1694,11 +1708,12 @@ func TestRemoteUnlockWithContextStopsOnCancellation(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	client := &blockingUnlockClient{unlockStarted: make(chan struct{}, 1)}
+	failed := &failOnceSendClient{Client: client, method: pb.Method_Unlock, err: &net.OpError{Op: "write", Net: "unix", Err: syscall.EPIPE}}
+
 	remote := newRemoteLockTable(
 		"s1",
-		time.Second,
 		pb.LockTable{ServiceID: "s2", Table: 1},
-		client,
+		failed,
 		func(pb.LockTable) {},
 		getLogger(""),
 	)
@@ -1707,8 +1722,15 @@ func TestRemoteUnlockWithContextStopsOnCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		done <- remote.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{})
+	}()
+	defer func() {
+		cancel()
+		<-finished
+		reuse.Free(txn, nil)
 	}()
 
 	select {
@@ -1730,7 +1752,6 @@ func TestRemoteUnlockReturnsDeterministicOwnerErrorWithoutRetryLoop(t *testing.T
 	client := &deterministicUnlockErrorClient{err: ErrTxnNotFound}
 	remote := newRemoteLockTable(
 		"s1",
-		time.Second,
 		pb.LockTable{ServiceID: "s2", Table: 1},
 		client,
 		func(pb.LockTable) {},
@@ -1748,13 +1769,64 @@ func TestRemoteUnlockReturnsDeterministicOwnerErrorWithoutRetryLoop(t *testing.T
 		"a deterministic owner rejection must be returned, not replayed forever")
 }
 
+func TestRemoteUnlockConnectionFailureRefreshesBind(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"broken pipe", &net.OpError{Op: "write", Net: "tcp", Err: &os.SyscallError{Syscall: "write", Err: syscall.EPIPE}}},
+		{"connection reset", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}},
+		{"wrapped broken pipe", errors.Join(errors.New("RPC send failed"), syscall.EPIPE)},
+		{"typed connection reset", moerr.NewConnectionReset(context.Background())},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, changed := range []bool{false, true} {
+				name := "same owner retry"
+				if changed {
+					name = "reassigned owner cleanup"
+				}
+				t.Run(name, func(t *testing.T) {
+					bind := pb.LockTable{ServiceID: "s2", Table: 1, OriginTable: 1, Valid: true, Version: 1}
+					newBind := bind
+					if changed {
+						newBind.ServiceID = "s1"
+						newBind.Version++
+					}
+					client := &connectionUnlockErrorClient{
+						deterministicUnlockErrorClient: deterministicUnlockErrorClient{err: test.err},
+						bind:                           newBind, failUnlocks: 1,
+					}
+					var replacements []pb.LockTable
+					remote := newRemoteLockTable("s1", bind, client,
+						func(b pb.LockTable) { replacements = append(replacements, b) }, getLogger(""))
+					txn := newActiveTxn([]byte("transport-unlock"), "s1", newFixedSlicePool(8), "")
+					defer reuse.Free(txn, nil)
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					require.NoError(t, remote.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{}))
+					require.Equal(t, int32(1), client.bindCalls.Load())
+					if changed {
+						require.Equal(t, int32(1), client.calls.Load())
+						require.Equal(t, []pb.LockTable{newBind}, replacements)
+					} else {
+						require.Equal(t, int32(2), client.calls.Load())
+						require.Empty(t, replacements)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestRemoteUnlockWithContextCancelsBindRefresh(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
-	client := &blockingBindRefreshClient{bindRefreshStarted: make(chan struct{}, 1)}
+	client := &blockingBindRefreshClient{
+		bindRefreshStarted: make(chan struct{}, 1),
+		unlockError:        &net.OpError{Op: "write", Net: "unix", Err: syscall.EPIPE},
+	}
 	remote := newRemoteLockTable(
 		"s1",
-		time.Second,
 		pb.LockTable{ServiceID: "s2", Table: 1},
 		client,
 		func(pb.LockTable) {},
@@ -1764,6 +1836,7 @@ func TestRemoteUnlockWithContextCancelsBindRefresh(t *testing.T) {
 	txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(8), "")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		done <- remote.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{})
@@ -1797,7 +1870,6 @@ func TestRemoteNewBindRefreshHonorsContext(t *testing.T) {
 	newBind.Version++
 	remote := newRemoteLockTable(
 		"s1",
-		time.Second,
 		bind,
 		client,
 		func(pb.LockTable) {},
@@ -1805,6 +1877,7 @@ func TestRemoteNewBindRefreshHonorsContext(t *testing.T) {
 	)
 	remote.allocatorStateProvider = func() allocatorState { return allocatorState{} }
 	remote.allocatorBindChangedHandler = func(
+		context.Context,
 		string,
 		pb.LockTable,
 		pb.LockTable,
@@ -2175,7 +2248,6 @@ func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 			svc.lastAllocatorVersion = oldAllocator.version
 			svc.tableGroups.set(staleA.Group, staleA.Table, newRemoteLockTable(
 				svc.serviceID,
-				time.Second,
 				staleA,
 				nil,
 				svc.handleBindChanged,
@@ -2183,7 +2255,6 @@ func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 			))
 			svc.tableGroups.set(currentA.Group, currentA.Table, newRemoteLockTable(
 				svc.serviceID,
-				time.Second,
 				currentA,
 				nil,
 				svc.handleBindChanged,
@@ -2191,7 +2262,6 @@ func TestRemoteNewBindFromNewAllocatorPurgesStaleBinds(t *testing.T) {
 			))
 			remote := newRemoteLockTable(
 				svc.serviceID,
-				time.Second,
 				oldB,
 				c,
 				svc.handleBindChanged,
@@ -2276,7 +2346,6 @@ func TestRemoteLateNewBindDoesNotRepublishSupersededAllocator(t *testing.T) {
 
 			remote := newRemoteLockTable(
 				svc.serviceID,
-				time.Second,
 				oldBind,
 				c,
 				svc.handleBindChanged,
@@ -2336,7 +2405,6 @@ func TestRemoteNewBindRefreshFailureDoesNotPublishResponse(t *testing.T) {
 			published := 0
 			remote := newRemoteLockTable(
 				"s1",
-				time.Second,
 				oldBind,
 				c,
 				func(pb.LockTable) { published++ },
@@ -2346,6 +2414,7 @@ func TestRemoteNewBindRefreshFailureDoesNotPublishResponse(t *testing.T) {
 				return allocatorState{id: "current-allocator", version: 2}
 			}
 			remote.allocatorBindChangedHandler = func(
+				context.Context,
 				string,
 				pb.LockTable,
 				pb.LockTable,
@@ -2481,9 +2550,21 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 		func(l *remoteLockTable, s Server) {
 			txnID := []byte("txn1")
 			txn := newActiveTxn(txnID, string(txnID), newFixedSlicePool(32), "")
-			l.unlock(txn, nil, timestamp.Timestamp{})
-			<-c
-			reuse.Free(txn, nil)
+			defer reuse.Free(txn, nil)
+			failed := &failOnceSendClient{Client: l.client, method: pb.Method_Unlock, err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}}
+			l.client = failed
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			require.NoError(t, l.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{}))
+			require.True(t, failed.failed.Load())
+			select {
+			case <-c:
+			default:
+				t.Fatal("unlock returned before the owner acknowledged cleanup")
+			}
+			// Receiving c synchronizes with the handler before reading its count.
+			require.Equal(t, 2, n, "valid bind must still retry the owner")
+
 		},
 		func(lt pb.LockTable) {},
 	)
@@ -2535,7 +2616,7 @@ func TestRemoteBindRefreshRejectsSupersededAllocatorBind(t *testing.T) {
 			svc.addSupersededAllocatorIDLocked(oldAllocator.id)
 			svc.allocatorVersionMu.Unlock()
 
-			l := newRemoteLockTable(svc.serviceID, time.Second, oldBind, c, svc.handleBindChanged, logger)
+			l := newRemoteLockTable(svc.serviceID, oldBind, c, svc.handleBindChanged, logger)
 			l.allocatorStateProvider = svc.allocatorStateSnapshot
 			l.allocatorBindChangedHandler = svc.handleBindChangedFromAllocator
 
@@ -2856,6 +2937,27 @@ func TestRemoteWithBindChanged(t *testing.T) {
 				l.getLock(ctx, txnID, pb.WaitTxn{TxnID: []byte{1}}, nil),
 				ErrLockTableBindChanged)
 			requireRemoteBindChanged(t, ctx, c, newBind)
+			originalClient := l.client
+			defer func() { l.client = originalClient }()
+			for _, method := range []pb.Method{pb.Method_Lock, pb.Method_Unlock, pb.Method_GetTxnLock} {
+				failed := &failOnceSendClient{Client: originalClient, method: method,
+					err: &net.OpError{Op: "write", Net: "unix", Err: syscall.EPIPE}}
+				l.client = failed
+				switch method {
+				case pb.Method_Lock:
+					txn.Lock()
+					l.lock(ctx, txn, [][]byte{{1}}, LockOptions{}, func(_ pb.Result, err error) { lockErr = err })
+					txn.Unlock()
+					require.ErrorIs(t, lockErr, ErrLockTableBindChanged)
+				case pb.Method_Unlock:
+					require.NoError(t, l.unlockWithContext(ctx, txn, nil, timestamp.Timestamp{}))
+				case pb.Method_GetTxnLock:
+					require.ErrorIs(t, l.getLock(ctx, txnID, pb.WaitTxn{TxnID: []byte{1}}, nil), ErrLockTableBindChanged)
+				}
+				require.True(t, failed.failed.Load(), "method %s did not exercise transport failure", method)
+				requireRemoteBindChanged(t, ctx, c, newBind)
+			}
+
 			reuse.Free(txn, nil)
 		},
 		func(bind pb.LockTable) {
@@ -2915,12 +3017,25 @@ func TestRetryRemoteLockError(t *testing.T) {
 			err:  moerr.NewUnexpectedEOF(context.Background(), "test"),
 			want: true,
 		},
+		{name: "broken pipe", err: syscall.EPIPE, want: true},
+		{name: "wrapped write broken pipe", err: fmt.Errorf("send: %w", &net.OpError{Op: "write", Net: "unix", Err: &os.SyscallError{Syscall: "write", Err: syscall.EPIPE}}), want: true},
+		{name: "connection reset", err: syscall.ECONNRESET, want: true},
+		{name: "wrapped read reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, want: true},
+		{name: "closed connection", err: net.ErrClosed, want: true},
+		{name: "wrapped closed connection", err: fmt.Errorf("send: %w", net.ErrClosed), want: true},
+		{name: "nil", err: nil, want: false},
+		{name: "canceled", err: context.Canceled, want: false},
+		{name: "owner rejection", err: ErrTxnNotFound, want: false},
+		{name: "unsupported request", err: moerr.NewNotSupportedNoCtx("unsupported"), want: false},
+		{name: "permission denied", err: &net.OpError{Op: "write", Net: "unix", Err: os.ErrPermission}, want: false},
+		{name: "text alone", err: errors.New("broken pipe"), want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := retryRemoteLockError(tt.err)
 			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want, retryRemoteUnlockError(tt.err))
 		})
 	}
 }
@@ -2936,7 +3051,6 @@ func runRemoteLockTableTests(
 		register(s)
 		l := newRemoteLockTable(
 			"",
-			time.Second,
 			binding,
 			c,
 			changed,

@@ -342,8 +342,9 @@ func TestNarrowCastHonorsSelectList(t *testing.T) {
 	}
 }
 
-// TestCastTextToFloat8DigitSeparators casts text with digit separators to float8: each
-// spelling rounds as the same value without separators.
+// TestCastTextToFloat8DigitSeparators casts text with a digit separator to float8 as FLOAT
+// does: the decimal prefix before the separator is the value, rounded once from its exact
+// decimal value.
 func TestCastTextToFloat8DigitSeparators(t *testing.T) {
 	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
 	for _, tc := range []struct {
@@ -354,7 +355,7 @@ func TestCastTextToFloat8DigitSeparators(t *testing.T) {
 		{"1.062500000000000000000001e0_0", 1.125},
 		{"-1.062500000000000000000001e00", -1.125},
 		{"-1.062500000000000000000001e0_0", -1.125},
-		{"1.062_500000000000000000001", 1.125},
+		{"1.062_500000000000000000001", 1},
 		{"1.0625e0_0", 1},
 	} {
 		from := vector.NewVec(types.T_varchar.ToType())
@@ -369,5 +370,48 @@ func TestCastTextToFloat8DigitSeparators(t *testing.T) {
 		from.Free(proc.Mp())
 		target.Free(proc.Mp())
 		result.Free()
+	}
+}
+
+// TestCastTextToFloat8Hexadecimal casts radix text to float8 as FLOAT does: a 0x, 0b or 0o
+// integer is its value, a hexadecimal fraction is invalid, and a value beyond the type's
+// finite range errors.
+func TestCastTextToFloat8Hexadecimal(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	for _, tc := range []struct {
+		text  string
+		want  float32
+		fails bool
+	}{
+		{"0x1c0", 448, false},
+		{"-0x1c0", -448, false},
+		{"0X1C0", 448, false},
+		{"0b101", 5, false},
+		{"0o17", 15, false},
+		{"448", 448, false},
+		{"0x1.1p0", 0, true},
+		{"-0x1.1p0", 0, true},
+		{"0x1c1", 0, true},
+		{"448.000000000000000000000001", 0, true},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			from := vector.NewVec(types.T_varchar.ToType())
+			t.Cleanup(func() { from.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(from, []byte(tc.text), false, proc.Mp()))
+			target := vector.NewConstNull(types.T_float8.ToType(), 1, proc.Mp())
+			t.Cleanup(func() { target.Free(proc.Mp()) })
+			result := vector.NewFunctionResultWrapper(types.T_float8.ToType(), proc.Mp())
+			t.Cleanup(result.Free)
+			require.NoError(t, result.PreExtendAndReset(1))
+			err := NewCast([]*vector.Vector{from, target}, result, proc, 1, nil)
+			if tc.fails {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			got, ok := vector.GetLowPrecisionFloatAt(result.GetResultVector(), 0)
+			require.True(t, ok)
+			require.Equal(t, tc.want, got)
+		})
 	}
 }

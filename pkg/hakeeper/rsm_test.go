@@ -15,6 +15,8 @@
 package hakeeper
 
 import (
+	"math"
+
 	"bytes"
 	"sort"
 	"testing"
@@ -27,13 +29,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
-
-func TestAssignID(t *testing.T) {
-	tsm := NewStateMachine(0, 1).(*stateMachine)
-	assert.Equal(t, uint64(0), tsm.state.NextID)
-	assert.Equal(t, uint64(1), tsm.assignID())
-	assert.Equal(t, uint64(1), tsm.state.NextID)
-}
 
 func TestHAKeeperStateMachineCanBeCreated(t *testing.T) {
 	defer func() {
@@ -220,7 +215,9 @@ func TestGetIDCmd(t *testing.T) {
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
-	assert.Equal(t, uint64(201), tsm1.assignID())
+	result, err = tsm1.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Batch: 1})})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 201}, result)
 
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
@@ -260,7 +257,9 @@ func TestAllocateIDByKeyCmd(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 101}, result)
 
-	assert.Equal(t, uint64(201), tsm1.assignIDByKey("k1"))
+	result, err = tsm1.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: "k1", Batch: 1})})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 201}, result)
 
 	result, err = tsm1.Update(sm.Entry{Cmd: cmd})
 	assert.NoError(t, err)
@@ -276,7 +275,9 @@ func TestAllocateIDByKeyCmd(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, sm.Result{Value: 51}, result)
 
-	assert.Equal(t, uint64(101), tsm1.assignIDByKey("k2"))
+	result, err = tsm1.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: "k2", Batch: 1})})
+	assert.NoError(t, err)
+	assert.Equal(t, sm.Result{Value: 101}, result)
 }
 
 func TestAllocateIDByKeyWithRequestIDIsIdempotentAcrossSnapshot(t *testing.T) {
@@ -701,6 +702,57 @@ func TestSetTaskSchedulerState(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, tt.result, rsm.state.TaskSchedulerState)
 	}
+}
+
+// TestTaskTableUserCmdPersistsFirstBootOnly pins the one-shot persistence the
+// unknown-credentials upgrade rollout state depends on: the first accepted
+// task-table-user proposal persists and flips the scheduler to Running; every
+// later proposal — env-set at upgrade time or a fresh random pair — is dropped
+// and never replaces the persisted first-boot credentials. The proposer
+// (pkg/logservice/store_hakeeper_check.go's registerTaskUser/setTaskTableUser,
+// GetTaskTableUserCmd's only caller) merely logs 'task user info already set'
+// on this pre-state, no rotation command exists, and the state rides the RSM
+// snapshot across restarts — so special-user credentials set after first
+// bootstrap can never match an already-initialized cluster's persisted pair.
+func TestTaskTableUserCmdPersistsFirstBootOnly(t *testing.T) {
+	first := pb.TaskTableUser{Username: "first-boot-random-user", Password: "first-boot-random-password"}
+	rsm := stateMachine{state: pb.HAKeeperRSMState{
+		State:              pb.HAKeeperRunning,
+		TaskSchedulerState: pb.TaskSchedulerCreated,
+	}}
+	result, err := rsm.Update(sm.Entry{Cmd: GetTaskTableUserCmd(first)})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(pb.TaskSchedulerCreated), result.Value,
+		"the proposer observes the Created pre-state on the first proposal")
+	assert.Equal(t, first, rsm.state.TaskTableUser)
+	assert.Equal(t, pb.TaskSchedulerRunning, rsm.state.TaskSchedulerState)
+
+	for _, later := range []pb.TaskTableUser{
+		{Username: "env-set-at-upgrade", Password: "env-set-at-upgrade"},
+		{Username: "another-random-pair", Password: "another-random-pair"},
+	} {
+		result, err = rsm.Update(sm.Entry{Cmd: GetTaskTableUserCmd(later)})
+		require.NoError(t, err)
+		assert.Equal(t, uint64(pb.TaskSchedulerRunning), result.Value,
+			"the proposer observes Running and logs-and-drops the later proposal")
+		assert.Equal(t, first, rsm.state.TaskTableUser,
+			"later proposals never replace the persisted first-boot credentials")
+	}
+
+	// The persisted pair survives a snapshot/restore round trip, so a restart
+	// keeps rejecting replacement proposals.
+	var buf bytes.Buffer
+	require.NoError(t, rsm.SaveSnapshot(&buf, nil, nil))
+	restored := stateMachine{}
+	require.NoError(t, restored.RecoverFromSnapshot(&buf, nil, nil))
+	assert.Equal(t, first, restored.state.TaskTableUser)
+	assert.Equal(t, pb.TaskSchedulerRunning, restored.state.TaskSchedulerState)
+	result, err = restored.Update(sm.Entry{Cmd: GetTaskTableUserCmd(
+		pb.TaskTableUser{Username: "post-restart-env", Password: "post-restart-env"})})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(pb.TaskSchedulerRunning), result.Value)
+	assert.Equal(t, first, restored.state.TaskTableUser,
+		"the restarted state machine keeps the first-boot pair")
 }
 
 func TestInitialClusterRequestCmd(t *testing.T) {
@@ -2564,6 +2616,60 @@ func TestCheckerStateConfigurationSnapshotsAreIndependent(t *testing.T) {
 	}
 }
 
+func TestSchedulingStateProjectionPreservesAuthority(t *testing.T) {
+	rsm := NewStateMachine(DefaultHAKeeperShardID, 1).(*stateMachine)
+	config := &pb.ConfigData{Content: map[string]*pb.ConfigItem{
+		"display":                     {CurrentValue: "full"},
+		pb.WALRecoveryStatusConfigKey: {CurrentValue: "coordinator-pending", XXX_unrecognized: []byte{8, 1}},
+	}}
+	rsm.state.CNState.Stores["cn"] = pb.CNStoreInfo{Tick: 7, ConfigData: config}
+	rsm.state.TNState.Stores["tn"] = pb.TNStoreInfo{Tick: 8, ConfigData: config}
+	rsm.state.ProxyState.Stores["proxy"] = pb.ProxyStore{Tick: 9, ConfigData: config}
+	rsm.state.LogState.Stores["log"] = pb.LogStoreInfo{Tick: 10, ConfigData: config}
+	rsm.state.LogState.Stores["missing"] = pb.LogStoreInfo{}
+	rsm.state.LogServiceRecoveryPending = true
+	rsm.state.LogServiceRecoveryPrepared = true
+	rsm.state.IDWatermarkRestoreGeneration = 17
+	lookup := func(query *StateQuery) *pb.CheckerState {
+		t.Helper()
+		value, err := rsm.Lookup(query)
+		require.NoError(t, err)
+		return value.(*pb.CheckerState)
+	}
+	full := lookup(&StateQuery{})
+	projected := lookup(&StateQuery{Scheduling: true})
+	require.Nil(t, projected.CNState.Stores["cn"].ConfigData)
+	require.Nil(t, projected.TNState.Stores["tn"].ConfigData)
+	require.Nil(t, projected.ProxyState.Stores["proxy"].ConfigData)
+	require.Nil(t, projected.LogState.Stores["missing"].ConfigData)
+	status := projected.LogState.Stores["log"].ConfigData
+	require.Len(t, status.Content, 1)
+	require.Equal(t, config.Content[pb.WALRecoveryStatusConfigKey], status.Content[pb.WALRecoveryStatusConfigKey])
+	// Restore only omitted display data to compare every other field, including
+	// recovery generations and future additions to the checker snapshot.
+	for id, info := range projected.CNState.Stores {
+		info.ConfigData = full.CNState.Stores[id].ConfigData
+		projected.CNState.Stores[id] = info
+	}
+	for id, info := range projected.TNState.Stores {
+		info.ConfigData = full.TNState.Stores[id].ConfigData
+		projected.TNState.Stores[id] = info
+	}
+	for id, info := range projected.ProxyState.Stores {
+		info.ConfigData = full.ProxyState.Stores[id].ConfigData
+		projected.ProxyState.Stores[id] = info
+	}
+	for id, info := range projected.LogState.Stores {
+		info.ConfigData = full.LogState.Stores[id].ConfigData
+		projected.LogState.Stores[id] = info
+	}
+	require.Equal(t, full, projected)
+	status.Content[pb.WALRecoveryStatusConfigKey].CurrentValue = "complete"
+	status.Content[pb.WALRecoveryStatusConfigKey].XXX_unrecognized[1] = 2
+	require.Equal(t, full, lookup(&StateQuery{}))
+	require.Equal(t, full, lookup(nil))
+}
+
 func TestHeartbeatCheckHintTracksAcceptedReadiness(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	logHB := pb.LogStoreHeartbeat{UUID: "log", Replicas: []pb.LogReplicaInfo{{LogShardInfo: pb.LogShardInfo{ShardID: 0}}}}
@@ -2700,4 +2806,52 @@ func TestCNHeartbeatReobservesAdmissionBarrier(t *testing.T) {
 	require.True(t, rsm.state.ViewMetadataAdmissionCNReady["cn"])
 	require.Equal(t, before, rsm.state.CNState.Stores["cn"], "only the barrier observation changed")
 	apply(0)
+}
+
+func TestAllocateIDReservationBoundary(t *testing.T) {
+	for _, key := range []string{"", "__mo_sql_uuid_short"} {
+		t.Run(key, func(t *testing.T) {
+			s := NewStateMachine(0, 1).(*stateMachine)
+			s.state.State = pb.HAKeeperRunning
+			set := func(v uint64) {
+				if key == "" {
+					s.state.NextID = v
+				} else {
+					s.state.NextIDByKey[key] = v
+				}
+			}
+			get := func() uint64 {
+				if key == "" {
+					return s.state.NextID
+				}
+				return s.state.NextIDByKey[key]
+			}
+			set(math.MaxUint64 - 2)
+			for _, batch := range []uint64{0, 3, math.MaxUint64} {
+				r, err := s.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: key, Batch: batch})})
+				require.NoError(t, err)
+				require.Zero(t, r.Value)
+				require.Equal(t, uint64(math.MaxUint64-2), get())
+			}
+			request := pb.CNAllocateID{Key: key, Batch: 2}
+			if key != "" {
+				request.RequestID = "terminal"
+			}
+			r, err := s.Update(sm.Entry{Cmd: GetAllocateIDCmd(request)})
+			require.NoError(t, err)
+			require.Equal(t, uint64(math.MaxUint64-1), r.Value)
+			buf := bytes.NewBuffer(nil)
+			require.NoError(t, s.SaveSnapshot(buf, nil, nil))
+			restored := NewStateMachine(0, 2).(*stateMachine)
+			require.NoError(t, restored.RecoverFromSnapshot(buf, nil, nil))
+			r, err = restored.Update(sm.Entry{Cmd: GetAllocateIDCmd(pb.CNAllocateID{Key: key, Batch: 1})})
+			require.NoError(t, err)
+			require.Zero(t, r.Value)
+			if key != "" {
+				r, err = restored.Update(sm.Entry{Cmd: GetAllocateIDCmd(request)})
+				require.NoError(t, err)
+				require.Equal(t, uint64(math.MaxUint64-1), r.Value)
+			}
+		})
+	}
 }

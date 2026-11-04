@@ -125,6 +125,20 @@ CREATE EXTERNAL TABLE `ext_jl` (
 insert into ext_jl select a+10, b, c from src;
 select count(*) from ext_jl;
 
+-- The JSONLine writer must preserve the literal bytes 5C4E as a JSON string,
+-- not turn them into JSON null when the same file is read back.
+drop table if exists sentinel_src;
+create table sentinel_src(id int, value varchar(20));
+insert into sentinel_src values (1, cast(x'5C4E' as char)), (2, null), (3, 'plain');
+drop table if exists ext_jl_sentinel;
+create external table ext_jl_sentinel(id int, value varchar(20))
+infile{'filepath'='stage://wstage/wext_jl_sentinel_*.jl', 'format'='jsonline', 'write_file_pattern'='stage://wstage/wext_jl_sentinel_%U.jl', 'jsondata'='object'}
+fields terminated by ',';
+insert into ext_jl_sentinel select * from sentinel_src;
+select id, value is null as is_null, coalesce(hex(value), 'NULL') as value_hex from ext_jl_sentinel order by id;
+drop table if exists ext_jl_sentinel;
+drop table if exists sentinel_src;
+
 -- ---------- wide column-type coverage (CSV + JSONLine), incl. NULLs ----------
 drop table if exists wide_src;
 create table wide_src(
@@ -403,6 +417,8 @@ drop table if exists ext_rep;
 
 drop table if exists ext_csv;
 drop table if exists ext_jl;
+drop table if exists ext_jl_sentinel;
+drop table if exists sentinel_src;
 drop table if exists ext_tricky;
 drop table if exists tricky_src;
 drop table if exists ext_big;

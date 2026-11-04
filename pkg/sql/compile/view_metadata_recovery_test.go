@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -51,6 +52,7 @@ type viewMetadataCleanupRecordingExecutor struct {
 	failures        map[int]error
 	opts            []executor.Options
 	txnOptions      []executor.Options
+	checkTxnContext func(context.Context) error
 }
 
 func enableViewMetadataRefreshForTest(t *testing.T) {
@@ -91,9 +93,80 @@ func (e *viewMetadataCleanupRecordingExecutor) ExecTxn(
 	opts executor.Options,
 ) error {
 	e.txnOptions = append(e.txnOptions, opts)
+	if e.checkTxnContext != nil {
+		return e.checkTxnContext(ctx)
+	}
 	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 		return e.Exec(ctx, sql, opts)
 	}, nil))
+}
+
+// Exercise the public fence boundary without lock waits or wall-clock sleeps.
+func TestRequireViewMetadataRevalidationContextOwnership(t *testing.T) {
+	type contextKey struct{}
+	stopped := errors.New("executor stopped")
+	unknown := moerr.NewTxnUnknown(context.Background(), "context-ownership")
+	catalogErr := errors.New("catalog unavailable")
+	for _, tc := range []struct {
+		name                       string
+		budget                     time.Duration
+		cancelBefore, cancelDuring bool
+		result                     error
+	}{
+		{name: "fallback", result: stopped},
+		{name: "short-caller", budget: time.Second, result: stopped},
+		{name: "long-caller", budget: time.Minute, result: stopped},
+		{name: "canceled-caller", cancelBefore: true, result: context.Canceled},
+		{name: "cancel-during-call", budget: time.Minute, cancelDuring: true, result: context.Canceled},
+		{name: "unknown-commit", budget: time.Minute, result: unknown},
+		{name: "catalog-error", budget: time.Minute, result: catalogErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := context.WithValue(context.Background(), contextKey{}, "caller-value")
+			var cancel context.CancelFunc
+			if tc.budget != 0 {
+				parent, cancel = context.WithTimeout(parent, tc.budget)
+			} else {
+				parent, cancel = context.WithCancel(parent)
+			}
+			defer cancel()
+			if tc.cancelBefore {
+				cancel()
+			}
+			before := time.Now()
+			var observed context.Context
+			exec := &viewMetadataCleanupRecordingExecutor{checkTxnContext: func(ctx context.Context) error {
+				observed = ctx
+				require.Equal(t, "caller-value", ctx.Value(contextKey{}))
+				deadline, ok := ctx.Deadline()
+				require.True(t, ok)
+				if want, explicit := parent.Deadline(); explicit {
+					require.Equal(t, want, deadline, "the operation owner controls the whole transaction budget")
+				} else {
+					require.False(t, deadline.Before(before.Add(viewMetadataRecoveryCallTimeout)))
+					require.False(t, deadline.After(time.Now().Add(viewMetadataRecoveryCallTimeout)))
+				}
+				if tc.cancelDuring {
+					cancel()
+				}
+				if tc.cancelBefore || tc.cancelDuring {
+					return ctx.Err()
+				}
+				return tc.result
+			}}
+			err := RequireViewMetadataRevalidation(parent, exec)
+			require.ErrorIs(t, err, tc.result)
+			require.Len(t, exec.txnOptions, 1, "the fence must not retry a transaction")
+			if tc.cancelBefore || tc.cancelDuring {
+				require.ErrorIs(t, observed.Err(), context.Canceled)
+			} else {
+				require.NoError(t, parent.Err(), "the fence must not cancel its caller")
+				if tc.budget == 0 {
+					require.ErrorIs(t, observed.Err(), context.Canceled, "release the fallback timer")
+				}
+			}
+		})
+	}
 }
 
 func viewMetadataLifecycleGateTestResult() executor.Result {

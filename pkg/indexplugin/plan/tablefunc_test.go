@@ -23,7 +23,7 @@ import (
 )
 
 func TestTableFuncRegistrationPlacement(t *testing.T) {
-	builder := func(PlanBuilder, *tree.TableFunction, BindContext, []*plan.Expr, []int32) (int32, error) {
+	builder := func(PlanBuilder, *tree.TableFunction, BindContext, []*plan.Expr, []int32, *plan.Node) (int32, error) {
 		return 42, nil
 	}
 	for _, coordinatorOnly := range []bool{false, true} {
@@ -43,7 +43,7 @@ func TestTableFuncRegistrationPlacement(t *testing.T) {
 		}
 		registered, ok := TableFunc(name)
 		require.True(t, ok)
-		id, err := registered(nil, nil, nil, nil, nil)
+		id, err := registered(nil, nil, nil, nil, nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, int32(42), id)
 		require.Equal(t, coordinatorOnly, TableFuncRequiresCoordinator(name))

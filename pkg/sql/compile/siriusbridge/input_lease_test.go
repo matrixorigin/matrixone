@@ -280,7 +280,7 @@ func TestQueryCancellationInterruptsInputAcquire(t *testing.T) {
 		<-ctx.Done()
 		return nil, context.Cause(ctx)
 	}}
-	var materialized, releases atomic.Int32
+	var materialized atomic.Int32
 	request := testRequest()
 	request.Reads = []Read{{BindingID: 1, Columns: []ReadColumn{{Column: Column{Name: "c"}}}, Producer: func(ctx context.Context, input *Input) (err error) {
 		lease, err := input.Acquire(ctx, 1)
@@ -291,7 +291,6 @@ func TestQueryCancellationInterruptsInputAcquire(t *testing.T) {
 		materialized.Add(1)
 		return lease.Publish(ctx, 1, []Vector{{Data: make([]byte, 1)}})
 	}}}
-	request.Release = func(context.Context) error { releases.Add(1); return nil }
 	query, err := runtime.Prepare(ctx, request)
 	require.NoError(t, err)
 	done := make(chan error, 1)
@@ -303,7 +302,6 @@ func TestQueryCancellationInterruptsInputAcquire(t *testing.T) {
 	require.Zero(t, materialized.Load())
 	require.Positive(t, driver.q.cancels.Load())
 	require.NoError(t, query.Close(t.Context()))
-	require.Equal(t, int32(1), releases.Load())
 }
 
 func TestInputLeaseReleaseFailureRemainsOwnedByQuery(t *testing.T) {

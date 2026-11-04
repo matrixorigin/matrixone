@@ -1112,6 +1112,7 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 	t.Run("negative_bucket_count", func(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
+		defer exec.Free()
 
 		osVec := vector.NewVec(types.T_int64.ToType())
 		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
@@ -1128,14 +1129,16 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 
 		err = exec.Fill(0, 0, []*vector.Vector{osVec, bucketVec})
 		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Empty(t, exec.(*ntileWindowExec).groups[0])
+		require.Zero(t, exec.(*ntileWindowExec).bucketCounts[0])
 		require.Contains(t, err.Error(), "positive")
-
-		exec.Free()
 	})
 
 	t.Run("zero_bucket_count", func(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
+		defer exec.Free()
 
 		osVec := vector.NewVec(types.T_int64.ToType())
 		err = vector.AppendFixedList(osVec, []int64{0, 1}, nil, mp)
@@ -1152,13 +1155,15 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 
 		err = exec.Fill(0, 0, []*vector.Vector{osVec, bucketVec})
 		require.Error(t, err)
-
-		exec.Free()
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Empty(t, exec.(*ntileWindowExec).groups[0])
+		require.Zero(t, exec.(*ntileWindowExec).bucketCounts[0])
 	})
 
 	t.Run("null_bucket_count", func(t *testing.T) {
 		exec, err := makeNtileExec(mp, WinIdOfNtile, false, []types.Type{types.T_int64.ToType()})
 		require.NoError(t, err)
+		defer exec.Free()
 
 		osVec := vector.NewVec(types.T_int64.ToType())
 		err = vector.AppendFixedList(osVec, []int64{0, 1, 2, 3}, nil, mp)
@@ -1175,12 +1180,11 @@ func TestNtileExec_BoundaryConditions(t *testing.T) {
 
 		err = exec.Fill(0, 0, []*vector.Vector{osVec, bucketVec})
 		require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 
 		ntileExec := exec.(*ntileWindowExec)
 		require.Empty(t, ntileExec.groups[0])
 		require.Zero(t, ntileExec.bucketCounts[0])
-
-		exec.Free()
 	})
 
 	t.Run("empty_vectors", func(t *testing.T) {

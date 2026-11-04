@@ -92,6 +92,14 @@ func (collector *BaseCollector_V2) Collect(c *catalog.Catalog) (err error) {
 }
 
 func (collector *BaseCollector_V2) visitObject(entry *catalog.ObjectEntry) error {
+	// Appendable carriers are published independently of their first append.
+	// Until persisted, their payload belongs to WAL replay. Checkpoint replay
+	// treats every collected object as a file and would skip that payload.
+	// Use the catalog's persisted contract, including legacy checkpoint flags,
+	// rather than guessing from an extent that old persisted objects may lack.
+	if !entry.ObjectPersisted() {
+		return nil
+	}
 	return entry.ForeachMVCCNodeInRange(collector.start, collector.end, func(node *txnbase.TxnMVCCNode) error {
 		if node.IsAborted() {
 			return nil

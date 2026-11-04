@@ -38,26 +38,31 @@ func TestTPCHNumericEligibilityInventory(t *testing.T) {
 		message         string
 		numericEvidence string
 	}{
-		{1, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
+		{1, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(37,4)!])->DECIMAL256(59,4)!`},
 		{2, []string{`DECIMAL64(15,2)!`, `VARCHAR(25)!`, `VARCHAR(25)!`, `INT!`, `VARCHAR(25)!`, `VARCHAR(40)!`, `VARCHAR(15)!`, `VARCHAR(101)!`}, "", "", `min([DECIMAL64(15,2)!])->DECIMAL64(15,2)!`},
-		{3, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
+		{3, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(37,4)!])->DECIMAL256(59,4)!`},
 		{4, []string{`VARCHAR(15)!`, `BIGINT!`}, "", "", ""},
-		{5, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
-		{6, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(38,4)!])->DECIMAL256(60,4)!`},
-		{7, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
-		{8, nil, EligibilityExpression, `substrait: not eligible (expression): unsupported multiply signature`, `*([DECIMAL256(15,2)! DECIMAL256(38,2)!])->DECIMAL256(53,4)!`},
-		{9, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(65,4)!])->DECIMAL256(65,4)!`},
-		{10, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
-		{11, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(38,2)!])->DECIMAL256(60,2)!`},
+		{5, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(37,4)!])->DECIMAL256(59,4)!`},
+		{6, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(30,4)!])->DECIMAL256(52,4)!`},
+		{7, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(37,4)!])->DECIMAL256(59,4)!`},
+		{8, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `*([DECIMAL128(15,2)! DECIMAL128(22,2)!])->DECIMAL128(37,4)!`},
+		{9, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(38,4)!])->DECIMAL256(60,4)!`},
+		{10, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(37,4)!])->DECIMAL256(59,4)!`},
+		{11, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(25,2)!])->DECIMAL256(47,2)!`},
 		{12, []string{`VARCHAR(10)!`, `DECIMAL128(38,0)?`, `DECIMAL128(38,0)?`}, "", "", `sum([BIGINT!])->DECIMAL128(38,0)!`},
 		{13, []string{`BIGINT!`, `BIGINT!`}, "", "", ""},
-		{14, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
-		{15, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
+		{14, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(37,4)!])->DECIMAL256(59,4)!`},
+		{15, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(37,4)!])->DECIMAL256(59,4)!`},
 		{16, []string{`VARCHAR(10)!`, `VARCHAR(25)!`, `INT!`, `BIGINT!`}, "", "", ""},
-		{17, nil, EligibilityExpression, `substrait: not eligible (expression): scalar overload "*" has no declared Sirius semantic equivalence`, `*([DECIMAL128(38,1)! DECIMAL128(19,6)!])->DECIMAL128(38,7)!`},
+		// The correlated AVG remains nullable. Its bounded multiplication now
+		// fits the existing scalar proof; the later division still rejects.
+		{17, nil, EligibilityExpression, `substrait: not eligible (expression): unsupported divide signature`, `*([DECIMAL128(1,1)! DECIMAL128(19,6)?])->DECIMAL128(20,7)?`},
 		{18, []string{`VARCHAR(25)!`, `INT!`, `BIGINT!`, `DATE!`, `DECIMAL64(15,2)!`, `DECIMAL128(37,2)?`}, "", "", `sum([DECIMAL64(15,2)!])->DECIMAL128(37,2)!`},
-		{19, nil, EligibilityExpression, `substrait: not eligible (expression): aggregate overload "sum" has no declared Sirius semantic equivalence`, `sum([DECIMAL256(53,4)!])->DECIMAL256(65,4)!`},
-		{20, nil, EligibilityExpression, `substrait: not eligible (expression): scalar overload "*" has no declared Sirius semantic equivalence`, `*([DECIMAL128(38,1)! DECIMAL128(37,2)!])->DECIMAL128(38,3)!`},
+		{19, nil, EligibilityType, `substrait: not eligible (type): unsupported type DECIMAL256`, `sum([DECIMAL128(37,4)!])->DECIMAL256(59,4)!`},
+		// The correlated SUM/multiply remain nullable, but precision 1 + 37
+		// fits the existing 38-digit multiplication proof. No export rule is
+		// relaxed: correcting the operand domains removes the old rejection.
+		{20, []string{`VARCHAR(25)!`, `VARCHAR(40)!`}, "", "", `*([DECIMAL128(1,1)! DECIMAL128(37,2)?])->DECIMAL128(38,3)?`},
 		{21, []string{`VARCHAR(25)!`, `BIGINT!`}, "", "", ""},
 		{22, []string{`VARCHAR(2)!`, `BIGINT!`, `DECIMAL128(37,2)?`}, "", "", `avg([DECIMAL64(15,2)!])->DECIMAL128(19,6)!`},
 	}
@@ -87,7 +92,7 @@ func TestTPCHNumericEligibilityInventory(t *testing.T) {
 				read.ObjRef.Obj = 42
 			}
 
-			candidate, err := Export(query)
+			candidate, err := ExportEmbeddedMO(query, NewEmbeddedExportProfile(0))
 			numericSignatures := numericFunctionSignatures(query)
 			if tc.eligibleOutput == nil {
 				require.Nil(t, candidate)

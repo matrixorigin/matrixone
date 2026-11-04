@@ -52,8 +52,9 @@ select l2_distance(a, '[1,2,3]') from t where id = 1;
 select cosine_similarity(a, '[0,0,0,0]') from t where id = 1;
 select cosine_distance(a, '[0,0,0,0]') from t where id = 1;
 
--- float32 lane overflow: +Inf and -Inf lanes would sum to NaN; inner product and L2 are +Inf, an
--- overflow error; cosine recomputes in float64
+-- float32 lane overflow: an overflowed lane sum is recomputed in float64. The products cancel, so
+-- the inner product is exactly 0 and the cosine distance 1; the L2 distance itself is beyond the
+-- float32 range, an overflow error
 select inner_product(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf8(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf8(32)));
 select cosine_distance(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf4(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf4(32)));
 select l2_distance(cast('[3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38,3e38]' as vecf8(32)), cast('[3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38,3e38,-3e38]' as vecf8(32)));
@@ -88,6 +89,15 @@ deallocate prepare s2;
 
 -- NULL handling, conditionals, element math and JSON dequantize to vecf32
 select id, summation(a), l1_norm(b), l2_norm(a) from t where id in (1, 2) order by id;
+select id, subvector(a, 2), subvector(b, 2, 2), subvector(a, '-1') from t where id = 1;
+-- subvector returns vecf32, equal to subvector over the vecf32 cast, also across block boundaries
+create table sv (id int, a vecf8(40), b vecf4(40));
+insert into sv values (1, '[-18.63,-17.26,-15.89,-14.52,-13.15,-11.78,-10.41,-9.04,-7.67,-6.3,-4.93,-3.56,-2.19,-0.82,0.55,1.92,3.29,4.66,6.03,7.4,8.77,10.14,11.51,12.88,14.25,15.62,16.99,18.36,19.73,21.1,22.47,23.84,25.21,26.58,27.95,29.32,30.69,32.06,33.43,34.8]', '[-8.29,-7.58,-6.87,-6.16,-5.45,-4.74,-4.03,-3.32,-2.61,-1.9,-1.19,-0.48,0.23,0.94,1.65,2.36,3.07,3.78,4.49,5.2,5.91,6.62,7.33,8.04,8.75,9.46,10.17,10.88,11.59,12.3,13.01,13.72,14.43,15.14,15.85,16.56,17.27,17.98,18.69,19.4]');
+insert into sv values (2, null, null);
+select id, subvector(a, 5, 30) = subvector(cast(a as vecf32(40)), 5, 30), subvector(b, 9, 20) = subvector(cast(b as vecf32(40)), 9, 20), subvector(a, 33) = subvector(cast(a as vecf32(40)), 33), subvector(b, -3) = subvector(cast(b as vecf32(40)), -3) from sv order by id;
+select id, subvector(a, 0), subvector(b, 99), subvector(a, 31, 3), subvector(b, 15, 3) from sv order by id;
+create table svc as select subvector(a, 2, 3) x, subvector(b, 2, 3) y from sv;
+show create table svc;
 select id, abs(a), sqrt(abs(b)) from t where id = 1;
 select id, coalesce(a, '[0,0,0,0]'), greatest(a, b), case when id = 1 then a else b end from t where id in (1, 3) order by id;
 select json_object('a', a), json_array(b) from t where id = 1;
@@ -186,6 +196,13 @@ select cast('{"g":1,"s":[3],"v":[1]}' as vecf8(1));
 select cast('{"g":1,"s":[1],"v":[2.5]}' as vecf4(1));
 select cast('{"s":[1],"v":[1]}' as vecf8(1));
 select cast('{"g":1,"s":[1],"v":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}' as vecf4(17));
+-- a number that float32 parsing rounds to a code value is rejected; other notations of a value are not
+select cast('{"g":1,"s":[1],"v":[1.00000001]}' as vecf4(1));
+select cast('{"g":1,"s":[1],"v":[6.0000001]}' as vecf4(1));
+select cast('{"g":1,"s":[0.50000001],"v":[1]}' as vecf8(1));
+select cast('{"g":1.00000001,"s":[1],"v":[1]}' as vecf8(1));
+select vecblock_json(cast('{"g":1.0,"s":[1e0],"v":[6.000,-0.0]}' as vecf4(2)));
+select vecblock_json(cast('{"g":1,"s":[5.877471754111438e-39],"v":[1]}' as vecf8(1)));
 
 -- cells with equal values and different bytes are peers in ORDER BY and windows
 create table peer (id int, v vecf8(1));
@@ -212,6 +229,11 @@ insert into vbin values (3, cast(unhex('01020000110000006CB2553B7E7A070000000000
 select id, vecblock_json(v), vecblock_json(e) from vbin order by id;
 select count(distinct vecblock_binary(v)), count(distinct vecblock_binary(e)) from vbin;
 select vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e) from vbin where id = 1;
+-- a negative-zero element keeps its code through the exact text
+create table nz (id int, e vecf8(1), v vecf4(1));
+insert into nz values (1, cast(unhex('01010000010000000000803F7F80') as blob), cast(unhex('01020000010000000000803F3808') as blob));
+select hex(vecblock_binary(e)), hex(vecblock_binary(v)), vecblock_json(e), vecblock_json(v) from nz;
+select hex(vecblock_binary(cast(vecblock_json(e) as vecf8(1)))), hex(vecblock_binary(cast(vecblock_json(v) as vecf4(1)))) from nz;
 -- a BLOB of cell length that is not a valid cell is an error
 -- an unsized cast of a cell of the other format is an error
 select vecblock_json(cast(vecblock_binary(cast('[1,2,3,4,5]' as vecf4(5))) as vecf8));
@@ -247,6 +269,19 @@ create table expt_jsonl like expt;
 load data infile {'filepath'='$resources/into_outfile/vecblock.jsonl', 'format'='jsonline', 'jsondata'='object'} into table expt_jsonl;
 select x.id, vecblock_json(x.v) <=> vecblock_json(c.v), vecblock_json(x.e) = vecblock_json(c.e), vecblock_json(x.v) <=> vecblock_json(j.v), vecblock_json(x.e) = vecblock_json(j.e) from expt x join expt_csv c on x.id = c.id join expt_jsonl j on x.id = j.id order by x.id;
 select id, v, e from expt_jsonl order by id;
+select * from expt order by id into outfile '$resources/into_outfile/vecblock.parquet' format 'parquet';
+create table expt_pq like expt;
+load data infile {'filepath'='$resources/into_outfile/vecblock.parquet', 'format'='parquet'} into table expt_pq;
+select x.id, vecblock_json(x.v) <=> vecblock_json(p.v), vecblock_json(x.e) = vecblock_json(p.e) from expt x join expt_pq p on x.id = p.id order by x.id;
+-- a negative-zero element keeps its code through export and reload
+select * from nz into outfile '$resources/into_outfile/vecblock_nz.jsonl';
+create table nz_jsonl like nz;
+load data infile {'filepath'='$resources/into_outfile/vecblock_nz.jsonl', 'format'='jsonline', 'jsondata'='object'} into table nz_jsonl;
+select hex(vecblock_binary(e)), hex(vecblock_binary(v)), vecblock_json(e), vecblock_json(v) from nz_jsonl;
+select * from nz into outfile '$resources/into_outfile/vecblock_nz.csv';
+create table nz_csv like nz;
+load data infile '$resources/into_outfile/vecblock_nz.csv' into table nz_csv fields terminated by ',' enclosed by '"' ignore 1 lines;
+select hex(vecblock_binary(e)), hex(vecblock_binary(v)) from nz_csv;
 
 -- cells equal by decoded value can differ in bytes: vecf8/vecf4 are no cluster by or KEY
 -- partition columns
@@ -270,5 +305,45 @@ create index ix using ivfflat on iv(v) lists = 1 op_type 'vector_l2_ops';
 select id, l2_distance(v, cast('[1.3,2.7,3.1]' as vecf8(3))) dq8 from iv order by l2_distance(v, '[1.3,2.7,3.1]') limit 3;
 drop table iv;
 set experimental_ivf_index = 0;
+
+-- percentile_disc sorts with unaccounted scratch: no vector type, as for vecf32
+select percentile_disc(0.5) within group (order by a) from t;
+select percentile_disc(0.5) within group (order by c) from t;
+-- a cell decodes as At in the full-unit kernels and the tail: a 1.4e-45 element times a 1e30
+-- query is one representable term, equal to the product of the decoded vecf32
+create table sub1 (id int primary key, v vecf4(1));
+create table q1 (q vecf32(1));
+insert into q1 values ('[1e30]');
+insert into sub1 values (1, '[1.4e-45]'), (2, '[-1.4e-45]'), (3, '[0]'), (4, '[1.5]');
+create table sub16 (id int primary key, v vecf4(16));
+create table q16 (q vecf32(16));
+insert into q16 values ('[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into sub16 values (1, '[1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (2, '[-1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (3, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.4e-45]'), (4, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1.4e-45]'), (5, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (6, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.5]');
+create table sub17 (id int primary key, v vecf4(17));
+create table q17 (q vecf32(17));
+insert into q17 values ('[1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30,1e30]');
+insert into sub17 values (1, '[1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (2, '[-1.4e-45,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (3, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.4e-45]'), (4, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-1.4e-45]'), (5, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]'), (6, '[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1.5]');
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(1)), q) as same, inner_product(v, q) < 0 as neg from sub1, q1 order by id;
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(16)), q) as same, inner_product(v, q) < 0 as neg from sub16, q16 order by id;
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same, inner_product(v, q) < 0 as neg from sub17, q17 order by id;
+select mo_ctl('dn', 'flush', 'vecblock_db.sub1');
+select mo_ctl('dn', 'flush', 'vecblock_db.sub16');
+select mo_ctl('dn', 'flush', 'vecblock_db.sub17');
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(1)), q) as same, inner_product(v, q) < 0 as neg from sub1, q1 order by id;
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(16)), q) as same, inner_product(v, q) < 0 as neg from sub16, q16 order by id;
+select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same, inner_product(v, q) < 0 as neg from sub17, q17 order by id;
+
+-- serial_extract returns a vecf8/vecf4 element only when it is a cell of the declared type and dimension
+create table sx (id bigint primary key, s varchar(20), a vecf8(4), b vecf4(4));
+insert into sx values (1, 'x', '[1,-2,3,0.5]', '[1,-2,3,0.5]'), (2, 'aaaaaaaaaaaaaa', '[0,1,2,3]', '[0,1,2,3]');
+select id, serial_extract(serial(a), 0 as vecf8(4)) = a as a_same, serial_extract(serial(b), 0 as vecf4(4)) = b as b_same from sx order by id;
+select id, serial_extract(serial(a), id - id as vecf8(4)) = a as a_same, serial_extract(serial(b), id - id as vecf4(4)) = b as b_same from sx order by id;
+select hex(vecblock_binary(serial_extract(serial(s), 0 as vecf8(1)))) from sx where id = 1;
+select hex(vecblock_binary(serial_extract(serial(s), 0 as vecf8(1)))) from sx where id = 2;
+select hex(vecblock_binary(serial_extract(serial(s), id - id as vecf4(1)))) from sx where id = 2;
+select serial_extract(serial(a), 0 as vecf4(4)) from sx where id = 1;
+select serial_extract(serial(b), id - id as vecf8(4)) from sx where id = 1;
+select serial_extract(serial(a), 0 as vecf8(3)) from sx where id = 1;
+select serial_extract(serial(a), id - id as vecf8(5)) from sx where id = 1;
 
 drop database vecblock_db;

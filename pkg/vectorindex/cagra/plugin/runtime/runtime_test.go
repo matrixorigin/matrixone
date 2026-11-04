@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,9 +29,22 @@ import (
 
 func TestCagraHiddenTableTypes(t *testing.T) {
 	got := CatalogHooks{}.HiddenTableTypes()
-	require.Len(t, got, 2)
+	require.Len(t, got, 3)
 	require.Contains(t, got, catalog.Cagra_TblType_Metadata)
 	require.Contains(t, got, catalog.Cagra_TblType_Storage)
+	require.Contains(t, got, catalog.IndexIgnored_TblType)
+}
+
+// MAX_BAD_RECORDS is recorded when specified, 0 included.
+func TestCagraParamsFromTree_MaxBadRecords(t *testing.T) {
+	got, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+	require.NoError(t, err)
+	require.NotContains(t, got, catalog.IndexAlgoParamMaxBadRecords)
+	for _, n := range []int64{0, 100} {
+		got, err = CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{MaxBadRecords: n, MaxBadRecordsSet: true}})
+		require.NoError(t, err)
+		require.Equal(t, strconv.FormatInt(n, 10), got[catalog.IndexAlgoParamMaxBadRecords])
+	}
 }
 
 func TestCagraShouldTruncateHiddenTable(t *testing.T) {
@@ -56,8 +70,9 @@ func TestCagraAlterTableCloneBehavior(t *testing.T) {
 	require.Empty(t, CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
-func TestCagraDefaultOptions(t *testing.T) {
-	got := CatalogHooks{}.DefaultOptions()
+func TestCagraParamsWithoutOptions(t *testing.T) {
+	got, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+	require.NoError(t, err)
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
 	require.Equal(t, metric.Quantization_F32_Str, got[catalog.Quantization])
 	require.Equal(t, vectorindex.DistributionMode_SINGLE_GPU_Str, got[catalog.DistributionMode])

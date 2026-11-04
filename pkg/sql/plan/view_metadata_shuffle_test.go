@@ -58,9 +58,9 @@ func TestViewMetadataTableLimitZeroWithCachedStats(t *testing.T) {
 		var err error
 		p, err = buildViewMetadataConsumerPlan(t, ctx, "select * from nation limit 0", false)
 		require.NoError(t, err)
-	}, "a populated statistics cache must not require full metadata from the catalog-only path")
+	}, "LIMIT 0 must still resolve complete metadata when statistics are cached")
 	require.NotNil(t, p)
-	require.Equal(t, 1, ctx.fastCalls)
+	require.Zero(t, ctx.fastCalls, "LIMIT 0 must resolve complete table metadata before planning")
 	columns := GetResultColumnsFromPlan(p)
 	require.Len(t, columns, 4, "SELECT * must omit the mock catalog's hidden rowid")
 	require.Equal(t, []string{"n_nationkey", "n_name", "n_regionkey", "n_comment"},

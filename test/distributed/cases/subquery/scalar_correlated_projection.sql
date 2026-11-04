@@ -66,7 +66,6 @@ select a, (select case when d > 0 then a else 0 end from t2 where d = a order by
 select a, (select case when x.d > 0 then a else 0 end from (select max(d) as d from t2) x where x.d = a limit 1) as derived_agg_eq_mixed from t1;
 -- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
 select a, (select case when d > 0 then a else 0 end from t2 where d = a group by d limit 1) as grouped_eq_mixed from t1;
--- @regex("wrapped correlated scalar projection cannot be safely decorrelated",true)
 select a, (select (select case when t1.a > 0 then t1.a else 0 end from t2 limit 1) from t2 as outer_t2 limit 1) as deep_mixed from t1;
 -- @regex("wrapped correlated aggregate projection cannot be safely decorrelated",true)
 select a, (select case when count(*) > 0 then t1.a else 0 end from t2) as aggregate_projection_only from t1;
@@ -198,12 +197,9 @@ SELECT `t1`.`id`, (SELECT `t0`.`name` FROM `Author` AS `t0` WHERE `t0`.`id` = `t
 SELECT JSON_LENGTH(COALESCE(JSON_ARRAYAGG(`__prisma_data__`), CONVERT('[]', JSON))) AS `post_count` FROM (SELECT JSON_OBJECT('id', `t2`.`id`, 'title', `t2`.`title`, 'authorId', `t2`.`authorId`) AS `__prisma_data__` FROM (SELECT `t1`.* FROM `Post` AS `t1` WHERE `t1`.`authorId` = 3) AS `t2`) AS `t3`;
 
 -- Empty query blocks are real correlation levels even without FROM bindings.
--- @regex("correlated subquery in FROM clause is not yet implemented",true)
 SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM (SELECT `p`.`id` FROM `Post` AS `p` WHERE `p`.`authorId` = `a`.`id`) AS `d`));
--- Mixed empty/non-empty ancestor orderings must both stay fail-closed.
--- @regex("correlated subquery in FROM clause is not yet implemented",true)
+-- Mixed empty/non-empty ancestors retain the same lexical binding.
 SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM `Post` AS `p` WHERE EXISTS (SELECT 1 FROM (SELECT `a2`.`id` FROM `Author` AS `a2` WHERE `a2`.`id` = `a`.`id`) AS `d`)));
--- @regex("correlated subquery in FROM clause is not yet implemented",true)
 SELECT `a`.`id` FROM `Author` AS `a` WHERE EXISTS (SELECT 1 FROM `Post` AS `p` WHERE EXISTS (SELECT 1 WHERE EXISTS (SELECT 1 FROM (SELECT `a2`.`id` FROM `Author` AS `a2` WHERE `a2`.`id` = `p`.`authorId`) AS `d`)));
 
 -- @teardown

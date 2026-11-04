@@ -56,7 +56,7 @@ type mergeCTETestCase struct {
 func makeTestCases(t *testing.T) []mergeCTETestCase {
 	return []mergeCTETestCase{
 		{
-			proc: testutil.NewProcessWithMPool(t, "", mpool.MustNewZero()),
+			proc: testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero()),
 			arg:  &MergeCTE{},
 		},
 	}
@@ -77,7 +77,7 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestMergeCTEDistinctFiltersAcrossBatchesAndReset(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := NewArgument().WithNodeCnt(1).WithDistinct(true)
 	analyzer := process.NewAnalyzer(0, false, false, "merge cte distinct test")
 
@@ -174,7 +174,7 @@ func TestMergeCTE(t *testing.T) {
 }
 
 func TestAuditMergeCTERecursiveErrorThenRetryDoesNotEmitStaleBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeCTE{NodeCnt: 1}
 	cleaned := false
 	t.Cleanup(func() {
@@ -238,7 +238,7 @@ func TestAuditMergeCTERecursiveErrorThenRetryDoesNotEmitStaleBatch(t *testing.T)
 }
 
 func TestMergeCTEResetReusesChangedBatchLayout(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeCTE{NodeCnt: 1}
 	cleaned := false
 	t.Cleanup(func() {
@@ -294,7 +294,7 @@ func TestMergeCTEResetReusesChangedBatchLayout(t *testing.T) {
 }
 
 func TestMergeCTEResetClearsRecursiveFlagOnCompatibleBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &MergeCTE{NodeCnt: 1}
 	cleaned := false
 	t.Cleanup(func() {
@@ -337,7 +337,7 @@ func TestMergeCTEResetClearsRecursiveFlagOnCompatibleBatch(t *testing.T) {
 
 func TestMergeCTEMemoryQuotaInitialAndRecursivePhases(t *testing.T) {
 	t.Run("initial", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		src := batch.New([]string{"value"})
 		src.Vecs[0] = testutil.MakeVarcharVector([]string{strings.Repeat("x", 256)}, nil, proc.Mp())
 		src.SetRowCount(1)
@@ -361,7 +361,7 @@ func TestMergeCTEMemoryQuotaInitialAndRecursivePhases(t *testing.T) {
 	})
 
 	t.Run("recursive", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		initial := batch.New([]string{"value"})
 		initial.Vecs[0] = testutil.MakeVarcharVector([]string{"seed"}, nil, proc.Mp())
 		initial.SetRowCount(1)
@@ -391,7 +391,7 @@ func TestMergeCTEMemoryQuotaInitialAndRecursivePhases(t *testing.T) {
 }
 
 func TestMergeCTEMarkerReleasesBackingAndNewStatementDropsOversizedCache(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	limit := int64(1 << 20)
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return limit, nil })
 	arg := &MergeCTE{NodeCnt: 1}
@@ -437,7 +437,7 @@ func TestMergeCTECopyAndReconcileFailuresAreAtomic(t *testing.T) {
 	t.Run("copy failure", func(t *testing.T) {
 		limited, err := mpool.NewMPool(t.Name(), 1<<20, mpool.NoFixed)
 		require.NoError(t, err)
-		proc := testutil.NewProcessWithMPool(t, "", limited)
+		proc := testutil.NewProcessWithOwnedMPool(t, "", limited)
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(0), nil })
 		arg := &MergeCTE{NodeCnt: 1}
 		require.NoError(t, arg.Prepare(proc))
@@ -459,7 +459,7 @@ func TestMergeCTECopyAndReconcileFailuresAreAtomic(t *testing.T) {
 	})
 
 	t.Run("reconcile failure", func(t *testing.T) {
-		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return int64(72), nil })
 		arg := &MergeCTE{NodeCnt: 1}
 		require.NoError(t, arg.Prepare(proc))
@@ -551,7 +551,7 @@ func TestMergeCTERecursionDepthCountsOnlyProductiveLevels(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			setMergeCTEDepth(proc, tc.maxDepth)
 			arg := &MergeCTE{NodeCnt: 1}
 			t.Cleanup(func() {
@@ -579,7 +579,7 @@ func TestMergeCTERecursionDepthCountsOnlyProductiveLevels(t *testing.T) {
 }
 
 func TestMergeCTERecursionDepthAggregatesAllSenders(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	setMergeCTEDepth(proc, 2)
 	arg := &MergeCTE{NodeCnt: 2}
 	t.Cleanup(func() {
@@ -612,7 +612,7 @@ func TestMergeCTERecursionDepthAggregatesAllSenders(t *testing.T) {
 }
 
 func TestMergeCTERecursionDepthDoesNotCountDuplicateOnlyDistinctRound(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	setMergeCTEDepth(proc, 0)
 	arg := &MergeCTE{NodeCnt: 1, Distinct: true}
 	t.Cleanup(func() {
@@ -636,7 +636,7 @@ func TestMergeCTERecursionDepthDoesNotCountDuplicateOnlyDistinctRound(t *testing
 }
 
 func TestMergeCTEResetClearsRecursiveDepthProgress(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	setMergeCTEDepth(proc, 0)
 	arg := &MergeCTE{NodeCnt: 1}
 	t.Cleanup(func() {
@@ -745,4 +745,47 @@ func resetChildren(arg *MergeCTE, m *mpool.MPool) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+}
+
+func TestMergeCTEAllocationFailureAndReuse(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(3, 2048)
+	require.NoError(t, err)
+	op := NewArgument().WithNodeCnt(1).WithDistinct(true)
+	defer op.Release()
+	first := makeMergeCTEDistinctBatch(t, proc, []int64{1, 1, 2}, []string{"a", "a", "b"}, []bool{false, false, false})
+	defer first.Clean(proc.Mp())
+	second := makeMergeCTEDistinctBatch(t, proc, []int64{2, 3}, []string{"b", "c"}, []bool{false, false})
+	defer second.Clean(proc.Mp())
+	for _, limit := range []uint64{128, 1 << 24, 1 << 24} {
+		func() {
+			account, err := registry.OpenWithController(limit, budget)
+			require.NoError(t, err)
+			require.NoError(t, op.SetAllocationAccount(account))
+			defer func() {
+				op.Reset(proc, false, nil)
+				op.Free(proc, false, nil)
+				require.NoError(t, op.ClearAllocationAccount(account))
+				require.Zero(t, account.Snapshot().Used)
+				require.Zero(t, budget.Used())
+			}()
+			err = op.Prepare(proc)
+			if limit == 128 {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			out, err := op.ctr.cacheBatch(proc, op.OpAnalyzer, first)
+			require.NoError(t, err)
+			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+			out, err = op.ctr.cacheBatch(proc, op.OpAnalyzer, second)
+			require.NoError(t, err)
+			require.Equal(t, []int64{3}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+			require.Equal(t, uint64(3), op.ctr.hashTable.GroupCount())
+			require.Positive(t, account.Snapshot().Used)
+		}()
+	}
 }

@@ -17,6 +17,7 @@ package top
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"math"
 	"testing"
@@ -204,6 +205,392 @@ func TestTop(t *testing.T) {
 	}
 }
 
+func TestTopKeepsColumnLayoutAcrossTypedNullBatches(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		nullFirst bool
+	}{
+		{name: "ordinary then typed null"},
+		{name: "typed null then ordinary", nullFirst: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := newTestCase(
+				t,
+				mpool.MustNewZero(),
+				[]types.Type{types.T_int64.ToType()},
+				2,
+				[]*plan.OrderBySpec{{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_DESC}},
+			)
+			batches := []*batch.Batch{
+				newTopInt64Batch(t, tc.proc, test.nullFirst),
+				newTopInt64Batch(t, tc.proc, !test.nullFirst),
+				batch.EmptyBatch,
+			}
+			inputVecs := []*vector.Vector{batches[0].Vecs[0], batches[1].Vecs[0]}
+			child := resetChildren(tc.arg, batches)
+			t.Cleanup(func() {
+				child.Free(tc.proc, false, nil)
+				tc.arg.Free(tc.proc, false, nil)
+				tc.proc.Free()
+				require.Zero(t, tc.proc.Mp().CurrNB())
+			})
+
+			require.NoError(t, tc.arg.Prepare(tc.proc))
+			result, err := vm.Exec(tc.arg, tc.proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			require.Len(t, result.Batch.Vecs, 1)
+			require.Equal(t, 2, result.Batch.RowCount())
+			require.Equal(t, types.T_int64, result.Batch.Vecs[0].GetType().Oid)
+			require.Equal(t, []int64{2, 0}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+			require.False(t, result.Batch.Vecs[0].GetNulls().Contains(0))
+			require.True(t, result.Batch.Vecs[0].GetNulls().Contains(1))
+			for i := range inputVecs {
+				require.Same(t, inputVecs[i], batches[i].Vecs[0])
+				require.Equal(t, types.T_int64, inputVecs[i].GetType().Oid)
+			}
+			require.Equal(t, test.nullFirst, inputVecs[0].IsConstNull())
+			require.Equal(t, !test.nullFirst, inputVecs[1].IsConstNull())
+		})
+	}
+}
+
+func TestTopTypedNullLayoutK1ReplacementAndEOF(t *testing.T) {
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_int64.ToType()},
+		1,
+		[]*plan.OrderBySpec{{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_DESC}},
+	)
+	batches := []*batch.Batch{
+		newTopInt64ValueBatch(t, tc.proc, 1, false),
+		newTopInt64ValueBatch(t, tc.proc, 0, true),
+		newTopInt64ValueBatch(t, tc.proc, 2, false),
+		batch.EmptyBatch,
+	}
+	child := resetChildren(tc.arg, batches)
+	t.Cleanup(func() {
+		child.Free(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	var got []int64
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		require.Len(t, result.Batch.Vecs, 1)
+		got = append(got, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])...)
+	}
+	require.Equal(t, []int64{2}, got)
+}
+
+func TestTopTypedNullColumnLayoutResetAndReuse(t *testing.T) {
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_int64.ToType()},
+		2,
+		[]*plan.OrderBySpec{{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_DESC}},
+	)
+	var child *colexec.MockOperator
+	t.Cleanup(func() {
+		if child != nil {
+			child.Free(tc.proc, false, nil)
+		}
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	for _, nullFirst := range []bool{false, true} {
+		if child != nil {
+			child.Free(tc.proc, false, nil)
+			tc.arg.Reset(tc.proc, false, nil)
+		}
+		batches := []*batch.Batch{
+			newTopInt64Batch(t, tc.proc, nullFirst),
+			newTopInt64Batch(t, tc.proc, !nullFirst),
+			batch.EmptyBatch,
+		}
+		child = resetChildren(tc.arg, batches)
+		require.NoError(t, tc.arg.Prepare(tc.proc))
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		require.NotNil(t, result.Batch)
+		require.Len(t, result.Batch.Vecs, 1)
+		require.Equal(t, 2, result.Batch.RowCount())
+		require.Equal(t, []int64{2, 0}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+		require.True(t, result.Batch.Vecs[0].GetNulls().Contains(1))
+	}
+}
+
+func TestTopFreesExecutorsAfterPartialOrderEvalError(t *testing.T) {
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_int64.ToType()},
+		2,
+		[]*plan.OrderBySpec{
+			{Expr: newTypedInt64Expression(0)},
+			{Expr: newTypedInt64Expression(0)},
+		},
+	)
+	batches := []*batch.Batch{newTopInt64Batch(t, tc.proc, true), batch.EmptyBatch}
+	child := resetChildren(tc.arg, batches)
+	t.Cleanup(func() {
+		child.Free(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+
+	tc.arg.ctr.executorsForOrderColumn[1].Free()
+	tc.arg.ctr.executorsForOrderColumn[1] = topErrorExpressionExecutor{err: context.Canceled}
+	_, err := vm.Exec(tc.arg, tc.proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, tc.arg.ctr.bat)
+	require.Len(t, tc.arg.ctr.poses, 1)
+}
+
+type topErrorExpressionExecutor struct{ err error }
+
+func (e topErrorExpressionExecutor) Eval(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+	return nil, e.err
+}
+
+func (e topErrorExpressionExecutor) EvalWithoutResultReusing(*process.Process, []*batch.Batch, []bool) (*vector.Vector, error) {
+	return nil, e.err
+}
+
+func (topErrorExpressionExecutor) ResetForNextQuery() {}
+
+func (topErrorExpressionExecutor) Free() {}
+
+func (topErrorExpressionExecutor) IsColumnExpr() bool { return false }
+
+func (topErrorExpressionExecutor) TypeName() string { return "top test error" }
+
+func TestTopKeepsTypedNullColumnLayoutForResidentVarlena(t *testing.T) {
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_varchar.ToType()},
+		2,
+		[]*plan.OrderBySpec{{Expr: newTypedVarcharExpression(0), Flag: plan.OrderBySpec_DESC}},
+	)
+	tc.arg.ctr.residentByteLimit = 1 << 20
+	batches := []*batch.Batch{
+		newTopVarcharBatch(t, tc.proc, false),
+		newTopVarcharBatch(t, tc.proc, true),
+		batch.EmptyBatch,
+	}
+	inputVecs := []*vector.Vector{batches[0].Vecs[0], batches[1].Vecs[0]}
+	child := resetChildren(tc.arg, batches)
+	t.Cleanup(func() {
+		child.Free(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.False(t, tc.arg.ctr.spilling)
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Len(t, result.Batch.Vecs, 1)
+	require.Equal(t, 2, result.Batch.RowCount())
+	require.Equal(t, types.T_varchar, result.Batch.Vecs[0].GetType().Oid)
+	require.Equal(t, "b", string(result.Batch.Vecs[0].GetBytesAt(0)))
+	require.False(t, result.Batch.Vecs[0].GetNulls().Contains(0))
+	require.True(t, result.Batch.Vecs[0].GetNulls().Contains(1))
+	require.True(t, tc.arg.ctr.boundedResident)
+	for i := range inputVecs {
+		require.Same(t, inputVecs[i], batches[i].Vecs[0])
+		require.Equal(t, types.T_varchar, inputVecs[i].GetType().Oid)
+	}
+}
+
+func TestTopKeepsTypedNullColumnLayoutAcrossResidentSpillMigration(t *testing.T) {
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_varchar.ToType()},
+		2,
+		[]*plan.OrderBySpec{{Expr: newTypedVarcharExpression(0), Flag: plan.OrderBySpec_DESC}},
+	)
+	// One varchar row fits, while admitting the typed-NULL second row forces
+	// the bounded resident heap to migrate to spill.
+	tc.arg.ctr.residentByteLimit = 32
+	batches := []*batch.Batch{
+		newTopVarcharBatch(t, tc.proc, false),
+		newTopVarcharBatch(t, tc.proc, true),
+		batch.EmptyBatch,
+	}
+	inputVecs := []*vector.Vector{batches[0].Vecs[0], batches[1].Vecs[0]}
+	child := resetChildren(tc.arg, batches)
+	t.Cleanup(func() {
+		child.Free(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.False(t, tc.arg.ctr.spilling)
+	var values []string
+	var nulls []bool
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		require.Len(t, result.Batch.Vecs, 1)
+		require.Equal(t, types.T_varchar, result.Batch.Vecs[0].GetType().Oid)
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			isNull := result.Batch.Vecs[0].GetNulls().Contains(uint64(row))
+			nulls = append(nulls, isNull)
+			if !isNull {
+				values = append(values, string(result.Batch.Vecs[0].GetBytesAt(row)))
+			}
+		}
+	}
+	require.True(t, tc.arg.ctr.spilling)
+	require.Positive(t, tc.arg.ctr.spillOffset)
+	require.Equal(t, []string{"b"}, values)
+	require.Equal(t, []bool{false, true}, nulls)
+	for i := range inputVecs {
+		require.Same(t, inputVecs[i], batches[i].Vecs[0])
+		require.Equal(t, types.T_varchar, inputVecs[i].GetType().Oid)
+	}
+}
+
+func TestTopKeepsColumnAndComputedKeySlotsAcrossTypedNullBatches(t *testing.T) {
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_int64.ToType()},
+		2,
+		[]*plan.OrderBySpec{{Expr: newTypedInt64Expression(0)}},
+	)
+	computed, err := plan2.BindFuncExprImplByPlanExpr(
+		tc.proc.Ctx,
+		"+",
+		[]*plan.Expr{newTypedInt64Expression(0), plan2.MakePlan2Int64ConstExprWithType(1)},
+	)
+	require.NoError(t, err)
+	tc.arg.Fs = []*plan.OrderBySpec{
+		{Expr: computed, Flag: plan.OrderBySpec_DESC},
+		{Expr: newTypedInt64Expression(0)},
+	}
+	batches := []*batch.Batch{
+		newTopInt64Batch(t, tc.proc, false),
+		newTopInt64Batch(t, tc.proc, true),
+		batch.EmptyBatch,
+	}
+	child := resetChildren(tc.arg, batches)
+	t.Cleanup(func() {
+		child.Free(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Len(t, result.Batch.Vecs, 1)
+	require.Equal(t, 2, result.Batch.RowCount())
+	require.Equal(t, []int64{2, 0}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	require.True(t, result.Batch.Vecs[0].GetNulls().Contains(1))
+}
+
+func TestTopKeepsTypedNullColumnLayoutInSpillMode(t *testing.T) {
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_int64.ToType()},
+		int64(topSpillThreshold+1),
+		[]*plan.OrderBySpec{{Expr: newTypedInt64Expression(0), Flag: plan.OrderBySpec_DESC}},
+	)
+	batches := []*batch.Batch{
+		newTopInt64Batch(t, tc.proc, false),
+		newTopInt64Batch(t, tc.proc, true),
+		batch.EmptyBatch,
+	}
+	child := resetChildren(tc.arg, batches)
+	t.Cleanup(func() {
+		child.Free(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.True(t, tc.arg.ctr.spilling)
+	result, err := vm.Exec(tc.arg, tc.proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Len(t, result.Batch.Vecs, 1)
+	require.Equal(t, 2, result.Batch.RowCount())
+	require.Equal(t, []int64{2, 0}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+	require.True(t, result.Batch.Vecs[0].GetNulls().Contains(1))
+}
+
+func newTopInt64Batch(t *testing.T, proc *process.Process, null bool) *batch.Batch {
+	return newTopInt64ValueBatch(t, proc, 2, null)
+}
+
+func newTopInt64ValueBatch(t *testing.T, proc *process.Process, value int64, null bool) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(1)
+	var vec *vector.Vector
+	if null {
+		vec = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
+	} else {
+		vec = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(vec, []int64{value}, nil, proc.Mp()))
+	}
+	bat.Vecs[0] = vec
+	bat.SetRowCount(1)
+	return bat
+}
+
+func newTypedInt64Expression(pos int32) *plan.Expr {
+	expr := newExpression(pos)
+	expr.Typ = types.T_int64.ToType().PlanType()
+	return expr
+}
+
+func newTypedVarcharExpression(pos int32) *plan.Expr {
+	expr := newExpression(pos)
+	expr.Typ = types.T_varchar.ToType().PlanType()
+	return expr
+}
+
+func newTopVarcharBatch(t *testing.T, proc *process.Process, null bool) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(1)
+	if null {
+		bat.Vecs[0] = vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+	} else {
+		bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("b"), false, proc.Mp()))
+	}
+	bat.SetRowCount(1)
+	return bat
+}
+
 func TestTopCopiesNullVarlenaRow(t *testing.T) {
 	tc := newTestCase(
 		t,
@@ -295,6 +682,61 @@ func TestTopOrdersFloatNaNLastAndUsesSecondaryKey(t *testing.T) {
 			testCase.proc.Free()
 			require.Zero(t, testCase.proc.Mp().CurrNB())
 		})
+	}
+}
+
+func TestTopUniqueOrderPrefixes(t *testing.T) {
+	for _, order := range []struct {
+		name string
+		flag plan.OrderBySpec_OrderByFlag
+		want []int64
+	}{
+		{"ascending", 0, []int64{1, 2, 5, 7, 3, 4, 6, 8}},
+		{"descending", plan.OrderBySpec_DESC, []int64{8, 6, 4, 3, 7, 5, 2, 1}},
+	} {
+		for _, limit := range []int64{3, 6, 9} {
+			t.Run(fmt.Sprintf("%s/limit=%d", order.name, limit), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { mpool.DeleteMPool(mp) })
+				tc := newTestCase(t, mp,
+					[]types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, limit,
+					[]*plan.OrderBySpec{
+						{Expr: newExpression(0), Flag: order.flag},
+						{Expr: newExpression(1), Flag: order.flag},
+					})
+				t.Cleanup(func() {
+					tc.arg.Free(tc.proc, false, nil)
+					if len(tc.arg.Children) > 0 {
+						tc.arg.GetChildren(0).Free(tc.proc, false, nil)
+					}
+					tc.proc.Free()
+					require.Zero(t, tc.proc.Mp().CurrNB())
+					require.Zero(t, tc.proc.Mp().OnHeapCurrNB())
+				})
+				require.NoError(t, tc.arg.Prepare(tc.proc))
+
+				bats := []*batch.Batch{batch.NewWithSize(2), batch.NewWithSize(2)}
+				resetChildren(tc.arg, bats)
+				for i, ids := range [][]int64{{7, 2, 8, 3}, {5, 1, 6, 4}} {
+					bat := bats[i]
+					bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+					bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+					require.NoError(t, vector.AppendFixedList(bat.Vecs[0], []int64{1, 1, 2, 2}, nil, tc.proc.Mp()))
+					require.NoError(t, vector.AppendFixedList(bat.Vecs[1], ids, nil, tc.proc.Mp()))
+					bat.SetRowCount(len(ids))
+				}
+
+				// 分页边界位于重复首键内部；后到的行必须参与选取。
+				// 唯一次级键使不同 K 的结果都是同一个全序的前缀。
+				result, err := vm.Exec(tc.arg, tc.proc)
+				require.NoError(t, err)
+				require.NotNil(t, result.Batch)
+				require.Len(t, result.Batch.Vecs, 2)
+				want := order.want[:min(int(limit), len(order.want))]
+				require.Equal(t, len(want), result.Batch.RowCount())
+				require.Equal(t, want, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+			})
+		}
 	}
 }
 
@@ -464,7 +906,7 @@ func testTopSpillOutputUsesRowAndByteBounds(t *testing.T, limit int, orderedOutp
 
 func TestTopSpillPrepareParamMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	arg := &Top{
 		Limit: plan2.MakePlan2Uint64ConstExprWithType(topSpillThreshold + 1),
 		Fs: []*plan.OrderBySpec{{
@@ -586,7 +1028,7 @@ func TestTopSpillWriteHonorsCancellationAfterInputBatch(t *testing.T) {
 }
 
 func TestTopSpillBatchCancellationBeforeWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	arg := &Top{}
 	arg.ctr.n = 1
@@ -614,7 +1056,7 @@ func TestTopSpillBatchCancellationBeforeWrite(t *testing.T) {
 }
 
 func TestTopSpillBatchRejectsShortWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	arg := &Top{}
 	arg.ctr.n = 1
 	arg.ctr.spillWriter = shortTopSpillWriter{}
@@ -634,7 +1076,7 @@ func TestTopSpillBatchRejectsShortWrite(t *testing.T) {
 }
 
 func TestTopSpillBatchCancellationAfterWrite(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	baseCtx := proc.Ctx
 	arg := &Top{}
 	arg.ctr.n = 1
@@ -671,7 +1113,7 @@ func TestTopSpillEvalCancellationCheckpoints(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			arg := &Top{}
 			arg.ctr.n = 1
 			analyzer := process.NewAnalyzer(0, false, false, "top-cancel-eval")

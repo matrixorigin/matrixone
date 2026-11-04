@@ -27,6 +27,17 @@ import (
 )
 
 func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, error) {
+	if state, _ := ctx.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning {
+		switch source := stmt.(type) {
+		case *tree.Select, *tree.ParenSelect:
+		case *tree.CreateTable:
+			if !source.IsAsSelect || source.AsSource == nil {
+				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "view schema planning requires SELECT or CTAS")
+			}
+		default:
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "view schema planning requires SELECT or CTAS")
+		}
+	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
 			p, err := BuildPlan(ctx, stmt, true)
@@ -129,6 +140,12 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 		stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), pstmt.Sql, v.(int64), sqlMode)
 		if err != nil {
+			// Same parse-error normalization as the frontend prepare path:
+			// report inner syntax failures as ER_PARSE_ERROR (1064/42000)
+			// rather than an untyped parser value that surfaces as 1105.
+			if _, positioned := err.(mysql.PositionedErr); positioned {
+				err = moerr.NewParseError(ctx.GetContext(), err.Error())
+			}
 			return nil, err
 		}
 		defer func() {
@@ -265,8 +282,9 @@ func dataBranchPickSubqueryHasParams(selectStmt *tree.Select) bool {
 	selectStmt.Format(fmtCtx)
 	scanner := mysql.NewScanner(dialect.MYSQL, fmtCtx.String())
 	defer mysql.PutScanner(scanner)
+	previousToken := 0
 	for {
-		token, _ := scanner.Scan()
+		token, _ := scanSQLToken(scanner, &previousToken)
 		switch token {
 		case mysql.VALUE_ARG:
 			return true
@@ -347,6 +365,7 @@ func collectPrepareAnalyzeSchemas(ctx CompilerContext, stmt tree.Statement) ([]*
 func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, preparePlan *Plan) ([]*plan.ObjectRef, error) {
 	var tableNames []*tree.TableName
 	var schemas []*plan.ObjectRef
+	resolveTable := ctx.Resolve
 
 	addTableNames := func(names tree.TableNames) {
 		for _, name := range names {
@@ -418,6 +437,9 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			}
 		}
 	case *tree.RenameTable:
+		// Dependencies must use the same persisted namespace as buildRenameTable,
+		// including destinations that do not exist yet but have temporary aliases.
+		resolveTable = ctx.ResolveWithoutTemporaryAlias
 		for _, alterTable := range ddl.AlterTables {
 			tableNames = append(tableNames, alterTable.Table)
 			for _, option := range alterTable.Options {
@@ -487,7 +509,7 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 			databaseName = ctx.DefaultDatabase()
 		}
 		name := string(tableName.ObjectName)
-		objRef, tableDef, err := ctx.Resolve(databaseName, name, nil)
+		objRef, tableDef, err := resolveTable(databaseName, name, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -549,6 +571,16 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 }
 
 func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
+	if state, _ := ctx.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning {
+		// The scoped resolver already captured the full identity/snapshot chain.
+		// Resolving recorded View names again in the caller's namespace can
+		// mistake a publisher source for a same-named subscriber object.
+		schemas := make([]*plan.ObjectRef, len(state.planDependencies))
+		for i, ref := range state.planDependencies {
+			schemas[i] = DeepCopyObjectRef(ref)
+		}
+		return schemas, nil
+	}
 	var schemas []*plan.ObjectRef
 	for _, viewKey := range ctx.GetViews() {
 		snapshot := ctx.GetSnapshot()

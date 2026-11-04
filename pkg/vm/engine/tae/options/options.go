@@ -28,12 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
-func WithTransferTableTTL(ttl time.Duration) func(*Options) {
-	return func(opts *Options) {
-		opts.TransferTableTTL = ttl
-	}
-}
-
 func WithWalClientFactory(factory logservicedriver.LogServiceClientFactory) func(*Options) {
 	return func(opts *Options) {
 		opts.WalClientFactory = factory
@@ -43,30 +37,12 @@ func WithWalClientFactory(factory logservicedriver.LogServiceClientFactory) func
 	}
 }
 
-func WithCheckpointMinCount(count int64) func(*Options) {
-	return func(opts *Options) {
-		if opts.CheckpointCfg == nil {
-			opts.CheckpointCfg = new(CheckpointCfg)
-		}
-		opts.CheckpointCfg.MinCount = count
-	}
-}
-
 func WithFlushInterval(interval time.Duration) func(*Options) {
 	return func(opts *Options) {
 		if opts.CheckpointCfg == nil {
 			opts.CheckpointCfg = new(CheckpointCfg)
 		}
 		opts.CheckpointCfg.FlushInterval = interval
-	}
-}
-
-func WithCheckpointScanInterval(interval time.Duration) func(*Options) {
-	return func(opts *Options) {
-		if opts.CheckpointCfg == nil {
-			opts.CheckpointCfg = new(CheckpointCfg)
-		}
-		opts.CheckpointCfg.ScanInterval = interval
 	}
 }
 
@@ -94,15 +70,6 @@ func WithGlobalVersionInterval(interval time.Duration) func(*Options) {
 			opts.CheckpointCfg = new(CheckpointCfg)
 		}
 		opts.CheckpointCfg.GlobalVersionInterval = interval
-	}
-}
-
-func WithGCCheckpointInterval(interval time.Duration) func(*Options) {
-	return func(opts *Options) {
-		if opts.CheckpointCfg == nil {
-			opts.CheckpointCfg = new(CheckpointCfg)
-		}
-		opts.CheckpointCfg.GCCheckpointInterval = interval
 	}
 }
 

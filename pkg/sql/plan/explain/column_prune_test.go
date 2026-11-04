@@ -784,6 +784,185 @@ func TestColumnPruneSemanticBoundaries(t *testing.T) {
 	}
 }
 
+func TestUnionAllAggregateOutputPruning(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		sql    string
+		aggs   []string
+		width  int
+		having bool
+	}{
+		{
+			name: "unused sum",
+			sql: "select c from (select count(*) c, sum(n_nationkey) s from nation union all " +
+				"select count(*), sum(r_regionkey) from region) u",
+			aggs: []string{"starcount"}, width: 1,
+		},
+		{
+			name: "referenced sum at nonzero ordinal",
+			sql: "select s from (select count(*) c, sum(n_nationkey) s from nation union all " +
+				"select count(*), sum(r_regionkey) from region) u",
+			aggs: []string{"sum"}, width: 1,
+		},
+		{
+			name: "both results referenced",
+			sql: "select c,s from (select count(*) c, sum(n_nationkey) s from nation union all " +
+				"select count(*), sum(r_regionkey) from region) u",
+			aggs: []string{"starcount", "sum"}, width: 2,
+		},
+		{
+			name: "hidden grouping and having consumers",
+			sql: "select c from (select count(*) c, avg(n_nationkey) unused, sum(n_regionkey) s " +
+				"from nation group by n_nationkey having sum(n_regionkey)>0 union all " +
+				"select count(*), avg(r_regionkey), sum(r_regionkey) from region " +
+				"group by r_regionkey having sum(r_regionkey)>0) u",
+			aggs: []string{"starcount", "sum"}, width: 1, having: true,
+		},
+		{
+			name: "unused effectful aggregate remains owned",
+			sql: "select c from (select count(*) c, sum(sleep(0)) s from nation union all " +
+				"select count(*), sum(sleep(0)) from region) u",
+			aggs: []string{"starcount", "sum"}, width: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			aggregates, unions := 0, 0
+			for _, node := range reachablePlanNodes(logicPlan.GetQuery()) {
+				switch node.NodeType {
+				case plan.Node_UNION_ALL:
+					unions++
+					require.Len(t, node.ProjectList, tc.width)
+				case plan.Node_AGG:
+					aggregates++
+					names := make([]string, 0, len(node.AggList))
+					sumPos := -1
+					for i, expr := range node.AggList {
+						require.NotNil(t, expr.GetF())
+						names = append(names, expr.GetF().Func.ObjName)
+						if expr.GetF().Func.ObjName == "sum" {
+							sumPos = i
+						}
+					}
+					require.ElementsMatch(t, tc.aggs, names)
+					if tc.having {
+						require.Len(t, node.GroupBy, 1)
+						require.Len(t, node.FilterList, 1)
+						col := node.FilterList[0].GetF().Args[0].GetCol()
+						require.NotNil(t, col)
+						require.Equal(t, int32(-2), col.RelPos)
+						require.Equal(t, int32(len(node.GroupBy)+sumPos), col.ColPos, "HAVING must reference the retained SUM slot")
+					}
+				}
+			}
+			require.Equal(t, 2, aggregates)
+			require.Equal(t, 1, unions)
+		})
+	}
+}
+
+func TestUnionAllComputedOutputPruning(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql             string
+		width, windows, slots int
+		prunedInputs          bool
+	}{
+		{"unused window", "select v from (select n_nationkey v,sum(n_regionkey) over() w from nation union all select r_regionkey,sum(r_regionkey) over() from region) u", 1, 0, 0, true},
+		{"unused partitioned window", "select v from (select n_nationkey v,sum(n_regionkey) over(partition by n_name order by n_regionkey) w from nation union all select r_regionkey,sum(r_regionkey) over(partition by r_name order by r_regionkey) from region) u", 1, 0, 0, true},
+		{"referenced window", "select v,w from (select n_nationkey v,sum(n_regionkey) over() w from nation union all select r_regionkey,sum(r_regionkey) over() from region) u", 2, 2, 0, false},
+		{"window filter consumes hidden result", "select v from (select n_nationkey v,sum(n_regionkey) over() w from nation union all select r_regionkey,sum(r_regionkey) over() from region) u where w>0", 1, 2, 0, false},
+		{"effectful window", "select v from (select n_nationkey v,sum(sleep(0)) over() w from nation union all select r_regionkey,sum(sleep(0)) over() from region) u", 1, 2, 0, false},
+		{"unused sample", "select n_name from (select sample(n_name,n_regionkey,2 rows) from nation union all select sample(r_name,r_regionkey,2 rows) from region) u", 1, 0, 2, true},
+		{"referenced sample", "select * from (select sample(n_name,n_regionkey,2 rows) from nation union all select sample(r_name,r_regionkey,2 rows) from region) u", 2, 0, 4, false},
+		{"nullable sample retains row set", "select n_name from (select sample(n_name,nullif(n_regionkey,0),2 rows) from nation union all select sample(r_name,nullif(r_regionkey,0),2 rows) from region) u", 1, 0, 4, false},
+		{"effectful sample", "select n_regionkey from (select sample(sleep(0),n_regionkey,2 rows) from nation union all select sample(sleep(0),r_regionkey,2 rows) from region) u", 1, 0, 4, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			width, windows, slots, unions := 0, 0, 0, 0
+			for _, n := range reachablePlanNodes(p.GetQuery()) {
+				switch n.NodeType {
+				case plan.Node_UNION_ALL:
+					width = len(n.ProjectList)
+					unions++
+				case plan.Node_WINDOW:
+					windows++
+				case plan.Node_SAMPLE:
+					slots += len(n.AggList)
+				}
+			}
+			require.Equal(t, 1, unions)
+			require.Equal(t, tc.width, width)
+			require.Equal(t, tc.windows, windows)
+			require.Equal(t, tc.slots, slots)
+			if tc.prunedInputs {
+				columns, err := getPrunedTableColumns(p)
+				require.NoError(t, err)
+				if tc.slots == 0 {
+					require.ElementsMatch(t, []Entry[string, []string]{
+						{tableName: "nation", colNames: []string{"n_nationkey"}},
+						{tableName: "region", colNames: []string{"r_regionkey"}},
+					}, columns)
+				} else {
+					require.ElementsMatch(t, []Entry[string, []string]{
+						{tableName: "nation", colNames: []string{"n_name"}},
+						{tableName: "region", colNames: []string{"r_name"}},
+					}, columns)
+				}
+			}
+		})
+	}
+}
+
+func TestUnionAllTimeWindowOutputPruning(t *testing.T) {
+	for _, tc := range []struct {
+		name, output, suffix string
+		width, sums          int
+	}{
+		{"unused time aggregate", "c", "", 1, 2},
+		{"unused fill aggregate", "c", " fill(null)", 1, 2},
+		{"referenced outputs", "c,s", "", 2, 4},
+		{"nonzero ordinal", "s", "", 1, 2},
+		{"boundary output", "w", "", 1, 0},
+		{"fill previous", "c", " fill(prev)", 1, 2},
+		{"effectful fill", "c", " fill(value,sleep(0))", 1, 4},
+		{"hidden having", "c", "", 1, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			branch := "select sum(id) c,sum(val) s,_wstart w from " + twTable
+			if tc.name == "hidden having" {
+				branch += " having sum(val)>0"
+			}
+			branch += " interval(updated_at,5,second)" + tc.suffix
+			operand := "select c,s,w from (" + branch + ") t"
+			p, err := buildOneStmt(plan2.NewMockOptimizer(false, newPlanTestProcess(t)), t,
+				"select "+tc.output+" from ("+operand+" union all "+operand+") u")
+			require.NoError(t, err)
+			unions, windows, sums := 0, 0, 0
+			for _, n := range reachablePlanNodes(p.GetQuery()) {
+				switch n.NodeType {
+				case plan.Node_UNION_ALL:
+					unions++
+					require.Len(t, n.ProjectList, tc.width)
+				case plan.Node_TIME_WINDOW:
+					windows++
+					for _, e := range n.AggList {
+						if e.GetF() != nil && e.GetF().Func.ObjName == "sum" {
+							sums++
+						}
+					}
+					requireSlotsWithinLayout(t, n)
+				}
+			}
+			require.Equal(t, 1, unions)
+			require.Equal(t, 2, windows)
+			require.Equal(t, tc.sums, sums)
+		})
+	}
+}
+
 func TestColumnPruneOperatorShape(t *testing.T) {
 	t.Run("scan chooses deterministic row carrier", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(

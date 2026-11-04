@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -31,6 +32,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColDef, []interface{}, error) {
@@ -83,11 +85,25 @@ func getPreparedResultColumnsForWithGroupConcatMaxLen(
 	}
 	if query := preparedPlan.GetQuery(); query != nil {
 		var title string
-		switch stmt.(type) {
-		case *tree.ExplainStmt, *tree.ExplainAnalyze:
-			title = plan2.GetPlanTitle(query, txnHaveDDL)
+		switch explainStmt := stmt.(type) {
+		case *tree.ExplainStmt:
+			if explainJSONFormat(explainStmt.Options) {
+				title = "EXPLAIN"
+			} else {
+				title = plan2.GetPlanTitle(query, txnHaveDDL)
+			}
+		case *tree.ExplainAnalyze:
+			if explainJSONFormat(explainStmt.Options) {
+				title = "EXPLAIN"
+			} else {
+				title = plan2.GetPlanTitle(query, txnHaveDDL)
+			}
 		case *tree.ExplainPhyPlan:
-			title = plan2.GetPhyPlanTitle(query, txnHaveDDL)
+			if explainJSONFormat(explainStmt.Options) {
+				title = "EXPLAIN"
+			} else {
+				title = plan2.GetPhyPlanTitle(query, txnHaveDDL)
+			}
 		}
 		if title != "" {
 			return []*plan2.ColDef{{
@@ -174,12 +190,12 @@ func overlayPreparedGroupConcatResultMetadata(
 	if query == nil || groupConcatMaxLen == 0 || len(query.Steps) == 0 {
 		return
 	}
-	step := len(query.Steps) - 1
+	step := query.MainOutputStep()
 	if query.HasReturning {
-		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
-			return
-		}
-		step = int(query.ReturningStep)
+		step = query.ReturningStep
+	}
+	if step < 0 || int(step) >= len(query.Steps) {
+		return
 	}
 	rootID := query.Steps[step]
 	if rootID < 0 || int(rootID) >= len(query.Nodes) {
@@ -285,6 +301,17 @@ func isDirectPreparedGroupConcatResult(
 	}
 }
 
+func explainJSONFormat(options []tree.OptionElem) bool {
+	for _, option := range options {
+		if !strings.EqualFold(option.Name, tree.FormatOption) {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(option.Value), "'\"")
+		return strings.EqualFold(value, "JSON")
+	}
+	return false
+}
+
 func sessionTxnHaveDDL(ses FeSession) bool {
 	if ses == nil || ses.GetProc() == nil {
 		return false
@@ -321,6 +348,82 @@ func freezeResultMetadata(runner ComputationRunner) {
 	}
 }
 
+// deferredResultMetadata belongs to one statement. A definition retry may
+// replace its plan before output starts; once metadata is published, the
+// existing compiler guard prevents a retry from changing that visible schema.
+type deferredResultMetadata struct {
+	once       sync.Once
+	initialize func() error
+	err        error
+}
+
+func (metadata *deferredResultMetadata) publish() error {
+	metadata.once.Do(func() { metadata.err = metadata.initialize() })
+	return metadata.err
+}
+
+func publishSelectResultMetadata(ses *Session, execCtx *ExecCtx) error {
+	if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+		if runningCompile, ok := execCtx.runner.(Compile); ok {
+			txnCW.syncCompileExecution(runningCompile)
+			if runningCompile.PlanGenerationRebuilt() {
+				// Binary execution may retain column packets from the original
+				// prepared generation. Derive fresh packets from the current plan.
+				execCtx.prepareColDef = nil
+			}
+		}
+	}
+	columns, colDefs, err := getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
+	if err != nil {
+		return err
+	}
+	ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+	freezeResultMetadata(execCtx.runner)
+	recordCampaignResultMetadata(ses, colDefs)
+	return execCtx.resper.RespPreMeta(execCtx, columns)
+}
+
+// updateWithChangedRowsSemanticsCoversSpool decides whether a divergence
+// between the DML RETURNING spool row count and runResult.AffectRows is legal.
+//
+// The spool holds the final image of every row the DML matched, so its row
+// count equals the matched-row count. runResult.AffectRows is the
+// client-protocol affected-row count: with CLIENT_FOUND_ROWS enabled it is
+// also the matched-row count, but on a default-capability session an UPDATE
+// reports only physically changed rows (MySQL changed-row semantics). There,
+// and only there, a no-op or partially no-op UPDATE legitimately spools more
+// row images than the affected-row count reports; the invariant that still
+// holds -- and is enforced -- is that every changed row is covered by a
+// spooled matched image, i.e. spooled >= affected. Every other statement kind
+// and capability keeps the original strict-equality guard: INSERT and DELETE
+// count each spooled row as affected, MERGE action rows are never
+// changed-row filtered, and ODKU RETURNING is rejected upstream before this
+// point. See issue #31422.
+func updateWithChangedRowsSemanticsCoversSpool(ses *Session, execCtx *ExecCtx, spooled, affected uint64) bool {
+	return spoolCoversAffectedRows(spooled, affected, updateStmtWithChangedRowSemantics(ses, execCtx))
+}
+
+// spoolCoversAffectedRows is the pure gate predicate: strict equality always
+// passes; a larger spool passes only for changed-row UPDATE semantics; every
+// other divergence fails.
+func spoolCoversAffectedRows(spooled, affected uint64, updateChangedRows bool) bool {
+	if spooled == affected {
+		return true
+	}
+	return updateChangedRows && spooled > affected
+}
+
+// updateStmtWithChangedRowSemantics reports whether this statement is an
+// UPDATE planned for a session whose protocol reports changed rows only
+// (CLIENT_FOUND_ROWS disabled).
+func updateStmtWithChangedRowSemantics(ses *Session, execCtx *ExecCtx) bool {
+	if !countUpdateChangedRows(ses) {
+		return false
+	}
+	query := execCtx.cw.Plan().GetQuery()
+	return query != nil && query.StmtType == plan.Query_UPDATE
+}
+
 // executeResultRowStmt run the statemet that responses result rows
 func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var columns []interface{}
@@ -353,7 +456,8 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
 		execCtx.returning.columns = columns
 		execCtx.returning.affectedRows = execCtx.runResult.AffectRows
-		if got := execCtx.returning.spool.RowCount(); got != execCtx.runResult.AffectRows {
+		if got := execCtx.returning.spool.RowCount(); got != execCtx.runResult.AffectRows &&
+			!updateWithChangedRowsSemanticsCoversSpool(ses, execCtx, got, execCtx.runResult.AffectRows) {
 			return moerr.NewInternalErrorf(execCtx.reqCtx,
 				"DML RETURNING row count %d does not match affected rows %d", got, execCtx.runResult.AffectRows)
 		}
@@ -373,22 +477,30 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	}
 	switch statement := execCtx.stmt.(type) {
 	case *tree.Select:
-
-		columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
-		if err != nil {
-			ses.Error(execCtx.reqCtx,
-				"Failed to get columns from computation handler",
-				zap.Error(err))
-			return
-		}
-
-		ses.rs = &plan.ResultColDef{ResultCols: colDefs}
-
 		ses.EnterFPrint(FPResultRowStmtSelect1)
 		defer ses.ExitFPrint(FPResultRowStmtSelect1)
-		freezeResultMetadata(execCtx.runner)
+		if txnCW, ok := execCtx.cw.(*TxnComputationWrapper); ok && txnCW.preparedStmt != nil {
+			// Hold a prepared execution after binding but before any result
+			// metadata is retained or published for deterministic DDL races.
+			fault.TriggerFaultWithContext(execCtx.reqCtx, "prepared-result-metadata-bound")
+		}
 		cursorExecute := execCtx.input != nil && execCtx.input.isCursorExecute
+		queryResultFinalized := false
+		defer func() {
+			// A producer or terminal step can fail after batches were saved.
+			// Cursor staging has its own abort owner; ordinary SELECT must clear
+			// its session state before another statement can save a result.
+			if !cursorExecute && !queryResultFinalized {
+				resetQueryResultState(ses)
+			}
+		}()
 		if cursorExecute {
+			columns, colDefs, err = getSelectColumnsAndResultColumns(execCtx.reqCtx, execCtx.cw)
+			if err != nil {
+				return err
+			}
+			ses.rs = &plan.ResultColDef{ResultCols: colDefs}
+			freezeResultMetadata(execCtx.runner)
 			// A cursor must retain its metadata before the pipeline starts so
 			// captured batches can be decoded, but its execute terminator must
 			// not be sent until all batches have materialized successfully.
@@ -398,9 +510,8 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				return moerr.NewInternalError(execCtx.reqCtx, "prepared cursor requires MySQL response writer")
 			}
 		} else {
-			err = execCtx.resper.RespPreMeta(execCtx, columns)
-			if err != nil {
-				return
+			execCtx.resultMetadata = &deferredResultMetadata{
+				initialize: func() error { return publishSelectResultMetadata(ses, execCtx) },
 			}
 		}
 
@@ -414,6 +525,19 @@ func executeResultRowStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		// todo: add trace
 		if _, err = execCtx.runner.Run(0); err != nil {
 			return
+		}
+		if !cursorExecute {
+			// Empty results never invoke a positive-row output callback. Publish
+			// their metadata only after the successful final plan is known.
+			if err = execCtx.resultMetadata.publish(); err != nil {
+				return err
+			}
+			// Pipeline reset callbacks also run on failed attempts. Finalize a
+			// saved result only after Run succeeds with its final schema.
+			if err = finalizeQueryResult(execCtx); err != nil {
+				return err
+			}
+			queryResultFinalized = true
 		}
 		// Cursor metadata is retained above for decoding, but its wire response
 		// is emitted by respStreamResultRow after transaction finalization. This

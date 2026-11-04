@@ -45,4 +45,99 @@ NULL    0    ROLLUP    1    2    2    30
 west    0    tea    0    1    1    3
 west    0    ROLLUP    1    1    1    3
 ROLLUP    1    ROLLUP    1    6    5    45
+select r, p, gr, gp, c, s
+from (
+select region as r, product as p, grouping(region) as gr,
+grouping(product) as gp, count(*) as c, sum(amount) as s
+from t_rollup
+group by r, p with rollup
+) q
+order by gr, r, gp, p;
+r    p    gr    gp    c    s
+null    tea    0    0    2    30
+null    null    0    1    2    30
+east    null    0    0    1    5
+east    coffee    0    0    1    7
+east    tea    0    0    1    null
+east    null    0    1    3    12
+west    tea    0    0    1    3
+west    null    0    1    1    3
+null    null    1    1    6    45
+select region as r, sum(amount) as s,
+row_number() over (order by sum(amount) desc) as rn
+from t_rollup
+group by r with rollup
+order by s desc;
+r    s    rn
+null    45    1
+null    30    2
+east    12    3
+west    3    4
+create table t_empty(k int, v int);
+select k, sum(v) as total, count(*) as n, grouping(k) as g
+from t_empty group by k with rollup;
+k    total    n    g
+select region, sum(amount) as total, count(*) as n, grouping(region) as g
+from t_rollup where 1=0 group by region with rollup;
+region    total    n    g
+with input as (select * from t_empty)
+select k, sum(v) as total from input group by rollup(k);
+k    total
+select k, row_number() over(order by k) as rn
+from t_empty group by k with rollup;
+k    rn
+select k as x, sum(v) as s, row_number() over(order by sum(v)) as rn
+from t_empty group by x with rollup;
+x    s    rn
+select k, count(*) as n from t_empty group by k with rollup
+having count(*)=0 or sum(v)>0;
+k    n
+select k, sum(v) as total, count(*) as n, grouping(k) as g
+from t_empty group by k with rollup
+union all select 99,99,99,0;
+k    total    n    g
+99    99    99    0
+create table t_empty_copy as
+select k, sum(v) as total, count(*) as n, grouping(k) as g
+from t_empty group by k with rollup;
+select count(*) as copied_rows from t_empty_copy;
+copied_rows
+0
+insert into t_empty_copy
+select k, sum(v), count(*), grouping(k) from t_empty group by k with rollup;
+select count(*) as inserted_rows from t_empty_copy;
+inserted_rows
+0
+select sum(v) as total, count(*) as n from t_empty;
+total    n
+null    0
+select k, sum(v) as total, count(*) as n, grouping(k) as g
+from t_empty group by grouping sets ((k),());
+k    total    n    g
+null    null    0    1
+insert into t_empty values(null,null);
+select k, grouping(k) as g, count(*) as n, count(v) as count_v
+from t_empty group by k with rollup order by grouping(k);
+k    g    n    count_v
+null    0    1    0
+null    1    1    0
+delete from t_empty;
+select k, count(*) as n from t_empty group by k with rollup;
+k    n
+select k, sample(v, 1 rows) as sampled from t_empty group by k with rollup;
+k    sampled
+select k, sample(v, 100 percent) as sampled from t_empty group by rollup(k);
+k    sampled
+insert into t_empty values(1,10);
+select k, sample(v, 1 rows) as sampled from t_empty group by k with rollup;
+k    sampled
+1    10
+1    10
+select k, sample(v, 100 percent) as sampled from t_empty group by rollup(k);
+k    sampled
+1    10
+1    10
+select k, sample(v, 1 rows) as sampled from t_empty where 1=0 group by rollup(k);
+k    sampled
+delete from t_empty;
 drop database mysql_compat_null_rollup_grouping;

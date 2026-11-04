@@ -1092,14 +1092,14 @@ func TestJSONSourceCastsAreNotSkipped(t *testing.T) {
 	require.Equal(t, "cast", blobExpr.GetF().Func.ObjName)
 }
 
-func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {
+func TestJSONComparisonOperandDomains(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		sql  string
-		want types.T
+		name        string
+		sql         string
+		left, right types.T
 	}{
-		{name: "numeric", sql: "select cast('3' as json) > 1", want: types.T_int64},
-		{name: "string", sql: "select cast('\"active\"' as json) = 'active'", want: types.T_varchar},
+		{name: "numeric", sql: "select cast('3' as json) > 1", left: types.T_json, right: types.T_int64},
+		{name: "string", sql: "select cast('\"active\"' as json) = 'active'", left: types.T_varchar, right: types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -1108,8 +1108,8 @@ func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {
 
 			args := pl.GetQuery().Nodes[1].ProjectList[0].GetF().Args
 			require.Len(t, args, 2)
-			require.Equal(t, int32(tc.want), args[0].Typ.Id)
-			require.Equal(t, int32(tc.want), args[1].Typ.Id)
+			require.Equal(t, int32(tc.left), args[0].Typ.Id)
+			require.Equal(t, int32(tc.right), args[1].Typ.Id)
 		})
 	}
 }
@@ -1408,13 +1408,31 @@ func TestPreparedDynamicIntervalHasVersionedUnit(t *testing.T) {
 		"prepare interval_units from select date_add('2026-01-01', interval ? second)")
 	require.NoError(t, err)
 	preparedPlan := p.GetDcl().GetPrepare().GetPlan()
-	require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_interval_microsecond"))
+	require.NotNil(t, findPlanFunctionExpr(preparedPlan, "to_calendar_interval"))
 	require.Nil(t, findPlanFunctionExpr(preparedPlan, "to_interval"))
 	dateAdd := findPlanFunctionExpr(preparedPlan, "date_add")
 	require.NotNil(t, dateAdd)
 	require.Equal(t, int64(types.MicroSecond), dateAdd.GetF().Args[2].GetLit().GetI64Val())
 	features, err := plan.RequiredRemoteExpressionFeatures(preparedPlan)
 	require.NoError(t, err)
-	require.True(t, features.NormalizedIntervalUnits)
+	require.True(t, features.CalendarIntervalNormalization)
 	require.False(t, features.LegacyIntervalUnits)
+}
+
+// Tuple extraction restores an already stored ENUM value. Its domain must
+// survive binding so INSERT does not introduce a new enum conversion.
+func TestSerialExtractEnumDomain(t *testing.T) {
+	for _, domain := range []string{"cold,hot,warm", ",2,1"} {
+		target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: domain}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+		extracted, err := BindFuncExprImplByPlanExpr(context.Background(), "serial_extract", []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+			makePlan2Int64ConstExprWithType(0), target,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_enum), extracted.Typ.Id)
+		require.Equal(t, domain, extracted.Typ.Enumvalues)
+		assigned, err := funcCastForEnumType(context.Background(), extracted, target.Typ)
+		require.NoError(t, err)
+		require.Same(t, extracted, assigned, "same-domain stored value must not pass through input validation")
+	}
 }

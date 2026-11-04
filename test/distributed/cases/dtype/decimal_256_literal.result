@@ -76,7 +76,7 @@ select id,
 (cast(x as decimal(20,0)) % cast('3e-38' as decimal(65,38))) = cast(case id when 1 then '0.00000000000000000000000000000000000001' when 2 then '0.00000000000000000000000000000000000002' end as decimal(65,38)) as mod_left,
 (cast('3e-38' as decimal(65,38)) % cast(x as decimal(20,0))) = cast(case id when 1 then '0.00000000000000000000000000000000000003' when 2 then '0.00000000000000000000000000000000000003' end as decimal(65,38)) as mod_right
 from decimal_scale_alignment_t order by id;
-➤ id[4,32,0]  ¦  add_left[-7,1,0]  ¦  add_right[-7,1,0]  ¦  sub_left[-7,1,0]  ¦  sub_right[-7,1,0]  ¦  mod_left[-7,1,0]  ¦  mod_right[-7,1,0]  𝄀
+➤ id[4,32,0]  ¦  add_left[-6,8,0]  ¦  add_right[-6,8,0]  ¦  sub_left[-6,8,0]  ¦  sub_right[-6,8,0]  ¦  mod_left[-6,8,0]  ¦  mod_right[-6,8,0]  𝄀
 1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
 2  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
 3  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL
@@ -88,14 +88,14 @@ select id,
 (cast(x as decimal(20,0)) % cast('3e-39' as decimal(65,39))) = cast(case id when 1 then '0.000000000000000000000000000000000000001' when 2 then '0.000000000000000000000000000000000000002' end as decimal(65,39)) as mod_left,
 (cast('3e-39' as decimal(65,39)) % cast(x as decimal(20,0))) = cast(case id when 1 then '0.000000000000000000000000000000000000003' when 2 then '0.000000000000000000000000000000000000003' end as decimal(65,39)) as mod_right
 from decimal_scale_alignment_t order by id;
-➤ id[4,32,0]  ¦  add_left[-7,1,0]  ¦  add_right[-7,1,0]  ¦  sub_left[-7,1,0]  ¦  sub_right[-7,1,0]  ¦  mod_left[-7,1,0]  ¦  mod_right[-7,1,0]  𝄀
+➤ id[4,32,0]  ¦  add_left[-6,8,0]  ¦  add_right[-6,8,0]  ¦  sub_left[-6,8,0]  ¦  sub_right[-6,8,0]  ¦  mod_left[-6,8,0]  ¦  mod_right[-6,8,0]  𝄀
 1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
 2  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
 3  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL  ¦  NULL
 select (-cast(x as decimal(20,0)) + cast('3e-65' as decimal(65,65))) = cast('-0.99999999999999999999999999999999999999999999999999999999999999997' as decimal(65,65)) as add_limit,
 (cast(x as decimal(20,0)) - cast('3e-65' as decimal(65,65))) = cast('0.99999999999999999999999999999999999999999999999999999999999999997' as decimal(65,65)) as sub_limit
 from decimal_scale_alignment_t where id=1;
-➤ add_limit[-7,1,0]  ¦  sub_limit[-7,1,0]  𝄀
+➤ add_limit[-6,8,0]  ¦  sub_limit[-6,8,0]  𝄀
 1  ¦  1
 select cast(x as decimal(20,0)) + cast('3e-65' as decimal(65,65)) from decimal_scale_alignment_t where id=1;
 Data truncation: data out of range: data type decimal256, value '1.00000000000000000000000000000000000000000000000000000000000000003' exceeds DECIMAL(65,65)

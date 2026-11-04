@@ -45,6 +45,7 @@ func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.Cagra_TblType_Metadata,
 		catalog.Cagra_TblType_Storage,
+		catalog.IndexIgnored_TblType,
 	}
 }
 
@@ -79,14 +80,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	return []string{
 		"cagra_threads_build",
 		"lower_case_table_names",
-	}
-}
-
-func (CatalogHooks) DefaultOptions() map[string]string {
-	return map[string]string{
-		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,
-		catalog.Quantization:         metric.Quantization_F32_Str,
-		catalog.DistributionMode:     vectorindex.DistributionMode_SINGLE_GPU_Str,
 	}
 }
 
@@ -264,6 +257,9 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.QuantizerTrainLimit > 0 {
 		res[catalog.IndexAlgoParamQuantizerTrainLimit] = strconv.FormatInt(idx.IndexOption.QuantizerTrainLimit, 10)
+	}
+	if idx.IndexOption.MaxBadRecordsSet {
+		res[catalog.IndexAlgoParamMaxBadRecords] = strconv.FormatInt(idx.IndexOption.MaxBadRecords, 10)
 	}
 	return res, nil
 }

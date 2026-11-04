@@ -29,11 +29,9 @@ UNAME_M=$(shell uname -m)
 # this Makefile runs, so under `make -j` it fails a clean build and vanishes
 # before anyone can look -- see the `config` target in ../Makefile.
 USEARCH_DIR=_usearch_build
-USEARCH_TAR=usearch-2.25.3.tar.gz
+USEARCH_TAR=usearch-2.26.5-20261030.tar.gz
 STRINGZILLA_DIR=_stringzilla
 STRINGZILLA_TAR=StringZilla-4.2.1.tar.gz
-SIMSIMD_DIR=_simsimd
-SIMSIMD_TAR=SimSIMD-6.5.3.tar.gz
 FP16_DIR=_fp16
 FP16_TAR=fp16.tar.gz
 XXHASH_DIR=xxHash-0.8.3
@@ -61,8 +59,8 @@ ONNX_VERSION=1.26.0
 ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
 ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
 # GitHub's media endpoint serves the same immutable Git LFS objects directly.
-# It is used only after the primary endpoint times out and is still verified by
-# the platform-specific SHA-256 below.
+# It is used only after a primary timeout or HTTP failure and is still verified
+# by the platform-specific SHA-256 below.
 ONNX_FALLBACK_BASE_URL=https://media.githubusercontent.com/media/matrixorigin/thirdparty/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
 # The MatrixOne CI builder image ships these pinned artifacts. Keep this a
 # versioned directory so a base-image update cannot accidentally satisfy a
@@ -106,11 +104,7 @@ usearch: install/include/usearch.h
 
 stringzilla: install/include/stringzilla/stringzilla.h
 
-simsimd: install/include/simsimd/simsimd.h
-
 fp16: install/include/fp16.h
-
-simsimd: install/include/simsimd/simsimd.h
 
 xxhash: install/include/xxhash.h
 
@@ -125,12 +119,6 @@ install/include/fp16.h: | init
 	mkdir -p $(FP16_DIR)
 	tar zxf $(FP16_TAR) -C $(FP16_DIR) --strip-components=1
 	cp -r $(FP16_DIR)/include/* install/include
-
-install/include/simsimd/simsimd.h: | init
-	rm -rf $(SIMSIMD_DIR)
-	mkdir -p $(SIMSIMD_DIR)
-	tar zxf $(SIMSIMD_TAR) -C $(SIMSIMD_DIR) --strip-components=1
-	cp -r $(SIMSIMD_DIR)/include/* install/include
 
 install/include/stringzilla/stringzilla.h: | init
 	rm -rf $(STRINGZILLA_DIR)
@@ -147,24 +135,25 @@ ifeq ($(UNAME_S),linux)
   endif
 endif
 
-ifeq ($(MO_CL_SIMSIMD),1)
-  ifeq ($(MUSL),)
-	USEARCH_CMAKE_FLAG += -DUSEARCH_USE_SIMSIMD=1 -DSIMSIMD_DYNAMIC_DISPATCH=1
-	SIMSIMD_TARGET := HASWELL SKYLAKE ICE GENOA SAPPHIRE TURIN SIERRA NEON NEON_I8 NEON_F16 NEON_BF16 SVE SVE_I8 SVE_F16 SVE_BF16 SVE2
-	USEARCH_CMAKE_FLAG += $(foreach target,$(SIMSIMD_TARGET),-DSIMSIMD_TARGET_$(target)=1)
-  endif
-endif
-
-install/include/usearch.h: install/include/fp16.h install/include/simsimd/simsimd.h install/include/stringzilla/stringzilla.h | init
+install/include/usearch.h: install/include/fp16.h install/include/stringzilla/stringzilla.h | init
 	rm -rf $(USEARCH_DIR)
 	mkdir -p $(USEARCH_DIR)
 	tar zxf $(USEARCH_TAR) -C $(USEARCH_DIR) --strip-components=1
-	mkdir -p $(USEARCH_DIR)/fp16 $(USEARCH_DIR)/simsimd $(USEARCH_DIR)/stringzilla
+	mkdir -p $(USEARCH_DIR)/fp16 $(USEARCH_DIR)/stringzilla
 	cp -r $(FP16_DIR)/* $(USEARCH_DIR)/fp16
-	cp -r $(SIMSIMD_DIR)/* $(USEARCH_DIR)/simsimd
 	cp -r $(STRINGZILLA_DIR)/* $(USEARCH_DIR)/stringzilla
+# usearch compiles with -march=native, which tunes the artifact to the build
+# host's CPU. On a release/CI builder that is not the deployment target this
+# bakes in instructions the target may not implement. x86 is pinned to a haswell
+# baseline; arm64 must likewise drop to the portable armv8-a baseline -- without
+# this an arm64 image built on an SVE-capable host (modern Graviton/Ampere/
+# Neoverse) emits SVE into libusearch_c and SIGILLs on any arm64 CPU without SVE,
+# e.g. Apple Silicon under Docker (#30413). SVE on genuinely-SVE hardware belongs
+# behind runtime dispatch, never a static -march.
 	@if $(CC) -march=haswell -E - < /dev/null > /dev/null 2>&1; then \
 		sed -i -e "s/march=native/march=haswell/g" $(USEARCH_DIR)/CMakeLists.txt; \
+	elif $(CC) -march=armv8-a -E - < /dev/null > /dev/null 2>&1; then \
+		sed -i -e "s/march=native/march=armv8-a/g" $(USEARCH_DIR)/CMakeLists.txt; \
 	fi
 	(cd $(USEARCH_DIR) && cmake -B build $(USEARCH_CMAKE_FLAG) && cmake --build build --config Release)
 ifeq ($(UNAME_S),darwin)
@@ -176,7 +165,6 @@ endif
 	cp $(USEARCH_DIR)/build/libusearch_static_c.a install/lib/libusearch_c.a
 	cp $(USEARCH_DIR)/c/usearch.h install/include
 	rm -rf $(FP16_DIR)
-	rm -rf $(SIMSIMD_DIR)
 	rm -rf $(STRINGZILLA_DIR)
 	rm -rf $(USEARCH_DIR)
 
@@ -247,6 +235,6 @@ test-download:
 	$(PWD)/download_test
 
 clean:
-	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(SIMSIMD_DIR) $(FP16_DIR) $(CROARING_TMP) $(JEMALLOC_DIR)
+	rm -rf install $(USEARCH_DIR) $(STRINGZILLA_DIR) $(FP16_DIR) $(CROARING_TMP) $(JEMALLOC_DIR)
 
-.PHONY: usearch stringzilla fp16 simsimd init croaring jemalloc onnxruntime test-download
+.PHONY: usearch stringzilla fp16 init croaring jemalloc onnxruntime test-download

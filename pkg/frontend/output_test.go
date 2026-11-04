@@ -279,13 +279,18 @@ func Test_extractRowFromVector2(t *testing.T) {
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
 		ioses, err := NewIOSession(&testConn{}, pu, "")
-		convey.ShouldBeNil(err)
+		require.NoError(t, err)
 		proto := NewMysqlClientProtocol("", 0, ioses, 1024, sv)
 
 		ses := NewSession(ctx, "", proto, nil)
 		proto.ses = ses
+		defer func() {
+			ses.Close()
+			proto.Close()
+			require.NoError(t, ioses.Close())
+		}()
 
-		kases := makeKases()
+		kases := makeKases(t)
 		for _, kse := range kases {
 			bat := kse.bat
 			row := make([]any, len(bat.Vecs))
@@ -584,8 +589,13 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 		scale int32
 		want  string
 	}{
+		{scale: 0, want: "2024-01-15 10:20:30"},
 		{scale: 1, want: "2024-01-15 10:20:30.0"},
+		{scale: 2, want: "2024-01-15 10:20:30.00"},
 		{scale: 3, want: "2024-01-15 10:20:30.000"},
+		{scale: 4, want: "2024-01-15 10:20:30.0000"},
+		{scale: 5, want: "2024-01-15 10:20:30.00000"},
+		{scale: 6, want: "2024-01-15 10:20:30.000000"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			bat := batch.NewWithSize(1)

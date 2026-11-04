@@ -106,7 +106,7 @@ func chunksFromSql(t *testing.T, sqls []string, startId int64) []cuvscdc.EventCh
 
 func TestIvfpqSync_Update_AllInsert(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -143,7 +143,7 @@ func TestIvfpqSync_Update_AllInsert(t *testing.T) {
 
 func TestIvfpqSync_Update_DeleteAndInsert(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 7)()
@@ -178,7 +178,7 @@ func TestIvfpqSync_Update_DeleteAndInsert(t *testing.T) {
 // TestIvfpqSync_Update_DeleteInsertDelete: the user's collapse case.
 func TestIvfpqSync_Update_DeleteInsertDelete(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -209,7 +209,7 @@ func TestIvfpqSync_Update_DeleteInsertDelete(t *testing.T) {
 
 func TestIvfpqSync_Update_DeleteIdempotent(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -237,7 +237,7 @@ func TestIvfpqSync_Update_DeleteIdempotent(t *testing.T) {
 
 func TestIvfpqSync_Update_Upsert(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -267,7 +267,7 @@ func TestIvfpqSync_Update_Upsert(t *testing.T) {
 
 func TestIvfpqSync_Update_DimMismatch(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	s, err := NewIvfpqSync(sqlproc, "db", "src", "idxname",
@@ -286,7 +286,7 @@ func TestIvfpqSync_Update_DimMismatch(t *testing.T) {
 
 func TestIvfpqSync_Update_WithIncludeBytes(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -327,7 +327,7 @@ func TestIvfpqSync_Update_WithIncludeBytes(t *testing.T) {
 
 func TestIvfpqSync_Update_NoOpSaveSkipsSql(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	rec := &recordingTxn{}
@@ -351,7 +351,7 @@ func TestIvfpqSync_Update_NoOpSaveSkipsSql(t *testing.T) {
 
 func TestIvfpqSync_NewSync_Stateless(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	called := 0
@@ -372,7 +372,7 @@ func TestIvfpqSync_NewSync_Stateless(t *testing.T) {
 
 func TestIvfpqSync_RunOnce(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()
@@ -405,7 +405,7 @@ func TestIvfpqSync_RunOnce(t *testing.T) {
 // CdcTailRowsUpperBound added a chunk's worth of phantom rows for every chunk it could not see.
 func TestIvfpqSyncWritesOneFrameRowPerChunk(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
 	defer installNextChunkIdMock(t, proc, 0)()

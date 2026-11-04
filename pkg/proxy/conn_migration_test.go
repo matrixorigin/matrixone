@@ -318,6 +318,26 @@ func TestQueryServiceMigrateToRejectsReadDeadlineClearFailure(t *testing.T) {
 	})
 }
 
+func TestQueryServiceMigrateToRejectsDependentPreparedOnOldTarget(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		previous, _ := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		defer targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, previous)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion111)
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+			LastInsertIDExported: true,
+			PrepareStmts:         []*pb.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion112}},
+		})
+		assert.ErrorContains(t, err, "requires protocol version 112")
+		assert.Empty(t, sc.statements, "no target session mutation before admission")
+	})
+}
+
 func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV29Target(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
 	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {

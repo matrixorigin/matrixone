@@ -256,7 +256,38 @@ void test_offset() {
     printf("offset layout passed\n");
 }
 
+// contain agrees with a direct span-and-bit check at the span edges, across word
+// boundaries and for values that wrap below base.
+void test_contain_edges() {
+    printf("Testing contain at span edges...\n");
+    uint64_t keys[] = {1000, 1063, 1064, 1127, 1128, 1200};
+    void *f = cbm_build(keys, sizeof(keys), sizeof(uint64_t), 6, NULL, 0, MAXBITS, 1);
+    CHECK(f != NULL, "build");
+    for (int i = 0; i < 6; i++) CHECK(mo_cbitmap_contain(f, keys[i]), "key present");
+    CHECK(!mo_cbitmap_contain(f, 999), "base - 1 absent");
+    CHECK(!mo_cbitmap_contain(f, 1001), "next to base absent");
+    CHECK(!mo_cbitmap_contain(f, 1199), "below last absent");
+    CHECK(!mo_cbitmap_contain(f, 1201), "nbits absent");
+    CHECK(!mo_cbitmap_contain(f, 0), "0 absent");
+    CHECK(!mo_cbitmap_contain(f, UINT64_MAX), "max absent");
+    CHECK(!mo_cbitmap_contain(f, 1000 + (1ULL << 63)), "wrapped offset absent");
+    mo_cbitmap_free(f);
+
+    // base 0 (legacy layout): bit 0 present, word 0 read for an out-of-span value
+    uint64_t zero[] = {0, 5};
+    f = cbm_build(zero, sizeof(zero), sizeof(uint64_t), 2, NULL, 0, MAXBITS, 0);
+    CHECK(f != NULL, "build base 0");
+    CHECK(mo_cbitmap_contain(f, 0), "0 present");
+    CHECK(mo_cbitmap_contain(f, 5), "5 present");
+    CHECK(!mo_cbitmap_contain(f, 6), "6 absent");
+    CHECK(!mo_cbitmap_contain(f, 64), "64 absent");
+    CHECK(!mo_cbitmap_contain(f, UINT64_MAX), "max absent");
+    mo_cbitmap_free(f);
+    printf("contain edges passed\n");
+}
+
 int main() {
+    test_contain_edges();
     test_build_contain();
     test_test_fixed_and_nulls();
     test_serialize_roundtrip();

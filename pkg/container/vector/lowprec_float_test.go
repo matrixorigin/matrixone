@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -82,4 +83,29 @@ func TestLowPrecisionFloatMarshalRoundTrip(t *testing.T) {
 		require.True(t, got.IsNull(2))
 		vec.Free(mp)
 	}
+}
+
+func testLowPrecisionFloatRowStrings[T types.LowPrecFloat](t *testing.T, oid types.T, stored []T, want []float32) {
+	t.Helper()
+	t.Run(oid.String(), func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+		vec := NewVec(oid.ToType())
+		t.Cleanup(func() { vec.Free(mp) })
+		require.NoError(t, AppendFixedList(vec, stored, nil, mp))
+		var zero T
+		require.NoError(t, AppendFixed(vec, zero, true, mp))
+		for i, value := range stored {
+			text := fmt.Sprintf("%v", want[i])
+			require.Equal(t, text, vec.RowToString(i))
+			constant, err := NewConstFixed(oid.ToType(), value, 10, mp)
+			require.NoError(t, err)
+			t.Cleanup(func() { constant.Free(mp) })
+			require.Equal(t, text, constant.RowToString(7))
+		}
+		require.Equal(t, "null", vec.RowToString(len(stored)))
+		null := NewConstNull(oid.ToType(), 10, mp)
+		t.Cleanup(func() { null.Free(mp) })
+		require.Equal(t, "null", null.RowToString(7))
+	})
 }

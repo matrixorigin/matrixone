@@ -309,7 +309,6 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		if !w.isSetPK || w.pk != uint16(i) {
 			continue
 		}
-		w.objMetaBuilder.AddPKData(columnData)
 		var bf index.StaticFilter
 		arenaAlloc := w.writer.AllocFromArena
 		if w.pkType == index.BF {

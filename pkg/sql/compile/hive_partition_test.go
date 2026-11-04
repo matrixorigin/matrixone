@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -335,6 +336,7 @@ func TestGetHivePartitionFileListCoverageHack(t *testing.T) {
 		},
 	}
 
+	param.Ctx = fileservice.WithSQLFileAccess(proc.Ctx, "sys", "moadmin")
 	files, sizes, err := c.getHivePartitionFileList(node, param)
 	require.NoError(t, err)
 	assert.Equal(t, []string{selectedFile}, files)

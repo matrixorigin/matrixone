@@ -1300,7 +1300,7 @@ func (s *Service) replayWALEntries(
 
 	maxWaitTime := 5 * time.Minute
 	waitStart := time.Now()
-	leaderServiceAddress := ""
+	replicaServiceAddress := ""
 	for {
 		select {
 		case <-ctx.Done():
@@ -1312,27 +1312,16 @@ func (s *Service) replayWALEntries(
 		}
 
 		info, ok := s.getShardInfo(ctx, shardID, true, true)
-		if ok && info.LeaderID != 0 {
-			logger.Info("WAL recovery: Log shard is ready",
+		if route, ready := routableShardInfo(info); ok && ready {
+			// Use the same metadata-readiness policy as client discovery.
+			// The existing connection and linearizable marker/lease reads
+			// establish replay readiness, without an arbitrary stability delay.
+			replicaServiceAddress = route.Replicas[route.ReplicaID]
+			logger.Info("WAL recovery: Log shard route is ready",
 				zap.Uint64("shard_id", shardID),
-				zap.Uint64("leader_id", info.LeaderID))
-			if err := waitWALRecoveryInterval(ctx, 5*time.Second); err != nil {
-				return err
-			}
-
-			info2, ok2 := s.getShardInfo(ctx, shardID, true, true)
-			if ok2 && info2.LeaderID != 0 {
-				if replicaInfo, ok := info2.Replicas[info2.LeaderID]; ok {
-					leaderServiceAddress = replicaInfo.ServiceAddress
-				}
-				logger.Info("WAL recovery: Log shard leader confirmed",
-					zap.Uint64("shard_id", shardID),
-					zap.Uint64("leader_id", info2.LeaderID),
-					zap.String("leader_service_address", leaderServiceAddress))
-				break
-			}
-			logger.Warn("WAL recovery: Log shard leader lost after wait, retrying...")
-			continue
+				zap.Uint64("replica_id", route.ReplicaID),
+				zap.String("service_address", replicaServiceAddress))
+			break
 		}
 
 		logger.Info("WAL recovery: Log shard not ready yet, waiting...",
@@ -1347,7 +1336,7 @@ func (s *Service) replayWALEntries(
 	logger.Info("WAL recovery: starting entry replay loop",
 		zap.Int("total_entries", len(walData.Entries)))
 
-	replayClient, err := s.newWALRecoveryClient(ctx, cfg, leaderServiceAddress)
+	replayClient, err := s.newWALRecoveryClient(ctx, cfg, replicaServiceAddress)
 	if err != nil {
 		logger.Error("WAL recovery: failed to create replay client", zap.Error(err))
 		return err
@@ -1717,11 +1706,11 @@ func waitWALRecoveryInterval(ctx context.Context, interval time.Duration) error 
 func (s *Service) newWALRecoveryClient(
 	ctx context.Context,
 	cfg Config,
-	leaderServiceAddress string,
+	replicaServiceAddress string,
 ) (*client, error) {
 	serviceAddresses := append([]string{}, cfg.HAKeeperClientConfig.ServiceAddresses...)
-	if cfg.HAKeeperClientConfig.DiscoveryAddress == "" && leaderServiceAddress != "" {
-		serviceAddresses = []string{leaderServiceAddress}
+	if cfg.HAKeeperClientConfig.DiscoveryAddress == "" && replicaServiceAddress != "" {
+		serviceAddresses = []string{replicaServiceAddress}
 	}
 	clientCfg := ClientConfig{
 		Tag:              "wal-recovery",

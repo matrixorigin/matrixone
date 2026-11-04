@@ -78,7 +78,7 @@ func runFill(t *testing.T, proc *process.Process, fillType plan.Node_FillType, b
 // fill(prev) must not carry the last value of one partition into the next:
 // the first window of a new partition has no previous value.
 func TestFillPrevStopsAtPartitionBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	// batch 1: partition 1 = [10, NULL]; batch 2: partition 2 = [NULL, 30]
@@ -102,7 +102,7 @@ func TestFillPrevStopsAtPartitionBoundary(t *testing.T) {
 // The boundary must also hold inside a single batch: the non-sliding window
 // forwards rows of several partitions in one batch.
 func TestFillPrevPartitionBoundaryWithinBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	bats := []*batch.Batch{
@@ -118,7 +118,7 @@ func TestFillPrevPartitionBoundaryWithinBatch(t *testing.T) {
 // fill(next) is the mirror image: the trailing NULLs of a partition have no
 // next value, because the following rows belong to another group.
 func TestFillNextStopsAtPartitionBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	// partition 1 = [NULL, 10, NULL]; partition 2 = [20, NULL]
@@ -141,7 +141,7 @@ func TestFillNextStopsAtPartitionBoundary(t *testing.T) {
 // A batch containing no NULL must not end the scan: batches after it still
 // need their NULLs filled. The old streaming state machine dropped them.
 func TestFillNextConsumesBatchesAfterNullFreeBatch(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	bats := []*batch.Batch{
@@ -164,7 +164,7 @@ func TestFillNextConsumesBatchesAfterNullFreeBatch(t *testing.T) {
 // decimal128 exercises the built-in midpoint path, which needs no expression
 // executor.
 func TestFillLinearStopsAtPartitionBoundary(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
 	// One batch, two partitions: [10, NULL, 30, NULL | NULL, 100].

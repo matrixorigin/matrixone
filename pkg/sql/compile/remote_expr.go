@@ -87,7 +87,7 @@ func validateRemoteBoundStringVariables(p *pipeline.Pipeline) error {
 		if node := source.Node; node != nil {
 			bound = bound || hasExecutableBoundStringVariable(node.BlockFilterList) ||
 				hasExecutableBoundStringVariable(node.IndexReaderParam) ||
-				hasExecutableBoundStringVariable(node.VectorIndexScan)
+				hasExecutableBoundStringVariable(node.IndexSearchScan)
 			if node.TableDef != source.TableDef {
 				bound = bound || hasExecutableBoundStringVariable(node.TableDef)
 			}
@@ -683,4 +683,34 @@ func containsFunctionInValue(
 		}
 	}
 	return false
+}
+
+// No fragment may serialize a private continuation, slot or program. This
+// fence applies to both senders and receivers, independently of peer version.
+func validateRemoteCorrelation(p *pipeline.Pipeline) error {
+	pending := []*pipeline.Pipeline{p}
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if current == nil {
+			continue
+		}
+		invalid := current.Qry.GetQuery().GetCorrelation() != nil
+		for _, instruction := range current.InstructionList {
+			invalid = invalid || instruction != nil && instruction.Op == int32(vm.Dependent)
+		}
+		if err := plan.VisitExpressionsInOwner([]any{current.Qry, current.InstructionList, current.DataSource}, func(root *plan.Expr) error {
+			return plan.VisitExprTree(root, func(e *plan.Expr) error {
+				invalid = invalid || e.GetSlot() != nil || e.GetDependent() != nil
+				return nil
+			})
+		}); err != nil {
+			return err
+		}
+		if invalid {
+			return moerr.NewNotSupportedNoCtx("dependent programs require the coordinator execution owner")
+		}
+		pending = append(pending, current.Children...)
+	}
+	return nil
 }

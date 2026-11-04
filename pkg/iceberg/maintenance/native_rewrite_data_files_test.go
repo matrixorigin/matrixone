@@ -324,6 +324,8 @@ func TestBuildRewriteDataFilesManifestCommitMaterializesSnapshotUpdate(t *testin
 	require.Equal(t, 9, *result.Attempt.Updates[0].Snapshot.SchemaID)
 	require.Equal(t, int64(123456), result.Attempt.Updates[0].Snapshot.TimestampMS)
 	require.Equal(t, "s3://warehouse/orders/metadata/mo-rewrite-data-files/rw-1/manifest-list.avro", result.Attempt.Updates[0].Snapshot.ManifestList)
+	require.Equal(t, "replace", result.Attempt.Updates[0].Snapshot.Summary["operation"])
+	require.Equal(t, "replace", result.Attempt.Summary["operation"])
 	require.Equal(t, int64(11), result.Attempt.Updates[1].SnapshotID)
 	require.Equal(t, 3, result.Attempt.Updates[1].MinSnapshotsToKeep)
 	require.Equal(t, int64(1_000), result.Attempt.Updates[1].MaxSnapshotAgeMS)
@@ -488,6 +490,8 @@ func TestNativeRewriteDataFilesPlannerBuildsCommitPlanWithInjectedCompactor(t *t
 	require.Equal(t, []string{"add-snapshot", "set-snapshot-ref"}, rewriteDataFileCommitUpdateTypes(plan.Attempt.Updates))
 	require.NotNil(t, plan.Attempt.Updates[0].Snapshot)
 	require.Equal(t, int64(9_000), plan.Attempt.Updates[0].Snapshot.SnapshotID)
+	require.Equal(t, "replace", plan.Attempt.Updates[0].Snapshot.Summary["operation"])
+	require.Equal(t, "replace", plan.Attempt.Summary["operation"])
 	require.NotNil(t, plan.Attempt.Updates[0].Snapshot.ParentSnapshotID)
 	require.Equal(t, int64(4), *plan.Attempt.Updates[0].Snapshot.ParentSnapshotID)
 	require.Equal(t, int64(8), plan.Attempt.Updates[0].Snapshot.SequenceNumber)
@@ -726,7 +730,7 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesEqualityDeleteManifests(t 
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
 		Metadata: rewriteDataFilesPartitionedMetadata(),
 		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
-		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes}}, Groups: []RewriteDataFileGroup{{
+		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes, SequenceNumber: 11}}, Groups: []RewriteDataFileGroup{{
 			PartitionSpecID: 0,
 			PartitionKey:    "0|region=s:ksa",
 			Candidates: []RewriteDataFileCandidate{
@@ -783,7 +787,7 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesPositionDeleteManifests(t 
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
 		Metadata: rewriteDataFilesPartitionedMetadata(),
 		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
-		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes}}, Groups: []RewriteDataFileGroup{{
+		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes, SequenceNumber: 10}}, Groups: []RewriteDataFileGroup{{
 			PartitionSpecID: 0,
 			PartitionKey:    "0|region=s:ksa",
 			Candidates: []RewriteDataFileCandidate{
@@ -1298,4 +1302,26 @@ func rewriteDataFilesParquetInt64Values(t *testing.T, data []byte) []int64 {
 		require.NoError(t, rows.Close())
 	}
 	return out
+}
+
+func TestRewriteDataFilesPositionDeleteRejectsRepeatedOrNullValues(t *testing.T) {
+	repeatedText := parquet.Row{
+		parquet.ValueOf("first").Level(0, 1, 0),
+		parquet.ValueOf("second").Level(1, 1, 0),
+	}
+	_, ok := rewriteDataFilesRowString(repeatedText, 0)
+	require.False(t, ok)
+
+	repeatedPosition := parquet.Row{
+		parquet.Int64Value(1).Level(0, 1, 0),
+		parquet.Int64Value(2).Level(1, 1, 0),
+	}
+	_, ok = rewriteDataFilesRowInt64(repeatedPosition, 0)
+	require.False(t, ok)
+
+	null := parquet.Row{parquet.NullValue().Level(0, 0, 0)}
+	_, ok = rewriteDataFilesRowString(null, 0)
+	require.False(t, ok)
+	_, ok = rewriteDataFilesRowInt64(null, 0)
+	require.False(t, ok)
 }

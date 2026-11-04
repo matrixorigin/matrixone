@@ -1,0 +1,743 @@
+diff --git a/pkg/frontend/view_metadata_s6_b0_benchmark_test.go b/pkg/frontend/view_metadata_s6_b0_benchmark_test.go
+new file mode 100644
+index 0000000000..dfd8fa0042
+--- /dev/null
++++ b/pkg/frontend/view_metadata_s6_b0_benchmark_test.go
+@@ -0,0 +1,405 @@
++//go:build integration && viewmetadatabench
++
++// Copyright 2026 Matrix Origin
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++// http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package frontend_test
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"os"
++	"runtime"
++	"slices"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/matrixorigin/matrixone/pkg/catalog"
++	"github.com/matrixorigin/matrixone/pkg/cnservice"
++	"github.com/matrixorigin/matrixone/pkg/container/vector"
++	"github.com/matrixorigin/matrixone/pkg/defines"
++	"github.com/matrixorigin/matrixone/pkg/embed"
++	"github.com/matrixorigin/matrixone/pkg/frontend"
++	"github.com/matrixorigin/matrixone/pkg/txn/client"
++	"github.com/matrixorigin/matrixone/pkg/util/executor"
++	"github.com/matrixorigin/matrixone/pkg/vm/process"
++	"github.com/stretchr/testify/require"
++)
++
++type viewMetadataBenchShape struct {
++	name                   string
++	roots, depth, columns  int
++	unrelated              int
++	tablesOnly, fullSchema bool
++}
++
++type viewMetadataBenchMode struct {
++	name            string
++	legacy, memoOff bool
++}
++
++var viewMetadataBenchModes = []viewMetadataBenchMode{
++	{"historical_b0", true, false},
++}
++
++// 保留与当前 harness 相同的记录布局；没有回移计量 API。
++// 所有这些字段在 B0 均为 N/A，占位零不是零工作量证明。
++type viewMetadataB0NAStats struct {
++	ViewBinds, RelationLookups, DatabaseLookups uint64
++	CompletedRootBinds, MemoHits                uint64
++	Roots, LogicalWork                          int
++}
++
++type viewMetadataBenchSample struct {
++	elapsed time.Duration
++	stats   viewMetadataB0NAStats
++	peak    uint64 // 父执行代被计费的峰值，不是完整 binder heap/RSS。
++	err     error
++}
++
++func viewMetadataBenchContext() context.Context {
++	return defines.AttachAccount(context.Background(), catalog.System_Account, catalog.System_User, catalog.System_Role)
++}
++
++func viewMetadataBenchExec(ctx context.Context, svc cnservice.Service, database, sql string) error {
++	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
++	defer cancel()
++	result, err := svc.GetSQLExecutor().Exec(ctx, sql, executor.Options{}.WithDatabase(database))
++	if err != nil {
++		return err
++	}
++	result.Close()
++	return nil
++}
++
++// 大 fixture 只由显式 benchmark 选择。普通合同测试使用两根/两列。
++func setupViewMetadataBench(t testing.TB, svc cnservice.Service, shape viewMetadataBenchShape) (string, []string) {
++	t.Helper()
++	const database = "view_metadata_benchmark"
++	ctx := viewMetadataBenchContext()
++	require.NoError(t, viewMetadataBenchExec(ctx, svc, "", "create database "+database))
++	var createdViews, createdTables []string
++	t.Cleanup(func() {
++		// DROP DATABASE 一次删除上万对象会把全部 catalog 删除留在同一事务，
++		// 不是读基准要测的负载。按逆依赖顺序逐对象提交，保持清理事务有界；
++		// MO 不支持一次 DROP 多个 View。不增加读 deadline，也不在失败时重试。
++		for _, objects := range []struct {
++			kind  string
++			names []string
++		}{{"view", createdViews}, {"table", createdTables}} {
++			for i := len(objects.names) - 1; i >= 0; i-- {
++				require.NoError(t, viewMetadataBenchExec(ctx, svc, database,
++					"drop "+objects.kind+" "+objects.names[i]))
++			}
++		}
++		require.NoError(t, viewMetadataBenchExec(ctx, svc, "", "drop database "+database))
++		checkCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
++		defer cancel()
++		result, err := svc.GetSQLExecutor().Exec(checkCtx,
++			"select cast(count(*) as char) from mo_catalog.mo_database where account_id=0 and datname='"+database+"'", executor.Options{})
++		require.NoError(t, err)
++		defer result.Close()
++		rows := 0
++		result.ReadRows(func(n int, columns []*vector.Vector) bool {
++			rows += n
++			require.Len(t, columns, 1)
++			require.Equal(t, "0", columns[0].GetStringAt(0), "fixture teardown must remove its database")
++			return true
++		})
++		require.Equal(t, 1, rows)
++	})
++	columns := make([]string, shape.columns)
++	definitions := make([]string, shape.columns)
++	for i := range columns {
++		columns[i] = fmt.Sprintf("c%04d", i)
++		definitions[i] = columns[i] + " int"
++	}
++	var names []string
++	if shape.tablesOnly {
++		for i := 0; i < shape.roots; i++ {
++			name := fmt.Sprintf("t%05d", i)
++			require.NoError(t, viewMetadataBenchExec(ctx, svc, database, "create table "+name+" ("+strings.Join(definitions, ",")+")"))
++			createdTables = append(createdTables, name)
++			names = append(names, name)
++		}
++		return database, names
++	}
++	// 宽列由一个物理列重复直接投影生成，避免把隐藏物理列数量混入 4096 输出边界。
++	baseDefinitions := definitions
++	projection := strings.Join(columns, ",")
++	if shape.columns > 8 {
++		baseDefinitions = []string{"c0000 int"}
++		wide := make([]string, shape.columns)
++		for i := range wide {
++			wide[i] = "c0000 as " + columns[i]
++		}
++		projection = strings.Join(wide, ",")
++	}
++	require.NoError(t, viewMetadataBenchExec(ctx, svc, database, "create table source ("+strings.Join(baseDefinitions, ",")+")"))
++	createdTables = append(createdTables, "source")
++	source := "source"
++	if shape.fullSchema {
++		names = append(names, source)
++	}
++	for layer := 1; layer < shape.depth; layer++ {
++		name := fmt.Sprintf("middle_%02d", layer)
++		require.NoError(t, viewMetadataBenchExec(ctx, svc, database, "create view "+name+" as select "+projection+" from "+source))
++		createdViews = append(createdViews, name)
++		source = name
++		if shape.fullSchema {
++			names = append(names, name)
++		}
++	}
++	for i := 0; i < shape.roots; i++ {
++		name := fmt.Sprintf("v%05d", i)
++		require.NoError(t, viewMetadataBenchExec(ctx, svc, database, "create view "+name+" as select "+projection+" from "+source))
++		createdViews = append(createdViews, name)
++		names = append(names, name)
++	}
++	for i := 0; i < shape.unrelated; i++ {
++		name := fmt.Sprintf("unrelated_%05d", i)
++		require.NoError(t, viewMetadataBenchExec(ctx, svc, database, "create view "+name+" as select "+projection+" from source"))
++		createdViews = append(createdViews, name)
++	}
++	slices.Sort(names)
++	return database, names
++}
++
++// result 的发送者只在 Exec 返回后关闭结果通道；消费者即使校验失败也取消并
++// 排空所有已发布 batch，再 join。不会把 Exec 的一次 error send 阻塞在无人读的通道。
++func streamViewMetadataBench(ctx context.Context, svc cnservice.Service, sql string, options executor.Options, consume func(int, []*vector.Vector) error) error {
++	ctx, cancel := context.WithCancel(ctx)
++	defer cancel()
++	results := make(chan executor.Result, 1)
++	execErrors := make(chan error, 1)
++	done := make(chan error, 1)
++	go func() {
++		result, err := svc.GetSQLExecutor().Exec(ctx, sql, options.WithStreaming(results, execErrors))
++		result.Close()
++		close(results)
++		done <- err
++	}()
++	var readErr error
++	for result := range results {
++		func() {
++			defer result.Close()
++			if readErr != nil {
++				return
++			}
++			result.ReadRows(func(n int, columns []*vector.Vector) bool {
++				readErr = consume(n, columns)
++				if readErr != nil {
++					cancel()
++				}
++				return readErr == nil
++			})
++		}()
++	}
++	return errors.Join(readErr, <-done)
++}
++
++func readViewMetadataBench(ctx context.Context, cn embed.ServiceOperator, svc cnservice.Service,
++	database string, names []string, columns int, mode viewMetadataBenchMode, collect, show, fullSchema, widened bool,
++) (sample viewMetadataBenchSample) {
++	if show || !mode.legacy {
++		sample.err = fmt.Errorf("B0 adapter only supports historical I_S consumers")
++		return sample
++	}
++	start := time.Now()
++	defer func() { sample.elapsed = time.Since(start) }()
++	ctx, cancel := context.WithTimeout(ctx, time.Minute)
++	defer cancel()
++	sample.err = withNativeViewSchemaStatement(ctx, cn, svc, database, nil,
++		func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) error {
++			before := op.GetWorkspace().WriteOffset()
++			execCtx := ctx
++			rowIndex := 0
++			check := func(table, column, typ string) error {
++				if rowIndex >= len(names)*columns {
++					return fmt.Errorf("unexpected metadata row %d: %s.%s", rowIndex, table, column)
++				}
++				wantTable := names[rowIndex/columns]
++				wantColumn := fmt.Sprintf("c%04d", rowIndex%columns)
++				wantType := "int(32)"
++				if widened && rowIndex%columns == 0 {
++					wantType = "bigint(64)"
++				}
++				if table != wantTable || column != wantColumn || strings.ToLower(typ) != wantType {
++					return fmt.Errorf("row %d: got %s.%s %s, want %s.%s %s", rowIndex, table, column, typ, wantTable, wantColumn, wantType)
++				}
++				rowIndex++
++				return nil
++			}
++			query := "select table_name, column_name, lower(column_type) from information_schema.columns where table_schema='" + database + "'"
++			if !fullSchema {
++				query += " and table_name in ('" + strings.Join(names, "','") + "')"
++			}
++			query += " order by table_name, ordinal_position"
++			// SQLExecutor 本来每次解析/优化；ForceRebuildPlan 会额外构造第二份计划，
++			// 不能把这种测试强制开销算作正常消费者成本。
++			options := executor.Options{}.WithDatabase(database).WithTxn(op).WithKeepTxnAlive().WithDisableIncrStatement()
++			if err := streamViewMetadataBench(execCtx, svc, query, options, func(n int, vectors []*vector.Vector) error {
++				if len(vectors) != 3 {
++					return fmt.Errorf("metadata projection width %d, want 3", len(vectors))
++				}
++				for row := 0; row < n; row++ {
++					for _, v := range vectors {
++						if v.IsNull(uint64(row)) {
++							return fmt.Errorf("unexpected NULL in metadata identity/type")
++						}
++					}
++					if err := check(vectors[0].GetStringAt(row), vectors[1].GetStringAt(row), vectors[2].GetStringAt(row)); err != nil {
++						return err
++					}
++				}
++				return nil
++			}); err != nil {
++				return err
++			}
++			if rowIndex != len(names)*columns {
++				return fmt.Errorf("metadata rows %d, want %d", rowIndex, len(names)*columns)
++			}
++			if before != op.GetWorkspace().WriteOffset() {
++				return fmt.Errorf("metadata read changed catalog workspace")
++			}
++			generation, err := proc.GetExecutionResourceBudget()
++			if err != nil {
++				return err
++			}
++			sample.peak = generation.Peak()
++			if generation.Used() != 0 {
++				return fmt.Errorf("request retained %d charged bytes", generation.Used())
++			}
++			return nil
++		})
++	return sample
++}
++
++func reportViewMetadataBench(b *testing.B, samples []viewMetadataBenchSample) {
++	b.Helper()
++	durations := make([]time.Duration, len(samples))
++	var binds, lookups, hits, peak uint64
++	for i, sample := range samples {
++		require.NoError(b, sample.err, "sample %d", i)
++		durations[i] = sample.elapsed
++		binds += sample.stats.ViewBinds
++		lookups += sample.stats.RelationLookups
++		hits += sample.stats.MemoHits
++		peak = max(peak, sample.peak)
++	}
++	if path := os.Getenv("MO_VIEW_BENCH_OUTPUT"); path != "" {
++		// 单条记录最多 100000 个 duration，且只在计时外写文件。
++		file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
++		require.NoError(b, err)
++		err = json.NewEncoder(file).Encode(struct {
++			Benchmark, Go, OS, Arch                                string
++			GOMAXPROCS                                             int
++			DurationsNS                                            []time.Duration
++			ViewBinds, RelationLookups, MemoHits, ChargedPeakBytes uint64
++		}{b.Name(), runtime.Version(), runtime.GOOS, runtime.GOARCH, runtime.GOMAXPROCS(0), durations, binds, lookups, hits, peak})
++		closeErr := file.Close()
++		require.NoError(b, errors.Join(err, closeErr))
++	}
++	slices.Sort(durations)
++	for _, percentile := range []int{50, 95, 99} {
++		// p99 不从不足 100 个样本推断；所有样本总是保留最大值。
++		if percentile == 99 && len(samples) < 100 {
++			continue
++		}
++		b.ReportMetric(float64(durations[(len(durations)*percentile+99)/100-1].Nanoseconds()), fmt.Sprintf("p%d-ns/op", percentile))
++	}
++	b.ReportMetric(float64(durations[len(durations)-1].Nanoseconds()), "max-ns/op")
++	b.ReportMetric(float64(binds)/float64(len(samples)), "view-binds/op")
++	b.ReportMetric(float64(lookups)/float64(len(samples)), "relation-resolves/op")
++	b.ReportMetric(float64(hits)/float64(len(samples)), "memo-hits/op")
++	b.ReportMetric(float64(peak), "charged-peak-B")
++	b.ReportMetric(float64(len(samples))/b.Elapsed().Seconds(), "requests/s")
++}
++
++func BenchmarkNativeViewMetadata(b *testing.B) {
++	b.StopTimer()
++	collect := os.Getenv("MO_VIEW_BENCH_COUNTS") != "0"
++	runNativeViewSchemaCluster(b, func(cn embed.ServiceOperator, svc cnservice.Service) {
++		for _, shape := range []viewMetadataBenchShape{
++			{"single", 1, 1, 8, 0, false, false},
++			{"table_single", 1, 1, 8, 0, true, false},
++			{"selective10000", 1, 1, 8, 10000, false, false},
++			{"tables1000", 1000, 1, 8, 0, true, true},
++			{"chain32", 1, 32, 8, 0, false, false},
++			{"shared128_chain16", 128, 17, 8, 0, false, false},
++			{"shallow1000", 1000, 1, 8, 0, false, true},
++			{"shallow10000", 10000, 1, 8, 0, false, true},
++			{"wide4096", 1, 1, 4096, 0, false, false},
++		} {
++			b.Run(shape.name, func(b *testing.B) {
++				database, names := setupViewMetadataBench(b, svc, shape)
++				for _, mode := range viewMetadataBenchModes {
++					b.Run(mode.name, func(b *testing.B) {
++						for _, concurrency := range []int{1, 8} {
++							b.Run(fmt.Sprintf("concurrency=%d/counts=%t", concurrency, collect), func(b *testing.B) {
++								if b.N > 100000 {
++									b.Fatal("bounded latency recorder supports at most 100000 samples; use -benchtime=Nx")
++								}
++								ctx, cancel := context.WithCancelCause(viewMetadataBenchContext())
++								defer cancel(nil)
++								warm := readViewMetadataBench(ctx, cn, svc, database, names, shape.columns, mode, collect, false, shape.fullSchema, false)
++								require.NoError(b, warm.err)
++								samples := make([]viewMetadataBenchSample, b.N)
++								stopProfile := startViewMetadataBenchProfile(b)
++								defer stopProfile()
++								var next atomic.Int64
++								var workers sync.WaitGroup
++								start := make(chan struct{})
++								for range concurrency {
++									workers.Add(1)
++									go func() {
++										defer workers.Done()
++										<-start
++										for {
++											i := int(next.Add(1) - 1)
++											if i >= len(samples) {
++												return
++											}
++											samples[i] = readViewMetadataBench(ctx, cn, svc, database, names, shape.columns, mode, collect, false, shape.fullSchema, false)
++											if samples[i].err != nil {
++												cancel(samples[i].err)
++											}
++										}
++									}()
++								}
++								b.ReportAllocs()
++								b.ResetTimer()
++								close(start)
++								workers.Wait()
++								b.StopTimer()
++								stopProfile()
++								// 保留导致停止的主因，不能让较早下标的取消错误掩盖它。
++								require.NoError(b, context.Cause(ctx))
++								reportViewMetadataBench(b, samples)
++							})
++						}
++					})
++				}
++			})
++			if b.Failed() {
++				return // 失败 fixture 不得污染下一个 workload。
++			}
++		}
++	})
++}
+diff --git a/pkg/frontend/view_metadata_s6_b0_contract_test.go b/pkg/frontend/view_metadata_s6_b0_contract_test.go
+new file mode 100644
+index 0000000000..59314af0cf
+--- /dev/null
++++ b/pkg/frontend/view_metadata_s6_b0_contract_test.go
+@@ -0,0 +1,77 @@
++//go:build integration && viewmetadatabench
++
++package frontend_test
++
++import (
++	"context"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/matrixorigin/matrixone/pkg/cnservice"
++	"github.com/matrixorigin/matrixone/pkg/container/vector"
++	"github.com/matrixorigin/matrixone/pkg/embed"
++	"github.com/matrixorigin/matrixone/pkg/util/executor"
++	"github.com/stretchr/testify/require"
++)
++
++// 历史生产源码不变；同口径私有 statement adapter 的小控制，不测 wall-clock 门槛。
++func TestViewMetadataS6B0Adapter(t *testing.T) {
++	runNativeViewSchemaCluster(t, func(cn embed.ServiceOperator, svc cnservice.Service) {
++		ctx, cancel := context.WithTimeout(viewMetadataBenchContext(), 2*time.Minute)
++		defer cancel()
++		shape := viewMetadataBenchShape{name: "contract", roots: 2, depth: 2, columns: 2, unrelated: 1}
++		database, names := setupViewMetadataBench(t, svc, shape)
++		mode := viewMetadataBenchModes[0]
++		result, err := svc.GetSQLExecutor().Exec(ctx,
++			"select viewdef from mo_catalog.mo_tables where account_id=0 and reldatabase='information_schema' and lower(relname)='columns'", executor.Options{})
++		require.NoError(t, err)
++		func() {
++			defer result.Close()
++			rows := 0
++			result.ReadRows(func(n int, columns []*vector.Vector) bool {
++				require.Len(t, columns, 1)
++				for i := 0; i < n; i++ {
++					require.Contains(t, strings.ToLower(columns[0].GetStringAt(i)), "mo_view_columns")
++				}
++				rows += n
++				return true
++			})
++			require.Equal(t, 1, rows)
++		}()
++		read := func(ctx context.Context, selected []string, widened bool) viewMetadataBenchSample {
++			return readViewMetadataBench(ctx, cn, svc, database, selected, 2, mode, false, false, false, widened)
++		}
++		t.Run("ordinary table", func(t *testing.T) {
++			require.NoError(t, read(ctx, []string{"source"}, false).err)
++		})
++		t.Run("complete view results", func(t *testing.T) {
++			require.NoError(t, read(ctx, names, false).err)
++		})
++		t.Run("concurrent statements", func(t *testing.T) {
++			start := make(chan struct{})
++			done := make(chan error, 2)
++			for range 2 {
++				go func() { <-start; done <- read(ctx, names, false).err }()
++			}
++			close(start)
++			// 在任何断言前 join 两个 worker，失败也不遗留活动读者。
++			first, second := <-done, <-done
++			require.NoError(t, first)
++			require.NoError(t, second)
++		})
++		t.Run("pre cancelled", func(t *testing.T) {
++			cancelled, cancel := context.WithCancel(ctx)
++			cancel()
++			require.ErrorIs(t, read(cancelled, names, false).err, context.Canceled)
++		})
++		t.Run("oracle rejects missing rows", func(t *testing.T) {
++			require.ErrorContains(t, read(ctx, []string{"missing"}, false).err, "metadata rows 0, want 2")
++		})
++		require.NoError(t, viewMetadataBenchExec(ctx, svc, database, "alter table source modify column c0000 bigint"))
++		t.Run("first read after DDL", func(t *testing.T) {
++			require.NoError(t, read(ctx, names, true).err)
++			require.NoError(t, read(ctx, []string{"source"}, true).err)
++		})
++	})
++}
+diff --git a/pkg/frontend/view_metadata_s6_b0_lifecycle_test.go b/pkg/frontend/view_metadata_s6_b0_lifecycle_test.go
+new file mode 100644
+index 0000000000..96c3919c2f
+--- /dev/null
++++ b/pkg/frontend/view_metadata_s6_b0_lifecycle_test.go
+@@ -0,0 +1,104 @@
++//go:build integration && viewmetadatabench
++
++// Copyright 2026 Matrix Origin
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++// http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package frontend_test
++
++import (
++	"context"
++	"errors"
++	"github.com/google/uuid"
++	"github.com/matrixorigin/matrixone/pkg/cnservice"
++	"github.com/matrixorigin/matrixone/pkg/common/mpool"
++	"github.com/matrixorigin/matrixone/pkg/defines"
++	"github.com/matrixorigin/matrixone/pkg/embed"
++	"github.com/matrixorigin/matrixone/pkg/frontend"
++	"github.com/matrixorigin/matrixone/pkg/lockservice"
++	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
++	"github.com/matrixorigin/matrixone/pkg/txn/client"
++	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
++	"github.com/matrixorigin/matrixone/pkg/vm/process"
++	"github.com/stretchr/testify/require"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++func runNativeViewSchemaCluster(t testing.TB, run func(embed.ServiceOperator, cnservice.Service)) {
++	t.Helper()
++	// 沿用本地集群 fixture 的短相对路径，避免 macOS Unix socket 路径超限。
++	cwd, err := os.Getwd()
++	require.NoError(t, err)
++	tmp, err := filepath.Rel(cwd, os.TempDir())
++	require.NoError(t, err)
++	t.Setenv("TMPDIR", tmp)
++	t.Cleanup(func() { require.NoError(t, embed.CloseSingleCNBaseClusterTests()) })
++	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
++		cn, err := cluster.GetCNService(0)
++		require.NoError(t, err)
++		run(cn, cn.RawService().(cnservice.Service))
++	})
++}
++
++func withNativeViewSchemaRead(t *testing.T, ctx context.Context, cn embed.ServiceOperator,
++	svc cnservice.Service, database string, tenant *frontend.TenantInfo,
++	run func(*frontend.TxnCompilerContext, client.TxnOperator, *process.Process),
++) {
++	t.Helper()
++	require.NoError(t, withNativeViewSchemaStatement(ctx, cn, svc, database, tenant,
++		func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) error {
++			run(compiler, op, proc)
++			return nil
++		}))
++}
++
++// 返回错误而非在工作 goroutine 中 FailNow，供并发基准复用同一事务 fixture。
++// 所有获得的资源立即登记释放，callback 失败也不会留下请求/事务。
++func withNativeViewSchemaStatement(ctx context.Context, cn embed.ServiceOperator,
++	svc cnservice.Service, database string, tenant *frontend.TenantInfo,
++	run func(*frontend.TxnCompilerContext, client.TxnOperator, *process.Process) error,
++) (err error) {
++	if tenant == nil {
++		tenant = frontend.GetBackgroundTenant()
++	}
++	ctx = defines.AttachAccount(ctx, tenant.TenantID, tenant.UserID, tenant.DefaultRoleID)
++	op, err := svc.GetTxnClient().New(ctx, timestamp.Timestamp{})
++	if err != nil {
++		return err
++	}
++	defer func() {
++		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
++		defer cancel()
++		err = errors.Join(err, op.Rollback(cleanupCtx))
++	}()
++	storage := svc.GetEngine().(*disttae.Engine)
++	if err = storage.New(ctx, op); err != nil {
++		return err
++	}
++	mp := mpool.MustNewZeroNoFixed()
++	defer mpool.DeleteMPool(mp)
++	proc := process.NewTopProcess(ctx, mp, svc.GetTxnClient(), op, nil,
++		lockservice.GetLockServiceByServiceID(cn.ServiceID()), nil, nil, nil, nil, nil)
++	defer proc.Free()
++	proc.Base.SessionInfo.TimeZone = time.Local
++	proc.Base.Lim.Size = 64 << 20
++	proc.SetStmtProfile(process.NewStmtProfile(uuid.New(), uuid.New()))
++	defer proc.SetStmtProfile(nil)
++	return frontend.WithNativeViewSchemaCompilerForTest(ctx, cn.ServiceID(), storage,
++		op, proc, database, tenant, func(compiler *frontend.TxnCompilerContext) error {
++			return run(compiler, op, proc)
++		})
++}
+diff --git a/pkg/frontend/view_metadata_s6_b0_profile_test.go b/pkg/frontend/view_metadata_s6_b0_profile_test.go
+new file mode 100644
+index 0000000000..0237d2583d
+--- /dev/null
++++ b/pkg/frontend/view_metadata_s6_b0_profile_test.go
+@@ -0,0 +1,58 @@
++//go:build integration && viewmetadatabench
++
++// Copyright 2026 Matrix Origin
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++// http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package frontend_test
++
++import (
++	"errors"
++	"os"
++	"runtime/pprof"
++	"strings"
++	"sync"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++// 单独的 profile 运行才设置此目录；CPU 只覆盖测量循环，排除建库/warm-up。
++// heap profile 是进程快照，包含服务背景与 setup，不能充当请求峰值证明。
++func startViewMetadataBenchProfile(b *testing.B) func() {
++	dir := os.Getenv("MO_VIEW_BENCH_PROFILE_DIR")
++	if dir == "" {
++		return func() {}
++	}
++	require.NoError(b, os.MkdirAll(dir, 0700))
++	prefix := "CLAUDE_" + strings.ReplaceAll(b.Name(), "/", "_") + "-"
++	cpu, err := os.CreateTemp(dir, prefix+"*.cpu.pprof")
++	require.NoError(b, err)
++	if err = pprof.StartCPUProfile(cpu); err != nil {
++		require.NoError(b, errors.Join(err, cpu.Close()))
++	}
++	var once sync.Once
++	return func() {
++		once.Do(func() {
++			pprof.StopCPUProfile()
++			require.NoError(b, cpu.Close())
++			b.Logf("measured CPU profile: %s", cpu.Name())
++			heap, err := os.CreateTemp(dir, prefix+"*.heap.pprof")
++			require.NoError(b, err)
++			err = pprof.WriteHeapProfile(heap)
++			closeErr := heap.Close()
++			require.NoError(b, errors.Join(err, closeErr))
++			b.Logf("process heap snapshot (not request peak): %s", heap.Name())
++		})
++	}
++}
+diff --git a/pkg/frontend/view_metadata_s6_b0_support_test.go b/pkg/frontend/view_metadata_s6_b0_support_test.go
+new file mode 100644
+index 0000000000..ca2da207cb
+--- /dev/null
++++ b/pkg/frontend/view_metadata_s6_b0_support_test.go
+@@ -0,0 +1,69 @@
++//go:build integration && viewmetadatabench
++
++// Copyright 2026 Matrix Origin
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++// http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package frontend
++
++import (
++	"context"
++	"fmt"
++
++	"github.com/matrixorigin/matrixone/pkg/defines"
++	"github.com/matrixorigin/matrixone/pkg/txn/client"
++	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
++	"github.com/matrixorigin/matrixone/pkg/vm/process"
++)
++
++// 此构造器只进入 integration 测试产物。集群、事务、workspace 和 process
++// 均由调用者真实持有；这里仅补齐普通 Session 的私有 ExecCtx 接线。
++func WithNativeViewSchemaCompilerForTest(
++	ctx context.Context, service string, storage *disttae.Engine,
++	op client.TxnOperator, proc *process.Process, database string,
++	tenant *TenantInfo, run func(*TxnCompilerContext) error,
++) error {
++	unit := getPuIfPresent(service)
++	if unit == nil || unit.StorageEngine != storage || proc.GetTxnOperator() != op || proc.GetService() != service {
++		return fmt.Errorf("native view schema fixture does not own the CN transaction")
++	}
++	if tenant == nil {
++		tenant = &TenantInfo{Tenant: sysAccountName, User: rootName, DefaultRole: moAdminRoleName,
++			TenantID: sysAccountID, UserID: rootID, DefaultRoleID: moAdminRoleID}
++	}
++	tenant = tenant.Copy()
++	ctx = defines.AttachAccount(ctx, tenant.TenantID, tenant.UserID, tenant.DefaultRoleID)
++	handler := InitTxnHandler(service, storage, ctx, op)
++	defer handler.Close()
++	compiler := InitTxnCompilerContext(database)
++	defer compiler.Close()
++	vars := &SystemVariables{mp: make(map[string]interface{}, len(gSysVarsDefs))}
++	for name, definition := range gSysVarsDefs {
++		vars.mp[name] = definition.Default
++	}
++	ses := &Session{
++		feSessionImpl: feSessionImpl{
++			pool: proc.Mp(), service: service, accountId: tenant.TenantID,
++			timeZone: proc.GetSessionInfo().TimeZone, tenant: tenant,
++			respr:      &NullResp{username: tenant.User, database: database},
++			txnHandler: handler, txnCompileCtx: compiler, sesSysVars: vars, gSysVars: vars.Clone(),
++		},
++		proc: proc, errInfo: &errInfo{}, cache: &privilegeCache{},
++		userDefinedVars: make(map[string]*UserDefinedVar), tempTables: make(map[string]string),
++	}
++	previousFS := proc.GetFileService()
++	proc.SetFileService(unit.FileService)
++	defer proc.SetFileService(previousFS)
++	compiler.SetExecCtx(&ExecCtx{reqCtx: ctx, ses: ses, proc: proc})
++	return run(compiler)
++}

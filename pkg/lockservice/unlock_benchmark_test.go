@@ -199,6 +199,69 @@ func BenchmarkUnlockWithoutConflict(b *testing.B) {
 	)
 }
 
+// BenchmarkProxySingletonRowsUnlock measures only Unlock after one transaction
+// accumulates 64 singleton Shared proxy memberships. Each is the last local
+// membership, so the owner receives conditional mutations without replacements.
+func BenchmarkProxySingletonRowsUnlock(b *testing.B) {
+	benchmarkProxyConditionalUnlock(b, false, false)
+}
+
+// BenchmarkProxyMergedRangeUnlock controls the normalization and actual
+// replacement paths using the same cached logical rows as the singleton case.
+func BenchmarkProxyMergedRangeUnlock(b *testing.B) {
+	b.Run("cleanup", func(b *testing.B) { benchmarkProxyConditionalUnlock(b, true, false) })
+	b.Run("handoff", func(b *testing.B) { benchmarkProxyConditionalUnlock(b, true, true) })
+}
+
+func benchmarkProxyConditionalUnlock(b *testing.B, mergeRange, handoff bool) {
+	b.StopTimer()
+	runLockServiceTestsWithLevel(b, zapcore.ErrorLevel, []string{"owner", "origin"},
+		10*time.Second, func(_ *lockTableAllocator, services []*service) {
+			owner, origin := services[0], services[1]
+			ctx := context.Background()
+			const table = uint64(3032100)
+			if _, err := owner.getLockTableWithCreate(ctx, 0, table, nil, pb.Sharding_None); err != nil {
+				b.Fatal(err)
+			}
+			rows := make([][][]byte, 64)
+			for idx := range rows {
+				rows[idx] = [][]byte{[]byte(fmt.Sprintf("proxy-unlock-row-%02d", idx))}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for idx := range b.N {
+				txnID := []byte(fmt.Sprintf("proxy-unlock-txn-%d", idx))
+				for _, row := range rows {
+					if _, err := origin.Lock(ctx, table, row, txnID, newTestRowSharedOptions()); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if mergeRange {
+					if _, err := origin.Lock(ctx, table, [][]byte{rows[0][0], rows[63][0]}, txnID, newTestRangeSharedOptions()); err != nil {
+						b.Fatal(err)
+					}
+				}
+				followerID := []byte(fmt.Sprintf("proxy-unlock-follower-%d", idx))
+				if handoff {
+					if _, err := origin.Lock(ctx, table, rows[32], followerID, newTestRowSharedOptions()); err != nil {
+						b.Fatal(err)
+					}
+				}
+				b.StartTimer()
+				err := origin.Unlock(ctx, txnID, timestamp.Timestamp{})
+				b.StopTimer()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if handoff {
+					if err := origin.Unlock(ctx, followerID, timestamp.Timestamp{}); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		}, func(cfg *Config) { cfg.EnableRemoteLocalProxy = true })
+}
+
 // BenchmarkRemoteMultiTableUnlock isolates the regression shape from #27628:
 // one transaction releases several physical tables on the same remote owner.
 // The protocol gate provides an in-process A/B: v29 exercises the table-scoped

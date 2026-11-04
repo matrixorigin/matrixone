@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -75,7 +76,7 @@ type MessageCenter struct {
 
 type MessageBoard struct {
 	reset         bool // for debug purpose
-	closed        bool
+	closed        atomic.Bool
 	drained       bool
 	multiCN       bool
 	stmtId        uuid.UUID
@@ -109,7 +110,7 @@ func (m *MessageBoard) DebugString() string {
 	if m.reset {
 		buf.WriteString("messageBoard has been reseted!\n")
 	}
-	if m.closed {
+	if m.closed.Load() {
 		buf.WriteString("messageBoard has been closed!\n")
 	}
 	if m.multiCN {
@@ -145,7 +146,7 @@ func (m *MessageBoard) BeforeRunonce() {
 	// call this before runonce
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
-	if !m.closed {
+	if !m.closed.Load() {
 		m.reset = false
 	}
 }
@@ -166,13 +167,19 @@ func (m *MessageBoard) Reset() *MessageBoard {
 	}
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
-	if m.closed {
+	if m.closed.Load() {
 		return NewMessageBoard()
 	}
 	m.cleanupQueuedMessagesLocked()
 	m.multiCN = false
 	m.reset = true
 	return m
+}
+
+// IsClosed reports whether publication and new execution admission are sealed.
+// It does not wait for queued-message destruction by the terminal owner.
+func (m *MessageBoard) IsClosed() bool {
+	return m == nil || m.closed.Load()
 }
 
 // Close prevents publication and wakes blocked receivers without destroying
@@ -213,9 +220,9 @@ func (m *MessageBoard) close(drain bool) bool {
 
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
-	firstClose := !m.closed
+	firstClose := !m.closed.Load()
 	if firstClose {
-		m.closed = true
+		m.closed.Store(true)
 		m.reset = true
 		for _, waiter := range m.waiters {
 			if waiter == nil {
@@ -261,13 +268,12 @@ func (m *MessageBoard) cleanupQueuedMessagesLocked() {
 }
 
 type MessageReceiver struct {
-	debug    bool // for unit test
-	offset   int32
-	tags     []int32
-	received []int32
-	addr     *MessageAddress
-	mb       *MessageBoard
-	waiter   chan bool
+	debug  bool // for unit test
+	offset int32
+	tags   []int32
+	addr   *MessageAddress
+	mb     *MessageBoard
+	waiter chan bool
 }
 
 func NewMessageReceiver(tags []int32, addr MessageAddress, mb *MessageBoard) *MessageReceiver {
@@ -281,7 +287,7 @@ func NewMessageReceiver(tags []int32, addr MessageAddress, mb *MessageBoard) *Me
 func SendMessage(m Message, mb *MessageBoard) {
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
 		mb.rwMutex.Lock()
-		if mb.closed {
+		if mb.closed.Load() {
 			mb.rwMutex.Unlock()
 			m.Destroy()
 			return
@@ -318,12 +324,11 @@ func (mr *MessageReceiver) receiveMessageNonBlock() ([]Message, bool) {
 		for i := range mr.tags {
 			if mr.tags[i] == message.GetMsgTag() {
 				result = append(result, message)
-				mr.received = append(mr.received, mr.offset)
 				break
 			}
 		}
 	}
-	return result, mr.mb.closed
+	return result, mr.mb.closed.Load()
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool, error) {
@@ -339,7 +344,7 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) (
 	if mr.waiter == nil {
 		mr.waiter = make(chan bool, 1)
 		mr.mb.rwMutex.Lock()
-		if mr.mb.closed {
+		if mr.mb.closed.Load() {
 			closed = true
 		} else {
 			mr.mb.waiters = append(mr.mb.waiters, mr.waiter)
@@ -394,14 +399,6 @@ func MatchAddress(m Message, raddr *MessageAddress) bool {
 func AddrBroadCastOnCurrentCN() MessageAddress {
 	return MessageAddress{
 		CnAddr:     CURRENTCN,
-		OperatorID: -1,
-		ParallelID: -1,
-	}
-}
-
-func AddrBroadCastOnALLCN() MessageAddress {
-	return MessageAddress{
-		CnAddr:     ALLCN,
 		OperatorID: -1,
 		ParallelID: -1,
 	}

@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -150,9 +151,17 @@ func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
 	return false
 }
 
+// Mixed JSON/numeric equality is a typed comparison, not a shared key domain.
+// Retain it as a residual predicate; key extraction and equality propagation
+// must not replace either operand with the other physical representation.
+func isJSONNumericComparisonArgs(args []*plan.Expr) bool {
+	return len(args) == 2 && args[0] != nil && args[1] != nil &&
+		function.IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id))
+}
+
 func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
-		if !IsEqualFunc(e.F.Func.GetObj()) {
+		if !IsEqualFunc(e.F.Func.GetObj()) || isJSONNumericComparisonArgs(e.F.Args) {
 			return false
 		}
 
@@ -173,16 +182,21 @@ func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 // Can only be used after optimizer!!!
 func IsEquiJoin2(exprs []*plan.Expr) bool {
 	for _, expr := range exprs {
-		if isEquiCond2(expr) {
+		if IsEquiJoinCondition(expr) {
 			return true
 		}
 	}
 	return false
 }
 
-func isEquiCond2(expr *plan.Expr) bool {
+// IsEquiJoinCondition admits and orients an equality for independent left/right
+// key evaluation. It must only be used after column remapping.
+func IsEquiJoinCondition(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || !IsEqualFunc(e.F.Func.GetObj()) {
+	if !ok || e.F == nil || e.F.Func == nil || len(e.F.Args) != 2 || !IsEqualFunc(e.F.Func.GetObj()) || isJSONNumericComparisonArgs(e.F.Args) {
 		return false
 	}
 	lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
@@ -203,31 +217,25 @@ func IsEqualFunc(id int64) bool {
 	return fid == function.EQUAL
 }
 
+// HasColExpr returns a remapped input only when the entire expression belongs
+// to it. A mixed subtree must not be mistaken for a column-free subtree.
 func HasColExpr(expr *plan.Expr, pos int32) int32 {
-	switch e := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if pos == -1 {
-			return e.Col.RelPos
-		}
-		if pos != e.Col.RelPos {
-			return -1
-		}
+	side := getJoinSideWithOuterScope(expr, map[int32]bool{0: true}, map[int32]bool{1: true}, -1)
+	var rel int32
+	switch side {
+	case 0:
 		return pos
-	case *plan.Expr_F:
-		for i := range e.F.Args {
-			pos0 := HasColExpr(e.F.Args[i], pos)
-			switch {
-			case pos0 == -1:
-			case pos == -1:
-				pos = pos0
-			case pos != pos0:
-				return -1
-			}
-		}
-		return pos
+	case JoinSideLeft:
+		rel = 0
+	case JoinSideRight:
+		rel = 1
 	default:
-		return pos
+		return -1
 	}
+	if pos != -1 && pos != rel {
+		return -1
+	}
+	return rel
 }
 
 func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {

@@ -35,7 +35,10 @@ func NewProjectionBinder(builder *QueryBuilder, ctx *BindContext, havingBinder *
 func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
 		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
-			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+			if !aliasProjectionNeedsRebind(b.ctx.projects[projectPos]) {
+				return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+			}
+			aliasExpr = &tree.ParenExpr{Expr: cloneTreeExpr(aliasExpr.Expr)}
 		}
 		if b.havingBinder != nil {
 			previousHaving := b.havingBinder.bindingProjectedAlias
@@ -131,10 +134,13 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 			return b.baseBindExpr(astExpr, depth, isRoot)
 		}
 		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
-		if isBareColumn && isEnumOrSetPlanType(target) {
+		if isBareColumn && isEnumOrSetPlanType(target) && !(isEnumPlanType(target) && b.ctx.isDistinct) {
 			previousTarget := b.mysqlSpecialTargetType
 			b.mysqlSpecialTargetType = target
 			defer func() { b.mysqlSpecialTargetType = previousTarget }()
+		}
+		if isEnumPlanType(target) {
+			return b.baseBindExpr(astExpr, depth, isRoot)
 		}
 		if subquery, ok := scalarSubqueryExpr(astExpr); ok && !subquery.Exists {
 			previousSubqueryTarget := b.numericSubqueryTarget

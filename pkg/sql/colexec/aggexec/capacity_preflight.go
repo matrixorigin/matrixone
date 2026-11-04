@@ -2094,6 +2094,7 @@ func (exec *bitOpExecBytes) PreflightBatchFill(
 	winnerCount := 0
 	var needs [hashmap.UnitLimit]vectorAreaChunkCapacity
 	needCount := 0
+	isBlob := exec.argTypes[0].Oid == types.T_blob
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -2104,6 +2105,11 @@ func (exec *bitOpExecBytes) PreflightBatchFill(
 		}
 		if vectors[0].IsNull(uint64(row)) {
 			continue
+		}
+		if isBlob {
+			if err := exec.validateOperand(vectors[0].GetRawBytesAt(row)); err != nil {
+				return err
+			}
 		}
 		x, y, state, err := exec.validatePreflightTarget(group)
 		if err != nil {
@@ -2149,6 +2155,7 @@ func (exec *bitOpExecBytes) PreflightBatchMerge(
 	winnerCount := 0
 	var needs [hashmap.UnitLimit]vectorAreaChunkCapacity
 	needCount := 0
+	isBlob := exec.argTypes[0].Oid == types.T_blob
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -2157,7 +2164,8 @@ func (exec *bitOpExecBytes) PreflightBatchMerge(
 		if err != nil {
 			return err
 		}
-		if !state.vecs[0].IsNull(uint64(y)) {
+		targetInitialized := !state.vecs[0].IsNull(uint64(y))
+		if targetInitialized && !isBlob {
 			continue
 		}
 		otherX, otherY := other.getXY(uint64(offset + i))
@@ -2167,6 +2175,14 @@ func (exec *bitOpExecBytes) PreflightBatchMerge(
 		}
 		source := other.state[otherX].vecs[0]
 		if source.IsNull(uint64(otherY)) {
+			continue
+		}
+		if isBlob {
+			if err := exec.validateOperand(source.GetRawBytesAt(int(otherY))); err != nil {
+				return err
+			}
+		}
+		if targetInitialized {
 			continue
 		}
 		winner, err := winnerForGroup(&winners, &winnerCount, group)
@@ -2351,6 +2367,11 @@ func (exec *minMaxExecFixed[T]) preflightFixedStringSources(
 	return exec.applyStringSourceEvents(&events, eventCount)
 }
 
+func hasDefaultFixedMinMaxMetadata(vec *vector.Vector) bool {
+	return vec.GetPrepareParamKind() == vector.PrepareParamNone &&
+		vec.GetPrepareParamKinds() == nil && !vec.HasStringSourceMetadata()
+}
+
 func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 	offset int,
 	groups []uint64,
@@ -2366,6 +2387,40 @@ func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 		return err
 	}
 	values := vector.MustFixedColNoTypeCheck[T](vectors[0])
+	if hasDefaultFixedMinMaxMetadata(vectors[0]) {
+		// Ordinary fixed values cannot create a provenance sidecar when every
+		// touched destination is ordinary too. Validate the same active/standby
+		// targets without simulating winners or recording metadata events.
+		plain := true
+		for row, group := range groups {
+			if group == GroupNotMatched {
+				continue
+			}
+			physicalRow, err := preflightPhysicalRow(vectors[0], offset+row)
+			if err != nil {
+				return err
+			}
+			if vectors[0].IsNull(uint64(physicalRow)) {
+				continue
+			}
+			_ = values[physicalRow]
+			_, y, state, err := exec.validatePreflightTarget(group)
+			if err != nil {
+				return err
+			}
+			// Preserve the original metadata preflight's shape errors as well
+			// as its allocation checks; an incomplete target must fall back.
+			if len(state.vecs) == 0 || state.vecs[0] == nil ||
+				max(int(state.length), int(y)+1) < state.vecs[0].Length() ||
+				!hasDefaultFixedMinMaxMetadata(state.vecs[0]) {
+				plain = false
+				break
+			}
+		}
+		if plain {
+			return nil
+		}
+	}
 	candidate := func(row int) (T, vector.PrepareParamKind, bool, error) {
 		physicalRow, err := preflightPhysicalRow(vectors[0], offset+row)
 		if err != nil {
@@ -2406,6 +2461,46 @@ func (exec *minMaxExecFixed[T]) PreflightBatchMerge(
 	}
 	if offset < 0 || offset > other.GetNumGroups()-len(groups) {
 		return mpool.ErrAllocationAccountInvalid
+	}
+	if len(groups) > hashmap.UnitLimit {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	// Merging ordinary fixed values cannot create provenance metadata when
+	// every touched destination is ordinary too. Validate the same sources
+	// and active/standby targets without simulating per-group winners.
+	plain := true
+	for row, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y := other.getXY(uint64(offset + row))
+		if x < 0 || x >= len(other.state) ||
+			int(y) >= int(other.state[x].length) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if len(other.state[x].vecs) == 0 || other.state[x].vecs[0] == nil ||
+			!hasDefaultFixedMinMaxMetadata(other.state[x].vecs[0]) {
+			plain = false
+			break
+		}
+		source := other.state[x].vecs[0]
+		if source.IsNull(uint64(y)) {
+			continue
+		}
+		_ = vector.GetFixedAtNoTypeCheck[T](source, int(y))
+		_, targetRow, state, err := exec.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		if len(state.vecs) == 0 || state.vecs[0] == nil ||
+			max(int(state.length), int(targetRow)+1) < state.vecs[0].Length() ||
+			!hasDefaultFixedMinMaxMetadata(state.vecs[0]) {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return nil
 	}
 	candidate := func(row int) (T, vector.PrepareParamKind, bool, error) {
 		x, y := other.getXY(uint64(offset + row))

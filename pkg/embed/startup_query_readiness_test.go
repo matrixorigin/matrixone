@@ -33,6 +33,7 @@ import (
 func TestStartupQueryReadiness(t *testing.T) {
 	// This scenario needs a fresh inventory configuration. Release the cached
 	// shared fixture through its owner before acquiring exclusive admission.
+	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c, err := StartTestCluster(WithCNCount(2), WithPreStart(func(op ServiceOperator) {
 		if op.ServiceType() == metadata.ServiceType_CN {

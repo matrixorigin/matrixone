@@ -1,0 +1,28 @@
+select 1.5e;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " 1.5e;";
+select 1.e;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 10 near " 1.e;";
+select .5e;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 10 near " .5e;";
+select 1.5Efoo;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " 1.5Efoo;";
+prepare numeric_exponent_invalid from 'select 1.5e';
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " 1.5e";
+select 1.e5, 1.5e+2, .5E-2;
+➤ 1.e5[8,53,31]  ¦  1.5e+2[8,53,31]  ¦  .5e-2[8,53,31]  𝄀
+100000.0  ¦  150.0  ¦  0.005
+select 1.5 e;
+➤ e[3,2,1]  𝄀
+1.5
+select 1.5/**/e;
+➤ e[3,2,1]  𝄀
+1.5
+select 1.5 AS e;
+➤ e[3,2,1]  𝄀
+1.5
+select 1.5foo;
+➤ foo[3,2,1]  𝄀
+1.5
+select 1.5e1foo;
+➤ foo[8,53,31]  𝄀
+15.0

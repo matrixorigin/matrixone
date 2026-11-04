@@ -17,11 +17,13 @@ package iceberg
 import (
 	"bytes"
 	"context"
+	"math"
 	"strings"
 	"testing"
 
 	"github.com/parquet-go/parquet-go"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/dml"
 )
@@ -182,6 +184,29 @@ func TestBuildDMLDeleteActionStreamConsumesMatchedBatch(t *testing.T) {
 	}
 	if len(writer.objects) != 1 {
 		t.Fatalf("expected one delete object write, got %d", len(writer.objects))
+	}
+}
+
+func TestBuildDMLDeleteActionStreamRejectsMatchedBatchOrdinalOverflowBeforeWrites(t *testing.T) {
+	writer := &recordingDMLDeleteObjectWriter{}
+	bat, cleanup := newMatchedDeleteBatch(t)
+	defer cleanup()
+
+	stream, err := BuildDMLDeleteActionStream(context.Background(), DMLDeleteActionStreamRequest{
+		TableLocation: "s3://warehouse/gold/orders",
+		Schema:        api.Schema{SchemaID: 9},
+		Base:          dml.CommitBase{Namespace: api.Namespace{"sales"}, Table: "orders", StatementID: "delete-overflow", IdempotencyKey: "idem-delete-overflow", BaseSnapshotID: 10},
+		SnapshotID:    11, DeleteSchemaID: 9, ObjectWriter: writer,
+		MatchedBatches: []DMLMatchedRowsBatchRequest{
+			{DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/valid.parquet"}, Batch: bat, IncludePositionRows: true, StartRowOrdinal: 20},
+			{DataFile: api.DataFile{FilePath: "s3://warehouse/gold/orders/data/overflow.parquet"}, Batch: bat, IncludePositionRows: true, StartRowOrdinal: math.MaxInt64},
+		},
+	})
+	if !moerr.IsMoErrCode(err, moerr.ErrInvalidState) || !strings.Contains(err.Error(), "matched batch row ordinal overflows int64") {
+		t.Fatalf("expected constructor overflow error, got %v", err)
+	}
+	if stream != nil || len(writer.objects) != 0 {
+		t.Fatalf("expected no stream or writes before all matched batches are validated: stream=%+v objects=%d", stream, len(writer.objects))
 	}
 }
 

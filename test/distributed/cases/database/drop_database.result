@@ -20,6 +20,8 @@ create view drop_database_bvt.v as select id, v from drop_database_bvt.p;
 create sequence drop_database_bvt.s;
 set @drop_db_id = (select dat_id from mo_catalog.mo_database where account_id = 0 and datname = 'drop_database_bvt');
 set @drop_p_id = (select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_db_id and relname = 'p');
+set @drop_index_rows = (select count(*) from mo_catalog.mo_indexes where database_id = @drop_db_id);
+set @keep_index_rows = (select count(*) from mo_catalog.mo_indexes where database_id = (select dat_id from mo_catalog.mo_database where account_id = 0 and datname = 'drop_database_keep'));
 set @drop_tmp_id = (select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_db_id and relkind = 'temporary_table');
 select count(*) as temp_allocator_before from mo_catalog.mo_increment_columns where table_id = @drop_tmp_id;
 ➤ temp_allocator_before[-5,64,0]  𝄀
@@ -35,6 +37,9 @@ select dat_id = @drop_db_id as same_database from mo_catalog.mo_database where a
 1
 select rel_id = @drop_p_id as same_table from mo_catalog.mo_tables where account_id = 0 and reldatabase_id = @drop_db_id and relname = 'p';
 ➤ same_table[-7,1,0]  𝄀
+1
+select count(*) = @drop_index_rows as index_catalog_restored from mo_catalog.mo_indexes where database_id = @drop_db_id;
+➤ index_catalog_restored[-7,1,0]  𝄀
 1
 select id, v from drop_database_bvt.p;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
@@ -61,6 +66,9 @@ select count(*) as columns_left from mo_catalog.mo_columns where account_id = 0 
 select count(*) as indexes_left from mo_catalog.mo_indexes where database_id = @drop_db_id;
 ➤ indexes_left[-5,64,0]  𝄀
 0
+select count(*) = @keep_index_rows as surviving_index_catalog from mo_catalog.mo_indexes where database_id = (select dat_id from mo_catalog.mo_database where account_id = 0 and datname = 'drop_database_keep');
+➤ surviving_index_catalog[-7,1,0]  𝄀
+1
 select id from drop_database_keep.guard;
 ➤ id[4,32,0]  𝄀
 99

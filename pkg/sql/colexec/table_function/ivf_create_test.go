@@ -143,7 +143,7 @@ func TestIvfCreateStart_Error(t *testing.T) {
 			ivf_runSql = tt.sqlFn
 
 			m := mpool.MustNewZero()
-			proc := testutil.NewProcessWithMPool(t, "", m)
+			proc := testutil.NewProcessWithOwnedMPool(t, "", m)
 			proc.Ctx = context.Background()
 
 			arg := &TableFunction{

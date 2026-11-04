@@ -174,6 +174,7 @@ func WithTxnCacheWrite() TxnOption {
 // WithSnapshotTS use a spec snapshot timestamp to build TxnOperator.
 func WithSnapshotTS(ts timestamp.Timestamp) TxnOption {
 	return func(tc *txnOperator) {
+		tc.opts.explicitSnapshot = true
 		tc.mu.txn.SnapshotTS = ts
 	}
 }
@@ -250,13 +251,14 @@ func WithFootPrints(fp *footPrints) TxnOption {
 }
 
 type txnOperator struct {
-	sid             string
-	logger          *log.MOLogger
-	sender          rpc.TxnSender
-	clock           clock.Clock
-	lockService     lockservice.LockService
-	timestampWaiter TimestampWaiter
-	terminalCall    atomic.Uint32
+	sid                 string
+	logger              *log.MOLogger
+	sender              rpc.TxnSender
+	clock               clock.Clock
+	lockService         lockservice.LockService
+	timestampWaiter     TimestampWaiter
+	terminalCall        atomic.Uint32
+	catalogReadRevision atomic.Uint64
 
 	mu struct {
 		sync.RWMutex
@@ -306,10 +308,13 @@ type txnOperator struct {
 	}
 
 	opts struct {
-		coordinator        bool
-		skipWaitPushClient bool
-		options            txn.TxnOptions
-		waitActiveHandle   func()
+		coordinator           bool
+		skipWaitPushClient    bool
+		options               txn.TxnOptions
+		waitActiveHandle      func()
+		snapshotAdmission     *SnapshotAdmission
+		authorizationSnapshot *SnapshotAdmission
+		explicitSnapshot      bool
 	}
 }
 
@@ -658,6 +663,7 @@ func (t *runSQLTracker) waitingInfo(keepToken uint64, skipToken uint64) []string
 
 func newTxnOperator(
 	sid string,
+	logger *log.MOLogger,
 	clock clock.Clock,
 	sender rpc.TxnSender,
 	txnMeta txn.TxnMeta,
@@ -665,7 +671,7 @@ func newTxnOperator(
 ) *txnOperator {
 	tc := &txnOperator{
 		sid:    sid,
-		logger: util.GetLogger(sid),
+		logger: logger,
 		sender: sender,
 		clock:  clock,
 	}
@@ -698,6 +704,7 @@ func (tc *txnOperator) initWithRunSQLGate(
 
 	tc.initReset(sealRunSQL)
 	tc.initProtectedFields(sealRunSQL)
+	tc.catalogReadRevision.Add(1)
 
 	tc.mu.txn = txnMeta
 	tc.reset.txnID = txnMeta.ID
@@ -854,22 +861,17 @@ func LockWaitTimeoutFromTxn(op TxnOperator) time.Duration {
 }
 
 func (tc *txnOperator) notifyActive() {
-	tc.completeActiveWait(nil)
-}
-
-func (tc *txnOperator) failActiveWait(err error) {
-	tc.completeActiveWait(err)
-}
-
-func (tc *txnOperator) completeActiveWait(err error) {
 	if tc.reset.waiter == nil {
 		panic("BUG: notify active on non-waiter txn operator")
 	}
-	tc.reset.waiter.complete(err)
+	tc.reset.waiter.complete(nil)
 }
 
 func (tc *txnOperator) AddWorkspace(workspace Workspace) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	tc.reset.workspace = workspace
+	tc.catalogReadRevision.Add(1)
 }
 
 func (tc *txnOperator) GetWorkspace() Workspace {
@@ -907,6 +909,7 @@ func (tc *txnOperator) SnapshotTS() timestamp.Timestamp {
 func (tc *txnOperator) SetSnapshotTS(ts timestamp.Timestamp) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
+	tc.catalogReadRevision.Add(1)
 	tc.mu.txn.SnapshotTS = ts
 }
 
@@ -983,6 +986,7 @@ func (tc *txnOperator) updateSnapshot(
 	if err != nil {
 		return err
 	}
+	tc.catalogReadRevision.Add(1)
 	tc.mu.txn.SnapshotTS = next
 	return nil
 }
@@ -1029,6 +1033,7 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 		}
 	}
 	if tc.mu.txn.SnapshotTS.Less(snapshot.Txn.SnapshotTS) {
+		tc.catalogReadRevision.Add(1)
 		tc.mu.txn.SnapshotTS = snapshot.Txn.SnapshotTS
 	}
 	if snapshot.Txn.RequireAutoIncrEpochFenceCommit {
@@ -1936,12 +1941,9 @@ func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.Se
 }
 
 func (tc *txnOperator) unlock(ctx context.Context) error {
-	if tc.reset.workspace != nil &&
-		tc.reset.workspace.Readonly() &&
-		len(tc.mu.lockTables) == 0 {
-		return nil
-	}
-
+	// A failed first Lock RPC can leave indeterminate remote ownership while
+	// the workspace is still read-only and no acknowledged table is recorded.
+	// Only lockservice owns that cleanup witness; always ask it to unlock by ID.
 	if tc.reset.commitNeedsResolution {
 		resolver, ok := tc.lockService.(lockservice.UnknownCommitResolver)
 		if !ok {
@@ -1991,8 +1993,10 @@ func (tc *txnOperator) unlock(ctx context.Context) error {
 		v2.TxnCNCommitResponseDurationHistogram.Observe(float64(time.Since(tc.reset.commitAt).Seconds()))
 	}
 
-	// rc mode need to see the committed value, so wait logtail applied
-	if tc.mu.txn.IsRCIsolation() &&
+	// RC waits only for a real commit. Read-only/aborted transactions have no
+	// commit timestamp; waiting for "now" here can deadlock catalog replay on
+	// the logtail initialization that this same transaction must finish.
+	if !tc.mu.txn.CommitTS.IsEmpty() && tc.mu.txn.IsRCIsolation() &&
 		tc.timestampWaiter != nil {
 		start := time.Now()
 		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
@@ -2103,6 +2107,12 @@ func (tc *txnOperator) closeUnadmitted(err error) {
 // cleaning concurrently is unsafe because the running SQL still owns the
 // workspace. Sealing rejects new SQL before the final exit performs one
 // detached, bounded rollback.
+// RollbackAfterRunningSQL shares the existing terminal owner with SQL callers
+// that borrow a transaction and may otherwise catch a fatal statement error.
+func (tc *txnOperator) RollbackAfterRunningSQL(err error) {
+	tc.scheduleRollbackAfterRunningSQL(err)
+}
+
 func (tc *txnOperator) scheduleRollbackAfterRunningSQL(waitErr error) {
 	tc.mu.Lock()
 	if tc.mu.closed || tc.mu.terminalAction != txnTerminalActionNone {
@@ -2316,6 +2326,19 @@ func (tc *txnOperator) waitRunningSQL(
 
 func (tc *txnOperator) inRunSql() bool {
 	return tc.reset.runSQLTracker.active()
+}
+
+func (tc *txnOperator) IsAbortedTxnCleanupComplete(expectedTxnID []byte) bool {
+	// Deferred rollback can retain mu while remote unlock is still pending.
+	// This observation must decline replay rather than wait for that owner.
+	if !tc.mu.TryRLock() {
+		return false
+	}
+	defer tc.mu.RUnlock()
+	return len(expectedTxnID) != 0 && slices.Equal(expectedTxnID, tc.mu.txn.ID) &&
+		tc.mu.closed && tc.mu.txn.Status == txn.TxnStatus_Aborted &&
+		tc.mu.terminalOutcome == txnTerminalOutcomeSucceeded && !tc.mu.restarting &&
+		txnTerminalCallState(tc.terminalCall.Load()) == txnTerminalCallSealed
 }
 
 func (tc *txnOperator) claimRestart() error {

@@ -631,18 +631,24 @@ func ReportGroupConcatWarnings(agg AggFuncExec, session any) {
 func (exec *groupConcatExec) SetAllocationAccount(
 	allocation *AllocationAccount,
 ) error {
+	if err := exec.aggExec.SetAllocationAccount(allocation); err != nil {
+		return err
+	}
+	exec.setAccountedDistinctMode()
+	exec.distinctHash.free()
+	return nil
+}
+
+// setAccountedDistinctMode selects the accounted DISTINCT representation from the ORDER BY
+// configuration. SetAllocationAccount and SetExtraInformation both call it, in either order.
+func (exec *groupConcatExec) setAccountedDistinctMode() {
 	// The saved-argument arena provides the exact DISTINCT set in accounted
 	// Group mode. It replaces the auxiliary Go hash and uses the same bounded
 	// spill representation as ordinary saved arguments.
 	preserveDistinctInputOrder := exec.distinct && exec.orderArgCnt == 0
-	if err := exec.aggExec.SetAllocationAccount(allocation); err != nil {
-		return err
-	}
 	exec.aggInfo.isDistinct = preserveDistinctInputOrder
 	exec.aggInfo.preserveDistinctInputOrder = preserveDistinctInputOrder
 	exec.aggInfo.distinctInputOrderSourceRow = preserveDistinctInputOrder
-	exec.distinctHash.free()
-	return nil
 }
 
 func (exec *groupConcatExec) ClearAllocationAccount(
@@ -738,8 +744,7 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 		}
 	}
 	result := types.T_text.ToType()
-	result.Charset = types.MergeStringCharset(args, result.Charset)
-	return result
+	return types.MergeStringCollationMetadata(result, args)
 }
 
 func groupConcatResultIsBinary(result types.Type) bool {
@@ -1258,6 +1263,9 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 			exec.separator = config
 		}
 		exec.retType = GroupConcatReturnType(exec.argTypes)
+		if exec.allocation != nil {
+			exec.setAccountedDistinctMode()
+		}
 		return nil
 	}
 	typedConfig, ok := partialResult.(AggregateConfig)
@@ -1293,6 +1301,9 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, _ int) error
 	exec.orderNullsLast = orderNullsLast
 	exec.separator = separator
 	exec.retType = GroupConcatReturnType(exec.concatTypes())
+	if exec.allocation != nil {
+		exec.setAccountedDistinctMode()
+	}
 	if exec.distinct && exec.allocation == nil {
 		for len(exec.orderedDistinct) < exec.GetNumGroups() {
 			exec.orderedDistinct = append(exec.orderedDistinct, nil)

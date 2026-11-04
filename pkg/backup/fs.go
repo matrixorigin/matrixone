@@ -18,10 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/csv"
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 )
@@ -58,8 +55,6 @@ func setupFileservice(ctx context.Context, conf *pathConfig) (res fileservice.Fi
 		}
 		if conf.forETL {
 			s3path := fileservice.JoinPath(s3opts, etlFSDir(conf.filepath))
-			//TODO:remove debug
-			logutil.Debugf("==>s3path: %s", s3path)
 			res, readPath, err = fileservice.GetForETL(ctx, nil, s3path)
 			if err != nil {
 				return nil, "", err
@@ -181,47 +176,4 @@ func readFile(ctx context.Context, fs fileservice.FileService, path string) ([]b
 		return nil, err
 	}
 	return iov.Entries[0].Data, err
-}
-
-func hexStr(d []byte) string {
-	return fmt.Sprintf("%x", d)
-}
-
-// readFileAndCheck reads data and compare the checksum with the one in checksum file.
-// if the checksum is equal, it returns the data of the file.
-func readFileAndCheck(ctx context.Context, fs fileservice.FileService, path string) ([]byte, error) {
-	var (
-		err               error
-		data              []byte
-		savedChecksumData []byte
-		newChecksumData   []byte
-		savedChecksum     string
-		newChecksum       string
-	)
-	data, err = readFile(ctx, fs, path)
-	if err != nil {
-		return nil, err
-	}
-
-	//calculate the checksum
-	hash := sha256.New()
-	hash.Write(data)
-	newChecksumData = hash.Sum(nil)
-	newChecksum = hexStr(newChecksumData)
-
-	checksumFile := path + ".sha256"
-	savedChecksumData, err = readFile(ctx, fs, checksumFile)
-	if err != nil {
-		return nil, err
-	}
-	savedChecksum = hexStr(savedChecksumData)
-	//3. compare the checksum
-	if strings.Compare(savedChecksum, newChecksum) != 0 {
-		return nil, moerr.NewInternalError(ctx, checksumErrorInfo(newChecksum, savedChecksum, path))
-	}
-	return data, err
-}
-
-func checksumErrorInfo(newChecksum, savedChecksum, path string) string {
-	return fmt.Sprintf("checksum %s of %s is not equal to %s ", newChecksum, path, savedChecksum)
 }

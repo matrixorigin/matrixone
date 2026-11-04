@@ -183,7 +183,9 @@ func (f *lateMaterializationBenchmarkFixture) read(late, all bool) (int, error) 
 			}
 		}
 		for _, pos := range loaded {
-			bat.Vecs[pos].Shrink(sels, false)
+			if err := bat.Vecs[pos].Shrink(sels, false, mp); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 		}
 		bat.SetRowCount(len(sels))
 		return engine.ReaderFilterResult{Sels: sels}, nil
@@ -194,7 +196,7 @@ func (f *lateMaterializationBenchmarkFixture) read(late, all bool) (int, error) 
 			f.ctx, &f.info, f.ds, f.columns, f.colTypes, -1, timestamp.Timestamp{},
 			nil, nil, objectio.BlockReadFilter{}, nil, fileservice.Policy(0),
 			"ivfflat-include-benchmark", output, cacheVectors, mp, f.fs,
-			[]int{0}, filter,
+			[]int{0}, &engine.ReaderFilterRequest{Apply: filter},
 		)
 		return output.RowCount(), err
 	}
@@ -317,6 +319,34 @@ func BenchmarkBlockDataReadPersistedFilteredVectorTopN(b *testing.B) {
 	}
 }
 
+// Compare equivalent all-row filters without allocating an identity selection
+// on the All path. Both cases must successfully return the same bounded Top-K.
+func BenchmarkBlockDataReadPersistedAllFilteredVectorTopN(b *testing.B) {
+	for _, tc := range []struct {
+		name        string
+		selectEvery int64
+	}{
+		{name: "all"},
+		{name: "explicit_identity", selectEvery: 1},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			fixture := newVectorRangeTopNBenchmarkFixture(b)
+			b.Cleanup(fixture.close)
+			if err := fixture.readFiltered(true, false, tc.selectEvery); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := fixture.readFiltered(true, false, tc.selectEvery); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+		})
+	}
+}
+
 type vectorRangeTopNBenchmarkFixture struct {
 	ctx         context.Context
 	fs          fileservice.FileService
@@ -432,6 +462,9 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 	defer cacheVectors.Free(mp)
 
 	filter := func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+		if selectEvery == 0 {
+			return engine.ReaderFilterResult{All: true}, nil
+		}
 		ids := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])
 		sels := make([]int64, 0, len(ids)/int(selectEvery)+1)
 		for pos, id := range ids {
@@ -440,7 +473,9 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 			}
 		}
 		for _, pos := range loaded {
-			bat.Vecs[pos].Shrink(sels, false)
+			if err := bat.Vecs[pos].Shrink(sels, false, mp); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 		}
 		bat.SetRowCount(len(sels))
 		return engine.ReaderFilterResult{Sels: sels}, nil
@@ -454,7 +489,7 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 		if err := blockDataReadWithFilter(
 			f.ctx, &f.info, nil, f.columns, f.columnTypes, 1, types.TS{},
 			f.storageRows, fileservice.Policy(0), output, cacheVectors, mp, f.fs,
-			[]int{0}, filter, pushedTop, nil,
+			[]int{0}, &engine.ReaderFilterRequest{Apply: filter}, pushedTop, nil,
 		); err != nil {
 			return err
 		}
@@ -463,7 +498,7 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 			f.ctx, &f.info, f.ds, f.columns, f.columnTypes, 1, timestamp.Timestamp{},
 			nil, nil, objectio.BlockReadFilter{}, pushedTop, fileservice.Policy(0),
 			"ivfflat-filtered-topk-benchmark", output, cacheVectors, mp, f.fs,
-			[]int{0}, filter,
+			[]int{0}, &engine.ReaderFilterRequest{Apply: filter},
 		); err != nil {
 			return err
 		}
@@ -473,6 +508,12 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 			return moerr.NewInternalErrorNoCtxf(
 				"filtered storage Top-K returned %d rows and %d embeddings",
 				output.RowCount(), output.Vecs[2].Length())
+		}
+		if selectEvery <= 1 {
+			return validateVectorRangeTopNBenchmarkResult(
+				vector.MustFixedColWithTypeCheck[int64](output.Vecs[0]),
+				vector.MustFixedColWithTypeCheck[float64](output.Vecs[len(f.columns)]),
+			)
 		}
 		return nil
 	}

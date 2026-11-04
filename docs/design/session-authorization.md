@@ -1,0 +1,108 @@
+# Current-session KILL authorization and processlist visibility — design v2
+
+Owner issues: MatrixOne #30276 and #30278. Implementation: https://github.com/matrixorigin/matrixone/pull/30299. This versioned design records the current contract; approval evidence is retained in the task record.
+
+Design-first review: **APPROVED v2**, gpt-6-astra, reasoning_effort=medium, canonical collaboration session `/root/proxy_design`, 2026-10-15. Exact inspected base: `8795f3699b40504376343fa1acda8b4619f0c76e`. Design-only inspection; no source edits, builds, runtime tests or GitHub writes by this reviewer. Prior `design.md` evidence is reused and its local authorization/lifecycle and processlist conclusions remain applicable. This delta supersedes its unresolved proxy disposition. User explicitly chose full current-identity behavior, preserving legitimate KILL after SET ROLE and COM_CHANGE_USER.
+
+## Classification and evidence
+
+The original local authorization fixes are ordinary bug fixes. Complete closure now changes the CN internal wire protocol and ownership across proxy/frontend/query service; the feature-design gate applies because of wire compatibility, distributed routing and security boundaries. A document in the implementation PR is acceptable because this distinct design-first approval precedes implementation. This is the required versioned design, not an additional request for user approval.
+
+At inspected base, proxy `makeEvent` consumes single KILL commands; `handleKill` locates target CN and reauthenticates using the ORIGINAL handshake in `connAndExec`. `cacheIdentityChanged` records but cannot refresh changes to user or active role. Thus authorizing that temporary session still permits an original administrator to kill another user after changing to an ordinary identity. Conversely legitimate upgrades and same-current-user actions can fail. Disconnect cleanup also authenticates the original login. SQL request admission in `RoutineManager.Handler` already pins the executing session against COM_CHANGE_USER/reset/migration; normal SQL ordering is the correct owner of current identity.
+
+Production frontend connection IDs come from HAkeeper `AllocateIDByKey(ConnIDAllocKey)`; local incremental IDs are only the nil-HAkeeper unit-test fallback. Existing proxy global routing scans processlist; it is not a separate authoritative directory. Existing query RPC is a trusted internal control plane, already supporting reset/migration and account-wide kill. SQL/MySQL users cannot directly invoke its handlers. This design preserves that trust model; deployments must already isolate query-service RPC from untrusted clients. No user-supplied SQL principal or trusted boolean is introduced.
+
+## Invariants and contract
+
+Authenticated sys+moadmin may act globally; non-sys+accountadmin within its account; others only same account AND same user. Sys membership or username root alone grants nothing. Missing authenticated identity fails closed. Active role means the role of the current executing session, including earlier successful statements in a multi-statement request. Failed identity-changing commands preserve whatever identity the existing authentication/role implementation leaves installed; the proxy neither guesses nor replays it.
+
+Each SQL KILL executes on its existing authenticated backend, authorizes against the target's pinned current session generation, and has at most one selected target effect. No target CN forwards again. Target disappearance is distinct from permission denial or transport failure. A denied target is never canceled or closed. IDs above uint32 are rejected before lookup or conversion. Existing QUERY/CONNECTION/default, statement-ID and local self-KILL semantics are retained. Statement ID remains subject to current kernel semantics (killQuery currently cancels the request regardless of that string); this fix does not invent new semantics.
+
+Processlist remains the prior design: fetchSessions receives authenticated Account/User/Role from proc.SessionInfo, requests SysTenant only for actual sys+moadmin, and filters every returned row before vector materialization. Ordinary users see own rows, account admins own-account rows, moadmin all. SHOW, direct processlist() and information_schema view converge here. Empty identity and malformed/nil rows fail closed. Prepared execution must use current session information. No processlist wire change or SQL privilege catalog change.
+
+## Chosen architecture
+
+### 1. Forward SQL through the existing proxy tunnel
+
+`pkg/proxy/event.go`: stop consuming KILL. Remove the `tree.Kill` event case and obsolete killEvent definition/helpers, TypeKill references if otherwise unused, and the matching dispatch/handleKill in `client_conn.go`. The original packet travels through the ordinary c2s/s2c pipes. Do not replace it with a second writer, `ExecStmt`, synthetic OK/ERR, or a temporary connection. Update event/tunnel fixtures to expect KILL forwarding. Multi-statements and prepared KILL (where supported) naturally reach the same frontend boundary. Existing identity-change cache invalidation stays intact.
+
+This avoids proxy protocol interleaving: exactly one request enters the active backend in ordinary order and its native MySQL response returns through the existing pipe. Local self QUERY remains a no-op; local self CONNECTION uses the existing delayed close/response path. In-flight accounting now sees KILL like normal SQL. No stale handshake is involved, including after user/role changes or tunnel migration.
+
+### 2. Source CN snapshots current identity and performs bounded remote lookup/action
+
+`pkg/frontend/mysql_cmd_executor.go`: `doKill` snapshots an immutable principal from `ses.GetTenantInfo()` under one TenantInfo lock, validates it, and calls a frontend helper (suggested `killSession(ctx, principal, callerConnID, targetID, killConnection, statementID) error`). First try the local target using the same authorization implementation described below. Only a genuine local absence proceeds remotely; denied/busy/closed/error never does.
+
+`pkg/frontend/routine_manager.go` (or a small `kill.go` in the same package): separate local lookup result from SQL error formatting. Suggested owning API:
+
+- internal `killLocal(ctx, principal, callerConnID, targetID, killConnection, statementID) (found bool, err error)`;
+- exported `KillSession(ctx, *query.KillSessionRequest) (found bool, err error)` for a **remote local-only** operation; never recursively invokes cluster routing and always uses `killMyself=false`;
+- exported `DisconnectSession(ctx, connID uint32) error` for the trusted proxy lifecycle cleanup described below.
+
+Exact helper names may follow repository conventions; signatures must retain explicit absence and separate authenticated SQL from trusted lifecycle cleanup. Keep the caller snapshot immutable. The source request admission prevents identity replacement while SQL executes; role changes execute sequentially. Do not hold caller or manager locks during RPC.
+
+If absent locally, snapshot CN query addresses from `clusterservice.GetMOCluster(...).GetCNService(NewSelectAll(), ...)`, deduplicate addresses, exclude self by ServiceID, and visit each remote CN sequentially. Reuse `getPu(ses.GetService()).QueryClient`. Bound the entire remote operation by the earlier of caller deadline and one fixed control-operation timeout (existing suitable finite query-control timeout, otherwise 10 seconds); do not reset timeout per CN. Before each effect check ctx.Err. Send one local-only KillSession RPC per candidate; false/absent means continue; found=true means finish; any error, cancellation, timeout, nil/malformed response means stop with error. Do not retry an uncertain effect or continue after a transport error. All absent returns the existing unknown connection error (the old proxy's synthetic success for absence disappears in favor of native frontend behavior).
+
+This is O(number of CNs) small control messages only when the target is remote, with at most one outstanding RPC and O(number of CNs) address storage. It replaces an existing all-CN processlist scan plus temporary authentication and avoids exposing process metadata to routing. It adds no directory, goroutine, cache, replay state or retry loop. Global production connection IDs provide the existing targeting assumption. Connection-ID wrap/reallocation is a pre-existing allocator limitation, not newly solved by this fix. Migration may transiently yield busy/not-found and must fail boundedly; no auto-retry or parallel multi-target cancellation is allowed.
+
+### 3. Target authorization and generation action
+
+Both local and remote SQL actions use ONE principal predicate and ONE guarded target action. Principal carries account/user/active-role names and account/user IDs, not a caller-controlled admin flag. Names identify explicit built-in role semantics; numeric account/user IDs identify ownership. Validate authenticated names and any consistency needed by the existing TenantInfo semantics, then compute scope. A protobuf message being present is not sufficient authentication for a public SQL caller: only trusted source CN constructs it from its executing Session.
+
+After manager lookup releases the map lock, take target `mc.Lock`, reject closed/inProgress promptly, snapshot its session and authenticated identity, authorize, and check context. QUERY calls existing killQuery while holding mc; it only takes routine/session locks, and it must operate on that pinned session. CONNECTION sets mc.closed, broadcasts cond, releases mc, then calls existing killConnection; do not pre-set rt.cancelled. No network or wait under mc. Active SQL is allowed; identity-changing lifecycle operations are not. Existing close releases rt.mu before acquiring mc, avoiding reverse nesting. No new session may publish after sealed admission. Tests must prove this target generation property.
+
+Remote self classification is always false: self KILL is handled locally before any forwarding. Do not infer self from a remote supplied caller connection number. A remote request includes no callerConnID because it is unnecessary authority.
+
+### 4. Proxy disconnect cleanup is lifecycle control, not SQL impersonation
+
+Replace only `KillCurrentBackendConn`'s temporary-login KILL with a separate trusted `DisconnectSession` query RPC to the captured `sc.GetCNServer()` query endpoint (reuse `getQueryAddress(c.moCluster, currentCN.addr)`). Capture its request ConnID from `c.ConnID()`: this is the immutable logical frontend ID allocated for the current client/tunnel. Do NOT use or compare it with `ServerConn.ConnID()` (a separate local proxy ID allocated by nextServerConnID), or `CNServer.connID` (original logical ID, stale after cache Pop executes SET CONNECTION ID TO the new client ID). No client KILL argument or original-login principal participates.
+
+Before `handler.cleanupBackendOnClientDisconnect` captures currentSC, ensure `t.Close()` has completed (idempotent closeOnce; call without tunnel locks), then call getServerConn. This is necessary because setError sends errC BEFORE calling Close: receiving that event alone does not prove migration publication is sealed. Close selects/seals the terminal backend under t.mu, and replacement checks that same closed state before publishing. The handler skips cache return and closes the captured backend after synchronous cleanup. Cache reuse barriers retain old-handler ownership until terminal cleanup completes. Keep the RPC in that synchronous interval, never reroute by ID, and never schedule a late goroutine against a later binding. This closes the capture/publication race without adding a token registry or new lifetime owner.
+
+The receiver obtains the local routine and invokes the existing nonwaiting close/cancel machinery: `rt.beginClose()` then `rt.killConnection(false)`. beginClose seals/cancels lifecycle and request; final resource destruction remains cleanup.closeOnce. Absence is idempotent success. It does not wait for the SQL or lifecycle operation it must cancel, does not scan CNs, and cannot be invoked via SQL. This separate method avoids a privileged optional flag in the ordinary kill API.
+
+Use a fresh bounded context derived without the already-fired client disconnect cancellation (context.WithoutCancel followed by defaultTransferTimeout), so cleanup still runs after disconnect; never an unbounded background call. Release every query response. Missing query client/address, unsupported peer, RPC failure or timeout returns an error to existing logging; handler still closes the captured socket. Never fall back to original-login KILL. This preserves same-user ordinary disconnect cancellation and extends it correctly across COM_CHANGE_USER/SET ROLE.
+
+## Exact additive wire delta and generation
+
+In `proto/query.proto`, append CmdMethod `KillSession = 45`, `DisconnectSession = 46`; append Request pointer fields KillSessionRequest=47, DisconnectSessionRequest=48; append Response pointer fields KillSessionResponse=48, DisconnectSessionResponse=49. Existing numbers remain unchanged.
+
+New messages:
+
+- `KillSessionPrincipal`: uint32 AccountID=1, uint32 UserID=2, string Account=3, string User=4, string Role=5.
+- `KillSessionRequest`: uint64 ConnID=1, bool KillConnection=2, string StatementID=3, KillSessionPrincipal Principal=4 (nullable/pointer).
+- `KillSessionResponse`: bool Found=1.
+- `DisconnectSessionRequest`: uint32 ConnID=1.
+- `DisconnectSessionResponse`: empty (nonnull response proves handled).
+
+The request ConnID stays uint64 so malicious/buggy trusted callers cannot bypass overflow validation by serialization truncation. Missing request/principal fails before any action. Add handlers and registration in `pkg/cnservice/server_query.go`; thin adapters call RoutineManager APIs and set typed responses, propagating normal moerr failures. Keep legacy KillConn account-suspension semantics unchanged.
+
+Add MORPCVersion120 and advance MORPCLatestVersion in `pkg/defines/const.go`; gate both new methods at 120 in `pkg/queryservice/client/query_client.go`. Check existing version-negotiation tests and update directly affected latest-version expectations. New message enums must fail on unsupported peers; no fallback to old KillConn or SQL impersonation. Use normal repository `make generate-pb`/`make pb` workflow (`make proto-vendor`, proto/gen.sh with the pinned gogo generator); commit regenerated `pkg/pb/query/query.pb.go`. Do not hand-edit generated wire code. If full generation touches unrelated generated artifacts, compare and retain only intended semantically required outputs; generator/environment failures are evidence gaps, not permission to synthesize bindings.
+
+## Compatibility and rollout
+
+New CNs authorize local SQL regardless of wire version. Their remote operations fail closed when the cluster version/peer cannot handle v120. New proxy cleanup RPC similarly has no insecure fallback and always closes the socket on failure. Error/absent/malformed response is never synthetic success (except idempotent absent disconnect cleanup).
+
+The full guarantee requires all SQL-serving CNs AND proxies upgraded: old CNs retain original authorization bugs; old proxies can still impersonate original login even against a fixed CN. Do not claim fleet protection during mixed-version rollout. Deployment should upgrade/drain all affected serving components before exposing the repaired contract; rollback reintroduces the vulnerability. No config, catalog or persisted format changes. Legacy clients remain wire-compatible on MySQL. Native unknown-target and self-close semantics replace the proxy's intercepted synthetic behavior as explicitly documented above.
+
+## Validation and review map
+
+Reuse prior design's complete permission matrix and processlist cases; no duplicate builds by this reviewer. Implementation owner records real selection/revision/result.
+
+1. Frontend R3 authorization/lifecycle: ordinary sys vs root, same user across active roles, other user, cross-account equal IDs/names, accountadmin, moadmin, wrong role/account, empty identities; deny has zero effects. QUERY/CONNECTION/default, statement-ID, self, absent, overflow. Deterministic mc barriers for reset/change-user racing KILL prove either old generation action or bounded rejection, never new-owner action. Simultaneous close remains nonblocking. Required focused race plus owning frontend package race per mo-dev.
+2. Forwarding R2/R3: local success/deny never sends RPC; local absence visits unique remote candidates, skips self, absent continues, found stops, denied/busy/transport/cancel/nil response stops, no retry and no receiver recursion. Test total timeout/cancellation via controlled context/barriers without sleeps. Validate principal snapshot matches current session. Response release accounting covers success/error paths. Query-service round-trip tests exercise generated payload and missing principal, >uint32 rejection, unsupported version. Scope owning packages frontend/cnservice/queryservice/client and generated query consumer compilation.
+3. Proxy R3: event parser forwards original KILL bytes; no temporary backend creation and no synthetic response; ordinary command ordering retained. Adapt existing event/client/tunnel tests rather than dropping their distinct oracles. Disconnect RPC uses terminal captured endpoint plus c.ConnID after tunnel migration/cache reuse, with deliberately unequal local ServerConn.ConnID and stale CNServer.connID; deterministic barrier proves close seals publication before capture; runs even after client cancellation; absence success; version/error/cancel still closes backend and never cache-publishes it; no stale-handshake invocation. Existing TestClientConn_KillCurrentBackendConn and cleanupBackendOnClientDisconnect suites should be reshaped to these oracles. Race evidence for any newly changed ownership/closure paths follows skill.
+4. Real public-path topology: two CNs behind proxy, a privileged target executing a controllable long request, ordinary actor cannot cancel it and target remains usable; authorized own-user/admin controls cancel query or close connection as appropriate. Exercise successful SET ROLE downgrade then denial, upgrade then legitimate cross-user action, COM_CHANGE_USER admin->ordinary denial and own-user success, and failed switch preserving existing authenticated identity. Native MySQL packets/driver must prove response synchronization and COM_CHANGE_USER authentication, not only helper booleans. Verify self KILL and disconnect while own query runs. Two CNs are necessary to prove actual RPC routing; reuse minimal available fixture, no broad stress cluster.
+5. Processlist R2 operator consumer: mixed-CN responses filtered before append; errors/cancel/nil handled without partial unauthorized rows, ordinary/admin controls on SHOW/function/view, current role through prepared execution. Existing special proxy SQL-worker user is explicitly sys+moadmin (`SetSpecialUser`), so its administrative processlist usage remains allowed; no username exception.
+6. Mixed-version focused tests: v119 rejects new remote/cleanup methods, no fallback; missing handler/response fails; document old serving components remain vulnerable. No upgrade/restart cluster required because no persistence/new recovery state; versioned request/handler tests discriminate the contract.
+
+Parent must run meaningful focused tests, owning packages, required race evidence, targeted static checks and public topology evidence, then independent gpt-6.1-sol / xhigh final review. No PASS/runtime claim follows from this design approval. Material departures (proxy-originated claimed identity, parallel broadcast effects, caller-supplied routing/admin SQL extension, fallback login, a new lifecycle registry) require a delta review before delivery.
+
+## Alternatives rejected and acceptance
+
+Reject-all after identity-change violates user-selected availability. Replaying SET or changed credentials from proxy duplicates authentication state and mishandles failed commands/roles. Proxy RPC that merely looks up caller ConnID can race SQL ordering and lacks request admission; the live SQL execution owner is simpler. Arbitrary internal SQL statements carrying a claimed role introduce an unnecessary public bypass boundary. A global connection directory/token service creates new retained state and recovery complexity; existing globally allocated IDs plus bounded local-only probing suffice. Parallel cancellation broadcasts risk effects on transient migration copies and make errors ambiguous.
+
+Acceptance: common local/remote authorization closes both reported issues; legitimate current-role/user KILL works through proxy; generation action is pinned; disconnect cancellation remains bounded and ownership-scoped; no new unbounded state/waits; generated/versioned artifacts match; complete validation and independent final review have no unresolved blockers. Expected production growth is a small forwarding helper, two thin RPC handlers and schema additions, offset by deleting proxy interception and temporary cleanup authentication.
+
+## Current protocol allocation
+
+Official main `2508ce7029b03e6bb3ac0bd8e66a994d12593664` publishes protocol 119 for coordinator-owned parameterized subqueries. Session control appends protocol 120. Existing versions, command identities and field numbers remain unchanged. Both RPCs reject at 119, accept at 120, and reject again after rollback to 119, before target lookup or effects. Prepared SQL uses the current statement identity; it does not retain a separate session-control capability snapshot.

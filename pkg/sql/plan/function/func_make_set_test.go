@@ -24,6 +24,8 @@ import (
 )
 
 func TestMakeSetDecimal(t *testing.T) {
+	// Children are sequential; each leaf releases its vectors and result.
+	proc := testutil.NewProcess(t)
 	type row struct{ value, want string }
 	halves := []row{
 		{"0", ""}, {"0.4", ""}, {"0.5", "a"}, {"0.6", "a"},
@@ -87,7 +89,6 @@ func TestMakeSetDecimal(t *testing.T) {
 	} {
 		t.Run(group.name, func(t *testing.T) {
 			run := func(t *testing.T, rows []row, constant bool) {
-				proc := testutil.NewProcess(t)
 				n := len(rows)
 				if constant {
 					n = 3

@@ -23,9 +23,9 @@ package cuvs
 import "C"
 import (
 	"runtime"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 // BlockScaledMatmul scores tiles of vector cells against a fixed set of query cells on a GPU
@@ -82,11 +82,11 @@ func NewBlockScaledMatmul(format, dim, nq int, queryCells []byte, cellBytes, max
 	}
 	var errmsg *C.char
 	ptr := C.gpu_blockscaled_matmul_new(C.int(format), C.uint32_t(dim), C.uint32_t(nq),
-		(*C.uint8_t)(unsafe.Pointer(&queryCells[0])), C.uint64_t(maxRows), C.uint32_t(topk), C.int(metric), unsafe.Pointer(&errmsg))
+		(*C.uint8_t)(util.UnsafePointer(&queryCells[0])), C.uint64_t(maxRows), C.uint32_t(topk), C.int(metric), util.UnsafePointer(&errmsg))
 	runtime.KeepAlive(queryCells)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	m := &BlockScaledMatmul{
@@ -120,13 +120,13 @@ func (m *BlockScaledMatmul) Run(cells []byte, scores []float32) error {
 		return moerr.NewInvalidInputNoCtxf("block-scaled matmul: %d cells exceed the tile of %d rows or the %d scores", n, m.maxRows, len(scores))
 	}
 	var errmsg *C.char
-	C.gpu_blockscaled_matmul_run(m.ptr, (*C.uint8_t)(unsafe.Pointer(&cells[0])), C.uint64_t(n),
-		(*C.float)(unsafe.Pointer(&scores[0])), unsafe.Pointer(&errmsg))
+	C.gpu_blockscaled_matmul_run(m.ptr, (*C.uint8_t)(util.UnsafePointer(&cells[0])), C.uint64_t(n),
+		(*C.float)(util.UnsafePointer(&scores[0])), util.UnsafePointer(&errmsg))
 	runtime.KeepAlive(cells)
 	runtime.KeepAlive(scores)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -155,9 +155,9 @@ func (m *BlockScaledMatmul) RunTopK(cells []byte, topScores []float32, topRows [
 		return moerr.NewInvalidInputNoCtxf("block-scaled matmul: %d cells exceed the tile of %d rows or the output buffers", n, m.maxRows)
 	}
 	var errmsg *C.char
-	C.gpu_blockscaled_matmul_run_topk(m.ptr, (*C.uint8_t)(unsafe.Pointer(&cells[0])), C.uint64_t(n),
-		(*C.float)(unsafe.Pointer(&topScores[0])), (*C.int32_t)(unsafe.Pointer(&topRows[0])),
-		(*C.float)(unsafe.Pointer(&full[0])), (*C.uint8_t)(unsafe.Pointer(&tied[0])), unsafe.Pointer(&errmsg))
+	C.gpu_blockscaled_matmul_run_topk(m.ptr, (*C.uint8_t)(util.UnsafePointer(&cells[0])), C.uint64_t(n),
+		(*C.float)(util.UnsafePointer(&topScores[0])), (*C.int32_t)(util.UnsafePointer(&topRows[0])),
+		(*C.float)(util.UnsafePointer(&full[0])), (*C.uint8_t)(util.UnsafePointer(&tied[0])), util.UnsafePointer(&errmsg))
 	runtime.KeepAlive(cells)
 	runtime.KeepAlive(topScores)
 	runtime.KeepAlive(topRows)
@@ -165,7 +165,7 @@ func (m *BlockScaledMatmul) RunTopK(cells []byte, topScores []float32, topRows [
 	runtime.KeepAlive(tied)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil

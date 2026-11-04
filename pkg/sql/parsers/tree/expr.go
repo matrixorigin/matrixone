@@ -981,6 +981,18 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
+	if ctx.viewDefinition {
+		if value, ok := viewNameConstValue(node); ok {
+			// NAME_CONST returns its literal value. Keep the view export
+			// independent of its literal-only argument syntax; SelectExpr
+			// retains the named heading when emitting that value directly.
+			ctx.WriteByte('(')
+			value.Format(ctx)
+			ctx.WriteByte(')')
+			return
+		}
+	}
+
 	funcName := ""
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
@@ -1472,7 +1484,26 @@ func (node *CastExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString("cast(")
 	node.Expr.Format(ctx)
 	ctx.WriteString(" as ")
-	node.Type.(*T).InternalType.Format(ctx)
+	typ := node.Type.(*T).InternalType
+	if !typ.CastCharsetSpecified {
+		typ.Format(ctx)
+	} else {
+		// CHAR without a length is represented internally as VARCHAR for cast
+		// width semantics. Keep the original CHAR target in formatted SQL so the
+		// CHARACTER SET suffix remains parseable and round-trips.
+		ctx.WriteString("char")
+		if typ.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(typ.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
+		ctx.WriteString(" character set ")
+		if typ.CastCharsetName == "" {
+			ctx.WriteString("''")
+		} else {
+			ctx.WriteString(typ.CastCharsetName)
+		}
+	}
 	ctx.WriteByte(')')
 }
 
@@ -1636,6 +1667,9 @@ type CaseExpr struct {
 }
 
 func (node *CaseExpr) Format(ctx *FmtCtx) {
+	if ctx.caseExpressions != nil {
+		*ctx.caseExpressions = append(*ctx.caseExpressions, node)
+	}
 	ctx.WriteString("case")
 	if node.Expr != nil {
 		ctx.WriteByte(' ')
@@ -2264,4 +2298,68 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Mode.ToString())
 	}
 	ctx.WriteString(")")
+}
+
+// NameConstHeading returns the result name assigned by NAME_CONST, independently
+// of the value's SQL rendering. Callers handle an explicit projection alias first.
+func NameConstHeading(expr Expr) (string, bool) {
+	for {
+		paren, ok := expr.(*ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	fn, ok := expr.(*FuncExpr)
+	if !ok || fn.FuncName == nil || !strings.EqualFold(fn.FuncName.Origin(), "name_const") || len(fn.Exprs) != 2 {
+		return "", false
+	}
+
+	nameExpr := fn.Exprs[0]
+	for {
+		paren, ok := nameExpr.(*ParenExpr)
+		if !ok {
+			break
+		}
+		nameExpr = paren.Expr
+	}
+
+	name, ok := nameExpr.(*NumVal)
+	if !ok || (name.ValType == P_null || name.ValType == P_nulltext || name.ValType == P_star) {
+		return "", false
+	}
+	return name.String(), true
+}
+
+// viewNameConstValue is intentionally restricted to the literal form whose
+// normal rendering needs a cast. It does not make invalid NAME_CONST arguments
+// valid, and ordinary SQL formatting keeps the function call unchanged.
+func viewNameConstValue(expr Expr) (Expr, bool) {
+	for {
+		paren, ok := expr.(*ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	fn, ok := expr.(*FuncExpr)
+	if !ok || fn.Type != FUNC_TYPE_DEFAULT || fn.WindowSpec != nil || len(fn.OrderBy) != 0 || fn.WithinGroup || fn.IsGeneric {
+		return nil, false
+	}
+	if _, ok := NameConstHeading(fn); !ok {
+		return nil, false
+	}
+	value := fn.Exprs[1]
+	for {
+		switch node := value.(type) {
+		case *ParenExpr:
+			value = node.Expr
+		case *CollateExpr:
+			value = node.Expr
+		case *NumVal:
+			return fn.Exprs[1], node.ValType == P_char && strings.Contains(node.origString, "\\")
+		default:
+			return nil, false
+		}
+	}
 }

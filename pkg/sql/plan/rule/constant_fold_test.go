@@ -521,6 +521,170 @@ func TestConstantFoldDefersDiagnosticExpressions(t *testing.T) {
 	}
 }
 
+func TestConstantFoldDefersExplicitCastRangeWarnings(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		for _, tc := range []struct {
+			target            types.Type
+			overflow, control string
+		}{
+			{types.T_int64.ToType(), "9223372036854775808", "9223372036854775807"},
+			{types.T_uint64.ToType(), "-1", "18446744073709551615"},
+			{types.New(types.T_decimal64, 5, 2), "999.995", "999.994"},
+			{types.New(types.T_decimal128, 20, 2), "999999999999999999.995", "999999999999999999.994"},
+			{types.New(types.T_decimal256, 40, 2), "99999999999999999999999999999999999999.995", "99999999999999999999999999999999999999.994"},
+		} {
+			for _, value := range []string{tc.overflow, tc.control} {
+				t.Run(fmt.Sprintf("%v/%s/%s", prepared, tc.target, value), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					sink := &foldTestWarnings{}
+					proc.WarningSink = sink
+					expr := makeConstantCastExpr(t, "cast", types.T_varchar.ToType(), tc.target, value)
+					expr.GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 1)
+					got := NewConstantFold(prepared).constantFold(expr, proc)
+					require.Zero(t, sink.count, "speculative diagnostics must not reach the real session")
+					if value == tc.overflow {
+						require.NotNil(t, got.GetF(), "warning cast must remain executable")
+					} else if tc.target.Oid != types.T_decimal256 {
+						require.NotNil(t, got.GetLit(), "silent boundary control remains foldable")
+					} else {
+						require.NotNil(t, got.GetVec(), "silent wide values use a constant vector")
+						require.True(t, got.GetVec().DecimalLiteralRequiresV82)
+					}
+					if tc.target.Oid == types.T_decimal256 {
+						vec, free, warned, err := EvaluateConstantExpression(proc, expr, batch.EmptyForConstFoldBatch)
+						if free != nil {
+							t.Cleanup(free)
+						}
+						require.NoError(t, err)
+						require.NotNil(t, vec)
+						require.Equal(t, value == tc.overflow, warned)
+						require.Zero(t, sink.count)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestConstantVectorFoldRetainsRecoverySource(t *testing.T) {
+	for _, prepared := range []bool{false, true} {
+		t.Run(fmt.Sprint(prepared), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			wide := types.New(types.T_decimal256, 65, 1)
+			makeCast := func(recoverSource bool) *plan.Expr {
+				expr := makeConstantCastExpr(t, "cast", types.T_varchar.ToType(), wide, "900")
+				expr.GetF().Func.Obj = function.EncodeOverloadID(function.CAST, 1)
+				if recoverSource {
+					expr.GetF().Args[0].GetLit().Src = &plan.Expr{
+						Typ:  types.T_varchar.ToType().PlanType(),
+						Expr: &plan.Expr_V{V: &plan.VarRef{Name: "later_execution_value"}},
+					}
+				}
+				return expr
+			}
+			cast := NewConstantFold(prepared).constantFold(makeCast(true), proc)
+			require.NotNil(t, cast.GetF())
+			require.NotNil(t, cast.GetF().Args[0].GetLit().Src)
+			plus, err := function.GetFunctionByName(proc.Ctx, "+", []types.Type{wide, wide})
+			require.NoError(t, err)
+			parent := &plan.Expr{Typ: wide.PlanType(), Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "+", Obj: plus.GetEncodedOverloadID()},
+				Args: []*plan.Expr{makeCast(false), makeCast(true)},
+			}}}
+			got := NewConstantFold(prepared).constantFold(parent, proc)
+			require.NotNil(t, got.GetF(), "a new constant-vector child must not erase its sibling's recovery source")
+			require.NotNil(t, got.GetF().Args[0].GetVec())
+			require.NotNil(t, got.GetF().Args[1].GetF().Args[0].GetLit().Src)
+		})
+	}
+}
+
+func TestDecimal256ScalarConstantAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wide := types.New(types.T_decimal256, 65, 1)
+	for _, tc := range []struct {
+		name                           string
+		null, flat, mismatch, unmarked bool
+	}{
+		{name: "scalar"}, {name: "NULL", null: true},
+		{name: "flat singleton", flat: true}, {name: "payload type mismatch", mismatch: true},
+		{name: "unmarked", unmarked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var value *vector.Vector
+			var err error
+			switch {
+			case tc.null:
+				value = vector.NewConstNull(wide, 1, proc.Mp())
+			case tc.flat:
+				value = vector.NewVec(wide)
+				err = vector.AppendFixed(value, types.Decimal256{}, false, proc.Mp())
+			case tc.mismatch:
+				value, err = vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+			default:
+				value, err = vector.NewConstFixed(wide, types.Decimal256{}, 1, proc.Mp())
+			}
+			if value != nil {
+				defer value.Free(proc.Mp())
+			}
+			require.NoError(t, err)
+			data, err := value.MarshalBinary()
+			require.NoError(t, err)
+			expr := &plan.Expr{Typ: wide.PlanType(), Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+				Len: 1, Data: data, DecimalLiteralRequiresV82: !tc.unmarked,
+			}}}
+			require.Equal(t, tc.name == "scalar", IsDecimal256ScalarConstant(expr))
+			expr.Typ.Id = int32(types.T_int64)
+			require.False(t, IsDecimal256ScalarConstant(expr), "the enclosing type must agree too")
+		})
+	}
+	require.False(t, IsDecimal256ScalarConstant(nil))
+	require.False(t, IsDecimal256ScalarConstant(&plan.Expr{Typ: wide.PlanType(), Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+		Len: 1, Data: []byte{1}, DecimalLiteralRequiresV82: true,
+	}}}))
+}
+
+func TestScalarConstantVectorAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name                  string
+		constant              bool
+		length, encodedLength int
+		want                  bool
+	}{
+		{"scalar", true, 1, 1, true},
+		{"flat singleton", false, 1, 1, false},
+		{"flat list", false, 2, 2, false},
+		{"constant multiple rows", true, 2, 2, false},
+		{"payload length mismatch", true, 2, 1, false},
+		{"encoded length mismatch", true, 1, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var value *vector.Vector
+			if tc.constant {
+				var err error
+				value, err = vector.NewConstFixed(types.T_int64.ToType(), int64(900), tc.length, proc.Mp())
+				if value != nil {
+					defer value.Free(proc.Mp())
+				}
+				require.NoError(t, err)
+			} else {
+				value = vector.NewVec(types.T_int64.ToType())
+				defer value.Free(proc.Mp())
+				for range tc.length {
+					require.NoError(t, vector.AppendFixed(value, int64(900), false, proc.Mp()))
+				}
+			}
+			data, err := value.MarshalBinary()
+			require.NoError(t, err)
+			expr := &plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: int32(tc.encodedLength), Data: data}}}
+			require.Equal(t, tc.want, IsScalarConstantVector(expr))
+		})
+	}
+	require.False(t, IsScalarConstantVector(nil))
+	require.False(t, IsScalarConstantVector(&plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 1, Data: []byte{1}}}}))
+}
+
 func TestEvaluateConstantExpressionKernelFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name string

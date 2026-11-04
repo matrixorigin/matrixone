@@ -84,7 +84,7 @@ func TestWGS84AntimeridianOverlay(t *testing.T) {
 	}{
 		// These are independent topology oracles for a small local patch:
 		// intersection=inner, union=outer, and difference/XOR=outer-with-inner-hole.
-		{name: "intersection", fn: StIntersection, want: "POLYGON((179.5 0.5,179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5))"},
+		{name: "intersection", fn: StIntersection, want: "POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))"},
 		{name: "union", fn: StUnion, want: "POLYGON((179 1,179 -1,-179 -1,-179 1,179 1))"},
 		{name: "difference", fn: StDifference, want: "POLYGON((179 1,179 -1,-179 -1,-179 1,179 1),(179.5 -0.5,179.5 0.5,-179.5 0.5,-179.5 -0.5,179.5 -0.5))"},
 		{name: "symmetric difference", fn: StSymDifference, want: "POLYGON((179 1,179 -1,-179 -1,-179 1,179 1),(179.5 -0.5,179.5 0.5,-179.5 0.5,-179.5 -0.5,179.5 -0.5))"},
@@ -169,7 +169,7 @@ func TestWGS84AntimeridianGeometry32AndMaskedRows(t *testing.T) {
 			NewFunctionTestInput(geometry32, []string{g32(antimeridianOuter)}, []bool{false}),
 			NewFunctionTestInput(geometry32, []string{g32(antimeridianInner)}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"POLYGON((179.5 0.5,179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5))"}, []bool{false}), StIntersection)
+		NewFunctionTestResult(types.T_geometry32.ToType(), false, []string{"POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))"}, []bool{false}), StIntersection)
 	defer intersection.Free()
 	ok, info = intersection.Run()
 	require.True(t, ok, info)

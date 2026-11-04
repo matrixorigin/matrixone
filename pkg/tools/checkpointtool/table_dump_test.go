@@ -31,7 +31,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	sqlutil "github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
@@ -47,6 +49,75 @@ func TestCSVPipelineErrorKeepsNonCanceledRootCause(t *testing.T) {
 	assert.ErrorIs(t, csvPipelineError(root, context.Canceled), root)
 	assert.ErrorIs(t, csvPipelineError(context.Canceled, context.Canceled), context.Canceled)
 	assert.NoError(t, csvPipelineError(nil, nil))
+}
+
+func TestFunctionalIndexCheckpointDDL(t *testing.T) {
+	const backing = "__mo_fi_123"
+	schema := &TableSchema{TableName: "fi", Columns: []TableColumn{{Name: "name", SQLType: "VARCHAR(40)", Position: 1}},
+		UniqueKeys: []TableUniqueKey{{Name: "idx", Columns: []string{backing}}}}
+	encoded, err := types.Encode(&plan.GeneratedCol{OriginString: "lower(`name`)"})
+	require.NoError(t, err)
+	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "att_is_hidden", "attr_generated"},
+		Rows: [][]string{{}, {"o", "0", "0", "42", backing, "1", string(encoded)}}}
+	attachFunctionalIndexExpressions(schema, columns, 42)
+	ddl := RenderCreateTableDDLFromSchema(cloneTableSchema(schema))
+	require.Contains(t, ddl, "KEY `idx`((lower(`name`)))")
+	require.NotContains(t, ddl, backing)
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position"},
+		Rows: [][]string{{"o", "0", "0", "42", "idx", backing, "INDEX", "1"}}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `fi` ADD KEY `idx`((lower(`name`)));"}, statements)
+	schema.UniqueKeys[0].Expressions = nil
+	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
+	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.Error(t, err)
+}
+
+func TestOrdinaryPrefixedColumnCheckpointDDL(t *testing.T) {
+	schema := &TableSchema{TableName: "legacy", Columns: []TableColumn{{Name: "__mo_fi_user", SQLType: "INT", Position: 1}},
+		UniqueKeys: []TableUniqueKey{{Name: "ordinary", Columns: []string{"__mo_fi_user"}}}}
+	ddl := RenderCreateTableDDLFromSchema(schema)
+	require.Contains(t, ddl, "KEY `ordinary`(`__mo_fi_user`)")
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position", "hidden"},
+		Rows: [][]string{{"o", "0", "0", "42", "ordinary", "__mo_fi_user", "INDEX", "1", "0"}}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "legacy", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `legacy` ADD KEY `ordinary`(`__mo_fi_user`);"}, statements)
+	// Visible catalog columns take precedence over stale expression annotations.
+	schema.UniqueKeys[0].Expressions = map[string]string{"__mo_fi_user": "lower(`name`)"}
+	require.Contains(t, RenderCreateTableDDLFromSchema(schema), "KEY `ordinary`(`__mo_fi_user`)")
+	statements, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "legacy", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `legacy` ADD KEY `ordinary`(`__mo_fi_user`);"}, statements)
+}
+
+func TestFunctionalCompositeIndexCheckpointDDL(t *testing.T) {
+	const first, second = "__mo_fi_a_1", "__mo_fi_a_2"
+	schema := &TableSchema{TableName: "fi", Columns: []TableColumn{{Name: "id", SQLType: "INT", Position: 1}, {Name: "name", SQLType: "VARCHAR(40)", Position: 2}}, UniqueKeys: []TableUniqueKey{{Name: "idx", Columns: []string{"id", first, second}}}}
+	columns := &LogicalTableView{Headers: []string{"object", "block", "row", "att_relname_id", "attname", "att_is_hidden", "attr_generated"}}
+	for _, part := range []struct{ name, expr string }{{first, "lower(`name`)"}, {second, "upper(`name`)"}} {
+		encoded, err := types.Encode(&plan.GeneratedCol{OriginString: part.expr})
+		require.NoError(t, err)
+		columns.Rows = append(columns.Rows, []string{"o", "0", "0", "42", part.name, "1", string(encoded)})
+	}
+	attachFunctionalIndexExpressions(schema, columns, 42)
+	clone := cloneTableSchema(schema)
+	require.Contains(t, RenderCreateTableDDLFromSchema(clone), "KEY `idx`(`id`, (lower(`name`)), (upper(`name`)))")
+	require.NotContains(t, RenderCreateTableDDLFromSchema(clone), "__mo_fi_")
+	indexes := &LogicalTableView{Headers: []string{"object", "block", "row", "table_id", "name", "column_name", "type", "ordinal_position"}, Rows: [][]string{
+		{"o", "0", "0", "42", "idx", second, "INDEX", "3"},
+		{"o", "0", "0", "42", "idx", "id", "INDEX", "1"},
+		{"o", "0", "0", "42", "idx", first, "INDEX", "2"},
+	}}
+	statements, err := buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ALTER TABLE `fi` ADD KEY `idx`(`id`, (lower(`name`)), (upper(`name`)));"}, statements)
+	delete(schema.UniqueKeys[0].Expressions, second)
+	require.NotEmpty(t, clone.UniqueKeys[0].Expressions[second], "clone owns expression map")
+	require.Empty(t, RenderCreateTableDDLFromSchema(schema))
+	_, err = buildCreateIndexStatementsFromMoIndexes(indexes, 42, "fi", schema)
+	require.Error(t, err)
 }
 
 func TestComposeAtUsesLatestUsableGlobalCheckpoint(t *testing.T) {
@@ -647,11 +718,18 @@ func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 		want string
 	}{
 		{"plain", TableColumn{SQLType: "INT"}, "INT"},
+		{"single empty enum", TableColumn{SQLType: "ENUM"}, "ENUM('')"},
+		{"single empty set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: ","}, "SET('')"},
+		{"plain uint64", TableColumn{SQLType: "BIGINT UNSIGNED"}, "BIGINT UNSIGNED"},
 		{"json array", TableColumn{SQLType: "JSON", EnumValues: "array(int)"}, "ARRAY(int)"},
 		{"json non array", TableColumn{SQLType: "JSON", EnumValues: "plain"}, "JSON"},
-		{"enum bare values", TableColumn{SQLType: "ENUM", EnumValues: "a,'b,c',\"d\""}, "ENUM('a','b,c',\"d\")"},
-		{"enum already typed", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('x')"},
-		{"set parens", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('x','y')"},
+		{"enum raw quotes", TableColumn{SQLType: "ENUM", EnumValues: `a,'b',"d"`}, `ENUM('a','''b''','"d"')`},
+		{"enum SQL-like member", TableColumn{SQLType: "ENUM", EnumValues: "ENUM('x')"}, "ENUM('ENUM(''x'')')"},
+		{"set parentheses in members", TableColumn{SQLType: "SET", EnumValues: "(x,y)"}, "SET('(x','y)')"},
+		{"enum mixed empty members", TableColumn{SQLType: "ENUM", EnumValues: ", x,"}, "ENUM('',' x','')"},
+		{"set leading whitespace", TableColumn{SQLType: "SET", EnumValues: " x,y"}, "SET(' x','y')"},
+		{"enum whitespace member", TableColumn{SQLType: "ENUM", EnumValues: " "}, "ENUM(' ')"},
+		{"set backslash member", TableColumn{SQLType: "SET", EnumValues: `a\b`}, `SET('a\\b')`},
 		{"bigint unsigned set", TableColumn{SQLType: "BIGINT UNSIGNED", EnumValues: "red,blue"}, "SET('red','blue')"},
 	}
 	for _, tc := range cases {
@@ -660,10 +738,6 @@ func TestRenderColumnSQLTypeEnumSetAndArrayBranches(t *testing.T) {
 		})
 	}
 
-	require.Equal(t, []string{"'a,b'", " c", " 'd''e'", " f\\", "g"}, splitEnumSetValues("'a,b', c, 'd''e', f\\,g"))
-	require.Equal(t, "x,y", stripEnumSetValueParens(" ( x,y ) "))
-	require.True(t, isQuotedSQLString(`"x"`))
-	require.False(t, isQuotedSQLString(`x`))
 }
 
 func TestAppendColumnDDLAttributesBranches(t *testing.T) {
@@ -2358,6 +2432,29 @@ func TestBuildCreateIndexStatementsFromMoIndexes_FullTextParserAndCatalogOrder(t
 	}, got)
 }
 
+func TestDecodeMoColumnEncodedSQLType_TextBlobFamily(t *testing.T) {
+	for _, tc := range []struct {
+		typ  types.Type
+		want string
+	}{
+		{types.New(types.T_text, 0, 0), "TEXT"},
+		{types.New(types.T_text, types.MaxTinyTextLen, 0), "TINYTEXT"},
+		{types.New(types.T_text, types.MaxMediumTextLen, 0), "MEDIUMTEXT"},
+		{types.New(types.T_text, types.MaxLongTextLen, 0), "LONGTEXT"},
+		{types.New(types.T_blob, types.MaxTinyTextLen, 0), "TINYBLOB"},
+		{types.New(types.T_blob, types.MaxStringSize, 0), "BLOB"},
+		{types.New(types.T_blob, types.MaxMediumTextLen, 0), "MEDIUMBLOB"},
+		{types.New(types.T_blob, types.MaxLongTextLen, 0), "LONGBLOB"},
+		{types.New(types.T_blob, 0, 0), "LONGBLOB"},
+	} {
+		t.Run(tc.want+fmt.Sprint(tc.typ.Width), func(t *testing.T) {
+			got, ok := decodeMoColumnEncodedSQLType(encodedSQLType(t, tc.typ))
+			require.True(t, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {
 	sqlType, ok := decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_time, 0, 6)))
 	require.True(t, ok)
@@ -3131,4 +3228,115 @@ func TestWriteSQLLoadCSVFieldFromVec_VecBlockExactText(t *testing.T) {
 		require.Equal(t, cell, got)
 		vec.Free(mp)
 	}
+}
+
+func TestWriteSQLLoadCSVFieldFromVec_LowPrecisionScalarRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	for _, tc := range []struct {
+		oid    types.T
+		values []any
+	}{
+		{types.T_bf16, []any{types.BF16(0x3fc0), types.BF16(0xc000), types.BF16(0x8000), types.BF16(0x7f7f), types.BF16(1)}},
+		{types.T_float16, []any{types.Float16(0x3e00), types.Float16(0xc000), types.Float16(0x8000), types.Float16(0x7bff), types.Float16(1)}},
+		{types.T_float8, []any{types.Float8(0x3c), types.Float8(0xc0), types.Float8(0x80), types.Float8(0x7e), types.Float8(1)}},
+		{types.T_float4, []any{types.Float4(3), types.Float4(12), types.Float4(8), types.Float4(7), types.Float4(1)}},
+	} {
+		t.Run(tc.oid.String(), func(t *testing.T) {
+			stored := vector.NewVec(tc.oid.ToType())
+			t.Cleanup(func() { stored.Free(proc.Mp()) })
+			for _, value := range tc.values {
+				require.NoError(t, vector.AppendAny(stored, value, false, proc.Mp()))
+			}
+			require.NoError(t, vector.AppendAny(stored, nil, true, proc.Mp()))
+			var buf bytes.Buffer
+			for row := 0; row < stored.Length(); row++ {
+				require.NoError(t, writeSQLLoadCSVFieldFromVec(&buf, *stored.GetType(), []*vector.Vector{stored}, 0, row))
+				buf.WriteByte('\n')
+			}
+			parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+				FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`, FieldsEscapedBy: `\`,
+				LinesTerminatedBy: "\n", Null: []string{`\N`}, UnescapedQuote: true,
+			}, strings.NewReader(buf.String()), csvparser.ReadBlockSize, false)
+			require.NoError(t, err)
+			loaded := vector.NewVec(tc.oid.ToType())
+			t.Cleanup(func() { loaded.Free(proc.Mp()) })
+			require.NoError(t, loaded.PreExtend(stored.Length(), proc.Mp()))
+			loaded.SetLength(stored.Length())
+			for i := 0; i < stored.Length(); i++ {
+				row, err := parser.Read(nil)
+				require.NoError(t, err)
+				require.Len(t, row, 1)
+				if i == 0 {
+					require.Equal(t, "1.5", row[0].Val, "export the numeric value, not its bit code")
+				}
+				require.NoError(t, sqlutil.SetBytesToAnyVector(proc.Ctx, row[0].Val, i, row[0].IsNull, loaded, proc))
+				require.Equal(t, stored.IsNull(uint64(i)), loaded.IsNull(uint64(i)))
+				if !stored.IsNull(uint64(i)) {
+					want := stored.GetRawBytesAt(i)
+					if i == 2 { // SQL admission canonically stores either signed zero as +0.
+						want = make([]byte, tc.oid.ToType().TypeSize())
+					}
+					require.Equal(t, want, loaded.GetRawBytesAt(i))
+				}
+			}
+			_, err = parser.Read(nil)
+			require.ErrorIs(t, err, io.EOF)
+		})
+	}
+}
+
+func TestCatalogNumericAttributeMaskOracle(t *testing.T) {
+	// Legacy boolean values keep the legacy read byte-identically.
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("0"))
+	assert.Equal(t, uint32(1), catalogNumericAttributeMask("1"))
+	assert.Equal(t, uint32(1), catalogNumericAttributeMask("true"))
+	assert.Equal(t, uint32(1), catalogNumericAttributeMask("TRUE"))
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("false"))
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask(""))
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("junk"))
+	// The attributed-DECIMAL masks (authoring normalizes ZEROFILL to 3).
+	assert.Equal(t, uint32(1), catalogNumericAttributeMask("1"))
+	assert.Equal(t, uint32(3), catalogNumericAttributeMask("3"))
+	assert.Equal(t, uint32(2), catalogNumericAttributeMask("2"))
+	// Out-of-range or negative integers degrade to the signed read.
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("4"))
+	assert.Equal(t, uint32(0), catalogNumericAttributeMask("-1"))
+}
+
+func TestRenderCreateTableDDLFromSchema_DecimalNumericAttributes(t *testing.T) {
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_money",
+		Columns: []TableColumn{
+			{Name: "amount", SQLType: "DECIMAL(10,2)", Position: 1, Unsigned: true},
+			{Name: "coded", SQLType: "DECIMAL(8,3)", Position: 2, Unsigned: true, Zerofill: true},
+			{Name: "signed_raw", SQLType: "DECIMAL(10,2)", Position: 3},
+			{Name: "big", SQLType: "BIGINT", Position: 4, Unsigned: true},
+		},
+	})
+
+	assert.Contains(t, ddl, "`amount` DECIMAL(10,2) UNSIGNED")
+	assert.Contains(t, ddl, "`coded` DECIMAL(8,3) UNSIGNED ZEROFILL")
+	assert.Contains(t, ddl, "`signed_raw` DECIMAL(10,2)")
+	assert.NotContains(t, ddl, "`signed_raw` DECIMAL(10,2) UNSIGNED")
+	// An unsigned integer control keeps exactly its legacy rendering and
+	// never gains ZEROFILL from the shared bits.
+	assert.Contains(t, ddl, "`big` BIGINT UNSIGNED")
+	assert.NotContains(t, ddl, "BIGINT UNSIGNED ZEROFILL")
+}
+
+func TestRenderCreateTableDDLFromSchema_ZerofillRequiresUnsigned(t *testing.T) {
+	// Mask 2 (ZEROFILL bit without UNSIGNED) is impossible under authoring
+	// normalization; a manual catalog row still degrades to the plain
+	// signed rendering just as a pre-change tool would produce.
+	ddl := RenderCreateTableDDLFromSchema(&TableSchema{
+		TableName: "t_orphan_mask",
+		Columns: []TableColumn{
+			{Name: "odd", SQLType: "DECIMAL(6,1)", Position: 1, Zerofill: true},
+		},
+	})
+
+	assert.Contains(t, ddl, "`odd` DECIMAL(6,1)")
+	assert.NotContains(t, ddl, "ZEROFILL")
+	assert.NotContains(t, ddl, "UNSIGNED")
 }

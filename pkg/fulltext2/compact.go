@@ -126,12 +126,7 @@ func CompactSegments(sqlproc *sqlexec.SqlProcess, cfg TableConfig, capacity, pos
 		seg.Id = SubIndexId(uid, segIdx)
 		seg.Recency = recency
 		segIdx++
-		sqls, cleanup, e := seg.ToInsertSqls(sqlproc, cfg, ts, 0 /* tag=0 base */, maxBuildTS)
-		if e != nil {
-			return e
-		}
-		defer cleanup()
-		return runCompactSqls(sqlproc, sqls)
+		return seg.Persist(sqlproc, cfg, ts, 0 /* tag=0 base */, maxBuildTS)
 	}
 	for d, derr := range idx.ReconstructLiveDocs(cfg.PositionFree) {
 		if derr != nil {
@@ -169,14 +164,5 @@ func runCompactSql(sqlproc *sqlexec.SqlProcess, sql string) error {
 		return err
 	}
 	res.Close()
-	return nil
-}
-
-func runCompactSqls(sqlproc *sqlexec.SqlProcess, sqls []string) error {
-	for _, s := range sqls {
-		if err := runCompactSql(sqlproc, s); err != nil {
-			return err
-		}
-	}
 	return nil
 }

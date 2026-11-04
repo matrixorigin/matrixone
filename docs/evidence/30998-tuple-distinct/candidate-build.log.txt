@@ -1,0 +1,6 @@
+[Verify Go package graph]
+[Stage jieba dict]
+rm -rf /private/tmp/mo-issue30995/dict
+cp -r /private/tmp/mo-issue30995/pkg/monlp/tokenizer/dict /private/tmp/mo-issue30995/dict
+[Build binary with prebuilt native libraries]
+GOEXPERIMENT=simd  CGO_CFLAGS="-I/private/tmp/mo-issue30995/cgo -I/private/tmp/mo-issue30995/thirdparties/install/include  " go build -mod=readonly   -ldflags="-w -extldflags '-L/private/tmp/mo-issue30995/cgo -lmo -L/private/tmp/mo-issue30995/thirdparties/install/lib -Wl,-rpath,@executable_path/lib' -X 'github.com/matrixorigin/matrixone/pkg/version.GoVersion=go version go1.27.1 darwin/arm64' -X 'github.com/matrixorigin/matrixone/pkg/version.BranchName=codex/perf-30995-tuple-distinct' -X 'github.com/matrixorigin/matrixone/pkg/version.CommitID=3d1b86fcaee0' -X 'github.com/matrixorigin/matrixone/pkg/version.BuildTime=1792802352' -X 'github.com/matrixorigin/matrixone/pkg/version.Version=codex/perf-30995-tuple-distinct'"  -p=1 -gcflags=github.com/matrixorigin/matrixone/...=-dwarf=false -o mo-service ./cmd/mo-service

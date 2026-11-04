@@ -118,19 +118,61 @@ func TestBlockScaledJSONRejects(t *testing.T) {
 		{BlockScaledNVFP4, `{"g":1e38,"s":[448],"v":[6]}`},         // decodes to infinity
 		{BlockScaledNVFP4, `{"g":1e39,"s":[1],"v":[1]}`},           // not a finite float32
 		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[[1]]}`},            // nested values
+		// a number that float32 parsing rounds to a code value
+		{BlockScaledNVFP4, `{"g":1,"s":[1],"v":[1.00000001]}`},
+		{BlockScaledNVFP4, `{"g":1,"s":[1],"v":[6.0000001]}`},
+		{BlockScaledNVFP4, `{"g":1,"s":[1.00000001],"v":[1]}`},
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[448.00001]}`},
+		{BlockScaledMXFP8, `{"g":1,"s":[0.50000001],"v":[1]}`},
+		{BlockScaledMXFP8, `{"g":1.00000001,"s":[1],"v":[1]}`},
+		{BlockScaledNVFP4, `{"g":0.1000000001,"s":[1],"v":[1]}`},
+		{BlockScaledNVFP4, `{"g":1,"s":[1],"v":[1e-50]}`},
 	} {
 		_, err := BlockScaledFromJSON(tc.f, tc.text)
 		require.Error(t, err, "%s %s", tc.f, tc.text)
 	}
-	// -0 is stored as code 0
-	a, err := BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1],"v":[-0,2]}`)
-	require.NoError(t, err)
-	b, err := BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1],"v":[0,2]}`)
-	require.NoError(t, err)
-	require.Equal(t, a, b)
+	// -0 is the negative-zero code, and its text restores the cell
+	for _, tc := range []struct {
+		f    BlockScaledFormat
+		text string
+		code byte
+	}{
+		{BlockScaledMXFP8, `{"g":1,"s":[1],"v":[-0,2]}`, 0x80},
+		{BlockScaledNVFP4, `{"g":1,"s":[1],"v":[-0,2]}`, 0x08},
+	} {
+		a, err := BlockScaledFromJSON(tc.f, tc.text)
+		require.NoError(t, err)
+		require.Equal(t, tc.code, a[len(a)-BlockScaledElemBytes(tc.f, 2)]&tc.code, "%s", tc.f)
+		text, err := BlockScaledToJSON(a)
+		require.NoError(t, err)
+		b, err := BlockScaledFromJSON(tc.f, text)
+		require.NoError(t, err)
+		require.Equal(t, a, b, "%s %s", tc.f, text)
+		c, err := BlockScaledFromJSON(tc.f, strings.Replace(tc.text, "-0", "0", 1))
+		require.NoError(t, err)
+		require.NotEqual(t, a, c, "%s", tc.f)
+	}
 	// 33 values in two blocks, the last of one value
-	_, err = BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1,2],"v":`+ones(33)+`}`)
+	_, err := BlockScaledFromJSON(BlockScaledMXFP8, `{"g":1,"s":[1,2],"v":`+ones(33)+`}`)
 	require.NoError(t, err)
+	// a value's exact text, or its shortest float32 or float64 text, in any notation
+	for _, tc := range []struct {
+		f          BlockScaledFormat
+		text, want string
+	}{
+		{BlockScaledNVFP4, `{"g":1.0,"s":[1e0],"v":[6.000,-0.0,0e9,0.5E0]}`, `{"g":1,"s":[1],"v":[6,-0,0,0.5]}`},
+		{BlockScaledMXFP8, `{"g":1,"s":[5.877472e-39],"v":[1]}`, `{"g":1,"s":[5.877472e-39],"v":[1]}`},
+		{BlockScaledMXFP8, `{"g":1,"s":[5.877471754111438e-39],"v":[1]}`, `{"g":1,"s":[5.877472e-39],"v":[1]}`},
+		{BlockScaledNVFP4, `{"g":0.1,"s":[1],"v":[1]}`, `{"g":0.1,"s":[1],"v":[1]}`},
+		{BlockScaledNVFP4, `{"g":0.10000000149011612,"s":[1],"v":[1]}`, `{"g":0.1,"s":[1],"v":[1]}`},
+		{BlockScaledNVFP4, `{"g":0.100000001490116119384765625,"s":[1],"v":[1]}`, `{"g":0.1,"s":[1],"v":[1]}`},
+	} {
+		cell, err := BlockScaledFromJSON(tc.f, tc.text)
+		require.NoError(t, err, tc.text)
+		text, err := BlockScaledToJSON(cell)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, text)
+	}
 }
 
 // TestBlockScaledFromBinaryOtherFormat checks that an unsized binary value holding a cell of

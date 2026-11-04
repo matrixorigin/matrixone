@@ -22,6 +22,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,9 +35,77 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDependentPreparedMigrationProtocol(t *testing.T) {
+	ses, prepared, _, execCtx := newPreparedExecuteEnvForSQL(t, 112,
+		"select (select (select t.k limit 1)) from (select 1 as k union all select 2) t")
+	defer ses.Close()
+	prepared.rewritePolicyCaptured = true
+	prepared.rewritePolicyGeneration = ses.rewritePolicyGeneration
+	// A sparse snapshot must retain the dependent handle's protocol identity.
+	ses.mu.Lock()
+	ses.prepareStmts["empty_handle"] = nil
+	ses.mu.Unlock()
+	defer func() {
+		ses.mu.Lock()
+		delete(ses.prepareStmts, "empty_handle")
+		ses.mu.Unlock()
+	}()
+	require.NotNil(t, prepared.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery().Correlation)
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	resp := &query.MigrateConnFromResponse{}
+	err := rt.migrateConnectionFromActionWithCapabilities(execCtx.reqCtx, query.MigrateConnFromAction_MigrateConnFromExport, true, true, resp, false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	require.Empty(t, resp.PrepareStmts)
+	require.NoError(t, rt.migrateConnectionFromActionWithCapabilities(execCtx.reqCtx, query.MigrateConnFromAction_MigrateConnFromExport, true, true, resp, true))
+	require.Len(t, resp.PrepareStmts, 1)
+	require.Equal(t, defines.MORPCVersion119, resp.PrepareStmts[0].RequiredProtocolVersion)
+	require.Equal(t, prepared.Sql, resp.PrepareStmts[0].SQL)
+
+	// The protocol capability cannot override an invalidated rewrite policy.
+	ses.rewriteEnabled.Store(true)
+	prepared.rewritePolicyEnabled = true
+	ses.InvalidatePrivilegeCache()
+	resp = &query.MigrateConnFromResponse{}
+	err = rt.migrateConnectionFromActionWithCapabilities(execCtx.reqCtx, query.MigrateConnFromAction_MigrateConnFromExport, true, true, resp, true)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	require.Empty(t, resp.PrepareStmts)
+}
+
+func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) {
+	ses, prepared, _, _ := newPreparedExecuteEnv(t, 111)
+	defer ses.Close()
+	rt := moruntime.ServiceRuntime(ses.GetService())
+	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+		}
+	}()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+	ses.SetLastFoundRows(23)
+	ses.SetLastInsertID(7)
+	err := Migrate(context.Background(), ses, &query.MigrateConnToRequest{
+		LastInsertIDExported: true, LastInsertID: 99, FoundRows: 42,
+		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion119}},
+	})
+	require.ErrorContains(t, err, "requires protocol version 119")
+	require.Equal(t, uint64(23), ses.GetLastFoundRows())
+	require.Equal(t, uint64(7), ses.GetLastInsertID())
+	ses.mu.Lock()
+	retained, count := ses.prepareStmts[prepared.Name], len(ses.prepareStmts)
+	ses.mu.Unlock()
+	require.Same(t, prepared, retained)
+	require.Equal(t, 1, count)
+}
+
 func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 125)
 	t.Cleanup(ses.Close)
+	scratch.rewritePolicyCaptured = true
+	scratch.rewritePolicyGeneration = ses.rewritePolicyGeneration
 	staticType := plan.Type{Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary)}
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKindAndReplayability(
 		"bound_s", "你", "", false, staticType, vector.PrepareParamNone, false, types.RuntimeStringText))
@@ -48,7 +117,8 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	require.NoError(t, err)
 	prepared := &PrepareStmt{
 		Name: "bound_migration", Sql: stmt.Sql, PreparePlan: p, PrepareStmt: parsed[0],
-		NativeMode: ses.sqlModeHasMatrixOneNative(), protocolVersion: currentProtocolVersion(cw.proc),
+		rewritePolicyCaptured: true,
+		NativeMode:            ses.sqlModeHasMatrixOneNative(), protocolVersion: currentProtocolVersion(cw.proc),
 		proc: cw.proc, ParamTypes: []byte{byte(defines.MYSQL_TYPE_NULL), 0},
 		params: vector.NewVec(types.T_varchar.ToType()),
 	}
@@ -118,7 +188,11 @@ func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {
 	markerPlan, err := buildPlan(execCtx.reqCtx, ses, ses.txnCompileCtx, markerStmt)
 	require.NoError(t, err)
 	require.NoError(t, ses.SetPrepareStmt(execCtx.reqCtx, "marker_migration", &PrepareStmt{
-		Name: "marker_migration", Sql: markerStmt.Sql, PreparePlan: markerPlan,
+		Name:                    "marker_migration",
+		Sql:                     markerStmt.Sql,
+		PreparePlan:             markerPlan,
+		rewritePolicyCaptured:   true,
+		rewritePolicyGeneration: ses.rewritePolicyGeneration,
 	}))
 	resp := &query.MigrateConnFromResponse{}
 	require.NoError(t, rt.migrateConnectionFrom(resp))

@@ -17,7 +17,6 @@ package mometric
 import (
 	"context"
 	"regexp"
-	"runtime"
 	"testing"
 	"time"
 
@@ -78,49 +77,63 @@ func TestCollectorOpts(t *testing.T) {
 }
 
 func TestCollector(t *testing.T) {
-	if runtime.NumCPU() < 4 {
-		t.Skip("machine's performance too low to handle time sensitive case")
-		return
-	}
-	t.Logf("runtime.NumCPU: %d", runtime.NumCPU())
 	sqlch := make(chan string, 100)
 	factory := newExecutorFactory(sqlch)
-	collector := newMetricCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2),
-		WithSqlWorkerNum(runtime.NumCPU()))
-	// fix issue: https://github.com/matrixorigin/matrixone/issues/19163
-	instant := time.Now() // collector.Start() will go mergeWorker(), in which active 'FlushInterval' setting.
-	collector.Start(context.TODO())
-	defer collector.Stop(false)
+	collector := newMetricCollector(factory, WithFlushInterval(time.Hour), WithMetricThreshold(2),
+		WithSqlWorkerNum(1))
+	ctx, cancel := context.WithCancel(context.Background())
+	var stopCh <-chan struct{}
+	waitForStop := func() bool {
+		select {
+		case <-stopCh:
+			return true
+		case <-time.After(3 * time.Second):
+			return false
+		}
+	}
+	t.Cleanup(func() {
+		cancel()
+		if stopCh == nil {
+			stopCh, _ = collector.Stop(false)
+		}
+		if stopCh != nil && !waitForStop() {
+			t.Error("collector cleanup did not finish")
+		}
+	})
+	if !collector.Start(ctx) {
+		t.Fatal("collector did not start")
+	}
 	names := []string{"m1", "m2"}
 	nodes := []string{"e669d136-24f3-11ed-ba8c-d6aee46d73fa", "e9b89520-24f3-11ed-ba8c-d6aee46d73fa"}
 	roles := []string{"ping", "pong"}
 	ts := time.Now().UnixMicro()
-	go func() {
-		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
-			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{
-				{
-					Counter: &pb.Counter{Value: 12.0}, Collecttime: ts,
-				},
-			}},
-			{Name: names[1], Type: pb.MetricType_RAWHIST, Metric: []*pb.Metric{
-				{
-					Label:   []*pb.LabelPair{{Name: "type", Value: "select"}, {Name: "account", Value: "user"}},
-					RawHist: &pb.RawHist{Samples: []*pb.Sample{{Datetime: ts, Value: 12.0}, {Datetime: ts, Value: 12.0}}},
-				},
-			}},
-		})
-
-		_ = collector.SendMetrics(context.TODO(), []*pb.MetricFamily{
-			{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[1], Role: roles[1], Metric: []*pb.Metric{
-				{
-					Counter: &pb.Counter{Value: 21.0}, Collecttime: ts,
-				},
-				{
-					Counter: &pb.Counter{Value: 66.0}, Collecttime: ts,
-				},
-			}},
-		})
-	}()
+	if err := collector.SendMetrics(ctx, []*pb.MetricFamily{
+		{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[0], Role: roles[0], Metric: []*pb.Metric{
+			{
+				Counter: &pb.Counter{Value: 12.0}, Collecttime: ts,
+			},
+		}},
+		{Name: names[1], Type: pb.MetricType_RAWHIST, Metric: []*pb.Metric{
+			{
+				Label:   []*pb.LabelPair{{Name: "type", Value: "select"}, {Name: "account", Value: "user"}},
+				RawHist: &pb.RawHist{Samples: []*pb.Sample{{Datetime: ts, Value: 12.0}, {Datetime: ts, Value: 12.0}}},
+			},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.SendMetrics(ctx, []*pb.MetricFamily{
+		{Name: names[0], Type: pb.MetricType_COUNTER, Node: nodes[1], Role: roles[1], Metric: []*pb.Metric{
+			{
+				Counter: &pb.Counter{Value: 21.0}, Collecttime: ts,
+			},
+			{
+				Counter: &pb.Counter{Value: 66.0}, Collecttime: ts,
+			},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	valuesRe := regexp.MustCompile(`\([^)]*\),?\s?`) // find pattern like (1,2,3)
 	nameRe := regexp.MustCompile(`\.(\w+)\svalues`)  // find table name
 	nameAndValueCnt := func(s string) (name string, cnt int) {
@@ -134,18 +147,35 @@ func TestCollector(t *testing.T) {
 		return name, cnt
 	}
 
-	name, cnt := nameAndValueCnt(<-sqlch)
-	if name != names[0] || cnt != 3 {
-		t.Errorf("m1 metric should be flushed first with 3 rows, got %s with %d rows", name, cnt)
+	receiveSQL := func() string {
+		t.Helper()
+		select {
+		case sql := <-sqlch:
+			return sql
+		case <-time.After(3 * time.Second):
+			t.Fatal("collector did not publish the expected SQL batch")
+			return ""
+		}
 	}
 
-	sql := <-sqlch
-	if time.Since(instant) < 200*time.Millisecond {
-		t.Errorf("m2 should be flushed after a period")
+	// Observe threshold publication while live; shutdown drainage cannot satisfy it.
+	name, cnt := nameAndValueCnt(receiveSQL())
+	if name != names[0] || cnt != 3 {
+		t.Fatalf("m1 metric should be flushed live with 3 rows, got %s with %d rows", name, cnt)
 	}
-	name, cnt = nameAndValueCnt(sql)
+
+	var stopped bool
+	stopCh, stopped = collector.Stop(true)
+	if !stopped {
+		t.Fatal("collector was not running")
+	}
+	if !waitForStop() {
+		t.Fatal("collector graceful stop did not finish")
+	}
+	// m2 remains below the threshold and is owned by graceful shutdown.
+	name, cnt = nameAndValueCnt(receiveSQL())
 	if name != names[1] || cnt != 2 {
-		t.Errorf("m2 metric should be flushed first with 2 rows, got %s with %d rows", name, cnt)
+		t.Errorf("m2 metric should be drained with 2 rows, got %s with %d rows", name, cnt)
 	}
 }
 

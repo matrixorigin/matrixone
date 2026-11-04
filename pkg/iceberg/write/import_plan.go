@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
@@ -79,35 +80,36 @@ func importChecksum(snapshot api.SnapshotPlan, dataTasks []api.DataFileTask, del
 	hash.Write([]byte(snapshot.MetadataLocationHash))
 	for _, task := range dataTasks {
 		hash.Write([]byte{0})
-		hash.Write([]byte(firstNonEmpty(task.DataFile.FilePathHash, api.PathHash(task.DataFile.FilePath))))
+		hash.Write([]byte(importFilePathHash(task.DataFile)))
 		hash.Write([]byte{0})
 		hash.Write([]byte(strconv.FormatInt(task.DataFile.RecordCount, 10)))
 	}
 	for _, task := range deleteTasks {
 		hash.Write([]byte{0})
-		hash.Write([]byte(firstNonEmpty(task.DataFile.FilePathHash, api.PathHash(task.DataFile.FilePath))))
+		hash.Write([]byte(importFilePathHash(task.DataFile)))
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func cloneDataFileTasks(in []api.DataFileTask) []api.DataFileTask {
-	if len(in) == 0 {
-		return nil
+func importFilePathHash(file api.DataFile) string {
+	if hash := strings.TrimSpace(file.FilePathHash); hash != "" {
+		return hash
 	}
+	return api.PathHash(file.FilePath)
+}
+
+func cloneDataFileTasks(in []api.DataFileTask) []api.DataFileTask {
 	out := append([]api.DataFileTask(nil), in...)
 	for i := range out {
-		out[i].DataFile = cloneDataFiles([]api.DataFile{in[i].DataFile})[0]
+		out[i].DataFile = cloneDataFile(in[i].DataFile)
 	}
 	return out
 }
 
 func cloneDeleteFileTasks(in []api.DeleteFileTask) []api.DeleteFileTask {
-	if len(in) == 0 {
-		return nil
-	}
 	out := append([]api.DeleteFileTask(nil), in...)
 	for i := range out {
-		out[i].DataFile = cloneDataFiles([]api.DataFile{in[i].DataFile})[0]
+		out[i].DataFile = cloneDataFile(in[i].DataFile)
 	}
 	return out
 }

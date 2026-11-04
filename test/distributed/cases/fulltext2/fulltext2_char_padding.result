@@ -95,12 +95,13 @@ select id from t where match(body) against('+alpha' in boolean mode) and ch = 'a
 2  𝄀
 3
 explain select id from t where match(body) against('+alpha' in boolean mode) and ch = 'a' order by id;
--- @regex("fulltext2_search", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_fulltext_alias_0.__mo_ft_doc_id INTERNAL  𝄀
         ->  Sort  𝄀
               Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
-              ->  Table Function on fulltext2_search
+              ->  Fulltext Index Scan on ft  𝄀
+                    Fulltext Index: ft
 drop database ft2_char_padding;

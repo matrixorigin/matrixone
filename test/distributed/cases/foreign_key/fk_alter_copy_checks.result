@@ -1,0 +1,84 @@
+drop database if exists fk_alter_copy_checks;
+create database fk_alter_copy_checks;
+use fk_alter_copy_checks;
+create table parent(id int primary key);
+insert into parent values(1);
+create table child(id int primary key, parent_id int);
+insert into child values(1,99);
+set foreign_key_checks=1;
+alter table child add column extra int, add constraint fk_child foreign key(parent_id) references parent(id);
+Cannot add or update a child row: a foreign key constraint fails
+select count(*) as fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='child' and constraint_type='FOREIGN KEY';
+➤ fk_count[-5,64,0]  𝄀
+0
+set foreign_key_checks=0;
+alter table child add column extra int, add constraint fk_child foreign key(parent_id) references parent(id);
+select id,parent_id,extra from child;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  ¦  extra[4,32,0]  𝄀
+1  ¦  99  ¦  null
+select count(*) as fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='child' and constraint_type='FOREIGN KEY';
+➤ fk_count[-5,64,0]  𝄀
+1
+set foreign_key_checks=1;
+insert into child values(2,99,null);
+Cannot add or update a child row: a foreign key constraint fails
+insert into child values(2,1,null);
+select id,parent_id from child order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  99  𝄀
+2  ¦  1
+create table self_child(id int primary key, parent_id int);
+insert into self_child values(1,99);
+set foreign_key_checks=0;
+alter table self_child add column extra int, add constraint fk_self foreign key(parent_id) references self_child(id);
+set foreign_key_checks=1;
+select id,parent_id from self_child;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  99
+select count(*) as self_fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='self_child' and constraint_type='FOREIGN KEY';
+➤ self_fk_count[-5,64,0]  𝄀
+1
+create table inplace_child(id int primary key, parent_id int not null);
+insert into inplace_child values(1,99);
+set foreign_key_checks=1;
+alter table inplace_child add constraint fk_inplace foreign key(parent_id) references parent(id);
+Cannot add or update a child row: a foreign key constraint fails
+select count(*) as fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='inplace_child' and constraint_type='FOREIGN KEY';
+➤ fk_count[-5,64,0]  𝄀
+0
+set foreign_key_checks=0;
+alter table inplace_child add constraint fk_inplace foreign key(parent_id) references parent(id);
+select id,parent_id from inplace_child;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  99
+select count(*) as fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='inplace_child' and constraint_type='FOREIGN KEY';
+➤ fk_count[-5,64,0]  𝄀
+1
+select count(*) as fk_catalog_count from mo_catalog.mo_foreign_keys where db_name='fk_alter_copy_checks' and table_name='inplace_child';
+➤ fk_catalog_count[-5,64,0]  𝄀
+1
+set foreign_key_checks=1;
+insert into inplace_child values(2,99);
+Cannot add or update a child row: a foreign key constraint fails
+insert into inplace_child values(2,1);
+select id,parent_id from inplace_child order by id;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  99  𝄀
+2  ¦  1
+create table inplace_self(id int primary key, parent_id int);
+insert into inplace_self values(1,99);
+set foreign_key_checks=0;
+alter table inplace_self add constraint fk_inplace_self foreign key(parent_id) references inplace_self(id);
+set foreign_key_checks=1;
+select id,parent_id from inplace_self;
+➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
+1  ¦  99
+select count(*) as self_fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='inplace_self' and constraint_type='FOREIGN KEY';
+➤ self_fk_count[-5,64,0]  𝄀
+1
+select count(*) as self_fk_catalog_count from mo_catalog.mo_foreign_keys where db_name='fk_alter_copy_checks' and table_name='inplace_self';
+➤ self_fk_catalog_count[-5,64,0]  𝄀
+1
+set foreign_key_checks=0;
+drop database fk_alter_copy_checks;
+set foreign_key_checks=1;

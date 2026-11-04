@@ -49,6 +49,12 @@ select vector_matmul(1, id, a, @qs) from t;
 -- other keys are ignored; the scores are distances, nearest first: -dot, 1 - cos, |x - q|^2
 select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"inner_product","x":1}') from t;
 select vector_matmul(2, id, a, '[[1,0,0,0]]', 'not json') from t;
+-- a supplied options argument is a JSON object: empty text or a NULL variable is an error
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '') from t;
+set @no_opts = null;
+select vector_matmul(2, id, a, '[[1,0,0,0]]', @no_opts) from t;
+set @no_queries = null;
+select vector_matmul(2, id, a, @no_queries) from t;
 select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"l2"}') from t;
 create table mt (id int, v vecf32(3));
 insert into mt values (1, '[1,2,2]'), (2, '[0,0,0]'), (3, '[3,0,4]'), (4, '[1,1,1]');
@@ -56,6 +62,20 @@ select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]') from mt;
 select id, inner_product(v, '[1,2,2]') d from mt order by d, id;
 select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"cosine"}') from mt;
 select id, cosine_distance(v, '[1,2,2]') d from mt order by d, id;
+-- options as a SQL JSON object equal the same options as text; one that is not a valid options object is an error
+select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', json_object('metric', 'cosine')) = vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"cosine"}') from mt;
+select vector_matmul(4, id, v, json_array(json_array(1, 2, 2)), json_object('metric', 'l2sq')) from mt;
+select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'l2')) from mt;
+select vector_matmul(4, id, v, '[[1,2,2]]', json_array('cosine')) from mt;
+-- a JSON query value rounds once from its text to float32: 1.00000005960464478 is just above
+-- the midpoint of 1 and the next float32, so the score is -1.0000001, not -1
+create table r1 (id int, v vecf32(1));
+insert into r1 values (1, '[1]');
+select vector_matmul(1, id, v, '[[1.00000005960464478]]') from r1;
+drop table r1;
+-- a configuration that can differ between evaluations is an error: rand(), uuid(), sysdate()
+select vector_matmul(4, id, v, json_array(json_array(rand(), rand(), rand()))) from mt;
+select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'cosine', 'seed', uuid())) from mt;
 select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"l2sq"}') from mt;
 select id, l2_distance_sq(v, '[1,2,2]') d from mt order by d, id;
 
@@ -64,6 +84,7 @@ select vector_matmul('abc', id, a, '[[1,0,0,0]]') from t;
 select vector_matmul(0, id, a, '[[1,0,0,0]]') from t;
 select vector_matmul(2, id, a, '[[1,0,0]]') from t;
 select vector_matmul(2, id, a, '[]') from t;
+select vector_matmul(2, id, a, '[[null,1,0,0]]') from t;
 select vector_matmul(id, id, a, '[[1,0,0,0]]') from t;
 select vector_matmul(2, id, a, cat) from t;
 select vector_matmul(2, id, a) from t;
@@ -123,6 +144,8 @@ set @qc = (select vecblock_binary(v) from vq where id = 1);
 set @qc2 = (select concat(vecblock_binary(v), (select vecblock_binary(v) from vq where id = 2)) from vq where id = 1);
 set @qj = (select concat('[', group_concat(vecblock_json(v) order by id), ']') from vq where id in (1, 2));
 select vector_matmul(2, id, v, @qc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
+-- on the CPU the hits and distances are those of l2_distance_sq ordered by distance, id
+select a.id, l2_distance_sq(a.v, b.v) d from vq a, vq b where b.id = 1 order by d, a.id limit 2;
 select vector_matmul(1, id, v, @qc2, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 select vector_matmul(1, id, v, @qj, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 -- the displayed (decoded) values of row 1 quantize to another cell: not at distance 0
@@ -156,5 +179,13 @@ select vector_matmul(1, id, b, '[[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]]', '{"metric"
 create table mx (id int, v vecf8(33));
 insert into mx values (1, '[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]'), (2, '[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]');
 select vector_matmul(2, id, v, '[[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]', '{"metric":"l2sq"}') from mx;
+
+-- a finite query value that narrows to infinity in the column type is rejected
+create table nf (id int primary key, h vecf16(1), g vecbf16(1));
+insert into nf values (1, '[1]', '[1]');
+select vector_matmul(1, id, h, '[[70000]]', '{"metric":"l2sq"}') from nf;
+select vector_matmul(1, id, h, '[[-70000]]', '{"metric":"l2sq"}') from nf;
+select vector_matmul(1, id, g, '[[3.4028234663852886e38]]', '{"metric":"l2sq"}') from nf;
+select vector_matmul(1, id, h, '[[2]]', '{"metric":"l2sq"}') from nf;
 
 drop database vector_matmul_db;

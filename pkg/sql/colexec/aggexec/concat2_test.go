@@ -649,6 +649,10 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 
 	require.Equal(t, types.T_blob.ToType(), GroupConcatReturnType([]types.Type{types.T_blob.ToType()}))
 	require.Equal(t, types.T_text.ToType(), GroupConcatReturnType([]types.Type{types.T_int64.ToType()}))
+	nativeText := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	groupConcatType := GroupConcatReturnType([]types.Type{nativeText})
+	require.Equal(t, types.CharsetUTF8MB4UnicodeCI, groupConcatType.Charset)
+	require.Equal(t, uint8(types.CollationVersionV1), groupConcatType.CollationVersion)
 	for _, oid := range []types.T{
 		types.T_varchar, types.T_decimal256, types.T_year, types.T_uuid,
 		types.T_geometry, types.T_geometry32, types.T_array_uint8,
@@ -2363,5 +2367,52 @@ func testGroupConcatOrderConfig(
 	return AggregateConfig{
 		Type: plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER,
 		Data: config,
+	}
+}
+
+func TestGroupConcatAccountedDistinctModeIndependentOfOrder(t *testing.T) {
+	varchar := types.T_varchar.ToType()
+	for _, tc := range []struct {
+		name   string
+		params []types.Type
+		config any
+		want   bool
+	}{
+		{name: "unordered", params: []types.Type{varchar}, config: EncodeGroupConcatConfig(",", 1024), want: true},
+		{
+			name:   "ordered",
+			params: []types.Type{varchar, varchar},
+			config: testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+			want:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+
+			// configuration first, then the account
+			configFirst, err := MakeAgg(mp, AggIdOfGroupConcat, true, tc.params...)
+			require.NoError(t, err)
+			require.NoError(t, configFirst.SetExtraInformation(tc.config, 0))
+			require.NoError(t, configFirst.(*groupConcatExec).SetAllocationAccount(allocation))
+
+			// the shared factory: the account first, then the configuration
+			accountFirst, err := MakeGroupAgg(mp, AggIdOfGroupConcat, true, allocation, tc.config, tc.params...)
+			require.NoError(t, err)
+
+			for _, exec := range []AggFuncExec{configFirst, accountFirst} {
+				info := exec.(*groupConcatExec).aggInfo
+				require.Equal(t, tc.want, info.isDistinct)
+				require.Equal(t, tc.want, info.preserveDistinctInputOrder)
+				require.Equal(t, tc.want, info.distinctInputOrderSourceRow)
+			}
+
+			for _, exec := range []AggFuncExec{configFirst, accountFirst} {
+				exec.Free()
+				require.NoError(t, exec.(*groupConcatExec).ClearAllocationAccount(allocation))
+			}
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
 	}
 }

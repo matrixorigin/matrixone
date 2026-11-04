@@ -72,6 +72,9 @@ func (p *Pipeline) Run(proc *process.Process) (end bool, err error) {
 		if er != nil {
 			return true, er
 		}
+		if result.Status == vm.ExecYield {
+			return false, moerr.NewInternalError(proc.Ctx, "continuation demand escaped its execution owner")
+		}
 		end = result.Status == vm.ExecStop || result.Batch == nil
 	}
 

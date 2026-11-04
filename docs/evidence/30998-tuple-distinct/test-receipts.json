@@ -1,0 +1,60 @@
+[
+  {
+    "name": "normal-plan-service",
+    "command": [
+      ".agents/skills/mo-dev/scripts/mo-cgo-test",
+      "-p=1",
+      "-gcflags=github.com/matrixorigin/matrixone/...=-dwarf=false",
+      "-count=1",
+      "-timeout=300s",
+      "./pkg/sql/plan",
+      "./pkg/vm/engine/tae/logtail/service"
+    ],
+    "cwd": "/private/tmp/mo-issue30995",
+    "started_epoch": 1792802441.8531358,
+    "finished_epoch": 1792802557.587975,
+    "exit": 0,
+    "source_head": "3d1b86fcaee0b83eb10c50b2b5cee141ab3f0396"
+  },
+  {
+    "name": "normal-compile",
+    "command": [
+      ".agents/skills/mo-dev/scripts/mo-cgo-test",
+      "-p=1",
+      "-gcflags=github.com/matrixorigin/matrixone/...=-dwarf=false",
+      "-count=1",
+      "-timeout=300s",
+      "-v",
+      "-run",
+      "^TestTupleCountDistinct|^TestOptimize.*Distinct|^TestDistinctKey|^Test.*LocalPreAggregation|^TestPadSpaceRemoteProtocolValidation$|^TestReadBarrier",
+      "./pkg/sql/compile"
+    ],
+    "cwd": "/private/tmp/mo-issue30995",
+    "started_epoch": 1792802557.661314,
+    "finished_epoch": 1792802603.309897,
+    "exit": 0,
+    "source_head": "3d1b86fcaee0b83eb10c50b2b5cee141ab3f0396"
+  },
+  {
+    "name": "race",
+    "command": [
+      ".agents/skills/mo-dev/scripts/mo-cgo-test",
+      "-p=1",
+      "-gcflags=github.com/matrixorigin/matrixone/...=-dwarf=false",
+      "-count=1",
+      "-timeout=300s",
+      "-race",
+      "-v",
+      "-run",
+      "^TestTupleCountDistinct|^TestOptimize.*Distinct|^TestDistinctKey|^Test.*LocalPreAggregation|^TestPadSpaceRemoteProtocolValidation$|^TestReadBarrier",
+      "./pkg/sql/plan",
+      "./pkg/sql/compile",
+      "./pkg/vm/engine/tae/logtail/service"
+    ],
+    "cwd": "/private/tmp/mo-issue30995",
+    "started_epoch": 1792802603.33479,
+    "finished_epoch": 1792802728.36202,
+    "exit": 0,
+    "source_head": "3d1b86fcaee0b83eb10c50b2b5cee141ab3f0396"
+  }
+]

@@ -43,7 +43,7 @@ POLYGON((0 0,1 0,1 1,0 1,0 0))
 select st_aswkt(st_geomfromtext('POINT(1 2)')) as aswkt_point;
 aswkt_point
 POINT(1 2)
-select st_geomfromtext('POINT(7 8)') as direct_geom;
+select st_astext(st_geomfromtext('POINT(7 8)')) as direct_geom;
 direct_geom
 POINT(7 8)
 select st_astext(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')))) as wkb_point;
@@ -72,3 +72,15 @@ select st_astext(cast('POINT(NaN 1)' as geometry));
 invalid input: invalid geometry payload
 select st_astext(st_geomfromtext('CIRCLE(0 0,1)'));
 invalid input: invalid geometry type
+select st_geomfromtext('POLYGON((0 0,1 0,1 1))',0);
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload: polygon ring must have at least four positions and be closed
+select cast('POLYGON((0 0,1 0,1 1,0 0.0000000001))' as geometry32);
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload: polygon ring must have at least four positions and be closed
+select st_geomfromgeojson('{"type":"Polygon","coordinates":[[]]}');
+-- @regex("invalid geometry payload", true)
+invalid input: invalid geometry payload: polygon ring must have at least four positions and be closed
+select st_astext(st_geomfromtext('MULTIPOLYGON(EMPTY,((0 0,1 0,0 1,0 0)))',0)) as empty_member;
+empty_member
+MULTIPOLYGON(EMPTY,((0 0,1 0,0 1,0 0)))

@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"bytes"
+	"fmt"
 	"math"
 	"testing"
 
@@ -28,14 +30,17 @@ import (
 func TestBitwiseAggregateRejectsOversizedBinaryOperand(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()) }()
-
 	for _, aggID := range []int64{AggIdOfBitAnd, AggIdOfBitOr, AggIdOfBitXor} {
-		exec, ok, err := makeSpecialAggExec(mp, aggID, false, false, false, false, false,
-			types.New(types.T_varbinary, MaxBitwiseAggregateOperandBytes+1, 0))
-		require.True(t, ok)
-		require.Nil(t, exec)
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidBitwiseAggregateOperandsSize))
+		for _, typ := range []types.Type{
+			types.New(types.T_varbinary, 512, 0),
+			types.New(types.T_blob, 512, 0),
+			types.New(types.T_blob, 65535, 0),
+		} {
+			exec, ok, err := makeSpecialAggExec(mp, aggID, false, false, false, false, false, typ)
+			require.True(t, ok)
+			require.Nil(t, exec)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidBitwiseAggregateOperandsSize), "%v", err)
+		}
 	}
 }
 
@@ -315,6 +320,7 @@ func TestBitOpsBytes(t *testing.T) {
 		{"binary(3)", types.T_binary, 3},
 		{"binary(10)", types.T_binary, 10},
 		{"varbinary(4)", types.T_varbinary, 4},
+		{"blob(511)", types.T_blob, 511},
 	} {
 		typ := types.New(dim.oid, dim.width, 0)
 		w := int(dim.width)
@@ -435,6 +441,7 @@ func TestBitOpsBytes(t *testing.T) {
 		}{
 			{"binary(64)", types.T_binary, 64},
 			{"varbinary(64)", types.T_varbinary, 64},
+			{"blob", types.T_blob, 0},
 		} {
 			t.Run(dim.name, func(t *testing.T) {
 				origCap := mpool.GlobalCap()
@@ -495,6 +502,7 @@ func TestBitOpsBytes(t *testing.T) {
 		}{
 			{"binary(64)", types.T_binary, 64},
 			{"varbinary(64)", types.T_varbinary, 64},
+			{"blob", types.T_blob, 0},
 		} {
 			t.Run(dim.name, func(t *testing.T) {
 				origCap := mpool.GlobalCap()
@@ -549,4 +557,272 @@ func TestBitOpsBytes(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestBitOpsBlob(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   int64
+		want []byte
+	}{
+		{"and", AggIdOfBitAnd, []byte{0, 0}},
+		{"or", AggIdOfBitOr, []byte{255, 255}},
+		{"xor", AggIdOfBitXor, []byte{255, 255}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			typ := types.T_blob.ToType()
+			input := vector.NewVec(typ)
+			t.Cleanup(func() { input.Free(mp) })
+			require.NoError(t, vector.AppendBytesList(input,
+				[][]byte{{0x0F, 0}, {0xF0, 255}, {}, nil, bytes.Repeat([]byte{0xAA}, 511)},
+				[]bool{false, false, false, true, false}, mp))
+			exec, err := MakeAgg(mp, tc.id, false, typ)
+			require.NoError(t, err)
+			t.Cleanup(exec.Free)
+			require.NoError(t, exec.GroupGrow(5))
+			require.NoError(t, exec.BatchFill(0, []uint64{1, 1, 2, 3, 5}, []*vector.Vector{input}))
+			// An empty partial is an identity, including for a real empty string.
+			empty := makeBitAggExec(mp, tc.id, typ)
+			t.Cleanup(empty.Free)
+			require.NoError(t, empty.GroupGrow(5))
+			require.NoError(t, exec.BatchMerge(empty, 0, []uint64{1, 2, 3, 4, 5}))
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			for _, v := range result {
+				t.Cleanup(func() { v.Free(mp) })
+			}
+			require.Equal(t, typ, *result[0].GetType())
+			require.False(t, result[0].HasNull())
+			require.Equal(t, tc.want, result[0].GetBytesAt(0))
+			for _, row := range []int{1, 2, 3} {
+				require.Empty(t, result[0].GetBytesAt(row))
+			}
+			require.Equal(t, bytes.Repeat([]byte{0xAA}, 511), result[0].GetBytesAt(4))
+		})
+	}
+}
+
+func TestBitOpsBlobPartialRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		id   int64
+		want byte
+	}{
+		{AggIdOfBitAnd, 0}, {AggIdOfBitOr, 255}, {AggIdOfBitXor, 255},
+	} {
+		t.Run(fmt.Sprintf("aggregate=%d", tc.id), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			typ := types.T_blob.ToType()
+			newExec := func() AggFuncExec {
+				e, err := MakeAgg(mp, tc.id, false, typ)
+				require.NoError(t, err)
+				t.Cleanup(e.Free)
+				return e
+			}
+			input := vector.NewVec(typ)
+			t.Cleanup(func() { input.Free(mp) })
+			require.NoError(t, vector.AppendBytesList(input, [][]byte{{15}, {240}}, nil, mp))
+			source := newExec()
+			require.NoError(t, source.GroupGrow(1))
+			require.NoError(t, source.Fill(0, 0, []*vector.Vector{input}))
+			var wire bytes.Buffer
+			require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
+			restored := newExec()
+			require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+			target := newExec()
+			require.NoError(t, target.GroupGrow(1))
+			require.NoError(t, target.Merge(restored, 0, 0))
+			second := newExec()
+			require.NoError(t, second.GroupGrow(1))
+			require.NoError(t, second.Fill(0, 1, []*vector.Vector{input}))
+			require.NoError(t, target.Merge(second, 0, 0))
+			result, err := target.Flush()
+			require.NoError(t, err)
+			for _, v := range result {
+				t.Cleanup(func() { v.Free(mp) })
+			}
+			require.Equal(t, []byte{tc.want}, result[0].GetBytesAt(0))
+			require.Equal(t, []byte{15}, restored.(*bitOpExecBytes).state[0].vecs[0].GetBytesAt(0), "merge must copy partial bytes")
+		})
+	}
+}
+
+func TestBitOpsBlobOperandValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		values  [][]byte
+		nulls   []bool
+		groups  []uint64
+		errCode uint16
+	}{
+		{"oversized first", [][]byte{make([]byte, 512)}, nil, []uint64{1}, moerr.ErrInvalidBitwiseAggregateOperandsSize},
+		{"oversized later", [][]byte{make([]byte, 511), make([]byte, 512)}, nil, []uint64{1, 1}, moerr.ErrInvalidBitwiseAggregateOperandsSize},
+		{"unequal", [][]byte{{1}, {1, 2}}, nil, []uint64{1, 1}, moerr.ErrInvalidBitwiseOperandsSize},
+		{"empty then nonempty", [][]byte{{}, {1}}, nil, []uint64{1, 1}, moerr.ErrInvalidBitwiseOperandsSize},
+		{"ignored null and unmatched", [][]byte{make([]byte, 512), make([]byte, 512), {15}}, []bool{true, false, false}, []uint64{1, GroupNotMatched, 1}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			typ := types.T_blob.ToType()
+			input := vector.NewVec(typ)
+			t.Cleanup(func() { input.Free(mp) })
+			require.NoError(t, vector.AppendBytesList(input, tc.values, tc.nulls, mp))
+			exec := makeBitAggExec(mp, AggIdOfBitOr, typ)
+			t.Cleanup(exec.Free)
+			require.NoError(t, exec.GroupGrow(1))
+			err := exec.BatchFill(0, tc.groups, []*vector.Vector{input})
+			if tc.errCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, tc.errCode), "%v", err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestBitOpsBlobPreflightValidation(t *testing.T) {
+	for _, initialized := range []bool{false, true} {
+		t.Run(fmt.Sprintf("initialized=%t", initialized), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			registry, account, allocation := newTestAggregateAllocation(t)
+			t.Cleanup(func() { finishTestAggregateAllocation(t, registry, account) })
+			typ := types.T_blob.ToType()
+			exec := makeBitAggExec(mp, AggIdOfBitOr, typ).(*bitOpExecBytes)
+			require.NoError(t, exec.SetAllocationAccount(allocation))
+			t.Cleanup(func() { exec.Free(); require.NoError(t, exec.ClearAllocationAccount(allocation)) })
+			require.NoError(t, exec.GroupGrow(1))
+			input := vector.NewVec(typ)
+			t.Cleanup(func() { input.Free(mp) })
+			require.NoError(t, vector.AppendBytesList(input, [][]byte{make([]byte, 511), make([]byte, 512)}, nil, mp))
+			if initialized {
+				require.NoError(t, exec.Fill(0, 0, []*vector.Vector{input}))
+			}
+			used := account.Snapshot().Used
+			for _, groups := range [][]uint64{{1}, {1, 1}} {
+				offset := 2 - len(groups)
+				err := exec.PreflightBatchFill(offset, groups, []*vector.Vector{input})
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidBitwiseAggregateOperandsSize), "%v", err)
+				require.Equal(t, used, account.Snapshot().Used, "reject before area reservation")
+			}
+			// Simulate a restored partial violating the new producer invariant.
+			source := makeBitAggExec(mp, AggIdOfBitOr, typ).(*bitOpExecBytes)
+			t.Cleanup(source.Free)
+			require.NoError(t, source.GroupGrow(2))
+			for row, value := range [][]byte{make([]byte, 511), make([]byte, 512)} {
+				require.NoError(t, vector.SetBytesAt(source.state[0].vecs[0], row, value, mp))
+				source.state[0].vecs[0].UnsetNull(uint64(row))
+			}
+			for _, groups := range [][]uint64{{1}, {1, 1}} {
+				err := exec.PreflightBatchMerge(source, 2-len(groups), groups)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidBitwiseAggregateOperandsSize), "%v", err)
+				require.Equal(t, used, account.Snapshot().Used)
+			}
+			err := exec.Merge(source, 0, 1)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidBitwiseAggregateOperandsSize), "%v", err)
+		})
+	}
+}
+
+// BenchmarkBitOpsAccountedPreflight measures steady-state batches with an
+// initialized destination, where preflight should not reserve more capacity.
+func BenchmarkBitOpsAccountedPreflight(b *testing.B) {
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		width int
+	}{
+		{"binary-1", types.New(types.T_binary, 1, 0), 1},
+		{"binary-64", types.New(types.T_binary, 64, 0), 64},
+		{"binary-511", types.New(types.T_binary, 511, 0), 511},
+		{"varbinary-64", types.New(types.T_varbinary, 64, 0), 64},
+		{"blob-64", types.T_blob.ToType(), 64},
+		{"uint64", types.T_uint64.ToType(), 0},
+	} {
+		for _, merge := range []bool{false, true} {
+			path := "fill"
+			if merge {
+				path = "merge"
+			}
+			b.Run(tc.name+"/"+path, func(b *testing.B) {
+				const rows = 256
+				mp := mpool.MustNewZero()
+				b.Cleanup(func() { require.Zero(b, mp.CurrNB()) })
+				registry, account, allocation := newTestAggregateAllocation(b)
+				b.Cleanup(func() { finishTestAggregateAllocation(b, registry, account) })
+				input := vector.NewVec(tc.typ)
+				b.Cleanup(func() { input.Free(mp) })
+				value := bytes.Repeat([]byte{0xA5}, tc.width)
+				groups := make([]uint64, rows)
+				sourceGroups := make([]uint64, rows)
+				for row := range groups {
+					groups[row] = 1
+					sourceGroups[row] = uint64(row + 1)
+					if tc.width == 0 {
+						require.NoError(b, vector.AppendFixed(input, uint64(0xA5), false, mp))
+					} else {
+						require.NoError(b, vector.AppendBytes(input, value, false, mp))
+					}
+				}
+				vectors := []*vector.Vector{input}
+				newExec := func(groupCount int) AggFuncExec {
+					exec := makeBitAggExec(mp, AggIdOfBitOr, tc.typ)
+					owner := exec.(AllocationAccountOwner)
+					require.NoError(b, owner.SetAllocationAccount(allocation))
+					b.Cleanup(func() {
+						exec.Free()
+						require.NoError(b, owner.ClearAllocationAccount(allocation))
+					})
+					require.NoError(b, exec.GroupGrow(groupCount))
+					return exec
+				}
+				target := newExec(1)
+				preflight := target.(BatchCapacityPreflight)
+				require.NoError(b, preflight.PreflightBatchFill(0, groups, vectors))
+				require.NoError(b, target.BatchFill(0, groups, vectors))
+				var source AggFuncExec
+				if merge {
+					source = newExec(rows)
+					require.NoError(b, source.(BatchCapacityPreflight).PreflightBatchFill(0, sourceGroups, vectors))
+					require.NoError(b, source.BatchFill(0, sourceGroups, vectors))
+				}
+				used := account.Snapshot().Used
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if merge {
+						if err := preflight.PreflightBatchMerge(source, 0, groups); err != nil {
+							b.Fatal(err)
+						}
+						if err := target.BatchMerge(source, 0, groups); err != nil {
+							b.Fatal(err)
+						}
+					} else {
+						if err := preflight.PreflightBatchFill(0, groups, vectors); err != nil {
+							b.Fatal(err)
+						}
+						if err := target.BatchFill(0, groups, vectors); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+				b.StopTimer()
+				require.Equal(b, used, account.Snapshot().Used)
+				result, err := target.Flush()
+				require.NoError(b, err)
+				for _, vec := range result {
+					b.Cleanup(func() { vec.Free(mp) })
+				}
+				require.Len(b, result, 1)
+				if tc.width == 0 {
+					require.Equal(b, uint64(0xA5), vector.MustFixedColNoTypeCheck[uint64](result[0])[0])
+				} else {
+					require.Equal(b, value, result[0].GetBytesAt(0))
+				}
+			})
+		}
+	}
 }

@@ -68,7 +68,14 @@ func ParseSQLTaskTimeout(value string) (int, error) {
 	if d < 0 {
 		return 0, moerr.NewInvalidArgNoCtx("timeout", value)
 	}
-	return int(d / time.Second), nil
+	// timeout_seconds is integer seconds; 0 means unlimited. A positive
+	// sub-second duration must not truncate to 0 and silently disable the
+	// deadline — round up to 1s as a conservative bound.
+	secs := int(d / time.Second)
+	if d > 0 && secs == 0 {
+		return 1, nil
+	}
+	return secs, nil
 }
 
 func DefinerOpts(sqlTask SQLTask) ie.SessionOverrideOptions {

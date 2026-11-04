@@ -17,15 +17,15 @@ package plan
 import (
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statspb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
@@ -33,6 +33,12 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 
 	increaseRefCntForExprList(node.ProjectList, 1, colRefCnt)
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
+	increaseRefCntForExprList(node.DedupKeyExprs, 1, colRefCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseRefCntForExprList(exprs.GetList(), 1, colRefCnt)
+		}
+	}
 	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
 	increaseRefCntForExprList(node.PhysicalEqualityKeyList, 1, colRefCnt)
@@ -156,8 +162,13 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 
 	default:
+		childParentType := node.NodeType
+		if isSetOperation(parentType) && isSetOperationInputWrapper(node) {
+			// Keep the operand's positional schema boundary through identity wrappers.
+			childParentType = parentType
+		}
 		for i, childID := range node.Children {
-			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, flag, colRefCnt)
+			newChildID, childProjMap := builder.removeSimpleProjections(childID, childParentType, flag, colRefCnt)
 			node.Children[i] = newChildID
 			for ref, expr := range childProjMap {
 				projMap[ref] = expr
@@ -216,6 +227,9 @@ func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]i
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
 func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
+	if builder.isFullTextBooleanScoreProject(node) {
+		return false
+	}
 	if _, protected := builder.existentialGateProjects[node.NodeId]; protected {
 		// Inlining its TRUE slot would turn an ANTI hash key back into a
 		// residual and enumerate every duplicate-key match.
@@ -287,7 +301,7 @@ func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_F:
 		// fulltext_match is a planner placeholder: applyIndices replaces it
-		// with the score column produced by fulltext_index_scan.  Inlining a
+		// with the score column produced by the fulltext search scan.  Inlining a
 		// projection that contains it can move the placeholder into a WINDOW
 		// (for example through a multi-CTE query) where the fulltext rewrite
 		// cannot associate it with the source scan anymore.  Keep that PROJECT
@@ -333,6 +347,12 @@ func exprCanRemoveProject(expr *Expr) bool {
 func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.ProjectList, projMap)
 	replaceColumnsForExprList(node.OnList, projMap)
+	replaceColumnsForExprList(node.DedupKeyExprs, projMap)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			replaceColumnsForExprList(exprs.GetList(), projMap)
+		}
+	}
 	replaceColumnsForExprList(node.FilterList, projMap)
 	replaceColumnsForExprList(node.GroupBy, projMap)
 	replaceColumnsForExprList(node.PhysicalEqualityKeyList, projMap)
@@ -653,7 +673,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
 		if exprf := expr.GetF(); exprf != nil {
-			if IsEqualFunc(exprf.Func.GetObj()) {
+			if IsEqualFunc(exprf.Func.GetObj()) && !isJSONNumericComparisonArgs(exprf.Args) {
 				leftcol := exprf.Args[0].GetCol()
 				rightcol := exprf.Args[1].GetCol()
 				if leftcol != nil && rightcol != nil {
@@ -706,6 +726,12 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 	increaseTagCntForExprList(node.ProjectList, 1, tagCnt)
 	increaseTagCntForExprList(node.OnList, 1, tagCnt)
+	increaseTagCntForExprList(node.DedupKeyExprs, 1, tagCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseTagCntForExprList(exprs.GetList(), 1, tagCnt)
+		}
+	}
 	increaseTagCntForExprList(node.FilterList, 1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
@@ -768,6 +794,12 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 END:
 	increaseTagCntForExprList(node.ProjectList, -1, tagCnt)
+	increaseTagCntForExprList(node.DedupKeyExprs, -1, tagCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseTagCntForExprList(exprs.GetList(), -1, tagCnt)
+		}
+	}
 	increaseTagCntForExprList(node.FilterList, -1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
@@ -806,8 +838,9 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := make([]*plan.ColRef, 0, 3+len(ctx.ForeignKeyChecks))
+	cols := make([]*plan.ColRef, 0, 7+len(ctx.ForeignKeyChecks))
 	cols = append(cols, ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol)
+	cols = append(cols, ctx.OdkuTargetAutoIncrementCol, ctx.OdkuGeneratedCol, ctx.OdkuOrdinalCol, ctx.OdkuGeneratedAutoIncrementCol)
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}
@@ -890,6 +923,11 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) map[uint64][]uint64 
 		return nil
 	}
 
+	// This proof belongs to the current inputs and predicates. Rewriters may
+	// have changed them since a previous invocation, including for a trial.
+	if node.Stats != nil && node.Stats.HashmapStats != nil {
+		node.Stats.HashmapStats.HashOnPK = false
+	}
 	leftColMap := determineHashOnPK(node.Children[0], builder)
 	rightColMap := determineHashOnPK(node.Children[1], builder)
 	if rightColMap == nil {
@@ -1121,48 +1159,52 @@ func checkExprInTags(expr *plan.Expr, tags []int32) bool {
 	return false
 }
 
-func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
+func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) error {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteDistinctToAGG(child)
+			if err := builder.rewriteDistinctToAGG(child); err != nil {
+				return err
+			}
 		}
 	}
 	if node.NodeType != plan.Node_DISTINCT {
-		return
+		return nil
 	}
 	project := builder.qry.Nodes[node.Children[0]]
 	if project.NodeType != plan.Node_PROJECT {
-		return
+		return nil
 	}
 	if builder.qry.Nodes[project.Children[0]].NodeType == plan.Node_VALUE_SCAN {
-		return
+		return nil
 	}
 
+	groupBy, hashKeys, err := CompactPhysicalGroupKeys(project.ProjectList, node.PhysicalEqualityKeyList)
+	if err != nil {
+		return err
+	}
 	node.NodeType = plan.Node_AGG
-	node.GroupBy = project.ProjectList
+	node.GroupBy, node.GroupByHashKey = groupBy, hashKeys
 	if len(node.PhysicalEqualityKeyList) > 0 {
-		visibleCount := len(node.GroupBy)
+		visibleCount := len(project.ProjectList)
 		node.ProjectList = make([]*plan.Expr, visibleCount)
 		for i, expr := range project.ProjectList {
 			node.ProjectList[i] = GetColExpr(expr.Typ, -1, int32(i))
 		}
-		for i, key := range node.PhysicalEqualityKeyList {
-			node.GroupBy = append(node.GroupBy, DeepCopyExpr(key))
-			node.GroupByHashKey = append(node.GroupByHashKey, int32(visibleCount+i))
-		}
 	}
+	node.PhysicalEqualityKeyList = nil
 	node.BindingTags = project.BindingTags
 	node.BindingTags = append(node.BindingTags, builder.genNewBindTag())
 	node.Children[0] = project.Children[0]
 	node.SpillMem = builder.aggSpillMem
+	return nil
 }
 
 // reuse removeSimpleProjections to delete this plan node
 func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) int32 {
 	remap := make(map[[2]int32]*plan.Expr)
 	rewritten := make(map[int32]struct{})
-	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, remap, rewritten)
+	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, false, remap, rewritten)
 	if len(rewritten) == 0 {
 		return nodeID
 	}
@@ -1175,11 +1217,13 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) int32 {
 func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	nodeID int32,
 	limitDemand bool,
+	rollupCountGuard bool,
 	remap map[[2]int32]*plan.Expr,
 	rewritten map[int32]struct{},
 ) {
 	node := builder.qry.Nodes[nodeID]
 	childLimitDemand := false
+	childRollupCountGuard := false
 	if len(node.Children) == 1 {
 		boundedDemand := limitDemand || node.Limit != nil
 		switch node.NodeType {
@@ -1190,6 +1234,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 			// boundary and accidentally rewrite an unrelated aggregate.
 			childLimitDemand = boundedDemand
 		case plan.Node_FILTER:
+			childRollupCountGuard = builder.isSingletonRollupCountGuard(node, builder.qry.Nodes[node.Children[0]])
 			// A HAVING Filter is above Aggregate on the first rewrite pass. If
 			// Aggregate is removed, filter pushdown can move that predicate onto
 			// the scan before the second pass. Carry demand through only when the
@@ -1202,7 +1247,18 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	}
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, remap, rewritten)
+			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, childRollupCountGuard, remap, rewritten)
+		}
+	}
+	if childRollupCountGuard {
+		if _, singleton := rewritten[node.Children[0]]; singleton &&
+			builder.qry.Nodes[node.Children[0]].NodeType == plan.Node_PROJECT {
+			// All uniqueness, active-key and expression proofs succeeded for
+			// this direct child. COUNT(*) is one on every surviving row, so
+			// its sole guard is true. Remove it before normal filter/projection
+			// cleanup, which can also discard an otherwise unused hidden count.
+			node.FilterList = nil
+			node.RollupFilter = false
 		}
 	}
 	if node.NodeType != plan.Node_AGG {
@@ -1231,10 +1287,10 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 		// that every logical key is active in this grouping-set branch.
 		return
 	}
-	if len(node.AggList) > 0 && !limitDemand {
-		// Aggregate-bearing rewrites are a limit-aware optimization, not a
-		// general plan-shape canonicalization.  Requiring a bounded demand
-		// keeps unlimited queries on their established physical path.
+	if len(node.AggList) > 0 && !limitDemand && !rollupCountGuard {
+		// Ordinary aggregate-bearing rewrites require bounded demand. The
+		// singleton ROLLUP count guard has a separate row-equivalence proof;
+		// other unlimited queries keep their established physical path.
 		return
 	}
 	scan := builder.qry.Nodes[node.Children[0]]
@@ -1290,7 +1346,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	if !containsCompleteUniqueKey {
 		return
 	}
-	if limitDemand {
+	if limitDemand || rollupCountGuard {
 		for _, expr := range node.GroupBy {
 			if !isTruncationSafeRowExpr(expr) {
 				return
@@ -1371,6 +1427,41 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	node.GroupByHashKey = nil
 	node.SpillMem = 0
 	rewritten[nodeID] = struct{}{}
+}
+
+// A ROLLUP detail group proven unique below has exactly one input row. Its
+// COUNT(*) guard is therefore row-equivalent even without bounded demand.
+// Recognize only that guard; do not carry LIMIT through a grouping-set UNION
+// or relax the established gate for ordinary unbounded aggregates.
+func (builder *QueryBuilder) isSingletonRollupCountGuard(filter, agg *plan.Node) bool {
+	if !filter.RollupFilter || filter.IsEnd || filter.FilterIsBarrier ||
+		filter.Limit != nil || filter.Offset != nil || filter.RankOption != nil ||
+		len(filter.FilterList) != 1 || agg.NodeType != plan.Node_AGG ||
+		len(agg.FilterList) != 0 || len(agg.GroupingFlag) == 0 || len(agg.AggList) != 1 ||
+		!groupingSetPositiveCountFilter(filter.FilterList[0], agg) ||
+		!areTruncationSafePredicates(filter.FilterList) {
+		return false
+	}
+	predicate := filter.FilterList[0]
+	fn := predicate.GetF()
+	rebound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), ">", DeepCopyExprList(fn.Args))
+	if err != nil || rebound == nil || rebound.GetF() == nil || rebound.GetF().Func == nil ||
+		rebound.GetF().Func.Obj != fn.Func.Obj ||
+		!isSameColumnType(rebound.Typ, predicate.Typ) || rebound.Typ.NotNullable != predicate.Typ.NotNullable {
+		return false
+	}
+	count := agg.AggList[0].GetF()
+	if len(count.Args) != 1 || count.Args[0] == nil || count.Args[0].GetLit() == nil ||
+		types.T(count.Args[0].Typ.Id) != types.T_int64 {
+		return false
+	}
+	one := count.Args[0].GetLit()
+	value, ok := one.Value.(*plan.Literal_I64Val)
+	if one.Isnull || !ok || value.I64Val != 1 {
+		return false
+	}
+	_, valid := builder.singleRowAggregateExpr(agg.AggList[0])
+	return valid
 }
 
 // removeConstantSortAfterSingletonGroup removes only Sorts whose complete key
@@ -1469,7 +1560,7 @@ func (builder *QueryBuilder) isConstantSingletonGroupOrderExpr(
 		nodeID = node.Children[0]
 	}
 
-	if !rule.IsConstant(resolved, false) {
+	if !function.IsConstant(resolved, false) {
 		return false, usesSingletonGroup
 	}
 	if resolved.GetLit() != nil {
@@ -1934,10 +2025,12 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	if isSameColumnType(source, target) {
 		return !sourceID.IsDecimal() || validDecimalPlanType(source)
 	}
-	// CHAR comparison binding casts text operands to the fixed CHAR domain.
-	// With the same charset and a target at least as wide as the declared
-	// source, that cast cannot reject or truncate any source value.
-	if targetID == types.T_char &&
+	// Text widening is total in the same collation: strToStr checks character
+	// width without transcoding, and every value fits a target at least as wide
+	// as its bounded source. Keep the cast itself (including comparison-key
+	// trimming); this only proves that skipping its evaluation cannot hide an
+	// input-dependent error or warning.
+	if (targetID == types.T_char || targetID == types.T_varchar) &&
 		(sourceID == types.T_char || sourceID == types.T_varchar) &&
 		source.SameCollation(target) && source.Width > 0 &&
 		target.Width >= source.Width {
@@ -2027,23 +2120,6 @@ func integerTypeDomain(oid types.T) (bits int, signed bool) {
 		return 64, false
 	default:
 		return 0, false
-	}
-}
-
-func integerDecimalDigits(oid types.T) int32 {
-	switch oid {
-	case types.T_int8, types.T_uint8:
-		return 3
-	case types.T_int16, types.T_uint16:
-		return 5
-	case types.T_int32, types.T_uint32:
-		return 10
-	case types.T_int64:
-		return 19
-	case types.T_uint64:
-		return 20
-	default:
-		return 0
 	}
 }
 
@@ -2169,84 +2245,108 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 	if builder.optimizerHints != nil && builder.optimizerHints.optimizeLikeExpr != 0 {
 		return
 	}
-	// for a like "abc%", change it to prefix_equal(a,"abc")
-	// for a like "abc%def", add an extra filter prefix_equal(a,"abc")
 	node := builder.qry.Nodes[nodeID]
-
 	for _, childID := range node.Children {
 		builder.optimizeLikeExpr(childID)
 	}
 	if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 {
 		return
 	}
-	var newFilters []*plan.Expr
-	for i := range node.FilterList {
-		expr := node.FilterList[i]
-		fun := expr.GetF()
-		if fun != nil && fun.Func.ObjName == "like" {
-			// Explicit ESCAPE changes how wildcard bytes are interpreted. Keep
-			// the original predicate intact instead of applying the two-argument
-			// prefix rewrite with its hard-coded default escape semantics.
-			if len(fun.Args) != 2 {
-				continue
+	var stats *statspb.StatsInfo
+	if w := builder.getStatsInfoByTableID(node.TableDef.TblId); w != nil {
+		stats = w.GetStats()
+	}
+	var prefixes []*plan.Expr
+	var equalities []*plan.Expr
+	for i, expr := range node.FilterList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func.ObjName != "like" || len(fn.Args) != 2 || fn.Args[0].GetCol() == nil {
+			continue
+		}
+		if _, usable := prefixStringDomain(fn.Args[0].Typ); !usable {
+			continue
+		}
+		lit := fn.Args[1].GetLit()
+		if lit == nil || lit.Isnull || lit.Src != nil {
+			continue
+		}
+		value, ok := lit.Value.(*plan.Literal_Sval)
+		if !ok || value.Sval == "" {
+			continue
+		}
+		binary, _ := prefixStringDomain(fn.Args[0].Typ)
+		if !binary && (!utf8.ValidString(value.Sval) || strings.ContainsRune(value.Sval, utf8.RuneError)) {
+			continue
+		}
+		prefix, wildcard, escaped, pure := likeLiteralPrefix(value.Sval)
+		if !wildcard {
+			if !escaped {
+				fn.Func.ObjName = function.EqualFunctionName
+				fn.Func.Obj = function.EqualFunctionEncodedID
+				equalities = append(equalities, expr)
 			}
-			col := fun.Args[0].GetCol()
-			if col == nil {
-				continue
-			}
-			if fun.Args[1].GetLit() == nil {
-				continue
-			}
-			str := fun.Args[1].GetLit().GetSval()
-			if len(str) == 0 {
-				continue
-			}
-			index1 := strings.IndexByte(str, '_')
-			if index1 > 0 && str[index1-1] == '\\' {
-				index1--
-			}
-			index2 := strings.IndexByte(str, '%')
-			if index2 > 0 && str[index2-1] == '\\' {
-				index2--
-			}
-			if index1 == -1 && index2 == -1 {
-				// it's col like string without wildcard, can change to equal
-				fun.Func.ObjName = function.EqualFunctionName
-				fun.Func.Obj = function.EqualFunctionEncodedID
-				continue
-			}
-
-			indexOfWildCard := index1
-			if index1 == -1 {
-				indexOfWildCard = index2
-			}
-			if index2 != -1 && index2 < index1 {
-				indexOfWildCard = index2
-			}
-			if indexOfWildCard <= 0 {
-				continue
-			}
-			newStr := str[:indexOfWildCard]
-
-			newFilter := node.FilterList[i]
-			// if no _ and % in the last, we can replace the origin filter
-			replaceOrigin := (index1 == -1) && (index2 == len(str)-1)
-			if !replaceOrigin {
-				newFilter = DeepCopyExpr(newFilter)
-				newFilters = append(newFilters, newFilter)
-			}
-			newFunc := newFilter.GetF()
-			newFunc.Func.ObjName = function.PrefixEqualFunctionName
-			newFunc.Func.Obj = function.PrefixEqualFunctionEncodedID
-			newFunc.Args[1].GetLit().Value.(*plan.Literal_Sval).Sval = newStr
-			if replaceOrigin {
-				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(newFilter))
-			}
+			continue
+		}
+		if _, ok := stringPrefixSuccessor(prefix, binary); !ok {
+			continue
+		}
+		bound := makePlan2StringConstExprWithType(prefix, binary)
+		bound.Typ.Charset = fn.Args[0].Typ.Charset
+		prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "prefix_eq", []*plan.Expr{DeepCopyExpr(fn.Args[0]), bound})
+		if err != nil {
+			continue
+		}
+		col := fn.Args[0].GetCol()
+		if !logicalPrefixOnTable(prefixExpr.GetF(), node.TableDef) || len(node.BindingTags) == 0 || col.RelPos != node.BindingTags[0] {
+			continue
+		}
+		prefixExpr.Selectivity = regularIndexUnknownRangeSel
+		if upper, known := stringPrefixSelectivity(prefixExpr.GetF(), stats, node); known {
+			prefixExpr.Selectivity = upper
+		}
+		// This is one predicate's necessary condition, not an independent estimate.
+		// Preserve LIKE's truth and error semantics after the candidate lookup.
+		if pure {
+			// In the proved byte domain, trailing '%' contributes only a suffix:
+			// prefix_eq is exact even if later subject bytes are malformed UTF-8.
+			node.FilterList[i] = prefixExpr
+			node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(prefixExpr))
+		} else {
+			expr.Selectivity = 1
+			prefixes = append(prefixes, prefixExpr)
 		}
 	}
-	if len(newFilters) > 0 {
-		node.FilterList = append(node.FilterList, newFilters...)
-		node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(newFilters)...)
+	node.FilterList = append(node.FilterList, prefixes...)
+	node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(prefixes)...)
+	if len(equalities) > 0 && builder.canRefreshLiteralLikeSelectivity(nodeID) && regularIndexFiltersHaveStableEvaluation(node, equalities...) {
+		for _, expr := range equalities {
+			// LIKE's cached 20% estimate no longer describes this equality.
+			// Refresh before filter sorting, without an observable zero estimate.
+			expr.Selectivity = estimateEqualitySelectivity(expr, builder, stats)
+		}
+	}
+}
+
+// New estimates may change which independent branch is executed first. Keep
+// their historical behavior; a linear single-scan query has no such branch.
+func (builder *QueryBuilder) canRefreshLiteralLikeSelectivity(scanID int32) bool {
+	if len(builder.qry.Steps) != 1 || builder.qry.Correlation != nil {
+		return false
+	}
+	for nodeID := builder.qry.Steps[0]; ; {
+		node := builder.qry.Nodes[nodeID]
+		if nodeID == scanID {
+			return node.NodeType == plan.Node_TABLE_SCAN && len(node.Children) == 0
+		}
+		switch node.NodeType {
+		case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_AGG, plan.Node_SORT:
+		default:
+			return false
+		}
+		if len(node.Children) != 1 {
+			return false
+		}
+		nodeID = node.Children[0]
 	}
 }
 
@@ -2305,7 +2405,7 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 	}
 	switch key {
 	case "vectorLocalDOP":
-		builder.optimizerHints.vectorLocalDOP = value
+		// Read directly by VectorLocalDOPEnabled at planning and compilation.
 	case "pushDownLimitToScan":
 		builder.optimizerHints.pushDownLimitToScan = value
 	case "pushDownTopThroughLeftJoin":
@@ -2356,6 +2456,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.skipDedup = value
 	case "outerAntiPlanning":
 		builder.optimizerHints.outerAntiPlanning = value
+	case "rollupSort":
+		builder.optimizerHints.rollupSort = value
 	}
 }
 
@@ -2377,19 +2479,35 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 			handleOptimizerHints(kvs[i], builder)
 		}
 	}
-	if v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints"); ok {
+	// The session value includes the global default captured when the connection was
+	// created. CN runtime variables are shared by unrelated sessions and tenants.
+	if v, err := builder.compCtx.ResolveVariable("optimizer_hints", true, false); err == nil {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
 	}
 	// Per-statement optimizer_hints (same key=value format as the global variable) carried on the
 	// execution context by the internal SQL executor (StatementOption.WithOptimizerHints). Applied
-	// AFTER the global so a statement can override it -- e.g. the fulltext2 json probe's fallback/
+	// AFTER the session so a statement can override it -- e.g. the fulltext2 json probe's fallback/
 	// tail SQL passes applyIndices=1 so its base-table scan does not re-trigger the probe rewrite.
 	if v := builder.compCtx.GetContext().Value(defines.OptimizerHints{}); v != nil {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
+	}
+}
+
+// sortRollupMode is retained as an internal compatibility adapter. New code
+// should use rollup_algorithm through rollupAlgorithmMode, which mirrors the
+// COST/SORT/HASH session variable used by the window partition implementation.
+func (builder *QueryBuilder) sortRollupMode() int {
+	switch builder.rollupAlgorithmMode() {
+	case rollupAlgorithmSort:
+		return 1
+	case rollupAlgorithmHash:
+		return 2
+	default:
+		return 0
 	}
 }
 
@@ -2402,8 +2520,8 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
-	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
-	builder.mergeFiltersOnCompositeKey(rootID)
+	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false)
+	builder.mergeFiltersOnCompositeKey(rootID, true)
 	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
@@ -2492,20 +2610,21 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 
 		for _, expr := range baseNode.FilterList {
 			if e, ok := expr.Expr.(*plan.Expr_F); ok {
-				if e.F.Func.GetObjName() == "=" {
+				// Mixed JSON/numeric equality does not identify a physical PK value.
+				if e.F.Func.GetObjName() == "=" && !isJSONNumericComparisonArgs(e.F.Args) {
 					//update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 					//delete from where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
-					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+					if checkIsPkColExpr(e.F.Args[0]) && function.IsConstant(e.F.Args[1], true) {
 						lockRows = e.F.Args[1]
-					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+					} else if checkIsPkColExpr(e.F.Args[1]) && function.IsConstant(e.F.Args[0], true) {
 						lockRows = e.F.Args[0]
 					}
 				} else if e.F.Func.GetObjName() == "in" {
 					//update t1 set a = 1 where pk in (1,2); then we allays lock rows pk in (1,2), even pk=1 is not exists
 					//delete from where pk in (1,2); then we allays lock rows pk in (1,2), even pk in (1,2) is not exists
-					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+					if checkIsPkColExpr(e.F.Args[0]) && function.IsConstant(e.F.Args[1], true) {
 						lockRows = e.F.Args[1]
-					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+					} else if checkIsPkColExpr(e.F.Args[1]) && function.IsConstant(e.F.Args[0], true) {
 						lockRows = e.F.Args[0]
 					}
 				}

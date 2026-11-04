@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/stretchr/testify/require"
 )
 
 type testDriver struct {
@@ -167,13 +168,11 @@ func TestCancellationWakesNativeCall(t *testing.T) {
 	}
 }
 
-func TestCloseRetainsBorrowedResultAndRelease(t *testing.T) {
+func TestCloseRetainsBorrowedResultOwner(t *testing.T) {
 	r, d := testRuntime()
 	t.Cleanup(func() { _ = r.Close(context.Background()) })
 	d.q.fill = true
-	var releases atomic.Int32
 	req := testRequest()
-	req.Release = func(context.Context) error { releases.Add(1); return nil }
 	q, err := r.Prepare(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +194,7 @@ func TestCloseRetainsBorrowedResultAndRelease(t *testing.T) {
 	if err := r.Close(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Close: %v", err)
 	}
-	if d.closed.Load() || d.q.closed.Load() || releases.Load() != 0 {
+	if d.closed.Load() || d.q.closed.Load() {
 		t.Fatal("destroyed borrowed result owner")
 	}
 	close(release)
@@ -203,14 +202,11 @@ func TestCloseRetainsBorrowedResultAndRelease(t *testing.T) {
 	if err := r.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !d.closed.Load() || !d.q.closed.Load() || releases.Load() != 1 {
+	if !d.closed.Load() || !d.q.closed.Load() {
 		t.Fatal("cleanup did not release exactly once")
 	}
 	if err := r.Close(context.Background()); err != nil {
 		t.Fatal(err)
-	}
-	if releases.Load() != 1 {
-		t.Fatal("duplicate release")
 	}
 }
 
@@ -248,7 +244,7 @@ func TestConfigurationBounds(t *testing.T) {
 	}
 }
 
-func TestCanceledBeforePreparationReleasesWithoutSealing(t *testing.T) {
+func TestCanceledBeforePreparationDoesNotSealAdmission(t *testing.T) {
 	r, d := testRuntime()
 	t.Cleanup(func() { _ = r.Close(context.Background()) })
 	if r.cleanupTimeout != 30*time.Second {
@@ -256,104 +252,12 @@ func TestCanceledBeforePreparationReleasesWithoutSealing(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	var releases atomic.Int32
 	req := testRequest()
-	req.Release = func(cleanup context.Context) error {
-		releases.Add(1)
-		if cleanup.Err() != nil {
-			return errors.New("cleanup inherited statement cancellation")
-		}
-		if _, ok := cleanup.Deadline(); !ok {
-			return errors.New("cleanup has no deadline")
-		}
-		return nil
-	}
 	if _, err := r.Prepare(ctx, req); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Prepare: %v", err)
 	}
-	if releases.Load() != 1 || d.prepares.Load() != 0 || !r.Accepting() {
-		t.Fatalf("release/native/admission: %d/%d/%v", releases.Load(), d.prepares.Load(), r.Accepting())
-	}
-}
-
-func TestRuntimeCloseWaitsForPreValidationRelease(t *testing.T) {
-	for _, test := range []struct {
-		name         string
-		failFirst    bool
-		wantReleases int32
-	}{
-		{name: "release succeeds", wantReleases: 1},
-		{name: "failed release is retried", failFirst: true, wantReleases: 2},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			r, d := testRuntime()
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			stopEntered := make(chan struct{})
-			d.stopFn = func() error {
-				select {
-				case <-stopEntered:
-				default:
-					close(stopEntered)
-				}
-				return nil
-			}
-			releaseEntered := make(chan struct{})
-			releaseGate := make(chan struct{})
-			var releaseGateOnce sync.Once
-			openReleaseGate := func() { releaseGateOnce.Do(func() { close(releaseGate) }) }
-			t.Cleanup(openReleaseGate)
-			var releases atomic.Int32
-			d.closeFn = func(context.Context) error {
-				if releases.Load() != test.wantReleases {
-					return errors.New("engine close overtook release ownership")
-				}
-				return nil
-			}
-			request := testRequest()
-			request.Release = func(context.Context) error {
-				call := releases.Add(1)
-				if call == 1 {
-					close(releaseEntered)
-					<-releaseGate
-					if test.failFirst {
-						return errors.New("injected release failure")
-					}
-				}
-				return nil
-			}
-			canceled, cancelPrepare := context.WithCancel(ctx)
-			cancelPrepare()
-			prepared := make(chan error, 1)
-			go func() { _, err := r.Prepare(canceled, request); prepared <- err }()
-			select {
-			case <-releaseEntered:
-			case <-ctx.Done():
-				t.Fatal("pre-validation release did not start")
-			}
-			closed := make(chan error, 1)
-			go func() { closed <- r.Close(ctx) }()
-			select {
-			case <-stopEntered:
-			case <-ctx.Done():
-				t.Fatal("runtime close did not seal admission")
-			}
-			select {
-			case err := <-closed:
-				t.Fatalf("runtime closed ahead of pre-validation ownership: %v", err)
-			default:
-			}
-			openReleaseGate()
-			if err := <-prepared; !errors.Is(err, context.Canceled) {
-				t.Fatalf("Prepare: %v", err)
-			}
-			if err := <-closed; err != nil {
-				t.Fatal(err)
-			}
-			if releases.Load() != test.wantReleases || !d.closed.Load() {
-				t.Fatalf("release/engine close: %d/%v", releases.Load(), d.closed.Load())
-			}
-		})
+	if d.prepares.Load() != 0 || !r.Accepting() {
+		t.Fatalf("native/admission: %d/%v", d.prepares.Load(), r.Accepting())
 	}
 }
 
@@ -389,9 +293,7 @@ func TestCanceledNativePreparationJoinsAndUsesCleanupBudget(t *testing.T) {
 		}
 	}
 	d.q.closeFn = verifyCleanup
-	var releases atomic.Int32
 	req := testRequest()
-	req.Release = func(cleanup context.Context) error { releases.Add(1); return verifyCleanup(cleanup) }
 	done := make(chan error, 1)
 	go func() { _, err := r.Prepare(ctx, req); done <- err }()
 	select {
@@ -408,120 +310,21 @@ func TestCanceledNativePreparationJoinsAndUsesCleanupBudget(t *testing.T) {
 	case <-parent.Done():
 		t.Fatal("canceled preparation did not clean up")
 	}
-	if releases.Load() != 1 || d.q.closes.Load() != 1 || !r.Accepting() {
-		t.Fatalf("release/close/admission: %d/%d/%v", releases.Load(), d.q.closes.Load(), r.Accepting())
-	}
-}
-
-func TestRejectedPreparationRetainsFailedRelease(t *testing.T) {
-	r, d := testRuntime()
-	t.Cleanup(func() { _ = r.Close(context.Background()) })
-	var releases atomic.Int32
-	req := Request{Release: func(context.Context) error {
-		if releases.Add(1) == 1 {
-			return context.DeadlineExceeded
-		}
-		return nil
-	}}
-	if _, err := r.Prepare(context.Background(), req); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Prepare: %v", err)
-	}
-	if r.Accepting() {
-		t.Fatal("failed cleanup left native admission open")
-	}
-	if d.closed.Load() {
-		t.Fatal("engine closed before admitted-resource cleanup")
-	}
-	if err := r.Close(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if releases.Load() != 2 || !d.closed.Load() {
-		t.Fatal("failed release was not retained for retry")
-	}
-}
-
-func TestClosingRejectionRetainsFailedReleaseForFutureClose(t *testing.T) {
-	r, d := testRuntime()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := r.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
-	var releases atomic.Int32
-	req := testRequest()
-	req.Release = func(context.Context) error {
-		if releases.Add(1) == 1 {
-			return errors.New("injected rejected-release failure")
-		}
-		return nil
-	}
-	if _, err := r.Prepare(ctx, req); err == nil {
-		t.Fatal("closed runtime admitted a query")
-	}
-	if releases.Load() != 1 || d.prepares.Load() != 0 {
-		t.Fatalf("release/native calls: %d/%d", releases.Load(), d.prepares.Load())
-	}
-	r.mu.Lock()
-	retained := len(r.queries)
-	r.mu.Unlock()
-	if retained != 1 {
-		t.Fatalf("failed release owners: %d", retained)
-	}
-	if err := r.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if releases.Load() != 2 || d.closes.Load() != 1 {
-		t.Fatalf("retry/engine close calls: %d/%d", releases.Load(), d.closes.Load())
+	if d.q.closes.Load() != 1 || !r.Accepting() {
+		t.Fatalf("close/admission: %d/%v", d.q.closes.Load(), r.Accepting())
 	}
 }
 
 func TestNilNativeQueryIsPreparationFailure(t *testing.T) {
-	for _, test := range []struct {
-		name        string
-		withRelease bool
-		failRelease bool
-	}{
-		{name: "without release"},
-		{name: "with release", withRelease: true},
-		{name: "failed release retained", withRelease: true, failRelease: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			r, d := testRuntime()
-			t.Cleanup(func() { _ = r.Close(context.Background()) })
-			d.prepareFn = func(context.Context, Request) (queryDriver, error) { return nil, nil }
-			var releases atomic.Int32
-			req := testRequest()
-			if test.withRelease {
-				req.Release = func(context.Context) error {
-					if releases.Add(1) == 1 && test.failRelease {
-						return errors.New("injected nil-query release failure")
-					}
-					return nil
-				}
-			}
-			q, err := r.Prepare(context.Background(), req)
-			if q != nil || err == nil || !strings.Contains(err.Error(), "returned no query") {
-				t.Fatalf("Prepare: query=%v err=%v", q, err)
-			}
-			wantReleases := int32(0)
-			if test.withRelease {
-				wantReleases = 1
-			}
-			if releases.Load() != wantReleases || d.prepares.Load() != 1 {
-				t.Fatalf("release/native calls: %d/%d", releases.Load(), d.prepares.Load())
-			}
-			if test.failRelease {
-				if r.Accepting() {
-					t.Fatal("failed nil-query cleanup left admission open")
-				}
-				if err = r.Close(context.Background()); err != nil {
-					t.Fatal(err)
-				}
-				if releases.Load() != 2 {
-					t.Fatalf("release retry calls: %d", releases.Load())
-				}
-			}
-		})
+	r, d := testRuntime()
+	t.Cleanup(func() { _ = r.Close(context.Background()) })
+	d.prepareFn = func(context.Context, Request) (queryDriver, error) { return nil, nil }
+	q, err := r.Prepare(context.Background(), testRequest())
+	if q != nil || err == nil || !strings.Contains(err.Error(), "returned no query") {
+		t.Fatalf("Prepare: query=%v err=%v", q, err)
+	}
+	if d.prepares.Load() != 1 || !r.Accepting() {
+		t.Fatal("nil native query leaked admission")
 	}
 }
 
@@ -551,9 +354,7 @@ func TestTerminalTimeoutReleasesQuery(t *testing.T) {
 	r, d := testRuntime()
 	t.Cleanup(func() { _ = r.Close(context.Background()) })
 	d.q.nextErr = context.DeadlineExceeded
-	var released atomic.Int32
 	req := testRequest()
-	req.Release = func(context.Context) error { released.Add(1); return nil }
 	q, err := r.Prepare(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
@@ -564,7 +365,7 @@ func TestTerminalTimeoutReleasesQuery(t *testing.T) {
 	if err = q.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !d.q.closed.Load() || released.Load() != 1 {
+	if !d.q.closed.Load() || d.q.closes.Load() != 1 || len(r.queries) != 0 {
 		t.Fatal("quiesced timed-out query did not release ownership")
 	}
 }
@@ -618,9 +419,7 @@ func TestAdmissionBoundsPreparingAndOwnedQueries(t *testing.T) {
 		}
 		return &testQuery{entered: make(chan struct{}), cancelled: make(chan struct{})}, nil
 	}
-	var acceptedReleases, rejectedReleases atomic.Int32
 	request := testRequest()
-	request.Release = func(context.Context) error { acceptedReleases.Add(1); return nil }
 	type preparation struct {
 		query *Query
 		err   error
@@ -637,12 +436,11 @@ func TestAdmissionBoundsPreparingAndOwnedQueries(t *testing.T) {
 		}
 	}
 	rejected := testRequest()
-	rejected.Release = func(context.Context) error { rejectedReleases.Add(1); return nil }
 	if _, err := r.Prepare(ctx, rejected); err == nil {
 		t.Fatal("concurrent preparation exceeded admission")
 	}
-	if d.prepares.Load() != 2 || rejectedReleases.Load() != 1 {
-		t.Fatalf("driver/rejected cleanup: %d/%d", d.prepares.Load(), rejectedReleases.Load())
+	if d.prepares.Load() != 2 {
+		t.Fatalf("driver preparation calls: %d", d.prepares.Load())
 	}
 	release()
 	queries := make([]*Query, 0, 2)
@@ -661,8 +459,8 @@ func TestAdmissionBoundsPreparingAndOwnedQueries(t *testing.T) {
 	if _, err := r.Prepare(ctx, rejected); err == nil {
 		t.Fatal("unclosed queries stopped counting against admission")
 	}
-	if d.prepares.Load() != 2 || rejectedReleases.Load() != 2 {
-		t.Fatalf("owned-query rejection: %d/%d", d.prepares.Load(), rejectedReleases.Load())
+	if d.prepares.Load() != 2 {
+		t.Fatalf("owned-query preparation calls: %d", d.prepares.Load())
 	}
 	if err := queries[0].Close(ctx); err != nil {
 		t.Fatal(err)
@@ -681,60 +479,6 @@ func TestAdmissionBoundsPreparingAndOwnedQueries(t *testing.T) {
 	if err := next.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if acceptedReleases.Load() != 3 || rejectedReleases.Load() != 2 {
-		t.Fatalf("release ownership: %d/%d", acceptedReleases.Load(), rejectedReleases.Load())
-	}
-}
-
-func TestReleasePanicRetainsUnlockedRetryOwner(t *testing.T) {
-	r, d := testRuntime()
-	t.Cleanup(func() { _ = r.Close(context.Background()) })
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	var releases atomic.Int32
-	req := testRequest()
-	req.Release = func(context.Context) error {
-		if releases.Add(1) == 1 {
-			panic("release boom")
-		}
-		return nil
-	}
-	q, err := r.Prepare(ctx, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = q.Close(ctx); err == nil || !strings.Contains(err.Error(), "release callback panicked: release boom") {
-		t.Fatalf("Close: %v", err)
-	}
-	var releasePanic *moerr.Error
-	if !errors.As(err, &releasePanic) {
-		t.Fatalf("release panic was not converted to moerr: %v", err)
-	}
-	if r.Accepting() {
-		t.Fatal("cleanup panic left admission open")
-	}
-	if d.q.closes.Load() != 1 || releases.Load() != 1 {
-		t.Fatalf("native/release calls: %d/%d", d.q.closes.Load(), releases.Load())
-	}
-	closed := make(chan error, 1)
-	go func() { closed <- q.Close(ctx) }()
-	select {
-	case err = <-closed:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-ctx.Done():
-		t.Fatal("release panic stranded query cleanup mutex")
-	}
-	if d.q.closes.Load() != 1 || releases.Load() != 2 {
-		t.Fatalf("retry ownership: %d/%d", d.q.closes.Load(), releases.Load())
-	}
-	if err = q.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if releases.Load() != 2 {
-		t.Fatal("successful release was repeated")
-	}
 }
 
 func TestConcurrentQueryCloseWaitsWithOwnContext(t *testing.T) {
@@ -752,9 +496,7 @@ func TestConcurrentQueryCloseWaitsWithOwnContext(t *testing.T) {
 		return nil
 	}
 	d.stopFn = func() error { return nil }
-	var releases atomic.Int32
 	req := testRequest()
-	req.Release = func(context.Context) error { releases.Add(1); return nil }
 	q, err := r.Prepare(ctx, req)
 	if err != nil {
 		t.Fatal(err)
@@ -771,15 +513,15 @@ func TestConcurrentQueryCloseWaitsWithOwnContext(t *testing.T) {
 	if err = q.Close(short); !errors.Is(err, context.Canceled) {
 		t.Fatalf("second Close: %v", err)
 	}
-	if d.q.closes.Load() != 1 || releases.Load() != 0 || d.stops.Load() != 0 {
-		t.Fatalf("concurrent cleanup ownership: close=%d release=%d stop=%d", d.q.closes.Load(), releases.Load(), d.stops.Load())
+	if d.q.closes.Load() != 1 || d.stops.Load() != 0 {
+		t.Fatalf("concurrent cleanup ownership: close=%d stop=%d", d.q.closes.Load(), d.stops.Load())
 	}
 	openCloseGate()
 	if err = <-first; err != nil {
 		t.Fatal(err)
 	}
-	if d.q.closes.Load() != 1 || releases.Load() != 1 {
-		t.Fatalf("cleanup calls: %d/%d", d.q.closes.Load(), releases.Load())
+	if d.q.closes.Load() != 1 {
+		t.Fatalf("cleanup calls: %d", d.q.closes.Load())
 	}
 	if err = r.Close(ctx); err != nil {
 		t.Fatal(err)
@@ -817,9 +559,8 @@ func TestConcurrentQueryCloseJoinsCancelBeforeDestroy(t *testing.T) {
 			// Engine stop has its own handle, not a borrowed query handle. Do not
 			// model it with testDriver's default delegation to query.cancel here.
 			d.stopFn = func() error { return nil }
-			var releases atomic.Int32
 			req := testRequest()
-			req.Release = func(context.Context) error { releases.Add(1); return nil }
+
 			q, err := r.Prepare(ctx, req)
 			if err != nil {
 				t.Fatal(err)
@@ -848,8 +589,8 @@ func TestConcurrentQueryCloseJoinsCancelBeforeDestroy(t *testing.T) {
 			if err = q.Close(short); !errors.Is(err, context.Canceled) {
 				t.Fatalf("competing Close: %v", err)
 			}
-			if d.q.cancels.Load() != 1 || d.q.closes.Load() != 0 || releases.Load() != 0 {
-				t.Fatalf("unjoined cancel borrower: cancel=%d close=%d release=%d", d.q.cancels.Load(), d.q.closes.Load(), releases.Load())
+			if d.q.cancels.Load() != 1 || d.q.closes.Load() != 0 {
+				t.Fatalf("unjoined cancel borrower: cancel=%d close=%d", d.q.cancels.Load(), d.q.closes.Load())
 			}
 			second := make(chan error, 1)
 			workers.Add(1)
@@ -865,8 +606,8 @@ func TestConcurrentQueryCloseJoinsCancelBeforeDestroy(t *testing.T) {
 					t.Fatal("Close did not finish")
 				}
 			}
-			if overlapped.Load() || d.q.cancels.Load() != 1 || d.q.closes.Load() != 1 || releases.Load() != 1 {
-				t.Fatalf("native lifetime: overlap=%v cancel=%d close=%d release=%d", overlapped.Load(), d.q.cancels.Load(), d.q.closes.Load(), releases.Load())
+			if overlapped.Load() || d.q.cancels.Load() != 1 || d.q.closes.Load() != 1 {
+				t.Fatalf("native lifetime: overlap=%v cancel=%d close=%d", overlapped.Load(), d.q.cancels.Load(), d.q.closes.Load())
 			}
 		})
 	}
@@ -910,39 +651,6 @@ func TestConcurrentRuntimeCloseWaitsWithOwnContext(t *testing.T) {
 	}
 	if d.closes.Load() != 1 || !d.closed.Load() {
 		t.Fatalf("engine close calls/success: %d/%v", d.closes.Load(), d.closed.Load())
-	}
-}
-
-func TestNativeCloseSuccessReleaseFailureRetriesOnlyRelease(t *testing.T) {
-	r, d := testRuntime()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	var releases atomic.Int32
-	req := testRequest()
-	req.Release = func(context.Context) error {
-		if releases.Add(1) == 1 {
-			return errors.New("injected release failure")
-		}
-		return nil
-	}
-	q, err := r.Prepare(ctx, req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = q.Close(ctx); err == nil {
-		t.Fatal("release failure was lost")
-	}
-	if d.q.closes.Load() != 1 || releases.Load() != 1 {
-		t.Fatalf("first cleanup: %d/%d", d.q.closes.Load(), releases.Load())
-	}
-	if err = q.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if d.q.closes.Load() != 1 || releases.Load() != 2 {
-		t.Fatalf("retry repeated native cleanup: %d/%d", d.q.closes.Load(), releases.Load())
-	}
-	if err = r.Close(ctx); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -1071,19 +779,18 @@ func TestCleanupFailureSealsAdmissionBeforeStopReturns(t *testing.T) {
 	var stopGateOnce sync.Once
 	openStopGate := func() { stopGateOnce.Do(func() { close(stopGate) }) }
 	t.Cleanup(openStopGate)
+	d.q.closeFn = func(context.Context) error {
+		if d.q.closes.Load() == 1 {
+			return errors.New("native cleanup unavailable")
+		}
+		return nil
+	}
 	d.stopFn = func() error {
 		close(stopEntered)
 		<-stopGate
 		return nil
 	}
-	var releases atomic.Int32
 	req := testRequest()
-	req.Release = func(context.Context) error {
-		if releases.Add(1) == 1 {
-			return errors.New("injected release failure")
-		}
-		return nil
-	}
 	q, err := r.Prepare(ctx, req)
 	if err != nil {
 		t.Fatal(err)
@@ -1095,14 +802,12 @@ func TestCleanupFailureSealsAdmissionBeforeStopReturns(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("failed cleanup did not stop the engine")
 	}
-	var rejectedRelease atomic.Int32
 	rejected := testRequest()
-	rejected.Release = func(context.Context) error { rejectedRelease.Add(1); return nil }
 	if _, err = r.Prepare(ctx, rejected); err == nil {
 		t.Fatal("sealed runtime admitted a query")
 	}
-	if d.prepares.Load() != 1 || rejectedRelease.Load() != 1 {
-		t.Fatalf("post-seal native/release calls: %d/%d", d.prepares.Load(), rejectedRelease.Load())
+	if d.prepares.Load() != 1 {
+		t.Fatalf("post-seal native calls: %d", d.prepares.Load())
 	}
 	openStopGate()
 	if err = <-closed; err == nil {
@@ -1150,20 +855,25 @@ func (i *panicPublishInput) acquire(context.Context, uint64) (inputLeaseDriver, 
 func (*panicPublishInput) finish() error    { return nil }
 func (*panicPublishInput) fail(error) error { return nil }
 
-func TestInputPushPanicStillReleasesNativeLease(t *testing.T) {
+func TestInputPublishPanicStillReleasesNativeLease(t *testing.T) {
+	runtime, driver := testRuntime()
+	t.Cleanup(func() { _ = runtime.Close(context.Background()) })
 	lease := new(panicPublishLease)
-	input := &Input{native: &panicPublishInput{lease: lease}}
-	func() {
-		defer func() {
-			if recovered := recover(); recovered != "publish panic" {
-				t.Fatalf("panic: %v", recovered)
-			}
-		}()
-		_ = input.Push(context.Background(), 1, []Vector{{Data: []byte{1}}})
-	}()
-	if lease.released.Load() != 1 {
-		t.Fatalf("release calls: %d", lease.released.Load())
-	}
+	driver.q.source = &panicPublishInput{lease: lease}
+	request := testRequest()
+	request.Reads = []Read{{BindingID: 1, Columns: []ReadColumn{{Column: Column{Name: "c"}}}, Producer: func(ctx context.Context, input *Input) (err error) {
+		owned, err := input.Acquire(ctx, 1)
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, owned.Release()) }()
+		return owned.Publish(ctx, 1, []Vector{{Data: []byte{1}}})
+	}}}
+	query, err := runtime.Prepare(t.Context(), request)
+	require.NoError(t, err)
+	require.ErrorContains(t, query.Run(t.Context(), func(Result) error { return nil }), "publish panic")
+	require.NoError(t, query.Close(t.Context()))
+	require.Equal(t, int32(1), lease.released.Load())
 }
 
 func TestProducerPanicReportsFailureCancelsAndJoins(t *testing.T) {
@@ -1189,16 +899,6 @@ func TestProducerPanicReportsFailureCancelsAndJoins(t *testing.T) {
 			return ctx.Err()
 		}
 	}}}
-	var releases atomic.Int32
-	req.Release = func(context.Context) error {
-		select {
-		case <-exited:
-			releases.Add(1)
-			return nil
-		default:
-			return errors.New("producer was not joined before release")
-		}
-	}
 	q, err := r.Prepare(ctx, req)
 	if err != nil {
 		t.Fatal(err)
@@ -1225,7 +925,7 @@ func TestProducerPanicReportsFailureCancelsAndJoins(t *testing.T) {
 	if err = q.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if d.q.closes.Load() != 1 || releases.Load() != 1 {
-		t.Fatalf("native/release calls: %d/%d", d.q.closes.Load(), releases.Load())
+	if d.q.closes.Load() != 1 {
+		t.Fatalf("native close calls: %d", d.q.closes.Load())
 	}
 }

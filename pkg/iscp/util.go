@@ -16,14 +16,12 @@ package iscp
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"slices"
-
-	// "encoding/hex"
 	"math"
-	// "slices"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,8 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-
-	// "github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -101,7 +97,7 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 
 	switch vec.GetType().Oid { //get col
 	case types.T_json:
-		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex)))
+		row[i] = types.DecodeJson(vec.CloneBytesAt(rowIndex))
 	case types.T_bool:
 		row[i] = vector.GetFixedAtWithTypeCheck[bool](vec, rowIndex)
 	case types.T_bit:
@@ -129,7 +125,7 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	case types.T_float64:
 		row[i] = vector.GetFixedAtWithTypeCheck[float64](vec, rowIndex)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-		row[i] = copyBytes(vec.GetBytesAt(rowIndex))
+		row[i] = vec.CloneBytesAt(rowIndex)
 	case types.T_array_float32:
 		// NOTE: Don't merge it with T_varchar. You will get raw binary in the SQL output
 		//+------------------------------+
@@ -145,7 +141,7 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	case types.T_array_bf16:
 		row[i] = vector.GetArrayAt[types.BF16](vec, rowIndex)
 	case types.T_array_float8, types.T_array_float4:
-		row[i] = copyBytes(vec.GetBytesAt(rowIndex))
+		row[i] = vec.CloneBytesAt(rowIndex)
 	case types.T_array_int8:
 		row[i] = vector.GetArrayAt[int8](vec, rowIndex)
 	case types.T_array_uint8:
@@ -215,16 +211,6 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 	return nil
 }
 
-func copyBytes(src []byte) []byte {
-	if len(src) > 0 {
-		dst := make([]byte, len(src))
-		copy(dst, src)
-		return dst
-	} else {
-		return []byte{}
-	}
-}
-
 func convertColIntoSql(
 	ctx context.Context,
 	data any,
@@ -232,16 +218,19 @@ func convertColIntoSql(
 	sqlBuff []byte) ([]byte, error) {
 	if data == nil {
 		typstr := typ.DescString()
+		if typ.Oid == types.T_enum {
+			// The source projection restores the ENUM domain. Its transport type
+			// must be valid SQL without member metadata in the runtime type.
+			typstr = types.T_uint16.ToType().DescString()
+		}
 		sqlBuff = appendString(sqlBuff, fmt.Sprintf("CAST(NULL as %s)", typstr))
 		return sqlBuff, nil
 	}
 	var temp string
 	switch typ.Oid { //get col
 	case types.T_json:
-		sqlBuff = appendByte(sqlBuff, '\'')
 		temp = data.(bytejson.ByteJson).String()
-		sqlBuff = appendString(sqlBuff, temp)
-		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendSQLString(sqlBuff, temp)
 	case types.T_bool:
 		b := data.(bool)
 		if b {
@@ -256,9 +245,7 @@ func convertColIntoSql(
 		byteLength := (bitLength + 7) / 8
 		b := types.EncodeUint64(&value)[:byteLength]
 		slices.Reverse(b)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendBytes(sqlBuff, b)
-		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendHex(sqlBuff, b)
 	case types.T_int8:
 		value := data.(int8)
 		sqlBuff = appendInt64(sqlBuff, int64(value))
@@ -357,9 +344,11 @@ func convertColIntoSql(
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_timestamp:
 		value := data.(string)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value)
-		sqlBuff = appendByte(sqlBuff, '\'')
+		ts, err := types.ParseTimestamp(time.UTC, value, typ.Scale)
+		if err != nil {
+			return nil, err
+		}
+		sqlBuff = appendTimestampSQL(sqlBuff, ts, typ.Scale)
 	case types.T_decimal64:
 		value := data.(string)
 		sqlBuff = appendByte(sqlBuff, '\'')
@@ -392,9 +381,8 @@ func convertColIntoSql(
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_enum:
 		value := data.(types.Enum)
-		sqlBuff = appendByte(sqlBuff, '\'')
-		sqlBuff = appendString(sqlBuff, value.String())
-		sqlBuff = appendByte(sqlBuff, '\'')
+		// Preserve ordinals even when member labels themselves are numeric.
+		sqlBuff = appendUint64(sqlBuff, uint64(value))
 	default:
 		logutil.Error(
 			"Failed to extract row from vector, unsupported type",
@@ -410,6 +398,42 @@ func appendHex(dst []byte, src []byte) []byte {
 	dst = hex.AppendEncode(dst, src)
 	dst = append(dst, '\'')
 	return dst
+}
+
+func appendSQLString(dst []byte, value string) []byte {
+	dst = appendByte(dst, '\'')
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '\\', '\'':
+			dst = appendByte(dst, '\\')
+		}
+		dst = appendByte(dst, value[i])
+	}
+	return appendByte(dst, '\'')
+}
+
+func appendTimestampSQL(dst []byte, value types.Timestamp, scale int32) []byte {
+	// Timestamp is stored as a signed microsecond count.  Serializing that
+	// representation through BIT_CAST avoids parsing a session-timezone
+	// dependent string and preserves fractional values and zero timestamps.
+	buf := types.EncodeTimestamp(&value)
+	dst = appendString(dst, "bit_cast(unhex('")
+	dst = hex.AppendEncode(dst, buf)
+	dst = appendString(dst, "') AS TIMESTAMP(")
+	dst = strconv.AppendInt(dst, int64(scale), 10)
+	return appendString(dst, "))")
+}
+
+// DescString omits temporal scale. Intermediate casts must retain it: casting
+// a TIMESTAMP(6) to the default TIMESTAMP(0) loses precision before assignment
+// to the hidden index, even if the destination column still has scale 6.
+func sqlCastTypeName(typ *types.Type) string {
+	switch typ.Oid {
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		return fmt.Sprintf("%s(%d)", typ.Oid.String(), typ.Scale)
+	default:
+		return typ.DescString()
+	}
 }
 
 func appendByte(buf []byte, d byte) []byte {
@@ -433,18 +457,27 @@ func appendUint64(buf []byte, value uint64) []byte {
 }
 
 func appendFloat64(buf []byte, value float64, bitSize int) []byte {
-	if !math.IsInf(value, 0) {
+	if !math.IsNaN(value) && !math.IsInf(value, 0) {
 		buf = strconv.AppendFloat(buf, value, 'f', -1, bitSize)
 	} else {
-		if math.IsInf(value, 1) {
-			buf = append(buf, []byte("+Infinity")...)
+		buf = append(buf, []byte("bit_cast(unhex('")...)
+		var raw [8]byte
+		if bitSize == 32 {
+			binary.LittleEndian.PutUint32(raw[:4], math.Float32bits(float32(value)))
+			buf = hex.AppendEncode(buf, raw[:4])
+			buf = append(buf, []byte("') AS FLOAT)")...)
 		} else {
-			buf = append(buf, []byte("-Infinity")...)
+			binary.LittleEndian.PutUint64(raw[:], math.Float64bits(value))
+			buf = hex.AppendEncode(buf, raw[:])
+			buf = append(buf, []byte("') AS DOUBLE)")...)
 		}
 	}
 	return buf
 }
 
+// CollectChanges reads one ISCP iteration's change range for index maintenance.
+// The caller's ctx carries the read policy: collectChangesCtxForJobs decides
+// whether this range may keep the trailing DELETE of an insert-then-delete key.
 var CollectChanges = func(ctx context.Context, rel engine.Relation, fromTs, toTs types.TS, mp *mpool.MPool) (engine.ChangesHandle, error) {
 	return rel.CollectChanges(ctx, fromTs, toTs, false, mp)
 }

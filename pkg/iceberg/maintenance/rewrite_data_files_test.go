@@ -45,7 +45,7 @@ func TestRewriteDataFilesPlannerBuildsCatalogCommitAction(t *testing.T) {
 	require.Equal(t, "268435456", plan.Attempt.Updates[0].Payload["target_file_size"])
 	require.NotContains(t, plan.Attempt.Updates[0].Payload, "idempotency_key")
 	require.Equal(t, "set-snapshot-summary", plan.Attempt.Updates[1].Type)
-	require.Equal(t, string(OperationRewriteDataFiles), plan.Attempt.Summary["operation"])
+	require.Equal(t, "replace", plan.Attempt.Summary["operation"])
 }
 
 func TestRewriteDataFilesPlannerUsesBranchRefSnapshot(t *testing.T) {

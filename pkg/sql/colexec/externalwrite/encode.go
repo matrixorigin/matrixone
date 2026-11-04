@@ -405,15 +405,8 @@ func (w *externalWriter) appendJSONValue(buf *bytes.Buffer, vec *vector.Vector, 
 		return w.appendJSONFloat(buf, vector.GetFixedAtNoTypeCheck[float64](vec, i), 64)
 	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		b := vec.GetBytesAt(i)
-		// The jsonline reader compares every decoded string against the \N null
-		// token (reader_csv.go JsonNull), so that exact content cannot
-		// round-trip under any encoding; and its JSON tokenizer rewrites
-		// invalid UTF-8 bytes to U+FFFD, mutating the value. Reject both
-		// rather than corrupt silently.
-		if bytes.Equal(b, csvNull) {
-			return moerr.NewNotSupported(context.Background(),
-				"external write (jsonline): a string value of exactly \\N reads back as NULL and cannot round-trip")
-		}
+		// JSON strings can preserve valid UTF-8 text, including the literal \\N.
+		// Reject invalid UTF-8 rather than let the JSON reader rewrite it.
 		if !utf8.Valid(b) {
 			return moerr.NewNotSupported(context.Background(),
 				"external write (jsonline): string value contains invalid UTF-8, which the jsonline reader rewrites; use csv format for raw bytes")

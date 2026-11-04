@@ -139,3 +139,21 @@ func TestResolvePadCharToFullLength(t *testing.T) {
 		require.ErrorIs(t, err, wantErr)
 	})
 }
+
+func TestIsDivisionByZeroMode(t *testing.T) {
+	for _, tc := range []struct {
+		mode any
+		want bool
+	}{
+		{"", false}, {nil, false}, {1, false},
+		{"STRICT_TRANS_TABLES", false},
+		{"ERROR_FOR_DIVISION_BY_ZERO", true},
+		{"TRADITIONAL", true},
+		{" traditional ,ERROR_FOR_DIVISION_BY_ZERO", true},
+		{" error_for_division_by_zero , STRICT_ALL_TABLES", true},
+		{"ERROR_FOR_DIVISION_BY_ZERO_EXTRA", false},
+		{"TRADITIONAL_EXTRA", false},
+	} {
+		require.Equal(t, tc.want, IsDivisionByZeroMode(tc.mode), tc.mode)
+	}
+}

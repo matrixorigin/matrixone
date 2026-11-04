@@ -1,0 +1,46 @@
+from pathlib import Path
+import os, subprocess, signal, time, socket, json, re, hashlib
+import pymysql
+root=Path(__file__).parent
+work=Path('/private/tmp/mo-issue30995')
+runtime=Path('/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/isolated-runtime')
+env=os.environ.copy();env.update(GOMAXPROCS='4',GOMEMLIMIT='3GiB',DYLD_LIBRARY_PATH=f'{work}/cgo:{work}/thirdparties/install/lib:{work}/lib')
+(root/'cn.toml').write_text((runtime/'cn-4g.toml').read_text().replace('level = "warn"','level = "info"'))
+for service in ['log','tn']:
+ (root/f'{service}.toml').write_text((runtime/f'{service}.toml').read_text().replace('level = "warn"','level = "info"'))
+(root/'launch.toml').write_text(f'logservices = ["{root}/log.toml"]\ntnservices = ["{root}/tn.toml"]\ncnservices = ["{root}/cn.toml"]\n')
+class Service:
+ def __init__(self,variant,label=None):self.variant=variant;self.c=None;self.label=label or ('blackbox-'+variant)
+ def __enter__(self):
+  for port in [55401,55460]:
+   with socket.socket() as s:s.bind(('127.0.0.1',port))
+  self.binary=root/'mo-service-candidate' if self.variant=='candidate' else root/'mo-service-baseline'
+  self.path=root/f'{self.label}-service.log';self.log=self.path.open('wb')
+  self.p=subprocess.Popen([str(self.binary),'-launch',str(root/'launch.toml'),'-debug-http','127.0.0.1:55460'],cwd=work,env=env,stdout=self.log,stderr=subprocess.STDOUT)
+  try:
+   deadline=time.monotonic()+90
+   while time.monotonic()<deadline:
+    if self.p.poll() is not None:raise RuntimeError(('startup exit',self.p.returncode))
+    if self.c is None:
+     try:self.c=pymysql.connect(host='127.0.0.1',port=55401,user='root',password='111',database='q33_bench',autocommit=True,read_timeout=120)
+     except pymysql.MySQLError:pass
+    if self.c is not None and 'ISCP-Task Start' in self.path.read_text(errors='replace'):break
+    time.sleep(.1)
+   else:raise TimeoutError('SQL and query service registration readiness')
+   self.s=self.c.cursor();self.s.execute('SET SESSION agg_spill_mem=0');return self
+  except BaseException:self.__exit__(None,None,None);raise
+ def __exit__(self,*args):
+  if self.c:
+   try:self.c.rollback()
+   finally:self.c.close()
+  if self.p.poll() is None:
+   self.p.send_signal(signal.SIGTERM)
+   try:self.p.wait(timeout=30)
+   except subprocess.TimeoutExpired:self.p.kill();self.p.wait();raise
+  self.log.close()
+def run(s,sql,want):
+ start=time.monotonic();s.execute(sql);got=s.fetchall();assert got==want,(sql,got,want)
+ return {'rows':got,'seconds':time.monotonic()-start}
+def physical(s,sql,label):
+ s.execute('EXPLAIN PHYPLAN VERBOSE '+sql);raw='\n'.join(str(x[0]) for x in s.fetchall());(root/f'{label}-physical.txt').write_text(raw+'\n')
+ return sorted({int(x) for x in re.findall(r'\bgroup\s*\(idx:(-?\d+)',raw)})

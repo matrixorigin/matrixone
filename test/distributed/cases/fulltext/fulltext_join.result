@@ -65,7 +65,8 @@ Project  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on ft_join_test.ft  𝄀
                     Runtime Filter Probe: f.id  𝄀
-              ->  Table Function on fulltext_index_scan
+              ->  Fulltext Index Scan on ft_idx  𝄀
+                    Fulltext Index: ft_idx
 select f.id, b.name
 from ft f join base b on b.id = f.base_id
 where match(f.title, f.body) against('hello')
@@ -128,22 +129,25 @@ where match(d.title) against('alpha' in boolean mode) order by d.id;
 5  ¦  null
 explain select d.id, s.tag from lj_docs d left join lj_side s on d.id = s.id
 where match(d.title) against('alpha' in boolean mode) order by d.id;
--- @regex("fulltext_index_scan", true)
+-- @regex("Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: d.id INTERNAL  𝄀
         ->  Join  𝄀
-              Join Type: LEFT   hashOnPK  𝄀
-              Join Cond: (d.id = s.id)  𝄀
+              Join Type: RIGHT   hashOnPK  𝄀
+              Join Cond: (s.id = d.id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_join_test.lj_side [ForceOneCN]  𝄀
+                    Runtime Filter Probe: s.id  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (d.id = mo_fulltext_alias_0.doc_id)  𝄀
                     Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on ft_join_test.lj_docs  𝄀
+                    ->  Table Scan on ft_join_test.lj_docs [ForceOneCN]  𝄀
                           Runtime Filter Probe: d.id  𝄀
-                    ->  Table Function on fulltext_index_scan  𝄀
-              ->  Table Scan on ft_join_test.lj_side
+                    ->  Fulltext Index Scan on   𝄀
+                          Fulltext Index: 
 select d.id, s.tag from lj_side s right join lj_docs d on d.id = s.id
 where match(d.title) against('alpha' in boolean mode) order by d.id;
 ➤ id[4,32,0]  ¦  tag[12,20,0]  𝄀

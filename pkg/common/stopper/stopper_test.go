@@ -17,8 +17,10 @@ package stopper
 import (
 	"context"
 	"io"
+	"strconv"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -26,89 +28,272 @@ import (
 )
 
 func TestRunTaskOnNotRunning(t *testing.T) {
-	s := NewStopper("TestRunTaskOnNotRunning")
+	s := NewStopper(t.Name())
 	s.Stop()
-	assert.Equal(t, ErrUnavailable, s.RunTask(func(ctx context.Context) {
-
-	}))
+	called := false
+	require.ErrorIs(t, s.RunTask(func(context.Context) { called = true }), ErrUnavailable)
+	require.ErrorIs(t, s.RunNamedRetryTask("retry", 17, 2, func(context.Context, int32) error {
+		called = true
+		return nil
+	}), ErrUnavailable)
+	s.Stop()
+	require.False(t, called)
 }
 
 func TestRunTask(t *testing.T) {
-	s := NewStopper("TestRunTask")
-	defer s.Stop()
-
-	c := make(chan struct{})
-	assert.NoError(t, s.RunTask(func(ctx context.Context) {
-		close(c)
-	}))
-	select {
-	case <-c:
-		break
-	case <-time.After(time.Second):
-		assert.Fail(t, "run task timeout")
+	for _, canceled := range []bool{false, true} {
+		name := "running context"
+		if canceled {
+			name = "canceled context"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := NewStopper(t.Name())
+				defer s.Stop()
+				if canceled {
+					s.cancel()
+				}
+				called := false
+				var err error
+				require.NoError(t, s.RunTask(func(ctx context.Context) { called = true; err = ctx.Err() }))
+				synctest.Wait()
+				require.True(t, called, "accepted ordinary tasks must execute even if cancellation precedes invocation")
+				if canceled {
+					require.ErrorIs(t, err, context.Canceled)
+				} else {
+					require.NoError(t, err)
+				}
+				require.Empty(t, s.runningTasks())
+			})
+		})
 	}
 }
 
 func TestRunTaskWithTimeout(t *testing.T) {
-	c := make(chan struct{})
-	defer close(c)
-	var names []string
-	s := NewStopper("TestRunTaskWithTimeout",
-		WithStopTimeout(time.Millisecond*10),
-		WithTimeoutTaskHandler(func(tasks []string, timeAfterStop time.Duration) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{})
+		release := make(chan struct{})
+		releaseTask := sync.OnceFunc(func() { close(release) })
+		handlerRelease := make(chan struct{})
+		releaseHandler := sync.OnceFunc(func() { close(handlerRelease) })
+		type diagnostic struct {
+			tasks   []string
+			elapsed time.Duration
+		}
+		diagnostics := make(chan diagnostic, 1)
+		s := NewStopper(t.Name(), WithStopTimeout(10*time.Millisecond),
+			WithTimeoutTaskHandler(func(tasks []string, elapsed time.Duration) {
+				diagnostics <- diagnostic{tasks, elapsed}
+				<-handlerRelease
+			}))
+		defer s.Stop()
+		defer releaseTask()
+		defer releaseHandler()
+		require.NoError(t, s.RunNamedTask("timeout", func(context.Context) { close(started); <-release }))
+		<-started
+		stopped := make(chan struct{}, 2)
+		for range 2 {
+			go func() { s.Stop(); stopped <- struct{}{} }()
+		}
+		select {
+		case info := <-diagnostics:
+			require.Equal(t, []string{"timeout"}, info.tasks)
+			require.Equal(t, 10*time.Millisecond, info.elapsed)
+		case <-time.After(time.Second):
+			t.Fatal("blocked task was not diagnosed")
+		}
+		releaseTask()
+		synctest.Wait()
+		require.Empty(t, s.runningTasks())
+		select {
+		case <-stopped:
+			t.Fatal("Stop returned before its diagnostic handler completed")
+		default:
+		}
+		releaseHandler()
+		deadline := time.NewTimer(time.Second)
+		defer deadline.Stop()
+		for range 2 {
 			select {
-			case c <- struct{}{}:
-			default:
+			case <-stopped:
+			case <-deadline.C:
+				t.Fatal("Stop did not join its diagnostic handler")
 			}
-			names = append(names, tasks...)
-		}))
-
-	assert.NoError(t, s.RunNamedTask("timeout", func(ctx context.Context) {
-		<-c
-	}))
-
-	s.Stop()
-	assert.Equal(t, 1, len(names))
-	assert.Contains(t, names[0], "timeout")
+		}
+	})
 }
 
 func TestRunNamedRetryTask(t *testing.T) {
-	s := NewStopper("TestRunNamedRetryTask")
+	for _, tc := range []struct {
+		name      string
+		limit     uint32
+		successAt int
+		attempts  []time.Duration
+	}{
+		{name: "zero attempts"},
+		{name: "large limit with immediate success", limit: ^uint32(0), successAt: 1, attempts: []time.Duration{0}},
+		{name: "one failure", limit: 1, attempts: []time.Duration{0}},
+		{name: "retry then success", limit: 3, successAt: 2, attempts: []time.Duration{0, time.Second}},
+		{name: "exhaustion", limit: 3, attempts: []time.Duration{0, time.Second, 3 * time.Second}},
+		{name: "capped backoff", limit: 7, attempts: []time.Duration{0, time.Second, 3 * time.Second, 7 * time.Second, 15 * time.Second, 25 * time.Second, 35 * time.Second}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := NewStopper(t.Name())
+				defer s.Stop()
+				start := time.Now()
+				var attempts []time.Duration
+				var accounts []int32
+				called := make(chan struct{}, max(1, len(tc.attempts)))
+				require.NoError(t, s.RunNamedRetryTask("retry", 17, tc.limit, func(ctx context.Context, account int32) error {
+					attempts = append(attempts, time.Since(start))
+					accounts = append(accounts, account)
+					select {
+					case called <- struct{}{}:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					if len(attempts) == tc.successAt {
+						return nil
+					}
+					return io.EOF
+				}))
+				deadline := time.NewTimer(time.Minute)
+				defer deadline.Stop()
+				for range tc.attempts {
+					select {
+					case <-called:
+					case <-deadline.C:
+						t.Fatal("retry attempt did not execute")
+					}
+				}
+				synctest.Wait()
+				require.Equal(t, tc.attempts, attempts)
+				for _, account := range accounts {
+					require.Equal(t, int32(17), account)
+				}
+				require.Empty(t, s.runningTasks(), "success or exhaustion must retire without another backoff")
+			})
+		})
+	}
+}
 
-	called := 0
-	err := s.RunNamedRetryTask(
-		"retry",
-		0,
-		2,
-		func(ctx context.Context, _ int32) error {
-			called++
-			if called == 0 {
+func TestRunNamedRetryTaskCancellation(t *testing.T) {
+	t.Run("before execution", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s := NewStopper(t.Name())
+			defer s.Stop()
+			s.cancel()
+			called := false
+			require.NoError(t, s.RunNamedRetryTask("retry", 17, 2, func(context.Context, int32) error {
+				called = true
 				return io.EOF
+			}))
+			synctest.Wait()
+			require.False(t, called)
+			require.Empty(t, s.runningTasks())
+		})
+	})
+	t.Run("during backoff", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			s := NewStopper(t.Name())
+			defer s.Stop()
+			called := 0
+			first := make(chan struct{}, 2)
+			require.NoError(t, s.RunNamedRetryTask("retry", 17, 2, func(context.Context, int32) error {
+				called++
+				first <- struct{}{}
+				return io.EOF
+			}))
+			<-first
+			synctest.Wait()
+			stopped := make(chan struct{})
+			go func() { s.Stop(); close(stopped) }()
+			select {
+			case <-stopped:
+			case <-time.After(100 * time.Millisecond):
+				t.Error("Stop remained blocked behind retry backoff after cancellation")
 			}
-			return nil
-		},
-	)
-	require.NoError(t, err)
-
-	s.Stop()
-	require.Equal(t, 1, called)
+			<-stopped
+			require.Equal(t, 1, called)
+			require.Empty(t, s.runningTasks())
+		})
+	})
 }
 
-func BenchmarkRunTask1000(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		runTasks(b, 1000)
+func TestStopWaitsForTaskDone(t *testing.T) {
+	for _, retry := range []bool{false, true} {
+		name := "task"
+		if retry {
+			name = "retry task"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := NewStopper(t.Name())
+				defer s.Stop()
+				// An earlier empty epoch must not let Stop skip a later accepted task.
+				for range 3 {
+					require.NoError(t, s.RunTask(func(context.Context) {}))
+					synctest.Wait()
+					require.Empty(t, s.runningTasks())
+				}
+				release := make(chan struct{})
+				releaseTask := sync.OnceFunc(func() { close(release) })
+				defer releaseTask()
+				started := make(chan struct{})
+				canceled := make(chan struct{})
+				task := func(ctx context.Context) {
+					close(started)
+					<-ctx.Done()
+					close(canceled)
+					<-release
+				}
+				if retry {
+					require.NoError(t, s.RunNamedRetryTask("retry", 17, 2, func(ctx context.Context, _ int32) error { task(ctx); return io.EOF }))
+				} else {
+					require.NoError(t, s.RunTask(task))
+				}
+				<-started
+				stopped := make(chan struct{}, 2)
+				for range 2 {
+					go func() { s.Stop(); stopped <- struct{}{} }()
+				}
+				synctest.Wait()
+				select {
+				case <-canceled:
+				default:
+					t.Fatal("Stop did not cancel the accepted task")
+				}
+				require.ErrorIs(t, s.RunTask(func(context.Context) {}), ErrUnavailable)
+				require.ErrorIs(t, s.RunNamedRetryTask("rejected", 17, 2, func(context.Context, int32) error { return nil }), ErrUnavailable)
+				select {
+				case <-stopped:
+					t.Fatal("Stop returned before the accepted task exited")
+				default:
+				}
+				releaseTask()
+				deadline := time.NewTimer(time.Second)
+				defer deadline.Stop()
+				for range 2 {
+					select {
+					case <-stopped:
+					case <-deadline.C:
+						t.Fatal("concurrent Stop did not join the released task")
+					}
+				}
+				require.Empty(t, s.runningTasks())
+			})
+		})
 	}
 }
 
-func BenchmarkRunTask10000(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		runTasks(b, 10000)
-	}
-}
-
-func BenchmarkRunTask100000(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		runTasks(b, 100000)
+func BenchmarkRunTask(b *testing.B) {
+	for _, n := range []int{0, 1, 1000, 10000, 100000} {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			for range b.N {
+				runTasks(b, n)
+			}
+		})
 	}
 }
 

@@ -16,8 +16,10 @@ package mysql
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -83,4 +85,28 @@ func TestSpatialAliasesNonReserved(t *testing.T) {
 		_, err := ParseOne(context.Background(), "create table t ("+name+" int)", 1)
 		require.NoError(t, err, "%s should be usable as a column name", name)
 	}
+}
+
+func TestPointFunctionCall(t *testing.T) {
+	for _, sql := range []string{"select point(1, 2)", "select POINT(1, 2)"} {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok)
+		selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, selectClause.Exprs, 1)
+		call, ok := selectClause.Exprs[0].Expr.(*tree.FuncExpr)
+		require.True(t, ok)
+		require.Equal(t, "point", strings.ToLower(call.FuncName.Origin()))
+		require.Len(t, call.Exprs, 2)
+
+		formatted := tree.String(stmt, dialect.MYSQL)
+		_, err = ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+	}
+
+	// POINT remains usable as a geometry type and a column identifier.
+	_, err := ParseOne(context.Background(), "create table t (point point)", 1)
+	require.NoError(t, err)
 }

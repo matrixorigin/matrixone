@@ -20,8 +20,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -258,10 +260,7 @@ var sendCNAllocateIDWithRequestIDFunc = (*hakeeperClient).sendCNAllocateIDWithRe
 func NewClusterHAKeeperClient(
 	ctx context.Context, sid string, cfg HAKeeperClientConfig,
 ) (ClusterHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -275,10 +274,7 @@ func NewCNHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (CNHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -292,10 +288,7 @@ func NewTNHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (TNHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -309,10 +302,7 @@ func NewLogHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (LogHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
@@ -371,13 +361,17 @@ func NewProxyHAKeeperClient(
 	sid string,
 	cfg HAKeeperClientConfig,
 ) (ProxyHAKeeperClient, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if err := validateHAKeeperClientContext(ctx); err != nil {
+	if err := validateHAKeeperClientConfigAndContext(&cfg, ctx); err != nil {
 		return nil, err
 	}
 	return newManagedHAKeeperClient(ctx, sid, cfg)
+}
+
+func validateHAKeeperClientConfigAndContext(cfg *HAKeeperClientConfig, ctx context.Context) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return validateHAKeeperClientContext(ctx)
 }
 
 func validateHAKeeperClientContext(ctx context.Context) error {
@@ -679,6 +673,9 @@ func (c *managedHAKeeperClient) allocateID(
 		// RPC without an allocation lock, then publishes the batch and wakes all
 		// waiters exactly once on either success or failure.
 		firstID, err := c.allocateIDBatch(ctx, key, batchSize)
+		if err == nil && (firstID == 0 || batchSize == 0 || batchSize-1 > math.MaxUint64-firstID) {
+			err = moerr.NewInternalError(ctx, "HAKeeper returned an invalid ID reservation")
+		}
 		ids.Lock()
 		if err == nil {
 			ids.nextID = firstID + 1
@@ -1205,6 +1202,7 @@ func (c *managedHAKeeperClient) isRetryableError(err error) bool {
 	// applies while the replacement generation is being connected or admitted.
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) ||
 		logutil.IsExpectedConnectionCloseError(err) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
 		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||

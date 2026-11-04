@@ -17,6 +17,7 @@
 package frontend
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -24,6 +25,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/config"
 )
 
 func tcpConnectionPair(t testing.TB) (net.Conn, net.Conn) {
@@ -182,6 +185,66 @@ func TestConnectionPeerClosedRefreshesProbeWhenConnChanges(t *testing.T) {
 	}
 	conn.UseConn(secondServer)
 	require.NoError(t, secondClient.Close())
+	require.Eventually(t, func() bool {
+		closed, err := connectionPeerClosed(conn)
+		return err == nil && closed
+	}, time.Second, time.Millisecond)
+}
+
+func TestConnectionPeerClosedAfterBufferedTLSUpgrade(t *testing.T) {
+	serverRaw, clientRaw := tcpConnectionPair(t)
+	t.Cleanup(func() {
+		_ = serverRaw.Close()
+		_ = clientRaw.Close()
+	})
+
+	sv, err := getSystemVariables("test/system_vars_config.toml")
+	require.NoError(t, err)
+	pu := config.NewParameterUnit(sv, nil, nil, nil)
+	allocator := NewLeakCheckAllocator()
+	conn, err := NewIOSessionWithOptions(
+		serverRaw,
+		pu,
+		"",
+		WithIOSessionAllocator(allocator),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = conn.Close()
+		require.True(t, allocator.CheckBalance())
+	})
+
+	certificate := newTestTLSCertificate(t)
+	clientTLS := tls.Client(&prefixWriteConn{
+		Conn:   clientRaw,
+		prefix: makePacket(bytes.Repeat([]byte{0x01}, 32), 1),
+	}, &tls.Config{
+		InsecureSkipVerify: true, // test certificate is intentionally self-signed
+		MinVersion:         tls.VersionTLS12,
+	})
+	serverRaw.SetDeadline(time.Now().Add(5 * time.Second))
+	clientRaw.SetDeadline(time.Now().Add(5 * time.Second))
+	clientHandshake := make(chan error, 1)
+	go func() {
+		clientHandshake <- clientTLS.Handshake()
+	}()
+
+	payload, err := conn.Read()
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte{0x01}, 32), payload)
+	tlsConn := tls.Server(conn.connForTLS(), &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		MinVersion:   tls.VersionTLS12,
+	})
+	require.NotSame(t, serverRaw, tlsConn.NetConn())
+	require.NoError(t, tlsConn.Handshake())
+	require.NoError(t, <-clientHandshake)
+	conn.UseConn(tlsConn)
+
+	// Close the raw client socket instead of sending TLS close_notify. The
+	// liveness probe must still reach the TCP socket through both TLS and the
+	// buffered handshake wrapper and observe the peer FIN.
+	require.NoError(t, clientRaw.Close())
 	require.Eventually(t, func() bool {
 		closed, err := connectionPeerClosed(conn)
 		return err == nil && closed

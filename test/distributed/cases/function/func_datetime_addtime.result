@@ -69,3 +69,52 @@ null
 SELECT ADDTIME('0000-00-00 00:00:00', '00:00:01') AS zero_datetime_string;
 ➤ zero_datetime_string[93,64,0]  𝄀
 null
+SELECT ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.123456' AS TIME(6))) AS fractional_date,
+MICROSECOND(ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.123456' AS TIME(6)))) AS micros;
+➤ fractional_date[93,26,0]  ¦  micros[-5,64,0]  𝄀
+2024-02-29 00:00:00.123456000  ¦  123456
+SELECT ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.999999' AS TIME(6))) AS below_next_second,
+MICROSECOND(ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.999999' AS TIME(6)))) AS micros;
+➤ below_next_second[93,26,0]  ¦  micros[-5,64,0]  𝄀
+2024-02-29 00:00:00.999999000  ¦  999999
+SELECT ADDTIME(CAST('2024-02-29' AS DATETIME(6)), CAST('00:00:00.123456' AS TIME(6))) AS datetime_control,
+ADDTIME(CAST('2024-02-29' AS DATE), CAST('00:00:00.123' AS TIME(3))) AS milliseconds;
+➤ datetime_control[93,26,0]  ¦  milliseconds[93,23,0]  𝄀
+2024-02-29 00:00:00.123456000  ¦  2024-02-29 00:00:00.123000000
+SELECT ADDTIME(CAST(NULL AS DATE), CAST('00:00:00.123456' AS TIME(6))) IS NULL AS null_date,
+ADDTIME(CAST('2024-02-29' AS DATE), CAST(NULL AS TIME(6))) IS NULL AS null_time,
+ADDTIME(CAST('2024-02-29' AS DATE), 'invalid') IS NULL AS invalid_duration;
+➤ null_date[-7,1,0]  ¦  null_time[-7,1,0]  ¦  invalid_duration[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+DROP TABLE IF EXISTS addtime_date_fsp, addtime_date_fsp_result;
+CREATE TABLE addtime_date_fsp(id INT, d DATE, t TIME(6));
+INSERT INTO addtime_date_fsp VALUES
+(1, '2024-02-29', '00:00:00.123456'),
+(2, '2024-02-29', '00:00:00.999999'),
+(3, '2024-02-29', '-00:00:00.000001'),
+(4, NULL, '00:00:00.123456'),
+(5, '2024-02-29', NULL);
+SELECT id, ADDTIME(d, t) AS added, MICROSECOND(ADDTIME(d, t)) AS micros,
+SUBTIME(d, t) AS subtracted FROM addtime_date_fsp ORDER BY id;
+➤ id[4,32,0]  ¦  added[93,26,0]  ¦  micros[-5,64,0]  ¦  subtracted[93,26,0]  𝄀
+1  ¦  2024-02-29 00:00:00.123456000  ¦  123456  ¦  2024-02-28 23:59:59.876544000  𝄀
+2  ¦  2024-02-29 00:00:00.999999000  ¦  999999  ¦  2024-02-28 23:59:59.000001000  𝄀
+3  ¦  2024-02-28 23:59:59.999999000  ¦  999999  ¦  2024-02-29 00:00:00.000001000  𝄀
+4  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null  ¦  null
+CREATE TABLE addtime_date_fsp_result AS
+SELECT id, ADDTIME(d, t) AS added, SUBTIME(d, t) AS subtracted FROM addtime_date_fsp;
+SELECT column_name, data_type, datetime_precision FROM information_schema.columns
+WHERE table_schema = DATABASE() AND table_name = 'addtime_date_fsp_result'
+AND column_name IN ('added', 'subtracted') ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
+added  ¦  datetime  ¦  6  𝄀
+subtracted  ¦  datetime  ¦  6
+SELECT id, added, MICROSECOND(added) AS micros, subtracted FROM addtime_date_fsp_result ORDER BY id;
+➤ id[4,32,0]  ¦  added[93,26,0]  ¦  micros[-5,64,0]  ¦  subtracted[93,26,0]  𝄀
+1  ¦  2024-02-29 00:00:00.123456000  ¦  123456  ¦  2024-02-28 23:59:59.876544000  𝄀
+2  ¦  2024-02-29 00:00:00.999999000  ¦  999999  ¦  2024-02-28 23:59:59.000001000  𝄀
+3  ¦  2024-02-28 23:59:59.999999000  ¦  999999  ¦  2024-02-29 00:00:00.000001000  𝄀
+4  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null  ¦  null
+DROP TABLE addtime_date_fsp_result, addtime_date_fsp;

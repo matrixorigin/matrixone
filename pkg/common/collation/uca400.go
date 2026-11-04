@@ -17,7 +17,6 @@ package collation
 import (
 	"bytes"
 	"encoding/binary"
-	"unicode/utf8"
 
 	"vitess.io/vitess/go/mysql/collations/colldata"
 )
@@ -51,18 +50,8 @@ func uca400Weights(dst, value []byte) []byte {
 }
 
 func (d Domain) uca400Key(scratch, value []byte) ([]byte, error) {
-	if _, err := d.KeySizeUpperBound(len(value)); err != nil {
+	if err := d.ValidateValue(value); err != nil {
 		return nil, err
-	}
-	if !utf8.Valid(value) {
-		return nil, ErrUTF8
-	}
-	if d == UTF8MB3UnicodeCI {
-		for _, r := range string(value) {
-			if r > 0xffff {
-				return nil, ErrRepertoire
-			}
-		}
 	}
 	// Keep weights separate from scratch so expansion never overwrites unread
 	// weights. Both allocations are bounded by the checked scalar-size bound.

@@ -22,6 +22,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTimeToDecimalPreservesRangeError(t *testing.T) {
+	for _, negative := range []bool{false, true} {
+		value := TimeFromClock(negative, 12, 34, 56, 123456)
+		for _, target := range []struct{ width, scale int32 }{{5, 1}, {8, 6}, {18, 6}} {
+			text := value.NumericString(target.scale)
+			want64, wantErr64 := ParseDecimal64(text, target.width, target.scale)
+			got64, err64 := value.ToDecimal64(context.Background(), target.width, target.scale)
+			want128, wantErr128 := ParseDecimal128(text, target.width, target.scale)
+			got128, err128 := value.ToDecimal128(context.Background(), target.width, target.scale)
+			if wantErr64 != nil {
+				require.EqualError(t, err64, wantErr64.Error())
+				require.False(t, moerr.IsMoErrCode(err64, moerr.ErrInternal))
+			} else {
+				require.NoError(t, err64)
+				require.Equal(t, want64, got64)
+			}
+			if wantErr128 != nil {
+				require.EqualError(t, err128, wantErr128.Error())
+				require.False(t, moerr.IsMoErrCode(err128, moerr.ErrInternal))
+			} else {
+				require.NoError(t, err128)
+				require.Equal(t, want128, got128)
+			}
+		}
+	}
+}
+
 func TestTime_StringAndString2(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -851,5 +878,23 @@ func TestTime_ToDecimal_ScaleGreaterThan6(t *testing.T) {
 				}, "ToDecimal128 should not panic with scale > 6")
 			}
 		})
+	}
+}
+
+func TestTruncateTemporalFractionForParse(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		scale int32
+		want  string
+	}{
+		{" 00:00:00.9999999 ", 6, "00:00:00.999999"},
+		{"-00:00:00.9999999", 0, "-00:00:00"},
+		{"2024-01-02 03:04:05.1234567", 3, "2024-01-02 03:04:05.123"},
+		{"00:00:00.12", 3, "00:00:00.12"},
+		{"00:00:00.9999999tail", 6, "00:00:00.9999999tail"},
+		{"00:00:00.", 6, "00:00:00."},
+		{"00:00:00", 6, "00:00:00"},
+	} {
+		require.Equal(t, tc.want, TruncateTemporalFractionForParse(tc.input, tc.scale))
 	}
 }

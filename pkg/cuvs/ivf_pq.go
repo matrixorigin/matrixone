@@ -26,9 +26,10 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 // GpuIvfPq represents the C++ gpu_ivf_pq_t object.
@@ -47,10 +48,10 @@ func (gi *GpuIvfPq[B, Q]) SetBatchWindow(windowUs int64) error {
 	gi.batchWindowUs = windowUs
 	if gi.cIvfPq != nil {
 		var errmsg *C.char
-		C.gpu_ivf_pq_set_batch_window(gi.cIvfPq, C.int64_t(windowUs), unsafe.Pointer(&errmsg))
+		C.gpu_ivf_pq_set_batch_window(gi.cIvfPq, C.int64_t(windowUs), util.UnsafePointer(&errmsg))
 		if errmsg != nil {
 			errStr := C.GoString(errmsg)
-			C.free(unsafe.Pointer(errmsg))
+			C.free(util.UnsafePointer(errmsg))
 			return moerr.NewInternalErrorNoCtx(errStr)
 		}
 	}
@@ -65,10 +66,10 @@ func (gi *GpuIvfPq[B, Q]) SetDynbConservativeDispatch(enable bool) error {
 	gi.dynbConservativeDispatch = enable
 	if gi.cIvfPq != nil {
 		var errmsg *C.char
-		C.gpu_ivf_pq_set_dynb_conservative_dispatch(gi.cIvfPq, C.bool(enable), unsafe.Pointer(&errmsg))
+		C.gpu_ivf_pq_set_dynb_conservative_dispatch(gi.cIvfPq, C.bool(enable), util.UnsafePointer(&errmsg))
 		if errmsg != nil {
 			errStr := C.GoString(errmsg)
-			C.free(unsafe.Pointer(errmsg))
+			C.free(util.UnsafePointer(errmsg))
 			return moerr.NewInternalErrorNoCtx(errStr)
 		}
 	}
@@ -93,7 +94,7 @@ func NewGpuIvfPq[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 
 	var cIds *C.int64_t
 	if len(ids) > 0 {
-		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+		cIds = (*C.int64_t)(util.UnsafePointer(&ids[0]))
 	}
 
 	cBP := C.ivf_pq_build_params_t{
@@ -106,7 +107,7 @@ func NewGpuIvfPq[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 	}
 
 	cIvfPq := C.gpu_ivf_pq_new(
-		unsafe.Pointer(&dataset[0]),
+		util.UnsafePointer(&dataset[0]),
 		C.uint64_t(count),
 		C.uint32_t(dimension),
 		C.distance_type_t(metric),
@@ -118,7 +119,7 @@ func NewGpuIvfPq[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		cIds,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 	runtime.KeepAlive(cDevices)
@@ -126,7 +127,7 @@ func NewGpuIvfPq[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -179,13 +180,13 @@ func NewGpuIvfPqEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metr
 		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -213,21 +214,21 @@ func (gi *GpuIvfPq[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) er
 	var errmsg *C.char
 	var cIds *C.int64_t
 	if len(ids) > 0 {
-		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+		cIds = (*C.int64_t)(util.UnsafePointer(&ids[0]))
 	}
 	C.gpu_ivf_pq_add_chunk(
 		gi.cIvfPq,
-		unsafe.Pointer(&chunk[0]),
+		util.UnsafePointer(&chunk[0]),
 		C.uint64_t(chunkCount),
 		cIds,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
 	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -247,21 +248,21 @@ func (gi *GpuIvfPq[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []i
 	var errmsg *C.char
 	var cIds *C.int64_t
 	if len(ids) > 0 {
-		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+		cIds = (*C.int64_t)(util.UnsafePointer(&ids[0]))
 	}
 	C.gpu_ivf_pq_add_chunk_quantize(
 		gi.cIvfPq,
-		unsafe.Pointer(&chunk[0]),
+		util.UnsafePointer(&chunk[0]),
 		C.uint64_t(chunkCount),
 		cIds,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
 	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -280,15 +281,15 @@ func (gi *GpuIvfPq[B, Q]) TrainQuantizer(trainData []B, nSamples uint64) error {
 	var errmsg *C.char
 	C.gpu_ivf_pq_train_quantizer(
 		gi.cIvfPq,
-		unsafe.Pointer(&trainData[0]),
+		util.UnsafePointer(&trainData[0]),
 		C.uint64_t(nSamples),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(trainData)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -305,12 +306,12 @@ func (gi *GpuIvfPq[B, Q]) SetQuantizer(min, max float32) error {
 		gi.cIvfPq,
 		C.float(min),
 		C.float(max),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -328,12 +329,12 @@ func (gi *GpuIvfPq[B, Q]) GetQuantizer() (float32, float32, error) {
 		gi.cIvfPq,
 		&cMin,
 		&cMax,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return float32(cMin), float32(cMax), nil
@@ -350,7 +351,7 @@ func NewGpuIvfPqFromFile[B, Q VectorType](filename string, dimension uint32, met
 	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cFilename := C.CString(filename)
-	defer C.free(unsafe.Pointer(cFilename))
+	defer C.free(util.UnsafePointer(cFilename))
 
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
@@ -377,13 +378,13 @@ func NewGpuIvfPqFromFile[B, Q VectorType](filename string, dimension uint32, met
 		C.distribution_mode_t(mode),
 		C.quantization_t(btype),
 		C.quantization_t(qtype),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -444,13 +445,13 @@ func NewGpuIvfPqFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if cIvfPq == nil {
@@ -458,21 +459,21 @@ func NewGpuIvfPqFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 	}
 
 	// Constructed for LOADING: deserialising ingests no raw rows.
-	C.gpu_ivf_pq_start(cIvfPq, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_start(cIvfPq, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		C.gpu_ivf_pq_destroy(cIvfPq, nil)
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
 	cDir := C.CString(dir)
-	defer C.free(unsafe.Pointer(cDir))
+	defer C.free(util.UnsafePointer(cDir))
 
-	C.gpu_ivf_pq_load_dir(cIvfPq, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_load_dir(cIvfPq, cDir, C.distribution_mode_t(mode), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		C.gpu_ivf_pq_destroy(cIvfPq, nil)
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
@@ -491,11 +492,11 @@ func (gi *GpuIvfPq[B, Q]) Destroy() error {
 		return nil
 	}
 	var errmsg *C.char
-	C.gpu_ivf_pq_destroy(gi.cIvfPq, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_destroy(gi.cIvfPq, util.UnsafePointer(&errmsg))
 	gi.cIvfPq = nil
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -520,10 +521,10 @@ func (gi *GpuIvfPq[B, Q]) Start() error {
 	}
 
 	var errmsg *C.char
-	C.gpu_ivf_pq_start(gi.cIvfPq, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_start(gi.cIvfPq, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -535,10 +536,10 @@ func (gi *GpuIvfPq[B, Q]) Build() error {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_ivf_pq_build(gi.cIvfPq, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_build(gi.cIvfPq, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -551,12 +552,12 @@ func (gi *GpuIvfPq[B, Q]) Save(filename string) error {
 	}
 	var errmsg *C.char
 	cFilename := C.CString(filename)
-	defer C.free(unsafe.Pointer(cFilename))
+	defer C.free(util.UnsafePointer(cFilename))
 
-	C.gpu_ivf_pq_save(gi.cIvfPq, cFilename, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_save(gi.cIvfPq, cFilename, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -583,12 +584,12 @@ func (gi *GpuIvfPq[B, Q]) Pack(filename, spillDir string) (PackSizes, error) {
 
 	var errmsg *C.char
 	cDir := C.CString(tmpDir)
-	defer C.free(unsafe.Pointer(cDir))
+	defer C.free(util.UnsafePointer(cDir))
 
-	C.gpu_ivf_pq_save_dir(gi.cIvfPq, cDir, unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_save_dir(gi.cIvfPq, cDir, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return PackSizes{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -626,12 +627,12 @@ func (gi *GpuIvfPq[B, Q]) Unpack(filename, spillDir string, mode DistributionMod
 
 	var errmsg *C.char
 	cDir := C.CString(tmpDir)
-	defer C.free(unsafe.Pointer(cDir))
+	defer C.free(util.UnsafePointer(cDir))
 
-	C.gpu_ivf_pq_load_dir(gi.cIvfPq, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_load_dir(gi.cIvfPq, cDir, C.distribution_mode_t(mode), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -643,10 +644,10 @@ func (gi *GpuIvfPq[B, Q]) DeleteId(id int64) error {
 		return moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_ivf_pq_delete_id(gi.cIvfPq, C.int64_t(id), unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_delete_id(gi.cIvfPq, C.int64_t(id), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -679,18 +680,18 @@ func (gi *GpuIvfPq[B, Q]) Search(queries []Q, numQueries uint64, dimension uint3
 
 	res := C.gpu_ivf_pq_search(
 		gi.cIvfPq,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -702,8 +703,8 @@ func (gi *GpuIvfPq[B, Q]) Search(queries []Q, numQueries uint64, dimension uint3
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 
@@ -731,18 +732,18 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantize(queries []B, numQueries uint64, dimensi
 
 	res := C.gpu_ivf_pq_search_quantize(
 		gi.cIvfPq,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -754,8 +755,8 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantize(queries []B, numQueries uint64, dimensi
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 
@@ -788,18 +789,18 @@ func (gi *GpuIvfPq[B, Q]) SearchAsyncWithParams(queries []Q, numQueries uint64, 
 
 	jobID := C.gpu_ivf_pq_search_async(
 		gi.cIvfPq,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -824,18 +825,18 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeAsyncWithParams(queries []B, numQueries 
 
 	jobID := C.gpu_ivf_pq_search_quantize_async(
 		gi.cIvfPq,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -849,11 +850,11 @@ func (gi *GpuIvfPq[B, Q]) SearchWait(jobID uint64, numQueries uint64, limit uint
 	}
 
 	var errmsg *C.char
-	res := C.gpu_ivf_pq_search_wait(gi.cIvfPq, C.uint64_t(jobID), unsafe.Pointer(&errmsg))
+	res := C.gpu_ivf_pq_search_wait(gi.cIvfPq, C.uint64_t(jobID), util.UnsafePointer(&errmsg))
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -865,8 +866,8 @@ func (gi *GpuIvfPq[B, Q]) SearchWait(jobID uint64, numQueries uint64, limit uint
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 
@@ -899,15 +900,15 @@ func (gi *GpuIvfPq[B, Q]) GetFilterColMetaJSON() string {
 		return ""
 	}
 	var errmsg *C.char
-	jsonPtr := C.gpu_ivf_pq_get_filter_col_meta_json(gi.cIvfPq, unsafe.Pointer(&errmsg))
+	jsonPtr := C.gpu_ivf_pq_get_filter_col_meta_json(gi.cIvfPq, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 	}
 	if jsonPtr == nil {
 		return ""
 	}
 	out := C.GoString(jsonPtr)
-	C.free(unsafe.Pointer(jsonPtr))
+	C.free(util.UnsafePointer(jsonPtr))
 	return out
 }
 
@@ -917,12 +918,12 @@ func (gi *GpuIvfPq[B, Q]) Info() (string, error) {
 		return "", moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
 	var errmsg *C.char
-	infoPtr := C.gpu_ivf_pq_info(gi.cIvfPq, unsafe.Pointer(&errmsg))
+	infoPtr := C.gpu_ivf_pq_info(gi.cIvfPq, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		if infoPtr != nil {
-			C.free(unsafe.Pointer(infoPtr))
+			C.free(util.UnsafePointer(infoPtr))
 		}
 		return "", moerr.NewInternalErrorNoCtx(errStr)
 	}
@@ -930,7 +931,7 @@ func (gi *GpuIvfPq[B, Q]) Info() (string, error) {
 		return "{}", nil
 	}
 	info := C.GoString(infoPtr)
-	C.free(unsafe.Pointer(infoPtr))
+	C.free(util.UnsafePointer(infoPtr))
 	return info, nil
 }
 
@@ -943,12 +944,12 @@ func (gi *GpuIvfPq[B, Q]) GetCenters() ([]Q, error) {
 	dim := gi.GetRotDim()
 	centers := make([]Q, nList*dim)
 	var errmsg *C.char
-	C.gpu_ivf_pq_get_centers(gi.cIvfPq, unsafe.Pointer(&centers[0]), C.uint64_t(len(centers)), unsafe.Pointer(&errmsg))
+	C.gpu_ivf_pq_get_centers(gi.cIvfPq, util.UnsafePointer(&centers[0]), C.uint64_t(len(centers)), util.UnsafePointer(&errmsg))
 	runtime.KeepAlive(centers)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return centers, nil
@@ -992,7 +993,7 @@ func (gi *GpuIvfPq[B, Q]) GetDataset(totalElements uint64) []Q {
 		return nil
 	}
 	data := make([]Q, totalElements)
-	C.gpu_ivf_pq_get_dataset(gi.cIvfPq, unsafe.Pointer(&data[0]))
+	C.gpu_ivf_pq_get_dataset(gi.cIvfPq, util.UnsafePointer(&data[0]))
 	return data
 }
 
@@ -1008,23 +1009,23 @@ func (gi *GpuIvfPq[B, Q]) Extend(newData []Q, nRows uint64, newIDs []int64) erro
 
 	var idsPtr *C.int64_t
 	if len(newIDs) > 0 {
-		idsPtr = (*C.int64_t)(unsafe.Pointer(&newIDs[0]))
+		idsPtr = (*C.int64_t)(util.UnsafePointer(&newIDs[0]))
 	}
 
 	var errmsg *C.char
 	C.gpu_ivf_pq_extend(
 		gi.cIvfPq,
-		unsafe.Pointer(&newData[0]),
+		util.UnsafePointer(&newData[0]),
 		C.uint64_t(nRows),
 		idsPtr,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(newData)
 	runtime.KeepAlive(newIDs)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -1042,23 +1043,23 @@ func (gi *GpuIvfPq[B, Q]) ExtendFloat(newData []float32, nRows uint64, newIDs []
 
 	var idsPtr *C.int64_t
 	if len(newIDs) > 0 {
-		idsPtr = (*C.int64_t)(unsafe.Pointer(&newIDs[0]))
+		idsPtr = (*C.int64_t)(util.UnsafePointer(&newIDs[0]))
 	}
 
 	var errmsg *C.char
 	C.gpu_ivf_pq_extend_float(
 		gi.cIvfPq,
-		(*C.float)(unsafe.Pointer(&newData[0])),
+		(*C.float)(util.UnsafePointer(&newData[0])),
 		C.uint64_t(nRows),
 		idsPtr,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(newData)
 	runtime.KeepAlive(newIDs)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -1077,11 +1078,11 @@ func (gi *GpuIvfPq[B, Q]) SetFilterColumns(colMetaJSON string, totalCount uint64
 	}
 	var errmsg *C.char
 	cMeta := C.CString(colMetaJSON)
-	defer C.free(unsafe.Pointer(cMeta))
-	C.gpu_ivf_pq_set_filter_columns(gi.cIvfPq, cMeta, C.uint64_t(totalCount), unsafe.Pointer(&errmsg))
+	defer C.free(util.UnsafePointer(cMeta))
+	C.gpu_ivf_pq_set_filter_columns(gi.cIvfPq, cMeta, C.uint64_t(totalCount), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -1098,28 +1099,28 @@ func (gi *GpuIvfPq[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap 
 	var errmsg *C.char
 	var cNullBitmap *C.uint32_t
 	if len(nullBitmap) > 0 {
-		cNullBitmap = (*C.uint32_t)(unsafe.Pointer(&nullBitmap[0]))
+		cNullBitmap = (*C.uint32_t)(util.UnsafePointer(&nullBitmap[0]))
 	}
 	C.gpu_ivf_pq_add_filter_chunk(
 		gi.cIvfPq,
 		C.uint32_t(colIdx),
-		unsafe.Pointer(&data[0]),
+		util.UnsafePointer(&data[0]),
 		cNullBitmap,
 		C.uint64_t(nrows),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(data)
 	runtime.KeepAlive(nullBitmap)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
 }
 
 // SearchWithFilter runs a filtered K-NN search. predsJSON="" = unfiltered.
-func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
+func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string, mem docfilter.CMembership) (SearchResultIvfPq, error) {
 	if gi.cIvfPq == nil {
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1130,23 +1131,24 @@ func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 	var errmsg *C.char
 	cSP := C.ivf_pq_search_params_t{n_probes: C.uint32_t(sp.NProbes)}
 	cPreds := C.CString(predsJSON)
-	defer C.free(unsafe.Pointer(cPreds))
+	defer C.free(util.UnsafePointer(cPreds))
 
 	res := C.gpu_ivf_pq_search_with_filter(
 		gi.cIvfPq,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
-		unsafe.Pointer(&errmsg),
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if res.result_ptr == nil {
@@ -1156,8 +1158,8 @@ func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 	totalElements := uint64(numQueries) * uint64(limit)
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
-	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 	C.gpu_ivf_pq_free_result(res.result_ptr)
@@ -1167,7 +1169,7 @@ func (gi *GpuIvfPq[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 
 // SearchQuantizeWithFilter runs a filtered K-NN search with base-typed (B)
 // queries; the index converts B to storage T (copy / quantize / f32->f16 cast).
-func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (SearchResultIvfPq, error) {
+func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string, mem docfilter.CMembership) (SearchResultIvfPq, error) {
 	if gi.cIvfPq == nil {
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1178,23 +1180,24 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 	var errmsg *C.char
 	cSP := C.ivf_pq_search_params_t{n_probes: C.uint32_t(sp.NProbes)}
 	cPreds := C.CString(predsJSON)
-	defer C.free(unsafe.Pointer(cPreds))
+	defer C.free(util.UnsafePointer(cPreds))
 
 	res := C.gpu_ivf_pq_search_quantize_with_filter(
 		gi.cIvfPq,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
-		unsafe.Pointer(&errmsg),
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if res.result_ptr == nil {
@@ -1204,8 +1207,8 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 	totalElements := uint64(numQueries) * uint64(limit)
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
-	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 	C.gpu_ivf_pq_free_result(res.result_ptr)
@@ -1218,7 +1221,7 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 // SearchQuantizeAsyncWithParams + the predicate-eval semantics of
 // SearchQuantizeWithFilter. Used by MultiGpuIvfPq to dispatch per-shard
 // filtered searches in parallel. The index converts B to storage T.
-func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) (uint64, error) {
+func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string, mem docfilter.CMembership) (uint64, error) {
 	if gi.cIvfPq == nil {
 		return 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
 	}
@@ -1229,26 +1232,126 @@ func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries 
 	var errmsg *C.char
 	cSP := C.ivf_pq_search_params_t{n_probes: C.uint32_t(sp.NProbes)}
 	cPreds := C.CString(predsJSON)
-	defer C.free(unsafe.Pointer(cPreds))
+	defer C.free(util.UnsafePointer(cPreds))
 
 	jobID := C.gpu_ivf_pq_search_quantize_with_filter_async(
 		gi.cIvfPq,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
-		unsafe.Pointer(&errmsg),
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
+	return uint64(jobID), nil
+}
+
+// PrepareBitset builds the filter masks of a search once, from predsJSON and mem
+// as SearchQuantizeWithFilter, for SearchQuantizeWithBitset calls on this index
+// to reuse. mem is not referenced after it returns. The caller frees the bitset.
+func (gi *GpuIvfPq[B, Q]) PrepareBitset(predsJSON string, mem docfilter.CMembership) (*Bitset, error) {
+	if gi.cIvfPq == nil {
+		return nil, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	var errmsg *C.char
+	cPreds := C.CString(predsJSON)
+	defer C.free(util.UnsafePointer(cPreds))
+	ptr := C.gpu_ivf_pq_prepare_bitset(gi.cIvfPq, cPreds,
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)}, util.UnsafePointer(&errmsg))
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(util.UnsafePointer(errmsg))
+		return nil, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	return &Bitset{ptr: C.gpu_bitset_c(ptr)}, nil
+}
+
+// SearchQuantizeWithBitset is SearchQuantizeWithFilter on a bitset from
+// PrepareBitset of this index.
+func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithBitset(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, bitset *Bitset) (SearchResultIvfPq, error) {
+	if gi.cIvfPq == nil {
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return SearchResultIvfPq{}, nil
+	}
+
+	var errmsg *C.char
+	cSP := C.ivf_pq_search_params_t{n_probes: C.uint32_t(sp.NProbes)}
+	res := C.gpu_ivf_pq_search_quantize_with_bitset(
+		gi.cIvfPq,
+		util.UnsafePointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		bitset.handle(),
+		util.UnsafePointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	runtime.KeepAlive(bitset)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(util.UnsafePointer(errmsg))
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx(errStr)
+	}
+	if res.result_ptr == nil {
+		return SearchResultIvfPq{}, moerr.NewInternalErrorNoCtx("search returned nil result")
+	}
+
+	totalElements := uint64(numQueries) * uint64(limit)
+	neighbors := make([]int64, totalElements)
+	distances := make([]float32, totalElements)
+	C.gpu_ivf_pq_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_ivf_pq_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
+	runtime.KeepAlive(neighbors)
+	runtime.KeepAlive(distances)
+	C.gpu_ivf_pq_free_result(res.result_ptr)
+
+	return SearchResultIvfPq{Neighbors: neighbors, Distances: distances}, nil
+}
+
+// SearchQuantizeWithBitsetAsync is SearchQuantizeWithFilterAsync on a bitset
+// from PrepareBitset of this index; collect the result with SearchWait.
+func (gi *GpuIvfPq[B, Q]) SearchQuantizeWithBitsetAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, bitset *Bitset) (uint64, error) {
+	if gi.cIvfPq == nil {
+		return 0, moerr.NewInternalErrorNoCtx("GpuIvfPq is not initialized")
+	}
+	if len(queries) == 0 || numQueries == 0 {
+		return 0, nil
+	}
+
+	var errmsg *C.char
+	cSP := C.ivf_pq_search_params_t{n_probes: C.uint32_t(sp.NProbes)}
+	jobID := C.gpu_ivf_pq_search_quantize_with_bitset_async(
+		gi.cIvfPq,
+		util.UnsafePointer(&queries[0]),
+		C.uint64_t(numQueries),
+		C.uint32_t(dimension),
+		C.uint32_t(limit),
+		cSP,
+		bitset.handle(),
+		util.UnsafePointer(&errmsg),
+	)
+	runtime.KeepAlive(queries)
+	runtime.KeepAlive(bitset)
+
+	if errmsg != nil {
+		errStr := C.GoString(errmsg)
+		C.free(util.UnsafePointer(errmsg))
+		return 0, moerr.NewInternalErrorNoCtx(errStr)
+	}
 	return uint64(jobID), nil
 }
 
@@ -1279,11 +1382,11 @@ func IvfPqRowsFitting(dim, m, bitsPerCode, elemSize uint64, devices []int, mode 
 	rc := C.gpu_ivf_pq_rows_fitting(
 		C.uint64_t(dim), C.uint64_t(m), C.uint64_t(bitsPerCode), C.uint64_t(elemSize),
 		&cDevs[0], C.int(len(cDevs)), C.int(mode),
-		&cRows, &cTrain, &cPerRow, &cMinDev, &cFree, unsafe.Pointer(&errmsg))
+		&cRows, &cTrain, &cPerRow, &cMinDev, &cFree, util.UnsafePointer(&errmsg))
 	runtime.KeepAlive(cDevs)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, 0, 0, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if rc != 0 {

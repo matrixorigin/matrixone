@@ -463,6 +463,14 @@ func TestCTEMultiReferenceReusesExpensiveProducer(t *testing.T) {
 			} else if len(node.GroupBy) == 0 && containsSinkScan(nodeID) {
 				scalarAggConsumers++
 			}
+		case planpb.Node_FILTER:
+			require.False(t, node.FilterIsBarrier,
+				"an independent CTE must not block join predicate pushdown")
+		case planpb.Node_JOIN:
+			if node.JoinType == planpb.Node_INNER {
+				require.NotEmpty(t, node.OnList,
+					"the supplier equality must not become a Cartesian product")
+			}
 		case planpb.Node_SINK:
 			sinks++
 			require.Equal(t, materialized.CTESinkOption, node.ExtraOptions)
@@ -482,6 +490,59 @@ func TestCTEMultiReferenceReusesExpensiveProducer(t *testing.T) {
 	for _, consumers := range sourceSteps {
 		require.Equal(t, 2, consumers)
 	}
+}
+
+func TestCTEReuseKeepsIndependentNestedHashBuildRequirements(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	logicPlan, err := runOneStmt(mock, t, `
+		with expensive_keys as (
+			select l_suppkey as k, sum(l_extendedprice) as total
+			from lineitem
+			group by l_suppkey
+		), avg_value as (
+			select avg(quantity * price) as v
+			from (
+				select l_quantity as quantity, l_extendedprice as price from lineitem
+				union all
+				select o_shippriority as quantity, o_totalprice as price from orders
+				union all
+				select ps_availqty as quantity, ps_supplycost as price from partsupp
+			) sales
+		)
+		select channel, sum(sales)
+		from (
+			select 'lineitem' as channel, sum(l_quantity * l_extendedprice) as sales
+			from lineitem
+			where l_suppkey in (select k from expensive_keys)
+			having sum(l_quantity * l_extendedprice) > (select v from avg_value)
+			union all
+			select 'orders' as channel, sum(o_shippriority * o_totalprice) as sales
+			from orders
+			where o_custkey in (select k from expensive_keys)
+			having sum(o_shippriority * o_totalprice) > (select v from avg_value)
+			union all
+			select 'partsupp' as channel, sum(ps_availqty * ps_supplycost) as sales
+			from partsupp
+			where ps_suppkey in (select k from expensive_keys)
+			having sum(ps_availqty * ps_supplycost) > (select v from avg_value)
+		) channels
+		group by rollup(channel)`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	tableScans := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil {
+			switch node.TableDef.Name {
+			case "lineitem", "orders", "partsupp":
+				tableScans++
+			}
+		}
+	}
+	require.Equal(t, 7, tableScans,
+		"the nested hash-build CTE and the surrounding scalar CTE should each have one producer")
 }
 
 func TestCTEReuseHonorsPostOptimizerSQLSelectLimit(t *testing.T) {
@@ -657,24 +718,102 @@ func TestCTEMultiReferenceReusesHashSemiBuildConsumers(t *testing.T) {
 		"each marked CTE reader must remain the physical hash-build input")
 }
 
-func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
+func TestCTEMultiReferenceReusesBelowBlockingAggregateLimit(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `
-		with c as (
-			select l_suppkey, max(l_comment) as comment
+		with expensive_keys as (
+			select l_suppkey, sum(l_extendedprice) as total
 			from lineitem group by l_suppkey
 		)
-		select a.l_suppkey from c a join c b
-			on a.l_suppkey = b.l_suppkey
-		where a.l_suppkey < 10`)
+		select sum(x) from (
+			select o_totalprice as x from orders
+			where o_custkey in (select l_suppkey from expensive_keys)
+			union all
+			select c_acctbal as x from customer
+			where c_custkey in (select l_suppkey from expensive_keys)
+		) u limit 100`)
 	require.NoError(t, err)
 
 	query := logicPlan.GetQuery()
-	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.NotNil(t, query)
+	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN),
+		"a transparent LIMIT above a blocking aggregate cannot truncate its input")
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+}
+
+func TestCTEMultiReferencePrunesUnusedVariableWidthPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, consumer string
+	}{
+		{"join", "l_comment", "select a.l_suppkey from c a join c b on a.l_suppkey = b.l_suppkey where a.l_suppkey < 10"},
+		{"union-all-numeric", "l_partkey", "select l_suppkey from (select l_suppkey,payload from c union all select l_suppkey,payload from c) u"},
+		{"union-all-variable-width", "l_comment", "select l_suppkey from (select a.l_suppkey,a.payload from c a join c b on a.l_suppkey=b.l_suppkey union all select 0,cast(NULL as varchar(44))) u"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, "with c as (select l_suppkey, max("+tc.payload+") as payload from lineitem group by l_suppkey) "+tc.consumer)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+			require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+			require.Equal(t, 1, countReachableNodeType(query, planpb.Node_AGG))
+			var sourceStep []int32
+			for nodeID := range cteReachablePlanNodes(query) {
+				node := query.Nodes[nodeID]
+				switch node.NodeType {
+				case planpb.Node_SINK_SCAN:
+					require.Len(t, node.ProjectList, 1, "unused payload must not inflate a reader")
+					if sourceStep == nil {
+						sourceStep = node.SourceStep
+					}
+					require.Equal(t, sourceStep, node.SourceStep, "readers must retain one shared producer")
+				case planpb.Node_SINK:
+					require.Len(t, node.ProjectList, 1, "unused payload must not be materialized")
+				case planpb.Node_AGG:
+					require.Empty(t, node.AggList, "unused payload aggregate must not execute")
+					require.Len(t, node.GroupBy, 1, "grouping must preserve the row set")
+				case planpb.Node_TABLE_SCAN:
+					for _, col := range node.TableDef.Cols {
+						require.NotEqual(t, tc.payload, col.Name, "unused payload input must not be read")
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCTEMultiReferenceUnionRetainsDemandedPayload(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_suppkey, max(l_comment) as payload
+			from lineitem group by l_suppkey
+		)
+		select l_suppkey from (
+			select l_suppkey,payload from c
+			union all select l_suppkey,payload from c
+		) u
+		union all select length(payload) from c`)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.Equal(t, 3, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_AGG))
 	for nodeID := range cteReachablePlanNodes(query) {
-		if node := query.Nodes[nodeID]; node.NodeType == planpb.Node_SINK_SCAN {
-			require.Len(t, node.ProjectList, 1,
-				"an unused variable-width payload must not inflate the shared source")
+		node := query.Nodes[nodeID]
+		switch node.NodeType {
+		case planpb.Node_SINK_SCAN:
+			require.Len(t, node.ProjectList, 1, "each reader needs only its own output")
+		case planpb.Node_SINK:
+			require.Len(t, node.ProjectList, 2, "another consumer still demands the payload")
+		case planpb.Node_AGG:
+			require.Len(t, node.AggList, 1)
+		case planpb.Node_TABLE_SCAN:
+			var names []string
+			for _, col := range node.TableDef.Cols {
+				names = append(names, col.Name)
+			}
+			require.Contains(t, names, "l_comment")
 		}
 	}
 }
@@ -1031,7 +1170,7 @@ func TestCTEReuseRewritesConsumersInsideInlineCTE(t *testing.T) {
 	require.Equal(t, 1, lineitemScans)
 }
 
-func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
+func TestCTEIdentityIncludesProducerContainingRecursiveCTE(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `with recursive r(n) as (
 		select 1
@@ -1051,7 +1190,8 @@ func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
 			cteSinks++
 		}
 	}
-	require.Equal(t, 0, cteSinks)
+	require.Equal(t, 2, cteSinks)
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_RECURSIVE_CTE))
 }
 
 func TestCTEMultiReferenceReuseGuards(t *testing.T) {
@@ -1073,7 +1213,18 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 				select a.n_nationkey from c a join c b on a.n_nationkey = b.n_nationkey`,
 		},
 		{
-			name: "volatile producer",
+			name: "stable session reader remains no-fold",
+			sql: `with c as(select n_regionkey,max(row_count())x from nation group by n_regionkey)
+				select a.x from c a join c b on a.n_regionkey=b.n_regionkey`,
+		},
+		{
+			name: "stable JSON_TABLE keeps optional scan guard",
+			sql: `with c as(select x from json_table('[1,2,3]','$[*]' columns(x int path '$'))j)
+				select a.x from c a join c b on a.x=b.x`,
+		},
+		{
+			name:          "volatile producer",
+			wantSinkScans: 2,
 			sql: `with c as (
 				select n_regionkey, max(rand()) as r from nation group by n_regionkey
 			) select a.n_regionkey from c a join c b on a.n_regionkey = b.n_regionkey`,
@@ -1085,7 +1236,8 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 			) select a.n_regionkey from c a join c b on a.n_regionkey = b.n_regionkey`,
 		},
 		{
-			name: "sample producer",
+			name:          "sample producer",
+			wantSinkScans: 2,
 			sql: `with c as (
 				select sample(total, 2 rows) as n from (
 					select l_suppkey, sum(l_extendedprice) as total
@@ -1295,6 +1447,55 @@ func TestCTEDrainProofRejectsZeroAndStreamingLimits(t *testing.T) {
 	builder.qry.Nodes[1].NodeType = planpb.Node_DISTINCT
 	_, ok = builder.cteConsumerDrainRequirements(1, []cteOccurrence{{rootID: 0}})
 	require.False(t, ok, "streaming distinct is not a full-input witness under LIMIT")
+
+	builder.qry.Nodes = append(builder.qry.Nodes,
+		&planpb.Node{NodeId: 2, NodeType: planpb.Node_PROJECT, Children: []int32{1},
+			Limit: MakePlan2Uint64ConstExprWithType(1)})
+	_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
+	require.False(t, ok,
+		"a streaming descendant remains truncatable through a transparent limited parent")
+
+	builder.qry.Nodes[1].NodeType = planpb.Node_AGG
+	builder.qry.Nodes[1].Limit = nil
+	_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
+	require.True(t, ok,
+		"a blocking descendant drains its input before a transparent parent can apply LIMIT")
+	for _, limit := range []*planpb.Expr{
+		MakePlan2Uint64ConstExprWithType(0),
+		{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+	} {
+		builder.qry.Nodes[2].Limit = limit
+		_, ok = builder.cteConsumerDrainRequirements(2, []cteOccurrence{{rootID: 0}})
+		require.False(t, ok,
+			"zero or dynamic LIMIT may skip the blocking descendant without starting it")
+	}
+
+	// A blocking branch is not enough when a lazy multi-input ancestor can
+	// satisfy LIMIT from another branch without starting this occurrence.
+	builder.qry.Nodes = append(builder.qry.Nodes,
+		&planpb.Node{NodeId: 3, NodeType: planpb.Node_VALUE_SCAN},
+		&planpb.Node{NodeId: 4, NodeType: planpb.Node_UNION,
+			Children: []int32{3, 1}},
+		&planpb.Node{NodeId: 5, NodeType: planpb.Node_PROJECT,
+			Children: []int32{4}, Limit: MakePlan2Uint64ConstExprWithType(1)})
+	_, ok = builder.cteConsumerDrainRequirements(5, []cteOccurrence{{rootID: 0}})
+	require.False(t, ok,
+		"LIMIT above a lazy multi-input boundary may skip a blocking branch entirely")
+
+	logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `
+		with c as (
+			select l_suppkey as k, sum(cast(l_comment as bigint)) as total
+			from lineitem group by l_suppkey
+		)
+		select x from (select sum(total) as x from c limit 0) a
+		union all
+		select x from (select sum(total) as x from c limit 0) b`)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	for id := range cteReachablePlanNodes(query) {
+		require.NotEqual(t, planpb.Node_SINK, query.Nodes[id].NodeType,
+			"skipped consumers must not publish an eager CTE producer")
+	}
 }
 
 func TestCTEDrainProofRejectsSamplingConsumer(t *testing.T) {
@@ -1767,7 +1968,7 @@ func TestCTEReuseRejectsVolatileAuxiliaryNodeExpressions(t *testing.T) {
 		}},
 		{name: "vector index query", node: &planpb.Node{
 			NodeType:        planpb.Node_TABLE_SCAN,
-			VectorIndexScan: &planpb.VectorIndexScan{QueryVector: volatile},
+			IndexSearchScan: &planpb.IndexSearchScan{QueryPayload: volatile},
 		}},
 		{name: "dedup update expression", node: &planpb.Node{
 			NodeType:     planpb.Node_JOIN,
@@ -2077,4 +2278,136 @@ func TestCTEMultiReferenceReusePreservesConsumerBindings(t *testing.T) {
 		}
 	}
 	require.Equal(t, map[int32]bool{0: true, 1: true}, projectedCols)
+}
+
+func TestCTEMultiReferencePruningCounterexamples(t *testing.T) {
+	for _, tc := range []struct {
+		name, query         string
+		sinkWidth, aggSlots int
+		scalar              bool
+	}{
+		{"fallible-cast", `with c as (select l_suppkey,cast(max(l_comment) as bigint) as payload from lineitem group by l_suppkey) select l_suppkey from (select l_suppkey,payload from c union all select l_suppkey,payload from c) u`, 2, 1, false},
+		{"unproven-sum", `with c as (select l_suppkey,sum(l_partkey) as payload from lineitem group by l_suppkey) select l_suppkey from (select l_suppkey,payload from c union all select l_suppkey,payload from c) u`, 2, 1, false},
+		{"having-demand", `with c as (select l_suppkey,max(l_comment) as payload from lineitem group by l_suppkey having max(l_comment)>'a') select l_suppkey from (select a.l_suppkey,a.payload from c a join c b on a.l_suppkey=b.l_suppkey union all select 0,cast(NULL as varchar(44))) u`, 1, 1, false},
+		{"join-count-carrier", `with c as (select l_suppkey,max(l_comment) as payload from lineitem group by l_suppkey) select count(*) from c a join c b on a.l_suppkey=b.l_suppkey`, 1, 0, false},
+		{"scalar-aggregate-carrier", `with c as (select 1 as k,max(l_comment) as payload from lineitem) select k from (select a.k,a.payload from c a join c b on a.k=b.k union all select 0,cast(NULL as varchar(44))) u`, 1, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			lp, err := runOneStmt(mock, t, tc.query)
+			require.NoError(t, err)
+			q := lp.GetQuery()
+			require.Equal(t, 2, countReachableNodeType(q, planpb.Node_SINK_SCAN))
+			require.Equal(t, 1, countReachableNodeType(q, planpb.Node_SINK))
+			for id := range cteReachablePlanNodes(q) {
+				n := q.Nodes[id]
+				switch n.NodeType {
+				case planpb.Node_SINK:
+					require.Len(t, n.ProjectList, tc.sinkWidth)
+				case planpb.Node_AGG:
+					if tc.scalar {
+						if len(n.GroupBy) == 0 {
+							require.Len(t, n.AggList, tc.aggSlots, "scalar aggregate must preserve its one-row carrier")
+						}
+					} else if len(n.GroupBy) > 0 {
+						require.Len(t, n.AggList, tc.aggSlots)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCTEMultiReferenceUnionKeepsVariableWidthAdmissionGuard(t *testing.T) {
+	for _, tc := range []struct{ name, consumer string }{
+		{"explicit-projections", `select l_suppkey from (select l_suppkey,payload from c union all select l_suppkey,payload from c) u`},
+		{"count-only-first", `select count(*) from c union all select max(l_suppkey) from c`},
+		{"count-only-last", `select max(l_suppkey) from c union all select count(*) from c`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, `with c as (select l_suppkey,max(l_comment) payload from lineitem group by l_suppkey) `+tc.consumer)
+			require.NoError(t, err)
+			require.Zero(t, countReachableNodeType(logicPlan.GetQuery(), planpb.Node_SINK_SCAN),
+				"explicit and fallback projections must not relax variable-width spill admission")
+		})
+	}
+}
+
+func TestCTEMultiReferenceCompactsReaderInputOrdinals(t *testing.T) {
+	const aggregate = `select n_regionkey g,sum(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`
+	for _, tc := range []struct {
+		name, producer, consumer string
+		producerWidth            int
+		readerInputs             [][]int32
+	}{
+		{"filtered-row", `select n_regionkey g,n_nationkey total,n_regionkey n,n_nationkey+10 mx from nation where n_nationkey>0`,
+			`select a.g,a.mx,a.total,b.g,b.mx,b.total from r a join r b on a.g<=>b.g and a.mx=b.mx`, 3, [][]int32{{0, 1, 2}, {0, 1, 2}}},
+		{"aggregate-middle", aggregate,
+			`select a.g,a.mx,a.total,b.g,b.mx,b.total from r a join r b on a.g<=>b.g and a.mx=b.mx`, 3, [][]int32{{0, 1, 2}, {0, 1, 2}}},
+		{"aggregate-first", aggregate,
+			`select total,mx from r union all select total,mx from r`, 2, [][]int32{{0, 1}, {0, 1}}},
+		{"discarded-sum", aggregate,
+			`select a.g,a.mx,b.mx from r a join r b on a.g=b.g`, 2, [][]int32{{0, 1}, {0, 1}}},
+		{"asymmetric", `select n_regionkey g,min(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`,
+			`select a.g,a.total,b.g,b.mx from r a join r b on a.g=b.g`, 3, [][]int32{{0, 1}, {0, 2}}},
+		{"single-late-output", `select n_regionkey g,min(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`,
+			`select a.mx,b.total from r a join r b on a.mx=b.total`, 2, [][]int32{{1}, {0}}},
+		{"in-range-stale-position", `select n_regionkey g,sum(n_nationkey) total,count(*) n,max(n_nationkey) mx,min(n_nationkey) mn from nation group by n_regionkey`,
+			`select g,total,mx,mn from r union all select g,total,mx,mn from r`, 4, [][]int32{{0, 1, 2, 3}, {0, 1, 2, 3}}},
+		{"one-reader-preserves-middle", aggregate,
+			`select a.g,a.mx,a.total,b.g,b.mx,b.total,b.n from r a join r b on a.g<=>b.g and a.mx=b.mx`, 4, [][]int32{{0, 1, 3}, {0, 1, 2, 3}}},
+		{"full-projection", aggregate,
+			`select a.*,b.* from r a join r b on a.g<=>b.g and a.mx=b.mx`, 4, [][]int32{{0, 1, 2, 3}, {0, 1, 2, 3}}},
+		{"count-only-fallback", aggregate,
+			`select count(*) from r union all select max(mx) from r`, 4, [][]int32{{0, 1, 2, 3}, {3}}},
+		{"both-count-only", aggregate,
+			`select count(*) from r union all select count(*) from r`, 4, [][]int32{{0, 1, 2, 3}, {0, 1, 2, 3}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, "with r as ("+tc.producer+") "+tc.consumer)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+			require.Equal(t, len(tc.readerInputs), countReachableNodeType(query, planpb.Node_SINK_SCAN))
+			var inputs [][]int32
+			for nodeID := range cteReachablePlanNodes(query) {
+				node := query.Nodes[nodeID]
+				if node.NodeType != planpb.Node_SINK_SCAN {
+					continue
+				}
+				require.Len(t, node.SourceStep, 1)
+				sink := query.Nodes[query.Steps[node.SourceStep[0]]]
+				require.Equal(t, planpb.Node_SINK, sink.NodeType)
+				require.Equal(t, materialized.CTESinkOption, sink.ExtraOptions)
+				require.Len(t, sink.ProjectList, tc.producerWidth)
+				child := query.Nodes[sink.Children[0]]
+				require.Len(t, child.ProjectList, tc.producerWidth,
+					"the published batch must implement the compacted SINK schema")
+				for pos, expr := range sink.ProjectList {
+					require.Zero(t, expr.GetCol().RelPos)
+					require.Equal(t, int32(pos), expr.GetCol().ColPos)
+					require.Equal(t, expr.Typ, child.ProjectList[pos].Typ)
+				}
+				if tc.name == "discarded-sum" {
+					require.Equal(t, planpb.Node_PROJECT, child.NodeType)
+					producer := query.Nodes[child.Children[0]]
+					require.Greater(t, len(producer.ProjectList), tc.producerWidth,
+						"the discarded SUM must still be evaluated by the wider producer")
+				}
+				var positions []int32
+				for _, expr := range node.ProjectList {
+					col := expr.GetCol()
+					require.NotNil(t, col)
+					require.Zero(t, col.RelPos)
+					require.GreaterOrEqual(t, col.ColPos, int32(0))
+					require.Less(t, int(col.ColPos), len(sink.ProjectList))
+					positions = append(positions, col.ColPos)
+				}
+				inputs = append(inputs, positions)
+			}
+			require.ElementsMatch(t, tc.readerInputs, inputs, "each reader must address the shared producer's compacted layout")
+		})
+	}
 }

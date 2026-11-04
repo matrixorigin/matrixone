@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -43,6 +44,10 @@ var (
 // it prevents an impossible residue from spinning forever while leaving
 // normal allocation behavior unchanged.
 const maxAutoIncrementAllocationsPerRow = 8
+
+// Adaptive reservations follow observed automatic demand, never planner estimates.
+// This bounds reservation span rather than allocating per-ID heap storage.
+const maxAutoIDPrefetch = 1_000_000
 
 type columnCache struct {
 	sync.RWMutex
@@ -68,6 +73,10 @@ type columnCache struct {
 	allocateCount    atomic.Uint64
 	committed        bool
 	retired          bool
+	// consumedAutoRows counts successful automatic assignments under the
+	// mutex and saturates at maxAutoIDPrefetch. Failed apply calls do
+	// not increase it; later SQL/transaction failures need not undo demand.
+	consumedAutoRows int
 }
 
 func newColumnCache(
@@ -97,7 +106,7 @@ func newColumnCache(
 		ranges:    &ranges{step: col.Step, values: make([]uint64, 0, 1)},
 		committed: committed,
 	}
-	item.preAllocate(ctx, tableID, cfg.CountPerAllocate, txnOp)
+	item.preAllocate(ctx, tableID, cfg.CountPerAllocate, txnOp, false)
 	item.Lock()
 	defer item.Unlock()
 	if err := item.waitPrevAllocatingLocked(ctx); err != nil {
@@ -170,19 +179,25 @@ func (col *columnCache) insertAutoValues(
 			txnOp,
 			options)
 	case types.T_int32:
+		maxValue := uint64(math.MaxInt32)
+		typeName := "int"
+		if vec.GetType().IsMediumInt() {
+			maxValue = 1<<23 - 1
+			typeName = "mediumint"
+		}
 		return insertAutoValues[int32](
 			ctx,
 			tableID,
 			vec, rows,
-			math.MaxInt32,
+			int32(maxValue),
 			col,
 			func(v uint64) error {
 				if v == 0 {
-					v = math.MaxInt32 + 1
+					v = maxValue + 1
 				}
 				return moerr.NewOutOfRangef(
 					ctx,
-					"int",
+					typeName,
 					"value %v",
 					v)
 			},
@@ -249,20 +264,26 @@ func (col *columnCache) insertAutoValues(
 			txnOp,
 			options)
 	case types.T_uint32:
+		maxValue := uint64(math.MaxUint32)
+		typeName := "int unsigned"
+		if vec.GetType().IsMediumInt() {
+			maxValue = 1<<24 - 1
+			typeName = "mediumint unsigned"
+		}
 		return insertAutoValues[uint32](
 			ctx,
 			tableID,
 			vec,
 			rows,
-			math.MaxUint32,
+			uint32(maxValue),
 			col,
 			func(v uint64) error {
 				if v == 0 {
-					v = math.MaxUint32 + 1
+					v = maxValue + 1
 				}
 				return moerr.NewOutOfRangef(
 					ctx,
-					"int unsigned",
+					typeName,
 					"value %v",
 					v)
 			},
@@ -423,14 +444,28 @@ func (col *columnCache) applyAutoValues(
 		}
 		remaining--
 	}
+	if col.adaptivePrefetch() && options.isDefault() {
+		col.consumedAutoRows += min(autoRows, maxAutoIDPrefetch-col.consumedAutoRows)
+	}
 	return nil
+}
+
+func (col *columnCache) adaptivePrefetch() bool {
+	return col.col.Step == 1 && col.col.CacheSize == 0 &&
+		col.cfg.defaultAllocation && !col.cfg.demandOnly &&
+		(!col.col.isInternal || col.col.ColName == catalog.FakePrimaryKeyColName)
+}
+
+func (col *columnCache) adaptiveVisiblePrefetch() bool {
+	return !col.col.isInternal && col.adaptivePrefetch()
 }
 
 func (col *columnCache) preAllocate(
 	ctx context.Context,
 	tableID uint64,
 	count int,
-	txnOp client.TxnOperator) {
+	txnOp client.TxnOperator,
+	useVisibleDemand bool) {
 	// Statement-scoped non-default series reserve on demand in applyAutoValues;
 	// prefetching a default block here would consume values from the shared
 	// allocator which may not belong to that series.
@@ -455,6 +490,12 @@ func (col *columnCache) preAllocate(
 	col.allocatingC = make(chan error, 1)
 	if col.cfg.CountPerAllocate > count {
 		count = col.cfg.CountPerAllocate
+	}
+	// Check inventory against current demand before considering history: a
+	// large past load must not cause an otherwise unnecessary reservation.
+	// Only callers with actual multi-row generation may use visible history.
+	if col.adaptivePrefetch() && (col.col.isInternal || useVisibleDemand) {
+		count = max(count, col.consumedAutoRows)
 	}
 	err := col.allocator.asyncAllocate(
 		ctx,
@@ -540,7 +581,7 @@ func (col *columnCache) allocateLocked(
 	return err
 }
 
-func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator) error {
+func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp client.TxnOperator, useVisibleDemand bool) error {
 	options := AutoIncrementOptionsFromContext(ctx)
 	// Non-default series allocate on demand in applyAutoValues, using at least
 	// the configured span. Keep background prefetch disabled: unlike demand
@@ -561,7 +602,8 @@ func (col *columnCache) maybeAllocate(ctx context.Context, tableID uint64, txnOp
 		col.preAllocate(defines.AttachAccountId(context.Background(), accountId),
 			tableID,
 			col.cfg.CountPerAllocate,
-			txnOp)
+			txnOp,
+			useVisibleDemand)
 	}
 	return nil
 }
@@ -684,14 +726,16 @@ func insertAutoValues[T constraints.Integer](
 	txnOp client.TxnOperator,
 	options AutoIncrementOptions) (uint64, error) {
 	options = NormalizeAutoIncrementOptions(options.Increment, options.Offset)
-	// all values are filled after insert
+	autoCount := vec.GetNulls().Count()
+	applied := false
+	// All values are filled after insert. Failed calls retain the original
+	// fixed prefetch policy, even when a previous load learned large demand.
 	defer func() {
 		vec.SetNulls(nil)
-		col.maybeAllocate(ctx, tableID, txnOp)
+		col.maybeAllocate(ctx, tableID, txnOp, applied && autoCount > 1)
 	}()
 
 	vs := vector.MustFixedColWithTypeCheck[T](vec)
-	autoCount := vec.GetNulls().Count()
 	lastInsertValue := uint64(0)
 
 	// A cold demand-only cache has no constructor reservation. Materialize the
@@ -750,7 +794,15 @@ func insertAutoValues[T constraints.Integer](
 		}
 	}
 	if options.isDefault() {
-		col.preAllocate(ctx, tableID, rows, txnOp)
+		count := rows
+		if col.adaptiveVisiblePrefetch() {
+			// Explicit values, including a high manual watermark, are not
+			// automatic demand. A single generated row keeps fixed policy.
+			count = autoCount
+		}
+		if count > 0 {
+			col.preAllocate(ctx, tableID, count, txnOp, autoCount > 1)
+		}
 	}
 	err := col.applyAutoValues(
 		ctx,
@@ -788,5 +840,6 @@ func insertAutoValues[T constraints.Integer](
 	if err != nil {
 		return 0, err
 	}
-	return lastInsertValue, err
+	applied = true
+	return lastInsertValue, nil
 }

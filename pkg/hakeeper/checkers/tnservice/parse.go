@@ -93,6 +93,7 @@ func checkReportedState(
 	mapper ShardMapper,
 	workingStores []*util.Store,
 	idAlloc util.IDAllocator,
+	pending map[uint64]*operator.Operator,
 ) []*operator.Operator {
 	var ops []*operator.Operator
 
@@ -107,6 +108,9 @@ func checkReportedState(
 			panic(fmt.Sprintf("shard `%d` not register", shardID))
 		}
 
+		if pending[shardID] != nil && len(shard.workingReplicas()) == 0 {
+			continue
+		}
 		steps := checkShard(service, shard, mapper, workingStores, idAlloc)
 		// avoid Operator with nil steps
 		if len(steps) > 0 {
@@ -132,6 +136,7 @@ func checkInitiatingShards(
 	cluster pb.ClusterInfo,
 	cfg hakeeper.Config,
 	currTick uint64,
+	pending map[uint64]*operator.Operator,
 ) []*operator.Operator {
 	// update the registered newly-created shards
 	for _, record := range cluster.TNShards {
@@ -154,8 +159,12 @@ func checkInitiatingShards(
 		return cfg.TNStoreExpired(start, currTick)
 	})
 
+	slices.Sort(expired)
 	var ops []*operator.Operator
 	for _, id := range expired {
+		if pending[id] != nil {
+			continue
+		}
 		steps := checkShard(service, newTnShard(id), mapper, workingStores, idAlloc)
 		if len(steps) > 0 { // avoid Operator with nil steps
 			ops = append(ops,

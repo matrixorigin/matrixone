@@ -100,6 +100,92 @@ func TestDeleteUnpublishedObjectCleanupAcceptsAmbiguousDeleteAbsence(t *testing.
 		statCleanupTestFile(ctx, base, marker), moerr.ErrFileNotFound))
 }
 
+func TestUnpublishedCleanupHonorsDependencies(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"cleanup-dependency", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	dependency := "gc/gc_1-0_2-0.ckp"
+	object := "dependent-object"
+	for _, file := range []string{dependency, object} {
+		require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+			FilePath: file,
+			Entries:  []fileservice.IOEntry{{Offset: 0, Size: 0}},
+		}))
+	}
+	marker, err := RecordUnpublishedObjectCleanup(ctx, fs, UnpublishedObject{
+		File:      object,
+		DependsOn: []string{dependency},
+	})
+	require.NoError(t, err)
+
+	_, _, _, remaining, err := ReplayUnpublishedObjectCleanupPageFrom(
+		ctx, fs, fs,
+		func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error) {
+			return DeleteUnpublishedObject, nil
+		}, nil, nil, "", 10,
+	)
+	require.NoError(t, err)
+	require.True(t, remaining)
+	_, err = fs.StatFile(ctx, object)
+	require.NoError(t, err)
+	require.NoError(t, fs.Delete(ctx, dependency))
+
+	_, _, _, remaining, err = ReplayUnpublishedObjectCleanupPageFrom(
+		ctx, fs, fs,
+		func(UnpublishedObject) (UnpublishedObjectCleanupDecision, error) {
+			return DeleteUnpublishedObject, nil
+		}, nil, nil, "", 10,
+	)
+	require.NoError(t, err)
+	require.False(t, remaining)
+	_, err = fs.StatFile(ctx, object)
+	require.Error(t, err)
+	_, err = fs.StatFile(ctx, marker)
+	require.Error(t, err)
+}
+
+func TestUnpublishedCleanupChecksMarkerDependencyOnMarkerFS(t *testing.T) {
+	ctx := context.Background()
+	markerFS, err := fileservice.NewMemoryFS(
+		"local-markers", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared-objects", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	metadata := UnpublishedObject{File: "gc/gc_1-0_2-0.ckp", CleanupID: "attempt"}
+	metadataMarker, err := RecordUnpublishedObjectCleanup(ctx, markerFS, metadata)
+	require.NoError(t, err)
+	object := "dependent-data"
+	require.NoError(t, objectFS.Write(ctx, fileservice.IOVector{
+		FilePath: object,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte{1}}},
+	}))
+	_, err = RecordUnpublishedObjectCleanup(ctx, markerFS, UnpublishedObject{
+		File: object, DependsOn: []string{metadataMarker},
+	})
+	require.NoError(t, err)
+	decide := func(intent UnpublishedObject) (UnpublishedObjectCleanupDecision, error) {
+		if intent.File == metadata.File {
+			return RetryUnpublishedObjectCleanup, nil
+		}
+		return DeleteUnpublishedObject, nil
+	}
+	_, _, _, remaining, err := ReplayUnpublishedObjectCleanupPageFrom(
+		ctx, markerFS, objectFS, decide, nil, nil, "", 10)
+	require.NoError(t, err)
+	require.True(t, remaining)
+	_, err = objectFS.StatFile(ctx, object)
+	require.NoError(t, err)
+
+	require.NoError(t, markerFS.Delete(ctx, metadataMarker))
+	_, _, _, _, err = ReplayUnpublishedObjectCleanupPageFrom(
+		ctx, markerFS, objectFS, decide, nil, nil, "", 10)
+	require.NoError(t, err)
+	_, err = objectFS.StatFile(ctx, object)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+}
+
 func TestCCPRUnpublishedCleanupIsRestartSafeAndNamespaceIsolated(t *testing.T) {
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS(

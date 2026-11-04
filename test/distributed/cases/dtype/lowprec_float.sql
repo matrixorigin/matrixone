@@ -205,6 +205,15 @@ DEALLOCATE PREPARE pq;
 DEALLOCATE PREPARE nb;
 DEALLOCATE PREPARE eb;
 DEALLOCATE PREPARE lb;
+-- only a column narrows a parameter, as for a literal
+SELECT CAST(1.1 AS FLOAT4) = 1.1;
+PREPARE xq FROM 'SELECT CAST(1.1 AS FLOAT4) = ?';
+SET @v = 1.1;
+EXECUTE xq USING @v;
+DEALLOCATE PREPARE xq;
+-- a numeral beyond DECIMAL(38) narrows by its exact value
+SELECT id FROM pp WHERE b = 0.30000000000000000000000000000000000000001;
+SELECT id FROM pp WHERE b = CAST(0.30000000000000000000000000000000000000001 AS BF16);
 
 -- NOT IN, !=, <=> and BETWEEN round literals to the column type as = and IN do
 CREATE TABLE cmp (a bf16, q float4, h float16);
@@ -232,6 +241,20 @@ UPDATE m1 JOIN m2 ON m1.id = m2.k SET m1.a = m2.a, m1.b = m2.b, m1.c = m2.c, m1.
 SELECT * FROM m1;
 SELECT IF(a > 1, a, b), COALESCE(NULL, d), IFNULL(d, a), CASE WHEN a > 0 THEN d END, NULLIF(d, 1) FROM m1;
 SELECT IF(d, 'y', 'n'), INTERVAL(d, 1, 4), CONV(b, 10, 2) FROM m1;
+-- DECIMAL UNSIGNED admits them as it admits FLOAT: non-negative values store, negative ones are out of range
+CREATE TABLE ud (id INT, x DECIMAL(10,2) UNSIGNED);
+INSERT INTO ud SELECT 1, a FROM m1;
+INSERT INTO ud SELECT 2, b FROM m1;
+INSERT INTO ud SELECT 3, c FROM m1;
+INSERT INTO ud SELECT 4, d FROM m1;
+SELECT * FROM ud ORDER BY id;
+SET @lp_ud_mode = @@sql_mode;
+SET sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO ud SELECT 5, -d FROM m1;
+INSERT INTO ud SELECT 6, -c FROM m1;
+SET sql_mode = @lp_ud_mode;
+-- mixed with an integer or decimal they resolve as FLOAT does: 16777217 stays exact
+SELECT COALESCE(NULLIF(d, d), 16777217), IF(id = 0, a, 16777217), CASE WHEN id = 0 THEN b ELSE 1234567.89 END, COALESCE(NULLIF(c, c), 16777217) FROM m1;
 SELECT BIT_AND(d), BIT_OR(c) FROM m1;
 -- data branch diff and merge see a conflicting bf16 value
 CREATE TABLE bx (id INT PRIMARY KEY, v bf16, w INT);
@@ -272,8 +295,281 @@ DROP TABLE zf;
 SELECT hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', cast(1 AS bf16))), hex(uuid_to_bin('6ccd780c-baba-1026-9564-5b8c656024db', cast(0 AS float8)));
 SELECT date_add('2020-01-01 00:00:00', INTERVAL cast(1.5 AS bf16) SECOND), date_sub('2020-01-01 00:00:00', INTERVAL cast(0.5 AS float4) SECOND);
 SELECT date_add(DATE '2020-01-01', INTERVAL cast(1.5 AS float8) DAY), '2020-01-01 00:00:00' + INTERVAL cast(1.5 AS float16) SECOND;
+SELECT a, count(*) OVER (ORDER BY d RANGE BETWEEN INTERVAL cast(1.5 AS bf16) DAY PRECEDING AND CURRENT ROW) c FROM (SELECT 1 a, DATE '2020-01-01' d UNION ALL SELECT 2, DATE '2020-01-02') t ORDER BY a;
+SELECT a, count(*) OVER (ORDER BY d RANGE BETWEEN INTERVAL cast(1 AS float4) DAY PRECEDING AND CURRENT ROW) c FROM (SELECT 1 a, DATE '2020-01-01' d UNION ALL SELECT 2, DATE '2020-01-03') t ORDER BY a;
 SELECT json_row(cast(1.5 AS bf16), cast(-2 AS float16), cast(448 AS float8), cast(6 AS float4), cast(NULL AS bf16));
 -- arbitrary bits are not a stored low-precision value
 SELECT bit_cast(cast(x'803f' AS varbinary(2)) AS bf16), bit_cast(cast(x'0000803f' AS varbinary(4)) AS float);
+
+-- a literal or parameter is in range by the value CAST rounds it to (to odd, from the exact
+-- source); one just outside float4 (6) or float8 (448) keeps the wide comparison
+CREATE TABLE fp (id INT, f float4, g float8);
+INSERT INTO fp VALUES (1, 6, 448), (2, -6, -448);
+SELECT count(*) FROM fp WHERE f <= 6.0000001;
+SELECT count(*) FROM fp WHERE f >= -6.0000001;
+SELECT count(*) FROM fp WHERE g <= 448.000001;
+SELECT count(*) FROM fp WHERE g >= -448.000001;
+SELECT count(*) FROM fp WHERE f <= '6.0000001';
+SELECT count(*) FROM fp WHERE f BETWEEN -6.0000001 AND 6.0000001;
+SELECT count(*) FROM fp WHERE f IN (6.0000001, 6, -6);
+SELECT count(*) FROM fp WHERE f NOT IN (6.0000001);
+SELECT count(*) FROM fp WHERE f <= 6.0000000000000000000000001;
+SELECT count(*) FROM fp WHERE f <= '6.0000000000000000000000001';
+SELECT count(*) FROM fp WHERE f < 6.0000001 AND f > 5.9999999;
+SELECT count(*) FROM fp WHERE f <= 6.1;
+SELECT count(*) FROM fp WHERE g <= 449;
+SELECT count(*) FROM fp WHERE f <= 6;
+SELECT count(*) FROM fp WHERE f = 6;
+SELECT count(*) FROM fp WHERE CAST(f AS double) <= 6.0000001;
+SET @p = 6.0000001;
+PREPARE s FROM 'SELECT count(*) FROM fp WHERE f <= ?';
+EXECUTE s USING @p;
+SET @p = '6.0000000000000000000000001';
+EXECUTE s USING @p;
+SET @p = 6;
+EXECUTE s USING @p;
+DEALLOCATE PREPARE s;
+SET @q = -448.000001;
+PREPARE s2 FROM 'SELECT count(*) FROM fp WHERE g >= ?';
+EXECUTE s2 USING @q;
+DEALLOCATE PREPARE s2;
+-- CAST and writes still reject a value outside the type
+SELECT CAST(6.0000001 AS float4);
+INSERT INTO fp VALUES (3, 6.0000001, 0);
+SELECT count(*) FROM fp;
+
+-- float16 (±65504) and bf16: a value just above the maximum rounds back to it under
+-- round-to-nearest-even, and is still outside the type: CAST rejects it and a comparison
+-- with it stays wide
+CREATE TABLE fh (id INT, k float16, b bf16);
+INSERT INTO fh VALUES (1, 65504, 3.38e38), (2, -65504, -3.38e38);
+SELECT count(*) FROM fh WHERE k < 65505;
+SELECT count(*) FROM fh WHERE k = 65505;
+SELECT count(*) FROM fh WHERE k > -65505;
+SELECT count(*) FROM fh WHERE k <= 65504;
+SELECT count(*) FROM fh WHERE k IN (65505, 65504);
+SELECT count(*) FROM fh WHERE b < 3.39e38;
+SELECT count(*) FROM fh WHERE b > -3.39e38;
+SET @h = 65505;
+PREPARE s3 FROM 'SELECT count(*) FROM fh WHERE k < ?';
+EXECUTE s3 USING @h;
+SET @h = 65504;
+EXECUTE s3 USING @h;
+DEALLOCATE PREPARE s3;
+SELECT CAST(65504 AS float16), CAST(-65504 AS float16);
+SELECT CAST(65505 AS float16);
+SELECT CAST(-65505 AS float16);
+SELECT CAST('65504.5' AS float16);
+SELECT CAST(3.39e38 AS bf16);
+-- a bf16 is checked by its float32 value: its maximum's float32 text and the text CAST prints load back
+SELECT CAST(CAST('3.3895314e+38' AS bf16) AS char), CAST(CAST('-3.3895314e+38' AS bf16) AS char);
+SELECT CAST(CAST(CAST('3.3895314e+38' AS bf16) AS char) AS bf16) = CAST('3.3895314e+38' AS bf16), CAST(CAST(CAST('-3.3895314e+38' AS bf16) AS char) AS bf16) = CAST('-3.3895314e+38' AS bf16);
+SELECT CAST('3.3895316e+38' AS bf16);
+-- the printed maximum also matches the stored value in a comparison, as a literal and as a
+-- prepared parameter
+CREATE TABLE bmax (id int, f bf16);
+INSERT INTO bmax VALUES (1, 3.3895314e38), (2, -3.3895314e38), (3, 1);
+SELECT id FROM bmax WHERE f = 3.3895314e38;
+SELECT id FROM bmax WHERE f = -3.3895314e38;
+SELECT id FROM bmax WHERE f <=> 3.3895314e38;
+SELECT id FROM bmax WHERE f = '3.3895314e+38';
+SELECT id FROM bmax WHERE f IN (3.3895314e38, -3.3895314e38) ORDER BY id;
+SELECT count(*) FROM bmax WHERE f = 3.3895316e38;
+PREPARE bm FROM 'SELECT id FROM bmax WHERE f = ?';
+SET @bm = 3.3895314e38;
+EXECUTE bm USING @bm;
+SET @bm = -3.3895314e38;
+EXECUTE bm USING @bm;
+SET @bm = '3.3895314e+38';
+EXECUTE bm USING @bm;
+SET @bm = '-3.3895314e+38';
+EXECUTE bm USING @bm;
+DEALLOCATE PREPARE bm;
+INSERT INTO fh VALUES (3, 65505, 0);
+SELECT count(*) FROM fh;
+-- the same bound for vecf16 and vecbf16 elements, from text and from a wider vector
+SELECT CAST('[65504,-65504]' AS vecf16(2));
+SELECT CAST('[65505]' AS vecf16(1));
+SELECT CAST(CAST('[65505]' AS vecf32(1)) AS vecf16(1));
+SELECT CAST('[3.39e38]' AS vecbf16(1));
+SELECT CAST(CAST('[-3.39e38]' AS vecf32(1)) AS vecbf16(1));
+
+-- SAMPLE ... ROWS replaces pooled rows of every low-precision type
+CREATE TABLE sp (id INT, b bf16, h float16, e float8, q float4);
+INSERT INTO sp SELECT result, result % 7, result % 5, result % 3, result % 2 FROM generate_series(1, 50) g;
+SELECT count(*) FROM (SELECT sample(b, 5 rows) FROM sp) x;
+SELECT count(*) FROM (SELECT sample(*, 5 rows) FROM sp) x;
+SELECT count(*) FROM (SELECT sample(q, 3 rows) FROM sp) x;
+-- a RANGE bound would round to the column type: not a RANGE partition column;
+-- KEY, HASH and LIST compare by equality and are accepted
+CREATE TABLE pr1 (id INT, e float8) PARTITION BY RANGE COLUMNS(e) (PARTITION p0 VALUES LESS THAN (0), PARTITION p1 VALUES LESS THAN (100));
+CREATE TABLE pr2 (id INT, b bf16) PARTITION BY RANGE(b) (PARTITION p0 VALUES LESS THAN (0), PARTITION p1 VALUES LESS THAN (300));
+CREATE TABLE pr3 (id INT, h float16) PARTITION BY RANGE((h)) (PARTITION p0 VALUES LESS THAN (0));
+CREATE TABLE pr4 (id INT, e float8) PARTITION BY RANGE(id) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20));
+INSERT INTO pr4 VALUES (5, 99), (15, -3);
+SELECT count(*) FROM pr4;
+CREATE TABLE pk1 (id INT, e float8) PARTITION BY KEY(e) PARTITIONS 2;
+INSERT INTO pk1 VALUES (1, -3), (2, 99), (3, -3);
+SELECT count(*) FROM pk1 WHERE e = -3;
+CREATE TABLE pl1 (id INT, e float8) PARTITION BY LIST COLUMNS(e) (PARTITION p0 VALUES IN (-3, 0), PARTITION p1 VALUES IN (2.5, 99));
+INSERT INTO pl1 VALUES (1, -3), (2, 0), (3, 2.5), (4, 99);
+SELECT count(*) FROM pl1 WHERE e = 99;
+
+-- TIMESTAMPADD SECOND widens a narrow float count to float32
+SELECT TIMESTAMPADD(SECOND, CAST(1.5 AS bf16), '2020-01-01 00:00:00'), TIMESTAMPADD(SECOND, CAST(2.25 AS float16), '2020-01-01 00:00:00'), TIMESTAMPADD(SECOND, CAST(1.5 AS float8), '2020-01-01 00:00:00'), TIMESTAMPADD(SECOND, CAST(1.5 AS float4), '2020-01-01 00:00:00');
+
+-- ADD COLUMN ... NOT NULL without a default backfills 0 on a populated table
+CREATE TABLE addnn (id INT PRIMARY KEY, x INT);
+INSERT INTO addnn VALUES (1, 10), (2, 20);
+ALTER TABLE addnn ADD COLUMN b bf16 NOT NULL, ALGORITHM=COPY;
+ALTER TABLE addnn ADD COLUMN h float16 NOT NULL, ALGORITHM=COPY;
+ALTER TABLE addnn ADD COLUMN e float8 NOT NULL, ALGORITHM=COPY;
+ALTER TABLE addnn ADD COLUMN q float4 NOT NULL, ALGORITHM=COPY;
+ALTER TABLE addnn ADD COLUMN b2 bf16 NOT NULL, ADD COLUMN q2 float4 NOT NULL;
+SELECT * FROM addnn ORDER BY id;
+DROP TABLE addnn;
+
+-- JSON compared with a number keeps its category, as for float: a JSON string is not the number
+CREATE TABLE jn (id INT, d JSON, f FLOAT, b bf16, h float16, e float8, q float4);
+INSERT INTO jn VALUES (1, '1.5', 1.5, 1.5, 1.5, 1.5, 1.5), (2, '"1.5"', 1.5, 1.5, 1.5, 1.5, 1.5), (3, '0.3', 0.3, 0.3, 0.3, 0.3, 0.5), (4, '-2', -2, -2, -2, -2, -2);
+SELECT id, d = f, d = b, d = h, d = e, d = q, b = d, d <=> q, d < b, d >= e FROM jn ORDER BY id;
+SELECT id FROM jn WHERE d = CAST(1.5 AS bf16) ORDER BY id;
+SELECT id FROM jn WHERE d = CAST(1.5 AS FLOAT) ORDER BY id;
+-- a JSON number outside the type's finite range compares unrounded, as outside FLOAT's range
+SELECT id FROM jn WHERE CAST('7' AS JSON) = q;
+SELECT id FROM jn WHERE CAST('7' AS JSON) > q ORDER BY id;
+SELECT id FROM jn WHERE CAST('1e100' AS JSON) = f;
+SELECT id FROM jn WHERE CAST('1e100' AS JSON) > f ORDER BY id;
+SELECT id FROM jn WHERE CAST('1e100' AS JSON) > b ORDER BY id;
+DROP TABLE jn;
+
+-- a user variable holding a narrow float computes in DOUBLE, as for FLOAT
+CREATE TABLE uv (id INT, a bf16, f FLOAT);
+INSERT INTO uv VALUES (1, 1.5, 1.5);
+SET @y = CAST(1.5 AS bf16);
+SET @yf = CAST(1.5 AS FLOAT);
+SELECT @y + 1, @y + 0.25, @y * 2, @yf + 1, @yf + 0.25, @yf * 2;
+SET @z = CAST(0.5 AS float8);
+SELECT id FROM uv WHERE a = @z + 1;
+SELECT id FROM uv WHERE f = @z + 1;
+DROP TABLE uv;
+
+-- a constant expression compared with the column is folded and rounded as a literal is
+CREATE TABLE ce (a bf16, h float16, q float4, f FLOAT);
+INSERT INTO ce VALUES (0.1, 0.1, 1, 0.1);
+SELECT COUNT(*) FROM ce WHERE a = ABS(-0.1);
+SELECT COUNT(*) FROM ce WHERE h = ABS(-0.1);
+SELECT COUNT(*) FROM ce WHERE q IN (ABS(-1.1));
+SELECT COUNT(*) FROM ce WHERE f = ABS(-0.1);
+DROP TABLE ce;
+
+-- hex and bit literals are unsigned integers, as for FLOAT
+SELECT CAST(0x05 AS bf16), CAST(x'01' AS float4), CAST(b'101' AS float8), CAST(0x05 AS FLOAT);
+SELECT CAST(0x10 AS float4);
+CREATE TABLE hx (a bf16 DEFAULT 0x02, q float8);
+INSERT INTO hx (q) VALUES (0x03);
+SELECT * FROM hx;
+DROP TABLE hx;
+
+-- JSON, YEAR and ENUM convert as they convert to FLOAT
+SELECT CAST(CAST('1.5' AS JSON) AS bf16), CAST(CAST(2024 AS YEAR) AS bf16), CAST(CAST('1.5' AS JSON) AS FLOAT);
+CREATE TABLE src (e ENUM('a','b','c'), j JSON, y YEAR);
+INSERT INTO src VALUES ('c', '2.5', 2024);
+SELECT CAST(e AS float4), CAST(j AS float8), CAST(y AS float16), CAST(e AS FLOAT) FROM src;
+CREATE TABLE dst (b bf16, q float4);
+INSERT INTO dst SELECT j, e FROM src;
+SELECT * FROM dst;
+SELECT CAST(CAST('7' AS JSON) AS float4);
+DROP TABLE src;
+DROP TABLE dst;
+
+-- text that is not a number converts to its numeric prefix with a warning, as for FLOAT;
+-- a prefix outside the type's finite range is an error
+SET sql_mode = '';
+CREATE TABLE txt (id INT, b bf16, f FLOAT);
+INSERT INTO txt VALUES (1, 'abc', 'abc');
+INSERT INTO txt VALUES (2, '1abc', '1abc');
+INSERT INTO txt VALUES (3, '', '');
+INSERT IGNORE INTO txt VALUES (4, ' 2.5x', ' 2.5x');
+SELECT * FROM txt ORDER BY id;
+INSERT INTO txt VALUES (5, '1e39x', 1);
+DROP TABLE txt;
+SET sql_mode = DEFAULT;
+
+-- serial keeps the stored bits; serial_extract restores them; the encoding orders as the values
+SELECT HEX(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)));
+SELECT SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 0 AS bf16),
+       SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 1 AS float16),
+       SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 2 AS float8),
+       SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 3 AS float4);
+SELECT SERIAL_FULL(CAST(1.5 AS bf16), NULL) IS NULL, SERIAL(CAST(1.5 AS bf16), NULL) IS NULL;
+CREATE TABLE so (v float4);
+INSERT INTO so VALUES (6), (-1.5), (0.5), (-6), (0), (4), (-0.5), (1);
+SELECT v FROM so ORDER BY SERIAL(v);
+DROP TABLE so;
+
+-- a hand-built tuple element: -0 extracts as 0, NaN is an error
+CREATE TABLE sz (v float4);
+INSERT INTO sz SELECT SERIAL_EXTRACT(CAST(UNHEX('587F') AS VARCHAR(2)), 0 AS float4);
+INSERT INTO sz VALUES (0);
+SELECT v, COUNT(*) FROM sz GROUP BY v;
+SELECT COUNT(DISTINCT v), SUM(v = 0) FROM sz;
+DROP TABLE sz;
+SELECT SERIAL_EXTRACT(CAST(UNHEX('577F') AS VARCHAR(2)), 0 AS float8);
+SELECT SERIAL_EXTRACT(CAST(UNHEX('5700') AS VARCHAR(2)), 0 AS float8);
+SELECT SERIAL_EXTRACT(CAST(UNHEX('56037F') AS VARCHAR(3)), 0 AS float16);
+CREATE TABLE sx (s VARCHAR(10), i BIGINT);
+INSERT INTO sx VALUES (CAST(UNHEX('577F') AS VARCHAR(2)), 0);
+SELECT SERIAL_EXTRACT(s, i AS float8) FROM sx;
+INSERT INTO sx VALUES (CAST(UNHEX('5700') AS VARCHAR(2)), 0);
+SELECT SERIAL_EXTRACT(s, i AS float8) FROM sx;
+DROP TABLE sx;
+
+-- NUMERIC_PRECISION is the significand bits
+CREATE TABLE np (a bf16, b float16, c float8, d float4, f FLOAT);
+SELECT column_name, numeric_precision FROM information_schema.columns WHERE table_schema = 'lowprec_float' AND table_name = 'np' ORDER BY ordinal_position;
+DROP TABLE np;
+
+-- text converts as FLOAT does: radix literals are their integer value, other text its decimal prefix
+SELECT CAST('0x10' AS FLOAT), CAST('0x10' AS bf16), CAST('-0x10' AS float16), CAST('0b101' AS float8), CAST('0b11' AS float4), CAST('0o7' AS bf16);
+SELECT CAST('inf' AS FLOAT), CAST('inf' AS bf16), CAST('-inf' AS float16), CAST('nan' AS float8), CAST('nan' AS float4);
+SELECT CAST('1.5abc' AS FLOAT), CAST('1.5abc' AS bf16), CAST('1.5abc' AS float16), CAST('1.5abc' AS float8), CAST('1.5abc' AS float4);
+SELECT CAST('0x1.1p0' AS bf16);
+
+-- truncated text in an assignment: an error in strict mode, a warning with IGNORE or without strict mode
+CREATE TABLE ta (id INT PRIMARY KEY, f FLOAT, a bf16, b float16, c float8, d float4);
+SET sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO ta (id, f) VALUES (1, '1.5abc');
+INSERT INTO ta (id, a) VALUES (1, '1.5abc');
+INSERT INTO ta (id, b) VALUES (1, '1.5abc');
+INSERT INTO ta (id, c) VALUES (1, '1.5abc');
+INSERT INTO ta (id, d) VALUES (1, '1.5abc');
+INSERT IGNORE INTO ta VALUES (1, '1.5abc', '1.5abc', '1.5abc', '1.5abc', '1.5abc');
+SET sql_mode = '';
+INSERT INTO ta VALUES (2, '2.5x', '2.5x', '2.5x', '2.5x', '2.5x');
+SET sql_mode = DEFAULT;
+SELECT * FROM ta ORDER BY id;
+DROP TABLE ta;
+
+-- indicator and local-rank window functions read the values as FLOAT does
+CREATE TABLE tiw (id INT PRIMARY KEY, f FLOAT, a bf16, b float16, c float8, d float4);
+INSERT INTO tiw VALUES (1, 1, 1, 1, 1, 1), (2, 2, 2, 2, 2, 2), (3, 3, 3, 3, 3, 3), (4, 4, 4, 4, 4, 4), (5, 1.5, 1.5, 1.5, 1.5, 1.5);
+SELECT id, sma(f, 2) OVER (ORDER BY id), sma(a, 2) OVER (ORDER BY id), sma(b, 2) OVER (ORDER BY id), sma(c, 2) OVER (ORDER BY id), sma(d, 2) OVER (ORDER BY id) FROM tiw ORDER BY id;
+SELECT id, mmaxDrawdown(f, 3) OVER (ORDER BY id), mmaxDrawdown(a, 3) OVER (ORDER BY id), mmaxDrawdown(d, 3) OVER (ORDER BY id), cumpositivestreak(c) OVER (ORDER BY id) FROM tiw ORDER BY id;
+SELECT id, mrank(f, 3) OVER (ORDER BY id), mrank(a, 3) OVER (ORDER BY id), mrank(c, 3) OVER (ORDER BY id), cumrank(b) OVER (ORDER BY id), cumrank(d) OVER (ORDER BY id) FROM tiw ORDER BY id;
+SELECT quantileExactWeighted(f, id, 0.5), quantileExactWeighted(a, id, 0.5), quantileExactWeighted(c, id, 0.5), quantileExactWeighted(d, id, 0.5) FROM tiw;
+DROP TABLE tiw;
+
+-- ROLLUP over the four types gives the same rows with the sort, hash and cost-chosen plans
+CREATE TABLE tru (g INT, h INT, f FLOAT, a bf16, b float16, c float8, d float4);
+INSERT INTO tru VALUES (1, 1, 1.5, 1.5, 1.5, 1.5, 1.5), (1, 2, -2, -2, -2, -2, -2), (2, 1, 3, 3, 3, 3, 3), (2, 1, 0.5, 0.5, 0.5, 0.5, 0.5), (NULL, 1, 4, 4, 4, 4, 4);
+SET SESSION rollup_algorithm = 'SORT';
+SELECT g, h, SUM(f), SUM(a), MIN(b), MAX(c), COUNT(d), GROUPING(g, h) FROM tru GROUP BY g, h WITH ROLLUP ORDER BY GROUPING(g, h), g, h;
+SET SESSION rollup_algorithm = 'HASH';
+SELECT g, h, SUM(f), SUM(a), MIN(b), MAX(c), COUNT(d), GROUPING(g, h) FROM tru GROUP BY g, h WITH ROLLUP ORDER BY GROUPING(g, h), g, h;
+SET SESSION rollup_algorithm = 'COST';
+SELECT g, h, SUM(f), SUM(a), MIN(b), MAX(c), COUNT(d), GROUPING(g, h) FROM tru GROUP BY g, h WITH ROLLUP ORDER BY GROUPING(g, h), g, h;
+SET SESSION rollup_algorithm = default;
+DROP TABLE tru;
 
 DROP DATABASE lowprec_float;

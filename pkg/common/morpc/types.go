@@ -72,7 +72,9 @@ type RPCMessage struct {
 	internal       bool
 	stream         bool
 	streamSequence uint32
-	createAt       time.Time
+	// Native timeout cancellation provenance, never encoded on the wire.
+	// Values alone cannot prove ancestry after context.WithoutCancel.
+	nativeContextDone <-chan struct{}
 }
 
 // StreamTerminalToken proves that the server IO loop validated a particular

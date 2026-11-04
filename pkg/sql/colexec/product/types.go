@@ -147,10 +147,6 @@ func (product *Product) Free(proc *process.Process, pipelineFailed bool, err err
 	product.ctr.cleanBatch(proc.Mp())
 }
 
-func (product *Product) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)

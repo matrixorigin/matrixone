@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -569,8 +570,6 @@ func (c *clientConn) BuildConnWithServer(ctx context.Context, prevAddr string) (
 // HandleEvent implements the ClientConn interface.
 func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error {
 	switch ev := e.(type) {
-	case *killEvent:
-		return c.handleKill(ctx, ev, resp)
 	case *setVarEvent:
 		return c.handleSetVar(ev)
 	case *identityChangeEvent:
@@ -720,80 +719,38 @@ func (c *clientConn) acquireBackgroundBackendProtocolMemory(
 
 // KillCurrentBackendConn implements the ClientConn interface.
 func (c *clientConn) KillCurrentBackendConn(sc ServerConn) error {
-	if sc == nil {
+	if sc == nil || sc.GetCNServer() == nil {
 		return nil
 	}
-	currentCN := sc.GetCNServer()
-	if currentCN == nil {
-		return nil
+	cn := sc.GetCNServer()
+	if c.queryClient == nil || c.moCluster == nil {
+		return moerr.NewInternalErrorNoCtx("missing query service for disconnect cleanup")
 	}
-
-	tempCN := &CNServer{
-		uuid:                currentCN.uuid,
-		addr:                currentCN.addr,
-		salt:                currentCN.salt,
-		admissionGeneration: currentCN.admissionGeneration,
+	addr := getQueryAddress(c.moCluster, cn.addr)
+	if addr == "" {
+		return moerr.NewInternalErrorNoCtx("missing backend query address for disconnect cleanup")
 	}
-	if c.mysqlProto != nil {
-		tempCN.salt = c.mysqlProto.GetSalt()
+	parent := c.ctx
+	if parent == nil {
+		parent = context.Background()
 	}
-
-	cid, err := c.genConnID()
-	if err != nil {
-		return err
-	}
-	tempCN.connID = cid
-
-	ctx := c.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+	// Client cancellation triggers this cleanup; it must not cancel the RPC
+	// before the captured backend has been notified. The deadline is finite.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), defaultTransferTimeout)
 	defer cancel()
-	return c.connAndExec(
-		ctx,
-		tempCN,
-		fmt.Sprintf("kill connection %d", c.ConnID()),
-		nil,
-		protocolMemoryCritical,
-	)
-}
-
-// handleKill handles the kill event.
-func (c *clientConn) handleKill(
-	ctx context.Context,
-	e *killEvent,
-	resp chan<- []byte,
-) error {
-	cn, err := c.router.SelectByConnID(e.connID)
+	req := c.queryClient.NewRequest(query.CmdMethod_DisconnectSession)
+	req.DisconnectSessionRequest = &query.DisconnectSessionRequest{ConnID: c.ConnID()}
+	rsp, err := c.queryClient.SendMessage(ctx, addr, req)
+	if rsp != nil {
+		defer c.queryClient.Release(rsp)
+	}
 	if err != nil {
-		// If no server found, means that the query has been terminated.
-		if errors.Is(err, noCNServerErr) {
-			sendResp(makeOKPacket(8), resp)
-			return nil
-		}
-		c.log.Error("failed to select CN server", zap.Error(err))
-		c.sendErr(err, resp)
 		return err
 	}
-	// Before connect to backend server, update the salt.
-	cn.salt = c.mysqlProto.GetSalt()
-
-	// And also update the connection ID.
-	cid, err := c.genConnID()
-	if err != nil {
-		c.log.Error("failed to generate conn ID for kill query", zap.Error(err))
-		c.sendErr(err, resp)
-		return err
+	if rsp == nil || rsp.DisconnectSessionResponse == nil {
+		return moerr.NewInternalError(ctx, "missing disconnect session response")
 	}
-	cn.connID = cid
-
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
-	defer cancel()
-	return c.connAndExec(ctx, cn, e.stmt, resp, protocolMemoryCritical)
+	return nil
 }
 
 // handleSetVar handles the set variable event.

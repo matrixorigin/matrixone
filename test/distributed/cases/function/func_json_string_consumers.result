@@ -1,0 +1,244 @@
+drop database if exists issue28905_json_string_consumers;
+create database issue28905_json_string_consumers;
+use issue28905_json_string_consumers;
+create table src (id int primary key, js json, v varchar(20));
+insert into src values
+(1, '{"b":2,"a":1}', 'A'),
+(2, '1', ''),
+(3, 'null', null),
+(4, null, null);
+select count(*) as matching_sha_alias from src where sha(js) = sha1(js) or (sha(js) is null and sha1(js) is null);
+matching_sha_alias
+4
+select id, concat('', js) as concat_left, concat(js, '') as concat_right, concat('', js) is null as concat_left_is_null, concat(js, '') is null as concat_right_is_null, concat_ws('|', 'x', js, 'y') as concat_ws_middle, concat_ws('|', js, v) as concat_ws_column, concat_ws('|', js, v) = '' as concat_ws_empty from src order by id;
+id    concat_left    concat_right    concat_left_is_null    concat_right_is_null    concat_ws_middle    concat_ws_column    concat_ws_empty
+1    {"a": 1, "b": 2}    {"a": 1, "b": 2}    0    0    x|{"a": 1, "b": 2}|y    {"a": 1, "b": 2}|A    0
+2    1    1    0    0    x|1|y    1|    0
+3    null    null    0    0    x|null|y    null    0
+4    null    null    1    1    x|y        1
+select id, elt(2, 'fallback', js, 'other') as elt_selected from src order by id;
+id    elt_selected
+1    {"a": 1, "b": 2}
+2    1
+3    null
+4    null
+select id, elt(2, 'fallback', js, 'other') is null as selected_is_null from src order by id;
+➤ id[4,32,0]  ¦  selected_is_null[-7,1,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0  𝄀
+4  ¦  1
+create view json_elt_view as select id, elt(2, 'fallback', js) as c from src;
+select id, c, c is null as selected_is_null from json_elt_view order by id;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  ¦  selected_is_null[-7,1,0]  𝄀
+1  ¦  {"a": 1, "b": 2}  ¦  0  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  0  𝄀
+4  ¦  null  ¦  1
+create table json_elt_ctas as select id, elt(2, 'fallback', js) as c from src;
+select id, c, c is null as selected_is_null from json_elt_ctas order by id;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  ¦  selected_is_null[-7,1,0]  𝄀
+1  ¦  {"a": 1, "b": 2}  ¦  0  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  0  𝄀
+4  ¦  null  ¦  1
+prepare json_elt_column_stmt from 'select id, elt(2, ''fallback'', js) as c, elt(2, ''fallback'', js) is null as selected_is_null from src order by id';
+execute json_elt_column_stmt;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  ¦  selected_is_null[-7,1,0]  𝄀
+1  ¦  {"a": 1, "b": 2}  ¦  0  𝄀
+2  ¦  1  ¦  0  𝄀
+3  ¦  null  ¦  0  𝄀
+4  ¦  null  ¦  1
+deallocate prepare json_elt_column_stmt;
+select concat(cast('{"k":1}' as json), '!') as constant_concat, concat_ws('|', cast('[1,2]' as json), 'x') as constant_concat_ws, elt(1, cast('{"k":1}' as json), 'fallback') as constant_elt;
+constant_concat    constant_concat_ws    constant_elt
+{"k": 1}!    [1, 2]|x    {"k": 1}
+create view json_string_view as select id, concat_ws('|', 'x', js, 'y') as c from src;
+select id, c from json_string_view order by id;
+id    c
+1    x|{"a": 1, "b": 2}|y
+2    x|1|y
+3    x|null|y
+4    x|y
+create table json_string_ctas as select id, concat('', js) as c from src;
+select id, c from json_string_ctas order by id;
+id    c
+1    {"a": 1, "b": 2}
+2    1
+3    null
+4    null
+set @json_string_param = '{"p":1}';
+prepare json_string_stmt from 'select id, concat(cast(? as json), js) as c from src order by id';
+execute json_string_stmt using @json_string_param;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  𝄀
+1  ¦  {"p": 1}{"a": 1, "b": 2}  𝄀
+2  ¦  {"p": 1}1  𝄀
+3  ¦  {"p": 1}null  𝄀
+4  ¦  null
+set @json_string_param = '[2]';
+execute json_string_stmt using @json_string_param;
+➤ id[4,32,0]  ¦  c[-1,16383,0]  𝄀
+1  ¦  [2]{"a": 1, "b": 2}  𝄀
+2  ¦  [2]1  𝄀
+3  ¦  [2]null  𝄀
+4  ¦  null
+deallocate prepare json_string_stmt;
+prepare json_kind_stmt from 'select case when ? is null then ''NULL'' else charset(?) end as source_charset, coalesce(json_type(cast(? as json)) = ''OBJECT'', false) as parsed_object, cast(? as json) is null as value_is_null';
+set @json_string_param = binary '{"p":1}';
+execute json_kind_stmt using @json_string_param, @json_string_param, @json_string_param, @json_string_param;
+➤ source_charset[12,65535,0]  ¦  parsed_object[-7,1,0]  ¦  value_is_null[-7,1,0]  𝄀
+binary  ¦  0  ¦  0
+set @json_string_param = '{"p":1}';
+execute json_kind_stmt using @json_string_param, @json_string_param, @json_string_param, @json_string_param;
+➤ source_charset[12,65535,0]  ¦  parsed_object[-7,1,0]  ¦  value_is_null[-7,1,0]  𝄀
+utf8mb4  ¦  1  ¦  0
+set @json_string_param = binary '{"p":1}';
+execute json_kind_stmt using @json_string_param, @json_string_param, @json_string_param, @json_string_param;
+➤ source_charset[12,65535,0]  ¦  parsed_object[-7,1,0]  ¦  value_is_null[-7,1,0]  𝄀
+binary  ¦  0  ¦  0
+set @json_string_param = null;
+execute json_kind_stmt using @json_string_param, @json_string_param, @json_string_param, @json_string_param;
+➤ source_charset[12,65535,0]  ¦  parsed_object[-7,1,0]  ¦  value_is_null[-7,1,0]  𝄀
+NULL  ¦  0  ¦  1
+deallocate prepare json_kind_stmt;
+select elt(1, 'ok', cast('bad' as json)) as selected_text, elt(null, cast('bad' as json), 'ok') is null as null_selector, elt(0, cast('bad' as json), 'ok') is null as zero_selector, elt(3, cast('bad' as json), 'ok') is null as outside_selector;
+➤ selected_text[-1,16383,0]  ¦  null_selector[-7,1,0]  ¦  zero_selector[-7,1,0]  ¦  outside_selector[-7,1,0]  𝄀
+ok  ¦  1  ¦  1  ¦  1
+prepare json_elt_lazy_stmt from 'select elt(?, ''ok'', cast(''bad'' as json)) as selected_text';
+set @json_elt_selector = 1;
+execute json_elt_lazy_stmt using @json_elt_selector;
+➤ selected_text[-1,16383,0]  𝄀
+ok
+set @json_elt_selector = null;
+execute json_elt_lazy_stmt using @json_elt_selector;
+➤ selected_text[-1,16383,0]  𝄀
+null
+set @json_elt_selector = 0;
+execute json_elt_lazy_stmt using @json_elt_selector;
+➤ selected_text[-1,16383,0]  𝄀
+null
+deallocate prepare json_elt_lazy_stmt;
+create table lazy_src(id int primary key, n int, js json, txt varchar(20));
+insert into lazy_src values (1, 1, '{"p":1}', 'bad'), (2, 2, '{"p":1}', '[2]');
+select id, elt(n, js, cast(txt as json)) as selected_value from lazy_src order by id;
+➤ id[4,32,0]  ¦  selected_value[-1,16383,0]  𝄀
+1  ¦  {"p": 1}  𝄀
+2  ¦  [2]
+select concat(elt(1, 'ok', cast('bad' as json)), '!') as lazy_parent, elt(1, elt(1, 'ok', cast('bad' as json)), cast('bad' as json)) as lazy_nested;
+➤ lazy_parent[-1,16383,0]  ¦  lazy_nested[-1,16383,0]  𝄀
+ok!  ¦  ok
+select elt(1, 'ok', cast(bit_count('3x') as json)) as unselected_warning;
+➤ unselected_warning[-1,16383,0]  𝄀
+ok
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select concat(elt(1, cast(bit_count('3x') as json), 'ok'), '!') as selected_warning;
+➤ selected_warning[-1,16383,0]  𝄀
+2!
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
+select elt(1, cast(cast('a' as binary(1)) as json)) = '"base64:type254:YQ=="' as binary_subtype;
+➤ binary_subtype[-7,1,0]  𝄀
+1
+create table opaque_stored(j json);
+insert into opaque_stored values (cast(cast(repeat('a',58) as blob) as json));
+select elt(1,j) = concat('"base64:type252:',repeat('YWFh',19),char(92),'nYQ=="') as wrapped_elt, concat('',j) = concat('"base64:type252:',repeat('YWFh',19),char(92),'nYQ=="') as wrapped_stored from opaque_stored;
+➤ wrapped_elt[-7,1,0]  ¦  wrapped_stored[-7,1,0]  𝄀
+1  ¦  1
+select (select group_concat(j) from opaque_stored) = (select concat('',j) from opaque_stored) as group_concat_json_visible, (select listagg(j, '') within group (order by 1) from opaque_stored) = (select concat('',j) from opaque_stored) as listagg_json_visible;
+➤ group_concat_json_visible[-7,1,0]  ¦  listagg_json_visible[-7,1,0]  𝄀
+1  ¦  1
+select json_schema_valid('{"type":"string","maxLength":95}',j) as rejects_compact_length, json_schema_valid('{"type":"string","maxLength":96}',j) as accepts_visible_length from opaque_stored;
+➤ rejects_compact_length[-7,1,0]  ¦  accepts_visible_length[-7,1,0]  𝄀
+0  ¦  1
+create table remaining(id int primary key, js json, bits bigint);
+insert into remaining values
+(1, '{"b":2,"a":1}', 256),
+(2, '[1,true,"x"]', 224),
+(3, '1', 384),
+(4, 'null', 123),
+(5, null, null);
+select id, md5(js), sha1(js), sha2(js,256) from remaining order by id;
+id    md5(js)    sha1(js)    sha2(js, 256)
+1    8aacdb17187e6acf2b175d4aa08d7213    1744f53e00fc23bd3e515b298e42936485061dba    d8497d9d82770a70729261095aa98f7ef5154d7af499f8037b6ca250296785a6
+2    1f1023597e1b9c9af1c8b6d089a40157    0bb18612a0dba78a67adac7e447de4836c49efab    0aa5427e0ddcc32db2821c2f77596fa9c7d904a15819c9edc2a90da9400560ab
+3    c4ca4238a0b923820dcc509a6f75849b    356a192b7913b04c54574d18c28d46e6395428ab    6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b
+4    37a6259cc0c1dae299a7866489dff0bd    2be88ca4242c76e8253ac62474851065032d6833    74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b
+5    NULL    NULL    NULL
+select id,
+md5(js) <=> md5(cast(js as char)) as md5_ok,
+sha1(js) <=> sha1(cast(js as char)) as sha1_ok,
+sha2(js,256) <=> sha2(cast(js as char),256) as sha2_const_ok,
+sha2(js,bits) <=> sha2(cast(js as char),bits) as sha2_dynamic_ok,
+compress(js) <=> compress(cast(js as char)) as compress_ok,
+quote(js) <=> quote(cast(js as char)) as quote_ok,
+soundex(js) <=> soundex(cast(js as char)) as soundex_ok
+from remaining order by id;
+id    md5_ok    sha1_ok    sha2_const_ok    sha2_dynamic_ok    compress_ok    quote_ok    soundex_ok
+1    1    1    1    1    1    1    1
+2    1    1    1    1    1    1    1
+3    1    1    1    1    1    1    1
+4    1    1    1    1    1    1    1
+5    1    1    1    1    1    1    1
+create view remaining_hash_view as select id, md5(js) as h from remaining;
+create table remaining_hash_ctas as select id, sha1(js) as h from remaining;
+select count(*) as view_rows from remaining_hash_view;
+view_rows
+5
+select count(*) as ctas_rows from remaining_hash_ctas;
+ctas_rows
+5
+select id, h from remaining_hash_view order by id;
+id    h
+1    8aacdb17187e6acf2b175d4aa08d7213
+2    1f1023597e1b9c9af1c8b6d089a40157
+3    c4ca4238a0b923820dcc509a6f75849b
+4    37a6259cc0c1dae299a7866489dff0bd
+5    NULL
+select id, h from remaining_hash_ctas order by id;
+id    h
+1    1744f53e00fc23bd3e515b298e42936485061dba
+2    0bb18612a0dba78a67adac7e447de4836c49efab
+3    356a192b7913b04c54574d18c28d46e6395428ab
+4    2be88ca4242c76e8253ac62474851065032d6833
+5    NULL
+set @json_param = '{"p":1}';
+prepare remaining_hash_stmt from 'select md5(cast(? as json)), sha1(cast(? as json)), sha2(cast(? as json),256)';
+execute remaining_hash_stmt using @json_param, @json_param, @json_param;
+md5(cast(? as json))    sha1(cast(? as json))    sha2(cast(? as json), 256)
+262ae956981d11897008917c45c1fe81    559edcdea9ee17f84389bab2d74fc13e0ba343a8    0d39f4372258aad0c0428f91e4bd17f49195f847d89ea447106f9dafef6c63f3
+set @json_param = '[2]';
+execute remaining_hash_stmt using @json_param, @json_param, @json_param;
+md5(cast(? as json))    sha1(cast(? as json))    sha2(cast(? as json), 256)
+beb4dbf9af069aa2df7b147229965085    2499831338ca5dc8c44f3d063e076799bea9bdff    038966de9f6b9a901b20b4c6ca8b2a46009feebe031babc842d43690c0bc222b
+set @json_param = null;
+execute remaining_hash_stmt using @json_param, @json_param, @json_param;
+md5(cast(? as json))    sha1(cast(? as json))    sha2(cast(? as json), 256)
+NULL    NULL    NULL
+deallocate prepare remaining_hash_stmt;
+create table remaining_escaped(js json);
+insert into remaining_escaped values (cast('"a\\nb"' as json));
+select json_type(js) = 'STRING' as escaped_string_type_ok, hex(json_unquote(js)) = '610A62' as escaped_payload_ok from remaining_escaped;
+escaped_string_type_ok    escaped_payload_ok
+1    1
+select md5(js) = 'd665f714215a80776250f430c42864d1' as escaped_md5_ok, sha1(js) = '3e10cf070236090738d5b82cc1df9ef2bbddda46' as escaped_sha1_ok, sha2(js,256) = '8cb67f89f9ff0e25bb064da96907151d8e0eb7a5c0d4cde1b72ad1c9a30c065e' as escaped_sha2_ok, sha2(js,'256tail') = '8cb67f89f9ff0e25bb064da96907151d8e0eb7a5c0d4cde1b72ad1c9a30c065e' as escaped_sha2_dynamic_ok, uncompress(compress(js)) = concat(char(34),'a',char(92),'nb',char(34)) as escaped_compress_ok, quote(js) = concat(char(39),char(34),'a',char(92),char(92),'nb',char(34),char(39)) as escaped_quote_ok, soundex(js) = 'A510' as escaped_soundex_ok from remaining_escaped;
+escaped_md5_ok    escaped_sha1_ok    escaped_sha2_ok    escaped_sha2_dynamic_ok    escaped_compress_ok    escaped_quote_ok    escaped_soundex_ok
+1    1    1    1    1    1    1
+create table remaining_wide(js json);
+insert into remaining_wide select cast(concat('["',repeat('a',65536),'"]') as json);
+select json_type(js) = 'ARRAY' as wide_array_type_ok, length(json_unquote(json_extract(js,'$[0]'))) = 65536 as wide_payload_length_ok from remaining_wide;
+wide_array_type_ok    wide_payload_length_ok
+1    1
+select length(uncompress(compress(js))) = 65540 as wide_visible_length_ok, hex(compress(js)) like '04000100%' as wide_compress_length_prefix_ok, md5(js) = '5e8753f8d5676a65ecd5c673e8204688' as wide_md5_ok, sha1(js) = 'ef1611bef272f528473258bc37f70d4f0c4e4a8d' as wide_sha1_ok, sha2(js,256) = 'c3d56e681749fe23d224d22e13f6e37fdf331ec060c434d30e272e5b89c0721f' as wide_sha2_ok, length(quote(js)) = 65542 as wide_quote_length_ok, soundex(js) = 'A000' as wide_soundex_ok from remaining_wide;
+wide_visible_length_ok    wide_compress_length_prefix_ok    wide_md5_ok    wide_sha1_ok    wide_sha2_ok    wide_quote_length_ok    wide_soundex_ok
+1    1    1    1    1    1    1
+select json_type(cast(concat('["',repeat('bc',32768),'"]') as json)) = 'ARRAY' as soundex_array_type_ok, length(concat('["',repeat('bc',32768),'"]')) = 65540 as soundex_document_length_ok;
+soundex_array_type_ok    soundex_document_length_ok
+1    1
+create table remaining_soundex_ctas as select soundex(cast(concat('["',repeat('bc',32768),'"]') as json)) as s;
+select length(s) = 65536 as wide_soundex_ctas_length_ok, left(s,4) = 'B212' as wide_soundex_ctas_prefix_ok from remaining_soundex_ctas;
+wide_soundex_ctas_length_ok    wide_soundex_ctas_prefix_ok
+1    1
+drop database issue28905_json_string_consumers;

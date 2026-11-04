@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -109,14 +110,19 @@ func DocTokenizer(parser string) (tokenizer.Tokenizer, error) {
 	}
 }
 
-// queryTokenizer returns the tokenizer for a QUERY pattern under parser. It is
-// SimpleTokenizer for every parser except gojieba — a json index is queried with
-// plain text, so json uses the ngram tokenizer at query time.
-func queryTokenizer(parser string) (tokenizer.Tokenizer, error) {
+// queryTokenizer returns the tokenizer for a QUERY pattern under parser, wrapped
+// in the token_filter chain (filters) so the query strips the SAME tokens the
+// build did. It is SimpleTokenizer for every parser except gojieba — a json index
+// is queried with plain text, so json uses the ngram tokenizer at query time.
+func queryTokenizer(parser string, filters ...tokenfilter.TokenFilter) (tokenizer.Tokenizer, error) {
 	if normalizeParser(parser) == ParserGojieba {
-		return tokenizer.SharedJiebaTokenizer(false)
+		tok, err := tokenizer.SharedJiebaTokenizer(false)
+		if err != nil {
+			return nil, err
+		}
+		return tokenfilter.Apply(tok, filters), nil
 	}
-	return tokenizer.NewSimpleTokenizer(), nil
+	return tokenfilter.Apply(tokenizer.NewSimpleTokenizer(), filters), nil
 }
 
 // flattenJSONValues parses raw as a TEXT JSON document and returns its leaf
@@ -268,8 +274,8 @@ func JSONValueTokenize(text []byte) []WordPos {
 // (The old form flattened the whole joined multi-column blob once with binary=false,
 // which produced zero tokens for a T_json column and mis-parsed multi-column json — so
 // CDC-inserted json rows were unsearchable.)
-func CdcTokenizer(parser string) (func(string) []WordPos, error) {
-	return CdcTokenizerWithJSONOptions(parser, JSONTermOptions{})
+func CdcTokenizer(parser string, filters ...tokenfilter.TokenFilter) (func(string) []WordPos, error) {
+	return CdcTokenizerWithJSONOptions(parser, JSONTermOptions{}, filters...)
 }
 
 // CdcTokenizerWithJSONOptions is CdcTokenizer for a config that knows its json
@@ -278,7 +284,7 @@ func CdcTokenizer(parser string) (func(string) []WordPos, error) {
 // carrier, so there is nothing to tokenize here — the terms are decoded back
 // verbatim. Tokenizing that carrier as text would corrupt it: the terms are raw
 // packed bytes.
-func CdcTokenizerWithJSONOptions(parser string, opt JSONTermOptions) (func(string) []WordPos, error) {
+func CdcTokenizerWithJSONOptions(parser string, opt JSONTermOptions, filters ...tokenfilter.TokenFilter) (func(string) []WordPos, error) {
 	if IsJSONParser(parser) && !IsJSONValueParser(parser) && opt.IncludeKeys {
 		return DecodeJSONTermCarrier, nil
 	}
@@ -292,8 +298,15 @@ func CdcTokenizerWithJSONOptions(parser string, opt JSONTermOptions) (func(strin
 	if err != nil {
 		return nil, err
 	}
+	// Apply the token_filter chain (stop) so CDC drops the same tokens as create/query.
+	tok = tokenfilter.Apply(tok, filters)
 	return func(text string) []WordPos { return tokenizeWords(tok, []byte(text)) }, nil
 }
+
+// ParseTokenFilterNames splits a persisted token_filter algo_param ("stop", or a
+// comma-separated list) into normalized filter names. Re-exported so the plan layer
+// builds the search config's TokenFilters without importing the tokenfilter package.
+func ParseTokenFilterNames(s string) []string { return tokenfilter.ParseNames(s) }
 
 // WordPos is a tokenized word with its BYTE position in the source text — carried
 // through the CDC/merge build so positional phrase queries match by byte offset.
@@ -386,6 +399,9 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 
 	// NL mode is an exact ORDERED PHRASE for every parser — the deduped, byte-positioned
 	// slots matched positionally, matching classic fulltext's NL semantics (incl. CJK).
+	// token_filter is NOT applied here: it is a bag-of-words (IN BM25 MODE) analyzer, and
+	// a dropped stopword's bytes stay in the surviving tokens' positions, so an NL phrase
+	// would match surprisingly. A token_filter index rejects NL/boolean at plan time.
 	slots, err := phraseSlots(pat, p)
 	if err != nil {
 		return nil, err
@@ -399,14 +415,15 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 // BOOLEAN mode, a CJK run does NOT become a positional phrase (a query "我家有三个人"
 // scores every doc containing 我家/有/三个/人 in any order), so it works on a
 // POSITION_FREE index. Positions are never touched.
-func (idx *Index) SearchBagOfWords(pattern []byte, parser string, algo ScoreAlgo, k int, filter *prefilter) ([]Result, error) {
+func (idx *Index) SearchBagOfWords(pattern []byte, parser string, algo ScoreAlgo, k int, filter *prefilter, dfCutoff float64) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}
-	q, err := buildBagOfWordsQuery(string(pattern), normalizeParser(parser))
+	q, err := buildBagOfWordsQuery(string(pattern), normalizeParser(parser), idx.tokenFilters...)
 	if err != nil {
 		return nil, err
 	}
+	q.dfCutoff = dfCutoff
 	return idx.SearchBoolean(q, algo, k, filter)
 }
 
@@ -414,8 +431,8 @@ func (idx *Index) SearchBagOfWords(pattern []byte, parser string, algo ScoreAlgo
 // terms (SHOULD clauseTerm). Dedup avoids two cursors on one term's postings; the
 // disjunction of single-term SHOULD clauses is exactly what disjunctiveTerms routes to
 // searchWAND.
-func buildBagOfWordsQuery(pattern, parser string) (BoolQuery, error) {
-	slots, err := phraseSlots(pattern, parser)
+func buildBagOfWordsQuery(pattern, parser string, filters ...tokenfilter.TokenFilter) (BoolQuery, error) {
+	slots, err := phraseSlots(pattern, parser, filters...)
 	if err != nil {
 		return BoolQuery{}, err
 	}
@@ -440,7 +457,7 @@ func buildBagOfWordsQuery(pattern, parser string) (BoolQuery, error) {
 // >= 3 chars), so matching is exact-term lookups + byte-position adjacency instead of the
 // old ParsePatternInNLMode prefix decomposition, whose word* expansion + full-position
 // materialization OOM-killed the CN at scale. Offsets are relative to the first slot.
-func phraseSlots(pattern, parser string) ([]phraseSlot, error) {
+func phraseSlots(pattern, parser string, filters ...tokenfilter.TokenFilter) ([]phraseSlot, error) {
 	if IsJSONValueParser(parser) {
 		// json_value: the whole pattern is ONE atomic value matched exactly (no ngram) —
 		// a single exact-term slot, mirroring classic `word = value`.
@@ -450,7 +467,7 @@ func phraseSlots(pattern, parser string) ([]phraseSlot, error) {
 		return []phraseSlot{{term: pattern, off: 0}}, nil
 	}
 	if normalizeParser(parser) == ParserGojieba {
-		tok, err := queryTokenizer(ParserGojieba)
+		tok, err := queryTokenizer(ParserGojieba, filters...)
 		if err != nil {
 			return nil, err
 		}

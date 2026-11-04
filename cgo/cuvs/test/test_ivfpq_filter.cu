@@ -35,7 +35,7 @@
 //              never the sentinel.
 //
 // Workaround we ship in matrixone (cgo/cuvs/ivf_pq.hpp,
-// apply_pq_post_filter_locked): copy the filter bitset back to the host and
+// apply_host_post_filter_locked): copy the filter bitset back to the host and
 // overwrite any slot whose row-id has a 0 bit with (-1, FLT_MAX). This file
 // implements the same workaround in `postfilter_on_host` and prints the
 // before/after for each query so the contrast is plain.
@@ -139,7 +139,7 @@ std::vector<float> make_dataset() {
 // Re-apply the filter on the host: for every result slot whose row-id has
 // a 0 bit in the filter, overwrite with (-1, FLT_MAX). This is exactly the
 // fix-up that matrixone applies in cgo/cuvs/ivf_pq.hpp's
-// apply_pq_post_filter_locked.
+// apply_host_post_filter_locked.
 void postfilter_on_host(std::vector<int64_t>&         neighbors,
                         std::vector<float>&           distances,
                         const std::vector<uint32_t>&  host_filter_words,

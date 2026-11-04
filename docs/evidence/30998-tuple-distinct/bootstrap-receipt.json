@@ -1,0 +1,22 @@
+{
+  "command": [
+    "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/mo-service-baseline",
+    "-launch",
+    "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/launch.toml",
+    "-debug-http",
+    "127.0.0.1:55460"
+  ],
+  "source_head": "94faf0209b9ac3254d31906f92e34405f1988203",
+  "binary_sha256": "bbd27b9a8a693a8ab0543e9473a5d1eaea6cffeddd5307bf3f311a58ed34773a",
+  "started_epoch": 1792803242.0640728,
+  "finished_epoch": 1792803251.357098,
+  "exit": 0,
+  "dataset_id": "30998-isolated-94fa",
+  "runtime": "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/isolated-runtime",
+  "bootstrap_command": [
+    "/private/tmp/mo-27683-bench-20261023/venv/bin/python",
+    "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/bootstrap.py"
+  ],
+  "sql_sha256": "6674e860e4ab775cbc09035767e8216af8f2e6b5cd0663ffded15d374507101a",
+  "raw_log": "bootstrap.log"
+}

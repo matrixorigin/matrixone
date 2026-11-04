@@ -20,8 +20,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -129,6 +131,18 @@ func TestCompare(t *testing.T) {
 	}
 }
 
+func TestNewOrderUsesPlanUnicodeTypeWhenVectorMetadataIsPhysical(t *testing.T) {
+	mp := mpool.MustNewZero()
+	physical := vector.NewVec(types.T_varchar.ToType())
+	defer physical.Free(mp)
+	require.NoError(t, vector.AppendStringList(physical, []string{"A", "a"}, nil, mp))
+	semantic := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	c := NewOrder(semantic, false, false)
+	c.Set(0, physical)
+	c.Set(1, physical)
+	require.Equal(t, 0, c.Compare(0, 1, 0, 1))
+}
+
 func TestNewOrderJSONUsesSQLComparison(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())
@@ -157,16 +171,59 @@ func TestNewOrderJSONUsesSQLComparison(t *testing.T) {
 	physical := New(types.T_json.ToType(), false, false)
 	physical.Set(0, vec)
 	physical.Set(1, vec)
-	require.Equal(t,
-		bytes.Compare(vec.GetBytesAt(0), vec.GetBytesAt(2)),
-		physical.Compare(0, 1, 0, 2),
-		"generic JSON comparison keeps its physical byte-order contract",
-	)
+	require.Zero(t, physical.Compare(0, 1, 1, 4),
+		"generic JSON identity treats SQL numeric peers as equal")
+	require.Negative(t, physical.Compare(0, 1, 0, 2),
+		"generic JSON identity keeps SQL value ordering (numbers before booleans)")
+}
+
+func TestNewJSONIdentityUsesSQLValueSemantics(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_json.ToType())
+	defer vec.Free(mp)
+	values := []string{"1", "1.0", "1e0", `{"a":1}`, `{"a":1.0}`, "[1]", "[1.0]", "2", "2.0"}
+	rowOf := make(map[string]int64)
+	for i, value := range values {
+		jsonValue, err := bytejson.ParseFromString(value)
+		require.NoError(t, err)
+		encoded, err := jsonValue.Marshal()
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
+		rowOf[value] = int64(i)
+	}
+	require.NoError(t, vector.AppendBytes(vec, nil, true, mp))
+	nullRow := int64(len(values))
+
+	c := New(types.T_json.ToType(), false, false)
+	c.Set(0, vec)
+	c.Set(1, vec)
+	require.Zero(t, c.Compare(0, 1, rowOf["1"], rowOf["1.0"]),
+		"JSON numbers 1 and 1.0 are one identity")
+	require.Zero(t, c.Compare(0, 1, rowOf["1"], rowOf["1e0"]),
+		"JSON numbers 1 and 1e0 are one identity")
+	require.Zero(t, c.Compare(0, 1, rowOf[`{"a":1}`], rowOf[`{"a":1.0}`]),
+		"object members compare by their own typed semantics")
+	require.Zero(t, c.Compare(0, 1, rowOf["[1]"], rowOf["[1.0]"]),
+		"array elements compare by their own typed semantics")
+	require.NotZero(t, c.Compare(0, 1, rowOf["1"], rowOf["2"]),
+		"different JSON values keep different identities")
+	require.NotZero(t, c.Compare(0, 1, rowOf["[1]"], rowOf[`{"a":1}`]),
+		"an array is never an object")
+	require.Zero(t, c.Compare(0, 1, nullRow, nullRow),
+		"NULL equals NULL in grouping identity")
+	require.NotZero(t, c.Compare(0, 1, nullRow, rowOf["1"]),
+		"NULL differs from a value")
+
+	desc := New(types.T_json.ToType(), true, false)
+	desc.Set(0, vec)
+	desc.Set(1, vec)
+	require.Zero(t, desc.Compare(0, 1, rowOf["1.0"], rowOf["1"]),
+		"DESC keeps SQL-equal JSON values as peers")
 }
 
 func TestJSONOrderMetadataAndCopy(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	source := vector.NewVec(types.T_json.ToType())
 	destination := vector.NewVec(types.T_json.ToType())
 	value := vector.NewVec(types.T_json.ToType())
@@ -250,7 +307,7 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 		for _, metadata := range []string{"null", "const-null", "grouping"} {
 			t.Run(tc.name+"/"+metadata, func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				proc := testutil.NewProcessWithMPool(t, "", mp)
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 				registry, err := mpool.NewAllocationAccountRegistry(1, 16)
 				require.NoError(t, err)
 				account, err := registry.Open(1 << 20)
@@ -299,7 +356,7 @@ func TestCopyGrowsAccountedRowMetadata(t *testing.T) {
 
 func TestCopyAccountedNullAdmissionFailure(t *testing.T) {
 	mp := mpool.MustNewZero()
-	proc := testutil.NewProcessWithMPool(t, "", mp)
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1)
 	require.NoError(t, err)
 	account, err := registry.Open(1 << 20)
@@ -398,5 +455,174 @@ func TestBlockRowIdsCompare(t *testing.T) {
 			require.Equal(t, rowIds1, rowIds2)
 		}
 
+	})
+}
+
+func TestDomainlessNullCompare(t *testing.T) {
+	for _, factory := range []struct {
+		name string
+		new  func(types.Type, bool, bool) Compare
+	}{{"identity", New}, {"order", NewOrder}} {
+		t.Run(factory.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			constant := vector.NewConstNull(types.T_any.ToType(), 3, mp)
+			flat := vector.NewVec(types.T_any.ToType())
+			flat.SetLength(3)
+			nulls.AddRange(flat.GetNulls(), 0, 3)
+			defer func() { constant.Free(mp); flat.Free(mp); require.Zero(t, mp.CurrNB()) }()
+			require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
+			for _, desc := range []bool{false, true} {
+				c := factory.new(types.T_any.ToType(), desc, desc)
+				require.NotNil(t, c)
+				c.Set(0, constant)
+				c.Set(1, flat)
+				require.Same(t, constant, c.Vector())
+				require.Zero(t, c.Compare(0, 1, 2, 1))
+				require.Zero(t, c.Compare(1, 0, 1, 2))
+				require.NoError(t, c.Copy(0, 1, 2, 1, proc))
+				require.True(t, flat.IsNull(1))
+				require.Equal(t, types.StringSourceLiteral, flat.GetStringSourceAt(1))
+				// ANY has no non-NULL value domain; don't broaden unsupported values.
+				nulls.Del(flat.GetNulls(), 0)
+				require.True(t, moerr.IsMoErrCode(c.Copy(1, 0, 0, 0, proc), moerr.ErrNotSupported))
+				func() {
+					defer func() {
+						e, ok := recover().(error)
+						require.True(t, ok)
+						require.True(t, moerr.IsMoErrCode(e, moerr.ErrNotSupported))
+					}()
+					c.Compare(1, 0, 0, 0)
+				}()
+				nulls.Add(flat.GetNulls(), 0)
+			}
+		})
+	}
+}
+
+func TestJSONCompareCrossVectorConstNullAndTypeControls(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	appendJSON := func(v *vector.Vector, s string) {
+		bj, err := bytejson.ParseFromString(s)
+		require.NoError(t, err)
+		enc, err := bj.Marshal()
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(v, enc, false, mp))
+	}
+
+	// cross-vector: equal JSON values in distinct vectors stay peers, and
+	// desc inversion keeps them peers while flipping unequal pairs
+	left := vector.NewVec(types.T_json.ToType())
+	defer left.Free(mp)
+	right := vector.NewVec(types.T_json.ToType())
+	defer right.Free(mp)
+	appendJSON(left, "1")
+	appendJSON(left, "2")
+	appendJSON(right, "1.0")
+	appendJSON(right, "3")
+
+	c := New(types.T_json.ToType(), false, false)
+	c.Set(0, left)
+	c.Set(1, right)
+	require.Zero(t, c.Compare(0, 1, 0, 0), "cross-vector 1 equals 1.0")
+	require.Negative(t, c.Compare(0, 1, 0, 1), "cross-vector 2 sorts before 3")
+	desc := New(types.T_json.ToType(), true, false)
+	desc.Set(0, left)
+	desc.Set(1, right)
+	require.Zero(t, desc.Compare(0, 1, 0, 0), "desc cross-vector keeps 1 and 1.0 peers")
+	require.Positive(t, desc.Compare(0, 1, 0, 1), "desc cross-vector inverts 2 vs 3")
+
+	// const-null side: never equal to a value, equal to another NULL, via the
+	// same nullsCompare contract strCompare applies
+	constNull := vector.NewConstNull(types.T_json.ToType(), 1, mp)
+	defer constNull.Free(mp)
+	cc := New(types.T_json.ToType(), false, false)
+	cc.Set(0, constNull)
+	cc.Set(1, left)
+	require.NotZero(t, cc.Compare(0, 1, 0, 0), "const NULL differs from a value")
+	cc2 := New(types.T_json.ToType(), false, false)
+	cc2.Set(0, constNull)
+	cc2.Set(1, constNull)
+	require.Zero(t, cc2.Compare(0, 1, 0, 0), "const NULL equals const NULL")
+
+	// reverse controls: ordinary types are untouched by the JSON change
+	ivec := vector.NewVec(types.T_int64.ToType())
+	defer ivec.Free(mp)
+	require.NoError(t, vector.AppendFixedList(ivec, []int64{1, 2}, nil, mp))
+	i := New(types.T_int64.ToType(), false, false)
+	i.Set(0, ivec)
+	i.Set(1, ivec)
+	require.Negative(t, i.Compare(0, 1, 0, 1), "int64 1 sorts before 2")
+	idi := New(types.T_int64.ToType(), true, false)
+	idi.Set(0, ivec)
+	idi.Set(1, ivec)
+	require.Positive(t, idi.Compare(0, 1, 0, 1), "desc int64 inverts")
+
+	svec := vector.NewVec(types.T_varchar.ToType())
+	defer svec.Free(mp)
+	require.NoError(t, vector.AppendStringList(svec, []string{"1", "1.0"}, nil, mp))
+	s := New(types.T_varchar.ToType(), false, false)
+	s.Set(0, svec)
+	s.Set(1, svec)
+	require.Zero(t, s.Compare(0, 1, 0, 0), "string self equality")
+	require.NotZero(t, s.Compare(0, 1, 0, 1), "strings keep byte identity")
+}
+
+func BenchmarkJSONCompareValueIdentityCost(b *testing.B) {
+	mp := mpool.MustNewZero()
+	intVec := vector.NewVec(types.T_json.ToType())
+	objVec := vector.NewVec(types.T_json.ToType())
+	defer func() {
+		intVec.Free(mp)
+		objVec.Free(mp)
+	}()
+	appendJSON := func(v *vector.Vector, s string) {
+		bj, err := bytejson.ParseFromString(s)
+		if err != nil {
+			b.Fatal(err)
+		}
+		enc, err := bj.Marshal()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := vector.AppendBytes(v, enc, false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	appendJSON(intVec, "1")
+	appendJSON(intVec, "1.0")
+	appendJSON(objVec, `{"a":1}`)
+	appendJSON(objVec, `{"a":1.0}`)
+
+	intBytes0, intBytes1 := intVec.GetBytesAt(0), intVec.GetBytesAt(1)
+	objBytes0, objBytes1 := objVec.GetBytesAt(0), objVec.GetBytesAt(1)
+
+	cInt := New(types.T_json.ToType(), false, false)
+	cInt.Set(0, intVec)
+	cInt.Set(1, intVec)
+	cObj := New(types.T_json.ToType(), false, false)
+	cObj.Set(0, objVec)
+	cObj.Set(1, objVec)
+
+	b.Run("ValueIdentity-NumberPair", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = cInt.Compare(0, 1, 0, 1)
+		}
+	})
+	b.Run("ValueIdentity-ObjectPair", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = cObj.Compare(0, 1, 0, 1)
+		}
+	})
+	b.Run("ByteBaseline-NumberPair", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = bytes.Compare(intBytes0, intBytes1)
+		}
+	})
+	b.Run("ByteBaseline-ObjectPair", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = bytes.Compare(objBytes0, objBytes1)
+		}
 	})
 }

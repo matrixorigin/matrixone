@@ -18,17 +18,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-type HnswBuild[T types.RealNumbers] struct {
+type HnswBuild[T types.ArrayElement] struct {
 	uid      string
 	cfg      vectorindex.IndexConfig
 	tblcfg   vectorindex.IndexTableConfig
@@ -52,6 +52,12 @@ type HnswBuild[T types.RealNumbers] struct {
 	// tmpDir is the LOCAL fileservice scratch volume, resolved once here because
 	// getIndexForAdd creates models with no SqlProcess in scope.
 	tmpDir string
+
+	// bounds is the range an int8/uint8 build maps every vector with, set before any Add.
+	bounds QuantizeBounds
+
+	// rows is the number of vectors the build will add; 0 when unknown.
+	rows int64
 }
 
 // recordWorkerErr stores the first worker error and wakes any blocked producer /
@@ -72,13 +78,13 @@ func (h *HnswBuild[T]) WorkerErr() error {
 	return h.workerErr
 }
 
-type AddItem[T types.RealNumbers] struct {
+type AddItem[T types.ArrayElement] struct {
 	key int64
 	vec []T
 }
 
 // create HsnwBuild struct
-func NewHnswBuild[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, uid string, nworker int32,
+func NewHnswBuild[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, uid string, nworker int32,
 	cfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (info *HnswBuild[T], err error) {
 
 	// estimate the number of worker threads
@@ -193,6 +199,34 @@ func (h *HnswBuild[T]) Destroy() error {
 }
 
 func (h *HnswBuild[T]) Add(key int64, vec []T) error {
+	if NeedsQuantizeBounds(h.cfg.Usearch.Quantization) && !h.bounds.Set {
+		return moerr.NewInternalErrorNoCtx("hnsw int8/uint8 build has no quantization range")
+	}
+	return h.add(key, vec)
+}
+
+// SetRowCount tells the build how many vectors it will add, so its last model reserves room
+// for only the rows left.
+func (h *HnswBuild[T]) SetRowCount(rows int64) {
+	h.rows = rows
+}
+
+// modelCapacity is the capacity of the nidx-th model: IndexCapacity, or the rows left when
+// fewer.
+func (h *HnswBuild[T]) modelCapacity(nidx int64) uint {
+	capacity := h.cfg.IndexCapacity
+	if left := h.rows - nidx*capacity; left > 0 && left < capacity {
+		return uint(left)
+	}
+	return uint(capacity)
+}
+
+// SetQuantizeBounds gives an int8/uint8 build the range it maps every vector with, before any Add.
+func (h *HnswBuild[T]) SetQuantizeBounds(bounds QuantizeBounds) {
+	h.bounds = bounds
+}
+
+func (h *HnswBuild[T]) add(key int64, vec []T) error {
 	if h.nthread > 1 {
 		// copy the []T slice.
 		item := AddItem[T]{key, append(make([]T, 0, len(vec)), vec...)}
@@ -225,10 +259,11 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 	save_idx = nil
 	nidx := int64(len(h.indexes))
 	if nidx == 0 {
-		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity), h.tmpDir)
+		idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, h.modelCapacity(nidx), 0, h.tmpDir)
 		if err != nil {
 			return nil, nil, err
 		}
+		idx.Bounds = h.bounds
 		h.indexes = append(h.indexes, idx)
 	} else {
 		// get last index
@@ -240,10 +275,11 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 			save_idx = idx
 
 			// create new index
-			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, uint(h.cfg.IndexCapacity), h.tmpDir)
+			idx, err = NewHnswModelForBuild[T](h.createIndexUniqueKey(nidx), h.cfg, h.nthread, h.modelCapacity(nidx), 0, h.tmpDir)
 			if err != nil {
 				return nil, nil, err
 			}
+			idx.Bounds = h.bounds
 			h.indexes = append(h.indexes, idx)
 			// reset count for next index
 			h.count.Store(0)
@@ -315,7 +351,7 @@ func (h *HnswBuild[T]) addVector(key int64, vec []T) error {
 // generations; buildTS is the transaction SnapshotTS (physical) the content was built from, i.e.
 // the base-table version this generation reflects. provenance says whether the metadata table
 // carries the nrow/build_ts columns yet -- see sqlexec.HasProvenanceColumns.
-func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64, provenance bool) ([]string, error) {
+func (h *HnswBuild[T]) PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error) {
 
 	// Surface any worker error from the multi-threaded build. Without this a worker
 	// that failed on the last queued vector (after Add already returned nil) would be
@@ -332,32 +368,36 @@ func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64, provenance bool) ([]
 
 	metas := make([]string, 0, len(h.indexes))
 	for _, idx := range h.indexes {
-		indexsqls, err := idx.ToSql(h.tblcfg)
-		if err != nil {
+		if err := idx.PreparePersistence(); err != nil {
 			return nil, err
 		}
-
-		sqls = append(sqls, indexsqls...)
 
 		//os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
-		chksum, err := vectorindex.CheckSum(idx.Path)
-		if err != nil {
-			return nil, err
+		if idx.FileSize == 0 {
+			continue
 		}
-
-		finfo, err := os.Stat(idx.Path)
-		if err != nil {
-			return nil, err
-		}
-		fs := finfo.Size()
+		chksum, fs := idx.Checksum, idx.FileSize
 
 		metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
 	}
 
+	if len(metas) == 0 {
+		return nil, nil
+	}
 	metasql := catalog.IndexMetadataInsertSql(h.tblcfg.DbName, h.tblcfg.MetadataTable, provenance, metas)
 
 	sqls = append(sqls, metasql)
 	return sqls, nil
+}
+
+// PersistChunks runs only after preparation and any device admission succeeds.
+func (h *HnswBuild[T]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	for _, idx := range h.indexes {
+		if err := idx.PersistChunks(writer); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *HnswBuild[T]) GetIndexes() []*HnswModel[T] {

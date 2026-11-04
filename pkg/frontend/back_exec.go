@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -51,7 +53,20 @@ import (
 type backExec struct {
 	backSes    *backSession
 	statsArray *statistic.StatsArray
+	// internalExecution tags every statement this executor runs as trusted
+	// implementation SQL (BackgroundExecOption.internalExecution), e.g. the
+	// catalog writes generated for SET GLOBAL, instead of caller-authored
+	// work. It flows into UserInput.isInternalInput so the READ ONLY
+	// transaction gate never observes generated catalog maintenance as user
+	// writes, while user-authored procedure statements stay gated.
+	internalExecution bool
 }
+
+// backExecProcessHook runs after a background statement has created its
+// process, but before the statement is compiled or executed. It is used for
+// control-plane protocols that must operate on the same transaction and
+// process as the following background SQL statements.
+type backExecProcessHook func(context.Context, *process.Process) error
 
 type backgroundExecRowCount interface {
 	GetLastAffectedRows() int64
@@ -69,6 +84,13 @@ func (back *backExec) init(ses FeSession, txnOp TxnOperator, db string, callBack
 
 func (back *backExec) Service() string {
 	return back.backSes.GetService()
+}
+
+func (back *backExec) getTxn() TxnOperator {
+	if back == nil || back.backSes == nil || back.backSes.GetTxnHandler() == nil {
+		return nil
+	}
+	return back.backSes.GetTxnHandler().GetTxn()
 }
 
 func (back *backExec) GetLastAffectedRows() int64 {
@@ -146,6 +168,22 @@ func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
 	return back.exec(ctx, sql, "", false)
 }
 
+func (back *backExec) execWithProcessHook(
+	ctx context.Context,
+	sql string,
+	hook backExecProcessHook,
+) error {
+	if back == nil || back.backSes == nil {
+		return moerr.NewInternalError(ctx, "background executor is closed")
+	}
+	previous := back.backSes.processHook
+	back.backSes.processHook = hook
+	defer func() {
+		back.backSes.processHook = previous
+	}()
+	return back.exec(ctx, sql, "", false)
+}
+
 // ExecWithSQLMode executes sql using sqlMode to parse it. The original SQL text
 // is retained so DDL which persists its source text, such as CREATE VIEW, is
 // not rewritten during execution.
@@ -182,7 +220,11 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 
 	var statements []tree.Statement
 	if useSQLMode {
-		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, v.(int64), sqlMode)
+		lowerCase, modeErr := plan2.RestoredViewLowerCaseTableNames(ctx, sql, v.(int64))
+		if modeErr != nil {
+			return modeErr
+		}
+		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, lowerCase, sqlMode)
 	} else {
 		statements, err = mysql.Parse(ctx, sql, v.(int64))
 	}
@@ -198,25 +240,6 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	if len(statements) > 1 {
 		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
-	// uncomment this to enable backExec export data to CSV file.
-	//
-	//if st, ok := statements[0].(*tree.Select); ok && st != nil && st.Ep != nil {
-	//	back.backSes.ep = &ExportConfig{
-	//		userConfig: st.Ep,
-	//		service:    back.Service(),
-	//	}
-	//
-	//	back.backSes.ep.init()
-	//	back.backSes.ep.DefaultBufSize = getPu(back.backSes.GetService()).SV.ExportDataDefaultFlushSize
-	//	initExportFileParam(back.backSes.ep, back.backSes.mrs)
-	//	if err = openNewFile(ctx, back.backSes.ep, back.backSes.mrs); err != nil {
-	//		return err
-	//	}
-	//
-	//	defer func() {
-	//		retErr = errors.Join(retErr, Close(back.backSes.ep))
-	//	}()
-	//}
 
 	//share txn can not run transaction statement
 	if back.backSes.GetTxnHandler().IsShareTxn() {
@@ -238,6 +261,7 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 		parserSQLMode:    sqlMode,
 		useParserSQLMode: useSQLMode,
 		isRestore:        isRestore,
+		isInternalInput:  back.internalExecution,
 	}
 	execCtx := ExecCtx{
 		reqCtx: ctx,
@@ -431,6 +455,9 @@ func doComQueryInBack(
 	proc.SetAffectedRows(backSes.lastAffectedRows)
 	bindBackExecSession(proc, backSes, execCtx.reqCtx)
 	proc.SetStmtProfile(&backSes.stmtProfile)
+	if catalogRead, _ := execCtx.reqCtx.Value(viewSchemaCatalogReadKey{}).(bool); catalogRead {
+		proc.SetIncrStatementDisabled(true)
+	}
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	if process.HasSystemCTELimits(execCtx.reqCtx) {
 		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))
@@ -653,6 +680,101 @@ func bindBackExecSession(proc *process.Process, backSes *backSession, ctx contex
 	proc.Base.SessionInfo.SessionId = backSes.upstream.GetSessId()
 }
 
+// bindPublicationScopeSelect is the metadata binding of one published view:
+// the statement reaches here only with the defines.PublicationViewBinding
+// marker, which keeps its identifiers at source case through the parser that
+// supplies the executed statement. Binding is all it does - plan2.BuildPlan
+// runs the persisted-view binder (relations, columns and functions bind
+// recursively against the caller's transaction and source account), the
+// marker stops the build at the metadata boundary before the optimizer's
+// rewrite pipeline, and the binder's eager-evaluation sites (the fold switch,
+// LIMIT/OFFSET folding and window frame-bound evaluation) honor the same
+// marker, so no expression of the validated definition is ever evaluated and
+// no function of it is ever executed; no pipeline is built at all. A binding
+// failure is the complete answer the caller needs: it is exactly the error a
+// subscriber's first query hits.
+//
+// The build runs through the shared planning initializer buildPlanWithStats,
+// exactly like every compiled statement on this session: the initializer
+// stamps the request account on the session before the build starts, so a
+// probe executed after a system-account catalog read on the same background
+// executor (publicationSystemRelationAvailable attaches the system account to
+// its own compile, which stamps the shared session with that account) still
+// binds inside the publication's source account - the mo_columns identity
+// read of the LIMIT 0 shortcut is keyed on the stamped account. The
+// initializer also owns the planContext flavors (tracing, warnings), so the
+// marker survives into the compiler context it installs.
+//
+// The binding runs with the publication database as the compiling session's
+// current database - the creation-time context of the stored definition, and
+// what the publisher's own qualified read of the view uses - restored before
+// the statement finishes: function resolution by name and argument types
+// happens against that database, exactly like at view creation, so the veto
+// fires for the calls the real binder sends to this publication database's
+// user-defined functions.
+func bindPublicationScopeSelect(execCtx *ExecCtx) error {
+	sel := execCtx.stmt.(*tree.Select)
+	tcc := execCtx.ses.GetTxnCompileCtx()
+	bind := func() (*plan2.Plan, error) {
+		return plan2.BuildPlan(tcc, sel, false)
+	}
+	database := publicationProbeDatabase(sel)
+	if database == "" {
+		_, err := buildPlanWithStats(execCtx.reqCtx, execCtx.ses, tcc, bind)
+		return err
+	}
+	previous := tcc.GetDatabase()
+	tcc.SetDatabase(database)
+	defer func() { tcc.SetDatabase(previous) }()
+	_, err := buildPlanWithStats(execCtx.reqCtx, execCtx.ses, tcc, bind)
+	return err
+}
+
+// publicationProbeDatabase extracts the schema of the probe's first
+// qualified table, the publication database of the validated view. The empty
+// string keeps whatever database the compiling session already has.
+func publicationProbeDatabase(sel *tree.Select) string {
+	clause, ok := sel.Select.(*tree.SelectClause)
+	if !ok || len(clause.From.Tables) == 0 {
+		return ""
+	}
+	// The parser wraps every FROM element in an implicit join expression and
+	// every table in an aliasable one.
+	for table := clause.From.Tables[0]; ; {
+		switch typed := table.(type) {
+		case *tree.TableName:
+			return string(typed.SchemaName)
+		case *tree.AliasedTableExpr:
+			table = typed.Expr
+		case *tree.JoinTableExpr:
+			if typed.Right != nil {
+				return ""
+			}
+			table = typed.Left
+		default:
+			return ""
+		}
+	}
+}
+
+// isPublicationViewBindingProbe reports whether the marked statement is the
+// binding probe itself: a top-level SELECT with literal LIMIT 0. Only the
+// probe takes the bind-only route. The marker also rides the compiler
+// context into catalog readers the planner nests during binding - the
+// mo_columns identity read of the LIMIT 0 shortcut first - and those
+// readers must still compile and run: intercepting them would return no
+// rows and the probe would report the bound relation as missing. The
+// literal LIMIT 0 shape is produced only by publicationViewBindingSQL across
+// the frontend.
+func isPublicationViewBindingProbe(stmt tree.Statement) bool {
+	sel, ok := stmt.(*tree.Select)
+	if !ok || sel.Limit == nil || sel.Limit.Count == nil {
+		return false
+	}
+	count, ok := sel.Limit.Count.(*tree.NumVal)
+	return ok && count.String() == "0"
+}
+
 func executeStmtInBack(backSes *backSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
@@ -698,6 +820,12 @@ func executeStmtInBack(backSes *backSession,
 	err = disttae.CheckTxnIsValid(execCtx.ses.GetTxnHandler().GetTxn())
 	if err != nil {
 		return err
+	}
+
+	if defines.IsPublicationViewBinding(execCtx.reqCtx) {
+		if isPublicationViewBindingProbe(execCtx.stmt) {
+			return bindPublicationScopeSelect(execCtx)
+		}
 	}
 
 	if ret, err = execCtx.cw.Compile(execCtx, backSes.GetOutputCallback(execCtx)); err != nil {
@@ -823,12 +951,24 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 		}
 		stmts = append(stmts, cmdCheckSnapshotFlushedStmt)
 	} else {
+		// See parseSql: a marked probe's wrapper statement keeps identifier
+		// source case; every other statement uses the session's case mode.
+		lowerCaseTableNames := parserLowerCaseTableNames(ses)
+		if defines.IsPublicationViewBinding(execCtx.reqCtx) {
+			lowerCaseTableNames = 0
+		}
 		if input.useParserSQLMode {
+			// This parse produces the executed AST; preliminary classification
+			// in back.exec is not sufficient to preserve restored identifiers.
+			lowerCaseTableNames, err = plan2.RestoredViewLowerCaseTableNames(execCtx.reqCtx, input.getSql(), lowerCaseTableNames)
+			if err != nil {
+				return nil, err
+			}
 			stmts, err = parsers.ParseWithSQLMode(
 				execCtx.reqCtx,
 				dialect.MYSQL,
 				input.getSql(),
-				parserLowerCaseTableNames(ses),
+				lowerCaseTableNames,
 				input.parserSQLMode,
 			)
 		} else {
@@ -866,27 +1006,6 @@ func backSesOutputCallback(handle FeSession, execCtx *ExecCtx, dataSet *batch.Ba
 	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
-
-	// uncomment this to enable backExec export data to CSV file.
-	//back := handle.(*backSession)
-	//if back.ep != nil {
-	//	back.ep.Index.Add(1)
-	//	copied, err := dataSet.Dup(execCtx.ses.GetMemPool())
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	constructByte(execCtx.reqCtx, execCtx.ses, copied, back.ep.Index.Load(), back.ep.ByteChan, back.ep)
-	//
-	//	if err = exportDataFromBatchToCSVFile(back.ep); err != nil {
-	//		execCtx.ses.Error(execCtx.reqCtx,
-	//			"Error occurred while exporting to CSV file",
-	//			zap.Error(err))
-	//		return err
-	//	}
-	//
-	//	return nil
-	//}
 
 	return fakeDataSetFetcher2(handle, execCtx, dataSet, nil)
 }
@@ -976,12 +1095,13 @@ func executeStmtInSameSession(
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ses, execCtx, &UserInput{
-		stmt:                  stmt,
-		isInternalInput:       true,
-		isSetExpression:       true,
-		isPreparedExpression:  preparedExpression,
-		preparedParamVals:     preparedParamVals,
-		preparedBinaryExecute: preparedBinaryExecute,
+		stmt:                       stmt,
+		isInternalInput:            true,
+		sameStatementAuthorization: true,
+		isSetExpression:            true,
+		isPreparedExpression:       preparedExpression,
+		preparedParamVals:          preparedParamVals,
+		preparedBinaryExecute:      preparedBinaryExecute,
 	})
 }
 
@@ -1076,6 +1196,8 @@ type backSession struct {
 	forcePessimisticRC                bool
 	cloneSnapshotUsesBackgroundTxn    bool
 	cancelTxnCreateWithRequest        bool
+	authorizationSnapshot             *txnclient.SnapshotAdmission
+	processHook                       backExecProcessHook
 	lineageOwnerLifecycleWritePending bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
@@ -1157,6 +1279,9 @@ func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack 
 		be := &backExec{}
 		be.init(backSes, txnOp, db, callBack)
 		be.backSes.upstream = backSes.upstream
+		if len(opts) > 0 && opts[0] != nil {
+			be.internalExecution = opts[0].internalExecution
+		}
 		return be
 	} else if backSes.upstream != nil {
 		// XXXSP
@@ -1209,6 +1334,15 @@ func (backSes *backSession) Close() {
 		backSes.feSessionImpl.Reset()
 	}
 	backSes.upstream = nil
+	backSes.authorizationSnapshot = nil
+}
+
+// A read-only authorization transaction contributes no causal user writes.
+// Its internal completion must not advance the statement's authorization epoch.
+func (backSes *backSession) updateLastCommitTS(ts timestamp.Timestamp) {
+	if backSes.authorizationSnapshot == nil {
+		backSes.feSessionImpl.updateLastCommitTS(ts)
+	}
 }
 
 func (backSes *backSession) Clear() {
@@ -1409,12 +1543,32 @@ func (backSes *backSession) SetUserDefinedVar(name string, value interface{}, sq
 }
 
 func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
+	if value, handled, err := databaseDefaultSystemVariable(backSes, strings.ToLower(name)); handled {
+		return value, err
+	}
 	switch strings.ToLower(name) {
 	case "autocommit":
 		return true, nil
 	case "lower_case_table_names":
 		if backSes.GetRestore() && !backSes.GetRestoreFail() {
 			return int64(0), nil
+		}
+		// The variable is instance-global (ScopeGlobal, dynamic), so the
+		// upstream session's read is the mode every ordinary session - the
+		// validating DDL session now and any subscriber session later - uses
+		// to resolve identifier case. Background executors that re-bind
+		// stored definitions (publication binding probes among them) parse
+		// and compile inside this session, and must resolve identifier case
+		// the way the owning session resolves it; guessing mode 1 here would
+		// certify a different relation than the session - and every
+		// subscriber - resolves on an instance running with mode 0. A
+		// background session without an upstream keeps the registered
+		// default.
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
 		}
 		return int64(1), nil
 	case "sql_mode":
@@ -1427,6 +1581,24 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 			return backSes.parentBackSession.GetSessionSysVar(name)
 		}
 		return int64(process.WarningDiagnosticDefaultRetentionLimit), nil
+	case "experimental_hnsw_index", "mo_pk_check_by_cn":
+		// Procedure statements run through frontend back sessions and must
+		// see the owning connection's current planning settings.
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
+		}
+		return nil, nil
+	case "max_sp_recursion_depth":
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
+		}
+		return gSysVarsDefs["max_sp_recursion_depth"].Default, nil
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}
@@ -1612,6 +1784,31 @@ func (backSes *backSession) GetTempTable(dbName, alias string) (string, bool) {
 		return "", false
 	}
 	return backSes.upstream.GetTempTable(dbName, alias)
+}
+
+// Forgetting confirmed-dead ownership is irreversible, including in a failed
+// stored-procedure statement. Do not journal it as a normal temporary DROP.
+func (backSes *backSession) ForgetMissingTemporaryTable(dbName, alias, physical string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		owner.ForgetMissingTemporaryTable(dbName, alias, physical)
+	}
+}
+
+var _ process.MissingTemporaryTableForgetter = (*backSession)(nil)
+
+// OwnsTemporaryTable forwards physical ownership checks to the interactive
+// session. Background executors resolve the same temporary index relations as
+// their caller, so the shared temporary-table access gate must see the caller's
+// ownership map rather than treating the executor wrapper as a foreign session.
+func (backSes *backSession) OwnsTemporaryTable(dbName, physical string) bool {
+	if backSes == nil {
+		return false
+	}
+	owner := upstreamUserSession(backSes)
+	return owner != nil && owner.OwnsTemporaryTable(dbName, physical)
 }
 
 func (backSes *backSession) AddTempTable(dbName, alias, realName string) {

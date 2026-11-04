@@ -99,26 +99,32 @@ func TestIssue27774PreparedTemporalCompositeRange(t *testing.T) {
 
 				require.NoError(t, stmt.QueryRowContext(ctx, nil, tc.upper).Scan(&count))
 				require.Zero(t, count)
+
+				switch tc.name {
+				case "datetime":
+					// Malformed DATETIME expression inputs become NULL bounds.
+					require.NoError(t, stmt.QueryRowContext(ctx, "not-a-datetime", tc.upper).Scan(&count))
+					require.Zero(t, count)
+					require.NoError(t, stmt.QueryRowContext(ctx, tc.lower, "not-a-datetime").Scan(&count))
+					require.Zero(t, count)
+				case "timestamp":
+					// TIMESTAMP retains strict parsing and temporal error reporting.
+					err := stmt.QueryRowContext(ctx, "not-a-datetime", tc.upper).Scan(&count)
+					require.Error(t, err)
+					var mysqlErr *mysqlDriver.MySQLError
+					require.ErrorAs(t, err, &mysqlErr)
+					require.Equal(t, uint16(20301), mysqlErr.Number)
+					require.Contains(t, mysqlErr.Message, "invalid datetime value")
+					require.NotContains(t, mysqlErr.Message, "invalid numeric string")
+				}
+				require.NoError(t, stmt.QueryRowContext(ctx, tc.lower, tc.upper).Scan(&count))
+				require.Equal(t, 2, count, "NULL bounds or a failed execute must not corrupt the prepared statement")
 			})
 		}
 
 		datetimeQuery := fmt.Sprintf(
 			"select count(*) from `%s`.`temporal_datetime` where v > ? and v <= ?", dbName)
-		stmt, err := db.PrepareContext(ctx, datetimeQuery)
-		require.NoError(t, err)
-		defer stmt.Close()
-
 		var count int
-		err = stmt.QueryRowContext(ctx, "not-a-datetime", cases[1].upper).Scan(&count)
-		require.Error(t, err)
-		var mysqlErr *mysqlDriver.MySQLError
-		require.ErrorAs(t, err, &mysqlErr)
-		require.Equal(t, uint16(20301), mysqlErr.Number)
-		require.Contains(t, mysqlErr.Message, "invalid datetime value")
-		require.NotContains(t, mysqlErr.Message, "invalid numeric string")
-		require.NoError(t, stmt.QueryRowContext(ctx, cases[1].lower, cases[1].upper).Scan(&count))
-		require.Equal(t, 2, count, "a failed execute must not corrupt the prepared statement")
-
 		literalQuery := fmt.Sprintf(
 			"select count(*) from `%s`.`temporal_datetime` where v > '%s' and v <= '%s'",
 			dbName, cases[1].lower, cases[1].upper)
@@ -132,6 +138,9 @@ func TestIssue27774PreparedTemporalCompositeRange(t *testing.T) {
 		require.NoError(t, textDB.QueryRowContext(
 			ctx, datetimeQuery, cases[1].lower, cases[1].upper).Scan(&count))
 		require.Equal(t, 2, count)
+		require.NoError(t, textDB.QueryRowContext(
+			ctx, datetimeQuery, "not-a-datetime", cases[1].upper).Scan(&count))
+		require.Zero(t, count, "interpolated and binary parameters must share DATETIME NULL semantics")
 
 		execSQLRequire(t, ctx, db, fmt.Sprintf("drop database `%s`", dbName))
 		require.NoError(t, db.QueryRowContext(ctx,

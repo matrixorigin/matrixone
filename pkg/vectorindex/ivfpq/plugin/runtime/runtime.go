@@ -66,6 +66,7 @@ func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.Ivfpq_TblType_Metadata,
 		catalog.Ivfpq_TblType_Storage,
+		catalog.IndexIgnored_TblType,
 	}
 }
 
@@ -99,17 +100,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	return []string{
 		"ivfpq_threads_build",
 		"lower_case_table_names",
-	}
-}
-
-// DefaultOptions is the params map produced when CREATE INDEX is issued
-// without a WITH(...) clause. Return nil if your algorithm requires
-// explicit options. Keys come from pkg/catalog (IndexAlgoParamOpType etc.).
-func (CatalogHooks) DefaultOptions() map[string]string {
-	return map[string]string{
-		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,
-		catalog.Quantization:         metric.Quantization_F32_Str,
-		catalog.DistributionMode:     vectorindex.DistributionMode_SINGLE_GPU_Str,
 	}
 }
 
@@ -282,6 +272,9 @@ func (CatalogHooks) ParamsFromTree(idx *tree.Index) (map[string]string, error) {
 	}
 	if idx.IndexOption.QuantizerTrainLimit > 0 {
 		res[catalog.IndexAlgoParamQuantizerTrainLimit] = strconv.FormatInt(idx.IndexOption.QuantizerTrainLimit, 10)
+	}
+	if idx.IndexOption.MaxBadRecordsSet {
+		res[catalog.IndexAlgoParamMaxBadRecords] = strconv.FormatInt(idx.IndexOption.MaxBadRecords, 10)
 	}
 
 	return res, nil

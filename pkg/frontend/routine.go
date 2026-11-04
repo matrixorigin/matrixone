@@ -759,6 +759,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	tempTableMigrationSupported bool,
 	lastInsertIDMigrationSupported bool,
 	resp *query.MigrateConnFromResponse,
+	preparedStatementProtocolSupported ...bool,
 ) error {
 	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
 	if !ok {
@@ -803,6 +804,14 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	if ses.hasForeignConns() {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
+	// Invalidated prepared handles cannot be exported. Take the decision and
+	// snapshot under one session lock so the target cannot reset its statement-
+	// ID high-water mark from a concurrently changing prepared-handle set: a
+	// later PREPARE must not reuse an invalidated ID after migration.
+	prepareStmts, hasInvalidated := ses.getPrepareStmtsForMigration()
+	if hasInvalidated {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	tempTables, err := ses.snapshotTempTablesForMigration(operationCtx)
 	if err != nil {
 		if isMigrationSnapshotSizeLimitError(err) {
@@ -828,8 +837,26 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	resp.LastInsertID = ses.GetLastInsertID()
 	resp.LastInsertIDExported = true
-	prepareStmts := ses.GetPrepareStmts()
-	for _, st := range prepareStmts {
+	requiredVersions := make([]int64, len(prepareStmts))
+	for i, st := range prepareStmts {
+		if st == nil || st.rewritePolicyInvalidated.Load() {
+			continue
+		}
+		features, err := plan.RequiredRemoteExpressionFeatures(st.PreparePlan)
+		if err != nil {
+			return err
+		}
+		if features.DependentPrograms {
+			if len(preparedStatementProtocolSupported) > 0 && !preparedStatementProtocolSupported[0] {
+				return moerr.GetOkExpectedNotSafeToStartTransfer()
+			}
+			requiredVersions[i] = defines.MORPCVersion119
+		}
+		// The migration payload cannot preserve execution-resolved FIELD
+		// return types. Reject under the request owner before exporting handles.
+		if st.fieldTypes != nil {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
 		// Migration replays SQL against the current assignment; it does not
 		// transfer this statement's original static type and row-domain binding.
 		// Keep the connection here until the statement is deallocated.
@@ -894,11 +921,18 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		resp.SystemVariables = systemVars
 		resp.SystemVariablesExported = systemVarsExported
 	}
-	for _, st := range prepareStmts {
+	for i, st := range prepareStmts {
+		// A rewrite-policy-invalidated handle cannot be replayed on the target
+		// session: its retained SQL/AST may contain the old row predicate. The
+		// client must explicitly prepare it again under the target policy.
+		if st == nil || st.rewritePolicyInvalidated.Load() {
+			continue
+		}
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
-			Name:       st.Name,
-			SQL:        st.Sql,
-			ParamTypes: st.ParamTypes,
+			Name:                    st.Name,
+			SQL:                     st.Sql,
+			ParamTypes:              st.ParamTypes,
+			RequiredProtocolVersion: requiredVersions[i],
 		})
 	}
 	if cause := context.Cause(operationCtx); cause != nil {
@@ -1131,7 +1165,12 @@ func (rt *Routine) resetSessionWithAdmission(
 	}()
 
 	// reset the old and new session.
-	if err := newSession.reset(operationCtx, oldSession); err != nil {
+	if err := newSession.resetWith(operationCtx, oldSession, func() error {
+		if protocol, ok := rt.getProtocol().(*MysqlProtocolImpl); ok {
+			return protocol.applyNegotiatedSessionCharsetTo(operationCtx, newSession)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 

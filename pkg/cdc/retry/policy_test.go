@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -95,34 +96,39 @@ func TestPolicy_Do_NonRetryableStopsImmediately(t *testing.T) {
 }
 
 func TestPolicy_Do_ContextCancelDuringBackoff(t *testing.T) {
-	backoff := ExponentialBackoff{
-		Base:   time.Hour, // ensure we block on timer
-		Factor: 1.0,
-		Jitter: 0,
-		randFn: func(time.Duration) time.Duration { return 0 },
-	}
-	p := Policy{
-		MaxAttempts: 3,
-		Classifier:  AlwaysRetryClassifier{},
-		Backoff:     backoff,
-	}
+	synctest.Test(t, func(t *testing.T) {
+		backoff := ExponentialBackoff{
+			Base:   time.Hour, // ensure we block on timer
+			Factor: 1.0,
+			Jitter: 0,
+			randFn: func(time.Duration) time.Duration { return 0 },
+		}
+		p := Policy{
+			MaxAttempts: 3,
+			Classifier:  AlwaysRetryClassifier{},
+			Backoff:     backoff,
+		}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-	}()
+		cancelStarted := make(chan struct{})
+		go func() {
+			close(cancelStarted)
+			time.Sleep(10 * time.Millisecond)
+			cancel()
+		}()
 
-	start := time.Now()
-	err := p.Do(ctx, func() error { return moerr.NewInternalErrorNoCtx("retryable") })
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context canceled, got %v", err)
-	}
-	if time.Since(start) > time.Second {
-		t.Fatalf("context cancel should abort quickly")
-	}
+		<-cancelStarted
+		start := time.Now()
+		err := p.Do(ctx, func() error { return moerr.NewInternalErrorNoCtx("retryable") })
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context canceled, got %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("context cancel should abort quickly, took %s", elapsed)
+		}
+	})
 }
 
 func TestDefaultClassifier(t *testing.T) {
@@ -169,5 +175,31 @@ func TestPolicy_Do_CircuitOpenStops(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Fatalf("expected 1 attempt, got %d", attempts)
+	}
+}
+
+func TestExponentialBackoffDefaultsCapAndJitter(t *testing.T) {
+	calls := 0
+	b := ExponentialBackoff{
+		Base: 10 * time.Millisecond, Factor: 3, Max: 20 * time.Millisecond, Jitter: 5 * time.Millisecond,
+		randFn: func(max time.Duration) time.Duration {
+			calls++
+			if max != 5*time.Millisecond {
+				t.Fatalf("jitter bound = %s", max)
+			}
+			return 4 * time.Millisecond
+		},
+	}
+	if got := b.Next(0); got != 14*time.Millisecond {
+		t.Fatalf("first delay = %s", got)
+	}
+	if got := b.Next(3); got != 24*time.Millisecond {
+		t.Fatalf("capped delay with jitter = %s", got)
+	}
+	if calls != 2 {
+		t.Fatalf("jitter calls = %d", calls)
+	}
+	if got := (ExponentialBackoff{}).Next(2); got != 200*time.Millisecond {
+		t.Fatalf("default delay = %s", got)
 	}
 }

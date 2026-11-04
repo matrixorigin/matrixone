@@ -1,8 +1,12 @@
 # Type-switch families
 
-`TestTypeSwitchFamilies` (`../typeswitch_test.go`) checks every `switch` over `types.T`
-in `pkg/` (`_test.go` files excluded). A switch that names any member of a family must name
-every member of the family, or every member of one subfamily and no other family member:
+`TestTypeSwitchFamilies` (`../typeswitch_test.go`) checks, in `pkg/` (`_test.go` files
+excluded), every `switch` over `types.T`, every `||` chain of `==` comparisons (and `&&`
+chain of `!=` comparisons) that names two or more members of a family, and every
+`[]types.T{...}` / `map[types.T]...{...}` literal that names two or more members. In a chain,
+`IsFloat()`, `IsLowPrecisionFloat()`, `IsArray()` and `IsArrayRelate()` name the members
+they cover. Such a switch, chain or list must name every member of the family, or every
+member of one subfamily and no other family member:
 
 | Family | Members | Subfamily |
 |--------|---------|-----------|
@@ -39,7 +43,11 @@ line per file, function and family with a count:
 
 ```
 pkg/sql/plan/function/func_cast.go	castToDecimal256	float	1
+pkg/sql/plan/utils.go	checkNoNeedCast	float chain	4
 ```
+
+The family column carries `chain` or `list` for those constructs; their entries were
+added when the check was extended to them, after each one was reviewed.
 
 The test fails when a key has more untagged partial switches than its count. The list may
 only shrink: after fixing or tagging listed switches, regenerate it from the repository

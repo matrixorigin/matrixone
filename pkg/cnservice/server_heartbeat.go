@@ -74,6 +74,9 @@ func (s *service) heartbeatTask(ctx context.Context) {
 		case <-ticker.C:
 		case <-s.heartbeatWakeup:
 		}
+		if ctx.Err() != nil {
+			return
+		}
 		s.heartbeat(ctx)
 		// see pkg/logservice/service_commands.go#130
 		select {
@@ -91,6 +94,9 @@ func (s *service) controlTask(ctx context.Context) {
 		defer close(commandDone)
 		s.commandTask(ctx)
 	}()
+	// Construction has initialized every command target. Publish the initial
+	// registration through the serial owner instead of waiting for a timer.
+	s.notifyHeartbeat()
 	s.heartbeatTask(ctx)
 	<-commandDone
 }

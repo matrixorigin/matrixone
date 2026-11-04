@@ -353,14 +353,14 @@ var upg_information_schema_views = versions.UpgradeEntry{
 	Schema:    sysview.InformationDBConst,
 	TableName: "VIEWS",
 	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaViewsDDL,
+	UpgSql:    sysview.InformationSchemaViewsLegacyDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "VIEWS")
 		if err != nil {
 			return false, err
 		}
 
-		if exists && viewDef == sysview.InformationSchemaViewsDDL {
+		if exists && viewDef == sysview.InformationSchemaViewsLegacyDDL {
 			return true, nil
 		}
 		return false, nil

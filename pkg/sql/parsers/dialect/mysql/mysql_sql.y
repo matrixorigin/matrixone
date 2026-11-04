@@ -70,6 +70,106 @@ func sqlTaskInt64(v any) int64 {
     }
 }
 
+const restoreSnapshotFromSyntaxHint = `FROM SNAPSHOT is not supported; use RESTORE DATABASE [account.]database{snapshot="snapshot_name"}`
+
+func makeCharsetCastCharType(width int32, charsetName string) *tree.T {
+	locale := ""
+	familyString := "char"
+	oid := uint32(defines.MYSQL_TYPE_STRING)
+	if width == -1 {
+		// Match the existing CAST/CONVERT no-length CHAR target, which uses
+		// VARCHAR's expression width while preserving CHAR syntax for deparse.
+		familyString = "varchar"
+		oid = uint32(defines.MYSQL_TYPE_VARCHAR)
+	}
+	return &tree.T{InternalType: tree.InternalType{
+		Family:          tree.StringFamily,
+		FamilyString:    familyString,
+		DisplayWith:     width,
+		Locale:          &locale,
+		Oid:             oid,
+		CastCharsetSpecified: true,
+		CastCharsetName: charsetName,
+	}}
+}
+
+func mergeIndexOption(left, right *tree.IndexOption) *tree.IndexOption {
+    if left == nil {
+        return right
+    }
+    if right == nil {
+        return left
+    }
+    if right.IType != tree.INDEX_TYPE_INVALID {
+        left.IType = right.IType
+    } else if len(right.Comment) > 0 {
+        left.Comment = right.Comment
+    } else if right.KeyBlockSize > 0 {
+        left.KeyBlockSize = right.KeyBlockSize
+    } else if len(right.ParserName) > 0 {
+        left.ParserName = right.ParserName
+    } else if right.Visible != tree.VISIBLE_TYPE_INVALID {
+        left.Visible = right.Visible
+    } else if right.AlgoParamList > 0 {
+        left.AlgoParamList = right.AlgoParamList
+    } else if len(right.AlgoParamVectorOpType) > 0 {
+        left.AlgoParamVectorOpType = right.AlgoParamVectorOpType
+    } else if right.AlgoParamM > 0 {
+        left.AlgoParamM = right.AlgoParamM
+    } else if right.HnswEfConstruction > 0 {
+        left.HnswEfConstruction = right.HnswEfConstruction
+    } else if right.HnswEfSearch > 0 {
+        left.HnswEfSearch = right.HnswEfSearch
+    } else if right.Async {
+        left.Async = right.Async
+    } else if right.ForceSync {
+        left.ForceSync = right.ForceSync
+    } else if right.Merge {
+        left.Merge = right.Merge
+    } else if right.AutoUpdate {
+        left.AutoUpdate = right.AutoUpdate
+    } else if right.Day > 0 {
+        left.Day = right.Day
+    } else if right.Hour > 0 {
+        left.Hour = right.Hour
+    } else if right.Second > 0 {
+        left.Second = right.Second
+    } else if right.IntermediateGraphDegree > 0 {
+        left.IntermediateGraphDegree = right.IntermediateGraphDegree
+    } else if right.GraphDegree > 0 {
+        left.GraphDegree = right.GraphDegree
+    } else if right.BitsPerCode > 0 {
+        left.BitsPerCode = right.BitsPerCode
+    } else if len(right.Quantization) > 0 {
+        left.Quantization = right.Quantization
+    } else if len(right.DistributionMode) > 0 {
+        left.DistributionMode = right.DistributionMode
+    } else if right.ITopkSize > 0 {
+        left.ITopkSize = right.ITopkSize
+    } else if right.KmeansTrainPercent > 0 {
+        left.KmeansTrainPercent = right.KmeansTrainPercent
+    } else if right.KmeansMaxIteration > 0 {
+        left.KmeansMaxIteration = right.KmeansMaxIteration
+    } else if right.MaxIndexCapacity > 0 {
+        left.MaxIndexCapacity = right.MaxIndexCapacity
+    } else if right.MaxBadRecordsSet {
+        left.MaxBadRecords = right.MaxBadRecords
+        left.MaxBadRecordsSet = true
+    } else if right.MaxPostingsCapacity > 0 {
+        left.MaxPostingsCapacity = right.MaxPostingsCapacity
+    } else if right.QuantizerTrainLimit > 0 {
+        left.QuantizerTrainLimit = right.QuantizerTrainLimit
+    } else if right.PositionFreeSet {
+        left.PositionFree = right.PositionFree
+        left.PositionFreeSet = true
+    } else if len(right.IncludeColumns) > 0 {
+        left.IncludeColumns = right.IncludeColumns
+    } else if len(right.TokenFilters) > 0 {
+        left.TokenFilters = right.TokenFilters
+    }
+    return left
+}
+
 func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.OrderBy, frame *tree.FrameClause) *tree.WindowSpec {
     hasFrame := frame != nil
     if frame == nil {
@@ -124,6 +224,10 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     tableOptions []tree.TableOption
     tableExprs tree.TableExprs
     tableExpr tree.TableExpr
+    jsonTableColumn *tree.JSONTableColumn
+    jsonTableColumns []*tree.JSONTableColumn
+    jsonTableResponse *tree.JSONTableResponse
+    jsonTableCharset *string
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
     fullTextSearchType tree.FullTextSearchType
@@ -345,6 +449,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     minValueOption  *tree.MinValueOption
     maxValueOption  *tree.MaxValueOption
     startWithOption *tree.StartWithOption
+    sequenceOptions *sequenceOptions
     cycleOption     *tree.CycleOption
     alterTypeOption *tree.TypeOption
 
@@ -373,6 +478,12 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 }
 
 %token LEX_ERROR
+%token <str> JSON_TABLE JSON_TABLE_PATH JSON_TABLE_NESTED JSON_TABLE_ORDINALITY JSON_TABLE_EMPTY JSON_TABLE_ERROR
+%type <jsonTableColumn> json_table_column json_table_policies
+%type <jsonTableColumns> json_table_columns
+%type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
+%type <str> json_table_path_opt
+%type <jsonTableCharset> json_table_charset_opt
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
@@ -493,7 +604,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_BAD_RECORDS MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN TOKEN_FILTER
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -513,6 +624,11 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Account
 %token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY RESTRICTED
 
+// GRANT role TO user WITH ADMIN OPTION: ADMIN is a contextual token, the
+// lexer only yields it inside that clause (see mysql_lexer.go), so the word
+// admin keeps parsing as a plain identifier everywhere else.
+%token <str> ADMIN
+
 // User
 %token <str> USER IDENTIFIED CIPHER ISSUER X509 SUBJECT SAN REQUIRE SSL NONE PASSWORD SHARED EXCLUSIVE
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
@@ -531,7 +647,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS ROLES RULE RULES
+%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES IGNORED SCHEMAS NODE LOCKS ROLES RULE RULES
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE TASKS RUNS
 
 // SET tokens
@@ -566,12 +682,14 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
-%token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
+%token <str> APPROX_PERCENTILE QUANTILE_EXACT_WEIGHTED CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
+%token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK MRANK CUMRANK TMRANK
+%token <str> SMA WMA TRIMA EMA WILDER KAMA DEMA TEMA T3 MMAXDRAWDOWN CUMPOSITIVESTREAK
+%token <str> EWM_MEAN EWM_VAR EWM_STD EWM_COV EWM_CORR
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> JSON_ARRAYAGG JSON_OBJECTAGG
 %token <str> GET_FORMAT
@@ -657,9 +775,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
-%type <statement> show_variables_stmt show_status_stmt show_index_stmt
+%type <statement> show_variables_stmt show_status_stmt show_index_stmt show_index_ignored_stmt show_index_status_stmt
 %type <statement> show_servers_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
-%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt
+%type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt alter_database_defaults_stmt
 %type <merge> merge_no_with_stmt
 %type <mergeClauses> merge_when_list
 %type <mergeClause> merge_when_clause
@@ -692,7 +810,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <selectInto> select_into_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
-%type <str> json_type_opt restore_snapshot_name restore_to_account_name_opt
+%type <str> json_type_opt restore_snapshot_name restore_snapshot_from_name restore_to_account_name_opt
 
 // case statement
 %type <statement> case_stmt
@@ -868,18 +986,18 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
-%type <createOption> create_option
-%type <createOptions> create_option_list_opt create_option_list
+%type <createOption> create_option database_default_option database_safe_default_option
+%type <createOptions> create_option_list_opt create_option_list database_default_options database_safe_default_options
 %type <ifNotExists> not_exists_opt
 %type <defaultOptional> default_opt
 %type <sourceOptional> replace_opt
 %type <str> database_or_schema
-%type <indexType> using_opt
+%type <indexType> using_opt using_type
 %type <str> opt_lang
 %type <indexCategory> index_prefix
 %type <keyParts> index_column_list index_column_list_opt
 %type <keyPart> index_column
-%type <indexOption> index_option_list index_option
+%type <indexOption> index_option_list index_option create_index_option_list create_index_option
 %type <roles> role_spec_list using_roles_opt
 %type <role> role_spec
 %type <cstr> role_name
@@ -894,7 +1012,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <updateExprs> update_list on_duplicate_key_update on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
-%type <boolVal> grant_option_opt enforce enforce_opt generated_column_type_opt
+%type <boolVal> grant_option_opt grant_role_option_opt enforce enforce_opt generated_column_type_opt
 
 %type <varAssignmentExpr> var_assignment
 %type <varAssignmentExprs> var_assignment_list
@@ -934,6 +1052,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <minValueOption> min_value_opt
 %type <maxValueOption> max_value_opt
 %type <startWithOption> start_with_opt
+%type <sequenceOptions> sequence_option_list_opt sequence_option_list sequence_option
 %type <cycleOption> alter_cycle_opt
 %type <alterTypeOption> alter_as_datatype_opt
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
@@ -942,7 +1061,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <int64Val> parallel_opt
 %type <unsignedOpt> strict_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt temporary_opt cycle_opt drop_table_opt rollup_opt
+%type <boolVal> global_scope exists_opt temporary_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict separator_opt kmeans_opt
 %type <insert> insert_data
@@ -1042,6 +1161,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> RESPECT
 %left <str> MEMBER
 %token <str> AUTO_ID_CACHE
+// Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
+%left <str> SOUNDS
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -1059,9 +1180,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <fillMode> fill_mode
 
 %start start_command
-
 // python udf
 %type<str> func_handler func_handler_opt
+%type <alterTableOptions> alter_add_column_list
 %%
 
 start_command:
@@ -1530,7 +1651,9 @@ create_pitr_stmt:
 pitr_value:
     INTEGRAL
     {
-        $$ = $1.(int64)
+        value, ok := signedIntegral(yylex, $1)
+        if !ok { goto ret1 }
+        $$ = value
     }
    
 
@@ -1566,6 +1689,16 @@ snapshot_restore_stmt:
         }
 
         $$ = result
+    }
+|   RESTORE DATABASE ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
+|   RESTORE DATABASE ident '.' ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
     }
 |   RESTORE TABLE restore_table_scope restore_snapshot_name restore_to_account_name_opt
     {
@@ -1625,6 +1758,11 @@ snapshot_restore_stmt:
 
         $$ = result
     }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT restore_snapshot_from_name
+    {
+        yylex.Error(restoreSnapshotFromSyntaxHint)
+        goto ret1
+    }
 
 restore_db_scope:
     ident
@@ -1664,6 +1802,16 @@ restore_snapshot_name:
 |   '{' SNAPSHOT '=' STRING '}'
     {
         $$ = strings.ToLower($4)
+    }
+
+restore_snapshot_from_name:
+    ident
+    {
+        $$ = $1.Compare()
+    }
+|   STRING
+    {
+        $$ = $1
     }
 
 restore_to_account_name_opt:
@@ -2057,7 +2205,7 @@ parallel_opt:
         } else if str == "false" {
 			$$ = 0
         } else {
-            yylex.Error("error strict flag")
+            yylex.Error("error parallel flag")
             goto ret1
         }
     }
@@ -2073,7 +2221,7 @@ strict_opt:
         } else if str == "false" {
             $$ = false
         } else {
-            yylex.Error("error parallel flag")
+            yylex.Error("error strict flag")
             goto ret1
         }
     }
@@ -2214,11 +2362,15 @@ ignore_lines:
     }
 |   IGNORE INTEGRAL LINES
     {
-        $$ = $2.(int64)
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 |   IGNORE INTEGRAL ROWS
     {
-        $$ = $2.(int64)
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 load_lines:
@@ -2418,7 +2570,7 @@ grant_stmt:
             },
         }
     }
-|   GRANT role_spec_list TO drop_user_spec_list grant_option_opt
+|   GRANT role_spec_list TO drop_user_spec_list grant_role_option_opt
     {
         $$ = &tree.Grant{
             Typ: tree.GrantTypeRole,
@@ -2454,6 +2606,23 @@ grant_option_opt:
 // |    WITH MAX_UPDATES_PER_HOUR INTEGRAL
 // |    WITH MAX_CONNECTIONS_PER_HOUR INTEGRAL
 // |    WITH MAX_USER_CONNECTIONS INTEGRAL
+
+// The role grant accepts MySQL 8.0's WITH ADMIN OPTION alongside the legacy
+// WITH GRANT OPTION; both set the same GrantRole.GrantOption flag, persisted
+// as with_grant_option and enforced on re-grants. Privilege and proxy grants
+// keep grant_option_opt and therefore reject ADMIN.
+grant_role_option_opt:
+    {
+        $$ = false
+    }
+|   WITH GRANT OPTION
+    {
+        $$ = true
+    }
+|   WITH ADMIN OPTION
+    {
+        $$ = true
+    }
 
 revoke_stmt:
     REVOKE exists_opt  priv_list ON object_type priv_level FROM role_spec_list
@@ -3591,11 +3760,11 @@ explain_stmt:
     }
 |   explain_sym FOR CONNECTION INTEGRAL
     {
-        $$ = tree.NewExplainFor("", uint64($4.(int64)))
+        $$ = tree.NewExplainFor("", integralToUint64($4))
     }
 |   explain_sym FORMAT '=' STRING FOR CONNECTION INTEGRAL
     {
-        $$ = tree.NewExplainFor($4, uint64($7.(int64)))
+        $$ = tree.NewExplainFor($4, integralToUint64($7))
     }
 |   explain_plan_stmt
     {
@@ -3603,7 +3772,77 @@ explain_stmt:
     }
 
 explain_plan_stmt:
-    explain_sym explainable_stmt
+    explain_sym FORMAT '=' explain_format_value explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.FormatOption, $4),
+        }
+        $$ = tree.MakeExplainStmt($5, options)
+    }
+|   explain_sym FORMAT '=' STRING explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($5); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.FormatOption, $4),
+        }
+        $$ = tree.MakeExplainStmt($5, options)
+    }
+|   explain_sym ANALYZE FORMAT '=' explain_format_value explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym ANALYZE FORMAT '=' STRING explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.AnalyzeOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym PHYPLAN FORMAT '=' explain_format_value explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym PHYPLAN FORMAT '=' STRING explainable_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoEnclosingStatement($6); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        options := []tree.OptionElem{
+            tree.MakeOptionElem(tree.PhyPlanOption, "NULL"),
+            tree.MakeOptionElem(tree.FormatOption, $5),
+        }
+        $$ = tree.MakeExplainStmt($6, options)
+    }
+|   explain_sym explainable_stmt
     {
         if intoErr := tree.ValidateSelectIntoEnclosingStatement($2); intoErr != "" {
             yylex.Error(intoErr)
@@ -3842,7 +4081,9 @@ for_query_opt:
     }
 |   FOR QUERY INTEGRAL
     {
-        $$ = $3.(int64)
+        value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 upgrade_stmt:
@@ -3876,7 +4117,8 @@ opt_retry:
     }
 |   WITH RETRY INTEGRAL
     {
-    	res := $3.(int64)
+	res, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
     	if res <= 0 {
             yylex.Error("retry value can not less than 0")
             $$ = -1
@@ -3888,6 +4130,7 @@ alter_stmt:
     alter_user_stmt
 |   alter_account_stmt
 |   alter_database_config_stmt
+|   alter_database_defaults_stmt
 |   alter_view_stmt
 |   alter_table_stmt
 |   alter_publication_stmt
@@ -4214,16 +4457,16 @@ alter_role_stmt:
     {
         var roleName = $3.Compare()
         var ruleSQL = $6
-        var dbName = $9.Compare()
-        var tblName = $11.Compare()
+        var dbName = yylex.(*Lexer).GetDbOrTblNameCStr($9.Origin()).Compare()
+        var tblName = yylex.(*Lexer).GetDbOrTblNameCStr($11.Origin()).Compare()
         var ruleName = dbName + "." + tblName
         $$ = tree.NewAlterRoleAddRule(roleName, ruleName, ruleSQL, dbName, tblName)
     }
 |   ALTER ROLE role_name DROP RULE ON TABLE ident '.' ident
     {
         var roleName = $3.Compare()
-        var dbName = $8.Compare()
-        var tblName = $10.Compare()
+        var dbName = yylex.(*Lexer).GetDbOrTblNameCStr($8.Origin()).Compare()
+        var tblName = yylex.(*Lexer).GetDbOrTblNameCStr($10.Origin()).Compare()
         $$ = tree.NewAlterRoleDropRule(roleName, dbName, tblName)
     }
 
@@ -4394,14 +4637,17 @@ alter_option:
         opt.Collate = $7
         $$ = opt
     }
-|   CONVERT TO CHARACTER SET charset_name
+|   CONVERT TO charset_keyword charset_name
     {
-        $$ = tree.NewTableOptionCharset($5)
+        opt := tree.NewTableOptionCharset($4)
+        opt.Convert = true
+        $$ = opt
     }
-|   CONVERT TO CHARACTER SET charset_name COLLATE equal_opt charset_name
+|   CONVERT TO charset_keyword charset_name COLLATE equal_opt charset_name
     {
-        opt := tree.NewTableOptionCharset($5)
-        opt.Collate = $8
+        opt := tree.NewTableOptionCharset($4)
+        opt.Collate = $7
+        opt.Convert = true
         $$ = opt
     }
 |   able_type KEYS
@@ -4552,10 +4798,14 @@ alter_table_drop:
 |   CONSTRAINT ident
         {
             $$ = &tree.AlterOptionDrop{
-                Typ:  tree.AlterTableDropForeignKey,
+                Typ:  tree.AlterTableDropConstraint,
                 Name: tree.Identifier($2.Compare()),
             }
         }
+|   CHECK ident
+    {
+        $$ = tree.NewAlterOptionDrop(tree.AlterTableDropCheck, tree.Identifier($2.Compare()));
+    }
 |   PRIMARY KEY
     {
         var dropType = tree.AlterTableDropPrimaryKey;
@@ -4636,8 +4886,74 @@ alter_account_stmt:
         )
     }
 
+alter_database_defaults_stmt:
+    ALTER database_or_schema db_name database_default_options
+    {
+        $$ = &tree.AlterDatabase{Name: tree.Identifier($3), Options: $4}
+    }
+|   ALTER database_or_schema database_safe_default_options
+    {
+        $$ = &tree.AlterDatabase{Options: $3}
+    }
+
+database_default_options:
+    database_default_option
+    {
+        $$ = []tree.CreateOption{$1}
+    }
+|   database_default_options database_default_option
+    {
+        $$ = append($1, $2)
+    }
+
+database_default_option:
+    charset_keyword equal_opt charset_name
+    {
+        $$ = tree.NewCreateOptionCharset(false, $3)
+    }
+|   DEFAULT charset_keyword equal_opt charset_name
+    {
+        $$ = tree.NewCreateOptionCharset(true, $4)
+    }
+|   COLLATE equal_opt collate_name
+    {
+        $$ = tree.NewCreateOptionCollate(false, $3)
+    }
+|   DEFAULT COLLATE equal_opt collate_name
+    {
+        $$ = tree.NewCreateOptionCollate(true, $4)
+    }
+
+database_safe_default_options:
+    database_safe_default_option
+    {
+        $$ = []tree.CreateOption{$1}
+    }
+|   database_safe_default_options database_default_option
+    {
+        $$ = append($1, $2)
+    }
+
+database_safe_default_option:
+    CHARACTER SET equal_opt charset_name
+    {
+        $$ = tree.NewCreateOptionCharset(false, $4)
+    }
+|   DEFAULT charset_keyword equal_opt charset_name
+    {
+        $$ = tree.NewCreateOptionCharset(true, $4)
+    }
+|   COLLATE equal_opt collate_name
+    {
+        $$ = tree.NewCreateOptionCollate(false, $3)
+    }
+|   DEFAULT COLLATE equal_opt collate_name
+    {
+        $$ = tree.NewCreateOptionCollate(true, $4)
+    }
+
 alter_database_config_stmt:
-    ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
+    ALTER database_or_schema db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
     {
         var accountName = ""
         var dbName = $3
@@ -4652,7 +4968,7 @@ alter_database_config_stmt:
             updateConfig,
         )
     }
-|   ALTER DATABASE db_name SET UNIQUE_CHECK_ON_AUTOINCR '=' STRING
+|   ALTER database_or_schema db_name SET UNIQUE_CHECK_ON_AUTOINCR '=' STRING
     {
         var accountName = ""
         var dbName = $3
@@ -4802,7 +5118,8 @@ pwd_or_lck:
     }
 |   pwd_expire INTERVAL INTEGRAL DAY
     {
-        var Value = $3.(int64)
+        Value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionPasswordExpireInterval(
             Value,
         )
@@ -4821,7 +5138,8 @@ pwd_or_lck:
     }
 |   PASSWORD HISTORY INTEGRAL
     {
-        var Value = $3.(int64)
+        Value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionPasswordHistoryCount(
             Value,
         )
@@ -4832,7 +5150,8 @@ pwd_or_lck:
     }
 |   PASSWORD REUSE INTERVAL INTEGRAL DAY
     {
-        var Value = $4.(int64)
+        Value, ok := signedIntegral(yylex, $4)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionPasswordReuseIntervalCount(
             Value,
         )
@@ -4851,14 +5170,16 @@ pwd_or_lck:
     }
 |   FAILED_LOGIN_ATTEMPTS INTEGRAL
     {
-        var Value = $2.(int64)
+        Value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionFailedLoginAttempts(
             Value,
         )
     }
 |   PASSWORD_LOCK_TIME INTEGRAL
     {
-        var Value = $2.(int64)
+        Value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         $$ = tree.NewUserMiscOptionPasswordLockTimeCount(
             Value,
         )
@@ -4894,6 +5215,8 @@ show_stmt:
 |   show_variables_stmt
 |   show_status_stmt
 |   show_index_stmt
+|   show_index_ignored_stmt
+|   show_index_status_stmt
 |   show_target_filter_stmt
 |   show_table_status_stmt
 |   show_grants_stmt
@@ -5162,6 +5485,10 @@ show_grants_stmt:
     {
         $$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5, ShowGrantType: tree.GrantForUser}
     }
+|   SHOW GRANTS FOR CURRENT_USER braces_opt using_roles_opt
+    {
+        $$ = &tree.ShowGrants{CurrentUser: true, Roles: $6, ShowGrantType: tree.GrantForUser}
+    }
 |   SHOW GRANTS FOR ROLE ident
     {
         s := &tree.ShowGrants{}
@@ -5310,6 +5637,24 @@ show_index_stmt:
             TableName: $4,
             DbName: $5,
             Where: $6,
+        }
+    }
+
+show_index_ignored_stmt:
+    SHOW extended_opt index_kwd IGNORED from_or_in unresolved_object_name where_expression_opt
+    {
+        $$ = &tree.ShowIndexIgnored{
+            TableName: $6,
+            Where: $7,
+        }
+    }
+
+show_index_status_stmt:
+    SHOW extended_opt index_kwd STATUS from_or_in unresolved_object_name where_expression_opt
+    {
+        $$ = &tree.ShowIndexStatus{
+            TableName: $6,
+            Where: $7,
         }
     }
 
@@ -6655,6 +7000,10 @@ export_splitsize_opt:
 
 export_fields:
     {
+        // Defaults match the historical SELECT INTO OUTFILE framing:
+        // comma-separated, double-quoted. ESCAPED BY stays unset here so the
+        // writer keeps its built-in backslash default (tree.Fields.EscapedBy
+        // == nil means "not specified").
         $$ = &tree.Fields{
             Terminated: &tree.Terminated{
                 Value: ",",
@@ -6664,60 +7013,34 @@ export_fields:
             },
         }
     }
-|   FIELDS TERMINATED BY STRING
+|   FIELDS field_item_list
     {
-        $$ = &tree.Fields{
+        // MySQL SELECT INTO OUTFILE accepts the same FIELDS sub-clauses as
+        // LOAD DATA, in any order, each at most effective once (the last one
+        // wins, mirroring the LOAD merge above).
+        res := &tree.Fields{
             Terminated: &tree.Terminated{
-                Value: $4,
+                Value: ",",
             },
             EnclosedBy:  &tree.EnclosedBy{
                 Value: '"',
             },
         }
-    }
-|   FIELDS TERMINATED BY STRING ENCLOSED BY field_terminator
-    {
-        str := $7
-        if str != "\\" && len(str) > 1 {
-            yylex.Error("export1 error field terminator")
-            goto ret1
+        for _, f := range $2 {
+            if f.Terminated != nil {
+                res.Terminated = f.Terminated
+            }
+            if f.Optionally {
+                res.Optionally = f.Optionally
+            }
+            if f.EnclosedBy != nil {
+                res.EnclosedBy = f.EnclosedBy
+            }
+            if f.EscapedBy != nil {
+                res.EscapedBy = f.EscapedBy
+            }
         }
-        var b byte
-        if len(str) != 0 {
-           b = byte(str[0])
-        } else {
-           b = 0
-        }
-        $$ = &tree.Fields{
-            Terminated: &tree.Terminated{
-                Value: $4,
-            },
-            EnclosedBy:  &tree.EnclosedBy{
-                Value: b,
-            },
-        }
-    }
-|   FIELDS ENCLOSED BY field_terminator
-    {
-        str := $4
-        if str != "\\" && len(str) > 1 {
-            yylex.Error("export2 error field terminator")
-            goto ret1
-        }
-        var b byte
-        if len(str) != 0 {
-           b = byte(str[0])
-        } else {
-           b = 0
-        }
-        $$ = &tree.Fields{
-            Terminated: &tree.Terminated{
-                Value: ",",
-            },
-            EnclosedBy:  &tree.EnclosedBy{
-                Value: b,
-            },
-        }
+        $$ = res
     }
 
 export_lines_opt:
@@ -6728,9 +7051,19 @@ export_lines_opt:
             },
         }
     }
-|   LINES lines_terminated_opt
+|   LINES starting lines_terminated_opt
     {
         $$ = &tree.Lines{
+            StartingBy: $2,
+            TerminatedBy: &tree.Terminated{
+                Value: $3,
+            },
+        }
+    }
+|   LINES lines_terminated starting_opt
+    {
+        $$ = &tree.Lines{
+            StartingBy: $3,
             TerminatedBy: &tree.Terminated{
                 Value: $2,
             },
@@ -6760,7 +7093,9 @@ max_file_size_opt:
     }
 |   MAX_FILE_SIZE INTEGRAL
     {
-        $$ = $2.(int64)
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 force_quote_opt:
@@ -7157,6 +7492,13 @@ cte_list:
 common_table_expr:
     ident column_list_opt AS '(' stmt ')'
     {
+        // stmt has an EMPTY alternative used for bare trailing semicolons.
+        // Inside a CTE body that produces a nil Stmt and panics in Format
+        // (CTAS / PREPARE). Reject like MySQL. See #30146.
+        if $5 == nil {
+            yylex.Error("empty common table expression body")
+            goto ret1
+        }
         $$ = &tree.CTE{
             Name: &tree.AliasClause{Alias: tree.Identifier($1.Compare()), Cols: $2},
             Stmt: $5,
@@ -7231,7 +7573,8 @@ rank_opt:
             } else if strVal, ok := expr.(*tree.StrVal); ok {
                 str = strVal.String()
             } else {
-                continue
+                yylex.Error("rank options must be string literals containing key=value")
+                return 1
             }
             
             // Remove quotes if present
@@ -7241,11 +7584,13 @@ rank_opt:
             
             // Parse key=value pairs
             parts := strings.Split(str, "=")
-            if len(parts) == 2 {
-                key := strings.TrimSpace(strings.ToLower(parts[0]))
-                value := strings.TrimSpace(parts[1])
-                optionMap[key] = value
+            if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+                yylex.Error("rank options must contain a nonempty key=value pair")
+                return 1
             }
+            key := strings.TrimSpace(strings.ToLower(parts[0]))
+            value := strings.TrimSpace(parts[1])
+            optionMap[key] = value
         }
         
         $$ = &tree.RankOption{
@@ -7328,11 +7673,19 @@ select_lock_opt:
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForUpdate,
         }
+        if strings.EqualFold($2, "update nowait") {
+            $$.LockType = tree.SelectLockForUpdateNoWait
+        }
     }
 |   FOR SHARE
     {
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForShare,
+        }
+        if strings.EqualFold($2, "share nowait") {
+            $$.LockType = tree.SelectLockForShareNoWait
+        } else if strings.EqualFold($2, "share skip locked") {
+            $$.LockType = tree.SelectLockForShareSkipLocked
         }
     }
 |   LOCK IN SHARE MODE
@@ -8171,6 +8524,15 @@ table_subquery:
     }
 
 table_function:
+    JSON_TABLE '(' expression ',' STRING COLUMNS '(' json_table_columns ')' ')'
+    {
+        name := tree.NewUnresolvedName(tree.NewCStr("json_table", 1))
+        $$ = &tree.TableFunction{
+            Func: &tree.FuncExpr{Func: tree.FuncName2ResolvableFunctionReference(name), FuncName: tree.NewCStr("json_table", 1), Exprs: tree.Exprs{$3}, Type: tree.FUNC_TYPE_TABLE},
+            JSONTable: &tree.JSONTable{Path: $5, Columns: $8},
+        }
+    }
+|
     ident '(' expression_list_opt ')'
     {
         name := tree.NewUnresolvedName($1)
@@ -8183,6 +8545,57 @@ table_function:
                 },
         }
     }
+
+json_table_columns:
+    json_table_column
+    { $$ = []*tree.JSONTableColumn{$1} }
+|   json_table_columns ',' json_table_column
+    { $$ = append($1, $3) }
+
+json_table_column:
+    ident FOR JSON_TABLE_ORDINALITY
+    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "ordinality"} }
+|   ident column_type json_table_charset_opt JSON_TABLE_PATH STRING json_table_policies
+    { $$ = $6; $$.Name = $1.Origin(); $$.Kind = "path"; $$.Type = $2; $$.Charset = $3; $$.Path = $5 }
+|   ident column_type json_table_charset_opt EXISTS JSON_TABLE_PATH STRING
+    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "exists", Type: $2, Charset: $3, Path: $6} }
+|   JSON_TABLE_NESTED json_table_path_opt STRING COLUMNS '(' json_table_columns ')'
+    { $$ = &tree.JSONTableColumn{Kind: "nested", Path: $3, Children: $6} }
+
+json_table_charset_opt:
+    { $$ = nil }
+|   charset_keyword charset_name
+    { charset := $2; $$ = &charset }
+
+json_table_path_opt:
+    { $$ = "" }
+|   JSON_TABLE_PATH
+    { $$ = $1 }
+
+json_table_response:
+    NULL
+    { $$ = &tree.JSONTableResponse{Action: "null"} }
+|   JSON_TABLE_ERROR
+    { $$ = &tree.JSONTableResponse{Action: "error"} }
+|   DEFAULT STRING
+    { $$ = &tree.JSONTableResponse{Action: "default", Default: $2} }
+
+json_table_policies:
+    { $$ = &tree.JSONTableColumn{} }
+|   json_table_response ON JSON_TABLE_EMPTY json_table_on_error
+    { $$ = &tree.JSONTableColumn{OnEmpty: $1, OnError: $4} }
+|   json_table_response ON JSON_TABLE_ERROR json_table_on_empty
+    { $$ = &tree.JSONTableColumn{OnEmpty: $4, OnError: $1, ReversePolicies: $4 != nil} }
+
+json_table_on_empty:
+    { $$ = nil }
+|   json_table_response ON JSON_TABLE_EMPTY
+    { $$ = $1 }
+
+json_table_on_error:
+    { $$ = nil }
+|   json_table_response ON JSON_TABLE_ERROR
+    { $$ = $1 }
 
 aliased_table_name:
     table_name as_opt_id index_hint_list_opt
@@ -8685,7 +9098,7 @@ create_view_stmt:
         var Name = $5
         var ColNames = $6
         var AsSource = $8
-        var IfNotExists = $4
+        var IfNotExists = $4; var CheckOption = $9
         if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
             yylex.Error(intoErr)
             goto ret1
@@ -8695,7 +9108,7 @@ create_view_stmt:
             Name,
             ColNames,
             AsSource,
-            IfNotExists,
+            IfNotExists, CheckOption,
         )
     }
 |   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS ctas_select_stmt view_tail
@@ -8704,7 +9117,7 @@ create_view_stmt:
         var Name = $5
         var ColNames = $6
         var AsSource = $8
-        var IfNotExists = $4
+        var IfNotExists = $4; var CheckOption = $9
         if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
             yylex.Error(intoErr)
             goto ret1
@@ -8714,7 +9127,7 @@ create_view_stmt:
             Name,
             ColNames,
             AsSource,
-            IfNotExists,
+            IfNotExists, CheckOption,
         )
     }
 
@@ -8778,11 +9191,11 @@ view_opt:
 
 view_tail:
     {
-        $$ = ""
+        $$ = "NONE"
     }
 |   WITH check_type CHECK OPTION
     {
-        $$ = "WITH " + $2 + " CHECK OPTION"
+        $$ = $2; if $$ == "" { $$ = "CASCADED" }
     }
 
 algorithm_type_2:
@@ -9608,19 +10021,17 @@ index_prefix:
     }
 
 create_index_stmt:
-    CREATE index_prefix INDEX ident using_opt ON table_name '(' index_column_list ')' index_option_list
+    CREATE index_prefix INDEX ident using_opt ON table_name '(' index_column_list ')' create_index_option_list
     {
-        var io *tree.IndexOption = nil
-        if $11 == nil && $5 != tree.INDEX_TYPE_INVALID {
+        io := $11
+        if io == nil {
             io = tree.NewIndexOption()
+        }
+        // MySQL permits the index type before ON or after the key parts.
+        // When both forms are present, the trailing type takes precedence.
+        if io.IType == tree.INDEX_TYPE_INVALID {
             io.IType = $5
-        } else if $11 != nil{
-            io = $11
-            io.IType = $5
-        } else {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_INVALID
-	    }
+        }
         var Name = tree.Identifier($4.Origin())
         var Table = $7
         var ifNotExists = false
@@ -9645,88 +10056,41 @@ index_option_list:
     }
 |   index_option_list index_option
     {
-        // Merge the options
-        if $1 == nil {
-            $$ = $2
-        } else {
-            opt1 := $1
-            opt2 := $2
-            if len(opt2.Comment) > 0 {
-                opt1.Comment = opt2.Comment
-            } else if opt2.KeyBlockSize > 0 {
-                opt1.KeyBlockSize = opt2.KeyBlockSize
-            } else if len(opt2.ParserName) > 0 {
-                opt1.ParserName = opt2.ParserName
-            } else if opt2.Visible != tree.VISIBLE_TYPE_INVALID {
-                opt1.Visible = opt2.Visible
-            } else if opt2.AlgoParamList > 0 {
-	      opt1.AlgoParamList = opt2.AlgoParamList
-	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
-	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
-	    } else if opt2.AlgoParamM > 0 {
-	      opt1.AlgoParamM = opt2.AlgoParamM
-	    } else if opt2.HnswEfConstruction > 0 {
-	      opt1.HnswEfConstruction = opt2.HnswEfConstruction
-            } else if opt2.HnswEfSearch > 0 {
-	      opt1.HnswEfSearch = opt2.HnswEfSearch
-	    } else if opt2.Async {
-	      opt1.Async = opt2.Async
-	    } else if opt2.ForceSync {
-	      opt1.ForceSync = opt2.ForceSync
-	    } else if opt2.Merge {
-	      opt1.Merge = opt2.Merge
-	    } else if opt2.AutoUpdate {
-	      opt1.AutoUpdate = opt2.AutoUpdate
-	    } else if opt2.Day > 0 {
-	      opt1.Day = opt2.Day
-	    } else if opt2.Hour > 0 {
-	      opt1.Hour = opt2.Hour
-	    } else if opt2.Second > 0 {
-	      opt1.Second = opt2.Second
-	    } else if opt2.IntermediateGraphDegree > 0 {
-              opt1.IntermediateGraphDegree = opt2.IntermediateGraphDegree
-	    } else if opt2.GraphDegree > 0 {
-              opt1.GraphDegree = opt2.GraphDegree
-	    } else if opt2.BitsPerCode > 0 {
-              opt1.BitsPerCode = opt2.BitsPerCode
-            } else if len(opt2.Quantization) > 0 {
-              opt1.Quantization = opt2.Quantization
-            } else if len(opt2.DistributionMode) > 0 {
-              opt1.DistributionMode = opt2.DistributionMode
-            } else if opt2.BitsPerCode > 0 {
-              opt1.BitsPerCode = opt2.BitsPerCode
-            } else if opt2.ITopkSize > 0 {
-              opt1.ITopkSize = opt2.ITopkSize
-            } else if opt2.KmeansTrainPercent > 0 {
-              opt1.KmeansTrainPercent = opt2.KmeansTrainPercent
-            } else if opt2.KmeansMaxIteration > 0 {
-              opt1.KmeansMaxIteration = opt2.KmeansMaxIteration
-            } else if opt2.MaxIndexCapacity > 0 {
-              opt1.MaxIndexCapacity = opt2.MaxIndexCapacity
-            } else if opt2.MaxPostingsCapacity > 0 {
-              opt1.MaxPostingsCapacity = opt2.MaxPostingsCapacity
-            } else if opt2.QuantizerTrainLimit > 0 {
-              opt1.QuantizerTrainLimit = opt2.QuantizerTrainLimit
-            } else if opt2.PositionFreeSet {
-              opt1.PositionFree = opt2.PositionFree
-              opt1.PositionFreeSet = true
-            } else if len(opt2.IncludeColumns) > 0 {
-              opt1.IncludeColumns = opt2.IncludeColumns
-            }
-            $$ = opt1
-        }
+        $$ = mergeIndexOption($1, $2)
+    }
+
+create_index_option_list:
+    {
+        $$ = nil
+    }
+|   create_index_option_list create_index_option
+    {
+        $$ = mergeIndexOption($1, $2)
+    }
+
+create_index_option:
+    index_option
+    {
+        $$ = $1
+    }
+|   using_type
+    {
+        io := tree.NewIndexOption()
+        io.IType = $1
+        $$ = io
     }
 
 index_option:
     KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
         io := tree.NewIndexOption()
-        io.KeyBlockSize = uint64($3.(int64))
+        io.KeyBlockSize = integralToUint64($3)
         $$ = io
     }
 |   LISTS equal_opt INTEGRAL
     {
-    	val:= int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
     	if val <= 0 {
     		yylex.Error("LISTS should be greater than 0")
     		return 1
@@ -9768,7 +10132,8 @@ index_option:
     }
 |   M equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("M should be greater than 0")
 		return 1
@@ -9779,7 +10144,8 @@ index_option:
     }
 |   EF_CONSTRUCTION equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("EF_CONSTRUCTION should be greater than 0")
 		return 1
@@ -9790,7 +10156,8 @@ index_option:
      }
 |   EF_SEARCH equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("EF_SEARCH should be greater than 0")
 		return 1
@@ -9801,7 +10168,8 @@ index_option:
      }
 |   INTERMEDIATE_GRAPH_DEGREE equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("INTERMEDIATE_GRAPH_DEGREE should be greater than 0")
 		return 1
@@ -9812,7 +10180,8 @@ index_option:
      }
 |   GRAPH_DEGREE equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("GRAPH_DEGREE should be greater than 0")
 		return 1
@@ -9823,7 +10192,8 @@ index_option:
      }
 |   ITOPK_SIZE equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
         if val <= 0 {
                 yylex.Error("GRAPH_DEGREE should be greater than 0")
                 return 1
@@ -9852,7 +10222,8 @@ index_option:
     }
 |   BITS_PER_CODE equal_opt INTEGRAL
     {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("M should be greater than 0")
 		return 1
@@ -9863,7 +10234,8 @@ index_option:
     }
 |   KMEANS_TRAIN_PERCENT equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("KMEANS_TRAIN_PERCENT should be greater than 0")
 		return 1
@@ -9874,7 +10246,8 @@ index_option:
     }
 |   QUANTIZER_TRAIN_LIMIT equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("QUANTIZER_TRAIN_LIMIT should be greater than 0")
 		return 1
@@ -9885,7 +10258,8 @@ index_option:
     }
 |   KMEANS_MAX_ITERATION equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("KMEANS_MAX_ITERATION should be greater than 0")
 		return 1
@@ -9896,7 +10270,8 @@ index_option:
     }
 |   MAX_INDEX_CAPACITY equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("MAX_INDEX_CAPACITY should be greater than 0")
 		return 1
@@ -9905,9 +10280,23 @@ index_option:
 	io.MaxIndexCapacity = val
 	$$ = io
     }
+|   MAX_BAD_RECORDS equal_opt INTEGRAL
+    {
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
+	if val < 0 {
+		yylex.Error("MAX_BAD_RECORDS should not be negative")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxBadRecords = val
+	io.MaxBadRecordsSet = true
+	$$ = io
+    }
 |   MAX_POSTINGS_CAPACITY equal_opt INTEGRAL
     {
-	val := int64($3.(int64))
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
 	if val <= 0 {
 		yylex.Error("MAX_POSTINGS_CAPACITY should be greater than 0")
 		return 1
@@ -9928,6 +10317,19 @@ index_option:
 	io := tree.NewIndexOption()
 	io.PositionFree = false
 	io.PositionFreeSet = true
+	$$ = io
+    }
+|   TOKEN_FILTER equal_opt STRING
+    {
+	io := tree.NewIndexOption()
+	parts := strings.Split($3, ",")
+	names := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if n := strings.TrimSpace(p); n != "" {
+			names = append(names, n)
+		}
+	}
+	io.TokenFilters = names
 	$$ = io
     }
 |    ASYNC
@@ -9962,7 +10364,8 @@ index_option:
      }
 |    DAY equal_opt INTEGRAL
      {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val < 0 {
 		yylex.Error("DAY should be greater than or equal to 0")
 		return 1
@@ -9973,7 +10376,8 @@ index_option:
      }
 |    HOUR equal_opt INTEGRAL
      {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val < 0 || val > 23 {
 		yylex.Error("HOUR should be between 0 and 23")
 		return 1
@@ -9984,7 +10388,8 @@ index_option:
      }
 |    SECOND equal_opt INTEGRAL
      {
-        val := int64($3.(int64))
+        val, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
 	if val < 0 {
 		yylex.Error("SECOND should be greater than or equal to 0")
 		return 1
@@ -10038,7 +10443,13 @@ using_opt:
     {
         $$ = tree.INDEX_TYPE_INVALID
     }
-|   USING BTREE
+|   using_type
+    {
+        $$ = $1
+    }
+
+using_type:
+    USING BTREE
     {
         $$ = tree.INDEX_TYPE_BTREE
     }
@@ -10703,7 +11114,7 @@ load_param_opt:
         $$ = &tree.ExternParam{
             ExParamConst: tree.ExParamConst{
                 ScanType: tree.INLINE,
-                Format: $4,
+                Format: strings.ToLower($4),
                 Data: $8,
             },
             ExParam:tree.ExParam{
@@ -10789,26 +11200,97 @@ load_charset:
     }
 
 create_sequence_stmt:
-    CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
+    CREATE SEQUENCE not_exists_opt table_name as_datatype_opt sequence_option_list_opt
     {
-        var Name = $4
-        var Type = $5
-        var IfNotExists = $3
-        var IncrementBy = $6
-        var MinValue = $7
-        var MaxValue = $8
-        var StartWith = $9
-        var Cycle = $10
+        opts := $6
         $$ = tree.NewCreateSequence(
-            Name,
-            Type,
-            IfNotExists,
-            IncrementBy,
-            MinValue,
-            MaxValue,
-            StartWith,
-            Cycle,
+            $4,
+            $5,
+            $3,
+            opts.incrementBy,
+            opts.minValue,
+            opts.maxValue,
+            opts.startWith,
+            opts.cycle,
         )
+    }
+sequence_option_list_opt:
+    {
+        $$ = &sequenceOptions{}
+    }
+|   sequence_option_list
+    {
+        $$ = $1
+    }
+sequence_option_list:
+    sequence_option
+    {
+        $$ = $1
+    }
+|   sequence_option_list sequence_option
+    {
+        if name := $1.merge($2); name != "" {
+            yylex.Error("option '" + name + "' used twice in CREATE SEQUENCE")
+            goto ret1
+        }
+        $$ = $1
+    }
+sequence_option:
+    INCREMENT BY INTEGRAL
+    {
+        $$ = &sequenceOptions{incrementBy: &tree.IncrementByOption{Minus: false, Num: $3}}
+    }
+|   INCREMENT INTEGRAL
+    {
+        $$ = &sequenceOptions{incrementBy: &tree.IncrementByOption{Minus: false, Num: $2}}
+    }
+|   INCREMENT BY '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{incrementBy: &tree.IncrementByOption{Minus: true, Num: $4}}
+    }
+|   INCREMENT '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{incrementBy: &tree.IncrementByOption{Minus: true, Num: $3}}
+    }
+|   MINVALUE INTEGRAL
+    {
+        $$ = &sequenceOptions{minValue: &tree.MinValueOption{Minus: false, Num: $2}}
+    }
+|   MINVALUE '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{minValue: &tree.MinValueOption{Minus: true, Num: $3}}
+    }
+|   MAXVALUE INTEGRAL
+    {
+        $$ = &sequenceOptions{maxValue: &tree.MaxValueOption{Minus: false, Num: $2}}
+    }
+|   MAXVALUE '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{maxValue: &tree.MaxValueOption{Minus: true, Num: $3}}
+    }
+|   START WITH INTEGRAL
+    {
+        $$ = &sequenceOptions{startWith: &tree.StartWithOption{Minus: false, Num: $3}}
+    }
+|   START INTEGRAL
+    {
+        $$ = &sequenceOptions{startWith: &tree.StartWithOption{Minus: false, Num: $2}}
+    }
+|   START WITH '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{startWith: &tree.StartWithOption{Minus: true, Num: $4}}
+    }
+|   START '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{startWith: &tree.StartWithOption{Minus: true, Num: $3}}
+    }
+|   NO CYCLE
+    {
+        $$ = &sequenceOptions{cycle: false, cycleSet: true}
+    }
+|   CYCLE
+    {
+        $$ = &sequenceOptions{cycle: true, cycleSet: true}
     }
 as_datatype_opt:
     {
@@ -10869,18 +11351,6 @@ increment_by_opt:
             Minus: true,
             Num: $3,
         }
-    }
-cycle_opt:
-    {
-        $$ = false
-    }
-|   NO CYCLE
-    {
-        $$ = false
-    }
-|   CYCLE
-    {
-        $$ = true
     }
 min_value_opt:
     {
@@ -11179,7 +11649,8 @@ sub_partition_num_opt:
     }
 |   SUBPARTITIONS INTEGRAL
     {
-        res := $2.(int64)
+        res, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         if res == 0 {
             yylex.Error("partitions can not be 0")
             goto ret1
@@ -11193,7 +11664,8 @@ partition_num_opt:
     }
 |   PARTITIONS INTEGRAL
     {
-        res := $2.(int64)
+        res, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
         if res == 0 {
             yylex.Error("partitions can not be 0")
             goto ret1
@@ -11272,7 +11744,9 @@ algorithm_opt:
     }
 |   ALGORITHM '=' INTEGRAL
     {
-        $$ = $3.(int64)
+        value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 linear_opt:
@@ -11535,7 +12009,7 @@ table_option_list:
 table_option:
     AUTOEXTEND_SIZE equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionAUTOEXTEND_SIZE(uint64($3.(int64)))
+        $$ = tree.NewTableOptionAUTOEXTEND_SIZE(integralToUint64($3))
     }
 |   AUTO_INCREMENT equal_opt INTEGRAL
     {
@@ -11547,7 +12021,7 @@ table_option:
     }
 |   AVG_ROW_LENGTH equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionAvgRowLength(uint64($3.(int64)))
+        $$ = tree.NewTableOptionAvgRowLength(integralToUint64($3))
     }
 |   default_opt charset_keyword equal_opt charset_name
     {
@@ -11559,7 +12033,7 @@ table_option:
     }
 |   CHECKSUM equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionChecksum(uint64($3.(int64)))
+        $$ = tree.NewTableOptionChecksum(integralToUint64($3))
     }
 |   COMMENT_KEYWORD equal_opt STRING
     {
@@ -11584,7 +12058,7 @@ table_option:
     }
 |   DELAY_KEY_WRITE equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionDelayKeyWrite(uint64($3.(int64)))
+        $$ = tree.NewTableOptionDelayKeyWrite(integralToUint64($3))
     }
 |   ENCRYPTION equal_opt STRING
     {
@@ -11604,20 +12078,22 @@ table_option:
     }
 |   KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionKeyBlockSize(uint64($3.(int64)))
+        $$ = tree.NewTableOptionKeyBlockSize(integralToUint64($3))
     }
 |   MAX_ROWS equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionMaxRows(uint64($3.(int64)))
+        $$ = tree.NewTableOptionMaxRows(integralToUint64($3))
     }
 |   MIN_ROWS equal_opt INTEGRAL
     {
-        $$ = tree.NewTableOptionMinRows(uint64($3.(int64)))
+        $$ = tree.NewTableOptionMinRows(integralToUint64($3))
     }
 |   PACK_KEYS equal_opt INTEGRAL
     {
         t := tree.NewTableOptionPackKeys()
-        t.Value = $3.(int64)
+        value, ok := signedIntegral(yylex, $3)
+        if !ok { goto ret1 }
+        t.Value = value
         $$ = t
     }
 |   PACK_KEYS equal_opt DEFAULT
@@ -11645,7 +12121,7 @@ table_option:
 |   STATS_AUTO_RECALC equal_opt INTEGRAL
     {
         t := tree.NewTableOptionStatsAutoRecalc()
-        t.Value = uint64($3.(int64))
+        t.Value = integralToUint64($3)
         $$ = t
     }
 |   STATS_AUTO_RECALC equal_opt DEFAULT
@@ -11657,7 +12133,7 @@ table_option:
 |   STATS_PERSISTENT equal_opt INTEGRAL
     {
         t := tree.NewTableOptionStatsPersistent()
-        t.Value = uint64($3.(int64))
+        t.Value = integralToUint64($3)
         $$ = t
     }
 |   STATS_PERSISTENT equal_opt DEFAULT
@@ -11669,7 +12145,7 @@ table_option:
 |   STATS_SAMPLE_PAGES equal_opt INTEGRAL
     {
         t := tree.NewTableOptionStatsSamplePages()
-        t.Value = uint64($3.(int64))
+        t.Value = integralToUint64($3)
         $$ = t
     }
 |   STATS_SAMPLE_PAGES equal_opt DEFAULT
@@ -12406,7 +12882,11 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeVisable(false)
     }
-|   default_opt CHARACTER SET equal_opt charset_name
+|   charset_keyword equal_opt charset_name
+    {
+		$$ = tree.NewAttributeCharset($3)
+    }
+|   DEFAULT CHARACTER SET equal_opt charset_name
     {
 		$$ = tree.NewAttributeCharset($5)
     }
@@ -12613,7 +13093,9 @@ field_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
-        $$ = $2.(int64)
+        value, ok := signedIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 storage_media:
@@ -12760,6 +13242,55 @@ simple_expr:
     {
         $$ = tree.NewNotExpr($2)
     }
+|   BINARY simple_expr
+    {
+        name := tree.NewUnresolvedColName($1)
+        exprs := make([]tree.Expr, 1)
+        arg := $2
+        // `binary(<expr>)` is the functional notation of the same operator;
+        // unwrap one paren layer so the AST stays identical to the legacy
+        // `BINARY '(' expression_list ')'` form and the formatted output
+        // re-parses to itself.
+        if paren, ok := arg.(*tree.ParenExpr); ok {
+            arg = paren.Expr
+        }
+        if sub, ok := arg.(*tree.Subquery); ok {
+            // Flatten redundant nested-paren subqueries produced by
+            // `select_with_parens: '(' select_with_parens ')'`, keeping the
+            // canonical single-layer `Subquery{ParenSelect{...}}` shape so
+            // formatted output re-parses to itself. Only collapse an
+            // intermediate layer whose *tree.Select is a genuinely empty
+            // wrapper: select_no_parens attaches Limit, OrderBy, With and the
+            // other semantic clauses to that same Select shape, and dropping
+            // any of them would change the subquery's meaning (e.g. LIMIT 0
+            // pins a zero-row scalar result, and a CTE definition binds the
+            // body select). See PR review 5688289986.
+            for {
+                ps, ok1 := sub.Select.(*tree.ParenSelect)
+                if !ok1 {
+                    break
+                }
+                mid := ps.Select
+                if mid == nil || mid.IsPerform || mid.RewriteOption != nil ||
+                    mid.TimeWindow != nil || len(mid.OrderBy) > 0 || mid.Limit != nil ||
+                    mid.RankOption != nil || mid.With != nil || mid.Ep != nil ||
+                    len(mid.IntoVars) > 0 || mid.DeprecatedInto || mid.SelectLockInfo != nil {
+                    break
+                }
+                inner, ok2 := mid.Select.(*tree.ParenSelect)
+                if !ok2 || inner == ps {
+                    break
+                }
+                sub.Select = inner
+            }
+        }
+        exprs[0] = arg
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: exprs,
+        }
+    }
 |   '{'  ident expression '}'
     {   
         hint := strings.ToLower($2.Compare())
@@ -12768,10 +13299,10 @@ simple_expr:
             locale := ""
             t := &tree.T{
                 InternalType: tree.InternalType{
-                   Family: tree.TimestampFamily,
-                   FamilyString: "DATETIME",
+                   Family: tree.DateFamily,
+                   FamilyString: "DATE",
                    Locale: &locale,
-                   Oid: uint32(defines.MYSQL_TYPE_DATETIME),
+                   Oid: uint32(defines.MYSQL_TYPE_DATE),
                 },
             }
             $$ = tree.NewCastExpr($3, t)
@@ -12827,6 +13358,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   CAST '(' expression AS CHAR length_option_opt charset_keyword charset_name ')'
+    {
+        $$ = tree.NewCastExpr($3, makeCharsetCastCharType($6, $8))
+    }
 |   SERIAL_EXTRACT '(' expression ',' expression AS mo_cast_type ')'
     {
 	$$ = tree.NewSerialExtractExpr($3, $5, $7)
@@ -12879,7 +13414,7 @@ simple_expr:
     }
 |   simple_expr COLLATE collate_name
     {
-        $$ = $1
+        $$ = &tree.CollateExpr{Expr: $1, Collation: $3}
     }
 |   MATCH '(' index_column_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
     {
@@ -13050,11 +13585,154 @@ function_call_window:
             WindowSpec: $9,
         }
     }
+|	MRANK '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+|	CUMRANK '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	TMRANK '(' expression ',' interval_expr ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+
+|	SMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	WMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	TRIMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	EMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	WILDER '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	KAMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	DEMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	TEMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	T3 '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	MMAXDRAWDOWN '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	CUMPOSITIVESTREAK '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
 
 sample_function_expr:
     SAMPLE '(' '*' ',' INTEGRAL ROWS ')'
     {
-	v := int($5.(int64))
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	v := int(value)
 	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, "block")
 	if err != nil {
 	    yylex.Error(err.Error())
@@ -13064,7 +13742,9 @@ sample_function_expr:
     }
 |   SAMPLE '(' '*' ',' INTEGRAL ROWS ',' STRING ')'
         {
-    	v := int($5.(int64))
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	v := int(value)
     	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, $8)
     	if err != nil {
     	    yylex.Error(err.Error())
@@ -13074,7 +13754,9 @@ sample_function_expr:
         }
 |   SAMPLE '(' '*' ',' INTEGRAL PERCENT ')'
     {
-	val, err := tree.NewSamplePercentFuncExpression1($5.(int64), true, nil)
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	val, err := tree.NewSamplePercentFuncExpression1(value, true, nil)
 	if err != nil {
 	    yylex.Error(err.Error())
 	    goto ret1
@@ -13093,7 +13775,9 @@ sample_function_expr:
 |
     SAMPLE '(' expression_list ',' INTEGRAL ROWS ')'
     {
-    	v := int($5.(int64))
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	v := int(value)
     	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, "block")
     	if err != nil {
     	    yylex.Error(err.Error())
@@ -13103,7 +13787,9 @@ sample_function_expr:
     }
 |   SAMPLE '(' expression_list ',' INTEGRAL ROWS ',' STRING ')'
     {
-	v := int($5.(int64))
+	value, ok := signedIntegral(yylex, $5)
+	if !ok { goto ret1 }
+	v := int(value)
 	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, $8)
 	if err != nil {
 	    yylex.Error(err.Error())
@@ -13113,7 +13799,9 @@ sample_function_expr:
     }
 |   SAMPLE '(' expression_list ',' INTEGRAL PERCENT ')'
     {
-        val, err := tree.NewSamplePercentFuncExpression1($5.(int64), false, $3)
+        value, ok := signedIntegral(yylex, $5)
+        if !ok { goto ret1 }
+        val, err := tree.NewSamplePercentFuncExpression1(value, false, $3)
         if err != nil {
             yylex.Error(err.Error())
             goto ret1
@@ -13259,6 +13947,10 @@ mysql_cast_type:
                 DisplayWith: $2,
             },
         }
+    }
+|   CHAR length_option_opt charset_keyword charset_name
+    {
+        $$ = makeCharsetCastCharType($2, $4)
     }
 |   DATE
     {
@@ -13600,6 +14292,17 @@ function_call_aggregate:
             WithinGroup: $5 != nil,
         }
     }
+|   QUANTILE_EXACT_WEIGHTED '(' func_type_opt expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $4,
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
       {
   	    name := tree.NewUnresolvedColName($1)
@@ -13665,6 +14368,56 @@ function_call_aggregate:
             WindowSpec: $6,
             OrderBy: $5,
             WithinGroup: $5 != nil,
+        }
+    }
+|   EWM_MEAN '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_VAR '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_STD '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_COV '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|   EWM_CORR '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
         }
     }
 |   BIT_AND '(' func_type_opt expression ')' window_spec_opt
@@ -14222,37 +14975,6 @@ function_call_keyword:
             Exprs: es,
         }
     }
-|   BINARY '(' expression_list ')'
-    {
-        name := tree.NewUnresolvedColName($1)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: $3,
-        }
-    }
-|   BINARY literal
-    {
-        name := tree.NewUnresolvedColName($1)
-        exprs := make([]tree.Expr, 1)
-        exprs[0] = $2
-        $$ = &tree.FuncExpr{
-           Func: tree.FuncName2ResolvableFunctionReference(name),
-           FuncName: tree.NewCStr($1, 1),
-           Exprs: exprs,
-        }
-    }
-|   BINARY column_name
-    {
-        name := tree.NewUnresolvedColName($1)
-        exprs := make([]tree.Expr, 1)
-        exprs[0] = $2
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStr($1, 1),
-            Exprs: exprs,
-        }
-    }
 |   CHAR '(' expression_list ')'
     {
         name := tree.NewUnresolvedColName($1)
@@ -14421,11 +15143,13 @@ name_confict:
 |   HOUR
 |   IF
 |   FORMAT
+|   JSON_TABLE_EMPTY
 |   LEFT
 |   MICROSECOND
 |   MINUTE
 |   MONTH
 |   QUARTER
+|   POINT
 |   REPEAT
 |   REPLACE
 |   REVERSE
@@ -14611,6 +15335,20 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.MEMBER_OF, $1, $5)
     }
+|   bit_expr SOUNDS LIKE bit_expr %prec LIKE
+    {
+        left := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("soundex")),
+            FuncName: tree.NewCStr("soundex", 1),
+            Exprs: tree.Exprs{$1},
+        }
+        right := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("soundex")),
+            FuncName: tree.NewCStr("soundex", 1),
+            Exprs: tree.Exprs{$4},
+        }
+        $$ = tree.NewComparisonExpr(tree.EQUAL, left, right)
+    }
 |   bit_expr LIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.LIKE, $1, $3, $4)
@@ -14750,7 +15488,7 @@ keys:
 num_literal:
     INTEGRAL
     {
-        str := fmt.Sprintf("%v", $1)
+        str := $<str>1
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
@@ -14778,7 +15516,7 @@ literal:
     }
 |   INTEGRAL
     {
-        str := fmt.Sprintf("%v", $1)
+        str := $<str>1
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
@@ -15855,7 +16593,9 @@ timestamp_option_opt:
         }
 |    '(' INTEGRAL ')'
     {
-        $$ = int32($2.(int64))
+        value, ok := typeLengthIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 length_option_opt:
@@ -15864,13 +16604,17 @@ length_option_opt:
     }
 |    '(' INTEGRAL ')'
     {
-        $$ = int32($2.(int64))
+        value, ok := typeLengthIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = value
     }
 
 length:
    '(' INTEGRAL ')'
     {
-        $$ = tree.GetDisplayWith(int32($2.(int64)))
+        value, ok := typeLengthIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        $$ = tree.GetDisplayWith(value)
     }
 
 float_length_opt:
@@ -15883,16 +16627,22 @@ float_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
+        value, ok := typeLengthIntegral(yylex, $2)
+        if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
+            DisplayWith: tree.GetDisplayWith(value),
             Scale: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
+        width, ok := typeLengthIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        scale, ok := typeLengthIntegral(yylex, $4)
+        if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Scale: int32($4.(int64)),
+            DisplayWith: tree.GetDisplayWith(width),
+            Scale: scale,
         }
     }
 
@@ -15906,16 +16656,22 @@ decimal_length_opt:
     }
 |   '(' INTEGRAL ')'
     {
+        value, ok := typeLengthIntegral(yylex, $2)
+        if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
+            DisplayWith: tree.GetDisplayWith(value),
             Scale: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
     {
+        width, ok := typeLengthIntegral(yylex, $2)
+        if !ok { goto ret1 }
+        scale, ok := typeLengthIntegral(yylex, $4)
+        if !ok { goto ret1 }
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Scale: int32($4.(int64)),
+            DisplayWith: tree.GetDisplayWith(width),
+            Scale: scale,
         }
     }
 
@@ -16149,6 +16905,11 @@ equal_opt:
 
 non_reserved_keyword:
     ACCOUNT
+|   JSON_TABLE_PATH
+|   JSON_TABLE_NESTED
+|   JSON_TABLE_ORDINALITY
+|   JSON_TABLE_EMPTY
+|   JSON_TABLE_ERROR
 |   ACCOUNTS
 |   AGAINST
 |   ALWAYS
@@ -16249,6 +17010,7 @@ non_reserved_keyword:
 |   INT
 |   INTEGER
 |   INDEXES
+|   IGNORED
 |   ICEBERG
 |   MONGODB
 |   MONGODB_PATH
@@ -16279,9 +17041,11 @@ non_reserved_keyword:
 |   KMEANS_TRAIN_PERCENT
 |   KMEANS_MAX_ITERATION
 |   MAX_INDEX_CAPACITY
+|   MAX_BAD_RECORDS
 |   MAX_POSTINGS_CAPACITY
 |   QUANTIZER_TRAIN_LIMIT
 |   POSITION_FREE
+|   TOKEN_FILTER
 |   FULLSCAN
 |   KEYS
 |   LANGUAGE
@@ -16368,6 +17132,7 @@ non_reserved_keyword:
 |   SHARE
 |   SIGNED
 |   SMALLINT
+|   SOUNDS
 |   SNAPSHOT
 |   PITR
 |   RECOVERY_WINDOW
@@ -16441,6 +17206,7 @@ non_reserved_keyword:
 |   MINVALUE
 |	PROCESSLIST
 |   PUBLICATION
+|   SUBSCRIPTION
 |   SUBSCRIPTIONS
 |   PUBLICATIONS
 |   PROPERTIES
@@ -16600,6 +17366,20 @@ non_reserved_keyword:
 |   FIRST_VALUE
 |   LAST_VALUE
 |   NTH_VALUE
+|   MRANK
+|   CUMRANK
+|   TMRANK
+|   SMA
+|   WMA
+|   TRIMA
+|   EMA
+|   WILDER
+|   KAMA
+|   DEMA
+|   TEMA
+|   T3
+|   MMAXDRAWDOWN
+|   CUMPOSITIVESTREAK
 
 func_not_keyword:
     DATE_ADD
@@ -16622,6 +17402,7 @@ not_keyword:
 |   APPROX_COUNT
 |   APPROX_COUNT_DISTINCT
 |   APPROX_PERCENTILE
+|   QUANTILE_EXACT_WEIGHTED
 |   CURDATE
 |   CURTIME
 |   DATE_ADD
@@ -16668,6 +17449,11 @@ not_keyword:
 |   BITMAP_COUNT
 |   PERCENTILE_CONT
 |   PERCENTILE_DISC
+|   EWM_MEAN
+|   EWM_VAR
+|   EWM_STD
+|   EWM_COV
+|   EWM_CORR
 
 value_window_null_treatment_opt:
     {
@@ -16687,5 +17473,27 @@ nth_value_from_first_opt:
 //    PROPERTIES
 //  BSI
 //  ZONEMAP
+
+alter_option_list:
+    ADD column_keyword_opt '(' alter_add_column_list ')'
+    {
+        $$ = $4
+    }
+|   alter_option_list ',' ADD column_keyword_opt '(' alter_add_column_list ')'
+    {
+        $$ = append($1, $6...)
+    }
+
+alter_add_column_list:
+    column_def
+    {
+        position := tree.NewColumnPosition(tree.ColumnPositionNone, nil)
+        $$ = tree.AlterTableOptions{tree.NewAlterAddCol($1, position)}
+    }
+|   alter_add_column_list ',' column_def
+    {
+        position := tree.NewColumnPosition(tree.ColumnPositionNone, nil)
+        $$ = append($1, tree.NewAlterAddCol($3, position))
+    }
 
 %%

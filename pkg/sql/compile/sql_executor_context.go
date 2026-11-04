@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -612,11 +613,22 @@ func (c *compilerContext) resolveDelegate() plan.CompilerContext {
 }
 
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	return c.resolve(dbName, tableName, snapshot, true)
+}
+
+func (c *compilerContext) ResolveWithoutTemporaryAlias(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
+	return c.resolve(dbName, tableName, snapshot, false)
+}
+
+func (c *compilerContext) resolve(dbName string, tableName string, snapshot *plan.Snapshot, resolveTemporaryAlias bool) (*plan.ObjectRef, *plan.TableDef, error) {
 	// CTAS follow-up compilation carries the original frontend compiler
 	// context. Delegate relation resolution as one operation so subscription,
 	// snapshot, tenant, and physical-account mapping cannot diverge between
 	// GetSubscriptionMeta and the actual catalog lookup.
 	if delegate := c.resolveDelegate(); delegate != nil {
+		if !resolveTemporaryAlias {
+			return delegate.ResolveWithoutTemporaryAlias(dbName, tableName, snapshot)
+		}
 		return delegate.Resolve(dbName, tableName, snapshot)
 	}
 	// In order to be compatible with various GUI clients and BI tools, lower case db and table name if it's a mysql system table
@@ -636,7 +648,7 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	// Resolve temporary table alias in current session for internal SQL execution.
 	// This keeps CTAS follow-up INSERT in the same transaction workable for temp tables.
 	isTmpTable := false
-	if ses := c.proc.GetSession(); ses != nil {
+	if ses := c.proc.GetSession(); ses != nil && resolveTemporaryAlias {
 		if realName, ok := ses.GetTempTable(dbName, tableName); ok {
 			tableName = realName
 			isTmpTable = true
@@ -675,12 +687,22 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	}); err != nil {
 		return nil, nil, err
 	}
-	if err := plan.MigrateLegacyHexTableDef(c.proc, tableDef); err != nil {
+	if err := plan.MigrateLegacyFloatStringTableDef(c, tableDef); err != nil {
+		return nil, nil, err
+	}
+	if err := plan.MigrateLegacyCatalogTableDef(ctx, c.proc, tableDef); err != nil {
 		return nil, nil, err
 	}
 	ownedTemporary := false
 	if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
+	}
+	var extraInfo *api.SchemaExtra
+	if tableDef.TableType == catalog.SystemOrdinaryRel && defines.IsTempTableName(tableName) {
+		extraInfo = table.GetExtraInfo()
+	}
+	if !plan.TemporaryTableAccessAllowed(c.GetContext(), c.proc.GetSession(), dbName, tableName, tableDef, extraInfo, isTmpTable) {
+		return nil, nil, nil
 	}
 	if isTmpTable || ownedTemporary || tableDef.IsTemporary {
 		tableDef.IsTemporary = true
@@ -708,13 +730,17 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	//
 	// Replay may carry the original frontend context; other internal SQL can
 	// carry a partial session resolver on its process (e.g. ALTER TABLE).
-	// Prefer the former, then forward only explicit precision and DOP settings.
+	// Prefer the former, then forward explicit precision, DOP and FK-check settings.
+	// ALTER COPY population must inherit the outer statement's FK-check mode;
+	// defaulting it to nil silently re-enables checks during the internal INSERT.
 	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
 	}
 	if isSystemVar && !isGlobalVar && c.proc != nil &&
 		(strings.EqualFold(varName, "div_precision_increment") ||
-			strings.EqualFold(varName, "max_dop")) {
+			strings.EqualFold(varName, "max_dop") ||
+			strings.EqualFold(varName, "foreign_key_checks") ||
+			strings.EqualFold(varName, "mo_pk_check_by_cn")) {
 		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
 			return resolve(varName, isSystemVar, isGlobalVar)
 		}
@@ -729,6 +755,15 @@ func (c *compilerContext) ResolveVariableType(varName string, isSystemVar, isGlo
 		}
 	}
 	return plan.Type{}, nil
+}
+
+func (c *compilerContext) ResolveVariableRegexpStringResult(varName string) (bool, error) {
+	if delegate := getInternalExecutorCompilerContext(c.ctx); delegate != nil && delegate != c {
+		if resolver, ok := delegate.(plan.UserVariableRegexpCastResolver); ok {
+			return resolver.ResolveVariableRegexpStringResult(varName)
+		}
+	}
+	return false, nil
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {

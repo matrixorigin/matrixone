@@ -29,6 +29,7 @@ import (
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/icebergwrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
@@ -792,6 +793,19 @@ func TestExternalInsertStmtTime(t *testing.T) {
 	arg := op.(*insert.Insert)
 	defer arg.Release()
 	require.True(t, arg.InsertCtx.ExternalConfig.Stmt.Equal(want))
+
+	// A dependent SELECT source must retain external writer mode rather than
+	// attempting an ordinary engine-relation INSERT.
+	node.NodeType = plan.Node_INSERT
+	factory, _, err := (&Compile{proc: proc, startAt: startAt}).compileDependentKernel(node, []*plan.Node{{}})
+	require.NoError(t, err)
+	native, err := factory(proc, []*dependent.DemandInput{{}})
+	require.NoError(t, err)
+	nativeArg := native.(*insert.Insert)
+	defer nativeArg.Release()
+	require.NotNil(t, nativeArg.InsertCtx.ExternalConfig)
+	require.True(t, nativeArg.InsertCtx.ExternalConfig.Stmt.Equal(want))
+	require.Equal(t, arg.InsertCtx.ExternalConfig.Pattern, nativeArg.InsertCtx.ExternalConfig.Pattern)
 }
 
 func TestExternalInsertTargetIsLocalFile(t *testing.T) {
@@ -802,6 +816,7 @@ func TestExternalInsertTargetIsLocalFile(t *testing.T) {
 	require.NoError(t, err)
 	proc.GetStageCache().Set("local_stage", stage.StageDef{Name: "local_stage", Url: fileURL})
 	proc.GetStageCache().Set("s3_stage", stage.StageDef{Name: "s3_stage", Url: s3URL})
+	proc.GetStageCache().Set("disabled_stage", stage.StageDef{Name: "disabled_stage", Url: fileURL, Status: "disabled"})
 
 	node := &plan.Node{InsertCtx: &plan.InsertCtx{TableDef: &plan.TableDef{
 		TableType: catalog.SystemExternalRel,
@@ -814,6 +829,11 @@ func TestExternalInsertTargetIsLocalFile(t *testing.T) {
 	node.InsertCtx.TableDef.Createsql = extWriteCreatesql(t, "stage://s3_stage/p-%U.csv")
 	isLocal, err = externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
 	require.NoError(t, err)
+	require.False(t, isLocal)
+
+	node.InsertCtx.TableDef.Createsql = extWriteCreatesql(t, "stage://disabled_stage/p-%U.csv")
+	isLocal, err = externalInsertTargetIsLocalFile(proc, node, time.Unix(1, 0).UTC())
+	require.ErrorContains(t, err, "stage disabled_stage is disabled")
 	require.False(t, isLocal)
 
 	isLocal, err = externalInsertTargetIsLocalFile(proc, nil, time.Unix(1, 0).UTC())

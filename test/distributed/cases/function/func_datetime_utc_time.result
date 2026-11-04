@@ -34,9 +34,11 @@ SELECT UTC_TIME() IS NOT NULL AS not_null_check;
 ➤ not_null_check[-7,1,0]  𝄀
 1
 SELECT UTC_TIME() + INTERVAL 1 HOUR AS one_hour_later;
-invalid argument operator +, bad value [TIME INTERVAL]
+➤ one_hour_later[92,10,0]  𝄀
+04:34:34
 SELECT UTC_TIME() - INTERVAL 30 MINUTE AS thirty_minutes_ago;
-invalid argument operator -, bad value [TIME INTERVAL]
+➤ thirty_minutes_ago[92,10,0]  𝄀
+03:04:34
 SELECT UTC_TIME() AS time_format;
 ➤ time_format[92,64,0]  𝄀
 10:08:23
@@ -72,9 +74,9 @@ CREATE VIEW v_utc_time_fsp AS
 SELECT UTC_TIME(0) AS value0, UTC_TIME(3) AS value3, UTC_TIME(6) AS value6;
 DESC v_utc_time_fsp;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-value0  ¦  TIME(0)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value3  ¦  TIME(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-value6  ¦  TIME(6)  ¦  NO  ¦    ¦  null  ¦    ¦  
+value0  ¦  time  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value3  ¦  time(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+value6  ¦  time(6)  ¦  NO  ¦    ¦  null  ¦    ¦  
 DROP VIEW v_utc_time_fsp;
 DROP TABLE IF EXISTS utc_time_fsp_arg;
 CREATE TABLE utc_time_fsp_arg(fsp BIGINT);

@@ -599,22 +599,22 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 		context.Background(), context.DeadlineExceeded),
 		"internal traffic must not extend the user-request read window")
 	oneWay := &Future{oneWay: true}
-	oneWay.send.createAt = time.Now()
+	oneWay.createAt = time.Now()
 	rb.mu.futures = map[uint64]*Future{1: oneWay}
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"one-way traffic must not create a response read window")
 	inFlight := &Future{}
-	inFlight.send.createAt = time.Now()
+	inFlight.createAt = time.Now()
 	rb.mu.futures = map[uint64]*Future{1: inFlight}
 	require.True(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"an admitted request must not inherit the remainder of an idle read window")
-	inFlight.send.createAt = time.Now().Add(-rb.options.readTimeout)
+	inFlight.createAt = time.Now().Add(-rb.options.readTimeout)
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
 		"a request stuck before flush must not renew the connection beyond one admission window")
-	inFlight.send.createAt = time.Now()
+	inFlight.createAt = time.Now()
 	inFlight.waiting.Store(true)
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
@@ -644,7 +644,7 @@ func TestReadTimeoutDoesNotChargeIdleTimeToNewRequest(t *testing.T) {
 		context.Background(), context.DeadlineExceeded),
 		"fresh stream traffic must not rescue a generation with an expired unary request")
 	fresh := &Future{}
-	fresh.send.createAt = time.Now()
+	fresh.createAt = time.Now()
 	rb.mu.futures[2] = fresh
 	require.False(t, rb.keepDataConnectionAfterReadTimeout(
 		context.Background(), context.DeadlineExceeded),
@@ -1716,7 +1716,7 @@ func TestSendWithCannotConnect(t *testing.T) {
 			defer cancel()
 			req := &testMessage{id: 1}
 			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer f.Close()
 
 			resp, err := f.Get()
@@ -1724,11 +1724,13 @@ func TestSendWithCannotConnect(t *testing.T) {
 			assert.Nil(t, resp)
 		},
 		WithBackendFilter(func(Message, string) bool {
+			// Keep the short reconnect budget out of healthy fixture setup.
+			// The filter and subsequent reconnects share the write-loop owner.
+			rb.options.connectTimeout = time.Millisecond * 200
 			assert.NoError(t, rb.conn.Disconnect())
 			rb.remote = ""
 			return true
 		}),
-		WithBackendConnectTimeout(time.Millisecond*200),
 	)
 }
 
@@ -2747,7 +2749,8 @@ func TestInactiveAfterCannotConnect(t *testing.T) {
 	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
 		return conn.Write(msg, goetty.WriteOptions{Flush: true})
 	})
-	assert.NoError(t, app.Start())
+	require.NoError(t, app.Start())
+	t.Cleanup(func() { require.NoError(t, app.Stop()) })
 
 	testBackendSendWithoutServer(t,
 		testAddr,
@@ -2756,23 +2759,23 @@ func TestInactiveAfterCannotConnect(t *testing.T) {
 			defer cancel()
 			req := newTestMessage(1)
 			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer f.Close()
 
 			resp, err := f.Get()
-			assert.NoError(t, err)
-			assert.Equal(t, req, resp)
+			require.NoError(t, err)
+			require.Equal(t, req, resp)
+			require.False(t, b.LastActiveTime().IsZero())
 
-			assert.NoError(t, app.Stop())
-			var v time.Time
-			for {
-				if b.LastActiveTime() == v {
-					break
-				}
-				time.Sleep(time.Millisecond * 100)
-			}
+			require.NoError(t, app.Stop())
+			require.Eventually(t, func() bool {
+				return b.LastActiveTime().IsZero()
+			}, 20*time.Second, 10*time.Millisecond,
+				"a failed reconnect must clear the backend's activity")
 		},
-		WithBackendConnectTimeout(time.Millisecond*100))
+		// The failure under test is reconnecting after the listener stops, not
+		// timing out the initial successful connection on a busy CI runner.
+		WithBackendConnectTimeout(10*time.Second))
 }
 
 func TestTCPProxyExample(t *testing.T) {
@@ -3269,6 +3272,7 @@ func testBackendSendWithAddr(t *testing.T, addr string,
 func testBackendSendWithoutServer(t *testing.T, addr string,
 	testFunc func(b *remoteBackend),
 	options ...BackendOption) {
+	t.Helper()
 
 	options = append(
 		options,
@@ -3276,7 +3280,7 @@ func testBackendSendWithoutServer(t *testing.T, addr string,
 		WithBackendBufferSize(1),
 		WithBackendLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel).With(zap.String("testcase", t.Name()))))
 	rb, err := NewRemoteBackend(addr, newTestCodec(), options...)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	b := rb.(*remoteBackend)
 	defer func() {

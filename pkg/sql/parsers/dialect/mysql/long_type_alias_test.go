@@ -71,6 +71,7 @@ func TestTextAndBlobDisplayLength(t *testing.T) {
 		oid     defines.MysqlType
 	}{
 		{typeSQL: "text(4000)", width: 4000, oid: defines.MYSQL_TYPE_TEXT},
+		{typeSQL: "text(2147483647)", width: 2147483647, oid: defines.MYSQL_TYPE_TEXT},
 		{typeSQL: "blob(4000)", width: 4000, oid: defines.MYSQL_TYPE_BLOB},
 		{typeSQL: "text", width: 0, oid: defines.MYSQL_TYPE_TEXT},
 		{typeSQL: "blob", width: 0, oid: defines.MYSQL_TYPE_BLOB},

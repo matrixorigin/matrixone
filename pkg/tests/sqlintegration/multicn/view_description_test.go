@@ -105,7 +105,7 @@ func TestViewDescriptionTwoCN(t *testing.T) {
 				require.Equal(t, width, gotWidth)
 				checkShow(func() (*sql.Rows, error) {
 					return db.QueryContext(ctx, "desc view_description_two_cn."+name)
-				}, fmt.Sprintf("VARCHAR(%d)", width))
+				}, fmt.Sprintf("varchar(%d)", width))
 				var gotValue string
 				require.NoError(t, db.QueryRowContext(ctx, "select x from view_description_two_cn."+name).Scan(&gotValue))
 				require.Equal(t, value, gotValue)
@@ -117,7 +117,7 @@ func TestViewDescriptionTwoCN(t *testing.T) {
 			defer exec(second, "drop table view_description_two_cn.copied")
 			checkShow(func() (*sql.Rows, error) {
 				return second.QueryContext(ctx, "desc view_description_two_cn.copied")
-			}, fmt.Sprintf("VARCHAR(%d)", width))
+			}, fmt.Sprintf("varchar(%d)", width))
 		}()
 	}
 	check(60, "saved")
@@ -142,16 +142,16 @@ func TestViewDescriptionTwoCN(t *testing.T) {
 			t.Helper()
 			checkShow(func() (*sql.Rows, error) { return prepared.QueryContext(ctx) }, want)
 		}
-		checkPrepared("VARCHAR(60)")
+		checkPrepared("varchar(60)")
 		exec(first, "alter table view_description_two_cn.src modify column x varchar(90)")
 		exec(first, "update view_description_two_cn.src set x='changed'")
 		check(90, "changed")
-		checkPrepared("VARCHAR(90)")
+		checkPrepared("varchar(90)")
 		sourceID = identity("src")
 		exec(first, "restore table view_description_two_cn.src {snapshot='view_description_restore'}")
 		require.NotEqual(t, sourceID, identity("src"), "restore must exercise physical replacement")
 		require.Equal(t, viewID, identity("v"), "source restore must not recreate the dependent View")
-		checkPrepared("VARCHAR(60)")
+		checkPrepared("varchar(60)")
 		check(60, "saved")
 	}()
 
@@ -163,8 +163,12 @@ func TestViewDescriptionTwoCN(t *testing.T) {
 	first = nil
 	require.NoError(t, second.Close())
 	second = nil
-	require.NoError(t, cluster.Close())
+	require.NoError(t, cluster.Stop())
+	cancel()
 	require.NoError(t, cluster.Start())
+	// Lifecycle admission must not consume the restarted generation's query budget.
+	ctx, restartCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer restartCancel()
 	require.Equal(t, firstID, cn0.ServiceID())
 	require.Equal(t, secondID, cn1.ServiceID())
 	require.NotSame(t, oldFirst, cn0.RawService())

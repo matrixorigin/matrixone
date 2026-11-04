@@ -57,7 +57,7 @@ func TestBruteForceExcludesOverflowCandidate29496(t *testing.T) {
 	cand1[0] = 1
 	cand2[0], cand2[1] = 1, 1
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	idx := &GoBruteForceIndex[float32, float32]{
 		Dataset:   [][]float32{cand0, cand1, cand2},
@@ -103,7 +103,7 @@ func TestBruteForceRecoversLostWinner29496(t *testing.T) {
 	}
 	cand1[0] = -1
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	idx := &GoBruteForceIndex[float32, float32]{
 		Dataset:   [][]float32{cand0, cand1},
@@ -146,7 +146,7 @@ func TestBruteForceRecoversNarrowCosineWinner29496(t *testing.T) {
 		cand1[i] = negOne
 	}
 
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 	idx := &GoBruteForceIndex[types.BF16, float64]{
 		Dataset:   [][]types.BF16{cand0, cand1},

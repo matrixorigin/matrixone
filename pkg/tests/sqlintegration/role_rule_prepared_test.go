@@ -21,10 +21,150 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
+
+// Issue #30347: account-local role DDL must not break another account's
+// existing SQL or binary prepared handles on the same CN. Keep the inverse
+// security control here: real rule changes must still reject stale handles.
+func TestPreparedRoleInvalidationAccountIsolation(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		connect := func(user, password string) *sql.Conn {
+			t.Helper()
+			db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(127.0.0.1:%d)/?interpolateParams=false", user, password, port))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+			conn, err := db.Conn(ctx)
+			require.NoError(t, err)
+			return conn
+		}
+		admin := connect("dump", "111")
+		defer admin.Close()
+		exec := func(conn *sql.Conn, statement string) {
+			t.Helper()
+			_, err := conn.ExecContext(ctx, statement)
+			require.NoError(t, err, statement)
+		}
+		const (
+			account = "issue30347_account"
+			dbName  = "issue30347_db"
+			role    = "issue30347_role"
+			user    = "issue30347_user"
+		)
+		defer cleanupSQLIntegration(t, cn,
+			"drop account if exists "+account,
+			"drop user if exists "+user,
+			"drop role if exists "+role,
+			"drop database if exists "+dbName,
+		)
+		exec(admin, "set role moadmin")
+		exec(admin, "create account "+account+" admin_name = 'admin' identified by 'Test30347Pass'")
+		exec(admin, "create database "+dbName)
+		exec(admin, "create table "+dbName+".t (id int primary key)")
+		exec(admin, "insert into "+dbName+".t values (1),(2)")
+		exec(admin, "create role "+role)
+		exec(admin, "create user "+user+" identified by 'Test30347Pass' default role "+role)
+		exec(admin, "grant connect on account * to "+role)
+		exec(admin, "grant select on table "+dbName+".t to "+role)
+
+		other := connect(account+"#admin#accountadmin", "Test30347Pass")
+		defer other.Close()
+		exec(other, "create database "+dbName)
+		exec(other, "create table "+dbName+".t (id int primary key)")
+		exec(other, "insert into "+dbName+".t values (7)")
+		query := "select id from " + dbName + ".t where id >= ? order by id"
+		otherBinary, err := other.PrepareContext(ctx, query)
+		require.NoError(t, err)
+		defer otherBinary.Close()
+		exec(other, "prepare other_sql from 'select id from "+dbName+".t order by id'")
+		defer exec(other, "deallocate prepare other_sql")
+		checkOther := func() {
+			t.Helper()
+			for range 2 {
+				var id int
+				require.NoError(t, otherBinary.QueryRowContext(ctx, 0).Scan(&id), "binary handle in another tenant")
+				require.Equal(t, 7, id)
+				require.NoError(t, other.QueryRowContext(ctx, "execute other_sql").Scan(&id), "SQL handle in another tenant")
+				require.Equal(t, 7, id)
+			}
+		}
+		checkOther()
+
+		reader := connect("sys#"+user+"#"+role, "Test30347Pass")
+		defer reader.Close()
+		prepareReader := func() *sql.Stmt {
+			t.Helper()
+			stmt, err := reader.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			return stmt
+		}
+		readIDs := func(stmt *sql.Stmt) []int {
+			t.Helper()
+			rows, err := stmt.QueryContext(ctx, 0)
+			require.NoError(t, err)
+			defer rows.Close()
+			var ids []int
+			for rows.Next() {
+				var id int
+				require.NoError(t, rows.Scan(&id))
+				ids = append(ids, id)
+			}
+			require.NoError(t, rows.Err())
+			return ids
+		}
+		assertReprepare := func(stmt *sql.Stmt) {
+			t.Helper()
+			var id int
+			err := stmt.QueryRowContext(ctx, 0).Scan(&id)
+			var mysqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &mysqlErr)
+			require.EqualValues(t, 1615, mysqlErr.Number)
+		}
+		// A no-op must preserve handles even in the DDL's own account.
+		func() {
+			stmt := prepareReader()
+			defer stmt.Close()
+			exec(admin, "drop role if exists issue30347_absent")
+			checkOther()
+			require.Equal(t, []int{1, 2}, readIDs(stmt))
+		}()
+		// A previously empty policy must also be invalidated when a rule is
+		// installed. Removing a rule must not leave the old filter cached.
+		for _, change := range []struct {
+			name, ddl string
+			want      []int
+		}{
+			{"add", "alter role " + role + " add rule 'select * from " + dbName + ".t where id = 2' on table " + dbName + ".t", []int{2}},
+			{"drop", "alter role " + role + " drop rule on table " + dbName + ".t", []int{1, 2}},
+		} {
+			t.Logf("verify %s rule isolation and stale-policy rejection", change.name)
+			func() {
+				stale := prepareReader()
+				defer stale.Close()
+				exec(admin, change.ddl)
+				checkOther()
+				assertReprepare(stale)
+				fresh := prepareReader()
+				defer fresh.Close()
+				require.Equal(t, change.want, readIDs(fresh))
+			}()
+		}
+		func() {
+			stale := prepareReader()
+			defer stale.Close()
+			exec(admin, "drop role "+role)
+			checkOther()
+			assertReprepare(stale)
+		}()
+	})
+}
 
 func TestNativePreparedRoleRuleSurvivesDisabledRemapHint(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {

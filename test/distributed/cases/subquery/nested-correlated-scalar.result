@@ -1,3 +1,5 @@
+drop user if exists nested_correlation_reader_user;
+drop role if exists nested_correlation_reader_role;
 drop database if exists test_nested_correlated_scalar;
 create database test_nested_correlated_scalar;
 use test_nested_correlated_scalar;
@@ -19,10 +21,10 @@ WHERE y.dim_id = a.id)
 ) AS latest
 FROM j_dim a
 ORDER BY a.id;
-id	latest
-1	220
-2	300
-3	null
+➤ id[4,32,0]  ¦  latest[8,53,31]  𝄀
+1  ¦  220.0  𝄀
+2  ¦  300.0  𝄀
+3  ¦  null
 SELECT a.id,
 (SELECT MAX(x.val)
 FROM j_fact x
@@ -32,7 +34,8 @@ WHERE y.dim_id = a.id)
 ) AS latest
 FROM j_dim a
 WHERE a.id = 3;
-(correlated columns in SCALAR subquery deeper than 1 level.*)
+➤ id[4,32,0]  ¦  latest[8,53,31]  𝄀
+3  ¦  900.0
 SELECT a.id,
 (SELECT COUNT(COALESCE(
 (SELECT MAX(y.ts)
@@ -42,7 +45,8 @@ WHERE y.dim_id = a.id),
 FROM j_fact x) AS actual
 FROM j_dim a
 WHERE a.id = 3;
-(correlated columns in SCALAR subquery deeper than 1 level.*)
+➤ id[4,32,0]  ¦  actual[-5,64,0]  𝄀
+3  ¦  5
 SELECT a.id,
 (SELECT MAX(x.val)
 FROM j_fact x
@@ -53,7 +57,8 @@ WHERE y.dim_id = a.id),
 0)) AS latest
 FROM j_dim a
 WHERE a.id = 3;
-(correlated columns in SCALAR subquery deeper than 1 level.*)
+➤ id[4,32,0]  ¦  latest[8,53,31]  𝄀
+3  ¦  900.0
 SELECT a.id,
 (SELECT MAX(x.val)
 FROM j_fact x
@@ -63,7 +68,8 @@ FROM j_fact y
 WHERE y.dim_id = a.id)) AS latest
 FROM j_dim a
 WHERE a.id = 3;
-(correlated columns in SCALAR subquery deeper than 1 level.*)
+➤ id[4,32,0]  ¦  latest[8,53,31]  𝄀
+3  ¦  900.0
 SELECT a.id,
 (SELECT MAX(x.val)
 FROM j_fact x
@@ -74,7 +80,10 @@ WHERE y.dim_id = a.id
 LIMIT 1)) AS latest
 FROM j_dim a
 ORDER BY a.id;
-(correlated columns in SCALAR subquery deeper than 1 level.*)
+➤ id[4,32,0]  ¦  latest[8,53,31]  𝄀
+1  ¦  220.0  𝄀
+2  ¦  300.0  𝄀
+3  ¦  null
 SELECT a.id,
 (SELECT MAX(x.val)
 FROM j_fact x
@@ -85,5 +94,292 @@ WHERE y.dim_id = a.id
 LIMIT 1 OFFSET 1)) AS latest
 FROM j_dim a
 ORDER BY a.id;
-(correlated columns in SCALAR subquery deeper than 1 level.*)
+➤ id[4,32,0]  ¦  latest[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+select d.id,(select (select y.val from j_fact y where y.id=d.id)) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[8,53,31]  𝄀
+1  ¦  100.0  𝄀
+2  ¦  200.0  𝄀
+3  ¦  220.0
+select d.id,(select (select (select d.id))) as v from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3
+select d.id,(select (select d.id+x.ts) from j_fact x where x.id=d.id) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  22  𝄀
+3  ¦  23
+select d.id,(select case when d.id>0 then 7 else
+(select d.id+y.id from j_fact y) end) as v from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  7  𝄀
+3  ¦  7
+select (select y.val from j_fact y where y.dim_id=d.id)
+from j_dim d where d.id=1;
+Subquery returns more than 1 row
+select 7 as after_error;
+➤ after_error[-5,64,0]  𝄀
+7
+select d.id,(select (select d.id from j_fact y where y.id<=d.id)) as v
+from j_dim d order by d.id limit 1;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1
+select d.id,case when d.id=2 then 7 else
+(select (select d.id from j_fact y)) end as v
+from j_dim d order by d.id limit 1 offset 1;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+2  ¦  7
+select (select (select d.id from j_fact y where y.id<=d.id)) as v
+from j_dim d order by v limit 1;
+Subquery returns more than 1 row
+select sql_calc_found_rows d.id,(select (select d.id from j_fact y where y.id<=d.id)) as v
+from j_dim d order by d.id limit 1;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  1
+select found_rows() as n;
+➤ n[-5,64,0]  𝄀
+3
+select sql_calc_found_rows d.id,case when d.id=2 then (select (select d.id)) else
+(select (select d.id from j_fact y)) end as v
+from j_dim d order by d.id limit 1 offset 1;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  2
+select found_rows() as n;
+➤ n[-5,64,0]  𝄀
+3
+select sql_calc_found_rows (select (select d.id from j_fact y)) as v
+from j_dim d limit 0;
+➤ v[4,32,0]
+select found_rows() as n;
+➤ n[-5,64,0]  𝄀
+3
+select sql_calc_found_rows distinct (select (select d.id%2)) as v
+from j_dim d order by v limit 1;
+➤ v[-5,64,0]  𝄀
+0
+select found_rows() as n;
+➤ n[-5,64,0]  𝄀
+2
+select sql_calc_found_rows count(*) as n,(select (select y.dim_id)) as k
+from j_fact y group by y.dim_id order by k limit 1;
+➤ n[-5,64,0]  ¦  k[4,32,0]  𝄀
+2  ¦  1
+select found_rows() as n;
+➤ n[-5,64,0]  𝄀
+3
+select count(*) as n from j_dim d full join j_fact y
+on (d.id,(select (select y.id)))=(select d.id,y.id);
+➤ n[-5,64,0]  𝄀
+15
+select count(*) as n from j_dim d left join j_fact y
+on (d.id,(select (select y.id)))=(select d.id,y.id);
+➤ n[-5,64,0]  𝄀
+15
+select d.id,(d.id,0) not in (select (select d.id+1),NULL) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+select d.id,(d.id,NULL)=(select (select d.id),NULL) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[-7,1,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+select d.id,(with x as (select y.id+d.id k from j_fact y where y.id<=2)
+select (select min(k) from x,j_dim d where d.id=3)+(select max(k) from x)) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  7  𝄀
+3  ¦  9
+select d.id,(with recursive x(k) as (select (select d.id)
+union all select k+1 from x where k<3)
+select (select min(k) from x)+(select max(k) from x)) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  5  𝄀
+3  ¦  6
+select d.id,(select (select count(*) from generate_series(d.id,3) g)) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  2  𝄀
+3  ¦  1
+select d.id,(select 10*count(*)+count(g.result) from j_fact y
+outer apply generate_series(y.id,0,1) g where y.id=(select d.id)) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  10  𝄀
+3  ¦  10
+select d.id,(select sum(x.k) from
+(select sample((select d.id),100 percent) k from j_fact y) x) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  10  𝄀
+3  ¦  15
+select d.id,exists(select (select d.id from j_fact y) from j_fact x order by x.id) as e
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  e[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+select d.id,exists(select (select d.id from j_fact y) from j_fact x order by x.id limit 1 offset 5) as e
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  e[-7,1,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+select d.id,(with q(n) as (select d.id)
+select row_number() over(order by count(*)) from q group by n) as rn
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+select d.id,(select sum(s) from (select sum((select d.id)) s
+from (select cast('2026-01-01' as datetime) ts from j_fact y) x
+interval(ts,10,minute)) w) as v from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[3,38,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  10  𝄀
+3  ¦  15
+select d.id,(select sum(s) from (select sum((select d.id)) s
+from (select case when y.id=1 then cast('2026-01-01 00:00:00' as datetime)
+else cast('2026-01-01 00:20:00' as datetime) end ts from j_fact y where y.id in (1,3)) x
+interval(ts,10,minute) gapfill(partition) fill(next)) w) as v from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[3,60,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  6  𝄀
+3  ¦  9
+select d.id,exists(select sum((select d.id from j_fact y))
+from j_fact x group by x.dim_id) as e from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  e[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+select d.id,exists(select sum((select d.id from j_fact y)) over ()
+from j_fact x) as e from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  e[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+select d.id,exists(select (select d.id from j_fact y) from j_fact x where x.id<0
+union all select (select d.id from j_fact y) from j_fact x) as e
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  e[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+select exists(select 1 from j_fact x group by (select d.id from j_fact y))
+from j_dim d;
+Subquery returns more than 1 row
+select d.id,(select count(*) from j_fact x group by d.id) as n
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  5  𝄀
+3  ¦  5
+select d.id,(select count(*) from j_fact x group by (select d.id)) as n
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  5  𝄀
+2  ¦  5  𝄀
+3  ¦  5
+select d.id,(select sum(s) from (select sum((select d.id)) s
+from (select case when y.id=1 then cast('2026-01-01 00:00:00' as datetime)
+else cast('2026-01-01 00:20:00' as datetime) end ts from j_fact y where y.id in (1,3)) x
+interval(ts,10,minute) gapfill(partition) fill(value,(select (select d.id+10)))) w) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[3,60,0]  𝄀
+1  ¦  13  𝄀
+2  ¦  16  𝄀
+3  ¦  19
+create external table nested_external(id int,label varchar(20),v int)
+infile{'filepath'='$resources/load_data/glob/part_0.csv'}
+fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select d.id,(select (select sum(e.v) from nested_external e where e.id<=d.id)) as v
+from j_dim d order by d.id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  3  𝄀
+3  ¦  3
+prepare nested_external_query from 'select d.id,(select (select sum(e.v) from nested_external e where e.id<=d.id and e.id<=?)) as v from j_dim d order by d.id';
+set @external_limit=1;
+execute nested_external_query using @external_limit;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+set @external_limit=2;
+execute nested_external_query using @external_limit;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  3  𝄀
+3  ¦  3
+deallocate prepare nested_external_query;
+drop table nested_external;
+create view nested_view as select d.id,(select (select cast(d.id as decimal(12,2)))) as v from j_dim d;
+select * from nested_view order by id;
+➤ id[4,32,0]  ¦  v[3,12,2]  𝄀
+1  ¦  1.00  𝄀
+2  ¦  2.00  𝄀
+3  ¦  3.00
+create table nested_ctas as select * from nested_view;
+select * from nested_ctas order by id;
+➤ id[4,32,0]  ¦  v[3,12,2]  𝄀
+1  ¦  1.00  𝄀
+2  ¦  2.00  𝄀
+3  ¦  3.00
+select column_name,data_type,numeric_precision,numeric_scale
+from information_schema.columns where table_schema='test_nested_correlated_scalar'
+and table_name='nested_ctas' and column_name in ('id','v') order by ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  numeric_precision[-5,64,0]  ¦  numeric_scale[-5,64,0]  𝄀
+id  ¦  int  ¦  10  ¦  0  𝄀
+v  ¦  decimal  ¦  12  ¦  2
+drop table nested_ctas;
+drop view nested_view;
+create role nested_correlation_reader_role;
+create user nested_correlation_reader_user identified by '111' default role nested_correlation_reader_role;
+grant connect on account * to nested_correlation_reader_role;
+grant select on table test_nested_correlated_scalar.j_dim to nested_correlation_reader_role;
+use test_nested_correlated_scalar;
+select count(*) as n from j_dim;
+➤ n[-5,64,0]  𝄀
+3
+select d.id,(select case when d.id>0 then 7 else
+(select max(y.val) from j_fact y where y.dim_id=d.id) end) as v
+from j_dim d order by d.id;
+internal error: do not have privilege to execute the statement
+grant select on table test_nested_correlated_scalar.j_fact to nested_correlation_reader_role;
+prepare nested_authorized from 'select d.id,(select (select max(y.val) from j_fact y where y.dim_id=d.id and y.id<=?)) as v from j_dim d order by d.id';
+set @authorized_limit=2;
+execute nested_authorized using @authorized_limit;
+➤ id[4,32,0]  ¦  v[8,53,31]  𝄀
+1  ¦  200.0  𝄀
+2  ¦  null  𝄀
+3  ¦  null
+set @authorized_limit=4;
+execute nested_authorized using @authorized_limit;
+➤ id[4,32,0]  ¦  v[8,53,31]  𝄀
+1  ¦  200.0  𝄀
+2  ¦  300.0  𝄀
+3  ¦  null
+revoke select on table test_nested_correlated_scalar.j_fact from nested_correlation_reader_role;
+execute nested_authorized using @authorized_limit;
+internal error: do not have privilege to execute the statement
+deallocate prepare nested_authorized;
+drop user nested_correlation_reader_user;
+drop role nested_correlation_reader_role;
 drop database test_nested_correlated_scalar;

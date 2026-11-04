@@ -16,7 +16,6 @@ package logutil
 
 import (
 	"context"
-	"regexp"
 	"testing"
 	"time"
 
@@ -186,57 +185,41 @@ func TestSetupMOLogger_panic(t *testing.T) {
 
 func Test_getLoggerEncoder(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	type args struct {
-		format string
-	}
-	type fields struct {
-		entry  zapcore.Entry
-		fields []zap.Field
-	}
+	epoch := time.Unix(0, 0).UTC()
 	tests := []struct {
-		name       string
-		args       args
-		fields     fields
-		wantOutput *regexp.Regexp
-		foundCnt   int
+		name, format string
+		ts           time.Time
+		want         string
 	}{
 		{
-			name: "console",
-			args: args{
-				format: "console",
-			},
-			fields: fields{
-				entry:  zapcore.Entry{Time: time.Unix(0, 0), Level: zapcore.DebugLevel, Message: "console msg"},
-				fields: []zap.Field{},
-			},
-			// like: 1970/01/01 00:00:00.000000 +0000 DEBUG console msg
-			wantOutput: regexp.MustCompile(`\d{4}/\d{2}/\d{2} (\d{2}:{0,1}){3}\.\d{6} \+\d{4} DEBUG console msg`),
-			foundCnt:   1,
+			name: "console/UTC", format: "console", ts: epoch,
+			want: "1970/01/01 00:00:00.000000 +0000 DEBUG console msg\n",
 		},
 		{
-			name: "json",
-			args: args{
-				format: "json",
-			},
-			fields: fields{
-				entry:  zapcore.Entry{Level: zapcore.DebugLevel, Message: "json msg"},
-				fields: []zap.Field{},
-			},
-			// like: 0001/01/01 00:00:00.000000 +0000 DEBUG console msg
-			wantOutput: regexp.MustCompile(`\{.*"level":"DEBUG".*"msg":"json msg".*\}`),
-			foundCnt:   1,
+			name: "console/negative_offset", format: "console", ts: epoch.In(time.FixedZone("west", -5*60*60)),
+			want: "1969/12/31 19:00:00.000000 -0500 DEBUG console msg\n",
+		},
+		{
+			name: "console/fractional_offset", format: "console", ts: epoch.In(time.FixedZone("east", (5*60+30)*60)),
+			want: "1970/01/01 05:30:00.000000 +0530 DEBUG console msg\n",
+		},
+		{
+			name: "json", format: "json",
+			want: `{"level":"DEBUG","msg":"json msg"}`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getLoggerEncoder(tt.args.format)
+			got := getLoggerEncoder(tt.format)
 			require.NotNil(t, got)
-			buf, err := got.EncodeEntry(tt.fields.entry, tt.fields.fields)
-			require.Nil(t, err)
-			t.Logf("encode result: %s", buf.String())
-			found := tt.wantOutput.FindAll(buf.Bytes(), -1)
-			t.Logf("found: %s", found)
-			require.Equal(t, tt.foundCnt, len(found))
+			buf, err := got.EncodeEntry(zapcore.Entry{Time: tt.ts, Level: zapcore.DebugLevel, Message: tt.format + " msg"}, nil)
+			require.NoError(t, err)
+			defer buf.Free()
+			if tt.format == "json" {
+				require.JSONEq(t, tt.want, buf.String())
+			} else {
+				require.Equal(t, tt.want, buf.String())
+			}
 		})
 	}
 }

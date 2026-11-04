@@ -1,0 +1,59 @@
+drop database if exists dependent_fulltext_dml;
+create database dependent_fulltext_dml;
+use dependent_fulltext_dml;
+create table keys_src(id int primary key);
+insert into keys_src values (1), (2);
+create table docs(id int primary key, body text, fulltext ft_body(body));
+insert into docs values (3, 'control token');
+select id from docs where match(body) against('control') order by id;
+➤ id[4,32,0]  𝄀
+3
+delete from docs where id=3;
+select count(*) from docs;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into docs select (select (select k.id)), 'alpha token' from keys_src k;
+select id, body from docs order by id;
+➤ id[4,32,0]  ¦  body[-1,16383,0]  𝄀
+1  ¦  alpha token  𝄀
+2  ¦  alpha token
+select id from docs where match(body) against('alpha') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+update docs d set body=concat('beta token ', cast((select (select d.id)) as char));
+select id, body from docs order by id;
+➤ id[4,32,0]  ¦  body[-1,16383,0]  𝄀
+1  ¦  beta token 1  𝄀
+2  ¦  beta token 2
+select id from docs where match(body) against('alpha') order by id;
+➤ id[4,32,0]
+select id from docs where match(body) against('beta') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+replace into docs select (select (select k.id)), 'gamma token' from keys_src k;
+select id, body from docs order by id;
+➤ id[4,32,0]  ¦  body[-1,16383,0]  𝄀
+1  ¦  gamma token  𝄀
+2  ¦  gamma token
+select id from docs where match(body) against('beta') order by id;
+➤ id[4,32,0]
+select id from docs where match(body) against('gamma') order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+delete from docs where id=(select (select docs.id)) and id=1;
+select id, body from docs order by id;
+➤ id[4,32,0]  ¦  body[-1,16383,0]  𝄀
+2  ¦  gamma token
+select id from docs where match(body) against('gamma') order by id;
+➤ id[4,32,0]  𝄀
+2
+delete from docs where id=(select (select docs.id));
+select count(*) from docs;
+➤ count(*)[-5,64,0]  𝄀
+0
+select id from docs where match(body) against('gamma') order by id;
+➤ id[4,32,0]
+drop database dependent_fulltext_dml;

@@ -37,6 +37,31 @@ EXECUTE p_window USING @value;
 DEALLOCATE PREPARE p_window;
 CREATE TABLE ntile_input(id INT PRIMARY KEY, g INT);
 INSERT INTO ntile_input VALUES (1, 1), (2, 1), (3, 1), (4, 2);
+SELECT id, NTILE(id) OVER (ORDER BY id) AS bucket FROM ntile_input ORDER BY id;
+Incorrect arguments to ntile
+SELECT id, NTILE(id + 1) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id;
+Incorrect arguments to ntile
+SELECT NTILE(g) OVER (ORDER BY id) AS bucket FROM ntile_input WHERE FALSE;
+Incorrect arguments to ntile
+SELECT id, NTILE(1 + 1) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id;
+➤ id[4,32,0]  ¦  bucket[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  1
+SET @ntile_buckets = 2;
+SELECT id, NTILE(@ntile_buckets) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id;
+➤ id[4,32,0]  ¦  bucket[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  2  𝄀
+4  ¦  1
+SELECT NTILE(0) OVER (ORDER BY id) AS bucket FROM ntile_input;
+invalid input: ntile bucket count must be positive
+SELECT NTILE(-5) OVER (ORDER BY id) AS bucket FROM ntile_input;
+invalid input: ntile bucket count must be positive
+SELECT NTILE(CAST(NULL AS SIGNED)) OVER (ORDER BY id) AS bucket FROM ntile_input;
+invalid input: ntile bucket count cannot be NULL
 PREPARE p_ntile FROM 'SELECT id, NTILE(?) OVER (PARTITION BY g ORDER BY id) AS bucket FROM ntile_input ORDER BY id';
 SET @value = 2;
 EXECUTE p_ntile USING @value;
@@ -69,6 +94,12 @@ EXECUTE p_ntile USING @value;
 2  ¦  1  𝄀
 3  ¦  2  𝄀
 4  ¦  1
+SET @value = 0;
+EXECUTE p_ntile USING @value;
+invalid input: ntile bucket count must be positive
+SET @value = -5;
+EXECUTE p_ntile USING @value;
+invalid input: ntile bucket count must be positive
 SET @value = NULL;
 EXECUTE p_ntile USING @value;
 invalid input: ntile bucket count cannot be NULL

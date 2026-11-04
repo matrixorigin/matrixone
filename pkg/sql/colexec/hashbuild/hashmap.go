@@ -35,14 +35,8 @@ import (
 
 type HashmapBuilder struct {
 	needDupVec bool
-	// InputBatchRowCount is the physical retained row count published with the
-	// JoinMap. hashMapRowCount is the number of those rows that participate in
-	// the current hashmap and its auxiliary-memory projection. REPLACE may
-	// append delete-only rows which belong to the first count but not the
-	// second.
+	// InputBatchRowCount is the physical retained row count published with the JoinMap.
 	InputBatchRowCount int
-	hashMapRowCount    int
-	hashMapRowCountSet bool
 	TrackNullKeys      bool
 	HasNullKey         bool
 	curVecs            []*vector.Vector // evaluated key vecs for the current batch
@@ -63,6 +57,7 @@ type HashmapBuilder struct {
 	OnDuplicateAction  plan.Node_OnDuplicateAction
 	DedupColName       string
 	DedupColTypes      []plan.Type
+	DedupKeyExprs      []*plan.Expr
 
 	IgnoreRows *bitmap.Bitmap
 
@@ -214,8 +209,6 @@ func (hb *HashmapBuilder) Prepare(
 		hb.keyExprs = keyCols
 		hb.keyWidth = keyWidth
 		hb.InputBatchRowCount = 0
-		hb.hashMapRowCount = 0
-		hb.hashMapRowCountSet = false
 	}
 
 	if hb.IsDedup {
@@ -248,8 +241,6 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 
 	hb.FreeTemporaryVectors(proc)
 	hb.InputBatchRowCount = 0
-	hb.hashMapRowCount = 0
-	hb.hashMapRowCountSet = false
 	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.retainedSpillTailSelected = 0
@@ -387,6 +378,10 @@ func (hb *HashmapBuilder) abortExpressionEval(proc *process.Process) {
 // explicit key domains; an IntHashMap cannot represent a sentinel outside the
 // complete uint64 raw-value domain without collisions.
 func (hb *HashmapBuilder) hasGroupingKey() bool {
+	return hb.hasGroupingKeyInBatches(hb.Batches.Buf)
+}
+
+func (hb *HashmapBuilder) hasGroupingKeyInBatches(batches []*batch.Batch) bool {
 	for _, executor := range hb.executors {
 		if !executor.IsColumnExpr() {
 			continue
@@ -402,10 +397,10 @@ func (hb *HashmapBuilder) hasGroupingKey() bool {
 		// same physical column here; filtering on RelPos would miss GROUPING
 		// sentinels for DedupJoin and RightDedupJoin.
 		position := column.GetColIndex()
-		for _, bat := range hb.Batches.Buf {
+		for _, bat := range batches {
 			if bat != nil && position >= 0 && position < len(bat.Vecs) &&
 				bat.Vecs[position] != nil &&
-				bat.Vecs[position].GetGrouping().GetBitmap().CountRange(
+				bat.Vecs[position].GetGrouping().CountRange(
 					0, uint64(bat.Vecs[position].Length()),
 				) > 0 {
 				return true
@@ -520,7 +515,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			duplicateWarnings.Reset()
 		}
 	}()
-	recordDuplicateWarning := func(vec *vector.Vector, row int) {
+	recordDuplicateWarning := func(vec *vector.Vector, row int, inputRow int) {
 		if !warningsEnabled {
 			return
 		}
@@ -532,7 +527,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			duplicateWarnings.AddCount()
 			return
 		}
-		rowStr, err := colexec.FormatDedupEntry(vec, row, hb.DedupColName, hb.DedupColTypes)
+		rowStr, err := hb.formatDuplicateEntry(proc, vec, row, inputRow)
 		if err != nil {
 			// IGNORE must preserve its historical data-path semantics even if a
 			// user-facing rendering of a corrupt internal key is unavailable.
@@ -547,11 +542,6 @@ func (hb *HashmapBuilder) buildHashmap(
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
-	// Every ordinary build starts with all retained rows participating in the
-	// map. Canonical Dedup rewrites below update this count before resizing the
-	// auxiliary owner and rebuilding.
-	hb.hashMapRowCount = hb.InputBatchRowCount
-	hb.hashMapRowCountSet = true
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
@@ -848,8 +838,7 @@ buildUnits:
 							continue
 						}
 
-						rowStr, err := colexec.FormatDedupEntry(
-							hb.curVecs[0], vecIdx2+k, hb.DedupColName, hb.DedupColTypes)
+						rowStr, err := hb.formatDuplicateEntry(proc, hb.curVecs[0], vecIdx2+k, i+k)
 						if err != nil {
 							return err
 						}
@@ -859,13 +848,13 @@ buildUnits:
 							previousRow := ignoreSurvivorRows[v]
 							if previousRow > 0 {
 								hb.IgnoreRows.Add(uint64(previousRow - 1))
-								recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
+								recordDuplicateWarning(hb.curVecs[0], vecIdx2+k, int(previousRow-1))
 							}
 							ignoreSurvivorRows[v] = int64(i+k) + 1
 							ignoreSurvivorOwnsKey[v] = true
 						} else {
 							hb.IgnoreRows.Add(uint64(i + k))
-							recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
+							recordDuplicateWarning(hb.curVecs[0], vecIdx2+k, i+k)
 						}
 					}
 				} else {
@@ -1008,7 +997,6 @@ buildUnits:
 		} else {
 			hb.InputBatchRowCount = totalRowCount
 		}
-		hb.hashMapRowCount = hb.InputBatchRowCount
 		cleanupDedupScratch()
 		hb.resetHashStateForRebuild(proc)
 		needUniqueVec, err = hb.prepareCanonicalRuntimeFilterCollection(
@@ -1044,7 +1032,6 @@ buildUnits:
 			return err
 		}
 		hb.InputBatchRowCount = hb.Batches.RowCount()
-		hb.hashMapRowCount = hb.InputBatchRowCount
 		cleanupDedupScratch()
 		hb.freeDelRows(proc.Mp())
 		hb.resetHashStateForRebuild(proc)
@@ -1377,4 +1364,12 @@ func (hb *HashmapBuilder) detachAndPruneCachedIterators() {
 		}
 		hashmap.IteratorClearOwner(hb.cachedStrIterator)
 	}
+}
+
+func (hb *HashmapBuilder) formatDuplicateEntry(proc *process.Process, key *vector.Vector, keyRow, inputRow int) (string, error) {
+	if len(hb.DedupKeyExprs) > 0 {
+		return colexec.FormatDedupKeyFromRow(proc, hb.DedupKeyExprs,
+			hb.Batches.Buf[inputRow/colexec.DefaultBatchSize], inputRow%colexec.DefaultBatchSize)
+	}
+	return colexec.FormatDedupEntry(key, keyRow, hb.DedupColName, hb.DedupColTypes)
 }

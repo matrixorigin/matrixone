@@ -285,6 +285,86 @@ truncate table export_verify;
 load data infile 'stage://export_test_stage/test_csv_no_header.csv' into table export_verify fields terminated by ',';
 select * from export_verify order by id;
 
+-- Test 7.4: FLOAT infinities and NULL retain bits through MO Parquet export/load.
+create table export_float_source(id int primary key, v float);
+create table export_float_verify(id int primary key, v float);
+create table export_float_widen(id int primary key, v double);
+insert into export_float_source values (1, bit_cast(unhex('0000807f') as float)), (2, bit_cast(unhex('000080ff') as float)), (3, null), (4, 1.5);
+select id, hex(serial(v)) as value_bits, v is null as value_null from export_float_source order by id;
+remove files from stage if exists 'stage://export_test_stage/float_roundtrip.parquet';
+select id, v from export_float_source order by id into outfile 'stage://export_test_stage/float_roundtrip.parquet' format 'parquet';
+load data infile {'filepath'='stage://export_test_stage/float_roundtrip.parquet', 'format'='parquet'} into table export_float_verify;
+select id, hex(serial(v)) as value_bits, v is null as value_null from export_float_verify order by id;
+load data infile {'filepath'='stage://export_test_stage/float_roundtrip.parquet', 'format'='parquet'} into table export_float_widen;
+select id, hex(serial(v)) as value_bits, v is null as value_null from export_float_widen order by id;
+
+-- Test 7.5: Finite DOUBLE overflow rejects the FLOAT load without inserting rows.
+truncate table export_float_widen;
+insert into export_float_widen values (1, 1e100);
+remove files from stage if exists 'stage://export_test_stage/float_overflow.parquet';
+select id, v from export_float_widen into outfile 'stage://export_test_stage/float_overflow.parquet' format 'parquet';
+truncate table export_float_verify;
+load data infile {'filepath'='stage://export_test_stage/float_overflow.parquet', 'format'='parquet'} into table export_float_verify;
+select count(*) from export_float_verify;
+remove files from stage if exists 'stage://export_test_stage/float_roundtrip.parquet';
+remove files from stage if exists 'stage://export_test_stage/float_overflow.parquet';
+drop table export_float_source;
+drop table export_float_verify;
+drop table export_float_widen;
+
+-- Test 7.6: Zero-width text admits empty/NULL and rejects nonempty Parquet values.
+drop table if exists export_zero_external_char;
+drop table if exists export_zero_external_varchar;
+drop table if exists export_zero_source;
+drop table if exists export_zero_char;
+drop table if exists export_zero_varchar;
+create table export_zero_source(id int primary key, v varchar(4));
+create table export_zero_char(id int primary key, v char(0));
+create table export_zero_varchar(id int primary key, v varchar(0));
+insert into export_zero_char values (99, '');
+insert into export_zero_varchar values (99, null);
+insert into export_zero_char values (3, 'x');
+insert into export_zero_varchar values (3, 'x');
+insert into export_zero_source values (1, ''), (2, null);
+remove files from stage if exists 'stage://export_test_stage/zero_valid.parquet';
+select id, v from export_zero_source order by id into outfile 'stage://export_test_stage/zero_valid.parquet' format 'parquet';
+load data infile {'filepath'='stage://export_test_stage/zero_valid.parquet', 'format'='parquet'} into table export_zero_char;
+load data infile {'filepath'='stage://export_test_stage/zero_valid.parquet', 'format'='parquet'} into table export_zero_varchar;
+select id, v is null as value_null, char_length(v) as value_length from export_zero_char order by id;
+select id, v is null as value_null, char_length(v) as value_length from export_zero_varchar order by id;
+create external table export_zero_external_char(id int, v char(0)) infile {'filepath'='stage://export_test_stage/zero_valid.parquet', 'format'='parquet'};
+create external table export_zero_external_varchar(id int, v varchar(0)) infile {'filepath'='stage://export_test_stage/zero_valid.parquet', 'format'='parquet'};
+select id, v is null as value_null, char_length(v) as value_length from export_zero_external_char order by id;
+select id, v is null as value_null, char_length(v) as value_length from export_zero_external_varchar order by id;
+drop table export_zero_external_char;
+drop table export_zero_external_varchar;
+
+-- The valid prefix of a rejected load must not remain, and existing seeds must survive.
+delete from export_zero_char where id <> 99;
+delete from export_zero_varchar where id <> 99;
+insert into export_zero_source values (3, 'x'), (4, 'é'), (5, '😀');
+remove files from stage if exists 'stage://export_test_stage/zero_mixed.parquet';
+select id, v from export_zero_source order by id into outfile 'stage://export_test_stage/zero_mixed.parquet' format 'parquet';
+load data infile {'filepath'='stage://export_test_stage/zero_mixed.parquet', 'format'='parquet'} into table export_zero_char parallel 'false';
+load data infile {'filepath'='stage://export_test_stage/zero_mixed.parquet', 'format'='parquet'} into table export_zero_varchar parallel 'true';
+select id, v is null as value_null, char_length(v) as value_length from export_zero_char order by id;
+select id, v is null as value_null, char_length(v) as value_length from export_zero_varchar order by id;
+create external table export_zero_external_char(id int, v char(0)) infile {'filepath'='stage://export_test_stage/zero_mixed.parquet', 'format'='parquet'};
+create external table export_zero_external_varchar(id int, v varchar(0)) infile {'filepath'='stage://export_test_stage/zero_mixed.parquet', 'format'='parquet'};
+select id, char_length(v) from export_zero_external_char order by id;
+select id, char_length(v) from export_zero_external_varchar order by id;
+insert into export_zero_char select id, v from export_zero_external_char;
+insert into export_zero_varchar select id, v from export_zero_external_varchar;
+select id, v is null as value_null, char_length(v) as value_length from export_zero_char order by id;
+select id, v is null as value_null, char_length(v) as value_length from export_zero_varchar order by id;
+drop table export_zero_external_char;
+drop table export_zero_external_varchar;
+remove files from stage if exists 'stage://export_test_stage/zero_valid.parquet';
+remove files from stage if exists 'stage://export_test_stage/zero_mixed.parquet';
+drop table export_zero_source;
+drop table export_zero_char;
+drop table export_zero_varchar;
+
 -- ============================================================================
 -- PART 8: Abnormal/Invalid Cases - FORMAT errors
 -- ============================================================================

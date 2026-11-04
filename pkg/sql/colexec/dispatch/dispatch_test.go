@@ -1169,8 +1169,10 @@ func TestDispatchAllocationAccountContract(t *testing.T) {
 	require.ErrorIs(t, d.SetAllocationAccount(nil), mpool.ErrAllocationAccountInvalid)
 	require.NoError(t, d.SetAllocationAccount(first))
 	require.ErrorIs(t, d.SetAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
+	require.ErrorIs(t, d.DrainAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
 	require.ErrorIs(t, d.ClearAllocationAccount(second), mpool.ErrAllocationAccountMismatch)
 	d.ctr = &container{sp: &pSpool.PipelineSpool{}}
+	require.ErrorIs(t, d.DrainAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
 	require.ErrorIs(t, d.ClearAllocationAccount(first), mpool.ErrAllocationAccountInvariant)
 	d.ctr = nil
 	require.NoError(t, d.ClearAllocationAccount(first))
@@ -1230,6 +1232,10 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	}
 	d.CleanupDeferredSpool()
 	require.Same(t, sp, d.cleanupSpool)
+	require.NoError(t, d.DrainAllocationAccount(account))
+	require.Nil(t, d.cleanupSpool)
+	require.Same(t, account, d.allocationAccount)
+	require.NoError(t, d.DrainAllocationAccount(account))
 	require.NoError(t, d.ClearAllocationAccount(account))
 	require.Nil(t, d.cleanupSpool)
 

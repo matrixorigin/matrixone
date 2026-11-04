@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -209,11 +210,30 @@ func Test_createPubByPitr(t *testing.T) {
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
 		sql := getPubInfoWithPitr(ts, 0, "test")
-		mrs := newMrsForSqlForGetPubs([][]interface{}{})
+		// Use a non-empty publication with distinct role/user IDs.  The replay
+		// path must preserve owner (role) and creator (user) when it builds the
+		// INSERT into mo_pubs; an empty result would not exercise that contract.
+		mrs := newMrsForSqlForGetPubs([][]interface{}{
+			{int64(sysAccountID), sysAccountName, "pub01", pubsub.TableAll, uint64(0), pubsub.TableAll, pubsub.AccountAll, "", "", uint64(17), uint64(29), ""},
+		})
 		bh.sql2result[sql] = mrs
+		bh.sql2result[getAccountIdNamesSql] = newMrsForGetAllAccounts([][]interface{}{
+			{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
+			{int64(1), "acc01", "open", uint64(1), nil},
+		})
+		bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub01'"] =
+			newMrsForSqlForGetSubs([][]interface{}{})
 
-		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
+		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts, nil)
 		assert.NoError(t, err)
+		var insertSQL string
+		for _, executedSQL := range bh.executedSQLs {
+			if strings.HasPrefix(executedSQL, "insert into mo_catalog.mo_pubs") {
+				insertSQL = executedSQL
+				break
+			}
+		}
+		assert.Contains(t, insertSQL, "now(), 17, 29, '')")
 	})
 
 	convey.Convey("createPubByPitr fail", t, func() {
@@ -250,11 +270,11 @@ func Test_createPubByPitr(t *testing.T) {
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
 		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
-			{"pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(0), uint64(0), ""},
+			{int64(0), "sys", "pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
 		bh.sql2result[sql] = mrs
 
-		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
+		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts, nil)
 		assert.Error(t, err)
 	})
 
@@ -292,13 +312,111 @@ func Test_createPubByPitr(t *testing.T) {
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
 		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
-			{"pub01", "test", "uint64(0)", "test1", "acc01", "", "", uint64(0), uint64(0), ""},
+			{int64(0), "sys", "pub01", "test", "uint64(0)", "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
 		bh.sql2result[sql] = mrs
 
-		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
+		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts, nil)
 		assert.Error(t, err)
 	})
+}
+
+// Test_createPubByPitrTableScopeModeResolution pins when a PITR publication
+// replay consults the replay executor's lower_case_table_names mode: the
+// explicit table list of this publication certifies a table scope, so its
+// replay must refuse a replay executor that cannot name that mode instead of
+// certifying under a guess. The account-level replay above stays the proof
+// that a shape which certifies nothing never consults the mode.
+func Test_createPubByPitrTableScopeModeResolution(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+	sql := getPubInfoWithPitr(ts, 0, "test")
+	bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{
+		{int64(0), "sys", "pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(17), uint64(29), ""},
+	})
+	// Replay first reconciles the historical selection with bulk-restore
+	// exclusions, then resolves the mode needed by the retained table scope.
+	historicalTablesSQL := buildTableInfoListSQL("test", "", ts, sysAccountID)
+	bh.sql2result[historicalTablesSQL] = newMrsForRestoreStringRows(
+		[]string{"name", "type", "kind", "view"}, [][]interface{}{{"test1", "BASE TABLE", "r", ""}})
+
+	err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts, nil)
+	require.Error(t, err)
+	require.ErrorContains(t, err,
+		"session variable lower_case_table_names is unavailable")
+	require.Equal(t, []string{sql, historicalTablesSQL}, bh.executedSQLs,
+		"missing replay mode must fail before publication or subscriber writes")
+}
+
+// Test_getPubInfoWithPitrLayout guarantees the PITR publication query
+// projection stays in sync with extractPubInfosFromExecResult. The restore
+// path used to select a shortened layout that fed the pub name into
+// ParseInt, aborting restores of published databases (#30607).
+func Test_getPubInfoWithPitrLayout(t *testing.T) {
+	pitrSQL := getPubInfoWithPitr(123, 7, "db1")
+	fullSQL := fmt.Sprintf(getPubInfoSql, 7)
+
+	projectionOf := func(sql string) string {
+		lower := strings.ToLower(sql)
+		i := strings.Index(lower, "select ")
+		j := strings.Index(lower, " from mo_catalog.mo_pubs")
+		require.True(t, i >= 0 && j > i)
+		return lower[i+len("select ") : j]
+	}
+	require.Equal(t, projectionOf(fullSQL), projectionOf(pitrSQL))
+	require.Contains(t, pitrSQL, "{MO_TS = 123}")
+	require.Contains(t, pitrSQL, "where account_id = 7")
+	require.Contains(t, pitrSQL, "database_name = 'db1'")
+
+	// The new-layout reader must parse a realistic row into the right fields.
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[pitrSQL] = newMrsForSqlForGetPubs([][]interface{}{
+		{int64(0), "sys", "pub01", "db1", uint64(42), "t1, t2", "acc01", "", "", uint64(1), uint64(2), ""},
+	})
+	require.NoError(t, bh.Exec(context.TODO(), pitrSQL))
+	erArray, err := getResultSet(context.TODO(), bh)
+	require.NoError(t, err)
+	pubInfos, err := extractPubInfosFromExecResult(context.TODO(), erArray)
+	require.NoError(t, err)
+	require.Len(t, pubInfos, 1)
+	require.Equal(t, uint32(0), pubInfos[0].PubAccountId)
+	require.Equal(t, "sys", pubInfos[0].PubAccountName)
+	require.Equal(t, "pub01", pubInfos[0].PubName)
+	require.Equal(t, "db1", pubInfos[0].DbName)
+	require.Equal(t, uint64(42), pubInfos[0].DbId)
+	require.Equal(t, "t1, t2", pubInfos[0].TablesStr)
+	require.Equal(t, "acc01", pubInfos[0].SubAccountsStr)
+	require.Equal(t, uint32(1), pubInfos[0].Owner)
+	require.Equal(t, uint32(2), pubInfos[0].Creator)
 }
 
 func Test_doRestorePitr(t *testing.T) {
@@ -2539,6 +2657,10 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		})
 		bh.sql2result[sql] = mrs
 
+		masterSQL := fmt.Sprintf(checkTableIsMasterFormat,
+			quoteSQLStringLiteral(moCatalog), quoteSQLStringLiteral("mo_user"))
+		bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name", "table_name"}, nil)
+
 		// CLONE owns the historical schema lookup; inject its failure rather
 		// than relying on an absent result for a redundant SHOW CREATE.
 		cloneSQL := restoreTableDataByTsSQL(moCatalog, "mo_user", resovleTs)
@@ -3847,6 +3969,8 @@ func TestRestorePitrPreflightsBeforeExistingAccountSideEffects(t *testing.T) {
 	accountExistsSQL, err := getSqlForCheckAccountWithPitr(ctx, ts, sysAccountName)
 	require.NoError(t, err)
 	bh.sql2result[accountExistsSQL] = newMrsForPitrRecord([][]interface{}{{uint64(sysAccountID)}})
+	cdcSQL := fmt.Sprintf("select attname from mo_catalog.mo_columns {MO_TS = %d} where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_cdc_watermark' and attname in ('source_table_id','owner_generation','pending_source_table_id','target_identity')", ts)
+	bh.sql2result[cdcSQL] = newMrsForRestoreStringRows([]string{"attname"}, [][]interface{}{{"source_table_id"}, {"owner_generation"}, {"pending_source_table_id"}, {"target_identity"}})
 	showDatabasesSQL := fmt.Sprintf("show databases {MO_TS = %d}", ts)
 	createDatabaseSQL := fmt.Sprintf(
 		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
@@ -4120,6 +4244,7 @@ func Test_restoreViewsSkipsUnservableView(t *testing.T) {
 		sortedViews := []string{genKey("db01", "ft_v"), genKey("db01", "ok_v")}
 
 		for _, skipIfDependencyMissing := range []bool{false, true} {
+			viewMap[genKey("db01", "ft_v")].unservable = false
 			bh.sql2err = map[string]error{badSQL: moerr.NewFtMatchingKeyNotFound(ctx)}
 			bh.executedSQLs = nil
 
@@ -4133,6 +4258,7 @@ func Test_restoreViewsSkipsUnservableView(t *testing.T) {
 		// An unrelated failure must still abort: only the specific refusal is tolerated,
 		// so genuine corruption is never silently swallowed.
 		bh.sql2err = map[string]error{badSQL: moerr.NewInternalError(ctx, "boom")}
+		viewMap[genKey("db01", "ft_v")].unservable = false
 		bh.executedSQLs = nil
 		err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
 		require.Error(t, err, "an unrelated error must remain fatal")
@@ -4145,6 +4271,7 @@ func Test_restoreViewsSkipsUnservableView(t *testing.T) {
 		bh.sql2err = map[string]error{
 			badSQL: moerr.NewInternalError(ctx, moerr.FtMatchingKeyNotFoundMsg),
 		}
+		viewMap[genKey("db01", "ft_v")].unservable = false
 		bh.executedSQLs = nil
 		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
 		require.NoError(t, err, "the refusal must be recognised even once its code is lost")

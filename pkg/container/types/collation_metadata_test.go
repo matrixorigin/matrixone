@@ -71,6 +71,25 @@ func TestVersionedCollationTypeRoundTrip(t *testing.T) {
 	}))
 }
 
+func TestMergeStringCollationMetadataPreservesRevision(t *testing.T) {
+	native := NewWithCharset(T_varchar, 64, 0, CharsetUTF8MB4UnicodeCI)
+	general := New(T_varchar, 1, 0)
+
+	result := MergeStringCollationMetadata(T_varchar.ToType(), []Type{native, general})
+	require.Equal(t, CharsetUTF8MB4UnicodeCI, result.Charset)
+	require.Equal(t, uint8(CollationVersionV1), result.CollationVersion)
+
+	// A native identity reconstructed from a legacy zero-valued source is still
+	// executable; the identity itself implies the current native revision.
+	native.CollationVersion = CollationVersionLegacy
+	result = MergeStringCollationMetadata(T_text.ToType(), []Type{native})
+	require.Equal(t, CharsetUTF8MB4UnicodeCI, result.Charset)
+	require.Equal(t, uint8(CollationVersionV1), result.CollationVersion)
+
+	legacy := MergeStringCollationMetadata(T_varchar.ToType(), []Type{general})
+	require.Equal(t, CollationVersionLegacy, legacy.CollationVersion)
+}
+
 func TestCollationTypeRejectsUnknownBeforePublication(t *testing.T) {
 	original := NewWithCharset(T_varchar, 32, 0, CharsetUTF8)
 	data, err := original.Marshal()

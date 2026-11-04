@@ -25,40 +25,18 @@ func TestManagedAllocator(t *testing.T) {
 		newUpstreamAllocatorForTest(),
 	)
 	for i := uint64(1); i < 128*MB; i = uint64(math.Ceil(float64(i) * 1.1)) {
-		// allocate
-		slice, err := allocator.Allocate(i, NoHints)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// len
-		if len(slice) != int(i) {
-			t.Fatal()
-		}
-		// read
-		for _, i := range slice {
-			if i != 0 {
-				t.Fatal("not zeroed")
+		func() {
+			slice, err := allocator.Allocate(i, NoHints)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		// write
-		for i := range slice {
-			slice[i] = byte(i)
-		}
-		// read
-		for i := range slice {
-			if slice[i] != byte(i) {
-				t.Fatal()
+			// Deallocate the shortened view, including on assertion failure.
+			defer func() { allocator.Deallocate(slice) }()
+			if len(slice) != int(i) {
+				t.Fatalf("allocation length: got %d, want %d", len(slice), i)
 			}
-		}
-		// slice
-		slice = slice[:len(slice)/2]
-		for i := range slice {
-			if slice[i] != byte(i) {
-				t.Fatal()
-			}
-		}
-		// deallocate
-		allocator.Deallocate(slice)
+			slice = testAllocationContents(t, slice)
+		}()
 	}
 }
 

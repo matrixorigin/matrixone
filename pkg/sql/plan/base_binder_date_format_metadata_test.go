@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -37,8 +38,15 @@ func TestMySQLDateFormatWidth(t *testing.T) {
 		{name: "date_format", format: "%W %M %Y", width: 134},
 		{name: "date_format", format: "%a %b %D %j", width: 74},
 		{name: "date_format", format: "%H|%r|%T|%f", width: 35},
-		{name: "date_format", format: "%U%u%V%v%y%m%d%h%I%i%l%p%S%s%c%e", width: 53},
-		{name: "date_format", format: "%U|%u|%V", width: 29},
+		{name: "date_format", format: "%U%u%V%v%y%m%d%h%I%i%l%p%S%s%c%e", width: 60},
+		{name: "date_format", format: "%U|%u|%V|%v", width: 39},
+		{name: "date_format", format: "%v", width: 9},
+		{name: "time_format", format: "%v", width: 3},
+		{name: "date_format", format: "%X", width: 10},
+		{name: "date_format", format: "%x", width: 10},
+		{name: "date_format", format: "%X|%x|%Y|%D", width: 31},
+		{name: "date_format", format: strings.Repeat("%X", 8192), width: types.MaxVarcharLen},
+		{name: "time_format", format: "%X|%x", width: 10},
 		{name: "date_format", format: "%%-%q-%", width: 5},
 		{name: "date_format", format: strings.Repeat("%W", 2048), width: types.MaxVarcharLen},
 		{name: "time_format", format: "%H", width: 11},
@@ -67,6 +75,26 @@ func TestBindDateFormatMetadata(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), literal.Typ.Id)
 	require.Equal(t, int32(134), literal.Typ.Width)
 	require.False(t, literal.Typ.NotNullable)
+
+	// Both the raw string and typed temporal overloads use the shared bound.
+	for _, oid := range []types.T{types.T_varchar, types.T_datetime} {
+		operandType := oid.ToType()
+		operand := &planpb.Expr{
+			Typ:  makePlan2Type(&operandType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+		}
+		for _, format := range []string{"%X", "%x", "%v"} {
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), "date_format", []*planpb.Expr{
+				operand, makePlan2StringConstExprWithType(format),
+			})
+			require.NoError(t, err)
+			wantWidth := int32(10)
+			if format == "%v" {
+				wantWidth = 9
+			}
+			require.Equal(t, wantWidth, expr.Typ.Width, "%v %s", oid, format)
+		}
+	}
 
 	dynamicPatternType := types.New(types.T_varchar, 12, 0)
 	dynamic, err := BindFuncExprImplByPlanExpr(context.Background(), "date_format", []*planpb.Expr{
@@ -444,4 +472,85 @@ func BenchmarkHeadingProvenanceStorage(b *testing.B) {
 			ctx.appendHeading("date_format(col2, '%M')", provenance)
 		}
 	})
+}
+
+func TestCTASRepeatedPlanningPreservesSource(t *testing.T) {
+	for _, tc := range []struct{ source, want string }{
+		{"date_format(col2, '%W %M %Y') from time01", "date_format(col2, '%W %M %Y')"},
+		{"date_format(time01.col2, '%W %M %Y') from time01", "date_format(time01.col2, '%W %M %Y')"},
+		{"date_format(col2, '%W %M %Y') as formatted from time01", "formatted"},
+		{"concat(date_format(col2, '%M'), 'X') from time01", "concat(date_format(col2, '%M'), 'X')"},
+		{"time_format(time_col, '%H') from time01", "time_format(time_col, '%H')"},
+		{"year(col2) + 1 from time01", "year(col2) + 1"},
+		{"* from (select date_format(col2, '%M') from time01) q", "date_format(col2, '%M')"},
+		{"(select date_format(col2, '%M') from time01 limit 1)", "(select date_format(col2, '%M') from time01 limit 1)"},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			ctx := newDateFormatCompilerContext(t)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table time02 as select "+tc.source, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			source := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
+			var first *Plan
+			for i := 0; i < 3; i++ {
+				got, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
+				require.Equal(t, source, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
+				if first == nil {
+					first = got
+				} else {
+					require.Equal(t, first.GetDdl().GetCreateTable().TableDef.Cols, got.GetDdl().GetCreateTable().TableDef.Cols)
+					require.Equal(t, first.GetDdl().GetCreateTable().CreateAsSelectSql, got.GetDdl().GetCreateTable().CreateAsSelectSql)
+				}
+			}
+		})
+	}
+}
+
+func TestCTASFailedPlanningAndSourceReplacement(t *testing.T) {
+	ctx := newDateFormatCompilerContext(t)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table time02 as select date_format(col2, '%M'), missing from time01", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	original := tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL)
+	_, err = BuildPlan(ctx, stmt, false)
+	require.Error(t, err)
+	require.Equal(t, original, tree.String(stmt.(*tree.CreateTable).AsSource, dialect.MYSQL))
+	replacement, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select time_format(time_col, '%H') from time01", 1)
+	require.NoError(t, err)
+	defer replacement.Free()
+	ctas := stmt.(*tree.CreateTable)
+	oldSource := ctas.AsSource
+	ctas.AsSource = replacement.(*tree.Select)
+	defer func() { ctas.AsSource = oldSource }()
+	got, err := BuildPlan(ctx, ctas, false)
+	require.NoError(t, err)
+	require.Equal(t, "time_format(time_col, '%H')", got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
+}
+
+func TestTreeCloneIsolatesMapsAndSampleColumns(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select sample(col2, 1 rows) from time01", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	source := stmt.(*tree.Select)
+	source.RankOption = &tree.RankOption{Option: map[string]string{"mode": "original"}}
+	copied := DeepCopySelect(source)
+	require.Equal(t, tree.String(source, dialect.MYSQL), tree.String(copied, dialect.MYSQL))
+	copied.RankOption.Option["mode"] = "changed"
+	require.Equal(t, "original", source.RankOption.Option["mode"])
+	sample := copied.Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.SampleExpr)
+	columns, star := sample.GetColumns()
+	require.False(t, star)
+	columns[0].(*tree.UnresolvedName).CStrParts[0] = tree.NewCStr("changed", 1)
+	require.NotEqual(t, tree.String(source, dialect.MYSQL), tree.String(copied, dialect.MYSQL))
+	originalColumns, _ := source.Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.SampleExpr).GetColumns()
+	require.Equal(t, "col2", originalColumns[0].(*tree.UnresolvedName).ColName())
+	// The memo preserves shared maps and prevents cycles from recursing forever.
+	graph := map[string]any{}
+	graph["self"] = graph
+	clone := cloneTreeValue(reflect.ValueOf(graph), make(map[treeClonePointer]reflect.Value)).Interface().(map[string]any)
+	clone["new"] = 1
+	require.Equal(t, 1, clone["self"].(map[string]any)["new"])
+	require.NotContains(t, graph, "new")
 }

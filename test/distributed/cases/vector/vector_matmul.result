@@ -62,6 +62,14 @@ select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"inner_product","x":1}'
 [[["1", -1], ["3", -1]]]
 select vector_matmul(2, id, a, '[[1,0,0,0]]', 'not json') from t;
 invalid input: vector_matmul: options must be a JSON object
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '') from t;
+invalid input: vector_matmul: options must be a JSON object
+set @no_opts = null;
+select vector_matmul(2, id, a, '[[1,0,0,0]]', @no_opts) from t;
+invalid input: vector_matmul: options must be a JSON object
+set @no_queries = null;
+select vector_matmul(2, id, a, @no_queries) from t;
+invalid input: vector_matmul: queries must not be NULL
 select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"l2"}') from t;
 invalid input: vector_matmul: metric "l2" is not inner_product, cosine or l2sq
 create table mt (id int, v vecf32(3));
@@ -84,6 +92,26 @@ select id, cosine_distance(v, '[1,2,2]') d from mt order by d, id;
 4  ¦  0.037749551236629486  𝄀
 3  ¦  0.2666666805744171  𝄀
 2  ¦  1.0
+select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', json_object('metric', 'cosine')) = vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"cosine"}') from mt;
+➤ vector_matmul(4, id, v, [[1,2,2],[0,1,0]], json_object(metric, cosine)) = vector_matmul(4, id, v, [[1,2,2],[0,1,0]], {"metric":"cosine"})[-7,1,0]  𝄀
+1
+select vector_matmul(4, id, v, json_array(json_array(1, 2, 2)), json_object('metric', 'l2sq')) from mt;
+➤ vector_matmul(4, id, v, json_array(json_array(1, 2, 2)), json_object(metric, l2sq))[-1,2147483647,0]  𝄀
+[[["1", 0], ["4", 2], ["2", 9], ["3", 12]]]
+select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'l2')) from mt;
+invalid input: vector_matmul: metric "l2" is not inner_product, cosine or l2sq
+select vector_matmul(4, id, v, '[[1,2,2]]', json_array('cosine')) from mt;
+invalid input: vector_matmul: options must be a JSON object
+create table r1 (id int, v vecf32(1));
+insert into r1 values (1, '[1]');
+select vector_matmul(1, id, v, '[[1.00000005960464478]]') from r1;
+➤ vector_matmul(1, id, v, [[1.00000005960464478]])[-1,2147483647,0]  𝄀
+[[["1", -1.0000001]]]
+drop table r1;
+select vector_matmul(4, id, v, json_array(json_array(rand(), rand(), rand()))) from mt;
+invalid input: topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables
+select vector_matmul(4, id, v, '[[1,2,2]]', json_object('metric', 'cosine', 'seed', uuid())) from mt;
+invalid input: topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables
 select vector_matmul(4, id, v, '[[1,2,2],[0,1,0]]', '{"metric":"l2sq"}') from mt;
 ➤ vector_matmul(4, id, v, [[1,2,2],[0,1,0]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
 [[["1", 0], ["4", 2], ["2", 9], ["3", 12]], [["2", 1], ["4", 2], ["1", 6], ["3", 26]]]
@@ -101,6 +129,8 @@ select vector_matmul(2, id, a, '[[1,0,0]]') from t;
 invalid input: vector ops between different dimensions (4, 3) is not permitted.
 select vector_matmul(2, id, a, '[]') from t;
 invalid input: vector_matmul: query count 0 out of range [1, 4096]
+select vector_matmul(2, id, a, '[[null,1,0,0]]') from t;
+invalid input: vector_matmul: query 0: coordinate 0 is null
 select vector_matmul(id, id, a, '[[1,0,0,0]]') from t;
 invalid input: topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables
 select vector_matmul(2, id, a, cat) from t;
@@ -175,7 +205,11 @@ set @qc2 = (select concat(vecblock_binary(v), (select vecblock_binary(v) from vq
 set @qj = (select concat('[', group_concat(vecblock_json(v) order by id), ']') from vq where id in (1, 2));
 select vector_matmul(2, id, v, @qc, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 ➤ vector_matmul(2, id, v, @qc, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
-[[["1", 0], ["3", 0.5857208]]]
+[[["1", 0], ["3", 0.5857207836327234]]]
+select a.id, l2_distance_sq(a.v, b.v) d from vq a, vq b where b.id = 1 order by d, a.id limit 2;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+3  ¦  0.5857207836327234
 select vector_matmul(1, id, v, @qc2, '{"query_format":"vecblock","metric":"l2sq"}') from vq;
 ➤ vector_matmul(1, id, v, @qc2, {"query_format":"vecblock","metric":"l2sq"})[-1,2147483647,0]  𝄀
 [[["1", 0]], [["2", 0]]]
@@ -184,7 +218,7 @@ select vector_matmul(1, id, v, @qj, '{"query_format":"vecblock","metric":"l2sq"}
 [[["1", 0]], [["2", 0]]]
 select vector_matmul(2, id, v, '[[8.764914,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6.2606535]]', '{"metric":"l2sq"}') from vq;
 ➤ vector_matmul(2, id, v, [[8.764914,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,6.2606535]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
-[[["1", 0.3919571], ["3", 0.9462981]]]
+[[["1", 0.3919571054686912], ["3", 0.9462981068973022]]]
 select vector_matmul(1, id, v, @qc, '{"query_format":"float32"}') from vq;
 invalid input: vector_matmul: binary queries are 23 bytes, want a non-zero multiple of 68 (float32 x dimension 17)
 select vector_matmul(1, id, w, @qc, '{"query_format":"vecblock"}') from vq;
@@ -234,4 +268,15 @@ insert into mx values (1, '[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 select vector_matmul(2, id, v, '[[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]]', '{"metric":"l2sq"}') from mx;
 ➤ vector_matmul(2, id, v, [[1.329228e36,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
 [[["2", 0], ["1", 1]]]
+create table nf (id int primary key, h vecf16(1), g vecbf16(1));
+insert into nf values (1, '[1]', '[1]');
+select vector_matmul(1, id, h, '[[70000]]', '{"metric":"l2sq"}') from nf;
+invalid input: vector_matmul: query value 70000 is not representable in the column type
+select vector_matmul(1, id, h, '[[-70000]]', '{"metric":"l2sq"}') from nf;
+invalid input: vector_matmul: query value -70000 is not representable in the column type
+select vector_matmul(1, id, g, '[[3.4028234663852886e38]]', '{"metric":"l2sq"}') from nf;
+invalid input: vector_matmul: query value 3.4028235e+38 is not representable in the column type
+select vector_matmul(1, id, h, '[[2]]', '{"metric":"l2sq"}') from nf;
+➤ vector_matmul(1, id, h, [[2]], {"metric":"l2sq"})[-1,2147483647,0]  𝄀
+[[["1", 1]]]
 drop database vector_matmul_db;

@@ -17,6 +17,8 @@ package cdc
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,8 +30,11 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -42,11 +47,80 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetTableScanner(t *testing.T) {
-	gostub.Stub(&getSqlExecutor, func(cnUUID string) executor.SQLExecutor {
-		return &mock_executor.MockSQLExecutor{}
+func newDetectorTestRuntime(t *testing.T, sid string) runtime.Runtime {
+	t.Helper()
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, sid, logutil.GetPanicLogger())
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	rt.SetGlobalVariables(runtime.InternalSQLExecutor, &mock_executor.MockSQLExecutor{})
+	t.Cleanup(func() {
+		if d := TableDetectorFromRuntime(rt); d != nil {
+			d.Close()
+		}
+		runtime.CompareAndDeleteServiceBasedRuntime(sid, rt)
 	})
-	assert.NotNil(t, GetTableDetector("cnUUID"))
+	return rt
+}
+
+func TestGetTableScanner(t *testing.T) {
+	firstRT := newDetectorTestRuntime(t, t.Name()+"-first")
+	secondRT := newDetectorTestRuntime(t, t.Name()+"-second")
+	first := InitTableDetector(firstRT, &mock_executor.MockSQLExecutor{})
+	second := InitTableDetector(secondRT, &mock_executor.MockSQLExecutor{})
+	require.Same(t, first, GetTableDetector(t.Name()+"-first"))
+	require.Same(t, second, GetTableDetector(t.Name()+"-second"))
+	require.NotSame(t, first, second)
+	first.Close()
+	require.NoError(t, second.Context().Err(), "closing one CN must not close another")
+}
+
+func TestTableDetectorResetScanInterval(t *testing.T) {
+	newDetectorTestRuntime(t, "private")
+	newDetectorTestRuntime(t, "next")
+	ResetTableDetectorForTest("private", time.Second)
+	first := GetTableDetector("private")
+	require.Equal(t, time.Second, first.scanInterval)
+	for _, interval := range []time.Duration{0, -time.Second} {
+		ResetTableDetectorForTest("private", interval)
+		require.Equal(t, defaultTableScanInterval, GetTableDetector("private").scanInterval)
+	}
+	require.ErrorIs(t, first.Context().Err(), context.Canceled)
+	ResetTableDetectorForTest("next")
+	require.Equal(t, defaultTableScanInterval, GetTableDetector("next").scanInterval, "private cadence must not leak")
+}
+
+func TestTableDetectorPrivatePeriodicScan(t *testing.T) {
+	stub := gostub.Stub(&cdcScanTableInjected, func() (string, bool) { return "", false })
+	defer stub.Reset()
+	td := newTableDetector(&mock_executor.MockSQLExecutor{})
+	td.scanInterval = 10 * time.Millisecond
+	td.scanTableFn = func(context.Context) error {
+		td.mu.Lock()
+		td.Mp = map[uint32]TblMap{1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl"}}}
+		td.mu.Unlock()
+		return nil
+	}
+	defer func() {
+		td.Close()
+		waitUntil(t, func() bool {
+			td.mu.Lock()
+			defer td.mu.Unlock()
+			return !td.loopRunning.Load() && !td.handling
+		}, time.Second, "private detector did not stop")
+	}()
+	observed := make(chan map[uint32]TblMap, 1)
+	require.True(t, td.RegisterIfAbsent("periodic", 1, []string{"db"}, []string{"tbl"}, func(tables map[uint32]TblMap) error {
+		select {
+		case observed <- tables:
+		default:
+		}
+		return nil
+	}))
+	select {
+	case tables := <-observed:
+		require.Equal(t, "tbl", tables[1]["db.tbl"].SourceTblName)
+	case <-time.After(time.Second):
+		t.Fatal("periodic scan did not deliver the registered table without a manual scan")
+	}
 }
 
 func TestApplyTableDetectorOptions(t *testing.T) {
@@ -188,7 +262,7 @@ func TestTableScanner1(t *testing.T) {
 	assert.Equal(t, 1, len(td.Callbacks))
 	assert.Equal(t, 1, len(td.SubscribedAccountIds))
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(td.Mp))
 
@@ -198,7 +272,7 @@ func TestTableScanner1(t *testing.T) {
 		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	).Return(executor.Result{}, moerr.NewInternalErrorNoCtx("mock error")).AnyTimes()
 
-	err = td.scanTable()
+	err = td.scanTable(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 1, len(td.Mp))
 
@@ -206,7 +280,7 @@ func TestTableScanner1(t *testing.T) {
 	assert.Equal(t, 0, len(td.Callbacks))
 	assert.Equal(t, 0, len(td.SubscribedAccountIds))
 
-	err = td.scanTable()
+	err = td.scanTable(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 0, len(td.Mp))
 }
@@ -267,7 +341,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
 	})
 	td.mu.Unlock()
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, td.Mp)
 }
@@ -324,7 +398,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 	})
 	td.mu.Unlock()
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	require.NoError(t, err)
 	require.Contains(t, td.Mp, uint32(1))
 	assert.Contains(t, td.Mp[1], "source_db.child")
@@ -382,7 +456,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 	})
 	td.mu.Unlock()
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, td.Mp)
 }
@@ -447,7 +521,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	})
 	td.mu.Unlock()
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	require.Error(t, err)
 	require.Contains(t, td.Mp, uint32(1))
 	gotInfo := td.Mp[1][GenDbTblKey("source_db", "child")]
@@ -473,7 +547,7 @@ func TestTableDetectorRegisterStartsScanAsync(t *testing.T) {
 		cleanupWarn:          time.Second,
 		nowFn:                time.Now,
 	}
-	td.scanTableFn = func() error { return nil }
+	td.scanTableFn = func(context.Context) error { return nil }
 	defer td.Close()
 
 	errCh := make(chan error, 1)
@@ -531,7 +605,7 @@ func TestTableDetectorScanLoopSingleInstance(t *testing.T) {
 		cleanupWarn:          time.Second,
 		nowFn:                time.Now,
 	}
-	td.scanTableFn = func() error {
+	td.scanTableFn = func(context.Context) error {
 		scanCalls.Add(1)
 		return nil
 	}
@@ -543,10 +617,7 @@ func TestTableDetectorScanLoopSingleInstance(t *testing.T) {
 
 	waitUntil(t, func() bool { return scanCalls.Load() > 0 }, 500*time.Millisecond, "scan loop did not start")
 
-	firstSeq := td.loopSeq.Load()
-	if firstSeq != 1 {
-		t.Fatalf("expected loopSeq 1, got %d", firstSeq)
-	}
+	firstContext := td.Context()
 
 	for i := 1; i < 5; i++ {
 		id := fmt.Sprintf("task-%d", i)
@@ -555,10 +626,7 @@ func TestTableDetectorScanLoopSingleInstance(t *testing.T) {
 		}
 	}
 
-	time.Sleep(50 * time.Millisecond)
-	if td.loopSeq.Load() != firstSeq {
-		t.Fatalf("expected loopSeq to remain %d, got %d", firstSeq, td.loopSeq.Load())
-	}
+	require.Same(t, firstContext, td.Context(), "registrations share one scan lifetime")
 
 	td.Close()
 	waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
@@ -836,6 +904,8 @@ func TestTableDetectorCloseWhileCallbackRunning(t *testing.T) {
 
 	block := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
 
 	require.True(t, d.RegisterIfAbsent("task", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error {
 		close(block)
@@ -853,9 +923,17 @@ func TestTableDetectorCloseWhileCallbackRunning(t *testing.T) {
 	}()
 
 	<-block
-	d.Close()
-	close(release)
+	closed := make(chan struct{})
+	go func() { d.Close(); close(closed) }()
+	<-d.Context().Done()
+	select {
+	case <-closed:
+		t.Fatal("Close returned before the admitted callback exited")
+	default:
+	}
+	releaseOnce.Do(func() { close(release) })
 	wg.Wait()
+	<-closed
 
 	d.mu.Lock()
 	if d.handling {
@@ -895,55 +973,129 @@ func TestTableDetectorConcurrentRegisterUnregister(t *testing.T) {
 		cleanupWarn:          time.Second,
 		nowFn:                time.Now,
 	}
-	td.scanTableFn = func() error { return nil }
-	defer td.Close()
-
-	const workers = 16
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	errCh := make(chan error, workers)
-
-	for i := 0; i < workers; i++ {
-		go func(idx int) {
-			defer wg.Done()
-			id := fmt.Sprintf("task-%d", idx)
-			if !td.RegisterIfAbsent(id, uint32(idx+1), []string{fmt.Sprintf("db%d", idx)}, []string{fmt.Sprintf("tbl%d", idx)}, func(map[uint32]TblMap) error { return nil }) {
-				errCh <- moerr.NewInternalErrorNoCtx(fmt.Sprintf("register failed for %s", id))
-				return
+	td.scanTableFn = func(context.Context) error { return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	start := make(chan struct{})
+	startWorkers := sync.OnceFunc(func() { close(start) })
+	var workersDone <-chan struct{}
+	defer func() {
+		cancel()
+		startWorkers()
+		if workersDone != nil {
+			select {
+			case <-workersDone:
+			case <-time.After(time.Second):
+				t.Error("register/unregister workers did not exit")
 			}
-			time.Sleep(time.Duration(idx%4) * 5 * time.Millisecond)
-			td.UnRegister(id)
-		}(i)
-	}
+		}
+		closed := make(chan struct{})
+		go func() {
+			td.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Error("table detector did not close")
+			return
+		}
+		waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
+	}()
 
+	register := func(id string) bool {
+		return td.RegisterIfAbsent(id, 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error { return nil })
+	}
+	require.True(t, register("anchor"))
+	require.True(t, register("a"))
+
+	// Registration and removal contend on the same subscription indexes. The
+	// registration of c must follow a's removal, regardless of b's ordering.
+	removed := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		td.UnRegister("a")
+		close(removed)
+		results <- nil
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		if !register("b") {
+			results <- moerr.NewInternalErrorNoCtx("register b failed")
+			return
+		}
+		select {
+		case <-removed:
+		case <-ctx.Done():
+			results <- ctx.Err()
+			return
+		}
+		if !register("c") {
+			results <- moerr.NewInternalErrorNoCtx("register c failed")
+			return
+		}
+		results <- nil
+	}()
 	done := make(chan struct{})
+	workersDone = done
 	go func() {
 		wg.Wait()
 		close(done)
 	}()
-
+	startWorkers()
+	for range 2 {
+		select {
+		case err := <-results:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatalf("concurrent register/unregister timed out: %v", ctx.Err())
+		}
+	}
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("concurrent register/unregister timed out")
+	case <-ctx.Done():
+		t.Fatal("register/unregister workers did not finish")
 	}
 
-	close(errCh)
-	for err := range errCh {
-		t.Fatalf("unexpected error: %v", err)
+	td.mu.Lock()
+	ids := make([]string, 0, len(td.Callbacks))
+	for id := range td.Callbacks {
+		ids = append(ids, id)
 	}
+	accountByTask := maps.Clone(td.CallBackAccountId)
+	dbByTask := maps.Clone(td.CallBackDbName)
+	tableByTask := maps.Clone(td.CallBackTableName)
+	accountTasks := slices.Clone(td.SubscribedAccountIds[1])
+	dbTasks := slices.Clone(td.SubscribedDbNames["db"])
+	tableTasks := slices.Clone(td.SubscribedTableNames["tbl"])
+	indexCounts := []int{len(td.SubscribedAccountIds), len(td.SubscribedDbNames), len(td.SubscribedTableNames)}
+	td.mu.Unlock()
 
-	waitUntil(t, func() bool {
-		td.mu.Lock()
-		defer td.mu.Unlock()
-		return len(td.Callbacks) == 0 &&
-			len(td.SubscribedAccountIds) == 0 &&
-			len(td.SubscribedDbNames) == 0 &&
-			len(td.SubscribedTableNames) == 0
-	}, 500*time.Millisecond, "callbacks or subscriptions not cleaned up")
+	wantIDs := []string{"anchor", "b", "c"}
+	require.ElementsMatch(t, wantIDs, ids)
+	require.Equal(t, map[string]uint32{"anchor": 1, "b": 1, "c": 1}, accountByTask)
+	require.Equal(t, map[string][]string{"anchor": {"db"}, "b": {"db"}, "c": {"db"}}, dbByTask)
+	require.Equal(t, map[string][]string{"anchor": {"tbl"}, "b": {"tbl"}, "c": {"tbl"}}, tableByTask)
+	require.Equal(t, []int{1, 1, 1}, indexCounts)
+	require.ElementsMatch(t, wantIDs, accountTasks)
+	require.ElementsMatch(t, wantIDs, dbTasks)
+	require.ElementsMatch(t, wantIDs, tableTasks)
 
-	td.Close()
-	waitUntil(t, func() bool { return !td.loopRunning.Load() }, time.Second, "scan loop did not stop after Close")
+	for _, id := range wantIDs {
+		td.UnRegister(id)
+	}
+	td.mu.Lock()
+	counts := []int{
+		len(td.Callbacks), len(td.CallBackAccountId), len(td.SubscribedAccountIds),
+		len(td.CallBackDbName), len(td.SubscribedDbNames),
+		len(td.CallBackTableName), len(td.SubscribedTableNames),
+	}
+	td.mu.Unlock()
+	require.Equal(t, []int{0, 0, 0, 0, 0, 0, 0}, counts)
 }
 
 func waitUntil(t *testing.T, cond func() bool, timeout time.Duration, msg string) {
@@ -974,7 +1126,7 @@ func TestTableDetectorConcurrentRegister(t *testing.T) {
 		cleanupWarn:          time.Second,
 		nowFn:                time.Now,
 	}
-	td.scanTableFn = func() error { return nil }
+	td.scanTableFn = func(context.Context) error { return nil }
 	defer td.Close()
 
 	const concurrency = 8
@@ -1117,13 +1269,13 @@ func TestTableScannerMalformedUTF8UsesCatalogSuperset(t *testing.T) {
 	td.mu.Lock()
 	td.registerLocked("malformed", 1, []string{malformed}, []string{"Orders"}, nil)
 	td.mu.Unlock()
-	require.NoError(t, td.scanTable())
+	require.NoError(t, td.scanTable(context.Background()))
 }
 
-func TestScanAndProcess(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
+func TestScanAndProcessStopsOnScanError(t *testing.T) {
+	const wantErr = "scan failed"
+	var scanCalls atomic.Int32
+	var callbackCalls atomic.Int32
 	td := &TableDetector{
 		Mp:                   make(map[uint32]TblMap),
 		Callbacks:            make(map[string]TableCallback),
@@ -1133,45 +1285,28 @@ func TestScanAndProcess(t *testing.T) {
 		SubscribedDbNames:    make(map[string][]string),
 		CallBackTableName:    make(map[string][]string),
 		SubscribedTableNames: make(map[string][]string),
-		exec:                 nil,
 		cleanupPeriod:        time.Hour,
 		cleanupWarn:          DefaultCleanupWarnThreshold,
 	}
 	defer td.Close()
 
-	tables := map[uint32]TblMap{
-		1: {
-			"db1.tbl1": &DbTableInfo{
-				SourceDbId:      1,
-				SourceDbName:    "db1",
-				SourceTblId:     1001,
-				SourceTblName:   "tbl1",
-				SourceCreateSql: "create table tbl1 (a int)",
-			},
-		},
+	td.scanTableFn = func(context.Context) error {
+		scanCalls.Add(1)
+		return moerr.NewInternalErrorNoCtx(wantErr)
 	}
-	scanCount := 0
-	td.scanTableFn = func() error {
-		td.mu.Lock()
-		if scanCount%5 == 0 {
-			td.lastMp = tables
-		} else {
-			td.lastMp = nil
-		}
-		td.mu.Unlock()
-		scanCount++
+	require.True(t, td.RegisterIfAbsent("scan-error", 1, []string{"db"}, []string{"tbl"}, func(map[uint32]TblMap) error {
+		callbackCalls.Add(1)
 		return nil
-	}
+	}))
 
-	fault.Enable()
-	objectio.SimpleInject(objectio.FJ_CDCScanTableErr)
-	rm, _ := objectio.InjectCDCScanTable("fast scan")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go td.scanTableLoop(ctx)
-	time.Sleep(200 * time.Millisecond)
-	defer rm()
-	fault.Disable()
+	td.scanAndProcess(context.Background())
+
+	require.Equal(t, int32(1), scanCalls.Load())
+	require.Zero(t, callbackCalls.Load())
+	td.mu.Lock()
+	lastMp := td.lastMp
+	td.mu.Unlock()
+	require.Nil(t, lastMp)
 }
 
 func TestProcessCallBack(t *testing.T) {
@@ -1339,7 +1474,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 		return nil
 	}))
 
-	err := td.scanTable()
+	err := td.scanTable(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(td.Mp))
 
@@ -1352,7 +1487,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 
 	assert.True(t, tblInfo.HasUserPrimaryKey)
 
-	err = td.scanTable()
+	err = td.scanTable(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(td.Mp))
 
@@ -1386,4 +1521,55 @@ func TestTableScanner_PrintActiveRunners_NilReceiver(t *testing.T) {
 	assert.NotPanics(t, func() {
 		cdcStateManager.PrintActiveRunners(0)
 	})
+}
+
+func TestTableDetectorStopCancelsAndJoinsScan(t *testing.T) {
+	d := newTableDetector(&mock_executor.MockSQLExecutor{})
+	d.scanInterval = time.Millisecond
+	entered := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	var once, enteredOnce, canceledOnce sync.Once
+	defer d.Close()
+	defer once.Do(func() { close(release) })
+	d.scanTableFn = func(ctx context.Context) error {
+		enteredOnce.Do(func() { close(entered) })
+		<-ctx.Done()
+		canceledOnce.Do(func() { close(canceled) })
+		<-release // An executor may need additional time to finish cleanup.
+		return ctx.Err()
+	}
+	d.startScanLoop()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("scan not admitted")
+	}
+	d.Stop()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("SQL scan did not receive cancellation")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, d.CloseAndWait(ctx), context.Canceled)
+	require.False(t, d.RegisterIfAbsent("late", 1, nil, nil, func(map[uint32]TblMap) error { t.Fatal("late callback"); return nil }))
+	once.Do(func() { close(release) })
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, d.CloseAndWait(ctx))
+	require.False(t, d.loopRunning.Load())
+}
+
+func TestTableDetectorReplacementKeepsGenerationOwnership(t *testing.T) {
+	sid := t.Name()
+	oldRT := newDetectorTestRuntime(t, sid)
+	old := InitTableDetector(oldRT, &mock_executor.MockSQLExecutor{})
+	newRT := newDetectorTestRuntime(t, sid)
+	next := InitTableDetector(newRT, &mock_executor.MockSQLExecutor{})
+	old.Close()
+	require.False(t, runtime.CompareAndDeleteServiceBasedRuntime(sid, oldRT))
+	require.Same(t, next, GetTableDetector(sid))
+	require.NoError(t, next.Context().Err())
 }

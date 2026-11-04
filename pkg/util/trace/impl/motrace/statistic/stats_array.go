@@ -1010,18 +1010,3 @@ func StatsInfoFromContext(requestCtx context.Context) *StatsInfo {
 	}
 	return nil
 }
-
-// EnsureStatsInfoCanBeFound ensure a statement statistic is set in context, if not, copy one from another context, this function is copied from EnsureStatementProfiler
-func EnsureStatsInfoCanBeFound(ctx context.Context, from context.Context) context.Context {
-	if v := ctx.Value(statsInfoKey{}); v != nil {
-		// already set
-		return ctx
-	}
-	v := from.Value(statsInfoKey{})
-	if v == nil {
-		// not set in from
-		return ctx
-	}
-	ctx = context.WithValue(ctx, statsInfoKey{}, v)
-	return ctx
-}

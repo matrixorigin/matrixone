@@ -61,4 +61,53 @@ set @issue_27320_interval = '0-1';
 execute issue_27320_year_month using @issue_27320_interval, @issue_27320_interval;
 deallocate prepare issue_27320_year_month;
 
+-- Fractional calendar intervals normalize the evaluated source type.
+select cast(date_add(date '2024-01-01', interval cast(1.5 as decimal(3,1)) day) as char) as decimal_day,
+       cast(date_add(date '2024-01-01', interval cast(1.5 as double) day) as char) as double_day,
+       cast(date_add(date '2024-01-01', interval '1.5' day) as char) as text_day;
+select cast(date_add(cast('2024-01-01' as datetime(6)), interval 1.1234567 second) as char) as added,
+       cast(date_sub(cast('2024-01-01' as datetime(6)), interval 1.1234567 second) as char) as subtracted,
+       cast(adddate(cast('2024-01-01' as datetime(6)), interval -0.0000009 second) as char) as negative_zero,
+       cast(subdate(cast('2024-01-01' as datetime(6)), interval -1.1234567 second) as char) as negative_sub;
+-- Explicit CAST scale is evaluated before interval normalization.
+select cast(adddate(date '2024-01-01', cast(1.49 as decimal(3,1))) as char) as cast_day,
+       cast(date_add(cast('2024-01-01' as datetime(6)), interval cast(1.12345679 as decimal(9,6)) second) as char) as cast_second;
+create table t_calendar_interval (
+  id int primary key,
+  d date,
+  n decimal(18,7),
+  calc date as (adddate(d,n)) stored,
+  index idx_calc(calc)
+);
+insert into t_calendar_interval(id,d,n) values
+ (1,'2024-01-01',1.4),(2,'2024-01-01',1.5),(3,'2024-01-01',1.9),
+ (4,'2024-01-01',-1.5),(5,'2024-01-01',-0.0000009),(6,'2024-01-01',null);
+select id, cast(date_add(d, interval n day) as char) as added,
+       cast(date_sub(d, interval n day) as char) as subtracted,
+       cast(adddate(d,n) as char) as alias_added, cast(subdate(d,n) as char) as alias_subtracted
+from t_calendar_interval order by id;
+select id, cast(calc as char) as stored_day from t_calendar_interval order by id;
+select id from t_calendar_interval where calc='2024-01-03' order by id;
+create table t_calendar_ctas as select adddate(d,n) as calculated from t_calendar_interval;
+select data_type from information_schema.columns where table_schema='date_add_dynamic_interval' and table_name='t_calendar_ctas' and column_name='calculated';
+select cast(calculated as char) as persisted_day from t_calendar_ctas order by calculated;
+-- The same prepared plan must specialize DECIMAL and text independently.
+prepare calendar_day from 'select cast(adddate(date ''2024-01-01'', ?) as char) as prepared_day';
+set @calendar_n=cast(1.5 as decimal(3,1));
+execute calendar_day using @calendar_n;
+set @calendar_n='1.5';
+execute calendar_day using @calendar_n;
+set @calendar_n=cast(-1.5 as decimal(3,1));
+execute calendar_day using @calendar_n;
+set @calendar_n=null;
+execute calendar_day using @calendar_n;
+deallocate prepare calendar_day;
+-- Overflow remains owned by the active arithmetic consumer.
+select cast(date_add(cast(null as date), interval cast(99999999999999999999 as decimal(20,0)) day) as char) as null_base,
+       cast(case when false then date_sub(date '2024-01-01', interval cast(99999999999999999999 as decimal(20,0)) day) else date '2024-01-01' end as char) as inactive;
+select cast(date_add(date '2024-01-01', interval cast(1.9 as decimal(3,1)) year) as char) as year_control,
+       cast(date_add(date '2024-01-01', interval cast(1.9 as decimal(3,1)) quarter) as char) as quarter_control,
+       cast(date_add(date '2024-01-01', interval cast(1.9 as decimal(3,1)) month) as char) as month_control,
+       cast(date_add(date '2024-01-01', interval cast(1.9 as decimal(3,1)) week) as char) as week_control;
+
 drop database date_add_dynamic_interval;

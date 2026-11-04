@@ -17,7 +17,6 @@ package connector
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -95,6 +94,16 @@ func (connector *Connector) ActivatesAllocationAccountLifecycle() bool {
 func (connector *Connector) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
+	if err := connector.DrainAllocationAccount(account); err != nil {
+		return err
+	}
+	connector.allocationAccount = nil
+	return nil
+}
+
+// DrainAllocationAccount releases transferred batches after every producer and
+// consumer has quiesced, before their source operators retire capacity classes.
+func (connector *Connector) DrainAllocationAccount(account *mpool.AllocationAccount) error {
 	if connector.allocationAccount == nil {
 		return nil
 	}
@@ -108,7 +117,6 @@ func (connector *Connector) ClearAllocationAccount(
 		connector.cleanupSpool.FinalizeAfterConsumersQuiesced()
 		connector.cleanupSpool = nil
 	}
-	connector.allocationAccount = nil
 	return nil
 }
 
@@ -190,8 +198,4 @@ func (connector *Connector) CleanupDeferredSpool() {
 }
 
 func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
-}
-
-func (connector *Connector) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }

@@ -107,7 +107,6 @@ func (l *localLockTable) doLock(
 	c *lockContext,
 	blocked bool) {
 	var old *waiter
-	var oldOffset int
 	var err error
 	table := l.bind.Table
 	// Session-level SET lock_wait_timeout takes highest priority (passed via
@@ -118,6 +117,15 @@ func (l *localLockTable) doLock(
 		// So only need wait notify.
 		if !blocked {
 			err = l.doAcquireLock(c)
+			// Acquisition can consume the previous waiter and create another at
+			// the same request position. Retire ownership by identity, including
+			// when admission at the next conflict returns an error.
+			if old != nil && old != c.w {
+				old.disableNotify()
+				old.close("doLock, previous waiter consumed", l.logger)
+				c.txn.clearBlocked(old, l.logger)
+				old = nil
+			}
 			if err != nil {
 				logLocalLockFailed(l.logger, c.txn, table, c.rows, c.opts, err)
 				w := c.w
@@ -131,11 +139,6 @@ func (l *localLockTable) doLock(
 			// no waiter, all locks are added
 			if c.w == nil {
 				v2.TxnAcquireLockWaitDurationHistogram.Observe(time.Since(c.createAt).Seconds())
-				if old != nil {
-					old.disableNotify()
-					old.close("doLock, no waiter, all locks are added in doLock", l.logger)
-				}
-				c.txn.clearBlocked(old, l.logger)
 				logLocalLockAdded(l.logger, c.txn, l.bind.Table, c.rows, c.opts)
 				if c.result.Timestamp.IsEmpty() {
 					c.result.Timestamp = c.lockedTS
@@ -144,13 +147,6 @@ func (l *localLockTable) doLock(
 				return
 			}
 
-			if oldOffset != c.offset {
-				if old != nil {
-					old.disableNotify()
-					old.close("doLock, lock next row", l.logger)
-				}
-				c.txn.clearBlocked(old, l.logger)
-			}
 			// The new dependency is now visible without the physical lock-table
 			// mutex. Check it promptly; the periodic checker remains the fallback
 			// when detector admission is busy or traversal is transiently blocked.
@@ -166,7 +162,6 @@ func (l *localLockTable) doLock(
 		// txn is locked by service.lock or service_remote.lock. We must unlock here. And lock again after
 		// wait result. Because during wait, deadlock detection may be triggered, and need call txn.fetchWhoWaitingMe,
 		// or other concurrent txn method.
-		oldOffset = c.offset
 		oldTxnID := c.txn.txnID
 		oldTxnGeneration := c.txn.generation
 		old = c.w
@@ -220,7 +215,7 @@ func (l *localLockTable) doLock(
 
 		c.txn.Lock()
 
-		logLocalLockWaitOnResult(l.logger, c.txn, table, c.rows[c.idx], c.opts, c.w, v)
+		logLocalLockWaitOnResult(l.logger, c.txn, table, c.rows[c.offset], c.opts, c.w, v)
 
 		// txn closed between Unlock and get Lock again
 		e := v.err
@@ -246,7 +241,6 @@ func (l *localLockTable) doLock(
 		}
 
 		c.w.resetWait(l.logger)
-		c.offset = c.idx
 		c.result.Timestamp = v.ts
 		c.result.HasConflict = true
 		c.result.TableDefChanged = v.defChanged
@@ -390,81 +384,163 @@ func (l *localLockTable) unlockWithContext(
 	}
 
 	mutationByKey := make(map[string]int, len(mutations))
-	hasHandoff := false
 	for idx := range mutations {
 		key := string(mutations[idx].Key)
 		if _, ok := mutationByKey[key]; !ok {
-			// Preserve the historical first-mutation-wins behavior if a caller
-			// sends duplicate entries for one physical key.
+			// Preserve first-mutation-wins for duplicate logical keys.
 			mutationByKey[key] = idx
 		}
-		hasHandoff = hasHandoff || len(mutations[idx].ReplaceTo) > 0
-	}
-	getMutation := func(key []byte) int {
-		if idx, ok := mutationByKey[util.UnsafeBytesToString(key)]; ok {
-			return idx
-		}
-		return -1
 	}
 
-	// A proxy handoff changes two ownership surfaces: the replacement
-	// transaction ledger and the physical holder set. Discover the conditional
-	// mutations first, then prepare every ledger update before changing either
-	// surface. This also keeps failure injection and fixed-slice allocation on
-	// the fail-closed side of the linearization point.
+	// A proxy names logical rows, while this owner may have merged those rows
+	// into one physical range. Resolve mutations to complete cleanup units;
+	// several keys in one unit can nominate different replacement holders.
+	type handoffUnit struct {
+		keys [][]byte
+		lock Lock
+		skip bool
+	}
 	type handoffSpec struct {
-		key       []byte
+		unit      *handoffUnit
 		replaceTo []byte
 		needsAdd  bool
 	}
 	var handoffs []handoffSpec
-	var discoveredHandoffs map[string]struct{}
-	if hasHandoff {
-		discoveredHandoffs = make(map[string]struct{})
-	}
-
-	if hasHandoff {
-		l.mu.Lock()
-		v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
-		if l.mu.closed {
-			l.mu.Unlock()
-			return nil
+	units := make(map[string]*handoffUnit)
+	destinations := make(map[*handoffUnit]map[string]struct{})
+	var cleanupMutations map[string]bool
+	getMutation := func(key []byte) (skip, conditional bool) {
+		if skip, conditional = cleanupMutations[util.UnsafeBytesToString(key)]; conditional {
+			return
 		}
-		locks.iter(func(key []byte) bool {
-			idx := getMutation(key)
-			if idx == -1 ||
-				mutations[idx].Skip ||
-				len(mutations[idx].ReplaceTo) == 0 {
-				return true
-			}
-			keyValue := util.UnsafeBytesToString(key)
-			if _, duplicate := discoveredHandoffs[keyValue]; duplicate {
-				return true
-			}
-			lock, ok := l.mu.store.Get(key)
-			if !ok || !lock.holders.contains(txn.txnID) {
-				// A response-lost retry can already observe the replacement (or no
-				// holder after it finished). It is an idempotent no-op below.
-				return true
-			}
-			discoveredHandoffs[string(key)] = struct{}{}
-			handoffs = append(handoffs, handoffSpec{
-				key:       bytes.Clone(key),
-				replaceTo: bytes.Clone(mutations[idx].ReplaceTo),
-				needsAdd:  !lock.holders.contains(mutations[idx].ReplaceTo),
-			})
-			return true
-		})
-		l.mu.Unlock()
+		if idx, ok := mutationByKey[util.UnsafeBytesToString(key)]; ok {
+			return mutations[idx].Skip, true
+		}
+		return false, false
 	}
+	resolveUnit := func(key []byte) ([][]byte, Lock, error) {
+		foundKey, lock, ok := l.mu.store.Seek(key)
+		if !ok {
+			return nil, Lock{}, nil
+		}
+		if lock.isLockRow() {
+			if !bytes.Equal(foundKey, key) {
+				return nil, Lock{}, nil
+			}
+			return [][]byte{foundKey}, lock, nil
+		}
+		if lock.isLockRangeStart() && !bytes.Equal(foundKey, key) {
+			return nil, Lock{}, nil
+		}
+		pairedKey, _, paired := l.findPairedRangeLock(foundKey, lock)
+		if !paired {
+			return nil, Lock{}, moerr.NewInvalidStateNoCtx("missing paired range lock during proxy handoff")
+		}
+		if lock.isLockRangeStart() {
+			return [][]byte{foundKey, pairedKey}, lock, nil
+		}
+		if bytes.Compare(key, pairedKey) < 0 {
+			return nil, Lock{}, nil
+		}
+		return [][]byte{pairedKey, foundKey}, lock, nil
+	}
+	var sourceKeys map[string]struct{}
+	l.mu.Lock()
+	v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
+	if l.mu.closed {
+		l.mu.Unlock()
+		return nil
+	}
+	for idx, mutation := range mutations {
+		if mutationByKey[string(mutation.Key)] != idx {
+			continue
+		}
+		// Ordinary proxy cleanup names exact rows and has no ownership to
+		// transfer. Keep its conditional marker without grouping or cloning
+		// keys. Logical rows inside a physical range still need normalization.
+		if mutation.Skip || len(mutation.ReplaceTo) == 0 {
+			if lock, ok := l.mu.store.Get(mutation.Key); ok && lock.isLockRow() {
+				continue
+			}
+		}
+		keys, lock, err := resolveUnit(mutation.Key)
+		if err != nil {
+			l.mu.Unlock()
+			return err
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		if sourceKeys == nil {
+			sourceKeys = make(map[string]struct{}, locks.len())
+			locks.iter(func(key []byte) bool {
+				sourceKeys[string(key)] = struct{}{}
+				return true
+			})
+		}
+		tracked := false
+		for _, key := range keys {
+			if _, ok := sourceKeys[util.UnsafeBytesToString(key)]; ok {
+				tracked = true
+				break
+			}
+		}
+		if !tracked {
+			continue
+		}
+		canonical := string(keys[len(keys)-1])
+		unit := units[canonical]
+		if unit == nil {
+			unit = &handoffUnit{keys: make([][]byte, len(keys)), lock: lock, skip: true}
+			for i, key := range keys {
+				unit.keys[i] = bytes.Clone(key)
+			}
+			units[canonical] = unit
+		}
+		unit.skip = unit.skip && mutation.Skip
+		if mutation.Skip || len(mutation.ReplaceTo) == 0 || !lock.holders.contains(txn.txnID) {
+			continue
+		}
+		if destinations[unit] == nil {
+			destinations[unit] = make(map[string]struct{})
+		}
+		destination := string(mutation.ReplaceTo)
+		if _, duplicate := destinations[unit][destination]; duplicate {
+			continue
+		}
+		destinations[unit][destination] = struct{}{}
+		handoffs = append(handoffs, handoffSpec{
+			unit:      unit,
+			replaceTo: bytes.Clone(mutation.ReplaceTo),
+			needsAdd:  !lock.holders.contains(mutation.ReplaceTo),
+		})
+	}
+	for _, unit := range units {
+		if cleanupMutations == nil {
+			cleanupMutations = make(map[string]bool)
+		}
+		for _, key := range unit.keys {
+			cleanupMutations[string(key)] = unit.skip
+		}
+	}
+	if len(handoffs) == 0 {
+		if err := ctx.Err(); err != nil {
+			l.mu.Unlock()
+			return err
+		}
+		l.unlockLocksWithMutationsLocked(txn, locks, commitTS, b, getMutation)
+		l.mu.Unlock()
+		return nil
+	}
+	l.mu.Unlock()
 
 	type replacementUpdate struct {
-		txn          *activeTxn
-		generation   uint64
-		keys         [][]byte
-		existingKeys [][]byte
-		prepared     *preparedTxnLocks
-		created      bool
+		txn           *activeTxn
+		generation    uint64
+		keys          [][]byte
+		existingUnits []*handoffUnit
+		prepared      *preparedTxnLocks
+		created       bool
 	}
 	var replacementsByID map[string]*replacementUpdate
 	if len(handoffs) > 0 {
@@ -486,9 +562,9 @@ func (l *localLockTable) unlockWithContext(
 		// through physical publication. Otherwise it can finish after discovery
 		// and the handoff can resurrect its holder without a live ledger.
 		if h.needsAdd {
-			update.keys = append(update.keys, h.key)
+			update.keys = append(update.keys, h.unit.keys...)
 		} else {
-			update.existingKeys = append(update.existingKeys, h.key)
+			update.existingUnits = append(update.existingUnits, h.unit)
 		}
 	}
 
@@ -558,21 +634,30 @@ func (l *localLockTable) unlockWithContext(
 			return moerr.NewInternalErrorNoCtx(
 				"proxy handoff replacement belongs to a different origin service")
 		}
-		for _, key := range update.existingKeys {
-			if !txnLedgerContainsKeyLocked(
-				update.txn,
-				l.bind.Group,
-				l.bind.Table,
-				key,
-			) {
-				// Repair a pre-existing holder/ledger divergence before removing
-				// the source. This can be observed across a rolling upgrade from
-				// the former non-atomic handoff implementation.
-				update.keys = append(update.keys, key)
+		for _, unit := range update.existingUnits {
+			complete := true
+			for _, key := range unit.keys {
+				if !txnLedgerContainsKeyLocked(update.txn, l.bind.Group, l.bind.Table, key) {
+					complete = false
+					break
+				}
+			}
+			if !complete {
+				// Replace endpoint fragments with one ordered pair; appending just
+				// a missing start behind an existing end would break unlock order.
+				update.keys = append(update.keys, unit.keys...)
 			}
 		}
 		if len(update.keys) == 0 {
 			continue
+		}
+		rewrittenKeys := make(map[string]struct{}, len(update.keys))
+		for _, key := range update.keys {
+			rewrittenKeys[string(key)] = struct{}{}
+		}
+		keep := func(key []byte) bool {
+			_, rewritten := rewrittenKeys[util.UnsafeBytesToString(key)]
+			return !rewritten
 		}
 		prepared, err := update.txn.prepareLockUpdate(
 			l.bind.Group,
@@ -582,7 +667,7 @@ func (l *localLockTable) unlockWithContext(
 			// the conservative mode here so this table can never be coarsened
 			// based on an incomplete owner-side view.
 			pb.LockOptions{Mode: pb.LockMode_Shared, Sharding: l.bind.Sharding},
-			nil,
+			keep,
 			l.logger,
 		)
 		if err != nil {
@@ -601,22 +686,23 @@ func (l *localLockTable) unlockWithContext(
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if !hasHandoff {
-		v2.TxnUnlockBtreeGetLockDurationHistogram.Observe(time.Since(start).Seconds())
-	}
 	if l.mu.closed {
 		return nil
 	}
 	for idx := range handoffs {
 		h := &handoffs[idx]
-		lock, ok := l.mu.store.Get(h.key)
-		if !ok || !lock.holders.contains(txn.txnID) {
-			return moerr.NewInternalErrorNoCtx(
-				"proxy handoff source changed while bookkeeping was prepared")
+		keys, lock, err := resolveUnit(h.unit.keys[0])
+		unchanged := err == nil && len(keys) == len(h.unit.keys) && sameRangeLockState(lock, h.unit.lock)
+		if unchanged {
+			for i, key := range keys {
+				unchanged = unchanged && bytes.Equal(key, h.unit.keys[i])
+			}
+		}
+		if !unchanged || !lock.holders.contains(txn.txnID) {
+			return moerr.NewInternalErrorNoCtx("proxy handoff source changed while bookkeeping was prepared")
 		}
 		if lock.holders.contains(h.replaceTo) == h.needsAdd {
-			return moerr.NewInternalErrorNoCtx(
-				"proxy handoff replacement changed while bookkeeping was prepared")
+			return moerr.NewInternalErrorNoCtx("proxy handoff replacement changed while bookkeeping was prepared")
 		}
 	}
 	// Every operation from here to holder replacement is allocation-free and
@@ -629,18 +715,15 @@ func (l *localLockTable) unlockWithContext(
 	}
 	for idx := range handoffs {
 		h := &handoffs[idx]
-		lock, _ := l.mu.store.Get(h.key)
-		if lock.holders.contains(h.replaceTo) {
-			lock.holders.remove(txn.txnID)
-		} else {
-			lock.holders.replace(
-				txn.txnID,
-				pb.WaitTxn{TxnID: h.replaceTo, CreatedOn: txn.remoteService},
-			)
+		if h.needsAdd {
+			h.unit.lock.holders.add(pb.WaitTxn{TxnID: h.replaceTo, CreatedOn: txn.remoteService})
 		}
 	}
+	// All replacements now own complete cleanup records and physical holds.
+	// The ordinary source pass removes its membership once per physical unit,
+	// preserving holder-change notifications and the commit timestamp frontier.
 	handoffCommitted = true
-	l.unlockLocksWithMutationsLocked(txn, locks, commitTS, b, mutations, getMutation)
+	l.unlockLocksWithMutationsLocked(txn, locks, commitTS, b, getMutation)
 	return nil
 }
 
@@ -697,10 +780,10 @@ func (l *localLockTable) unlockLocksLocked(
 				l.mu.store.Delete(key)
 				if len(startKey) > 0 {
 					l.mu.store.Delete(startKey)
-					startKey = nil
 				}
 				lock.release()
 			}
+			startKey = nil
 		}
 		return true
 	})
@@ -715,15 +798,20 @@ func (l *localLockTable) unlockLocksWithMutationsLocked(
 	locks *fixedSlice,
 	commitTS timestamp.Timestamp,
 	b pb.LockTable,
-	mutations []pb.ExtraMutation,
-	getMutation func([]byte) int,
+	getMutation func([]byte) (skip, conditional bool),
 ) {
 	var startKey []byte
 	tableDefChanged := false
 	locks.iter(func(key []byte) bool {
 		if lock, ok := l.mu.store.Get(key); ok {
-			idx := getMutation(key)
-			if idx != -1 && mutations[idx].Skip {
+			skip, conditional := getMutation(key)
+			// A lost-response retry can find only replacement holders. Apply
+			// the same conditional marker to both endpoints and skip the pair
+			// without carrying its cursor into a following standalone row.
+			if conditional && (skip || !lock.holders.contains(txn.txnID)) {
+				if lock.isLockRangeEnd() {
+					startKey = nil
+				}
 				return true
 			}
 
@@ -733,15 +821,6 @@ func (l *localLockTable) unlockLocksWithMutationsLocked(
 			}
 
 			if !lock.holders.contains(txn.txnID) {
-				// A remote proxy retries ReplaceTo after an RPC response is lost.
-				// The first request may already have replaced the holder, so make
-				// a stale handoff idempotent instead of treating it as a stale
-				// ordinary unlock. A replacement can itself finish before the
-				// original proxy holder retries, in which case the conditional
-				// handoff is also a safe no-op.
-				if idx != -1 {
-					return true
-				}
 				// 1. txn1 hold key1 on bind version 0
 				// 2. txn1 commit success
 				// 3. dn restart
@@ -761,10 +840,6 @@ func (l *localLockTable) unlockLocksWithMutationsLocked(
 			}
 			if len(startKey) > 0 && !lock.isLockRangeEnd() {
 				panic("BUG: missing range end key")
-			}
-
-			if idx != -1 && len(mutations[idx].ReplaceTo) > 0 {
-				panic("BUG: proxy handoff was not prepared")
 			}
 
 			if lock.isLockTableDefChanged() {
@@ -788,10 +863,10 @@ func (l *localLockTable) unlockLocksWithMutationsLocked(
 				l.mu.store.Delete(key)
 				if len(startKey) > 0 {
 					l.mu.store.Delete(startKey)
-					startKey = nil
 				}
 				lock.release()
 			}
+			startKey = nil
 		}
 		return true
 	})
@@ -1027,7 +1102,6 @@ func (l *localLockTable) doAcquireLock(c *lockContext) error {
 		c.opts.originalRows = nil
 		c.opts.originalOptions = pb.LockOptions{}
 		c.offset = 0
-		c.idx = 0
 	}
 }
 
@@ -1047,10 +1121,24 @@ func (l *localLockTable) acquireRowLockLocked(c *lockContext) error {
 				l.logger,
 				c,
 				func() error {
+					keys := [][]byte{key}
+					if !lock.isLockRow() {
+						pairedKey, _, paired := l.findPairedRangeLock(key, lock)
+						if !paired {
+							return moerr.NewInvalidStateNoCtx("missing paired range lock during row admission")
+						}
+						// Unlock consumes an ordered physical range pair even when
+						// the logical request only names one row inside that range.
+						if lock.isLockRangeStart() {
+							keys = [][]byte{key, pairedKey}
+						} else {
+							keys = [][]byte{pairedKey, key}
+						}
+					}
 					return c.txn.lockAdded(
 						l.bind.Group,
 						l.bind,
-						[][]byte{key},
+						keys,
 						c.opts.LockOptions,
 						l.logger,
 					)

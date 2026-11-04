@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -53,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -338,8 +340,8 @@ func (s *Scope) initDataSource(c *Compile) (err error) {
 		return nil
 	}
 
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		return c.compileVectorIndexScanDataSource(s)
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return c.compileIndexSearchScanDataSource(s)
 	}
 	return c.compileTableScanDataSource(s)
 }
@@ -361,7 +363,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
-		err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
@@ -388,6 +390,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if s.DataSource.TableDef != nil {
 			id = s.DataSource.TableDef.TblId
 		}
+		if id == 0 {
+			id = uint64(s.DataSource.node.GetObjRef().GetObj())
+		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
 			s.ScopeAnalyzer.Stop()
@@ -413,11 +418,22 @@ func (s *Scope) Run(c *Compile) (err error) {
 			if len(s.DataSource.RecvMsgList) > 0 {
 				tag = s.DataSource.RecvMsgList[0].MsgTag
 			}
+			if ts, ok := vm.GetLeafOp(s.RootOp).(*table_scan.TableScan); ok {
+				ts.ReadPolicy = scanReadPolicy(s.DataSource.node)
+			}
 			s.ScopeAnalyzer.Stop()
 			_, err = p.RunWithReader(s.DataSource.R, tag, s.Proc)
 		}
 	}
 	return err
+}
+
+// scanReadPolicy returns the fileservice policy bits a table scan adds to its reads.
+func scanReadPolicy(node *plan.Node) fileservice.Policy {
+	if node.GetNarrowScan() {
+		return fileservice.NarrowRead
+	}
+	return 0
 }
 
 func (s *Scope) FreeOperator(c *Compile) {
@@ -499,6 +515,11 @@ type sequentialBranchLifecycle interface {
 func installSequentialBranchStarter(root vm.Operator, start, wait func(int) error) (func(), bool, error) {
 	var target sequentialBranchStarter
 	err := vm.HandleAllOp(root, func(_ vm.Operator, op vm.Operator) error {
+		// Parallel inputs and flattened unions retain pass-through UNION ALL
+		// markers for projection/analysis. They do not own pre-scope activation.
+		if u, ok := op.(*unionall.UnionAll); ok && u.SequentialBranches <= 1 {
+			return nil
+		}
 		candidate, ok := op.(sequentialBranchStarter)
 		if !ok {
 			return nil
@@ -910,7 +931,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
-	runErr, _ := normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+	runErr, _ := process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 	// Publish the immediate outcome before waiting for remote cleanup or
 	// canceling this scope. Consumers can participate in that cleanup; late
 	// failures remain in the joined scope result below.
@@ -1046,12 +1067,12 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 			rawErr := err
 			queryCtx := scopeRunQueryContext(s.Proc)
 			var normalized bool
-			err, normalized = normalizeScopeRunError(
+			err, normalized = process.NormalizePipelineRunError(
 				err,
 				s.Proc.Ctx,
 				queryCtx,
 			)
-			if isScopeCancellationError(rawErr) {
+			if process.IsPipelineCancellationError(rawErr) {
 				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
 			}
 			if err == nil {
@@ -1362,7 +1383,8 @@ func validateRequiredVectorMembership(spec *plan.RuntimeFilterSpec, msg message.
 	if err := keys.UnmarshalBinary(msg.Data); err != nil {
 		return err
 	}
-	if keys.Length() != int(msg.Card) || keys.HasNull() || keys.GetType().Oid != types.T(spec.Expr.Typ.Id) {
+	if keys.Length() != int(msg.Card) || keys.HasNull() ||
+		!types.MembershipKeyTypeCompatible(keys.GetType().Oid, types.T(spec.Expr.Typ.Id)) {
 		return moerr.NewInvalidStateNoCtx("required vector membership has invalid cardinality or key type")
 	}
 	return nil
@@ -1636,7 +1658,7 @@ func (s *Scope) sendNotifyMessageWithFactory(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 		// Publish durable terminal evidence before waking canceled consumers.
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		err = finalizeRemoteResult(err, sender)
@@ -1900,11 +1922,8 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	if err != nil {
 		return
 	}
-	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
-		if emptyScan {
-			return emptyScanReaders(s.NodeInfo.Mcpu), nil
-		}
-		return s.buildVectorIndexReaders(runtimeFilterList)
+	if s.DataSource.node != nil && s.DataSource.node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		return s.buildVectorIndexReaders(runtimeFilterList, emptyScan)
 	}
 	for i := range s.DataSource.FilterList {
 		if plan2.IsFalseExpr(s.DataSource.FilterList[i]) {
@@ -2114,9 +2133,11 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	return
 }
 
-func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) ([]engine.Reader, error) {
+// buildVectorIndexReaders builds the readers of an index search scan; dropped
+// means a runtime filter proved the scan empty.
+func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter, dropped bool) ([]engine.Reader, error) {
 	node := s.DataSource.node
-	spec := node.GetVectorIndexScan()
+	spec := node.GetIndexSearchScan()
 	if spec == nil || spec.GetIndex() == nil {
 		return nil, moerr.NewInvalidInputNoCtx("vector index scan is missing index metadata")
 	}
@@ -2146,7 +2167,16 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 	if err != nil {
 		return nil, err
 	}
-	if !hasQuery {
+	if err := vectorscan.ApplySearchKnobs(&req, spec, s.Proc.GetResolveVariableFunc()); err != nil {
+		return nil, err
+	}
+	req.MembershipFilterPassed = !hasMembership && hasMembershipFilterSpec(s.DataSource.RuntimeFilterSpecs)
+	if dropped || !hasQuery {
+		if hooks, ok := searcher.Search().(searchplugin.EmptyScanHooks); ok {
+			if err := hooks.EmptyScan(s.Proc, spec, req); err != nil {
+				return nil, err
+			}
+		}
 		return emptyScanReaders(s.NodeInfo.Mcpu), nil
 	}
 	if factory, ok := searcher.Search().(searchplugin.ParallelHooks); ok && req.MembershipFilterRequired {
@@ -2172,6 +2202,16 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter) 
 		return nil, err
 	}
 	return []engine.Reader{reader}, nil
+}
+
+// hasMembershipFilterSpec reports whether specs plan a membership runtime filter.
+func hasMembershipFilterSpec(specs []*plan.RuntimeFilterSpec) bool {
+	for _, spec := range specs {
+		if spec != nil && spec.UseMembershipFilter {
+			return true
+		}
+	}
+	return false
 }
 
 func emptyScanReaders(count int) []engine.Reader {

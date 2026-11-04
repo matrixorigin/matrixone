@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,11 +97,6 @@ type Dynamic struct {
 
 // Config mo-service configuration
 type Config struct {
-	// benchmarkTNNoGC is launcher-owned proof propagated from the TN service
-	// config when a launch manifest starts CN and TN from separate files. It is
-	// never decoded from TOML and is consumed only by CN startup validation.
-	benchmarkTNNoGC bool
-
 	// DataDir data dir
 	DataDir string `toml:"data-dir"`
 	// Log log config
@@ -196,10 +190,11 @@ func parseConfigFromFile(file string, cfg any) error {
 }
 
 func parseFromString(data string, cfg any) error {
-	if _, err := toml.Decode(data, cfg); err != nil {
+	metadata, err := toml.Decode(data, cfg)
+	if err != nil {
 		return err
 	}
-	return nil
+	return cnservice.ValidateSiriusConfigKeys(metadata)
 }
 
 func (c *Config) validate() error {
@@ -367,7 +362,7 @@ func (c *Config) createFileServiceWithCreator(
 
 	// set distributed cache callbacks
 	for i := range c.FileServices {
-		c.setCacheCallbacks(&c.FileServices[i])
+		c.FileServices[i].Cache.SetRemoteCacheCallback()
 	}
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
@@ -389,6 +384,8 @@ func (c *Config) createFileServiceWithCreator(
 	metricScope := fileservice.ServiceMetricScope(serviceType.String(), nodeUUID)
 	for _, config := range c.FileServices {
 		config.Cache.MetricScope = metricScope
+		config.Cache.IndexFileCacheEnabled = serviceType == metadata.ServiceType_CN &&
+			strings.EqualFold(config.Name, defines.SharedFileServiceName)
 		counterSet := new(perfcounter.CounterSet)
 		service, err := creator(
 			ctx,
@@ -511,37 +508,6 @@ func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
 	return c.Observability
 }
 
-// memberlist requires all gossip seed addresses to be provided as IP:PORT
-func (c *Config) resolveGossipSeedAddresses() error {
-	result := make([]string, 0)
-	for _, addr := range c.LogService.GossipSeedAddresses {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return err
-		}
-		ips, err := net.LookupIP(host)
-		if err != nil {
-			// the configured member may be failed currently, keep the host name anyway since
-			// memberlist would try to resolve it again
-			result = append(result, addr)
-			continue
-		}
-		// only keep IPv4 addresses
-		filtered := make([]string, 0)
-		for _, ip := range ips {
-			if ip.To4() != nil {
-				filtered = append(filtered, ip.String())
-			}
-		}
-		if len(filtered) != 1 {
-			return moerr.NewBadConfigf(context.Background(), "GossipSeedAddress %s", addr)
-		}
-		result = append(result, net.JoinHostPort(filtered[0], port))
-	}
-	c.LogService.GossipSeedAddresses = result
-	return nil
-}
-
 func (c *Config) hashNodeID() uint16 {
 	st, err := c.getServiceType()
 	if err != nil {
@@ -601,10 +567,6 @@ func (c *Config) mustGetServiceUUID() string {
 		return c.PythonUdfServerConfig.UUID
 	}
 	panic("impossible")
-}
-
-func (c *Config) setCacheCallbacks(fsConfig *fileservice.Config) {
-	fsConfig.Cache.SetRemoteCacheCallback()
 }
 
 // dumpCommonConfig gets the common config items except cn,tn,log,proxy

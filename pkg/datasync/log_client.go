@@ -236,7 +236,7 @@ func (c *logClient) getRequiredLsn(ctx context.Context) (uint64, error) {
 }
 
 func (c *logClient) writeWithRetry(ctx context.Context, data []byte, retryTimes int) (uint64, error) {
-	lsn, err := fileservice.DoWithRetry("write-data", func() (uint64, error) {
+	lsn, err := fileservice.DoWithRetryContext(ctx, "write-data", func() (uint64, error) {
 		return c.write(ctx, data)
 	}, retryTimes, func(_ error) bool {
 		return true
@@ -248,7 +248,7 @@ func (c *logClient) writeWithRetry(ctx context.Context, data []byte, retryTimes 
 }
 
 func (c *logClient) getTruncatedLsnWithRetry(ctx context.Context) (uint64, error) {
-	lsn, err := fileservice.DoWithRetry("get-truncated-lsn", func() (uint64, error) {
+	lsn, err := fileservice.DoWithRetryContext(ctx, "get-truncated-lsn", func() (uint64, error) {
 		return c.getTruncatedLsn(ctx)
 	}, 100, func(_ error) bool {
 		return true
@@ -260,7 +260,7 @@ func (c *logClient) getTruncatedLsnWithRetry(ctx context.Context) (uint64, error
 }
 
 func (c *logClient) setRequiredLsnWithRetry(ctx context.Context, lsn uint64) error {
-	lsn, err := fileservice.DoWithRetry("write-data", func() (uint64, error) {
+	_, err := fileservice.DoWithRetryContext(ctx, "write-data", func() (uint64, error) {
 		return 0, c.setRequiredLsn(ctx, lsn)
 	}, 10, func(_ error) bool {
 		return true
@@ -272,7 +272,7 @@ func (c *logClient) setRequiredLsnWithRetry(ctx context.Context, lsn uint64) err
 }
 
 func (c *logClient) getRequiredLsnWithRetry(ctx context.Context) (uint64, error) {
-	lsn, err := fileservice.DoWithRetry("get-required-lsn", func() (uint64, error) {
+	lsn, err := fileservice.DoWithRetryContext(ctx, "get-required-lsn", func() (uint64, error) {
 		return c.getRequiredLsn(ctx)
 	}, 100, func(_ error) bool {
 		return true
@@ -284,7 +284,7 @@ func (c *logClient) getRequiredLsnWithRetry(ctx context.Context) (uint64, error)
 }
 
 func (c *logClient) getLatestLsnWithRetry(ctx context.Context) (uint64, error) {
-	lsn, err := fileservice.DoWithRetry("get-latest-lsn", func() (uint64, error) {
+	lsn, err := fileservice.DoWithRetryContext(ctx, "get-latest-lsn", func() (uint64, error) {
 		return c.getLatestLsn(ctx)
 	}, 100, func(_ error) bool {
 		return true

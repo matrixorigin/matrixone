@@ -18,6 +18,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -136,6 +137,9 @@ type AutoIncrementService interface {
 	DiscardOffsetReset(ctx context.Context, tableID uint64, txn client.TxnOperator) error
 	// Close close the auto increment service
 	Close()
+	// ReloadForPKRetry invalidates only the expected committed allocation
+	// generation. False preserves transaction-private CREATE/ALTER state unchanged.
+	ReloadForPKRetry(ctx context.Context, tableID uint64, expectedEpoch uint32, txn client.TxnOperator) (bool, error)
 	// GetLastAllocateTS gets the oldest allocation timestamp that can still
 	// issue a value from the transaction-private or committed column cache.
 	GetLastAllocateTS(ctx context.Context, tableID uint64, autoIncrEpoch uint32, txn client.TxnOperator, colName string) (timestamp.Timestamp, error)
@@ -225,19 +229,25 @@ type AutoColumn struct {
 	Step     uint64
 	// CacheSize is projected from the table's SchemaExtra, not stored in the allocator row.
 	CacheSize uint64
+	// isInternal is authoritative hidden fake-PK ownership from the table
+	// definition, not inferred from a name supplied by a SQL-visible column.
+	isInternal bool
 }
 
 // ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
 // by the destination AUTO_INCREMENT column type.
-func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) error {
+func ValidateAutoColumnOffset(ctx context.Context, typ types.Type, offset uint64) error {
 	var limit uint64
-	switch typ {
+	switch typ.Oid {
 	case types.T_uint8:
 		limit = math.MaxUint8
 	case types.T_uint16:
 		limit = math.MaxUint16
 	case types.T_uint32:
 		limit = math.MaxUint32
+		if typ.IsMediumInt() {
+			limit = 1<<24 - 1
+		}
 	case types.T_uint64:
 		return nil
 	case types.T_int8:
@@ -246,6 +256,9 @@ func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) e
 		limit = math.MaxInt16
 	case types.T_int32:
 		limit = math.MaxInt32
+		if typ.IsMediumInt() {
+			limit = 1<<23 - 1
+		}
 	case types.T_int64:
 		limit = math.MaxInt64
 	default:
@@ -256,7 +269,7 @@ func ValidateAutoColumnOffset(ctx context.Context, typ types.T, offset uint64) e
 	}
 	return moerr.NewOutOfRangef(
 		ctx,
-		typ.ToType().String(),
+		typ.String(),
 		"AUTO_INCREMENT value %d",
 		offset,
 	)
@@ -284,12 +297,13 @@ func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) 
 	for i, col := range def.Cols {
 		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
-				ColName:   col.Name,
-				TableID:   def.TblId,
-				Step:      1,
-				Offset:    def.AutoIncrOffset,
-				ColIndex:  i,
-				CacheSize: def.AutoIdCache,
+				ColName:    col.Name,
+				TableID:    def.TblId,
+				Step:       1,
+				Offset:     def.AutoIncrOffset,
+				ColIndex:   i,
+				CacheSize:  def.AutoIdCache,
+				isInternal: col.Hidden && col.Name == catalog.FakePrimaryKeyColName,
 			})
 		}
 	}

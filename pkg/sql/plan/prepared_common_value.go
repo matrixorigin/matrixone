@@ -23,6 +23,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+// PREPARE markers use TEXT for transport, but do not yet own a string domain.
+// Let concrete numeric COALESCE peers supply their common consumer type while
+// keeping the original marker under a provisional cast for EXECUTE rebinding.
+func bindPrepareCoalesceNumericArguments(ctx context.Context, args []*Expr) ([]*Expr, error) {
+	peers := make([]types.Type, 0, len(args))
+	hasMarker := false
+	for _, arg := range args {
+		if arg.GetP() != nil && arg.Typ.Id == int32(types.T_text) {
+			hasMarker = true
+			continue
+		}
+		if arg.GetLit() != nil && arg.GetLit().Isnull && arg.Typ.Id == int32(types.T_any) {
+			continue
+		}
+		typ := makeTypeByPlan2Expr(arg)
+		if !typ.IsNumeric() {
+			return args, nil
+		}
+		peers = append(peers, typ)
+	}
+	if !hasMarker || len(peers) == 0 {
+		return args, nil
+	}
+	resolved, err := function.GetFunctionByName(ctx, "coalesce", peers)
+	if err != nil || !resolved.GetReturnType().IsNumeric() {
+		// Speculative peer inference must not reject a call that the ordinary
+		// binder can still accept using its unresolved string envelope.
+		return args, nil
+	}
+	target := resolved.GetReturnType()
+	converted := append([]*Expr(nil), args...)
+	for i, arg := range args {
+		if arg.GetP() == nil || arg.Typ.Id != int32(types.T_text) {
+			continue
+		}
+		converted[i], err = appendCastBeforeExpr(ctx, arg, makePlan2Type(&target))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return converted, nil
+}
+
 // A marker-only result has no independent SQL domain. Its TEXT transport must
 // not prevent an enclosing common-value call from supplying an exact domain.
 // Concrete strings, FLOAT and explicit casts still own their source domains.

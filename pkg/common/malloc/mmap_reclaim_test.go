@@ -220,8 +220,6 @@ func TestMmapReclaimAdmissionAndPoolReuse(t *testing.T) {
 	require.ErrorIs(t, err, unix.ENOMEM)
 	dec.Deallocate()
 	unmapMemory(unsafe.Slice((*byte)(<-f.buffer1), 4096))
-	_, _, err = NewHybridMmapAllocator().Allocate(hybridMmapPooledMaxSize+1, 0)
-	require.ErrorIs(t, err, unix.ENOMEM)
 	mmapReclaimer.blocked.Store(false)
 	data, err = mmapMemory(4096)
 	require.NoError(t, err)

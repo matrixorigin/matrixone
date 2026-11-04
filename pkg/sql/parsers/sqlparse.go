@@ -78,87 +78,108 @@ var stripContents = map[string]int8{
 var HandleSqlForRecord = func(sql string) []string {
 	split := SplitSqlBySemicolon(sql)
 	for i := range split {
-		stripScanner := mysql.NewScanner(dialect.MYSQL, split[i])
-		//strip needed comment "/*XXX*/"
-		var commentIdx [][]int
-		for stripScanner.Pos < len(split[i]) {
-			typ, comment := stripScanner.ScanComment()
-			if typ == mysql.COMMENT {
-				//only strip needed comment "/*XXX*/"
-				if strings.HasPrefix(comment, "/*") && strings.HasSuffix(comment, "*/") {
-					commentContent := strings.ToLower(strings.TrimSpace(comment[2 : len(comment)-2]))
-					if _, ok := stripContents[commentContent]; ok {
-						commentIdx = append(commentIdx, []int{stripScanner.Pos - len(comment), stripScanner.Pos})
-					}
+		split[i] = handleSQLForRecordFragment(split[i])
+	}
+	return split
+}
+
+func handleSQLForRecordFragment(sql string) string {
+	stripScanner := mysql.NewScanner(dialect.MYSQL, sql)
+	defer mysql.PutScanner(stripScanner)
+	//strip needed comment "/*XXX*/"
+	var commentIdx [][]int
+	for stripScanner.Pos < len(sql) {
+		typ, comment := stripScanner.ScanComment()
+		if typ == mysql.COMMENT {
+			//only strip needed comment "/*XXX*/"
+			if strings.HasPrefix(comment, "/*") && strings.HasSuffix(comment, "*/") {
+				commentContent := strings.ToLower(strings.TrimSpace(comment[2 : len(comment)-2]))
+				if _, ok := stripContents[commentContent]; ok {
+					commentIdx = append(commentIdx, []int{stripScanner.Pos - len(comment), stripScanner.Pos})
 				}
-			} else if typ == mysql.EofChar() || typ == mysql.LEX_ERROR {
-				break
+			}
+		} else if typ == mysql.EofChar() || typ == mysql.LEX_ERROR {
+			break
+		}
+	}
+
+	if len(commentIdx) > 0 {
+		var builder strings.Builder
+		for j := 0; j < len(commentIdx); j++ {
+			if j == 0 {
+				builder.WriteString(sql[0:commentIdx[j][0]])
+			} else {
+				builder.WriteString(sql[commentIdx[j-1][1]:commentIdx[j][0]])
 			}
 		}
 
-		if len(commentIdx) > 0 {
-			var builder strings.Builder
-			for j := 0; j < len(commentIdx); j++ {
-				if j == 0 {
-					builder.WriteString(split[i][0:commentIdx[j][0]])
-				} else {
-					builder.WriteString(split[i][commentIdx[j-1][1]:commentIdx[j][0]])
-				}
-			}
+		builder.WriteString(sql[commentIdx[len(commentIdx)-1][1]:])
+		sql = strings.TrimSpace(builder.String())
+	}
 
-			builder.WriteString(split[i][commentIdx[len(commentIdx)-1][1]:len(split[i])])
-			split[i] = strings.TrimSpace(builder.String())
-		}
+	// Hide secret key for sql,
+	// for example:
+	// before: create account nihao admin_name 'admin' identified with '123'
+	// after: create account nihao admin_name 'admin' identified with '******'
 
-		// Hide secret key for split[i],
-		// for example:
-		// before: create account nihao admin_name 'admin' identified with '123'
-		// after: create account nihao admin_name 'admin' identified with '******'
-
-		// Slice indexes helps to get the final ranges from split[i],
-		// for example:
-		// Secret keys' indexes ranges in split[i] are:
-		// 1, 2, 3, 3
-		// These mean [1, 2] and [3, 3] in split[i] are secret keys
-		// And if len(split[i]) is 10, then we get slice indexes:
-		// -1, 1, 2, 3, 3, 10
-		// These mean we need to get (-1, 1), (2, 3), (3, 10) from split[i]
-		scanner := mysql.NewScanner(dialect.MYSQL, split[i])
-		indexes := []int{-1}
-		eq := int('=')
-		for scanner.Pos < len(split[i]) {
-			typ, s := scanner.Scan()
-			if typ == mysql.IDENTIFIED {
-				typ, _ = scanner.Scan()
-				if typ == mysql.BY || typ == mysql.WITH {
-					typ, s = scanner.Scan()
-					if typ != mysql.RANDOM {
-						indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
-					}
-				}
-			} else if strings.ToLower(s) == "access_key_id" || strings.ToLower(s) == "secret_access_key" {
-				typ, _ = scanner.Scan()
-				if typ == eq {
-					_, s = scanner.Scan()
+	// Slice indexes helps to get the final ranges from sql,
+	// for example:
+	// Secret keys' indexes ranges in sql are:
+	// 1, 2, 3, 3
+	// These mean [1, 2] and [3, 3] in sql are secret keys
+	// And if len(sql) is 10, then we get slice indexes:
+	// -1, 1, 2, 3, 3, 10
+	// These mean we need to get (-1, 1), (2, 3), (3, 10) from sql
+	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	defer mysql.PutScanner(scanner)
+	previousToken := 0
+	indexes := []int{-1}
+	eq := int('=')
+	for scanner.Pos < len(sql) {
+		typ, s := scanSQLToken(scanner, &previousToken)
+		if typ == mysql.IDENTIFIED {
+			typ, _ = scanSQLToken(scanner, &previousToken)
+			if typ == mysql.BY || typ == mysql.WITH {
+				typ, s = scanSQLToken(scanner, &previousToken)
+				if typ != mysql.RANDOM {
 					indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
 				}
 			}
-		}
-		indexes = append(indexes, len(split[i]))
-
-		if len(indexes) > 2 {
-			var builder strings.Builder
-			for j := 0; j < len(indexes); j += 2 {
-				builder.WriteString(split[i][indexes[j]+1 : indexes[j+1]])
-				if j < len(indexes)-2 {
-					builder.WriteString("******")
-				}
+		} else if strings.ToLower(s) == "access_key_id" || strings.ToLower(s) == "secret_access_key" {
+			typ, _ = scanSQLToken(scanner, &previousToken)
+			if typ == eq {
+				_, s = scanSQLToken(scanner, &previousToken)
+				indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
 			}
-			split[i] = builder.String()
 		}
-		split[i] = strings.TrimSpace(split[i])
 	}
-	return split
+	indexes = append(indexes, len(sql))
+
+	if len(indexes) > 2 {
+		var builder strings.Builder
+		for j := 0; j < len(indexes); j += 2 {
+			builder.WriteString(sql[indexes[j]+1 : indexes[j+1]])
+			if j < len(indexes)-2 {
+				builder.WriteString("******")
+			}
+		}
+		sql = builder.String()
+	}
+	sql = strings.TrimSpace(sql)
+	return sql
+}
+
+// scanSQLToken preserves qualified identifier context across raw token scans.
+func scanSQLToken(scanner *mysql.Scanner, previousToken *int) (int, string) {
+	var token int
+	var value string
+	if *previousToken == int('.') {
+		token, value = scanner.ScanAfterDot()
+	} else {
+		token, value = scanner.Scan()
+	}
+	*previousToken = token
+	return token, value
 }
 
 func SplitSqlBySemicolon(sql string) []string {
@@ -168,12 +189,14 @@ func SplitSqlBySemicolon(sql string) []string {
 		return []string{sql}
 	}
 	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	defer mysql.PutScanner(scanner)
+	previousToken := 0
 	lastEnd := 0
 	endWithSemicolon := false
 	for scanner.Pos < len(sql) {
-		typ, _ := scanner.Scan()
+		typ, _ := scanSQLToken(scanner, &previousToken)
 		for scanner.Pos < len(sql) && typ != ';' {
-			typ, _ = scanner.Scan()
+			typ, _ = scanSQLToken(scanner, &previousToken)
 		}
 		if typ == ';' {
 			ret = append(ret, sql[lastEnd:scanner.Pos-1])
@@ -218,6 +241,12 @@ func SplitSqlByStatement(ctx context.Context, sql string) ([]string, error) {
 
 func SplitSqlByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]string, error) {
 	return mysql.SplitSqlByStatementWithSQLMode(ctx, sql, 1, sqlMode)
+}
+
+// SplitSqlByStatementFragmentsWithSQLMode retains raw source spans alongside
+// independently parseable SQL, including synthesized executable-comment ends.
+func SplitSqlByStatementFragmentsWithSQLMode(ctx context.Context, sql string, sqlMode string) ([]mysql.SQLFragment, error) {
+	return mysql.SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, 1, sqlMode)
 }
 
 // FragmentHasStatement reports whether a semicolon-separated fragment carries an
@@ -404,13 +433,34 @@ func NormalizeRewriteKey(ctx context.Context, key string, lowerCaseTableNames in
 		}
 		return "", "", "", moerr.NewParseError(ctx, "empty table or database")
 	}
-	compareDB := tree.NewCStr(db, lowerCaseTableNames).Compare()
-	compareTable := tree.NewCStr(table, lowerCaseTableNames).Compare()
+	compareDB, compareTable, err := NormalizeRewriteKeyParts(ctx, db, table, lowerCaseTableNames)
+	if err != nil {
+		return "", "", "", err
+	}
 	if lowerCaseTableNames == 1 {
 		db = compareDB
 		table = compareTable
 	}
 	return compareDB + "." + compareTable, db, table, nil
+}
+
+// NormalizeRewriteKeyParts returns database and table comparison identities
+// independently. This preserves identifier boundaries for names containing a
+// dot; callers consuming the persisted database.table format must still parse
+// that format with SplitRewriteKey first.
+func NormalizeRewriteKeyParts(
+	ctx context.Context,
+	databaseName string,
+	tableName string,
+	lowerCaseTableNames int64,
+) (string, string, error) {
+	databaseName = strings.TrimSpace(databaseName)
+	tableName = strings.TrimSpace(tableName)
+	if databaseName == "" || tableName == "" {
+		return "", "", moerr.NewParseError(ctx, "empty table or database")
+	}
+	return tree.NewCStr(databaseName, lowerCaseTableNames).Compare(),
+		tree.NewCStr(tableName, lowerCaseTableNames).Compare(), nil
 }
 
 // ValidateRemapDb validates a remapdb map: every source/destination must be a
@@ -754,6 +804,15 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 				if ps, ok := s.Source.Select.(*tree.ParenSelect); ok && ps.Select != nil {
 					ps.Select.RewriteOption = rewriteOption
 				}
+			}
+		case *tree.CreateTable:
+			// CREATE TABLE ... AS SELECT carries the rewrite option on its
+			// nested source query so CTAS materializes only rows visible through
+			// the active role/session policy.
+			if s.AsSource != nil {
+				s.AsSource.RewriteOption = rewriteOption
+			} else {
+				freeRewriteOption()
 			}
 		default:
 			// Every policy value must be valid even when this statement kind does

@@ -132,6 +132,16 @@ func (dispatch *Dispatch) ActivatesAllocationAccountLifecycle() bool {
 func (dispatch *Dispatch) ClearAllocationAccount(
 	account *mpool.AllocationAccount,
 ) error {
+	if err := dispatch.DrainAllocationAccount(account); err != nil {
+		return err
+	}
+	dispatch.allocationAccount = nil
+	return nil
+}
+
+// DrainAllocationAccount releases transferred batches after every producer and
+// consumer has quiesced, before their source operators retire capacity classes.
+func (dispatch *Dispatch) DrainAllocationAccount(account *mpool.AllocationAccount) error {
 	if dispatch.allocationAccount == nil {
 		return nil
 	}
@@ -145,7 +155,6 @@ func (dispatch *Dispatch) ClearAllocationAccount(
 		dispatch.cleanupSpool.FinalizeAfterConsumersQuiesced()
 		dispatch.cleanupSpool = nil
 	}
-	dispatch.allocationAccount = nil
 	return nil
 }
 
@@ -284,8 +293,4 @@ func (dispatch *Dispatch) CleanupDeferredSpool() {
 }
 
 func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
-}
-
-func (dispatch *Dispatch) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }

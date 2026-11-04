@@ -80,4 +80,92 @@ execute issue_27320_year_month using @issue_27320_interval, @issue_27320_interva
 ➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
 2026-02-01  ¦  2025-12-01
 deallocate prepare issue_27320_year_month;
+select cast(date_add(date '2024-01-01', interval cast(1.5 as decimal(3,1)) day) as char) as decimal_day,
+cast(date_add(date '2024-01-01', interval cast(1.5 as double) day) as char) as double_day,
+cast(date_add(date '2024-01-01', interval '1.5' day) as char) as text_day;
+➤ decimal_day[12,65535,0]  ¦  double_day[12,65535,0]  ¦  text_day[12,65535,0]  𝄀
+2024-01-03  ¦  2024-01-02  ¦  2024-01-02
+select cast(date_add(cast('2024-01-01' as datetime(6)), interval 1.1234567 second) as char) as added,
+cast(date_sub(cast('2024-01-01' as datetime(6)), interval 1.1234567 second) as char) as subtracted,
+cast(adddate(cast('2024-01-01' as datetime(6)), interval -0.0000009 second) as char) as negative_zero,
+cast(subdate(cast('2024-01-01' as datetime(6)), interval -1.1234567 second) as char) as negative_sub;
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  ¦  negative_zero[12,65535,0]  ¦  negative_sub[12,65535,0]  𝄀
+2024-01-01 00:00:01.123456  ¦  2023-12-31 23:59:58.876544  ¦  2024-01-01 00:00:00.000000  ¦  2024-01-01 00:00:01.123456
+select cast(adddate(date '2024-01-01', cast(1.49 as decimal(3,1))) as char) as cast_day,
+cast(date_add(cast('2024-01-01' as datetime(6)), interval cast(1.12345679 as decimal(9,6)) second) as char) as cast_second;
+➤ cast_day[12,65535,0]  ¦  cast_second[12,65535,0]  𝄀
+2024-01-03  ¦  2024-01-01 00:00:01.123457
+create table t_calendar_interval (
+id int primary key,
+d date,
+n decimal(18,7),
+calc date as (adddate(d,n)) stored,
+index idx_calc(calc)
+);
+insert into t_calendar_interval(id,d,n) values
+(1,'2024-01-01',1.4),(2,'2024-01-01',1.5),(3,'2024-01-01',1.9),
+(4,'2024-01-01',-1.5),(5,'2024-01-01',-0.0000009),(6,'2024-01-01',null);
+select id, cast(date_add(d, interval n day) as char) as added,
+cast(date_sub(d, interval n day) as char) as subtracted,
+cast(adddate(d,n) as char) as alias_added, cast(subdate(d,n) as char) as alias_subtracted
+from t_calendar_interval order by id;
+➤ id[4,32,0]  ¦  added[12,65535,0]  ¦  subtracted[12,65535,0]  ¦  alias_added[12,65535,0]  ¦  alias_subtracted[12,65535,0]  𝄀
+1  ¦  2024-01-02  ¦  2023-12-31  ¦  2024-01-02  ¦  2023-12-31  𝄀
+2  ¦  2024-01-03  ¦  2023-12-30  ¦  2024-01-03  ¦  2023-12-30  𝄀
+3  ¦  2024-01-03  ¦  2023-12-30  ¦  2024-01-03  ¦  2023-12-30  𝄀
+4  ¦  2023-12-30  ¦  2024-01-03  ¦  2023-12-30  ¦  2024-01-03  𝄀
+5  ¦  2024-01-01  ¦  2024-01-01  ¦  2024-01-01  ¦  2024-01-01  𝄀
+6  ¦  null  ¦  null  ¦  null  ¦  null
+select id, cast(calc as char) as stored_day from t_calendar_interval order by id;
+➤ id[4,32,0]  ¦  stored_day[12,65535,0]  𝄀
+1  ¦  2024-01-02  𝄀
+2  ¦  2024-01-03  𝄀
+3  ¦  2024-01-03  𝄀
+4  ¦  2023-12-30  𝄀
+5  ¦  2024-01-01  𝄀
+6  ¦  null
+select id from t_calendar_interval where calc='2024-01-03' order by id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+3
+create table t_calendar_ctas as select adddate(d,n) as calculated from t_calendar_interval;
+select data_type from information_schema.columns where table_schema='date_add_dynamic_interval' and table_name='t_calendar_ctas' and column_name='calculated';
+➤ data_type[12,65535,0]  𝄀
+date
+select cast(calculated as char) as persisted_day from t_calendar_ctas order by calculated;
+➤ persisted_day[12,65535,0]  𝄀
+null  𝄀
+2023-12-30  𝄀
+2024-01-01  𝄀
+2024-01-02  𝄀
+2024-01-03  𝄀
+2024-01-03
+prepare calendar_day from 'select cast(adddate(date ''2024-01-01'', ?) as char) as prepared_day';
+set @calendar_n=cast(1.5 as decimal(3,1));
+execute calendar_day using @calendar_n;
+➤ prepared_day[12,65535,0]  𝄀
+2024-01-03
+set @calendar_n='1.5';
+execute calendar_day using @calendar_n;
+➤ prepared_day[12,65535,0]  𝄀
+2024-01-02
+set @calendar_n=cast(-1.5 as decimal(3,1));
+execute calendar_day using @calendar_n;
+➤ prepared_day[12,65535,0]  𝄀
+2023-12-30
+set @calendar_n=null;
+execute calendar_day using @calendar_n;
+➤ prepared_day[12,65535,0]  𝄀
+null
+deallocate prepare calendar_day;
+select cast(date_add(cast(null as date), interval cast(99999999999999999999 as decimal(20,0)) day) as char) as null_base,
+cast(case when false then date_sub(date '2024-01-01', interval cast(99999999999999999999 as decimal(20,0)) day) else date '2024-01-01' end as char) as inactive;
+➤ null_base[12,65535,0]  ¦  inactive[12,65535,0]  𝄀
+null  ¦  2024-01-01
+select cast(date_add(date '2024-01-01', interval cast(1.9 as decimal(3,1)) year) as char) as year_control,
+cast(date_add(date '2024-01-01', interval cast(1.9 as decimal(3,1)) quarter) as char) as quarter_control,
+cast(date_add(date '2024-01-01', interval cast(1.9 as decimal(3,1)) month) as char) as month_control,
+cast(date_add(date '2024-01-01', interval cast(1.9 as decimal(3,1)) week) as char) as week_control;
+➤ year_control[12,65535,0]  ¦  quarter_control[12,65535,0]  ¦  month_control[12,65535,0]  ¦  week_control[12,65535,0]  𝄀
+2026-01-01  ¦  2024-07-01  ¦  2024-03-01  ¦  2024-01-15
 drop database date_add_dynamic_interval;

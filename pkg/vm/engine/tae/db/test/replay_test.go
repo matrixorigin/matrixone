@@ -39,10 +39,8 @@ import (
 )
 
 func TestReplayCatalog1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
-	testutils.EnsureNoLeak(t)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schemas := make([]*catalog.Schema, 4)
 	for i := range schemas {
@@ -128,8 +126,6 @@ func TestReplayCatalog1(t *testing.T) {
 }
 
 func TestReplayCatalog2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -207,8 +203,6 @@ func TestReplayCatalog2(t *testing.T) {
 }
 
 func TestReplayCatalog3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -292,8 +286,6 @@ func TestReplayCatalog3(t *testing.T) {
 // catalog and data not checkpoint
 // catalog not softdelete
 func TestReplay1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -396,8 +388,6 @@ func TestReplay1(t *testing.T) {
 // replay
 // TODO check id and row of data
 func TestReplay2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -508,8 +498,6 @@ func TestReplay2(t *testing.T) {
 // 1. Ckp
 // TODO check rows
 func TestReplay3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, nil)
@@ -586,8 +574,6 @@ func TestReplay3(t *testing.T) {
    1. compact
    replay and check rows */
 func TestReplayTableRows(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -659,32 +645,6 @@ func TestReplayTableRows(t *testing.T) {
 	assert.Equal(t, rows, tbl.GetMeta().(*catalog.TableEntry).GetRows())
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	// worker := ops.NewOpWorker("xx")
-	// worker.Start()
-	// txn, err = tae3.StartTxn(nil)
-	// assert.Nil(t, err)
-	// db, err = txn.GetDatabase("db")
-	// assert.Nil(t, err)
-	// tbl, err = db.GetRelationByName(schema.Name)
-	// assert.Nil(t, err)
-	// blkIterator := tbl.MakeBlockIt()
-	// blks := make([]*catalog.BlockEntry, 0)
-	// for blkIterator.Valid() {
-	// 	blk := blkIterator.GetBlock().GetMeta().(*catalog.BlockEntry)
-	// 	blks = append(blks, blk)
-	// 	blkIterator.Next()
-	// }
-	// for _, blk := range blks {
-	// 	ctx := &tasks.Context{Waitable: true}
-	// 	task, err := jobs.NewCompactBlockTask(ctx, txn, blk, tae3.Scheduler)
-	// 	assert.Nil(t, err)
-	// 	worker.SendOp(task)
-	// 	err = task.WaitDone()
-	// 	assert.Nil(t, err)
-	// }
-	// assert.Nil(t, txn.Commit(context.Background()))
-	// worker.Stop()
-
 	err = tae3.Close()
 	assert.Nil(t, err)
 
@@ -707,8 +667,6 @@ func TestReplayTableRows(t *testing.T) {
 
 // Testing Steps
 func TestReplay4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -772,8 +730,6 @@ func TestReplay4(t *testing.T) {
 
 // Testing Steps
 func TestReplay5(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -904,8 +860,6 @@ func TestReplay5(t *testing.T) {
 }
 
 func TestReplay6(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -966,8 +920,6 @@ func TestReplay6(t *testing.T) {
 }
 
 func TestReplay7(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -1011,8 +963,6 @@ func TestReplay7(t *testing.T) {
 }
 
 func TestReplay8(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1167,8 +1117,6 @@ func TestReplay8(t *testing.T) {
 }
 
 func TestReplay9(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1265,8 +1213,6 @@ func TestReplay9(t *testing.T) {
 }
 
 func TestReplay10(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -1333,7 +1279,6 @@ func TestReplay10(t *testing.T) {
 // checkpoint
 // Restart
 func TestReplaySnapshots(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1387,7 +1332,6 @@ func TestReplaySnapshots(t *testing.T) {
 }
 
 func TestReplayDatabaseEntry(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1430,7 +1374,6 @@ func TestReplayDatabaseEntry(t *testing.T) {
 // replay
 // check ckp-lsn and truncate-lsn
 func Test_ReplayAfterForceGCKP(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)

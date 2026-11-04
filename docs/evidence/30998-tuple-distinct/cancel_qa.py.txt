@@ -1,0 +1,46 @@
+from harness import *
+import threading
+out=root/'cancel-qa';out.mkdir(exist_ok=True)
+def spills():return {str(p) for p in (runtime/'data/local/__spill').rglob('*') if p.is_file()}
+with Service('candidate','cancel-qa') as svc:
+ before=spills();conns=[];threads=[];results=[{},{}];done=[threading.Event(),threading.Event()];barrier=threading.Barrier(3)
+ try:
+  for _ in range(2):
+   c=pymysql.connect(host='127.0.0.1',port=55401,user='root',password='111',autocommit=True,read_timeout=120);conns.append(c)
+   with c.cursor() as s:s.execute('SET SESSION max_dop=8');s.execute('SET SESSION agg_spill_mem=8388608')
+  queries=[f'SELECT /*qa30995cancel{i}*/ COUNT(DISTINCT g8,k) FROM qa30982_history_20261024.natural_unique5m' for i in range(2)]
+  def execute(i):
+   try:
+    with conns[i].cursor() as s:
+     barrier.wait(timeout=10);s.execute(queries[i]);results[i]['rows']=s.fetchall()
+   except Exception as e:results[i]['error']=[type(e).__name__,list(e.args)]
+   finally:done[i].set()
+  for i in range(2):
+   t=threading.Thread(target=execute,args=(i,));t.start();threads.append(t)
+  barrier.wait(timeout=10);deadline=time.monotonic()+15
+  with svc.c.cursor() as s:
+   while True:
+    s.execute('SELECT conn_id,info FROM processlist() p');active={str(r[0]) for r in s.fetchall() if 'qa30995cancel' in str(r[1])}
+    files=spills()-before
+    if files and all(str(c.thread_id()) in active for c in conns):break
+    assert not done[0].is_set() and time.monotonic()<deadline,('no active spilling cancel target',results)
+    done[0].wait(.001)
+   (out/'observed-spill-files.json').write_text(json.dumps(sorted(files)))
+   start=time.monotonic();s.execute(f'KILL QUERY {conns[0].thread_id()}')
+  assert done[0].wait(20),results
+  results[0]['cancel_seconds']=time.monotonic()-start
+  assert done[1].wait(120),results
+  assert results[0].get('error',[None,[None]])[1][0]==1317,results
+  assert results[1].get('rows')==((5000000,),),results
+  with conns[0].cursor() as s:run(s,'SELECT 1',((1,),));run(s,'SELECT COUNT(DISTINCT b,a) FROM qa30995.nn',((333337,),))
+  remaining=spills()-before
+  assert not remaining,('spill cleanup failed',remaining)
+  (out/'cleanup.json').write_text(json.dumps({'active_connections_observed':len(active),'new_spill_files_observed':len(files),'new_spill_files_remaining':len(remaining),'cancelled_connection_reused':True},indent=2))
+  (out/'results.json').write_text(json.dumps(results,indent=2,default=str))
+  print('CANCEL_QA_PASS',results,flush=True)
+ finally:
+  for i,t in enumerate(threads):
+   if t.is_alive():
+    with svc.c.cursor() as s:s.execute(f'KILL QUERY {conns[i].thread_id()}')
+   t.join(timeout=20)
+  for c in conns:c.close()

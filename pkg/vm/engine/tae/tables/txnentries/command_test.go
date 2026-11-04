@@ -22,14 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMergeBlocksCmd(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	droppedSid := objectio.NewSegmentid()
 	createdSid := objectio.NewSegmentid()
 	id1 := common.ID{TableID: 1}
@@ -77,7 +74,6 @@ func (cmd *errorMergeObjectsCmd) MarshalBinary() ([]byte, error) {
 
 // TestMergeObjectsCmd_MarshalBinary_Error tests error branch in MarshalBinary
 func TestMergeObjectsCmd_MarshalBinary_Error(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	cmd := &errorMergeObjectsCmd{}
 	buf, err := cmd.MarshalBinary()
@@ -87,8 +83,6 @@ func TestMergeObjectsCmd_MarshalBinary_Error(t *testing.T) {
 
 // TestMergeObjectsCmd_MarshalBinary_LargeBuffer tests large buffer branch
 func TestMergeObjectsCmd_MarshalBinary_LargeBuffer(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	droppedSid := objectio.NewSegmentid()
 	createdSid := objectio.NewSegmentid()

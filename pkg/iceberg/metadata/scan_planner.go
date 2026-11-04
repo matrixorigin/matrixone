@@ -100,6 +100,12 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		profile.PlanningCacheMiss++
 	}
 
+	// Fresh tables have a schema but no snapshot or implicit main ref yet.
+	// Explicit selectors and dangling refs must still be resolved normally.
+	if isSnapshotlessScan(loaded.Metadata, selector) {
+		return p.planSnapshotlessScan(planningCtx, req, loaded.Metadata, selector, profile, cfg)
+	}
+
 	snapshot, err := p.Metadata.ResolveSnapshot(planningCtx, loaded.Metadata, selector)
 	if err != nil {
 		return nil, planContextError(planningCtx, err)
@@ -109,7 +115,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 			"snapshot_id": strconv.FormatInt(snapshot.SnapshotID, 10),
 		})
 	}
-	schema, schemaID, err := snapshotSchema(loaded.Metadata, snapshot)
+	schema, schemaID, err := scanSchema(loaded.Metadata, snapshot, selector)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +159,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 	// Selection and manifestsToRead retain additional manifest structs while the
 	// decoded list remains live. Charge full manifest weights conservatively;
 	// paths and partition bounds are mostly shared, but slice/map overhead is not.
-	derivedManifestMemory := saturatingPlanningMul(
+	derivedManifestMemory := api.SaturatingMemoryMul(
 		ManifestListMemoryWeight(0, manifestListRead.Manifests),
 		2,
 	)
@@ -220,10 +226,11 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 				}
 				continue
 			}
+			entry, err = NormalizeManifestEntry(entry, read.Manifest)
+			if err != nil {
+				return nil, err
+			}
 			file := normalizeDataFile(entry.DataFile)
-			file.SequenceNumber = firstNonZeroInt64(file.SequenceNumber, entry.SequenceNumber, read.Manifest.SequenceNumber)
-			file.FileSequenceNumber = firstNonZeroInt64(file.FileSequenceNumber, entry.FileSequence, read.Manifest.SequenceNumber)
-			file.SpecID = read.Manifest.PartitionSpecID
 			if read.Manifest.Content == api.ManifestContentDeletes {
 				if !req.EnableDeleteApply {
 					return nil, ValidateP0ManifestFile(read.Manifest)
@@ -270,7 +277,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 			// values from the decoded manifest.
 			if err := reservePlanningMemory(
 				&planningMemoryUsed,
-				saturatingPlanningMul(planningDataFileMemory(file), 2),
+				api.SaturatingMemoryMul(planningDataFileMemory(file), 2),
 				cfg.planningMaxMemory,
 				cfg.serverPlanningMode,
 			); err != nil {
@@ -296,13 +303,13 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 	if len(deleteEntries) > 0 {
 		if err := reservePlanningMemory(
 			&planningMemoryUsed,
-			saturatingPlanningMul(int64(len(loaded.Metadata.PartitionSpecs)), 64),
+			api.SaturatingMemoryMul(int64(len(loaded.Metadata.PartitionSpecs)), 64),
 			cfg.planningMaxMemory,
 			cfg.serverPlanningMode,
 		); err != nil {
 			return nil, err
 		}
-		specFieldCounts = partitionSpecFieldCounts(loaded.Metadata)
+		specFieldCounts = loaded.Metadata.PartitionSpecFieldCounts()
 	}
 	deleteTasks, err := pairDeleteTasksBoundedMemory(
 		planningCtx,
@@ -342,7 +349,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 
 	if err := reservePlanningMemory(
 		&planningMemoryUsed,
-		saturatingPlanningMul(int64(len(schema.Fields)), 512),
+		api.SaturatingMemoryMul(int64(len(schema.Fields)), 512),
 		cfg.planningMaxMemory,
 		cfg.serverPlanningMode,
 	); err != nil {
@@ -380,15 +387,50 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 	}, nil
 }
 
-func partitionSpecFieldCounts(meta *api.TableMetadata) map[int]int {
-	if meta == nil {
-		return nil
+func isSnapshotlessScan(meta *api.TableMetadata, selector api.SnapshotSelector) bool {
+	ref := strings.TrimSpace(selector.RefName)
+	return meta != nil && len(meta.Snapshots) == 0 && !HasCurrentSnapshot(meta) && len(meta.Refs) == 0 &&
+		!selector.HasSnapshotID && !selector.HasTimestampMS &&
+		(ref == "" || ref == model.DefaultRefMain)
+}
+
+func (p LocalScanPlanner) planSnapshotlessScan(ctx context.Context, req api.ScanPlanRequest, meta *api.TableMetadata, selector api.SnapshotSelector, profile api.PlanningProfile, cfg localPlannerConfig) (*api.IcebergScanPlan, error) {
+	schema, schemaID, err := scanSchema(meta, api.Snapshot{}, selector)
+	if err != nil {
+		return nil, err
 	}
-	out := make(map[int]int, len(meta.PartitionSpecs))
-	for _, spec := range meta.PartitionSpecs {
-		out[spec.SpecID] = len(spec.Fields)
+	if features, err := p.Metadata.DetectUnsupportedP0(ctx, meta, nil, nil); err != nil {
+		return nil, planContextError(ctx, err)
+	} else if len(features) > 0 {
+		return nil, unsupportedFeaturesError(features)
 	}
-	return out
+	planningMemoryUsed := profile.MetadataBytes
+	if err := reservePlanningMemory(&planningMemoryUsed, api.SaturatingMemoryMul(int64(len(schema.Fields)), 512), cfg.planningMaxMemory, cfg.serverPlanningMode); err != nil {
+		return nil, err
+	}
+	columnMapping, err := buildColumnMapping(schema, req.ProjectionIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkPlanningContext(ctx); err != nil {
+		return nil, err
+	}
+	return &api.IcebergScanPlan{
+		Snapshot: api.SnapshotPlan{
+			SnapshotID:           NoCurrentSnapshotID,
+			SchemaID:             schemaID,
+			PartitionSpecIDs:     partitionSpecIDs(meta, nil),
+			MetadataLocation:     meta.MetadataLocationRed,
+			MetadataLocationHash: meta.MetadataLocationHash,
+			RefName:              strings.TrimSpace(selector.RefName),
+			PlanningMode:         localPlanningMode,
+		},
+		ColumnMapping:        columnMapping,
+		ResidualFilter:       residualFilter(req.ResidualSQL),
+		Profile:              profile,
+		DeleteMaxMemoryBytes: req.DeleteMaxMemoryBytes,
+		EnableDeleteSpill:    req.EnableDeleteSpill,
+	}, nil
 }
 
 type RefCacheRefresher interface {
@@ -545,23 +587,6 @@ func reservePlanningMemory(used *int64, addition, limit int64, mode api.ServerPl
 	return nil
 }
 
-func saturatingPlanningMul(left, right int64) int64 {
-	if left <= 0 || right <= 0 {
-		return 0
-	}
-	if left > math.MaxInt64/right {
-		return math.MaxInt64
-	}
-	return left * right
-}
-
-func saturatingPlanningAdd(left, right int64) int64 {
-	if left < 0 || right < 0 || left > math.MaxInt64-right {
-		return math.MaxInt64
-	}
-	return left + right
-}
-
 func planningDataFileMemory(file api.DataFile) int64 {
 	return ManifestEntriesMemoryWeight(0, []api.ManifestEntry{{DataFile: file}})
 }
@@ -650,6 +675,15 @@ func selectScanManifests(ctx context.Context, manifests []api.ManifestFile, prun
 		selectedData = append(selectedData, manifest)
 	}
 	return selectedData, selectedDeletes, pruned, nil
+}
+
+// Branches share the current table schema; time travel and tags retain the
+// schema at snapshot creation. ResolveSnapshot has already validated the ref.
+func scanSchema(meta *api.TableMetadata, snapshot api.Snapshot, selector api.SnapshotSelector) (api.Schema, int, error) {
+	if selector.HasSnapshotID || selector.HasTimestampMS || strings.EqualFold(meta.Refs[strings.TrimSpace(selector.RefName)].Type, "tag") {
+		return snapshotSchema(meta, snapshot)
+	}
+	return snapshotSchema(meta, api.Snapshot{})
 }
 
 func snapshotSchema(meta *api.TableMetadata, snapshot api.Snapshot) (api.Schema, int, error) {

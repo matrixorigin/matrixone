@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"strings"
@@ -35,7 +36,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/panjf2000/ants/v2"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	costypes "github.com/tencentyun/cos-go-sdk-v5"
@@ -281,9 +281,24 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 	defer server.Close()
 	state.uploadID = "uid-success"
 
-	sdk := newTestAWSClient(t, server)
+	upstream := server.Client().Transport
+	var traceMu sync.Mutex
+	traces := make(map[*httptrace.ClientTrace]struct{})
+	transport := wrapRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		tr := httptrace.ContextClientTrace(req.Context())
+		if tr == nil {
+			return nil, errors.New("multipart request has no HTTP trace")
+		}
+		traceMu.Lock()
+		traces[tr] = struct{}{}
+		traceMu.Unlock()
+		return upstream.RoundTrip(req)
+	}))
+	sdk := newObjectStorageHTTPTrace(newTestAWSClientWithTransport(t, server, transport))
 	counter := new(perfcounter.CounterSet)
 	ctx := perfcounter.WithCounterSet(context.Background(), counter)
+	var callerHooks atomic.Int64
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { callerHooks.Add(1) }})
 
 	data := bytes.Repeat([]byte("a"), int(minMultipartPartSize+1))
 	size := int64(len(data))
@@ -303,6 +318,11 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 	if len(state.completeBody) == 0 {
 		t.Fatalf("complete body not recorded")
 	}
+	traceMu.Lock()
+	traceCount := len(traces)
+	traceMu.Unlock()
+	require.GreaterOrEqual(t, traceCount, 4, "create, two parts and completion need independent traces")
+	require.Equal(t, int64(traceCount), callerHooks.Load(), "caller hooks must be composed exactly once per request")
 	if got := counter.FileService.S3.Put.Load(); got != 2 {
 		t.Fatalf("expected 2 physical PUT requests, got %d", got)
 	}
@@ -527,7 +547,7 @@ func TestAwsWriteLargeNonSeekableFallsBackToMultipart(t *testing.T) {
 	}
 }
 
-func TestAwsParallelMultipartDoesNotDeadlockOnTinyGlobalPool(t *testing.T) {
+func TestAwsParallelMultipartCompletesWithSingleGlobalSlot(t *testing.T) {
 	server, state := newMockAWSServer(t, 0)
 	defer server.Close()
 	state.uploadID = "uid-no-deadlock"
@@ -536,35 +556,23 @@ func TestAwsParallelMultipartDoesNotDeadlockOnTinyGlobalPool(t *testing.T) {
 	data := bytes.Repeat([]byte("m"), int(minMultipartPartSize*2))
 	size := int64(len(data))
 
-	oldPool := parallelUploadPool
-	tinyPool, err := ants.NewPool(1)
-	if err != nil {
-		t.Fatalf("create ants pool: %v", err)
-	}
-	parallelUploadPool = tinyPool
+	oldSlots := getParallelUploadSemaphore()
+	parallelUploadSemaphore = make(chan struct{}, 1)
 	defer func() {
-		tinyPool.Release()
-		parallelUploadPool = oldPool
+		parallelUploadSemaphore = oldSlots
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
-			PartSize:    minMultipartPartSize,
-			Concurrency: 2,
-		})
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("write failed: %v", err)
-		}
-	case <-ctx.Done():
-		t.Fatalf("multipart upload timed out, likely deadlocked")
+	if err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+		PartSize:    minMultipartPartSize,
+		Concurrency: 2,
+	}); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if len(parallelUploadSemaphore) != 0 {
+		t.Fatal("multipart upload retained a global slot")
 	}
 
 	if len(state.parts) != 2 {
@@ -1686,7 +1694,7 @@ func TestCOSMultipartCreateFail(t *testing.T) {
 	}
 }
 
-func TestCOSParallelMultipartDoesNotDeadlockOnTinyGlobalPool(t *testing.T) {
+func TestCOSParallelMultipartCompletesWithSingleGlobalSlot(t *testing.T) {
 	server, state := newMockCOSServer(t, 0)
 	defer server.Close()
 	state.uploadID = "cos-no-deadlock"
@@ -1695,35 +1703,23 @@ func TestCOSParallelMultipartDoesNotDeadlockOnTinyGlobalPool(t *testing.T) {
 	data := bytes.Repeat([]byte("n"), int(minMultipartPartSize*2))
 	size := int64(len(data))
 
-	oldPool := parallelUploadPool
-	tinyPool, err := ants.NewPool(1)
-	if err != nil {
-		t.Fatalf("create ants pool: %v", err)
-	}
-	parallelUploadPool = tinyPool
+	oldSlots := getParallelUploadSemaphore()
+	parallelUploadSemaphore = make(chan struct{}, 1)
 	defer func() {
-		tinyPool.Release()
-		parallelUploadPool = oldPool
+		parallelUploadSemaphore = oldSlots
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go func() {
-		done <- sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
-			PartSize:    minMultipartPartSize,
-			Concurrency: 2,
-		})
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("write failed: %v", err)
-		}
-	case <-ctx.Done():
-		t.Fatalf("multipart upload timed out, likely deadlocked")
+	if err := sdk.WriteMultipartParallel(ctx, "object", bytes.NewReader(data), &size, &ParallelMultipartOption{
+		PartSize:    minMultipartPartSize,
+		Concurrency: 2,
+	}); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if len(parallelUploadSemaphore) != 0 {
+		t.Fatal("multipart upload retained a global slot")
 	}
 
 	if len(state.parts) != 2 {

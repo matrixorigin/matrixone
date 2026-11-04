@@ -56,3 +56,30 @@ func TestCollationPostprocessBoundaryAndIdempotence(t *testing.T) {
 		t.Fatal("missing return accepted")
 	}
 }
+
+func TestIntegerPrecisionDecoderPostprocessIdempotence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generated.go")
+	if err := os.WriteFile(path, []byte("func (m *Query) Unmarshal(dAtA []byte) error {\n\treturn nil\n}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := patchCollationMetadata(path, "Query"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(first), "return m.ValidateIntegerPrecision()") {
+		t.Fatal(string(first))
+	}
+	if err := patchCollationMetadata(path, "Query"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Fatal("query admission is not idempotent")
+	}
+}

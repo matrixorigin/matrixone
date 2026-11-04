@@ -23,13 +23,17 @@ import (
 )
 
 type bytejsonModifier struct {
-	bj        ByteJson
-	modifyPtr *byte
-	modifyVal ByteJson
+	bj                ByteJson
+	modifyPtr         *byte
+	modifyVal         ByteJson
+	legacyScalarIndex bool
 }
 
 func (bm *bytejsonModifier) insert(path *Path, newBj ByteJson) (ByteJson, error) {
-	_, exists := bm.bj.querySimpleExist(path, false)
+	// MySQL evaluates a scalar's array index 0 as the autowrapped scalar
+	// itself, so JSON_INSERT leaves the document unchanged instead of
+	// appending and wrapping it into an array (#30774).
+	_, exists := bm.bj.querySimpleExist(path, !bm.legacyScalarIndex)
 	if exists {
 		// if path exists, return
 		return bm.bj, nil
@@ -43,7 +47,8 @@ func (bm *bytejsonModifier) insert(path *Path, newBj ByteJson) (ByteJson, error)
 }
 
 func (bm *bytejsonModifier) replace(path *Path, newBj ByteJson) (ByteJson, error) {
-	result, exists := bm.bj.querySimpleExist(path, false)
+	// Scalar index 0 selects the existing value (#30774).
+	result, exists := bm.bj.querySimpleExist(path, !bm.legacyScalarIndex)
 	if !exists {
 		// if path not exists, return
 		return bm.bj, nil
@@ -55,7 +60,8 @@ func (bm *bytejsonModifier) replace(path *Path, newBj ByteJson) (ByteJson, error
 }
 
 func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
-	result, exists := bm.bj.querySimpleExist(path, false)
+	// Scalar index 0 selects the existing value for SET (#30774).
+	result, exists := bm.bj.querySimpleExist(path, !bm.legacyScalarIndex)
 	if exists {
 		// set
 		bm.modifyPtr = &result.Data[0]
@@ -101,6 +107,77 @@ func (bm *bytejsonModifier) arrayAppend(path *Path, newBj ByteJson) (ByteJson, e
 	bm.modifyPtr = &selected.Data[0]
 	bm.modifyVal = buildBinaryJSONArray(elems)
 	result := bm.rebuild()
+	if err := ValidateJSONDocumentDepth(result); err != nil {
+		return Null, err
+	}
+	return result, nil
+}
+
+func (bm *bytejsonModifier) arrayInsert(path *Path, newBj ByteJson) (ByteJson, error) {
+	if path == nil || path.empty() {
+		return Null, moerr.NewInvalidArgNoCtx("invalid json array insert path", "$")
+	}
+
+	parentPath, lastSub := path.popOneSubPath()
+	if lastSub.tp != subPathIdx || lastSub.idx == nil {
+		return Null, moerr.NewInvalidArgNoCtx("invalid json array insert path", path.String())
+	}
+
+	parent, exists := bm.bj.querySimpleExistWithWrapping(&parentPath, false, false)
+	if !exists || parent.Type != TpCodeArray {
+		return bm.bj, nil
+	}
+
+	elemCnt := parent.GetElemCnt()
+	insertIdx := 0
+	switch lastSub.idx.tp {
+	case numberIndices:
+		insertIdx = lastSub.idx.num
+		if insertIdx > elemCnt {
+			insertIdx = elemCnt
+		}
+	case lastIndices:
+		// JSON_ARRAY_INSERT('$[last-N]') inserts before the selected element.
+		// Underflow clamps to the head; an empty array naturally inserts at 0.
+		insertIdx = elemCnt - lastSub.idx.num - 1
+		if insertIdx < 0 {
+			insertIdx = 0
+		}
+		if insertIdx > elemCnt {
+			insertIdx = elemCnt
+		}
+	default:
+		return Null, moerr.NewInvalidArgNoCtx("invalid json array insert path", path.String())
+	}
+	arraySize := uint64(len(parent.Data)) + uint64(valEntrySize)
+	if newBj.Type != TpCodeLiteral {
+		arraySize += uint64(len(newBj.Data))
+	}
+	if arraySize > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array insert result is too large")
+	}
+	documentSize := arrayAppendDocumentSize(bm.bj, parent, arraySize)
+	if documentSize > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array insert result is too large")
+	}
+
+	elems := make([]ByteJson, 0, elemCnt+1)
+	for i := 0; i < elemCnt; i++ {
+		if i == insertIdx {
+			elems = append(elems, newBj)
+		}
+		elems = append(elems, parent.getArrayElem(i))
+	}
+	if insertIdx == elemCnt {
+		elems = append(elems, newBj)
+	}
+
+	bm.modifyPtr = &parent.Data[0]
+	bm.modifyVal = buildBinaryJSONArray(elems)
+	result := bm.rebuild()
+	if uint64(len(result.Data)) > math.MaxUint32 {
+		return Null, moerr.NewInvalidInputNoCtx("json array insert result is too large")
+	}
 	if err := ValidateJSONDocumentDepth(result); err != nil {
 		return Null, err
 	}

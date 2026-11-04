@@ -21,6 +21,8 @@ import pytest_asyncio
 from matrixone import AsyncClient
 from matrixone.sqlalchemy_ext import boolean_match, natural_match
 
+from .test_config import online_config
+
 
 class TestAsyncTransactionSimpleQuery:
     """Test async transaction simple_query operations"""
@@ -29,7 +31,7 @@ class TestAsyncTransactionSimpleQuery:
     async def async_client_setup(self):
         """Setup async client for testing"""
         client = AsyncClient()
-        await client.connect(host="127.0.0.1", port=6001, user="root", password="111", database="test")
+        await client.connect(**online_config.get_connection_kwargs())
 
         # Enable fulltext indexing
         await client.execute("SET experimental_fulltext_index=1")

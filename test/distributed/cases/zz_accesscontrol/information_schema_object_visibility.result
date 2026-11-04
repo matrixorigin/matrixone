@@ -84,6 +84,130 @@ grant select on table metadata_visibility_db.allowed_table to metadata_visibilit
 grant metadata_visibility_reader to metadata_visibility_middle;
 grant metadata_visibility_middle to metadata_visibility_primary;
 grant select on table metadata_visibility_db.hidden_parent to metadata_visibility_primary;
+create table metadata_visibility_show_db.allowed_table (id int);
+create view metadata_visibility_db.allowed_view as select id from metadata_visibility_db.allowed_table;
+grant select on table metadata_visibility_db.allowed_view to metadata_visibility_reader;
+set global enable_privilege_cache = on;
+set session enable_privilege_cache = on;
+select @@session.enable_privilege_cache;
+➤ @@enable_privilege_cache[-1,16383,0]  𝄀
+1
+select count(*) from metadata_visibility_db.allowed_table;
+➤ count(*)[-5,64,0]  𝄀
+0
+show columns from metadata_visibility_db.allowed_table;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+secret  ¦  varchar(20)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+payload  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table metadata_visibility_db.allowed_table;
+➤ Table[12,13,0]  ¦  Create Table[12,271,0]  𝄀
+allowed_table  ¦  CREATE TABLE `allowed_table` (
+  `id` int NOT NULL,
+  `secret` varchar(20) DEFAULT NULL,
+  `payload` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `secret` (`secret`),
+  CONSTRAINT `ck_allowed_payload` CHECK (`payload` >= 0)
+) partition by hash (`id`) partitions 2
+show full tables from metadata_visibility_db;
+➤ Tables_in_metadata_visibility_db[12,5000,0]  ¦  Table_type[12,13,0]  𝄀
+allowed_table  ¦  BASE TABLE  𝄀
+allowed_view  ¦  VIEW  𝄀
+hidden_parent  ¦  BASE TABLE
+show tables from metadata_visibility_db like 'allowed%';
+➤ Tables_in_metadata_visibility_db[12,5000,0]  𝄀
+allowed_table  𝄀
+allowed_view
+show tables from metadata_visibility_db where Tables_in_metadata_visibility_db = 'allowed_table';
+➤ Tables_in_metadata_visibility_db[12,5000,0]  𝄀
+allowed_table
+show full columns from metadata_visibility_db.allowed_table like 'id';
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦  
+show columns from metadata_visibility_db.hidden_table;
+internal error: do not have privilege to execute the statement
+show create table metadata_visibility_db.hidden_table;
+internal error: do not have privilege to execute the statement
+show columns from metadata_visibility_show_db.allowed_table;
+internal error: do not have privilege to execute the statement
+show create table metadata_visibility_show_db.allowed_table;
+internal error: do not have privilege to execute the statement
+show columns from metadata_visibility_db.allowed_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦  
+show create table metadata_visibility_db.allowed_view;
+internal error: do not have privilege to execute the statement
+show create view metadata_visibility_db.allowed_view;
+internal error: do not have privilege to execute the statement
+use metadata_visibility_db;
+show columns from allowed_table;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+secret  ¦  varchar(20)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+payload  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table allowed_table;
+➤ Table[12,13,0]  ¦  Create Table[12,271,0]  𝄀
+allowed_table  ¦  CREATE TABLE `allowed_table` (
+  `id` int NOT NULL,
+  `secret` varchar(20) DEFAULT NULL,
+  `payload` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `secret` (`secret`),
+  CONSTRAINT `ck_allowed_payload` CHECK (`payload` >= 0)
+) partition by hash (`id`) partitions 2
+prepare metadata_show from 'show tables';
+execute metadata_show;
+➤ Tables_in_metadata_visibility_db[12,5000,0]  𝄀
+allowed_table  𝄀
+allowed_view  𝄀
+hidden_parent
+revoke select on table metadata_visibility_db.allowed_table from metadata_visibility_reader;
+show columns from allowed_table;
+internal error: do not have privilege to execute the statement
+show create table allowed_table;
+internal error: do not have privilege to execute the statement
+execute metadata_show;
+➤ Tables_in_metadata_visibility_db[12,5000,0]  𝄀
+allowed_view  𝄀
+hidden_parent
+grant insert on table metadata_visibility_db.allowed_table to metadata_visibility_reader;
+show columns from allowed_table;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+secret  ¦  varchar(20)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+payload  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
+show create table allowed_table;
+➤ Table[12,13,0]  ¦  Create Table[12,271,0]  𝄀
+allowed_table  ¦  CREATE TABLE `allowed_table` (
+  `id` int NOT NULL,
+  `secret` varchar(20) DEFAULT NULL,
+  `payload` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `secret` (`secret`),
+  CONSTRAINT `ck_allowed_payload` CHECK (`payload` >= 0)
+) partition by hash (`id`) partitions 2
+execute metadata_show;
+➤ Tables_in_metadata_visibility_db[12,5000,0]  𝄀
+allowed_table  𝄀
+allowed_view  𝄀
+hidden_parent
+deallocate prepare metadata_show;
+set role public;
+show columns from metadata_visibility_db.allowed_table;
+internal error: do not have privilege to execute the statement
+set secondary role all;
+show columns from metadata_visibility_db.allowed_table;
+internal error: do not have privilege to execute the statement
+set secondary role none;
+set role metadata_visibility_primary;
+set session enable_privilege_cache = off;
+revoke insert on table metadata_visibility_db.allowed_table from metadata_visibility_reader;
+grant select on table metadata_visibility_db.allowed_table to metadata_visibility_reader;
+revoke select on table metadata_visibility_db.allowed_view from metadata_visibility_reader;
+drop view metadata_visibility_db.allowed_view;
+drop table metadata_visibility_show_db.allowed_table;
+set global enable_privilege_cache = off;
 select
 (select count(*) = 1 from information_schema.tables
 where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as inherited_table_visible,
@@ -228,6 +352,20 @@ where schema_name = 'metadata_visibility_show_db';
 ➤ empty_schema_hidden_after_show_databases_revoke[-7,1,0]  𝄀
 1
 grant show tables on database metadata_visibility_db to metadata_visibility_primary;
+grant show tables on database metadata_visibility_show_db to metadata_visibility_primary;
+show tables from metadata_visibility_show_db;
+➤ Tables_in_metadata_visibility_show_db[12,5000,0]
+show full tables from metadata_visibility_db;
+➤ Tables_in_metadata_visibility_db[12,5000,0]  ¦  Table_type[12,13,0]  𝄀
+allowed_table  ¦  BASE TABLE  𝄀
+hidden_parent  ¦  BASE TABLE  𝄀
+hidden_table  ¦  BASE TABLE  𝄀
+hidden_view  ¦  VIEW
+show columns from metadata_visibility_db.hidden_table;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+secret  ¦  varchar(20)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+payload  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) = 1 as database_schema_visible
 from information_schema.schemata
 where schema_name = 'metadata_visibility_db';

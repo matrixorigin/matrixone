@@ -24,11 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-type StringRef struct {
-	Ptr *byte
-	Len int
-}
-
 type StringHashMapCell struct {
 	HashState [3]uint64
 	Mapped    uint64
