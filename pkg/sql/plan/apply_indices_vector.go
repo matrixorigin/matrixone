@@ -202,21 +202,11 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 		}
 	}
 
-	// SORT anchor only (projNode == nil): the child PROJECT is detached and each of its
-	// non-distance expressions is published through idxColMap, which applyIndices then
-	// substitutes into EVERY ancestor referencing that column -- a deep copy per reference.
-	// Fine for a column reference, wrong for anything evaluated: two ancestors would each
-	// get their own rand()/uuid()/now(), so the value a JOIN predicate admitted a row on can
-	// differ from the value projected out of it, and moving evaluation above a JOIN changes
-	// how many times it runs.
-	//
-	// The PROJECT anchor is unaffected: spliceVectorRewrite applies its remap to that one
-	// node, so the expression is still evaluated exactly once.
-	//
-	// exprCanRemoveProject is the planner's existing answer to this same question --
-	// removeSimpleProjections refuses to inline a PROJECT holding a CannotFold or
-	// IsRealTimeRelated function. Reuse it rather than restate it, so the two cannot drift.
-	if projNode == nil && childNode != nil && !vectorChildProjectIsDetachable(childNode, orderExpr) {
+	// The child PROJECT is detached and its columns are substituted into their readers, a
+	// copy per reference. An expression exprCanRemoveProject rejects (rand(), uuid(), now())
+	// must not be copied: with the SORT anchor every ancestor reads it, with the PROJECT
+	// anchor only that node does, so there it may be read once.
+	if childNode != nil && !vectorChildProjectIsDetachable(projNode, childNode, orderExpr) {
 		return nil
 	}
 
@@ -910,22 +900,29 @@ func (builder *QueryBuilder) spliceVectorRewrite(
 }
 
 // vectorChildProjectIsDetachable reports whether the PROJECT below the Top-K may be removed
-// with its expressions republished to arbitrarily many ancestors.
+// with its expressions republished to their readers: every ancestor when projNode is nil,
+// else projNode only.
 //
 // The distance entry is exempt: it is replaced by a single ColRef to the index score, so it
 // is not duplicated however many ancestors read it. Every other entry is deep-copied per
 // reference, which is only sound for something whose value does not depend on being
-// evaluated once -- precisely what exprCanRemoveProject already decides.
-func vectorChildProjectIsDetachable(childNode *plan.Node, orderExpr *plan.Expr) bool {
+// evaluated once -- precisely what exprCanRemoveProject already decides -- or, with projNode,
+// for an entry projNode reads at most once.
+func vectorChildProjectIsDetachable(projNode, childNode *plan.Node, orderExpr *plan.Expr) bool {
 	sortIdx := -1
 	if col := orderExpr.GetCol(); col != nil {
 		sortIdx = int(col.ColPos)
 	}
+	var refCnt map[[2]int32]int
+	if projNode != nil {
+		refCnt = make(map[[2]int32]int)
+		increaseRefCntForExprList(projNode.ProjectList, 1, refCnt)
+	}
 	for i, proj := range childNode.ProjectList {
-		if i == sortIdx {
+		if i == sortIdx || exprCanRemoveProject(proj) {
 			continue
 		}
-		if !exprCanRemoveProject(proj) {
+		if projNode == nil || len(childNode.BindingTags) == 0 || refCnt[[2]int32{childNode.BindingTags[0], int32(i)}] > 1 {
 			return false
 		}
 	}

@@ -32,6 +32,7 @@ func TestVectorTopKOverChildProject(t *testing.T) {
 		"with d as (select * from ft) select id from d where match(title,body) against('hello') order by l2_distance(v,'[1,2,3]') limit 2",
 		"select id from (select v, id, title, body from ft) d where match(title,body) against('hello') order by l2_distance(v,'[1,2,3]') limit 2",
 		"select id from (select id, v, rand() r from ft) d order by l2_distance(v,'[1,2,3]') limit 2",
+		"select id, r from (select id, v, rand() r from ft) d order by l2_distance(v,'[1,2,3]') limit 2",
 		"select id, l2_distance(v,'[1,2,3]') dist from (select * from ft) d where match(title,body) against('hello') order by l2_distance(v,'[1,2,3]') limit 2",
 		"with d as (select * from ft) select id, l2_distance(v,'[1,2,3]') dist from d where match(title,body) against('hello') order by dist limit 2",
 		"select group_concat(id) from (select id, l2_distance(v,'[1,2,3]') dist from (select * from ft) d where match(title,body) against('hello') order by l2_distance(v,'[1,2,3]') limit 2) x",
@@ -113,5 +114,37 @@ func TestVectorTopKMergeKeepsSharedComputedColumns(t *testing.T) {
 		shallow := exprSize(buildBooleanFullTextPublicPlan(t, nested(4), false, false, algo))
 		deep := exprSize(buildBooleanFullTextPublicPlan(t, nested(12), false, false, algo))
 		require.Less(t, deep, 4*shallow, "%s: %d expression nodes at depth 12, %d at depth 4", algo, deep, shallow)
+	}
+}
+
+// A volatile column of the derived table below a Top-K is evaluated once however often it is read.
+func TestVectorTopKKeepsSharedVolatileColumns(t *testing.T) {
+	queries := []string{
+		"select id, r as a, r as b from (select id, v, rand() r from ft) d order by l2_distance(v,'[1,2,3]') limit 2",
+		"select id, r - r from (select id, v, rand() r from ft) d order by l2_distance(v,'[1,2,3]') limit 2",
+		"select id, r as a, r as b from (select id, v, rand() r, l2_distance(v,'[1,2,3]') dist from ft) d order by dist limit 2",
+	}
+	for _, algo := range []string{catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString()} {
+		for _, sql := range queries {
+			query := buildBooleanFullTextPublicPlan(t, sql, false, false, algo)
+			rands := 0
+			var walk func(*planpb.Expr)
+			walk = func(e *planpb.Expr) {
+				if f := e.GetF(); f != nil {
+					if f.Func.ObjName == "rand" {
+						rands++
+					}
+					for _, arg := range f.Args {
+						walk(arg)
+					}
+				}
+			}
+			for _, n := range booleanFullTextNodes(query, query.Steps[0]) {
+				for _, e := range n.ProjectList {
+					walk(e)
+				}
+			}
+			require.Equal(t, 1, rands, "%s: %s", algo, sql)
+		}
 	}
 }
