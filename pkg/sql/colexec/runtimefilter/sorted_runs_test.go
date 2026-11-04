@@ -16,6 +16,7 @@ package runtimefilter
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,6 +24,46 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func checkExactDataSorter[T types.FixedSizeT](t *testing.T, typ types.Type, values []T) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	v := vector.NewVec(typ)
+	defer v.Free(mp)
+	require.NoError(t, vector.AppendFixedList(v, values, nil, mp))
+	data := append([]byte(nil), v.GetData()[:v.Length()*typ.TypeSize()]...)
+	sorter := ExactFilterDataSorter(typ)
+	require.NotNil(t, sorter)
+	sorter(data)
+	require.NoError(t, v.InplaceSort(mp))
+	require.Equal(t, v.GetData()[:v.Length()*typ.TypeSize()], data)
+}
+
+func TestExactDataSortersMatchVectorOrdering(t *testing.T) {
+	checkExactDataSorter(t, types.T_bool.ToType(), []bool{true, false, true})
+	checkExactDataSorter(t, types.T_int8.ToType(), []int8{3, -7, 0})
+	checkExactDataSorter(t, types.T_int16.ToType(), []int16{257, -7, 0})
+	checkExactDataSorter(t, types.T_int32.ToType(), []int32{65537, -7, 0})
+	checkExactDataSorter(t, types.T_int64.ToType(), []int64{1 << 40, -7, 0})
+	checkExactDataSorter(t, types.T_uint8.ToType(), []uint8{255, 0, 128})
+	checkExactDataSorter(t, types.T_uint16.ToType(), []uint16{257, 1, 256})
+	checkExactDataSorter(t, types.T_uint32.ToType(), []uint32{1 << 31, 0, 65537})
+	checkExactDataSorter(t, types.T_uint64.ToType(), []uint64{1 << 63, 0, 1 << 40})
+	checkExactDataSorter(t, types.T_bit.ToType(), []uint64{1 << 63, 0, 1 << 40})
+	checkExactDataSorter(t, types.T_float32.ToType(), []float32{3, -7, 0, float32(math.NaN())})
+	checkExactDataSorter(t, types.T_float64.ToType(), []float64{3, -7, 0, math.NaN()})
+	checkExactDataSorter(t, types.T_date.ToType(), []types.Date{3, -7, 0})
+	checkExactDataSorter(t, types.T_time.ToType(), []types.Time{3, -7, 0})
+	checkExactDataSorter(t, types.T_datetime.ToType(), []types.Datetime{3, -7, 0})
+	checkExactDataSorter(t, types.T_timestamp.ToType(), []types.Timestamp{3, -7, 0})
+	checkExactDataSorter(t, types.T_year.ToType(), []types.MoYear{2026, 0, 1990})
+	checkExactDataSorter(t, types.T_enum.ToType(), []types.Enum{3, 1, 2})
+	checkExactDataSorter(t, types.T_decimal64.ToType(), []types.Decimal64{7, 0, types.Decimal64(^uint64(0))})
+	checkExactDataSorter(t, types.T_decimal128.ToType(), []types.Decimal128{{7, 0}, {1, 0}, {0, 0}})
+	checkExactDataSorter(t, types.T_decimal256.ToType(), []types.Decimal256{{7, 0, 0, 0}, {1, 0, 0, 0}, {0, 0, 0, 0}})
+	checkExactDataSorter(t, types.T_uuid.ToType(), []types.Uuid{{7}, {1}, {0}})
+	require.Nil(t, ExactFilterDataSorter(types.T_varchar.ToType()))
+}
 
 func TestMarshalExactFilterRuns(t *testing.T) {
 	for _, variable := range []bool{false, true} {
@@ -59,7 +100,9 @@ func TestMarshalExactFilterRuns(t *testing.T) {
 				}
 			}
 			for _, v := range []*vector.Vector{x, y, expected} {
-				require.NoError(t, v.InplaceSort(mp))
+				if variable || v == expected {
+					require.NoError(t, v.InplaceSort(mp))
+				}
 			}
 			data, release, err := MarshalExactFilterRuns(context.Background(), []*vector.Vector{x, y}, mp, account, mpool.AllocationOwnerHashBuild, mpool.AllocationSiteMin)
 			require.NoError(t, err)

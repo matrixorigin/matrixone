@@ -29,14 +29,23 @@ import (
 )
 
 func (hb *HashmapBuilder) marshalMembershipKeys(proc *process.Process) (*keycodec.KeyPayload, error) {
-	count := 1 + len(hb.uniqueKeys.rest)
-	bytes := uint64(count) * uint64(reflect.TypeFor[[]byte]().Size()+reflect.TypeFor[func()]().Size())
-	reservation, err := hb.mapAllocationAccount.ReserveCapacity(bytes, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterPayload)
-	if err != nil {
+	if err := proc.Ctx.Err(); err != nil {
 		return nil, err
 	}
-	defer reservation.Abort()
-	lease, err := reservation.Commit(bytes)
+	count := 1 + len(hb.uniqueKeys.rest)
+	if count == 1 {
+		data, release, err := hb.marshalRuntimeFilterVector(hb.uniqueKeys.first.vecs[0], proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+		keys, err := keycodec.NewTrustedSingleKeyPayload(proc.Ctx, data, int64(cap(data)), release)
+		if err != nil {
+			release()
+		}
+		return keys, err
+	}
+	bytes := uint64(count) * uint64(reflect.TypeFor[[]byte]().Size()+reflect.TypeFor[func()]().Size())
+	lease, err := hb.runtimeKeyMetadata(bytes, HashBuildAllocationSiteRuntimeFilterPayload)
 	if err != nil {
 		return nil, err
 	}
@@ -54,32 +63,81 @@ func (hb *HashmapBuilder) marshalMembershipKeys(proc *process.Process) (*keycode
 			cleanup()
 		}
 	}()
-	totalBytes := int64(bytes)
+	scratch, err := hb.runtimeKeyMetadata(uint64(count)*uint64(reflect.TypeFor[vector.MarshalBinaryPlan]().Size()), HashBuildAllocationSiteRuntimeFilterScratch)
+	if err != nil {
+		return nil, err
+	}
+	defer scratch.Release()
+	plans := make([]vector.MarshalBinaryPlan, count)
+	index := 0
 	err = hb.uniqueKeys.visit(func(keys []*vector.Vector) error {
 		if err := proc.Ctx.Err(); err != nil {
 			return err
 		}
-		if len(keys) == 0 || keys[0] == nil {
+		if len(keys) == 0 || keys[0] == nil || keys[0].HasNull() {
 			return process.ErrExecutionResourceInvalid
 		}
-		data, release, err := hb.marshalRuntimeFilterVector(keys[0], proc.Mp())
+		var err error
+		plans[index], err = keys[0].PrepareMarshalBinary()
 		if err != nil {
 			return err
 		}
-		chunks = append(chunks, data)
-		releases = append(releases, release)
-		totalBytes += int64(cap(data))
+		if int64(plans[index].Size()) > mpool.MaxAllocationSize() {
+			return runtimefilter.ErrOptionalKeySize
+		}
+		index++
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	keys, err := keycodec.NewKeyPayload(proc.Ctx, chunks, totalBytes, cleanup)
+	// Frames remain independently bounded, but share bounded backing arenas:
+	// the complete payload has one lifetime, so per-frame MPool allocations
+	// and release closures only add overhead. Wide frames get their own arena.
+	const arenaBytes = 1 << 20
+	totalBytes := int64(bytes)
+	for start := 0; start < count; {
+		end, size := start+1, plans[start].Size()
+		for end < count && size <= arenaBytes && plans[end].Size() <= arenaBytes-size {
+			size += plans[end].Size()
+			end++
+		}
+		buf, err := mpool.NewAccountedBuffer(proc.Mp(), hb.mapAllocationAccount, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterPayload)
+		if err != nil {
+			return nil, err
+		}
+		releases = append(releases, buf.Free)
+		if err = buf.EnsureCapacity(size); err != nil {
+			return nil, runtimefilter.MarkOptionalAllocationError(err)
+		}
+		totalBytes += int64(buf.Cap())
+		for i := start; i < end; i++ {
+			if err := proc.Ctx.Err(); err != nil {
+				return nil, err
+			}
+			offset := buf.Len()
+			if err := plans[i].MarshalTo(buf); err != nil {
+				return nil, err
+			}
+			chunks = append(chunks, buf.Bytes()[offset:buf.Len():buf.Len()])
+		}
+		start = end
+	}
+	keys, err := keycodec.NewTrustedKeyPayload(proc.Ctx, chunks, totalBytes, cleanup)
 	if err != nil {
 		return nil, err
 	}
 	owned = false
 	return keys, nil
+}
+
+func (hb *HashmapBuilder) runtimeKeyMetadata(bytes uint64, site mpool.AllocationSite) (*mpool.CapacityLease, error) {
+	reservation, err := hb.mapAllocationAccount.ReserveCapacity(bytes, mpool.AllocationOwnerHashBuild, site)
+	if err != nil {
+		return nil, err
+	}
+	defer reservation.Abort()
+	return reservation.Commit(bytes)
 }
 
 func (hashBuild *HashBuild) materializeSerializedRuntimeFilterRuns(proc *process.Process, spec *plan.RuntimeFilterSpec, componentTypes []types.Type) ([]byte, func(), int, bool, error) {
@@ -159,6 +217,7 @@ func (hashBuild *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process,
 	defer lease.Release()
 	runs := make([]*vector.Vector, 0, count)
 	rows := 0
+	sortInEncoding := runtimefilter.ExactFilterDataSorter(*hb.uniqueKeys.first.vecs[slot].GetType()) != nil
 	err = hb.uniqueKeys.visit(func(vecs []*vector.Vector) error {
 		if err := checkHashBuildCanceled(proc); err != nil {
 			return err
@@ -173,8 +232,10 @@ func (hashBuild *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process,
 			}
 		}
 		v.GetNulls().Reset()
-		if err := v.InplaceSort(proc.Mp()); err != nil {
-			return err
+		if !sortInEncoding {
+			if err := v.InplaceSort(proc.Mp()); err != nil {
+				return err
+			}
 		}
 		runs = append(runs, v)
 		rows += v.Length()

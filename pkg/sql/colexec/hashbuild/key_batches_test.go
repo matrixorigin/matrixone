@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,8 +26,85 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/runtimefilter"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHashBuildPublishesCompleteChunkedMembership(t *testing.T) {
+	typ := types.T_int64.ToType()
+	tc := newTestCase(t, []types.Type{typ}, []*plan.Expr{newExpr(0, typ)})
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.GetMessageBoard().Reset()
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+	tc.arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: 177, Expr: newExpr(0, typ), UseMembershipFilter: true, MustApply: true}
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	builder := &tc.arg.ctr.hashmapBuilder
+	func() {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewVec(typ)
+		defer input.Clean(tc.proc.Mp())
+		for row := 0; row < 8193; row++ {
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(row), false, tc.proc.Mp()))
+		}
+		input.SetRowCount(8193)
+		require.NoError(t, builder.CopyBuildBatch(input, tc.proc))
+	}()
+	builder.InputBatchRowCount = 8193
+	require.NoError(t, builder.BuildHashmap(true, false, true, tc.proc))
+	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+	receiver := message.NewMessageReceiver([]int32{177}, message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard())
+	messages, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, messages, 1)
+	msg := messages[0].(message.RuntimeFilterMessage)
+	require.EqualValues(t, message.RuntimeFilter_UNIQUEJOINKEYS, msg.Typ)
+	require.EqualValues(t, 8193, msg.Card)
+	require.EqualValues(t, 8193, msg.Keys.Rows())
+	require.Equal(t, 2, msg.Keys.ChunkCount())
+	require.Empty(t, msg.Data, "membership has one authoritative chunked representation")
+	require.Zero(t, builder.uniqueKeys.count())
+	filter, err := docfilter.NewForCKeys(tc.proc.Ctx, msg.Keys, nil)
+	require.NoError(t, err)
+	defer filter.Free()
+	tc.proc.GetMessageBoard().Reset()
+	require.False(t, msg.Keys.Retain())
+	require.True(t, filter.Test(types.EncodeFixed(int64(8192))))
+	require.False(t, filter.Test(types.EncodeFixed(int64(8193))))
+}
+
+func TestHashBuildAllNullKeysPublishesDrop(t *testing.T) {
+	typ := types.T_int64.ToType()
+	tc := newTestCase(t, []types.Type{typ}, []*plan.Expr{newExpr(0, typ)})
+	defer func() {
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.GetMessageBoard().Reset()
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	}()
+	tc.arg.RuntimeFilterSpec = rawRuntimeFilterSpec(178, 100, typ)
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	builder := &tc.arg.ctr.hashmapBuilder
+	func() {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = vector.NewConstNull(typ, 17, tc.proc.Mp())
+		defer input.Clean(tc.proc.Mp())
+		input.SetRowCount(17)
+		require.NoError(t, builder.CopyBuildBatch(input, tc.proc))
+	}()
+	builder.InputBatchRowCount = 17
+	require.NoError(t, builder.BuildHashmap(false, false, true, tc.proc))
+	require.NoError(t, tc.arg.handleRuntimeFilter(tc.proc))
+	receiver := message.NewMessageReceiver([]int32{178}, message.AddrBroadCastOnCurrentCN(), tc.proc.GetMessageBoard())
+	messages, done, err := receiver.ReceiveMessage(false, tc.proc.Ctx)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, messages, 1)
+	require.EqualValues(t, message.RuntimeFilter_DROP, messages[0].(message.RuntimeFilterMessage).Typ)
+}
 
 func TestHashmapUniqueKeyChunking(t *testing.T) {
 	for _, pk := range []bool{false, true} {

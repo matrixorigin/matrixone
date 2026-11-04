@@ -69,6 +69,10 @@ func (b *uniqueKeyBatches) count() int {
 }
 
 func (b *uniqueKeyBatches) free(mp *mpool.MPool) {
+	if len(b.first.vecs) == 0 && b.first.metadata == nil && len(b.rest) == 0 && b.directory == nil {
+		b.rows = 0
+		return
+	}
 	b.first.free(mp)
 	for i := range b.rest {
 		b.rest[i].free(mp)
@@ -93,11 +97,15 @@ func (b *uniqueKeyBatches) visit(fn func([]*vector.Vector) error) error {
 	return nil
 }
 
-func (hb *HashmapBuilder) newUniqueKeyBatch() (out uniqueKeyBatch, err error) {
+func (hb *HashmapBuilder) newUniqueKeyBatch(mp *mpool.MPool) (out uniqueKeyBatch, err error) {
 	if hb.uniqueKeyAllocation == nil || hb.mapAllocationAccount == nil {
 		return out, mpool.ErrAllocationAccountInvalid
 	}
 	width := len(hb.curVecs)
+	// A PK build knows its complete cardinality. Reserve one bounded data
+	// chunk once, rather than repeatedly growing it for each hash unit. For
+	// non-PK keys the actual uniqueness selection still controls allocation.
+	capacityHint := min(hb.uniqueKeyRowsHint, max(0, hb.InputBatchRowCount-hb.uniqueKeys.count()))
 	bytes := uint64(width) * uint64(reflect.TypeFor[*vector.Vector]().Size()+reflect.TypeFor[vector.AppendCheckpoint]().Size())
 	reservation, err := hb.mapAllocationAccount.ReserveCapacity(bytes, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteUniqueKeyData)
 	if err != nil {
@@ -116,8 +124,14 @@ func (hb *HashmapBuilder) newUniqueKeyBatch() (out uniqueKeyBatch, err error) {
 		}
 		out.vecs[i], err = vector.NewOffHeapVecWithTypeAndAllocation(*src.GetType(), hb.uniqueKeyAllocation)
 		if err != nil {
-			out.free(nil)
+			out.free(mp)
 			return uniqueKeyBatch{}, err
+		}
+		if capacityHint > 0 {
+			if err = out.vecs[i].PreExtend(capacityHint, mp); err != nil {
+				out.free(mp)
+				return uniqueKeyBatch{}, err
+			}
 		}
 	}
 	return out, nil
@@ -162,6 +176,7 @@ func keyAppendCount(dst []*vector.Vector, src []*vector.Vector, start, count int
 	// Signed-zero closure can add one representation at publication. Reserve
 	// that row rather than allowing publication to grow a full float chunk.
 	for _, v := range dst {
+		// typeswitch:partial signed-zero closure is defined only for ordinary float32/64 runtime filters.
 		if v != nil && (v.GetType().Oid == types.T_float32 || v.GetType().Oid == types.T_float64) {
 			room--
 			break
@@ -189,6 +204,14 @@ func keyAppendCount(dst []*vector.Vector, src []*vector.Vector, start, count int
 			}
 			available := max(int64(0), maxBytes-envelope-dataBytes)
 			count = min(count, int(available/int64(v.GetType().TypeSize())))
+			continue
+		}
+		// Every external value is bounded by the source area. When even
+		// that conservative bound fits, reuse Union's own sizing pass instead
+		// of scanning ordinary variable-width keys a second time here.
+		available := maxBytes - envelope - dataBytes - areaBytes
+		perRowBound := int64(v.GetType().TypeSize()) + int64(len(src[col].GetArea()))
+		if available >= 0 && int64(count) <= available/perRowBound {
 			continue
 		}
 		accepted := 0
@@ -228,6 +251,12 @@ func (hb *HashmapBuilder) appendUniqueKeys(proc *process.Process, start, count i
 }
 
 func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, count int, sels []int64, maxBytes int64) (err error) {
+	if count < 0 || len(hb.curVecs) == 0 && count != 0 {
+		return process.ErrExecutionResourceInvalid
+	}
+	if len(hb.curVecs) == 0 {
+		return nil
+	}
 	b := &hb.uniqueKeys
 	oldChunks, oldRows := len(b.rest), b.count()
 	if count > math.MaxInt32-oldRows {
@@ -267,7 +296,9 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		b.rows = oldRows
 	}()
 	remaining := count
-	for remaining != 0 {
+	// Even a zero-selection append establishes a typed empty collection.
+	// Absence of collection state means PASS; a valid empty set means DROP.
+	for remaining != 0 || len(b.first.vecs) == 0 {
 		if err = proc.Ctx.Err(); err != nil {
 			return err
 		}
@@ -277,7 +308,7 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		}
 		if len(tail.vecs) == 0 {
 			var next uniqueKeyBatch
-			next, err = hb.newUniqueKeyBatch()
+			next, err = hb.newUniqueKeyBatch(proc.Mp())
 			if err != nil {
 				return err
 			}
@@ -294,7 +325,7 @@ func (hb *HashmapBuilder) appendUniqueKeysWithin(proc *process.Process, start, c
 		}
 		if n == 0 {
 			var next uniqueKeyBatch
-			next, err = hb.newUniqueKeyBatch()
+			next, err = hb.newUniqueKeyBatch(proc.Mp())
 			if err != nil {
 				return err
 			}

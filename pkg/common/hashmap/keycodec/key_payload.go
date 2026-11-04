@@ -44,16 +44,60 @@ type KeyPayload struct {
 // The caller must admit the encoded buffers and directory before constructing
 // them; accountedBytes is diagnostic and does not itself reserve capacity.
 func NewKeyPayload(ctx context.Context, chunks [][]byte, accountedBytes int64, release func()) (*KeyPayload, error) {
+	return newKeyPayload(ctx, chunks, accountedBytes, release, false)
+}
+
+// NewTrustedKeyPayload accepts encodings produced by Vector's checked marshal
+// plan. Like UnmarshalBinaryTrusted, it validates framing and shape without
+// rescanning every value. Never use it for unvalidated wire or persisted bytes.
+func NewTrustedKeyPayload(ctx context.Context, chunks [][]byte, accountedBytes int64, release func()) (*KeyPayload, error) {
+	return newKeyPayload(ctx, chunks, accountedBytes, release, true)
+}
+
+// NewTrustedSingleKeyPayload keeps the common one-chunk payload inline,
+// without allocating a chunk directory. The trusted-input rule is the same.
+func NewTrustedSingleKeyPayload(ctx context.Context, data []byte, accountedBytes int64, release func()) (*KeyPayload, error) {
+	if len(data) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("empty runtime-key chunk")
+	}
+	return newKeyPayloadParts(ctx, data, nil, accountedBytes, release, true)
+}
+
+func newKeyPayload(ctx context.Context, chunks [][]byte, accountedBytes int64, release func(), trusted bool) (*KeyPayload, error) {
+	if len(chunks) == 0 {
+		return newKeyPayloadParts(ctx, nil, nil, accountedBytes, release, trusted)
+	}
+	if len(chunks[0]) == 0 {
+		return nil, moerr.NewInvalidInputNoCtx("empty runtime-key chunk")
+	}
+	return newKeyPayloadParts(ctx, chunks[0], chunks[1:], accountedBytes, release, trusted)
+}
+
+func newKeyPayloadParts(ctx context.Context, first []byte, rest [][]byte, accountedBytes int64, release func(), trusted bool) (*KeyPayload, error) {
 	if accountedBytes < 0 {
 		return nil, moerr.NewInvalidInputNoCtx("negative runtime-key payload accounting")
 	}
 	p := &KeyPayload{}
-	for i, data := range chunks {
+	count := len(rest)
+	if len(first) != 0 {
+		count++
+	}
+	for i := 0; i < count; i++ {
+		data := first
+		if i > 0 {
+			data = rest[i-1]
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		var v vector.Vector
-		if err := v.UnmarshalBinary(data); err != nil {
+		var err error
+		if trusted {
+			err = v.UnmarshalBinaryTrusted(data)
+		} else {
+			err = v.UnmarshalBinary(data)
+		}
+		if err != nil {
 			v.Free(nil)
 			return nil, err
 		}
@@ -68,9 +112,7 @@ func NewKeyPayload(ctx context.Context, chunks [][]byte, accountedBytes int64, r
 		p.rows += uint64(v.Length())
 		v.Free(nil)
 	}
-	if len(chunks) != 0 {
-		p.first, p.rest = chunks[0], chunks[1:]
-	}
+	p.first, p.rest = first, rest
 	lease, err := bufferlease.NewRefCounted(nil, accountedBytes, release)
 	if err != nil {
 		return nil, err

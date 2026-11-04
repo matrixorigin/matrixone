@@ -81,6 +81,7 @@ type HashmapBuilder struct {
 	// must not be retried or re-spilled.
 	runtimeFilterCollectionFallback bool
 	runtimeFilterKeysRequired       bool
+	uniqueKeyRowsHint               int
 	retainedBatchRecoverySafe       bool
 	mapAllocationAccount            *mpool.AllocationAccount
 	mapAllocation                   *hashtable.AllocationAccountSelection
@@ -98,19 +99,21 @@ func (hb *HashmapBuilder) GetSize() int64 {
 		sz += hb.StrHashMap.Size()
 	}
 	sz += hb.Sels.Size()
-	_ = hb.uniqueKeys.visit(func(vecs []*vector.Vector) error {
-		for _, v := range vecs {
-			if v != nil {
-				sz += int64(v.Allocated())
+	if len(hb.uniqueKeys.first.vecs) != 0 {
+		_ = hb.uniqueKeys.visit(func(vecs []*vector.Vector) error {
+			for _, v := range vecs {
+				if v != nil {
+					sz += int64(v.Allocated())
+				}
 			}
+			return nil
+		})
+		sz += int64(hb.uniqueKeys.first.metadata.Capacity())
+		for i := range hb.uniqueKeys.rest {
+			sz += int64(hb.uniqueKeys.rest[i].metadata.Capacity())
 		}
-		return nil
-	})
-	sz += int64(hb.uniqueKeys.directory.Capacity())
-	sz += int64(hb.uniqueKeys.first.metadata.Capacity())
-	for i := range hb.uniqueKeys.rest {
-		sz += int64(hb.uniqueKeys.rest[i].metadata.Capacity())
 	}
+	sz += int64(hb.uniqueKeys.directory.Capacity())
 	if hb.IgnoreRows != nil {
 		sz += int64(hb.IgnoreRows.Size())
 	}
@@ -260,6 +263,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.uniqueKeys.free(proc.Mp())
 	hb.uniqueKeySlots = nil
 	hb.runtimeFilterKeysRequired = false
+	hb.uniqueKeyRowsHint = 0
 	// Function executors retain result-vector capacity across ResetForNextQuery.
 	// Destroy them here; immutable allocation selections remain installed until
 	// the statement lifecycle calls ClearAllocationAccount.
@@ -285,6 +289,7 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.uniqueKeySlots = nil
 	hb.runtimeFilterCollectionFallback = false
 	hb.runtimeFilterKeysRequired = false
+	hb.uniqueKeyRowsHint = 0
 	hb.retainedBatchRecoverySafe = false
 }
 
@@ -445,6 +450,10 @@ func (hb *HashmapBuilder) buildHashmapWithRuntimeFilterLimit(
 ) (retErr error) {
 	hb.runtimeFilterCollectionFallback = false
 	hb.retainedBatchRecoverySafe = true
+	hb.uniqueKeyRowsHint = 0
+	if hashOnPK && needUniqueVec && (runtimeFilterLimit < 0 || hb.InputBatchRowCount <= int(runtimeFilterLimit)) {
+		hb.uniqueKeyRowsHint = min(8192, hb.InputBatchRowCount)
+	}
 	return hb.buildHashmap(
 		hashOnPK,
 		needAllocateSels,

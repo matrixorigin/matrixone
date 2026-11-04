@@ -11,8 +11,9 @@ payload and encoded size are checked before growth; a byte boundary may produce
 a shorter batch. One indivisible oversized key remains a size refusal.
 
 Ordinary IN keeps its existing wire/probe contract and its single-batch fast path.
-Multiple sorted runs are merged directly into the final admitted encoding without
-constructing a whole-build vector. Composite expressions execute per aligned
+Numeric values are copied and sorted directly in the final admitted encoding;
+other sorted runs are merged into that encoding without constructing a
+whole-build vector. Composite expressions execute per aligned
 batch. Membership consumers receive one complete immutable chunked payload and
 build one membership structure; they never probe each chunk independently.
 

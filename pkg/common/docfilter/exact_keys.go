@@ -68,6 +68,7 @@ func (f *exactKeys) notJoinable(value []byte) bool {
 // Native integer consumers use NewForCKeys/BuildKeysWithMemoryAdmission instead.
 // The payload must remain owned by the caller throughout construction.
 func NewExactKeys(ctx context.Context, keys *keycodec.KeyPayload, typ types.Type, admission MemoryAdmission) (MembershipFilter, error) {
+	// typeswitch:partial exact scalar runtime filters support float32/64, not the low-precision float family.
 	if keys == nil || !types.MembershipKeyTypeCompatible(keys.Type().Oid, typ.Oid) || (!keycodec.SupportsExactRawRuntimeFilter(typ.Oid) && typ.Oid != types.T_float32 && typ.Oid != types.T_float64) {
 		return nil, moerr.NewInvalidInputNoCtx("docfilter: unsupported exact key domain")
 	}
