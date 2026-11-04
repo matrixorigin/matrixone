@@ -102,3 +102,56 @@ func TestBuildCloneTableSubscriptionReplanKeepsAlias(t *testing.T) {
 	require.Equal(t, "localdb", second.GetDdl().GetCloneTable().GetDstDatabaseName())
 	require.Equal(t, "copy", second.GetDdl().GetCloneTable().GetDstTableName())
 }
+
+// When planning fails after the alias was rewritten for the build, the AST
+// must still hold the subscription alias so a later plan of the same AST
+// fails (or succeeds) for the same reason instead of losing the alias.
+func TestBuildCloneTableSubscriptionPlanningErrorKeepsAlias(t *testing.T) {
+	const rootSQL = "CREATE TABLE mysql.copy CLONE subdb.source"
+	base := NewMockCompilerContext(false, newPlanTestProcess(t))
+	base.dbs["localdb"] = true
+	base.dbs["subdb"] = true
+	base.tables["source"] = &plan.TableDef{
+		Name:      "source",
+		DbName:    "publisherdb",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*plan.ColDef{{
+			Name: "id", OriginName: "id",
+			Typ:     plan.Type{Id: int32(types.T_int32)},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	base.objects["source"] = &plan.ObjectRef{
+		SchemaName:       "publisherdb",
+		ObjName:          "source",
+		SubscriptionName: "subdb",
+		PubInfo:          &plan.PubInfo{TenantId: 7},
+	}
+	ctx := &subscriberOnlyCompilerContext{
+		subscriptionScopeCompilerContext: &subscriptionScopeCompilerContext{
+			MockCompilerContext: base,
+			subscription: &SubscriptionMeta{
+				AccountId: 7, DbName: "publisherdb", SubName: "subdb", Tables: "*",
+			},
+		},
+		hiddenDB: "publisherdb",
+	}
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	// The destination is a system database, so planning fails after the
+	// subscription resolution. The AST must not leak the publisher names.
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "cannot clone data into system database")
+	clone := stmt.(*tree.CloneTable)
+	require.Equal(t, "subdb", string(clone.SrcTable.SchemaName))
+	require.Equal(t, "source", string(clone.SrcTable.ObjectName))
+
+	// Re-planning the same AST must fail for the same reason; a hidden
+	// rewrite of the source name would instead report a resolution error.
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "cannot clone data into system database")
+	require.NotContains(t, err.Error(), "does not exist")
+}
