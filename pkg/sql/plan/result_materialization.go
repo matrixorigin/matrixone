@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gogo/protobuf/proto"
@@ -142,7 +143,7 @@ func newResultMaterialization(query *plan.Query, values []any, scopes ...[]*Bind
 		case plan.Node_JOIN:
 			if len(node.Children) == 2 {
 				left, right := bound(node.Children[0]), bound(node.Children[1])
-				reject := resultFiltersRejectAll(node.OnList)
+				reject := r.filtersRejectAll(node.OnList)
 				switch node.JoinType {
 				case plan.Node_INNER:
 					if reject || left == 0 || right == 0 {
@@ -190,7 +191,10 @@ func newResultMaterialization(query *plan.Query, values []any, scopes ...[]*Bind
 				}
 			}
 		}
-		if resultFiltersRejectAll(node.FilterList) {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_INNER && r.joinKeyFilter(node, nil, 0) {
+			result = min(result, 1)
+		}
+		if r.filtersRejectAll(node.FilterList) {
 			result = 0
 		}
 		result = min(result, resultPaginationBound(node.Limit, values))
@@ -222,8 +226,7 @@ func newResultMaterialization(query *plan.Query, values []any, scopes ...[]*Bind
 		}
 		// Grouping/aggregate/HAVING subqueries are independent existence
 		// consumers, not semijoin FROM providers. Their inputs need not be const.
-		if block == owner && ((!owner.isCorrelated && (len(owner.aggregates) > 0 || len(owner.groups) > 0 || owner.hasHaving)) ||
-			len(owner.aggregates) > 0 && len(owner.groups) == 0) {
+		if block == owner && (len(owner.aggregates) > 0 || owner.hasHaving || !owner.isCorrelated && len(owner.groups) > 0) {
 			providers[address] = true
 			return true
 		}
@@ -235,6 +238,9 @@ func newResultMaterialization(query *plan.Query, values []any, scopes ...[]*Bind
 		case plan.Node_VALUE_SCAN:
 			value = n.TableDef == nil
 		case plan.Node_FILTER:
+			if len(n.Children) == 1 && valid(n.Children[0]) && query.Nodes[n.Children[0]].NodeType == plan.Node_JOIN {
+				value = r.joinKeyFilter(query.Nodes[n.Children[0]], n.FilterList, 0)
+			}
 			if len(n.Children) == 1 && valid(n.Children[0]) && query.Nodes[n.Children[0]].NodeType == plan.Node_TABLE_SCAN {
 				scan := *query.Nodes[n.Children[0]]
 				scan.FilterList = append(append([]*plan.Expr(nil), scan.FilterList...), n.FilterList...)
@@ -276,7 +282,7 @@ func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.E
 		return false
 	}
 	rightOwner := r.blockOwner(join.Children[1])
-	scalar := rightOwner != nil && !rightOwner.isCorrelated && !resultMarkCorrelated(r.query, join) && r.bound(join.Children[1]) <= 1 &&
+	scalar := rightOwner != nil && !rightOwner.isCorrelated && r.bound(join.Children[1]) <= 1 &&
 		(join.JoinType == plan.Node_LEFT || join.JoinType == plan.Node_SINGLE || join.JoinType == plan.Node_INNER)
 	// A rejected outer-join provider cannot multiply its preserved input.
 	admitted := scalar || join.JoinType == plan.Node_LEFT && (resultFiltersRejectAll(join.OnList) || r.bound(join.Children[1]) == 0)
@@ -289,8 +295,13 @@ func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.E
 	if !admitted {
 		return false
 	}
-	proofs := make([]*plan.Expr, 0, len(filters)+len(join.FilterList))
-	for _, filter := range append(append([]*plan.Expr(nil), filters...), join.FilterList...) {
+	constraints := append(append([]*plan.Expr(nil), filters...), join.FilterList...)
+	// ON constrains output rows only for an INNER join. Outer-join ON is not WHERE.
+	if join.JoinType == plan.Node_INNER {
+		constraints = append(constraints, join.OnList...)
+	}
+	proofs := make([]*plan.Expr, 0, len(constraints))
+	for _, filter := range constraints {
 		proofs = append(proofs, resultProofExpr(filter, func(e *plan.Expr) *plan.Expr {
 			route := resultColumnRouteAtJoin(r.query, join, e.GetCol(), true)
 			if route.childIdx == 1 && scalar {
@@ -303,18 +314,23 @@ func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.E
 			return e
 		}))
 	}
-	return r.keyFilteredInput(join.Children[0], proofs, depth+1)
+	return r.keyFilteredInput(join.Children[0], proofs, depth+1, r.blockOwner(join.NodeId))
 }
 
 // Carry the same conjunct environment down the preserved input. Each scalar
 // JOIN discharges only its own producer; later joins can then combine all key
 // parts, including constants nested in deterministic scalar expressions.
-func (r *resultMaterialization) keyFilteredInput(id int32, filters []*plan.Expr, depth int) bool {
+func (r *resultMaterialization) keyFilteredInput(id int32, filters []*plan.Expr, depth int, owner *BindContext) bool {
 	if id < 0 || int(id) >= len(r.query.Nodes) || depth > len(r.query.Nodes) {
 		return false
 	}
 	n := r.query.Nodes[id]
 	if n == nil {
+		return false
+	}
+	// Forwarding a column does not license pushing an outer key predicate into
+	// a materialized input. Its independent bound, if any, is handled by bound().
+	if block := r.blockOwner(id); block != nil && block != owner && !block.integerPrecisionTransparentBoundary && r.materializedBlock(id, block) {
 		return false
 	}
 	if n.NodeType == plan.Node_JOIN {
@@ -337,7 +353,7 @@ func (r *resultMaterialization) keyFilteredInput(id int32, filters []*plan.Expr,
 			return e
 		})
 	}
-	return r.keyFilteredInput(n.Children[0], filters, depth+1)
+	return r.keyFilteredInput(n.Children[0], filters, depth+1, owner)
 }
 
 func resultProofExpr(e *plan.Expr, column func(*plan.Expr) *plan.Expr) *plan.Expr {
@@ -368,7 +384,7 @@ func (r *resultMaterialization) existenceConstant(join *plan.Node, filters []*pl
 	}
 	// A correlated global group remains an independently evaluated existence
 	// consumer; it is not a row-producing semijoin FROM provider.
-	if len(owner.aggregates) > 0 && len(owner.groups) == 0 {
+	if len(owner.aggregates) > 0 || owner.hasHaving {
 		return true
 	}
 	correlated := owner.isCorrelated || resultMarkCorrelated(r.query, join)
@@ -511,8 +527,9 @@ func (r *resultMaterialization) scanSingleRow(node *plan.Node) bool {
 	scan := *node
 	// Normalize only predicates which prove the same non-NULL key equality.
 	// These private proof expressions are never installed in the executable plan.
-	scan.FilterList = make([]*plan.Expr, len(node.FilterList))
-	for i, filter := range node.FilterList {
+	atoms := resultPredicateAtoms(node.FilterList)
+	scan.FilterList = make([]*plan.Expr, len(atoms))
+	for i, filter := range atoms {
 		scan.FilterList[i] = filter
 		fn := filter.GetF()
 		if fn == nil || fn.Func == nil {
@@ -618,12 +635,37 @@ func resultReversedIntegerBounds(lo, hi *plan.Expr) bool {
 	return lok && hok && ((!ln && hn) || ln == hn && l > h)
 }
 
-func resultFiltersRejectAll(filters []*plan.Expr) bool {
-	// BETWEEN's binder fallback is a conjunction of >= and <=, including
-	// NULL and reversed bounds. Work on atoms without rewriting execution IR.
+// Normalize row-admission predicates only, not arbitrary Boolean values.
+// In WHERE/ON, X OR NULL and X OR FALSE admit exactly the rows admitted by X.
+func resultPredicateAtoms(filters []*plan.Expr) []*plan.Expr {
+	var normalize func(*plan.Expr) *plan.Expr
+	normalize = func(e *plan.Expr) *plan.Expr {
+		fn := e.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "or" || len(fn.Args) != 2 {
+			return e
+		}
+		left, right := normalize(fn.Args[0]), normalize(fn.Args[1])
+		reject := func(e *plan.Expr) bool {
+			if IsFalseExpr(e) {
+				return true
+			}
+			for fn := e.GetF(); fn != nil && fn.Func != nil && ((fn.Func.ObjName == "cast" && len(fn.Args) == 2) || (fn.Func.ObjName == "istrue" && len(fn.Args) == 1)); fn = e.GetF() {
+				e = fn.Args[0]
+			}
+			return e.GetLit() != nil && e.GetLit().Isnull
+		}
+		if reject(left) {
+			return right
+		}
+		if reject(right) || proto.Equal(left, right) {
+			return left
+		}
+		return e
+	}
 	var atoms []*plan.Expr
 	var collect func(*plan.Expr)
 	collect = func(e *plan.Expr) {
+		e = normalize(e)
 		if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "and" {
 			for _, arg := range fn.Args {
 				collect(arg)
@@ -635,6 +677,143 @@ func resultFiltersRejectAll(filters []*plan.Expr) bool {
 	for _, filter := range filters {
 		collect(filter)
 	}
+	return atoms
+}
+
+func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
+	proofs := make([]*plan.Expr, len(filters))
+	var predicate func(*plan.Expr) *plan.Expr
+	predicate = func(e *plan.Expr) *plan.Expr {
+		fn := e.GetF()
+		if fn == nil || fn.Func == nil {
+			return e
+		}
+		copyFn := *fn
+		copyFn.Args = append([]*plan.Expr(nil), fn.Args...)
+		switch fn.Func.ObjName {
+		case "and", "or":
+			for i, arg := range copyFn.Args {
+				copyFn.Args[i] = predicate(arg)
+			}
+		case "between", "<=", ">=", "<", ">":
+			for i, arg := range copyFn.Args {
+				copyFn.Args[i] = r.rangeValue(arg)
+			}
+		default:
+			return e
+		}
+		copyExpr := *e
+		copyExpr.Expr = &plan.Expr_F{F: &copyFn}
+		return &copyExpr
+	}
+	for i, filter := range filters {
+		proofs[i] = predicate(filter)
+	}
+	return resultFiltersRejectAll(proofs)
+}
+
+// Interpret only admitted integer/null transport, never execute expressions or
+// guess string/float conversions. The source owner records value dependence.
+func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
+	if p := e.GetP(); p != nil && p.Pos >= 0 && int(p.Pos) < len(r.values) {
+		value := r.values[p.Pos]
+		var wireType types.T
+		wireInteger := false
+		if typed, ok := value.(ParamValue); ok {
+			value = typed.Value
+			// COM_STMT_EXECUTE stores even numeric packets as text. Trust only
+			// the admitted integer runtime domain, never a bare string spelling.
+			if text, ok := value.(string); ok && typed.HasRuntimeType && typed.RuntimeType.Oid.IsInteger() {
+				wireType = typed.RuntimeType.Oid
+				bits := int(wireType.ToType().Size) * 8
+				var err error
+				if wireType.IsUnsignedInt() {
+					value, err = strconv.ParseUint(text, 10, bits)
+				} else {
+					value, err = strconv.ParseInt(text, 10, bits)
+				}
+				if err != nil {
+					return e
+				}
+				wireInteger = true
+			}
+		}
+		var literal *plan.Literal
+		source := types.T_int64
+		switch v := value.(type) {
+		case nil:
+			literal = &plan.Literal{Isnull: true}
+		case int8:
+			source = types.T_int8
+			literal = &plan.Literal{Value: &plan.Literal_I64Val{I64Val: int64(v)}}
+		case int16:
+			source = types.T_int16
+			literal = &plan.Literal{Value: &plan.Literal_I64Val{I64Val: int64(v)}}
+		case int32:
+			source = types.T_int32
+			literal = &plan.Literal{Value: &plan.Literal_I64Val{I64Val: int64(v)}}
+		case int64:
+			literal = &plan.Literal{Value: &plan.Literal_I64Val{I64Val: v}}
+		case uint8:
+			source = types.T_uint8
+			literal = &plan.Literal{Value: &plan.Literal_U64Val{U64Val: uint64(v)}}
+		case uint16:
+			source = types.T_uint16
+			literal = &plan.Literal{Value: &plan.Literal_U64Val{U64Val: uint64(v)}}
+		case uint32:
+			source = types.T_uint32
+			literal = &plan.Literal{Value: &plan.Literal_U64Val{U64Val: uint64(v)}}
+		case uint64:
+			source = types.T_uint64
+			literal = &plan.Literal{Value: &plan.Literal_U64Val{U64Val: v}}
+		}
+		if wireInteger {
+			source = wireType
+		}
+		if literal != nil {
+			target := types.T(e.Typ.Id)
+			if literal.Isnull || target == source || integerDomainFits(source, target) {
+				r.usedValues = true
+				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Lit{Lit: literal}}
+			}
+			// SQL EXECUTE's generic marker is a TEXT transport envelope even
+			// when its admitted user variable has an integer value.
+			if target == types.T_text {
+				r.usedValues = true
+				return &plan.Expr{Typ: source.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: literal}}
+			}
+		}
+	}
+	if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+		(types.T(e.Typ.Id).IsInteger() || types.T(e.Typ.Id).IsDecimal()) {
+		source := r.rangeValue(fn.Args[0])
+		if lit := source.GetLit(); lit != nil {
+			if lit.Isnull {
+				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Lit{Lit: lit}}
+			}
+			if integerDomainFits(types.T(source.Typ.Id), types.T(e.Typ.Id)) ||
+				types.T(source.Typ.Id).IsInteger() && localCTEIntegerLiteralFits(lit, types.T(e.Typ.Id)) {
+				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Lit{Lit: lit}}
+			}
+			// The legacy TEXT -> DECIMAL -> integer parameter adapter is exact
+			// only when the whole admitted integer domain fits its decimal carrier.
+			if types.T(source.Typ.Id).IsInteger() && types.T(e.Typ.Id).IsDecimal() && e.Typ.Scale >= 0 {
+				precision := e.Typ.Width
+				if precision == 0 {
+					precision = types.T(e.Typ.Id).ToType().Width
+				}
+				if precision <= types.T(e.Typ.Id).ToType().Width && integerDecimalDigits(types.T(source.Typ.Id)) <= precision-e.Typ.Scale {
+					return source
+				}
+			}
+		}
+	}
+	return e
+}
+
+func resultFiltersRejectAll(filters []*plan.Expr) bool {
+	// BETWEEN's fallback uses >= AND <=; keep the same admission normalization.
+	atoms := resultPredicateAtoms(filters)
 	type column struct{ relation, position int32 }
 	type interval struct{ lower, upper *plan.Expr }
 	bounds := make(map[column]interval)

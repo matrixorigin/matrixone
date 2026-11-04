@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -156,6 +157,23 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false", true},
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t", true},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=1", true},
+		{"select min(e)over(),max(s)over() from (select id,e,s from enum_order_t limit 2)d where id=(select min(id) from enum_order_t)", false},
+		{"select min(e)over(),max(s)over() from (select id,e,s from enum_order_t limit 2)d where id=1", false},
+		{"select min(e)over(),max(s)over() from (select id,e,s from enum_order_t)d where id=(select min(id) from enum_order_t)", true},
+		{"select min(e)over(),max(s)over() from (select id,e,s from enum_order_t limit 1)d where id=(select min(id) from enum_order_t)", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 and exists(select count(*) from enum_order_t b where b.id=enum_order_t.id group by b.e)", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 and exists(select count(*) from enum_order_t b where b.id>=enum_order_t.id group by b.e)", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 and exists(select 1 from enum_order_t b where b.id=(select min(id) from enum_order_t))", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 and exists(select count(*) from enum_order_t b where b.id=(select min(id) from enum_order_t) group by b.e)", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a join (select id from enum_order_t limit 1)b on a.id=b.id", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a join (select id from enum_order_t limit 1)b on true where a.id=b.id", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a join (select id from enum_order_t limit 2)b on a.id=b.id", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t limit 1)b on a.id=b.id", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 or false", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 or id=1", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 or id=2", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 or null", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where (id=1 or false) and exists(select 1 from enum_order_t b where b.id=(select min(id) from enum_order_t))", true},
 		{"select min(e) over(),max(s) over() from enum_order_t where cast(id as signed)=(select count(*) from enum_order_t where id<=1)", false},
 		{"select min(e) over(),max(s) over() from enum_order_t where cast(id as signed)=1", false},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=(select count(*) from enum_order_t where id<=1)", true},
@@ -305,6 +323,58 @@ func TestEnumSetNullSafeKeyParameters(t *testing.T) {
 			}
 			require.True(t, proto.Equal(snapshot, bound.Plan))
 		}
+	}
+}
+
+func TestEnumSetBoundRangeMaterialization(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values []any
+		empty  bool
+	}{
+		{"reversed", []any{int32(2), int32(1)}, true},
+		{"null_lower", []any{nil, int32(1)}, true},
+		{"null_upper", []any{int32(1), nil}, true},
+		{"range", []any{int32(1), int32(2)}, false},
+		{"equal", []any{int32(1), int32(1)}, false},
+		{"sql_integer_transport", []any{ParamValue{Value: int64(2)}, ParamValue{Value: int64(1)}}, true},
+		{"binary_integer_text", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}}, true},
+		{"binary_null", []any{ParamValue{IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(t.Context(), "select min(e)over(),max(s)over() from enum_order_t where id between ? and ?", 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			mock := newMySQLSpecialOrderMock(t)
+			mock.ctxt.tables["enum_order_t"].Cols[0].Typ.Id = int32(types.T_int32)
+			proc := mock.ctxt.GetProcess()
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+			for _, value := range tc.values {
+				if typed, ok := value.(ParamValue); ok {
+					value = typed.Value
+				}
+				require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(value)), value == nil, proc.Mp()))
+			}
+			proc.SetPrepareParams(params)
+			bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_int32.ToType()}, {Position: 1, Type: types.T_int32.ToType()}}
+			if tc.name == "sql_integer_transport" {
+				for i := range bindings {
+					bindings[i].Type = types.T_text.ToType()
+				}
+			}
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, tc.values)
+			require.NoError(t, err)
+			if tc.empty {
+				require.True(t, bound.ValueDependent, "a bound-only rejection cannot enter the type-only plan cache")
+			}
+			snapshot := proto.Clone(bound.Plan)
+			for _, col := range GetResultColumnsFromPlanWithParams(bound.Plan, tc.values) {
+				require.NotNil(t, col.MysqlSpecialResultType)
+				require.Equal(t, tc.empty, col.MysqlSpecialResultType.MaterializationElided)
+			}
+			require.True(t, proto.Equal(snapshot, bound.Plan))
+		})
 	}
 }
 

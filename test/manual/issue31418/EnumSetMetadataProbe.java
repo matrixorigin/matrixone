@@ -89,6 +89,20 @@ public final class EnumSetMetadataProbe {
         }
     }
 
+    private static void rangeExecution(PreparedStatement statement,Integer[] range,boolean cursor) throws Exception {
+        for (int i=0;i<2;i++) {
+            if (range[i]==null) statement.setNull(i+1,Types.INTEGER); else statement.setInt(i+1,range[i]);
+        }
+        boolean empty=range[0]==null || range[1]==null || range[0]>range[1];
+        List<List<String>> wanted=empty ? Collections.<List<String>>emptyList() : range[0].equals(range[1])
+                ? Collections.singletonList(Arrays.asList("a", "x,yy"))
+                : Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy"));
+        try (ResultSet result=statement.executeQuery()) {
+            rows(result,cursor || !empty ? Types.VARCHAR : Types.CHAR,false,wanted,"range "+Arrays.toString(range));
+            labelWidths(result.getMetaData());
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length != 3) throw new IllegalArgumentException("JDBC_URL USER PASSWORD");
         for (String mode : new String[]{"statement", "client-prepared", "server-prepared", "cursor"}) {
@@ -318,7 +332,56 @@ public final class EnumSetMetadataProbe {
                             Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy")));
                     query(connection, mode, "SELECT MIN(l.e)OVER(),MAX(l.s)OVER() FROM t l WHERE l.id=COALESCE((SELECT MIN(r.id) FROM t r WHERE r.id>=l.id),1)",
                             Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy")));
+                    for (String sql : new String[]{
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM (SELECT id,e,s FROM t ORDER BY id LIMIT 2)d WHERE id=(SELECT MIN(id) FROM t)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM (SELECT id,e,s FROM t ORDER BY id LIMIT 2)d WHERE id=1"}) {
+                        query(connection, mode, sql, Types.VARCHAR, Types.CHAR, false,
+                                Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    }
+                    for (String sql : new String[]{
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM (SELECT id,e,s FROM t)d WHERE id=(SELECT MIN(id) FROM t)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM (SELECT id,e,s FROM t ORDER BY id LIMIT 1)d WHERE id=(SELECT MIN(id) FROM t)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT COUNT(*) FROM t b WHERE b.id=t.id GROUP BY b.e)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT COUNT(*) FROM t b WHERE b.id>=t.id GROUP BY b.e)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT 1 FROM t b WHERE b.id=(SELECT MIN(id) FROM t))",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT COUNT(*) FROM t b WHERE b.id=(SELECT MIN(id) FROM t) GROUP BY b.e)",
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a JOIN (SELECT id FROM t ORDER BY id LIMIT 1)b ON a.id=b.id",
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a JOIN (SELECT id FROM t ORDER BY id LIMIT 1)b ON TRUE WHERE a.id=b.id",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 OR FALSE",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 OR id=1",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 OR NULL",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE (id=1 OR FALSE) AND EXISTS(SELECT 1 FROM t b WHERE b.id=(SELECT MIN(id) FROM t))"}) {
+                        query(connection, mode, sql, constantWindowType, Types.CHAR, false,
+                                Collections.singletonList(Arrays.asList("a", "x,yy")));
+                    }
+                    for (String sql : new String[]{
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a JOIN (SELECT id FROM t ORDER BY id LIMIT 2)b ON a.id=b.id",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 OR id=2"}) {
+                        query(connection, mode, sql, Types.VARCHAR, Types.CHAR, false,
+                                Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy")));
+                    }
+                    query(connection, mode, "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t ORDER BY id LIMIT 1)b ON a.id=b.id",
+                            Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy")));
                     if (mode.equals("server-prepared") || mode.equals("cursor")) {
+                        Integer[][] ranges={{2,1},{null,1},{1,null},{1,2},{1,1},{2,1},{1,2},{null,null},{1,2}};
+                        String sql="SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN ? AND ?";
+                        for (Integer[] range:ranges) {
+                            try (PreparedStatement fresh=connection.prepareStatement(sql)) {
+                                fresh.setQueryTimeout(30);
+                                if (mode.equals("cursor")) fresh.setFetchSize(1);
+                                check(fresh.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"),"range prepare fell back");
+                                metadata(fresh.getMetaData(),Types.CHAR,false,"fresh range prepare");
+                                rangeExecution(fresh,range,mode.equals("cursor"));
+                            }
+                        }
+                        try (PreparedStatement repeated=connection.prepareStatement(sql)) {
+                            repeated.setQueryTimeout(30);
+                            if (mode.equals("cursor")) repeated.setFetchSize(1);
+                            for (Integer[] range:ranges) {
+                                rangeExecution(repeated,range,mode.equals("cursor"));
+                                metadata(repeated.getMetaData(),Types.CHAR,false,"range prepare cache after execution");
+                            }
+                        }
                         for (String key : new String[]{"id", "u"}) {
                             try (PreparedStatement keyed = connection.prepareStatement("SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE " + key + "<=>?")) {
                                 keyed.setQueryTimeout(30);

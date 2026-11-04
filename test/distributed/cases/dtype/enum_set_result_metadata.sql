@@ -216,4 +216,59 @@ where a=(select min(id) from jdbc_enum_set_metadata) and b=(select min(id) from 
 select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_composite
 where a=(select min(id) from jdbc_enum_set_metadata);
 drop table jdbc_enum_set_composite;
+-- Outer key facts must stop at a materialized query-block boundary.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from
+(select id,e,s from jdbc_enum_set_metadata order by id limit 2)d
+where id=(select min(id) from jdbc_enum_set_metadata);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from
+(select id,e,s from jdbc_enum_set_metadata order by id limit 2)d where id=1;
+-- Existential consumers share local key facts, not arbitrary cardinality bounds.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select count(*) from jdbc_enum_set_metadata b where b.id=jdbc_enum_set_metadata.id group by b.e);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select 1 from jdbc_enum_set_metadata b where b.id=(select min(id) from jdbc_enum_set_metadata));
+-- INNER ON admits constraints; a preserved outer input is a different contract.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+join (select id from jdbc_enum_set_metadata order by id limit 1)b on a.id=b.id;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+join (select id from jdbc_enum_set_metadata order by id limit 1)b on true where a.id=b.id;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata order by id limit 1)b on a.id=b.id;
+-- Normalize row-admission Boolean identities without rewriting execution.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1 or false;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1 or id=1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1 or id=2;
+-- Prepared range rejection uses this binding and must not taint later execution.
+prepare enum_range_metadata from 'select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between ? and ?';
+set @enum_lo=2;
+set @enum_hi=1;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+set @enum_lo=1;
+set @enum_hi=2;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+set @enum_lo=null;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+set @enum_lo=1;
+set @enum_hi=null;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+set @enum_hi=2;
+-- @metacmp(true)
+execute enum_range_metadata using @enum_lo,@enum_hi;
+deallocate prepare enum_range_metadata;
+set @enum_lo=null;
+set @enum_hi=null;
 drop table jdbc_enum_set_metadata;

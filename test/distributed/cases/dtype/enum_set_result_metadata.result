@@ -284,4 +284,71 @@ where a=(select min(id) from jdbc_enum_set_metadata);
   ¦  x,yy  𝄀
   ¦  x,yy
 drop table jdbc_enum_set_composite;
+select min(e)over() as min_e,max(s)over() as max_s from
+(select id,e,s from jdbc_enum_set_metadata order by id limit 2)d
+where id=(select min(id) from jdbc_enum_set_metadata);
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+a  ¦  x,yy
+select min(e)over() as min_e,max(s)over() as max_s from
+(select id,e,s from jdbc_enum_set_metadata order by id limit 2)d where id=1;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+a  ¦  x,yy
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select count(*) from jdbc_enum_set_metadata b where b.id=jdbc_enum_set_metadata.id group by b.e);
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  𝄀
+a  ¦  x,yy
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select 1 from jdbc_enum_set_metadata b where b.id=(select min(id) from jdbc_enum_set_metadata));
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  𝄀
+a  ¦  x,yy
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+join (select id from jdbc_enum_set_metadata order by id limit 1)b on a.id=b.id;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  𝄀
+a  ¦  x,yy
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+join (select id from jdbc_enum_set_metadata order by id limit 1)b on true where a.id=b.id;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  𝄀
+a  ¦  x,yy
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata order by id limit 1)b on a.id=b.id;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1 or false;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  𝄀
+a  ¦  x,yy
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1 or id=1;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  𝄀
+a  ¦  x,yy
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1 or id=2;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy
+prepare enum_range_metadata from 'select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between ? and ?';
+set @enum_lo=2;
+set @enum_hi=1;
+execute enum_range_metadata using @enum_lo,@enum_hi;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]
+set @enum_lo=1;
+set @enum_hi=2;
+execute enum_range_metadata using @enum_lo,@enum_hi;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy
+set @enum_lo=null;
+execute enum_range_metadata using @enum_lo,@enum_hi;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]
+set @enum_lo=1;
+set @enum_hi=null;
+execute enum_range_metadata using @enum_lo,@enum_hi;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]
+set @enum_hi=2;
+execute enum_range_metadata using @enum_lo,@enum_hi;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy
+deallocate prepare enum_range_metadata;
+set @enum_lo=null;
+set @enum_hi=null;
 drop table jdbc_enum_set_metadata;
