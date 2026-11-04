@@ -89,8 +89,7 @@ func makeJSONNumericPeer(ctx context.Context, value bytejson.ByteJson, typ types
 }
 
 // checkJSONNumericDomain validates the numeric peer's declared adapter domain.
-// For JSON rows it is used only for floating-point conversion; integer peers
-// must not impose their CAST range on the JSON value being compared.
+// JSON rows are converted separately without imposing the peer's range.
 func checkJSONNumericDomain(ctx context.Context, value bytejson.ByteJson, typ types.T, kind vector.PrepareParamKind) (float64, error) {
 	switch {
 	case typ.IsSignedInt():
@@ -132,9 +131,12 @@ func compareJSONNumeric(ctx context.Context, value bytejson.ByteJson, peer *json
 		return bytejson.CompareByteJsonTrusted(value, peer.value), false, nil
 	}
 	if peer.typ.IsFloat() || peer.typ == types.T_any && peer.kind == vector.PrepareParamFloat {
-		floatValue, err := checkJSONNumericDomain(ctx, value, peer.typ, peer.kind)
+		floatValue, _, err := preparedJSONFloatScalarWithLimit(ctx, value, types.T_float64, math.MaxFloat64, false)
 		if err != nil {
 			return 0, false, err
+		}
+		if peer.typ == types.T_float32 && floatValue >= -math.MaxFloat32 && floatValue <= math.MaxFloat32 {
+			floatValue = float64(float32(floatValue))
 		}
 		return compareFloat64Total(floatValue, peer.floatValue), false, nil
 	}

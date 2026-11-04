@@ -1542,7 +1542,7 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 	}
 	if !legacyProof {
 		for _, predicate := range predicates {
-			if !existentialPredicateIsTotal(predicate, storedTextIsBounded) {
+			if !builder.existentialPredicateIsTotal(predicate, storedTextIsBounded) {
 				return false
 			}
 		}
@@ -1570,7 +1570,7 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 					return false
 				}
 				origin := node.ProjectList[col.ColPos]
-				if !(legacyProof && isTruncationSafePredicateValue(origin) || existentialValueIsTotal(origin, storedTextIsBounded)) || !inspect(origin) {
+				if !(legacyProof && isTruncationSafePredicateValue(origin) || builder.existentialValueIsTotal(origin, storedTextIsBounded)) || !inspect(origin) {
 					return false
 				}
 			}
@@ -1602,6 +1602,11 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
+	if outerPred == nil {
+		if root, marker, rewritten, rewriteErr := builder.tryExistentialDisjunction(left, right, joinPreds, negate, ctx); rewritten || rewriteErr != nil {
+			return root, marker, rewriteErr
+		}
+	}
 	markTag := builder.genNewBindTag()
 	existential := outerPred == nil
 
