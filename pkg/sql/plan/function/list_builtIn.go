@@ -4553,14 +4553,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: COMPRESS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return compressReturnType(parameters)
+					return compressReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Compress
@@ -4570,7 +4570,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return compressReturnType(parameters)
+					return compressReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Compress
@@ -4580,7 +4580,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return compressReturnType(parameters)
+					return compressReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Compress
@@ -4590,7 +4590,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
-					return compressReturnType(parameters)
+					return compressReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Compress
@@ -5203,14 +5203,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: QUOTE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return quoteReturnType(parameters)
+					return quoteReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -5220,7 +5220,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return quoteReturnType(parameters)
+					return quoteReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -5230,7 +5230,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return quoteReturnType(parameters)
+					return quoteReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Quote
@@ -7389,14 +7389,14 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SOUNDEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return soundexReturnType(parameters)
+					return soundexReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Soundex
@@ -7406,7 +7406,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return soundexReturnType(parameters)
+					return soundexReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Soundex
@@ -7416,7 +7416,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return soundexReturnType(parameters)
+					return soundexReturnType(jsonStringConsumerResultParameters(parameters))
 				},
 				newOp: func() executeLogicOfOverload {
 					return Soundex
@@ -7432,7 +7432,7 @@ var supportedStringBuiltIns = []FuncNew{
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		bindingOverloads:  []int{0},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           stringDomainFixedTypeMatch,
+		checkFn:           jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9516,7 +9516,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: MD5,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -17391,7 +17391,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		functionId: SHA1,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryFixedTypeMatch,
 
 		Overloads: []overload{
 			{
