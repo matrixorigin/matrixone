@@ -362,7 +362,7 @@ def compile_predicate(condition, params=(), model=None, alias=None, **context):
 
 
 def conjoin_conditions(conditions):
-    """Preserve each disjunction when chained predicates are combined with AND."""
+    """Preserve OR/XOR grouping when chained predicates are combined with AND."""
     if len(conditions) > 1:
-        conditions = ['(' + c + ')' if re.search(r'\bOR\b', c, re.IGNORECASE) else c for c in conditions]
+        conditions = ['(' + c + ')' if re.search(r'\b(?:OR|XOR)\b', c, re.IGNORECASE) else c for c in conditions]
     return ' AND '.join(conditions)
