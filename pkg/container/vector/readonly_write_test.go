@@ -172,7 +172,7 @@ func TestReadonlyFixedPreflightPublication(t *testing.T) {
 				for _, value := range []int64{11, 22, 33} {
 					require.NoError(t, AppendFixed(destination, value, false, mp))
 				}
-				destination.Shrink([]int64{2}, true)
+				require.NoError(t, destination.Shrink([]int64{2}, true, mp))
 				var input *Vector
 				if alias {
 					var err error

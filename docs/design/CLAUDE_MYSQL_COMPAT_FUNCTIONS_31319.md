@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v23，2026-11-03。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v24，2026-11-04。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -67,7 +67,8 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 
 - 所有新函数 ID 追加，既有 ID 不重排。无 wire/catalog 格式变更，不新增 MORPCVersion、capability gate 或迁移步骤；MO 使用全停机升级。
 - 不新增权限、跨租户或外部网络路径；SQL 文本只解析，错误不应暴露输入中其他行的敏感数据。
-- parser 生成物与 token 兼容表由各自生成器维护，不手改状态表；兼容表升级必须同时更新来源版本与独立 oracle。
+- parser 生成物与 token 兼容表由各自生成器维护，不手改状态表；兼容表升级必须同时更新来源版本与独立 oracle。merge后的生成文件mtime可能更新而仍含冲突，必须强制运行生成目标并检查实际编译、零conflict/错误/冲突标记及重复cmp，不能只相信make up-to-date。
+- MO函数注册ID与MySQL摘要token编号是不同域。保留上游VECTOR_MATMUL/VECBLOCK_JSON/VECBLOCK_BINARY的629/630/631；本未发布功能的STATEMENT_DIGEST/STATEMENT_DIGEST_TEXT使用632/633，FUNCTION_END_NUMBER为634，所有消费者按符号引用，固定注册ID测试同步验证。不得挪动上游已分配编号来解决分支碰撞。
 - UT：parser/typed AST、兼容 token/hash/text、非法输入/预算/取消、NULL/selection/常量与列向量、DEFAULT 来源/错误和真实 binder 消费者。
 - BVT：用本任务服务和隔离 mo-tester workspace，独立运行新增/扩展 case；生成结果后逐项对照 MySQL，正常比较两次并验证资源清理。SQL 注释不写 issue 号。
 - 证据顺序：聚焦回归 → 所有者包/直接消费者 → 增量 gofmt/vet/lint → 服务构建/BVT。只有可达并发/持久化/分布式风险才增加 race/重启/多 CN 证据。大输入成本用专门 benchmark 或最小预算边界，不把普通 BVT 变成负载测试。
@@ -94,7 +95,7 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - 列定义、view列名和SHOW数据库各自拥有不同校验边界：CREATE/ALTER ADD/MODIFY/CHANGE的新列定义只接受未限定的名称，最多64字符，但空名/空白结尾属于更晚的执行校验；CHANGE旧名、DROP/RENAME目标不套新列定义限制。CREATE/ALTER VIEW显式列列表拒绝空名/ASCII空白结尾/超过64字符；其查询内的SELECT显式别名（包括字符串别名和嵌套查询）在itemization时采用同样限制，未引用CTE仍不提前展开，CTE/derived自身列列表不是view列列表。复用现有作用域遍历及CStr的引用身份区分缺省别名与显式空别名，不改普通执行parser的准入。字符串别名中的NUL按MySQL列名C字符串前缀校验，不能套SQL quoted identifier的NUL拒绝，也不能把NUL后的字节计入该列名限制。与这个itemization检查不同，所有SELECT字符串别名先按TEXT_STRING_validated进行无损utf8mb4→系统utf8mb3验证，四字节字符（包括NUL之后的字符）会失败，未引用CTE也不能跳过语法阶段验证；普通字符串值与quoted identifier仍采用各自语义。别名不接受字符集/国家字符串引导符。digest中scanner/lexer折叠_utf8mb4/N字符串时保留独立DIGEST_INTRODUCED_STRING token，仅由literal接收；不能再折叠为普通STRING、再逐个文本消费者猜测来源。该token和普通STRING均在独立编码扫描按同一原生字面量规则编码，且字面量内容不参与保留词查找。折叠_utf8mb4 HEX保留DIGEST_INTRODUCED_HEX，表达式/MATCH维持原文本lowering与字节编码，json_text_literal只接收真正STRING/N/charset STRING，不能因HEX已解码成相同文本而准许其进入JSON_VALUE路径。普通执行parser不发出该token，原准入保持不变。
 - SHOW TABLES（不含OPEN）、TABLE STATUS、TRIGGERS、EVENTS及COLUMNS/INDEX的显式FROM数据库检查名称；SHOW OPEN TABLES及SHOW CREATE DATABASE不在相同解析阶段检查。语法语义值保留“省略/显式空数据库”的区别，不能只用空字符串代表二者。SQL quoted名称中的NUL在digest词法域拒绝，不污染普通SQL或hint的独立词法域。
 - SHOW TABLE STATUS/TRIGGERS/EVENTS共享数据库子句语法归约：FROM/IN和数据库名必须同时出现或同时省略，随后才进行既有数据库名称校验。存在性分别来自两个可选产生式，不能用空字符串值判断；该配对约束仅用于digest，普通执行parser的准入保持不变。
-- 固定MySQL保留词事实同样约束裸名称：MO的not_keyword/non_reserved_keyword归约不能让INTEGER等原生保留词成为普通标识符。真正紧邻点号的词法限定名、quoted名称、原生类型和函数产生式不套裸名称禁令；AS后的MO宽松别名适配也不得绕过检查。DUAL仍由自己的完整FROM语法消费。DEC/FLOAT4/FLOAT8/MIDDLEINT/VARCHARACTER通过共享MySQL token身份选择已有类型grammar所有者，不能把digest展示拼写（它本身也可能是别名）当作MO token名。VARCHAR/VARBINARY声明保留必需长度；FLOAT(p)仅允许0..53的二进制精度；FLOAT/DOUBLE/REAL(M,D)采用M≤255、D≤30、M≥D及非零M的十进制展示约束；REAL_AS_FLOAT也不放宽REAL声明限制。所有浮点类型产生式共享digest-only检查，普通执行parser保留原有限制/诊断。DOUBLE/REAL不接受单精度参数（DOUBLE PRECISION相同），DECIMAL/NUMERIC的显式零精度不与缺省宽度哨兵混淆。整数声明显示宽度最多255，按length_opt保存的原始数值验证，不能使用把显式0映射后的默认宽度；BOOL不带长度和数值修饰，BIT不带数值修饰，YEAR只带省略/4的长度。numericModifiers事实区分显式SIGNED与无修饰（两者Unsigned值均为false），在column_type组合SIGNED/UNSIGNED/ZEROFILL并由CAST拒绝；独立SIGNED/UNSIGNED CAST目标与合法DDL修饰保持可用。YEAR字段修饰和CREATE USER省略鉴权仅在digest允许，普通parser仍拒绝原本不支持的形式。CREATE USER的普通authentication检查归每个create_user_spec归约所有，不能推迟到整条CREATE USER后才拒绝，必须保留首个不完整用户的原错误位置。额外语法事实位于本次yacc语义栈，非池化scanner或持久AST状态；布尔事实集中排列，避免额外语义栈padding。
+- 固定MySQL保留词事实同样约束裸名称：MO的not_keyword/non_reserved_keyword归约不能让INTEGER等原生保留词成为普通标识符。真正紧邻点号的词法限定名、quoted名称、原生类型和函数产生式不套裸名称禁令；AS后的MO宽松别名适配也不得绕过检查。DUAL仍由自己的完整FROM语法消费。DEC/FLOAT4/FLOAT8/MIDDLEINT/VARCHARACTER通过共享MySQL token身份选择已有类型grammar所有者，不能把digest展示拼写（它本身也可能是别名）当作MO token名。FLOAT4/FLOAT8即使已有MO低精度专用token，在digest中仍分别走MySQL的FLOAT_TYPE/DOUBLE；普通执行保留原专用token及低精度语义，不能让两种方言互相覆盖。VARCHAR/VARBINARY声明保留必需长度；FLOAT(p)仅允许0..53的二进制精度；FLOAT/DOUBLE/REAL(M,D)采用M≤255、D≤30、M≥D及非零M的十进制展示约束；REAL_AS_FLOAT也不放宽REAL声明限制。所有浮点类型产生式共享digest-only检查，普通执行parser保留原有限制/诊断。DOUBLE/REAL不接受单精度参数（DOUBLE PRECISION相同），DECIMAL/NUMERIC的显式零精度不与缺省宽度哨兵混淆。整数声明显示宽度最多255，按length_opt保存的原始数值验证，不能使用把显式0映射后的默认宽度；BOOL不带长度和数值修饰，BIT不带数值修饰，YEAR只带省略/4的长度。numericModifiers事实区分显式SIGNED与无修饰（两者Unsigned值均为false），在column_type组合SIGNED/UNSIGNED/ZEROFILL并由CAST拒绝；独立SIGNED/UNSIGNED CAST目标与合法DDL修饰保持可用。YEAR字段修饰和CREATE USER省略鉴权仅在digest允许，普通parser仍拒绝原本不支持的形式。CREATE USER的普通authentication检查归每个create_user_spec归约所有，不能推迟到整条CREATE USER后才拒绝，必须保留首个不完整用户的原错误位置。额外语法事实位于本次yacc语义栈，非池化scanner或持久AST状态；布尔事实集中排列，避免额外语义栈padding。
 - 表别名必须使用identifier，不能沿用SELECT字符串别名规则。共享table_alias产生式也供ENGINE=消费，后者允许STRING；因此table_alias只在yacc临时stringTableAlias事实中保存来源，由真正别名消费者as_opt_id拒绝STRING，不能全局拒绝共享归约。普通MO parser保留原准入。ANSI_QUOTES改变双引号的词法角色，不改变单引号。
 - UTF8字符集引导的HEX字符串必须校验解码后的内容：相邻_utf8mb4由既有scanner解码路径验证；跨注释或_utf8/utf8mb3由literal产生式按引导符验证。后者还拒绝四字节字符；_binary/latin1与无引导HEX保留不同的字节域。折叠的引导字符串不进入ENGINE、COMMENT、认证文本等STRING-only产生式；SELECT/INSERT/UPDATE/DEFAULT/SET中的表达式字面量仍由literal接收。该来源身份在可执行注释内由scanner保留，不依赖父scanner的原文前缀猜测。无目录查询、无新全局状态；普通parser不增加这些检查。
 - DDL列定义的CHAR/CHARACTER/NCHAR长度不超过255字符、BINARY宽度不超过255字节；BIT显式长度为1..64，省略不等于显式0。原length_opt/length的展示宽度可能把0映射为默认值，因此yacc语义栈保留原始typeLength（空产生式-1）供BIT检查，不在持久AST或池状态加字段。DECIMAL/NUMERIC/DEC的小数位上限30在共同decimal_length_opt归约检查，精度65及M≥D规则继续沿用。

@@ -481,9 +481,8 @@ func (v *Vector) ensureBinaryStringCapacity(rows int, mp *mpool.MPool) error {
 		rows = v.Capacity()
 	}
 	if v.allocationAccount != nil {
-		// InplaceSort has an infallible public API and reorders all row
-		// metadata together. Reserve its NULL and grouping sidecars while an
-		// MPool is available, before publishing binary row metadata.
+		// Reserve the NULL and grouping sidecars alongside binary row
+		// metadata so later row reordering can move all bitmaps together.
 		if err := v.ensureNullCapacity(rows, mp); err != nil {
 			return err
 		}

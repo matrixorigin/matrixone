@@ -23,6 +23,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDigestFloatAliasesKeepExecutionTypeTokens(t *testing.T) {
+	for _, test := range []struct {
+		word                        string
+		executionToken, digestToken int
+	}{
+		{"FLOAT4", FLOAT4, FLOAT_TYPE},
+		{"FLOAT8", FLOAT8, DOUBLE},
+	} {
+		for _, digestMode := range []bool{false, true} {
+			func() {
+				scanner := NewScanner(dialect.MYSQL, test.word)
+				defer PutScanner(scanner)
+				scanner.digestMode = digestMode
+				token, spelling := scanner.Scan()
+				expected := test.executionToken
+				if digestMode {
+					expected = test.digestToken
+				}
+				require.Equal(t, expected, token)
+				require.Equal(t, test.word, spelling)
+			}()
+		}
+	}
+}
+
 func TestDigestIdentifierCasePolicy(t *testing.T) {
 	for _, test := range [][2]string{
 		{"", ""}, {"ascii", "ascii"}, {"ABC_x", "abc_x"},

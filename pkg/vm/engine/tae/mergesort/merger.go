@@ -195,7 +195,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 	defer releaseF()
 
 	mp := m.host.GetMPool()
-	bigblk := false
 	for m.heap.Len() != 0 {
 		select {
 		case <-ctx.Done():
@@ -235,9 +234,7 @@ func (m *merger[T]) merge(ctx context.Context) error {
 
 		m.stats.blkRowCnt++
 		m.stats.objRowCnt++
-		if m.stats.blkRowCnt%100 == 0 && m.stats.targetObjSize > 0 {
-			bigblk = m.buffer.Size() > int(m.stats.targetObjSize)*3/2
-		}
+		bigblk := m.stats.isBlockOversized(m.buffer)
 		// write new block
 		if m.stats.blkRowCnt == int(m.rowPerBlk) || bigblk {
 			m.stats.blkRowCnt = 0
@@ -264,7 +261,6 @@ func (m *merger[T]) merge(ctx context.Context) error {
 				m.stats.objBlkCnt = 0
 				m.stats.objRowCnt = 0
 				m.stats.objCnt++
-				bigblk = false
 			}
 		}
 
@@ -449,6 +445,30 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 				cols:        make([][]float64, size),
 			}
 			merger = newMerger(mergeHost, sort.GenericLess[float64], sortKeyPos, df)
+		case types.T_bf16:
+			df := &fixedDataFetcher[types.BF16]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.BF16],
+				cols:        make([][]types.BF16, size),
+			}
+			merger = newMerger(mergeHost, sort.LowPrecisionLess[types.BF16], sortKeyPos, df)
+		case types.T_float16:
+			df := &fixedDataFetcher[types.Float16]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Float16],
+				cols:        make([][]types.Float16, size),
+			}
+			merger = newMerger(mergeHost, sort.LowPrecisionLess[types.Float16], sortKeyPos, df)
+		case types.T_float8:
+			df := &fixedDataFetcher[types.Float8]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Float8],
+				cols:        make([][]types.Float8, size),
+			}
+			merger = newMerger(mergeHost, sort.LowPrecisionLess[types.Float8], sortKeyPos, df)
+		case types.T_float4:
+			df := &fixedDataFetcher[types.Float4]{
+				mustColFunc: vector.MustFixedColNoTypeCheck[types.Float4],
+				cols:        make([][]types.Float4, size),
+			}
+			merger = newMerger(mergeHost, sort.LowPrecisionLess[types.Float4], sortKeyPos, df)
 		case types.T_uint8:
 			df := &fixedDataFetcher[uint8]{
 				mustColFunc: vector.MustFixedColNoTypeCheck[uint8],

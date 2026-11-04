@@ -958,7 +958,7 @@ func TestDistanceRangeFiltersBeforeTopInSourceUnits(t *testing.T) {
 	}
 
 	require.NoError(t, idx.filterEntryDistanceRange(
-		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance, nil))
+		&res, distRange, metric.DistFn_L2Distance, metric.Metric_L2sqDistance, nil, mp))
 	require.NoError(t, compactRelationTop(&res, 2, false))
 
 	require.Equal(t, []int64{2, 3}, vector.MustFixedColWithTypeCheck[int64](res.Batches[0].Vecs[0]))
@@ -1081,15 +1081,15 @@ func TestRelationSearchBoundaryBranches(t *testing.T) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 	}
 	idx := &IvfflatSearchIndex[float32]{QuantMul: 1}
-	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
+	require.NoError(t, idx.filterEntryDistanceRange(nil, rangeExclusive, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil, mp))
 	unbounded := &plan.DistRange{LowerBoundType: plan.BoundType_UNBOUNDED, UpperBoundType: plan.BoundType_UNBOUNDED}
 	all := newResult(1, 2)
-	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, unbounded, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil, mp))
 	require.Equal(t, 2, all.Batches[0].RowCount())
 	all.Close()
 	all = newResult(1, 2)
 	noneRange := &plan.DistRange{LowerBoundType: plan.BoundType_INCLUSIVE, LowerBound: floatLiteral(3), UpperBoundType: plan.BoundType_UNBOUNDED}
-	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil))
+	require.NoError(t, idx.filterEntryDistanceRange(&all, noneRange, metric.DistFn_L2sqDistance, metric.Metric_L2sqDistance, nil, mp))
 	require.Zero(t, all.Batches[0].RowCount())
 	all.Close()
 
@@ -1534,6 +1534,7 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	proc.Ctx = fileservice.WithFileServicePolicy(proc.Ctx, fileservice.SkipDiskCacheWrites)
 	checkPolicy := func(ctx context.Context) {
 		require.Equal(t, fileservice.Policy(fileservice.SkipDiskCacheWrites|fileservice.SkipFullFilePreloads), fileservice.GetFileServicePolicy(ctx))
+		require.Equal(t, uint64(9), fileservice.GetPreloadGroup(ctx), "reads are grouped by the entries table")
 	}
 	eng := mock_frontend.NewMockEngine(ctrl)
 	db := mock_frontend.NewMockDatabase(ctrl)
@@ -1541,7 +1542,8 @@ func TestRelationScannerExecutesTypedReaderLifecycle(t *testing.T) {
 	proc.Base.SessionInfo.StorageEngine = eng
 
 	tableDef := &plan.TableDef{
-		Name: "entries",
+		TblId: 9,
+		Name:  "entries",
 		Cols: []*plan.ColDef{
 			{Name: "version", Typ: plan.Type{Id: int32(types.T_int64)}},
 			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}},

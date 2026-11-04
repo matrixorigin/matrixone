@@ -55,6 +55,7 @@ const quantileExactWeightedConfigVersion byte = 1
 // DECIMAL64/128, excluding DECIMAL256 and width-38 decimals like
 // percentile_cont.
 func QuantileExactWeightedSupportedValueType(typ types.Type) bool {
+	// typeswitch:partial bf16/float16/float8/float4 arguments are cast to FLOAT when the function resolves
 	switch typ.Oid {
 	case types.T_bit, types.T_int8, types.T_int16, types.T_int32,
 		types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32,
@@ -72,6 +73,7 @@ func QuantileExactWeightedSupportedValueType(typ types.Type) bool {
 // weight set: signed/unsigned integer widths, BIT, FLOAT32/64 and
 // DECIMAL64/128. DECIMAL256 is deliberately not a weight type.
 func QuantileExactWeightedSupportedWeightType(typ types.Type) bool {
+	// typeswitch:partial bf16/float16/float8/float4 arguments are cast to FLOAT when the function resolves
 	switch typ.Oid {
 	case types.T_bit, types.T_int8, types.T_int16, types.T_int32,
 		types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32,
@@ -489,6 +491,7 @@ func (exec *quantileExactWeightedExec) weightedResultRow(
 func quantileValueLessFunc(
 	values *vector.Vector,
 ) func(i, j int64) bool {
+	// typeswitch:partial bf16/float16/float8/float4 arguments are cast to FLOAT when the function resolves
 	switch values.GetType().Oid {
 	case types.T_bit:
 		col := vector.MustFixedColNoTypeCheck[uint64](values)
@@ -703,6 +706,7 @@ func invalidQuantileExactWeightedWeight(reason string) error {
 func quantileExactWeightedWeightBytes(
 	typ types.Type, raw []byte,
 ) (uint64, error) {
+	// typeswitch:partial bf16/float16/float8/float4 arguments are cast to FLOAT when the function resolves
 	switch typ.Oid {
 	case types.T_bit:
 		return types.DecodeUint64(raw), nil

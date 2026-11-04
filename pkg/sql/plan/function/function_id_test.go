@@ -67,6 +67,7 @@ func TestAggregateExecutorIDs(t *testing.T) {
 		{"hll_add_agg", HLL_ADD_AGG, aggexec.AggIdOfHllAdd},
 		{"hll_merge_agg", HLL_MERGE_AGG, aggexec.AggIdOfHllMerge},
 		{"approx_percentile", APPROX_PERCENTILE, aggexec.AggIdOfApproxPercentile},
+		{"vector_matmul", VECTOR_MATMUL, aggexec.AggIdOfVectorMatmul},
 		{"percentile_cont", PERCENTILE_CONT, aggexec.AggIdOfPercentileCont},
 		{"percentile_disc", PERCENTILE_DISC, aggexec.AggIdOfPercentileDisc},
 		{"quantileExactWeighted", QUANTILE_EXACT_WEIGHTED, aggexec.AggIdOfQuantileExactWeighted},
@@ -885,9 +886,12 @@ var predefinedFunids = map[int]int{
 	EWM_STD:               626,
 	EWM_COV:               627,
 	EWM_CORR:              628,
-	STATEMENT_DIGEST:      629,
-	STATEMENT_DIGEST_TEXT: 630,
-	FUNCTION_END_NUMBER:   631,
+	VECTOR_MATMUL:         629,
+	VECBLOCK_JSON:         630,
+	VECBLOCK_BINARY:       631,
+	STATEMENT_DIGEST:      632,
+	STATEMENT_DIGEST_TEXT: 633,
+	FUNCTION_END_NUMBER:   634,
 }
 
 func Test_funids(t *testing.T) {
