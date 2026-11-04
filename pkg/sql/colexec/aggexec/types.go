@@ -166,7 +166,9 @@ type AggFuncExec interface {
 	// Flush return the aggregation result.
 	Flush() ([]*vector.Vector, error)
 
-	// Serialize intermediate result to bytes.
+	// Serialize the selected intermediate groups in chunk and row order. A
+	// missing or empty flags chunk selects no rows; nonempty flags contain 0/1
+	// selectors. On error the caller must discard any partial record in buf.
 	SaveIntermediateResult(cnt int64, flags [][]uint8, buf *bytes.Buffer) error
 	SaveIntermediateResultOfChunk(chunk int, buf *bytes.Buffer) error
 	UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error

@@ -231,7 +231,12 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 	defer rvec.Free(r.mp)
 
 	for i := range r.resultList {
-		rvec.UnionBatch(r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp)
+		if i >= len(flags) || len(flags[i]) == 0 {
+			continue
+		}
+		if err := rvec.UnionBatch(r.resultList[i], 0, r.resultList[i].Length(), flags[i], r.mp); err != nil {
+			return err
+		}
 	}
 	if err := rvec.MarshalBinaryWithBuffer(buf); err != nil {
 		return err
@@ -244,7 +249,12 @@ func (r *optSplitResult) marshalToBuffers(flags [][]uint8, buf *bytes.Buffer) er
 		mvec := vector.NewOffHeapVecWithType(types.T_bool.ToType())
 		defer mvec.Free(r.mp)
 		for i := range r.emptyList {
-			mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp)
+			if i >= len(flags) || len(flags[i]) == 0 {
+				continue
+			}
+			if err := mvec.UnionBatch(r.emptyList[i], 0, r.emptyList[i].Length(), flags[i], r.mp); err != nil {
+				return err
+			}
 		}
 		if err := mvec.MarshalBinaryWithBuffer(buf); err != nil {
 			return err
@@ -478,7 +488,7 @@ func (r *optSplitResult) extendResultPurely(more int) error {
 	for i := 0; i < apFullPart; i++ {
 		k := r.appendPartK()
 		if err := r.extendMoreToKthGroup(k, r.optInformation.chunkSize); err != nil {
-			return nil
+			return err
 		}
 		r.setLengthPartK(k, r.optInformation.chunkSize)
 	}
