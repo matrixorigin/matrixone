@@ -9385,7 +9385,6 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
-
 	// Temporal precision is also the display width stored in derived schemas.
 	// Keep the two metadata fields aligned after unit-dependent refinement.
 	switch name {
