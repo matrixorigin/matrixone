@@ -3493,6 +3493,9 @@ func pregrowVarlenaArea(vec *Vector, totalBytes int, mp *mpool.MPool) error {
 	if mp == nil || totalBytes <= 0 {
 		return nil
 	}
+	if totalBytes > math.MaxInt-len(vec.area) {
+		return moerr.NewInternalErrorNoCtx("varlena area size exceeds supported range")
+	}
 	need := len(vec.area) + totalBytes
 	if need <= cap(vec.area) {
 		return nil
@@ -3825,7 +3828,25 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	return nil
 }
 
+// UnionBatch appends selected rows. If it fails, the destination may be
+// partially modified; before reuse, roll back an append checkpoint or reset
+// the vector.
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
+	return v.unionBatch(w, offset, cnt, flags, -1, mp)
+}
+
+// UnionWholeWithPayloadSize appends cnt rows from w. When the source is a
+// non-constant vector of exactly cnt rows, a nonnegative payloadSize must equal
+// its non-null, non-inline payload bytes and is used only for preallocation.
+// Other sources or a negative size use the normal UnionBatch path.
+func (v *Vector) UnionWholeWithPayloadSize(w *Vector, cnt, payloadSize int, mp *mpool.MPool) error {
+	if payloadSize < 0 || w.IsConst() || w.Length() != cnt || payloadSize > math.MaxInt-len(v.area) {
+		return v.UnionBatch(w, 0, cnt, nil, mp)
+	}
+	return v.unionBatch(w, 0, cnt, nil, payloadSize, mp)
+}
+
+func (v *Vector) unionBatch(w *Vector, offset int64, cnt int, flags []uint8, payloadSize int, mp *mpool.MPool) error {
 	if v.typ.IsVarlen() {
 		v.areaDisjoint = false
 	}
@@ -3924,29 +3945,32 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		// would reserve area for dead payload (large needless mp.Grow / alloc
 		// failure), so exclude them to match what's actually appended.
 		{
-			total := 0
-			hasNull := !w.nsp.EmptyByFlag()
-			if flags == nil {
-				for i := 0; i < cnt; i++ {
-					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
-						continue
+			total := payloadSize
+			if total < 0 {
+				total = 0
+				hasNull := !w.nsp.EmptyByFlag()
+				if flags == nil {
+					for i := 0; i < cnt; i++ {
+						if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+							continue
+						}
+						if s := &wCol[int(offset)+i]; !s.IsSmall() {
+							_, l := s.OffsetLen()
+							total += int(l)
+						}
 					}
-					if s := &wCol[int(offset)+i]; !s.IsSmall() {
-						_, l := s.OffsetLen()
-						total += int(l)
-					}
-				}
-			} else {
-				for i := range flags {
-					if flags[i] == 0 {
-						continue
-					}
-					if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
-						continue
-					}
-					if s := &wCol[int(offset)+i]; !s.IsSmall() {
-						_, l := s.OffsetLen()
-						total += int(l)
+				} else {
+					for i := range flags {
+						if flags[i] == 0 {
+							continue
+						}
+						if hasNull && w.nsp.Contains(uint64(offset)+uint64(i)) {
+							continue
+						}
+						if s := &wCol[int(offset)+i]; !s.IsSmall() {
+							_, l := s.OffsetLen()
+							total += int(l)
+						}
 					}
 				}
 			}
