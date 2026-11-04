@@ -42,9 +42,6 @@ const (
 	// trigger write s3
 	WriteS3Threshold         = 128 * mpool.MB
 	FaultInjectedS3Threshold = 512 * mpool.KB
-	// Keep a sorted CN spill run within the same soft target used by TN
-	// large-block merges. A single large row may exceed the target.
-	maxCNSortedRunBytes = 192 * mpool.MB
 )
 
 type CNS3Writer struct {
@@ -194,7 +191,7 @@ func NewCNS3DataWriter(
 		// do not flush on sync, so the threshold is the max int
 		memoryThreshold = math.MaxInt
 	} else {
-		sinkerOpts = append(sinkerOpts, ioutil.WithMaxSortedRunBytes(maxCNSortedRunBytes), ioutil.WithUnpublishedRunCleanup())
+		sinkerOpts = append(sinkerOpts, ioutil.WithByteBoundedRuns(), ioutil.WithUnpublishedRunCleanup())
 	}
 	writer.memorySizeThreshold = memoryThreshold
 
@@ -265,10 +262,9 @@ func (w *CNS3Writer) Close() (err error) {
 	var mp *mpool.MPool
 	if w.sinker != nil {
 		mp = w.sinker.GetMPool()
-		if err = w.sinker.Close(); err != nil {
-			return
+		if err = w.sinker.Close(); err == nil {
+			w.sinker = nil
 		}
-		w.sinker = nil
 	}
 
 	if w.blockInfoBat != nil {
@@ -276,7 +272,7 @@ func (w *CNS3Writer) Close() (err error) {
 		w.blockInfoBat = nil
 	}
 
-	return nil
+	return err
 }
 
 // Reset discards any buffered or staged data accumulated since the last

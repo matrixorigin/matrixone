@@ -69,8 +69,10 @@ func TestSortAndSyncDropsTransferredBatchOnWriteError(t *testing.T) {
 	columnType := types.New(types.T_varchar, 256, 0)
 	input := batch.NewOffHeap([]string{"v"})
 	input.Vecs[0] = vector.NewOffHeapVecWithType(columnType)
+	// Descriptor plus payload is exactly the injected 512 KiB threshold, so
+	// WriteOwned transfers the full batch and its spill fails synchronously.
 	for range objectio.BlockMaxRows {
-		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(strings.Repeat("x", 128)), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(strings.Repeat("x", 40)), false, proc.Mp()))
 	}
 	input.SetRowCount(int(objectio.BlockMaxRows))
 	bats := []*batch.Batch{input}

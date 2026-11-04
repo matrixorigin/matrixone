@@ -41,9 +41,26 @@ func multiplyRunBytes(a, b int) int {
 // dead area and shared descriptors, respectively. The bound travels with the
 // staged batch, including when sorting clears its disjointness flag.
 func materializedBatchSize(bat *batch.Batch) int {
+	size, _ := materializedBatchSizeWithPayloadSizes(bat, nil)
+	return size
+}
+
+// payloadSizes, when provided, receives exact live payload sizes for
+// non-constant columns that required a scan. The values are valid only while
+// this batch remains unchanged and can be reused by the same full-window copy.
+func materializedBatchSizeWithPayloadSizes(bat *batch.Batch, payloadSizes []int) (int, bool) {
 	size := 0
-	for _, vec := range bat.Vecs {
+	hasPayloadSize := false
+	for i, vec := range bat.Vecs {
+		if payloadSizes != nil {
+			payloadSizes[i] = -1
+		}
 		rows := vec.Length()
+		if vec.IsConst() {
+			// A constant may have one physical/logical slot while the batch
+			// broadcasts it across every row.
+			rows = bat.RowCount()
+		}
 		size = addRunBytes(size, multiplyRunBytes(rows, vec.GetType().TypeSize()))
 		if !vec.GetType().IsVarlen() || len(vec.GetArea()) == 0 {
 			continue
@@ -61,21 +78,65 @@ func materializedBatchSize(bat *batch.Batch) int {
 		if vec.IsConst() {
 			if !values[0].IsSmall() {
 				_, n := values[0].OffsetLen()
+				if uint64(n) > uint64(math.MaxInt) {
+					return math.MaxInt, false
+				}
 				payload = multiplyRunBytes(rows, int(n))
 			}
 		} else {
 			hasNull := !vec.GetNulls().EmptyByFlag()
-			for i := 0; i < rows; i++ {
-				if hasNull && vec.GetNulls().Contains(uint64(i)) {
-					continue
+			// A varlena length is uint32. For ordinary vector sizes the
+			// entire sum is provably representable, so no per-row saturation
+			// check is needed. Retain the checked path for extreme inputs.
+			if uint64(rows) <= uint64(math.MaxInt)/uint64(math.MaxUint32) {
+				for i := 0; i < rows; i++ {
+					if hasNull && vec.GetNulls().Contains(uint64(i)) {
+						continue
+					}
+					if !values[i].IsSmall() {
+						_, n := values[i].OffsetLen()
+						payload += int(n)
+					}
 				}
-				if !values[i].IsSmall() {
-					_, n := values[i].OffsetLen()
-					payload = addRunBytes(payload, int(n))
+			} else {
+				for i := 0; i < rows; i++ {
+					if hasNull && vec.GetNulls().Contains(uint64(i)) {
+						continue
+					}
+					if !values[i].IsSmall() {
+						_, n := values[i].OffsetLen()
+						if uint64(n) > uint64(math.MaxInt) {
+							return math.MaxInt, false
+						}
+						payload = addRunBytes(payload, int(n))
+					}
 				}
 			}
 		}
+		if payloadSizes != nil && !vec.IsConst() && rows == bat.RowCount() && payload != math.MaxInt {
+			payloadSizes[i] = payload
+			hasPayloadSize = true
+		}
 		size = addRunBytes(size, max(len(vec.GetArea()), payload))
+	}
+	return size, hasPayloadSize
+}
+
+// UnionWindow stores a constant varlen payload once and broadcasts its
+// descriptor. A later sorted merge may materialize it once per row.
+func constantRunExpansion(data *batch.Batch, rows int) int {
+	if rows <= 1 {
+		return 0
+	}
+	size := 0
+	for _, vec := range data.Vecs {
+		if !vec.IsConst() || vec.IsConstNull() || !vec.GetType().IsVarlen() || len(vec.GetArea()) == 0 {
+			continue
+		}
+		n := len(vec.GetBytesAt(0))
+		if n > types.VarlenaInlineSize {
+			size = addRunBytes(size, multiplyRunBytes(rows-1, n))
+		}
 	}
 	return size
 }

@@ -15,11 +15,14 @@
 package colexec
 
 import (
+	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -126,4 +129,57 @@ func testCNS3WriterTableDef() *plan.TableDef {
 			catalog.Row_ID: 2,
 		},
 	}
+}
+
+type closeFailureFS struct {
+	fileservice.FileService
+	writes     int
+	failDelete bool
+}
+
+func (f *closeFailureFS) Write(ctx context.Context, v fileservice.IOVector) error {
+	f.writes++
+	if f.writes == 2 {
+		return errors.New("injected object write failure")
+	}
+	return f.FileService.Write(ctx, v)
+}
+
+func (f *closeFailureFS) Delete(ctx context.Context, names ...string) error {
+	if f.failDelete {
+		return errors.New("injected delete failure")
+	}
+	return f.FileService.Delete(ctx, names...)
+}
+
+func TestCNS3WriterCloseFreesBlockInfoWhenDeleteFails(t *testing.T) {
+	ctx := context.Background()
+	base := testutil.NewSharedFS()
+	defer base.Close(ctx)
+	fs := &closeFailureFS{FileService: base, failDelete: true}
+	mp := mpool.MustNewZero()
+	writer := NewCNS3DataWriter(mp, fs, testCNS3WriterTableDef(), 128, false)
+	require.NoError(t, vector.AppendBytes(writer.blockInfoBat.Vecs[0], []byte(strings.Repeat("m", 128)), false, mp))
+	writer.blockInfoBat.SetRowCount(1)
+	input := batch.NewWithSchema(false, []string{"a", "b"}, []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()})
+	for i := 0; i < 8; i++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(i), false, mp))
+		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(strings.Repeat("x", 64)), false, mp))
+	}
+	input.SetRowCount(8)
+	require.ErrorContains(t, writer.Write(ctx, input), "injected object write failure")
+	input.Clean(mp)
+	require.ErrorContains(t, writer.Close(), "injected delete failure")
+	require.Nil(t, writer.blockInfoBat)
+	require.NotNil(t, writer.sinker, "the caller can retry cleanup")
+	require.Zero(t, mp.CurrNB(), "a discarded writer must not retain mpool buffers")
+	onHeapBytes, onHeapObjects := mp.OnHeapOutstanding()
+	require.Zero(t, onHeapBytes, "failed cleanup must release on-heap buffers")
+	require.Zero(t, onHeapObjects, "failed cleanup must release on-heap allocations")
+	fs.failDelete = false
+	require.NoError(t, writer.Close())
+	require.Nil(t, writer.sinker)
+	files, err := fileservice.SortedList(base.List(ctx, ""))
+	require.NoError(t, err)
+	require.Empty(t, files)
 }
