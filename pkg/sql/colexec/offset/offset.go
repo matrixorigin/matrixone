@@ -96,10 +96,14 @@ func (offset *Offset) Call(proc *process.Process) (vm.CallResult, error) {
 			sels := newSels(int64(offset.ctr.offset-offset.ctr.seen), int64(length)-int64(offset.ctr.offset-offset.ctr.seen), proc)
 			offset.ctr.buf, err = offset.ctr.buf.AppendWithCopy(proc.Ctx, proc.GetMPool(), input.Batch)
 			if err != nil {
+				vector.PutSels(sels)
 				return vm.CancelResult, err
 			}
-			offset.ctr.buf.Shrink(sels, false)
+			err = offset.ctr.buf.Shrink(sels, false, proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return vm.CancelResult, err
+			}
 			offset.ctr.seen += uint64(length)
 
 			return vm.CallResult{Batch: offset.ctr.buf, Status: vm.ExecNext}, nil

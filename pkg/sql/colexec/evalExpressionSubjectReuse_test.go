@@ -61,7 +61,7 @@ func orLikeTestExpression(t testing.TB, proc *process.Process, subject *plan.Exp
 
 func orLikeTestRaw(t testing.TB, proc *process.Process, expression *plan.Expr) ExpressionExecutor {
 	t.Helper()
-	executor, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{})
+	executor, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{}, expressionDiagnosticScope{})
 	require.NoError(t, err)
 	t.Cleanup(executor.Free)
 	return executor
@@ -226,7 +226,7 @@ func TestORLikeSubjectReuseAdmission(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(expression)
 			}
-			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{})
+			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{}, expressionDiagnosticScope{})
 			require.NoError(t, err)
 			executor := reuseORLikeSubjects(expression, raw)
 			t.Cleanup(executor.Free)
@@ -303,7 +303,7 @@ func TestORLikeSubjectReuseNestedOwnerBudgetBoundary(t *testing.T) {
 				arguments = append(arguments, makePlan2BoolConstExprWithType(true))
 			}
 			expression := bindTestFunction(t, proc, "and", arguments...)
-			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{})
+			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{}, expressionDiagnosticScope{})
 			require.NoError(t, err)
 			originalOR := raw.(*FunctionExpressionExecutor).parameterExecutor[0]
 			executor := reuseORLikeSubjects(expression, raw)
@@ -348,7 +348,7 @@ func TestORLikeSubjectReuseNullLiteralPayloadBounds(t *testing.T) {
 			}
 			subject := bindTestFunction(t, proc, "concat", orLikeTestColumn(0), payload)
 			expression := orLikeTestExpression(t, proc, subject, 2)
-			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{})
+			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{}, expressionDiagnosticScope{})
 			require.NoError(t, err)
 			executor := reuseORLikeSubjects(expression, raw)
 			t.Cleanup(executor.Free)
@@ -405,7 +405,7 @@ func TestORLikeSubjectReuseSubjectBounds(t *testing.T) {
 			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
 			checkExpressionStorageAfterCleanup(t, proc)
 			expression := orLikeTestExpression(t, proc, test.make(t, proc), 2)
-			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{})
+			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{}, expressionDiagnosticScope{})
 			require.NoError(t, err)
 			executor := reuseORLikeSubjects(expression, raw)
 			t.Cleanup(executor.Free)
@@ -636,7 +636,7 @@ func TestORLikeSubjectReuseMarkerAndOwnerBarriers(t *testing.T) {
 			subject := orLikeTestSubject(t, proc, true)
 			test.edit(t, subject)
 			expression := orLikeTestExpression(t, proc, subject, 3)
-			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{})
+			raw, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{}, expressionDiagnosticScope{})
 			require.NoError(t, err)
 			executor := reuseORLikeSubjects(expression, raw)
 			t.Cleanup(executor.Free)
@@ -783,7 +783,7 @@ func BenchmarkORLikeSubjectReuse(b *testing.B) {
 				b.Run(fmt.Sprintf("%s/terms%d/reuse%t", value.name, terms, reuse), func(b *testing.B) {
 					proc := testutil.NewProcess(b, testutil.WithFileService(nil))
 					expression := orLikeTestExpression(b, proc, orLikeTestSubject(b, proc, true), terms)
-					executor, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{})
+					executor, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{}, expressionDiagnosticScope{})
 					require.NoError(b, err)
 					if reuse {
 						executor.Free()
@@ -857,7 +857,7 @@ func BenchmarkORLikeSubjectReuseBatch(b *testing.B) {
 				b.Run(fmt.Sprintf("rows%d/partial%t/reuse%t", rows, partial, reuse), func(b *testing.B) {
 					proc := testutil.NewProcess(b, testutil.WithFileService(nil))
 					expression := orLikeTestExpression(b, proc, orLikeTestSubject(b, proc, true), 3)
-					executor, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{})
+					executor, err := newExpressionExecutorWithAllocation(proc, expression, nil, &expressionExecutorBuildContext{}, expressionDiagnosticScope{})
 					require.NoError(b, err)
 					if reuse {
 						executor.Free()
@@ -993,7 +993,7 @@ func orLikeBenchmarkLegacyExecutor(proc *process.Process, expression *plan.Expr)
 		return nil, err
 	}
 	build := &expressionExecutorBuildContext{}
-	executor, err := newExpressionExecutorWithAllocation(proc, expression, nil, build)
+	executor, err := newExpressionExecutorWithAllocation(proc, expression, nil, build, expressionDiagnosticScope{})
 	if err != nil || len(build.states) == 0 {
 		return executor, err
 	}

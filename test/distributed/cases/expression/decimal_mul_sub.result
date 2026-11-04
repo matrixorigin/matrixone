@@ -1,0 +1,38 @@
+drop database if exists decimal_mul_sub;
+create database decimal_mul_sub;
+use decimal_mul_sub;
+create table t(id int primary key, x decimal(15,2), y decimal(15,2));
+insert into t values (1,100,0.05),(2,200,0.10),(3,-300,0.20);
+select sum(x*(1-y)) as total from t;
+total
+35.0000
+insert into t values (4,null,0.1),(5,400,null);
+select id,x*(1-y) as amount from t order by id;
+id	amount
+1	95.0000
+2	180.0000
+3	-240.0000
+4	null
+5	null
+select id,case when id in (2,3) then x*(1-y) else 0 end as amount from t order by id;
+id	amount
+1	0.0000
+2	180.0000
+3	-240.0000
+4	0.0000
+5	0.0000
+prepare revenue from 'select sum(x*(1-y)) as amount from t where id<=?';
+set @id=1;
+execute revenue using @id;
+amount
+95.0000
+set @id=2;
+execute revenue using @id;
+amount
+275.0000
+deallocate prepare revenue;
+create table result_type as select x*(1-y) as amount from t where id=1;
+select data_type,numeric_precision,numeric_scale from information_schema.columns where table_schema='decimal_mul_sub' and table_name='result_type' and column_name='amount';
+data_type	numeric_precision	numeric_scale
+decimal	37	4
+drop database decimal_mul_sub;

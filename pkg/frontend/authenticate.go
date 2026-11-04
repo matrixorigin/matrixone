@@ -40,7 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1142,7 +1142,7 @@ var (
 		stage_credentials,
 		stage_status,
 		created_time,
-		comment) values ('%s','%s', '%s', '%s','%s', '%s');`
+		comment) values (%s,%s, %s, %s,%s, %s);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1629,17 +1629,17 @@ const (
 
 	updateConfigurationByAccountNameFormat = `update mo_catalog.mo_mysql_compatibility_mode set variable_value = '%s' where account_name = '%s' and variable_name = '%s';`
 
-	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = "%s" order by stage_id;`
+	checkStageFormat = `select stage_id, stage_name from mo_catalog.mo_stages where stage_name = %s order by stage_id;`
 
-	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = '%s' order by stage_id;`
+	dropStageFormat = `delete from mo_catalog.mo_stages where stage_name = %s order by stage_id;`
 
-	updateStageUrlFormat = `update mo_catalog.mo_stages set url = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageUrlFormat = `update mo_catalog.mo_stages set url = %s  where stage_name = %s order by stage_id;`
 
-	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCredentialsFormat = `update mo_catalog.mo_stages set stage_credentials = %s  where stage_name = %s order by stage_id;`
 
-	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageStatusFormat = `update mo_catalog.mo_stages set stage_status = %s  where stage_name = %s order by stage_id;`
 
-	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = '%s'  where stage_name = '%s' order by stage_id;`
+	updateStageCommentFormat = `update mo_catalog.mo_stages set comment = %s  where stage_name = %s order by stage_id;`
 
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 
@@ -1709,12 +1709,12 @@ func getSqlForCheckTenant(ctx context.Context, tenant string) (string, error) {
 	return fmt.Sprintf(checkTenantFormat, tenant), nil
 }
 
-func getSqlForCheckStage(ctx context.Context, stage string) (string, error) {
-	err := inputNameIsInvalid(ctx, stage)
+func getSqlForCheckStage(ctx context.Context, stageName string) (string, error) {
+	err := stage.ValidateName(ctx, stageName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(checkStageFormat, stage), nil
+	return fmt.Sprintf(checkStageFormat, sqlquote.String(stageName)), nil
 }
 
 func getSqlForCheckUdfWithDb(dbName string) string {
@@ -1722,31 +1722,31 @@ func getSqlForCheckUdfWithDb(dbName string) string {
 }
 
 func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credentials, status, createdTime, comment string) (string, error) {
-	err := inputNameIsInvalid(ctx, stageName)
+	err := stage.ValidateName(ctx, stageName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
+	return fmt.Sprintf(insertIntoMoStages, sqlquote.String(stageName), sqlquote.String(url), sqlquote.String(credentials), sqlquote.String(status), sqlquote.String(createdTime), sqlquote.String(comment)), nil
 }
 
 func getSqlForDropStage(stageName string) string {
-	return fmt.Sprintf(dropStageFormat, stageName)
+	return fmt.Sprintf(dropStageFormat, sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageUrl(stageName, url string) string {
-	return fmt.Sprintf(updateStageUrlFormat, url, stageName)
+	return fmt.Sprintf(updateStageUrlFormat, sqlquote.String(url), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageCredentials(stageName, credentials string) string {
-	return fmt.Sprintf(updateStageCredentialsFormat, credentials, stageName)
+	return fmt.Sprintf(updateStageCredentialsFormat, sqlquote.String(credentials), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageStatus(stageName, status string) string {
-	return fmt.Sprintf(updateStageStatusFormat, status, stageName)
+	return fmt.Sprintf(updateStageStatusFormat, sqlquote.String(status), sqlquote.String(stageName))
 }
 
 func getsqlForUpdateStageComment(stageName, comment string) string {
-	return fmt.Sprintf(updateStageCommentFormat, comment, stageName)
+	return fmt.Sprintf(updateStageCommentFormat, sqlquote.String(comment), sqlquote.String(stageName))
 }
 
 func getSqlForUpdateCommentsOfAccount(ctx context.Context, comment, account string) (string, error) {
@@ -2468,6 +2468,8 @@ const (
 
 // privilegeItem is the item for in the compound entry
 type privilegeItem struct {
+	// SELECT is checked separately; this item requires a locking-read alternative.
+	selectLock            bool
 	privilegeTyp          PrivilegeType
 	objType               objectType
 	viewPath              []*plan.ViewStep
@@ -3790,6 +3792,29 @@ func checkStageExistOrNot(ctx context.Context, bh BackgroundExec, stageName stri
 	return false, nil
 }
 
+// validateStageCredentials preserves the existing comma-separated catalog format.
+// Delimiters cannot be represented in keys/values; reject before any mutation.
+func validateStageCredentials(ctx context.Context, credentials tree.StageCredentials) error {
+	if !credentials.Exist {
+		return nil
+	}
+	if len(credentials.Credentials)%2 != 0 {
+		return moerr.NewInvalidInput(ctx, "stage credentials require key/value pairs")
+	}
+	seen := make(map[string]struct{}, len(credentials.Credentials)/2)
+	for i := 0; i < len(credentials.Credentials); i += 2 {
+		if strings.ContainsAny(credentials.Credentials[i], ",=") || strings.Contains(credentials.Credentials[i+1], ",") {
+			return moerr.NewInvalidInput(ctx, "stage credential delimiters are not representable")
+		}
+		key := strings.ToLower(credentials.Credentials[i])
+		if _, ok := seen[key]; ok {
+			return moerr.NewInvalidInput(ctx, "duplicate stage credential key")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 func formatCredentials(credentials tree.StageCredentials) string {
 	var rstr string
 	if credentials.Exist {
@@ -3810,6 +3835,9 @@ func doCreateStage(ctx context.Context, ses *Session, cs *tree.CreateStage) (err
 	var credentials string
 	var StageStatus string
 	var comment string
+	if err = validateStageCredentials(ctx, cs.Credentials); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3961,6 +3989,9 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 	// var err error
 	var stageExist bool
 	var credentials string
+	if err = validateStageCredentials(ctx, as.CredentialsOption); err != nil {
+		return err
+	}
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -3970,25 +4001,8 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 		return err
 	}
 
-	optionBits := uint8(0)
-	if as.UrlOption.Exist {
-		optionBits |= 1
-	}
-	if as.CredentialsOption.Exist {
-		optionBits |= 1 << 1
-	}
-	if as.StatusOption.Exist {
-		optionBits |= 1 << 2
-	}
-	if as.Comment.Exist {
-		optionBits |= 1 << 3
-	}
-	optionCount := bits.OnesCount8(optionBits)
-	if optionCount == 0 {
+	if !as.UrlOption.Exist && !as.CredentialsOption.Exist && !as.StatusOption.Exist && !as.Comment.Exist {
 		return moerr.NewInternalError(ctx, "at least one option at a time")
-	}
-	if optionCount > 1 {
-		return moerr.NewInternalError(ctx, "at most one option at a time")
 	}
 
 	err = bh.Exec(ctx, "begin;")
@@ -4792,6 +4806,9 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 		return err
 	}
 	if err = lockRoleRuleLifecycleInBackground(ctx, bh); err != nil {
+		return err
+	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -5658,6 +5675,9 @@ func resolveViewChainPrivilegeContext(
 	privType PrivilegeType,
 	viewPath []*plan.ViewStep,
 	enableCache bool,
+	selectLock bool,
+	lockRoles *btree.Set[int64],
+	definerRoles ...*selectLockDefinerRoles,
 ) (viewPrivilegePrincipal, bool, bool, error) {
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
@@ -5671,7 +5691,7 @@ func resolveViewChainPrivilegeContext(
 		return caller, false, false, err
 	}
 	if isSystemViewDatabase(viewPath[0].DatabaseName) {
-		return caller, true, true, nil
+		return caller, true, !selectLock, nil
 	}
 
 	principal := caller
@@ -5688,7 +5708,12 @@ func resolveViewChainPrivilegeContext(
 			cacheToUse = nil
 		}
 		grantCtx := defines.AttachAccountId(ctx, principal.accountID)
-		viewAllowed, err := verifyViewPrivilegeForRole(grantCtx, bh, ses, cacheToUse, principal.roleID, privType, grantDb, viewName, useCache)
+		var viewAllowed bool
+		if lockRoles != nil {
+			viewAllowed, err = verifySelectLockPrivilegeForRoles(grantCtx, bh, ses, lockRoles, objectTypeView, grantDb, viewName)
+		} else {
+			viewAllowed, err = verifyViewPrivilegeForRole(grantCtx, bh, ses, cacheToUse, principal.roleID, privType, grantDb, viewName, useCache, selectLock)
+		}
 		if err != nil {
 			return principal, false, false, err
 		}
@@ -5714,6 +5739,21 @@ func resolveViewChainPrivilegeContext(
 		}
 		if viewInfo.securityType == viewSecurityDefiner {
 			principal = viewPrivilegePrincipal{accountID: snapshot.Tenant.TenantID, roleID: viewInfo.definerRoleId}
+			if lockRoles != nil {
+				// The caller owns this temporary set. A definer transition replaces
+				// the complete role namespace, even when numeric IDs collide.
+				lockRoles.Clear()
+				lockRoles.Insert(principal.roleID)
+				definerCtx := defines.AttachAccountId(ctx, principal.accountID)
+				if len(definerRoles) > 0 {
+					err = definerRoles[0].load(definerCtx, bh, principal, lockRoles)
+				} else {
+					err = expandRoleSetWithInheritedRoles(definerCtx, bh, lockRoles)
+				}
+				if err != nil {
+					return principal, false, false, err
+				}
+			}
 		}
 	}
 
@@ -6099,6 +6139,9 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 	if err != nil {
 		return err
 	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
+		return err
+	}
 
 	// handle "IF EXISTS"
 	// step1 : check Users are real Users or Roles,  exists or not
@@ -6242,7 +6285,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6263,6 +6306,9 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 		err = finishTxn(ctx, bh, err)
 	}()
 	if err != nil {
+		return err
+	}
+	if err = lockRoleGrantGraphInBackground(ctx, bh); err != nil {
 		return err
 	}
 
@@ -6838,6 +6884,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		if st.Table != nil {
 			dbName = string(st.Table.SchemaName)
 		}
+	case *tree.ShowIndexIgnored, *tree.ShowIndexStatus:
+		// lists primary keys of the table's rows, or the state of its indexes: SELECT on the
+		// named table and on what the plan reads
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		canExecInRestricted = true
 	case *tree.DropIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -6853,7 +6905,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers, *tree.ShowStages,
-		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
+		*tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.CheckTableStmt, *tree.ShowProfileStmt,
 		*tree.CreateExtension, *tree.LoadExtension,
@@ -6868,6 +6920,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		special = specialTagAdmin
 		canExecInRestricted = true
 	case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
+	case *tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
@@ -7516,6 +7573,11 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 			})
 		}
 	}
+	lockTips, err := selectLockPrivilegeTips(p.GetQuery())
+	if err != nil {
+		return nil, err
+	}
+	pts = append(pts, lockTips...)
 	return appendLogicalViewPrivilegeTips(pts, p.GetQuery())
 }
 
@@ -7830,6 +7892,198 @@ func replaceFunctionPreservesNull(fn *plan.Function) bool {
 	return strings.Contains(fnName, "cast")
 }
 
+// privilegeAlternatives keeps a locking read distinct from a data modification.
+// The SELECT requirement is checked independently of these alternatives.
+func privilegeAlternatives(typ PrivilegeType, selectLock bool) []PrivilegeType {
+	if selectLock {
+		return []PrivilegeType{PrivilegeTypeUpdate, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
+	}
+	return []PrivilegeType{typ, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
+}
+
+// selectLockPrivilegeTips uses binding identities rather than an outer AST or
+// physical table IDs: nested blocks and different view paths retain their own
+// requirements even when optimization removes their scan nodes.
+func selectLockPrivilegeTips(q *plan.Query) (privilegeTipsArray, error) {
+	if q == nil || len(q.SelectLockReferences) == 0 {
+		return nil, nil
+	}
+	var tips privilegeTipsArray
+	seen := make(map[string]struct{}, len(q.SelectLockReferences))
+	for _, reference := range q.SelectLockReferences {
+		obj := reference.GetObjectRef()
+		if obj == nil || obj.SchemaName == "" || obj.ObjName == "" {
+			return nil, moerr.NewInternalErrorNoCtx("invalid SELECT lock authorization target")
+		}
+		if err := validateViewPath(reference.ViewPath); err != nil {
+			return nil, err
+		}
+		identity, err := reference.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		key := string(identity)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		tips = append(tips, privilegeTips{
+			typ: PrivilegeTypeSelect, objType: objectTypeTable,
+			databaseName: getDbNameForPrivilege(obj), tableName: obj.ObjName,
+			objectRef: obj, viewPath: reference.ViewPath,
+			isClusterTable:        reference.IsClusterTable || isClusterTable(obj.SchemaName, obj.ObjName),
+			clusterTableOperation: clusterTableSelect,
+		})
+	}
+	return tips, nil
+}
+
+// This check consumes one already-validated, statement-local role closure.
+// It deliberately bypasses the session cache, which has no account/role key.
+func verifySelectLockPrivilegeForRoles(ctx context.Context, bh BackgroundExec, ses *Session, roles *btree.Set[int64], obj objectType, db, table string) (bool, error) {
+	entry := privilegeEntriesMap[PrivilegeTypeSelect]
+	entry.objType, entry.databaseName, entry.tableName = obj, db, table
+	levels, err := getPrivilegeLevelsOfObjectType(ctx, obj)
+	if err != nil {
+		return false, err
+	}
+	for _, role := range roles.Keys() {
+		if obj == objectTypeView {
+			ok, err := verifyViewPrivilegeForRole(ctx, bh, ses, nil, role, PrivilegeTypeSelect, db, table, false, true)
+			if err != nil || ok {
+				return ok, err
+			}
+			continue
+		}
+		for _, typ := range privilegeAlternatives(PrivilegeTypeSelect, true) {
+			entry.privilegeId = typ
+			ok, err := verifyPrivilegeEntryInMultiPrivilegeLevels(ctx, bh, ses, nil, role, entry, levels, false)
+			if err != nil || ok {
+				return ok, err
+			}
+		}
+	}
+	return false, nil
+}
+
+func determineSelectLockViewPrivilege(ctx context.Context, bh BackgroundExec, ses *Session, roles *btree.Set[int64], item privilegeItem, definerRoles ...*selectLockDefinerRoles) (bool, error) {
+	if !verifyLightPrivilege(ses, item.dbName, false, item.isClusterTable, clusterTableSelect) {
+		return false, nil
+	}
+	principal, allowed, _, err := resolveViewChainPrivilegeContext(ctx, bh, ses, nil,
+		int64(ses.GetTenantInfo().GetDefaultRoleID()), PrivilegeTypeSelect, item.viewPath, false, true, roles, definerRoles...)
+	if err != nil || !allowed {
+		return false, err
+	}
+	db := item.dbName
+	if item.objectRef != nil && item.objectRef.GetPubInfo() != nil && principal.accountID == uint32(item.objectRef.GetPubInfo().TenantId) {
+		db = item.objectRef.SchemaName
+	}
+	return verifySelectLockPrivilegeForRoles(defines.AttachAccountId(ctx, principal.accountID), bh, ses, roles, objectTypeTable, db, item.tableName)
+}
+
+// selectLockDefinerRoles retains just the last definer closure in one admitted
+// authorization transaction. Account-local role IDs never cross namespaces.
+// Grants and view metadata are deliberately not memoized.
+type selectLockDefinerRoles struct {
+	principal viewPrivilegePrincipal
+	roles     *btree.Set[int64]
+}
+
+func (m *selectLockDefinerRoles) load(ctx context.Context, bh BackgroundExec, principal viewPrivilegePrincipal, roles *btree.Set[int64]) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.roles != nil && m.principal == principal {
+		for _, role := range m.roles.Keys() {
+			roles.Insert(role)
+		}
+		return nil
+	}
+	if err := expandRoleSetWithInheritedRoles(ctx, bh, roles); err != nil {
+		return err
+	}
+	m.principal, m.roles = principal, roles.Copy()
+	return nil
+}
+
+// Only a multi-view invocation can share work. checked records successful
+// targets so an eligibility change resumes the legacy loop at the next target.
+type selectLockAuthorizationBatch struct {
+	items   []privilegeItem
+	checked int
+}
+
+func (b *selectLockAuthorizationBatch) check(ctx context.Context, bh BackgroundExec, ses *Session, callerRoles *btree.Set[int64], beforeNext func() (bool, error)) (bool, error) {
+	var definerRoles selectLockDefinerRoles
+	for i, item := range b.items {
+		if i > 0 {
+			eligible, err := beforeNext()
+			if err != nil {
+				return false, err
+			}
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			if !eligible {
+				return true, nil // commit this prefix, then resume independent reads
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		// DEFINER resolution replaces its input. Keep the caller closure intact
+		// even when the next target has the same base table or numeric role ID.
+		ok, err := determineSelectLockViewPrivilege(ctx, bh, ses, callerRoles.Copy(), item, &definerRoles)
+		if err != nil || !ok {
+			return ok, err
+		}
+		b.checked++
+	}
+	return true, nil
+}
+
+func authenticateSelectLockReferences(ctx context.Context, ses *Session, q *plan.Query) (bool, statistic.StatsArray, error) {
+	var stats statistic.StatsArray
+	stats.Reset()
+	tips, err := selectLockPrivilegeTips(q)
+	if err != nil {
+		return false, stats, err
+	}
+	items := make([]privilegeItem, 0, len(tips))
+	allViews := len(tips) > 1
+	for _, tip := range tips {
+		items = append(items, privilegeItem{
+			privilegeTyp: PrivilegeTypeSelect, selectLock: true, objType: objectTypeTable,
+			dbName: tip.databaseName, tableName: tip.tableName,
+			objectRef: tip.objectRef, viewPath: tip.viewPath,
+			isClusterTable: tip.isClusterTable, clusterTableOperation: clusterTableSelect,
+		})
+		allViews = allViews && len(tip.viewPath) > 0
+	}
+	for i := 0; i < len(items); i++ {
+		// Never use a generic multi-item compound: different targets can be
+		// authorized by different roles and privilege alternatives.
+		priv := &privilege{objType: objectTypeTable, entries: []privilegeEntry{{
+			privilegeEntryTyp: privilegeEntryTypeCompound,
+			compound:          &compoundEntry{items: items[i : i+1]},
+		}}}
+		var batch *selectLockAuthorizationBatch
+		if i == 0 && allViews {
+			batch = &selectLockAuthorizationBatch{items: items}
+		}
+		ok, delta, err := determineUserHasPrivilegeSetWithSelectLockBatch(ctx, ses, priv, batch)
+		stats.Add(&delta)
+		if err != nil || !ok {
+			return ok, stats, err
+		}
+		if batch != nil && batch.checked > 0 {
+			i += batch.checked - 1
+		}
+	}
+	return true, stats, nil
+}
+
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
 func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	// rewirte the privilege entries based on privilege tips
@@ -8035,6 +8289,7 @@ func verifyViewPrivilegeForRole(
 	dbName string,
 	viewName string,
 	enableCache bool,
+	selectLock bool,
 ) (bool, error) {
 	// Admin roles bypass view privilege checks to keep grants output stable.
 	accountID, err := defines.GetAccountId(ctx)
@@ -8044,7 +8299,7 @@ func verifyViewPrivilegeForRole(
 	if (accountID == sysAccountID && roleId == moAdminRoleID) || (accountID != sysAccountID && roleId == accountAdminRoleID) {
 		return true, nil
 	}
-	privTypes := []PrivilegeType{privType, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
+	privTypes := privilegeAlternatives(privType, selectLock)
 	seen := make(map[PrivilegeType]struct{}, len(privTypes))
 	for _, p := range privTypes {
 		if _, ok := seen[p]; ok {
@@ -8184,6 +8439,8 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									mi.privilegeTyp,
 									viewPath,
 									usePrivilegeCache,
+									mi.selectLock,
+									nil,
 								)
 								if err != nil {
 									return false, 0, err
@@ -8205,7 +8462,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 									if !useCache {
 										cacheToUse = nil
 									}
-									for i, typ := range [3]PrivilegeType{mi.privilegeTyp, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
+									for i, typ := range privilegeAlternatives(mi.privilegeTyp, mi.selectLock) {
 										if i > 0 && tempEntry.objType != objectTypeTable {
 											break
 										}
@@ -8266,7 +8523,11 @@ func orderedRoleIDsForPrivilegeCheck(ses *Session, roleIds *btree.Set[int64], pr
 
 // determineUserHasPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
-func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (ret bool, stats statistic.StatsArray, err error) {
+func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (bool, statistic.StatsArray, error) {
+	return determineUserHasPrivilegeSetWithSelectLockBatch(ctx, ses, priv, nil)
+}
+
+func determineUserHasPrivilegeSetWithSelectLockBatch(ctx context.Context, ses *Session, priv *privilege, batch *selectLockAuthorizationBatch) (ret bool, stats statistic.StatsArray, err error) {
 	var erArray []ExecResult
 	var yes bool
 	var roleB int64
@@ -8330,7 +8591,16 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	if err != nil {
 		return false, stats, err
 	}
+	// Batch reuse requires an admitted statement snapshot and an already proved
+	// membership generation. Cold/disabled/unpinned cases keep independent reads.
+	epoch := authorizationEpochFor(ctx, ses)
+	batchGeneration := cache.getActiveRoleGrantGeneration()
+	batchEligible := batch != nil && enableCache && cache != nil &&
+		cache.catalogVersion != (disttae.PrivilegeCacheVersion{}) && roleGrantCached &&
+		(!roleGrantNeedsCheck || roleGrantValid) && epoch != nil &&
+		backgroundExecOption.authorizationSnapshot != nil
 	_, _, _ = fault.TriggerFaultInDomainWithContext(ctx, fault.DomainFrontend, "authorization_before_grant_read")
+	batchEligible = batchEligible && cache.getActiveRoleGrantGeneration() == batchGeneration
 	bh := ses.GetBackgroundExec(ctx, backgroundExecOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
@@ -8360,17 +8630,18 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	roleSetOfKthIteration.Insert((int64)(tenant.GetDefaultRoleID()))
 
 	err = bh.Exec(ctx, "begin;")
-	txnFinished := false
 	publishRoleGrant := false
 	defer func() {
-		if txnFinished {
-			return
-		}
 		err = finishTxn(ctx, bh, err)
-		if err == nil && publishRoleGrant && enableCache && cache != nil {
-			cache.setActiveRoleGrantForGeneration(
-				tenant.GetUserID(), tenant.GetDefaultRoleID(), roleGrantValid,
-				roleGrantCacheGeneration)
+		if err == nil && publishRoleGrant {
+			if enableCache && cache != nil {
+				cache.setActiveRoleGrantForGeneration(
+					tenant.GetUserID(), tenant.GetDefaultRoleID(), roleGrantValid,
+					roleGrantCacheGeneration)
+			}
+			if !roleGrantValid {
+				err = activeRoleGrantAuthorizationError(ctx)
+			}
 		}
 	}()
 	if err != nil {
@@ -8387,20 +8658,9 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		}
 		publishRoleGrant = true
 		if !roleGrantValid {
-			// A negative membership result is a successful catalog transaction,
-			// even though it denies the statement. Commit that read before caching
-			// it, then return the authorization error to the caller.
-			err = finishTxn(ctx, bh, nil)
-			txnFinished = true
-			if err != nil {
-				return false, stats, err
-			}
-			if enableCache && cache != nil {
-				cache.setActiveRoleGrantForGeneration(
-					tenant.GetUserID(), tenant.GetDefaultRoleID(), false,
-					roleGrantCacheGeneration)
-			}
-			return false, stats, activeRoleGrantAuthorizationError(ctx)
+			// Logical denial still commits the catalog read. The deferred owner
+			// publishes membership after commit, then returns the typed denial.
+			return false, stats, nil
 		}
 
 		// This is the first authorization in the cache generation. Reuse any
@@ -8422,6 +8682,57 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	err = loadAllSecondaryRoles(ctx, bh, tenant, roleSetOfKthIteration)
 	if err != nil {
 		return false, stats, err
+	}
+
+	// A locking read through views can combine grants from active/inherited
+	// roles at each INVOKER step. Keep that set intact until a DEFINER replaces
+	// its namespace; never put partial cross-principal results in the session cache.
+	if len(priv.entries) == 1 && priv.entries[0].compound != nil && len(priv.entries[0].compound.items) == 1 {
+		item := priv.entries[0].compound.items[0]
+		if item.selectLock && len(item.viewPath) > 0 {
+			if err = expandRoleSetWithInheritedRoles(ctx, bh, roleSetOfKthIteration); err != nil {
+				return false, stats, err
+			}
+			if batchEligible && cache.getActiveRoleGrantGeneration() == batchGeneration {
+				if _, _, err = statementCatalogVersion(ctx, ses, sessionCatalogEngine(ses)); err != nil {
+					return false, stats, err
+				}
+				beforeNext := func() (bool, error) {
+					if err := ses.refreshPrivilegeCache(ctx); err != nil {
+						return false, err
+					}
+					enabled, boundaryErr := privilegeCacheIsEnabled(ctx, ses)
+					if boundaryErr != nil {
+						return false, boundaryErr
+					}
+					opts, boundaryErr := authorizationReadOption(ctx, ses, &BackgroundExecOption{})
+					if boundaryErr != nil {
+						return false, boundaryErr
+					}
+					eligible := enabled && ses.GetPrivilegeCache() == cache &&
+						authorizationEpochFor(ctx, ses) == epoch &&
+						opts.authorizationSnapshot == backgroundExecOption.authorizationSnapshot &&
+						cache.catalogVersion != (disttae.PrivilegeCacheVersion{}) &&
+						cache.getActiveRoleGrantGeneration() == batchGeneration
+					if roleGrantNeedsCheck {
+						valid, cached := cache.getActiveRoleGrant(tenant.GetUserID(), tenant.GetDefaultRoleID())
+						eligible = eligible && valid && cached
+					}
+					if !eligible {
+						return false, nil
+					}
+					_, _, _ = fault.TriggerFaultInDomainWithContext(ctx, fault.DomainFrontend, "authorization_before_grant_read")
+					if _, _, err := statementCatalogVersion(ctx, ses, sessionCatalogEngine(ses)); err != nil {
+						return false, err
+					}
+					return cache.getActiveRoleGrantGeneration() == batchGeneration, ctx.Err()
+				}
+				ret, err = batch.check(ctx, bh, ses, roleSetOfKthIteration, beforeNext)
+				return ret, stats, err
+			}
+			ret, err = determineSelectLockViewPrivilege(ctx, bh, ses, roleSetOfKthIteration, item)
+			return ret, stats, err
+		}
 	}
 
 	// init RVisited = Rk
@@ -9384,6 +9695,20 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 				})
 			}
 		}
+		// SHOW INDEX IGNORED and STATUS need SELECT on the named table, which their plans may not
+		// read: the table may have no ignored-rows table, and a WHERE subquery reads other tables.
+		if name := showIndexTableName(stmt); name != nil {
+			if dbName, tableName, ok := getShowIndexTableName(name, ses); ok {
+				arr = append(arr, privilegeTips{
+					typ:                   PrivilegeTypeSelect,
+					objType:               objectTypeTable,
+					databaseName:          dbName,
+					tableName:             tableName,
+					isClusterTable:        isClusterTable(dbName, tableName),
+					clusterTableOperation: clusterTableSelect,
+				})
+			}
+		}
 		if len(arr) == 0 {
 			return true, stats, nil
 		}
@@ -9396,8 +9721,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return false, stats, err
 		}
 		stats.Add(&delta)
-
-		return ok, stats, nil
+		if !ok {
+			return false, stats, nil
+		}
+		ok, delta, err = authenticateSelectLockReferences(ctx, ses, p.GetQuery())
+		stats.Add(&delta)
+		return ok, stats, err
 	}
 	return true, stats, nil
 }
@@ -9419,6 +9748,32 @@ func getInsertTargetTableName(stmt *tree.Insert, ses *Session) (string, string, 
 		dbName = ses.GetDatabaseName()
 	}
 	tableName := string(name.ObjectName)
+	if dbName == "" || tableName == "" {
+		return "", "", false
+	}
+	return dbName, tableName, true
+}
+
+// showIndexTableName returns the table named by SHOW INDEX IGNORED or STATUS, or nil.
+func showIndexTableName(stmt tree.Statement) *tree.UnresolvedObjectName {
+	switch st := stmt.(type) {
+	case *tree.ShowIndexIgnored:
+		return st.TableName
+	case *tree.ShowIndexStatus:
+		return st.TableName
+	}
+	return nil
+}
+
+func getShowIndexTableName(name *tree.UnresolvedObjectName, ses *Session) (string, string, bool) {
+	if name == nil {
+		return "", "", false
+	}
+	dbName := name.GetDBName()
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := name.GetTableName()
 	if dbName == "" || tableName == "" {
 		return "", "", false
 	}
@@ -9626,6 +9981,11 @@ func authenticateCreateTableAsSelectSourcePrivilege(
 	convertPrivilegeTipsToPrivilege(sourcePriv, arr)
 
 	ok, delta, err := determineUserHasPrivilegeSet(ctx, ses, sourcePriv)
+	stats.Add(&delta)
+	if err != nil || !ok {
+		return ok, stats, err
+	}
+	ok, delta, err = authenticateSelectLockReferences(ctx, ses, sourcePlan.GetQuery())
 	stats.Add(&delta)
 	return ok, stats, err
 }
@@ -10211,10 +10571,13 @@ func expandRoleSetWithInheritedRoles(ctx context.Context, bh BackgroundExec, rol
 	for roleSetOfKthIteration.Len() != 0 {
 		roleSetOfKPlusOneThIteration.Clear()
 		for _, roleID := range roleSetOfKthIteration.Keys() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			sqlForInheritedRoleIdOfRoleId := getSqlForInheritedRoleIdOfRoleId(roleID)
 			bh.ClearExecResultSet()
 			if err := bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId); err != nil {
-				return moerr.NewInternalErrorf(ctx, "get inherited role id of the role id. error:%v", err)
+				return err
 			}
 
 			erArray, err := getResultSet(ctx, bh)
@@ -10584,6 +10947,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
 			yes, err := checkSQLTaskPrivilege()
 			return yes, stats, err
+		case *tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
+			return tenant.IsAdminRole(), stats, nil
 		case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog,
 			*tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
 			yes, err := checkIcebergCatalogPrivilege()
@@ -10839,11 +11204,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		protocolVersion, protocolErr := protocolVersionForTenantInitializationWithContext(ctx, ses.GetService(), ses.GetProc())
-		if protocolErr != nil {
-			return protocolErr
-		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenantWithProtocol(newTenantCtx, bh, protocolVersion)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -11229,24 +11590,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(
-	ctx context.Context,
-	bh BackgroundExec,
-	service string,
-	proc *process.Process,
-) error {
-	protocolVersion, err := protocolVersionForTenantInitializationWithContext(ctx, service, proc)
-	if err != nil {
-		return err
-	}
-	return createTablesInInformationSchemaOfGeneralTenantWithProtocol(ctx, bh, protocolVersion)
-}
-
-func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
-	ctx context.Context,
-	bh BackgroundExec,
-	protocolVersion int64,
-) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11256,17 +11600,13 @@ func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
 	// with new tenant
 	// TODO: when we have the auto_increment column, we need new strategy.
 
-	// COLUMNS keeps its independent protocol contract even when VIEWS falls back.
-	if protocolVersion >= defines.MORPCVersion100 {
-		requiredProtocol := defines.MORPCVersion100
-		if protocolVersion >= defines.MORPCVersion109 {
-			requiredProtocol = defines.MORPCVersion109
-		}
-		if err := requireCommonViewColumnsProtocol(ctx, bh, requiredProtocol); err != nil {
-			return err
-		}
+	// The account row is committed at this binary's catalog version. Require
+	// the complete current definition set instead of publishing older views
+	// under that version when capability discovery is unavailable.
+	if err := requireCommonInformationSchemaProtocol(ctx, bh, defines.MORPCVersion126); err != nil {
+		return err
 	}
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion)
+	informationSchemaTables := sysview.InitInformationSchemaSysTables
 	var err error
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
@@ -11285,83 +11625,7 @@ func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
 	return err
 }
 
-func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
-	return protocolVersionForTenantInitializationWithContext(context.Background(), service, proc)
-}
-
-func protocolVersionForTenantInitializationWithContext(
-	ctx context.Context,
-	service string,
-	proc *process.Process,
-) (int64, error) {
-	// Account creation must remain available while the cluster is rolling out
-	// the parser-derived VIEWS functions. The v109 fallback preserves the
-	// native COLUMNS contract; an admitted v118 predecessor also retains TABLES.
-	// Bootstrap maintenance revisits the final-version account row once the
-	// VIEWS capability becomes available.
-	legacyVersion := defines.MORPCMinVersion
-	predecessorViewsVersion := defines.MORPCVersion109
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return legacyVersion, nil
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return legacyVersion, nil
-	}
-	version, ok := value.(int64)
-	if !ok {
-		return legacyVersion, nil
-	}
-	if version < defines.MORPCVersion126 {
-		// Preserve every pre-existing protocol-specific information_schema
-		// contract. Only the new VIEWS function needs the predecessor
-		// fallback; promoting an older known protocol would also install newer
-		// TABLES/COLUMNS and role-closure definitions.
-		return version, nil
-	}
-	// Admission for TABLES v118 and VIEWS v126 is independent. Keep TABLES
-	// when both its local authoring fence and the current peers support it.
-	floorValue, hasFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-	floor, validFloor := floorValue.(int64)
-	fallbackProtocol := func() (int64, error) {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		if hasFloor && (!validFloor || floor < defines.MORPCVersion118) {
-			return predecessorViewsVersion, nil
-		}
-		supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion118)
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
-		}
-		if err == nil && supported {
-			return defines.MORPCVersion118, nil
-		}
-		return predecessorViewsVersion, nil
-	}
-	// A missing key retains standalone runtimes' existing capability behavior.
-	if hasFloor && (!validFloor || floor < defines.MORPCVersion126) {
-		return fallbackProtocol()
-	}
-	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion126)
-	if err != nil {
-		// Capability discovery is deliberately best-effort for account
-		// creation. Do not turn a temporary inventory/RPC failure into a
-		// failed CREATE ACCOUNT, but preserve cancellation of the owning
-		// process so shutdown and request cancellation still propagate.
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
-		}
-		return fallbackProtocol()
-	}
-	if !supported {
-		return fallbackProtocol()
-	}
-	return version, nil
-}
-
-func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
+func requireCommonInformationSchemaProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
 	bh.ClearExecResultSet()
 	// This fixed cluster probe is system-authored; subsequent tenant DDL keeps its original identity.
 	probeCtx := defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)

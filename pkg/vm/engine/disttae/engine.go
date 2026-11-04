@@ -111,14 +111,9 @@ func New(
 	if err != nil {
 		panic(err)
 	}
-	services, err := clusterservice.GetAllTNServicesWithContext(ctx, cluster)
+	_, err = clusterservice.GetAllTNServicesWithContext(ctx, cluster)
 	if err != nil {
 		panic(err)
-	}
-
-	var tnID string
-	if len(services) > 0 {
-		tnID = services[0].ServiceID
 	}
 
 	ls, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.LockService)
@@ -134,7 +129,6 @@ func New(
 		hakeeper: hakeeper,
 		cli:      cli,
 		idGen:    hakeeper,
-		tnID:     tnID,
 		packerPool: fileservice.NewPool(
 			128,
 			func() *types.Packer {
@@ -845,7 +839,12 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 
-	if bat = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID); bat.RowCount() > 0 {
+	bat, err = txn.deleteBatch(bat, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID)
+	if err != nil {
+		bat.Clean(txn.proc.Mp())
+		return err
+	}
+	if bat.RowCount() > 0 {
 		note := noteForDrop(uint64(accountId), name)
 		if _, err := txn.WriteBatch(DELETE, note, catalog.System_Account, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 			catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0]); err != nil {
@@ -1394,7 +1393,6 @@ func (e *Engine) cleanMemoryTableWithTable(dbId, tblId uint64) {
 	// deadlock: cleanMemoryTableWithTable holds Engine.mu→GlobalStats.mu,
 	// while GlobalStats.Get holds GlobalStats.mu→Engine.mu (via GetOrCreateLatestPart).
 	e.globalStats.RemoveTid(tblId)
-	logutil.Debugf("clean memory table of tbl[dbId: %d, tblId: %d]", dbId, tblId)
 }
 
 func (e *Engine) PushClient() *PushClient {

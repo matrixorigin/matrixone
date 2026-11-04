@@ -367,4 +367,41 @@ insert into t1 values(1, 1, 1);
 insert into t1 values(2, 2, 2);
 insert into t1 values(3, 3, 3);
 insert into t1 values(4, 4, 4);
+
+-- Bounded cleanup preserves nullable/duplicate index entries and transaction state.
+create table bounded_delete (
+    id varchar(32) not null, expires_at datetime(6) not null,
+    token_hash varchar(32) not null, session_id varchar(32),
+    user_id varchar(32) not null, browser_hash varchar(32),
+    primary key(expires_at, id), unique key uq_id(id),
+    unique key uq_hash(token_hash), key idx_session(session_id),
+    unique key uq_browser(browser_hash), key idx_user(user_id)
+);
+insert into bounded_delete
+select concat('i', result), '2020-01-01', concat('h', result),
+       case when result % 7 = 0 then null else concat('s', result) end,
+       concat('u', result % 3), null from generate_series(0, 31) g;
+begin;
+insert into bounded_delete values
+('new1', '2020-01-01', 'newh1', null, 'u1', null),
+('new2', '2020-01-01', 'newh2', 'news2', 'u2', null);
+delete from bounded_delete where expires_at < now(6) and user_id = 'u1' limit 2;
+rollback;
+select count(*) as rows_after_rollback from bounded_delete;
+begin;
+prepare bounded_cleanup from 'delete from bounded_delete where expires_at < now(6) limit 1';
+execute bounded_cleanup;
+execute bounded_cleanup;
+deallocate prepare bounded_cleanup;
+select count(*) as rows_in_transaction from bounded_delete;
+rollback;
+select count(*) as rows_after_reuse_rollback from bounded_delete;
+begin;
+delete from bounded_delete where expires_at < now(6) and user_id = 'u1' limit 1;
+commit;
+select count(*) as rows_after_commit from bounded_delete;
+select count(id) as indexed from bounded_delete force index(idx_user) where user_id = 'u1';
+select count(id) as scanned from bounded_delete ignore index(idx_user) where user_id = 'u1';
+select count(id) as unique_indexed from bounded_delete force index(uq_id) where id >= 'i';
+select count(*) as null_browser_keys from bounded_delete where browser_hash is null;
 drop database if exists db1;

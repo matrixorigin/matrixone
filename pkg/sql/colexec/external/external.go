@@ -272,7 +272,8 @@ func (external *External) Prepare(proc *process.Process) error {
 		for i, attr := range param.Attrs {
 			colIndex := int(attr.ColIndex)
 			colType := &param.Cols[colIndex].Typ
-			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)))
+			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)) ||
+				loadAttributedDecimalTextInput(param, colType))
 			if external.OutputAllocation != nil {
 				vec, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, external.OutputAllocation)
 				if err != nil {
@@ -456,129 +457,19 @@ func (external *External) finishCurrentFile(param *ExternalParam) {
 }
 
 func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
-	if node == nil || node.TableDef == nil || node.ExternScan == nil || col == nil {
-		return false
-	}
-
-	colPos := int(col.ColPos)
-	if colPos < 0 || colPos >= len(node.TableDef.Cols) || colPos != len(node.TableDef.Cols)-1 {
-		return false
-	}
-	// Two hidden trailing columns exist: __mo_filepath on ordinary external
-	// tables and __mo_query on ESQL/SQL foreign tables. Either one is the
-	// "file-level" column of its scan (the query text plays the file-name
-	// role for foreign tables).
-	switch node.TableDef.Cols[colPos].Name {
-	case catalog.ExternalFilePath:
-		return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
-	case catalog.ExternalQuery:
-		return node.TableDef.Cols[colPos].ColId == catalog.ExternalQueryColId
-	}
-	return false
+	return colexec.FileLevelExecution.IsFileLevelColumn(node, col)
 }
 
 func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
-	if ref == nil {
-		return false
-	}
-	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
-	if !exists {
-		return false
-	}
-	// last_kafka_message_id is realTimeRelated (never constant-folded into a
-	// cached plan) but is deterministic WITHIN one compile on the session CN —
-	// it reads session state. Allowing it here is what makes server-side
-	// gap-free chaining work:
-	//   where __mo_read_start_id = last_kafka_message_id()
-	functionID, _ := function.DecodeOverloadID(ref.Obj)
-	if functionID == function.LAST_KAFKA_MESSAGE_ID {
-		return true
-	}
-	if overload.IsRealTimeRelated() {
-		return false
-	}
-	if !overload.CannotFold() {
-		return true
-	}
-
-	// mo_log_date is marked volatile to prevent ordinary constant folding, but
-	// it is a deterministic transform of __mo_filepath and is the established
-	// file-pruning primitive. Other volatile functions (for example rand) are
-	// row-dependent and must remain at row level.
-	return functionID == function.MO_LOG_DATE
+	return colexec.FileLevelExecution.IsSafeFileLevelFunction(ref)
 }
 
-func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (hasFileLevelColumn, hasUnsupportedColumn bool) {
-	if expr == nil {
-		return false, false
-	}
-
-	switch typedExpr := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if typedExpr.Col == nil {
-			return false, true
-		}
-		if isFileLevelColumn(node, typedExpr.Col) {
-			return true, false
-		}
-		return false, true
-	case *plan.Expr_F:
-		if typedExpr.F == nil || typedExpr.F.Func == nil {
-			return false, true
-		}
-		if !isSafeFileLevelFunction(typedExpr.F.Func) {
-			return false, true
-		}
-		for _, arg := range typedExpr.F.Args {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, arg)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_List:
-		if typedExpr.List == nil {
-			return false, false
-		}
-		for _, item := range typedExpr.List.List {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, item)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T,
-		*plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
-		return false, false
-	default:
-		return false, true
-	}
+func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (bool, bool) {
+	return colexec.FileLevelExecution.ClassifyFileLevelColumns(node, expr)
 }
 
 func isFileLevelFilter(node *plan.Node, expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-
-	functionExpr, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || functionExpr.F == nil || functionExpr.F.Func == nil {
-		return false
-	}
-	if !isSafeFileLevelFunction(functionExpr.F.Func) {
-		return false
-	}
-	if functionExpr.F.Func.ObjName == "or" {
-		if len(functionExpr.F.Args) == 0 {
-			return false
-		}
-		for _, arg := range functionExpr.F.Args {
-			if !isFileLevelFilter(node, arg) {
-				return false
-			}
-		}
-		return true
-	}
-
-	hasFileLevelColumn, hasUnsupportedColumn := classifyFileLevelColumns(node, expr)
-	return hasFileLevelColumn && !hasUnsupportedColumn
+	return colexec.FileLevelExecution.IsFileLevelFilter(node, expr)
 }
 
 func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) (bat *batch.Batch, err error) {
@@ -2116,6 +2007,27 @@ func loadTimeTextInput(param *ExternalParam, id types.T) bool {
 		param.Extern.Format != tree.PARQUET && param.Extern.Format != tree.ARROW
 }
 
+// isAttributedDecimalStagingTarget reports a decimal target carrying the
+// unsigned attribute mask — the type contract the text-staging decisions
+// read at allocation, field decoding and mapper rendering.
+func isAttributedDecimalStagingTarget(typ *plan.Type) bool {
+	return typ != nil && types.T(typ.Id).IsDecimal() &&
+		typ.NumericAttributes&types.NumericAttributeUnsigned != 0
+}
+
+// loadAttributedDecimalTextInput is the attributed DECIMAL text staging
+// predicate: the shared admission boundary classifies raw field text
+// (CSV/JSONLINE) or mapper-rendered text (Parquet/Arrow) for LOAD targets
+// carrying the unsigned attribute. Unlike TIME's textual input, this covers
+// every physical format.
+func loadAttributedDecimalTextInput(param *ExternalParam, typ *plan.Type) bool {
+	if param == nil || param.Extern == nil ||
+		param.Extern.ExternType != int32(plan.ExternType_LOAD) {
+		return false
+	}
+	return isAttributedDecimalStagingTarget(typ)
+}
+
 // parseCSVInt preserves the integer fast path and LOAD conversion policy. Only
 // unquoted external CSV decimal text uses exact assignment rounding.
 // An initial integer overflow can precede an exponent that scales into range;
@@ -2213,7 +2125,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	if loadDataNonStrictAdjustments {
 		switch {
 		case isLoadNumericAdjustedValueType(id) && !isSet:
-			if !field.HasStringQuote {
+			// Attributed DECIMAL targets stage raw trimmed field bytes
+			// unmodified (raw-field preservation boundary): the source sign and
+			// every truncation/invalid-input diagnostic belong to the shared
+			// admission boundary. Unattributed types keep today's rewrite.
+			if !field.HasStringQuote && !isAttributedDecimalStagingTarget(&col.Typ) {
 				field.Val = loadDataNonStrictNumericPrefix(field.Val)
 			}
 		case id == types.T_date || id == types.T_datetime || id == types.T_timestamp:
@@ -2232,7 +2148,8 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
-	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) {
+	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) ||
+		loadAttributedDecimalTextInput(param, &col.Typ) {
 		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
 		if err != nil {
 			return err

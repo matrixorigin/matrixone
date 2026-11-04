@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -510,4 +511,54 @@ func TestRewriteTombstoneRowids_NoMatchingMapping(t *testing.T) {
 	rowids := vector.MustFixedColWithTypeCheck[types.Rowid](rowidVec.GetDownstreamVector())
 	assert.Equal(t, upstreamObjID.String(), rowids[0].BorrowObjectID().String())
 	bat.Close()
+}
+
+func TestReadObjectMetadataBytesOwnershipAndErrors(t *testing.T) {
+	ctx := context.Background()
+	t.Run("uncompressed aliases input", func(t *testing.T) {
+		content := []byte("prefixmetadata")
+		var stats objectio.ObjectStats
+		require.NoError(t, objectio.SetObjectStatsExtent(&stats, objectio.NewExtent(compress.None, 6, 8, 8)))
+		got, err := readObjectMetadataBytes(ctx, content, &stats)
+		require.NoError(t, err)
+		require.Equal(t, []byte("metadata"), got)
+		got[0] = 'M'
+		require.Equal(t, byte('M'), content[6])
+	})
+	t.Run("compressed is copied before buffer release", func(t *testing.T) {
+		input := []byte(strings.Repeat("metadata contents ", 128))
+		encoded, err := compress.Compress(input, make([]byte, lz4.CompressBlockBound(len(input))), compress.Lz4)
+		require.NoError(t, err)
+		require.NotEmpty(t, encoded)
+		content := append([]byte("header"), encoded...)
+		var stats objectio.ObjectStats
+		require.NoError(t, objectio.SetObjectStatsExtent(&stats, objectio.NewExtent(compress.Lz4, 6, uint32(len(encoded)), uint32(len(input)))))
+		got, err := readObjectMetadataBytes(ctx, content, &stats)
+		require.NoError(t, err)
+		require.Equal(t, input, got)
+		other := []byte(strings.Repeat("other metadata ", 128))
+		otherEncoded, err := compress.Compress(other, make([]byte, lz4.CompressBlockBound(len(other))), compress.Lz4)
+		require.NoError(t, err)
+		var otherStats objectio.ObjectStats
+		require.NoError(t, objectio.SetObjectStatsExtent(&otherStats, objectio.NewExtent(compress.Lz4, 0, uint32(len(otherEncoded)), uint32(len(other)))))
+		_, err = readObjectMetadataBytes(ctx, otherEncoded, &otherStats)
+		require.NoError(t, err)
+		require.Equal(t, input, got)
+		for i := 6; i < len(content); i++ {
+			content[i] = 0
+		}
+		require.Equal(t, input, got)
+	})
+	t.Run("truncated extent", func(t *testing.T) {
+		var stats objectio.ObjectStats
+		require.NoError(t, objectio.SetObjectStatsExtent(&stats, objectio.NewExtent(compress.None, 2, 20, 20)))
+		_, err := readObjectMetadataBytes(ctx, []byte("short"), &stats)
+		require.ErrorContains(t, err, "object content too small for meta extent")
+	})
+	t.Run("corrupt compressed extent", func(t *testing.T) {
+		var stats objectio.ObjectStats
+		require.NoError(t, objectio.SetObjectStatsExtent(&stats, objectio.NewExtent(compress.Lz4, 0, 3, 128)))
+		_, err := readObjectMetadataBytes(ctx, []byte{0xff, 0xff, 0xff}, &stats)
+		require.ErrorContains(t, err, "failed to decompress meta data")
+	})
 }

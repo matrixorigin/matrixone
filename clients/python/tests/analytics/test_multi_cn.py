@@ -24,7 +24,7 @@ def cn2():
         port=int(port),
         user='root',
         password='111',
-        database='mo_analytics_test',
+        database=os.environ.get('MO_DATABASE', 'mo_analytics_test'),
         query_timeout=10,
         sql_log_mode='off',
     )

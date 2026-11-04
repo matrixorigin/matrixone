@@ -382,6 +382,7 @@ func TestAdaptiveTopSpillSelectionAndDiscard(t *testing.T) {
 				limit++
 			}
 			f := newAdaptiveFixture(t, limit)
+			f.proc.Base.Lim.SpillSize = 64 << 20
 			f.proc.Reg.MergeReceivers[0].ResetForReuse(4098, 1)
 			budget, err := f.proc.GetExecutionResourceBudget()
 			require.NoError(t, err)

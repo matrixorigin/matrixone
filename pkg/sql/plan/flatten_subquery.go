@@ -1162,7 +1162,10 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		// Lifting any visible volatile result across the join can change both
 		// its evaluation count and DISTINCT cardinality.  Keep this shape
 		// fail-closed until it can be decorrelated without moving evaluation.
-		if containsVolatileFunction(ctx.projects[i]) ||
+		// CAST9 is a pure, execution-stable conversion even though SQL-mode
+		// sensitivity forbids folding. Only this nullable, match-guarded lift
+		// may use that proof; diagnostic/unstable inputs remain inadmissible.
+		if containsVolatileFunctionImpl(ctx.projects[i], true) ||
 			(hasCorrCol(ctx.projects[i]) && !builder.casePreservesType(ctx.projects[i])) {
 			return unsafe()
 		}
@@ -1539,7 +1542,7 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 	}
 	if !legacyProof {
 		for _, predicate := range predicates {
-			if !existentialPredicateIsTotal(predicate, storedTextIsBounded) {
+			if !builder.existentialPredicateIsTotal(predicate, storedTextIsBounded) {
 				return false
 			}
 		}
@@ -1567,7 +1570,7 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 					return false
 				}
 				origin := node.ProjectList[col.ColPos]
-				if !(legacyProof && isTruncationSafePredicateValue(origin) || existentialValueIsTotal(origin, storedTextIsBounded)) || !inspect(origin) {
+				if !(legacyProof && isTruncationSafePredicateValue(origin) || builder.existentialValueIsTotal(origin, storedTextIsBounded)) || !inspect(origin) {
 					return false
 				}
 			}
@@ -1599,6 +1602,11 @@ func (builder *QueryBuilder) existentialJoinPredicatesAreTotal(predicates []*pla
 }
 
 func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan.Expr, outerPred *plan.Expr, negate bool, ctx *BindContext) (nodeID int32, markExpr *plan.Expr, err error) {
+	if outerPred == nil {
+		if root, marker, rewritten, rewriteErr := builder.tryExistentialDisjunction(left, right, joinPreds, negate, ctx); rewritten || rewriteErr != nil {
+			return root, marker, rewriteErr
+		}
+	}
 	markTag := builder.genNewBindTag()
 	existential := outerPred == nil
 
@@ -1631,12 +1639,13 @@ func (builder *QueryBuilder) insertMarkJoin(left, right int32, joinPreds []*plan
 	markNotNullable := outerPred != nil && outerPred.Typ.NotNullable
 
 	nodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_JOIN,
-		Children:    []int32{left, right},
-		BindingTags: []int32{markTag},
-		JoinType:    plan.Node_MARK,
-		OnList:      joinPreds,
-		SpillMem:    builder.joinSpillMem,
+		NodeType:          plan.Node_JOIN,
+		Children:          []int32{left, right},
+		BindingTags:       []int32{markTag},
+		JoinType:          plan.Node_MARK,
+		MarkExistenceOnly: keepRawExistential,
+		OnList:            joinPreds,
+		SpillMem:          builder.joinSpillMem,
 	}, ctx)
 
 	markExpr = &plan.Expr{

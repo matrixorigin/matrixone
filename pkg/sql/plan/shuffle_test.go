@@ -310,6 +310,26 @@ func TestRangeShuffleSlice(t *testing.T) {
 	require.Equal(t, GetRangeShuffleIndexUnsignedSlice([]uint64{30, 50, 60, 90, 120}, 61), uint64(3))
 }
 
+func TestRangeShuffleSliceBoundaries(t *testing.T) {
+	signed := []int64{math.MinInt64, -1, -1, 0, math.MaxInt64}
+	for _, tc := range []struct {
+		value int64
+		want  uint64
+	}{
+		{math.MinInt64, 0}, {-1, 1}, {0, 3}, {math.MaxInt64, 4},
+	} {
+		require.Equal(t, tc.want, GetRangeShuffleIndexSignedSlice(signed, tc.value))
+	}
+	unsigned := []uint64{0, 2, 2, math.MaxUint64 - 1}
+	for _, tc := range []struct{ value, want uint64 }{
+		{0, 0}, {1, 1}, {2, 1}, {3, 3}, {math.MaxUint64, 4},
+	} {
+		require.Equal(t, tc.want, GetRangeShuffleIndexUnsignedSlice(unsigned, tc.value))
+	}
+	require.Panics(t, func() { GetRangeShuffleIndexSignedSlice(nil, 0) })
+	require.Panics(t, func() { GetRangeShuffleIndexUnsignedSlice(nil, 0) })
+}
+
 func TestShouldSkipObjByShuffle(t *testing.T) {
 	row := types.RandomRowid()
 	stats := objectio.NewObjectStatsWithObjectID(row.BorrowObjectID(), false, false, true)

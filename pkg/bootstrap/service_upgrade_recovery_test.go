@@ -557,6 +557,11 @@ func (e *recoveryTestExecutor) exec(sql string) (executor.Result, error) {
 		res.NewBatchWithRowCount(1)
 		require.NoError(e.t, executor.AppendFixedRows(res, 0, []int32{state}))
 		return res.GetResult(), nil
+	case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
+		// The re-keyed recheck admission probes the CDC catalog before a
+		// non-ready final row is accepted (design D11-1); an empty task
+		// catalog admits the retained route.
+		return executor.Result{}, nil
 	case strings.Contains(sql, "from mo_upgrade"):
 		if strings.Contains(sql, "'4.0.12'") {
 			return ownRecoveryResult(e.t, buildUpgradeVersionResult(11, versions.StateCreated, "4.0.11", "4.0.12", 1, 0, versions.No, versions.No, 0, 0)), nil
@@ -787,5 +792,35 @@ func TestV407RejectsInterruptedOffsetOnlyRouteBeforeMutation(t *testing.T) {
 		var terminal *terminalUpgradeError
 		require.ErrorAs(t, err, &terminal)
 		require.False(t, s.upgrade.finalVersionCompleted.Load())
+	})
+}
+
+// A completed current target neither replays migrations nor creates a route.
+func TestV407ReadySourceDoesNotCreateAnotherRoute(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		frozen := v4_0_7.Handler.Metadata()
+		var routes []string
+		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+				return newBootstrapStringResult("mo_catalog"), nil
+			case sql == versions.LatestVersionSQL:
+				return recoveryVersionResult(t, versions.Version{Version: frozen.Version, VersionOffset: frozen.VersionOffset, State: versions.StateReady}), nil
+			case strings.Contains(sql, "select version from mo_version"):
+				return newBootstrapStringResult(frozen.Version), nil
+			case strings.HasPrefix(sql, "insert into mo_upgrade"):
+				routes = append(routes, sql)
+				return executor.Result{}, nil
+			case strings.Contains(sql, "from mo_catalog.mo_cdc_task"):
+				return executor.Result{}, fmt.Errorf("a ready frozen identity is a post-4.0.7 source: %s", sql)
+			default:
+				return executor.Result{}, nil
+			}
+		}, &testTxnOperator{})
+		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec, func(s *service) { s.initUpgrade() })
+		t.Cleanup(s.stopper.Stop)
+		require.NoError(t, s.doCheckUpgrade(t.Context()))
+		require.Empty(t, routes, "a completed current catalog must not create another route")
+		require.True(t, s.upgrade.finalVersionCompleted.Load())
 	})
 }

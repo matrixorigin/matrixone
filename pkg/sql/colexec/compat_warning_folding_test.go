@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -52,6 +53,12 @@ func TestCompatWarningRuntimeFolding(t *testing.T) {
 		wantWarnings int
 		wantFold     bool
 	}{
+		{"date invalid warns per row", "date", []*plan.Expr{sval("bad")}, 3, false},
+		{"date valid folds", "date", []*plan.Expr{sval("2024-02-29")}, 0, true},
+		{"date format empty warns per row", "date_format", []*plan.Expr{sval(""), sval("%Y-%m-%d")}, 3, false},
+		{"date cast warns per row", "cast", []*plan.Expr{sval("bad"), target(types.T_date)}, 3, false},
+		{"datetime cast warns per row", "cast", []*plan.Expr{sval("bad"), target(types.T_datetime)}, 3, false},
+		{"time cast warns per row", "cast", []*plan.Expr{sval("bad"), target(types.T_time)}, 3, false},
 		{"ln invalid argument warns per row", "ln", []*plan.Expr{f64(0)}, 3, false},
 		{"ln valid argument folds", "ln", []*plan.Expr{f64(2)}, 0, true},
 		{"log unary invalid argument warns per row", "log", []*plan.Expr{f64(0)}, 3, false},
@@ -87,6 +94,158 @@ func TestCompatWarningRuntimeFolding(t *testing.T) {
 			require.Equal(t, 3, result.Length())
 			require.Equal(t, tc.wantWarnings, sink.warningCount)
 			require.Equal(t, tc.wantFold, executor.(*FunctionExpressionExecutor).folded.canFold)
+		})
+	}
+}
+
+func TestTemporalConstantFilterOwner(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	defer proc.Free()
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	input := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "bad"}}}}
+	expr := bindTestCast(t, proc, 0, input, types.T_time.ToType())
+	execs, err := NewOwnedConstantFilterExecutors(proc, []*plan.Expr{expr})
+	require.NoError(t, err)
+	defer execs[0].Free()
+	require.Equal(t, 0, sink.warningCount)
+	b := batch.New(nil)
+	b.SetRowCount(2)
+	_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, sink.warningCount)
+	_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, sink.warningCount)
+}
+
+func TestTemporalWarningsFollowSelectedRows(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	defer proc.Free()
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	input := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "bad"}}}}
+	expr := bindTestCast(t, proc, 0, input, types.T_time.ToType())
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	b := batch.New(nil)
+	b.SetRowCount(2)
+	_, err = executor.Eval(proc, []*batch.Batch{b}, []bool{false, false})
+	require.NoError(t, err)
+	require.Zero(t, sink.warningCount)
+	_, err = executor.Eval(proc, []*batch.Batch{b}, []bool{true, false})
+	require.NoError(t, err)
+	require.Equal(t, 1, sink.warningCount)
+	_, err = executor.Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, sink.warningCount)
+}
+
+func TestTemporalMixedRowsWithSelection(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	defer proc.Free()
+	proc.SetStmtProfile(&process.StmtProfile{})
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	col := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	expr := bindTestCast(t, proc, 0, col, types.T_time.ToType())
+	executor, err := NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	b := batch.NewWithSize(1)
+	defer b.Clean(proc.Mp())
+	b.Vecs[0] = testutil.MakeVarcharVector([]string{"bad", "12:34:56", "", "bad"}, []uint64{2}, proc.Mp())
+	b.SetRowCount(4)
+	result, err := executor.Eval(proc, []*batch.Batch{b}, []bool{true, true, true, false})
+	require.NoError(t, err)
+	require.True(t, result.GetNulls().Contains(0))
+	require.False(t, result.GetNulls().Contains(1))
+	require.True(t, result.GetNulls().Contains(2))
+	want, err := types.ParseTime("12:34:56", 0)
+	require.NoError(t, err)
+	require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Time](result)[1])
+	require.Equal(t, 1, sink.warningCount)
+	_, err = executor.Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, sink.warningCount)
+}
+
+func TestTemporalOwnedFilterRespectsRowGuard(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	defer proc.Free()
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	source := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "bad"}}}}
+	bad := bindTestCast(t, proc, 0, source, types.T_time.ToType())
+	condition := &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	null := &plan.Expr{Typ: types.T_time.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	expr := bindTestFunction(t, proc, "if", condition, bad, null)
+	execs, err := NewOwnedConstantFilterExecutors(proc, []*plan.Expr{expr})
+	require.NoError(t, err)
+	defer execs[0].Free()
+	b := batch.NewWithSize(1)
+	defer b.Clean(proc.Mp())
+	b.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixedList(b.Vecs[0], []bool{true, false}, nil, proc.Mp()))
+	b.SetRowCount(2)
+	_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, sink.warningCount)
+}
+
+func TestTemporalDiagnosticScopeAcrossSiblings(t *testing.T) {
+	for _, guardedFirst := range []bool{true, false} {
+		name := "guarded-first"
+		if !guardedFirst {
+			name = "guarded-last"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			defer proc.Free()
+			proc.SetBaseProcessRunningStatus(true)
+			sink := &preparedCastWarningSession{}
+			proc.WarningSink = sink
+			str := &plan.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "bad"}}}}
+			bad := bindTestFunction(t, proc, "date", str)
+			flag := &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			null := &plan.Expr{Typ: types.T_date.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+			guarded := bindTestFunction(t, proc, "if", flag, bad, null)
+			left, right := guarded, bad
+			if !guardedFirst {
+				left, right = right, left
+			}
+			root := bindTestFunction(t, proc, "=", left, right)
+			execs, err := NewOwnedConstantFilterExecutors(proc, []*plan.Expr{root})
+			require.NoError(t, err)
+			defer execs[0].Free()
+			b := batch.NewWithSize(1)
+			defer b.Clean(proc.Mp())
+			b.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+			require.NoError(t, vector.AppendFixedList(b.Vecs[0], []bool{true, false, true}, nil, proc.Mp()))
+			b.SetRowCount(3)
+			for _, want := range []int{3, 5} {
+				result, err := execs[0].Eval(proc, []*batch.Batch{b}, nil)
+				require.NoError(t, err)
+				require.Equal(t, 3, result.Length())
+				for row := uint64(0); row < 3; row++ {
+					require.True(t, result.IsNull(row))
+				}
+				require.Equal(t, want, sink.warningCount)
+			}
+			execs[0].ResetForNextQuery()
+			_, err = execs[0].Eval(proc, []*batch.Batch{b}, nil)
+			require.NoError(t, err)
+			require.Equal(t, 8, sink.warningCount)
 		})
 	}
 }

@@ -341,6 +341,27 @@ func TestCastJsonToArray(t *testing.T) {
 	}
 }
 
+func TestParseFirstArrayTypeParam(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		width int
+		valid bool
+	}{
+		{input: " 38,18", width: 38, valid: true},
+		{input: "-1,ignored", width: -1, valid: true},
+		{input: "0", width: 0, valid: true},
+		{input: ",10", width: -1},
+		{input: "invalid,10", width: -1},
+		{input: "999999999999999999999999999", width: -1},
+	} {
+		t.Run(tt.input, func(t *testing.T) {
+			width, valid := parseFirstArrayTypeParam(tt.input)
+			require.Equal(t, tt.width, width)
+			require.Equal(t, tt.valid, valid)
+		})
+	}
+}
+
 func TestCastJsonToArrayRejectsNonArray(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	encoded := makeJSONEncodedFromText(t, []string{`{"tag":"red"}`}, nil)

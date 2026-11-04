@@ -312,6 +312,15 @@ func (s *viewColumnsState) call(tf *TableFunction, proc *process.Process) (resul
 				err = vector.AppendFixed(v, notNull, false, proc.Mp())
 			case "att_is_auto_increment", "attr_has_generated", "att_is_hidden":
 				err = vector.AppendFixed(v, int8(0), false, proc.Mp())
+			case "att_is_unsigned":
+				// Mirror the mo_columns durable mask: 1/3 for attributed
+				// DECIMAL columns, 0 otherwise. Persisted view plans written
+				// before the attribute channel carry a zero mask.
+				var mask int8
+				if types.T(col.Typ.Id).IsDecimal() {
+					mask = int8(col.Typ.NumericAttributes & types.NumericAttributeMask)
+				}
+				err = vector.AppendFixed(v, mask, false, proc.Mp())
 			case "attname":
 				err = vector.AppendBytes(v, []byte(col.GetOriginCaseName()), false, proc.Mp())
 			case "atttyp":

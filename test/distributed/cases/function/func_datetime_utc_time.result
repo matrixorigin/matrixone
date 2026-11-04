@@ -34,9 +34,11 @@ SELECT UTC_TIME() IS NOT NULL AS not_null_check;
 ➤ not_null_check[-7,1,0]  𝄀
 1
 SELECT UTC_TIME() + INTERVAL 1 HOUR AS one_hour_later;
-invalid argument operator +, bad value [TIME INTERVAL]
+➤ one_hour_later[92,10,0]  𝄀
+04:34:34
 SELECT UTC_TIME() - INTERVAL 30 MINUTE AS thirty_minutes_ago;
-invalid argument operator -, bad value [TIME INTERVAL]
+➤ thirty_minutes_ago[92,10,0]  𝄀
+03:04:34
 SELECT UTC_TIME() AS time_format;
 ➤ time_format[92,64,0]  𝄀
 10:08:23

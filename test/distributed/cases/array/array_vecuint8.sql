@@ -1,7 +1,8 @@
 -- vecuint8 narrow vector column type (unsigned 8-bit, [0,255]).
 -- Mirrors array_vecnarrow for the int8 sibling; scope (per design): distance
--- functions + casts + storage only. Elementwise arithmetic is NOT supported and
--- must go through an explicit CAST to vecf32.
+-- functions, casts, storage, summation/l1_norm/l2_norm (DOUBLE) and subvector
+-- (keeps vecuint8). Elementwise arithmetic is NOT supported and must go through
+-- an explicit CAST to vecf32.
 
 drop database if exists vecu8db;
 create database vecu8db;
@@ -64,9 +65,13 @@ select distinct v from u8t order by v;
 select v + v from u8t;
 select v * v from u8t;
 select abs(v) from u8t;
-select summation(v) from u8t;
 -- arithmetic IS allowed after an explicit cast to vecf32
 select cast(v as vecf32(4)) + cast(v as vecf32(4)) from u8t order by a;
+
+-- summation / l1_norm / l2_norm return DOUBLE; subvector keeps vecuint8 (#31666)
+select a, summation(v), l1_norm(v), l2_norm(v) from u8t order by a;
+select a, subvector(v, 2), subvector(v, -1), subvector(v, 2, 2) from u8t order by a;
+select summation(cast("[255,255,0,1]" as vecuint8(4))), l2_norm(cast("[255,255,0,1]" as vecuint8(4)));
 
 -- vecuint8_from_base64: decode raw little-endian uint8 bytes. This is the builtin
 -- the ivf search re-rank emits for the (quantized) query vector. A constant

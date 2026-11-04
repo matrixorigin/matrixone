@@ -58,6 +58,7 @@ type tableDumpExpressionVisitor struct {
 	hasUnixTimestamp      bool
 	hasJSON               bool
 	hasIncompleteTemporal bool
+	hasTimeString         bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
@@ -73,6 +74,8 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 		switch numericAstFunctionName(fn) {
 		case "format", "makedate", "maketime":
 			v.hasSpecial = true
+		case "time":
+			v.hasTimeString = true
 		case "timestampadd":
 			v.hasTimestampAdd = true
 		case "unix_timestamp":
@@ -249,6 +252,7 @@ const (
 	tableDumpBindingDDLColumnScope           tableDumpBindingMode = 1 << 9
 	tableDumpBindingPreIntegerDecimal        tableDumpBindingMode = 1 << 15
 	tableDumpBindingPreDecimalPrecision      tableDumpBindingMode = 1 << 16
+	tableDumpBindingPreTimeNullability       tableDumpBindingMode = 1 << 17
 )
 
 const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 11
@@ -389,6 +393,37 @@ func tableDumpHasLegacyDecimalPrecision(expr *planpb.Expr) bool {
 	return false
 }
 
+// tableDumpHasTimeStringConversion reports a stored tree with a TIME()
+// string conversion whose published binding metadata changed with the
+// row-local NULL synthesis contract; only such trees need the intermediate
+// post-8dd candidate era.
+func tableDumpHasTimeStringConversion(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if f := expr.GetF(); f != nil {
+		if fid, oid := function.DecodeOverloadID(f.Func.Obj); fid == function.TIME && oid >= 5 && oid <= 8 {
+			return true
+		}
+		for _, arg := range f.Args {
+			if tableDumpHasTimeStringConversion(arg) {
+				return true
+			}
+		}
+	}
+	if entry := expr.GetList(); entry != nil {
+		for _, arg := range entry.List {
+			if tableDumpHasTimeStringConversion(arg) {
+				return true
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return tableDumpHasTimeStringConversion(lit.Src)
+	}
+	return false
+}
+
 // Float compatibility uses the same complete-era binder as DUMP/LOAD.
 func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool, legacyFloat ...bool) (*planpb.Expr, error) {
 	mode := tableDumpBindingCurrent
@@ -403,7 +438,7 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision | tableDumpBindingPreIncompleteTemporal | tableDumpBindingDDLColumnScope | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults | tableDumpBindingPreJSONFolding | tableDumpBindingPreTimeNullability)
 	if mode&tableDumpBindingPreDecimalPrecision != 0 {
 		bindCtx = function.WithLegacyDecimalIntermediatePrecision(bindCtx)
 	}
@@ -421,6 +456,9 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	}
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
+	}
+	if mode&tableDumpBindingPreTimeNullability != 0 {
+		bindCtx = function.WithLegacyTimeNullability(bindCtx)
 	}
 	if mode&tableDumpBindingPreUnixTimestampDatetime != 0 {
 		bindCtx = function.WithLegacyUnixTimestampDatetime(bindCtx)
@@ -953,6 +991,19 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			// Each migration era must reproduce the whole tree; no partial matching
 			// or semantic normalization is permitted for supplied expressions.
 			modes := []tableDumpBindingMode{tableDumpBindingCurrent}
+			sawTimeEra := false
+			appendTimeEraCandidates := func() {
+				modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreTimeNullability)
+				if visit.hasTimestampAdd {
+					modes = append(modes, tableDumpBindingLegacyTimestampAdd|tableDumpBindingPreTimeNullability)
+				}
+				if visit.hasIntegerDivision {
+					modes = append(modes, tableDumpBindingLegacyDecimalIntegerDiv|tableDumpBindingPreTimeNullability)
+				}
+				if visit.hasSpecial {
+					modes = append(modes, tableDumpBindingLegacySpecial|tableDumpBindingPreTimeNullability)
+				}
+			}
 			zeroTemporal := false
 			if item.kind == "default" {
 				_, zeroTemporal = zeroTemporalDefaultLiteral(unwrapParenExpr(ast), item.col.Typ)
@@ -977,6 +1028,16 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				if visit.hasSpecial {
 					modes = append(modes, tableDumpBindingLegacySpecial|tableDumpBindingPreTemporalNullability)
 				}
+				if visit.hasTimeString || tableDumpHasTimeStringConversion(item.expr) {
+					// Constant folding may replace the TIME() string
+					// conversion with a literal that preserves its
+					// nullability metadata, so applicability comes from the
+					// SQL origin or the stored tree. The intermediate
+					// post-8dd era kept TIME() NOT NULL while DATE
+					// conversions were already nullable.
+					appendTimeEraCandidates()
+					sawTimeEra = true
+				}
 			}
 			if visit.hasJSON {
 				// The JSON correction postdates the existing migration eras.
@@ -986,6 +1047,12 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}
 				modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreJSON)
+				if sawTimeEra {
+					// The post-JSON window that predates the TIME() change
+					// keeps current JSON semantics: the legacy rewrite above
+					// must not consume the only intermediate-era candidate.
+					appendTimeEraCandidates()
+				}
 			}
 			if visit.hasUnixTimestamp {
 				// Rebind complete pre-overload trees, including their implicit
