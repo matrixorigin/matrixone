@@ -27,10 +27,10 @@ import (
 	"os"
 	"runtime"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -50,10 +50,10 @@ func (gi *GpuCagra[B, Q]) SetBatchWindow(windowUs int64) error {
 	gi.batchWindowUs = windowUs
 	if gi.cCagra != nil {
 		var errmsg *C.char
-		C.gpu_cagra_set_batch_window(gi.cCagra, C.int64_t(windowUs), unsafe.Pointer(&errmsg))
+		C.gpu_cagra_set_batch_window(gi.cCagra, C.int64_t(windowUs), util.UnsafePointer(&errmsg))
 		if errmsg != nil {
 			errStr := C.GoString(errmsg)
-			C.free(unsafe.Pointer(errmsg))
+			C.free(util.UnsafePointer(errmsg))
 			return moerr.NewInternalErrorNoCtx(errStr)
 		}
 	}
@@ -68,10 +68,10 @@ func (gi *GpuCagra[B, Q]) SetDynbConservativeDispatch(enable bool) error {
 	gi.dynbConservativeDispatch = enable
 	if gi.cCagra != nil {
 		var errmsg *C.char
-		C.gpu_cagra_set_dynb_conservative_dispatch(gi.cCagra, C.bool(enable), unsafe.Pointer(&errmsg))
+		C.gpu_cagra_set_dynb_conservative_dispatch(gi.cCagra, C.bool(enable), util.UnsafePointer(&errmsg))
 		if errmsg != nil {
 			errStr := C.GoString(errmsg)
-			C.free(unsafe.Pointer(errmsg))
+			C.free(util.UnsafePointer(errmsg))
 			return moerr.NewInternalErrorNoCtx(errStr)
 		}
 	}
@@ -96,7 +96,7 @@ func NewGpuCagra[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 
 	var cIds *C.int64_t
 	if len(ids) > 0 {
-		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+		cIds = (*C.int64_t)(util.UnsafePointer(&ids[0]))
 	}
 
 	cBP := C.cagra_build_params_t{
@@ -107,7 +107,7 @@ func NewGpuCagra[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 	}
 
 	cCagra := C.gpu_cagra_new(
-		unsafe.Pointer(&dataset[0]),
+		util.UnsafePointer(&dataset[0]),
 		C.uint64_t(count),
 		C.uint32_t(dimension),
 		C.distance_type_t(metric),
@@ -119,7 +119,7 @@ func NewGpuCagra[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		cIds,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(dataset)
 	runtime.KeepAlive(cDevices)
@@ -127,7 +127,7 @@ func NewGpuCagra[B, Q VectorType](dataset []Q, count uint64, dimension uint32, m
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -154,7 +154,7 @@ func NewGpuCagraFromFile[B, Q VectorType](filename string, dimension uint32, met
 	qtype := GetQuantization[Q]()
 	var errmsg *C.char
 	cFilename := C.CString(filename)
-	defer C.free(unsafe.Pointer(cFilename))
+	defer C.free(util.UnsafePointer(cFilename))
 
 	cDevices := make([]C.int, len(devices))
 	for i, d := range devices {
@@ -179,13 +179,13 @@ func NewGpuCagraFromFile[B, Q VectorType](filename string, dimension uint32, met
 		C.distribution_mode_t(mode),
 		C.quantization_t(btype),
 		C.quantization_t(qtype),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -244,13 +244,13 @@ func NewGpuCagraFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if cCagra == nil {
@@ -258,21 +258,21 @@ func NewGpuCagraFromDataDirectory[B, Q VectorType](dir string, dimension uint32,
 	}
 
 	// Constructed for LOADING: deserialising ingests no raw rows.
-	C.gpu_cagra_start(cCagra, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_start(cCagra, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		C.gpu_cagra_destroy(cCagra, nil)
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
 	cDir := C.CString(dir)
-	defer C.free(unsafe.Pointer(cDir))
+	defer C.free(util.UnsafePointer(cDir))
 
-	C.gpu_cagra_load_dir(cCagra, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
+	C.gpu_cagra_load_dir(cCagra, cDir, C.distribution_mode_t(mode), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		C.gpu_cagra_destroy(cCagra, nil)
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
@@ -291,11 +291,11 @@ func (gi *GpuCagra[B, Q]) Destroy() error {
 		return nil
 	}
 	var errmsg *C.char
-	C.gpu_cagra_destroy(gi.cCagra, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_destroy(gi.cCagra, util.UnsafePointer(&errmsg))
 	gi.cCagra = nil
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -320,10 +320,10 @@ func (gi *GpuCagra[B, Q]) Start() error {
 	}
 
 	var errmsg *C.char
-	C.gpu_cagra_start(gi.cCagra, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_start(gi.cCagra, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -335,10 +335,10 @@ func (gi *GpuCagra[B, Q]) Build() error {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_cagra_build(gi.cCagra, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_build(gi.cCagra, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -379,13 +379,13 @@ func NewGpuCagraEmpty[B, Q VectorType](totalCount uint64, dimension uint32, metr
 		C.quantization_t(btype),
 		C.quantization_t(qtype),
 		nil,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(cDevices)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -413,21 +413,21 @@ func (gi *GpuCagra[B, Q]) AddChunk(chunk []Q, chunkCount uint64, ids []int64) er
 	var errmsg *C.char
 	var cIds *C.int64_t
 	if len(ids) > 0 {
-		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+		cIds = (*C.int64_t)(util.UnsafePointer(&ids[0]))
 	}
 	C.gpu_cagra_add_chunk(
 		gi.cCagra,
-		unsafe.Pointer(&chunk[0]),
+		util.UnsafePointer(&chunk[0]),
 		C.uint64_t(chunkCount),
 		cIds,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
 	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -447,21 +447,21 @@ func (gi *GpuCagra[B, Q]) AddChunkQuantize(chunk []B, chunkCount uint64, ids []i
 	var errmsg *C.char
 	var cIds *C.int64_t
 	if len(ids) > 0 {
-		cIds = (*C.int64_t)(unsafe.Pointer(&ids[0]))
+		cIds = (*C.int64_t)(util.UnsafePointer(&ids[0]))
 	}
 	C.gpu_cagra_add_chunk_quantize(
 		gi.cCagra,
-		unsafe.Pointer(&chunk[0]),
+		util.UnsafePointer(&chunk[0]),
 		C.uint64_t(chunkCount),
 		cIds,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(chunk)
 	runtime.KeepAlive(ids)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -480,15 +480,15 @@ func (gi *GpuCagra[B, Q]) TrainQuantizer(trainData []B, nSamples uint64) error {
 	var errmsg *C.char
 	C.gpu_cagra_train_quantizer(
 		gi.cCagra,
-		unsafe.Pointer(&trainData[0]),
+		util.UnsafePointer(&trainData[0]),
 		C.uint64_t(nSamples),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(trainData)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -505,12 +505,12 @@ func (gi *GpuCagra[B, Q]) SetQuantizer(min, max float32) error {
 		gi.cCagra,
 		C.float(min),
 		C.float(max),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -528,12 +528,12 @@ func (gi *GpuCagra[B, Q]) GetQuantizer() (float32, float32, error) {
 		gi.cCagra,
 		&cMin,
 		&cMax,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return float32(cMin), float32(cMax), nil
@@ -546,12 +546,12 @@ func (gi *GpuCagra[B, Q]) Save(filename string) error {
 	}
 	var errmsg *C.char
 	cFilename := C.CString(filename)
-	defer C.free(unsafe.Pointer(cFilename))
+	defer C.free(util.UnsafePointer(cFilename))
 
-	C.gpu_cagra_save(gi.cCagra, cFilename, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_save(gi.cCagra, cFilename, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -579,14 +579,14 @@ func (gi *GpuCagra[B, Q]) Pack(filename, spillDir string) (PackSizes, error) {
 
 	var errmsg *C.char
 	cDir := C.CString(tmpDir)
-	defer C.free(unsafe.Pointer(cDir))
+	defer C.free(util.UnsafePointer(cDir))
 
 	logutil.Infof("GpuCagra.Pack: -> gpu_cagra_save_dir tmpDir=%s target=%s", tmpDir, filename)
 	t0 := time.Now()
-	C.gpu_cagra_save_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
+	C.gpu_cagra_save_dir(gi.cCagra, cDir, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		logutil.Errorf("GpuCagra.Pack: gpu_cagra_save_dir returned error after %v: %s", time.Since(t0), errStr)
 		return PackSizes{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
@@ -644,12 +644,12 @@ func (gi *GpuCagra[B, Q]) Unpack(filename, spillDir string, mode DistributionMod
 
 	var errmsg *C.char
 	cDir := C.CString(tmpDir)
-	defer C.free(unsafe.Pointer(cDir))
+	defer C.free(util.UnsafePointer(cDir))
 
-	C.gpu_cagra_load_dir(gi.cCagra, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
+	C.gpu_cagra_load_dir(gi.cCagra, cDir, C.distribution_mode_t(mode), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -661,10 +661,10 @@ func (gi *GpuCagra[B, Q]) DeleteId(id int64) error {
 		return moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	var errmsg *C.char
-	C.gpu_cagra_delete_id(gi.cCagra, C.int64_t(id), unsafe.Pointer(&errmsg))
+	C.gpu_cagra_delete_id(gi.cCagra, C.int64_t(id), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -719,18 +719,18 @@ func (gi *GpuCagra[B, Q]) Search(queries []Q, numQueries uint64, dimension uint3
 
 	res := C.gpu_cagra_search(
 		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -742,8 +742,8 @@ func (gi *GpuCagra[B, Q]) Search(queries []Q, numQueries uint64, dimension uint3
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 
@@ -774,18 +774,18 @@ func (gi *GpuCagra[B, Q]) SearchQuantize(queries []B, numQueries uint64, dimensi
 
 	res := C.gpu_cagra_search_quantize(
 		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -797,8 +797,8 @@ func (gi *GpuCagra[B, Q]) SearchQuantize(queries []B, numQueries uint64, dimensi
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 
@@ -834,18 +834,18 @@ func (gi *GpuCagra[B, Q]) SearchAsyncWithParams(queries []Q, numQueries uint64, 
 
 	jobID := C.gpu_cagra_search_async(
 		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -873,18 +873,18 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeAsyncWithParams(queries []B, numQueries 
 
 	jobID := C.gpu_cagra_search_quantize_async(
 		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -898,11 +898,11 @@ func (gi *GpuCagra[B, Q]) SearchWait(jobID uint64, numQueries uint64, limit uint
 	}
 
 	var errmsg *C.char
-	res := C.gpu_cagra_search_wait(gi.cCagra, C.uint64_t(jobID), unsafe.Pointer(&errmsg))
+	res := C.gpu_cagra_search_wait(gi.cCagra, C.uint64_t(jobID), util.UnsafePointer(&errmsg))
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -914,8 +914,8 @@ func (gi *GpuCagra[B, Q]) SearchWait(jobID uint64, numQueries uint64, limit uint
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
 
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 
@@ -948,15 +948,15 @@ func (gi *GpuCagra[B, Q]) GetFilterColMetaJSON() string {
 		return ""
 	}
 	var errmsg *C.char
-	jsonPtr := C.gpu_cagra_get_filter_col_meta_json(gi.cCagra, unsafe.Pointer(&errmsg))
+	jsonPtr := C.gpu_cagra_get_filter_col_meta_json(gi.cCagra, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 	}
 	if jsonPtr == nil {
 		return ""
 	}
 	out := C.GoString(jsonPtr)
-	C.free(unsafe.Pointer(jsonPtr))
+	C.free(util.UnsafePointer(jsonPtr))
 	return out
 }
 
@@ -966,12 +966,12 @@ func (gi *GpuCagra[B, Q]) Info() (string, error) {
 		return "", moerr.NewInternalErrorNoCtx("GpuCagra is not initialized")
 	}
 	var errmsg *C.char
-	infoPtr := C.gpu_cagra_info(gi.cCagra, unsafe.Pointer(&errmsg))
+	infoPtr := C.gpu_cagra_info(gi.cCagra, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		if infoPtr != nil {
-			C.free(unsafe.Pointer(infoPtr))
+			C.free(util.UnsafePointer(infoPtr))
 		}
 		return "", moerr.NewInternalErrorNoCtx(errStr)
 	}
@@ -979,7 +979,7 @@ func (gi *GpuCagra[B, Q]) Info() (string, error) {
 		return "{}", nil
 	}
 	info := C.GoString(infoPtr)
-	C.free(unsafe.Pointer(infoPtr))
+	C.free(util.UnsafePointer(infoPtr))
 	return info, nil
 }
 
@@ -995,23 +995,23 @@ func (gi *GpuCagra[B, Q]) Extend(additionalData []Q, numVectors uint64, newIDs [
 
 	var idsPtr *C.int64_t
 	if len(newIDs) > 0 {
-		idsPtr = (*C.int64_t)(unsafe.Pointer(&newIDs[0]))
+		idsPtr = (*C.int64_t)(util.UnsafePointer(&newIDs[0]))
 	}
 
 	var errmsg *C.char
 	C.gpu_cagra_extend(
 		gi.cCagra,
-		unsafe.Pointer(&additionalData[0]),
+		util.UnsafePointer(&additionalData[0]),
 		C.uint64_t(numVectors),
 		idsPtr,
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(additionalData)
 	runtime.KeepAlive(newIDs)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -1043,14 +1043,14 @@ func MergeGpuCagra[B, Q VectorType](indices []*GpuCagra[B, Q], nthread uint32, d
 		C.uint32_t(nthread),
 		&cDevices[0],
 		C.int(len(devices)),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(cIndices)
 	runtime.KeepAlive(cDevices)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -1080,11 +1080,11 @@ func (gi *GpuCagra[B, Q]) SaveToDir(dirPath string) error {
 	}
 	var errmsg *C.char
 	cDir := C.CString(dirPath)
-	defer C.free(unsafe.Pointer(cDir))
-	C.gpu_cagra_save_dir(gi.cCagra, cDir, unsafe.Pointer(&errmsg))
+	defer C.free(util.UnsafePointer(cDir))
+	C.gpu_cagra_save_dir(gi.cCagra, cDir, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -1099,11 +1099,11 @@ func (gi *GpuCagra[B, Q]) LoadFromDir(dirPath string, mode DistributionMode) err
 	}
 	var errmsg *C.char
 	cDir := C.CString(dirPath)
-	defer C.free(unsafe.Pointer(cDir))
-	C.gpu_cagra_load_dir(gi.cCagra, cDir, C.distribution_mode_t(mode), unsafe.Pointer(&errmsg))
+	defer C.free(util.UnsafePointer(cDir))
+	C.gpu_cagra_load_dir(gi.cCagra, cDir, C.distribution_mode_t(mode), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -1119,11 +1119,11 @@ func (gi *GpuCagra[B, Q]) SetFilterColumns(colMetaJSON string, totalCount uint64
 	}
 	var errmsg *C.char
 	cMeta := C.CString(colMetaJSON)
-	defer C.free(unsafe.Pointer(cMeta))
-	C.gpu_cagra_set_filter_columns(gi.cCagra, cMeta, C.uint64_t(totalCount), unsafe.Pointer(&errmsg))
+	defer C.free(util.UnsafePointer(cMeta))
+	C.gpu_cagra_set_filter_columns(gi.cCagra, cMeta, C.uint64_t(totalCount), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -1145,21 +1145,21 @@ func (gi *GpuCagra[B, Q]) AddFilterChunk(colIdx uint32, data []byte, nullBitmap 
 	var errmsg *C.char
 	var cNullBitmap *C.uint32_t
 	if len(nullBitmap) > 0 {
-		cNullBitmap = (*C.uint32_t)(unsafe.Pointer(&nullBitmap[0]))
+		cNullBitmap = (*C.uint32_t)(util.UnsafePointer(&nullBitmap[0]))
 	}
 	C.gpu_cagra_add_filter_chunk(
 		gi.cCagra,
 		C.uint32_t(colIdx),
-		unsafe.Pointer(&data[0]),
+		util.UnsafePointer(&data[0]),
 		cNullBitmap,
 		C.uint64_t(nrows),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(data)
 	runtime.KeepAlive(nullBitmap)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return nil
@@ -1184,24 +1184,24 @@ func (gi *GpuCagra[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 		search_width: C.size_t(sp.SearchWidth),
 	}
 	cPreds := C.CString(predsJSON)
-	defer C.free(unsafe.Pointer(cPreds))
+	defer C.free(util.UnsafePointer(cPreds))
 
 	res := C.gpu_cagra_search_with_filter(
 		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
 		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if res.result_ptr == nil {
@@ -1211,8 +1211,8 @@ func (gi *GpuCagra[B, Q]) SearchWithFilter(queries []Q, numQueries uint64, dimen
 	totalElements := uint64(numQueries) * uint64(limit)
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 	C.gpu_cagra_free_result(res.result_ptr)
@@ -1238,24 +1238,24 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 		search_width: C.size_t(sp.SearchWidth),
 	}
 	cPreds := C.CString(predsJSON)
-	defer C.free(unsafe.Pointer(cPreds))
+	defer C.free(util.UnsafePointer(cPreds))
 
 	res := C.gpu_cagra_search_quantize_with_filter(
 		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
 		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if res.result_ptr == nil {
@@ -1265,8 +1265,8 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint6
 	totalElements := uint64(numQueries) * uint64(limit)
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 	C.gpu_cagra_free_result(res.result_ptr)
@@ -1295,24 +1295,24 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithFilterAsync(queries []B, numQueries 
 		search_width: C.size_t(sp.SearchWidth),
 	}
 	cPreds := C.CString(predsJSON)
-	defer C.free(unsafe.Pointer(cPreds))
+	defer C.free(util.UnsafePointer(cPreds))
 
 	jobID := C.gpu_cagra_search_quantize_with_filter_async(
 		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
 		cPreds,
 		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)},
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 
@@ -1328,12 +1328,12 @@ func (gi *GpuCagra[B, Q]) PrepareBitset(predsJSON string, mem docfilter.CMembers
 	}
 	var errmsg *C.char
 	cPreds := C.CString(predsJSON)
-	defer C.free(unsafe.Pointer(cPreds))
+	defer C.free(util.UnsafePointer(cPreds))
 	ptr := C.gpu_cagra_prepare_bitset(gi.cCagra, cPreds,
-		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)}, unsafe.Pointer(&errmsg))
+		C.mo_membership_t{filter: mem.Handle, kind: C.int(mem.Kind)}, util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return &Bitset{ptr: C.gpu_bitset_c(ptr)}, nil
@@ -1358,20 +1358,20 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithBitset(queries []B, numQueries uint6
 	}
 	res := C.gpu_cagra_search_quantize_with_bitset(
 		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
 		bitset.handle(),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 	runtime.KeepAlive(bitset)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return SearchResult{}, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if res.result_ptr == nil {
@@ -1381,8 +1381,8 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithBitset(queries []B, numQueries uint6
 	totalElements := uint64(numQueries) * uint64(limit)
 	neighbors := make([]int64, totalElements)
 	distances := make([]float32, totalElements)
-	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(unsafe.Pointer(&neighbors[0])))
-	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(unsafe.Pointer(&distances[0])))
+	C.gpu_cagra_get_neighbors(res.result_ptr, C.uint64_t(totalElements), (*C.int64_t)(util.UnsafePointer(&neighbors[0])))
+	C.gpu_cagra_get_distances(res.result_ptr, C.uint64_t(totalElements), (*C.float)(util.UnsafePointer(&distances[0])))
 	runtime.KeepAlive(neighbors)
 	runtime.KeepAlive(distances)
 	C.gpu_cagra_free_result(res.result_ptr)
@@ -1409,20 +1409,20 @@ func (gi *GpuCagra[B, Q]) SearchQuantizeWithBitsetAsync(queries []B, numQueries 
 	}
 	jobID := C.gpu_cagra_search_quantize_with_bitset_async(
 		gi.cCagra,
-		unsafe.Pointer(&queries[0]),
+		util.UnsafePointer(&queries[0]),
 		C.uint64_t(numQueries),
 		C.uint32_t(dimension),
 		C.uint32_t(limit),
 		cSP,
 		bitset.handle(),
-		unsafe.Pointer(&errmsg),
+		util.UnsafePointer(&errmsg),
 	)
 	runtime.KeepAlive(queries)
 	runtime.KeepAlive(bitset)
 
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	return uint64(jobID), nil
@@ -1448,11 +1448,11 @@ func CagraRowsFitting(dim, elemSize, intermediateGraphDegree uint64, devices []i
 	rc := C.gpu_cagra_rows_fitting(
 		C.uint64_t(dim), C.uint64_t(elemSize), C.uint64_t(intermediateGraphDegree),
 		&cDevs[0], C.int(len(cDevs)), C.int(mode),
-		&cRows, &cPerRow, &cMinDev, &cFree, unsafe.Pointer(&errmsg))
+		&cRows, &cPerRow, &cMinDev, &cFree, util.UnsafePointer(&errmsg))
 	runtime.KeepAlive(cDevs)
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return 0, 0, 0, 0, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if rc != 0 {

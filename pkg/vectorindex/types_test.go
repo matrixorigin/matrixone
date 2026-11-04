@@ -15,8 +15,12 @@
 package vectorindex
 
 import (
+	"math"
+	"math/rand"
 	"testing"
 
+	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,4 +133,83 @@ func TestTailFramePredicatesHaveNoWildcards(t *testing.T) {
 	// The length is the sentinel's, so a row id one character short cannot be compared equal.
 	require.Equal(t, len("cdc_tail:"), len(TailFrameMetaPrefix))
 	require.Equal(t, TailFrameMetaPrefix, TailFrameMetaId(7)[:len(TailFrameMetaPrefix)])
+}
+
+// A float32 CDC batch decodes to the values it encodes, bit for bit: ToJson writes each
+// value's shortest float32 text, which a float32 decoder must round once. Through float64,
+// 7.038531e-26 (0x15ae43fd) reads as the next float32.
+func TestVectorIndexCdcFloat32RoundTrip(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	vals := []float32{
+		math.Float32frombits(0x15ae43fd), math.Float32frombits(0x95ae43fd), 1.0000001,
+		math.MaxFloat32, -math.MaxFloat32, math.SmallestNonzeroFloat32, 0, float32(math.Copysign(0, -1)),
+	}
+	for i := 0; i < 100000; i++ {
+		f := math.Float32frombits(rng.Uint32())
+		if !math.IsNaN(float64(f)) && !math.IsInf(float64(f), 0) {
+			vals = append(vals, f)
+		}
+	}
+	cdc := NewVectorIndexCdc[float32](64)
+	for start := 0; start < len(vals); start += 1000 {
+		end := min(start+1000, len(vals))
+		if start%2000 == 0 {
+			cdc.Insert(int64(start), vals[start:end], []byte{1, 2, 3})
+		} else {
+			cdc.Upsert(int64(start), vals[start:end], nil)
+		}
+	}
+	cdc.Delete(-1)
+	text, err := cdc.ToJson()
+	require.NoError(t, err)
+	check := func(got VectorIndexCdc[float32]) {
+		require.Len(t, got.Data, len(cdc.Data))
+		for i, e := range cdc.Data {
+			g := got.Data[i]
+			require.Equal(t, e.Type, g.Type)
+			require.Equal(t, e.PKey, g.PKey)
+			require.Equal(t, e.IncludeBytes, g.IncludeBytes)
+			require.Len(t, g.Vec, len(e.Vec))
+			for j := range e.Vec {
+				require.Equal(t, math.Float32bits(e.Vec[j]), math.Float32bits(g.Vec[j]), "entry %d value %d (%v)", i, j, e.Vec[j])
+			}
+		}
+	}
+	var direct VectorIndexCdc[float32]
+	require.NoError(t, direct.UnmarshalJSON([]byte(text)))
+	check(direct)
+	var viaSonic VectorIndexCdc[float32]
+	require.NoError(t, sonic.Unmarshal([]byte(text), &viaSonic))
+	check(viaSonic)
+
+	// other element types decode as before
+	c64 := NewVectorIndexCdc[float64](2)
+	c64.Insert(1, []float64{0.1, -2.5e-300}, nil)
+	text, err = c64.ToJson()
+	require.NoError(t, err)
+	var g64 VectorIndexCdc[float64]
+	require.NoError(t, g64.UnmarshalJSON([]byte(text)))
+	require.Equal(t, c64.Data, g64.Data)
+	cbf := NewVectorIndexCdc[types.BF16](1)
+	cbf.Upsert(2, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-3)}, nil)
+	text, err = cbf.ToJson()
+	require.NoError(t, err)
+	var gbf VectorIndexCdc[types.BF16]
+	require.NoError(t, gbf.UnmarshalJSON([]byte(text)))
+	require.Equal(t, cbf.Data, gbf.Data)
+}
+
+// cdcFloat32 is a named float32 element type, which ArrayElement (~float32) admits.
+type cdcFloat32 float32
+
+// A named float32 element type decodes exactly too.
+func TestVectorIndexCdcNamedFloat32RoundTrip(t *testing.T) {
+	cdc := NewVectorIndexCdc[cdcFloat32](1)
+	cdc.Insert(1, []cdcFloat32{cdcFloat32(math.Float32frombits(0x15ae43fd)), 1.0000001}, nil)
+	text, err := cdc.ToJson()
+	require.NoError(t, err)
+	var got VectorIndexCdc[cdcFloat32]
+	require.NoError(t, got.UnmarshalJSON([]byte(text)))
+	require.Equal(t, uint32(0x15ae43fd), math.Float32bits(float32(got.Data[0].Vec[0])))
+	require.Equal(t, cdc.Data, got.Data)
 }

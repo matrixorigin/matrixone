@@ -390,6 +390,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if s.DataSource.TableDef != nil {
 			id = s.DataSource.TableDef.TblId
 		}
+		if id == 0 {
+			id = uint64(s.DataSource.node.GetObjRef().GetObj())
+		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 		if s.DataSource.isConst {
 			s.ScopeAnalyzer.Stop()
