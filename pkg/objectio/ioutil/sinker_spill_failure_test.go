@@ -614,3 +614,201 @@ func TestPipelineAcceptedFailureResetGeneration(t *testing.T) {
 	require.NoError(t, s.Close())
 	require.Equal(t, before, proc.Mp().CurrNB())
 }
+
+func TestAccumulatedAndPipelineMultiBlockContentReset(t *testing.T) {
+	for _, pipeline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pipeline=%t", pipeline), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			attrs, typs, _ := mockSchema(3, 2)
+			file := &contentCheckingSink{}
+			opts := []SinkerOption{WithMemorySizeThreshold(100 * mpool.MB), WithTailSizeCap(1), WithOffHeap()}
+			if pipeline {
+				opts = append(opts, WithPipelineFlush())
+			} else {
+				opts = append(opts, WithDedupAll())
+			}
+			s := NewSinker(2, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, proc.Mp(), nil, opts...)
+			t.Cleanup(func() {
+				if s.buf.buffers != nil {
+					_ = s.Close()
+				}
+			})
+			before := proc.Mp().CurrNB()
+			n := 2*int(objectio.BlockMaxRows) + 1
+			source := containers.MockBatch(typs, n, 2, nil)
+			defer source.Close()
+			input := containers.ToCNBatch(source)
+			for gen := 0; gen < 2; gen++ {
+				for col := range input.Vecs {
+					values := vector.MustFixedColNoTypeCheck[int32](input.Vecs[col])
+					for i := range values {
+						values[i] = int32((n-1-i)*10 + col + gen)
+					}
+				}
+				require.NoError(t, s.Write(context.Background(), input))
+				require.NoError(t, s.Sync(context.Background()))
+				require.Len(t, file.rows, n)
+				for i, row := range file.rows {
+					for col, value := range row {
+						require.Equal(t, int32(i*10+col+gen), value)
+					}
+				}
+				s.Reset()
+				file.rows = nil
+				file.calls = 0
+			}
+			require.NoError(t, s.Close())
+			require.Equal(t, before, proc.Mp().CurrNB())
+		})
+	}
+}
+
+type replacementFailBuffer struct {
+	containers.IBatchBuffer
+	mp       *mpool.MPool
+	armed    bool
+	fetches  int
+	reserve  []byte
+	fetched  []*batch.Batch
+	returned []*batch.Batch
+}
+
+func (b *replacementFailBuffer) FetchWithSchema(attrs []string, typs []types.Type) *batch.Batch {
+	if b.armed {
+		b.fetches++
+	}
+	var bat *batch.Batch
+	if b.armed && b.fetches == 2 {
+		// Force a fresh replacement and leave room for only one column.
+		bat = batch.NewWithSchema(true, attrs, typs)
+		var err error
+		b.reserve, err = b.mp.Alloc(int(b.mp.Cap()-b.mp.CurrNB()-40000), true)
+		if err != nil {
+			panic(err)
+		}
+	} else {
+		bat = b.IBatchBuffer.FetchWithSchema(attrs, typs)
+	}
+	if b.armed {
+		b.fetched = append(b.fetched, bat)
+	}
+	return bat
+}
+func (b *replacementFailBuffer) Putback(bat *batch.Batch, mp *mpool.MPool) {
+	if b.armed {
+		b.returned = append(b.returned, bat)
+	}
+	b.IBatchBuffer.Putback(bat, mp)
+}
+
+func TestReplacementPreExtendFailureAfterTransfer(t *testing.T) {
+	for _, pipeline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pipeline=%t", pipeline), func(t *testing.T) {
+			mp, err := mpool.NewMPool("replacement-failure", 8*mpool.MB, mpool.NoFixed)
+			require.NoError(t, err)
+			attrs, typs, _ := mockSchema(3, 2)
+			pool := &replacementFailBuffer{IBatchBuffer: containers.NewOneSchemaBatchBuffer(mpool.MB, attrs, typs, true), mp: mp}
+			entered, release, observed := make(chan *batch.Batch, 1), make(chan struct{}), make(chan int32, 1)
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			file := &generationSink{entered: entered, release: release, observed: observed}
+			opts := []SinkerOption{WithMemorySizeThreshold(100 * mpool.MB), WithBuffer(pool, true)}
+			if pipeline {
+				opts = append(opts, WithPipelineFlush())
+			} else {
+				opts = append(opts, WithDedupAll())
+			}
+			s := NewSinker(2, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, mp, nil, opts...)
+			t.Cleanup(func() {
+				unblock()
+				if pool.reserve != nil {
+					mp.Free(pool.reserve)
+					pool.reserve = nil
+				}
+				if s.buf.buffers != nil {
+					_ = s.Close()
+				}
+			})
+			source := containers.MockBatch(typs, 2*int(objectio.BlockMaxRows), 2, nil)
+			defer source.Close()
+			input := containers.ToCNBatch(source)
+			for i := range vector.MustFixedColNoTypeCheck[int32](input.Vecs[2]) {
+				vector.MustFixedColNoTypeCheck[int32](input.Vecs[2])[i] = 7
+			}
+			require.NoError(t, s.Write(context.Background(), input))
+			pool.armed = true
+			if pipeline {
+				s.staged.memorySizeThreshold = 1
+			}
+			err = s.trySpill(context.Background())
+			require.Error(t, err)
+			require.Len(t, pool.fetched, 2)
+			require.Contains(t, pool.returned, pool.fetched[1])
+			if pipeline {
+				workerBatch := <-entered
+				require.Same(t, pool.fetched[0], workerBatch)
+				require.NotContains(t, pool.returned, workerBatch)
+				unblock()
+				require.NoError(t, s.drainPipeline())
+				require.Equal(t, int32(7), <-observed)
+			} else {
+				require.Contains(t, pool.returned, pool.fetched[0])
+			}
+			mp.Free(pool.reserve)
+			pool.reserve = nil
+			s.Reset()
+			require.NoError(t, s.Close())
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestRealSinkerReadbackReset(t *testing.T) {
+	proc := testutil.NewProc(t)
+	fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	attrs, typs, seq := mockSchema(3, 2)
+	s := NewSinker(2, attrs, typs, NewFSinkerImplFactory(seq, 2, true, false, 0), proc.Mp(), fs,
+		WithMemorySizeThreshold(100*mpool.MB), WithTailSizeCap(1), WithOffHeap(), WithDedupAll())
+	t.Cleanup(func() {
+		if s.buf.buffers != nil {
+			_ = s.Close()
+		}
+	})
+	before := proc.Mp().CurrNB()
+	n := 2*int(objectio.BlockMaxRows) + 1
+	source := containers.MockBatch(typs, n, 2, nil)
+	defer source.Close()
+	input := containers.ToCNBatch(source)
+	for gen := 0; gen < 2; gen++ {
+		for col := range input.Vecs {
+			values := vector.MustFixedColNoTypeCheck[int32](input.Vecs[col])
+			for i := range values {
+				values[i] = int32((n-1-i)*10 + col + gen)
+			}
+		}
+		require.NoError(t, s.Write(context.Background(), input))
+		require.NoError(t, s.Sync(context.Background()))
+		require.NotEmpty(t, s.result.persisted)
+		row := 0
+		for _, stats := range s.result.persisted {
+			reader, err := NewObjectReader(fs, stats.ObjectLocation())
+			require.NoError(t, err)
+			for block := uint16(0); uint32(block) < stats.BlkCnt(); block++ {
+				data, release, err := reader.LoadColumns(context.Background(), seq, typs, block, proc.Mp())
+				require.NoError(t, err)
+				for i := 0; i < data.RowCount(); i++ {
+					for col := range data.Vecs {
+						require.Equal(t, int32(row*10+col+gen), vector.MustFixedColNoTypeCheck[int32](data.Vecs[col])[i])
+					}
+					row++
+				}
+				release()
+			}
+		}
+		require.Equal(t, n, row)
+		s.Reset()
+	}
+	require.NoError(t, s.Close())
+	require.Equal(t, before, proc.Mp().CurrNB())
+}
