@@ -92,8 +92,10 @@ SHOW INDEX IGNORED FROM [db.]tbl [WHERE expr]
 SHOW INDEX STATUS FROM [db.]tbl [WHERE expr]
 ```
 
-`MAX_BAD_RECORDS` is the number of rows each index may leave out; of a partitioned table, each
-partition's index may leave out that many.
+`MAX_BAD_RECORDS` is the number of rows each index may leave out, per partition and per
+transaction: of a partitioned table, each partition's index may leave out that many; a statement
+counts the rows its transaction sees, so transactions open at the same time on a synchronous index
+may together leave out more (@cpegeric, 2026-11-04).
 
 It returns one row per ignored source row of every index of the table:
 
@@ -195,12 +197,9 @@ by, before the new version is assigned and, if the index cannot store it, record
 more than the limit fails it: a synchronous build and the DML of a synchronous index fail, as a
 synchronous build does (@cpegeric, 2026-11-03, rather than rejecting every such DML row); an
 asynchronous build or sync stops with a permanent error. A build that can store none of the rows
-it reads fails. The count is the one the statement's transaction sees (@cpegeric, 2026-11-04):
-transactions open at the same time on a synchronous index each stay within the limit and together
-may commit past it, by at most the rows each could add. Once that is committed, every later
-statement that records a row fails until rows are fixed or deleted, or REINDEX runs. Rejected: a
-lock that serializes the statements recording rows on one index (exact across transactions, at the
-cost of serializing bad-row DML and a lock the DML path does not take today).
+it reads fails. The limit is per transaction, as it is per partition: once transactions together
+commit past it, every later statement that records a row fails until rows are fixed or deleted, or
+REINDEX runs. Rejected: a lock that serializes the statements recording rows on one index.
 
 **k-means.** The sample the centroids are trained on leaves out the rows the index cannot store,
 so they do not distort the centroids or the int8/uint8 bounds.
