@@ -958,13 +958,18 @@ const (
 // admitted the expression default and stored its historical fold (DEFAULT
 // (-0.25) into VARCHAR(1) stores '0'; that expression owner keeps admitting
 // it), while this tree authored the bare literal whose origin formatter
-// parenthesized the stored text ('-1.25' -> '(-1.25)')). The stored value is
-// the producer's witness and the caller compares against it, so the
-// historical expression binding is reproduced first; only its inner
-// conversion failure (bad value / out of range, raised at any stage of the
-// chain, including constant folding) falls back to this tree's numeric-domain
-// literal rebinding. A mismatched stored payload keeps failing the caller's
-// comparison either way.
+// parenthesizes the stored text ('-1.25' as '(-1.25)')). The stored value is
+// the producer's witness: the historical expression binding is reproduced
+// first, and only its inner conversion failure (bad value / out of range,
+// raised at any stage of the chain, including constant folding) falls back
+// to this tree's numeric-domain rebinding. When BOTH producers bind legally —
+// a leading-zero raw text folds to its destination-truncated width with no
+// error while this tree stored the normalized number — a first success
+// cannot decide, so both witnesses are compared against the reader's real
+// stored payload with the same expression equality the dump verifier uses,
+// and the matching one wins; without a stored witness the reader keeps the
+// historical order. A mismatched or tampered stored payload keeps failing
+// the caller's comparison either way.
 func buildDefaultExprWithColumnsObserved(
 	bindCtx context.Context,
 	col *tree.ColumnTableDef,
@@ -986,18 +991,51 @@ func buildDefaultExprWithColumnsObserved(
 			bareSignedDecimalCharFamilyDefault(typ, unwrapParenExpr(originExpr)) {
 			legacy, legacyErr := buildDefaultExprWithColumnsForceDomain(
 				bindCtx, col, typ, proc, columns, purpose, observe, false)
-			if legacyErr == nil {
-				return legacy, nil
+			if legacyErr != nil {
+				if moerr.IsMoErrCode(legacyErr, moerr.ErrInvalidArg) ||
+					moerr.IsMoErrCode(legacyErr, moerr.ErrOutOfRange) {
+					return buildDefaultExprWithColumnsForceDomain(
+						bindCtx, col, typ, proc, columns, purpose, observe, true)
+				}
+				return nil, legacyErr
 			}
-			if moerr.IsMoErrCode(legacyErr, moerr.ErrInvalidArg) ||
-				moerr.IsMoErrCode(legacyErr, moerr.ErrOutOfRange) {
-				return buildDefaultExprWithColumnsForceDomain(
-					bindCtx, col, typ, proc, columns, purpose, observe, true)
+			// Both legal producers of this shape bind without an error and
+			// fold differently: the historical destination cast truncates a
+			// leading-zero raw text to the column width and folds the
+			// integer remainder ('(-000001.25)' into VARCHAR(5) folds '0'),
+			// while this tree stores the normalized value ('-1.25'). Route
+			// both witnesses through the real stored-expression comparison
+			// and return the matching one; the caller re-verifies it.
+			numeric, numericErr := buildDefaultExprWithColumnsForceDomain(
+				bindCtx, col, typ, proc, columns, purpose, observe, true)
+			if numericErr == nil && !sameTableDumpBoundExpression(legacy.Expr, numeric.Expr) {
+				if stored := persistedStoredDefaultExpr(col, columns); stored != nil &&
+					!sameTableDumpBoundExpression(legacy.Expr, stored) {
+					return numeric, nil
+				}
 			}
-			return nil, legacyErr
+			return legacy, nil
 		}
 	}
 	return buildDefaultExprWithColumnsForceDomain(bindCtx, col, typ, proc, columns, purpose, observe, false)
+}
+
+// persistedStoredDefaultExpr returns the catalog-stored default expression
+// of the named column for the persisted reading owners; exactly this payload
+// is the witness that discriminates the two legal producers of a
+// parenthesized signed-decimal origin.
+func persistedStoredDefaultExpr(col *tree.ColumnTableDef, columns []*ColDef) *plan.Expr {
+	if columns == nil {
+		return nil
+	}
+	name := col.Name.ColNameOrigin()
+	for _, column := range columns {
+		if column != nil && column.Default != nil && column.Default.Expr != nil &&
+			column.Name == name {
+			return column.Default.Expr
+		}
+	}
+	return nil
 }
 
 // buildDefaultExprWithColumnsForceDomain is the single-chain binder behind
@@ -1215,10 +1253,29 @@ func buildDefaultExprWithColumnsForceDomain(
 
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	fmtCtx.PrintExpr(originExpr, originExpr, false)
+	originString := fmtCtx.String()
+	if !isExpressionDefault && bareSignedDecimalCharFamilyDefault(typ, semanticExpr) {
+		// An authored bare signed plain-decimal into CHAR/VARCHAR must keep
+		// its bare origin. Every consumer — the catalog rebind that
+		// re-evaluates defaults on INSERT, the ALTER column round-trip and
+		// the table-dump analysis — reparses the origin string, and a
+		// formatter-inserted pair of parentheses there silently reclassifies
+		// this tree's literal default as an older era's expression default
+		// on every one of those paths (a leading-zero literal would be
+		// folded back to its truncated text '0' instead of the stored
+		// normalized value). Legacy catalogs keep their historical
+		// parenthesized origins; the persisted reading above keeps
+		// accepting both producer forms.
+		if unary, ok := semanticExpr.(*tree.UnaryExpr); ok {
+			if num, okNum := unary.Expr.(*tree.NumVal); okNum && num.String() != "" {
+				originString = "-" + num.String()
+			}
+		}
+	}
 	return &plan.Default{
 		NullAbility:  nullAbility,
 		Expr:         newExpr,
-		OriginString: fmtCtx.String(),
+		OriginString: originString,
 	}, nil
 }
 
@@ -1510,11 +1567,13 @@ func newDDLNumericLiteralDefaultExceedsCharWidth(
 	default:
 		return false
 	}
+	// The probe must not truncate the converted text before it is measured:
+	// probing through the CHAR family maximum makes the probe's own cast clip
+	// every wider literal to that cap, so the widest value a CHAR destination
+	// can reject is silently admitted. Numeric-to-text conversion is
+	// family-independent — only the width cap differs — so both destinations
+	// measure their converted text through the far wider VARCHAR maximum.
 	probe := plan.Type{Id: int32(types.T_varchar), Width: int32(types.MaxVarcharLen)}
-	if typ.Id == int32(types.T_char) {
-		probe.Id = int32(types.T_char)
-		probe.Width = int32(types.MaxCharLen)
-	}
 	probeBinder := NewDefaultBinder(bindCtx, nil, nil, probe, nil)
 	if bareSignedDecimalCharFamilyDefault(typ, semanticExpr) {
 		probeBinder.baseBinder.suppressDefaultValueBindType = true

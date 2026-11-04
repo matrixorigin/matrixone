@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -397,9 +398,12 @@ func TestTableDumpVerifiesNewSignedDecimalLiteralDefault(t *testing.T) {
 	require.Equal(t, "-1.25", col.Default.Expr.GetLit().GetSval(), "the stored default is the converted value")
 	require.Equal(t, int32(types.T_varchar), col.Typ.Id)
 	require.Equal(t, int32(5), col.Typ.Width)
-	// The origin formatter parenthesizes the signed literal; assert the exact
-	// text so a dropped sign cannot hide behind a substring check.
-	require.Equal(t, "(-1.25)", col.Default.OriginString, "origin text keeps the exact signed literal, sign included")
+	// An authored bare signed plain-decimal keeps its bare origin: a
+	// formatter-inserted pair of parentheses would reclassify the literal as
+	// an older era's expression default on every origin reparse (catalog
+	// rebinding, ALTER round-trip, dump analysis). Assert the exact text so
+	// a dropped sign cannot hide behind a substring check.
+	require.Equal(t, "-1.25", col.Default.OriginString, "origin text keeps the exact signed literal, sign included")
 
 	snapshot := proto.Clone(source)
 	_, err = AnalyzeTableDumpBindings(compiler, source, source)
@@ -495,4 +499,105 @@ func TestTableDumpVerifiesAdmittedParenthesizedSignedDecimalExpressionDefault(t 
 	}
 	_, err = AnalyzeTableDumpBindings(compiler, forged, forged)
 	require.ErrorContains(t, err, "cannot verify bound default expression")
+}
+
+// Review 5766780637: a leading-zero bare signed decimal authored by new DDL
+// stores the normalized numeric-domain value while the origin keeps the raw
+// literal, and the historical destination-directed chain folds that raw text
+// into a different value without failing. Both producers therefore bind
+// legally, so a first-success pick never lets the matching witness reach the
+// stored-expression comparison. The persisted reading owner must compare both
+// legal witnesses against the real stored payload, the older tree's fold of
+// the same origin keeps verifying, and a tampered payload stays rejected.
+func TestTableDumpVerifiesLeadingZeroBareSignedDecimalDefault(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t (v varchar(5) default -000001.25)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	source := built.GetDdl().GetCreateTable().GetTableDef()
+	require.NotNil(t, source)
+	var col *plan.ColDef
+	for _, c := range source.Cols {
+		if c.Name == "v" {
+			col = c
+		}
+	}
+	require.NotNil(t, col, "the CREATE plan must carry the v column")
+	require.Equal(t, "-1.25", col.Default.Expr.GetLit().GetSval(), "the numeric-domain admission normalizes the value")
+	require.Equal(t, "-000001.25", col.Default.OriginString, "origin text keeps the raw leading-zero literal, bare as authored")
+
+	// This tree's stored payload must verify end to end.
+	snapshot := proto.Clone(source)
+	_, err = AnalyzeTableDumpBindings(compiler, source, source)
+	require.NoError(t, err, "dump verification must compare both producer witnesses against the stored payload: %v", err)
+	require.True(t, proto.Equal(snapshot, source), "dump verification must not mutate the persisted payload")
+
+	// An older tree stored the destination-cast fold of the same literal: the
+	// historical raw-text chain truncated '000001.25' to the column width and
+	// folded '0', and that era's origin formatter parenthesized the signed
+	// literal (the v8.2-era decimal marker did not exist there). Model that
+	// payload by keeping the clause's real plan type and literal metadata,
+	// restoring the legacy parenthesized origin, and swapping only the folded
+	// value and the era marker.
+	historical := proto.Clone(source).(*plan.TableDef)
+	for _, c := range historical.Cols {
+		if c.Name == "v" {
+			historicalFold := proto.Clone(c.Default.Expr).(*plan.Expr)
+			lit := historicalFold.GetLit()
+			lit.Value = &plan.Literal_Sval{Sval: "0"}
+			lit.DecimalLiteralRequiresV82 = false
+			c.Default.Expr = historicalFold
+			c.Default.OriginString = "(-000001.25)"
+		}
+	}
+	_, err = AnalyzeTableDumpBindings(compiler, historical, historical)
+	require.NoError(t, err, "the older tree's stored fold of the same origin must keep verifying: %v", err)
+
+	// A tampered payload matching neither witness must not verify.
+	forgedZero := proto.Clone(source).(*plan.TableDef)
+	for _, c := range forgedZero.Cols {
+		if c.Name == "v" {
+			c.Default.Expr = &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_varchar), Width: 5},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "999"}}},
+			}
+		}
+	}
+	_, err = AnalyzeTableDumpBindings(compiler, forgedZero, forgedZero)
+	require.ErrorContains(t, err, "cannot verify bound default expression")
+}
+
+// Review 5766780637: the width probe must measure the converted text before
+// any destination cap can truncate it. Probing through the CHAR family
+// maximum makes the probe's own cast clip a 256-character value to 255, so
+// the widest value a CHAR(255) destination must reject is silently admitted.
+// The exact fit at the maximum, the one-character overflow on both sides of
+// the boundary and the nearest VARCHAR controls keep the #31860 admission
+// semantics; the value is judged as converted text, never as source length.
+func TestDDLCharMaximumWidthBareNumericLiteralAdmission(t *testing.T) {
+	fit := "1." + strings.Repeat("2", 253) // exactly 255 characters
+	over := fit + "2"                      // 256 characters
+	proc := testutil.NewProcess(t)
+	value, err := buildDDLColumnDefault(t, proc, "v char(255) default "+fit)
+	require.NoError(t, err, "an exact maximum-width converted value stays admitted")
+	require.Equal(t, fit, value.Expr.GetLit().GetSval())
+
+	_, err = buildDDLColumnDefault(t, proc, "v char(255) default "+over)
+	require.Error(t, err, "a converted value wider than the CHAR maximum must not be silently truncated")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "want ER_INVALID_DEFAULT, got %v", err)
+
+	char254 := "1." + strings.Repeat("2", 252) // exactly 254 characters
+	_, err = buildDDLColumnDefault(t, proc, "v char(254) default "+char254)
+	require.NoError(t, err, "the nearest narrower CHAR boundary keeps admitting its exact fit")
+	_, err = buildDDLColumnDefault(t, proc, "v char(254) default "+fit)
+	require.Error(t, err, "a 255-character converted value overflows CHAR(254)")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "want ER_INVALID_DEFAULT, got %v", err)
+
+	_, err = buildDDLColumnDefault(t, proc, "v varchar(255) default "+fit)
+	require.NoError(t, err, "the VARCHAR boundary keeps admitting its exact fit")
+	_, err = buildDDLColumnDefault(t, proc, "v varchar(255) default "+over)
+	require.Error(t, err, "a converted value wider than VARCHAR(255) is rejected")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "want ER_INVALID_DEFAULT, got %v", err)
 }
