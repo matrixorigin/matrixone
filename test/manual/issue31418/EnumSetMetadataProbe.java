@@ -1,5 +1,6 @@
 import java.sql.*;
 import java.util.*;
+import java.math.BigDecimal;
 
 /** ENUM/SET result metadata and label decoding through Connector/J's real wire paths. */
 public final class EnumSetMetadataProbe {
@@ -99,6 +100,19 @@ public final class EnumSetMetadataProbe {
                 : Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy"));
         try (ResultSet result=statement.executeQuery()) {
             rows(result,cursor || !empty ? Types.VARCHAR : Types.CHAR,false,wanted,"range "+Arrays.toString(range));
+            labelWidths(result.getMetaData());
+        }
+    }
+
+    private static void decimalRangeExecution(PreparedStatement statement,String[] range,boolean cursor) throws Exception {
+        for (int i=0;i<2;i++) {
+            if (range[i]==null) statement.setNull(i+1,Types.DECIMAL); else statement.setBigDecimal(i+1,new BigDecimal(range[i]));
+        }
+        boolean empty=range[0]==null || range[1]==null || new BigDecimal(range[0]).compareTo(new BigDecimal(range[1]))>0;
+        try (ResultSet result=statement.executeQuery()) {
+            rows(result,cursor || !empty ? Types.VARCHAR : Types.CHAR,false,
+                    empty ? Collections.<List<String>>emptyList() : Collections.singletonList(Arrays.asList("", "")),
+                    "decimal range "+Arrays.toString(range));
             labelWidths(result.getMetaData());
         }
     }
@@ -362,7 +376,52 @@ public final class EnumSetMetadataProbe {
                     }
                     query(connection, mode, "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t ORDER BY id LIMIT 1)b ON a.id=b.id",
                             Types.VARCHAR, Types.CHAR, false, Arrays.asList(Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy"),Arrays.asList("", "x,yy")));
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=COALESCE(b.id,2)",
+                            Types.VARCHAR,Types.CHAR,false,Arrays.asList(Arrays.asList("","x,yy"),Arrays.asList("","x,yy")));
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id=1 OR FALSE)",
+                            Types.VARCHAR,Types.CHAR,false,Arrays.asList(Arrays.asList("",""),Arrays.asList("","")));
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=1",
+                            Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
+                    for (String sql:new String[]{
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=COALESCE(b.id,2)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT 1 FROM t b WHERE b.id=t.id)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(NOT(id=1))",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id<>1)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id<>1 AND NULL)"}) {
+                        query(connection,mode,sql,constantWindowType,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
+                    }
+                    for (String sql:new String[]{
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id=1 OR NULL)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN 2.5 AND 1.5",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN -1.5 AND -2.5",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN 2.50 AND 1.500"}) {
+                        query(connection,mode,sql,constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    }
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT 1 FROM t b WHERE b.id>=t.id)",
+                            Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE EXISTS(SELECT 1 FROM t b WHERE b.id=t.id)",
+                            Types.VARCHAR,Types.CHAR,false,Arrays.asList(Arrays.asList("","x,yy"),Arrays.asList("","x,yy"),Arrays.asList("","x,yy")));
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN 1.5 AND 2.5",
+                            Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("","")));
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER(),COUNT(*)OVER() FROM t WHERE id BETWEEN 1.5 AND 2.5",
+                            Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("","","1")),3);
                     if (mode.equals("server-prepared") || mode.equals("cursor")) {
+                        String[][] decimalRanges={{"2.5","1.5"},{"1.5","2.5"},{"2.50","1.500"},{null,"2.5"},{"1.5",null},{"1.5","2.5"},{"2.5","1.5"}};
+                        String decimalSql="SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN ? AND ?";
+                        for (String[] range:decimalRanges) {
+                            try (PreparedStatement fresh=connection.prepareStatement(decimalSql)) {
+                                fresh.setQueryTimeout(30);if(mode.equals("cursor"))fresh.setFetchSize(1);
+                                check(fresh.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"),"decimal range prepare fell back");
+                                decimalRangeExecution(fresh,range,mode.equals("cursor"));
+                            }
+                        }
+                        try (PreparedStatement repeated=connection.prepareStatement(decimalSql)) {
+                            repeated.setQueryTimeout(30);if(mode.equals("cursor"))repeated.setFetchSize(1);
+                            for(String[] range:decimalRanges) {
+                                decimalRangeExecution(repeated,range,mode.equals("cursor"));
+                                metadata(repeated.getMetaData(),Types.CHAR,false,"decimal prepare cache");
+                            }
+                        }
                         Integer[][] ranges={{2,1},{null,1},{1,null},{1,2},{1,1},{2,1},{1,2},{null,null},{1,2}};
                         String sql="SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN ? AND ?";
                         for (Integer[] range:ranges) {

@@ -271,4 +271,40 @@ execute enum_range_metadata using @enum_lo,@enum_hi;
 deallocate prepare enum_range_metadata;
 set @enum_lo=null;
 set @enum_hi=null;
+-- A point provider is not a constant output after conditional null-extension.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where a.id=1;
+-- Correlation consumes only an independently established outer const environment.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id=1
+and exists(select 1 from jdbc_enum_set_metadata b where b.id=jdbc_enum_set_metadata.id);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata
+where exists(select 1 from jdbc_enum_set_metadata b where b.id=jdbc_enum_set_metadata.id);
+-- NOT identities must preserve UNKNOWN until the row-admission boundary.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(not(id=1));
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id<>1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id=1 or null);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id<>1 and null);
+-- Compare exact decimal bounds without a float conversion or scale truncation.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 2.5 and 1.5;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s,count(*)over() as matches
+from jdbc_enum_set_metadata where id between 1.5 and 2.5;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between -1.5 and -2.5;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 2.50 and 1.500;
 drop table jdbc_enum_set_metadata;

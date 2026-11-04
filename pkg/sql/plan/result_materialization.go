@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"context"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -283,7 +285,8 @@ func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.E
 	}
 	rightOwner := r.blockOwner(join.Children[1])
 	scalar := rightOwner != nil && !rightOwner.isCorrelated && r.bound(join.Children[1]) <= 1 &&
-		(join.JoinType == plan.Node_LEFT || join.JoinType == plan.Node_SINGLE || join.JoinType == plan.Node_INNER)
+		(join.JoinType == plan.Node_SINGLE || join.JoinType == plan.Node_INNER ||
+			join.JoinType == plan.Node_LEFT && !r.joinOnUsesLeft(join))
 	// A rejected outer-join provider cannot multiply its preserved input.
 	admitted := scalar || join.JoinType == plan.Node_LEFT && (resultFiltersRejectAll(join.OnList) || r.bound(join.Children[1]) == 0)
 	switch join.JoinType {
@@ -293,7 +296,41 @@ func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.E
 		admitted = r.existenceConstant(join, filters)
 	}
 	if !admitted {
-		return false
+		// A positive correlated lookup can consume outer columns only after
+		// the preserved input has independently established const access.
+		positive := join.JoinType == plan.Node_SEMI || join.JoinType == plan.Node_MARK && resultPositiveExistenceFilter(filters, join)
+		if !positive {
+			return false
+		}
+		leftProofs := make([]*plan.Expr, 0, len(filters)+len(join.FilterList))
+		for _, filter := range append(append([]*plan.Expr(nil), filters...), join.FilterList...) {
+			leftProofs = append(leftProofs, resultProofExpr(filter, func(e *plan.Expr) *plan.Expr {
+				route := r.keyJoinRoute(join, e)
+				if route.childIdx == 0 && route.ref != nil {
+					return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Col{Col: route.ref}}
+				}
+				return e
+			}))
+		}
+		leftConst := r.keyFilteredInput(join.Children[0], leftProofs, depth+1, r.blockOwner(join.NodeId))
+		if !leftConst {
+			return false
+		}
+		rightProofs := make([]*plan.Expr, 0, len(join.OnList))
+		for _, predicate := range join.OnList {
+			rightProofs = append(rightProofs, resultProofExpr(predicate, func(e *plan.Expr) *plan.Expr {
+				route := r.keyJoinRoute(join, e)
+				if route.childIdx == 0 {
+					return makePlan2Int64ConstExprWithType(0)
+				}
+				if route.childIdx == 1 && route.ref != nil {
+					return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Col{Col: route.ref}}
+				}
+				return e
+			}))
+		}
+		rightConst := r.keyFilteredInput(join.Children[1], rightProofs, depth+1, rightOwner)
+		return rightConst
 	}
 	constraints := append(append([]*plan.Expr(nil), filters...), join.FilterList...)
 	// ON constrains output rows only for an INNER join. Outer-join ON is not WHERE.
@@ -303,7 +340,7 @@ func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.E
 	proofs := make([]*plan.Expr, 0, len(constraints))
 	for _, filter := range constraints {
 		proofs = append(proofs, resultProofExpr(filter, func(e *plan.Expr) *plan.Expr {
-			route := resultColumnRouteAtJoin(r.query, join, e.GetCol(), true)
+			route := r.keyJoinRoute(join, e)
 			if route.childIdx == 1 && scalar {
 				// A statement-constant symbol, never a value installed in the plan.
 				return makePlan2Int64ConstExprWithType(0)
@@ -315,6 +352,14 @@ func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.E
 		}))
 	}
 	return r.keyFilteredInput(join.Children[0], proofs, depth+1, r.blockOwner(join.NodeId))
+}
+
+// Source proofs own logical binding references, not remapped JOIN output slots.
+func (r *resultMaterialization) keyJoinRoute(join *plan.Node, e *plan.Expr) resultColumnJoinRoute {
+	if len(r.scopes) > 0 && e.GetCol() != nil {
+		return resultColumnJoinRoute{ref: e.GetCol(), childIdx: resultColumnJoinChildByBinding(r.query, join, e.GetCol())}
+	}
+	return resultColumnRouteAtJoin(r.query, join, e.GetCol(), true)
 }
 
 // Carry the same conjunct environment down the preserved input. Each scalar
@@ -347,7 +392,15 @@ func (r *resultMaterialization) keyFilteredInput(id int32, filters []*plan.Expr,
 	}
 	for i, filter := range filters {
 		filters[i] = resultProofExpr(filter, func(e *plan.Expr) *plan.Expr {
-			if projected := resultColumnProjectionAtNode(n, e.GetCol(), true); projected != nil {
+			ref := e.GetCol()
+			if len(r.scopes) > 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(n.ProjectList) {
+				for _, tag := range n.BindingTags {
+					if ref.RelPos == tag {
+						return n.ProjectList[ref.ColPos]
+					}
+				}
+			}
+			if projected := resultColumnProjectionAtNode(n, ref, true); projected != nil {
 				return projected
 			}
 			return e
@@ -461,6 +514,32 @@ func (r *resultMaterialization) elided(root int32, expr *plan.Expr) bool {
 		}
 	}
 	return true
+}
+
+func (r *resultMaterialization) joinOnUsesLeft(node *plan.Node) bool {
+	var uses func(*plan.Expr) bool
+	uses = func(e *plan.Expr) bool {
+		if ref := e.GetCol(); ref != nil {
+			if len(r.scopes) > 0 {
+				return resultColumnJoinChildByBinding(r.query, node, ref) == 0
+			}
+			return ref.RelPos == 0
+		}
+		if fn := e.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if uses(arg) {
+					return true
+				}
+			}
+		}
+		return e.GetCorr() != nil
+	}
+	for _, e := range node.OnList {
+		if uses(e) {
+			return true
+		}
+	}
+	return false
 }
 
 func resultMarkCorrelated(query *plan.Query, node *plan.Node) bool {
@@ -605,7 +684,45 @@ func resultConstAccessColumn(e *plan.Expr) *plan.Expr {
 	return integerComparisonCastColumn(e)
 }
 
-func resultReversedIntegerBounds(lo, hi *plan.Expr) bool {
+func resultExactRangeNumber(e *plan.Expr) (*big.Rat, bool) {
+	if coefficient, scale, ok := exactDecimalCoefficient(e); ok {
+		value, valid := new(big.Rat).SetString(coefficient.Format(scale))
+		return value, valid
+	}
+	if !types.T(e.GetTyp().Id).IsInteger() || e.GetLit() == nil || e.GetLit().Isnull {
+		return nil, false
+	}
+	var text string
+	switch v := e.GetLit().Value.(type) {
+	case *plan.Literal_I64Val:
+		text = fmt.Sprint(v.I64Val)
+	case *plan.Literal_U64Val:
+		text = fmt.Sprint(v.U64Val)
+	case *plan.Literal_I32Val:
+		text = fmt.Sprint(v.I32Val)
+	case *plan.Literal_U32Val:
+		text = fmt.Sprint(v.U32Val)
+	case *plan.Literal_I16Val:
+		text = fmt.Sprint(v.I16Val)
+	case *plan.Literal_U16Val:
+		text = fmt.Sprint(v.U16Val)
+	case *plan.Literal_I8Val:
+		text = fmt.Sprint(v.I8Val)
+	case *plan.Literal_U8Val:
+		text = fmt.Sprint(v.U8Val)
+	default:
+		return nil, false
+	}
+	value, ok := new(big.Rat).SetString(text)
+	return value, ok
+}
+
+func resultReversedExactBounds(lo, hi *plan.Expr) bool {
+	if lo != nil && hi != nil && (types.T(lo.Typ.Id).IsDecimal() || types.T(hi.Typ.Id).IsDecimal()) {
+		left, lok := resultExactRangeNumber(lo)
+		right, rok := resultExactRangeNumber(hi)
+		return lok && rok && left.Cmp(right) > 0
+	}
 	if lo.GetLit() == nil || hi.GetLit() == nil || lo.Typ.Id != hi.Typ.Id || !types.T(lo.Typ.Id).IsInteger() {
 		return false
 	}
@@ -633,6 +750,60 @@ func resultReversedIntegerBounds(lo, hi *plan.Expr) bool {
 	l, ln, lok := integer(lo)
 	h, hn, hok := integer(hi)
 	return lok && hok && ((!ln && hn) || ln == hn && l > h)
+}
+
+// Push NOT through only exact three-valued Boolean identities before applying
+// row-admission identities. In particular, OR NULL cannot be erased under NOT.
+func resultPredicateNegation(e *plan.Expr, negate bool) *plan.Expr {
+	if lit := e.GetLit(); lit != nil {
+		if lit.Isnull || !negate {
+			return e
+		}
+		if b, ok := lit.Value.(*plan.Literal_Bval); ok {
+			return makePlan2BoolConstExprWithType(!b.Bval)
+		}
+	}
+	fn := e.GetF()
+	if fn != nil && fn.Func != nil {
+		name := fn.Func.ObjName
+		if name == "not" && len(fn.Args) == 1 {
+			return resultPredicateNegation(fn.Args[0], !negate)
+		}
+		if name == "cast" && len(fn.Args) == 2 && types.T(e.Typ.Id) == types.T_bool {
+			source := resultPredicateNegation(fn.Args[0], false)
+			if lit := source.GetLit(); lit != nil && lit.Isnull {
+				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Lit{Lit: lit}}
+			}
+		}
+		if name == "istrue" && len(fn.Args) == 1 {
+			source := resultPredicateNegation(fn.Args[0], false)
+			if lit := source.GetLit(); lit != nil && lit.Isnull {
+				return makePlan2BoolConstExprWithType(negate)
+			}
+		}
+		if (name == "and" || name == "or") && len(fn.Args) == 2 {
+			if negate {
+				if name == "and" {
+					name = "or"
+				} else {
+					name = "and"
+				}
+			}
+			return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: name}, Args: []*plan.Expr{
+				resultPredicateNegation(fn.Args[0], negate), resultPredicateNegation(fn.Args[1], negate),
+			}}}}
+		}
+		if negate && len(fn.Args) == 2 {
+			inverse := map[string]string{"=": "<>", "<>": "=", "!=": "=", "<": ">=", ">": "<=", "<=": ">", ">=": "<"}[name]
+			if inverse != "" {
+				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: inverse}, Args: fn.Args}}}
+			}
+		}
+	}
+	if !negate {
+		return e
+	}
+	return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "not"}, Args: []*plan.Expr{e}}}}
 }
 
 // Normalize row-admission predicates only, not arbitrary Boolean values.
@@ -675,7 +846,7 @@ func resultPredicateAtoms(filters []*plan.Expr) []*plan.Expr {
 		atoms = append(atoms, e)
 	}
 	for _, filter := range filters {
-		collect(filter)
+		collect(resultPredicateNegation(filter, false))
 	}
 	return atoms
 }
@@ -721,6 +892,26 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 		wireInteger := false
 		if typed, ok := value.(ParamValue); ok {
 			value = typed.Value
+			if typed.HasRuntimeType && typed.RuntimeType.Oid.IsDecimal() {
+				if text, ok := value.(string); ok {
+					domain, _, canonical, ok := PreparedDecimalRuntimeDomains(text)
+					if !ok {
+						return e
+					}
+					coefficient, err := types.ParseDecimal256(canonical, domain.Width, domain.Scale)
+					if err != nil {
+						return e
+					}
+					// Runtime canonical text may use an exponent; convert it to a
+					// bounded exact plain decimal, not a floating-point spelling.
+					decimal, err := makePlan2DecimalExprWithType(context.Background(), coefficient.Format(domain.Scale))
+					if err == nil {
+						r.usedValues = true
+						return decimal
+					}
+					return e
+				}
+			}
 			// COM_STMT_EXECUTE stores even numeric packets as text. Trust only
 			// the admitted integer runtime domain, never a bare string spelling.
 			if text, ok := value.(string); ok && typed.HasRuntimeType && typed.RuntimeType.Oid.IsInteger() {
@@ -787,6 +978,22 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 	if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
 		(types.T(e.Typ.Id).IsInteger() || types.T(e.Typ.Id).IsDecimal()) {
 		source := r.rangeValue(fn.Args[0])
+		if coefficient, scale, ok := exactDecimalCoefficient(source); ok && types.T(e.Typ.Id).IsDecimal() {
+			precision := e.Typ.Width
+			if precision == 0 {
+				precision = types.T(e.Typ.Id).ToType().Width
+			}
+			if precision > 0 && precision <= types.T(e.Typ.Id).ToType().Width && e.Typ.Scale >= 0 && e.Typ.Scale <= precision {
+				converted, err := types.ParseDecimal256(coefficient.Format(scale), precision, e.Typ.Scale)
+				if err == nil {
+					before, _ := new(big.Rat).SetString(coefficient.Format(scale))
+					after, _ := new(big.Rat).SetString(converted.Format(e.Typ.Scale))
+					if before != nil && after != nil && before.Cmp(after) == 0 {
+						return source
+					}
+				}
+			}
+		}
 		if lit := source.GetLit(); lit != nil {
 			if lit.Isnull {
 				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Lit{Lit: lit}}
@@ -833,22 +1040,28 @@ func resultFiltersRejectAll(filters []*plan.Expr) bool {
 		if fn.Func.ObjName != "<=" && fn.Func.ObjName != ">=" {
 			continue
 		}
-		ref := fn.Args[0].GetCol()
-		if ref == nil || fn.Args[1].GetLit() == nil {
+		columnExpr := resultConstAccessColumn(fn.Args[0])
+		ref := columnExpr.GetCol()
+		if ref == nil {
 			continue
+		}
+		if fn.Args[1].GetLit() == nil {
+			if _, exact := resultExactRangeNumber(fn.Args[1]); !exact {
+				continue
+			}
 		}
 		key := column{ref.RelPos, ref.ColPos}
 		bound := bounds[key]
 		if fn.Func.ObjName == ">=" {
-			if bound.lower == nil || resultReversedIntegerBounds(fn.Args[1], bound.lower) {
+			if bound.lower == nil || resultReversedExactBounds(fn.Args[1], bound.lower) {
 				bound.lower = fn.Args[1]
 			}
 		} else {
-			if bound.upper == nil || resultReversedIntegerBounds(bound.upper, fn.Args[1]) {
+			if bound.upper == nil || resultReversedExactBounds(bound.upper, fn.Args[1]) {
 				bound.upper = fn.Args[1]
 			}
 		}
-		if resultReversedIntegerBounds(bound.lower, bound.upper) {
+		if resultReversedExactBounds(bound.lower, bound.upper) {
 			return true
 		}
 		bounds[key] = bound
@@ -865,7 +1078,7 @@ func resultFiltersRejectAll(filters []*plan.Expr) bool {
 					return true
 				}
 			}
-			if resultReversedIntegerBounds(fn.Args[1], fn.Args[2]) {
+			if resultReversedExactBounds(fn.Args[1], fn.Args[2]) {
 				return true
 			}
 		}

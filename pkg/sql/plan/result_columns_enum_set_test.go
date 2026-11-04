@@ -157,6 +157,21 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t where false", true},
 		{"select min(min(e)) over(),max(max(s)) over() from enum_order_t", true},
 		{"select min(e) over(),max(s) over() from enum_order_t where id=1", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=coalesce(b.id,2)", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=coalesce(b.id,2)", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=1", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 and exists(select 1 from enum_order_t b where b.id=enum_order_t.id)", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where exists(select 1 from enum_order_t b where b.id=enum_order_t.id)", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id=1 and exists(select 1 from enum_order_t b where b.id>=enum_order_t.id)", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where not(not(id=1))", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where not(id<>1)", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where not(id=1 or null)", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where not(id=1 or false)", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where not(id<>1 and null)", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id between 2.5 and 1.5", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id between 1.5 and 2.5", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id between -1.5 and -2.5", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id between 2.50 and 1.500", true},
 		{"select min(e)over(),max(s)over() from (select id,e,s from enum_order_t limit 2)d where id=(select min(id) from enum_order_t)", false},
 		{"select min(e)over(),max(s)over() from (select id,e,s from enum_order_t limit 2)d where id=1", false},
 		{"select min(e)over(),max(s)over() from (select id,e,s from enum_order_t)d where id=(select min(id) from enum_order_t)", true},
@@ -337,6 +352,8 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 		{"null_upper", []any{int32(1), nil}, true},
 		{"range", []any{int32(1), int32(2)}, false},
 		{"equal", []any{int32(1), int32(1)}, false},
+		{"decimal_reversed", []any{ParamValue{Value: "2.5", HasRuntimeType: true, RuntimeType: types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}, IsBinaryProtocol: true}, ParamValue{Value: "1.5", HasRuntimeType: true, RuntimeType: types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}, IsBinaryProtocol: true}}, true},
+		{"decimal_range", []any{ParamValue{Value: "1.5", HasRuntimeType: true, RuntimeType: types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}, IsBinaryProtocol: true}, ParamValue{Value: "2.5", HasRuntimeType: true, RuntimeType: types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}, IsBinaryProtocol: true}}, false},
 		{"sql_integer_transport", []any{ParamValue{Value: int64(2)}, ParamValue{Value: int64(1)}}, true},
 		{"binary_integer_text", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}}, true},
 		{"binary_null", []any{ParamValue{IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}}, true},
@@ -358,6 +375,11 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 			}
 			proc.SetPrepareParams(params)
 			bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_int32.ToType()}, {Position: 1, Type: types.T_int32.ToType()}}
+			if tc.name == "decimal_reversed" || tc.name == "decimal_range" {
+				for i := range bindings {
+					bindings[i].Type = types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}
+				}
+			}
 			if tc.name == "sql_integer_transport" {
 				for i := range bindings {
 					bindings[i].Type = types.T_text.ToType()
