@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -120,6 +121,7 @@ func newCNS3TombstoneWriter(
 
 	opts = append(opts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	opts = append(opts, ioutil.WithTailSizeCap(0))
+	opts = append(opts, ioutil.WithBoundedRuns())
 	if policy := chunkedColumnPolicyForService(serviceID); policy != nil {
 		opts = append(opts, ioutil.WithChunkedColumnPolicy(policy))
 	}
@@ -254,6 +256,9 @@ func newCNS3DataWriter(
 	sinkerOpts = append(sinkerOpts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	sinkerOpts = append(sinkerOpts, ioutil.WithTailSizeCap(0))
 	sinkerOpts = append(sinkerOpts, ioutil.WithOffHeap())
+	if !flushOnSync {
+		sinkerOpts = append(sinkerOpts, ioutil.WithBoundedRuns())
+	}
 	if policy := chunkedColumnPolicyForService(serviceID); policy != nil {
 		sinkerOpts = append(sinkerOpts, ioutil.WithChunkedColumnPolicy(policy))
 	}
@@ -299,6 +304,48 @@ func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, er
 	return w.sinker.WriteOwned(ctx, bat)
 }
 
+// PendingUnpublishedRuns returns the known pre-Sync object names.
+func (w *CNS3Writer) PendingUnpublishedRuns() []string {
+	return w.sinker.PendingUnpublishedRuns()
+}
+
+// RetryUnpublishedRuns abandons the current generation and retries deletion.
+func (w *CNS3Writer) RetryUnpublishedRuns(ctx context.Context) ([]string, error) {
+	return w.sinker.RetryUnpublishedRuns(ctx)
+}
+
+// CleanupUnpublished is the synchronous teardown path. It may outlive
+// cancellation, but never extends the operation's original deadline.
+func (w *CNS3Writer) CleanupUnpublished(ctx context.Context) error {
+	deadline := time.Now().Add(10 * time.Second)
+	if original, ok := ctx.Deadline(); ok && original.Before(deadline) {
+		deadline = original
+	}
+	cleanupCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	defer cancel()
+	files, err := w.RetryUnpublishedRuns(cleanupCtx)
+	if err != nil {
+		logutil.Errorf("failed to clean up unpublished CN spill objects %v: %v", files, err)
+	}
+	return err
+}
+
+// CloseWithCleanup releases a terminal writer, preserving the operation error.
+func (w *CNS3Writer) CloseWithCleanup(ctx context.Context, primary error) error {
+	var cleanupErr error
+	if !w.WorkspaceOwnsCleanup() {
+		cleanupErr = w.CleanupUnpublished(ctx)
+	}
+	closeErr := w.Close()
+	if primary != nil {
+		return primary
+	}
+	if cleanupErr != nil {
+		return cleanupErr
+	}
+	return closeErr
+}
+
 func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, err error) {
 	if err = w.sinker.Sync(ctx); err != nil {
 		return
@@ -336,9 +383,7 @@ func (w *CNS3Writer) Close() (err error) {
 	var mp *mpool.MPool
 	if w.sinker != nil {
 		mp = w.sinker.GetMPool()
-		if err = w.sinker.Close(); err != nil {
-			return
-		}
+		err = w.sinker.Close()
 		w.sinker = nil
 	}
 
@@ -347,7 +392,7 @@ func (w *CNS3Writer) Close() (err error) {
 		w.blockInfoBat = nil
 	}
 
-	return nil
+	return err
 }
 
 // DeletePersisted deletes every object this writer has persisted, or may
@@ -382,6 +427,21 @@ func (w *CNS3Writer) PersistedNames() []string {
 	return w.sinker.PersistedNames()
 }
 
+// AbandonAndRetainableNames cancels abandoned work before taking its snapshot.
+func (w *CNS3Writer) AbandonAndRetainableNames() []string {
+	if w == nil || w.sinker == nil {
+		return nil
+	}
+	return w.sinker.AbandonAndRetainableNames()
+}
+
+// CancelPending cancels a writer without waiting for its asynchronous jobs.
+func (w *CNS3Writer) CancelPending() {
+	if w != nil && w.sinker != nil {
+		w.sinker.CancelPending()
+	}
+}
+
 // HasUncommittedCapacityHook reports whether a capacity hook guards this
 // writer's persistence — the assertion point of the writer-binding
 // regressions: a direct-S3 writer bound to its workspace's admission
@@ -393,6 +453,11 @@ func (w *CNS3Writer) HasUncommittedCapacityHook() bool {
 		return false
 	}
 	return w.sinker.HasUncommittedCapacityHook()
+}
+
+// WorkspaceOwnsCleanup reports whether the transaction owns unpublished names.
+func (w *CNS3Writer) WorkspaceOwnsCleanup() bool {
+	return w != nil && w.sinker != nil && w.sinker.WorkspaceOwnsCleanup()
 }
 
 // WorkspaceSinkerCapacityOption resolves the transaction workspace's
@@ -443,6 +508,7 @@ func (w *CNS3Writer) RebindWorkspaceSinkerCapacity(proc *process.Process) {
 		return
 	}
 	w.sinker.RebindUncommittedCapacityHook(nil)
+	w.sinker.ClearWorkspaceOwnedCleanup()
 }
 
 // ClearWorkspaceSinkerCapacity drops this persistent writer's
@@ -464,6 +530,7 @@ func (w *CNS3Writer) ClearWorkspaceSinkerCapacity() {
 		return
 	}
 	w.sinker.RebindUncommittedCapacityHook(nil)
+	w.sinker.ClearWorkspaceOwnedCleanup()
 }
 
 // Reset discards any buffered or staged data accumulated since the last

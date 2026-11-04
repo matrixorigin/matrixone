@@ -1449,6 +1449,7 @@ type issue25590PostPersistFailFS struct {
 	fileservice.FileService
 	mu             sync.Mutex
 	failWhen       func() bool
+	writeHook      func(context.Context) error
 	fired          bool
 	persisted      []string
 	failedAt       string
@@ -1573,6 +1574,14 @@ func (fs *issue25590PostPersistFailFS) deleteCallCount() int {
 func (fs *issue25590PostPersistFailFS) Write(
 	ctx context.Context, vector fileservice.IOVector,
 ) error {
+	fs.mu.Lock()
+	hook := fs.writeHook
+	fs.mu.Unlock()
+	if hook != nil {
+		if err := hook(ctx); err != nil {
+			return err
+		}
+	}
 	if err := fs.FileService.Write(ctx, vector); err != nil {
 		return err
 	}
