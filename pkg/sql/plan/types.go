@@ -918,6 +918,12 @@ type BindContext struct {
 	// Result-only identities are frozen before aggregate/subquery rewrites,
 	// independently of schema provenance, which must still see those rewrites.
 	mysqlSpecialResultTypes map[int32]*plan.MySQLSpecialResultType
+	// Binding-local syntax witnesses distinguish BETWEEN from an equivalent
+	// pair of comparisons after lowering. They never enter executable plans.
+	mysqlSpecialRangeOrigins map[*plan.Expr]*plan.Expr
+	// A scalar expression producer has a different nullability contract from
+	// an ordinary nullable FROM provider, even if both flatten to LEFT JOIN.
+	mysqlSpecialScalarSource bool
 
 	// mysqlSpecialOrderTypes records the storage type behind a visible ENUM/SET
 	// display value.  It is planner-local semantic provenance: only a pure

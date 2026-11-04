@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -168,6 +169,31 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		{"select min(e)over(),max(s)over() from enum_order_t where not(id=1 or null)", true},
 		{"select min(e)over(),max(s)over() from enum_order_t where not(id=1 or false)", false},
 		{"select min(e)over(),max(s)over() from enum_order_t where not(id<>1 and null)", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=b.id", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on true where a.id=coalesce(b.id,2)", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=100)b on true where a.id=coalesce(b.id,2)", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where b.id is not null and a.id=coalesce(b.id,2)", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where b.id is not null or a.id=2", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where not(b.id is null) and a.id=coalesce(b.id,2)", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where not(not(id between 1.2 and 1.1))", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>=1.2 and id<=1.1", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id between 1.2 and 1.1", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where 1.2<=id and 1.1>=id", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>1.2 and id<1.1", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>=2.0 and id<=1.0", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>2.0 and id<1.0", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>=cast(2.0 as decimal(10,1)) and id<=1", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>=2 and id<=1.1", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>=2.2 and id<=1.2", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where 2<=id and 1>=id", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>2 and id<1", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>1 and id<2", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>2.5 and id<2.5", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where id>=1 and id<1", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where not(id<2 or id>1)", true},
+		{"select min(e)over(),max(s)over() from enum_order_t where not(id<1.2 or id>1.1)", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where (id between 1.2 and 1.1) or id=1", false},
+		{"select min(e)over(),max(s)over() from enum_order_t where not(id between 1.2 and 1.1)", false},
 		{"select min(e)over(),max(s)over() from enum_order_t where id between 2.5 and 1.5", true},
 		{"select min(e)over(),max(s)over() from enum_order_t where id between 1.5 and 2.5", false},
 		{"select min(e)over(),max(s)over() from enum_order_t where id between -1.5 and -2.5", true},
@@ -354,6 +380,13 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 		{"equal", []any{int32(1), int32(1)}, false},
 		{"decimal_reversed", []any{ParamValue{Value: "2.5", HasRuntimeType: true, RuntimeType: types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}, IsBinaryProtocol: true}, ParamValue{Value: "1.5", HasRuntimeType: true, RuntimeType: types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}, IsBinaryProtocol: true}}, true},
 		{"decimal_range", []any{ParamValue{Value: "1.5", HasRuntimeType: true, RuntimeType: types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}, IsBinaryProtocol: true}, ParamValue{Value: "2.5", HasRuntimeType: true, RuntimeType: types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}, IsBinaryProtocol: true}}, false},
+		{"sql_decimal_text", []any{ParamValue{Value: "2.5", HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}, ParamValue{Value: "1.5", HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}}, true},
+		{"sql_decimal_native", []any{ParamValue{Value: types.Decimal64(25), HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}, ParamValue{Value: types.Decimal64(15), HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}}, true},
+		{"sql_decimal_128", []any{ParamValue{Value: types.Decimal128{B0_63: 25}, HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal128, Width: 38, Scale: 1}}, ParamValue{Value: types.Decimal128{B0_63: 15}, HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal128, Width: 38, Scale: 1}}}, true},
+		{"sql_decimal_256", []any{ParamValue{Value: types.Decimal256{B0_63: 25}, HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal256, Width: 76, Scale: 1}}, ParamValue{Value: types.Decimal256{B0_63: 15}, HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal256, Width: 76, Scale: 1}}}, true},
+		{"sql_decimal_runtime_string", []any{ParamValue{Value: "2.5", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), HasSourceType: true, SourceType: types.T_decimal64.ToType()}, ParamValue{Value: "1.5", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), HasSourceType: true, SourceType: types.T_decimal64.ToType()}}, false},
+		{"sql_decimal_range", []any{ParamValue{Value: types.Decimal64(15), HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}, ParamValue{Value: types.Decimal64(25), HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}}, false},
+		{"sql_decimal_string_source", []any{ParamValue{Value: "2.5", HasSourceType: true, SourceType: types.T_varchar.ToType()}, ParamValue{Value: "1.5", HasSourceType: true, SourceType: types.T_varchar.ToType()}}, false},
 		{"sql_integer_transport", []any{ParamValue{Value: int64(2)}, ParamValue{Value: int64(1)}}, true},
 		{"binary_integer_text", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}}, true},
 		{"binary_null", []any{ParamValue{IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}}, true},
@@ -380,7 +413,7 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 					bindings[i].Type = types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}
 				}
 			}
-			if tc.name == "sql_integer_transport" {
+			if tc.name == "sql_integer_transport" || strings.HasPrefix(tc.name, "sql_decimal_") {
 				for i := range bindings {
 					bindings[i].Type = types.T_text.ToType()
 				}

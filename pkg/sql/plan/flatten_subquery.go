@@ -501,6 +501,13 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 
 	subID := subquery.NodeId
 	subCtx := builder.ctxByNode[subID]
+	if subquery.Typ == plan.SubqueryRef_SCALAR {
+		owner := subCtx
+		if owner.queryBlockOwner != nil {
+			owner = owner.queryBlockOwner
+		}
+		owner.mysqlSpecialScalarSource = true
+	}
 	var scalarMatches []*plan.Expr
 	var scalarOuterResults []*plan.Expr
 	var scalarExistential bool

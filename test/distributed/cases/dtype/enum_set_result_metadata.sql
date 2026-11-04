@@ -307,4 +307,83 @@ from jdbc_enum_set_metadata where id between 1.5 and 2.5;
 select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between -1.5 and -2.5;
 -- @metacmp(true)
 select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 2.50 and 1.500;
+-- WHERE null rejection may discharge conditional LEFT null-extension; ON alone cannot.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where a.id=b.id;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=100)b on true where a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where b.id is not null and a.id=coalesce(b.id,2);
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where b.id is not null or a.id=2;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id where not(b.id is null) and a.id=coalesce(b.id,2);
+-- Identical empty row sets need not have identical MySQL window-omission eligibility.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=1.2 and id<=1.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where 1.2<=id and 1.1>=id;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>1.2 and id<1.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id between 1.2 and 1.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(not(id between 1.2 and 1.1));
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where (id between 1.2 and 1.1) or id=1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id between 1.2 and 1.1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where 2<=id and 1>=id;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>2 and id<1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>1 and id<2;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=1 and id<1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id<2 or id>1);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where not(id<1.2 or id>1.1);
+-- Fractional comparisons fold to strict integral endpoints, not observed integer-set emptiness.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=2.0 and id<=1.0;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>2.0 and id<1.0;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=cast(2.0 as decimal(10,1)) and id<=1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=2 and id<=1.1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where id>=2.2 and id<=1.2;
+-- SQL variable decimals retain source scale independently of binary packet runtime types.
+prepare enum_decimal_source from 'select min(e)over() as min_e,max(s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata where id between ? and ?';
+set @enum_decimal_lo=2.5,@enum_decimal_hi=1.5;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=1.5,@enum_decimal_hi=2.5;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=null,@enum_decimal_hi=2.5;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=1.5,@enum_decimal_hi=null;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=2.50,@enum_decimal_hi=1.500;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+set @enum_decimal_lo=1.5,@enum_decimal_hi=2.5;
+-- @metacmp(true)
+execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
+deallocate prepare enum_decimal_source;
+set @enum_decimal_lo=null,@enum_decimal_hi=null;
 drop table jdbc_enum_set_metadata;

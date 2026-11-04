@@ -55,12 +55,35 @@ type resultMaterialization struct {
 	values           []any
 	scopes           []*BindContext
 	usedValues       bool
+	rangeOrigins     map[*plan.Expr]*plan.Expr
 }
 
 func newResultMaterialization(query *plan.Query, values []any, scopes ...[]*BindContext) *resultMaterialization {
 	r := &resultMaterialization{query: query, values: values}
 	if len(scopes) > 0 {
 		r.scopes = scopes[0]
+		var seen map[*BindContext]bool
+		for _, scope := range r.scopes {
+			if scope == nil {
+				continue
+			}
+			if scope.queryBlockOwner != nil {
+				scope = scope.queryBlockOwner
+			}
+			if len(scope.mysqlSpecialRangeOrigins) == 0 || seen[scope] {
+				continue
+			}
+			if seen == nil {
+				seen = make(map[*BindContext]bool)
+			}
+			seen[scope] = true
+			for lowered, origin := range scope.mysqlSpecialRangeOrigins {
+				if r.rangeOrigins == nil {
+					r.rangeOrigins = make(map[*plan.Expr]*plan.Expr)
+				}
+				r.rangeOrigins[lowered] = origin
+			}
+		}
 	}
 	const unknown = uint8(2) // bounds are saturated at 0, 1, or unknown/many
 	memo := make(map[int32]uint8)
@@ -284,9 +307,10 @@ func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.E
 		return false
 	}
 	rightOwner := r.blockOwner(join.Children[1])
+	nullRejected := r.joinRightNullRejected(join, append(append([]*plan.Expr(nil), filters...), join.FilterList...))
 	scalar := rightOwner != nil && !rightOwner.isCorrelated && r.bound(join.Children[1]) <= 1 &&
 		(join.JoinType == plan.Node_SINGLE || join.JoinType == plan.Node_INNER ||
-			join.JoinType == plan.Node_LEFT && !r.joinOnUsesLeft(join))
+			join.JoinType == plan.Node_LEFT && (!r.joinOnUsesLeft(join) || nullRejected))
 	// A rejected outer-join provider cannot multiply its preserved input.
 	admitted := scalar || join.JoinType == plan.Node_LEFT && (resultFiltersRejectAll(join.OnList) || r.bound(join.Children[1]) == 0)
 	switch join.JoinType {
@@ -334,11 +358,17 @@ func (r *resultMaterialization) joinKeyFilter(join *plan.Node, filters []*plan.E
 	}
 	constraints := append(append([]*plan.Expr(nil), filters...), join.FilterList...)
 	// ON constrains output rows only for an INNER join. Outer-join ON is not WHERE.
-	if join.JoinType == plan.Node_INNER {
+	if join.JoinType == plan.Node_INNER || join.JoinType == plan.Node_LEFT && nullRejected {
 		constraints = append(constraints, join.OnList...)
 	}
 	proofs := make([]*plan.Expr, 0, len(constraints))
 	for _, filter := range constraints {
+		if join.JoinType == plan.Node_LEFT && !nullRejected &&
+			(rightOwner == nil || !rightOwner.mysqlSpecialScalarSource) && r.joinRightNullMasked(join, filter) {
+			// A nullable FROM value inside COALESCE/CASE does not qualify
+			// MySQL const access, even when ON TRUE makes it row-invariant.
+			continue
+		}
 		proofs = append(proofs, resultProofExpr(filter, func(e *plan.Expr) *plan.Expr {
 			route := r.keyJoinRoute(join, e)
 			if route.childIdx == 1 && scalar {
@@ -514,6 +544,70 @@ func (r *resultMaterialization) elided(root int32, expr *plan.Expr) bool {
 		}
 	}
 	return true
+}
+
+// A strict WHERE consumer can discard every right-NULL-extended row. ON
+// predicates are deliberately not passed here: they do not reject outer rows.
+func (r *resultMaterialization) joinRightNullRejected(join *plan.Node, filters []*plan.Expr) bool {
+	var nullOnRight func(*plan.Expr) bool
+	nullOnRight = func(e *plan.Expr) bool {
+		if e.GetCol() != nil {
+			return r.keyJoinRoute(join, e).childIdx == 1
+		}
+		if fn := e.GetF(); fn != nil && fn.Func != nil {
+			switch fn.Func.ObjName {
+			case "cast", "+", "-", "*", "/", "%", "abs", "unary_minus":
+				for _, arg := range fn.Args {
+					if nullOnRight(arg) {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	}
+	for _, filter := range resultPredicateAtoms(filters) {
+		if fn := filter.GetF(); fn != nil && fn.Func != nil {
+			switch fn.Func.ObjName {
+			case "=", "!=", "<>", "<", ">", "<=", ">=", "isnotnull", "is_not_null":
+				for _, arg := range fn.Args {
+					if nullOnRight(arg) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (r *resultMaterialization) joinRightNullMasked(join *plan.Node, e *plan.Expr) bool {
+	var right func(*plan.Expr) bool
+	right = func(e *plan.Expr) bool {
+		if e.GetCol() != nil && r.keyJoinRoute(join, e).childIdx == 1 {
+			return true
+		}
+		if fn := e.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if right(arg) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if fn := e.GetF(); fn != nil && fn.Func != nil {
+		switch fn.Func.ObjName {
+		case "coalesce", "ifnull", "if", "iff", "case":
+			return right(e)
+		}
+		for _, arg := range fn.Args {
+			if r.joinRightNullMasked(join, arg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r *resultMaterialization) joinOnUsesLeft(node *plan.Node) bool {
@@ -793,6 +887,12 @@ func resultPredicateNegation(e *plan.Expr, negate bool) *plan.Expr {
 				resultPredicateNegation(fn.Args[0], negate), resultPredicateNegation(fn.Args[1], negate),
 			}}}}
 		}
+		if negate && len(fn.Args) == 1 {
+			inverse := map[string]string{"isnull": "isnotnull", "is_null": "is_not_null", "isnotnull": "isnull", "is_not_null": "is_null"}[name]
+			if inverse != "" {
+				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: inverse}, Args: fn.Args}}}
+			}
+		}
 		if negate && len(fn.Args) == 2 {
 			inverse := map[string]string{"=": "<>", "<>": "=", "!=": "=", "<": ">=", ">": "<=", "<=": ">", ">=": "<"}[name]
 			if inverse != "" {
@@ -855,6 +955,9 @@ func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
 	proofs := make([]*plan.Expr, len(filters))
 	var predicate func(*plan.Expr) *plan.Expr
 	predicate = func(e *plan.Expr) *plan.Expr {
+		if origin := r.rangeOrigins[e]; origin != nil {
+			e = origin
+		}
 		fn := e.GetF()
 		if fn == nil || fn.Func == nil {
 			return e
@@ -862,7 +965,7 @@ func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
 		copyFn := *fn
 		copyFn.Args = append([]*plan.Expr(nil), fn.Args...)
 		switch fn.Func.ObjName {
-		case "and", "or":
+		case "and", "or", "not":
 			for i, arg := range copyFn.Args {
 				copyFn.Args[i] = predicate(arg)
 			}
@@ -883,7 +986,7 @@ func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
 	return resultFiltersRejectAll(proofs)
 }
 
-// Interpret only admitted integer/null transport, never execute expressions or
+// Interpret only admitted exact-number/null transport, never execute expressions or
 // guess string/float conversions. The source owner records value dependence.
 func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 	if p := e.GetP(); p != nil && p.Pos >= 0 && int(p.Pos) < len(r.values) {
@@ -892,8 +995,21 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 		wireInteger := false
 		if typed, ok := value.(ParamValue); ok {
 			value = typed.Value
-			if typed.HasRuntimeType && typed.RuntimeType.Oid.IsDecimal() {
-				if text, ok := value.(string); ok {
+			decimalType := typed.RuntimeType
+			if !typed.HasRuntimeType && typed.HasSourceType {
+				decimalType = typed.SourceType
+			}
+			if (typed.HasRuntimeType || typed.HasSourceType) && decimalType.Oid.IsDecimal() {
+				decimalValue := value
+				switch v := value.(type) {
+				case types.Decimal64:
+					decimalValue = v.Format(decimalType.Scale)
+				case types.Decimal128:
+					decimalValue = v.Format(decimalType.Scale)
+				case types.Decimal256:
+					decimalValue = v.Format(decimalType.Scale)
+				}
+				if text, ok := decimalValue.(string); ok {
 					domain, _, canonical, ok := PreparedDecimalRuntimeDomains(text)
 					if !ok {
 						return e
@@ -1019,10 +1135,15 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 }
 
 func resultFiltersRejectAll(filters []*plan.Expr) bool {
-	// BETWEEN's fallback uses >= AND <=; keep the same admission normalization.
+	// Compare ordinary predicates in MySQL's folded field domain, not by raw
+	// mathematical emptiness. BETWEEN keeps a separate binding-time syntax
+	// witness because its omission eligibility precedes comparison lowering.
 	atoms := resultPredicateAtoms(filters)
 	type column struct{ relation, position int32 }
-	type interval struct{ lower, upper *plan.Expr }
+	type interval struct {
+		lower, upper             *big.Rat
+		lowerStrict, upperStrict bool
+	}
 	bounds := make(map[column]interval)
 	for _, filter := range atoms {
 		fn := filter.GetF()
@@ -1037,32 +1158,64 @@ func resultFiltersRejectAll(filters []*plan.Expr) bool {
 				}
 			}
 		}
-		if fn.Func.ObjName != "<=" && fn.Func.ObjName != ">=" {
+		op := fn.Func.ObjName
+		if op != "<=" && op != ">=" && op != "<" && op != ">" {
 			continue
 		}
-		columnExpr := resultConstAccessColumn(fn.Args[0])
-		ref := columnExpr.GetCol()
-		if ref == nil {
-			continue
-		}
-		if fn.Args[1].GetLit() == nil {
-			if _, exact := resultExactRangeNumber(fn.Args[1]); !exact {
-				continue
+		columnExpr, value := resultConstAccessColumn(fn.Args[0]), fn.Args[1]
+		if columnExpr.GetCol() == nil {
+			columnExpr, value = resultConstAccessColumn(fn.Args[1]), fn.Args[0]
+			switch op {
+			case "<":
+				op = ">"
+			case "<=":
+				op = ">="
+			case ">":
+				op = "<"
+			case ">=":
+				op = "<="
 			}
+		}
+		ref := columnExpr.GetCol()
+		number, exact := resultExactRangeNumber(value)
+		if ref == nil || !exact {
+			continue
 		}
 		key := column{ref.RelPos, ref.ColPos}
 		bound := bounds[key]
-		if fn.Func.ObjName == ">=" {
-			if bound.lower == nil || resultReversedExactBounds(fn.Args[1], bound.lower) {
-				bound.lower = fn.Args[1]
+		strict := op == "<" || op == ">"
+		if types.T(columnExpr.Typ.Id).IsInteger() && !number.IsInt() {
+			// Match MySQL's integer-field comparison fold, not mathematical
+			// integer-set emptiness: >=1.2 becomes >1, <=1.1 becomes <2.
+			// The resulting open interval (1,2) does not omit the window.
+			whole := new(big.Int).Quo(number.Num(), number.Denom())
+			if number.Sign() < 0 {
+				whole.Sub(whole, big.NewInt(1))
+			}
+			if op == "<" || op == "<=" {
+				whole.Add(whole, big.NewInt(1))
+			}
+			number = new(big.Rat).SetInt(whole)
+			strict = true
+		}
+		if op == ">=" || op == ">" {
+			if bound.lower == nil || number.Cmp(bound.lower) > 0 {
+				bound.lower, bound.lowerStrict = number, strict
+			} else if number.Cmp(bound.lower) == 0 {
+				bound.lowerStrict = bound.lowerStrict || strict
 			}
 		} else {
-			if bound.upper == nil || resultReversedExactBounds(bound.upper, fn.Args[1]) {
-				bound.upper = fn.Args[1]
+			if bound.upper == nil || number.Cmp(bound.upper) < 0 {
+				bound.upper, bound.upperStrict = number, strict
+			} else if number.Cmp(bound.upper) == 0 {
+				bound.upperStrict = bound.upperStrict || strict
 			}
 		}
-		if resultReversedExactBounds(bound.lower, bound.upper) {
-			return true
+		if bound.lower != nil && bound.upper != nil {
+			cmp := bound.lower.Cmp(bound.upper)
+			if cmp > 0 || cmp == 0 && (bound.lowerStrict || bound.upperStrict) {
+				return true
+			}
 		}
 		bounds[key] = bound
 	}

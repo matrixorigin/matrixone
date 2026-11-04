@@ -4950,6 +4950,21 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.observeExpressionProtocol)
 		}
 		if err == nil {
+			if name == "between" && b.ctx != nil && e.GetF().GetFunc().GetObjName() == "and" {
+				// Numeric overload resolution may lower BETWEEN even before
+				// the folding observer. Preserve the bound call's syntax here.
+				rangeOrigin := &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "between"}, Args: DeepCopyExprList(args),
+				}}}
+				owner := b.ctx
+				if owner.queryBlockOwner != nil {
+					owner = owner.queryBlockOwner
+				}
+				if owner.mysqlSpecialRangeOrigins == nil {
+					owner.mysqlSpecialRangeOrigins = make(map[*plan.Expr]*plan.Expr)
+				}
+				owner.mysqlSpecialRangeOrigins[e] = rangeOrigin
+			}
 			if b.builder != nil && b.builder.integerPrecision != nil {
 				b.builder.integerPrecision.captureFunction(name, integerInputs, e)
 			}

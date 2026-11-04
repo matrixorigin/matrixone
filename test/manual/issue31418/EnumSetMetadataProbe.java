@@ -117,6 +117,38 @@ public final class EnumSetMetadataProbe {
         }
     }
 
+    private static void sqlDecimalPrepared(Statement statement,String[][] ranges) throws Exception {
+        statement.execute("PREPARE enum_decimal_range FROM 'SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN ? AND ?'");
+        try {
+            for (String[] range:ranges) {
+                statement.execute("SET @enum_decimal_lo="+range[0]+",@enum_decimal_hi="+range[1]);
+                boolean empty=range[0].equals("NULL") || range[1].equals("NULL") ||
+                        new BigDecimal(range[0]).compareTo(new BigDecimal(range[1]))>0;
+                try (ResultSet result=statement.executeQuery("EXECUTE enum_decimal_range USING @enum_decimal_lo,@enum_decimal_hi")) {
+                    rows(result,empty ? Types.CHAR : Types.VARCHAR,false,
+                            empty ? Collections.<List<String>>emptyList() : Collections.singletonList(Arrays.asList("","")),
+                            "SQL decimal "+Arrays.toString(range));
+                    labelWidths(result.getMetaData());
+                }
+            }
+        } finally {
+            statement.execute("DEALLOCATE PREPARE enum_decimal_range");
+        }
+    }
+
+    private static void sqlDecimalRanges(Connection connection) throws Exception {
+        String[][] ranges={{"2.5","1.5"},{"1.5","2.5"},{"NULL","2.5"},{"1.5","NULL"},{"2.50","1.500"},{"1.5","2.5"}};
+        try (Statement statement=connection.createStatement()) {
+            statement.setQueryTimeout(30);
+            try {
+                for (String[] range:ranges) sqlDecimalPrepared(statement,new String[][]{range});
+                sqlDecimalPrepared(statement,ranges);
+            } finally {
+                statement.execute("SET @enum_decimal_lo=NULL,@enum_decimal_hi=NULL");
+            }
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length != 3) throw new IllegalArgumentException("JDBC_URL USER PASSWORD");
         for (String mode : new String[]{"statement", "client-prepared", "server-prepared", "cursor"}) {
@@ -387,14 +419,26 @@ public final class EnumSetMetadataProbe {
                             "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT 1 FROM t b WHERE b.id=t.id)",
                             "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(NOT(id=1))",
                             "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id<>1)",
-                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id<>1 AND NULL)"}) {
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id<>1 AND NULL)",
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE a.id=b.id",
+                            "SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE b.id IS NOT NULL AND a.id=COALESCE(b.id,2)"}) {
                         query(connection,mode,sql,constantWindowType,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
                     }
                     for (String sql:new String[]{
                             "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id=1 OR NULL)",
                             "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN 2.5 AND 1.5",
                             "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN -1.5 AND -2.5",
-                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN 2.50 AND 1.500"}) {
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN 2.50 AND 1.500",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN 1.2 AND 1.1",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE 2<=id AND 1>=id",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id>2 AND id<1",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id>=1 AND id<1",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE NOT(id<2 OR id>1)",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id>=2.0 AND id<=1.0",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id>2.0 AND id<1.0",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id>=CAST(2.0 AS DECIMAL(10,1)) AND id<=1",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id>=2 AND id<=1.1",
+                            "SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id>=2.2 AND id<=1.2"}) {
                         query(connection,mode,sql,constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
                     }
                     query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id=1 AND EXISTS(SELECT 1 FROM t b WHERE b.id>=t.id)",
@@ -405,6 +449,16 @@ public final class EnumSetMetadataProbe {
                             Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("","")));
                     query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER(),COUNT(*)OVER() FROM t WHERE id BETWEEN 1.5 AND 2.5",
                             Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("","","1")),3);
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=1)b ON TRUE WHERE a.id=COALESCE(b.id,2)",
+                            Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN (SELECT id FROM t WHERE id=100)b ON TRUE WHERE a.id=COALESCE(b.id,2)",
+                            Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("","")));
+                    for (String predicate:new String[]{"id>=1.2 AND id<=1.1","1.2<=id AND 1.1>=id","id>1.2 AND id<1.1",
+                            "id>1 AND id<2","id>2.5 AND id<2.5","NOT(id<1.2 OR id>1.1)"}) {
+                        query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE "+predicate,
+                                Types.VARCHAR,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    }
+                    if (mode.equals("statement")) sqlDecimalRanges(connection);
                     if (mode.equals("server-prepared") || mode.equals("cursor")) {
                         String[][] decimalRanges={{"2.5","1.5"},{"1.5","2.5"},{"2.50","1.500"},{null,"2.5"},{"1.5",null},{"1.5","2.5"},{"2.5","1.5"}};
                         String decimalSql="SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN ? AND ?";
