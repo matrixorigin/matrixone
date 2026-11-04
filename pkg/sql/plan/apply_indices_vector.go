@@ -158,6 +158,9 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 	if scanNode == nil {
 		return nil
 	}
+	if sortNode.Limit != nil {
+		builder.mergeVectorSortProjects(sortNode)
+	}
 
 	orderExpr := sortNode.OrderBy[0].Expr
 	distFnExpr := orderExpr.GetF()
@@ -168,6 +171,9 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 		}
 		childNode = builder.qry.Nodes[sortNode.Children[0]]
 		if childNode.NodeType == plan.Node_PROJECT {
+			if len(childNode.Children) != 1 || childNode.Children[0] != scanNode.NodeId {
+				return nil
+			}
 			// Bounds-check: the ORDER BY column indexes the child project's list, but the
 			// two can disagree. `select count(*) from (<top-k>) t` prunes the derived
 			// table's projection to nothing while the sort still carries ColPos from
@@ -180,6 +186,16 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 		}
 		if distFnExpr == nil {
 			return nil
+		}
+	} else if len(sortNode.Children) == 1 {
+		// A distance over the columns of a PROJECT between the sort and the scan is read in
+		// the scan's columns, and the PROJECT is detached with its columns remapped.
+		if child := builder.qry.Nodes[sortNode.Children[0]]; child.NodeType == plan.Node_PROJECT {
+			if len(child.Children) != 1 || child.Children[0] != scanNode.NodeId || len(child.BindingTags) == 0 {
+				return nil
+			}
+			distFnExpr = replaceColumnsForExpr(DeepCopyExpr(orderExpr), buildIvfChildProjectionMap(child)).GetF()
+			childNode = child
 		}
 	}
 
@@ -224,6 +240,49 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 		rankOption:       rankOption,
 		providerNodeID:   -1,
 		membershipNodeID: -1,
+	}
+}
+
+// mergeVectorSortProjects inlines the PROJECTs below the PROJECT under a Top-K sort by a
+// vector distance into it, while their expressions can be inlined, so that one PROJECT sits
+// between the sort and the scan.
+func (builder *QueryBuilder) mergeVectorSortProjects(sortNode *plan.Node) {
+	if len(sortNode.Children) != 1 {
+		return
+	}
+	top := builder.qry.Nodes[sortNode.Children[0]]
+	if top.NodeType != plan.Node_PROJECT || len(top.Children) != 1 {
+		return
+	}
+	order := sortNode.OrderBy[0].Expr
+	if col := order.GetCol(); col != nil && col.ColPos >= 0 && int(col.ColPos) < len(top.ProjectList) {
+		order = top.ProjectList[col.ColPos]
+	}
+	if fn := order.GetF(); fn == nil {
+		return
+	} else if _, ok := metric.DistFuncOpTypes[fn.Func.ObjName]; !ok {
+		return
+	}
+	for {
+		inner := builder.qry.Nodes[top.Children[0]]
+		if inner.NodeType != plan.Node_PROJECT || len(inner.Children) != 1 || len(inner.BindingTags) == 0 ||
+			inner.Limit != nil || inner.Offset != nil || len(inner.FilterList) > 0 ||
+			builder.isFullTextBooleanScoreProject(inner) {
+			return
+		}
+		if _, protected := builder.existentialGateProjects[inner.NodeId]; protected {
+			return
+		}
+		if _, groupingSetExpand := DecodeGroupingSetExpandOption(inner.ExtraOptions); groupingSetExpand {
+			return
+		}
+		for _, expr := range inner.ProjectList {
+			if !exprCanRemoveProject(expr) {
+				return
+			}
+		}
+		replaceColumnsForExprList(top.ProjectList, buildIvfChildProjectionMap(inner))
+		top.Children[0] = inner.Children[0]
 	}
 }
 
@@ -1355,6 +1414,32 @@ func hasNonDistFnFilter(filters []*plan.Expr, partPos int32, origFuncName string
 // SAME query vector as vecLitArg — see sameQueryPayload. This is a real value comparison: a distance
 // on the same column but a DIFFERENT vector must NOT become this index's score (that would silently
 // report the wrong distance).
+// replaceProjectDistFnsWithScoreCol replaces the distance calls of projNode on the scan's
+// vector column, read directly or through a column of childNode, with the score column.
+func replaceProjectDistFnsWithScoreCol(
+	projNode, childNode *plan.Node,
+	scanBindingTag, partPos int32,
+	origFuncName string,
+	vecLitArg *plan.Expr,
+	tableFuncTag int32,
+	scoreColType plan.Type,
+) {
+	if projNode == nil {
+		return
+	}
+	replaceDistFnExprsWithScoreCol(projNode.ProjectList, scanBindingTag, partPos,
+		origFuncName, vecLitArg, tableFuncTag, scoreColType)
+	if childNode == nil || len(childNode.BindingTags) == 0 {
+		return
+	}
+	for i, expr := range childNode.ProjectList {
+		if col := expr.GetCol(); col != nil && col.RelPos == scanBindingTag && col.ColPos == partPos {
+			replaceDistFnExprsWithScoreCol(projNode.ProjectList, childNode.BindingTags[0], int32(i),
+				origFuncName, vecLitArg, tableFuncTag, scoreColType)
+		}
+	}
+}
+
 func replaceDistFnExprsWithScoreCol(
 	exprs []*plan.Expr,
 	scanBindingTag, partPos int32,
