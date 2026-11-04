@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -276,6 +277,39 @@ func (sm *snapshotManager) parse(dir string) (int, error) {
 		return 0, err
 	}
 	return index, nil
+}
+
+// ReconcileInterruptedExport removes exported snapshots left after Dragonboat
+// renamed a completed snapshot but before it removed its completion flag.
+// Call this only during store startup, before the replica can export again.
+func (sm *snapshotManager) ReconcileInterruptedExport(shardID, replicaID uint64) error {
+	path := sm.exportPath(shardID, replicaID)
+	if err := sm.prepareDir(path); err != nil {
+		return err
+	}
+	names, err := sm.cfg.FS.List(path)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		var index uint64
+		count, err := fmt.Sscanf(name, snapshotPathPattern, &index)
+		if err != nil || count != 1 || name != fmt.Sprintf(snapshotPathPattern, index) {
+			continue
+		}
+		dir := sm.cfg.FS.PathJoin(path, name)
+		_, err = sm.cfg.FS.Stat(sm.cfg.FS.PathJoin(dir, "dragonboat.snapshot.message"))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := sm.cfg.FS.RemoveAll(dir); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Init implements the ISnapshotManager interface.

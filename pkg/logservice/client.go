@@ -35,6 +35,9 @@ import (
 
 const (
 	defaultWriteSocketSize = 64 * 1024
+	// A Read is safe to repeat after an isolated connection stops answering.
+	// This leaves room to try another replica within the WAL caller's deadline.
+	defaultLogServiceReadAttemptTimeout = 7 * time.Second
 )
 
 var (
@@ -252,9 +255,16 @@ func (c *managedClient) Read(ctx context.Context,
 		if err := c.prepareClient(ctx); err != nil {
 			return nil, 0, err
 		}
-		recs, v, err := c.client.read(ctx, firstLsn, maxSize)
+		attemptCtx, cancel := context.WithTimeout(ctx, defaultLogServiceReadAttemptTimeout)
+		recs, v, err := c.client.read(attemptCtx, firstLsn, maxSize)
+		attemptExpired := attemptCtx.Err() == context.DeadlineExceeded
+		cancel()
 		if err != nil {
 			c.resetClient()
+		}
+		if ctx.Err() == nil && err != nil &&
+			(attemptExpired || morpc.IsConnectionError(err)) {
+			continue
 		}
 		if c.isRetryableError(err) {
 			continue

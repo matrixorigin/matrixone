@@ -536,6 +536,9 @@ func (l *store) startReplicas(ctx context.Context) error {
 				}
 			}
 		} else {
+			if err := l.snapshotMgr.ReconcileInterruptedExport(rec.ShardID, rec.ReplicaID); err != nil {
+				return err
+			}
 			if !rec.NonVoting {
 				if err := l.startReplica(rec.ShardID, rec.ReplicaID, nil, false); err != nil {
 					return err

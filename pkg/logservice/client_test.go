@@ -18,9 +18,11 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -453,6 +455,120 @@ func (c *closeTrackingRPCClient) Close() error {
 
 func (c *closeTrackingRPCClient) CloseBackend() error {
 	return nil
+}
+
+// The proxy keeps forwarding requests but drops responses after CONNECT has
+// succeeded. This models a blackholed established connection: APPEND may
+// commit even though its caller cannot learn the result.
+func startDroppingResponseProxy(t *testing.T, target string) (string, *atomic.Bool, func()) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var drop atomic.Bool
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	connections := make(map[net.Conn]struct{})
+	track := func(conn net.Conn, add bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if add {
+			connections[conn] = struct{}{}
+		} else {
+			delete(connections, conn)
+		}
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			clientConn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			serverConn, err := net.DialTimeout("tcp", target, time.Second)
+			if err != nil {
+				clientConn.Close()
+				continue
+			}
+			track(clientConn, true)
+			track(serverConn, true)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer track(clientConn, false)
+				defer track(serverConn, false)
+				defer clientConn.Close()
+				defer serverConn.Close()
+				forwardDone := make(chan struct{})
+				go func() {
+					_, _ = io.Copy(serverConn, clientConn)
+					close(forwardDone)
+				}()
+				buf := make([]byte, 64*1024)
+				for {
+					n, err := serverConn.Read(buf)
+					if err != nil {
+						break
+					}
+					if !drop.Load() {
+						if _, err := clientConn.Write(buf[:n]); err != nil {
+							break
+						}
+					}
+				}
+				clientConn.Close()
+				serverConn.Close()
+				<-forwardDone
+			}()
+		}
+	}()
+	cleanup := func() {
+		listener.Close()
+		mu.Lock()
+		for conn := range connections {
+			conn.Close()
+		}
+		mu.Unlock()
+		wg.Wait()
+	}
+	return listener.Addr().String(), &drop, cleanup
+}
+
+func TestReadRetriesBlackholedEstablishedConnection(t *testing.T) {
+	RunClientTest(t, false, nil, func(t *testing.T, s *Service, cfg ClientConfig, healthy Client) {
+		address, drop, cleanup := startDroppingResponseProxy(t, s.cfg.LogServiceServiceAddr())
+		defer cleanup()
+		cfg.ServiceAddresses = []string{address}
+		cfg.DiscoveryAddress = ""
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		throughProxy, err := NewClient(ctx, s.ID(), cfg)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, throughProxy.Close()) }()
+
+		record := healthy.GetLogRecord(8)
+		copy(record.Data[12:], "read1234")
+		lsn, err := healthy.Append(ctx, record)
+		require.NoError(t, err)
+		_, _, err = throughProxy.Read(ctx, lsn, 1<<20)
+		require.NoError(t, err, "the established connection is healthy before isolation")
+
+		throughProxy.(*managedClient).cfg.ServiceAddresses = []string{s.cfg.LogServiceServiceAddr()}
+		drop.Store(true)
+		started := time.Now()
+		records, _, err := throughProxy.Read(ctx, lsn, 1<<20)
+		require.NoError(t, err)
+		require.Less(t, time.Since(started), 3*defaultLogServiceReadAttemptTimeout)
+		require.NoError(t, ctx.Err())
+		found := false
+		for _, got := range records {
+			if got.Lsn == lsn {
+				require.Equal(t, record.Data, got.Data)
+				found = true
+			}
+		}
+		require.True(t, found, "the acknowledged record must be returned after failover")
+	})
 }
 
 func startHangingTCPServer(t *testing.T) (string, func()) {
