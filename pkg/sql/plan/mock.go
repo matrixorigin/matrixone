@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -124,6 +125,15 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		return m.ResolveVariableFunc(varName, isSystemVar, isGlobalVar)
 	}
 	switch varName {
+	case "optimizer_hints":
+		proc := m.GetProcess()
+		if proc == nil {
+			return "", nil
+		}
+		if value, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(varName); ok {
+			return value, nil
+		}
+		return "", nil
 	case "str_var":
 		return "str", nil
 	case "int_var":
