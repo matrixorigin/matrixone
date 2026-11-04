@@ -479,6 +479,31 @@ func TestScanSnapshotWithCurrentRangesUsesRangePartitionState(t *testing.T) {
 	pState := newTestMaterializedSnapshotPartitionState(t, mp, []testMaterializedSnapshotRow{
 		{rowID: rowID, ts: types.BuildTS(10, 0), id: 7, payload: 70},
 	})
+	// A later in-memory delete must not hide the row in this older snapshot.
+	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	tsVec := vector.NewVec(types.T_TS.ToType())
+	pkVec := vector.NewVec(types.T_int64.ToType())
+	tombstoneRowIDVec := vector.NewVec(types.T_Rowid.ToType())
+	defer rowIDVec.Free(mp)
+	defer tsVec.Free(mp)
+	defer pkVec.Free(mp)
+	defer tombstoneRowIDVec.Free(mp)
+	require.NoError(t, vector.AppendFixed(rowIDVec, rowID, false, mp))
+	require.NoError(t, vector.AppendFixed(tsVec, types.BuildTS(25, 0), false, mp))
+	require.NoError(t, vector.AppendFixed(pkVec, int64(7), false, mp))
+	require.NoError(t, vector.AppendFixed(tombstoneRowIDVec, types.RandomRowid(), false, mp))
+
+	packer := types.NewPacker()
+	defer packer.Close()
+	pState.HandleRowsDelete(context.Background(), &api.Batch{
+		Attrs: []string{"rowid", "time"},
+		Vecs: []api.Vector{
+			mustVectorToProtoForMaterializedSnapshotTest(t, rowIDVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, tsVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, pkVec),
+			mustVectorToProtoForMaterializedSnapshotTest(t, tombstoneRowIDVec),
+		},
+	}, packer, mp)
 	relData := readutil.NewBlockListRelationData(
 		0,
 		readutil.WithPartitionState(pState),

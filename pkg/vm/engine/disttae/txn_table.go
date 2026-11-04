@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -250,7 +251,7 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	published, err := tbl.getPublishedStats(ctx, sync)
-	if err != nil || strings.ToUpper(tbl.relKind) == "V" {
+	if err != nil || tbl.isLogicalView(ctx) {
 		return published, err
 	}
 	if published != nil && len(published.ByteRangeMap) > 0 && (tbl.db.op.IsSnapOp() || !tbl.getTxn().Readonly()) {
@@ -297,6 +298,15 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		return published, nil
 	}
 	return transientTableStats(published, rows), nil
+}
+
+func (tbl *txnTable) isLogicalView(ctx context.Context) bool {
+	if !strings.EqualFold(tbl.relKind, "V") {
+		return false
+	}
+	def := tbl.GetTableDef(ctx)
+	return mvdefinition.PropertyValue(def, mvdefinition.Property) == "" &&
+		mvdefinition.PropertyValue(def, mvdefinition.OwnerProperty) == ""
 }
 
 // transientTableStats borrows immutable published maps without modifying their
@@ -1899,6 +1909,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
 		}
 	}
+	mvdefinition.PlannerKind(tbl.tableDef)
 	return tbl.tableDef
 }
 
@@ -2818,7 +2829,7 @@ func (tbl *txnTable) getLatestPartitionState(ctx context.Context) (*logtailrepla
 	if err != nil {
 		return nil, false, err
 	}
-	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
+	if createdInTxn || tbl.isLogicalView(ctx) {
 		ps := tbl.getTxn().engine.GetOrCreateLatestPart(ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId).Snapshot()
 		return ps, true, nil
 	}

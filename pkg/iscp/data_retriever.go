@@ -36,9 +36,12 @@ func MarshalJobStatus(status *JobStatus) (string, error) {
 }
 
 func UnmarshalJobStatus(jsonByte []byte) (*JobStatus, error) {
-	byteJson := types.DecodeJson(jsonByte)
+	decoded, err := decodeISCPJSON(jsonByte)
+	if err != nil {
+		return nil, err
+	}
 	var jobStatus JobStatus
-	err := json.Unmarshal([]byte(byteJson.String()), &jobStatus)
+	err = json.Unmarshal(decoded, &jobStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +58,13 @@ func NewISCPData(
 		insertBatch: insertBatch,
 		deleteBatch: deleteBatch,
 		err:         err,
+	}
+	return d
+}
+
+func (d *ISCPData) SetSourceTableID(tableID uint64) *ISCPData {
+	if d != nil {
+		d.SourceTableID = tableID
 	}
 	return d
 }
@@ -216,6 +226,10 @@ func (r *DataRetrieverImpl) GetAccountID() uint32 {
 
 func (r *DataRetrieverImpl) GetTableID() uint64 {
 	return r.tableID
+}
+
+func (r *DataRetrieverImpl) GetFromTS() types.TS {
+	return r.status.From
 }
 
 func (r *DataRetrieverImpl) SetNextBatch(data *ISCPData) bool {

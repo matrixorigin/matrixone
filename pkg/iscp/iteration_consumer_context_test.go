@@ -150,9 +150,10 @@ func runIterationConsumersWithStatusesForTest(
 			ctx,
 			nil,
 			iterCtx,
-			changes,
+			[]iterationSourceChanges{{tableID: iterCtx.tableID, changes: changes}},
 			consumers,
 			statuses,
+			nil,
 			typ,
 			packer,
 			mp,
@@ -160,6 +161,8 @@ func runIterationConsumersWithStatusesForTest(
 			0,
 			1,
 			0,
+			false,
+			nil,
 		)
 	}()
 	return done, statuses

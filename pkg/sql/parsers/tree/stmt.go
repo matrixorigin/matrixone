@@ -367,6 +367,10 @@ func (node *CreateView) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
+func (node *RefreshMaterializedView) StmtKind() StmtKind {
+	return defaultStatusTyp
+}
+
 func (node *ShowDatabases) StmtKind() StmtKind {
 	return defaultResRowTyp
 }

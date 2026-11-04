@@ -107,3 +107,27 @@ func TestGetPastExistsAccountsPropagatesRandFailure(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "generate snapshot restore temp password")
 }
+
+func TestGetAccountRecordByTsUsesRandomBootstrapPassword(t *testing.T) {
+	const ts = int64(12345)
+	const name = "acc_restored"
+	bh := &backgroundExecTest{}
+	bh.init()
+	sql := fmt.Sprintf("select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } where account_name = '%s';", ts, name)
+	bh.sql2result[sql] = newMrsForRestoreStringRows(
+		[]string{"account_id", "account_name", "admin_name", "comments"},
+		[][]interface{}{{uint64(42), name, "admin", ""}})
+	ses := &Session{}
+	record, err := getAccountRecordByTs(t.Context(), ses, bh, "snapshot", ts, name)
+	require.NoError(t, err)
+	require.Equal(t, name, record.accountName)
+	require.Len(t, record.pwd, 48)
+	require.NotEqual(t, "111", record.pwd)
+
+	orig := snapshotRestoreRandRead
+	snapshotRestoreRandRead = func([]byte) (int, error) { return 0, errors.New("entropy unavailable") }
+	t.Cleanup(func() { snapshotRestoreRandRead = orig })
+	record, err = getAccountRecordByTs(t.Context(), ses, bh, "snapshot", ts, name)
+	require.ErrorContains(t, err, "generate snapshot restore temp password")
+	require.Empty(t, record.pwd)
+}
