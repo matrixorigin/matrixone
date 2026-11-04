@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -50,5 +51,67 @@ func TestVectorTopKOverChildProject(t *testing.T) {
 				require.Equal(t, 1, searches, "%s ft2=%v: %s", algo, ft2, sql)
 			}
 		}
+	}
+}
+
+// The pagination of a derived table below the Top-K bounds the rows it ranks, so it is kept.
+func TestVectorTopKKeepsDerivedTablePagination(t *testing.T) {
+	queries := []string{
+		"select id, r from (select id, v, rand() r from ft limit 1 offset 1) d order by l2_distance(v,'[1,2,3]') limit 2",
+		"select id, r from (select v, id, rand() r from ft limit 1 offset 1) d order by l2_distance(v,'[1,2,3]') limit 2 by rank with option 'mode=post'",
+		"select id from (select id, v from ft limit 1 offset 1) d order by l2_distance(v,'[1,2,3]') limit 2",
+	}
+	for _, algo := range []string{catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString()} {
+		for _, sql := range queries {
+			query := buildBooleanFullTextPublicPlan(t, sql, false, false, algo)
+			inner := false
+			for _, n := range booleanFullTextNodes(query, query.Steps[0]) {
+				if n.NodeType == planpb.Node_INDEX_SEARCH_SCAN {
+					t.Fatalf("%s: index search over a paginated derived table: %s", algo, sql)
+				}
+				if limit, ok := getLiteralUint64(n.Limit); ok && limit == 1 {
+					offset, ok := getLiteralUint64(n.Offset)
+					inner = inner || (ok && offset == 1)
+				}
+			}
+			require.True(t, inner, "%s: inner LIMIT 1 OFFSET 1 lost: %s", algo, sql)
+		}
+	}
+}
+
+// Merging the PROJECTs below a Top-K does not copy a computed column into each of its references.
+func TestVectorTopKMergeKeepsSharedComputedColumns(t *testing.T) {
+	exprSize := func(query *planpb.Query) int {
+		n := 0
+		var walk func(*planpb.Expr)
+		walk = func(e *planpb.Expr) {
+			if e == nil {
+				return
+			}
+			n++
+			if f := e.GetF(); f != nil {
+				for _, arg := range f.Args {
+					walk(arg)
+				}
+			}
+		}
+		for _, node := range query.Nodes {
+			for _, e := range node.ProjectList {
+				walk(e)
+			}
+		}
+		return n
+	}
+	nested := func(depth int) string {
+		sql := "select id, v, id x from ft"
+		for i := 0; i < depth; i++ {
+			sql = "select id, v, x+x as x from (" + sql + ") d" + strconv.Itoa(i)
+		}
+		return "select id, x, l2_distance(v,'[1,2,3]') dist from (" + sql + ") d order by l2_distance(v,'[1,2,3]') limit 2"
+	}
+	for _, algo := range []string{catalog.MoIndexHnswAlgo.ToString(), catalog.MoIndexIvfFlatAlgo.ToString()} {
+		shallow := exprSize(buildBooleanFullTextPublicPlan(t, nested(4), false, false, algo))
+		deep := exprSize(buildBooleanFullTextPublicPlan(t, nested(12), false, false, algo))
+		require.Less(t, deep, 4*shallow, "%s: %d expression nodes at depth 12, %d at depth 4", algo, deep, shallow)
 	}
 }

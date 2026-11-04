@@ -159,6 +159,9 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 		return nil
 	}
 	if sortNode.Limit != nil {
+		if scanNode.Limit != nil || scanNode.Offset != nil {
+			return nil
+		}
 		builder.mergeVectorSortProjects(sortNode)
 	}
 
@@ -276,8 +279,13 @@ func (builder *QueryBuilder) mergeVectorSortProjects(sortNode *plan.Node) {
 		if _, groupingSetExpand := DecodeGroupingSetExpandOption(inner.ExtraOptions); groupingSetExpand {
 			return
 		}
-		for _, expr := range inner.ProjectList {
+		refCnt := make(map[[2]int32]int)
+		increaseRefCntForExprList(top.ProjectList, 1, refCnt)
+		for i, expr := range inner.ProjectList {
 			if !exprCanRemoveProject(expr) {
+				return
+			}
+			if expr.GetCol() == nil && expr.GetLit() == nil && refCnt[[2]int32{inner.BindingTags[0], int32(i)}] > 1 {
 				return
 			}
 		}
