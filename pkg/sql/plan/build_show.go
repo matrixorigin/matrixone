@@ -681,6 +681,24 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		colNameToOriginName[col.Name] = colNameOrigin
 	}
 
+	// DESCRIBE tbl col_name is MySQL's shortcut for SHOW COLUMNS FROM tbl
+	// LIKE 'col_name': reuse the LIKE filter returnByLikeAndSQL composes.
+	// An exact column keeps its stored case via the origin-name map, so
+	// `desc tbl mixcase` still finds `MixCase`; anything else preserves the
+	// argument's original spelling so %/_ patterns match exactly like the
+	// equivalent public SHOW COLUMNS ... LIKE, and a missing name yields
+	// the empty set. The literal is the parser's own value-level string
+	// literal (NumVal/P_char), never spliced SQL text.
+	if stmt.ColName != nil && stmt.Like == nil && stmt.Where == nil {
+		pattern := stmt.ColName.ColNameOrigin()
+		if origin, ok := colNameToOriginName[stmt.ColName.ColName()]; ok {
+			pattern = origin
+		} else if origin, ok := colNameToOriginName[pattern]; ok {
+			pattern = origin
+		}
+		stmt.Like = tree.NewComparisonExpr(tree.LIKE, nil, tree.NewNumVal(pattern, pattern, false, tree.P_char))
+	}
+
 	var sub *SubscriptionMeta
 	if obj.PubInfo != nil {
 		dbName = obj.SchemaName

@@ -386,6 +386,19 @@ func TestCoverage_buildShowColumns(t *testing.T) {
 		"show columns from nation",
 		"show full columns from nation",
 		"show columns from nation from tpch",
+		// issue #30890: DESCRIBE tbl col_name is the documented shortcut for
+		// SHOW COLUMNS ... LIKE. Each statement below must build a real plan
+		// through the comparison/function binders: the literal is the
+		// parser's own NumVal/P_char form (the legacy *tree.StrVal operand
+		// bound straight into the rewritten Select AST reached the binder's
+		// NotYetImplemented case). n_regionkey exercises the case-fold exact
+		// name, nosuch keeps the empty set, and `n_na%` preserves the pattern.
+		"desc nation n_name",
+		"describe nation N_Name",
+		"explain nation n_name",
+		"desc nation nosuch",
+		"desc nation `n_na%`",
+		"desc tpch.nation n_name",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 }
