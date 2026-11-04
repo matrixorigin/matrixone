@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -220,6 +221,82 @@ func TestMergeSpillFullBlockFetchPanicByRange(t *testing.T) {
 				buf.panicValue, buf.panicAt = want, buf.calls+2
 				require.PanicsWithValue(t, want, func() { _ = sinker.trySpill(context.Background()) })
 				require.Equal(t, buf.panicAt, buf.calls)
+				require.NoError(t, sinker.Close())
+				gotBytes, gotObjects := proc.Mp().OnHeapOutstanding()
+				require.Equal(t, bytes, gotBytes)
+				require.Equal(t, objects, gotObjects)
+				require.Equal(t, offHeap, proc.Mp().CurrNB())
+			})
+		}
+	}
+}
+
+type tailFailureSinker struct {
+	mockFileSinker
+	want        error
+	panicOnTail bool
+	rows        []int
+	keys        []int64
+}
+
+func (s *tailFailureSinker) Sink(_ context.Context, bat *batch.Batch) error {
+	s.rows = append(s.rows, bat.RowCount())
+	s.keys = append(s.keys, vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0])...)
+	if len(s.rows) == 2 {
+		if s.panicOnTail {
+			panic(s.want)
+		}
+		return s.want
+	}
+	return nil
+}
+
+func TestStreamingTailSinkFailureByRange(t *testing.T) {
+	for _, disjoint := range []bool{false, true} {
+		for _, panicOnTail := range []bool{false, true} {
+			t.Run(fmt.Sprintf("disjoint=%t/panic=%t", disjoint, panicOnTail), func(t *testing.T) {
+				proc := testutil.NewProc(t)
+				fs, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+				require.NoError(t, err)
+				attrs := []string{"key"}
+				typs := []types.Type{types.T_int64.ToType()}
+				want := errors.New("tail sink failure")
+				file := &tailFailureSinker{want: want, panicOnTail: panicOnTail}
+				sinker := NewSinker(0, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, proc.Mp(), fs, WithMemorySizeThreshold(1<<30))
+				t.Cleanup(func() { _ = sinker.Close() })
+				input := batch.NewWithSchema(false, attrs, typs)
+				defer input.Clean(proc.Mp())
+				var expected []int64
+				for part, count := range []int{int(objectio.BlockMaxRows), 100} {
+					for i := range count {
+						key := int64(i*2 + part)
+						if disjoint {
+							key = int64(part*int(objectio.BlockMaxRows) + i)
+						}
+						require.NoError(t, vector.AppendFixed(input.Vecs[0], key, false, proc.Mp()))
+						expected = append(expected, key)
+					}
+				}
+				input.SetRowCount(len(expected))
+				bytes, objects := proc.Mp().OnHeapOutstanding()
+				offHeap := proc.Mp().CurrNB()
+				require.NoError(t, sinker.Write(context.Background(), input))
+				require.Len(t, sinker.staged.inMemory, 2)
+				first := vector.MustFixedColNoTypeCheck[int64](sinker.staged.inMemory[0].Vecs[0])
+				second := vector.MustFixedColNoTypeCheck[int64](sinker.staged.inMemory[1].Vecs[0])
+				if disjoint {
+					require.Less(t, first[len(first)-1], second[0])
+				} else {
+					require.Less(t, second[0], first[len(first)-1])
+				}
+				if panicOnTail {
+					require.PanicsWithValue(t, want, func() { _ = sinker.trySpill(context.Background()) })
+				} else {
+					require.ErrorIs(t, sinker.trySpill(context.Background()), want)
+				}
+				require.Equal(t, []int{int(objectio.BlockMaxRows), 100}, file.rows)
+				sort.Slice(expected, func(i, j int) bool { return expected[i] < expected[j] })
+				require.Equal(t, expected, file.keys)
 				require.NoError(t, sinker.Close())
 				gotBytes, gotObjects := proc.Mp().OnHeapOutstanding()
 				require.Equal(t, bytes, gotBytes)
