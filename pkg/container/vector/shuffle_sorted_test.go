@@ -73,6 +73,61 @@ func TestShuffleSorted(t *testing.T) {
 	}
 }
 
+// Exercise both the contiguous prefix and its boundary with the general gather.
+func TestShuffleSortedGather(t *testing.T) {
+	cases := []struct {
+		name string
+		sels []int64
+		want bool
+	}{
+		{"subrange", []int64{1, 2, 3}, true},
+		{"gaps and duplicates", []int64{0, 0, 2, 3}, true},
+		{"first inversion", []int64{1, 0, 2, 3}, false},
+		{"prefix boundary inversion", []int64{1, 2, 0, 3}, false},
+		{"last inversion", []int64{0, 1, 3, 2}, false},
+	}
+	for _, buffered := range []bool{false, true} {
+		for _, varlen := range []bool{false, true} {
+			for _, tc := range cases {
+				t.Run(fmt.Sprintf("buffered=%v/varlen=%v/%s", buffered, varlen, tc.name), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					typ := types.T_int64.ToType()
+					if varlen {
+						typ = types.T_varchar.ToType()
+					}
+					v := NewVec(typ)
+					t.Cleanup(func() { v.Free(mp); require.Zero(t, mp.CurrNB()) })
+					values := []string{"a long external value 0", "a long external value 1", "a long external value 2", "a long external value 3"}
+					if varlen {
+						for _, value := range values {
+							require.NoError(t, AppendBytes(v, []byte(value), false, mp))
+						}
+					} else {
+						require.NoError(t, AppendFixedList(v, []int64{10, 20, 30, 40}, nil, mp))
+					}
+					v.SetSorted(true)
+					var buf []byte
+					var err error
+					if buffered {
+						err = v.ShuffleWithBuf(tc.sels, mp, &buf)
+					} else {
+						err = v.Shuffle(tc.sels, mp)
+					}
+					require.NoError(t, err)
+					require.Equal(t, tc.want, v.GetSorted())
+					for row, source := range tc.sels {
+						if varlen {
+							require.Equal(t, values[source], string(v.GetBytesAt(row)))
+						} else {
+							require.Equal(t, (source+1)*10, MustFixedColWithTypeCheck[int64](v)[row])
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestShuffleWithBufStringMetadata(t *testing.T) {
 	for _, metadata := range []string{"uniform", "source", "kind", "domain"} {
 		t.Run(metadata, func(t *testing.T) {

@@ -6575,18 +6575,6 @@ func (v *Vector) remapPrepareParamKindsAfterShuffle(
 	v.normalizePrepareParamKinds()
 }
 
-// preserveSortedAfterShuffle retains the ordering proof only for a stable selection.
-func (v *Vector) preserveSortedAfterShuffle(sels []int64) {
-	if v.sorted {
-		for i := 1; i < len(sels); i++ {
-			if sels[i] < sels[i-1] {
-				v.sorted = false
-				return
-			}
-		}
-	}
-}
-
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
@@ -6694,7 +6682,6 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		}
 		return err
 	}
-	v.preserveSortedAfterShuffle(sels)
 	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
 	releaseRemappedSources = false
@@ -6838,7 +6825,6 @@ func (v *Vector) shuffleWithBufData(sels []int64, buf *[]byte) (err error) {
 	}
 
 	if err == nil {
-		v.preserveSortedAfterShuffle(sels)
 		if v.typ.IsVarlen() {
 			v.areaDisjoint = false
 		}
@@ -11051,6 +11037,32 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 	}
 }
 
+// shuffleWithSortedProof gathers into independent storage while preserving an
+// existing ordering proof only when the selection is nondecreasing.
+func shuffleWithSortedProof[T types.FixedSizeT](src, dst []T, sels []int64, sorted bool) bool {
+	if !sorted {
+		shuffle.FixedLengthShuffle(src, dst, sels)
+		return false
+	}
+	if len(sels) == 0 {
+		return true
+	}
+	start := sels[0]
+	k := 1
+	for k < len(sels) && sels[k] == sels[k-1]+1 {
+		k++
+	}
+	copy(dst[:k], src[start:start+int64(k)])
+	for i := k; i < len(sels); i++ {
+		dst[i] = src[sels[i]]
+		if sels[i] < sels[i-1] {
+			shuffle.FixedLengthShuffle(src, dst[i+1:], sels[i+1:])
+			return false
+		}
+	}
+	return true
+}
+
 // shuffleFixedNoTypeCheck is always used after type check. and we can use ToSliceNoTypeCheck here.
 func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) error {
 	sz := v.typ.TypeSize()
@@ -11064,7 +11076,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	}
 	ws := util.UnsafeSliceCastToLength[T](data, ns)
 
-	shuffle.FixedLengthShuffle(vs, ws, sels)
+	preserved := shuffleWithSortedProof(vs, ws, sels, v.sorted)
 	if err := v.remapShuffleBitmaps(sels, mp); err != nil {
 		mp.Free(data)
 		return err
@@ -11079,6 +11091,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	}
 	v.data = data
 	v.length = ns
+	v.sorted = preserved
 	return nil
 }
 
@@ -11172,11 +11185,12 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 	ToFixedColNoTypeCheck(v, &vs)
 	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
 
-	shuffle.FixedLengthShuffle(vs, ws, sels)
+	preserved := shuffleWithSortedProof(vs, ws, sels, v.sorted)
 	copy(v.data[:needed], *buf)
 	nulls.Filter(&v.gsp, sels, false)
 	nulls.Filter(&v.nsp, sels, false)
 	v.length = ns
+	v.sorted = preserved
 	return nil
 }
 

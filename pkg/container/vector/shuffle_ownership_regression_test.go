@@ -62,6 +62,43 @@ func TestShuffleBorrowedDataRetiresOwner(t *testing.T) {
 	require.False(t, orphan, "replacement must not retain the old data lease")
 }
 
+func TestShuffleBorrowedSortedContiguous(t *testing.T) {
+	for _, buffered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("buffered=%v", buffered), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			data := types.EncodeSlice([]int64{1, 2, 3, 4})
+			releases := 0
+			lease, err := NewRefCountedBufferLease(data, int64(cap(data)), func() { releases++ })
+			require.NoError(t, err)
+			v, err := NewBorrowedFixedVector(types.T_int64.ToType(), 4, data, lease)
+			lease.Release()
+			require.NoError(t, err)
+			t.Cleanup(func() { v.Free(mp) })
+			view, err := v.Window(0, 4)
+			require.NoError(t, err)
+			t.Cleanup(func() { view.Free(mp) })
+			v.SetSorted(true)
+			sels := []int64{0, 1, 2, 3}
+			if buffered {
+				var buf []byte
+				err = v.ShuffleWithBuf(sels, mp, &buf)
+			} else {
+				err = v.Shuffle(sels, mp)
+			}
+			require.NoError(t, err)
+			require.True(t, v.GetSorted())
+			require.NotEqual(t, BorrowedLease, v.DataBackingKind())
+			require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColWithTypeCheck[int64](v))
+			v.Free(mp)
+			require.Equal(t, []int64{1, 2, 3, 4}, MustFixedColWithTypeCheck[int64](view))
+			require.Zero(t, releases)
+			view.Free(mp)
+			require.Equal(t, 1, releases)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestShuffleVarlenSharedLeaseAndLegacyAlias(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		for _, buffered := range []bool{false, true} {
