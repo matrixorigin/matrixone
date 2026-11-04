@@ -1,5 +1,8 @@
 # Bounded HashBuild key collection
 
+Related issue: [#30125](https://github.com/matrixorigin/matrixone/issues/30125).
+Implementation: the bounded-key collection PR containing this document.
+
 Collected join keys are an aligned sequence of batches of at most 8,192 rows,
 not one vector spanning the whole build. This change does not alter JoinMap row
 addressing, retained build batches, planner thresholds or MPool allocation limits.
@@ -20,6 +23,11 @@ other sorted runs are merged into that encoding without constructing a
 whole-build vector. Composite expressions execute per aligned
 batch. Membership consumers receive one complete immutable chunked payload and
 build one membership structure; they never probe each chunk independently.
+
+Raising the allocator ceiling only moves the contiguous-allocation failure.
+Discarding oversized optional filters is valid, but cannot replace required
+membership before Top-K. Bounded collection therefore updates both the producer
+and every membership consumer while retaining ordinary IN's existing encoding.
 
 The payload owns its encoded buffers through the existing buffer-lease primitive.
 Publication transfers one reference; surviving reader generations retain their
