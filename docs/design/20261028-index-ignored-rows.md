@@ -195,7 +195,12 @@ by, before the new version is assigned and, if the index cannot store it, record
 more than the limit fails it: a synchronous build and the DML of a synchronous index fail, as a
 synchronous build does (@cpegeric, 2026-11-03, rather than rejecting every such DML row); an
 asynchronous build or sync stops with a permanent error. A build that can store none of the rows
-it reads fails.
+it reads fails. The count is the one the statement's transaction sees (@cpegeric, 2026-11-04):
+transactions open at the same time on a synchronous index each stay within the limit and together
+may commit past it, by at most the rows each could add. Once that is committed, every later
+statement that records a row fails until rows are fixed or deleted, or REINDEX runs. Rejected: a
+lock that serializes the statements recording rows on one index (exact across transactions, at the
+cost of serializing bad-row DML and a lock the DML path does not take today).
 
 **k-means.** The sample the centroids are trained on leaves out the rows the index cannot store,
 so they do not distort the centroids or the int8/uint8 bounds.

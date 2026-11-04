@@ -22,7 +22,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -151,7 +150,7 @@ func TestSerialPkString(t *testing.T) {
 
 	tableDef := &plan.TableDef{
 		Cols: []*plan.ColDef{{Name: "a"}, {Name: "d", Typ: plan.Type{Scale: 2}}},
-		Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.CPrimaryKeyColName, Names: []string{"d", "a"}},
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "__mo_cpkey_da", Names: []string{"d", "a"}},
 	}
 	require.Equal(t, []int32{2, 0}, SerialPkScales(tableDef))
 	tableDef.Pkey = &plan.PrimaryKeyDef{PkeyColName: "a", Names: []string{"a"}}
