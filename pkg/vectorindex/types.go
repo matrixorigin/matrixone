@@ -18,15 +18,17 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
+	"reflect"
+
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
-	"hash/crc32"
-	"reflect"
 )
 
 // QUANTIZATION lives in pkg/vectorindex/quantizer: ToVectorType, Int8Params,
@@ -360,7 +362,7 @@ type RuntimeConfig struct {
 
 	// Optional raw runtime-filter payload from the build side. IVF search turns
 	// this into either an exact-pk filter or a membership filter for entries.
-	RuntimeFilterData []byte
+	RuntimeFilterData *keycodec.KeyPayload
 	NThreads          uint // Brute Force Index
 
 	// Query-scoped IVF search state. These fields must not be cached on the

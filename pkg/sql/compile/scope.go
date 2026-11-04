@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -1297,11 +1298,16 @@ func localRangesPolicy(node *plan.Node, cnidx int32) engine.DataCollectPolicy {
 type receivedRuntimeFilter struct {
 	spec *plan.RuntimeFilterSpec
 	expr *plan.Expr
-	data []byte
+	data *keycodec.KeyPayload
 }
 
-func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool, error) {
+func (s *Scope) waitForRuntimeFilters(c *Compile) (out []receivedRuntimeFilter, empty bool, retErr error) {
 	var runtimeFilters []receivedRuntimeFilter
+	defer func() {
+		if retErr != nil || empty || out == nil {
+			releaseRuntimeKeyFilters(runtimeFilters)
+		}
+	}()
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
@@ -1326,8 +1332,16 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 				if !ok {
 					panic("expect runtime filter message, receive unknown message!")
 				}
+				var keyGuard *keycodec.KeyPayload
+				if msg.Typ == message.RuntimeFilter_UNIQUEJOINKEYS && msg.Keys != nil {
+					if !msg.Keys.Retain() {
+						return nil, false, moerr.NewInvalidStateNoCtx("runtime keys were released before receipt")
+					}
+					keyGuard = msg.Keys
+				}
 				if spec.MustApply && spec.UseMembershipFilter {
 					if err := validateRequiredVectorMembership(spec, msg); err != nil {
+						keyGuard.Release()
 						return nil, false, err
 					}
 				}
@@ -1346,19 +1360,24 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) ([]receivedRuntimeFilter, bool
 					requiredSatisfied = true
 				case message.RuntimeFilter_UNIQUEJOINKEYS:
 					if spec.UseMembershipFilter {
-						if spec.MustApply && len(msg.Data) == 0 {
+						if spec.MustApply && msg.Keys == nil {
 							return nil, false, moerr.NewInternalErrorf(
 								c.proc.Ctx, "required runtime filter %d has an empty key payload", spec.Tag)
 						}
+						if msg.Keys == nil {
+							continue
+						}
 						runtimeFilters = append(runtimeFilters, receivedRuntimeFilter{
 							spec: spec,
-							data: append([]byte(nil), msg.Data...),
+							data: msg.Keys,
 						})
 						requiredSatisfied = true
+						keyGuard = nil // ownership transferred to runtimeFilters
 					}
 
 					// TODO: implement BETWEEN expression
 				}
+				keyGuard.Release()
 			}
 			if spec.MustApply && !requiredSatisfied {
 				return nil, false, moerr.NewInternalErrorf(
@@ -1378,16 +1397,22 @@ func validateRequiredVectorMembership(spec *plan.RuntimeFilterSpec, msg message.
 	if msg.Typ != message.RuntimeFilter_UNIQUEJOINKEYS || msg.Card <= 0 || spec.Expr == nil {
 		return moerr.NewInvalidStateNoCtx("required vector membership is unavailable or malformed")
 	}
-	var keys vector.Vector
-	defer keys.Free(nil)
-	if err := keys.UnmarshalBinary(msg.Data); err != nil {
-		return err
-	}
-	if keys.Length() != int(msg.Card) || keys.HasNull() ||
-		!types.MembershipKeyTypeCompatible(keys.GetType().Oid, types.T(spec.Expr.Typ.Id)) {
+	if msg.Keys == nil || msg.Keys.Rows() != uint64(msg.Card) ||
+		!types.MembershipKeyTypeCompatible(msg.Keys.Type().Oid, types.T(spec.Expr.Typ.Id)) {
 		return moerr.NewInvalidStateNoCtx("required vector membership has invalid cardinality or key type")
 	}
-	return nil
+	return msg.Keys.Visit(context.Background(), func(v *vector.Vector) error {
+		if v.HasNull() {
+			return moerr.NewInvalidStateNoCtx("required vector membership contains NULL")
+		}
+		return nil
+	})
+}
+
+func releaseRuntimeKeyFilters(filters []receivedRuntimeFilter) {
+	for _, filter := range filters {
+		filter.data.Release()
+	}
 }
 
 func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntimeFilter) ([]*plan.Expr, error) {
@@ -1919,6 +1944,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	var blockFilterList []*plan.Expr
 	var emptyScan bool
 	runtimeFilterList, emptyScan, err = s.waitForRuntimeFilters(c)
+	defer releaseRuntimeKeyFilters(runtimeFilterList)
 	if err != nil {
 		return
 	}
@@ -2192,7 +2218,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter, 
 			}
 			return nil, moerr.NewInvalidStateNoCtx("vector plugin returned an invalid reader count")
 		}
-		return readers, nil
+		return searchplugin.RetainReaderKeys(readers, membership)
 	}
 	if s.NodeInfo.Mcpu > 1 {
 		return nil, moerr.NewNotSupportedNoCtx("vector plugin has no local parallel-reader capability")
@@ -2201,7 +2227,7 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter, 
 	if err != nil {
 		return nil, err
 	}
-	return []engine.Reader{reader}, nil
+	return searchplugin.RetainReaderKeys([]engine.Reader{reader}, membership)
 }
 
 // hasMembershipFilterSpec reports whether specs plan a membership runtime filter.
@@ -2222,21 +2248,11 @@ func emptyScanReaders(count int) []engine.Reader {
 	return readers
 }
 
-func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) ([]byte, bool, bool) {
-	for _, runtimeFilter := range runtimeFilters {
-		hasMembership := runtimeFilter.spec != nil && runtimeFilter.spec.UseMembershipFilter
-		membershipRequired := runtimeFilter.spec != nil && runtimeFilter.spec.MustApply
-		if len(runtimeFilter.data) > 0 {
-			return append([]byte(nil), runtimeFilter.data...), hasMembership, membershipRequired
+func vectorScanMembershipFilter(runtimeFilters []receivedRuntimeFilter) (*keycodec.KeyPayload, bool, bool) {
+	for _, filter := range runtimeFilters {
+		if filter.spec != nil && filter.spec.UseMembershipFilter {
+			return filter.data, true, filter.spec.MustApply
 		}
-		fn := runtimeFilter.expr.GetF()
-		if fn == nil || len(fn.Args) != 2 || fn.Args[1].GetVec() == nil {
-			if hasMembership {
-				return nil, true, membershipRequired
-			}
-			continue
-		}
-		return append([]byte(nil), fn.Args[1].GetVec().GetData()...), hasMembership, membershipRequired
 	}
 	return nil, false, false
 }
