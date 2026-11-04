@@ -2455,7 +2455,7 @@ func TestMaterializedViewIncrementalRejectsFloatingGroupKey(t *testing.T) {
 		"select k, count(*) c from src group by k", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
-	for _, kind := range []types.T{types.T_float32, types.T_float64} {
+	for _, kind := range []types.T{types.T_float32, types.T_float64, types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
 		outputs := []*ColDef{
 			{Name: "k", Typ: Type{Id: int32(kind)}},
 			{Name: "c", Typ: Type{Id: int32(types.T_int64)}},
@@ -2553,28 +2553,32 @@ func TestMaterializedViewIncrementalChecksSourceCollation(t *testing.T) {
 }
 
 func TestMaterializedViewIncrementalRejectsFloatingDistinctInput(t *testing.T) {
-	mock := NewMockOptimizer(true, newPlanTestProcess(t))
-	for _, def := range mock.ctxt.tables {
-		def.DbName = "tpch"
-		def.DbId = 1
+	for _, kind := range []types.T{types.T_float64, types.T_float16} {
+		t.Run(kind.String(), func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			for _, def := range mock.ctxt.tables {
+				def.DbName = "tpch"
+				def.DbId = 1
+			}
+			nation := mock.ctxt.tables["nation"]
+			require.NotNil(t, nation)
+			for _, col := range nation.Cols {
+				if col.Name == "n_name" {
+					col.Typ.Id = int32(kind)
+					break
+				}
+			}
+			query := "select n_regionkey k, count(distinct n_name) c from nation group by n_regionkey"
+			_, err := runOneStmt(mock, t, "create materialized view mv_bad refresh fast on change as "+query)
+			require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_FLOAT_DISTINCT_KEY")
+			p, err := runOneStmt(mock, t, "create materialized view mv_fallback refresh force on change as "+query)
+			require.NoError(t, err)
+			def := p.GetDdl().GetCreateView().GetTableDef()
+			mv, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
+			require.NoError(t, err)
+			require.Empty(t, mv.Incremental)
+		})
 	}
-	nation := mock.ctxt.tables["nation"]
-	require.NotNil(t, nation)
-	for _, col := range nation.Cols {
-		if col.Name == "n_name" {
-			col.Typ.Id = int32(types.T_float64)
-			break
-		}
-	}
-	query := "select n_regionkey k, count(distinct n_name) c from nation group by n_regionkey"
-	_, err := runOneStmt(mock, t, "create materialized view mv_bad refresh fast on change as "+query)
-	require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_FLOAT_DISTINCT_KEY")
-	p, err := runOneStmt(mock, t, "create materialized view mv_fallback refresh force on change as "+query)
-	require.NoError(t, err)
-	def := p.GetDdl().GetCreateView().GetTableDef()
-	mv, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
-	require.NoError(t, err)
-	require.Empty(t, mv.Incremental)
 }
 
 func TestMaterializedViewUnionAllIncrementalPlan(t *testing.T) {

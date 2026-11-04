@@ -654,10 +654,11 @@ func materializedViewIncrementalHavingAliases(exprs tree.SelectExprs) map[string
 }
 
 func materializedViewIncrementalGroupTypeSupported(typ Type) bool {
-	switch types.T(typ.Id) {
-	case types.T_float32, types.T_float64:
+	if types.T(typ.Id).IsFloat() {
 		// SQL equates +0 and -0, while serial_full preserves their sign bit.
 		return false
+	}
+	switch types.T(typ.Id) {
 	case types.T_char:
 		// CHAR comparisons pad trailing spaces even under a binary charset.
 		return false

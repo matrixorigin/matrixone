@@ -364,11 +364,12 @@ func materializedViewIncrementalUnsupportedSourceReason(
 		found := false
 		for _, col := range def.Cols {
 			if col != nil && strings.EqualFold(col.Name, name) {
-				if hasDistinct && (types.T(col.Typ.Id) == types.T_float32 || types.T(col.Typ.Id) == types.T_float64) {
+				isFloat := types.T(col.Typ.Id).IsFloat()
+				if hasDistinct && isFloat {
 					return "MV_FAST_UNSUPPORTED_FLOAT_DISTINCT_KEY"
 				}
 				if !materializedViewIncrementalGroupTypeSupported(col.Typ) &&
-					types.T(col.Typ.Id) != types.T_float32 && types.T(col.Typ.Id) != types.T_float64 {
+					!isFloat {
 					return "MV_FAST_UNSUPPORTED_SOURCE_COLLATION"
 				}
 				found = true
