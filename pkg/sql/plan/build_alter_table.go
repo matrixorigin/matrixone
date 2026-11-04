@@ -1487,6 +1487,16 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	// names the ALTER itself; writable file mappings keep their own
 	// INSERT/LOAD contract, and their ALTER behavior is unchanged here.
 	if IsFileExternalTableDef(tableDef) && !IsWritableFileExternalTableDef(tableDef) {
+		if AlterAddsIndexOrConstraint(stmt) {
+			// Constraint/index sub-actions keep their dedicated diagnostic:
+			// delegate to the established index type rejection. It rejects
+			// every external relation, and on an unexpected nil the typed
+			// read-only rejection below still fires, so a read-only file
+			// mapping is never admitted into the data-copy ALTER route.
+			if err := checkCreateIndexTableType(ctx.GetContext(), tableDef); err != nil {
+				return nil, err
+			}
+		}
 		return nil, moerr.NewNotSupported(ctx.GetContext(),
 			"ALTER TABLE on a read-only external table; drop and recreate the external table to change its schema")
 	}
