@@ -127,10 +127,11 @@ caller. `unzip_file` returns bytes that the caller could read with `load_file`, 
 
 ## Cancellation
 
-The statement context is passed to every file-service open and read. A canceled statement fails
-the read with the context error and returns no value. Both functions are synchronous: no
-goroutine runs after the call. Bytes already in the read buffer are decoded without checking the
-context, and that work is bounded by the limits above.
+The statement context is passed to every file-service open, and unzip_file checks it before every
+read from the archive, whether the entry is skipped or decoded and whatever the file service. A
+canceled statement fails the read with the context error and returns no value. Both functions are
+synchronous: no goroutine runs after the call. Bytes already in the read buffer are decoded
+without checking the context, and that work is bounded by the buffer.
 
 ## Alternatives
 
@@ -153,7 +154,7 @@ context, and that work is bounded by the limits above.
 | unzip_file overloads and BLOB return type | `TestUnzipFileOverloads` |
 | unzip_file admission, path and datalink | `TestUnzipFileRequiresServerFileAuthority` |
 | unzip_file blob limit | `TestUnzipFileBlobLimit` |
-| unzip_file cancellation | `TestUnzipFileCanceled` |
+| unzip_file cancellation, before the open and while reading or skipping | `TestUnzipFileCanceled`, `TestUnzipFileCanceledWhileReading` |
 | Zip format: deflate and stored entries, entry selection, rejections, CRC and size checks, truncation, zip64 local header, compressed size check | `crt.TestZipDeflateAndStored`, `TestZipEntrySelection`, `TestZipRejections`, `TestZipIntegrity`, `TestZipZip64LocalHeader`, `TestZipCompressedSizeVerified` |
 | A stored entry with a data descriptor before the returned entry cannot be skipped | `zipstream.TestNewReader` |
 | Function id allocation | `Test_funids` |

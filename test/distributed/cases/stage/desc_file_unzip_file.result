@@ -23,6 +23,9 @@ m_3.csv
 select count(*) from desc_file('stage://zs/missing') d;
 ➤ count(*)[-5,64,0]  𝄀
 0
+select count(*) from desc_file(null) d;
+➤ count(*)[-5,64,0]  𝄀
+0
 select cast(unzip_file(cast('stage://zs/two.zip' as datalink)) as char) c;
 ➤ c[12,65535,0]  𝄀
 id,name

@@ -6074,10 +6074,23 @@ func readLoadFileDatalinkContents(filePath string, proc *process.Process) ([]byt
 	return contents, nil
 }
 
+// ctxReader fails a Read once ctx is done.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
 // unzipContents returns the decompressed bytes of the first file of the zip archive r, and
 // closes r.
 func unzipContents(r io.ReadCloser, proc *process.Process) ([]byte, error) {
-	zr, closeDecoder, err := zipstream.NewReader(proc.Ctx, r)
+	zr, closeDecoder, err := zipstream.NewReader(proc.Ctx, ctxReader{ctx: proc.Ctx, r: r})
 	if err != nil {
 		r.Close()
 		return nil, err

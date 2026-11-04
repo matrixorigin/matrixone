@@ -140,15 +140,15 @@ func (s *descFileState) start(tf *TableFunction, proc *process.Process, nthRow i
 		return moerr.NewInvalidInput(proc.Ctx, "desc_file: requires one argument, the file path")
 	}
 	v := tf.ctr.argVecs[0]
-	if !v.GetType().Oid.IsMySQLString() {
-		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("desc_file: filepath must be string, but got %s", v.GetType().String()))
-	}
 	row := nthRow
 	if v.IsConst() {
 		row = 0
 	}
 	if v.IsConstNull() || v.GetNulls().Contains(uint64(row)) {
 		return nil
+	}
+	if !v.GetType().Oid.IsMySQLString() {
+		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("desc_file: filepath must be string, but got %s", v.GetType().String()))
 	}
 	filepath := v.UnsafeGetStringAt(row)
 	if len(filepath) == 0 {

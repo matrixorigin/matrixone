@@ -91,10 +91,12 @@ func TestDescFile(t *testing.T) {
 	// a NULL or empty path returns no rows; a path that is not a string is an error
 	null := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
 	defer null.Free(proc.Mp())
+	untyped := vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
+	defer untyped.Free(proc.Mp())
 	empty, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(""), 1, proc.Mp())
 	require.NoError(t, err)
 	defer empty.Free(proc.Mp())
-	for _, v := range []*vector.Vector{null, empty} {
+	for _, v := range []*vector.Vector{null, untyped, empty} {
 		tf.ctr.argVecs = []*vector.Vector{v}
 		sn := &descFileState{}
 		require.NoError(t, sn.start(tf, proc, 0, nil))

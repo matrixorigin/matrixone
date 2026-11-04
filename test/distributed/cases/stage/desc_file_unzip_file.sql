@@ -6,6 +6,7 @@ select substring_index(file, '/', -1) name, size, is_dir from desc_file('stage:/
 select substring_index(file, '/', -1) name, size, is_dir from desc_file('stage://zs/two.zip') d;
 select substring_index(file, '/', -1) name from desc_file('stage://zs/mix/*') d order by name;
 select count(*) from desc_file('stage://zs/missing') d;
+select count(*) from desc_file(null) d;
 select cast(unzip_file(cast('stage://zs/two.zip' as datalink)) as char) c;
 select cast(unzip_file(cast('stage://zs/stored.zip' as datalink)) as char) c;
 select length(unzip_file(cast('stage://zs/mix/m_2.csv.zip' as datalink))) n;

@@ -160,3 +160,47 @@ func TestUnzipFileCanceled(t *testing.T) {
 	_, err := openUnzipFilePath(docs, proc)
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+type cancelAfterRead struct {
+	io.Reader
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (c *cancelAfterRead) Read(p []byte) (int, error) {
+	c.reads++
+	c.cancel()
+	return c.Reader.Read(p[:min(len(p), 512)])
+}
+
+func (c *cancelAfterRead) Close() error { return nil }
+
+func TestUnzipFileCanceledWhileReading(t *testing.T) {
+	big := make([]byte, 1<<16)
+	for i, x := 0, uint32(1); i < len(big); i++ {
+		x = x*1664525 + 1013904223
+		big[i] = byte(x >> 24)
+	}
+	for _, files := range [][][2]string{
+		{{"a.txt", string(big)}},
+		{{".hidden", string(big)}, {"a.txt", "hello zip"}},
+	} {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		for _, f := range files {
+			w, err := zw.Create(f[0])
+			require.NoError(t, err)
+			_, err = w.Write([]byte(f[1]))
+			require.NoError(t, err)
+		}
+		require.NoError(t, zw.Close())
+
+		proc := newSQLFileAccessTestProc(t)
+		ctx, cancel := context.WithCancel(proc.Ctx)
+		proc.Ctx = ctx
+		r := &cancelAfterRead{Reader: bytes.NewReader(buf.Bytes()), cancel: cancel}
+		_, err := unzipContents(r, proc)
+		require.ErrorIs(t, err, context.Canceled, files[0][0])
+		require.Equal(t, 1, r.reads, files[0][0])
+	}
+}
