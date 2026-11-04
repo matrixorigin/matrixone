@@ -30,9 +30,11 @@ import (
 )
 
 type trackingStreamSinker struct {
-	received *batch.Batch
-	err      error
-	rows     int
+	received   *batch.Batch
+	err        error
+	rows       int
+	syncedRows int
+	objectRows []int
 }
 
 func (s *trackingStreamSinker) Sink(_ context.Context, b *batch.Batch) error {
@@ -44,7 +46,9 @@ func (s *trackingStreamSinker) Sink(_ context.Context, b *batch.Batch) error {
 	return nil
 }
 
-func (*trackingStreamSinker) Sync(context.Context) (*objectio.ObjectStats, error) {
+func (s *trackingStreamSinker) Sync(context.Context) (*objectio.ObjectStats, error) {
+	s.objectRows = append(s.objectRows, s.rows-s.syncedRows)
+	s.syncedRows = s.rows
 	return &objectio.ObjectStats{}, nil
 }
 func (*trackingStreamSinker) Reset()       {}

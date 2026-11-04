@@ -1072,15 +1072,26 @@ func (sinker *Sinker) Write(
 	inputSize := 0
 	wholeInputFits := false
 	// Keep the optional, per-call copy sizes on the stack for typical schemas.
-	// Wider schemas retain the ordinary copy path without allocating scratch.
 	var payloadSizeStorage [64]int
 	var payloadSizes []int
 	if limit > 0 {
 		if sinker.config.cleanupFailedRun {
 			defer sinker.cleanupRunOnFailure(ctx, &err, &completed)
 		}
-		if len(data.Vecs) <= len(payloadSizeStorage) && data.RowCount() <= objectio.BlockMaxRows {
-			payloadSizes = payloadSizeStorage[:len(data.Vecs)]
+		if data.RowCount() <= objectio.BlockMaxRows {
+			if len(data.Vecs) <= len(payloadSizeStorage) {
+				payloadSizes = payloadSizeStorage[:len(data.Vecs)]
+			} else {
+				// Wide schemas need scratch only for columns whose payload must
+				// already be scanned and may benefit from a whole-window hint.
+				for _, vec := range data.Vecs {
+					if vec.GetType().IsVarlen() && !vec.IsConst() &&
+						len(vec.GetArea()) > 0 && !vec.VarlenaAreaIsDisjoint() {
+						payloadSizes = make([]int, len(data.Vecs))
+						break
+					}
+				}
+			}
 		}
 		var hasPayloadSize bool
 		inputSize, hasPayloadSize = materializedBatchSizeWithPayloadSizes(data, payloadSizes)
@@ -1137,6 +1148,31 @@ func (sinker *Sinker) Write(
 				}
 			} else {
 				toAdd, addedBound = boundedRunRows(data, offset, toAdd, remaining)
+				if toAdd == 0 {
+					if curr.RowCount() > 0 || len(sinker.staged.inMemory) > 0 {
+						if curr.RowCount() > 0 {
+							staged := curr
+							curr = nil // pushStaged takes ownership even on failure.
+							if err = sinker.pushStaged(ctx, staged, currBound); err != nil {
+								return
+							}
+							currBound = 0
+						}
+						// The run can be below threshold when the next row does
+						// not fit, so pushStaged alone need not have spilled it.
+						if len(sinker.staged.inMemory) > 0 {
+							if err = sinker.trySpill(ctx); err != nil {
+								return
+							}
+						}
+						continue
+					}
+					// The run is empty, so this row alone exceeds the target.
+					// Admit it once and spill immediately to make progress.
+					toAdd = 1
+					_, addedBound = boundedRunRows(data, offset, 1, math.MaxInt)
+					useOne = true
+				}
 				// A full disjoint vector copy may include dead area bytes.
 				// Partial windows (or UnionOne for a single row) copy only
 				// live payload instead of copying that whole area.

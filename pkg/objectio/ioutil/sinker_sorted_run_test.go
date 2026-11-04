@@ -100,6 +100,7 @@ func TestSpillBoundedRunsReadBack(t *testing.T) {
 					require.Greater(t, len(stats), 1)
 					seen := make(map[int32]bool)
 					for _, stat := range stats {
+						objectBytes := 0
 						objectio.ForeachBlkInObjStatsList(false, nil, func(info objectio.BlockInfo, _ objectio.BlockObject) bool {
 							loc := objectio.Location(info.MetaLoc[:])
 							reader, err := NewObjectReader(fs, loc)
@@ -108,9 +109,9 @@ func TestSpillBoundedRunsReadBack(t *testing.T) {
 							require.NoError(t, err)
 							defer release()
 							require.Equal(t, int(loc.Rows()), got.RowCount(), "stats-only block row count must match persisted block")
-							require.LessOrEqual(t, got.Size(), limit+len(payload)+64)
 							ids := vector.MustFixedColNoTypeCheck[int32](got.Vecs[0])
 							for i, id := range ids {
+								objectBytes += typs[0].TypeSize() + typs[1].TypeSize()
 								if i > 0 && sortKey >= 0 {
 									require.Less(t, ids[i-1], id)
 								}
@@ -120,10 +121,14 @@ func TestSpillBoundedRunsReadBack(t *testing.T) {
 								require.Equal(t, isNull, got.Vecs[1].GetNulls().Contains(uint64(i)))
 								if !isNull {
 									require.Equal(t, want, string(got.Vecs[1].GetBytesAt(i)))
+									if len(want) > types.VarlenaInlineSize {
+										objectBytes += len(want)
+									}
 								}
 							}
 							return true
 						}, stat)
+						require.LessOrEqual(t, objectBytes, limit, "each complete object must fit the run budget")
 					}
 					require.Len(t, seen, rows)
 					for i := int32(0); i < rows; i++ {
@@ -234,56 +239,125 @@ func TestWholeAliasedBatchSpillReadback(t *testing.T) {
 	}
 }
 
-func TestSortedRunAvoidsCopyingDeadSingleRowArea(t *testing.T) {
+func TestSortedRunAvoidsCopyingDeadArea(t *testing.T) {
+	for _, rows := range []int{1, 2} {
+		t.Run(fmt.Sprintf("rows=%d", rows), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			attrs := []string{"id", "payload"}
+			typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
+			input := batch.NewWithSchema(false, attrs, typs)
+			defer input.Clean(mp)
+			for i := 0; i < rows; i++ {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, mp))
+				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(strings.Repeat("x", 4096)), false, mp))
+				require.NoError(t, vector.SetBytesAt(input.Vecs[1], i, []byte("ok"), mp))
+			}
+			input.SetRowCount(rows)
+			sink := NewSinker(0, attrs, typs, nil, mp, nil, WithMemorySizeThreshold(256), WithByteBoundedRuns())
+			t.Cleanup(func() { require.NoError(t, sink.Close()) })
+			require.NoError(t, sink.Write(context.Background(), input))
+			require.Len(t, sink.staged.inMemory, 1)
+			got := sink.staged.inMemory[0]
+			require.Equal(t, rows, got.RowCount())
+			for i := 0; i < rows; i++ {
+				require.Equal(t, "ok", string(got.Vecs[1].GetBytesAt(i)))
+			}
+			require.Empty(t, got.Vecs[1].GetArea(), "short values must not copy unused input area")
+			require.Less(t, sink.StagedSize(), 256)
+		})
+	}
+}
+
+func TestWholeWideAliasedBatchSpillReadback(t *testing.T) {
+	const columns, rows = 65, 3
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	defer fs.Close(ctx)
 	mp := mpool.MustNewZero()
-	attrs := []string{"id", "payload"}
-	typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
+	attrs := make([]string, columns)
+	typs := make([]types.Type, columns)
+	seqnums := make([]uint16, columns)
+	attrs[0], typs[0] = "id", types.T_int32.ToType()
+	for i := 1; i < columns; i++ {
+		attrs[i], typs[i], seqnums[i] = fmt.Sprintf("v%d", i), types.T_text.ToType(), uint16(i)
+	}
 	input := batch.NewWithSchema(false, attrs, typs)
 	defer input.Clean(mp)
-	require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(1), false, mp))
-	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(strings.Repeat("x", 4096)), false, mp))
-	require.NoError(t, vector.SetBytesAt(input.Vecs[1], 0, []byte("ok"), mp))
-	input.SetRowCount(1)
-	sink := NewSinker(0, attrs, typs, nil, mp, nil, WithMemorySizeThreshold(256), WithByteBoundedRuns())
-	t.Cleanup(func() { require.NoError(t, sink.Close()) })
-	require.NoError(t, sink.Write(context.Background(), input))
-	require.Len(t, sink.staged.inMemory, 1)
-	got := sink.staged.inMemory[0]
-	require.Equal(t, "ok", string(got.Vecs[1].GetBytesAt(0)))
-	require.Empty(t, got.Vecs[1].GetArea(), "a single short value must not copy unused input area")
-	require.Less(t, sink.StagedSize(), 256)
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(rows-i), false, mp))
+	}
+	for col := 1; col < columns; col++ {
+		value := fmt.Sprintf("%03d:%s", col, strings.Repeat("x", 40))
+		constant, err := vector.NewConstBytes(typs[col], []byte(value), rows, mp)
+		require.NoError(t, err)
+		err = input.Vecs[col].UnionBatch(constant, 0, rows, nil, mp)
+		constant.Free(mp)
+		require.NoError(t, err)
+		require.False(t, input.Vecs[col].VarlenaAreaIsDisjoint())
+	}
+	input.SetRowCount(rows)
+	sink := NewSinker(0, attrs, typs, NewFSinkerImplFactory(seqnums, 0, true, false, 0), mp, fs,
+		WithMemorySizeThreshold(1<<20), WithByteBoundedRuns(), WithTailSizeCap(0))
+	defer sink.Close()
+	require.NoError(t, sink.Write(ctx, input))
+	require.NoError(t, sink.Sync(ctx))
+	stats, _ := sink.GetResult()
+	require.Len(t, stats, 1)
+	require.Equal(t, uint32(1), stats[0].BlkCnt())
+	objectio.ForeachBlkInObjStatsList(false, nil, func(info objectio.BlockInfo, _ objectio.BlockObject) bool {
+		loc := objectio.Location(info.MetaLoc[:])
+		reader, err := NewObjectReader(fs, loc)
+		require.NoError(t, err)
+		got, release, err := reader.LoadColumns(ctx, seqnums, typs, loc.ID(), mp)
+		require.NoError(t, err)
+		defer release()
+		require.Equal(t, rows, got.RowCount())
+		require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColNoTypeCheck[int32](got.Vecs[0]))
+		for col := 1; col < columns; col++ {
+			want := fmt.Sprintf("%03d:%s", col, strings.Repeat("x", 40))
+			for row := 0; row < rows; row++ {
+				require.Equal(t, want, string(got.Vecs[col].GetBytesAt(row)))
+			}
+		}
+		return true
+	}, stats[0])
 }
 
 func TestSortedRunOversizedRowAndRepeatedWrites(t *testing.T) {
-	ctx := context.Background()
-	mp := mpool.MustNewZero()
-	attrs := []string{"id", "payload"}
-	typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-	file := &trackingStreamSinker{}
-	var objectRows []int
-	factory := func(*mpool.MPool, fileservice.FileService) FileSinker { return file }
-	sink := NewSinker(0, attrs, typs, factory, mp, nil, WithMemorySizeThreshold(256), WithByteBoundedRuns(), WithTailSizeCap(0))
-	t.Cleanup(func() { require.NoError(t, sink.Close()) })
-	for i, value := range []string{"small", strings.Repeat("x", 2048), "small"} {
-		input := batch.NewWithSchema(false, attrs, typs)
-		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, mp))
-		require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(value), false, mp))
-		input.SetRowCount(1)
-		before := file.rows
-		err := sink.Write(ctx, input)
-		input.Clean(mp)
-		require.NoError(t, err)
-		if file.rows > before {
-			objectRows = append(objectRows, file.rows-before)
-		}
+	for _, tc := range []struct {
+		name       string
+		limit      int
+		values     []string
+		objectRows []int
+	}{
+		{"exact_budget", 256, []string{strings.Repeat("x", 100), strings.Repeat("y", 100)}, []int{2}},
+		{"next_row_exceeds_budget", 256, []string{strings.Repeat("x", 100), strings.Repeat("y", 101)}, []int{1, 1}},
+		{"oversized_between_small_rows", 256, []string{"small", strings.Repeat("x", 2048), "small"}, []int{1, 1, 1}},
+		{"each_row_exceeds_budget", 1, []string{"small", "small"}, []int{1, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mp := mpool.MustNewZero()
+			attrs := []string{"id", "payload"}
+			typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
+			file := &trackingStreamSinker{}
+			factory := func(*mpool.MPool, fileservice.FileService) FileSinker { return file }
+			sink := NewSinker(0, attrs, typs, factory, mp, nil, WithMemorySizeThreshold(tc.limit), WithByteBoundedRuns(), WithTailSizeCap(0))
+			t.Cleanup(func() { require.NoError(t, sink.Close()) })
+			for i, value := range tc.values {
+				input := batch.NewWithSchema(false, attrs, typs)
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, mp))
+				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(value), false, mp))
+				input.SetRowCount(1)
+				err := sink.Write(ctx, input)
+				input.Clean(mp)
+				require.NoError(t, err)
+			}
+			require.NoError(t, sink.Sync(ctx))
+			require.Equal(t, len(tc.values), file.rows)
+			require.Equal(t, tc.objectRows, file.objectRows)
+		})
 	}
-	before := file.rows
-	require.NoError(t, sink.Sync(ctx))
-	if file.rows > before {
-		objectRows = append(objectRows, file.rows-before)
-	}
-	require.Equal(t, 3, file.rows)
-	require.Equal(t, []int{2, 1}, objectRows, "one large row may exceed the soft limit, but the next row is in a new run")
 }
 
 func TestSortedRunWriteOwnedBudget(t *testing.T) {
@@ -403,51 +477,65 @@ func TestSortedRunPanicReleasesBuffersAndCanRetry(t *testing.T) {
 func TestRunKeepsFullBlocksBeforeLastPartial(t *testing.T) {
 	for _, pipeline := range []bool{false, true} {
 		for _, sortKey := range []int{0, -1} {
-			t.Run(fmt.Sprintf("pipeline=%t/sortKey=%d", pipeline, sortKey), func(t *testing.T) {
-				ctx := context.Background()
-				fs := testutil.NewSharedFS()
-				t.Cleanup(func() { fs.Close(ctx) })
-				mp := mpool.MustNewZero()
-				attrs := []string{"id", "payload"}
-				typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
-				input := batch.NewWithSchema(false, attrs, typs)
-				defer input.Clean(mp)
-				for i := 0; i < objectio.BlockMaxRows; i++ {
-					require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, mp))
-					require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("x"), false, mp))
-				}
-				require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(objectio.BlockMaxRows), false, mp))
-				large := strings.Repeat("z", 300<<10)
-				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(large), false, mp))
-				input.SetRowCount(objectio.BlockMaxRows + 1)
-				opts := []SinkerOption{WithMemorySizeThreshold(256 << 10), WithByteBoundedRuns(), WithTailSizeCap(0)}
-				if pipeline {
-					opts = append(opts, WithPipelineFlush())
-				}
-				sink := NewSinker(sortKey, attrs, typs, NewFSinkerImplFactory([]uint16{0, 1}, sortKey, sortKey >= 0, false, 0), mp, fs, opts...)
-				t.Cleanup(func() { require.NoError(t, sink.Close()) })
-				require.NoError(t, sink.Write(ctx, input))
-				require.NoError(t, sink.Sync(ctx))
-				stats, _ := sink.GetResult()
-				require.Len(t, stats, 1)
-				require.Equal(t, uint32(2), stats[0].BlkCnt())
-				var blockRows []int
-				objectio.ForeachBlkInObjStatsList(false, nil, func(info objectio.BlockInfo, _ objectio.BlockObject) bool {
-					loc := objectio.Location(info.MetaLoc[:])
-					reader, err := NewObjectReader(fs, loc)
-					require.NoError(t, err)
-					got, release, err := reader.LoadColumns(ctx, []uint16{0, 1}, typs, loc.ID(), mp)
-					require.NoError(t, err)
-					defer release()
-					require.Equal(t, int(loc.Rows()), got.RowCount())
-					blockRows = append(blockRows, got.RowCount())
-					if loc.ID() == 1 {
-						require.Equal(t, large, string(got.Vecs[1].GetBytesAt(0)))
+			for _, payloadSize := range []int{100, 300 << 10} {
+				t.Run(fmt.Sprintf("pipeline=%t/sortKey=%d/payload=%d", pipeline, sortKey, payloadSize), func(t *testing.T) {
+					ctx := context.Background()
+					fs := testutil.NewSharedFS()
+					t.Cleanup(func() { fs.Close(ctx) })
+					mp := mpool.MustNewZero()
+					attrs := []string{"id", "payload"}
+					typs := []types.Type{types.T_int32.ToType(), types.T_text.ToType()}
+					input := batch.NewWithSchema(false, attrs, typs)
+					defer input.Clean(mp)
+					for i := 0; i < objectio.BlockMaxRows; i++ {
+						require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(i), false, mp))
+						require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("x"), false, mp))
 					}
-					return true
-				}, stats...)
-				require.Equal(t, []int{objectio.BlockMaxRows, 1}, blockRows)
-			})
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(objectio.BlockMaxRows), false, mp))
+					payload := strings.Repeat("z", payloadSize)
+					require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte(payload), false, mp))
+					input.SetRowCount(objectio.BlockMaxRows + 1)
+					opts := []SinkerOption{WithMemorySizeThreshold(256 << 10), WithByteBoundedRuns(), WithTailSizeCap(0)}
+					if pipeline {
+						opts = append(opts, WithPipelineFlush())
+					}
+					sink := NewSinker(sortKey, attrs, typs, NewFSinkerImplFactory([]uint16{0, 1}, sortKey, sortKey >= 0, false, 0), mp, fs, opts...)
+					t.Cleanup(func() { require.NoError(t, sink.Close()) })
+					require.NoError(t, sink.Write(ctx, input))
+					require.NoError(t, sink.Sync(ctx))
+					stats, _ := sink.GetResult()
+					if payloadSize > 256<<10 {
+						require.Len(t, stats, 2)
+						for _, stat := range stats {
+							require.Equal(t, uint32(1), stat.BlkCnt())
+						}
+					} else {
+						require.Len(t, stats, 1)
+						require.Equal(t, uint32(2), stats[0].BlkCnt())
+					}
+					var blockRows []int
+					foundLast := false
+					objectio.ForeachBlkInObjStatsList(false, nil, func(info objectio.BlockInfo, _ objectio.BlockObject) bool {
+						loc := objectio.Location(info.MetaLoc[:])
+						reader, err := NewObjectReader(fs, loc)
+						require.NoError(t, err)
+						got, release, err := reader.LoadColumns(ctx, []uint16{0, 1}, typs, loc.ID(), mp)
+						require.NoError(t, err)
+						defer release()
+						require.Equal(t, int(loc.Rows()), got.RowCount())
+						blockRows = append(blockRows, got.RowCount())
+						for i, id := range vector.MustFixedColNoTypeCheck[int32](got.Vecs[0]) {
+							if id == int32(objectio.BlockMaxRows) {
+								foundLast = true
+								require.Equal(t, payload, string(got.Vecs[1].GetBytesAt(i)))
+							}
+						}
+						return true
+					}, stats...)
+					require.True(t, foundLast)
+					require.ElementsMatch(t, []int{objectio.BlockMaxRows, 1}, blockRows)
+				})
+			}
 		}
 	}
 }

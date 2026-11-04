@@ -141,11 +141,12 @@ func constantRunExpansion(data *batch.Batch, rows int) int {
 	return size
 }
 
-// boundedRunRows selects through the first row reaching the remaining budget.
-// A row cannot be split, so the returned window always contains at least one.
+// boundedRunRows selects the prefix whose materialized size fits the remaining
+// budget. The caller handles a zero-length prefix, including oversized rows.
 func boundedRunRows(data *batch.Batch, offset, rows, remaining int) (int, int) {
 	size := 0
 	for row := offset; row < offset+rows; row++ {
+		previous := size
 		for _, vec := range data.Vecs {
 			size = addRunBytes(size, vec.GetType().TypeSize())
 			if !vec.GetType().IsVarlen() || len(vec.GetArea()) == 0 || vec.IsConstNull() {
@@ -159,7 +160,10 @@ func boundedRunRows(data *batch.Batch, offset, rows, remaining int) (int, int) {
 				size = addRunBytes(size, n)
 			}
 		}
-		if size >= remaining {
+		if size > remaining {
+			return row - offset, previous
+		}
+		if size == remaining {
 			return row - offset + 1, size
 		}
 	}
