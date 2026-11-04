@@ -5,10 +5,11 @@ e enum('a','bb',''),
 s set('x','yy'),
 c char(2),
 v varchar(2),
-u int unique
+u int unique,
+n int
 );
 insert into jdbc_enum_set_metadata values
-(1, 'a', 'x,yy', 'ab', 'ab', 1), (2, '', '', '', '', null), (3, null, null, null, null, null);
+(1, 'a', 'x,yy', 'ab', 'ab', 1, 1), (2, '', '', '', '', null, 2), (3, null, null, null, null, null, 3);
 select e, s, c, v from jdbc_enum_set_metadata where 1 = 0;
 ➤ e[1,2,0]  ¦  s[1,4,0]  ¦  c[1,2,0]  ¦  v[12,2,0]
 select e, s, c, v from jdbc_enum_set_metadata order by id;
@@ -483,4 +484,86 @@ execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
   ¦    ¦  1
 deallocate prepare enum_decimal_source;
 set @enum_decimal_lo=null,@enum_decimal_hi=null;
+select e,s,count(*)over() as matches from
+(select min(e)e,max(s)s from jdbc_enum_set_metadata group by id with rollup)d;
+➤ e[1,2,0]  ¦  s[1,4,0]  ¦  matches[-5,64,0]  𝄀
+  ¦  x,yy  ¦  4  𝄀
+a  ¦  x,yy  ¦  4  𝄀
+  ¦    ¦  4  𝄀
+null  ¦  null  ¦  4
+select e,s,count(*)over() as matches from
+(select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union select e,s from jdbc_enum_set_metadata group by e,s with rollup)d;
+➤ e[1,2,0]  ¦  s[1,4,0]  ¦  matches[-5,64,0]  𝄀
+null  ¦  null  ¦  5  𝄀
+a  ¦  null  ¦  5  𝄀
+  ¦  null  ¦  5  𝄀
+a  ¦  x,yy  ¦  5  𝄀
+  ¦    ¦  5
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and length(b.id)>0;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  𝄀
+a  ¦  x,yy
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and (b.id is null)+1>0;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+  ¦  x,yy  𝄀
+  ¦  x,yy
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=(b.id is null)+1;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  𝄀
+a  ¦  x,yy
+select min(a.e)over() as min_e,max(a.s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=b.id+1;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  ¦  matches[-5,64,0]  𝄀
+  ¦    ¦  1
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n>=2 and n<=1;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between null and 1;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]
+alter table jdbc_enum_set_metadata add index range_n(n);
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between null and 1;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata ignore index(range_n) where n between 2 and 1;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]
+alter table jdbc_enum_set_metadata alter index range_n invisible;
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]
+alter table jdbc_enum_set_metadata alter index range_n visible;
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]
+alter table jdbc_enum_set_metadata drop index range_n;
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]
+prepare enum_string_range from 'select min(e)over() as min_e,max(s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata where id between ? and ?';
+set @enum_string_lo='2',@enum_string_hi='1';
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  ¦  matches[-5,64,0]
+set @enum_string_lo='1',@enum_string_hi='2';
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  ¦  matches[-5,64,0]  𝄀
+  ¦  x,yy  ¦  2  𝄀
+  ¦  x,yy  ¦  2
+set @enum_string_lo='1.2',@enum_string_hi='1.1';
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  ¦  matches[-5,64,0]
+set @enum_string_lo=null,@enum_string_hi='1';
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  ¦  matches[-5,64,0]
+set @enum_string_lo='2.5',@enum_string_hi='1.5';
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+➤ min_e[1,2,0]  ¦  max_s[1,4,0]  ¦  matches[-5,64,0]
+set @enum_string_lo='1',@enum_string_hi='2';
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+➤ min_e[12,2,0]  ¦  max_s[12,4,0]  ¦  matches[-5,64,0]  𝄀
+  ¦  x,yy  ¦  2  𝄀
+  ¦  x,yy  ¦  2
+deallocate prepare enum_string_range;
+set @enum_string_lo=null,@enum_string_hi=null;
 drop table jdbc_enum_set_metadata;

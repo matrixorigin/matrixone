@@ -2649,6 +2649,10 @@ message MySQLSpecialResultType {
     PREPARE_ONLY = 4;
     // Materialized expression fields retain label width, not ENUM/SET flags.
     VARCHAR_LABEL = 5;
+    // ROLLUP aggregate labels stay CHAR; FROM exposes their declaration fields.
+    ROLLUP_AGGREGATE = 6;
+    // SET expression labels preserve CHAR through forwarding, without field flags.
+    CHAR_LABEL = 7;
   }
   Type typ = 1 [(gogoproto.nullable) = false];
   Kind kind = 2;

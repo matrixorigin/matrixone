@@ -968,7 +968,11 @@ func (builder *QueryBuilder) captureMySQLSpecialBlockResultTypes(ctx *BindContex
 				ctx.mysqlSpecialResultTypes = make(map[int32]*plan.MySQLSpecialResultType)
 			}
 			if ctx.sortRollup {
-				withMySQLSpecialResultKind(result, plan.MySQLSpecialResultType_ROLLUP)
+				kind := plan.MySQLSpecialResultType_ROLLUP
+				if result.Kind == plan.MySQLSpecialResultType_AGGREGATE {
+					kind = plan.MySQLSpecialResultType_ROLLUP_AGGREGATE
+				}
+				withMySQLSpecialResultKind(result, kind)
 			}
 			ctx.mysqlSpecialResultTypes[int32(i)] = result
 		}

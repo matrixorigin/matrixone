@@ -54,7 +54,8 @@ func TestEnumSetColumnDefinitionMetadata(t *testing.T) {
 			}
 			kinds := []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_COLUMN}
 			if tc.source != nil {
-				kinds = append(kinds, pb.MySQLSpecialResultType_AGGREGATE, pb.MySQLSpecialResultType_SCALAR_SUBQUERY, pb.MySQLSpecialResultType_ROLLUP)
+				kinds = append(kinds, pb.MySQLSpecialResultType_AGGREGATE, pb.MySQLSpecialResultType_SCALAR_SUBQUERY, pb.MySQLSpecialResultType_ROLLUP,
+					pb.MySQLSpecialResultType_ROLLUP_AGGREGATE, pb.MySQLSpecialResultType_CHAR_LABEL)
 			}
 			if tc.oid.IsMySQLString() {
 				def.Typ.Charset = uint32(types.CharsetUTF8)
@@ -103,7 +104,9 @@ func TestEnumSetColumnDefinitionMetadata(t *testing.T) {
 }
 
 func TestEnumSetPrepareOnlyMetadataDoesNotLeakIntoExecute(t *testing.T) {
-	for _, kind := range []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_PREPARE_ONLY, pb.MySQLSpecialResultType_VARCHAR_LABEL} {
+	for _, kind := range []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_PREPARE_ONLY, pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		pb.MySQLSpecialResultType_SCALAR_SUBQUERY, pb.MySQLSpecialResultType_ROLLUP,
+		pb.MySQLSpecialResultType_ROLLUP_AGGREGATE, pb.MySQLSpecialResultType_CHAR_LABEL} {
 		t.Run(kind.String(), func(t *testing.T) {
 			conn := &prepareResponseCaptureConn{}
 			protocol, _, stmt := newBinaryPrepareProtocolTestCaseWithConn(t, "select min('a') over () e, max('x') over () s from (select 1 n union all select 2 n) d", conn)
@@ -140,7 +143,12 @@ func TestEnumSetPrepareOnlyMetadataDoesNotLeakIntoExecute(t *testing.T) {
 						require.NoError(t, err)
 						packet := protocol.makeColumnDefinition41Payload(column, int(cmd))
 						execute := parsePrepareColumnDefinition(t, packet[HeaderOffset:])
-						require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, execute.typ)
+						wantExecute := defines.MYSQL_TYPE_VAR_STRING
+						if kind == pb.MySQLSpecialResultType_SCALAR_SUBQUERY || kind == pb.MySQLSpecialResultType_ROLLUP ||
+							kind == pb.MySQLSpecialResultType_ROLLUP_AGGREGATE || kind == pb.MySQLSpecialResultType_CHAR_LABEL {
+							wantExecute = defines.MYSQL_TYPE_STRING
+						}
+						require.Equal(t, wantExecute, execute.typ)
 						require.Equal(t, width, execute.length)
 						require.Zero(t, execute.flags&uint16(defines.ENUM_FLAG|defines.SET_FLAG))
 					}
@@ -152,18 +160,23 @@ func TestEnumSetPrepareOnlyMetadataDoesNotLeakIntoExecute(t *testing.T) {
 			ses := protocol.GetSession()
 			ses.SetCmd(COM_STMT_EXECUTE)
 			ses.SetMysqlResultSet(&MysqlResultSet{})
-			ctx := &ExecCtx{reqCtx: t.Context(), prepareStmt: stmt, prepareColDef: cached}
+			ctx := &ExecCtx{reqCtx: t.Context(), prepareStmt: stmt, prepareColDef: cached, input: &UserInput{isCursorExecute: true}}
 			wireColumns := make([]any, len(columns))
 			for i, column := range columns {
 				wireColumns[i], err = colDef2MysqlColumn(t.Context(), column)
 				require.NoError(t, err)
 			}
+			applyCursorEnumSetResultMetadata(wireColumns, columns)
 			require.NoError(t, NewMysqlResp(protocol).writeColumnDefs(ses, ctx, wireColumns))
 			require.NoError(t, protocol.flush())
 			packets := splitProtocolPackets(t, conn.writes)
 			for i := range columns {
 				wire := parsePrepareColumnDefinition(t, packets[i+1])
-				require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, wire.typ)
+				wantCursor := defines.MYSQL_TYPE_VAR_STRING
+				if kind == pb.MySQLSpecialResultType_ROLLUP_AGGREGATE || kind == pb.MySQLSpecialResultType_CHAR_LABEL {
+					wantCursor = defines.MYSQL_TYPE_STRING
+				}
+				require.Equal(t, wantCursor, wire.typ)
 			}
 			require.Equal(t, cached, stmt.ColDefData, "execute must leave prepare metadata intact")
 			after, err := query.Marshal()
@@ -207,7 +220,8 @@ func TestEnumSetExecutionParametersReachMetadataOwner(t *testing.T) {
 }
 
 func TestEnumSetConstantEmptyAndCursorMetadata(t *testing.T) {
-	for _, kind := range []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_PREPARE_ONLY, pb.MySQLSpecialResultType_VARCHAR_LABEL} {
+	for _, kind := range []pb.MySQLSpecialResultType_Kind{pb.MySQLSpecialResultType_PREPARE_ONLY, pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		pb.MySQLSpecialResultType_SCALAR_SUBQUERY, pb.MySQLSpecialResultType_ROLLUP} {
 		for _, elided := range []bool{false, true} {
 			def := &pb.ColDef{Typ: pb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)},
 				MysqlSpecialResultType: &pb.MySQLSpecialResultType{Typ: pb.Type{Id: int32(types.T_enum), Enumvalues: "a,bb"}, Kind: kind, MaterializationElided: elided}}
@@ -217,7 +231,8 @@ func TestEnumSetConstantEmptyAndCursorMetadata(t *testing.T) {
 				column, err := colDef2MysqlColumn(t.Context(), def, preparing)
 				require.NoError(t, err)
 				want := defines.MYSQL_TYPE_VAR_STRING
-				if kind == pb.MySQLSpecialResultType_PREPARE_ONLY && (preparing || elided) {
+				if kind == pb.MySQLSpecialResultType_PREPARE_ONLY && (preparing || elided) ||
+					kind == pb.MySQLSpecialResultType_SCALAR_SUBQUERY || kind == pb.MySQLSpecialResultType_ROLLUP {
 					want = defines.MYSQL_TYPE_STRING
 				}
 				require.Equal(t, want, column.ColumnType())

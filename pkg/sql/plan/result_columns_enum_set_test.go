@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -38,11 +39,12 @@ func TestEnumSetResultPresentation(t *testing.T) {
 		"empty subquery":            pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
 		"correlated subquery":       pb.MySQLSpecialResultType_SCALAR_SUBQUERY,
 		"rollup columns":            pb.MySQLSpecialResultType_ROLLUP,
-		"rollup aggregate":          pb.MySQLSpecialResultType_ROLLUP,
+		"rollup aggregate":          pb.MySQLSpecialResultType_ROLLUP_AGGREGATE,
+		"derived set char labels":   pb.MySQLSpecialResultType_CHAR_LABEL,
 		"window min max":            pb.MySQLSpecialResultType_PREPARE_ONLY,
 		"distinct rollup":           pb.MySQLSpecialResultType_PREPARE_ONLY,
 		"derived rollup":            pb.MySQLSpecialResultType_VARCHAR_LABEL,
-		"rollup user union":         pb.MySQLSpecialResultType_ROLLUP,
+		"rollup user union":         pb.MySQLSpecialResultType_CHAR_LABEL,
 		"derived window":            pb.MySQLSpecialResultType_VARCHAR_LABEL,
 		"widthonly aggregate":       pb.MySQLSpecialResultType_VARCHAR_LABEL,
 		"widthonly scalar":          pb.MySQLSpecialResultType_VARCHAR_LABEL,
@@ -50,8 +52,8 @@ func TestEnumSetResultPresentation(t *testing.T) {
 		"widthonly collapsed union": pb.MySQLSpecialResultType_VARCHAR_LABEL,
 		"widthonly union":           pb.MySQLSpecialResultType_VARCHAR_LABEL,
 		"widthonly rollup":          pb.MySQLSpecialResultType_VARCHAR_LABEL,
-		"collapsed rollup union":    pb.MySQLSpecialResultType_ROLLUP,
-		"noncollapsed rollup union": pb.MySQLSpecialResultType_ROLLUP,
+		"collapsed rollup union":    pb.MySQLSpecialResultType_CHAR_LABEL,
+		"noncollapsed rollup union": pb.MySQLSpecialResultType_CHAR_LABEL,
 	}
 	for _, tc := range []struct {
 		name string
@@ -78,6 +80,8 @@ func TestEnumSetResultPresentation(t *testing.T) {
 		{"derived window", "select e, s from (select min(e) over () e, max(s) over () s from enum_order_t) d", []types.T{types.T_enum, types.T_uint64}},
 		{"rollup user union", "select e, s from enum_order_t group by e, s with rollup union all select e, s from enum_order_t", []types.T{types.T_enum, types.T_uint64}},
 		{"rollup aggregate", "select min(e), max(s) from enum_order_t group by id with rollup", []types.T{types.T_enum, types.T_uint64}},
+		{"derived rollup aggregate", "select e,s from (select min(e)e,max(s)s from enum_order_t group by id with rollup)d", []types.T{types.T_enum, types.T_uint64}},
+		{"derived set char labels", "select e,s from (select e,s from enum_order_t group by e,s with rollup union select e,s from enum_order_t group by e,s with rollup)d", []types.T{types.T_enum, types.T_uint64}},
 		{"group by primary key", "select e, s from enum_order_t group by id", []types.T{types.T_enum, types.T_uint64}},
 		{"min max", "select min(e), max(s) from enum_order_t", []types.T{types.T_enum, types.T_uint64}},
 		{"scalar subquery", "select (select e from enum_order_t limit 1), (select s from enum_order_t limit 1)", []types.T{types.T_enum, types.T_uint64}},
@@ -176,6 +180,10 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where b.id is not null or a.id=2", false},
 		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where not(b.id is null) and a.id=coalesce(b.id,2)", true},
 		{"select min(e)over(),max(s)over() from enum_order_t where not(not(id between 1.2 and 1.1))", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=coalesce(b.id,2) and length(b.id)>0", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=coalesce(b.id,2) and (b.id is null)+1>0", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on true where a.id=(b.id is null)+1", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on true where a.id=b.id+1", true},
 		{"select min(e)over(),max(s)over() from enum_order_t where id>=1.2 and id<=1.1", false},
 		{"select min(e)over(),max(s)over() from enum_order_t where id between 1.2 and 1.1", true},
 		{"select min(e)over(),max(s)over() from enum_order_t where 1.2<=id and 1.1>=id", false},
@@ -384,9 +392,17 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 		{"sql_decimal_native", []any{ParamValue{Value: types.Decimal64(25), HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}, ParamValue{Value: types.Decimal64(15), HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}}, true},
 		{"sql_decimal_128", []any{ParamValue{Value: types.Decimal128{B0_63: 25}, HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal128, Width: 38, Scale: 1}}, ParamValue{Value: types.Decimal128{B0_63: 15}, HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal128, Width: 38, Scale: 1}}}, true},
 		{"sql_decimal_256", []any{ParamValue{Value: types.Decimal256{B0_63: 25}, HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal256, Width: 76, Scale: 1}}, ParamValue{Value: types.Decimal256{B0_63: 15}, HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal256, Width: 76, Scale: 1}}}, true},
-		{"sql_decimal_runtime_string", []any{ParamValue{Value: "2.5", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), HasSourceType: true, SourceType: types.T_decimal64.ToType()}, ParamValue{Value: "1.5", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), HasSourceType: true, SourceType: types.T_decimal64.ToType()}}, false},
+		{"sql_decimal_runtime_string", []any{ParamValue{Value: "2.5", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), HasSourceType: true, SourceType: types.T_decimal64.ToType()}, ParamValue{Value: "1.5", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), HasSourceType: true, SourceType: types.T_decimal64.ToType()}}, true},
 		{"sql_decimal_range", []any{ParamValue{Value: types.Decimal64(15), HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}, ParamValue{Value: types.Decimal64(25), HasSourceType: true, SourceType: types.Type{Oid: types.T_decimal64, Width: 2, Scale: 1}}}, false},
-		{"sql_decimal_string_source", []any{ParamValue{Value: "2.5", HasSourceType: true, SourceType: types.T_varchar.ToType()}, ParamValue{Value: "1.5", HasSourceType: true, SourceType: types.T_varchar.ToType()}}, false},
+		{"sql_decimal_string_source", []any{ParamValue{Value: "2.5", HasSourceType: true, SourceType: types.T_varchar.ToType()}, ParamValue{Value: "1.5", HasSourceType: true, SourceType: types.T_varchar.ToType()}}, true},
+		{"binary_string", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), IsBinaryProtocol: true}}, true},
+		{"binary_string_text_transport", []any{ParamValue{Value: "2", IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamNone, EnableNumericPrefix: true}, ParamValue{Value: "1", IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamNone, EnableNumericPrefix: true}}, true},
+		{"binary_string_exact", []any{ParamValue{Value: "9007199254740993", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "9007199254740992", HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(), IsBinaryProtocol: true}}, true},
+		{"sql_string", []any{ParamValue{Value: "2", HasSourceType: true, SourceType: types.T_varchar.ToType()}, ParamValue{Value: "1", HasSourceType: true, SourceType: types.T_varchar.ToType()}}, true},
+		{"sql_string_prefix", []any{ParamValue{Value: "2x", HasSourceType: true, SourceType: types.T_varchar.ToType(), EnableNumericPrefix: true}, ParamValue{Value: "1x", HasSourceType: true, SourceType: types.T_varchar.ToType(), EnableNumericPrefix: true}}, true},
+		{"sql_string_unadmitted_prefix", []any{ParamValue{Value: "2x", HasSourceType: true, SourceType: types.T_varchar.ToType()}, ParamValue{Value: "1x", HasSourceType: true, SourceType: types.T_varchar.ToType()}}, false},
+		{"binary_double", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}}, true},
+		{"binary_double_native", []any{ParamValue{Value: float64(1.2), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}, ParamValue{Value: float64(1.1), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}}, true},
 		{"sql_integer_transport", []any{ParamValue{Value: int64(2)}, ParamValue{Value: int64(1)}}, true},
 		{"binary_integer_text", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}}, true},
 		{"binary_null", []any{ParamValue{IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}}, true},
@@ -397,6 +413,10 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 			t.Cleanup(stmt.Free)
 			mock := newMySQLSpecialOrderMock(t)
 			mock.ctxt.tables["enum_order_t"].Cols[0].Typ.Id = int32(types.T_int32)
+			mock.ctxt.tables["enum_order_t"].Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+			if tc.name == "binary_string_exact" {
+				mock.ctxt.tables["enum_order_t"].Cols[0].Typ.Id = int32(types.T_int64)
+			}
 			proc := mock.ctxt.GetProcess()
 			params := vector.NewVec(types.T_text.ToType())
 			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
@@ -413,9 +433,14 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 					bindings[i].Type = types.Type{Oid: types.T_decimal64, Width: 18, Scale: 1}
 				}
 			}
-			if tc.name == "sql_integer_transport" || strings.HasPrefix(tc.name, "sql_decimal_") {
+			if tc.name == "sql_integer_transport" || strings.HasPrefix(tc.name, "sql_decimal_") || strings.HasPrefix(tc.name, "sql_string") || strings.HasPrefix(tc.name, "binary_string") {
 				for i := range bindings {
 					bindings[i].Type = types.T_text.ToType()
+				}
+			}
+			if strings.HasPrefix(tc.name, "binary_double") {
+				for i := range bindings {
+					bindings[i].Type = types.T_float64.ToType()
 				}
 			}
 			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, tc.values)
@@ -429,6 +454,101 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 				require.Equal(t, tc.empty, col.MysqlSpecialResultType.MaterializationElided)
 			}
 			require.True(t, proto.Equal(snapshot, bound.Plan))
+		})
+	}
+}
+
+func TestEnumSetRangeNumericAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		oid   types.T
+		valid bool
+	}{
+		{float32(1.25), types.T_float32, true},
+		{float64(1.25), types.T_float64, true},
+		{"1.25", types.T_float64, true},
+		{"not-a-number", types.T_float64, false},
+		{math.NaN(), types.T_float64, false},
+		{math.Inf(1), types.T_float64, false},
+		{math.MaxFloat64, types.T_float32, false},
+		{int64(1), types.T_float64, false},
+	} {
+		expr, ok := resultRangeFloat(tc.value, tc.oid)
+		require.Equal(t, tc.valid, ok)
+		if ok {
+			_, exact := resultExactRangeNumber(expr)
+			require.True(t, exact)
+		}
+	}
+	for _, tc := range []struct {
+		text          string
+		prefix, valid bool
+	}{
+		{"2.5", false, true}, {"2x", false, false}, {"2x", true, true},
+		{"x", true, true}, {"1e99999999", true, false},
+	} {
+		_, ok := resultRangeDecimalText(tc.text, tc.prefix)
+		require.Equal(t, tc.valid, ok)
+	}
+}
+
+func TestEnumSetRangeIndexAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name, predicate string
+		parts           []string
+		primary, empty  bool
+	}{
+		{"no_index_between", "id between 2 and 1", nil, false, false},
+		{"no_index_comparisons", "id>=2 and id<=1", nil, false, false},
+		{"no_index_null", "id between null and 1", nil, false, false},
+		{"no_index_null_order", "id>=null", nil, false, false},
+		{"no_index_null_equal", "id=null", nil, false, false},
+		{"primary_between", "id between 2 and 1", []string{"id"}, true, true},
+		{"secondary_between", "id between 2 and 1", []string{"id"}, false, true},
+		{"secondary_null", "id between null and 1", []string{"id"}, false, true},
+		{"invisible_secondary", "id between 2 and 1", []string{"id"}, false, false},
+		{"ignored_secondary", "id between 2 and 1", []string{"id"}, false, false},
+		{"use_none", "id between 2 and 1", []string{"id"}, false, false},
+		{"ignored_primary", "id between 2 and 1", []string{"id"}, true, false},
+		{"nonleading_between", "id between 2 and 1", []string{"u", "id"}, false, true},
+		{"bound_prefix_between", "u=1 and id between 2 and 1", []string{"u", "id"}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock(t)
+			table := mock.ctxt.tables["enum_order_t"]
+			table.Cols[0].Typ.Id = int32(types.T_int32)
+			table.Cols = append(table.Cols, &pb.ColDef{Name: "u", Typ: pb.Type{Id: int32(types.T_int32)}})
+			table.Name2ColIndex = make(map[string]int32)
+			for i, col := range table.Cols {
+				table.Name2ColIndex[col.Name] = int32(i)
+			}
+			table.Pkey, table.Indexes = nil, nil
+			if tc.primary {
+				table.Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: tc.parts}
+			} else if tc.parts != nil {
+				table.Indexes = []*pb.IndexDef{{IndexName: "range_idx", Parts: tc.parts}}
+			}
+			if tc.name == "invisible_secondary" {
+				catalog.SetIndexVisibility(table.Indexes[0], false)
+			}
+			hint := ""
+			switch tc.name {
+			case "ignored_secondary":
+				hint = " ignore index(range_idx)"
+			case "ignored_primary":
+				hint = " ignore index(primary)"
+			case "use_none":
+				hint = " use index()"
+			}
+			stmt, err := mysql.ParseOne(t.Context(), "select min(e)over(),max(s)over() from enum_order_t"+hint+" where "+tc.predicate, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			p, err := BuildPlan(&mock.ctxt, stmt, false)
+			require.NoError(t, err)
+			for _, col := range GetResultColumnsFromPlan(p) {
+				require.NotNil(t, col.MysqlSpecialResultType)
+				require.Equal(t, tc.empty, col.MysqlSpecialResultType.MaterializationElided)
+			}
 		})
 	}
 }
@@ -482,7 +602,7 @@ func TestEnumSetRollupResultPresentationPlanModes(t *testing.T) {
 			require.Equal(t, hint == "rollupSort=1", planHasSortRollup(p.GetQuery()))
 			for _, column := range GetResultColumnsFromPlan(p) {
 				require.NotNil(t, column.MysqlSpecialResultType)
-				require.Equal(t, pb.MySQLSpecialResultType_ROLLUP, column.MysqlSpecialResultType.Kind)
+				require.Equal(t, pb.MySQLSpecialResultType_ROLLUP_AGGREGATE, column.MysqlSpecialResultType.Kind)
 			}
 		})
 	}

@@ -7,10 +7,11 @@ create table jdbc_enum_set_metadata (
     s set('x','yy'),
     c char(2),
     v varchar(2),
-    u int unique
+    u int unique,
+    n int
 );
 insert into jdbc_enum_set_metadata values
-    (1, 'a', 'x,yy', 'ab', 'ab', 1), (2, '', '', '', '', null), (3, null, null, null, null, null);
+    (1, 'a', 'x,yy', 'ab', 'ab', 1, 1), (2, '', '', '', '', null, 2), (3, null, null, null, null, null, 3);
 -- @metacmp(true)
 select e, s, c, v from jdbc_enum_set_metadata where 1 = 0;
 -- @metacmp(true)
@@ -386,4 +387,71 @@ set @enum_decimal_lo=1.5,@enum_decimal_hi=2.5;
 execute enum_decimal_source using @enum_decimal_lo,@enum_decimal_hi;
 deallocate prepare enum_decimal_source;
 set @enum_decimal_lo=null,@enum_decimal_hi=null;
+-- Aggregate declarations and stored CHAR labels have distinct forwarding contracts.
+-- @metacmp(true)
+select e,s,count(*)over() as matches from
+(select min(e)e,max(s)s from jdbc_enum_set_metadata group by id with rollup)d;
+-- @metacmp(true)
+select e,s,count(*)over() as matches from
+(select e,s from jdbc_enum_set_metadata group by e,s with rollup
+union select e,s from jdbc_enum_set_metadata group by e,s with rollup)d;
+-- NULL rejection follows each function, not arbitrary descendants of arithmetic.
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and length(b.id)>0;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on a.id=b.id
+where a.id=coalesce(b.id,2) and (b.id is null)+1>0;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=(b.id is null)+1;
+-- @metacmp(true)
+select min(a.e)over() as min_e,max(a.s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata a
+left join (select id from jdbc_enum_set_metadata where id=1)b on true where a.id=b.id+1;
+-- Empty ranges need an indexed field, including NULL-bound BETWEEN.
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n>=2 and n<=1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between null and 1;
+alter table jdbc_enum_set_metadata add index range_n(n);
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between null and 1;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata ignore index(range_n) where n between 2 and 1;
+alter table jdbc_enum_set_metadata alter index range_n invisible;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+alter table jdbc_enum_set_metadata alter index range_n visible;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+alter table jdbc_enum_set_metadata drop index range_n;
+-- @metacmp(true)
+select min(e)over() as min_e,max(s)over() as max_s from jdbc_enum_set_metadata where n between 2 and 1;
+prepare enum_string_range from 'select min(e)over() as min_e,max(s)over() as max_s,count(*)over() as matches from jdbc_enum_set_metadata where id between ? and ?';
+set @enum_string_lo='2',@enum_string_hi='1';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo='1',@enum_string_hi='2';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo='1.2',@enum_string_hi='1.1';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo=null,@enum_string_hi='1';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo='2.5',@enum_string_hi='1.5';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+set @enum_string_lo='1',@enum_string_hi='2';
+-- @metacmp(true)
+execute enum_string_range using @enum_string_lo,@enum_string_hi;
+deallocate prepare enum_string_range;
+set @enum_string_lo=null,@enum_string_hi=null;
 drop table jdbc_enum_set_metadata;

@@ -5259,9 +5259,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		for colIdx := range ctx.headings {
 			var candidate *plan.MySQLSpecialResultType
 			compatible := true
-			hasRollup, widthOnly := false, false
+			hasRollup, widthOnly, allAggregate := false, false, true
 			for branchIdx, branchCtx := range subCtxList {
 				result := mysqlSpecialResultTypeFromProvenance(branchCtx.outputColumnProvenanceForProject(int32(colIdx)))
+				if captured := branchCtx.mysqlSpecialResultTypes[int32(colIdx)]; captured != nil {
+					result = DeepCopyMySQLSpecialResultType(captured)
+				}
 				if result == nil {
 					if !setBranchPureNull[branchIdx][colIdx] {
 						compatible = false
@@ -5273,7 +5276,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					compatible = false
 					break
 				}
-				hasRollup = hasRollup || result.Kind == plan.MySQLSpecialResultType_ROLLUP
+				allAggregate = allAggregate && (result.Kind == plan.MySQLSpecialResultType_AGGREGATE || result.Kind == plan.MySQLSpecialResultType_ROLLUP_AGGREGATE)
+				hasRollup = hasRollup || result.Kind == plan.MySQLSpecialResultType_ROLLUP ||
+					result.Kind == plan.MySQLSpecialResultType_ROLLUP_AGGREGATE || result.Kind == plan.MySQLSpecialResultType_CHAR_LABEL
 				widthOnly = widthOnly || result.Kind == plan.MySQLSpecialResultType_VARCHAR_LABEL
 				candidate = result
 			}
@@ -5282,6 +5287,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				// rolled-up CHAR item is not an ENUM/SET field, however, and
 				// retains CHAR when the other non-NULL label domains agree.
 				candidate.Kind = plan.MySQLSpecialResultType_ROLLUP
+				if shareGroupingInput && allAggregate {
+					candidate.Kind = plan.MySQLSpecialResultType_ROLLUP_AGGREGATE
+				} else if !shareGroupingInput {
+					candidate.Kind = plan.MySQLSpecialResultType_CHAR_LABEL
+				}
 				if distinct {
 					candidate.Kind = plan.MySQLSpecialResultType_PREPARE_ONLY
 				}
@@ -14678,7 +14688,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			outputColumnProvenance[i] = subCtx.outputColumnProvenanceForProject(int32(i))
 			if result := outputColumnProvenance[i].MySQLSpecialResultType; result != nil {
 				switch result.Kind {
-				case plan.MySQLSpecialResultType_AGGREGATE:
+				case plan.MySQLSpecialResultType_AGGREGATE, plan.MySQLSpecialResultType_ROLLUP_AGGREGATE:
 					result = DeepCopyMySQLSpecialResultType(result)
 					result.Kind = plan.MySQLSpecialResultType_COLUMN
 					outputColumnProvenance[i].MySQLSpecialResultType = result

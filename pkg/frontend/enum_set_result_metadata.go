@@ -25,13 +25,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func enumSetCursorMaterializes(kind plan.MySQLSpecialResultType_Kind) bool {
+	return kind == plan.MySQLSpecialResultType_PREPARE_ONLY || kind == plan.MySQLSpecialResultType_SCALAR_SUBQUERY ||
+		kind == plan.MySQLSpecialResultType_ROLLUP
+}
+
 // A cursor materializes its schema even when a static empty plan lets ordinary
 // execution publish unmaterialized CHAR metadata. Do not change the ColDefs or
 // the statement's prepare packets: those remain valid for subsequent executes.
 func applyCursorEnumSetResultMetadata(columns []any, defs []*plan.ColDef) {
 	for i, def := range defs {
 		result := def.MysqlSpecialResultType
-		if result != nil && result.Kind == plan.MySQLSpecialResultType_PREPARE_ONLY && result.MaterializationElided {
+		if result != nil && enumSetCursorMaterializes(result.Kind) {
 			columns[i].(*MysqlColumn).SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 		}
 	}
@@ -74,7 +79,8 @@ func setEnumSetResultMetadata(ctx context.Context, result *plan.MySQLSpecialResu
 	case plan.MySQLSpecialResultType_COLUMN:
 		col.SetFlag(col.Flag() | uint16(flag))
 	case plan.MySQLSpecialResultType_AGGREGATE, plan.MySQLSpecialResultType_SCALAR_SUBQUERY,
-		plan.MySQLSpecialResultType_ROLLUP, plan.MySQLSpecialResultType_PREPARE_ONLY, plan.MySQLSpecialResultType_VARCHAR_LABEL:
+		plan.MySQLSpecialResultType_ROLLUP, plan.MySQLSpecialResultType_ROLLUP_AGGREGATE, plan.MySQLSpecialResultType_CHAR_LABEL,
+		plan.MySQLSpecialResultType_PREPARE_ONLY, plan.MySQLSpecialResultType_VARCHAR_LABEL:
 		// Expression results retain label widths, but not field flags.
 	default:
 		return moerr.NewInternalError(ctx, "invalid ENUM/SET result presentation kind")

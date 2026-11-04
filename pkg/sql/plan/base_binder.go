@@ -4950,7 +4950,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.observeExpressionProtocol)
 		}
 		if err == nil {
-			if name == "between" && b.ctx != nil && e.GetF().GetFunc().GetObjName() == "and" {
+			if name == "between" && b.ctx != nil && len(args) == 3 && !function.IsRuntimeConstant(args[0]) &&
+				e.GetF().GetFunc().GetObjName() != "between" {
 				// Numeric overload resolution may lower BETWEEN even before
 				// the folding observer. Preserve the bound call's syntax here.
 				rangeOrigin := &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{

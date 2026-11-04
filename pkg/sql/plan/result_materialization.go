@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -546,6 +547,18 @@ func (r *resultMaterialization) elided(root int32, expr *plan.Expr) bool {
 	return true
 }
 
+// This is an any-NULL-in -> NULL-out contract. Registry STRICT does not mean
+// that (COALESCE is STRICT too). Keep non-propagating/unknown functions closed.
+func resultFunctionPropagatesNull(name string) bool {
+	switch name {
+	case "cast", "+", "-", "*", "/", "%", "abs", "unary_minus", "unary_plus",
+		"length", "length_utf8", "char_length", "character_length", "octet_length", "bit_length", "lower", "upper",
+		"=", "!=", "<>", "<", ">", "<=", ">=", "not":
+		return true
+	}
+	return false
+}
+
 // A strict WHERE consumer can discard every right-NULL-extended row. ON
 // predicates are deliberately not passed here: they do not reject outer rows.
 func (r *resultMaterialization) joinRightNullRejected(join *plan.Node, filters []*plan.Expr) bool {
@@ -554,13 +567,10 @@ func (r *resultMaterialization) joinRightNullRejected(join *plan.Node, filters [
 		if e.GetCol() != nil {
 			return r.keyJoinRoute(join, e).childIdx == 1
 		}
-		if fn := e.GetF(); fn != nil && fn.Func != nil {
-			switch fn.Func.ObjName {
-			case "cast", "+", "-", "*", "/", "%", "abs", "unary_minus":
-				for _, arg := range fn.Args {
-					if nullOnRight(arg) {
-						return true
-					}
+		if fn := e.GetF(); fn != nil && fn.Func != nil && resultFunctionPropagatesNull(fn.Func.ObjName) {
+			for _, arg := range fn.Args {
+				if nullOnRight(arg) {
+					return true
 				}
 			}
 		}
@@ -597,9 +607,8 @@ func (r *resultMaterialization) joinRightNullMasked(join *plan.Node, e *plan.Exp
 		return false
 	}
 	if fn := e.GetF(); fn != nil && fn.Func != nil {
-		switch fn.Func.ObjName {
-		case "coalesce", "ifnull", "if", "iff", "case":
-			return right(e)
+		if !resultFunctionPropagatesNull(fn.Func.ObjName) && right(e) {
+			return true
 		}
 		for _, arg := range fn.Args {
 			if r.joinRightNullMasked(join, arg) {
@@ -778,7 +787,40 @@ func resultConstAccessColumn(e *plan.Expr) *plan.Expr {
 	return integerComparisonCastColumn(e)
 }
 
+// Numeric comparison coercion does not make a field expression explicit SQL
+// CAST syntax. FLOAT comparisons may use an indexed integer field even though
+// this coercion is not an injective const-equality proof over its whole domain.
+func resultRangeColumn(e *plan.Expr) *plan.Expr {
+	if column := resultConstAccessColumn(e); column != nil {
+		return column
+	}
+	if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+		!fn.SyntaxExplicitCast && types.T(e.Typ.Id).IsFloat() {
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload == 0 && makeTypeByPlan2Expr(fn.Args[0]).IsNumeric() {
+			return resultRangeColumn(fn.Args[0])
+		}
+	}
+	return nil
+}
+
 func resultExactRangeNumber(e *plan.Expr) (*big.Rat, bool) {
+	if e == nil {
+		return nil, false
+	}
+	if lit := e.GetLit(); lit != nil && !lit.Isnull && types.T(e.Typ.Id).IsFloat() {
+		var value float64
+		switch v := lit.Value.(type) {
+		case *plan.Literal_Dval:
+			value = v.Dval
+		case *plan.Literal_Fval:
+			value = float64(v.Fval)
+		default:
+			return nil, false
+		}
+		number := new(big.Rat).SetFloat64(value)
+		return number, number != nil
+	}
 	if coefficient, scale, ok := exactDecimalCoefficient(e); ok {
 		value, valid := new(big.Rat).SetString(coefficient.Format(scale))
 		return value, valid
@@ -812,38 +854,9 @@ func resultExactRangeNumber(e *plan.Expr) (*big.Rat, bool) {
 }
 
 func resultReversedExactBounds(lo, hi *plan.Expr) bool {
-	if lo != nil && hi != nil && (types.T(lo.Typ.Id).IsDecimal() || types.T(hi.Typ.Id).IsDecimal()) {
-		left, lok := resultExactRangeNumber(lo)
-		right, rok := resultExactRangeNumber(hi)
-		return lok && rok && left.Cmp(right) > 0
-	}
-	if lo.GetLit() == nil || hi.GetLit() == nil || lo.Typ.Id != hi.Typ.Id || !types.T(lo.Typ.Id).IsInteger() {
-		return false
-	}
-	integer := func(e *plan.Expr) (uint64, bool, bool) {
-		switch v := e.GetLit().Value.(type) {
-		case *plan.Literal_I64Val:
-			return uint64(v.I64Val), v.I64Val < 0, true
-		case *plan.Literal_U64Val:
-			return v.U64Val, false, true
-		case *plan.Literal_I32Val:
-			return uint64(v.I32Val), v.I32Val < 0, true
-		case *plan.Literal_I16Val:
-			return uint64(v.I16Val), v.I16Val < 0, true
-		case *plan.Literal_I8Val:
-			return uint64(v.I8Val), v.I8Val < 0, true
-		case *plan.Literal_U32Val:
-			return uint64(v.U32Val), false, true
-		case *plan.Literal_U16Val:
-			return uint64(v.U16Val), false, true
-		case *plan.Literal_U8Val:
-			return uint64(v.U8Val), false, true
-		}
-		return 0, false, false
-	}
-	l, ln, lok := integer(lo)
-	h, hn, hok := integer(hi)
-	return lok && hok && ((!ln && hn) || ln == hn && l > h)
+	left, lok := resultExactRangeNumber(lo)
+	right, rok := resultExactRangeNumber(hi)
+	return lok && rok && left.Cmp(right) > 0
 }
 
 // Push NOT through only exact three-valued Boolean identities before applying
@@ -970,8 +983,20 @@ func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
 				copyFn.Args[i] = predicate(arg)
 			}
 		case "between", "<=", ">=", "<", ">":
+			double := false
+			for _, arg := range fn.Args {
+				double = double || r.rangeUsesDouble(arg)
+			}
 			for i, arg := range copyFn.Args {
 				copyFn.Args[i] = r.rangeValue(arg)
+				if double {
+					if number, ok := resultExactRangeNumber(copyFn.Args[i]); ok {
+						value, _ := number.Float64()
+						if converted, ok := resultRangeFloat(value, types.T_float64); ok {
+							copyFn.Args[i] = converted
+						}
+					}
+				}
 			}
 		default:
 			return e
@@ -983,12 +1008,147 @@ func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
 	for i, filter := range filters {
 		proofs[i] = predicate(filter)
 	}
-	return resultFiltersRejectAll(proofs)
+	return resultFiltersRejectAll(proofs, r.rangeAccess)
 }
 
-// Interpret only admitted exact-number/null transport, never execute expressions or
-// guess string/float conversions. The source owner records value dependence.
+// An admitted floating operand makes the numeric comparison DOUBLE. String
+// parameters retain MySQL's exact decimal conversion; they are not float wire
+// packets. Backend text adapters cannot change an integer/decimal source into
+// DOUBLE. Explicit casts own their resulting domain. No expressions execute.
+func (r *resultMaterialization) rangeUsesDouble(e *plan.Expr) bool {
+	pos, param := implicitPreparedParamPosition(e)
+	if marker := e.GetP(); marker != nil {
+		pos, param = int(marker.Pos), marker.Pos >= 0
+	}
+	if param && pos >= 0 && pos < len(r.values) {
+		if value, ok := r.values[pos].(ParamValue); ok {
+			typ := value.SourceType
+			if value.HasRuntimeType {
+				typ = value.RuntimeType
+			}
+			return (value.HasRuntimeType || value.HasSourceType) && typ.Oid.IsFloat()
+		}
+		return false
+	}
+	return types.T(e.Typ.Id).IsFloat() || types.T(e.Typ.Id).IsMySQLString() && e.GetLit() != nil
+}
+
+// Range omission is an access-path property, not just an empty numeric set.
+// Keep the source binding and require index membership. A non-leading part
+// still qualifies MySQL's contradiction check; this is not a point-seek proof.
+func (r *resultMaterialization) rangeAccess(e *plan.Expr) bool {
+	if function.IsRuntimeConstant(e) {
+		return e != nil && !types.T(e.Typ.Id).IsMySQLString()
+	}
+	e = resultRangeColumn(e)
+	ref := e.GetCol()
+	if ref == nil || !makeTypeByPlan2Expr(e).IsNumeric() || len(r.scopes) == 0 {
+		return false
+	}
+	for _, node := range r.query.Nodes {
+		if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil || ref.ColPos < 0 || int(ref.ColPos) >= len(node.TableDef.Cols) {
+			continue
+		}
+		for _, tag := range node.BindingTags {
+			if tag != ref.RelPos {
+				continue
+			}
+			name := node.TableDef.Cols[ref.ColPos].Name
+			matches := func(parts []string) bool {
+				for _, part := range parts {
+					if catalog.ResolveAlias(part) == name {
+						return true
+					}
+				}
+				return false
+			}
+			allowed := func(indexName string) bool {
+				if owner := r.blockOwner(node.NodeId); owner != nil && owner.builder != nil {
+					if hints := owner.builder.indexHintsByScan[node.NodeId]; hints != nil {
+						return indexAllowedByHintScope(indexName, hints.scan)
+					}
+				}
+				return true
+			}
+			if key := node.TableDef.Pkey; key != nil && allowed("PRIMARY") && (matches(key.Names) || key.PkeyColName == name) {
+				return true
+			}
+			for _, index := range node.TableDef.Indexes {
+				if index == nil {
+					continue
+				}
+				visible, explicit := catalog.GetIndexVisibility(index)
+				if (!explicit || visible) && allowed(index.IndexName) && catalog.IsRegularIndexAlgo(index.IndexAlgo) && matches(index.Parts) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func resultRangeDecimalText(text string, prefix bool) (*plan.Expr, bool) {
+	if prefix {
+		var ok bool
+		text, ok = function.GetNumericStringPrefix(text)
+		if !ok {
+			text = "0"
+		}
+	}
+	domain, _, canonical, ok := PreparedDecimalRuntimeDomains(text)
+	if !ok {
+		return nil, false
+	}
+	coefficient, err := types.ParseDecimal256(canonical, domain.Width, domain.Scale)
+	if err != nil {
+		return nil, false
+	}
+	e, err := makePlan2DecimalExprWithType(context.Background(), coefficient.Format(domain.Scale))
+	return e, err == nil
+}
+
+func resultRangeFloat(value any, oid types.T) (*plan.Expr, bool) {
+	var number float64
+	switch v := value.(type) {
+	case float64:
+		number = v
+	case float32:
+		number = float64(v)
+	case string:
+		bits := 64
+		if oid == types.T_float32 {
+			bits = 32
+		}
+		var err error
+		number, err = strconv.ParseFloat(strings.TrimSpace(v), bits)
+		if err != nil {
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+	if math.IsNaN(number) || math.IsInf(number, 0) {
+		return nil, false
+	}
+	if oid == types.T_float32 {
+		if math.IsInf(float64(float32(number)), 0) {
+			return nil, false
+		}
+		return &plan.Expr{Typ: plan.Type{Id: int32(oid)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Fval{Fval: float32(number)}}}}, true
+	}
+	return &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: number}}}}, true
+}
+
+// Interpret only admitted numeric/null transport in a range consumer; never execute expressions or
+// bypass the binding's admitted conversion kinds. The source owner records value dependence.
 func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
+	if lit := e.GetLit(); lit != nil && !lit.Isnull && types.T(e.Typ.Id).IsMySQLString() {
+		if _, ok := lit.Value.(*plan.Literal_Sval); ok {
+			if number, valid := resultRangeDecimalText(lit.GetSval(), true); valid {
+				return number
+			}
+		}
+	}
 	if p := e.GetP(); p != nil && p.Pos >= 0 && int(p.Pos) < len(r.values) {
 		value := r.values[p.Pos]
 		var wireType types.T
@@ -998,6 +1158,28 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 			decimalType := typed.RuntimeType
 			if !typed.HasRuntimeType && typed.HasSourceType {
 				decimalType = typed.SourceType
+			}
+			admitted := typed.HasRuntimeType || typed.HasSourceType
+			// Binary String packets intentionally keep generic TEXT without a
+			// runtime result type. Their protocol conversion kind still admits
+			// numeric range consumption; do not infer a direct SELECT ? type.
+			if !admitted && typed.IsBinaryProtocol && typed.PrepareParamKind == types.StringConversionString {
+				decimalType = types.T_text.ToType()
+				admitted = true
+			}
+			if admitted {
+				if decimalType.Oid.IsFloat() {
+					if number, ok := resultRangeFloat(value, decimalType.Oid); ok {
+						r.usedValues = true
+						return number
+					}
+				}
+				if text, ok := value.(string); ok && decimalType.Oid.IsMySQLString() {
+					if number, valid := resultRangeDecimalText(text, typed.EnableNumericPrefix); valid {
+						r.usedValues = true
+						return number
+					}
+				}
 			}
 			if (typed.HasRuntimeType || typed.HasSourceType) && decimalType.Oid.IsDecimal() {
 				decimalValue := value
@@ -1010,18 +1192,8 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 					decimalValue = v.Format(decimalType.Scale)
 				}
 				if text, ok := decimalValue.(string); ok {
-					domain, _, canonical, ok := PreparedDecimalRuntimeDomains(text)
-					if !ok {
-						return e
-					}
-					coefficient, err := types.ParseDecimal256(canonical, domain.Width, domain.Scale)
-					if err != nil {
-						return e
-					}
-					// Runtime canonical text may use an exponent; convert it to a
-					// bounded exact plain decimal, not a floating-point spelling.
-					decimal, err := makePlan2DecimalExprWithType(context.Background(), coefficient.Format(domain.Scale))
-					if err == nil {
+					decimal, valid := resultRangeDecimalText(text, false)
+					if valid {
 						r.usedValues = true
 						return decimal
 					}
@@ -1092,8 +1264,32 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 		}
 	}
 	if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
-		(types.T(e.Typ.Id).IsInteger() || types.T(e.Typ.Id).IsDecimal()) {
+		(types.T(e.Typ.Id).IsInteger() || types.T(e.Typ.Id).IsDecimal() || types.T(e.Typ.Id).IsFloat()) {
 		source := r.rangeValue(fn.Args[0])
+		if types.T(e.Typ.Id).IsInteger() {
+			if number, ok := resultExactRangeNumber(source); ok && number.IsInt() {
+				var literal *plan.Literal
+				if number.Num().IsInt64() {
+					literal = &plan.Literal{Value: &plan.Literal_I64Val{I64Val: number.Num().Int64()}}
+				} else if number.Num().IsUint64() {
+					literal = &plan.Literal{Value: &plan.Literal_U64Val{U64Val: number.Num().Uint64()}}
+				}
+				if literal != nil && localCTEIntegerLiteralFits(literal, types.T(e.Typ.Id)) {
+					return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Lit{Lit: literal}}
+				}
+			}
+		}
+		if types.T(e.Typ.Id) == types.T_float64 {
+			if number, ok := resultExactRangeNumber(source); ok {
+				value, _ := number.Float64()
+				if converted, ok := resultRangeFloat(value, types.T_float64); ok {
+					return converted
+				}
+			}
+		}
+		if source.Typ.Id == e.Typ.Id && types.T(e.Typ.Id).IsFloat() && source.GetLit() != nil {
+			return source
+		}
 		if coefficient, scale, ok := exactDecimalCoefficient(source); ok && types.T(e.Typ.Id).IsDecimal() {
 			precision := e.Typ.Width
 			if precision == 0 {
@@ -1134,7 +1330,8 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 	return e
 }
 
-func resultFiltersRejectAll(filters []*plan.Expr) bool {
+func resultFiltersRejectAll(filters []*plan.Expr, access ...func(*plan.Expr) bool) bool {
+	rangeEligible := func(e *plan.Expr) bool { return len(access) > 0 && access[0](e) }
 	// Compare ordinary predicates in MySQL's folded field domain, not by raw
 	// mathematical emptiness. BETWEEN keeps a separate binding-time syntax
 	// witness because its omission eligibility precedes comparison lowering.
@@ -1152,9 +1349,13 @@ func resultFiltersRejectAll(filters []*plan.Expr) bool {
 		}
 		switch fn.Func.ObjName {
 		case "=", "!=", "<>", "<", ">", "<=", ">=":
-			for _, arg := range fn.Args {
+			for i, arg := range fn.Args {
 				if lit := arg.GetLit(); lit != nil && lit.Isnull {
-					return true
+					// A lowered NULL-bound range must not regain omission after
+					// binding rejected its access path (or lost its syntax witness).
+					if rangeEligible(fn.Args[1-i]) {
+						return true
+					}
 				}
 			}
 		}
@@ -1162,9 +1363,9 @@ func resultFiltersRejectAll(filters []*plan.Expr) bool {
 		if op != "<=" && op != ">=" && op != "<" && op != ">" {
 			continue
 		}
-		columnExpr, value := resultConstAccessColumn(fn.Args[0]), fn.Args[1]
+		columnExpr, value := resultRangeColumn(fn.Args[0]), fn.Args[1]
 		if columnExpr.GetCol() == nil {
-			columnExpr, value = resultConstAccessColumn(fn.Args[1]), fn.Args[0]
+			columnExpr, value = resultRangeColumn(fn.Args[1]), fn.Args[0]
 			switch op {
 			case "<":
 				op = ">"
@@ -1178,7 +1379,7 @@ func resultFiltersRejectAll(filters []*plan.Expr) bool {
 		}
 		ref := columnExpr.GetCol()
 		number, exact := resultExactRangeNumber(value)
-		if ref == nil || !exact {
+		if ref == nil || !exact || !rangeEligible(columnExpr) {
 			continue
 		}
 		key := column{ref.RelPos, ref.ColPos}
@@ -1225,7 +1426,7 @@ func resultFiltersRejectAll(filters []*plan.Expr) bool {
 		if IsFalseExpr(filter) || filter.GetLit() != nil && filter.GetLit().Isnull {
 			return true
 		}
-		if fn := filter.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "between" && len(fn.Args) == 3 {
+		if fn := filter.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "between" && len(fn.Args) == 3 && rangeEligible(fn.Args[0]) {
 			for _, arg := range fn.Args {
 				if lit := arg.GetLit(); lit != nil && lit.Isnull {
 					return true
