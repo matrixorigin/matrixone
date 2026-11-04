@@ -968,7 +968,8 @@ func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
 %type <unionTypeRecord> union_op
 %type <parenTableExpr> table_subquery
 %type <str> inner_join straight_join outer_join natural_join apply_type dedup_join asof_join
-%type <funcType> func_type_opt
+%type <funcType> func_type_opt sum_func_type_opt count_star_type_opt
+%type <expr> aggregate_value_expr
 %type <funcExpr> function_call_generic
 %type <funcExpr> function_call_keyword
 %type <funcExpr> function_call_nonkeyword
@@ -14374,6 +14375,7 @@ window_definition:
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' within_group_opt window_spec_opt
 	    {
+            if !digestAggregateArgs(yylex, $1, $3, len($4), $9 != nil) { goto ret1 }
 	        functionName := $1
 	        arguments := $4
 	        separator := tree.Expr(tree.NewNumVal($6, $6, false, tree.P_char))
@@ -14461,7 +14463,7 @@ function_call_aggregate:
 		OrderBy:$5,
 	    }
       }
-|   AVG '(' func_type_opt expression  ')' window_spec_opt
+|   AVG '(' sum_func_type_opt expression  ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14568,6 +14570,7 @@ function_call_aggregate:
     }
 |   BIT_AND '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14579,6 +14582,7 @@ function_call_aggregate:
     }
 |   BIT_OR '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14590,6 +14594,7 @@ function_call_aggregate:
     }
 |   BIT_XOR '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14601,6 +14606,7 @@ function_call_aggregate:
     }
 |   COUNT '(' func_type_opt expression_list ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, len($4), $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14610,7 +14616,7 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   COUNT '(' '*' ')' window_spec_opt
+|   COUNT '(' count_star_type_opt '*' ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         es := tree.NewNumVal("*", "*", false, tree.P_star)
@@ -14618,10 +14624,11 @@ function_call_aggregate:
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{es},
-            WindowSpec: $5,
+            Type: $3,
+            WindowSpec: $6,
         }
     }
-|   MAX '(' func_type_opt expression ')' window_spec_opt
+|   MAX '(' sum_func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14632,7 +14639,7 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   MIN '(' func_type_opt expression ')' window_spec_opt
+|   MIN '(' sum_func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14643,7 +14650,7 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   SUM '(' func_type_opt expression ')' window_spec_opt
+|   SUM '(' sum_func_type_opt expression ')' window_spec_opt
     {
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
@@ -14656,6 +14663,7 @@ function_call_aggregate:
     }
 |   std_dev_pop '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14667,6 +14675,7 @@ function_call_aggregate:
     }
 |   STDDEV_SAMP '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14678,6 +14687,7 @@ function_call_aggregate:
     }
 |   VAR_POP '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14689,6 +14699,7 @@ function_call_aggregate:
     }
 |   VAR_SAMP '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14744,6 +14755,7 @@ function_call_aggregate:
     }
 |   GROUPING '(' func_type_opt expression_list ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, len($4), $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14755,6 +14767,7 @@ function_call_aggregate:
     }
 |   JSON_ARRAYAGG '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
 	    functionName := $1
 	    if strings.EqualFold(functionName, "array_agg") {
 	        // MatrixOne has no general SQL ARRAY value. ARRAY_AGG deliberately
@@ -14770,8 +14783,9 @@ function_call_aggregate:
             WindowSpec: $6,
         }
     }
-|   JSON_OBJECTAGG '(' func_type_opt expression ',' expression ')' window_spec_opt
+|   JSON_OBJECTAGG '(' func_type_opt expression ',' aggregate_value_expr ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 2, $8 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -14892,6 +14906,7 @@ function_call_generic:
     }
 |   VARIANCE '(' func_type_opt expression ')' window_spec_opt
     {
+        if !digestAggregateArgs(yylex, $1, $3, 1, $6 != nil) { goto ret1 }
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
@@ -15337,6 +15352,34 @@ ordinary_interval_expr:
 digest_interval_expr:
     DIGEST_INTERVAL expression time_unit
     { $$ = makeIntervalExpr($1, $2, $3) }
+
+// MySQL DISTINCT in_sum_expr permits DISTINCT ALL for AVG/MIN/MAX/SUM,
+// but not COUNT(DISTINCT expr_list) or GROUP_CONCAT(opt_distinct expr_list).
+sum_func_type_opt:
+    func_type_opt
+    { $$ = $1 }
+|   DISTINCT ALL
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = tree.FUNC_TYPE_DISTINCT
+    }
+
+count_star_type_opt:
+    { $$ = tree.FUNC_TYPE_DEFAULT }
+|   ALL
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = tree.FUNC_TYPE_ALL
+    }
+
+aggregate_value_expr:
+    expression
+    { $$ = $1 }
+|   ALL expression
+    {
+        if yylex.(*Lexer).digest == nil { yylex.Error("syntax error"); goto ret1 }
+        $$ = $2
+    }
 
 func_type_opt:
     {

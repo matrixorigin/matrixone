@@ -84,6 +84,29 @@ func digestNativeIdentifierArgs(yylex yyLexer, name string, args tree.Exprs, quo
 	}
 }
 
+// 聚合量词属于 native grammar，不能因所在 CTE 未引用而跳过。
+// 仅由原生聚合产生式调用；generic/quoted/空白角色不按函数拼写套规则。
+func digestAggregateArgs(yylex yyLexer, name string, quantifier tree.FuncType, count int, window bool) bool {
+	if yylex.(*Lexer).digest == nil {
+		return true
+	}
+	valid := true
+	switch strings.ToUpper(name) {
+	case "COUNT":
+		valid = quantifier == tree.FUNC_TYPE_DISTINCT || count == 1
+	case "GROUP_CONCAT":
+		valid = quantifier != tree.FUNC_TYPE_ALL
+	case "BIT_AND", "BIT_OR", "BIT_XOR", "STD", "STDDEV", "STDDEV_POP", "STDDEV_SAMP", "VARIANCE", "VAR_POP", "VAR_SAMP", "JSON_ARRAYAGG", "JSON_OBJECTAGG":
+		valid = quantifier != tree.FUNC_TYPE_DISTINCT
+	case "GROUPING":
+		valid = quantifier == tree.FUNC_TYPE_DEFAULT && !window
+	}
+	if !valid {
+		yylex.Error("Invalid aggregate arguments or quantifier")
+	}
+	return valid
+}
+
 // MySQL func_datetime_precision 要求 NUM（有符号32位非负整数字面量），
 // 不是任意 expression，也不是运行时 FSP 0..6 校验；例如 NOW(7) 可以生成 digest。
 func digestDatetimePrecision(expr tree.Expr) bool {

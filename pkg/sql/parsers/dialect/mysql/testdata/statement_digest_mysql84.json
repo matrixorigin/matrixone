@@ -63783,5 +63783,5790 @@
     "sql": "SELECT MATCH(a) AGAINST(_utf8mb3 X'61') FROM t",
     "text": "SELECT MATCH ( `a` ) AGAINST ( (_charset) ? ) FROM `t`",
     "digest": "28874992ccdf79f05dab4757c47f64d4822637646cb6952f63c3d3a388db23be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(1)",
+    "text": "SELECT COUNT (?)",
+    "digest": "5a390b8c0e841031a2be4d7e1c70c7ee6236b7ba7d205317dac4544589a525b5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(*)",
+    "text": "SELECT COUNT ( * )",
+    "digest": "11832c87ad641e01921641cc918caac05da4d87e02195e67004e52e3c16db485"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(ALL 1)",
+    "text": "SELECT COUNT ( ALL ? )",
+    "digest": "40298cddbe74ca49aee3c53e837e39fdd5e1de03fcb3bb7c82943a4d42f3db21"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(ALL *)",
+    "text": "SELECT COUNT ( ALL * )",
+    "digest": "4c3ff8334e400d49aabf269750797d074114840b4d9cf8baa5772aa763359137"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT 1)",
+    "text": "SELECT COUNT ( DISTINCTROW ? )",
+    "digest": "ae994d04d9cd1421368b07d951b06970a78a14222660cfbabb5e66250f6ae846"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT 1,2)",
+    "text": "SELECT COUNT ( DISTINCTROW ?, ... )",
+    "digest": "e939861dcabcea8c4a922d71c2fc53f70489935a894aefa4c346a534585671d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT 1,2,3)",
+    "text": "SELECT COUNT ( DISTINCTROW ?, ... )",
+    "digest": "e939861dcabcea8c4a922d71c2fc53f70489935a894aefa4c346a534585671d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT ALL *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW 1)",
+    "text": "SELECT COUNT ( DISTINCTROW ? )",
+    "digest": "ae994d04d9cd1421368b07d951b06970a78a14222660cfbabb5e66250f6ae846"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW 1,2)",
+    "text": "SELECT COUNT ( DISTINCTROW ?, ... )",
+    "digest": "e939861dcabcea8c4a922d71c2fc53f70489935a894aefa4c346a534585671d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW 1,2,3)",
+    "text": "SELECT COUNT ( DISTINCTROW ?, ... )",
+    "digest": "e939861dcabcea8c4a922d71c2fc53f70489935a894aefa4c346a534585671d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW ALL *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(1,2)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(ALL 1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(ALL 1,2)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(ALL 1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(ALL 1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCT 1,2)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT COUNT ( DISTINCTROW ?, ... ) ) SELECT ?",
+    "digest": "f9289a6027bf4c509c54e32132863f7c6147c4fd44d1087d1d2e5577cdb7cdda"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCT 1,2)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT COUNT ( DISTINCTROW ?, ... ) ) SELECT * FROM `c`",
+    "digest": "733f76df29b58d878293e86774c618c2d448759048ef76b33e08c966b9f9f15d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT 1,2) OVER ()",
+    "text": "SELECT COUNT ( DISTINCTROW ?, ... ) OVER ( )",
+    "digest": "def5368246fae1e53ed9abdb1a012d913cfac53522beb70e4c7caf3afdba5d1c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCT 1,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT COUNT ( DISTINCTROW ?, ... ) OVER ( ) ) SELECT ?",
+    "digest": "472f6958b55bb12146df0466788fee71ddef0f39f026528642a58964b414146c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCT ALL 1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCT ALL 1,2)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT ALL 1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCT ALL 1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCTROW 1,2)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT COUNT ( DISTINCTROW ?, ... ) ) SELECT ?",
+    "digest": "f9289a6027bf4c509c54e32132863f7c6147c4fd44d1087d1d2e5577cdb7cdda"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCTROW 1,2)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT COUNT ( DISTINCTROW ?, ... ) ) SELECT * FROM `c`",
+    "digest": "733f76df29b58d878293e86774c618c2d448759048ef76b33e08c966b9f9f15d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW 1,2) OVER ()",
+    "text": "SELECT COUNT ( DISTINCTROW ?, ... ) OVER ( )",
+    "digest": "def5368246fae1e53ed9abdb1a012d913cfac53522beb70e4c7caf3afdba5d1c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCTROW 1,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT COUNT ( DISTINCTROW ?, ... ) OVER ( ) ) SELECT ?",
+    "digest": "472f6958b55bb12146df0466788fee71ddef0f39f026528642a58964b414146c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCTROW ALL 1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCTROW ALL 1,2)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCTROW ALL 1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT COUNT(DISTINCTROW ALL 1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT (1,2)",
+    "text": "SELECT `COUNT` (...)",
+    "digest": "b30893d541b3aa48f7e00f5531c93de0f7565b680af56e392132ce4367437985"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT COUNT (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT/*gap*/(1,2)",
+    "text": "SELECT `COUNT` (...)",
+    "digest": "b30893d541b3aa48f7e00f5531c93de0f7565b680af56e392132ce4367437985"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT COUNT/*gap*/(1,2)",
+    "text": "SELECT `COUNT` (...)",
+    "digest": "b30893d541b3aa48f7e00f5531c93de0f7565b680af56e392132ce4367437985"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `COUNT`(1,2)",
+    "text": "SELECT `COUNT` (...)",
+    "digest": "b30893d541b3aa48f7e00f5531c93de0f7565b680af56e392132ce4367437985"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(1)",
+    "text": "SELECT BIT_AND (?)",
+    "digest": "da88a5f91cbdffb728f3f0dc682c4d4ac4938d42f9a3115deb86b69c7ad40276"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(ALL 1)",
+    "text": "SELECT BIT_AND ( ALL ? )",
+    "digest": "f2cc6a1011d86d2982f8530e8900b9c5cf99f67855c2c839c388b52676582c43"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_AND (?) ) SELECT ?",
+    "digest": "7b7a7c3c54eca3badae7a3df81e02908c0adb2f9d4c83e6f07f2f5739d7472ac"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT BIT_AND (?) ) SELECT * FROM `c`",
+    "digest": "4080012da26af9dd064cbc3eb72bc573a8c39fd7ea57429a611e7ea98b04df85"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(1) OVER ()",
+    "text": "SELECT BIT_AND (?) OVER ( )",
+    "digest": "4815e92c81af92e324be996b2b0ef3562cb47e14f79920c5646150a1de635c2b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_AND (?) OVER ( ) ) SELECT ?",
+    "digest": "fb2c41c7a35a4502e5aced44f4e52bd43cfec68dc3e3af29490d084155f45b73"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_AND ( ALL ? ) ) SELECT ?",
+    "digest": "67940ee45512c6ee0895d90de9c23ff483c67f930c3fb55894635c032d632c2d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT BIT_AND ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "e609a5f224538c7c287ad34ba9317df9a74a5559e3cc0309be7bf20920ac6a99"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(ALL 1) OVER ()",
+    "text": "SELECT BIT_AND ( ALL ? ) OVER ( )",
+    "digest": "dd4d5aeaaaf7cec8ccd3d2d6b65716c4dcdc7f25ea907c124cf818d8beaa3e6b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_AND ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "e6caf42161031409515be44ffc5f9fcb0b3b0eacc0da4ff35974d23b792f578d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_AND(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND (1,2)",
+    "text": "SELECT `BIT_AND` (...)",
+    "digest": "ad609d26b582981f034013da70dcf9efc4e91f6f5b5e016bcd3db2601f40d3ab"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT BIT_AND (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND/*gap*/(1,2)",
+    "text": "SELECT `BIT_AND` (...)",
+    "digest": "ad609d26b582981f034013da70dcf9efc4e91f6f5b5e016bcd3db2601f40d3ab"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT BIT_AND/*gap*/(1,2)",
+    "text": "SELECT `BIT_AND` (...)",
+    "digest": "ad609d26b582981f034013da70dcf9efc4e91f6f5b5e016bcd3db2601f40d3ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `BIT_AND`(1,2)",
+    "text": "SELECT `BIT_AND` (...)",
+    "digest": "ad609d26b582981f034013da70dcf9efc4e91f6f5b5e016bcd3db2601f40d3ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(1)",
+    "text": "SELECT BIT_OR (?)",
+    "digest": "d252aa90e9f4f26c0e536ad6f0879dbf0680eb90b6f8db82b1bce136e4d6fa18"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(ALL 1)",
+    "text": "SELECT BIT_OR ( ALL ? )",
+    "digest": "eee574662e6aae56f2887db14503a2a695bb4e9ef7a977a5dc8309f8f47cfa2b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_OR (?) ) SELECT ?",
+    "digest": "8699711f6e4620a11dda03a9a3813798ef73297a0747629ed3ef4406a8ef8cc4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT BIT_OR (?) ) SELECT * FROM `c`",
+    "digest": "85342e48edd937e621c3f6d3d3723970ee053a5fa5b507ff7cafc1db6fca8088"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(1) OVER ()",
+    "text": "SELECT BIT_OR (?) OVER ( )",
+    "digest": "95d91d35e51177b5b13ab5c67bcceae3e83c7d2199db907f5355316c5df39658"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_OR (?) OVER ( ) ) SELECT ?",
+    "digest": "e76027e9413967de19a4f78aeef626711fb7a3cadf570fa4263b84a57a3e1767"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_OR ( ALL ? ) ) SELECT ?",
+    "digest": "283abc087d26f137d78e649ebf33dcdeba999750944e07afac28a40b6fc851fc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT BIT_OR ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "4b82a3384db4b174eaf757ca3687ad5b4f16967e977c3fd71ac793e2a5ff7f16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(ALL 1) OVER ()",
+    "text": "SELECT BIT_OR ( ALL ? ) OVER ( )",
+    "digest": "165aeb0a8a5fdc5f67d9ed76942fafd4ae8c3949ab2dce48ea5725d957fa0cf6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_OR ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "cd6e4532469331f369101b002d28b743d06813fdfaf71cc5e6a5c066c4c64fb4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_OR(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR (1,2)",
+    "text": "SELECT `BIT_OR` (...)",
+    "digest": "0f6b161d3c4874b25b4d0479bcccb7b1d0b71a59788c28653f33fb8abd3aeb3d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT BIT_OR (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_OR/*gap*/(1,2)",
+    "text": "SELECT `BIT_OR` (...)",
+    "digest": "0f6b161d3c4874b25b4d0479bcccb7b1d0b71a59788c28653f33fb8abd3aeb3d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT BIT_OR/*gap*/(1,2)",
+    "text": "SELECT `BIT_OR` (...)",
+    "digest": "0f6b161d3c4874b25b4d0479bcccb7b1d0b71a59788c28653f33fb8abd3aeb3d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `BIT_OR`(1,2)",
+    "text": "SELECT `BIT_OR` (...)",
+    "digest": "0f6b161d3c4874b25b4d0479bcccb7b1d0b71a59788c28653f33fb8abd3aeb3d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(1)",
+    "text": "SELECT BIT_XOR (?)",
+    "digest": "eaab6cd73c08c131bbe9987b7106d923bb53cd58584077e2bef7edbfc9d36965"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(ALL 1)",
+    "text": "SELECT BIT_XOR ( ALL ? )",
+    "digest": "33021fbd703b655e7aa2bc6d14672278ff821ea4ec923ee7170503451c9a32fc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_XOR (?) ) SELECT ?",
+    "digest": "e62b7d8d93c46a54b2bc763537c9020e669402a958e3f7f2ef7b19ca795589c5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT BIT_XOR (?) ) SELECT * FROM `c`",
+    "digest": "1451597b711afbf34e59f74be32c8fe9783aaabbc8deeb1bcb05aa435a2065df"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(1) OVER ()",
+    "text": "SELECT BIT_XOR (?) OVER ( )",
+    "digest": "5d5a3364c088cb2c3bfcda0dc1a557de3a8efb8615fd00504db3c9972a320709"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_XOR (?) OVER ( ) ) SELECT ?",
+    "digest": "d46f620dd203abf3f7934ce896e78fb0ad8c38313ff7d494c47d35cbee65997d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_XOR ( ALL ? ) ) SELECT ?",
+    "digest": "f326dfb09633f92c674d33991b660c0a07b02456f996375f7d61e450d9cd0bda"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT BIT_XOR ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "99e83c9b7908d01c006dff0ba81c374eee31ef656132bc7b342c16e63ef33b03"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(ALL 1) OVER ()",
+    "text": "SELECT BIT_XOR ( ALL ? ) OVER ( )",
+    "digest": "17dfa13ce21a810b6e1e4f30d093d4d9b112faf0b9b5a750d6c50ce6134bf94b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT BIT_XOR ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "349162cac5c929b5d9ee85c39af08be45d36b50d57ba8f48f3a41999af8e205e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT BIT_XOR(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR (1,2)",
+    "text": "SELECT `BIT_XOR` (...)",
+    "digest": "68d2695803828a4fd28136d726ae24898aedba0d71d5834facc01051a6a2119e"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT BIT_XOR (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_XOR/*gap*/(1,2)",
+    "text": "SELECT `BIT_XOR` (...)",
+    "digest": "68d2695803828a4fd28136d726ae24898aedba0d71d5834facc01051a6a2119e"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT BIT_XOR/*gap*/(1,2)",
+    "text": "SELECT `BIT_XOR` (...)",
+    "digest": "68d2695803828a4fd28136d726ae24898aedba0d71d5834facc01051a6a2119e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `BIT_XOR`(1,2)",
+    "text": "SELECT `BIT_XOR` (...)",
+    "digest": "68d2695803828a4fd28136d726ae24898aedba0d71d5834facc01051a6a2119e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(1)",
+    "text": "SELECT GROUP_CONCAT (?)",
+    "digest": "f1db34c7ed87f6f32d3a66058f139cb80d4515f2a2b724597fe15da6327c4fcb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(1,2)",
+    "text": "SELECT GROUP_CONCAT (...)",
+    "digest": "b7a04601447c4ae336ad0bd0a4a55ba0827ec0a08642242441abc8cfea88a57a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(1,2,3)",
+    "text": "SELECT GROUP_CONCAT (...)",
+    "digest": "b7a04601447c4ae336ad0bd0a4a55ba0827ec0a08642242441abc8cfea88a57a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT 1)",
+    "text": "SELECT GROUP_CONCAT ( DISTINCTROW ? )",
+    "digest": "7f3b0ced4ebb026238bf7066a2ad46a3e229aafa262ae80242e2f63eae149199"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT 1,2)",
+    "text": "SELECT GROUP_CONCAT ( DISTINCTROW ?, ... )",
+    "digest": "6ee78144676d8f6c0f429d8a8f1767227a2789e427c67124c9ea17be7aaac6b8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT 1,2,3)",
+    "text": "SELECT GROUP_CONCAT ( DISTINCTROW ?, ... )",
+    "digest": "6ee78144676d8f6c0f429d8a8f1767227a2789e427c67124c9ea17be7aaac6b8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW 1)",
+    "text": "SELECT GROUP_CONCAT ( DISTINCTROW ? )",
+    "digest": "7f3b0ced4ebb026238bf7066a2ad46a3e229aafa262ae80242e2f63eae149199"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW 1,2)",
+    "text": "SELECT GROUP_CONCAT ( DISTINCTROW ?, ... )",
+    "digest": "6ee78144676d8f6c0f429d8a8f1767227a2789e427c67124c9ea17be7aaac6b8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW 1,2,3)",
+    "text": "SELECT GROUP_CONCAT ( DISTINCTROW ?, ... )",
+    "digest": "6ee78144676d8f6c0f429d8a8f1767227a2789e427c67124c9ea17be7aaac6b8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT GROUP_CONCAT (?) ) SELECT ?",
+    "digest": "3368e8434246c5aadb485b13c79e3df7b50ab6ef70fe1d5ccdcbef17f21affe0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT GROUP_CONCAT (?) ) SELECT * FROM `c`",
+    "digest": "cf8e7854c1704240978034e0401a2c00f953b46e8338b6ca72fac3d51aede4d1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(1) OVER ()",
+    "text": "SELECT GROUP_CONCAT (?) OVER ( )",
+    "digest": "b85c826aaafb6338ac98e9659b244911887c72df96c13a8d86af2b59d108379f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT GROUP_CONCAT (?) OVER ( ) ) SELECT ?",
+    "digest": "22104f29443dc88dd73bb18a029edfd5fca780fa801d1214041c89d1a811e468"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCT 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT GROUP_CONCAT ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "09273a5441b6f355e9cc0e8cdad948b951ea4c2e3b6a9c4aa3ae7cf14253d934"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCT 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT GROUP_CONCAT ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "bf0b5e5d67c9bfe52658125a5fc6b952519e2d55dd3183990fb94e447f61a661"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT 1) OVER ()",
+    "text": "SELECT GROUP_CONCAT ( DISTINCTROW ? ) OVER ( )",
+    "digest": "755ccdda80f559d8d848c2fbc069c097d67e8548482e60658b4d1e6b4662ca1c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCT 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT GROUP_CONCAT ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "e39b2c3c53494df9e0c22366acdf8fe610fe5505d44e8fbc485f5d7d4f983bc6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCTROW 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT GROUP_CONCAT ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "09273a5441b6f355e9cc0e8cdad948b951ea4c2e3b6a9c4aa3ae7cf14253d934"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCTROW 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT GROUP_CONCAT ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "bf0b5e5d67c9bfe52658125a5fc6b952519e2d55dd3183990fb94e447f61a661"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW 1) OVER ()",
+    "text": "SELECT GROUP_CONCAT ( DISTINCTROW ? ) OVER ( )",
+    "digest": "755ccdda80f559d8d848c2fbc069c097d67e8548482e60658b4d1e6b4662ca1c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCTROW 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT GROUP_CONCAT ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "e39b2c3c53494df9e0c22366acdf8fe610fe5505d44e8fbc485f5d7d4f983bc6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUP_CONCAT(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT (1,2)",
+    "text": "SELECT `GROUP_CONCAT` (...)",
+    "digest": "3e1fb562515f30108f7432fd4790dd57c23d3c967aa3aa1489685ce84e279372"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT GROUP_CONCAT (1,2)",
+    "text": "SELECT GROUP_CONCAT (...)",
+    "digest": "b7a04601447c4ae336ad0bd0a4a55ba0827ec0a08642242441abc8cfea88a57a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT/*gap*/(1,2)",
+    "text": "SELECT `GROUP_CONCAT` (...)",
+    "digest": "3e1fb562515f30108f7432fd4790dd57c23d3c967aa3aa1489685ce84e279372"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT GROUP_CONCAT/*gap*/(1,2)",
+    "text": "SELECT `GROUP_CONCAT` (...)",
+    "digest": "3e1fb562515f30108f7432fd4790dd57c23d3c967aa3aa1489685ce84e279372"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `GROUP_CONCAT`(1,2)",
+    "text": "SELECT `GROUP_CONCAT` (...)",
+    "digest": "3e1fb562515f30108f7432fd4790dd57c23d3c967aa3aa1489685ce84e279372"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(1)",
+    "text": "SELECT AVG (?)",
+    "digest": "34491f8c488f8eecbb1bb16d67deafbcc5117dea23f0b48ef495d127e4b907e4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(ALL 1)",
+    "text": "SELECT AVG ( ALL ? )",
+    "digest": "43e24978e5d77790f47e27e48b89cc61cc5944f5c4770bb7f822dd31ed95db37"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT 1)",
+    "text": "SELECT AVG ( DISTINCTROW ? )",
+    "digest": "7606254eedf72833a62574b83e0201b8a925f473937f0a1d618f9eedf360db16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT ALL 1)",
+    "text": "SELECT AVG ( DISTINCTROW ALL ? )",
+    "digest": "8185e5ecdc5e73d47e974c7cc0d27999cfd22af50e86b80de02ccc313fc56bcb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW 1)",
+    "text": "SELECT AVG ( DISTINCTROW ? )",
+    "digest": "7606254eedf72833a62574b83e0201b8a925f473937f0a1d618f9eedf360db16"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW ALL 1)",
+    "text": "SELECT AVG ( DISTINCTROW ALL ? )",
+    "digest": "8185e5ecdc5e73d47e974c7cc0d27999cfd22af50e86b80de02ccc313fc56bcb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG (?) ) SELECT ?",
+    "digest": "abc5ca0a954dabd6c1b6a4609ecb16a0d096e5330f6351230161b2ba49c7188f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT AVG (?) ) SELECT * FROM `c`",
+    "digest": "ce6888e82ae11d2db4713d9d824d2ada5419f34806f4b78163a60bd3738e0966"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(1) OVER ()",
+    "text": "SELECT AVG (?) OVER ( )",
+    "digest": "aa21ad2c6f8ae70d1418b6c601f2e4cdca5114036aadb5317a5812b03eb12a26"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG (?) OVER ( ) ) SELECT ?",
+    "digest": "da04b53a378e413d196fca1b8006f9f094372a6c8bf8967c6894c357ab1429fc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( ALL ? ) ) SELECT ?",
+    "digest": "e5331fd39e1ddce2ccb71161c263ba5299ab79a7a0ff7237f1213cb08e633846"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT AVG ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "8cbf3329487d76f1b91f9a920754a5c52983054f7210576d48165871a4d05f0c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(ALL 1) OVER ()",
+    "text": "SELECT AVG ( ALL ? ) OVER ( )",
+    "digest": "9b5fb036ffad497b4c316870bfc212d99a15a16038ae3f9d39b263e9c94efb5e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "c96db623c26b85e9b8a45d051a4cc38f509faac1e3efa1ee882540df97b93d43"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCT 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "b08a397e17cebb53ab1adfdf72267c8265a65fbb814199e0957ad21b7b7fa259"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCT 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "06e60db53b5c74c9fc9c5a354463dc38f5f6f8f1573f8ce6d8da96aff0256174"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT 1) OVER ()",
+    "text": "SELECT AVG ( DISTINCTROW ? ) OVER ( )",
+    "digest": "69750dac72aa1df9fbb36573a73d45af598194b18ad0c5b3770f7a7d2eb0441a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCT 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "cbd95796d9fcd2929bf8569725043f19d1e372a2c6db4a7d4dc42d879f1fefa8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCT ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ALL ? ) ) SELECT ?",
+    "digest": "b009e2ce6c7b1ffcfe3fb4360b23339aaf12b0c5e9ddaea4df7de95e695ef05f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCT ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ALL ? ) ) SELECT * FROM `c`",
+    "digest": "9a1dba671374734917d5e43285f3cafcf1561c44fd1e953097b827c0d401d68c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCT ALL 1) OVER ()",
+    "text": "SELECT AVG ( DISTINCTROW ALL ? ) OVER ( )",
+    "digest": "da52653cbb4b866e8e2555447f1118f32e34385c0076dac2e04d4808331f0475"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "0b87300a87c2e83c13dcad32b0cd5b2c8330df1287db4c94b089194b242fd4d6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCTROW 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "b08a397e17cebb53ab1adfdf72267c8265a65fbb814199e0957ad21b7b7fa259"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCTROW 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "06e60db53b5c74c9fc9c5a354463dc38f5f6f8f1573f8ce6d8da96aff0256174"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW 1) OVER ()",
+    "text": "SELECT AVG ( DISTINCTROW ? ) OVER ( )",
+    "digest": "69750dac72aa1df9fbb36573a73d45af598194b18ad0c5b3770f7a7d2eb0441a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCTROW 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "cbd95796d9fcd2929bf8569725043f19d1e372a2c6db4a7d4dc42d879f1fefa8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCTROW ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ALL ? ) ) SELECT ?",
+    "digest": "b009e2ce6c7b1ffcfe3fb4360b23339aaf12b0c5e9ddaea4df7de95e695ef05f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ALL ? ) ) SELECT * FROM `c`",
+    "digest": "9a1dba671374734917d5e43285f3cafcf1561c44fd1e953097b827c0d401d68c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG(DISTINCTROW ALL 1) OVER ()",
+    "text": "SELECT AVG ( DISTINCTROW ALL ? ) OVER ( )",
+    "digest": "da52653cbb4b866e8e2555447f1118f32e34385c0076dac2e04d4808331f0475"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT AVG(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT AVG ( DISTINCTROW ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "0b87300a87c2e83c13dcad32b0cd5b2c8330df1287db4c94b089194b242fd4d6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT AVG (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT AVG/*gap*/(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT AVG/*gap*/(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `AVG`(1,2)",
+    "text": "SELECT `AVG` (...)",
+    "digest": "75657b11a2d2a1f1cd4890d239e4d2129b488e580b35450cc3aad3a996773352"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1)",
+    "text": "SELECT SUM (?)",
+    "digest": "ec84d25fd42922d4c6af8f44cc0df16ec96b9441330af3e244fb35f58034d401"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(ALL 1)",
+    "text": "SELECT SUM ( ALL ? )",
+    "digest": "56b270f5480ae32a02797496099735e5bb176a46095f8114cd99c53268623473"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT 1)",
+    "text": "SELECT SUM ( DISTINCTROW ? )",
+    "digest": "8a9375dd3c797cdb53b5fd08b81a59d4c92788731edc32d90b4f1bcc58a2bc99"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT ALL 1)",
+    "text": "SELECT SUM ( DISTINCTROW ALL ? )",
+    "digest": "2f03401a5ee81cb8f1a8c903389a3c1af3b4503add8e52a28341ecae84fb966a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW 1)",
+    "text": "SELECT SUM ( DISTINCTROW ? )",
+    "digest": "8a9375dd3c797cdb53b5fd08b81a59d4c92788731edc32d90b4f1bcc58a2bc99"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW ALL 1)",
+    "text": "SELECT SUM ( DISTINCTROW ALL ? )",
+    "digest": "2f03401a5ee81cb8f1a8c903389a3c1af3b4503add8e52a28341ecae84fb966a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM (?) ) SELECT ?",
+    "digest": "2f5820a3c7c81c006ccf991eb54f209ad607efe5c64824cf3ef167ebf6fb793c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT SUM (?) ) SELECT * FROM `c`",
+    "digest": "71398e9981a716fdc661f7107953f983f99d16e66d5d2e781a6d58dcc1d3804f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(1) OVER ()",
+    "text": "SELECT SUM (?) OVER ( )",
+    "digest": "af73710d2ef07fcb5ae93004e1c1e9d57e9faa9ec403c4c814a02f69586811b1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM (?) OVER ( ) ) SELECT ?",
+    "digest": "ca021b79397bb08f3195a7cf7a6af052406e5fd62d175ddd7ae34c5e9c601ff8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( ALL ? ) ) SELECT ?",
+    "digest": "bf3d5ecd36fb447d3e3d86fbeb9c92eeffda0e293a2b2c42a9275e573bc8b8e6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT SUM ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "27cff11f2ada3bdd1706bd7d84d75fdf7a9a6e66b130e57cf68f2f71737cb273"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(ALL 1) OVER ()",
+    "text": "SELECT SUM ( ALL ? ) OVER ( )",
+    "digest": "e874a7b4f8511a4592b04aa05bd76084b5faa64cdd36c414cf1f79f5a5b69296"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "7b02157daac27002e25156d37555e227be67e950eb7e2cdf57e6bc36fc332f07"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCT 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "984d465bf820535d3ea8127ae0a8ff2cab44b815f66addcfd808d6343557cd6e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCT 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "40e11e278fb86ef115ff3ee1c545c1529bd510a8b775b5e6a920a3053f6f93f8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT 1) OVER ()",
+    "text": "SELECT SUM ( DISTINCTROW ? ) OVER ( )",
+    "digest": "1aa393252584521ca4ab39ade1d440408649df8c11d629c0e04a51dc219f7273"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCT 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "7f5adae8ab776da2b3cd861c8c82f5991cc85f8762c2a2e9d4e5e610c79809a1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCT ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ALL ? ) ) SELECT ?",
+    "digest": "eef917b8d5554fe32f189b188b63c5897fa6aedac13b2d1597c7f49028d1fc6b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCT ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ALL ? ) ) SELECT * FROM `c`",
+    "digest": "14013eed06034fea11ff2d4767146c42b2196a20e3e4614a41de9ebc267632be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT ALL 1) OVER ()",
+    "text": "SELECT SUM ( DISTINCTROW ALL ? ) OVER ( )",
+    "digest": "302ba341628ff68e448cb6112643675bdacafe82457f3c14b0a4bfc13c5ab13b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "5dc4f685cc4cd4cce7d7ac83db510017254a537bd390d47603ac472e824f59a0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCTROW 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "984d465bf820535d3ea8127ae0a8ff2cab44b815f66addcfd808d6343557cd6e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCTROW 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "40e11e278fb86ef115ff3ee1c545c1529bd510a8b775b5e6a920a3053f6f93f8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW 1) OVER ()",
+    "text": "SELECT SUM ( DISTINCTROW ? ) OVER ( )",
+    "digest": "1aa393252584521ca4ab39ade1d440408649df8c11d629c0e04a51dc219f7273"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCTROW 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "7f5adae8ab776da2b3cd861c8c82f5991cc85f8762c2a2e9d4e5e610c79809a1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCTROW ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ALL ? ) ) SELECT ?",
+    "digest": "eef917b8d5554fe32f189b188b63c5897fa6aedac13b2d1597c7f49028d1fc6b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ALL ? ) ) SELECT * FROM `c`",
+    "digest": "14013eed06034fea11ff2d4767146c42b2196a20e3e4614a41de9ebc267632be"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCTROW ALL 1) OVER ()",
+    "text": "SELECT SUM ( DISTINCTROW ALL ? ) OVER ( )",
+    "digest": "302ba341628ff68e448cb6112643675bdacafe82457f3c14b0a4bfc13c5ab13b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT SUM(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT SUM ( DISTINCTROW ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "5dc4f685cc4cd4cce7d7ac83db510017254a537bd390d47603ac472e824f59a0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM (1,2)",
+    "text": "SELECT `SUM` (...)",
+    "digest": "c04642af6192ac0e4d10dca34a25b71e993b37bce845bff4a6b7343ddc24f084"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUM (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM/*gap*/(1,2)",
+    "text": "SELECT `SUM` (...)",
+    "digest": "c04642af6192ac0e4d10dca34a25b71e993b37bce845bff4a6b7343ddc24f084"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT SUM/*gap*/(1,2)",
+    "text": "SELECT `SUM` (...)",
+    "digest": "c04642af6192ac0e4d10dca34a25b71e993b37bce845bff4a6b7343ddc24f084"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `SUM`(1,2)",
+    "text": "SELECT `SUM` (...)",
+    "digest": "c04642af6192ac0e4d10dca34a25b71e993b37bce845bff4a6b7343ddc24f084"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(1)",
+    "text": "SELECT MIN (?)",
+    "digest": "9f8ae9fbb5c598911c41ba19b2637a7cca4678208b0b3b5575e5e41e4239fd80"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(ALL 1)",
+    "text": "SELECT MIN ( ALL ? )",
+    "digest": "bfa21da5b416d10f841b11be8228a1dc16eba785317d5e5e67c04d0556966e29"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT 1)",
+    "text": "SELECT MIN ( DISTINCTROW ? )",
+    "digest": "5392b52353b8d17ba62f35962622bbb287b9aaa8348f465306e150b6034edf77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT ALL 1)",
+    "text": "SELECT MIN ( DISTINCTROW ALL ? )",
+    "digest": "f6085a34e0f8fe15bb7e9c9810df66c51b14ae348cbdad469f3c15469a64a9a7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW 1)",
+    "text": "SELECT MIN ( DISTINCTROW ? )",
+    "digest": "5392b52353b8d17ba62f35962622bbb287b9aaa8348f465306e150b6034edf77"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW ALL 1)",
+    "text": "SELECT MIN ( DISTINCTROW ALL ? )",
+    "digest": "f6085a34e0f8fe15bb7e9c9810df66c51b14ae348cbdad469f3c15469a64a9a7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN (?) ) SELECT ?",
+    "digest": "138f5815b57f9f86d6652483469fe97de59245acc5dd53c3ef09e46678ff91bb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MIN (?) ) SELECT * FROM `c`",
+    "digest": "19bec89c17ce534e633157497ac154b01211ea02a98040a048628143276adedb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(1) OVER ()",
+    "text": "SELECT MIN (?) OVER ( )",
+    "digest": "cfe3a6db969f16be941cc447ee8b51a2f8bbc1f5cd58dffd62396b7768d84cf3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN (?) OVER ( ) ) SELECT ?",
+    "digest": "c162c617b3aecb275e6483bc921bdd14df88e9a55fac21a865060c4d3db5830c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( ALL ? ) ) SELECT ?",
+    "digest": "cde53359e0dbe3008522c9f252df4c942fcfef8724cc56c3de769b501c6fd9fc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MIN ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "778440f16f019ffc902ccda1df31deb576d7b1d02f645189bae4a4e782535894"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(ALL 1) OVER ()",
+    "text": "SELECT MIN ( ALL ? ) OVER ( )",
+    "digest": "32ab6d838a6939f3c18c98f43f1f632acf2daa540b0fe3ff280377a11820e34d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "ca9903478a548b772a40030293bcb72465fc0310b280bda948bb69eb187708a3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCT 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "d1e6da25529ff136d49ae2daaefb6a00f9b2c49b78925244e805d6e60faf9118"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCT 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "80d40d48be27269e91bec02a709fa884696fc388c4404e515252bdf2b37081c7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT 1) OVER ()",
+    "text": "SELECT MIN ( DISTINCTROW ? ) OVER ( )",
+    "digest": "e29b34a9ac974daafea097e1096b3d34e5d75f4b27ae16ce279295c1f6a9590e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCT 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "00c5ef71feb7af4094596ad2dc560144c9a4429b09b186f2bb1ead5da2cf44b2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCT ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ALL ? ) ) SELECT ?",
+    "digest": "aa2e7945da76115fab1851005eb30812404c265e3657defebf7dc6523e24c79c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCT ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ALL ? ) ) SELECT * FROM `c`",
+    "digest": "8eabbbdb5fe7cabed82eb085cb39a61039293697601f9b8229a793927fb1059b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCT ALL 1) OVER ()",
+    "text": "SELECT MIN ( DISTINCTROW ALL ? ) OVER ( )",
+    "digest": "b0bf1b16f43307390f55b306ff9bfe7f5a76070bf2d6fe78d4044c8d34939235"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "05e04dba20d01d5c360cf288a136aa79b34c9377a778fe8c89bd1ff380735c7a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCTROW 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "d1e6da25529ff136d49ae2daaefb6a00f9b2c49b78925244e805d6e60faf9118"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCTROW 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "80d40d48be27269e91bec02a709fa884696fc388c4404e515252bdf2b37081c7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW 1) OVER ()",
+    "text": "SELECT MIN ( DISTINCTROW ? ) OVER ( )",
+    "digest": "e29b34a9ac974daafea097e1096b3d34e5d75f4b27ae16ce279295c1f6a9590e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCTROW 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "00c5ef71feb7af4094596ad2dc560144c9a4429b09b186f2bb1ead5da2cf44b2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCTROW ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ALL ? ) ) SELECT ?",
+    "digest": "aa2e7945da76115fab1851005eb30812404c265e3657defebf7dc6523e24c79c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ALL ? ) ) SELECT * FROM `c`",
+    "digest": "8eabbbdb5fe7cabed82eb085cb39a61039293697601f9b8229a793927fb1059b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN(DISTINCTROW ALL 1) OVER ()",
+    "text": "SELECT MIN ( DISTINCTROW ALL ? ) OVER ( )",
+    "digest": "b0bf1b16f43307390f55b306ff9bfe7f5a76070bf2d6fe78d4044c8d34939235"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MIN(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MIN ( DISTINCTROW ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "05e04dba20d01d5c360cf288a136aa79b34c9377a778fe8c89bd1ff380735c7a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN (1,2)",
+    "text": "SELECT `MIN` (...)",
+    "digest": "eca901b0b1a186f46b85bcd16e3b87ec58d33c058678a7fea8557d2c7491fa13"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT MIN (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MIN/*gap*/(1,2)",
+    "text": "SELECT `MIN` (...)",
+    "digest": "eca901b0b1a186f46b85bcd16e3b87ec58d33c058678a7fea8557d2c7491fa13"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT MIN/*gap*/(1,2)",
+    "text": "SELECT `MIN` (...)",
+    "digest": "eca901b0b1a186f46b85bcd16e3b87ec58d33c058678a7fea8557d2c7491fa13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `MIN`(1,2)",
+    "text": "SELECT `MIN` (...)",
+    "digest": "eca901b0b1a186f46b85bcd16e3b87ec58d33c058678a7fea8557d2c7491fa13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(1)",
+    "text": "SELECT MAX (?)",
+    "digest": "cb5d9a2d2c7fd64bfece4ca197b8f9a7742e6b9806dd8ccc5611b05daf3d765d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(ALL 1)",
+    "text": "SELECT MAX ( ALL ? )",
+    "digest": "d3d7f9c20d988f2107ed3d4fc134b90c741dbeac81a512184e8973546dbf7519"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT 1)",
+    "text": "SELECT MAX ( DISTINCTROW ? )",
+    "digest": "525f55aa50b73462586d0c22cb757405a6641566a756e3043abba6edba8daf29"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT ALL 1)",
+    "text": "SELECT MAX ( DISTINCTROW ALL ? )",
+    "digest": "96267dd2dcb9f4ccdd78fb86a0455b8269805850236e847332f28c2f7b3da3d4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW 1)",
+    "text": "SELECT MAX ( DISTINCTROW ? )",
+    "digest": "525f55aa50b73462586d0c22cb757405a6641566a756e3043abba6edba8daf29"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW ALL 1)",
+    "text": "SELECT MAX ( DISTINCTROW ALL ? )",
+    "digest": "96267dd2dcb9f4ccdd78fb86a0455b8269805850236e847332f28c2f7b3da3d4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX (?) ) SELECT ?",
+    "digest": "1455bf67e9a7788dcd3bbc00b89777bf947d9dc1c34d1ee43d2515f27180744f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MAX (?) ) SELECT * FROM `c`",
+    "digest": "8341034887258370b147b8945b3367cc164daa02ad389886d26e7dd782f98091"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(1) OVER ()",
+    "text": "SELECT MAX (?) OVER ( )",
+    "digest": "e2515a58915e094a92f8eaf14df0c8f6c530b85ce2e4218b3f81ffe29406ee6d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX (?) OVER ( ) ) SELECT ?",
+    "digest": "3f3ca74f54104c2538e21d27c01d2f005b4a76b536773e6b00518dfe2be1352f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( ALL ? ) ) SELECT ?",
+    "digest": "151ef3b0a286585a14ee2213155544e2f43b423a96afc636d33bcc7575fe4936"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MAX ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "6ad4013f2b7b92a6acb06e5d08c8b55f876c0b934898d9e34647bb5657bead25"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(ALL 1) OVER ()",
+    "text": "SELECT MAX ( ALL ? ) OVER ( )",
+    "digest": "01bc4f9441794431b97dc6b60f20deb52fbf6481d1e12c072d3dd5dd235e7873"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "b126029ac08ca13b8301a440a2e2147a8b26f93edbc7358dbb958859a297aea6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCT 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "be4ba98e994739dc4472c8b00d846d3f54ef2224d3a43cb177f19d7432b1bd87"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCT 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "2bc6af19910c876ed160a29103d1938443d5faab7c0e452d971261a428a58708"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT 1) OVER ()",
+    "text": "SELECT MAX ( DISTINCTROW ? ) OVER ( )",
+    "digest": "0102d30758d1461df6ec70cb6c48d71e069b83726249fab5cd776f27d7db1747"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCT 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "458002caa3c3dd452f4ccc7704b71436b19712b6466ab9ff72015d75c43c66ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCT ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ALL ? ) ) SELECT ?",
+    "digest": "4b0825ef56ab66251d32e0dfaf1fade436c0ea3c6254628b049e1d6a5969f28c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCT ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ALL ? ) ) SELECT * FROM `c`",
+    "digest": "8fcd48dd943ab677eadaa32b89468250f54290484c268b295b824ab577e6f419"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCT ALL 1) OVER ()",
+    "text": "SELECT MAX ( DISTINCTROW ALL ? ) OVER ( )",
+    "digest": "4513b7cef9066324941cc2a018604a025dc29b2a0bdd5f60a316c1093fdee6db"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "450aa6efaceae85a1c973b3bd98bedbc732b7679225cc92d5816a883f3e5efd4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCTROW 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ? ) ) SELECT ?",
+    "digest": "be4ba98e994739dc4472c8b00d846d3f54ef2224d3a43cb177f19d7432b1bd87"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCTROW 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ? ) ) SELECT * FROM `c`",
+    "digest": "2bc6af19910c876ed160a29103d1938443d5faab7c0e452d971261a428a58708"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW 1) OVER ()",
+    "text": "SELECT MAX ( DISTINCTROW ? ) OVER ( )",
+    "digest": "0102d30758d1461df6ec70cb6c48d71e069b83726249fab5cd776f27d7db1747"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCTROW 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ? ) OVER ( ) ) SELECT ?",
+    "digest": "458002caa3c3dd452f4ccc7704b71436b19712b6466ab9ff72015d75c43c66ab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCTROW ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ALL ? ) ) SELECT ?",
+    "digest": "4b0825ef56ab66251d32e0dfaf1fade436c0ea3c6254628b049e1d6a5969f28c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ALL ? ) ) SELECT * FROM `c`",
+    "digest": "8fcd48dd943ab677eadaa32b89468250f54290484c268b295b824ab577e6f419"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX(DISTINCTROW ALL 1) OVER ()",
+    "text": "SELECT MAX ( DISTINCTROW ALL ? ) OVER ( )",
+    "digest": "4513b7cef9066324941cc2a018604a025dc29b2a0bdd5f60a316c1093fdee6db"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT MAX(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT MAX ( DISTINCTROW ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "450aa6efaceae85a1c973b3bd98bedbc732b7679225cc92d5816a883f3e5efd4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX (1,2)",
+    "text": "SELECT `MAX` (...)",
+    "digest": "10365ca38f8d9f71d55fa44bad9b8b85ca9ee4a3ae470a92f0e8d18e809c1c66"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT MAX (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT MAX/*gap*/(1,2)",
+    "text": "SELECT `MAX` (...)",
+    "digest": "10365ca38f8d9f71d55fa44bad9b8b85ca9ee4a3ae470a92f0e8d18e809c1c66"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT MAX/*gap*/(1,2)",
+    "text": "SELECT `MAX` (...)",
+    "digest": "10365ca38f8d9f71d55fa44bad9b8b85ca9ee4a3ae470a92f0e8d18e809c1c66"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `MAX`(1,2)",
+    "text": "SELECT `MAX` (...)",
+    "digest": "10365ca38f8d9f71d55fa44bad9b8b85ca9ee4a3ae470a92f0e8d18e809c1c66"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(1)",
+    "text": "SELECT STDDEV_POP (?)",
+    "digest": "c9f7a829f170a8605ede300e4a4c6b5008938cf6c4c3fcf6eeb2038501ced56f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(ALL 1)",
+    "text": "SELECT STDDEV_POP ( ALL ? )",
+    "digest": "7e38a5e7ecbb701da4fb43f6d1fbe0dbaf9d6e62ae33cc7fdd5addfb2c79222c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP (?) ) SELECT ?",
+    "digest": "b7267fe1cd819865f03930261d8274edee7a690763cfb90cc5f299c1b58c4e14"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP (?) ) SELECT * FROM `c`",
+    "digest": "9007aedcdf98f59ce3dc81c4228a4b51d9a91d40696a7d048616601c04b88d3b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(1) OVER ()",
+    "text": "SELECT STDDEV_POP (?) OVER ( )",
+    "digest": "3381bcccd0105e8743025cdac7c1fda51af8672a9e61c71fb6decca8c9bcf1ee"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP (?) OVER ( ) ) SELECT ?",
+    "digest": "aebabe15db80614eb654167d7b6a4da4c216d1cf6b77145dbb04d3732ece010a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP ( ALL ? ) ) SELECT ?",
+    "digest": "86dcfd1e410885d668259f6b3d9be03cf3c387642e576e53ff141e8c27e694a5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "eda66c406adf2f25b9d3a9b10462acc523558ad59f0c536bd553f03c8566c97f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(ALL 1) OVER ()",
+    "text": "SELECT STDDEV_POP ( ALL ? ) OVER ( )",
+    "digest": "2bc8432410d993b8279b8f457b557471f2d52324be4ee67bcf1aa13dc5dd9f86"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "9fa227225c232ee64f1fe7b2bd2132923d194a11c58a5c2db83ea9fe43bfaf45"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STD(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD (1,2)",
+    "text": "SELECT `STD` (...)",
+    "digest": "2750869f846f834323f2934b8ad8a38a21230fe19ffecab03c18d3a4f6815256"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT STD (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STD/*gap*/(1,2)",
+    "text": "SELECT `STD` (...)",
+    "digest": "2750869f846f834323f2934b8ad8a38a21230fe19ffecab03c18d3a4f6815256"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT STD/*gap*/(1,2)",
+    "text": "SELECT `STD` (...)",
+    "digest": "2750869f846f834323f2934b8ad8a38a21230fe19ffecab03c18d3a4f6815256"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `STD`(1,2)",
+    "text": "SELECT `STD` (...)",
+    "digest": "2750869f846f834323f2934b8ad8a38a21230fe19ffecab03c18d3a4f6815256"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(1)",
+    "text": "SELECT STDDEV_POP (?)",
+    "digest": "c9f7a829f170a8605ede300e4a4c6b5008938cf6c4c3fcf6eeb2038501ced56f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(ALL 1)",
+    "text": "SELECT STDDEV_POP ( ALL ? )",
+    "digest": "7e38a5e7ecbb701da4fb43f6d1fbe0dbaf9d6e62ae33cc7fdd5addfb2c79222c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP (?) ) SELECT ?",
+    "digest": "b7267fe1cd819865f03930261d8274edee7a690763cfb90cc5f299c1b58c4e14"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP (?) ) SELECT * FROM `c`",
+    "digest": "9007aedcdf98f59ce3dc81c4228a4b51d9a91d40696a7d048616601c04b88d3b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(1) OVER ()",
+    "text": "SELECT STDDEV_POP (?) OVER ( )",
+    "digest": "3381bcccd0105e8743025cdac7c1fda51af8672a9e61c71fb6decca8c9bcf1ee"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP (?) OVER ( ) ) SELECT ?",
+    "digest": "aebabe15db80614eb654167d7b6a4da4c216d1cf6b77145dbb04d3732ece010a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP ( ALL ? ) ) SELECT ?",
+    "digest": "86dcfd1e410885d668259f6b3d9be03cf3c387642e576e53ff141e8c27e694a5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "eda66c406adf2f25b9d3a9b10462acc523558ad59f0c536bd553f03c8566c97f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(ALL 1) OVER ()",
+    "text": "SELECT STDDEV_POP ( ALL ? ) OVER ( )",
+    "digest": "2bc8432410d993b8279b8f457b557471f2d52324be4ee67bcf1aa13dc5dd9f86"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "9fa227225c232ee64f1fe7b2bd2132923d194a11c58a5c2db83ea9fe43bfaf45"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV (1,2)",
+    "text": "SELECT `STDDEV` (...)",
+    "digest": "62a84ea7f3de7323a90bc734f012a7b37307197b6d276611a93fea27c2f6904d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT STDDEV (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV/*gap*/(1,2)",
+    "text": "SELECT `STDDEV` (...)",
+    "digest": "62a84ea7f3de7323a90bc734f012a7b37307197b6d276611a93fea27c2f6904d"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT STDDEV/*gap*/(1,2)",
+    "text": "SELECT `STDDEV` (...)",
+    "digest": "62a84ea7f3de7323a90bc734f012a7b37307197b6d276611a93fea27c2f6904d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `STDDEV`(1,2)",
+    "text": "SELECT `STDDEV` (...)",
+    "digest": "62a84ea7f3de7323a90bc734f012a7b37307197b6d276611a93fea27c2f6904d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(1)",
+    "text": "SELECT STDDEV_POP (?)",
+    "digest": "c9f7a829f170a8605ede300e4a4c6b5008938cf6c4c3fcf6eeb2038501ced56f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(ALL 1)",
+    "text": "SELECT STDDEV_POP ( ALL ? )",
+    "digest": "7e38a5e7ecbb701da4fb43f6d1fbe0dbaf9d6e62ae33cc7fdd5addfb2c79222c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP (?) ) SELECT ?",
+    "digest": "b7267fe1cd819865f03930261d8274edee7a690763cfb90cc5f299c1b58c4e14"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP (?) ) SELECT * FROM `c`",
+    "digest": "9007aedcdf98f59ce3dc81c4228a4b51d9a91d40696a7d048616601c04b88d3b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(1) OVER ()",
+    "text": "SELECT STDDEV_POP (?) OVER ( )",
+    "digest": "3381bcccd0105e8743025cdac7c1fda51af8672a9e61c71fb6decca8c9bcf1ee"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP (?) OVER ( ) ) SELECT ?",
+    "digest": "aebabe15db80614eb654167d7b6a4da4c216d1cf6b77145dbb04d3732ece010a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP ( ALL ? ) ) SELECT ?",
+    "digest": "86dcfd1e410885d668259f6b3d9be03cf3c387642e576e53ff141e8c27e694a5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "eda66c406adf2f25b9d3a9b10462acc523558ad59f0c536bd553f03c8566c97f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(ALL 1) OVER ()",
+    "text": "SELECT STDDEV_POP ( ALL ? ) OVER ( )",
+    "digest": "2bc8432410d993b8279b8f457b557471f2d52324be4ee67bcf1aa13dc5dd9f86"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_POP ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "9fa227225c232ee64f1fe7b2bd2132923d194a11c58a5c2db83ea9fe43bfaf45"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_POP(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP (1,2)",
+    "text": "SELECT `STDDEV_POP` (...)",
+    "digest": "70f65f2688e880996f6450b3c9f7989a3bd15d650161d7e9e39b56e0c8791af9"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT STDDEV_POP (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_POP/*gap*/(1,2)",
+    "text": "SELECT `STDDEV_POP` (...)",
+    "digest": "70f65f2688e880996f6450b3c9f7989a3bd15d650161d7e9e39b56e0c8791af9"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT STDDEV_POP/*gap*/(1,2)",
+    "text": "SELECT `STDDEV_POP` (...)",
+    "digest": "70f65f2688e880996f6450b3c9f7989a3bd15d650161d7e9e39b56e0c8791af9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `STDDEV_POP`(1,2)",
+    "text": "SELECT `STDDEV_POP` (...)",
+    "digest": "70f65f2688e880996f6450b3c9f7989a3bd15d650161d7e9e39b56e0c8791af9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(1)",
+    "text": "SELECT STDDEV_SAMP (?)",
+    "digest": "b3243258e92d0609c6744de94bf30eeb6222c06514958a00876c97b941caa7b0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(ALL 1)",
+    "text": "SELECT STDDEV_SAMP ( ALL ? )",
+    "digest": "40481c7a4b27506ffe4e10701daed48a0dbe85df2f4f851c581a23a7cb86b272"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_SAMP (?) ) SELECT ?",
+    "digest": "05e9946ab7d40bdfacca34c3d76dbb8dff17061cdff6e71c74de254e97b8b945"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT STDDEV_SAMP (?) ) SELECT * FROM `c`",
+    "digest": "d9e3f392a279e580b95e5cc07a4c152eddad76930efc5bf39dd7a62293718508"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(1) OVER ()",
+    "text": "SELECT STDDEV_SAMP (?) OVER ( )",
+    "digest": "a7b62369433d31944c4d992e4b8a34f5694d0408c86f4b164467017b5a446354"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_SAMP (?) OVER ( ) ) SELECT ?",
+    "digest": "357bee225555fc8fb526c66e6d3fb060e559bbc2e0a36dba82e0fedb70482b00"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_SAMP ( ALL ? ) ) SELECT ?",
+    "digest": "a15bfd049d6750ef61a77c8b94f9b6c179418346e88629cfc4122e0c6fc6f287"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT STDDEV_SAMP ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "98b13978c9ad714122f70efada84470670bbdad296f72051051ee22af5ae48d9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(ALL 1) OVER ()",
+    "text": "SELECT STDDEV_SAMP ( ALL ? ) OVER ( )",
+    "digest": "83d1475c7124116511efb82ac4ec61ca138fb08e24425ce54616e27fcb7590df"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT STDDEV_SAMP ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "35584e4e2061871f2cf35bca0c7bb8e14ba65db51923bf119e4b7ed0b23811ed"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT STDDEV_SAMP(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP (1,2)",
+    "text": "SELECT `STDDEV_SAMP` (...)",
+    "digest": "8c11708987d149bb54f2c5c17d2b448e9e732d24fb12239a10372ff9e11181ba"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT STDDEV_SAMP (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT STDDEV_SAMP/*gap*/(1,2)",
+    "text": "SELECT `STDDEV_SAMP` (...)",
+    "digest": "8c11708987d149bb54f2c5c17d2b448e9e732d24fb12239a10372ff9e11181ba"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT STDDEV_SAMP/*gap*/(1,2)",
+    "text": "SELECT `STDDEV_SAMP` (...)",
+    "digest": "8c11708987d149bb54f2c5c17d2b448e9e732d24fb12239a10372ff9e11181ba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `STDDEV_SAMP`(1,2)",
+    "text": "SELECT `STDDEV_SAMP` (...)",
+    "digest": "8c11708987d149bb54f2c5c17d2b448e9e732d24fb12239a10372ff9e11181ba"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(1)",
+    "text": "SELECT VAR_POP (?)",
+    "digest": "bb7d6ff1efe6bc21fed3caf10f8a3d3e46410ea67d8b69d4495e0f764c22ba5e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(ALL 1)",
+    "text": "SELECT VAR_POP ( ALL ? )",
+    "digest": "29b4c6199b0e14d14f06756abfed22967141be4879a733bcaec4af8a7c0d5f98"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_POP (?) ) SELECT ?",
+    "digest": "42f2e1e1580cf725bd102aeffd6443a8c56e3266fcdb303047ecf8b25d4de1ed"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT VAR_POP (?) ) SELECT * FROM `c`",
+    "digest": "3f0bba4d52a92941ae619a5f33a181fe8f35b39338e5686f5e5021f5b53a3524"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(1) OVER ()",
+    "text": "SELECT VAR_POP (?) OVER ( )",
+    "digest": "e18ecf4d969186b6867a8d7ed32b0419df4107cc44c83f05b155adae5d69bcf5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_POP (?) OVER ( ) ) SELECT ?",
+    "digest": "289fee0b4d7aeb5db720ebdb54914085c8be31a8b92841210acfdcd7379fc1e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_POP ( ALL ? ) ) SELECT ?",
+    "digest": "2fb91bda86cda0c44e98114fa829214a9b22d304ce5186ff72da3588c852d69c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT VAR_POP ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "c960fd81a88a7a9052ecf49349e3f62263aa3579c2c8ed8b7fc5b34e7deafc73"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(ALL 1) OVER ()",
+    "text": "SELECT VAR_POP ( ALL ? ) OVER ( )",
+    "digest": "c41ed18a760e0eaa50bdf02c23bd51eee78098b4c8a12cd6978256b3dbd351f1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_POP ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "a6c6398c201a8ac843767d981099840c57e97b9650aad0eae18bfac2e7486c3c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VARIANCE(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE (1,2)",
+    "text": "SELECT `VARIANCE` (...)",
+    "digest": "851356b4bb7e3207c11c889d724dc28974c92b293a6204be95f7fa01e7c0a46e"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT VARIANCE (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VARIANCE/*gap*/(1,2)",
+    "text": "SELECT `VARIANCE` (...)",
+    "digest": "851356b4bb7e3207c11c889d724dc28974c92b293a6204be95f7fa01e7c0a46e"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT VARIANCE/*gap*/(1,2)",
+    "text": "SELECT `VARIANCE` (...)",
+    "digest": "851356b4bb7e3207c11c889d724dc28974c92b293a6204be95f7fa01e7c0a46e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `VARIANCE`(1,2)",
+    "text": "SELECT `VARIANCE` (...)",
+    "digest": "851356b4bb7e3207c11c889d724dc28974c92b293a6204be95f7fa01e7c0a46e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(1)",
+    "text": "SELECT VAR_POP (?)",
+    "digest": "bb7d6ff1efe6bc21fed3caf10f8a3d3e46410ea67d8b69d4495e0f764c22ba5e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(ALL 1)",
+    "text": "SELECT VAR_POP ( ALL ? )",
+    "digest": "29b4c6199b0e14d14f06756abfed22967141be4879a733bcaec4af8a7c0d5f98"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_POP (?) ) SELECT ?",
+    "digest": "42f2e1e1580cf725bd102aeffd6443a8c56e3266fcdb303047ecf8b25d4de1ed"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT VAR_POP (?) ) SELECT * FROM `c`",
+    "digest": "3f0bba4d52a92941ae619a5f33a181fe8f35b39338e5686f5e5021f5b53a3524"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(1) OVER ()",
+    "text": "SELECT VAR_POP (?) OVER ( )",
+    "digest": "e18ecf4d969186b6867a8d7ed32b0419df4107cc44c83f05b155adae5d69bcf5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_POP (?) OVER ( ) ) SELECT ?",
+    "digest": "289fee0b4d7aeb5db720ebdb54914085c8be31a8b92841210acfdcd7379fc1e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_POP ( ALL ? ) ) SELECT ?",
+    "digest": "2fb91bda86cda0c44e98114fa829214a9b22d304ce5186ff72da3588c852d69c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT VAR_POP ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "c960fd81a88a7a9052ecf49349e3f62263aa3579c2c8ed8b7fc5b34e7deafc73"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(ALL 1) OVER ()",
+    "text": "SELECT VAR_POP ( ALL ? ) OVER ( )",
+    "digest": "c41ed18a760e0eaa50bdf02c23bd51eee78098b4c8a12cd6978256b3dbd351f1"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_POP ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "a6c6398c201a8ac843767d981099840c57e97b9650aad0eae18bfac2e7486c3c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_POP(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP (1,2)",
+    "text": "SELECT `VAR_POP` (...)",
+    "digest": "988ee5c34bb87c0107e40321f8d825c6f9447eacba297c1f18c914630b59df6a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT VAR_POP (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_POP/*gap*/(1,2)",
+    "text": "SELECT `VAR_POP` (...)",
+    "digest": "988ee5c34bb87c0107e40321f8d825c6f9447eacba297c1f18c914630b59df6a"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT VAR_POP/*gap*/(1,2)",
+    "text": "SELECT `VAR_POP` (...)",
+    "digest": "988ee5c34bb87c0107e40321f8d825c6f9447eacba297c1f18c914630b59df6a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `VAR_POP`(1,2)",
+    "text": "SELECT `VAR_POP` (...)",
+    "digest": "988ee5c34bb87c0107e40321f8d825c6f9447eacba297c1f18c914630b59df6a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(1)",
+    "text": "SELECT VAR_SAMP (?)",
+    "digest": "31019dde33fae524c0abf69e759242b742015b834eee67432b3c904795605ffe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(ALL 1)",
+    "text": "SELECT VAR_SAMP ( ALL ? )",
+    "digest": "130188e8e40bcd79e22ebfd3de1cdecd9ed97faf41ee2efd2f7eb747c81ebd19"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_SAMP (?) ) SELECT ?",
+    "digest": "9a6f28cb8691f7cc670d52c8c6e80e2824caecec82c9a3b39dc66052a3358892"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT VAR_SAMP (?) ) SELECT * FROM `c`",
+    "digest": "e92b5c3efb837cc1d14e8219a259d46f92f8e08e6528cc8ade02cb2f4a1c1ecd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(1) OVER ()",
+    "text": "SELECT VAR_SAMP (?) OVER ( )",
+    "digest": "8dc9219aff89a73cfc5adc23326279d0284364f50171f06250711e51a3eaa88b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_SAMP (?) OVER ( ) ) SELECT ?",
+    "digest": "81765e2f4785142ce9a6660db548ce0e1bf0552d133ff8ccb3a28a0d7f15608a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_SAMP ( ALL ? ) ) SELECT ?",
+    "digest": "0bba4b12207bc61f90e39e3183c194ba0609d00bbea32062bea09f07b3898370"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT VAR_SAMP ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "7030550f76e5bf2406e84a8b60d52703d1d0aec3dde659887709209898a0cf92"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(ALL 1) OVER ()",
+    "text": "SELECT VAR_SAMP ( ALL ? ) OVER ( )",
+    "digest": "9ce4603831151134c3d837ec4a3408a9aeab4f9c46f52dc5f3038ab767e2a941"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT VAR_SAMP ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "727c260bb9128557f3c33181a8babfaf8f748b5fe1efddf33bc78a68b2e3f778"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT VAR_SAMP(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP (1,2)",
+    "text": "SELECT `VAR_SAMP` (...)",
+    "digest": "1b99450159d357b4440f9daa8eef9615f06d807b6e6b21ed608d266efd9655e4"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT VAR_SAMP (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT VAR_SAMP/*gap*/(1,2)",
+    "text": "SELECT `VAR_SAMP` (...)",
+    "digest": "1b99450159d357b4440f9daa8eef9615f06d807b6e6b21ed608d266efd9655e4"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT VAR_SAMP/*gap*/(1,2)",
+    "text": "SELECT `VAR_SAMP` (...)",
+    "digest": "1b99450159d357b4440f9daa8eef9615f06d807b6e6b21ed608d266efd9655e4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `VAR_SAMP`(1,2)",
+    "text": "SELECT `VAR_SAMP` (...)",
+    "digest": "1b99450159d357b4440f9daa8eef9615f06d807b6e6b21ed608d266efd9655e4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(1)",
+    "text": "SELECT JSON_ARRAYAGG (?)",
+    "digest": "375b29d4603c7c9e3a5fef91687c669ccb60d8a93d45fe3cf0b63749f83ee099"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(ALL 1)",
+    "text": "SELECT JSON_ARRAYAGG ( ALL ? )",
+    "digest": "354d482fe84480c90438e2f6dfe2467ab5e292821f8e7b232d6b3eb0a206f27c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT JSON_ARRAYAGG (?) ) SELECT ?",
+    "digest": "e620a1cadec38813ca772da215ee31a588bc249e2ff97f4f486734b8aa71ca0e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT JSON_ARRAYAGG (?) ) SELECT * FROM `c`",
+    "digest": "28310e1f3ec73c4ea640dbe778db00825895de79d503b7da0190e5cd00e409df"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(1) OVER ()",
+    "text": "SELECT JSON_ARRAYAGG (?) OVER ( )",
+    "digest": "aa80429b8899d625f1a232ce13629d68f10f3a17e00dd20ef15b3b3ccfdef17b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT JSON_ARRAYAGG (?) OVER ( ) ) SELECT ?",
+    "digest": "51e0db19791e51749c5112969ec9d867ff6bc91fcc8702d2a7f24857c0374dab"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(ALL 1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT JSON_ARRAYAGG ( ALL ? ) ) SELECT ?",
+    "digest": "16e3763e17df3f7d43101d4f34c54543d92306fec10daa41b2b9ca8807d40ac2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(ALL 1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT JSON_ARRAYAGG ( ALL ? ) ) SELECT * FROM `c`",
+    "digest": "deb47ddedc08f6bb9dfc387a542ff8a32eb18534a094af17e502702963df004e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(ALL 1) OVER ()",
+    "text": "SELECT JSON_ARRAYAGG ( ALL ? ) OVER ( )",
+    "digest": "6f634d305e9b1674fbd7e804e1371b685a45935a83bc729f034ab4b5348b93b0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(ALL 1) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT JSON_ARRAYAGG ( ALL ? ) OVER ( ) ) SELECT ?",
+    "digest": "eef8b710addf0063308bc7b0e6757239159b05a556835545ae4cc4eab4c8f56c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_ARRAYAGG(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG (1,2)",
+    "text": "SELECT `JSON_ARRAYAGG` (...)",
+    "digest": "16def94b5cb33d704b3e3d0764a05153f96499b0bf0d3fe66d7415d1eb066e9e"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT JSON_ARRAYAGG (1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_ARRAYAGG/*gap*/(1,2)",
+    "text": "SELECT `JSON_ARRAYAGG` (...)",
+    "digest": "16def94b5cb33d704b3e3d0764a05153f96499b0bf0d3fe66d7415d1eb066e9e"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT JSON_ARRAYAGG/*gap*/(1,2)",
+    "text": "SELECT `JSON_ARRAYAGG` (...)",
+    "digest": "16def94b5cb33d704b3e3d0764a05153f96499b0bf0d3fe66d7415d1eb066e9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `JSON_ARRAYAGG`(1,2)",
+    "text": "SELECT `JSON_ARRAYAGG` (...)",
+    "digest": "16def94b5cb33d704b3e3d0764a05153f96499b0bf0d3fe66d7415d1eb066e9e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(1,2)",
+    "text": "SELECT JSON_OBJECTAGG (...)",
+    "digest": "602eb16729713ae0bb9c8a39ad9b5917ab57b0c2eb7c391eb90604cf12a9bde0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(ALL 1,2)",
+    "text": "SELECT JSON_OBJECTAGG ( ALL ?, ... )",
+    "digest": "1db858c0f6612402e3211d9a2ae4416ddd71a4e3c9fa4318fe6d92aac1d884e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(1,2)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT JSON_OBJECTAGG (...) ) SELECT ?",
+    "digest": "94cd61e80944acbce3cca271d1d642e8c262e06b11f2ab6e57936527798c2f68"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(1,2)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT JSON_OBJECTAGG (...) ) SELECT * FROM `c`",
+    "digest": "bb4c3756aa15bac3e9b0abf44f88d75643c08fbea8e94931b92a6704ce689399"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(1,2) OVER ()",
+    "text": "SELECT JSON_OBJECTAGG (...) OVER ( )",
+    "digest": "e340ea009fa225008cf570464665b3d912e72fff0816184b9c79b2c33a39903a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(1,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT JSON_OBJECTAGG (...) OVER ( ) ) SELECT ?",
+    "digest": "8c91803826473da6ea2c89549494b4df257f8c54a04cbd9bcbe3a067c12f0844"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(ALL 1,2)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT JSON_OBJECTAGG ( ALL ?, ... ) ) SELECT ?",
+    "digest": "1b0a9be9b7b91e771c744da1652a9ed7203502d89222cadba86ac24a79890dfc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(ALL 1,2)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT JSON_OBJECTAGG ( ALL ?, ... ) ) SELECT * FROM `c`",
+    "digest": "42bccbe1973d68dca6dfe051c99e37a13ef10f3eb2579088f5b7280b2f9869c3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(ALL 1,2) OVER ()",
+    "text": "SELECT JSON_OBJECTAGG ( ALL ?, ... ) OVER ( )",
+    "digest": "563380af13b774dfe67d97543a3229d16830ac2fd22cf7b403be7323f2d45a44"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(ALL 1,2) OVER ()) SELECT 1",
+    "text": "WITH `c` AS ( SELECT JSON_OBJECTAGG ( ALL ?, ... ) OVER ( ) ) SELECT ?",
+    "digest": "a2989e3251999bee964ce436e85d04bef020cc4eafbd9a97b9f746cff0bbb46d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCT 1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCT 1,2)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT 1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCT 1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCT ALL 1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCT ALL 1,2)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT ALL 1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCT ALL 1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCTROW 1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCTROW 1,2)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW 1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCTROW 1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCTROW ALL 1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCTROW ALL 1,2)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCTROW ALL 1,2) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT JSON_OBJECTAGG(DISTINCTROW ALL 1,2) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG (1,2)",
+    "text": "SELECT `JSON_OBJECTAGG` (...)",
+    "digest": "7e8b59720886d87d8330ba1c9c6405c93ea3610f8331816f45766e84640d65ce"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT JSON_OBJECTAGG (1,2)",
+    "text": "SELECT JSON_OBJECTAGG (...)",
+    "digest": "602eb16729713ae0bb9c8a39ad9b5917ab57b0c2eb7c391eb90604cf12a9bde0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG/*gap*/(1,2)",
+    "text": "SELECT `JSON_OBJECTAGG` (...)",
+    "digest": "7e8b59720886d87d8330ba1c9c6405c93ea3610f8331816f45766e84640d65ce"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT JSON_OBJECTAGG/*gap*/(1,2)",
+    "text": "SELECT `JSON_OBJECTAGG` (...)",
+    "digest": "7e8b59720886d87d8330ba1c9c6405c93ea3610f8331816f45766e84640d65ce"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `JSON_OBJECTAGG`(1,2)",
+    "text": "SELECT `JSON_OBJECTAGG` (...)",
+    "digest": "7e8b59720886d87d8330ba1c9c6405c93ea3610f8331816f45766e84640d65ce"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(1)",
+    "text": "SELECT GROUPING (?)",
+    "digest": "05099c430f9dd08cb705370fa186d4f29c1c099cf9bef30aff5291306fbe24cf"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(1,2)",
+    "text": "SELECT GROUPING (...)",
+    "digest": "2adeb33fee6373a6b543fff394c7bb5e846ff6ea95d0773e56e4814f7ac3a6d7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(1,2,3)",
+    "text": "SELECT GROUPING (...)",
+    "digest": "2adeb33fee6373a6b543fff394c7bb5e846ff6ea95d0773e56e4814f7ac3a6d7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW ALL )",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW ALL 1,2,3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(1)) SELECT 1",
+    "text": "WITH `c` AS ( SELECT GROUPING (?) ) SELECT ?",
+    "digest": "2b2c69e8a9110962009cde55e71c99b478ecfda40ca9bd6d0758de020edd04dd"
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(1)) SELECT * FROM c",
+    "text": "WITH `c` AS ( SELECT GROUPING (?) ) SELECT * FROM `c`",
+    "digest": "205c41aeb840d66a5d5927a8ba6c019b93151c17ec779c961fc7abff6a0a73e7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCT 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCT 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCT ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCT ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCT ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCT ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCTROW 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCTROW 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCTROW 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCTROW ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCTROW ALL 1)) SELECT * FROM c",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING(DISTINCTROW ALL 1) OVER ()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "WITH c AS (SELECT GROUPING(DISTINCTROW ALL 1) OVER ()) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING (1,2)",
+    "text": "SELECT GROUPING (...)",
+    "digest": "2adeb33fee6373a6b543fff394c7bb5e846ff6ea95d0773e56e4814f7ac3a6d7"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT GROUPING (1,2)",
+    "text": "SELECT GROUPING (...)",
+    "digest": "2adeb33fee6373a6b543fff394c7bb5e846ff6ea95d0773e56e4814f7ac3a6d7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUPING/*gap*/(1,2)",
+    "text": "SELECT GROUPING (...)",
+    "digest": "2adeb33fee6373a6b543fff394c7bb5e846ff6ea95d0773e56e4814f7ac3a6d7"
+  },
+  {
+    "sql_mode": "IGNORE_SPACE",
+    "sql": "SELECT GROUPING/*gap*/(1,2)",
+    "text": "SELECT GROUPING (...)",
+    "digest": "2adeb33fee6373a6b543fff394c7bb5e846ff6ea95d0773e56e4814f7ac3a6d7"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT `GROUPING`(1,2)",
+    "text": "SELECT `GROUPING` (...)",
+    "digest": "fb0899e04a76f9ea8b95d4fcd6290411fe85a5a89cec10d336f7275f6b53db13"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(ALL DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(ALL ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(ALL DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(ALL ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(ALL *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT BIT_AND(DISTINCT ALL *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(ALL DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(ALL ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(ALL *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT ALL *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(ALL DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(ALL ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(ALL *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT SUM(DISTINCT ALL *)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(1,ALL 2)",
+    "text": "SELECT JSON_OBJECTAGG ( ? , ALL ? )",
+    "digest": "aee334d700b827e1fd9f8bb35f4c7ad7b93f5ebafa807b91d8c2084e52bbe54f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(ALL 1,ALL 2)",
+    "text": "SELECT JSON_OBJECTAGG ( ALL ? , ALL ? )",
+    "digest": "434f3503f4a26b18e88eb25612e2ea0b8575d52b7d6ea3e70c75257b689fafe9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(DISTINCT 1,ALL 2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(1,DISTINCT 2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT JSON_OBJECTAGG(1,ALL ALL 2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT COUNT(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT COUNT(1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT COUNT(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SET @x = COUNT(1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT COUNT(1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT COUNT(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT COUNT(ALL 1,2)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT COUNT(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SET @x = COUNT(ALL 1,2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT COUNT(ALL 1,2))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT COUNT(DISTINCT 1,2)",
+    "text": "EXPLAIN SELECT COUNT ( DISTINCTROW ?, ... )",
+    "digest": "649d209ef779f75e13c426fb07b8da3e3fc29fe759e38b615f43f7c3267de89d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT COUNT(DISTINCT 1,2)) SELECT 1",
+    "text": "CREATE VIEW `v` AS WITH `c` AS ( SELECT COUNT ( DISTINCTROW ?, ... ) ) SELECT ?",
+    "digest": "130c396cf3dc067462166d1b90aa78847697359ecd2d5345623a400e8d172c26"
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT COUNT(DISTINCT 1,2)",
+    "text": "INSERT INTO `t` SELECT COUNT ( DISTINCTROW ?, ... )",
+    "digest": "a315ce0610369390628c0070e9d59b8bb10ce337e9cb0dac580e8b0b19dfa8d2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SET @x = COUNT(DISTINCT 1,2)",
+    "text": "SET @? = COUNT ( DISTINCTROW ?, ... )",
+    "digest": "d9d4b9d5ea0a958923cacbcdcf9b6897d032d96fe05edee533a2546a3f03a865"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT COUNT(DISTINCT 1,2))",
+    "text": "SELECT ( SELECT COUNT ( DISTINCTROW ?, ... ) )",
+    "digest": "a25065fecf1b7f9744c8abc63d22cd433ddbe85ea71c14b11d777ab62f8c6db8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT BIT_AND(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT BIT_AND(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT BIT_AND(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SET @x = BIT_AND(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT BIT_AND(DISTINCT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT GROUP_CONCAT(ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT GROUP_CONCAT(ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT GROUP_CONCAT(ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SET @x = GROUP_CONCAT(ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT GROUP_CONCAT(ALL 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT STDDEV(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT STDDEV(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT STDDEV(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SET @x = STDDEV(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT STDDEV(DISTINCT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT JSON_ARRAYAGG(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT JSON_ARRAYAGG(DISTINCT 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT JSON_ARRAYAGG(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SET @x = JSON_ARRAYAGG(DISTINCT 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT JSON_ARRAYAGG(DISTINCT 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "EXPLAIN SELECT GROUPING(ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE VIEW v AS WITH c AS (SELECT GROUPING(ALL 1)) SELECT 1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "INSERT INTO t SELECT GROUPING(ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SET @x = GROUPING(ALL 1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT (SELECT GROUPING(ALL 1))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT(DISTINCT (1,2))",
+    "text": "SELECT COUNT ( DISTINCTROW (...) )",
+    "digest": "e30e93dcbf9fe38706505f6bd8fee4eac62df7570a797bd4fd41e8bde28bdbc6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT COUNT((1,2))",
+    "text": "SELECT COUNT ( (...) )",
+    "digest": "e9a4f47b2968f921f90f7faaad7604fd992fd82b478ad40c075acfb603f75263"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(DISTINCT 1,2 ORDER BY 1 SEPARATOR 'x')",
+    "text": "SELECT GROUP_CONCAT ( DISTINCTROW ?, ... ORDER BY ? SEPARATOR ? )",
+    "digest": "23ffdf973d55d8ff86a55b36d9e58e408cd00a9188691853a74c1a0015e3adf0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "SELECT GROUP_CONCAT(ALL 1 ORDER BY 1 SEPARATOR 'x')",
+    "error_code": 3677
   }
 ]

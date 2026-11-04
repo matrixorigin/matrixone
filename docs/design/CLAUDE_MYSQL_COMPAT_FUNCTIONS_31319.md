@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v24，2026-11-04。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v25，2026-11-04。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -104,6 +104,9 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 - MATCH AGAINST的文本参数与ENGINE/COMMENT的STRING-only域不同。text_literal统一STRING、折叠引导字符串及非折叠charset STRING/HEX的AST构造，由literal与search_pattern共享；普通parser的AGAINST仅保留原P_char准入。digest不套执行侧空查询串禁令，但保留原非空列语法；不执行检索或查目录。
 - INTERVAL value unit不是独立表达式。digest-only DIGEST_INTERVAL进入原生语法：bit_expr加/减interval、前置interval加完整expression、DATE_ADD/DATE_SUB/ADDDATE/SUBDATE的interval参数、window frame及独立INTERVAL(...)函数。ADDDATE/SUBDATE的native普通参数形式同样固定两参数，INTERVAL参数形式由前参列表恰好1个保证总两参；quoted、未启用IGNORE_SPACE的空白、跨注释等generic-call角色不套native名字的参数禁令。不能从MO已降低的FuncExpr父节点猜合法性，也不能用同名函数代替语法身份。普通INTERVAL token保留MO原准入；新增token仅由Lexer派发，独立编码scanner不改变native token。完整表达式引入的比较/LIKE ESCAPE/简单表达式后缀歧义按原生优先级显式归约；复用现有优先级而非扩展goyacc packed等级或放宽冲突门禁，保留PIPES_AS_CONCAT正控。
 - native特殊函数的参数形状由原生grammar所有，在未引用CTE中也不能跳过：CURDATE/USER/DATABASE等固定零参，SUBSTRING/SUBSTR/MID固定二或三参，INSERT四参、IF三参、COALESCE非空等，普通MO宽松产生式仅在digest附加该约束。NOW及datetime_scale要求原生NUM（非负32位整数字面量），不是任意expression，也不把运行时FSP 0..6限制搬到摘要；NOW(7)仍可digest。LOG/空间构造器/WEIGHT_STRING的非保留原生名字在MO的ID调用域校验，quoted调用保持generic身份；空间type token仅在调用位置适配ID，不改变CAST/DDL类型所有者。JSON_VALUE采用digest-only非保留token及simple_expr/json_text_literal路径grammar，拒绝二元运算第一参（括号包裹则合法）、非文本路径和HEX路径，quoted/qualified名字仍属generic；未新增RETURNING/ON EMPTY等既有未支持grammar。独立编码scanner不消费这些parser适配token。
+- native聚合的参数列表/量词是grammar限制，不是factory数量检查。COUNT非DISTINCT只允许一个expression（tuple是单个expression），DISTINCT/DISTINCTROW接受非空多参；COUNT(*)与COUNT(ALL *)由独立star量词产生式消费，不能接受DISTINCT *。BIT_AND/OR/XOR、STD/STDDEV族、VARIANCE/VAR_POP/SAMP、JSON_ARRAYAGG/OBJECTAGG不接受DISTINCT；GROUP_CONCAT只接受省略/DISTINCT、不接受ALL；GROUPING不接受量词或OVER。这些错误即使在unused CTE也拒绝，不能改成后置FuncExpr全局名字校验。
+- 量词复用已有FuncType的DEFAULT/ALL/DISTINCT区别，无新AST/池字段。原生in_sum_expr允许AVG/MIN/MAX/SUM的DISTINCT ALL及JSON_OBJECTAGG第二参数的ALL，通过独立窄产生式保持合法正控；新增形式仅digest开放，普通MO原准入/拒绝保持。不能把执行阶段对窗口DISTINCT的支持限制搬进digest，COUNT(DISTINCT 1,2) OVER()仍可解析/摘要。
+- digest的函数名空白/注释规则复用固定原生SYM_FN事实（含JSON_ARRAYAGG/OBJECTAGG），不依赖不同覆盖范围的普通MO函数名registry。IGNORE_SPACE只跨空白、不跨注释，quoted/限定名字不冒充native聚合；DISTINCTROW按共享原生token身份适配DISTINCT，原始编码拼写不变，普通MO词法不变。
 - generic native function factory的参数数目/奇偶不是grammar限制。digest_functions_gen.py从SHA固定的MySQL8.4.11 item_create.cc提取286个release公共factory的Min/Max/奇偶，按边界分组产生纯switch事实表；内部系统视图factory与NDEBUG调试函数不纳入，不引入运行时目录/函数签名依赖。函数名仅ASCII折叠，与原生逐字节toupper相同，不能把MAKE_SET等Unicode近似名当作MAKE_SET；未知/quoted非注册名不套MO执行函数签名。坏参数节点只加入本次parse候选集合，由既有引用式作用域在itemization拒绝；ABS()/CONCAT()/CURRENT_ROLE(1)在未引用CTE中仍合法，引用、derived、view、EXPLAIN不可跳过。quoted原生注册名仍走factory，quoted特殊grammar名不冒充native production。
 - DATE/TIME/TIMESTAMP typed literal在itemization检查原生日期/时间字段及类型身份；运行时DATE()/TIME()/TIMESTAMP()/CAST不套该规则。私有digestTemporalMode捕获NO_ZERO_DATE、NO_ZERO_IN_DATE、ALLOW_INVALID_DATES/TRADITIONAL，不扩展持久SQLModeFlags。解析支持原生紧凑/分隔格式、两位年、模糊零日期、闰年（原生year=0非闰）、TIME扩展小时/日期段及原生unsigned累加再检查语义、秒后必须有小数点的fraction、微秒与纳秒舍入溢出、固定offset范围；conversion警告导致失败而非把结果当有效。沿用budget，按字节预付额外检查工作。
 - 无效时间literal与无效factory参数共享本次解析的invalidExpressions指针集合，不维护第二套作用域或扫描：复用既有引用式CTE/名称/锁作用域遍历，在被itemize时通过表达式回调拒绝。未引用CTE内的无效literal不提前失败，引用、derived、view和EXPLAIN不能跳过；没有候选不增加walk。回调仅本次语法数据，无全局cache/目录查询/执行副作用；错误仍归原parser清理所有者，普通parser回调为nil。

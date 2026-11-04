@@ -1138,7 +1138,7 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 				// Digest display spellings may themselves be unsupported
 				// aliases (FLOAT4/MIDDLEINT/VARCHARACTER). Select the grammar
 				// owner by shared native token identity, not display text.
-				for _, name := range [...]string{"DECIMAL", "FLOAT", "DOUBLE", "MEDIUMINT", "VARCHAR"} {
+				for _, name := range [...]string{"DECIMAL", "FLOAT", "DOUBLE", "MEDIUMINT", "VARCHAR", "DISTINCT"} {
 					if symbol.id == digestSymbols[name].id {
 						keywordID = keywords[strings.ToLower(name)]
 						break
@@ -1146,7 +1146,13 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 				}
 			}
 		}
-		if isSQLModeSensitiveFunctionName(lower) && (!s.sqlMode.Has(SQLModeIgnoreSpace) || s.digestMode) {
+		sensitiveFunction := isSQLModeSensitiveFunctionName(lower)
+		if s.digestMode {
+			// Use the frozen native SYM_FN domain, including JSON aggregates;
+			// the ordinary MO function-name registry has a different scope.
+			sensitiveFunction = digestSymbols[digestKeywordUpper(keywordName)].function
+		}
+		if sensitiveFunction && (!s.sqlMode.Has(SQLModeIgnoreSpace) || s.digestMode) {
 			pos := s.skipBlankAndCommentsFrom(s.Pos)
 			if pos != s.Pos && pos < len(s.buf) && s.buf[pos] == '(' {
 				// IGNORE_SPACE admits whitespace, not intervening comments. Keep

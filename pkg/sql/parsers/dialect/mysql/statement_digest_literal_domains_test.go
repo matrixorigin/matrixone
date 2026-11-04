@@ -21,6 +21,90 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDigestAggregateArgumentDomains(t *testing.T) {
+	for _, test := range []struct {
+		sql, mode string
+		reject    bool
+	}{
+		{"SELECT COUNT(1)", "", false},
+		{"SELECT COUNT(1,2)", "", true},
+		{"SELECT COUNT(ALL 1,2)", "", true},
+		{"SELECT COUNT(DISTINCT 1,2)", "", false},
+		{"SELECT COUNT(DISTINCTROW 1,2)", "", false},
+		{"SELECT BIT_AND(DISTINCTROW 1)", "", true},
+		{"SELECT COUNT(*)", "", false},
+		{"SELECT COUNT(ALL *)", "", false},
+		{"SELECT COUNT(DISTINCT *)", "", true},
+		{"SELECT COUNT(DISTINCT ALL 1)", "", true},
+		{"SELECT BIT_AND(DISTINCT 1)", "", true},
+		{"SELECT BIT_AND(ALL 1)", "", false},
+		{"SELECT STDDEV_POP(DISTINCT 1)", "", true},
+		{"SELECT STDDEV_POP(ALL 1)", "", false},
+		{"SELECT GROUP_CONCAT(ALL 1)", "", true},
+		{"SELECT GROUP_CONCAT(DISTINCT 1,2)", "", false},
+		{"SELECT JSON_ARRAYAGG(DISTINCT 1)", "", true},
+		{"SELECT JSON_ARRAYAGG(ALL 1)", "", false},
+		{"SELECT JSON_OBJECTAGG(ALL 1,ALL 2)", "", false},
+		{"SELECT JSON_OBJECTAGG(DISTINCT 1,2)", "", true},
+		{"SELECT GROUPING(ALL 1)", "", true},
+		{"SELECT GROUPING(1) OVER ()", "", true},
+		{"SELECT SUM(DISTINCT ALL 1)", "", false},
+		{"SELECT MIN(DISTINCT ALL 1)", "", false},
+		{"WITH c AS (SELECT COUNT(1,2)) SELECT 1", "", true},
+		{"WITH c AS (SELECT BIT_AND(DISTINCT 1)) SELECT 1", "", true},
+		{"WITH c AS (SELECT GROUP_CONCAT(ALL 1)) SELECT 1", "", true},
+		{"WITH c AS (SELECT ABS()) SELECT 1", "", false},
+		{"SELECT COUNT (1,2)", "", false},
+		{"SELECT COUNT (1,2)", "IGNORE_SPACE", true},
+		{"SELECT `COUNT`(1,2)", "IGNORE_SPACE", false},
+		{"SELECT JSON_ARRAYAGG (1,2)", "", false},
+		{"SELECT JSON_ARRAYAGG (1,2)", "IGNORE_SPACE", true},
+		{"SELECT JSON_ARRAYAGG/*gap*/(1,2)", "IGNORE_SPACE", false},
+		{"SELECT COUNT(DISTINCT 1,2) OVER ()", "", false},
+	} {
+		t.Run(test.sql+"/"+test.mode, func(t *testing.T) {
+			for range 3 {
+				_, _, err := StatementDigest(t.Context(), test.sql, test.mode)
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				text, digest, err := StatementDigest(t.Context(), "SELECT 1", "")
+				require.NoError(t, err)
+				require.Equal(t, "SELECT ?", text)
+				require.Equal(t, "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae", digest)
+			}
+		})
+	}
+	for _, test := range []struct {
+		sql    string
+		reject bool
+	}{
+		{"SELECT COUNT(1,2)", false},
+		{"SELECT BIT_AND(DISTINCT 1)", false},
+		{"SELECT GROUP_CONCAT(ALL 1)", false},
+		{"SELECT COUNT(ALL *)", true},
+		{"SELECT SUM(DISTINCT ALL 1)", true},
+		{"SELECT JSON_OBJECTAGG(1,ALL 2)", true},
+	} {
+		func() {
+			stmts, err := Parse(t.Context(), test.sql, 0)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			if test.reject {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Len(t, stmts, 1)
+			}
+		}()
+	}
+}
+
 func TestDigestFunctionArgumentDomains(t *testing.T) {
 	for _, test := range []struct {
 		sql, mode string
