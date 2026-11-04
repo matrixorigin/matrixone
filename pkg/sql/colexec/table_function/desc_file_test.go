@@ -50,15 +50,30 @@ func TestDescFile(t *testing.T) {
 	} {
 		entries, err := descFileEntries(proc, tc.url)
 		require.NoError(t, err, tc.url)
-		for i := range entries {
-			if entries[i].IsDir {
-				entries[i].Size = 0
-			}
-		}
 		require.ElementsMatch(t, tc.want, entries, tc.url)
 	}
 
-	tf := &TableFunction{Attrs: []string{"is_dir", "file", "size"}}
+	// each row of a non-constant argument is described by its own call
+	rows := vector.NewVec(types.T_varchar.ToType())
+	defer rows.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(rows, []byte("stage://docs/a.pdf"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(rows, []byte("stage://docs/"), false, proc.Mp()))
+	tf := &TableFunction{Attrs: []string{"file", "size"}}
+	tf.ctr.retSchema = []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}
+	tf.ctr.argVecs = []*vector.Vector{rows}
+	sr := &descFileState{}
+	defer sr.free(tf, proc, false, nil)
+	require.NoError(t, sr.start(tf, proc, 1, nil))
+	require.Equal(t, 3, sr.batch.RowCount())
+	for i := 0; i < 3; i++ {
+		if sr.batch.Vecs[0].GetStringAt(i) == path.Join(dir, "sub") {
+			require.Zero(t, vector.GetFixedAtNoTypeCheck[int64](sr.batch.Vecs[1], i), "a directory has size 0")
+		}
+	}
+	tf.ctr.argVecs = nil
+	require.ErrorContains(t, sr.start(tf, proc, 0, nil), "requires one argument")
+
+	tf = &TableFunction{Attrs: []string{"is_dir", "file", "size"}}
 	tf.ctr.retSchema = []types.Type{types.T_bool.ToType(), types.T_varchar.ToType(), types.T_int64.ToType()}
 	arg, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("stage://docs/a.pdf"), 1, proc.Mp())
 	require.NoError(t, err)

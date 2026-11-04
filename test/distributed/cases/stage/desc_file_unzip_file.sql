@@ -1,7 +1,7 @@
 -- desc_file lists the name, size and directory flag of a file, of the entries of a directory, or
 -- of the files matching a pattern; unzip_file returns the first file of a zip archive (#21825)
 create stage zs URL='file:///$resources/load_data/zipzstd';
-select substring_index(file, '/', -1) name, if(is_dir, null, size) size, is_dir from desc_file('stage://zs/') d order by name;
+select substring_index(file, '/', -1) name, size, is_dir from desc_file('stage://zs/') d order by name;
 select substring_index(file, '/', -1) name, size, is_dir from desc_file('stage://zs/*.zip') d order by name;
 select substring_index(file, '/', -1) name, size, is_dir from desc_file('stage://zs/two.zip') d;
 select substring_index(file, '/', -1) name from desc_file('stage://zs/mix/*') d order by name;

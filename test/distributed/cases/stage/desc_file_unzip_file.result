@@ -1,7 +1,7 @@
 create stage zs URL='file:///$resources/load_data/zipzstd';
-select substring_index(file, '/', -1) name, if(is_dir, null, size) size, is_dir from desc_file('stage://zs/') d order by name;
+select substring_index(file, '/', -1) name, size, is_dir from desc_file('stage://zs/') d order by name;
 ➤ name[12,65535,0]  ¦  size[-5,64,0]  ¦  is_dir[-7,1,0]  𝄀
-mix  ¦  null  ¦  1  𝄀
+mix  ¦  0  ¦  1  𝄀
 rows_zip.csv.zip  ¦  146  ¦  0  𝄀
 rows_zst.csv.zst  ¦  47  ¦  0  𝄀
 stored.zip  ¦  145  ¦  0  𝄀

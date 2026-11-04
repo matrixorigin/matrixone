@@ -307,6 +307,14 @@ func UrlToStageDefForExport(furl string, proc *process.Process) (s stage.StageDe
 	return s, nil
 }
 
+// closeOwnedETLFS closes the file service GetForETL built for p: one for a local path or a path
+// with service arguments, which no other caller shares.
+func closeOwnedETLFS(ctx context.Context, p string, etlfs fileservice.ETLFileService) {
+	if parsed, err := fileservice.ParsePath(p); err == nil && (parsed.Service == "" || len(parsed.ServiceArguments) > 0) {
+		etlfs.Close(ctx)
+	}
+}
+
 func stageListWithWildcard(service string, pattern string, proc *process.Process) (entries []fileservice.DirEntry, err error) {
 	const wildcards = "*?["
 	const sep = "/"
@@ -343,6 +351,7 @@ func stageListWithWildcard(service string, pattern string, proc *process.Process
 			if err != nil {
 				return nil, err
 			}
+			defer closeOwnedETLFS(proc.Ctx, p, etlfs)
 			for entry, err := range etlfs.List(proc.Ctx, readpath) {
 				if err != nil {
 					return nil, err
@@ -379,6 +388,7 @@ func stageListWithoutWildcard(service string, pattern string, proc *process.Proc
 	if err != nil {
 		return nil, err
 	}
+	defer closeOwnedETLFS(proc.Ctx, p, etlfs)
 	for entry, err := range etlfs.List(proc.Ctx, readpath) {
 		if err != nil {
 			return nil, err
@@ -408,7 +418,7 @@ func StageListEntriesWithPattern(service string, pattern string, proc *process.P
 }
 
 // StageStatFile returns the entry of the file at pattern, which has no wildcard, named by its
-// full path. A directory or a missing file is ErrFileNotFound.
+// full path.
 func StageStatFile(service string, pattern string, proc *process.Process) (*fileservice.DirEntry, error) {
 	p := fileservice.JoinPath(service, pattern)
 	provider, err := fileservice.ParseETLService(p)
@@ -422,6 +432,7 @@ func StageStatFile(service string, pattern string, proc *process.Process) (*file
 	if err != nil {
 		return nil, err
 	}
+	defer closeOwnedETLFS(proc.Ctx, p, etlfs)
 	entry, err := etlfs.StatFile(proc.Ctx, readpath)
 	if err != nil {
 		return nil, err

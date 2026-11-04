@@ -136,14 +136,21 @@ func descFilePrepare(proc *process.Process, tableFunction *TableFunction) (tvfSt
 func (s *descFileState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	s.startPreamble(tf, proc, nthRow)
 
+	if len(tf.ctr.argVecs) != 1 {
+		return moerr.NewInvalidInput(proc.Ctx, "desc_file: requires one argument, the file path")
+	}
 	v := tf.ctr.argVecs[0]
-	if v.GetType().Oid != types.T_varchar {
+	if !v.GetType().Oid.IsMySQLString() {
 		return moerr.NewInvalidInput(proc.Ctx, fmt.Sprintf("desc_file: filepath must be string, but got %s", v.GetType().String()))
 	}
-	if v.IsConstNull() || v.GetNulls().Contains(0) {
+	row := nthRow
+	if v.IsConst() {
+		row = 0
+	}
+	if v.IsConstNull() || v.GetNulls().Contains(uint64(row)) {
 		return nil
 	}
-	filepath := v.UnsafeGetStringAt(0)
+	filepath := v.UnsafeGetStringAt(row)
 	if len(filepath) == 0 {
 		return nil
 	}
@@ -174,21 +181,28 @@ func (s *descFileState) start(tf *TableFunction, proc *process.Process, nthRow i
 	return nil
 }
 
-// descFileEntries returns the entry of the file filepath names, or the entries of the directory
-// or the files matching the pattern it names.
+// descFileEntries returns the entries of the directory or of the files matching the pattern
+// filepath names, or the entry of the file it names; a directory has size 0.
 func descFileEntries(proc *process.Process, filepath string) ([]fileservice.DirEntry, error) {
 	service, pattern, err := stageServicePattern(proc, filepath)
 	if err != nil {
 		return nil, err
 	}
-	if !strings.ContainsAny(pattern, "*?[") {
-		entry, err := stageutil.StageStatFile(service, pattern, proc)
-		if err == nil {
-			return []fileservice.DirEntry{*entry}, nil
-		}
-		if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, err
+	entries, listErr := stageutil.StageListEntriesWithPattern(service, pattern, proc)
+	for i := range entries {
+		if entries[i].IsDir {
+			entries[i].Size = 0
 		}
 	}
-	return stageutil.StageListEntriesWithPattern(service, pattern, proc)
+	if listErr == nil && len(entries) > 0 || strings.ContainsAny(pattern, "*?[") || strings.HasSuffix(filepath, "/") {
+		return entries, listErr
+	}
+	entry, err := stageutil.StageStatFile(service, pattern, proc)
+	if err == nil {
+		return []fileservice.DirEntry{*entry}, nil
+	}
+	if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return nil, err
+	}
+	return nil, listErr
 }
