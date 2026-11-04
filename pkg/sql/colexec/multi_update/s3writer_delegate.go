@@ -605,23 +605,17 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 				err = writeErr
 				return
 			}
-			if owned {
-				continue
+			if !owned {
+				// WriteOwned already copied the batch on this path.
+				bats[i].Clean(proc.GetMPool())
+				bats[i] = nil
 			}
-			// WriteOwned returned false: data was already copied inside
-			// WriteOwned via Write(), so skip the Write() call below.
-			bats[i].Clean(proc.GetMPool())
-			bats[i] = nil
 			continue
 		}
 		if err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 			return s3Writer.Write(writeCtx, bats[i])
 		}); err != nil {
 			return
-		}
-
-		if cleanBatchAfterUse {
-			bats[i].Clean(proc.GetMPool())
 		}
 		bats[i] = nil
 	}
