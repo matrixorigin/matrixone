@@ -211,7 +211,7 @@ func TestApplyMembership(t *testing.T) {
 		wantFilter bool
 	}{
 		{"no membership filter keeps the limit", searchplugin.Request{}, 10, false},
-		{"exact keys filter inside the search", searchplugin.Request{HasMembershipFilter: true, MembershipFilter: data}, 10, true},
+		{"exact keys filter inside the search", searchplugin.Request{HasMembershipFilter: true, MembershipFilter: testutil.RuntimeKeyPayload(t, data)}, 10, true},
 		{"a membership filter without keys streams", searchplugin.Request{HasMembershipFilter: true}, 0, false},
 		{"a passed membership filter streams", searchplugin.Request{MembershipFilterPassed: true}, 0, false},
 	} {
@@ -223,8 +223,7 @@ func TestApplyMembership(t *testing.T) {
 		})
 	}
 
-	u := &reader{proc: proc, req: searchplugin.Request{HasMembershipFilter: true, MembershipFilter: []byte{1}}}
-	require.Error(t, u.applyMembership(), "a malformed key payload is rejected")
+	testutil.AssertInvalidRuntimeKeys(t, []byte{1})
 }
 
 func TestStartRejectsBeforeSearching(t *testing.T) {
