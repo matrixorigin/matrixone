@@ -63,6 +63,183 @@ func (fs *boundedFailureFS) Delete(ctx context.Context, paths ...string) error {
 	return fs.FileService.Delete(ctx, paths...)
 }
 
+type cancelAfterFirstDeleteFS struct {
+	fileservice.FileService
+	cancel context.CancelFunc
+	calls  []int
+}
+
+func (fs *cancelAfterFirstDeleteFS) Delete(_ context.Context, paths ...string) error {
+	fs.calls = append(fs.calls, len(paths))
+	if fs.cancel != nil {
+		fs.cancel()
+		fs.cancel = nil
+	}
+	return nil
+}
+
+func TestBoundedRunCleanupStopsBetweenDeleteBatches(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fs := &cancelAfterFirstDeleteFS{cancel: cancel}
+	sink := NewSinker(-1, nil, nil, nil, mpool.MustNewZero(), fs,
+		WithMemorySizeThreshold(1024), WithBoundedRuns())
+	t.Cleanup(func() { require.NoError(t, sink.Close()) })
+	for i := 0; i <= unpublishedObjectDeleteBatchSize; i++ {
+		sink.staged.unpublished = append(sink.staged.unpublished, fmt.Sprintf("object-%d", i))
+	}
+	want := sink.PendingUnpublishedRuns()
+	names, err := sink.RetryUnpublishedRuns(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, []int{unpublishedObjectDeleteBatchSize}, fs.calls)
+	require.Equal(t, want, names)
+	require.Equal(t, want, sink.PendingUnpublishedRuns(), "unconfirmed names stay retryable")
+
+	names, err = sink.RetryUnpublishedRuns(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, want, names)
+	require.Equal(t, []int{unpublishedObjectDeleteBatchSize, unpublishedObjectDeleteBatchSize, 1}, fs.calls)
+	require.Empty(t, sink.PendingUnpublishedRuns())
+}
+
+type stopAtMissingFS struct {
+	fileservice.FileService
+	calls         [][]string
+	cancel        context.CancelCauseFunc
+	cancelCause   error
+	cancelOnCall  int
+	failPath      string
+	injectedError error
+	ignoreCancel  bool
+	canceledCalls int
+}
+
+func (fs *stopAtMissingFS) Delete(ctx context.Context, paths ...string) error {
+	fs.calls = append(fs.calls, append([]string(nil), paths...))
+	if ctx.Err() != nil {
+		fs.canceledCalls++
+	}
+	if fs.ignoreCancel {
+		ctx = context.WithoutCancel(ctx)
+	}
+	for _, path := range paths {
+		if path == fs.failPath {
+			return fs.injectedError
+		}
+		if _, err := fs.FileService.StatFile(ctx, path); err != nil {
+			if fs.cancel != nil && len(fs.calls) == fs.cancelOnCall {
+				fs.cancel(fs.cancelCause)
+				fs.cancel = nil
+			}
+			return err
+		}
+		if err := fs.FileService.Delete(ctx, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestDeleteUnpublishedObjectsConfirmsMissingBatch(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("canceled=%t", canceled), func(t *testing.T) {
+			base := testutil.NewSharedFS()
+			t.Cleanup(func() { base.Close(context.Background()) })
+			require.NoError(t, base.Write(context.Background(), fileservice.IOVector{FilePath: "present", Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}}}))
+			fs := &stopAtMissingFS{FileService: base, ignoreCancel: true}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if canceled {
+				cancel()
+			}
+			count, err := DeleteUnpublishedObjects(ctx, fs, "missing", "present")
+			require.NoError(t, err)
+			require.Equal(t, 2, count)
+			require.Equal(t, [][]string{{"missing", "present"}, {"missing"}, {"present"}}, fs.calls)
+			if canceled {
+				require.Equal(t, len(fs.calls), fs.canceledCalls)
+			}
+			_, err = base.StatFile(context.Background(), "present")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+		})
+	}
+}
+
+func TestBoundedRunCleanupConfirmsEveryNameAfterMissing(t *testing.T) {
+	for _, mode := range []string{"success", "failure", "cancel_batch", "cancel_fallback"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			base := testutil.NewSharedFS()
+			t.Cleanup(func() { base.Close(ctx) })
+			require.NoError(t, base.Write(ctx, fileservice.IOVector{FilePath: "z-present", Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}}}))
+			fs := &stopAtMissingFS{FileService: base}
+			sink := NewSinker(-1, nil, nil, nil, mpool.MustNewZero(), fs,
+				WithMemorySizeThreshold(1024), WithBoundedRuns())
+			t.Cleanup(func() { require.NoError(t, sink.Close()) })
+			sink.staged.unpublished = []string{"a-missing", "z-present"}
+			want := sink.PendingUnpublishedRuns()
+			var operationCtx context.Context = ctx
+			if mode == "failure" {
+				fs.failPath = "z-present"
+				fs.injectedError = errors.New("delete unavailable")
+			} else if mode == "cancel_batch" || mode == "cancel_fallback" {
+				var cancel context.CancelCauseFunc
+				operationCtx, cancel = context.WithCancelCause(ctx)
+				defer cancel(nil)
+				fs.cancel = cancel
+				fs.cancelCause = moerr.NewFileNotFoundNoCtx("cancel cause, not a deletion result")
+				fs.cancelOnCall = 1
+				if mode == "cancel_fallback" {
+					fs.cancelOnCall = 2
+				}
+			}
+			names, err := sink.RetryUnpublishedRuns(operationCtx)
+			require.Equal(t, want, names)
+			if mode == "success" {
+				require.NoError(t, err)
+				require.Len(t, fs.calls, 3, "the missing batch must be checked one name at a time")
+			} else {
+				if mode == "failure" {
+					require.ErrorIs(t, err, fs.injectedError)
+				} else {
+					require.Same(t, fs.cancelCause, err)
+					require.Len(t, fs.calls, fs.cancelOnCall, "cancellation must stop the fallback")
+				}
+				require.Equal(t, want, sink.PendingUnpublishedRuns())
+				_, statErr := base.StatFile(ctx, "z-present")
+				require.NoError(t, statErr)
+				fs.failPath = ""
+				names, err = sink.RetryUnpublishedRuns(ctx)
+				require.NoError(t, err)
+				require.Equal(t, want, names)
+			}
+			require.Empty(t, sink.PendingUnpublishedRuns())
+			_, err = base.StatFile(ctx, "z-present")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+		})
+	}
+}
+
+func TestBoundedRunCleanupDistinguishesMissingCancelCause(t *testing.T) {
+	base := testutil.NewSharedFS()
+	t.Cleanup(func() { base.Close(context.Background()) })
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	cause := moerr.NewFileNotFoundNoCtx("cancel cause")
+	fs := &stopAtMissingFS{FileService: base, cancel: cancel, cancelCause: cause, cancelOnCall: 1}
+	sink := NewSinker(-1, nil, nil, nil, mpool.MustNewZero(), fs,
+		WithMemorySizeThreshold(1024), WithBoundedRuns())
+	t.Cleanup(func() { require.NoError(t, sink.Close()) })
+	sink.staged.unpublished = []string{"missing"}
+	names, err := sink.RetryUnpublishedRuns(ctx)
+	require.Same(t, cause, err)
+	require.Equal(t, []string{"missing"}, names)
+	require.Equal(t, names, sink.PendingUnpublishedRuns())
+	_, err = sink.RetryUnpublishedRuns(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, sink.PendingUnpublishedRuns())
+}
+
 func TestBoundedWorkspaceFailureRetainsNamesWithoutDeleting(t *testing.T) {
 	ctx := context.Background()
 	base := testutil.NewSharedFS()
@@ -89,9 +266,12 @@ func TestBoundedWorkspaceFailureRetainsNamesWithoutDeleting(t *testing.T) {
 	_, err = sink.DeletePersisted(ctx)
 	require.ErrorContains(t, err, "workspace owns unpublished spill cleanup")
 	require.Zero(t, fs.deletes.Load())
-	sink.Reset()
-	require.ElementsMatch(t, names, sink.PersistedNames())
 	require.ErrorContains(t, sink.Write(ctx, input), "aborted")
+	require.ElementsMatch(t, names, sink.AbandonAndRetainableNames())
+	// The workspace has taken the snapshot, so Reset may discard this generation.
+	sink.Reset()
+	require.Empty(t, sink.PersistedNames())
+	require.NoError(t, sink.Write(ctx, input))
 }
 
 func boundedInput(t *testing.T, mp *mpool.MPool, values ...string) *batch.Batch {
@@ -355,8 +535,9 @@ func TestBoundedPipelineDrainsSuccessfulSiblingAfterFailure(t *testing.T) {
 					_, err := base.StatFile(ctx, path)
 					require.NoError(t, err)
 				}
+				require.ElementsMatch(t, paths, sink.AbandonAndRetainableNames())
 				sink.Reset()
-				require.ElementsMatch(t, paths, sink.PersistedNames())
+				require.Empty(t, sink.PersistedNames())
 			} else {
 				require.ElementsMatch(t, paths, deleted)
 				for _, path := range paths {
@@ -717,6 +898,51 @@ func TestBoundedRunSortFailureReleasesAndResets(t *testing.T) {
 	filler = nil
 	sink.Reset()
 	require.NoError(t, sink.Write(context.Background(), input))
+	require.NoError(t, sink.Sync(context.Background()))
+	require.Equal(t, rows, file.rows)
+}
+
+func TestUnboundedRunSortFailureKeepsStagedData(t *testing.T) {
+	const capacity = 1 << 20
+	mp, err := mpool.NewMPool("unbounded-sort-failure", capacity, mpool.NoFixed)
+	require.NoError(t, err)
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	attrs := []string{"key"}
+	typs := []types.Type{types.T_text.ToType()}
+	input := batch.NewWithSchema(true, attrs, typs)
+	t.Cleanup(func() { input.Clean(mp) })
+	const rows = 128
+	sources := make([]types.StringSource, rows)
+	for i := range sources {
+		require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(fmt.Sprintf("%03d", rows-1-i)), false, mp))
+		if i%2 == 0 {
+			sources[i] = types.StringSourceCOMStmt
+		} else {
+			sources[i] = types.StringSourceSQLPrepare
+		}
+	}
+	input.SetRowCount(rows)
+	require.NoError(t, input.Vecs[0].SetStringSourcesWithMP(sources, mp))
+	file := &countFileSinker{}
+	sink := NewSinker(0, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, mp, nil,
+		WithMemorySizeThreshold(capacity), WithTailSizeCap(0), WithOffHeap())
+	t.Cleanup(func() { require.NoError(t, sink.Close()) })
+	require.NoError(t, sink.Write(context.Background(), input))
+	require.Len(t, sink.GetInMemoryData(), 1)
+	remaining := capacity - int(mp.CurrNB()) - 64
+	require.Positive(t, remaining)
+	filler, err := mp.Alloc(remaining, true)
+	require.NoError(t, err)
+	defer func() {
+		if filler != nil {
+			mp.Free(filler)
+		}
+	}()
+	require.Error(t, sink.Sync(context.Background()))
+	require.Len(t, sink.GetInMemoryData(), 1)
+	require.Equal(t, "127", string(sink.GetInMemoryData()[0].Vecs[0].GetBytesAt(0)))
+	mp.Free(filler)
+	filler = nil
 	require.NoError(t, sink.Sync(context.Background()))
 	require.Equal(t, rows, file.rows)
 }

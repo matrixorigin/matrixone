@@ -503,12 +503,10 @@ func (w *CNS3Writer) RebindWorkspaceSinkerCapacity(proc *process.Process) {
 	if w == nil || w.sinker == nil {
 		return
 	}
+	w.ClearWorkspaceSinkerCapacity()
 	if opt := WorkspaceSinkerCapacityOption(proc); opt != nil {
 		opt(w.sinker)
-		return
 	}
-	w.sinker.RebindUncommittedCapacityHook(nil)
-	w.sinker.ClearWorkspaceOwnedCleanup()
 }
 
 // ClearWorkspaceSinkerCapacity drops this persistent writer's

@@ -2021,15 +2021,13 @@ func TestIssue25590DumpCleanupKeepsOwnershipWhenDeleteFails(t *testing.T) {
 	require.Empty(t, txn.pendingObjectCleanup,
 		"the pre-gate transfer owns nothing: the dump handed the orphan to the engine queue")
 	require.Eventually(t, func() bool {
-		return failFS.deleteCallCount() == 1
-	}, 10*time.Second, 10*time.Millisecond,
-		"the engine's own drain - the failed publication itself deleted nothing - performs the collection deletion")
-	issue25590RequireGone(t, failFS.FileService, failFS.failedAtName(),
-		"the orphan after the engine's drain collected it")
-	require.Eventually(t, func() bool {
 		return len(issue25590QueuedNames(txn.engine)) == 0
 	}, 10*time.Second, 10*time.Millisecond,
-		"the retired name left the queue")
+		"the engine's drain retires the name only after the deletion completes")
+	require.Equal(t, 1, failFS.deleteCallCount(),
+		"the failed publication itself did not delete; the engine drain did")
+	issue25590RequireGone(t, failFS.FileService, failFS.failedAtName(),
+		"the orphan after the engine's drain collected it")
 
 	// With the file service healthy the tombstone publication succeeds.
 	failFS.stopPostPersistFailure()
@@ -8938,26 +8936,43 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 	mixedObjNames := make([]string, 0, len(mixedStatsCol))
 	var deletedObjName string
 	var deletedRows int
+	var totalObjectRows int
 	for i := range mixedStatsCol {
 		st := objectio.ObjectStats(mixedStatsCol[i].GetByteSlice(mixedStatsArea))
 		mixedObjNames = append(mixedObjNames, st.ObjectName().String())
+		totalObjectRows += int(st.Rows())
 		if i == 0 {
 			deletedObjName = st.ObjectName().String()
 			deletedRows = int(st.Rows())
 		}
 	}
+	require.GreaterOrEqual(t, len(mixedObjNames), 2, "the mixed round must have a surviving object")
+	require.Equal(t, mixedRows, totalObjectRows)
 	mixedInfoCol, mixedInfoArea := vector.MustVarlenaRawData(txn.writes[mixedMeta].bat.Vecs[0])
-	firstMixedBlock := objectio.DecodeBlockInfo(
-		mixedInfoCol[0].GetByteSlice(mixedInfoArea)).BlockID
+	firstMixedInfo := objectio.DecodeBlockInfo(mixedInfoCol[0].GetByteSlice(mixedInfoArea))
+	firstMixedStats := objectio.ObjectStats(mixedStatsCol[0].GetByteSlice(mixedStatsArea))
+	firstLocation := firstMixedInfo.MetaLocation()
+	firstMeta, err := objectio.FastLoadObjectMeta(ctx, &firstLocation, false, failFS)
+	require.NoError(t, err)
+	firstDataMeta := firstMeta.MustDataMeta()
 	txn.EndStatement()
 
 	// A full deletion of the FIRST object's every row.
 	delRowids := make([]types.Rowid, deletedRows)
 	delPKs := make([]int64, deletedRows)
-	for r := range delRowids {
-		delRowids[r] = types.NewRowid(&firstMixedBlock, uint32(r))
-		delPKs[r] = nextPK - int64(mixedRows) + int64(r)
+	r := 0
+	for block := uint32(0); block < firstMixedStats.BlkCnt(); block++ {
+		info := objectio.DecodeBlockInfo(mixedInfoCol[block].GetByteSlice(mixedInfoArea))
+		require.True(t, info.BlockID.Object().EQ(firstMixedInfo.BlockID.Object()))
+		blockRows := firstDataMeta.GetBlockMeta(block).GetRows()
+		require.LessOrEqual(t, r+int(blockRows), deletedRows)
+		for offset := uint32(0); offset < blockRows; offset++ {
+			delRowids[r] = types.NewRowid(&info.BlockID, offset)
+			delPKs[r] = nextPK - int64(mixedRows) + int64(r) + 1
+			r++
+		}
 	}
+	require.Equal(t, deletedRows, r)
 	requiring := batch.NewWithSize(2)
 	requiring.SetAttributes([]string{objectio.PhysicalAddr_Attr, "a"})
 	delRidCol := vector.NewVec(types.T_Rowid.ToType())

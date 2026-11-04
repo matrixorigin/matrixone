@@ -540,6 +540,17 @@ func DeleteUnpublishedObjects(
 	fs fileservice.FileService,
 	files ...string,
 ) (int, error) {
+	return deleteUnpublishedObjects(ctx, fs, false, files...)
+}
+
+// A bounded writer may stop between requests; other callers retain the
+// existing contract of passing even an expired context to the file service.
+func deleteUnpublishedObjects(
+	ctx context.Context,
+	fs fileservice.FileService,
+	stopOnCancel bool,
+	files ...string,
+) (int, error) {
 	seen := make(map[string]struct{}, len(files))
 	unique := make([]string, 0, len(files))
 	for _, file := range files {
@@ -553,14 +564,44 @@ func DeleteUnpublishedObjects(
 		unique = append(unique, file)
 	}
 	for start := 0; start < len(unique); start += unpublishedObjectDeleteBatchSize {
-		if err := context.Cause(ctx); err != nil {
-			return len(unique), err
+		if stopOnCancel {
+			if err := context.Cause(ctx); err != nil {
+				return len(unique), err
+			}
 		}
 		end := min(start+unpublishedObjectDeleteBatchSize, len(unique))
 		deleteCtx, cancel := context.WithTimeoutCause(
 			ctx, unpublishedObjectDeleteTimeout, moerr.CauseCleanUpUselessFiles,
 		)
 		err := fs.Delete(deleteCtx, unique[start:end]...)
+		if stopOnCancel && moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			if cause := context.Cause(deleteCtx); cause != nil {
+				cancel()
+				return len(unique), cause
+			}
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) && end-start > 1 {
+			// The file service may stop at the first missing name, leaving the
+			// rest untouched. Confirm every member before releasing ownership.
+			for _, file := range unique[start:end] {
+				if stopOnCancel {
+					if cause := context.Cause(deleteCtx); cause != nil {
+						cancel()
+						return len(unique), cause
+					}
+				}
+				err = fs.Delete(deleteCtx, file)
+				if stopOnCancel && moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					if cause := context.Cause(deleteCtx); cause != nil {
+						cancel()
+						return len(unique), cause
+					}
+				}
+				if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					break
+				}
+			}
+		}
 		cancel()
 		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return len(unique), errors.Join(
@@ -723,7 +764,7 @@ func (sinker *Sinker) RetryUnpublishedRuns(ctx context.Context) ([]string, error
 	}
 	sinker.cleanupInMemoryStaged()
 	files := sinker.PendingUnpublishedRuns()
-	if _, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...); err != nil {
+	if _, err := deleteUnpublishedObjects(ctx, sinker.fs, true, files...); err != nil {
 		return files, err
 	}
 	sinker.staged.persisted = sinker.staged.persisted[:0]
@@ -973,7 +1014,6 @@ func (sinker *Sinker) drainPipeline() error {
 }
 
 func (sinker *Sinker) trySpill(ctx context.Context) error {
-	defer sinker.cleanupInMemoryStaged()
 	spillStart := time.Now()
 	defer func() {
 		atomic.AddInt64(&sinker.timing.spillCount, 1)
@@ -985,6 +1025,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	if err := sinker.trySortInMemoryStaged(ctx); err != nil {
 		return err
 	}
+	defer sinker.cleanupInMemoryStaged()
 
 	// merge sort
 	if sinker.schema.sortKeyIdx != -1 {
@@ -1819,7 +1860,9 @@ func (sinker *Sinker) Reset() {
 	}
 
 	sinker.cleanupInMemoryStaged()
-	pending := sinker.runSizeLimit() > 0 && sinker.hasPendingUnpublishedRuns()
+	// Workspace callers transfer names before Reset; unbound callers must retain
+	// an unsuccessful local cleanup generation until it can be retried.
+	pending := sinker.runSizeLimit() > 0 && !sinker.config.workspaceOwnedCleanup && sinker.hasPendingUnpublishedRuns()
 	if pending {
 		sinker.staged.aborted = true
 	} else {
