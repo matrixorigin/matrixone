@@ -56,7 +56,7 @@ func bindTestFunction(t testing.TB, proc *process.Process, name string, args ...
 }
 
 // bindTestCast retains the requested registered identity, including private casts.
-func bindTestCast(t *testing.T, proc *process.Process, overload int32, source *plan.Expr, target types.Type) *plan.Expr {
+func bindTestCast(t testing.TB, proc *process.Process, overload int32, source *plan.Expr, target types.Type) *plan.Expr {
 	t.Helper()
 	sourceType, err := types.TypeFromPlan(source.Typ)
 	require.NoError(t, err)
