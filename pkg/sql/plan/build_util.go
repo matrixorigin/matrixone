@@ -1015,9 +1015,38 @@ func buildDefaultExprWithColumnsObserved(
 	if isAttributedDecimalPlanType(typ) {
 		binder.baseBinder.suppressDefaultValueBindType = true
 	}
+	// A bare signed plain-decimal literal into CHAR/VARCHAR must bind its
+	// magnitude in the numeric domain before the sign is applied. With the
+	// narrow destination type driving the literal bind, the magnitude first
+	// becomes destination text and unary_minus then parses that text as an
+	// integer, so pristine main rejects a fitting v varchar(5) DEFAULT -1.25
+	// with "invalid argument cast to int, bad value 1.25". The assignment
+	// cast and the new-DDL width admission below judge the converted value.
+	// Only the bare literal authored as new DDL is rebound: a parenthesized
+	// DEFAULT (-1.25) is an expression default whose existing owner and raw
+	// error classification stay untouched (E1). Persisted readings reparse
+	// the stored origin text, and the origin formatter parenthesizes the
+	// signed literal, so persisted purposes must accept that parenthesized
+	// rendering of the bare authored literal; only this corrected tree can
+	// have stored it, because every older tree rejected the expression form.
+	if bareSignedDecimalCharFamilyDefault(typ, semanticExpr) &&
+		(purpose != defaultExprForDDL || !isExpressionDefault) {
+		binder.baseBinder.suppressDefaultValueBindType = true
+	}
 	planExpr, err := binder.bindPersistedExpr(semanticExpr, 0, false)
 	if err != nil {
+		if isNewDDLLiteralDefaultConversionError(purpose, semanticExpr, isExpressionDefault, err) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
 		return nil, err
+	}
+	// New DDL width admission (#31860): a CHAR/VARCHAR destination must not
+	// silently truncate its stored default away from the numeric literal's
+	// converted value. Persisted verification keeps reading historical
+	// defaults exactly as the catalog stored them.
+	if purpose == defaultExprForDDL &&
+		newDDLNumericLiteralDefaultExceedsCharWidth(bindCtx, proc, typ, semanticExpr, isExpressionDefault) {
+		return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
 	}
 	if zeroValue, ok := zeroTemporalDefaultLiteral(semanticExpr, typ); ok && purpose != defaultExprForPersistedLegacyZero {
 		planExpr = makePlan2StringConstExprWithType(zeroValue)
@@ -1088,6 +1117,9 @@ func buildDefaultExprWithColumnsObserved(
 	}
 	if err != nil {
 		if constantMediumIntDefault && moerr.IsMoErrCode(err, moerr.ErrOutOfRange) {
+			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
+		}
+		if isNewDDLLiteralDefaultConversionError(purpose, semanticExpr, isExpressionDefault, err) {
 			return nil, moerr.NewErrInvalidDefault(bindCtx, colNameOrigin)
 		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
@@ -1306,6 +1338,158 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 		OriginString: fmtCtx.String(),
 		IsStored:     genAttr.Stored,
 	}, nil
+}
+
+// isNewDDLLiteralDefaultConversionError reports whether a binding failure of a
+// bare literal DEFAULT authored as new DDL belongs to the literal's
+// conversion domain and must surface as ER_INVALID_DEFAULT (#31894). MySQL's
+// prepare_default_value clears the inner conversion error and reports the
+// invalid default; only bad-value (ErrInvalidArg) and out-of-range
+// (ErrOutOfRange) codes map. OOM/context/protocol/bind/internal failures keep
+// their owners, expression defaults keep the raw error, and hex/bit literals
+// keep their dedicated admission guards by ValType exclusion.
+func isNewDDLLiteralDefaultConversionError(
+	purpose defaultExprBindingPurpose,
+	semanticExpr tree.Expr,
+	expressionDefault bool,
+	err error,
+) bool {
+	if purpose != defaultExprForDDL || expressionDefault {
+		return false
+	}
+	num, ok := bareLiteralDefaultSource(semanticExpr)
+	if !ok {
+		return false
+	}
+	switch num.ValType {
+	case tree.P_int64, tree.P_uint64, tree.P_float64, tree.P_decimal, tree.P_char:
+	default:
+		return false
+	}
+	return moerr.IsMoErrCode(err, moerr.ErrInvalidArg) ||
+		moerr.IsMoErrCode(err, moerr.ErrOutOfRange)
+}
+
+// bareLiteralDefaultSource returns the literal behind a bare DEFAULT source:
+// a plain NumVal, or a NumVal in a single leading unary minus, which the
+// parser emits for signed decimal/float literals. The sign belongs to the
+// literal's constant value; parenthesized expression defaults are never
+// unwrapped.
+func bareLiteralDefaultSource(semanticExpr tree.Expr) (*tree.NumVal, bool) {
+	switch expr := semanticExpr.(type) {
+	case *tree.NumVal:
+		return expr, true
+	case *tree.UnaryExpr:
+		if expr.Op == tree.UNARY_MINUS {
+			if num, ok := expr.Expr.(*tree.NumVal); ok {
+				return num, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// bareSignedDecimalCharFamilyDefault reports whether a DEFAULT source is a
+// bare signed plain-decimal literal (a single leading unary minus over a
+// NumVal, the form the parser emits for signed decimal literals) written into
+// a CHAR/VARCHAR destination. Only this shape is broken by the destination
+// type driving the literal bind: signed integers survive because their text
+// parses back, scientific floats never take the text path, string literals
+// keep their own domain, and non-CHAR/VARCHAR destinations keep their
+// existing owners.
+func bareSignedDecimalCharFamilyDefault(typ plan.Type, semanticExpr tree.Expr) bool {
+	if typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
+		return false
+	}
+	unary, ok := semanticExpr.(*tree.UnaryExpr)
+	if !ok || unary.Op != tree.UNARY_MINUS {
+		return false
+	}
+	num, ok := unary.Expr.(*tree.NumVal)
+	if !ok {
+		return false
+	}
+	if num.ValType == tree.P_decimal {
+		return true
+	}
+	// The MySQL dialect parser labels plain decimal literal text P_float64;
+	// bindNumVal routes it back to the exact decimal domain through
+	// isPlainDecimalLiteral, which is the path the narrow CHAR/VARCHAR
+	// destination type breaks. Scientific notation keeps its working float
+	// path and stays out.
+	return num.ValType == tree.P_float64 && isPlainDecimalLiteral(num.String())
+}
+
+// newDDLNumericLiteralDefaultExceedsCharWidth reports whether the converted
+// value of a bare numeric DEFAULT exceeds the destination CHAR/VARCHAR width
+// (#31860). The untruncated converted text is recovered from real SQL value
+// semantics: the same declaration is bound against an unbounded width of the
+// destination family and folded, so signs, exponents and decimal scale count
+// as stored characters rather than source SQL text. The persisted
+// verification and legacy-zero purposes never call this admission: historical
+// catalogs keep the defaults the older trees admitted.
+func newDDLNumericLiteralDefaultExceedsCharWidth(
+	bindCtx context.Context,
+	proc *process.Process,
+	typ plan.Type,
+	semanticExpr tree.Expr,
+	expressionDefault bool,
+) bool {
+	if typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
+		return false
+	}
+	if expressionDefault || proc == nil {
+		return false
+	}
+	num, ok := bareLiteralDefaultSource(semanticExpr)
+	if !ok {
+		return false
+	}
+	switch num.ValType {
+	case tree.P_int64, tree.P_uint64, tree.P_float64, tree.P_decimal:
+	default:
+		return false
+	}
+	probe := plan.Type{Id: int32(types.T_varchar), Width: int32(types.MaxVarcharLen)}
+	if typ.Id == int32(types.T_char) {
+		probe.Id = int32(types.T_char)
+		probe.Width = int32(types.MaxCharLen)
+	}
+	probeBinder := NewDefaultBinder(bindCtx, nil, nil, probe, nil)
+	if bareSignedDecimalCharFamilyDefault(typ, semanticExpr) {
+		probeBinder.baseBinder.suppressDefaultValueBindType = true
+	}
+	probeExpr, err := probeBinder.bindPersistedExpr(semanticExpr, 0, false)
+	if err != nil {
+		// The authoring flow owns the verdict when the probe cannot decide;
+		// the admission never introduces a new failure mode.
+		return false
+	}
+	// Binding is not destination conversion for every numeric literal form:
+	// uint64 and scientific float64 bind as raw numeric literals whose folded
+	// GetSval is empty, and a signed decimal binds numerically once the
+	// destination bind type is suppressed. Route the bound value through the
+	// real cast owner so the measured text is the untruncated converted value
+	// the destination would store, never the SQL source text.
+	probeExpr, err = appendCastBeforeExpr(bindCtx, probeExpr, probe)
+	if err != nil {
+		return false
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, probeExpr, proc, false, true)
+	if err != nil {
+		return false
+	}
+	lit := folded.GetLit()
+	if lit == nil || lit.Isnull {
+		return false
+	}
+	if folded.Typ.Id != int32(types.T_char) && folded.Typ.Id != int32(types.T_varchar) {
+		// The probe measures real destination text only; a non-string fold
+		// means the conversion did not happen and the authoring flow keeps
+		// the verdict.
+		return false
+	}
+	return len([]rune(lit.GetSval())) > int(typ.Width)
 }
 
 func mapDDLAssignmentCastError(ctx context.Context, typ plan.Type, colName string, err error) error {
