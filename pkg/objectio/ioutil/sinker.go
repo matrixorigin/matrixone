@@ -559,6 +559,12 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 		sinker.buf.bufStats.updateBytes(-bat.Size())
 	}
 
+	delivered := false
+	defer func() {
+		if !delivered {
+			sinker.putBackBuffer(bat)
+		}
+	}()
 	// A transferred batch, or a shared buffer supplied by a caller, can hold
 	// constant vectors or borrowed windows. They are not writable destinations.
 	for _, vec := range bat.Vecs {
@@ -569,7 +575,6 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 			}
 			vec.Free(sinker.mp)
 			if err := vec.SetAllocationAccount(selection); err != nil {
-				bat.Clean(sinker.mp)
 				return nil, err
 			}
 		} else if vec.IsConst() {
@@ -578,10 +583,9 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	}
 
 	if err := bat.PreExtend(sinker.mp, objectio.BlockMaxRows); err != nil {
-		// A preceding vector may have allocated before a later vector failed.
-		bat.Clean(sinker.mp)
 		return nil, err
 	}
+	delivered = true
 	return bat, nil
 }
 
@@ -889,7 +893,7 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 	}
 	// The streaming callback reuses this buffer; retain one cleanup owner
 	// even when the file writer panics while processing it.
-	defer func() { sinker.putBackBuffer(buffer) }()
+	defer sinker.putBackBuffer(buffer)
 	streamSinker := func(data *batch.Batch) (*batch.Batch, error) {
 		sinkStart := time.Now()
 		if err := fSinker.Sink(ctx, data); err != nil {
@@ -899,7 +903,7 @@ func (sinker *Sinker) trySpillMergeSortStreaming(
 		data.CleanOnlyData()
 		return data, nil
 	}
-	buffer, err = mergeutil.MergeSortBatches(
+	_, err = mergeutil.MergeSortBatches(
 		sinker.staged.inMemory,
 		sinker.schema.sortKeyIdx,
 		buffer,
