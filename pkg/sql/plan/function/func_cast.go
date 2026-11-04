@@ -192,10 +192,41 @@ func numericToDecimalExplicit[S, D types.FixedSizeTExceptStrType](
 func explicitNumericToDecimalTarget[D types.FixedSizeTExceptStrType](
 	from *vector.Vector, to *vector.FunctionResult[D], length int, proc *process.Process, selectList *FunctionSelectList,
 	parseString func(string) (D, error), fromFloat func(float64) (D, error),
-	clamp func(bool) (D, error),
+	fromDatetime func(types.Datetime) (D, error), clamp func(bool) (D, error),
 ) (bool, error) {
+	// Temporal DECIMAL256 casts are not part of the supported cast overloads.
+	if fromDatetime == nil {
+		switch from.GetType().Oid {
+		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+			return false, nil
+		}
+	}
 	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
 	switch from.GetType().Oid {
+	case types.T_date:
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[types.Date](from), to, length, proc, selectList,
+			func(value types.Date) (D, error) { return parseString(strconv.FormatInt(packedDateInt64(value), 10)) },
+			func(types.Date) bool { return false }, nil, clamp)
+	case types.T_datetime:
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[types.Datetime](from), to, length, proc, selectList,
+			fromDatetime, func(types.Datetime) bool { return false }, nil, clamp)
+	case types.T_timestamp:
+		zone := time.Local
+		if proc != nil && proc.GetSessionInfo().TimeZone != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](from), to, length, proc, selectList,
+			func(value types.Timestamp) (D, error) { return fromDatetime(value.ToDatetime(zone)) },
+			func(types.Timestamp) bool { return false }, nil, clamp)
+	case types.T_time:
+		return true, numericToDecimalExplicit(
+			vector.GenerateFunctionFixedTypeParameter[types.Time](from), to, length, proc, selectList,
+			// Quantize once at the final scale, before checking the target width.
+			func(value types.Time) (D, error) { return parseString(value.NumericString(6)) },
+			func(value types.Time) bool { return value < 0 }, nil, clamp)
 	case types.T_bool:
 		// TRUE is exactly 1 and FALSE exactly 0, so the explicit cast reuses
 		// the integer parse path, including the out-of-range clamp that
@@ -300,6 +331,7 @@ func explicitNumericToDecimal(
 				}
 				return result, err
 			},
+			func(value types.Datetime) (types.Decimal64, error) { return packedDatetimeDecimal64(value, toType) },
 			func(negative bool) (types.Decimal64, error) {
 				return clampDecimal64Value(negative, toType.Width, toType.Scale)
 			})
@@ -317,6 +349,7 @@ func explicitNumericToDecimal(
 				}
 				return result, err
 			},
+			func(value types.Datetime) (types.Decimal128, error) { return packedDatetimeDecimal128(value, toType) },
 			func(negative bool) (types.Decimal128, error) {
 				return clampDecimal128Value(negative, toType.Width, toType.Scale)
 			})
@@ -334,6 +367,7 @@ func explicitNumericToDecimal(
 				}
 				return result, err
 			},
+			nil,
 			func(negative bool) (types.Decimal256, error) {
 				return clampDecimal256Value(negative, toType.Width, toType.Scale)
 			})
@@ -662,7 +696,8 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_date: {
-		types.T_int32, types.T_int64,
+		types.T_bool, types.T_float64,
+		types.T_int32, types.T_int64, types.T_uint64,
 		types.T_decimal64, types.T_decimal128,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp, types.T_year,
@@ -671,7 +706,8 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_datetime: {
-		types.T_int32, types.T_int64,
+		types.T_bool, types.T_float64,
+		types.T_int32, types.T_int64, types.T_uint64,
 		types.T_date, types.T_datetime,
 		types.T_time, types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
@@ -680,7 +716,8 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_timestamp: {
-		types.T_int32, types.T_int64,
+		types.T_bool, types.T_float64,
+		types.T_int32, types.T_int64, types.T_uint64,
 		types.T_date, types.T_datetime, types.T_time,
 		types.T_timestamp, types.T_year,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
@@ -689,6 +726,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_time: {
+		types.T_bool, types.T_float64,
 		types.T_date, types.T_datetime,
 		types.T_time,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -1184,7 +1222,62 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		}
 	}
 	from := parameters[0]
+	// Low-precision float types (bf16/float16/float8/float4) bridge through float32.
+	// Route them ahead of the integer/decimal fast-paths below so a low-precision
+	// source or target is never misdispatched into a specialization that lacks it.
+	if isLowPrecFloat(toType.Oid) {
+		if fromType.Oid == types.T_any {
+			return scalarNullToOthers(proc.Ctx, *toType, result, length, selectList)
+		}
+		// typeswitch:partial only the sources that convert to a number through DOUBLE
+		switch fromType.Oid {
+		case types.T_json, types.T_year, types.T_enum:
+			// converted as they are to DOUBLE, then rounded to the type
+			f64 := types.T_float64.ToType()
+			tmp := vector.NewFunctionResultWrapper(f64, proc.Mp())
+			defer tmp.Free()
+			if err := tmp.PreExtendAndReset(length); err != nil {
+				return err
+			}
+			target := vector.NewConstNull(f64, length, proc.Mp())
+			defer target.Free(proc.Mp())
+			if err := newCast([]*vector.Vector{from, target}, tmp, proc, length, selectList, mode, allowTrailingSpaceTrim); err != nil {
+				return err
+			}
+			return castToLowPrecFloat([]*vector.Vector{tmp.GetResultVector(), parameters[1]}, *toType, result, proc, length, selectList, mode)
+		}
+		return castToLowPrecFloat(parameters, *toType, result, proc, length, selectList, mode)
+	}
+	if isLowPrecFloat(fromType.Oid) {
+		// widen to float32 and cast it as a float32 value, so every float32 rule of this
+		// cast mode (explicit, assignment, decimal) applies
+		tmp := vector.NewVec(types.T_float32.ToType())
+		defer tmp.Free(proc.Mp())
+		if err := materializeLowPrecAsFloat32(proc.Ctx, from, tmp, length, proc.Mp()); err != nil {
+			return err
+		}
+		return newCast([]*vector.Vector{tmp, parameters[1]}, result, proc, length, selectList, mode, allowTrailingSpaceTrim)
+	}
+	// vecf8/vecf4 cells are block-scaled, not typed element arrays; route them before
+	// the generic array paths, which decode fixed-size elements. A NULL literal (T_any)
+	// still reaches scalarNullToOthers below.
+	if toType.Oid.IsBlockScaledArray() && fromType.Oid != types.T_any {
+		return castToBlockScaled(proc, from, *toType, result, length, selectList)
+	}
+	if fromType.Oid.IsBlockScaledArray() {
+		return blockScaledToOthers(proc, from, *toType, result, length, selectList)
+	}
+	if mode == castModeExplicit && (toType.Oid == types.T_int64 || toType.Oid == types.T_uint64) {
+		switch fromType.Oid {
+		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+			if toType.Oid == types.T_uint64 {
+				return explicitTemporalIntegerCast[uint64](parameters, result, proc, length, selectList, false)
+			}
+			return explicitTemporalIntegerCast[int64](parameters, result, proc, length, selectList, false)
+		}
+	}
 	if mode.isAssignment() && toType.Oid.IsInteger() {
+		// typeswitch:partial low-precision and vecf8/vecf4 sources return above
 		switch fromType.Oid {
 		case types.T_float32:
 			return floatToIntegerAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[float32](from), toType.Oid, result, length, selectList)
@@ -1202,12 +1295,13 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), toType.Oid, result, length, selectList, decimal256RoundedIntegerString)
 		}
 	}
-	if mode == castModeExplicit && toType.IsDecimal() && (fromType.IsNumeric() || fromType.Oid == types.T_bool) {
+	if mode == castModeExplicit && toType.IsDecimal() {
 		if handled, err := explicitNumericToDecimal(from, *toType, result, length, proc, selectList); handled {
 			return err
 		}
 	}
 	if mode == castModeExplicit && toType.Oid == types.T_uint64 {
+		// typeswitch:partial low-precision and vecf8/vecf4 sources return above
 		switch fromType.Oid {
 		case types.T_int8:
 			return signedToUint64Explicit(vector.GenerateFunctionFixedTypeParameter[int8](from), result, length, selectList)
@@ -1233,6 +1327,7 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		}
 	}
 	if mode == castModeExplicit && toType.Oid == types.T_int64 {
+		// typeswitch:partial low-precision and vecf8/vecf4 sources return above
 		switch fromType.Oid {
 		case types.T_uint8:
 			return unsignedToInt64Explicit(vector.GenerateFunctionFixedTypeParameter[uint8](from), result, length, selectList)
@@ -1266,6 +1361,10 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 	if toType.Oid == types.T_decimal256 {
 		return castToDecimal256(proc, from, *toType, result, length, selectList, mode)
 	}
+	if isTemporalContextSource(fromType.Oid) && (toType.Oid == types.T_bool || toType.Oid == types.T_float64) {
+		return castTemporalContext(parameters, result, proc, length, selectList)
+	}
+	// typeswitch:partial low-precision and vecf8/vecf4 sources return above
 	switch fromType.Oid {
 	case types.T_any: // scalar null
 		err = scalarNullToOthers(proc.Ctx, *toType, result, length, selectList)
@@ -1531,8 +1630,17 @@ func scalarNullToOthers(ctx context.Context,
 		return appendNulls[uint64](result, length, selectList)
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_json,
-		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_datalink, types.T_geometry:
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4, types.T_datalink, types.T_geometry:
 		return appendNulls[types.Varlena](result, length, selectList)
+	case types.T_bf16:
+		return appendNulls[types.BF16](result, length, selectList)
+	case types.T_float16:
+		return appendNulls[types.Float16](result, length, selectList)
+	case types.T_float8:
+		return appendNulls[types.Float8](result, length, selectList)
+	case types.T_float4:
+		return appendNulls[types.Float4](result, length, selectList)
 	case types.T_float32:
 		return appendNulls[float32](result, length, selectList)
 	case types.T_float64:
@@ -2399,6 +2507,9 @@ func dateToOthers(proc *process.Process,
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
 		return dateToSigned(source, rs, length, selectList)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
+		return dateToSigned(source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return dateToDecimal64(source, rs, length, selectList)
@@ -2441,6 +2552,9 @@ func datetimeToOthers(proc *process.Process,
 		return datetimeToInt32(proc.Ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
+		return datetimeToInt64(source, rs, length, selectList)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
 		return datetimeToInt64(source, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
@@ -2489,6 +2603,9 @@ func timestampToOthers(proc *process.Process,
 		return timestampToInt32(proc.Ctx, source, rs, length, zone, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
+		return timestampToInt64(source, rs, length, zone, selectList)
+	case types.T_uint64:
+		rs := vector.MustFunctionResult[uint64](result)
 		return timestampToInt64(source, rs, length, zone, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
@@ -2983,8 +3100,8 @@ func strTypeToOthers(proc *process.Process,
 	}
 	if fromType.Oid == types.T_blob {
 		// For handling BLOB to ARRAY implicit casting.
-		// This is used for VECTOR FAST/BINARY IO.
-		// SQL: insert into t2 values(2, decode("7e98b23e9e10383b2f41133f", "hex"));
+		// This is used for VECTOR FAST/BINARY IO: the BLOB holds little-endian elements.
+		// SQL: insert into t2 values(2, cast(unhex("7e98b23e9e10383b2f41133f") as blob));
 		switch toType.Oid {
 		case types.T_array_float32:
 			rs := vector.MustFunctionResult[types.Varlena](result)
@@ -5044,7 +5161,7 @@ func integerToEnum[T constraints.Integer](
 	return nil
 }
 
-func dateToSigned[T int32 | int64](
+func dateToSigned[T int32 | int64 | uint64](
 	from vector.FunctionParameterWrapper[types.Date],
 	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
 	var i uint64
@@ -5298,9 +5415,9 @@ func datetimeToInt32(
 	return nil
 }
 
-func datetimeToInt64(
+func datetimeToInt64[T int64 | uint64](
 	from vector.FunctionParameterWrapper[types.Datetime],
-	to *vector.FunctionResult[int64], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -5311,7 +5428,7 @@ func datetimeToInt64(
 			}
 		} else {
 			val := packedDatetimeInt64(v)
-			if err := to.Append(val, false); err != nil {
+			if err := to.Append(T(val), false); err != nil {
 				return err
 			}
 		}
@@ -5720,9 +5837,9 @@ func timestampToInt32(
 	return nil
 }
 
-func timestampToInt64(
+func timestampToInt64[T int64 | uint64](
 	from vector.FunctionParameterWrapper[types.Timestamp],
-	to *vector.FunctionResult[int64], length int, zone *time.Location, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[T], length int, zone *time.Location, selectList *FunctionSelectList) error {
 	var i uint64
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetValue(i)
@@ -5732,7 +5849,7 @@ func timestampToInt64(
 			}
 		} else {
 			val := packedDatetimeInt64(v.ToDatetime(zone))
-			if err := to.Append(val, false); err != nil {
+			if err := to.Append(T(val), false); err != nil {
 				return err
 			}
 		}
@@ -10532,11 +10649,12 @@ func strToArray[T types.ArrayElement](
 	var l = uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
+			// an empty string is not a vector: it fails to parse, as the literal does
 			arr, err := types.StringToArray[T](convertByteSliceToString(v))
 			if err != nil {
 				return err
@@ -10569,12 +10687,15 @@ func blobToArray[T types.ArrayElement](
 	for i = 0; i < l; i++ {
 
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
 			size := toType.GetArrayElementSize()
+			if len(v) == 0 {
+				return moerr.NewInvalidInputNoCtx("vector payload is empty")
+			}
 			if len(v)%size != 0 {
 				return moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")
 			}
@@ -10640,6 +10761,18 @@ func rejectNonFiniteVectorElems[T types.ArrayElement](out []T) error {
 	return nil
 }
 
+// narrowVectorElemMax returns the largest finite element of a vecbf16 or vecf16 type, or 0.
+func narrowVectorElemMax(oid types.T) float32 {
+	// typeswitch:partial only vecbf16 and vecf16 round elements back to their maximum
+	switch oid {
+	case types.T_array_bf16:
+		return types.BF16MaxFinite
+	case types.T_array_float16:
+		return types.Float16MaxFinite
+	}
+	return 0
+}
+
 func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -10690,6 +10823,22 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 			// This replaces moarray.Cast[I,O], which only handled float pairs.
 			_v := types.BytesToArray[I](v)
 			f32 := types.ToFloat32Array[I](_v)
+			if f64, ok := any(_v).([]float64); ok && to.GetType().Oid != types.T_array_float32 {
+				// a narrower target rounds once from the float64 value
+				f32 = make([]float32, len(f64))
+				for k, x := range f64 {
+					f32[k] = types.Float32RoundToOdd(x)
+				}
+			}
+			// a finite element above the largest finite bf16/float16 value is out of range,
+			// also when it rounds back to that value
+			if lim := narrowVectorElemMax(to.GetType().Oid); lim > 0 {
+				for _, x := range f32 {
+					if (x > lim || x < -lim) && !math.IsInf(float64(x), 0) {
+						return moerr.NewOutOfRangeNoCtxf(to.GetType().Oid.String(), "element %v", x)
+					}
+				}
+			}
 			out := types.FromFloat32Array[O](f32)
 			// A finite source can narrow to +/-Inf (e.g. VECF64 1e300 -> VECF32, or a VECF32 that
 			// overflows VECF16/VECBF16). Reject it here so the narrowing CAST enforces the same

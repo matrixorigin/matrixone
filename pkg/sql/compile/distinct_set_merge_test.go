@@ -24,12 +24,97 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCompileParallelUnionDistinct(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		edit   func(*Compile, *plan.Node, []*Scope)
+		owners int
+	}{
+		{"eligible", nil, 4},
+		{"budget caps owners", func(_ *Compile, n *plan.Node, _ []*Scope) { n.SpillMem = 256 << 20 }, 2},
+		{"auto unchanged", func(_ *Compile, n *plan.Node, _ []*Scope) { n.SpillMem = 0 }, 1},
+		{"small explicit unchanged", func(_ *Compile, n *plan.Node, _ []*Scope) { n.SpillMem = 255 << 20 }, 1},
+		{"max dop", func(c *Compile, _ *plan.Node, _ []*Scope) {
+			c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{MaxDop: 2}}}
+		}, 2},
+		{"one cpu", func(c *Compile, _ *plan.Node, _ []*Scope) { c.ncpu = 1 }, 1},
+		{"prepared", func(c *Compile, _ *plan.Node, _ []*Scope) { c.isPrepare = true }, 1},
+		{"remote input", func(_ *Compile, _ *plan.Node, s []*Scope) { s[0].NodeInfo.Addr = "other:18000" }, 1},
+		{"variable key", func(_ *Compile, n *plan.Node, _ []*Scope) { n.ProjectList[0].Typ.Id = int32(types.T_varchar) }, 1},
+		{"different physical type", func(_ *Compile, n *plan.Node, _ []*Scope) {
+			n.PhysicalEqualityKeyList = plan2.DeepCopyExprList(n.ProjectList)
+			n.PhysicalEqualityKeyList[0].Typ.Id = int32(types.T_float64)
+		}, 1},
+		{"physical nullable annotation", func(_ *Compile, n *plan.Node, _ []*Scope) {
+			n.PhysicalEqualityKeyList = plan2.DeepCopyExprList(n.ProjectList)
+			n.PhysicalEqualityKeyList[0].Typ.NotNullable = true
+		}, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newDistinctSetTestCompile(t)
+			t.Cleanup(c.proc.Free)
+			c.isPrepare = false
+			c.addr = "127.0.0.1:18000"
+			c.ncpu = 16
+			c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 16}}
+			input := newDistinctSetTestScopes(c, 2)
+			for _, s := range input {
+				s.NodeInfo.Addr = c.addr
+			}
+			node := &plan.Node{NodeType: plan.Node_UNION, SpillMem: 512 << 20, Stats: &plan.Stats{Dop: 16},
+				ProjectList: []*plan.Expr{plan2.GetColExpr(types.T_int64.ToType().PlanType(), 0, 0)}}
+			if tc.edit != nil {
+				tc.edit(c, node, input)
+			}
+			before := proto.Clone(node)
+			result := c.compileUnion(node, input[:1], input[1:])
+			t.Cleanup(func() {
+				for _, s := range result {
+					s.FreeOperator(c)
+					s.release()
+				}
+			})
+			require.True(t, proto.Equal(before, node))
+			require.Len(t, result, 1)
+			if tc.owners == 1 {
+				require.IsType(t, &group.Group{}, result[0].RootOp)
+				return
+			}
+			require.IsType(t, &merge.Merge{}, result[0].RootOp)
+			require.Len(t, result[0].PreScopes, tc.owners)
+			var thresholdSum int64
+			for i, owner := range result[0].PreScopes {
+				g := owner.RootOp.GetOperatorBase().GetChildren(0).(*group.Group)
+				thresholdSum += g.SpillMem
+				require.GreaterOrEqual(t, g.SpillMem, int64(128<<20))
+				require.True(t, g.IsFirst)
+				require.Len(t, owner.Proc.Reg.MergeReceivers, 2)
+				if i != 0 {
+					require.Empty(t, owner.PreScopes)
+					continue
+				}
+				require.Len(t, owner.PreScopes, 2)
+				for _, feeder := range owner.PreScopes {
+					router := feeder.RootOp.GetOperatorBase().GetChildren(0).(*shuffle.Shuffle)
+					require.Equal(t, []int32{0}, router.ShuffleKeyColumns)
+					require.True(t, router.DrainAllBuckets)
+					require.Equal(t, int32(tc.owners), router.BucketNum)
+					require.Len(t, feeder.PreScopes, 1)
+				}
+			}
+			require.LessOrEqual(t, thresholdSum, node.SpillMem)
+		})
+	}
+}
 
 func TestMergeDistinctSetScopesAddsGlobalDedup(t *testing.T) {
 	c := newDistinctSetTestCompile(t)

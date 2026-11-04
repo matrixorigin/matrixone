@@ -1850,7 +1850,7 @@ func TestSortRollupDoesNotPublishAfterEOFCancellation(t *testing.T) {
 
 func TestSortRollupStreamsMultipleOutputBatches(t *testing.T) {
 	for _, fast := range []bool{true, false} {
-		name := "fallback-min"
+		name := "forced-fallback-min"
 		aggs := []aggexec.AggFuncExecExpression{countStarAgg()}
 		if fast {
 			name = "reuse"
@@ -1882,7 +1882,10 @@ func TestSortRollupStreamsMultipleOutputBatches(t *testing.T) {
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 			require.NoError(t, g.Prepare(proc))
-			require.Equal(t, fast, g.ctr.sortRollup.reuseSingleGroup)
+			require.True(t, g.ctr.sortRollup.reuseSingleGroup)
+			if !fast {
+				g.ctr.sortRollup.reuseSingleGroup = false
+			}
 			results := collectSortRollupBatches(t, g, proc)
 			require.Greater(t, len(results), 1,
 				"streaming rollup must publish a full batch before EOF")
@@ -1910,7 +1913,7 @@ func TestSortRollupStreamsMultipleOutputBatches(t *testing.T) {
 
 func TestSortRollupDoesNotRepeatCrossBatchBoundary(t *testing.T) {
 	for _, fast := range []bool{true, false} {
-		name := "fallback-min"
+		name := "forced-fallback-min"
 		aggs := []aggexec.AggFuncExecExpression{countStarAgg()}
 		if fast {
 			name = "reuse"
@@ -1945,7 +1948,10 @@ func TestSortRollupDoesNotRepeatCrossBatchBoundary(t *testing.T) {
 				require.Zero(t, proc.Mp().CurrNB())
 			})
 			require.NoError(t, g.Prepare(proc))
-			require.Equal(t, fast, g.ctr.sortRollup.reuseSingleGroup)
+			require.True(t, g.ctr.sortRollup.reuseSingleGroup)
+			if !fast {
+				g.ctr.sortRollup.reuseSingleGroup = false
+			}
 			results := collectSortRollupBatches(t, g, proc)
 
 			detailCounts := make(map[int32]int64, firstRows+1)
@@ -1974,7 +1980,7 @@ func TestSortRollupDoesNotRepeatCrossBatchBoundary(t *testing.T) {
 
 func TestSortRollupReclaimsPublishedOutputBatches(t *testing.T) {
 	for _, fast := range []bool{true, false} {
-		name := "fallback-min"
+		name := "forced-fallback-min"
 		aggs := []aggexec.AggFuncExecExpression{countStarAgg()}
 		if fast {
 			name = "reuse"
@@ -2004,7 +2010,10 @@ func TestSortRollupReclaimsPublishedOutputBatches(t *testing.T) {
 					require.Zero(t, proc.Mp().CurrNB())
 				}()
 				require.NoError(t, g.Prepare(proc))
-				require.Equal(t, fast, g.ctr.sortRollup.reuseSingleGroup)
+				require.True(t, g.ctr.sortRollup.reuseSingleGroup)
+				if !fast {
+					g.ctr.sortRollup.reuseSingleGroup = false
+				}
 
 				var peak int64
 				for {

@@ -152,6 +152,9 @@ func mergeIndexOption(left, right *tree.IndexOption) *tree.IndexOption {
         left.KmeansMaxIteration = right.KmeansMaxIteration
     } else if right.MaxIndexCapacity > 0 {
         left.MaxIndexCapacity = right.MaxIndexCapacity
+    } else if right.MaxBadRecordsSet {
+        left.MaxBadRecords = right.MaxBadRecords
+        left.MaxBadRecordsSet = true
     } else if right.MaxPostingsCapacity > 0 {
         left.MaxPostingsCapacity = right.MaxPostingsCapacity
     } else if right.QuantizerTrainLimit > 0 {
@@ -562,7 +565,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %nonassoc <str> VARBINARY
 %token <str> NCHAR LONG
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
-%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64 VECBF16 VECF16 VECINT8 VECUINT8
+%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64 VECBF16 VECF16 VECINT8 VECUINT8 VECF8 VECF4
+%token <str> BF16 FLOAT16 FLOAT8 FLOAT4
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> GEOMETRY32 GEOGRAPHY GEOGRAPHY32 POINT32 LINESTRING32 POLYGON32 GEOMETRYCOLLECTION32 MULTIPOINT32 MULTILINESTRING32 MULTIPOLYGON32
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
@@ -600,7 +604,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN TOKEN_FILTER
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_BAD_RECORDS MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN TOKEN_FILTER
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -643,7 +647,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> OVER PRECEDING FOLLOWING GROUPS
 
 // Supported SHOW tokens
-%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS NODE LOCKS ROLES RULE RULES
+%token <str> DATABASES TABLES SEQUENCES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES IGNORED SCHEMAS NODE LOCKS ROLES RULE RULES
 %token <str> TABLE_NUMBER COLUMN_NUMBER TABLE_VALUES TABLE_SIZE TASKS RUNS
 
 // SET tokens
@@ -771,7 +775,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
-%type <statement> show_variables_stmt show_status_stmt show_index_stmt
+%type <statement> show_variables_stmt show_status_stmt show_index_stmt show_index_ignored_stmt show_index_status_stmt
 %type <statement> show_servers_stmt show_logservice_replicas_stmt show_logservice_stores_stmt show_logservice_settings_stmt
 %type <statement> alter_account_stmt alter_user_stmt alter_view_stmt update_stmt use_stmt update_no_with_stmt alter_database_config_stmt alter_table_stmt alter_role_stmt rename_stmt alter_iceberg_catalog_stmt alter_mongodb_connection_stmt alter_database_defaults_stmt
 %type <merge> merge_no_with_stmt
@@ -5183,6 +5187,8 @@ show_stmt:
 |   show_variables_stmt
 |   show_status_stmt
 |   show_index_stmt
+|   show_index_ignored_stmt
+|   show_index_status_stmt
 |   show_target_filter_stmt
 |   show_table_status_stmt
 |   show_grants_stmt
@@ -5603,6 +5609,24 @@ show_index_stmt:
             TableName: $4,
             DbName: $5,
             Where: $6,
+        }
+    }
+
+show_index_ignored_stmt:
+    SHOW extended_opt index_kwd IGNORED from_or_in unresolved_object_name where_expression_opt
+    {
+        $$ = &tree.ShowIndexIgnored{
+            TableName: $6,
+            Where: $7,
+        }
+    }
+
+show_index_status_stmt:
+    SHOW extended_opt index_kwd STATUS from_or_in unresolved_object_name where_expression_opt
+    {
+        $$ = &tree.ShowIndexStatus{
+            TableName: $6,
+            Where: $7,
         }
     }
 
@@ -10226,6 +10250,19 @@ index_option:
 	}
 	io := tree.NewIndexOption()
 	io.MaxIndexCapacity = val
+	$$ = io
+    }
+|   MAX_BAD_RECORDS equal_opt INTEGRAL
+    {
+	val, ok := signedIntegral(yylex, $3)
+	if !ok { goto ret1 }
+	if val < 0 {
+		yylex.Error("MAX_BAD_RECORDS should not be negative")
+		return 1
+	}
+	io := tree.NewIndexOption()
+	io.MaxBadRecords = val
+	io.MaxBadRecordsSet = true
 	$$ = io
     }
 |   MAX_POSTINGS_CAPACITY equal_opt INTEGRAL
@@ -16297,6 +16334,84 @@ char_type:
             },
         }
     }
+|   VECF8 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECF4 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   BF16
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 16,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
+|   FLOAT16
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 16,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
+|   FLOAT8
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 8,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
+|   FLOAT4
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 4,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
 | ENUM '(' enum_values ')'
     {
         locale := ""
@@ -16863,6 +16978,7 @@ non_reserved_keyword:
 |   INT
 |   INTEGER
 |   INDEXES
+|   IGNORED
 |   ICEBERG
 |   MONGODB
 |   MONGODB_PATH
@@ -16881,12 +16997,19 @@ non_reserved_keyword:
 |   VECF16
 |   VECINT8
 |   VECUINT8
+|   VECF8
+|   VECF4
+|   BF16
+|   FLOAT16
+|   FLOAT8
+|   FLOAT4
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE
 |   KMEANS_TRAIN_PERCENT
 |   KMEANS_MAX_ITERATION
 |   MAX_INDEX_CAPACITY
+|   MAX_BAD_RECORDS
 |   MAX_POSTINGS_CAPACITY
 |   QUANTIZER_TRAIN_LIMIT
 |   POSITION_FREE

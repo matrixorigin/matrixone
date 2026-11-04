@@ -9882,6 +9882,30 @@ func strLengthBinaryInt64(xs []byte) int64 {
 	return int64(len(xs))
 }
 
+// LengthBit evaluates the length family over a native BIT vector. MySQL
+// converts a BIT(M) value to its fixed-width binary string form
+// (Field_bit::val_str): ceil(M/8) big-endian bytes with leading zero bytes
+// preserved, in the single-byte binary charset, so LENGTH, OCTET_LENGTH and
+// CHAR_LENGTH all return the declared byte width for every non-NULL value.
+// The width M arrives on the input vector's type; a BIT type without a valid
+// declared width falls back to the value's minimal big-endian byte count.
+func LengthBit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	width := ivecs[0].GetType().Width
+	if width >= 1 && width <= 64 {
+		widthBytes := int64((width + 7) / 8)
+		return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(uint64) int64 {
+			return widthBytes
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[uint64, int64](ivecs, result, proc, length, func(v uint64) int64 {
+		n := int64(1)
+		for rest := v; rest >= 0x100; rest >>= 8 {
+			n++
+		}
+		return n
+	}, selectList)
+}
+
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	trim := func(value []byte) []byte { return bytes.TrimLeft(value, " ") }
 	return opUnaryBytesToBytesByStringDomain(ivecs, result, proc, length, trim, trim, selectList)
@@ -13908,6 +13932,10 @@ func BitCast(
 	toType := parameters[1].GetType()
 	ctx := proc.Ctx
 
+	// stored bf16/float16/float8/float4 values are finite with a +0 zero; arbitrary bits are not
+	if toType.Oid.IsLowPrecisionFloat() {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("bit_cast to %s", toType))
+	}
 	switch toType.Oid {
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)

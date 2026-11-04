@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -725,7 +727,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 		masterIndexes := make([]*plan.IndexDef, 0)
 		for _, indexDef := range node.TableDef.Indexes {
 			if indexDef != nil && indexDef.TableExist && !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) &&
-				!indexUsesUnicodeCollation(indexDef, node.TableDef) {
+				!indexUnsafeForRead(indexDef, node.TableDef) {
 				masterIndexes = append(masterIndexes, indexDef)
 			}
 		}
@@ -1231,6 +1233,10 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 }
 
 func containsVolatileFunction(expr *plan.Expr) bool {
+	return containsVolatileFunctionImpl(expr, false)
+}
+
+func containsVolatileFunctionImpl(expr *plan.Expr, allowTemporalIntegerPolicy bool) bool {
 	if expr == nil {
 		return true
 	}
@@ -1243,11 +1249,16 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 			return true
 		}
 		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
-		if !ok || overload.CannotFold() || function.IsTemporalTextDiagnosticCall(expr) {
+		stablePolicy := false
+		if ok && allowTemporalIntegerPolicy && isTemporalIntegerPolicyCast(expr) {
+			unstable, known := function.GetFunctionValueUnstableByID(exprImpl.F.Func.Obj)
+			stablePolicy = known && !unstable && !overload.HasRowScopedDiagnostics() && !overload.IsRealTimeRelated()
+		}
+		if !ok || (overload.CannotFold() && !stablePolicy) || function.IsTemporalTextDiagnosticCall(expr) {
 			return true
 		}
 		for _, arg := range exprImpl.F.Args {
-			if containsVolatileFunction(arg) {
+			if containsVolatileFunctionImpl(arg, allowTemporalIntegerPolicy) {
 				return true
 			}
 		}
@@ -1256,7 +1267,7 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 			return true
 		}
 		for _, item := range exprImpl.List.List {
-			if containsVolatileFunction(item) {
+			if containsVolatileFunctionImpl(item, allowTemporalIntegerPolicy) {
 				return true
 			}
 		}
@@ -1464,7 +1475,7 @@ func (builder *QueryBuilder) applyForceIndexHintToScan(scanNode *plan.Node, requ
 		}
 		indexes := filterIndexesByHintScope(scanNode.TableDef.Indexes, scope)
 		for _, idxDef := range indexes {
-			if !usableRegularHintIndex(idxDef) ||
+			if !usableRegularHintIndex(idxDef) || indexUnsafeForRead(idxDef, scanNode.TableDef) ||
 				(hintSet.join.forceSpecified && !indexAllowedByHintScope(idxDef.IndexName, hintSet.join)) {
 				continue
 			}
@@ -1524,7 +1535,7 @@ func (builder *QueryBuilder) applyForcedHintAccessToScan(scanNode *plan.Node, sc
 		return scanNode.NodeId, nil
 	}
 	for _, idxDef := range filterIndexesByHintScope(scanNode.TableDef.Indexes, scope) {
-		if !usableRegularHintIndex(idxDef) {
+		if !usableRegularHintIndex(idxDef) || indexUnsafeForRead(idxDef, scanNode.TableDef) {
 			continue
 		}
 		accessNodeID, _, _, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
@@ -1545,7 +1556,7 @@ func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *p
 	// The current index-table reader still probes serialized Unicode keys as
 	// raw bytes. Do not turn an explicit hint into a wrong-result plan while
 	// the physical probe path is being kept separate from generic SERIAL.
-	if node != nil && indexUsesUnicodeCollation(idxDef, node.TableDef) {
+	if node != nil && indexUnsafeForRead(idxDef, node.TableDef) {
 		return -1, -1, false, nil
 	}
 	idxNodeID, err := builder.tryHintedCoveringIndexScan(idxDef, node, colRefCnt, idxColMap)
@@ -1563,7 +1574,7 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 || !hintedIndexContainsQualifyingRows(idxDef, node) {
 		return -1, -1, nil
 	}
-	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
+	if indexUnsafeForRead(idxDef, node.TableDef) {
 		return -1, -1, nil
 	}
 	snapshot := node.ScanSnapshot
@@ -1624,7 +1635,7 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	// Serialized secondary-index keys contain UCA weights for native Unicode
 	// collations. serial_extract cannot reconstruct the original text, so an
 	// index-only/covering plan must keep the base-table row as the value source.
-	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
+	if indexUnsafeForRead(idxDef, node.TableDef) {
 		return -1, nil
 	}
 	for i, col := range node.TableDef.Cols {
@@ -2430,11 +2441,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		if node.TableDef.Indexes[i] == nil || !node.TableDef.Indexes[i].TableExist || !catalog.IsRegularIndexAlgo(node.TableDef.Indexes[i].IndexAlgo) {
 			continue
 		}
+		if indexUsesVirtualTimestamp(node.TableDef.Indexes[i], node.TableDef) {
+			continue
+		}
 		if isSpatialIndexDef(node.TableDef.Indexes[i]) {
 			spatialIndexes = append(spatialIndexes, node.TableDef.Indexes[i])
 			continue
 		}
-		if indexUsesUnicodeCollation(node.TableDef.Indexes[i], node.TableDef) {
+		if indexUnsafeForRead(node.TableDef.Indexes[i], node.TableDef) {
 			// The physical key is in the tagged UCA domain, while the current
 			// regular-index lookup builders still construct raw SERIAL probes.
 			// Keep the base scan as the correctness-preserving fallback.
@@ -2656,8 +2670,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		return retID
 	}
 
-	//no index applied
-	return nodeID
+	return builder.applyRegularIndexMerge(node, indexes, colRefCnt, idxColMap, costCtx)
 }
 
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
@@ -3338,6 +3351,9 @@ const (
 	regularIndexPredicateRowWork = 1.0
 	regularIndexJoinFixedWork    = 64.0
 	regularIndexUnknownRangeSel  = 0.1
+	// Byte-equivalent CPU cost for one packed-key encoding/allocation. The
+	// descriptor and payload bytes are charged separately per local reader.
+	regularIndexKeyEncodingWork = 64.0
 )
 
 type encodedIndexFilterFact struct {
@@ -4048,6 +4064,41 @@ func regularIndexBackfillInputRows(scanRows, selectedRows float64) float64 {
 	return min(scanRows, max(selectedRows, math.Ceil(selectedRows)*float64(objectio.BlockMaxRows)))
 }
 
+// backfillReaders estimates local reader construction, not a cluster-wide
+// reader count. BuildReaders constructs each reader's packed PK filter, so
+// parallel scan width cannot make this preparation a single per-query cost.
+func (ctx *encodedRegularIndexCostContext) backfillReaders() float64 {
+	cpus := max(1, system.GoMaxProcs())
+	if ctx.builder.qry != nil && ctx.builder.qry.MaxDop > 0 && ctx.builder.qry.MaxDop < int64(cpus) {
+		cpus = int(ctx.builder.qry.MaxDop)
+	}
+	if cpus > math.MaxInt32 {
+		cpus = math.MaxInt32
+	}
+	readers := calcDOP(int32(cpus), ctx.node.Stats, ctx.builder.isPrepareStatement)
+	if blocks := ctx.node.Stats.BlockNum; blocks > 0 {
+		readers = min(readers, blocks)
+	}
+	return float64(max(1, readers))
+}
+
+func regularIndexInSearchComparisons(keys float64) float64 {
+	if keys <= 0 {
+		return 0
+	}
+	if keys <= 4 {
+		return keys
+	}
+	return math.Ceil(math.Log2(keys + 1))
+}
+
+// Building the in-memory filter creates a packed payload plus two []byte
+// descriptor slices per reader. Width and reader count are cost estimates.
+func regularIndexBackfillPrepareWork(keys, packedWidth, readers float64) float64 {
+	const sliceBytes = 3 * (strconv.IntSize / 8)
+	return keys * ((2*float64(sliceBytes)+packedWidth)*readers + regularIndexKeyEncodingWork)
+}
+
 func (ctx *encodedRegularIndexCostContext) score(
 	idxDef *IndexDef,
 	leadingPos []int32,
@@ -4288,10 +4339,12 @@ func (ctx *encodedRegularIndexCostContext) score(
 
 	pkIdx, hasPK := ctx.node.TableDef.Name2ColIndex[ctx.node.TableDef.Pkey.PkeyColName]
 	pkWidth := 0.0
+	packedPKWidth := 0.0
 	if hasPK && pkIdx >= 0 && int(pkIdx) < len(ctx.columnWidths) {
 		pkWidth = ctx.columnWidths[pkIdx]
+		packedPKWidth = ctx.serialWidths[pkIdx]
 	}
-	if shape == encodedRegularIndexCostBackfill && !finitePositive(pkWidth) {
+	if shape == encodedRegularIndexCostBackfill && (!finitePositive(pkWidth) || !finitePositive(packedPKWidth)) {
 		ctx.resetScratch()
 		return 0, false, false
 	}
@@ -4314,7 +4367,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	if shape == encodedRegularIndexCostBackfill {
 		hiddenOutputWidth = pkWidth
 	}
-	calculateWork := func(candidateRows, hiddenRows, outputRows float64) (float64, float64, bool) {
+	calculateWork := func(candidateRows, hiddenRows, outputRows float64, optimistic bool) (float64, float64, bool) {
 		hiddenScanInput := candidateRows * hiddenInputWidth
 		prefixScanInput := hiddenScanInput
 		if prefixAccess && ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2 {
@@ -4362,23 +4415,39 @@ func (ctx *encodedRegularIndexCostContext) score(
 				}
 			}
 
-			// The hidden output already accounts for transferring each physical PK.
-			// Charge the targeted base lookup once more as a per-key operation.
-			pkBackfill := hiddenRows * regularIndexPredicateRowWork
 			rankingBaseInput = hiddenRows * ctx.baseWidth
 			prefixBaseInput = rankingBaseInput
-			if prefixAccess {
-				lookupRows := regularIndexBackfillInputRows(ctx.baseRows, hiddenRows)
-				probeRows := lookupRows
+			// Preserve the relative ranking of index candidates. Build and
+			// physical probe estimates below are admission-only costs.
+			commonWork += hiddenRows * regularIndexPredicateRowWork
+			admissionExtra := 0.0
+			if !optimistic {
+				lookupRows := hiddenRows
+				probeRows := hiddenRows
 				if hiddenRows > 0 && (!sortedPK || ctx.builder.optimizerHints != nil && ctx.builder.optimizerHints.blockFilter == 2) {
 					probeRows = ctx.baseRows
 				}
-				prefixBaseInput = max(rankingBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
+				prefixBaseInput = max(prefixBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
+				if prefixAccess {
+					// Retain the established conservative prefix admission guard.
+					lookupRows = regularIndexBackfillInputRows(ctx.baseRows, hiddenRows)
+					if sortedPK && (ctx.builder.optimizerHints == nil || ctx.builder.optimizerHints.blockFilter != 2) {
+						probeRows = lookupRows
+					}
+					prefixBaseInput = max(prefixBaseInput, lookupRows*lookupOtherWidth+probeRows*pkWidth)
+				}
+				candidateBuild := regularIndexBackfillPrepareWork(hiddenRows, packedPKWidth, ctx.backfillReaders())
+				// Replace, rather than duplicate, the ranking's per-key proxy.
+				admissionExtra = candidateBuild - hiddenRows*regularIndexPredicateRowWork
+				if !sortedPK {
+					admissionExtra += probeRows * regularIndexInSearchComparisons(hiddenRows) * regularIndexPredicateRowWork
+				}
 			}
 			baseChildPredicates := hiddenRows * float64(len(ctx.node.FilterList)) * regularIndexPredicateRowWork
 			joinFixed := regularIndexJoinFixedWork + ctx.outputWidth + float64(ctx.outputCols)*regularIndexPredicateRowWork
 			joinRows := outputRows * (ctx.outputWidth + regularIndexPredicateRowWork)
-			commonWork += pkBackfill + baseChildPredicates + joinFixed + joinRows
+			commonWork += baseChildPredicates + joinFixed + joinRows
+			prefixBaseInput += admissionExtra
 		}
 
 		rankingWork := hiddenScanInput + commonWork + rankingBaseInput
@@ -4394,7 +4463,7 @@ func (ctx *encodedRegularIndexCostContext) score(
 	if hasCorrelatedPrefix {
 		outputCostRows = max(outputCostRows, hiddenRows)
 	}
-	indexWork, rejectionWork, validWork := calculateWork(candidateRows, hiddenRows, outputCostRows)
+	indexWork, rejectionWork, validWork := calculateWork(candidateRows, hiddenRows, outputCostRows, false)
 	baseComparisonWork := ctx.baseWork
 	if len(ctx.unknownRangeLowerSelectivities) > 0 && validWork {
 		// Compare uncertainty intervals instead of the ranking point estimate. An
@@ -4410,11 +4479,12 @@ func (ctx *encodedRegularIndexCostContext) score(
 			// in the uncertainty lower bound.
 			lowerOutputRows = lowerHiddenRows
 		}
-		_, rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, lowerOutputRows)
+		_, rejectionWork, validWork = calculateWork(lowerCandidateRows, lowerHiddenRows, lowerOutputRows, true)
 		baseComparisonWork = ctx.baseUpperWork
 	}
 	overBudget := shape == encodedRegularIndexCostBackfill && boundedLeading && ctx.backfillCapacityExceeded(budgetRows)
-	shouldReject = !ctx.force && (overBudget || (prefixAccess || len(idxDef.Parts) >= 2 && ctx.node.Stats.TableCnt >= 50000) && validWork && rejectionWork >= baseComparisonWork)
+	compareCost := prefixAccess || ctx.node.Stats.TableCnt >= 50000 && (shape == encodedRegularIndexCostBackfill || len(idxDef.Parts) >= 2)
+	shouldReject = !ctx.force && (overBudget || compareCost && validWork && rejectionWork >= baseComparisonWork)
 	ctx.resetScratch()
 	if !validWork {
 		return 0, false, false
@@ -4534,7 +4604,7 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScanWithLeadingFilter(
 	if idxDef == nil || len(idxDef.Parts) == 0 || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
 		return nil, false
 	}
-	if indexUsesUnicodeCollation(idxDef, node.TableDef) {
+	if indexUnsafeForRead(idxDef, node.TableDef) {
 		return nil, false
 	}
 	if regularIndexHasDeclaredPrefix(idxDef) {
@@ -4654,6 +4724,25 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 	scanSnapshot *Snapshot,
 	match *regularIndexOnlyMatch,
 ) int32 {
+	indexNode := builder.buildRegularIndexOnlyScan(idxDef, node, idxColMap, scanSnapshot, match)
+	if indexNode == nil {
+		return -1
+	}
+	builder.addNameByColRef(indexNode.BindingTags[0], indexNode.TableDef)
+	id := builder.appendNode(indexNode, builder.ctxByNode[node.NodeId])
+	builder.inheritIndexHints(id, node.NodeId)
+	forceScanNodeStatsTP(id, builder)
+	return id
+}
+
+// 先构造、后发布，使多分支访问在任一分支失败时仍保留完整原计划。
+func (builder *QueryBuilder) buildRegularIndexOnlyScan(
+	idxDef *IndexDef,
+	node *plan.Node,
+	idxColMap map[[2]int32]*plan.Expr,
+	scanSnapshot *Snapshot,
+	match *regularIndexOnlyMatch,
+) *plan.Node {
 	leadingPos := match.filterIdx
 	numParts := len(idxDef.Parts)
 	missFilterIdx := make([]int, 0, len(node.FilterList))
@@ -4675,6 +4764,9 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 	if e != nil {
 		panic(e)
 	}
+	if idxObjRef == nil || idxTableDef == nil || len(idxTableDef.Cols) < 2 {
+		panic(moerr.NewInternalError(builder.GetContext(), "missing regular index table metadata"))
+	}
 	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 	var newLeadingFilter *plan.Expr
 	var err error
@@ -4684,9 +4776,8 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		newLeadingFilter, err = builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, match.leadingEqual, idxTag, idxTableDef)
 	}
 	if err != nil {
-		return -1
+		return nil
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
 
 	if numParts == 1 {
 		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
@@ -4735,7 +4826,7 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		IndexTableName: idxDef.IndexTableName,
 	}
 
-	idxTableNodeID := builder.appendNode(&plan.Node{
+	return &plan.Node{
 		NodeType:      plan.Node_TABLE_SCAN,
 		TableDef:      idxTableDef,
 		IndexScanInfo: idxScanInfo,
@@ -4746,11 +4837,7 @@ func (builder *QueryBuilder) applyRegularIndexOnlyScan(
 		Offset:        node.Offset,
 		BindingTags:   []int32{idxTag},
 		ScanSnapshot:  node.ScanSnapshot,
-	}, builder.ctxByNode[node.NodeId])
-	builder.inheritIndexHints(idxTableNodeID, node.NodeId)
-
-	forceScanNodeStatsTP(idxTableNodeID, builder)
-	return idxTableNodeID
+	}
 }
 
 func (builder *QueryBuilder) trySpatialIndexOnlyScan(idxDef *IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, scanSnapshot *Snapshot) int32 {
@@ -5088,6 +5175,12 @@ func (builder *QueryBuilder) replaceRangePairCondition(idxDef *IndexDef, filterL
 }
 
 func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, filterType int, filterIdx []int32, scanSnapshot *Snapshot) (int32, int32) {
+	if node == nil {
+		return -1, -1
+	}
+	if indexUsesVirtualTimestamp(idxDef, node.TableDef) {
+		return node.NodeId, -1
+	}
 	idxTag := builder.genNewBindTag()
 	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(node.ObjRef, idxDef.IndexTableName, scanSnapshot)
 	if err != nil {
@@ -5283,7 +5376,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		if idxDef == nil || !idxDef.TableExist ||
 			!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
 			isSpatialIndexDef(idxDef) ||
-			indexUsesUnicodeCollation(idxDef, leftChild.TableDef) ||
+			indexUnsafeForRead(idxDef, leftChild.TableDef) ||
 			!regularIndexPrefixMetadataUsable(idxDef) ||
 			regularIndexHasDeclaredPrefix(idxDef) {
 			continue
@@ -5556,7 +5649,7 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 	}
 	indexes := builder.filterRegularIndexesByJoinHints(scan, scan.TableDef.Indexes)
 	for _, idxDef := range indexes {
-		if !usableRegularHintIndex(idxDef) {
+		if !usableRegularHintIndex(idxDef) || indexUnsafeForRead(idxDef, scan.TableDef) {
 			continue
 		}
 		if builder.indexAccessUsesIndex(accessID, idxDef.IndexName) {
@@ -5569,7 +5662,7 @@ func (builder *QueryBuilder) applyForcedJoinAccess(accessID int32) (int32, error
 		return scan.NodeId, nil
 	}
 	for _, idxDef := range indexes {
-		if !usableRegularHintIndex(idxDef) {
+		if !usableRegularHintIndex(idxDef) || indexUnsafeForRead(idxDef, scan.TableDef) {
 			continue
 		}
 		forcedID, _, err := builder.buildHintedIndexBackfillJoin(idxDef, scan)
