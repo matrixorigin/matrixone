@@ -56,13 +56,13 @@ grp    group_concat(c, ---->)
 1    a
 2    b---->c
 3    E---->C---->D---->d---->d---->D
-SELECT grp,group_concat(c ORDER BY c) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by c)
+SELECT grp,group_concat(c ORDER BY c, a) FROM group_concat_01 GROUP BY grp;
+grp    group_concat(c, ,order by c, a)
 1    a
 2    b,c
 3    C,D,d,d,D,E
-SELECT grp,group_concat(c ORDER BY c DESC) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by c desc)
+SELECT grp,group_concat(c ORDER BY c DESC, a DESC) FROM group_concat_01 GROUP BY grp;
+grp    group_concat(c, ,order by c desc, a desc)
 1    a
 2    c,b
 3    E,D,d,d,D,C
@@ -76,18 +76,18 @@ grp    group_concat(d, ,order by a desc)
 1    a
 2    b,a
 3    c,d,d,b,b,a
-SELECT grp,group_concat(c ORDER BY 1) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by 1)
+SELECT grp,group_concat(c ORDER BY 1, a) FROM group_concat_01 GROUP BY grp;
+grp    group_concat(c, ,order by 1, a)
 1    a
 2    b,c
 3    C,D,d,d,D,E
-SELECT grp,group_concat(c ORDER BY c separator ",") FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by c)
+SELECT grp,group_concat(c ORDER BY c, a separator ",") FROM group_concat_01 GROUP BY grp;
+grp    group_concat(c, ,order by c, a)
 1    a
 2    b,c
 3    C,D,d,d,D,E
-SELECT grp,group_concat(c ORDER BY c DESC separator ",") FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,order by c desc)
+SELECT grp,group_concat(c ORDER BY c DESC, a DESC separator ",") FROM group_concat_01 GROUP BY grp;
+grp    group_concat(c, ,order by c desc, a desc)
 1    a
 2    c,b
 3    E,D,d,d,D,C
