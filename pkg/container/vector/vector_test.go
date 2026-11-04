@@ -592,7 +592,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_array_float32.ToType())
 		err := AppendArrayList[float32](v, [][]float32{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		require.Equal(t, [][]float32{{2, 2, 2}, {3, 3, 3}}, MustArrayCol[float32](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -601,7 +601,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_array_float64.ToType())
 		err := AppendArrayList[float64](v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		require.Equal(t, [][]float64{{2, 2, 2}, {3, 3, 3}}, MustArrayCol[float64](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -610,7 +610,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_bool.ToType())
 		err := AppendFixedList(v, []bool{true, false, true, false}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[bool](v)
 		require.Equal(t, []bool{false, true}, vs)
 		v.Free(mp)
@@ -620,7 +620,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_int8.ToType())
 		err := AppendFixedList(v, []int8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[int8](v)
 		require.Equal(t, []int8{2, 3}, vs)
 		v.Free(mp)
@@ -630,7 +630,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_int16.ToType())
 		err := AppendFixedList(v, []int16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{0, 3}, false)
+		require.NoError(t, v.Shrink([]int64{0, 3}, false, mp))
 		vs := MustFixedColWithTypeCheck[int16](v)
 		require.Equal(t, []int16{1, 4}, vs)
 		v.Free(mp)
@@ -640,7 +640,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_int32.ToType())
 		err := AppendFixedList(v, []int32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[int32](v)
 		require.Equal(t, []int32{2, 3}, vs)
 		v.Free(mp)
@@ -650,7 +650,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_int64.ToType())
 		err := AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[int64](v)
 		require.Equal(t, []int64{2, 3}, vs)
 		v.Free(mp)
@@ -660,7 +660,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_uint8.ToType())
 		err := AppendFixedList(v, []uint8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[uint8](v)
 		require.Equal(t, []uint8{2, 3}, vs)
 		v.Free(mp)
@@ -670,7 +670,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_uint16.ToType())
 		err := AppendFixedList(v, []uint16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{0, 3}, false)
+		require.NoError(t, v.Shrink([]int64{0, 3}, false, mp))
 		vs := MustFixedColWithTypeCheck[uint16](v)
 		require.Equal(t, []uint16{1, 4}, vs)
 		v.Free(mp)
@@ -680,7 +680,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_uint32.ToType())
 		err := AppendFixedList(v, []uint32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[uint32](v)
 		require.Equal(t, []uint32{2, 3}, vs)
 		v.Free(mp)
@@ -690,7 +690,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_uint64.ToType())
 		err := AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[uint64](v)
 		require.Equal(t, []uint64{2, 3}, vs)
 		v.Free(mp)
@@ -700,7 +700,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_float32.ToType())
 		err := AppendFixedList(v, []float32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[float32](v)
 		require.Equal(t, []float32{2, 3}, vs)
 		v.Free(mp)
@@ -710,7 +710,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_float64.ToType())
 		err := AppendFixedList(v, []float64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[float64](v)
 		require.Equal(t, []float64{2, 3}, vs)
 		v.Free(mp)
@@ -720,7 +720,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_text.ToType())
 		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := InefficientMustStrCol(v)
 		require.Equal(t, []string{"2", "3"}, vs)
 		require.Equal(t, [][]byte{[]byte("2"), []byte("3")}, InefficientMustBytesCol(v))
@@ -731,7 +731,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_date.ToType())
 		err := AppendFixedList(v, []types.Date{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[types.Date](v)
 		require.Equal(t, []types.Date{2, 3}, vs)
 		v.Free(mp)
@@ -741,7 +741,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_datetime.ToType())
 		err := AppendFixedList(v, []types.Datetime{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[types.Datetime](v)
 		require.Equal(t, []types.Datetime{2, 3}, vs)
 		v.Free(mp)
@@ -751,7 +751,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_time.ToType())
 		err := AppendFixedList(v, []types.Time{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[types.Time](v)
 		require.Equal(t, []types.Time{2, 3}, vs)
 		v.Free(mp)
@@ -761,7 +761,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_timestamp.ToType())
 		err := AppendFixedList(v, []types.Timestamp{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[types.Timestamp](v)
 		require.Equal(t, []types.Timestamp{2, 3}, vs)
 		v.Free(mp)
@@ -772,7 +772,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_decimal64.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Decimal64](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -782,7 +782,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_decimal128.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Decimal128](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -792,7 +792,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_uuid.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Uuid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -802,7 +802,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_TS.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.TS](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -812,7 +812,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_Rowid.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Rowid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -822,7 +822,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_Blockid.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Blockid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -831,7 +831,7 @@ func TestShrink(t *testing.T) {
 		v := NewVec(types.T_bit.ToType())
 		err := AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.Shrink([]int64{1, 2}, false)
+		require.NoError(t, v.Shrink([]int64{1, 2}, false, mp))
 		vs := MustFixedColWithTypeCheck[uint64](v)
 		require.Equal(t, []uint64{2, 3}, vs)
 		v.Free(mp)
@@ -868,7 +868,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_array_float64.ToType())
 		err := AppendArrayList[float64](v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		require.Equal(t, [][]float64{{2, 2, 2}, {3, 3, 3}}, MustArrayCol[float64](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -876,7 +876,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_array_float64.ToType())
 		err = AppendArrayList[float64](v, [][]float64{{1, 1, 1}, {2, 2, 2}, {3, 3, 3}}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		require.Equal(t, [][]float64{{1, 1, 1}}, MustArrayCol[float64](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -885,7 +885,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_bool.ToType())
 		err := AppendFixedList(v, []bool{true, false, true, false}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[bool](v)
 		require.Equal(t, []bool{false, true}, vs)
 		v.Free(mp)
@@ -894,7 +894,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_bool.ToType())
 		err = AppendFixedList(v, []bool{true, false, true, false}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[bool](v)
 		require.Equal(t, []bool{true, false}, vs)
 		v.Free(mp)
@@ -904,7 +904,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_int8.ToType())
 		err := AppendFixedList(v, []int8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[int8](v)
 		require.Equal(t, []int8{2, 3}, vs)
 		v.Free(mp)
@@ -913,7 +913,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_int8.ToType())
 		err = AppendFixedList(v, []int8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[int8](v)
 		require.Equal(t, []int8{1, 4}, vs)
 		v.Free(mp)
@@ -923,7 +923,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_int16.ToType())
 		err := AppendFixedList(v, []int16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[int16](v)
 		require.Equal(t, []int16{2, 3}, vs)
 		v.Free(mp)
@@ -932,7 +932,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_int16.ToType())
 		err = AppendFixedList(v, []int16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[int16](v)
 		require.Equal(t, []int16{1, 4}, vs)
 		v.Free(mp)
@@ -942,7 +942,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_int32.ToType())
 		err := AppendFixedList(v, []int32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[int32](v)
 		require.Equal(t, []int32{2, 3}, vs)
 		v.Free(mp)
@@ -951,7 +951,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_int32.ToType())
 		err = AppendFixedList(v, []int32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[int32](v)
 		require.Equal(t, []int32{1, 4}, vs)
 		v.Free(mp)
@@ -961,7 +961,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_int64.ToType())
 		err := AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[int64](v)
 		require.Equal(t, []int64{2, 3}, vs)
 		v.Free(mp)
@@ -970,7 +970,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_int64.ToType())
 		err = AppendFixedList(v, []int64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[int64](v)
 		require.Equal(t, []int64{1, 4}, vs)
 		v.Free(mp)
@@ -980,7 +980,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_uint8.ToType())
 		err := AppendFixedList(v, []uint8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[uint8](v)
 		require.Equal(t, []uint8{2, 3}, vs)
 		v.Free(mp)
@@ -989,7 +989,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_uint8.ToType())
 		err = AppendFixedList(v, []uint8{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[uint8](v)
 		require.Equal(t, []uint8{1, 4}, vs)
 		v.Free(mp)
@@ -999,7 +999,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_uint16.ToType())
 		err := AppendFixedList(v, []uint16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[uint16](v)
 		require.Equal(t, []uint16{2, 3}, vs)
 		v.Free(mp)
@@ -1008,7 +1008,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_uint16.ToType())
 		err = AppendFixedList(v, []uint16{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[uint16](v)
 		require.Equal(t, []uint16{1, 4}, vs)
 		v.Free(mp)
@@ -1018,7 +1018,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_uint32.ToType())
 		err := AppendFixedList(v, []uint32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[uint32](v)
 		require.Equal(t, []uint32{2, 3}, vs)
 		v.Free(mp)
@@ -1027,7 +1027,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_uint32.ToType())
 		err = AppendFixedList(v, []uint32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[uint32](v)
 		require.Equal(t, []uint32{1, 4}, vs)
 		v.Free(mp)
@@ -1037,7 +1037,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_uint64.ToType())
 		err := AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[uint64](v)
 		require.Equal(t, []uint64{2, 3}, vs)
 		v.Free(mp)
@@ -1046,7 +1046,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_uint64.ToType())
 		err = AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[uint64](v)
 		require.Equal(t, []uint64{1, 4}, vs)
 		v.Free(mp)
@@ -1056,7 +1056,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_float32.ToType())
 		err := AppendFixedList(v, []float32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[float32](v)
 		require.Equal(t, []float32{2, 3}, vs)
 		v.Free(mp)
@@ -1065,7 +1065,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_float32.ToType())
 		err = AppendFixedList(v, []float32{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[float32](v)
 		require.Equal(t, []float32{1, 4}, vs)
 		v.Free(mp)
@@ -1075,7 +1075,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_float64.ToType())
 		err := AppendFixedList(v, []float64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[float64](v)
 		require.Equal(t, []float64{2, 3}, vs)
 		v.Free(mp)
@@ -1084,7 +1084,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_float64.ToType())
 		err = AppendFixedList(v, []float64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[float64](v)
 		require.Equal(t, []float64{1, 4}, vs)
 		v.Free(mp)
@@ -1094,7 +1094,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_text.ToType())
 		err := AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := InefficientMustStrCol(v)
 		require.Equal(t, []string{"2", "3"}, vs)
 		require.Equal(t, [][]byte{[]byte("2"), []byte("3")}, InefficientMustBytesCol(v))
@@ -1104,7 +1104,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_text.ToType())
 		err = AppendBytesList(v, [][]byte{[]byte("1"), []byte("2"), []byte("3"), []byte("4")}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = InefficientMustStrCol(v)
 		require.Equal(t, []string{"1", "4"}, vs)
 		require.Equal(t, [][]byte{[]byte("1"), []byte("4")}, InefficientMustBytesCol(v))
@@ -1115,7 +1115,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_date.ToType())
 		err := AppendFixedList(v, []types.Date{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[types.Date](v)
 		require.Equal(t, []types.Date{2, 3}, vs)
 		v.Free(mp)
@@ -1124,7 +1124,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_date.ToType())
 		err = AppendFixedList(v, []types.Date{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[types.Date](v)
 		require.Equal(t, []types.Date{1, 4}, vs)
 		v.Free(mp)
@@ -1134,7 +1134,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_datetime.ToType())
 		err := AppendFixedList(v, []types.Datetime{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[types.Datetime](v)
 		require.Equal(t, []types.Datetime{2, 3}, vs)
 		v.Free(mp)
@@ -1143,7 +1143,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_datetime.ToType())
 		err = AppendFixedList(v, []types.Datetime{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[types.Datetime](v)
 		require.Equal(t, []types.Datetime{1, 4}, vs)
 		v.Free(mp)
@@ -1153,7 +1153,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_time.ToType())
 		err := AppendFixedList(v, []types.Time{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[types.Time](v)
 		require.Equal(t, []types.Time{2, 3}, vs)
 		v.Free(mp)
@@ -1162,7 +1162,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_time.ToType())
 		err = AppendFixedList(v, []types.Time{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[types.Time](v)
 		require.Equal(t, []types.Time{1, 4}, vs)
 		v.Free(mp)
@@ -1172,7 +1172,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_timestamp.ToType())
 		err := AppendFixedList(v, []types.Timestamp{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[types.Timestamp](v)
 		require.Equal(t, []types.Timestamp{2, 3}, vs)
 		v.Free(mp)
@@ -1181,7 +1181,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_timestamp.ToType())
 		err = AppendFixedList(v, []types.Timestamp{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[types.Timestamp](v)
 		require.Equal(t, []types.Timestamp{1, 4}, vs)
 		v.Free(mp)
@@ -1192,7 +1192,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_decimal64.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Decimal64](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1201,7 +1201,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_decimal64.ToType())
 		err = AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		require.Equal(t, append(vs[:1], vs[3]), MustFixedColWithTypeCheck[types.Decimal64](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1211,7 +1211,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_decimal128.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Decimal128](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1220,7 +1220,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_decimal128.ToType())
 		err = AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		require.Equal(t, append(vs[:1], vs[3]), MustFixedColWithTypeCheck[types.Decimal128](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1230,7 +1230,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_uuid.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Uuid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1239,7 +1239,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_uuid.ToType())
 		err = AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		require.Equal(t, append(vs[:1], vs[3]), MustFixedColWithTypeCheck[types.Uuid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1249,7 +1249,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_TS.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.TS](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1258,7 +1258,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_TS.ToType())
 		err = AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		require.Equal(t, append(vs[:1], vs[3]), MustFixedColWithTypeCheck[types.TS](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1268,7 +1268,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_Rowid.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Rowid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1277,7 +1277,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_Rowid.ToType())
 		err = AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		require.Equal(t, append(vs[:1], vs[3]), MustFixedColWithTypeCheck[types.Rowid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1287,7 +1287,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_Blockid.ToType())
 		err := AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		require.Equal(t, vs[1:3], MustFixedColWithTypeCheck[types.Blockid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1296,7 +1296,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_Blockid.ToType())
 		err = AppendFixedList(v, vs, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		require.Equal(t, append(vs[:1], vs[3]), MustFixedColWithTypeCheck[types.Blockid](v))
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -1305,7 +1305,7 @@ func TestShrinkByMask(t *testing.T) {
 		v := NewVec(types.T_bit.ToType())
 		err := AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, false, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, false, 1, mp))
 		vs := MustFixedColWithTypeCheck[uint64](v)
 		require.Equal(t, []uint64{2, 3}, vs)
 		v.Free(mp)
@@ -1314,7 +1314,7 @@ func TestShrinkByMask(t *testing.T) {
 		v = NewVec(types.T_bit.ToType())
 		err = AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
 		require.NoError(t, err)
-		v.ShrinkByMask(&bmask, true, 1)
+		require.NoError(t, v.ShrinkByMask(&bmask, true, 1, mp))
 		vs = MustFixedColWithTypeCheck[uint64](v)
 		require.Equal(t, []uint64{1, 4}, vs)
 		v.Free(mp)
@@ -1339,7 +1339,7 @@ func TestShrinkByMaskKeepsNullsAlignedWithOffset(t *testing.T) {
 		))
 		vec.GetGrouping().Add(3, 4)
 
-		vec.ShrinkByMask(&mask, true, 2)
+		require.NoError(t, vec.ShrinkByMask(&mask, true, 2, mp))
 		require.Equal(t, []int32{10, 11, 0, 0, 16, 17}, MustFixedColWithTypeCheck[int32](vec))
 		require.Equal(t, []uint64{2, 3}, vec.GetNulls().ToArray())
 		require.Equal(t, []uint64{2}, vec.GetGrouping().ToArray())
@@ -1356,7 +1356,7 @@ func TestShrinkByMaskKeepsNullsAlignedWithOffset(t *testing.T) {
 		))
 		vec.GetGrouping().Add(2, 4)
 
-		vec.ShrinkByMask(&mask, false, 2)
+		require.NoError(t, vec.ShrinkByMask(&mask, false, 2, mp))
 		require.Equal(t, []int32{0, 14}, MustFixedColWithTypeCheck[int32](vec))
 		require.Equal(t, []uint64{0}, vec.GetNulls().ToArray())
 		require.Equal(t, []uint64{0, 1}, vec.GetGrouping().ToArray())
@@ -1969,7 +1969,7 @@ func TestMixedBinaryStringMetadataSurvivesMaterialization(t *testing.T) {
 
 	shrunk, err := source.Dup(mp)
 	require.NoError(t, err)
-	shrunk.Shrink([]int64{1, 2}, false)
+	require.NoError(t, shrunk.Shrink([]int64{1, 2}, false, mp))
 	assertRows(t, shrunk, []bool{false, true})
 	shrunk.Free(mp)
 
@@ -2224,7 +2224,7 @@ func TestExplicitTextRuntimeDomainSurvivesVectorLifecycle(t *testing.T) {
 	nullable.Free(mp)
 
 	shrunk := newText(t)
-	shrunk.Shrink([]int64{1}, false)
+	require.NoError(t, shrunk.Shrink([]int64{1}, false, mp))
 	assertText(t, shrunk)
 	shrunk.Free(mp)
 	shuffled := newText(t)
@@ -2233,7 +2233,7 @@ func TestExplicitTextRuntimeDomainSurvivesVectorLifecycle(t *testing.T) {
 	shuffled.Free(mp)
 
 	sorted := newText(t)
-	sorted.InplaceSortAndCompact()
+	require.NoError(t, sorted.InplaceSortAndCompact(mp))
 	assertText(t, sorted)
 	sorted.Free(mp)
 
@@ -2374,7 +2374,7 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 		require.NoError(t, AppendBytes(sorted, []byte(value), false, mp))
 	}
 	require.NoError(t, sorted.SetIsBinaryStringAt(0, true))
-	sorted.InplaceSort()
+	require.NoError(t, sorted.InplaceSort(mp))
 	require.Equal(t, "a", string(sorted.GetBytesAt(0)))
 	require.Equal(t, "z", string(sorted.GetBytesAt(1)))
 	require.False(t, sorted.GetIsBinaryStringAt(0))
@@ -2393,7 +2393,7 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 		PrepareParamInteger, PrepareParamNone, PrepareParamNone,
 		PrepareParamBoolean, PrepareParamDecimal,
 	}, mp))
-	compact.InplaceSortAndCompact()
+	require.NoError(t, compact.InplaceSortAndCompact(mp))
 	require.Equal(t, 4, compact.Length())
 	require.True(t, compact.IsNull(0))
 	require.Equal(t, PrepareParamNone, compact.GetPrepareParamKindAt(0))
@@ -2413,7 +2413,7 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 		require.NoError(t, AppendBytes(interleaved, []byte("same"), false, mp))
 	}
 	require.NoError(t, interleaved.SetBinaryStringRowsWithMP([]bool{true, false, true}, mp))
-	interleaved.InplaceSortAndCompact()
+	require.NoError(t, interleaved.InplaceSortAndCompact(mp))
 	require.Equal(t, 2, interleaved.Length())
 	require.False(t, interleaved.GetBinaryStringMetadataAt(0))
 	require.True(t, interleaved.GetBinaryStringMetadataAt(1))
@@ -2432,7 +2432,7 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 		require.NoError(t, metadataDistinct.SetPrepareParamKindsWithMP([]PrepareParamKind{
 			PrepareParamInteger, PrepareParamFloat,
 		}, mp))
-		metadataDistinct.InplaceSortAndCompact()
+		require.NoError(t, metadataDistinct.InplaceSortAndCompact(mp))
 		require.Equal(t, 2, metadataDistinct.Length())
 		require.Equal(t, binaryFirst, metadataDistinct.GetIsBinaryStringAt(0))
 		require.Equal(t, !binaryFirst, metadataDistinct.GetIsBinaryStringAt(1))
@@ -2451,7 +2451,7 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 		PrepareParamInteger, PrepareParamFloat, PrepareParamBoolean, PrepareParamDecimal,
 	}, mp))
 	require.NoError(t, groupingDistinct.SetIsBinaryStringAt(2, true))
-	groupingDistinct.InplaceSortAndCompact()
+	require.NoError(t, groupingDistinct.InplaceSortAndCompact(mp))
 	require.Equal(t, 4, groupingDistinct.Length())
 	require.False(t, groupingDistinct.GetGrouping().Contains(0))
 	require.True(t, groupingDistinct.GetGrouping().Contains(1))
@@ -2466,9 +2466,9 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 			PrepareParamInteger, PrepareParamFloat,
 		}, mp))
 		if compact {
-			prepareOnly.InplaceSortAndCompact()
+			require.NoError(t, prepareOnly.InplaceSortAndCompact(mp))
 		} else {
-			prepareOnly.InplaceSort()
+			require.NoError(t, prepareOnly.InplaceSort(mp))
 		}
 		require.Equal(t, "a", string(prepareOnly.GetBytesAt(0)))
 		require.Equal(t, "z", string(prepareOnly.GetBytesAt(1)))
@@ -3313,19 +3313,19 @@ func TestSortAndCompact(t *testing.T) {
 	v := NewVec(types.New(types.T_array_float32, 4, 0))
 	err := AppendArrayList(v, [][]float32{{1, 2, 3, 0}, {1, 2, 3, 0}}, nil, mp)
 	require.NoError(t, err)
-	v.InplaceSortAndCompact()
+	require.NoError(t, v.InplaceSortAndCompact(mp))
 	require.Equal(t, v.length, 1)
 
 	v = NewVec(types.New(types.T_array_float64, 4, 0))
 	err = AppendArrayList(v, [][]float64{{1.1, 2, 3, 0}, {1.1, 2, 3, 0}}, nil, mp)
 	require.NoError(t, err)
-	v.InplaceSortAndCompact()
+	require.NoError(t, v.InplaceSortAndCompact(mp))
 	require.Equal(t, v.length, 1)
 
 	v = NewVec(types.T_geometry.ToType())
 	err = AppendBytesList(v, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(1 1)"), []byte("POINT(1 1)")}, nil, mp)
 	require.NoError(t, err)
-	v.InplaceSortAndCompact()
+	require.NoError(t, v.InplaceSortAndCompact(mp))
 	require.Equal(t, 2, v.length)
 	require.Equal(t, [][]byte{[]byte("POINT(1 1)"), []byte("POINT(2 2)")}, InefficientMustBytesCol(v))
 	v.Free(mp)
@@ -3348,7 +3348,7 @@ func TestGeometryVarlenPlumbing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, [][]byte{[]byte("POINT(2 2)")}, InefficientMustBytesCol(dst))
 
-	dst.Shrink([]int64{0}, false)
+	require.NoError(t, dst.Shrink([]int64{0}, false, mp))
 	require.Equal(t, [][]byte{[]byte("POINT(2 2)")}, InefficientMustBytesCol(dst))
 
 	err = dst.UnionOne(src, 2, mp)
@@ -3395,7 +3395,7 @@ func TestGeometryVarlenPlumbing(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []byte("POINT(1 1)"), minv)
 	require.Equal(t, []byte("POINT(3 3)"), maxv)
-	minmax.InplaceSort()
+	require.NoError(t, minmax.InplaceSort(mp))
 	require.Equal(t, [][]byte{
 		[]byte("POINT(1 1)"),
 		[]byte("POINT(2 2)"),
@@ -3413,7 +3413,7 @@ func TestGeometryVarlenPlumbing(t *testing.T) {
 		[]byte("POINT(4 4)"),
 	}, nil, mp)
 	require.NoError(t, err)
-	maskVec.ShrinkByMask(&bm, false, 1)
+	require.NoError(t, maskVec.ShrinkByMask(&bm, false, 1, mp))
 	require.Equal(t, [][]byte{[]byte("POINT(2 2)"), []byte("POINT(3 3)")}, InefficientMustBytesCol(maskVec))
 
 	maskVec.Free(mp)
@@ -4063,6 +4063,20 @@ func BenchmarkMustFixedCol(b *testing.B) {
 }
 
 func TestRowToString(t *testing.T) {
+	t.Run("low_precision", func(t *testing.T) {
+		testLowPrecisionFloatRowStrings(t, types.T_bf16,
+			[]types.BF16{0x3fc0, 0xc000, 0, 0x8000, 0x7f7f, 1},
+			[]float32{1.5, -2, 0, float32(math.Copysign(0, -1)), math.Float32frombits(0x7f7f0000), float32(math.Ldexp(1, -133))})
+		testLowPrecisionFloatRowStrings(t, types.T_float16,
+			[]types.Float16{0x3e00, 0xc000, 0, 0x8000, 0x7bff, 1},
+			[]float32{1.5, -2, 0, float32(math.Copysign(0, -1)), 65504, float32(math.Ldexp(1, -24))})
+		testLowPrecisionFloatRowStrings(t, types.T_float8,
+			[]types.Float8{0x3c, 0xc0, 0, 0x80, 0x7e, 1},
+			[]float32{1.5, -2, 0, float32(math.Copysign(0, -1)), 448, 1.0 / 512})
+		testLowPrecisionFloatRowStrings(t, types.T_float4,
+			[]types.Float4{3, 12, 0, 8, 7, 1},
+			[]float32{1.5, -2, 0, float32(math.Copysign(0, -1)), 6, 0.5})
+	})
 	mp := mpool.MustNewZero()
 
 	{ // Array Float32
@@ -4714,7 +4728,7 @@ func TestInplaceSortAndCompactMarksUniqueVectorsSorted(t *testing.T) {
 	for _, value := range []int64{3, 1, 2} {
 		require.NoError(t, AppendFixed(fixed, value, false, mp))
 	}
-	fixed.InplaceSortAndCompact()
+	require.NoError(t, fixed.InplaceSortAndCompact(mp))
 	require.Equal(t, []int64{1, 2, 3}, MustFixedColNoTypeCheck[int64](fixed))
 	require.True(t, fixed.GetSorted())
 	fixed.Free(mp)
@@ -4723,13 +4737,13 @@ func TestInplaceSortAndCompactMarksUniqueVectorsSorted(t *testing.T) {
 	for _, value := range []string{"c", "a", "b"} {
 		require.NoError(t, AppendBytes(varlen, []byte(value), false, mp))
 	}
-	varlen.InplaceSortAndCompact()
+	require.NoError(t, varlen.InplaceSortAndCompact(mp))
 	require.Equal(t, [][]byte{[]byte("a"), []byte("b"), []byte("c")}, InefficientMustBytesCol(varlen))
 	require.True(t, varlen.GetSorted())
 	varlen.Free(mp)
 
 	unsupported := NewVec(types.T_any.ToType())
-	unsupported.InplaceSortAndCompact()
+	require.NoError(t, unsupported.InplaceSortAndCompact(mp))
 	require.False(t, unsupported.GetSorted())
 }
 
@@ -4740,7 +4754,7 @@ func TestInplaceSortMarksSupportedVectorsSortedWithoutCompacting(t *testing.T) {
 	for _, value := range []int64{3, 1, 1, 2} {
 		require.NoError(t, AppendFixed(fixed, value, false, mp))
 	}
-	fixed.InplaceSort()
+	require.NoError(t, fixed.InplaceSort(mp))
 	require.Equal(t, []int64{1, 1, 2, 3}, MustFixedColNoTypeCheck[int64](fixed))
 	require.True(t, fixed.GetSorted())
 	fixed.Free(mp)
@@ -4749,7 +4763,7 @@ func TestInplaceSortMarksSupportedVectorsSortedWithoutCompacting(t *testing.T) {
 	for _, value := range []string{"c", "a", "a", "b"} {
 		require.NoError(t, AppendBytes(varlen, []byte(value), false, mp))
 	}
-	varlen.InplaceSort()
+	require.NoError(t, varlen.InplaceSort(mp))
 	require.Equal(t,
 		[][]byte{[]byte("a"), []byte("a"), []byte("b"), []byte("c")},
 		InefficientMustBytesCol(varlen))
@@ -4757,8 +4771,120 @@ func TestInplaceSortMarksSupportedVectorsSortedWithoutCompacting(t *testing.T) {
 	varlen.Free(mp)
 
 	unsupported := NewVec(types.T_any.ToType())
-	unsupported.InplaceSort()
+	require.NoError(t, unsupported.InplaceSort(mp))
 	require.False(t, unsupported.GetSorted())
+}
+
+// lowPrecValueOrderingCase exercises the container ordering/aggregation paths for one
+// low-precision float type, asserting they order/aggregate by FLOAT VALUE, not raw bits.
+func lowPrecValueOrderingCase[T types.LowPrecFloat](
+	t *testing.T, oid types.T, from func(float32) T,
+) {
+	mp := mpool.MustNew(t.Name())
+
+	// Values exactly representable in ALL four formats (float4 magnitudes are
+	// {0,.5,1,1.5,2,3,4,6}). Negatives are the discriminator: a negative float's raw
+	// uint bits exceed a positive's, so a bit-wise sort would reverse them.
+	vals := []float32{2.0, -1.0, -3.0, 0.5}
+	wantSorted := []float32{-3.0, -1.0, 0.5, 2.0}
+
+	build := func(fs []float32) *Vector {
+		v := NewVec(oid.ToType())
+		for _, f := range fs {
+			require.NoError(t, AppendFixed(v, from(f), false, mp))
+		}
+		return v
+	}
+	toF := func(v *Vector) []float32 {
+		col := MustFixedColNoTypeCheck[T](v)
+		out := make([]float32, len(col))
+		for i := range col {
+			out[i] = col[i].ToFloat32()
+		}
+		return out
+	}
+
+	// InplaceSort: value order (negatives first), no compaction.
+	v := build(vals)
+	require.True(t, supportsInplaceSort(oid))
+	require.NoError(t, v.InplaceSort(mp))
+	require.Equal(t, wantSorted, toF(v), "InplaceSort")
+	require.True(t, v.GetSorted())
+	v.Free(mp)
+
+	// compareVectorRows: -3.0 (row 2) < 2.0 (row 0); a raw-bit compare would say the
+	// negative is larger.
+	v = build(vals)
+	require.Less(t, compareVectorRows(v, 2, 0), 0, "compareVectorRows neg<pos")
+	require.Greater(t, compareVectorRows(v, 0, 1), 0, "compareVectorRows 2.0>-1.0")
+	v.Free(mp)
+
+	// InplaceSortAndCompact: dedup by value (+0/-0 collapse; here plain dups).
+	v = build([]float32{1.0, -1.0, 1.0, -1.0})
+	require.NoError(t, v.InplaceSortAndCompact(mp))
+	require.Equal(t, []float32{-1.0, 1.0}, toF(v), "InplaceSortAndCompact")
+	require.True(t, v.GetSorted())
+	v.Free(mp)
+
+	// GetSumValue: widened float64 sum = 2-1-3+0.5 = -1.5.
+	v = build(vals)
+	ok, sumBytes := v.GetSumValue()
+	require.True(t, ok)
+	require.InDelta(t, -1.5, types.DecodeFloat64(sumBytes), 1e-6, "GetSumValue")
+	v.Free(mp)
+
+	// GetMinMaxValue: by value, min=-3.0 max=2.0.
+	v = build(vals)
+	ok, minBytes, maxBytes := v.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, float32(-3.0), types.DecodeFixed[T](minBytes).ToFloat32(), "GetMinMaxValue min")
+	require.Equal(t, float32(2.0), types.DecodeFixed[T](maxBytes).ToFloat32(), "GetMinMaxValue max")
+	v.Free(mp)
+}
+
+// TestLowPrecFloatContainerValueOrdering covers the Layer-4 container paths for the
+// scalar low-precision float types (#20567): they must order/aggregate by float value
+// (via ToFloat32), never by the raw uint bits, whose sign bit inverts float order.
+func TestLowPrecFloatContainerValueOrdering(t *testing.T) {
+	t.Run("bf16", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_bf16, types.BF16FromFloat32)
+	})
+	t.Run("float16", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_float16, types.Float16FromFloat32)
+	})
+	t.Run("float8", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_float8, types.Float8FromFloat32)
+	})
+	t.Run("float4", func(t *testing.T) {
+		lowPrecValueOrderingCase(t, types.T_float4, types.Float4FromFloat32)
+	})
+}
+
+// TestLowPrecFloatGetMinMaxSkipsNaN verifies NaN never poisons the zonemap bounds
+// (bf16/float16/float8 have a NaN encoding; float4 has none).
+func TestLowPrecFloatGetMinMaxSkipsNaN(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	nan := float32(math.NaN())
+
+	// bf16 with a NaN mixed in: min/max come from the finite values only.
+	v := NewVec(types.T_bf16.ToType())
+	for _, f := range []float32{nan, -2.0, 4.0, nan} {
+		require.NoError(t, AppendFixed(v, types.BF16FromFloat32(f), false, mp))
+	}
+	ok, minB, maxB := v.GetMinMaxValue()
+	require.True(t, ok)
+	require.Equal(t, float32(-2.0), types.DecodeFixed[types.BF16](minB).ToFloat32())
+	require.Equal(t, float32(4.0), types.DecodeFixed[types.BF16](maxB).ToFloat32())
+	v.Free(mp)
+
+	// All-NaN bf16: no comparable value → ok=false, zonemap left uninitialized.
+	v = NewVec(types.T_bf16.ToType())
+	for i := 0; i < 3; i++ {
+		require.NoError(t, AppendFixed(v, types.BF16FromFloat32(nan), false, mp))
+	}
+	ok, _, _ = v.GetMinMaxValue()
+	require.False(t, ok)
+	v.Free(mp)
 }
 
 func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
@@ -4804,7 +4930,7 @@ func TestVarlenaAreaDisjointLifecycle(t *testing.T) {
 		"full in-order copy preserves independent payload ranges")
 	copied.Free(mp)
 
-	flat.Shrink([]int64{0, 0}, false)
+	require.NoError(t, flat.Shrink([]int64{0, 0}, false, mp))
 	require.False(t, flat.VarlenaAreaIsDisjoint(),
 		"selection can duplicate a descriptor")
 	flat.Free(mp)
@@ -5342,7 +5468,7 @@ func TestPrepareParamKindReordersWithoutSidecarAllocation(t *testing.T) {
 
 	vec := makeVector()
 	before := mp.CurrNB()
-	vec.Shrink([]int64{1, 3}, false)
+	require.NoError(t, vec.Shrink([]int64{1, 3}, false, mp))
 	require.Equal(t, before, mp.CurrNB(), "ordered shrink must reuse the sidecar")
 	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
 	require.Equal(t, PrepareParamDecimal, vec.GetPrepareParamKindAt(1))
@@ -5353,7 +5479,7 @@ func TestPrepareParamKindReordersWithoutSidecarAllocation(t *testing.T) {
 	var mask bitmap.Bitmap
 	mask.InitWithSize(2)
 	mask.AddMany([]uint64{0, 1})
-	vec.ShrinkByMask(&mask, false, 1)
+	require.NoError(t, vec.ShrinkByMask(&mask, false, 1, mp))
 	require.Equal(t, before, mp.CurrNB(), "mask shrink must reuse the sidecar")
 	require.Equal(t, PrepareParamFloat, vec.GetPrepareParamKindAt(0))
 	require.Equal(t, PrepareParamNone, vec.GetPrepareParamKindAt(1))
@@ -6955,7 +7081,7 @@ func TestStringSourceRowTransformsStayAligned(t *testing.T) {
 		return vec
 	}
 	shrunk := makeVector()
-	shrunk.Shrink([]int64{1, 2}, false)
+	require.NoError(t, shrunk.Shrink([]int64{1, 2}, false, mp))
 	require.Equal(t, [][]byte{[]byte("b"), []byte("c")}, InefficientMustBytesCol(shrunk))
 	require.Equal(t, []types.StringSource{types.StringSourceSQLPrepare, types.StringSourceCOMStmt}, shrunk.GetStringSources())
 	shrunk.Free(mp)
@@ -6964,7 +7090,7 @@ func TestStringSourceRowTransformsStayAligned(t *testing.T) {
 	mask.InitWithSize(3)
 	mask.Add(1)
 	mask.Add(2)
-	masked.ShrinkByMask(&mask, false, 0)
+	require.NoError(t, masked.ShrinkByMask(&mask, false, 0, mp))
 	require.Equal(t, [][]byte{[]byte("b"), []byte("c")}, InefficientMustBytesCol(masked))
 	require.Equal(t, []types.StringSource{types.StringSourceSQLPrepare, types.StringSourceCOMStmt}, masked.GetStringSources())
 	masked.Free(mp)
@@ -6984,7 +7110,7 @@ func TestStringSourceInplaceSortAndStableDecode(t *testing.T) {
 	sorted := NewVec(types.T_varchar.ToType())
 	require.NoError(t, AppendBytesList(sorted, [][]byte{[]byte("b"), []byte("a")}, nil, mp))
 	require.NoError(t, sorted.SetStringSourcesWithMP([]types.StringSource{types.StringSourceLiteral, types.StringSourceCOMStmt}, mp))
-	sorted.InplaceSort()
+	require.NoError(t, sorted.InplaceSort(mp))
 	require.Equal(t, [][]byte{[]byte("a"), []byte("b")}, InefficientMustBytesCol(sorted))
 	require.Equal(t, []types.StringSource{types.StringSourceCOMStmt, types.StringSourceLiteral}, sorted.GetStringSources())
 	sorted.Free(mp)
@@ -7014,7 +7140,7 @@ func TestStringSourceUniformInplaceSortAndCompact(t *testing.T) {
 		vec := NewVec(types.T_int64.ToType())
 		require.NoError(t, AppendFixedList(vec, []int64{1, 1}, nil, mp))
 		require.NoError(t, vec.SetStringSource(types.StringSourceLiteral))
-		vec.InplaceSortAndCompact()
+		require.NoError(t, vec.InplaceSortAndCompact(mp))
 		require.Equal(t, []int64{1}, MustFixedColNoTypeCheck[int64](vec))
 		require.True(t, vec.HasStringSourceMetadata())
 		require.Nil(t, vec.GetStringSources())
@@ -7026,7 +7152,7 @@ func TestStringSourceUniformInplaceSortAndCompact(t *testing.T) {
 		vec := NewVec(types.T_varchar.ToType())
 		require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("a"), []byte("a")}, nil, mp))
 		require.NoError(t, vec.SetStringSource(types.StringSourceLiteral))
-		vec.InplaceSortAndCompact()
+		require.NoError(t, vec.InplaceSortAndCompact(mp))
 		require.Equal(t, [][]byte{[]byte("a")}, InefficientMustBytesCol(vec))
 		require.True(t, vec.HasStringSourceMetadata())
 		require.Nil(t, vec.GetStringSources())
@@ -7041,7 +7167,7 @@ func TestStringSourceUniformInplaceSortAndCompact(t *testing.T) {
 		vec.gsp.GetBitmap().InstallExternalStorage(make([]uint64, 0))
 		require.True(t, vec.GetNulls().GetBitmap().HasExternalStorage())
 		require.NoError(t, vec.SetStringSource(types.StringSourceLiteral))
-		require.NotPanics(t, vec.InplaceSort)
+		require.NoError(t, vec.InplaceSort(mp))
 		require.Equal(t, []int64{1, 2}, MustFixedColNoTypeCheck[int64](vec))
 		require.Equal(t, types.StringSourceLiteral, vec.GetStringSourceAt(0))
 		vec.Free(mp)
@@ -7060,7 +7186,7 @@ func TestStringSourceSortAllPhysicalFamilies(t *testing.T) {
 		require.NoError(t, fixed.SetStringSourcesWithMP([]types.StringSource{
 			types.StringSourceSQLPrepare, types.StringSourceLiteral,
 		}, mp))
-		fixed.InplaceSort()
+		require.NoError(t, fixed.InplaceSort(mp))
 		require.Equal(t, []int64{1, 2}, MustFixedColNoTypeCheck[int64](fixed))
 		require.Equal(t, types.StringSourceLiteral, fixed.GetStringSourceAt(0))
 		require.Equal(t, types.StringSourceSQLPrepare, fixed.GetStringSourceAt(1))
@@ -7071,7 +7197,7 @@ func TestStringSourceSortAllPhysicalFamilies(t *testing.T) {
 		require.NoError(t, compact.SetStringSourcesWithMP([]types.StringSource{
 			types.StringSourceLiteral, types.StringSourceSQLPrepare,
 		}, mp))
-		compact.InplaceSortAndCompact()
+		require.NoError(t, compact.InplaceSortAndCompact(mp))
 		require.Equal(t, 2, compact.Length(), "source-distinct rows are not equivalent")
 		compact.Free(mp)
 	})
@@ -7084,7 +7210,7 @@ func TestStringSourceSortAllPhysicalFamilies(t *testing.T) {
 		require.NoError(t, json.SetStringSourcesWithMP([]types.StringSource{
 			types.StringSourceSQLPrepare, types.StringSourceLiteral,
 		}, mp))
-		json.InplaceSort()
+		require.NoError(t, json.InplaceSort(mp))
 		require.Equal(t, jsonAdmissionValue(t, `{"a":1}`), json.GetBytesAt(0))
 		require.Equal(t, types.StringSourceLiteral, json.GetStringSourceAt(0))
 		json.Free(mp)
@@ -7096,7 +7222,7 @@ func TestStringSourceSortAllPhysicalFamilies(t *testing.T) {
 		require.NoError(t, array.SetStringSourcesWithMP([]types.StringSource{
 			types.StringSourceSQLPrepare, types.StringSourceLiteral,
 		}, mp))
-		array.InplaceSort()
+		require.NoError(t, array.InplaceSort(mp))
 		require.Equal(t, []float32{1}, GetArrayAt[float32](array, 0))
 		require.Equal(t, types.StringSourceLiteral, array.GetStringSourceAt(0))
 		array.Free(mp)
@@ -7168,6 +7294,85 @@ func TestStringSourceGenericNullAppendUsesExpression(t *testing.T) {
 	mixed.Free(mp)
 
 	require.Zero(t, mp.CurrNB())
+}
+
+// TestLowPrecFloatAccessMovement exercises the access/movement/string switches for the
+// scalar low-precision float types (bf16/float16/float8/float4) so each per-type arm is
+// covered: GetAny/AppendAny round-trip, Shrink, ShrinkByMask, Shuffle, ShuffleWithBuf,
+// String, RowToString, and NewFunctionResultWrapper (#20567).
+func TestLowPrecFloatAccessMovement(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+
+	cases := []struct {
+		oid types.T
+		mk  func(float32) any
+	}{
+		{types.T_bf16, func(f float32) any { return types.BF16FromFloat32(f) }},
+		{types.T_float16, func(f float32) any { return types.Float16FromFloat32(f) }},
+		{types.T_float8, func(f float32) any { return types.Float8FromFloat32(f) }},
+		{types.T_float4, func(f float32) any { return types.Float4FromFloat32(f) }},
+	}
+
+	for _, c := range cases {
+		t.Run(c.oid.String(), func(t *testing.T) {
+			// AppendAny builds the column; GetAny reads it back.
+			v := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, -2.0, 0.5, 4.0} {
+				require.NoError(t, AppendAny(v, c.mk(f), false, mp))
+			}
+			require.Equal(t, c.mk(1.0), GetAny(v, 0, true))
+			require.Equal(t, c.mk(-2.0), GetAny(v, 1, true))
+
+			// String and RowToString must not panic and render the row.
+			_ = v.String()
+			require.NotEmpty(t, v.RowToString(0))
+
+			// NewFunctionResultWrapper builds a result vector for the type.
+			rw := NewFunctionResultWrapper(c.oid.ToType(), mp)
+			require.NotNil(t, rw)
+			rw.Free()
+
+			// Shuffle reorders in place.
+			require.NoError(t, v.Shuffle([]int64{3, 2, 1, 0}, mp))
+			require.Equal(t, c.mk(4.0), GetAny(v, 0, true))
+			v.Free(mp)
+
+			// ShuffleWithBuf.
+			v2 := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, 2.0, 3.0} {
+				require.NoError(t, AppendAny(v2, c.mk(f), false, mp))
+			}
+			var buf []byte
+			require.NoError(t, v2.ShuffleWithBuf([]int64{2, 1, 0}, mp, &buf))
+			require.Equal(t, c.mk(3.0), GetAny(v2, 0, true))
+			v2.Free(mp)
+
+			// Shrink keeps selected rows.
+			v3 := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, 2.0, 3.0, 4.0} {
+				require.NoError(t, AppendAny(v3, c.mk(f), false, mp))
+			}
+			require.NoError(t, v3.Shrink([]int64{0, 2}, false, mp))
+			require.Equal(t, 2, v3.Length())
+			require.Equal(t, c.mk(1.0), GetAny(v3, 0, true))
+			require.Equal(t, c.mk(3.0), GetAny(v3, 1, true))
+			v3.Free(mp)
+
+			// ShrinkByMask.
+			v4 := NewVec(c.oid.ToType())
+			for _, f := range []float32{1.0, 2.0, 3.0, 4.0} {
+				require.NoError(t, AppendAny(v4, c.mk(f), false, mp))
+			}
+			var bm bitmap.Bitmap
+			bm.InitWithSize(4)
+			bm.Add(1)
+			bm.Add(3)
+			require.NoError(t, v4.ShrinkByMask(&bm, false, 0, mp))
+			require.Equal(t, 2, v4.Length())
+			require.Equal(t, c.mk(2.0), GetAny(v4, 0, true))
+			v4.Free(mp)
+		})
+	}
 }
 
 func TestBoolMinMax(t *testing.T) {

@@ -305,7 +305,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			}
 		}
 		if useExplicitCastOverload(exprImpl.Type) {
-			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+			expr, err = appendTemporalIntegerCast(b.GetContext(), expr, typ, b)
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
@@ -710,11 +710,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	relPos := NotFound
 	colPos := NotFound
 	var typ *plan.Type
+	var resolvedBinding *Binding
 	localErrCtx := errutil.ContextWithNoReport(b.GetContext(), true)
 
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
 			if binding != nil {
+				resolvedBinding = binding
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = DeepCopyType(binding.types[colPos])
@@ -761,6 +763,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	} else {
 		binding := b.resolveTableBinding(b.ctx, db, table)
 		if binding != nil {
+			resolvedBinding = binding
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -801,6 +804,21 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			columnPos: colPos,
 		})
 	}
+	var virtualRead *plan.Expr
+	_, physicalGeneratedRef := b.ctx.physicalGeneratedRefs[astExpr]
+	if colPos != NotFound {
+		if !physicalGeneratedRef {
+			virtualRead, _, err = b.ctx.bindVirtualTimestampRead(resolvedBinding, colPos, depth)
+			if err != nil {
+				return nil, err
+			}
+		} else if resolvedBinding != nil && resolvedBinding.virtualTimestampStaged {
+			// The staged read value occupies the ordinary column position; the
+			// passthrough half of the projection retains the writer-time OLD
+			// value needed for secondary-index maintenance.
+			colPos += int32(len(resolvedBinding.types))
+		}
+	}
 
 	preserveSpecialValue := typ != nil && b.mysqlSpecialTargetType != nil &&
 		typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues &&
@@ -809,7 +827,8 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	// ENUM and SET have distinct storage and display representations. Keep their
 	// display value by default. Numeric and bitwise expression binders explicitly
 	// enable raw storage binding so they follow MySQL's numeric semantics.
-	if !b.bindRawMySQLSpecialType && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
+	_, physicalMySQLSpecialRef := b.ctx.physicalMySQLSpecialRefs[astExpr]
+	if !b.bindRawMySQLSpecialType && !physicalMySQLSpecialRef && !preserveSpecialValue && isEnumOrSetPlanType(typ) {
 		if err != nil {
 			errutil.ReportError(b.GetContext(), err)
 			return
@@ -844,11 +863,17 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				},
 			},
 		}
+		if virtualRead != nil {
+			args[len(args)-1] = virtualRead
+		}
 
 		return BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
 	}
 
 	if colPos != NotFound {
+		if virtualRead != nil {
+			return virtualRead, nil
+		}
 		expr = &plan.Expr{
 			Typ: *typ,
 		}
@@ -6151,6 +6176,12 @@ func rewriteFindInSetSetProvenance(
 // Children were already bound; only the temporal call itself and casts added
 // by the current overload resolver need a warning-free materialization proof.
 func foldTemporalTextConstant(proc *process.Process, expr *Expr) *Expr {
+	// The enclosing integer consumer has not bound yet. Preserve an explicit
+	// temporal CAST's value owner through IF/CASE argument binding; ordinary
+	// optimizer folding can run after its integer policy has been lowered.
+	if temporalIntegerSource(expr) && isExplicitPreparedCast(expr) {
+		return expr
+	}
 	if !function.IsTemporalTextDiagnosticCall(expr) {
 		return expr
 	}
@@ -6535,6 +6566,63 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	return nil
 }
 
+// validateVectorMatmulArgs requires the topk, queries and options arguments of
+// vector_matmul to be non-null constants, parameters or variables.
+func validateVectorMatmulArgs(ctx context.Context, args []*Expr) error {
+	if len(args) != 4 && len(args) != 5 {
+		return moerr.NewInvalidInputf(ctx, "vector_matmul requires 4 or 5 arguments, got %d", len(args))
+	}
+	for _, i := range VectorMatmulConfigArgs(len(args)) {
+		arg := args[i]
+		if arg == nil || isNullExpr(arg) || !IsVectorMatmulConfigExpr(arg) {
+			return moerr.NewInvalidInput(ctx,
+				"topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables")
+		}
+	}
+	return nil
+}
+
+// VectorMatmulConfigArgs returns the positions of vector_matmul's configuration
+// arguments for a call with n arguments.
+func VectorMatmulConfigArgs(n int) []int {
+	if n == 5 {
+		return []int{0, 3, 4}
+	}
+	return []int{0, 3}
+}
+
+// IsVectorMatmulConfigExpr reports whether expr can be evaluated without an input row,
+// to the same value wherever it is evaluated: a constant, a prepared parameter, a variable,
+// or a function over them that is neither volatile nor real-time related.
+func IsVectorMatmulConfigExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if function.IsConstant(expr, false) {
+		return true
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_P, *plan.Expr_V, *plan.Expr_T:
+		return true
+	case *plan.Expr_F:
+		// a cast or other function over parameters, e.g. CAST(? AS BIGINT)
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		f, ok := function.GetFunctionByIdWithoutError(e.F.Func.GetObj())
+		if !ok || f.IsVolatile() || f.IsRealTimeRelated() {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !IsVectorMatmulConfigExpr(arg) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // validateOrderedPercentileArgs enforces the scalar MVP contract for the
 // ordered-set percentile aggregates. The aggregate executor consumes the
 // percentile as compile-time configuration, while the first argument is the
@@ -6692,6 +6780,11 @@ func bindMixedInListComparison(
 	stringLeftNumericRight := leftType.Oid.IsMySQLString() && (rightType.IsNumeric() || rightType.Oid == types.T_bool)
 	numericLeftStringRight := rightType.Oid.IsMySQLString() && (leftType.IsNumeric() || leftType.Oid == types.T_bool)
 	_, directStringRight := decimalStringLiteralValue(right)
+	// a bf16/float16/float8/float4 operand binds as a single comparison, which rounds a
+	// numeral text literal to the column type
+	if leftType.Oid.IsLowPrecisionFloat() {
+		numericLeftStringRight = false
+	}
 	if stringLeftNumericRight || (!exactSingleComparison && numericLeftStringRight && directStringRight) {
 		targetType := types.T_float64.ToType()
 		operands = []*Expr{left, right}
@@ -7945,6 +8038,15 @@ func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool 
 	return hasText && hasNumericMarker || hasTextMarker && hasNumeric
 }
 
+func anyLowPrecisionFloat(argsType []types.Type) bool {
+	for _, typ := range argsType {
+		if typ.Oid.IsLowPrecisionFloat() {
+			return true
+		}
+	}
+	return false
+}
+
 func bindBetweenAsComparisons(ctx context.Context, args []*Expr) (*Expr, error) {
 	left, err := BindFuncExprImplByPlanExpr(ctx, ">=", []*Expr{DeepCopyExpr(args[0]), args[1]})
 	if err != nil {
@@ -8006,7 +8108,8 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
-	if name == "between" && preparedBetweenHasMixedNumericText(ctx, args) &&
+	if name == "between" && len(args) == 3 &&
+		(preparedBetweenHasMixedNumericText(ctx, args) || types.T(args[0].Typ.Id).IsLowPrecisionFloat()) &&
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
 	}
@@ -8068,6 +8171,11 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if name == NameApproxPercentile {
 		if err = validateApproxPercentileArgs(ctx, args); err != nil {
+			return nil, err
+		}
+	}
+	if name == NameVectorMatmul {
+		if err = validateVectorMatmulArgs(ctx, args); err != nil {
 			return nil, err
 		}
 	}
@@ -8696,7 +8804,10 @@ func bindFuncExprImplByPlanExpr(
 						}
 					}
 				}
-				if partitionIn || exactIntegerList || guardedInteger || checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
+				// bf16/float16/float8/float4 items stay in the OR list, whose equalities
+				// narrow in-range literals to the column type
+				if partitionIn || exactIntegerList || guardedInteger ||
+					(!typLeft.Oid.IsLowPrecisionFloat() && checkNoNeedCast(ctx, makeTypeByPlan2Expr(rightVal), typLeft, rightVal)) {
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
 					// retain an already same-typed constant cast; casting UUID to UUID
 					// is both redundant and unsupported.
@@ -9002,7 +9113,11 @@ func bindFuncExprImplByPlanExpr(
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
-	case "=", "<", "<=", ">", ">=", "<>":
+	case "=", "<", "<=", ">", ">=", "<>", "!=", "<=>":
+		// != and <=> take this rounding only for bf16/float16/float8/float4 operands
+		if (name == "!=" || name == "<=>") && !anyLowPrecisionFloat(argsType) {
+			break
+		}
 		if len(args) == 2 && len(argsType) == 2 {
 			if len(argsCastType) == 0 {
 				argsCastType = []types.Type{argsType[0], argsType[1]}
@@ -9014,6 +9129,22 @@ func bindFuncExprImplByPlanExpr(
 				// Check if we can use column type to avoid casting it
 				canUse := func(colType, otherType types.Type, colExpr, otherExpr *plan.Expr) bool {
 					colOid, otherOid := colType.Oid, otherType.Oid
+
+					// bf16/float16/float8/float4: a numeric literal inside the type's finite
+					// range compares in the column's precision, rounded as a stored value is,
+					// so a value equals the literal it was inserted from
+					if colOid.IsLowPrecisionFloat() {
+						if otherExpr == nil {
+							return false
+						}
+						if !(otherOid.IsFloat() || otherOid.IsDecimal() || otherOid.IsInteger() || otherOid.IsMySQLString()) {
+							return false
+						}
+						// the literal rounded as the CAST that narrows it rounds it; a value that
+						// CAST rejects keeps the wide comparison
+						v, ok := lowPrecisionLiteral(otherExpr)
+						return ok && v.fits(colOid)
+					}
 
 					// For integers, check if constant value is within column type range
 					if colOid.IsInteger() && otherOid.IsInteger() {
@@ -11484,9 +11615,7 @@ func foldFloatComparisonConstants(proc *process.Process, name string, args []*Ex
 		return
 	}
 	fold := func(column, candidate *Expr) *Expr {
-		if column.GetCol() == nil ||
-			(types.T(column.Typ.Id) != types.T_float32 && types.T(column.Typ.Id) != types.T_float64) ||
-			candidate.GetLit() != nil {
+		if column.GetCol() == nil || !types.T(column.Typ.Id).IsFloat() || candidate.GetLit() != nil {
 			return candidate
 		}
 		oid := types.T(candidate.Typ.Id)
@@ -12187,7 +12316,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		expr := makePlan2StringConstExprWithType(val, isBin)
 		expr.GetLit().LiteralForm = form
 		if !typ.IsEmpty() {
-			isFloat := typ.Id == int32(types.T_float32) || typ.Id == int32(types.T_float64)
+			isFloat := types.T(typ.Id).IsFloat()
 			return appendCastBeforeExpr(b.GetContext(), expr, typ, isBin, isFloat)
 		}
 		return expr, nil
@@ -12495,6 +12624,7 @@ func isBitwiseAggregateConversionInput(t types.Type) bool {
 	case types.T_any,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_char, types.T_varchar, types.T_text,
 		types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_year:
 		return true
@@ -12525,7 +12655,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ..
 }
 
 func appendExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
-	return appendCastBeforeExprWithOverload(ctx, expr, toType, 1)
+	return appendTemporalIntegerCast(ctx, expr, toType, nil)
 }
 
 // appendSyntaxExplicitCastBeforeExpr records syntax provenance while retaining
@@ -13172,6 +13302,12 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	intervalType, err := types.IntervalTypeOf(intervalTypeStr)
 	if err != nil {
 		return nil, err
+	}
+	// a bf16, float16, float8 or float4 value is an interval as its float32 value
+	if types.T(firstExpr.Typ.Id).IsLowPrecisionFloat() {
+		if firstExpr, err = appendCastBeforeExpr(ctx, firstExpr, plan.Type{Id: int32(types.T_float32)}); err != nil {
+			return nil, err
+		}
 	}
 	markerDate := temporalDirectMarker(dateExpr)
 	if markerDate {
@@ -13875,13 +14011,18 @@ func (b *baseBinder) defaultValueBindType() plan.Type {
 	if b.integerArgumentSourceContext || b.suppressDefaultValueBindType {
 		return plan.Type{}
 	}
+	var typ plan.Type
 	if d, ok := b.impl.(*DefaultBinder); ok {
-		return d.typ
+		typ = d.typ
+	} else if r, ok := b.impl.(*ReplaceValueBinder); ok {
+		typ = r.typ
 	}
-	if r, ok := b.impl.(*ReplaceValueBinder); ok {
-		return r.typ
+	// A numeric, hex or bit literal is not a vector value: a vector column type is not
+	// its binding type, so CAST(X'...' AS BLOB) keeps the BLOB binary vector input.
+	if types.T(typ.Id).IsArray() {
+		return plan.Type{}
 	}
-	return plan.Type{}
+	return typ
 }
 
 func (b *baseBinder) defaultNumericOuterType() *plan.Type {

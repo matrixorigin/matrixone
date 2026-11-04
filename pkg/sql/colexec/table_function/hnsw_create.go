@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -42,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	usearch "github.com/unum-cloud/usearch/golang"
-	"go.uber.org/zap"
 )
 
 // hnswCatalogHooks is the shared (stateless) catalog-hooks instance used for
@@ -60,13 +57,8 @@ type hnswCreateState struct {
 	idxcfg vectorindex.IndexConfig
 	// bounds is the range of an int8/uint8 index, written to its dict table by end.
 	bounds hnsw.QuantizeBounds
-	// ignored holds the rows the index cannot store, written to its ignored table by end.
-	ignored *vectorindex.IgnoredSpill
-	// left counts the rows the index cannot store, and added the rows it stores.
-	left, added int
-	// firstPk and firstErr are the key and the error of the first row the index cannot store.
-	firstPk  string
-	firstErr error
+	// ignored leaves out the rows the index cannot store; nil without an ignored table.
+	ignored *ignoredBuild
 
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -81,8 +73,10 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	if u.tblcfg.MetadataTable == "" || u.tblcfg.IndexTable == "" {
 		return nil
 	}
-	if u.left > 0 && u.added == 0 {
-		return moerr.NewIndexAllRowsBadNoCtx(int64(u.left), u.firstPk, u.firstErr.Error())
+	if u.ignored != nil {
+		if err := u.ignored.allBad(); err != nil {
+			return err
+		}
 	}
 
 	// Clear the old index unconditionally — even when nothing was built (REBUILD to zero docs must
@@ -105,13 +99,6 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		sqls = append(sqls, hnsw.DictBoundsSql(u.tblcfg.DbName, u.tblcfg.DictTable, u.bounds))
 	}
 	buildTs := buildSnapshotTS(proc)
-	if u.left > 0 {
-		logutil.Warn("hnsw_create ignored rows",
-			zap.String("db", u.tblcfg.DbName),
-			zap.String("table", u.tblcfg.SrcTable),
-			zap.Int("ignored", u.left),
-			zap.String("first", u.firstPk+": "+u.firstErr.Error()))
-	}
 
 	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
 		stmt := sqlproc.StatementOption()
@@ -142,8 +129,7 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 			}
 		}
 		if u.ignored != nil {
-			cols := vectorindex.IgnoredColumns{Pk: catalog.IndexIgnored_TblCol_Pk, Code: catalog.IndexIgnored_TblCol_Code, Ts: catalog.IndexIgnored_TblCol_Ts}
-			return u.ignored.Sqls(u.tblcfg.DbName, u.tblcfg.IgnoredTable, cols, buildTs, run)
+			return u.ignored.sqls(u.tblcfg, buildTs, run)
 		}
 		return nil
 	})
@@ -175,9 +161,7 @@ func (u *hnswCreateState) free(tf *TableFunction, proc *process.Process, pipelin
 	if u.build != nil {
 		u.build.Destroy()
 	}
-	if u.ignored != nil {
-		u.ignored.Close()
-	}
+	u.ignored.close()
 }
 
 func hnswCreatePrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -300,9 +284,7 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		return nil
 	}
 
-	if u.tblcfg.IgnoredTable != "" {
-		u.ignored = vectorindex.NewIgnoredSpill(vimemory.HostSpillDir(proc.GetTopContext(), proc.Base.FileService, proc.GetService()))
-	}
+	u.ignored = newIgnoredBuild(u.tblcfg, vimemory.HostSpillDir(proc.GetTopContext(), proc.Base.FileService, proc.GetService()))
 	uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
 	u.build, err = newHnswBuilder(sqlexec.NewSqlProcess(proc), uid, partType, u.idxcfg, u.tblcfg)
 	if err == nil {
@@ -385,23 +367,17 @@ func (u *hnswCreateState) addResult(res executor.Result) error {
 			}
 			id := vector.GetFixedAtNoTypeCheck[int64](idVec, i)
 			err := u.build.addBytes(id, faVec.GetBytesAt(i))
-			if err == nil {
-				u.added++
+			if u.ignored == nil {
+				if err != nil {
+					return err
+				}
 				continue
 			}
-			code, ok := vectorindex.UnstorableCode(err)
-			if !ok || u.tblcfg.IgnoredTable == "" {
-				return err
+			if err == nil {
+				u.ignored.stored()
+				continue
 			}
-			u.left++
-			pk := strconv.FormatInt(id, 10)
-			if u.firstErr == nil {
-				u.firstPk, u.firstErr = pk, err
-			}
-			if u.ignored.Len() >= u.tblcfg.MaxBadRecords {
-				return moerr.NewIndexTooManyBadRecordsNoCtx(u.tblcfg.MaxBadRecords, pk, err.Error())
-			}
-			if err := u.ignored.Add(pk, code); err != nil {
+			if err := u.ignored.leaveOut(strconv.FormatInt(id, 10), err); err != nil {
 				return err
 			}
 		}
@@ -450,6 +426,7 @@ func newTypedHnswBuilder[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, uid 
 // newHnswBuilder returns a build that takes vectors of the column type partType as they are.
 func newHnswBuilder(sqlproc *sqlexec.SqlProcess, uid string, partType int32,
 	idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) (hnswBuilder, error) {
+	// typeswitch:partial vecf8/vecf4 cannot carry a vector index (rejected at DDL)
 	switch types.T(partType) {
 	case types.T_array_float32:
 		return newTypedHnswBuilder[float32](sqlproc, uid, idxcfg, tblcfg)

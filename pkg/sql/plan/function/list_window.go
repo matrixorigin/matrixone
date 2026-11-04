@@ -662,8 +662,9 @@ func ewmNumericArgDomain(oid types.T) bool {
 	switch oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_float32, types.T_float64, types.T_decimal64,
-		types.T_decimal128, types.T_decimal256:
+		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	}
 	return false
@@ -737,8 +738,9 @@ func ewmTypeCheck(inputs []types.Type, valueArgs int) checkResult {
 			// adjust / ignoreNA
 		case types.T_int16, types.T_int32, types.T_int64,
 			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-			types.T_float32, types.T_float64, types.T_decimal64,
-			types.T_decimal128, types.T_decimal256:
+			types.T_float32, types.T_float64,
+			types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
 			// permit an integer-valued constant expression to flow; the
 			// per-execution boundary enforces the resolved kinds' values
 		default:

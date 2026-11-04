@@ -927,6 +927,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			PreInsertSkCtx: t.PreInsertCtx,
 		}
 	case *shuffle.Shuffle:
+		if len(t.ShuffleKeyColumns) > 0 {
+			return ctxId, nil, moerr.NewInternalErrorNoCtx("complete-key shuffle is coordinator-local")
+		}
 		if proc != nil && proc.UsesCompleteStringShuffleHash() &&
 			t.ShuffleType == int32(plan.ShuffleType_Hash) && t.StringHashKey {
 			// This appended wire opcode is deliberately unknown to pre-v33

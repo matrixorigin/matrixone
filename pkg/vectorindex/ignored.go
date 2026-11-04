@@ -29,6 +29,10 @@ import (
 
 const ignoredRowsPerSql = 1024
 
+// Float16Overflow is the smallest float32 magnitude that rounds to infinity as float16: the
+// midpoint above the largest finite value, which rounds to even, away from it.
+const Float16Overflow = float32(65520)
+
 // UnstorableCodes are the error codes of the reasons an index cannot store a row.
 var UnstorableCodes = []uint16{moerr.ErrIndexVectorDimension, moerr.ErrIndexVectorNonFinite, moerr.ErrIndexVectorOutOfRange}
 

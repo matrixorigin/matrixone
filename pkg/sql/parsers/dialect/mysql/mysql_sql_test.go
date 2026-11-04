@@ -1112,6 +1112,57 @@ func TestConvertUsingDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNumericExponentStatementBoundaries(t *testing.T) {
+	ctx := context.Background()
+	const sql = "select 1; select 1.5Efoo"
+	stmts, err := Parse(ctx, sql, 1)
+	for _, stmt := range stmts {
+		t.Cleanup(stmt.Free)
+	}
+	require.Error(t, err)
+	require.Empty(t, stmts)
+	fragments, err := SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, 1, "")
+	require.Error(t, err)
+	require.Empty(t, fragments)
+
+	parser := &MySQLParser{}
+	stmt, first, next, err := parser.ParseFirstStatementWithSQLMode(ctx, SQLContinuation{SQL: sql}, 1, "")
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, "select 1;", first)
+	require.Equal(t, "select 1", tree.String(stmt, dialect.MYSQL))
+	stmt, _, _, err = parser.ParseFirstStatementWithSQLMode(ctx, next, 1, "")
+	if stmt != nil {
+		t.Cleanup(stmt.Free)
+	}
+	require.Error(t, err)
+	require.Nil(t, stmt)
+	positioned, ok := err.(PositionedErr)
+	require.True(t, ok)
+	require.Contains(t, positioned.Near, "1.5Efoo")
+
+	stmts, err = parser.Parse(ctx, "select 1.5e", 1)
+	for _, stmt := range stmts {
+		t.Cleanup(stmt.Free)
+	}
+	require.Error(t, err)
+	require.Empty(t, stmts)
+	stmts, err = parser.Parse(ctx, "select 1.5e1foo", 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	require.Len(t, stmts, 1)
+	expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
+	require.Equal(t, "foo", expr.As.Origin())
+	require.IsType(t, &tree.NumVal{}, expr.Expr)
+	value, exact := expr.Expr.(*tree.NumVal).Float64()
+	require.True(t, exact)
+	require.Equal(t, float64(15), value)
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}
@@ -5451,12 +5502,31 @@ var (
 			output: "create table t1 (a vecbf16(3), b vecf16(3), c vecint8(3))",
 		},
 		{
+			// #20567: scalar low-precision float types (no length option).
+			input:  "create table t1(a bf16, b float16, c float8, d float4)",
+			output: "create table t1 (a bf16, b float16, c float8, d float4)",
+		},
+		{
 			input:  "create table t1(a vecbf16(128), b vecf16(65535), c vecint8(1))",
 			output: "create table t1 (a vecbf16(128), b vecf16(65535), c vecint8(1))",
 		},
 		{
 			input:  "create table t1(a vecuint8(3))",
 			output: "create table t1 (a vecuint8(3))",
+		},
+		{
+			// #20567: block-scaled vecf8 (MXFP8) / vecf4 (NVFP4).
+			input:  "create table t1(a vecf8(3), b vecf4(1024), c vecf8(65535), d vecf4(1))",
+			output: "create table t1 (a vecf8(3), b vecf4(1024), c vecf8(65535), d vecf4(1))",
+		},
+		{
+			input:  "select cast('[1,2,3]' as vecf8(3)), cast(v as vecf4(3)) from t1",
+			output: "select cast([1,2,3] as vecf8(3)), cast(v as vecf4(3)) from t1",
+		},
+		{
+			// vecf8/vecf4 are non-reserved keywords.
+			input:  "create table vecf8 (vecf4 int)",
+			output: "create table vecf8 (vecf4 int)",
 		},
 		{
 			input:  "create table t1(a vecuint8(128), b vecuint8(65535), c vecuint8(1))",

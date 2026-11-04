@@ -968,11 +968,7 @@ class BaseMatrixOneQuery:
 
     def _detect_sqlalchemy_model(self) -> bool:
         """Detect if the model class is a SQLAlchemy model"""
-        return (
-            hasattr(self.model_class, "__tablename__")
-            and hasattr(self.model_class, "__mapper__")
-            and hasattr(self.model_class, "__table__")
-        )
+        return hasattr(self.model_class, "__mapper__") and hasattr(self.model_class, "__table__")
 
     def select(self, *columns) -> "BaseMatrixOneQuery":
         """Add SELECT columns - SQLAlchemy style"""

@@ -243,6 +243,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	var selectList []tree.SelectExpr
+	physicalGeneratedRefs := make(map[*tree.UnresolvedName]struct{})
 	colName2Idx := make([]map[string]int32, len(stmt.Tables))
 
 	getResolveExpr := func(alias string) {
@@ -251,6 +252,9 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 		for _, col := range dmlCtx.tableDefs[defIdx].Cols {
 			colName2Idx[defIdx][col.Name] = int32(len(selectList))
 			selectExpr := tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(col.Name, 1))
+			if col.GeneratedCol != nil {
+				physicalGeneratedRefs[selectExpr] = struct{}{}
+			}
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: selectExpr,
 			})
@@ -291,6 +295,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 	}
 
 	selectCtx := NewBindContext(builder, bindCtx)
+	selectCtx.physicalGeneratedRefs = physicalGeneratedRefs
 	lastNodeID, err := builder.bindSelect(astSelect, selectCtx, false)
 	if err != nil {
 		return 0, err

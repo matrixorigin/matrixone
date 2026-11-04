@@ -1005,6 +1005,11 @@ func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
 			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 2, add); err != nil {
 				return 0, err
 			}
+		case types.T_array_float8, types.T_array_float4:
+			// Rows hold the dequantized []float32.
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 4, add); err != nil {
+				return 0, err
+			}
 		case types.T_array_int8:
 			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 1, add); err != nil {
 				return 0, err
@@ -1090,6 +1095,12 @@ func estimatePreparedCursorArrayCopyBytes(
 			length = len(vector.GetArrayAt[types.Float16](vec, row))
 		case types.T_array_int8:
 			length = len(vector.GetArrayAt[int8](vec, row))
+		case types.T_array_float8, types.T_array_float4:
+			c, err := types.ParseBlockScaledCell(vec.GetBytesAt(row))
+			if err != nil {
+				return err
+			}
+			length = c.Dim
 		}
 		bytes := uint64(length)
 		if bytes > math.MaxUint64/elementBytes {
@@ -2332,8 +2343,11 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 				}
 			}
 
-			bat.Shrink(sels, false)
+			err = bat.Shrink(sels, false, ses.proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
 
 			v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
 			v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
@@ -3882,8 +3896,11 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 				}
 			}
 
-			bat.Shrink(sels, false)
+			err = bat.Shrink(sels, false, proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
 			v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
 			v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 			v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
@@ -7757,6 +7774,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetSigned(false)
 	case types.T_float32:
 		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// The low-precision float types have no MySQL wire type; present them as
+		// FLOAT (they widen losslessly to float32 for the protocol).
+		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
 	case types.T_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
 	case types.T_char:
@@ -7764,7 +7785,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_varchar:
 		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_datalink:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)

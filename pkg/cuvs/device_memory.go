@@ -24,9 +24,9 @@ import "C"
 import (
 	"runtime"
 	"sync"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 )
 
 // DeviceReservation is a claim on a device's VRAM held in the C++ governor
@@ -39,7 +39,7 @@ import (
 // claim taken inside the C++ build would only begin at the allocation, leaving
 // the minutes between planning and allocating exactly as exposed as before.
 type DeviceReservation struct {
-	token unsafe.Pointer
+	token *byte
 	once  sync.Once
 }
 
@@ -52,17 +52,17 @@ type DeviceReservation struct {
 // is a defect, not permission to skip admission.
 func ReserveDeviceMemory(deviceID int, bytes uint64) (*DeviceReservation, error) {
 	var errmsg *C.char
-	tok := C.gpu_device_memory_reserve(C.int(deviceID), C.uint64_t(bytes), unsafe.Pointer(&errmsg))
+	tok := C.gpu_device_memory_reserve(C.int(deviceID), C.uint64_t(bytes), util.UnsafePointer(&errmsg))
 	if errmsg != nil {
 		errStr := C.GoString(errmsg)
-		C.free(unsafe.Pointer(errmsg))
+		C.free(util.UnsafePointer(errmsg))
 		return nil, moerr.NewInternalErrorNoCtx(errStr)
 	}
 	if tok == nil {
 		return nil, moerr.NewInternalErrorNoCtxf(
 			"cuvs: device %d refused a %d byte VRAM reservation", deviceID, bytes)
 	}
-	r := &DeviceReservation{token: tok}
+	r := &DeviceReservation{token: (*byte)(tok)}
 	// Backstop only. A dropped reservation would otherwise hold VRAM budget for
 	// the life of the process; the finalizer bounds that to the next GC. It is
 	// NOT a substitute for Release — finalizer timing is not a resource policy.
@@ -78,7 +78,7 @@ func (r *DeviceReservation) Release() {
 	}
 	r.once.Do(func() {
 		if r.token != nil {
-			C.gpu_device_memory_release(r.token)
+			C.gpu_device_memory_release(util.UnsafePointer(r.token))
 			r.token = nil
 		}
 		runtime.SetFinalizer(r, nil)

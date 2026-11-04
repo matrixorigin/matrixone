@@ -734,7 +734,8 @@ func TestMakeTimeReturnScale(t *testing.T) {
 func TestTimeArithmeticFloatDurationKeepsFractionalPrecision(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, name := range []string{"addtime", "subtime"} {
-		for _, floatType := range []types.T{types.T_float32, types.T_float64} {
+		for _, floatType := range []types.T{types.T_float32, types.T_float64,
+			types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
 			result, err := GetFunctionByName(proc.Ctx, name, []types.Type{
 				types.T_time.ToType(), floatType.ToType(),
 			})
@@ -1485,6 +1486,7 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 		CONVERT: true, DATEDIFF: true, UNIX_TIMESTAMP: true,
 		EXTRACTVALUE: true, UPDATEXML: true, UNCOMPRESS: true, UNCOMPRESSED_LENGTH: true,
 		AES_ENCRYPT: true, AES_DECRYPT: true, CAST_ASSIGN: true, CAST_IGNORE: true,
+		CAST:                true, // TemporalCastIntegerOverload reads a statement-stable session mode.
 		CAST_INDEX_TO_VALUE: true, CAST_VALUE_TO_INDEX: true, CAST_INDEX_VALUE_TO_INDEX: true,
 		CAST_INDEX_TO_SET_VALUE: true, CAST_SET_VALUE_TO_INDEX: true, CAST_SET_INDEX_VALUE_TO_INDEX: true,
 		CAST_GEOMETRY_TO_SUBTYPE: true, CAST_JSON_TO_ARRAY: true, CAST_NANO_TO_TIMESTAMP: true,
