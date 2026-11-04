@@ -47,6 +47,7 @@ type decimalChainExecutor struct {
 	inputs []decimalChainInput
 	nodes  []decimalChainNode
 	visits int
+	casts  int
 }
 
 func (e *decimalChainExecutor) domain(ref int) (int32, int32) {
@@ -83,6 +84,9 @@ func (e *decimalChainExecutor) prepare(expr *plan.Expr, executor ExpressionExecu
 				width, scale := e.domain(ref)
 				if width-max(scale-expr.Typ.Scale, 0) > expr.Typ.Width {
 					return 0, false
+				}
+				if expr.Typ.Id != source.Id || expr.Typ.Scale != source.Scale {
+					e.casts++
 				}
 				return ref, true
 			}
@@ -193,7 +197,10 @@ func prepareDecimalChain(expr *plan.Expr, executor ExpressionExecutor) Expressio
 	}
 	e := &decimalChainExecutor{root: root}
 	ref, ok := e.prepare(expr, executor, -1)
-	if !ok || ref != len(e.nodes)-1 || len(e.nodes) < 2 || len(e.inputs) > 5 {
+	if !ok || ref != len(e.nodes)-1 || len(e.nodes) < 1 || len(e.inputs) > 5 {
+		return nil
+	}
+	if len(e.nodes) == 1 && e.casts == 0 {
 		return nil
 	}
 	for _, input := range e.inputs {
@@ -217,7 +224,7 @@ func (e *decimalChainExecutor) releaseScratch() {
 		}
 	}
 }
-func (e *decimalChainExecutor) allocateScratch(p *process.Process, rows int) (err error) {
+func (e *decimalChainExecutor) allocateScratch(rows int) (err error) {
 	defer func() {
 		if err != nil {
 			e.releaseScratch()
@@ -226,7 +233,7 @@ func (e *decimalChainExecutor) allocateScratch(p *process.Process, rows int) (er
 	for i := range e.inputs {
 		v := &e.inputs[i]
 		if v.constant && v.value == nil {
-			v.value, err = newExpressionConstFixed(types.New(types.T_decimal64, min(v.precision, 18), v.scale), v.literal, 1, p.Mp(), e.root.allocation)
+			v.value, err = newExpressionConstFixed(types.New(types.T_decimal64, min(v.precision, 18), v.scale), v.literal, 1, e.root.m, e.root.allocation)
 			if err != nil {
 				return err
 			}
@@ -240,7 +247,7 @@ func (e *decimalChainExecutor) allocateScratch(p *process.Process, rows int) (er
 				return err
 			}
 		}
-		if err = v.scratch.PreExtend(rows, p.Mp()); err != nil {
+		if err = v.scratch.PreExtend(rows, e.root.m); err != nil {
 			return err
 		}
 		v.scratch.SetLength(rows)
@@ -292,7 +299,7 @@ func (e *decimalChainExecutor) Eval(p *process.Process, b []*batch.Batch, select
 	if n == 0 {
 		return e.root.Eval(p, b, selected)
 	}
-	if err = e.allocateScratch(p, min(n, decimalChainRows)); err != nil {
+	if err = e.allocateScratch(min(n, decimalChainRows)); err != nil {
 		return nil, err
 	}
 	e.root.resetResultType(e.root.resultVector)

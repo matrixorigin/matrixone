@@ -7,8 +7,8 @@ SIMD-first implementation planning, retaining historical designs and evidence.
 ## Contract
 
 Keep DECIMAL(15,2), SQL inference, per-operation precision/scale and aggregate
-accumulator types unchanged. One independent PR has two implementation commits:
-typed +,-,* operand execution, then bounded complete aggregate-argument chains.
+accumulator types unchanged. Implementation branch: `perf/decimal-typed-execution`. One independent PR covers:
+typed +,-,* operand execution and bounded complete aggregate-argument chains.
 Do not change general SELECT/filter constructors or add a query-specific path.
 The existing expression tree exclusively owns executors, literals and output;
 specializations borrow leaves and delegate reset/free once.
@@ -23,9 +23,12 @@ No sampled bounds, batch range scan, production big.Int, SIMD, JIT or new VM.
 
 ## Bounded chains and ownership
 
-Admit unshared trees of at most four arithmetic nodes. Process 256 rows per
+Admit unshared trees of at most four arithmetic nodes. A single-node chain
+requires a proven eliminated physical widening/scale-conversion cast. Process 256 rows per
 chunk in original tree order, with at most three 256x32-byte scratch buffers
-(24 KiB per argument), charged through the existing expression allocation owner.
+(24 KiB arithmetic scratch payload per argument), charged through the existing
+expression allocation owner. At most four normalized literal coefficients add
+32 payload bytes; vector metadata and allocator rounding remain accounted.
 The root writes its normal output vector. Only flat non-NULL inputs/non-NULL
 literals initially use the chain path. Masks, broadcast columns, NULL/grouping
 representations and ownership-transferring Eval use the original tree.

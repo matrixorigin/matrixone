@@ -244,3 +244,28 @@ func TestDecimalChainPreparationBounds(t *testing.T) {
 	t.Cleanup(generic2.Free)
 	require.Nil(t, prepareDecimalChain(expression, generic2))
 }
+
+func TestDecimalSingleNodeSkipsWideningCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	expression := mulSubTestPlan(t, proc, false).GetF().Args[1]
+	ex, err := newTestDecimalAggregateExecutor(proc, expression)
+	require.NoError(t, err)
+	t.Cleanup(ex.Free)
+	chain, ok := ex.(*decimalChainExecutor)
+	require.True(t, ok)
+	require.Len(t, chain.nodes, 1)
+	input := batch.NewWithSize(2)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	input.Vecs[1] = vector.NewVec(types.New(types.T_decimal64, 15, 2))
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.Decimal64(5), false, proc.Mp()))
+	input.SetRowCount(1)
+	out, err := ex.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "0.95", vector.GetFixedAtNoTypeCheck[types.Decimal128](out, 0).Format(2))
+	require.Equal(t, chain.root.resultType, *out.GetType())
+	cast := chain.root.parameterExecutor[1].(*FunctionExpressionExecutor)
+	if value := cast.resultVector.GetResultVector(); value != nil {
+		require.Zero(t, value.Length())
+	}
+}
