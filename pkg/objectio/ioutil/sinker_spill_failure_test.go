@@ -141,8 +141,8 @@ func TestFetchBufferPartialPreExtendFailure(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, bat)
 	require.Empty(t, pool.active)
-	require.Equal(t, 1, pool.Len())
-	require.Greater(t, mp.CurrNB(), baseline, "first column should have allocated before failure")
+	require.Zero(t, pool.Len(), "a cleaned partial batch must not enter the cache")
+	require.Equal(t, baseline, mp.CurrNB(), "partial allocations must be released immediately")
 	require.NoError(t, sinker.Close())
 	require.Equal(t, baseline, mp.CurrNB())
 }

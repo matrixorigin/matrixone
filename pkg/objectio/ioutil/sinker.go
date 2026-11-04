@@ -562,6 +562,9 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 	delivered := false
 	defer func() {
 		if !delivered {
+			// Release partial allocations immediately; returning to a cache
+			// alone can retain them after an allocation failure.
+			bat.Clean(sinker.mp)
 			sinker.putBackBuffer(bat)
 		}
 	}()
