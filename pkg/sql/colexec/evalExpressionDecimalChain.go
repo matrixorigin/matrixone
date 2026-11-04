@@ -65,14 +65,26 @@ func (e *decimalChainExecutor) prepare(expr *plan.Expr, executor ExpressionExecu
 	if expr == nil || expr.AuxId != 0 {
 		return 0, false
 	}
-	// Only physically widening, same-scale implicit casts are transparent.
+	// Bypass a cast only after proving its original precision boundary.
+	// Scale-increasing column casts are admitted only under exact ADD/SUB alignment.
 	if f := decimalCall(expr, function.CAST); f != nil {
 		fn, ok := executor.(*FunctionExpressionExecutor)
 		if ok && len(f.Args) == 2 && len(fn.parameterExecutor) == 2 && fn.overloadID == f.Func.Obj && !f.SyntaxExplicitCast {
 			_, overload := function.DecodeOverloadID(f.Func.Obj)
 			source := f.Args[0].Typ
 			if overload == 0 && types.T(source.Id).IsDecimal() && types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Scale >= source.Scale && expr.Typ.Width-expr.Typ.Scale >= source.Width-source.Scale && types.T(expr.Typ.Id).TypeLen() >= types.T(source.Id).TypeLen() {
-				return e.prepare(f.Args[0], fn.parameterExecutor[0], align)
+				if expr.Typ.Scale > source.Scale && align < expr.Typ.Scale {
+					return 0, false
+				}
+				ref, ok := e.prepare(f.Args[0], fn.parameterExecutor[0], align)
+				if !ok {
+					return 0, false
+				}
+				width, scale := e.domain(ref)
+				if width-max(scale-expr.Typ.Scale, 0) > expr.Typ.Width {
+					return 0, false
+				}
+				return ref, true
 			}
 		}
 	}
@@ -205,7 +217,7 @@ func (e *decimalChainExecutor) releaseScratch() {
 		}
 	}
 }
-func (e *decimalChainExecutor) allocateScratch(p *process.Process) (err error) {
+func (e *decimalChainExecutor) allocateScratch(p *process.Process, rows int) (err error) {
 	defer func() {
 		if err != nil {
 			e.releaseScratch()
@@ -228,10 +240,10 @@ func (e *decimalChainExecutor) allocateScratch(p *process.Process) (err error) {
 				return err
 			}
 		}
-		if err = v.scratch.PreExtend(decimalChainRows, p.Mp()); err != nil {
+		if err = v.scratch.PreExtend(rows, p.Mp()); err != nil {
 			return err
 		}
-		v.scratch.SetLength(decimalChainRows)
+		v.scratch.SetLength(rows)
 	}
 	return nil
 }
@@ -280,7 +292,7 @@ func (e *decimalChainExecutor) Eval(p *process.Process, b []*batch.Batch, select
 	if n == 0 {
 		return e.root.Eval(p, b, selected)
 	}
-	if err = e.allocateScratch(p); err != nil {
+	if err = e.allocateScratch(p, min(n, decimalChainRows)); err != nil {
 		return nil, err
 	}
 	e.root.resetResultType(e.root.resultVector)

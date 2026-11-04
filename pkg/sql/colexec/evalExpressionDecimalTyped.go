@@ -51,6 +51,13 @@ func decimalTypedColumn(e *plan.Expr, executor ExpressionExecutor) *ColumnExpres
 	if source.GetCol() == nil || source.AuxId != 0 || types.T(source.Typ.Id) != types.T_decimal64 || (target != types.T_decimal128 && target != types.T_decimal256) || e.Typ.Scale != source.Typ.Scale || source.Typ.Width <= 0 || source.Typ.Width > 18 || e.Typ.Width < source.Typ.Width {
 		return nil
 	}
+	width := source.Typ.Width
+	if width == 18 {
+		width = 19
+	}
+	if e.Typ.Width < width {
+		return nil
+	}
 	col, _ := cast.parameterExecutor[0].(*ColumnExpressionExecutor)
 	return col
 }

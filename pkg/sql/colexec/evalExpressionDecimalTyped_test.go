@@ -82,3 +82,17 @@ func TestDecimalTypedRefusesExplicitCast(t *testing.T) {
 	t.Cleanup(ex.Free)
 	require.Nil(t, prepareDecimalTyped(expression, ex))
 }
+
+func TestDecimalTypedRetainsLegacyCastPrecisionBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	typ := types.New(types.T_decimal64, 18, 2)
+	col := &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	cast := bindTestCast(t, proc, 0, col, types.New(types.T_decimal128, 18, 2))
+	expression := bindTestFunction(t, proc, "+", cast, cast)
+	ex, err := NewExpressionExecutor(proc, expression)
+	require.NoError(t, err)
+	t.Cleanup(ex.Free)
+	require.Nil(t, prepareDecimalTyped(expression, ex))
+	require.Nil(t, prepareDecimalChain(expression, ex))
+}

@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -140,54 +141,58 @@ func BenchmarkDecimalChain(b *testing.B) {
 }
 
 func TestDecimalChainAllocationFailureAndRetry(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	t.Cleanup(proc.Free)
-	registry, err := mpool.NewAllocationAccountRegistry(1, 64)
-	require.NoError(t, err)
-	account, err := registry.Open(16 << 10)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.Zero(t, account.Snapshot().Used)
-		account.Seal()
-		_, err := registry.Finalize(account)
-		require.NoError(t, err)
-	})
-	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
-	require.NoError(t, err)
-	ex, err := newTestDecimalAggregateExecutorWithAllocation(proc, decimalChargeTestPlan(t, proc), selection)
-	require.NoError(t, err)
-	t.Cleanup(ex.Free)
-	chain, ok := ex.(*decimalChainExecutor)
-	require.True(t, ok)
-	input := batch.NewWithSize(3)
-	t.Cleanup(func() { input.Clean(proc.Mp()) })
-	for col, value := range []types.Decimal64{10000, 5, 8} {
-		input.Vecs[col] = vector.NewVec(types.New(types.T_decimal64, 15, 2))
-		for i := 0; i < 8192; i++ {
-			require.NoError(t, vector.AppendFixed(input.Vecs[col], value, false, proc.Mp()))
-		}
+	for _, limit := range []uint64{4 << 10, 16 << 10} {
+		t.Run(fmt.Sprintf("limit%d", limit), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 64)
+			require.NoError(t, err)
+			account, err := registry.Open(limit)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.Zero(t, account.Snapshot().Used)
+				account.Seal()
+				_, err := registry.Finalize(account)
+				require.NoError(t, err)
+			})
+			selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+			require.NoError(t, err)
+			ex, err := newTestDecimalAggregateExecutorWithAllocation(proc, decimalChargeTestPlan(t, proc), selection)
+			require.NoError(t, err)
+			t.Cleanup(ex.Free)
+			chain, ok := ex.(*decimalChainExecutor)
+			require.True(t, ok)
+			input := batch.NewWithSize(3)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			for col, value := range []types.Decimal64{10000, 5, 8} {
+				input.Vecs[col] = vector.NewVec(types.New(types.T_decimal64, 15, 2))
+				for i := 0; i < 8192; i++ {
+					require.NoError(t, vector.AppendFixed(input.Vecs[col], value, false, proc.Mp()))
+				}
+			}
+			input.SetRowCount(8192)
+			before := account.Snapshot().Used
+			_, err = ex.Eval(proc, []*batch.Batch{input}, nil)
+			require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+			require.Equal(t, before, account.Snapshot().Used)
+			for _, node := range chain.nodes {
+				require.Nil(t, node.scratch)
+			}
+			for _, leaf := range chain.inputs {
+				require.Nil(t, leaf.value)
+			}
+			for _, v := range input.Vecs {
+				v.SetLength(1)
+			}
+			input.SetRowCount(1)
+			out, err := ex.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, "102.600000", vector.GetFixedAtNoTypeCheck[types.Decimal256](out, 0).Format(6))
+			require.Same(t, selection, out.AllocationAccountSelection())
+			ex.ResetForNextQuery()
+			require.LessOrEqual(t, account.Snapshot().Used, account.Snapshot().Limit)
+		})
 	}
-	input.SetRowCount(8192)
-	before := account.Snapshot().Used
-	_, err = ex.Eval(proc, []*batch.Batch{input}, nil)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.Equal(t, before, account.Snapshot().Used)
-	for _, node := range chain.nodes {
-		require.Nil(t, node.scratch)
-	}
-	for _, leaf := range chain.inputs {
-		require.Nil(t, leaf.value)
-	}
-	for _, v := range input.Vecs {
-		v.SetLength(1)
-	}
-	input.SetRowCount(1)
-	out, err := ex.Eval(proc, []*batch.Batch{input}, nil)
-	require.NoError(t, err)
-	require.Equal(t, "102.600000", vector.GetFixedAtNoTypeCheck[types.Decimal256](out, 0).Format(6))
-	require.Same(t, selection, out.AllocationAccountSelection())
-	ex.ResetForNextQuery()
-	require.LessOrEqual(t, account.Snapshot().Used, account.Snapshot().Limit)
 }
 
 func TestDecimalChainExactScaleAlignment(t *testing.T) {

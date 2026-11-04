@@ -55,31 +55,6 @@ func TestDecimalMul128By64Exact(t *testing.T) {
 	}
 }
 
-func TestDecimalMul128By64BatchBounds(t *testing.T) {
-	require.True(t, decimalMul128By64Batch(nil, nil, nil))
-	for _, n := range []int{1, 3, 255, 256, 257} {
-		x := make([]types.Decimal128, n)
-		y := make([]types.Decimal64, n)
-		output := make([]types.Decimal256, n+2)
-		output[0] = types.Decimal256FromInt64(17)
-		output[n+1] = types.Decimal256FromInt64(19)
-		for i := range x {
-			x[i] = types.Decimal128{B0_63: 3}
-			negative := int64(-7)
-			y[i] = types.Decimal64(negative)
-		}
-		require.True(t, decimalMul128By64Batch(x, y, output[1:n+1]))
-		for _, value := range output[1 : n+1] {
-			require.Equal(t, "-21", value.Format(0))
-		}
-		require.Equal(t, types.Decimal256FromInt64(17), output[0])
-		require.Equal(t, types.Decimal256FromInt64(19), output[n+1])
-		before := append([]types.Decimal256(nil), output...)
-		require.False(t, decimalMul128By64Batch(x, y[:n-1], output[1:n+1]))
-		require.Equal(t, before, output)
-	}
-}
-
 func TestDecimalAddSub128Exact(t *testing.T) {
 	for _, tc := range []struct{ x, y, sum, difference string }{
 		{"0", "0", "0", "0"},

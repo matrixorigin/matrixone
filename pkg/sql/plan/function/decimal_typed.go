@@ -48,19 +48,6 @@ func decimalMul128By64(x types.Decimal128, y types.Decimal64) types.Decimal256 {
 	return result
 }
 
-// decimalMul128By64Batch is the row-aligned mixed-width primitive. The caller
-// has admitted the complete operation, owns destination capacity and NULL/mask
-// handling, and supplies the exact original scale without rescaling.
-func decimalMul128By64Batch(x []types.Decimal128, y []types.Decimal64, dst []types.Decimal256) bool {
-	if len(x) != len(y) || len(x) != len(dst) {
-		return false
-	}
-	for i := range x {
-		dst[i] = decimalMul128By64(x[i], y[i])
-	}
-	return true
-}
-
 // decimalAdd128Exact retains the carry beyond the signed 128-bit inputs.
 // Its result needs at most 129 signed bits; no decimal rounding is involved.
 func decimalAdd128Exact(x, y types.Decimal128) types.Decimal256 {
