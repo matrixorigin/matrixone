@@ -14,7 +14,10 @@ The existing expression tree exclusively owns executors, literals and output;
 specializations borrow leaves and delegate reset/free once.
 
 Skip only provably lossless implicit casts over supported columns/literals.
-Normalize bound literals once. Select typed kernels at preparation, not per row.
+Normalize bound literals once. Select typed kernels at preparation, not per row. A single binary root
+requires an eliminated physical conversion; native arithmetic retains its
+existing kernel. The SF10 disk confirmation exposed a Q6 slowdown when that
+route was replaced without removing any widening work.
 Add/subtract align scales exactly; multiply uses exact 64x64->128 and
 128x64->256 primitives. Retain original result checks. Admit only operations
 with proven representability and no rounding/scale reduction. Explicit/fallible

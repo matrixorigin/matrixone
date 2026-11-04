@@ -79,6 +79,11 @@ func prepareDecimalTyped(e *plan.Expr, executor ExpressionExecutor) ExpressionEx
 	if a == nil || b == nil || a.typ.Width <= 0 || b.typ.Width <= 0 || a.typ.Scale < 0 || b.typ.Scale < 0 {
 		return nil
 	}
+	// Native operands already reach the existing typed arithmetic kernel.
+	// Replacing that route removes no conversion and adds chunk/broadcast work.
+	if types.T(f.Args[0].Typ.Id) == a.typ.Oid && types.T(f.Args[1].Typ.Id) == b.typ.Oid {
+		return nil
+	}
 	aw, bw := a.typ.Width, b.typ.Width
 	// The legacy precision-18 carrier may retain a full signed-int64 value.
 	if aw == 18 {

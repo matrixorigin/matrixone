@@ -34,7 +34,9 @@ func TestDecimalTypedBinaryAggregate(t *testing.T) {
 			col := func(i int32) *plan.Expr {
 				return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: i}}}
 			}
-			expression := bindTestFunction(t, proc, tc.op, col(0), col(1))
+			a := bindTestCast(t, proc, 0, col(0), types.New(types.T_decimal128, 15, 2))
+			b := bindTestCast(t, proc, 0, col(1), types.New(types.T_decimal128, 15, 2))
+			expression := bindTestFunction(t, proc, tc.op, a, b)
 			ex, err := newTestDecimalAggregateExecutor(proc, expression)
 			require.NoError(t, err)
 			t.Cleanup(ex.Free)
@@ -95,4 +97,20 @@ func TestDecimalTypedRetainsLegacyCastPrecisionBoundary(t *testing.T) {
 	t.Cleanup(ex.Free)
 	require.Nil(t, prepareDecimalTyped(expression, ex))
 	require.Nil(t, prepareDecimalChain(expression, ex))
+}
+
+func TestDecimalNativeBinaryKeepsExistingKernel(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	typ := types.New(types.T_decimal64, 15, 2)
+	col := func(i int32) *plan.Expr {
+		return &plan.Expr{Typ: typ.PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: i}}}
+	}
+	for _, op := range []string{"+", "-", "*"} {
+		expression := bindTestFunction(t, proc, op, col(0), col(1))
+		generic, err := NewExpressionExecutor(proc, expression)
+		require.NoError(t, err)
+		t.Cleanup(generic.Free)
+		require.Same(t, generic, FuseDecimalAggregateArgument(expression, generic))
+	}
 }
