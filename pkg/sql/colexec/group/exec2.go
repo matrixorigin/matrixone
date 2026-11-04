@@ -311,7 +311,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			}
 			for i, arg := range ag.GetArgExpressions() {
 				// Most aggregate arguments need no specialization discovery.
-				if f := arg.GetF(); f != nil && f.Func != nil && f.Func.ObjName == "*" && types.T(arg.Typ.Id) == types.T_decimal128 {
+				if f := arg.GetF(); f != nil && f.Func != nil && (f.Func.ObjName == "+" || f.Func.ObjName == "-" || f.Func.ObjName == "*") && types.T(arg.Typ.Id).IsDecimal() {
 					e.Executor[i] = colexec.FuseDecimalAggregateArgument(arg, e.Executor[i])
 				}
 			}
