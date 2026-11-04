@@ -75,6 +75,7 @@ func TestSortedConsumersAfterShuffle(t *testing.T) {
 			sels   []int64
 			sorted bool
 		}{
+			{"identity", []int64{0, 1, 2, 3}, true},
 			{"gaps_duplicates", []int64{0, 1, 1, 3}, true},
 			{"inversion", []int64{0, 2, 1, 3}, false},
 		} {
