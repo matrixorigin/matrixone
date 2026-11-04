@@ -124,3 +124,25 @@ func TestRetainReaderKeysRejectsReleasedOwner(t *testing.T) {
 	require.EqualValues(t, 1, second.closed.Load())
 	require.EqualValues(t, 1, released.Load())
 }
+
+func TestRetainReaderKeysPartialConstruction(t *testing.T) {
+	var released atomic.Int32
+	keys := readerTestKeys(t, &released)
+	rootOwned := true
+	t.Cleanup(func() {
+		if rootOwned {
+			keys.Release()
+		}
+	})
+	first := &keyTestReader{err: moerr.NewInternalErrorNoCtx("reader close failed")}
+	last := &keyTestReader{}
+	readers, err := RetainReaderKeys([]engine.Reader{first, nil, last}, keys)
+	require.Error(t, err)
+	require.Nil(t, readers)
+	require.EqualValues(t, 1, first.closed.Load())
+	require.EqualValues(t, 1, last.closed.Load(), "a close error must not skip remaining readers")
+	require.Zero(t, released.Load(), "construction borrows the caller's reference")
+	keys.Release()
+	rootOwned = false
+	require.EqualValues(t, 1, released.Load(), "the partially constructed reader must release its reference")
+}

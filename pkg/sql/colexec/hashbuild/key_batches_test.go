@@ -280,3 +280,55 @@ func TestUniqueKeyBytePreflight(t *testing.T) {
 	require.ErrorIs(t, err, runtimefilter.ErrOptionalKeySize)
 	require.Zero(t, dst.Length())
 }
+
+func TestUniqueKeyByteBoundedCollection(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		t.Run(fmt.Sprint(selected), func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			hb := newTestHashmapBuilder(t)
+			left := vector.NewVec(types.T_varchar.ToType())
+			right := vector.NewVec(types.T_int64.ToType())
+			t.Cleanup(func() {
+				hb.curVecs = nil // The test, rather than an executor, owns the sources.
+				hb.Free(proc)
+				left.Free(proc.Mp())
+				right.Free(proc.Mp())
+				require.Zero(t, hb.mapAllocationAccount.Snapshot().Used)
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			for row := 0; row < 5; row++ {
+				value := make([]byte, 100)
+				value[0] = byte(row)
+				require.NoError(t, vector.AppendBytes(left, value, false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(right, int64(row), false, proc.Mp()))
+			}
+			hb.curVecs = []*vector.Vector{left, nil, right}
+			hb.uniqueKeySlots = []bool{true, false, true}
+			var sels []int64
+			if selected {
+				sels = []int64{4, 3, 2, 1, 0}
+			}
+			// Admit exactly two varlen descriptors and payloads per chunk.
+			require.NoError(t, hb.appendUniqueKeysWithin(proc, 0, 5, sels, 4096+2*(24+100)))
+			require.Len(t, hb.uniqueKeys.rest, 2)
+			require.Equal(t, 5, hb.uniqueKeys.count())
+			next := 0
+			require.NoError(t, hb.uniqueKeys.visit(func(vecs []*vector.Vector) error {
+				require.Nil(t, vecs[1])
+				require.LessOrEqual(t, vecs[0].Length(), 2)
+				require.Equal(t, vecs[0].Length(), vecs[2].Length())
+				for row := 0; row < vecs[0].Length(); row++ {
+					want := next
+					if selected {
+						want = 4 - next
+					}
+					require.Equal(t, left.GetRawBytesAt(want), vecs[0].GetRawBytesAt(row))
+					require.EqualValues(t, want, vector.MustFixedColNoTypeCheck[int64](vecs[2])[row])
+					next++
+				}
+				return nil
+			}))
+			require.Equal(t, 5, next)
+		})
+	}
+}
