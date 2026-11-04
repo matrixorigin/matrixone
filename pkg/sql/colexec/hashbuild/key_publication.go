@@ -28,10 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (b *HashmapBuilder) marshalMembershipKeys(proc *process.Process) (*keycodec.KeyPayload, error) {
-	count := 1 + len(b.uniqueKeys.rest)
+func (hb *HashmapBuilder) marshalMembershipKeys(proc *process.Process) (*keycodec.KeyPayload, error) {
+	count := 1 + len(hb.uniqueKeys.rest)
 	bytes := uint64(count) * uint64(reflect.TypeFor[[]byte]().Size()+reflect.TypeFor[func()]().Size())
-	reservation, err := b.mapAllocationAccount.ReserveCapacity(bytes, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterPayload)
+	reservation, err := hb.mapAllocationAccount.ReserveCapacity(bytes, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterPayload)
 	if err != nil {
 		return nil, err
 	}
@@ -55,14 +55,14 @@ func (b *HashmapBuilder) marshalMembershipKeys(proc *process.Process) (*keycodec
 		}
 	}()
 	totalBytes := int64(bytes)
-	err = b.uniqueKeys.visit(func(keys []*vector.Vector) error {
+	err = hb.uniqueKeys.visit(func(keys []*vector.Vector) error {
 		if err := proc.Ctx.Err(); err != nil {
 			return err
 		}
 		if len(keys) == 0 || keys[0] == nil {
 			return process.ErrExecutionResourceInvalid
 		}
-		data, release, err := b.marshalRuntimeFilterVector(keys[0], proc.Mp())
+		data, release, err := hb.marshalRuntimeFilterVector(keys[0], proc.Mp())
 		if err != nil {
 			return err
 		}
@@ -82,10 +82,10 @@ func (b *HashmapBuilder) marshalMembershipKeys(proc *process.Process) (*keycodec
 	return keys, nil
 }
 
-func (h *HashBuild) materializeSerializedRuntimeFilterRuns(proc *process.Process, spec *plan.RuntimeFilterSpec, componentTypes []types.Type) ([]byte, func(), int, bool, error) {
-	b := &h.ctr.hashmapBuilder
-	count := 1 + len(b.uniqueKeys.rest)
-	reservation, err := b.mapAllocationAccount.ReserveCapacity(uint64(count)*uint64(reflect.TypeFor[*vector.Vector]().Size()), mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterScratch)
+func (hashBuild *HashBuild) materializeSerializedRuntimeFilterRuns(proc *process.Process, spec *plan.RuntimeFilterSpec, componentTypes []types.Type) ([]byte, func(), int, bool, error) {
+	hb := &hashBuild.ctr.hashmapBuilder
+	count := 1 + len(hb.uniqueKeys.rest)
+	reservation, err := hb.mapAllocationAccount.ReserveCapacity(uint64(count)*uint64(reflect.TypeFor[*vector.Vector]().Size()), mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterScratch)
 	if err != nil {
 		return nil, nil, 0, false, err
 	}
@@ -101,20 +101,20 @@ func (h *HashBuild) materializeSerializedRuntimeFilterRuns(proc *process.Process
 			v.Free(proc.Mp())
 		}
 	}()
-	executors, ok, err := h.serializedRuntimeFilterExecutors(proc, spec)
+	executors, ok, err := hashBuild.serializedRuntimeFilterExecutors(proc, spec)
 	if err != nil || !ok {
 		return nil, nil, 0, false, err
 	}
 	defer freeRuntimeFilterExecutors(executors)
 	rows := 0
 	usable := true
-	err = b.uniqueKeys.visit(func(keys []*vector.Vector) error {
+	err = hb.uniqueKeys.visit(func(keys []*vector.Vector) error {
 		currentTypes, n, valid := materializedRuntimeFilterComponents(spec, keys)
 		if !valid || !slices.Equal(currentTypes, componentTypes) {
 			usable = false
 			return nil
 		}
-		v, n, valid, err := h.materializeSerializedRuntimeFilterChunk(proc, spec, componentTypes, n, keys, executors)
+		v, n, valid, err := hashBuild.materializeSerializedRuntimeFilterChunk(proc, spec, componentTypes, n, keys, executors)
 		if err != nil {
 			return err
 		}
@@ -129,20 +129,24 @@ func (h *HashBuild) materializeSerializedRuntimeFilterRuns(proc *process.Process
 	if err != nil || !usable || rows == 0 {
 		return nil, nil, rows, usable, err
 	}
-	data, release, err := runtimefilter.MarshalExactFilterRuns(proc.Ctx, runs, proc.Mp(), b.mapAllocationAccount, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterPayload)
+	data, release, err := runtimefilter.MarshalExactFilterRuns(proc.Ctx, runs, proc.Mp(), hb.mapAllocationAccount, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterPayload)
 	return data, release, rows, true, err
 }
 
-func (h *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process, msg *message.RuntimeFilterMessage, spec *plan.RuntimeFilterSpec, slot int, encoding keycodec.ExactRuntimeFilterEncoding) error {
-	b := &h.ctr.hashmapBuilder
-	pass := func() error { msg.Typ = message.RuntimeFilter_PASS; h.sendRuntimeFilter(*msg, spec, proc); return nil }
-	if b.GetGroupCount() > uint64(spec.UpperLimit) || b.uniqueKeys.count() > int(spec.UpperLimit) {
+func (hashBuild *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process, msg *message.RuntimeFilterMessage, spec *plan.RuntimeFilterSpec, slot int, encoding keycodec.ExactRuntimeFilterEncoding) error {
+	hb := &hashBuild.ctr.hashmapBuilder
+	pass := func() error {
+		msg.Typ = message.RuntimeFilter_PASS
+		hashBuild.sendRuntimeFilter(*msg, spec, proc)
+		return nil
+	}
+	if hb.GetGroupCount() > uint64(spec.UpperLimit) || hb.uniqueKeys.count() > int(spec.UpperLimit) {
 		return pass()
 	}
-	count := 1 + len(b.uniqueKeys.rest)
-	reservation, err := b.mapAllocationAccount.ReserveCapacity(uint64(count)*uint64(reflect.TypeFor[*vector.Vector]().Size()), mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterScratch)
+	count := 1 + len(hb.uniqueKeys.rest)
+	reservation, err := hb.mapAllocationAccount.ReserveCapacity(uint64(count)*uint64(reflect.TypeFor[*vector.Vector]().Size()), mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterScratch)
 	if err != nil {
-		if h.fallbackOptionalRuntimeFilter(err, msg, spec, proc) {
+		if hashBuild.fallbackOptionalRuntimeFilter(err, msg, spec, proc) {
 			return nil
 		}
 		return err
@@ -155,7 +159,7 @@ func (h *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process, msg *me
 	defer lease.Release()
 	runs := make([]*vector.Vector, 0, count)
 	rows := 0
-	err = b.uniqueKeys.visit(func(vecs []*vector.Vector) error {
+	err = hb.uniqueKeys.visit(func(vecs []*vector.Vector) error {
 		if err := checkHashBuildCanceled(proc); err != nil {
 			return err
 		}
@@ -177,7 +181,7 @@ func (h *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process, msg *me
 		return nil
 	})
 	if err != nil {
-		if h.fallbackOptionalRuntimeFilter(err, msg, spec, proc) {
+		if hashBuild.fallbackOptionalRuntimeFilter(err, msg, spec, proc) {
 			return nil
 		}
 		return err
@@ -185,9 +189,9 @@ func (h *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process, msg *me
 	if rows > int(spec.UpperLimit) {
 		return pass()
 	}
-	data, release, err := runtimefilter.MarshalExactFilterRuns(proc.Ctx, runs, proc.Mp(), b.mapAllocationAccount, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterPayload)
+	data, release, err := runtimefilter.MarshalExactFilterRuns(proc.Ctx, runs, proc.Mp(), hb.mapAllocationAccount, mpool.AllocationOwnerHashBuild, HashBuildAllocationSiteRuntimeFilterPayload)
 	if err != nil {
-		if h.fallbackOptionalRuntimeFilter(err, msg, spec, proc) {
+		if hashBuild.fallbackOptionalRuntimeFilter(err, msg, spec, proc) {
 			return nil
 		}
 		return err
@@ -196,7 +200,7 @@ func (h *HashBuild) handleDirectRuntimeFilterRuns(proc *process.Process, msg *me
 	msg.Card = int32(rows)
 	msg.Data = data
 	msg.SetMemoryRelease(release)
-	h.sendRuntimeFilter(*msg, spec, proc)
-	h.ctr.runtimeFilterIn = true
+	hashBuild.sendRuntimeFilter(*msg, spec, proc)
+	hashBuild.ctr.runtimeFilterIn = true
 	return nil
 }
