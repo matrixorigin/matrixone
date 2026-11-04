@@ -3905,10 +3905,11 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 					}
 					v.area = append(v.area, w.area...)
 				} else {
-					v.area, err = v.growArea2(mp, w.area, baseOff+len(w.area))
+					area, err := v.growArea2(mp, w.area, baseOff+len(w.area))
 					if err != nil {
 						return err
 					}
+					v.area = area
 				}
 			}
 			// one memmove of the header array; inline varlenas carry their bytes here.
