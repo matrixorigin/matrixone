@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v26，2026-11-04。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v27，2026-11-04。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -17,6 +17,13 @@ parser 将其降低为既有两个 SOUNDEX 调用的等值比较。SOUNDS 是非
 该方案优于新增 ComparisonOp 或独立执行函数：既有 AST、格式化、参数遍历、binder、执行器和持久化 view 消费者均可复用，不新增函数 ID 或 plan 字段。语法生成器必须无新增冲突，生成物必须可重复生成。
 
 ## STATEMENT_DIGEST / STATEMENT_DIGEST_TEXT
+
+### 列字符集与大对象默认值的解析准入
+
+- MySQL 列字符集是字符类型尾部的语法，不是任意位置的列属性：只允许 CHAR/VARCHAR、TEXT 家族、ENUM/SET，位于全部列属性之前且仅一次；不允许 DEFAULT 前缀或等号。复用列定义已有属性有序切片校验位置/类型，grammar 保留前缀/等号事实并仅在 digest 拒绝；表/库级 DEFAULT CHARSET、CAST/CONVERT 及普通 MO 列属性仍归原有所有者。
+- NATIONAL CHAR 保留 NCHAR 的隐式字符集身份，不能降为普通 CHAR 后错误接受显式字符集。CHAR VARYING 的原生保留 token 在 digest 中适配并归现有字符类型 grammar，普通 MO 的 UNUSED 准入不变；national varying 仍不允许显式字符集。
+- 在已有列定义 contextualization 复用解析时 SQL-mode flags 检查 TEXT/BLOB/JSON 以及空间类型的裸默认值；不读取目录，不求值表达式，不对 ALTER COLUMN SET DEFAULT 猜测旧列类型。NULL 与括号表达式默认值保留；非严格模式允许空字符串（包括空 HEX/BIT/引入符字面量，原生伴随 warning），严格模式拒绝；空间类型即使非严格也不能有裸空字符串。数字零和 NUL 字节不是空字符串。不新增 warning 模拟。
+- 常量默认值与括号表达式是原生两个属性类别，各类别最后一个覆盖先前值；非 NULL 常量与表达式类别不得并存。原生 add_field_to_list 先清除常量 NULL 后检查类别冲突，因此 NULL 与表达式并存仍可准入；NOT NULL 的显式常量 NULL 约束不能被随后表达式隐藏。仅在已有有界属性循环中保存局部事实，无新 AST/池化状态、目录探测、worker、cache 或额外树遍历。
 
 ### 契约与编码
 

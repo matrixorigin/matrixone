@@ -371,7 +371,7 @@ func digestRowConstructorValid(parent *Scanner) bool {
 	return commas > 0
 }
 
-func digestSyntaxValid(statement tree.Statement) bool {
+func digestSyntaxValid(statement tree.Statement, sqlMode SQLModeFlags) bool {
 	switch stmt := statement.(type) {
 	case *tree.ShowColumns:
 		return digestShowFilterValid(stmt.Like, stmt.Where, true)
@@ -397,7 +397,7 @@ func digestSyntaxValid(statement tree.Statement) bool {
 		return digestShowFilterValid(stmt.Like, stmt.Where, allowed)
 	case *tree.CreateTable:
 		for _, definition := range stmt.Defs {
-			if column, ok := definition.(*tree.ColumnTableDef); ok && !digestColumnValid(column, true) {
+			if column, ok := definition.(*tree.ColumnTableDef); ok && !digestColumnValid(column, true, sqlMode) {
 				return false
 			}
 		}
@@ -405,15 +405,15 @@ func digestSyntaxValid(statement tree.Statement) bool {
 		for _, option := range stmt.Options {
 			switch option := option.(type) {
 			case *tree.AlterAddCol:
-				if !digestColumnValid(option.Column, true) {
+				if !digestColumnValid(option.Column, true, sqlMode) {
 					return false
 				}
 			case *tree.AlterTableModifyColumnClause:
-				if !digestColumnValid(option.NewColumn, false) {
+				if !digestColumnValid(option.NewColumn, false, sqlMode) {
 					return false
 				}
 			case *tree.AlterTableChangeColumnClause:
-				if !digestColumnValid(option.NewColumn, false) {
+				if !digestColumnValid(option.NewColumn, false, sqlMode) {
 					return false
 				}
 			case *tree.AlterTableAlterColumnClause:
@@ -436,7 +436,7 @@ func digestShowFilterValid(like *tree.ComparisonExpr, where *tree.Where, allowed
 	return like == nil && where == nil || allowed && (like == nil || where == nil)
 }
 
-func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
+func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool, sqlMode SQLModeFlags) bool {
 	// Mirror column-attribute contextualization, not DDL execution. Attribute
 	// order matters; a table-level primary key is not applied here. New column
 	// definitions check character length, not execution-time empty/trailing-
@@ -463,8 +463,25 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 	}
 	notNull, nullDefault, hasDefault, autoIncrement, generated := false, false, false, false, false
 	generatedDisallowedAttribute, hasCollation := false, false
-	for _, attribute := range column.Attributes {
+	var lastDefault tree.Expr
+	hasConstantDefault, hasExpressionDefault := false, false
+	for index, attribute := range column.Attributes {
 		switch attr := attribute.(type) {
+		case *tree.AttributeCharset:
+			// MySQL's charset belongs to the character type, before any column
+			// attributes. It is not a repeatable general-purpose attribute.
+			if index != 0 {
+				return false
+			}
+			typ, ok := column.Type.(*tree.T)
+			if !ok {
+				return false
+			}
+			switch digestKeywordUpper(typ.InternalType.FamilyString) {
+			case "CHAR", "CHARACTER", "VARCHAR", "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT", "ENUM", "SET":
+			default:
+				return false
+			}
 		case *tree.AttributeNull:
 			notNull = !attr.Is
 		case *tree.AttributePrimaryKey:
@@ -504,15 +521,71 @@ func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 				hasCollation = true
 			}
 			hasDefault = true
+			lastDefault = attr.Expr
 			expression := attr.Expr
 			if collated, ok := expression.(*tree.CollateExpr); ok {
 				expression = collated.Expr
 			}
+			// These are distinct native attribute classes: each is overridden
+			// by its own last occurrence, but the two classes cannot coexist.
 			value, literal := expression.(*tree.NumVal)
-			nullDefault = literal && value.ValType == tree.P_null
+			if _, parenthesized := expression.(*tree.ParenExpr); parenthesized {
+				hasExpressionDefault = true
+			} else {
+				// add_field_to_list clears an explicit NULL constant before
+				// checking the two default classes for a conflict.
+				hasConstantDefault = !literal || value.ValType != tree.P_null
+				nullDefault = literal && value.ValType == tree.P_null
+			}
 		}
 	}
-	return !(notNull && nullDefault || autoIncrement && hasDefault && !nullDefault || generated && (hasDefault || autoIncrement || generatedDisallowedAttribute))
+	return !(hasConstantDefault && hasExpressionDefault) && digestLargeObjectDefaultValid(column, lastDefault, sqlMode) &&
+		!(notNull && nullDefault || autoIncrement && (hasExpressionDefault || hasDefault && !nullDefault) || generated && (hasDefault || autoIncrement || generatedDisallowedAttribute))
+}
+
+// Create_field::init distinguishes a constant default from a parenthesized
+// generated default. Contextualization keeps the last of each default class. Never
+// evaluate expressions or resolve an ALTER COLUMN's existing catalog type here.
+func digestLargeObjectDefaultValid(column *tree.ColumnTableDef, expression tree.Expr, sqlMode SQLModeFlags) bool {
+	if expression == nil {
+		return true
+	}
+	typ, ok := column.Type.(*tree.T)
+	if !ok {
+		return true
+	}
+	spatial := false
+	switch digestKeywordUpper(typ.InternalType.FamilyString) {
+	case "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT", "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB", "JSON":
+	case "GEOMETRY", "GEOMETRYCOLLECTION", "POINT", "MULTIPOINT", "LINESTRING", "MULTILINESTRING", "POLYGON", "MULTIPOLYGON":
+		spatial = true
+	default:
+		return true
+	}
+	if collated, ok := expression.(*tree.CollateExpr); ok {
+		expression = collated.Expr
+	}
+	if _, parenthesized := expression.(*tree.ParenExpr); parenthesized {
+		return true
+	}
+	value, literal := expression.(*tree.NumVal)
+	if literal && value.ValType == tree.P_null {
+		return true
+	}
+	if !literal || spatial || sqlMode.Has(SQLModeStrict) {
+		return false
+	}
+	// A non-strict empty string is admitted with a native warning. Numeric
+	// zero and one NUL byte are not empty strings. HEX origin survives lowering.
+	switch value.ValType {
+	case tree.P_char, tree.P_ScoreBinary:
+		return value.String() == ""
+	case tree.P_hexnum, tree.P_ScoreBinaryHexnum:
+		return value.String() == "0x"
+	case tree.P_bit:
+		return value.String() == "0b"
+	}
+	return false
 }
 
 func digestColumnExpressionValid(expression tree.Expr, generated bool) bool {

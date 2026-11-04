@@ -246,7 +246,7 @@ func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode stri
 		lexer.stmts = []tree.Statement{&tree.EmptyStmt{}}
 	}
 	if digest != nil && digest.normalized != nil {
-		if len(lexer.stmts) != 1 || strings.TrimSpace(sql) == "" || !digestSyntaxValid(lexer.stmts[0]) {
+		if len(lexer.stmts) != 1 || strings.TrimSpace(sql) == "" || !digestSyntaxValid(lexer.stmts[0], lexer.sqlMode) {
 			return nil, moerr.NewDigestParse(ctx)
 		}
 		if control != nil {
@@ -609,6 +609,8 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			}
 		} else if typ == ID && !l.scanner.qualifiedIdentifier && strings.EqualFold(str, "national") {
 			typ = DIGEST_NATIONAL
+		} else if typ == UNUSED && strings.EqualFold(str, "varying") {
+			typ = DIGEST_VARYING
 		}
 		if typ == ROW && l.lastToken != CURRENT {
 			// CURRENT ROW is a window-frame bound, not a ROW constructor.

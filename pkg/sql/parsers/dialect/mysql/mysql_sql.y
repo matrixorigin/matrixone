@@ -768,7 +768,7 @@ func makeIntervalExpr(name string, value tree.Expr, unit string) tree.Expr {
 %token <str> ICEBERG CATALOG CATALOGS NAMESPACE NAMESPACES REF FOR_ICEBERG
 // DUAL is reserved only in MySQL digest syntax; ordinary MO identifiers keep
 // their existing grammar. Its only unqualified form is the entire FROM clause.
-%token <str> DIGEST_DUAL DIGEST_NATIONAL DIGEST_INTRODUCED_STRING DIGEST_INTRODUCED_HEX DIGEST_SHOW_LIKE
+%token <str> DIGEST_DUAL DIGEST_NATIONAL DIGEST_VARYING DIGEST_INTRODUCED_STRING DIGEST_INTRODUCED_HEX DIGEST_SHOW_LIKE
 %token <str> MONGODB MONGODB_PATH MONGODB_CONVERT CONNECTIONS
 %token <str> DATASTREAM ESQL KAFKA
 
@@ -13029,12 +13029,18 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeVisable(false)
     }
-|   charset_keyword equal_opt charset_name
+|   charset_keyword charset_name
     {
+		$$ = tree.NewAttributeCharset($2)
+    }
+|   charset_keyword '=' charset_name
+    {
+        if yylex.(*Lexer).digest != nil { yylex.Error("Column charset does not accept equals"); goto ret1 }
 		$$ = tree.NewAttributeCharset($3)
     }
 |   DEFAULT CHARACTER SET equal_opt charset_name
     {
+        if yylex.(*Lexer).digest != nil { yylex.Error("Column charset does not accept DEFAULT prefix"); goto ret1 }
 		$$ = tree.NewAttributeCharset($5)
     }
 |   GENERATED ALWAYS AS '(' expression ')' generated_column_type_opt
@@ -16384,7 +16390,8 @@ char_type_name:
     }
 |   DIGEST_NATIONAL CHAR
     {
-        $$ = $2
+        // Keep the implicit national charset identity for column contextualization.
+        $$ = "NCHAR"
     }
 
 char_type:
@@ -16400,6 +16407,17 @@ char_type:
                 DisplayWith: $2,
             },
         }
+    }
+|   char_type_name DIGEST_VARYING length_option_opt
+    {
+        if $3 < 0 { yylex.Error("Varying character type requires a length"); goto ret1 }
+        name := "VARCHAR"
+        if digestKeywordUpper($1) == "NCHAR" { name = "NVARCHAR" }
+        locale := ""
+        $$ = &tree.T{InternalType: tree.InternalType{
+            Family: tree.StringFamily, FamilyString: name, Locale: &locale,
+            Oid: uint32(defines.MYSQL_TYPE_VARCHAR), DisplayWith: $3,
+        }}
     }
 |   VARCHAR length_option_opt
     {

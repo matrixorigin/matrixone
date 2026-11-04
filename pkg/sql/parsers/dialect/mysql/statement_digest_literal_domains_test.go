@@ -21,6 +21,91 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDigestColumnTypeAttributeDomains(t *testing.T) {
+	for _, test := range []struct {
+		sql, mode string
+		reject    bool
+	}{
+		{"CREATE TABLE t (a VARCHAR(10) DEFAULT CHARACTER SET utf8mb4)", "", true},
+		{"CREATE TABLE t (a VARCHAR(10) CHARSET = utf8mb4)", "", true},
+		{"CREATE TABLE t (a VARCHAR(10) NOT NULL CHARSET utf8mb4)", "", true},
+		{"CREATE TABLE t (a VARCHAR(10) CHARSET utf8mb4 CHARSET latin1)", "", true},
+		{"CREATE TABLE t (a INT CHARSET utf8mb4)", "", true},
+		{"CREATE TABLE t (a BLOB CHARSET utf8mb4)", "", true},
+		{"CREATE TABLE t (a NCHAR(10) CHARSET utf8mb4)", "", true},
+		{"CREATE TABLE t (a NATIONAL CHAR(10) CHARSET utf8mb4)", "", true},
+		{"CREATE TABLE t (a VARCHAR(10) CHARSET utf8mb4 NOT NULL)", "", false},
+		{"CREATE TABLE t (a TEXT CHARSET utf8mb4 DEFAULT ('x'))", "", false},
+		{"CREATE TABLE t (a ENUM('a') CHARSET utf8mb4)", "", false},
+		{"CREATE TABLE t (a TEXT DEFAULT 'x')", "", true},
+		{"CREATE TABLE t (a JSON DEFAULT 0)", "", true},
+		{"CREATE TABLE t (a TEXT DEFAULT '')", "", false},
+		{"CREATE TABLE t (a TEXT DEFAULT '')", "STRICT_TRANS_TABLES", true},
+		{"CREATE TABLE t (a BLOB DEFAULT X'')", "", false},
+		{"CREATE TABLE t (a BLOB DEFAULT B'')", "", false},
+		{"CREATE TABLE t (a CHAR VARYING(10) CHARSET utf8mb4)", "", false},
+		{"CREATE TABLE t (a CHAR VARYING)", "", true},
+		{"CREATE TABLE t (a NATIONAL CHAR VARYING(10))", "", false},
+		{"CREATE TABLE t (a NCHAR VARYING(10) CHARSET utf8mb4)", "", true},
+		{"CREATE TABLE t (a TEXT NOT NULL DEFAULT NULL DEFAULT ('x'))", "", true},
+		{"CREATE TABLE t (a INT AUTO_INCREMENT DEFAULT NULL DEFAULT (0))", "", true},
+		{"CREATE TABLE t (a TEXT DEFAULT 'x' DEFAULT ('y') DEFAULT NULL)", "", false},
+		{"CREATE TABLE t (a BLOB DEFAULT X'')", "STRICT_ALL_TABLES", true},
+		{"CREATE TABLE t (a BLOB DEFAULT X'00')", "", true},
+		{"CREATE TABLE t (a JSON DEFAULT '')", "TRADITIONAL", true},
+		{"CREATE TABLE t (a JSON DEFAULT ('x'))", "STRICT_TRANS_TABLES", false},
+		{"CREATE TABLE t (a GEOMETRY DEFAULT '')", "", true},
+		{"CREATE TABLE t (a GEOMETRY DEFAULT NULL)", "", false},
+		{"CREATE TABLE t (a GEOMETRY DEFAULT ('x'))", "", false},
+		{"CREATE TABLE t (a TEXT DEFAULT 'x' DEFAULT NULL)", "STRICT_TRANS_TABLES", false},
+		{"CREATE TABLE t (a TEXT DEFAULT NULL DEFAULT 'x')", "", true},
+		{"CREATE TABLE t (a TEXT DEFAULT ('x') DEFAULT ('y'))", "", false},
+		{"CREATE TABLE t (a TEXT DEFAULT NULL DEFAULT ('x'))", "", false},
+		{"CREATE TABLE t (a VARCHAR(10) DEFAULT 'x' DEFAULT ('y'))", "", true},
+		{"ALTER TABLE t ADD a TEXT DEFAULT 'x'", "", true},
+		{"ALTER TABLE t MODIFY a TEXT DEFAULT ('x')", "", false},
+		{"ALTER TABLE t CHANGE b a TEXT DEFAULT 'x'", "", true},
+		{"ALTER TABLE t ALTER a SET DEFAULT 'x'", "", false},
+		{"CREATE TABLE t (a INT) DEFAULT CHARSET = utf8mb4", "", false},
+		{"SELECT CAST(1 AS CHAR CHARACTER SET utf8mb4)", "", false},
+	} {
+		t.Run(test.sql+"/"+test.mode, func(t *testing.T) {
+			for range 3 {
+				_, _, err := StatementDigest(t.Context(), test.sql, test.mode)
+				if test.reject {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDigestParse), "%v", err)
+				} else {
+					require.NoError(t, err)
+				}
+				text, digest, err := StatementDigest(t.Context(), "SELECT 1", "")
+				require.NoError(t, err)
+				require.Equal(t, "SELECT ?", text)
+				require.Equal(t, "d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae", digest)
+			}
+		})
+	}
+	// Ordinary MO owns its historical column attribute and default admission.
+	for _, sql := range []string{
+		"CREATE TABLE t (a VARCHAR(10) DEFAULT CHARACTER SET utf8mb4)",
+		"CREATE TABLE t (a VARCHAR(10) CHARSET = utf8mb4)",
+		"CREATE TABLE t (a VARCHAR(10) NOT NULL CHARSET utf8mb4)",
+		"CREATE TABLE t (a INT CHARSET utf8mb4)",
+		"CREATE TABLE t (a TEXT DEFAULT 'x')",
+		"CREATE TABLE t (a JSON DEFAULT 0)",
+	} {
+		func() {
+			stmts, err := Parse(t.Context(), sql, 0)
+			defer func() {
+				for _, stmt := range stmts {
+					stmt.Free()
+				}
+			}()
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+		}()
+	}
+}
+
 func TestDigestWindowArgumentDomains(t *testing.T) {
 	for _, test := range []struct {
 		sql, mode string
