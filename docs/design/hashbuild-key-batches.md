@@ -1,0 +1,31 @@
+# Bounded HashBuild key collection
+
+Collected join keys are an aligned sequence of batches of at most 8,192 rows,
+not one vector spanning the whole build. This change does not alter JoinMap row
+addressing, retained build batches, planner thresholds or MPool allocation limits.
+
+All collected columns in a batch have the same row count. Hash insertion remains
+the sole uniqueness authority. Collection appends are transactional across columns;
+failure restores the previous tail and destroys unpublished batches. Variable
+payload and encoded size are checked before growth; a byte boundary may produce
+a shorter batch. One indivisible oversized key remains a size refusal.
+
+Ordinary IN keeps its existing wire/probe contract and its single-batch fast path.
+Multiple sorted runs are merged directly into the final admitted encoding without
+constructing a whole-build vector. Composite expressions execute per aligned
+batch. Membership consumers receive one complete immutable chunked payload and
+build one membership structure; they never probe each chunk independently.
+
+The payload owns its encoded buffers through the existing buffer-lease primitive.
+Publication transfers one reference; surviving reader generations retain their
+own references. Failure, cancellation, Reset and Close release all owners. An
+optional size/admission refusal can disable the optional filter, never a required
+prefilter before Top-K. Empty, missing, PASS and DROP remain distinct.
+
+Validation covers row/byte boundaries, column alignment, late allocation errors,
+publication and parallel-reader lifetime, signed zero/NULLs, join result parity,
+and required IVF filtering before Top-K. Inject small byte limits rather than
+allocating gigabytes. Compare no-filter, single-batch and multi-batch CPU costs,
+allocations, peak memory and end-to-end joins against the parent. No repeatable
+OLAP slowdown is accepted without an explicit decision. CUDA validation is outside
+the requested delivery scope; shared CPU/GPU source contracts remain consistent.

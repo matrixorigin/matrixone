@@ -3385,20 +3385,22 @@ func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *test
 	require.NoError(t, vector.AppendFixed(keys, int64(7), false, proc.Mp()))
 	payload, err := keys.MarshalBinary()
 	require.NoError(t, err)
+	keyPayload := testutil.RuntimeKeyPayload(t, payload)
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  spec.Tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-		Data: payload,
+		Keys: keyPayload,
 		Card: 1,
 	}, board)
 
 	filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+	defer releaseRuntimeKeyFilters(filters)
 	require.NoError(t, err)
 	require.False(t, empty)
 	require.Len(t, filters, 1)
 	require.Same(t, spec, filters[0].spec)
 	require.Nil(t, filters[0].expr)
-	require.Equal(t, payload, filters[0].data)
+	require.Same(t, keyPayload, filters[0].data)
 }
 
 func TestWaitForRuntimeFiltersRejectsPassForRequiredFilter(t *testing.T) {
@@ -3451,7 +3453,8 @@ func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
 			data, err := v.MarshalBinary()
 			require.NoError(t, err)
 			if tc.corrupt {
-				data = data[:3]
+				testutil.AssertInvalidRuntimeKeys(t, data[:3])
+				return
 			}
 			board := message.NewMessageBoard()
 			defer board.Reset()
@@ -3459,8 +3462,9 @@ func TestRequiredVectorDomainRejectsMalformedPayload(t *testing.T) {
 			spec := &plan.RuntimeFilterSpec{Tag: 112, MustApply: true, UseMembershipFilter: true,
 				Expr: plan2.GetColExpr(plan.Type{Id: int32(types.T_int64)}, 1, 0)}
 			s := &Scope{Proc: proc, DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec}}}
-			message.SendMessage(message.RuntimeFilterMessage{Tag: spec.Tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: data, Card: tc.card}, board)
+			message.SendMessage(message.RuntimeFilterMessage{Tag: spec.Tag, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Keys: testutil.RuntimeKeyPayload(t, data), Card: tc.card}, board)
 			filters, empty, err := s.waitForRuntimeFilters(&Compile{proc: proc})
+			defer releaseRuntimeKeyFilters(filters)
 			require.False(t, empty)
 			if tc.name == "valid" {
 				require.NoError(t, err)
@@ -3486,7 +3490,7 @@ func TestRequiredVectorDomainAcceptsNormalizedCharMembership(t *testing.T) {
 	err = validateRequiredVectorMembership(spec, message.RuntimeFilterMessage{
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
 		Card: 1,
-		Data: data,
+		Keys: testutil.RuntimeKeyPayload(t, data),
 	})
 	require.NoError(t, err)
 }
@@ -3513,22 +3517,18 @@ func TestWaitForRuntimeFiltersRejectsCanceledRequiredFilter(t *testing.T) {
 	require.False(t, empty)
 }
 
-func TestVectorScanMembershipFilterExtractsInPayload(t *testing.T) {
-	payload := []byte{2, 4, 6, 8}
+func TestVectorScanMembershipFilterExtractsTypedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	v := testutil.MakeInt64Vector([]int64{2, 4, 6, 8}, nil, proc.Mp())
+	defer v.Free(proc.Mp())
+	data, err := v.MarshalBinary()
+	require.NoError(t, err)
+	payload := testutil.RuntimeKeyPayload(t, data)
 	spec := &plan.RuntimeFilterSpec{UseMembershipFilter: true, MustApply: true}
-	filter := receivedRuntimeFilter{
-		spec: spec,
-		expr: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Args: []*plan.Expr{
-			{},
-			{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: payload}}},
-		}}}},
-	}
-
-	membership, hasMembership, required := vectorScanMembershipFilter([]receivedRuntimeFilter{filter})
-
+	membership, hasMembership, required := vectorScanMembershipFilter([]receivedRuntimeFilter{{spec: spec, data: payload}})
 	require.True(t, hasMembership)
 	require.True(t, required)
-	require.Equal(t, payload, membership)
+	require.Same(t, payload, membership)
 }
 
 // noSearchTestAlgo is a registered index algorithm without a scan reader.
@@ -3642,7 +3642,7 @@ func TestBuildVectorIndexReadersRejectsIncompleteRuntimeState(t *testing.T) {
 			{}, {Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Data: []byte{9, 8, 7}}}},
 		}}}},
 	}})
-	require.Equal(t, []byte{9, 8, 7}, membership)
+	require.Nil(t, membership, "ordinary IN payloads are not membership key payloads")
 	require.False(t, hasMembership)
 	require.False(t, required)
 }
