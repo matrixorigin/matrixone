@@ -16,7 +16,6 @@ package fulltext2
 
 import (
 	"encoding/binary"
-	"os"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -386,15 +385,15 @@ type Segment struct {
 	dict                       *termDict
 	ranking, blocks, positions []byte
 
-	// mmapData is the shared read-only mmap of a base segment's on-disk file: the
+	// mmapData is the shared read-only mmap of a base segment's index file: the
 	// FST, the compressed docID/tf blocks, and the compressed positions section are
 	// all views into it (page-cache-backed, reclaimable, shared by all concurrent
-	// queries — no copy, no off-heap). mmapPath is that file (empty for the anonymous
-	// SSD file, whose inode is freed by munmap). Both are released by Free() under the
-	// cache's eviction write-lock (no reader in flight). nil on a build-side or
-	// in-memory (tail) segment, whose bytes are GC-managed Go slices.
+	// queries — no copy, no off-heap). It is released by Free() under the cache's
+	// eviction write-lock (no reader in flight). nil on a build-side or in-memory
+	// (tail) segment, whose bytes are GC-managed Go slices.
 	mmapData []byte
-	mmapPath string
+	// release drops the hold that keeps the index file mmapData maps in the index-file cache.
+	release func()
 }
 
 // numDocs is the segment's document count, valid for both a build-side segment (== len(pks))
@@ -687,9 +686,9 @@ func (s *Segment) Free() {
 		_ = munmap(s.mmapData)
 		s.mmapData = nil
 	}
-	if s.mmapPath != "" {
-		_ = os.Remove(s.mmapPath)
-		s.mmapPath = ""
+	if s.release != nil {
+		s.release()
+		s.release = nil
 	}
 	s.ranking, s.blocks, s.positions = nil, nil, nil
 }
