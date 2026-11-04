@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -246,11 +247,11 @@ func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 // RollbackAppend restores the logical state captured before an attempted
 // append. attemptedRows is needed because grouping bits can be published
 // before a varlen copy fails and advances length.
-func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) {
-	if checkpoint.length < 0 || checkpoint.length > v.length ||
+func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) error {
+	if v == nil || checkpoint.length < 0 || checkpoint.length > v.length ||
 		checkpoint.areaLength < 0 || checkpoint.areaLength > len(v.area) ||
-		attemptedRows < 0 {
-		panic("invalid vector append checkpoint")
+		attemptedRows < 0 || attemptedRows > math.MaxInt-checkpoint.length {
+		return errors.Join(mpool.ErrAllocationAccountInvariant, moerr.NewInternalErrorNoCtx("invalid vector append checkpoint"))
 	}
 	end := max(v.length, checkpoint.length+attemptedRows)
 	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
@@ -258,6 +259,15 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.length = checkpoint.length
 	v.area = v.area[:checkpoint.areaLength]
 	v.sorted = checkpoint.sorted
+	return nil
+}
+
+// JoinAppendRollbackError preserves the original error after successful rollback.
+func JoinAppendRollbackError(cause, rollbackErr error) error {
+	if rollbackErr == nil {
+		return cause
+	}
+	return errors.Join(cause, rollbackErr)
 }
 
 // Size of data, I think this function is inherently broken.  This
