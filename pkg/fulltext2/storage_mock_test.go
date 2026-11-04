@@ -58,6 +58,7 @@ func installPersistenceExecutor(t *testing.T, sp *sqlexec.SqlProcess, execFn fun
 		return execFn(sql, opts.StatementOption())
 	}).AnyTimes()
 	txnExec.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(execFn).AnyTimes()
+	txnExec.EXPECT().Txn().Return(nil).AnyTimes()
 }
 
 // swapRunSql / swapRunStreamingSql install a mock and return a restore func. The engine
@@ -248,33 +249,35 @@ func TestLoadAllBasesRunSqlError(t *testing.T) {
 	require.ErrorContains(t, err, "base enumeration failed")
 }
 
-func TestLoadFromStorageStreamError(t *testing.T) {
+func TestLoadFromStorageOpenError(t *testing.T) {
 	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, "chk", 1, 0)}}, nil
 	})
-	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
-		return executor.Result{}, moerr.NewInternalErrorNoCtx("stream failed")
-	})
+	files := swapIndexFiles(t)
+	files.openErr = moerr.NewInternalErrorNoCtx("open failed")
 
 	_, err := LoadFromStorage(sp, cfg, "seg0")
-	require.ErrorContains(t, err, "stream failed")
+	require.ErrorContains(t, err, "open failed")
 }
 
 func TestLoadTailSegmentsErrorPaths(t *testing.T) {
-	loadChunks := func(t *testing.T, chunks []TailChunk) ([]*Segment, map[any]int64, error) {
+	// loadFrames serves rows as the tail's frame metadata and files as their index files.
+	loadFrames := func(t *testing.T, rows []frameRow, files map[int64][]byte) ([]*Segment, map[any]int64, error) {
 		t.Helper()
 		sp, mp := mockSqlProc(t)
-		calls := 0
-		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-			calls++
-			if calls == 1 {
-				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
-			}
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
-		})
+		var stored, chunks int64
+		for _, r := range rows {
+			stored += int64(len(r.frame))
+			chunks += FrameChunkCount(len(r.frame))
+		}
+		fake := swapIndexFiles(t)
+		swapTailSql(t, mp, stored, chunks, chunks, rows, fake.storeFrames(files))
 		return LoadTailSegments(sp, testStorageCfg())
+	}
+	loadFrame := func(t *testing.T, start int64, frame []byte) ([]*Segment, map[any]int64, error) {
+		return loadFrames(t, []frameRow{{start: start, frame: frame}}, map[int64][]byte{start: frame})
 	}
 
 	t.Run("budget", func(t *testing.T) {
@@ -286,54 +289,122 @@ func TestLoadTailSegmentsErrorPaths(t *testing.T) {
 		require.ErrorContains(t, err, "tail budget failed")
 	})
 
-	t.Run("tail query", func(t *testing.T) {
+	t.Run("frame query", func(t *testing.T) {
 		sp, mp := mockSqlProc(t)
-		calls := 0
-		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-			calls++
-			if calls == 1 {
-				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			if strings.Contains(sql, "ORDER BY") {
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("tail query failed")
 			}
-			return executor.Result{}, moerr.NewInternalErrorNoCtx("tail query failed")
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 		})
 		_, _, err := LoadTailSegments(sp, testStorageCfg())
 		require.ErrorContains(t, err, "tail query failed")
 	})
 
-	t.Run("gap", func(t *testing.T) {
-		_, _, err := loadChunks(t, []TailChunk{{ChunkId: 1, Data: []byte("x")}, {ChunkId: 3, Data: []byte("x")}})
-		require.ErrorContains(t, err, "gap or duplicate")
+	t.Run("missing frame file", func(t *testing.T) {
+		frame, err := FrameDeletes(int32(types.T_int64), []DeleteRecord{{Pk: int64(7)}})
+		require.NoError(t, err)
+		_, _, err = loadFrames(t, []frameRow{{start: 0, frame: frame}}, nil)
+		require.ErrorContains(t, err, "missing chunk")
 	})
 
 	t.Run("bad frame", func(t *testing.T) {
-		_, _, err := loadChunks(t, []TailChunk{{ChunkId: 0, Data: []byte("bad frame")}})
+		frame := []byte("bad frame")
+		_, _, err := loadFrames(t, []frameRow{{start: 0, frame: frame, checksum: "00000000"}}, map[int64][]byte{0: frame})
 		require.Error(t, err)
 	})
 
+	t.Run("checksum mismatch", func(t *testing.T) {
+		frame, err := FrameDeletes(int32(types.T_int64), []DeleteRecord{{Pk: int64(7)}})
+		require.NoError(t, err)
+		_, _, err = loadFrames(t, []frameRow{{start: 0, frame: frame, checksum: "00000000"}}, map[int64][]byte{0: frame})
+		require.ErrorContains(t, err, "checksum mismatch")
+	})
+
 	t.Run("invalid insert payload", func(t *testing.T) {
-		frame := cuvscdc.FrameCdcChunk([]byte{1}, nil, 1, 0, 0)
-		_, _, err := loadChunks(t, []TailChunk{{ChunkId: 0, Data: frame}})
+		_, _, err := loadFrame(t, 0, cuvscdc.FrameCdcChunk([]byte{1}, nil, 1, 0, 0))
 		require.Error(t, err)
 	})
 
 	t.Run("invalid delete payload", func(t *testing.T) {
-		frame := cuvscdc.FrameCdcChunk([]byte{1}, nil, 0, 1, 0)
-		_, _, err := loadChunks(t, []TailChunk{{ChunkId: 0, Data: frame}})
+		_, _, err := loadFrame(t, 0, cuvscdc.FrameCdcChunk([]byte{1}, nil, 0, 1, 0))
 		require.Error(t, err)
 	})
 
 	t.Run("valid delete", func(t *testing.T) {
 		frame, err := FrameDeletes(int32(types.T_int64), []DeleteRecord{{Pk: int64(7)}})
 		require.NoError(t, err)
-		segs, deletes, err := loadChunks(t, []TailChunk{{ChunkId: 4, Data: frame}})
+		segs, deletes, err := loadFrame(t, 4, frame)
 		require.NoError(t, err)
 		require.Empty(t, segs)
 		require.Equal(t, int64(4), deletes[int64(7)])
 	})
 }
 
-// TestLoadFromStorageRoundTrip mocks the metadata read + base-chunk stream with a REAL
-// serialized segment, exercising the full decode path (spill → mmap → checksum → decode).
+// swapTailSql answers a tail load: stored bytes and chunks covered by frame rows, the tail's
+// chunk count, its frame rows and its chunk rows.
+func swapTailSql(t *testing.T, mp *mpool.MPool, stored, covered, total int64, rows []frameRow, chunks []TailChunk) {
+	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		switch {
+		case strings.Contains(sql, "SUM("):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, stored, covered)}}, nil
+		case strings.Contains(sql, "COUNT("):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, total, 0)}}, nil
+		case strings.Contains(sql, "ORDER BY"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{frameRowsBatch(t, mp, rows)}}, nil
+		default:
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
+		}
+	})
+}
+
+// A tail whose chunks frame rows do not all account for, written before every frame had a
+// metadata row, is read from its chunk rows; no index file is opened.
+func TestLoadTailSegmentsWithoutFrameRows(t *testing.T) {
+	ins := NewBuilder("t", int32(types.T_int64))
+	feed(t, ins, int64(1), "hello")
+	seg, err := ins.Finish()
+	require.NoError(t, err)
+	insFrame, err := FrameSegment(seg)
+	require.NoError(t, err)
+	delFrame, err := FrameDeletes(int32(types.T_int64), []DeleteRecord{{Pk: int64(9)}})
+	require.NoError(t, err)
+	chunks := append(splitFrameChunks(3, insFrame), splitFrameChunks(3+FrameChunkCount(len(insFrame)), delFrame)...)
+	total := int64(len(chunks))
+
+	for name, covered := range map[string][]frameRow{
+		"no frame rows":          nil,
+		"older frames have none": {{start: 3 + FrameChunkCount(len(insFrame)), frame: delFrame}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sp, mp := mockSqlProc(t)
+			var stored, n int64
+			for _, r := range covered {
+				stored += int64(len(r.frame))
+				n += FrameChunkCount(len(r.frame))
+			}
+			swapTailSql(t, mp, stored, n, total, covered, chunks)
+			files := swapIndexFiles(t)
+			segs, deletes, err := LoadTailSegments(sp, testStorageCfg())
+			require.NoError(t, err)
+			t.Cleanup(func() { freeSegs(segs) })
+			require.Len(t, segs, 1)
+			require.Equal(t, int64(3), segs[0].Recency)
+			require.Equal(t, 3+FrameChunkCount(len(insFrame)), deletes[int64(9)])
+			require.Zero(t, files.opens, "the chunk rows are read, not index files")
+		})
+	}
+
+	t.Run("gap", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		swapTailSql(t, mp, 0, 0, 2, nil, []TailChunk{{ChunkId: 1, Data: []byte("x")}, {ChunkId: 3, Data: []byte("x")}})
+		_, _, err := LoadTailSegments(sp, testStorageCfg())
+		require.ErrorContains(t, err, "gap or duplicate")
+	})
+}
+
+// TestLoadFromStorageRoundTrip mocks the metadata read and the index file with a REAL
+// serialized segment, exercising the full decode path (open → mmap → decode).
 func TestLoadFromStorageRoundTrip(t *testing.T) {
 	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
@@ -353,10 +424,8 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, checksum, filesize, 5)}}, nil
 	})
-	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
-		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, buf)}}
-		return executor.Result{}, nil
-	})
+	files := swapIndexFiles(t)
+	files.put("seg0", 0, 0, buf)
 
 	loaded, err := LoadFromStorage(sp, cfg, "seg0")
 	require.NoError(t, err)
@@ -377,10 +446,7 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, badDirectoryChecksum, int64(len(badDirectory)), 5)}}, nil
 	})
-	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
-		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, badDirectory)}}
-		return executor.Result{}, nil
-	})
+	files.put("seg0", 0, 0, badDirectory)
 	loaded, err = LoadFromStorage(sp, cfg, "seg0")
 	require.NoError(t, err)
 	t.Cleanup(loaded.Free)
@@ -392,13 +458,11 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 	_, ok = loaded.LookupLoaded("world")
 	require.True(t, ok)
 
-	// a checksum mismatch (corrupt stream) is detected and rejected.
-	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
-		bad := append([]byte(nil), buf...)
-		bad[0] ^= 0xFF
-		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, bad)}}
-		return executor.Result{}, nil
-	})
+	// the index file is opened with the metadata checksum; a file that does not match it
+	// is rejected.
+	bad := append([]byte(nil), badDirectory...)
+	bad[0] ^= 0xFF
+	files.put("seg0", 0, 0, bad)
 	_, err = LoadFromStorage(sp, cfg, "seg0")
 	require.ErrorContains(t, err, "checksum mismatch")
 
@@ -408,19 +472,6 @@ func TestLoadFromStorageRoundTrip(t *testing.T) {
 	})
 	_, err = LoadFromStorage(sp, cfg, "seg0")
 	require.ErrorContains(t, err, "metadata not found")
-}
-
-// tailChunkBatch renders forged (chunk_id, data) rows as the tail-data result batch.
-func tailChunkBatch(mp *mpool.MPool, chunks []TailChunk) *batch.Batch {
-	b := batch.NewWithSize(2)
-	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	b.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
-	for _, c := range chunks {
-		_ = vector.AppendFixed[int64](b.Vecs[0], c.ChunkId, false, mp)
-		_ = vector.AppendBytes(b.Vecs[1], c.Data, false, mp)
-	}
-	b.SetRowCount(len(chunks))
-	return b
 }
 
 // TestCompactSegmentsFoldsTail drives the full MERGE: no bases + a forged tag=1 tail
@@ -440,7 +491,6 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	require.NoError(t, err)
 	framed, err := FrameSegment(tseg)
 	require.NoError(t, err)
-	chunks := splitFrameChunks(1, framed)
 
 	var deleteAllRan, insertRan bool
 	swapRunSql(t, func(execProc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
@@ -456,9 +506,10 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 		// would hand them a batch of chunk data.
 		case strings.Contains(sql, "SUM("):
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 1, 0)}}, nil
-		case strings.Contains(sql, vectorindex.CdcTailId) && strings.Contains(sql, "SELECT") &&
-			!strings.Contains(sql, notTailFrame()): // tail chunk data
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
+		case strings.Contains(sql, "ORDER BY"): // the tail's frame rows
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{frameRowsBatch(t, mp, []frameRow{{start: 1, frame: framed}})}}, nil
+		case strings.Contains(sql, " IN ("): // the one-chunk frame's chunk row
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, []TailChunk{{ChunkId: 1, Data: framed}})}}, nil
 		case strings.HasPrefix(strings.TrimSpace(sql), "SELECT"): // LoadAllBases enumerate → no bases
 			return executor.Result{Mp: mp, Batches: nil}, nil
 		default: // DELETE / INSERT writes succeed
@@ -475,12 +526,14 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	})
 
 	installPersistenceExecutor(t, sp, func(sql string, opts executor.StatementOption) (executor.Result, error) { return runSql(sp, sql) })
+	files := swapIndexFiles(t)
 
 	nlive, err := CompactSegments(sp, cfg, 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, 2, nlive) // both docs are live → folded into the fresh base
 	require.True(t, deleteAllRan, "MERGE must clear prior bases first")
 	require.True(t, insertRan, "MERGE must persist the rebuilt base")
+	require.Len(t, files.files, 1, "MERGE writes the rebuilt base as one index file")
 	account, role := sp.StatementOption().SessionIdentity()
 	require.Equal(t, "tenant", account)
 	require.Equal(t, "accountadmin", role)
@@ -510,10 +563,7 @@ func loadOneBase(t *testing.T, sp *sqlexec.SqlProcess, mp *mpool.MPool, cfg Tabl
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{metaBatch(mp, vectorindex.CheckSumFromBuffer(buf), int64(len(buf)), 0)}}, nil
 	})
-	swapRunStreamingSql(t, func(_ context.Context, _ *sqlexec.SqlProcess, _ string, sc chan executor.Result, _ chan error) (executor.Result, error) {
-		sc <- executor.Result{Mp: mp, Batches: []*batch.Batch{chunkBatch(mp, buf)}}
-		return executor.Result{}, nil
-	})
+	swapIndexFiles(t).put(id, 0, 0, buf)
 	m, err := LoadFromStorage(sp, cfg, id)
 	require.NoError(t, err)
 	return m
@@ -579,4 +629,17 @@ func TestCompactSegmentsNoDelta(t *testing.T) {
 	nlive, err := CompactSegments(sp, cfg, 0, 0)
 	require.NoError(t, err)
 	require.Equal(t, 0, nlive)
+}
+
+// tailChunkBatch renders forged (chunk_id, data) rows as the tail-data result batch.
+func tailChunkBatch(mp *mpool.MPool, chunks []TailChunk) *batch.Batch {
+	b := batch.NewWithSize(2)
+	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	b.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	for _, c := range chunks {
+		_ = vector.AppendFixed[int64](b.Vecs[0], c.ChunkId, false, mp)
+		_ = vector.AppendBytes(b.Vecs[1], c.Data, false, mp)
+	}
+	b.SetRowCount(len(chunks))
+	return b
 }
