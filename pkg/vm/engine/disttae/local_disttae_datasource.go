@@ -481,9 +481,7 @@ func (ls *LocalDisttaeDataSource) Next(
 	}
 
 	// bathed prefetch block data and deletes
-	if !fileservice.FullFilePreloadsSkipped(ctx, ls.fs) {
-		ls.batchPrefetch(seqNums)
-	}
+	ls.batchPrefetch(ctx, seqNums)
 
 	for {
 		switch ls.iteratePhase {
@@ -1715,7 +1713,7 @@ func (i *reusableObjectStatsIter) next() (*objectio.ObjectStats, error) {
 	return &i.current, nil
 }
 
-func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
+func (ls *LocalDisttaeDataSource) batchPrefetch(ctx context.Context, seqNums []uint16) {
 	if ls.rc.prefetchDisabled {
 		return
 	}
@@ -1729,6 +1727,7 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 	begin := ls.rangesCursor
 	end := ls.rangesCursor + batchSize
 
+	policy := fileservice.GetFileServicePolicy(ctx)
 	var preObj types.Objectid
 	for idx := begin; idx < end; idx++ {
 		blk := ls.rangeSlice.Get(idx)
@@ -1737,6 +1736,9 @@ func (ls *LocalDisttaeDataSource) batchPrefetch(seqNums []uint16) {
 		}
 
 		preObj = *blk.BlockID.Object()
+		if ioutil.PrefetchSkipped(ctx, ls.fs, policy, blk) {
+			continue
+		}
 
 		// prefetch blk data
 		err := ioutil.Prefetch(
