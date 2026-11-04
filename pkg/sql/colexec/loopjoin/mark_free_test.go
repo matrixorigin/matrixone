@@ -37,7 +37,7 @@ func TestMarkHashFreeWithoutReset(t *testing.T) {
 		if canceled {
 			ctx, cancel := context.WithCancel(proc.Ctx)
 			proc.Ctx = ctx
-			join.ctr.markHash.keys[1] = cancelMarkKey{join.ctr.markHash.keys[1], cancel}
+			cancel()
 			require.ErrorIs(t, join.ctr.markHash.build(proc, jm), context.Canceled)
 			cancel()
 		} else {

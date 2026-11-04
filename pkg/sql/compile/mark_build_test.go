@@ -54,6 +54,7 @@ func TestBroadcastMarkBuildIndex(t *testing.T) {
 			for _, op := range []*loopjoin.LoopJoin{join, dup} {
 				b := constructBroadcastHashBuild(op, nil, 4)
 				require.Equal(t, tc.indexed, b.NeedHashMap)
+				require.Equal(t, tc.indexed, b.OptionalIndex)
 				require.True(t, b.NeedBatches, "NULL summary needs the original rows")
 				require.False(t, b.CanSpill, "LoopJoin cannot consume spilled hash maps")
 				require.Equal(t, int32(4), b.JoinMapRefCnt)

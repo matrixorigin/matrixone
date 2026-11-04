@@ -154,6 +154,32 @@ func (key cancelMarkKey) Eval(proc *process.Process, bats []*batch.Batch, sel []
 	return vec, err
 }
 
+func TestMarkHashCancellationDuringProbe(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = ctx
+	defer cancel()
+	join := &LoopJoin{JoinType: plan.Node_MARK, NonEqCond: markEquality(t, types.T_int32, "="),
+		LeftTypes:  []types.Type{types.T_int32.ToType()},
+		ResultCols: []colexec.ResultPos{colexec.NewResultPos(0, 0), colexec.NewResultPos(-1, 0)}}
+	probe := makeInt32LoopJoinBatch(proc.Mp(), []int32{1})
+	t.Cleanup(func() {
+		join.Free(proc, true, context.Canceled)
+		probe.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	require.NoError(t, join.Prepare(proc))
+	join.ctr.mp = markTestMap(t, proc, []*batch.Batch{makeInt32LoopJoinBatch(proc.Mp(), []int32{1})})
+	require.NoError(t, join.ctr.markHash.build(proc, join.ctr.mp))
+	join.ctr.markHash.key = cancelMarkKey{join.ctr.markHash.key, cancel}
+	join.ctr.inBat = probe
+	join.resetResultBat()
+	result := vm.NewCallResult()
+	require.ErrorIs(t, join.ctr.probeMarkHash(join, proc, &result), context.Canceled)
+	require.Nil(t, result.Batch)
+}
+
 func TestMarkHashCancellationCleanup(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	m, err := newMarkHash(proc, markEquality(t, types.T_int32, "="))
@@ -161,7 +187,7 @@ func TestMarkHashCancellationCleanup(t *testing.T) {
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	defer cancel()
 	proc.Ctx = ctx
-	m.keys[1] = cancelMarkKey{m.keys[1], cancel}
+	cancel()
 	bat := makeInt32LoopJoinBatch(proc.Mp(), []int32{1})
 	jm := markTestMap(t, proc, []*batch.Batch{bat})
 	require.ErrorIs(t, m.build(proc, jm), context.Canceled)

@@ -3224,7 +3224,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// random_bytes
 	{
 		functionId: RANDOM_BYTES,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_PRODUCE_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -3238,6 +3238,7 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return RandomBytes
 				},
+				volatile: true,
 			},
 			{
 				overloadId: 1,
@@ -3248,6 +3249,7 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return RandomBytes
 				},
+				volatile: true,
 			},
 		},
 	},
@@ -12611,10 +12613,11 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `cast_index_to_value`
 	{
-		functionId: CAST_INDEX_TO_VALUE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    CAST_INDEX_TO_VALUE,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12634,10 +12637,11 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `cast_value_to_index`
 	{
-		functionId: CAST_VALUE_TO_INDEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    CAST_VALUE_TO_INDEX,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12657,10 +12661,11 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `cast_index_value_to_index`
 	{
-		functionId: CAST_INDEX_VALUE_TO_INDEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    CAST_INDEX_VALUE_TO_INDEX,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12680,10 +12685,11 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `cast_index_to_set_value`
 	{
-		functionId: CAST_INDEX_TO_SET_VALUE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    CAST_INDEX_TO_SET_VALUE,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12703,10 +12709,11 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `cast_set_value_to_index`
 	{
-		functionId: CAST_SET_VALUE_TO_INDEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    CAST_SET_VALUE_TO_INDEX,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12726,10 +12733,11 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `cast_set_index_value_to_index`
 	{
-		functionId: CAST_SET_INDEX_VALUE_TO_INDEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:    CAST_SET_INDEX_VALUE_TO_INDEX,
+		nonNullResult: nonNullArgs,
+		class:         plan.Function_STRICT,
+		layout:        STANDARD_FUNCTION,
+		checkFn:       fixedTypeMatch,
 
 		Overloads: []overload{
 			{

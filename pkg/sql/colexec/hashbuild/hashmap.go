@@ -35,6 +35,7 @@ import (
 type HashmapBuilder struct {
 	needDupVec         bool
 	InputBatchRowCount int
+	hasNullKey         bool
 	curVecs            []*vector.Vector // evaluated key vecs for the current batch
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
@@ -89,6 +90,7 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 		return nil
 	}
 	jm := message.NewJoinMap(hb.Sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	jm.SetHasNullKey(hb.hasNullKey)
 	// GetJoinMap is the ownership transfer. An unpublished/error cleanup must
 	// not retain a second owner of the same hashmap/Sels/batches.
 	hb.Sels = message.GroupSels{}
@@ -169,6 +171,7 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	}
 	hb.curVecs = nil
 	hb.InputBatchRowCount = 0
+	hb.hasNullKey = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
@@ -277,6 +280,10 @@ func (hb *HashmapBuilder) buildHashmap(
 	dedupBuildKeepLast bool,
 	proc *process.Process,
 ) (retErr error) {
+	if err := proc.Ctx.Err(); err != nil {
+		return err
+	}
+	hb.hasNullKey = false
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
@@ -362,6 +369,9 @@ func (hb *HashmapBuilder) buildHashmap(
 	}
 
 	for i := 0; i < hb.InputBatchRowCount; i += hashmap.UnitLimit {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		if i%(hashmap.UnitLimit*32) == 0 {
 			runtime.Gosched()
 		}
@@ -404,11 +414,15 @@ func (hb *HashmapBuilder) buildHashmap(
 			}
 			lastBatch = vecIdx1
 		}
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		vals, zvals, err := itr.Insert(vecIdx2, n, hb.curVecs)
 		if err != nil {
 			return err
 		}
 		for k, v := range vals[:n] {
+			hb.hasNullKey = hb.hasNullKey || zvals[k] == 0
 			if hb.IsDedup && hb.OnDuplicateAction == plan.Node_UPDATE {
 				hb.Sels.Insert(int32(v), int32(i+k))
 				continue

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -38,11 +39,15 @@ func markTestMap(t *testing.T, proc *process.Process, bats []*batch.Batch, keys 
 	h, err := hashmap.NewStrHashMap(false, proc.Mp())
 	require.NoError(t, err)
 	it := h.NewIterator()
+	rows := 0
+	hasNull := false
 	for i, bat := range bats {
 		key := bat.Vecs[0]
 		if len(keys) != 0 {
 			key = keys[i]
 		}
+		rows += bat.RowCount()
+		hasNull = hasNull || key.IsConstNull() || key.GetNulls().Any()
 		for start := 0; start < bat.RowCount(); start += hashmap.UnitLimit {
 			_, _, err = it.Insert(start, min(hashmap.UnitLimit, bat.RowCount()-start), []*vector.Vector{key})
 			require.NoError(t, err)
@@ -50,6 +55,8 @@ func markTestMap(t *testing.T, proc *process.Process, bats []*batch.Batch, keys 
 	}
 	jm := message.NewJoinMap(message.GroupSels{}, nil, h, nil, bats, proc.Mp())
 	jm.IncRef(1)
+	jm.SetRowCount(int64(rows))
+	jm.SetHasNullKey(hasNull)
 	return jm
 }
 
@@ -114,11 +121,14 @@ func TestMarkHashSideLocalCastsAndGeneralBuild(t *testing.T) {
 	require.NotNil(t, m)
 	bat := makeInt32LoopJoinBatch(proc.Mp(), []int32{1, 0})
 	nulls.Add(bat.Vecs[0].GetNulls(), 1)
-	vec, err := m.keys[1].Eval(proc, []*batch.Batch{bat, bat}, nil)
+	buildKey, err := colexec.NewExpressionExecutor(proc, MarkHashKeys(cond)[1])
+	require.NoError(t, err)
+	vec, err := buildKey.Eval(proc, []*batch.Batch{bat, bat}, nil)
 	require.NoError(t, err)
 	jm := markTestMap(t, proc, []*batch.Batch{bat}, vec)
+	buildKey.Free()
 	require.NoError(t, m.build(proc, jm))
-	probe, err := m.keys[0].Eval(proc, []*batch.Batch{bat, bat}, nil)
+	probe, err := m.key.Eval(proc, []*batch.Batch{bat, bat}, nil)
 	require.NoError(t, err)
 	values, zs := m.iter.Find(0, 2, []*vector.Vector{probe})
 	require.NotZero(t, values[0])

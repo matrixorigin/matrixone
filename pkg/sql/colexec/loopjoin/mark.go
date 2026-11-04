@@ -33,7 +33,7 @@ import (
 // retain the general MARK evaluator, including correlated and row comparisons.
 // HashBuild owns the shared immutable index; each probe owns only its iterator.
 type markHash struct {
-	keys     [2]colexec.ExpressionExecutor
+	key      colexec.ExpressionExecutor
 	iter     hashmap.Iterator
 	probeVec *vector.Vector
 	hasRows  bool
@@ -90,12 +90,9 @@ func newMarkHash(proc *process.Process, cond *plan.Expr) (*markHash, error) {
 	}
 	m := &markHash{keyType: types.T(keys[0].Typ.Id)}
 	var err error
-	for i, key := range keys {
-		m.keys[i], err = colexec.NewExpressionExecutor(proc, key)
-		if err != nil {
-			m.free()
-			return nil, err
-		}
+	m.key, err = colexec.NewExpressionExecutor(proc, keys[0])
+	if err != nil {
+		return nil, err
 	}
 	return m, nil
 }
@@ -136,20 +133,16 @@ func (m *markHash) reset() {
 	m.iter = nil
 	m.probeVec = nil
 	m.hasRows, m.hasNull, m.hasZero = false, false, false
-	for _, key := range m.keys {
-		if key != nil {
-			key.ResetForNextQuery()
-		}
+	if m.key != nil {
+		m.key.ResetForNextQuery()
 	}
 }
 
 func (m *markHash) free() {
 	m.reset()
-	for i, key := range m.keys {
-		if key != nil {
-			key.Free()
-			m.keys[i] = nil
-		}
+	if m.key != nil {
+		m.key.Free()
+		m.key = nil
 	}
 }
 
@@ -158,22 +151,10 @@ func (m *markHash) build(proc *process.Process, jm *message.JoinMap) error {
 	if m.iter == nil {
 		return nil // General loop build, not an indexed MARK build.
 	}
-	for _, bat := range jm.GetBatches() {
-		if err := proc.Ctx.Err(); err != nil {
-			return err
-		}
-		if bat.RowCount() == 0 {
-			continue
-		}
-		m.hasRows = true
-		// Constants/type expressions take their row count from input zero.
-		// Both slots must name this side-local batch, even for build-side keys.
-		vec, err := m.keys[1].Eval(proc, []*batch.Batch{bat, bat}, nil)
-		if err != nil {
-			return err
-		}
-		m.hasNull = m.hasNull || vec.IsConstNull() || vec.GetNulls().Any()
-	}
+	// Facts are computed in the shared builder's insertion pass, not by each
+	// probe worker rescanning/evaluating all RHS rows.
+	m.hasRows = jm.GetRowCount() > 0
+	m.hasNull = jm.HasNullKey()
 	if err := proc.Ctx.Err(); err != nil {
 		return err
 	}
@@ -228,7 +209,7 @@ func (ctr *container) probeMarkHash(ap *LoopJoin, proc *process.Process, result 
 	m := ctr.markHash
 	if ctr.probeIdx == 0 {
 		var err error
-		m.probeVec, err = m.keys[0].Eval(proc, []*batch.Batch{ctr.inBat, ctr.inBat}, nil)
+		m.probeVec, err = m.key.Eval(proc, []*batch.Batch{ctr.inBat, ctr.inBat}, nil)
 		if err != nil {
 			return err
 		}

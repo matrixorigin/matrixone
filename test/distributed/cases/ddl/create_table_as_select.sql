@@ -1485,6 +1485,20 @@ select coalesce(x,0) as v, count(*) as c from nullable_fallback group by coalesc
 select ifnull(x,0) as v, count(*) as c from nullable_fallback group by ifnull(x,0) order by v;
 
 -- Functions can introduce NULL independently of their input column constraints.
+-- Unknown function metadata is not a positive proof of non-NULL results.
+create table null_domains (s varchar(20) not null, x double not null);
+insert into null_domains values ('abc', -1), ('123', 1);
+select regexp_substr(s, '[0-9]+') as v, count(*) as c from null_domains group by regexp_substr(s, '[0-9]+') order by v;
+select distinct regexp_substr(s, '[0-9]+') as v from null_domains order by v;
+create table regexp_result as select regexp_substr(s, '[0-9]+') as v from null_domains;
+select * from regexp_result order by v;
+create table domain_result as select sqrt(x) as root, ln(x) as logarithm from null_domains;
+select * from domain_result order by root;
+create table invalid_date_result as select cast(s as date) as d from null_domains;
+select * from invalid_date_result;
+create table random_null_result as select random_bytes(cast(x as signed)) as v from null_domains where x < 0;
+select * from random_null_result;
+select table_name, column_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('regexp_result','domain_result','invalid_date_result','random_null_result') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
 select 1/y as v, count(*) as c from nullable_fallback group by 1/y order by v;
 select distinct 1/y as v from nullable_fallback order by v;
 create table division_result as select 1/y as v, 1 div y as q, 1 % y as r from nullable_fallback;

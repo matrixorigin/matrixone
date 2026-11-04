@@ -414,6 +414,8 @@ message HashBuild {
   bool dedup_build_keep_last = 16;
   int32 dedup_delete_marker_col_idx = 17;
   repeated int32 dedup_delete_keep_col_idx_list = 18;
+  // The consumer can evaluate retained batches if the index exceeds its budget.
+  bool optional_index = 19;
 }
 
 message Indexbuild {

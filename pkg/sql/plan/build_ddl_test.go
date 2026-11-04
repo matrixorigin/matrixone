@@ -637,6 +637,12 @@ func TestCreateTableAsSelectOutputNullability(t *testing.T) {
 		nullable []bool
 	}{
 		{"count control", "select count(*) as c from nation", []bool{false}},
+		{"regexp no match", "select regexp_substr(n_name, 'z') as v from nation", []bool{true}},
+		{"regexp group", "select regexp_substr(n_name, 'z') as v,count(*) as c from nation group by regexp_substr(n_name, 'z')", []bool{true, false}},
+		{"sqrt domain", "select sqrt(n_nationkey) as v from nation", []bool{true}},
+		{"log domain", "select ln(n_nationkey) as v from nation", []bool{true}},
+		{"unhex invalid", "select unhex(n_name) as v from nation", []bool{true}},
+		{"date cast domain", "select cast(n_name as date) as v from nation", []bool{true}},
 		{"division", "select 1/n_nationkey as v from nation", []bool{true}},
 		{"integer division", "select 1 div n_nationkey as v from nation", []bool{true}},
 		{"modulo", "select 1 % n_nationkey as v from nation", []bool{true}},
