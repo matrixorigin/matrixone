@@ -156,6 +156,24 @@ func TestRuntimeAggSelectionKeepsResultsAndGroupsAligned(t *testing.T) {
 	}
 }
 
+func TestDistinctMarshalToBuffersAllowsPartialSelection(t *testing.T) {
+	mp := mpool.MustNewZero()
+	distinct := newDistinctHash(mp)
+	t.Cleanup(func() { distinct.free(); require.Zero(t, mp.CurrNB()) })
+	require.NoError(t, distinct.grows(2))
+	var encoded bytes.Buffer
+	require.NoError(t, distinct.marshalToBuffers([]uint8{1}, &encoded))
+
+	reader := bytes.NewReader(encoded.Bytes())
+	count, err := types.ReadInt64(reader)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+	var expected bytes.Buffer
+	_, err = distinct.maps[0].WriteTo(&expected)
+	require.NoError(t, err)
+	require.Equal(t, expected.Bytes(), encoded.Bytes()[8:])
+}
+
 func TestRuntimeAggSelectionRejectsInvalidInput(t *testing.T) {
 	mp := mpool.MustNewZero()
 	ret := initAggResultWithFixedTypeResult[int64](mp, types.T_int64.ToType(), true, 0, false)

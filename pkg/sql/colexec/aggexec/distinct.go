@@ -124,7 +124,7 @@ func (d *distinctHash) marshalToBuffers(flags []uint8, buf *bytes.Buffer) error 
 
 	types.WriteInt64(buf, cnt)
 	for i := range d.maps {
-		if flags != nil && flags[i] != 0 {
+		if flags == nil || (i < len(flags) && flags[i] != 0) {
 			if _, err := d.maps[i].WriteTo(buf); err != nil {
 				return err
 			}
