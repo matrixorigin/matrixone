@@ -1332,8 +1332,16 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) (out []receivedRuntimeFilter, 
 				if !ok {
 					panic("expect runtime filter message, receive unknown message!")
 				}
+				var keyGuard *keycodec.KeyPayload
+				if msg.Typ == message.RuntimeFilter_UNIQUEJOINKEYS && msg.Keys != nil {
+					if !msg.Keys.Retain() {
+						return nil, false, moerr.NewInvalidStateNoCtx("runtime keys were released before receipt")
+					}
+					keyGuard = msg.Keys
+				}
 				if spec.MustApply && spec.UseMembershipFilter {
 					if err := validateRequiredVectorMembership(spec, msg); err != nil {
+						keyGuard.Release()
 						return nil, false, err
 					}
 				}
@@ -1359,18 +1367,17 @@ func (s *Scope) waitForRuntimeFilters(c *Compile) (out []receivedRuntimeFilter, 
 						if msg.Keys == nil {
 							continue
 						}
-						if !msg.Keys.Retain() {
-							return nil, false, moerr.NewInvalidStateNoCtx("runtime keys were released before receipt")
-						}
 						runtimeFilters = append(runtimeFilters, receivedRuntimeFilter{
 							spec: spec,
 							data: msg.Keys,
 						})
 						requiredSatisfied = true
+						keyGuard = nil // ownership transferred to runtimeFilters
 					}
 
 					// TODO: implement BETWEEN expression
 				}
+				keyGuard.Release()
 			}
 			if spec.MustApply && !requiredSatisfied {
 				return nil, false, moerr.NewInternalErrorf(
