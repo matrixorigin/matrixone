@@ -78,7 +78,7 @@ func (builder *QueryBuilder) buildTableChanges(
 	if err != nil {
 		return 0, err
 	}
-	if err := validateTableChangesSource(objectRef, sourceDef); err != nil {
+	if err := catalog.ValidateTableChangesSource(objectRef, sourceDef); err != nil {
 		return 0, err
 	}
 	if builder.isReusablePlan() {
@@ -134,71 +134,6 @@ func (builder *QueryBuilder) buildTableChanges(
 		node.TableDef.TblFunc.Param = []byte{1}
 	}
 	return builder.appendNode(node, ctx), nil
-}
-
-func validateTableChangesSource(objectRef *plan.ObjectRef, tableDef *plan.TableDef) error {
-	if tableDef == nil {
-		return moerr.NewInvalidInputNoCtx("table_changes source table does not exist")
-	}
-	if objectRef != nil && objectRef.PubInfo != nil {
-		return moerr.NewNotSupportedNoCtx("table_changes does not support subscription tables")
-	}
-	if tableDef.IsTemporary {
-		return moerr.NewNotSupportedNoCtx("table_changes does not support temporary tables")
-	}
-	if err := validateTableChangesColumnNames(tableDef); err != nil {
-		return err
-	}
-	switch tableDef.TableType {
-	case catalog.SystemOrdinaryRel:
-	case catalog.SystemClusterRel:
-		// Cluster tables have a physical account_id column. The executor applies
-		// the same account filter as an ordinary SQL scan.
-	default:
-		return moerr.NewNotSupportedNoCtxf(
-			"table_changes does not support table type %q",
-			tableDef.TableType,
-		)
-	}
-	if tableDef.Partition != nil {
-		return moerr.NewNotSupportedNoCtx("table_changes does not support partitioned tables")
-	}
-	if tableDef.Pkey == nil ||
-		len(tableDef.Pkey.Names) == 0 ||
-		tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
-		return moerr.NewNotSupportedNoCtx("table_changes requires an explicit primary key")
-	}
-	if tableDef.TableType == catalog.SystemClusterRel &&
-		!containsChangeKey(tableDef.Pkey.Names, "account_id") {
-		return moerr.NewNotSupportedNoCtx(
-			"table_changes requires cluster table primary keys to include account_id",
-		)
-	}
-	return nil
-}
-
-func validateTableChangesColumnNames(tableDef *plan.TableDef) error {
-	for _, col := range tableDef.Cols {
-		if col == nil {
-			continue
-		}
-		if catalog.IsTableChangesMetadataColumn(col.Name) {
-			return moerr.NewInvalidInputNoCtxf(
-				"table_changes source column %q conflicts with reserved metadata column",
-				col.Name,
-			)
-		}
-	}
-	return nil
-}
-
-func containsChangeKey(names []string, target string) bool {
-	for _, name := range names {
-		if strings.EqualFold(name, target) {
-			return true
-		}
-	}
-	return false
 }
 
 func stringLiteral(expr *plan.Expr) (string, bool) {

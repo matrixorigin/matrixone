@@ -63,7 +63,7 @@ class TestCloneTable:
 
     def test_if_not_exists(self):
         with pytest.raises(ValueError, match="use client.clone"):
-            clone_table('tgt').if_not_exists().from_table('src').compile()
+            clone_table('tgt').from_table('src').if_not_exists()
 
     def test_to_account(self):
         sql = clone_table('tgt').from_table('src', snapshot='s1').to_account('acc1').compile()
@@ -145,7 +145,7 @@ class TestCloneDatabase:
 
     def test_if_not_exists(self):
         with pytest.raises(ValueError, match="use client.clone"):
-            clone_database('tgt_db').if_not_exists().from_database('src_db').compile()
+            clone_database('tgt_db').from_database('src_db').if_not_exists()
 
     def test_to_account(self):
         sql = clone_database('tgt_db').from_database('src_db', snapshot='s1').to_account('acc1').compile()

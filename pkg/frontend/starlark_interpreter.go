@@ -294,7 +294,6 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 type lastFailure struct {
 	code     uint16
 	sqlstate string
-	set      bool
 }
 
 // beginCall resets the recorded failure.  Every builtin that can fail calls it
@@ -308,7 +307,7 @@ func (si *starlarkInterpreter) beginCall() {
 // failed records a builtin failure and renders it for the `ok` slot.  The
 // rendering is a plain starlark.String, which is what mo.* always returned.
 func (si *starlarkInterpreter) failed(err error) starlark.Value {
-	si.lastErr = lastFailure{set: true}
+	si.lastErr = lastFailure{}
 	var me *moerr.Error
 	if errors.As(err, &me) {
 		si.lastErr.code = me.MySQLCode()

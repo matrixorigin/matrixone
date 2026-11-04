@@ -1005,6 +1005,11 @@ func estimatePreparedCursorMaterializedBytes(bat *batch.Batch) (uint64, error) {
 			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 2, add); err != nil {
 				return 0, err
 			}
+		case types.T_array_float8, types.T_array_float4:
+			// Rows hold the dequantized []float32.
+			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 4, add); err != nil {
+				return 0, err
+			}
 		case types.T_array_int8:
 			if err := estimatePreparedCursorArrayCopyBytes(vec, rows, 1, add); err != nil {
 				return 0, err
@@ -1090,6 +1095,12 @@ func estimatePreparedCursorArrayCopyBytes(
 			length = len(vector.GetArrayAt[types.Float16](vec, row))
 		case types.T_array_int8:
 			length = len(vector.GetArrayAt[int8](vec, row))
+		case types.T_array_float8, types.T_array_float4:
+			c, err := types.ParseBlockScaledCell(vec.GetBytesAt(row))
+			if err != nil {
+				return err
+			}
+			length = c.Dim
 		}
 		bytes := uint64(length)
 		if bytes > math.MaxUint64/elementBytes {
@@ -1179,6 +1190,36 @@ func capturePreparedCursorBatch(ses *Session, execCtx *ExecCtx, bat *batch.Batch
 	cursor.bytes += estimated
 	committed = true
 	return nil
+}
+
+// discardPreparedCursorRetryOutput releases everything a failed statement
+// generation retained for a prepared cursor before the compiler's retry
+// transition replays the statement: the captured row set (its session byte
+// reservation returns via preparedStmtCursor.resetAttempt) and any staged
+// saved-result blocks. The rows never reached the wire, so discarding them
+// loses nothing delivered. Statement-lifetime state the retry cannot
+// re-create survives the discard: the cursor shell and its frozen column
+// metadata (production installs it exactly once per EXECUTE before the
+// pipeline starts and internal retries do not repeat the installation) and
+// the session's authorized statement plan (installed once before Run; the
+// retried generation's publication re-serializes its Plan/Tables
+// provenance — abortPreparedCursorAttemptStaging keeps it). The retried
+// generation captures a fresh, complete row set into the kept cursor shell
+// (#30359 review). The hook is invoked by Compile.prepareRetryTransition
+// only after the failed generation's running SQL has quiesced, so no
+// pipeline can still append to the discarded set.
+func discardPreparedCursorRetryOutput(execCtx *ExecCtx) error {
+	if execCtx == nil {
+		return nil
+	}
+	if execCtx.prepareStmt != nil && execCtx.prepareStmt.cursor != nil {
+		execCtx.prepareStmt.cursor.resetAttempt()
+	}
+	// Attempt-cleanup failures are reported, not hidden (#30359 review):
+	// the retry transition surfaces the error and abandons the replay, and
+	// the failed staging cleanup keeps its owner (cursorResultSaver) so
+	// terminal statement cleanup can still reach the surviving files.
+	return abortPreparedCursorAttemptStaging(execCtx)
 }
 
 func doUse(ctx context.Context, ses FeSession, db string) (err error) {
@@ -2302,8 +2343,11 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 				}
 			}
 
-			bat.Shrink(sels, false)
+			err = bat.Shrink(sels, false, ses.proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
 
 			v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
 			v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
@@ -3852,8 +3896,11 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 				}
 			}
 
-			bat.Shrink(sels, false)
+			err = bat.Shrink(sels, false, proc.Mp())
 			vector.PutSels(sels)
+			if err != nil {
+				return err
+			}
 			v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
 			v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
 			v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
@@ -4266,7 +4313,7 @@ func buildPlanWithPrepareMode(
 			case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
 				*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
 				*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex, *tree.ShowIndexIgnored, *tree.ShowIndexStatus,
 				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 				opt := plan2.NewBaseOptimizer(ctx)
 				optimized, err := opt.Optimize(stmt, isPrepareStmt)
@@ -5386,15 +5433,7 @@ var (
 type loadLocalDrainCapable interface {
 	InterruptLoadLocalIO()
 	ClearLoadLocalIOInterrupt()
-	// LoadLocalFramingBroken reports that an upload read failed mid-frame
-	// (partial header, a header whose payload was never read, or a partial
-	// payload), so the connection's packet boundary is unknown: the bytes a
-	// drain would re-frame as the next packet still belong to the interrupted
-	// frame. The drain must then refuse to resync — accepting a re-framed
-	// empty packet as the upload EOF would leave the true frame remainder to
-	// be decoded as commands — and the caller retires the connection.
-	LoadLocalFramingBroken() bool
-	ReadLoadLocalPacketWithTimeout(time.Duration, time.Time) ([]byte, error)
+	DiscardLoadLocalPacket(time.Duration, time.Time, int64) (discarded int64, eof bool, err error)
 }
 
 // The production protocol behind ses.GetResponser().MysqlRrWr() must satisfy
@@ -5477,9 +5516,8 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 	}
 	// The client has accepted the upload; a later cancellation or failure
 	// drains its finite remainder before the command boundary is answered —
-	// provided the upload can still be re-framed at a known packet boundary:
-	// if the upload read died mid-frame, the boundary is unknown and the
-	// connection is retired instead (see loadLocalDrainCapable/drain).
+	// including an interrupted frame whose exact progress was preserved. A
+	// fatal framing/transport error still requires connection retirement.
 	requestAccepted := true
 	// drainOnExit requests the bounded post-failure drain below for an ordinary
 	// (non-cancellation) error, so the SQL error — not 2013 — answers the
@@ -5622,25 +5660,15 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 // within its budgets. The empty upload packet is the protocol EOF marker (see
 // readThenWrite).
 func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrainCapable) bool {
-	// A read interrupted mid-frame (partial header, a complete header whose
-	// payload was never read, or a partial payload) consumed bytes without
-	// reaching the frame end: the next byte on the wire is NOT a packet
-	// boundary, so a fresh packet read here could re-frame file bytes as an
-	// empty upload packet (a fake EOF authorizing reuse) and leave the true
-	// remainder to be decoded as commands. Only a clean boundary may drain;
-	// an unknown one retires the connection.
-	if drainer.LoadLocalFramingBroken() {
-		ses.Errorf(execCtx.reqCtx, "load local upload interrupted mid-packet: packet boundary unknown, retiring connection")
-		return false
-	}
 	deadline := time.Now().Add(loadLocalDrainMaxWait)
 	var drainedBytes int64
 	for {
 		// The absolute deadline is installed on every network read of this
 		// packet, so a trickled header or payload cannot outlive the drain's
 		// total budget one byte at a time.
-		payload, err := drainer.ReadLoadLocalPacketWithTimeout(loadLocalDrainReadTimeout, deadline)
-		if err == nil && len(payload) == 0 {
+		discarded, eof, err := drainer.DiscardLoadLocalPacket(loadLocalDrainReadTimeout, deadline, loadLocalDrainMaxBytes-drainedBytes)
+		ses.CountPayload(int(discarded))
+		if err == nil && eof {
 			return true
 		}
 		if err != nil {
@@ -5651,8 +5679,7 @@ func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrai
 			}
 			return false
 		}
-		drainedBytes += int64(len(payload))
-		ses.CountPayload(len(payload))
+		drainedBytes += discarded
 		switch {
 		case drainedBytes > loadLocalDrainMaxBytes:
 			ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drained %d bytes over budget %d, retiring connection", drainedBytes, loadLocalDrainMaxBytes)
@@ -7747,6 +7774,10 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 		col.SetSigned(false)
 	case types.T_float32:
 		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// The low-precision float types have no MySQL wire type; present them as
+		// FLOAT (they widen losslessly to float32 for the protocol).
+		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
 	case types.T_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
 	case types.T_char:
@@ -7754,7 +7785,8 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_varchar:
 		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_datalink:
 		col.SetColumnType(defines.MYSQL_TYPE_TEXT)

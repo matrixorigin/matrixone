@@ -161,6 +161,7 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
         'read_timeout': 7,
         'write_timeout': 7,
         'local_infile': False,
+        'client_flag': 128,
         'charset': 'utf8mb4',
         'ssl_disabled': True,
     }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -181,17 +182,48 @@ func ParseS3Url(u *url.URL) (bucket, fpath, query string, err error) {
 	return
 }
 
+// ValidateName matches the Stage catalog's varchar(64) logical identifier.
+// Quoted SQL identifiers are not DNS hostnames and may contain spaces/quotes.
+func ValidateName(ctx context.Context, name string) error {
+	if name == "" || !utf8.ValidString(name) || utf8.RuneCountInString(name) > 64 || strings.ContainsRune(name, 0) {
+		return moerr.NewInvalidInput(ctx, "stage name must contain 1..64 UTF-8 characters without NUL")
+	}
+	return nil
+}
+
 func ParseStageUrl(u *url.URL) (stagename, prefix, query string, err error) {
 	if u.Scheme != STAGE_PROTOCOL {
 		return "", "", "", moerr.NewBadConfig(context.TODO(), "ParseStageUrl: URL protocol is not stage://")
 	}
 
 	stagename = u.Host
-	if len(stagename) == 0 {
-		return "", "", "", moerr.NewBadConfig(context.TODO(), "Invalid stage URL: stage name is empty string")
+	prefix = u.Path
+	if stagename == "" {
+		if u.Fragment != "" || u.User != nil || u.OmitHost || u.Opaque != "" {
+			return "", "", "", moerr.NewInvalidInput(context.TODO(), "path-form Stage URLs require stage:///name/path without user info or fragment")
+		}
+		// Path authority supports logical catalog names which cannot be URL hosts.
+		// Split before decoding, so %2F remains part of the name, not the subpath.
+		encoded, rest, hasPath := strings.Cut(strings.TrimPrefix(u.EscapedPath(), "/"), "/")
+		stagename, err = url.PathUnescape(encoded)
+		if err != nil {
+			return "", "", "", err
+		}
+		if stagename == "." || stagename == ".." {
+			return "", "", "", moerr.NewInvalidInput(context.TODO(), "dot-only Stage names require host-form URLs")
+		}
+		prefix = ""
+		if hasPath {
+			prefix, err = url.PathUnescape("/" + rest)
+			if err != nil {
+				return "", "", "", err
+			}
+		}
+	}
+	if err = ValidateName(context.TODO(), stagename); err != nil {
+		return "", "", "", err
 	}
 
-	prefix = u.Path
 	query = u.RawQuery
 
 	return

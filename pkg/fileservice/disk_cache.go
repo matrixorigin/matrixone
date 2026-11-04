@@ -55,6 +55,7 @@ type DiskCache struct {
 
 	cache        *fifocache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
+	preloads     *preloadUsage
 	dirEntries   bool
 	directoryMu  sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
@@ -181,6 +182,7 @@ func newDiskCache(
 
 		capacityFunc: capacityFunc,
 		dirEntries:   opts.dirEntries,
+		preloads:     newPreloadUsage(),
 	}
 	cache = fifocache.NewWithPrepareEvict(
 
@@ -190,7 +192,8 @@ func newDiskCache(
 			return maphash.String(seed, key)
 		},
 
-		func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) { // postSet
+		func(_ context.Context, path string, _ struct{}, size int64, _ uint64) { // postSet
+			ret.preloads.cached(path)
 			inuseBytes.Add(float64(size))
 			capacityBytes.Set(float64(capacityFunc()))
 		},
@@ -216,7 +219,8 @@ func newDiskCache(
 				}
 			}
 		},
-		func(_ context.Context, _ string, _ struct{}, size int64, _ uint64) {
+		func(_ context.Context, path string, _ struct{}, size int64, _ uint64) {
+			ret.preloads.removed(path, size)
 			inuseBytes.Add(float64(-size))
 			capacityBytes.Set(float64(capacityFunc()))
 		},
@@ -555,6 +559,7 @@ func (d *DiskCache) Read(
 		readOffset, readSize := int64(0), entry.Size
 		if diskPath == d.pathForFile(path.File) {
 			readOffset = entry.Offset
+			d.preloads.read(diskPath, entry.Size)
 		}
 		if err := entry.ReadFromOSFile(ctx, file, d.cacheDataAllocator); err != nil {
 			return err
@@ -1393,6 +1398,9 @@ func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) 
 		}
 		err = nil
 	}
+	if d.cache.Contains(diskPath) {
+		d.preloads.deleted(diskPath)
+	}
 	d.cache.Delete(ctx, diskPath)
 
 	// A pre-upgrade binary may have left a legacy, unsharded cache file for this
@@ -1407,6 +1415,9 @@ func (d *DiskCache) removeOnePath(ctx context.Context, path string) (err error) 
 				return
 			}
 			err = nil
+		}
+		if d.cache.Contains(legacyPath) {
+			d.preloads.deleted(legacyPath)
 		}
 		d.cache.Delete(ctx, legacyPath)
 	}

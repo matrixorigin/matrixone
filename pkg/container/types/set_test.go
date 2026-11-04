@@ -153,6 +153,7 @@ func TestSetAssignmentParsing(t *testing.T) {
 		{"a,b,c,d", "a,c ", 5, false}, {"a,b,c,d", "a ,c", 4, true},
 		{"a,b,c,d", "a , c", 0, true}, {"a,b,c,d", "a,c,x", 5, true},
 		{"a,b,c,d", "a,,c", 5, true}, {"a,b,c,d", "a,2", 1, true},
+		{"Ä,Σ,blue", "ä,σ,BLUE", 7, false}, {"Ä,Σ,blue", "ä,missing,Σ", 3, true},
 		{"a,b,c,d", "b,b", 2, false}, {"a,b,c,d", "", 0, false},
 		{"a,b,c,d", "0", 0, false}, {"a,b,c,d", "+0", 0, false}, {"a,b,c,d", "-0", 0, false},
 		{"a,b,c,d", "08", 8, false}, {"a,b,c,d", "010", 10, false},

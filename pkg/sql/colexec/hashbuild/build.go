@@ -700,26 +700,6 @@ func hashBuildStatInt64(value uint64) int64 {
 	return int64(value)
 }
 
-// calculateBloomFilterProbability calculates the false positive rate for bloom filter
-// based on row count. Reference fuzzyfilter experience, choose different false positive rates
-// based on row count to balance memory usage and filtering accuracy.
-func calculateBloomFilterProbability(rowCount int) float64 {
-	switch {
-	case rowCount < 10_0001:
-		return 0.00001
-	case rowCount < 100_0001:
-		return 0.000003
-	case rowCount < 1000_0001:
-		return 0.000001
-	case rowCount < 1_0000_0001:
-		return 0.0000005
-	case rowCount < 10_0000_0001:
-		return 0.0000002
-	default:
-		return 0.0000001
-	}
-}
-
 func planExprType(expr *plan.Expr) (types.Type, bool) {
 	if expr == nil {
 		return types.Type{}, false
@@ -1120,7 +1100,12 @@ func (hashBuild *HashBuild) handleRuntimeFilter(
 		return nil
 	}
 	keyVec.GetNulls().Reset()
-	keyVec.InplaceSort()
+	if err := keyVec.InplaceSort(proc.Mp()); err != nil {
+		if hashBuild.fallbackOptionalRuntimeFilter(err, &runtimeFilter, spec, proc) {
+			return nil
+		}
+		return err
+	}
 	data, release, err := ctr.hashmapBuilder.marshalRuntimeFilterVector(
 		keyVec,
 		proc.Mp(),
@@ -1488,7 +1473,9 @@ func (hashBuild *HashBuild) materializeSerializedRuntimeFilter(
 	if outputRows == 0 {
 		return nil, nil, 0, true, nil
 	}
-	payload.InplaceSort()
+	if err := payload.InplaceSort(proc.Mp()); err != nil {
+		return nil, nil, 0, false, err
+	}
 	data, release, err =
 		hashBuild.ctr.hashmapBuilder.marshalRuntimeFilterVector(
 			payload,

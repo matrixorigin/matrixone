@@ -20,10 +20,7 @@ import (
 )
 
 // InformationSchemaTablesUpgradeEntry refreshes the current TABLES definition.
-// Historical and forward handlers share the same idempotent view repair; the
-// exact-equality CheckFunc makes the persisted definition the durable marker,
-// so a tenant already at the final version is repaired once and never
-// replaced afterwards.
+// Historical and forward handlers share the same idempotent view repair.
 func InformationSchemaTablesUpgradeEntry() UpgradeEntry {
 	return InformationSchemaViewUpgradeEntry("TABLES", sysview.InformationSchemaTablesV118DDL, defines.MORPCVersion118)
 }

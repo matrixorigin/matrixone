@@ -89,9 +89,9 @@ func (p *pluginCompileCtx) RunSql(sql string) error          { return p.c.runSql
 // RunWithSourceReadCacheSkip runs fn with SkipMemoryCacheWrites attached to the
 // compile context, so block reads performed inside fn — notably an index build's
 // source-table scans (kmeans sample + entry assignment) — do NOT populate the
-// fileservice memory cache. The build reads the source once; queries never re-read
-// it (re-rank fetches only a handful of rows), so caching it would just evict the
-// index-entry blocks the queries actually hit. Mirrors the policy LOAD DATA
+// fileservice memory cache. The build reads the whole source once; queries read only
+// the candidate rows of it, so caching the build's reads would just evict the blocks
+// the queries hit. Mirrors the policy LOAD DATA
 // (external) already uses for one-shot bulk reads. runSqlWithResultAndOptions
 // reads c.proc.Ctx for the sub-execution, so
 // attaching the policy here propagates to every read in the build; it is restored

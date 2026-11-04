@@ -21,9 +21,10 @@ Unified PubSub management supporting sync/async and client/session executors.
 from datetime import datetime
 from typing import List, Optional
 
-from ._sql_literals import sql_literal
+from ._sql_literals import sql_literal, string_grammar_token
 
 from .exceptions import PubSubError
+from ._utils import rows_from_result
 
 
 class Publication:
@@ -162,6 +163,27 @@ class BasePubSubManager:
             f"FROM {self._client._escape_identifier(publisher_account)} "
             f"PUBLICATION {self._client._escape_identifier(publication_name)}"
         )
+
+    @staticmethod
+    def _publication_lookup_sql(name):
+        # LIKE is the native SHOW grammar (WHERE is not accepted). Render the
+        # required STRING grammar independently of backslash modes, escaping
+        # name wildcards rather than fetching every publication.
+        pattern = name.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+        if '\\' in pattern and '$' in pattern:
+            # The native dollar-string lexer cannot represent this combination;
+            # preserve the exact client-side lookup instead of changing names.
+            return 'SHOW PUBLICATIONS'
+        return 'SHOW PUBLICATIONS ILIKE ' + string_grammar_token(pattern)
+
+    def _filtered_subscriptions(self, rows, pub_account, pub_database):
+        subscriptions = [self._row_to_subscription(row) for row in rows]
+        return [
+            item
+            for item in subscriptions
+            if (pub_account is None or item.pub_account == pub_account)
+            and (pub_database is None or item.pub_database == pub_database)
+        ]
 
     def _row_to_publication(self, row: tuple) -> Publication:
         """Convert database row to Publication object"""
@@ -304,7 +326,11 @@ class PubSubManager(BasePubSubManager):
         try:
             return self.get_publication(name)
         except Exception as e:
-            raise PubSubError(f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
+            raise PubSubError(
+                f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}",
+                phase='metadata_readback',
+                statement_acknowledged=True,
+            ) from e
 
     def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
         """Create table-level publication"""
@@ -319,23 +345,23 @@ class PubSubManager(BasePubSubManager):
         try:
             return self.get_publication(name)
         except Exception as e:
-            raise PubSubError(f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
+            raise PubSubError(
+                f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}",
+                phase='metadata_readback',
+                statement_acknowledged=True,
+            ) from e
 
     def get_publication(self, name: str) -> Publication:
         """Get publication by name"""
         try:
-            # SHOW PUBLICATIONS doesn't support WHERE clause
-            sql = "SHOW PUBLICATIONS"
-            result = self._get_executor().execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found")
-
-            # Find publication with matching name
-            for row in result.rows:
-                if row[0].lower() == name.lower():
-                    return self._row_to_publication(row)
-
+            # SHOW's native LIKE handling is not reliably case-insensitive,
+            # even with ILIKE. Preserve the established case-insensitive API
+            # if the targeted read produces no exact name match.
+            for sql in dict.fromkeys((self._publication_lookup_sql(name), 'SHOW PUBLICATIONS')):
+                result = self._get_executor().execute(sql)
+                for row in rows_from_result(result):
+                    if row[0].lower() == name.lower():
+                        return self._row_to_publication(row)
             raise PubSubError(f"Publication '{name}' not found")
 
         except Exception as e:
@@ -347,11 +373,12 @@ class PubSubManager(BasePubSubManager):
             sql = "SHOW PUBLICATIONS"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
             publications = []
-            for row in result.rows:
+            for row in rows:
                 pub = self._row_to_publication(row)
 
                 # Apply filters
@@ -402,10 +429,11 @@ class PubSubManager(BasePubSubManager):
             sql = f"SHOW CREATE PUBLICATION {self._client._escape_identifier(name)}"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise PubSubError(f"Publication '{name}' not found")
 
-            return result.rows[0][1]  # CREATE statement is in second column
+            return rows[0][1]  # CREATE statement is in second column
 
         except Exception as e:
             raise PubSubError(f"Failed to show create publication '{name}': {e}") from e
@@ -432,11 +460,12 @@ class PubSubManager(BasePubSubManager):
             sql = "SHOW SUBSCRIPTIONS"
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise PubSubError(f"Subscription '{name}' not found")
 
             # Find subscription with matching name
-            for row in result.rows:
+            for row in rows:
                 if row[6] == name:  # sub_name is in 7th column (index 6)
                     return self._row_to_subscription(row)
 
@@ -450,25 +479,16 @@ class PubSubManager(BasePubSubManager):
     ) -> List[Subscription]:
         """List subscriptions with optional filters"""
         try:
-            conditions = []
-
-            if pub_account:
-                conditions.append(f"pub_account = {sql_literal(pub_account)}")
-            if pub_database:
-                conditions.append(f"pub_database = {sql_literal(pub_database)}")
-
-            if conditions:
-                where_clause = " WHERE " + " AND ".join(conditions)
-            else:
-                where_clause = ""
-
-            sql = f"SHOW SUBSCRIPTIONS{where_clause}"
+            # Native SHOW SUBSCRIPTIONS accepts LIKE/ILIKE, not WHERE.
+            # Its LIKE pattern selects subscription names, not publisher fields.
+            sql = 'SHOW SUBSCRIPTIONS'
             result = self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            return [self._row_to_subscription(row) for row in result.rows]
+            return self._filtered_subscriptions(rows, pub_account, pub_database)
 
         except Exception as e:
             raise PubSubError(f"Failed to list subscriptions: {e}") from e
@@ -496,7 +516,11 @@ class AsyncPubSubManager(BasePubSubManager):
         try:
             return await self.get_publication(name)
         except Exception as e:
-            raise PubSubError(f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
+            raise PubSubError(
+                f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}",
+                phase='metadata_readback',
+                statement_acknowledged=True,
+            ) from e
 
     async def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
         """Create table-level publication asynchronously"""
@@ -511,23 +535,23 @@ class AsyncPubSubManager(BasePubSubManager):
         try:
             return await self.get_publication(name)
         except Exception as e:
-            raise PubSubError(f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
+            raise PubSubError(
+                f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}",
+                phase='metadata_readback',
+                statement_acknowledged=True,
+            ) from e
 
     async def get_publication(self, name: str) -> Publication:
         """Get publication by name asynchronously"""
         try:
-            # SHOW PUBLICATIONS doesn't support WHERE clause
-            sql = "SHOW PUBLICATIONS"
-            result = await self._get_executor().execute(sql)
-
-            if not result or not result.rows:
-                raise PubSubError(f"Publication '{name}' not found")
-
-            # Find publication with matching name
-            for row in result.rows:
-                if row[0].lower() == name.lower():
-                    return self._row_to_publication(row)
-
+            # SHOW's native LIKE handling is not reliably case-insensitive,
+            # even with ILIKE. Preserve the established case-insensitive API
+            # if the targeted read produces no exact name match.
+            for sql in dict.fromkeys((self._publication_lookup_sql(name), 'SHOW PUBLICATIONS')):
+                result = await self._get_executor().execute(sql)
+                for row in rows_from_result(result):
+                    if row[0].lower() == name.lower():
+                        return self._row_to_publication(row)
             raise PubSubError(f"Publication '{name}' not found")
 
         except Exception as e:
@@ -541,11 +565,12 @@ class AsyncPubSubManager(BasePubSubManager):
             sql = "SHOW PUBLICATIONS"
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
             publications = []
-            for row in result.rows:
+            for row in rows:
                 pub = self._row_to_publication(row)
 
                 # Apply filters
@@ -596,10 +621,11 @@ class AsyncPubSubManager(BasePubSubManager):
             sql = f"SHOW CREATE PUBLICATION {self._client._escape_identifier(name)}"
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise PubSubError(f"Publication '{name}' not found")
 
-            return result.rows[0][1]  # CREATE statement is in second column
+            return rows[0][1]  # CREATE statement is in second column
 
         except Exception as e:
             raise PubSubError(f"Failed to show create publication '{name}': {e}")
@@ -626,11 +652,12 @@ class AsyncPubSubManager(BasePubSubManager):
             sql = "SHOW SUBSCRIPTIONS"
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 raise PubSubError(f"Subscription '{name}' not found")
 
             # Find subscription with matching name
-            for row in result.rows:
+            for row in rows:
                 if row[6] == name:  # sub_name is in 7th column (index 6)
                     return self._row_to_subscription(row)
 
@@ -644,25 +671,16 @@ class AsyncPubSubManager(BasePubSubManager):
     ) -> List[Subscription]:
         """List subscriptions with optional filters asynchronously"""
         try:
-            conditions = []
-
-            if pub_account:
-                conditions.append(f"pub_account = {sql_literal(pub_account)}")
-            if pub_database:
-                conditions.append(f"pub_database = {sql_literal(pub_database)}")
-
-            if conditions:
-                where_clause = " WHERE " + " AND ".join(conditions)
-            else:
-                where_clause = ""
-
-            sql = f"SHOW SUBSCRIPTIONS{where_clause}"
+            # Native SHOW SUBSCRIPTIONS accepts LIKE/ILIKE, not WHERE.
+            # Its LIKE pattern selects subscription names, not publisher fields.
+            sql = 'SHOW SUBSCRIPTIONS'
             result = await self._get_executor().execute(sql)
 
-            if not result or not result.rows:
+            rows = rows_from_result(result)
+            if not rows:
                 return []
 
-            return [self._row_to_subscription(row) for row in result.rows]
+            return self._filtered_subscriptions(rows, pub_account, pub_database)
 
         except Exception as e:
             raise PubSubError(f"Failed to list subscriptions: {e}")

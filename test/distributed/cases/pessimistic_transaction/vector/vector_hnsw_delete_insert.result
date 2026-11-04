@@ -11,6 +11,7 @@ insert into t select result, cast(concat('[', result, ',1,2]') as vecf32(3)) fro
 create index hv using hnsw on t(v) op_type 'vector_l2_ops';
 alter table t alter reindex hv hnsw FORCE_SYNC;
 set @meta = (select index_table_name from mo_catalog.mo_indexes where name = 'hv' and algo = 'hnsw' and algo_table_type = 'hnsw_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
+set @cache_key = (select index_table_name from mo_catalog.mo_indexes where name = 'hv' and algo = 'hnsw' and algo_table_type = 'hnsw_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
 set @wait_initial_sql = concat('select count(*) = 1 and sum(nrow) = 1000 as initial_ready from `', database(), '`.`', @meta, '`');
 prepare wait_initial from @wait_initial_sql;
 execute wait_initial;
@@ -33,6 +34,7 @@ execute wait_delta;
 ➤ delta_ready[-6,8,0]  𝄀
 1
 deallocate prepare wait_delta;
+set @cache_reload = mo_ctl('cn', 'EvictVectorIndexCache', @cache_key);
 set @wait_serve_sql = 'select (select id from t order by l2_distance(v, ''[777.2,1,2]'') limit 1) = 2001 as serve_ready';
 prepare wait_serve from @wait_serve_sql;
 execute wait_serve;
@@ -69,6 +71,7 @@ execute wait_delta;
 ➤ delta_ready[-6,8,0]  𝄀
 1
 deallocate prepare wait_delta;
+set @cache_reload = mo_ctl('cn', 'EvictVectorIndexCache', @cache_key);
 set @wait_serve_sql = 'select (select id from t order by l2_distance(v, ''[888.8,1,2]'') limit 1) = 2002 as serve_ready';
 prepare wait_serve from @wait_serve_sql;
 execute wait_serve;

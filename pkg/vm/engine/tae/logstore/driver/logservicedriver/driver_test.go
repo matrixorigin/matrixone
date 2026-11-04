@@ -340,7 +340,6 @@ func TestCloseDeadlineIncludesIntakeAndWorkerDrain(t *testing.T) {
 			d.waitCommitLoop.Stop()
 			d.truncateQueue.Stop()
 			d.clientPool.Close()
-			d.cancel()
 			close(d.commitWaitQueue)
 			close(d.postCommitQueue)
 		})

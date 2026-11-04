@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergwrite "github.com/matrixorigin/matrixone/pkg/iceberg/write"
 )
 
 func TestWritePositionDeleteFileUsesIcebergReservedSchemaAndSortedRows(t *testing.T) {
@@ -307,6 +308,7 @@ func TestDeleteMetricBoundsCoverTypesAndNaN(t *testing.T) {
 
 	require.Equal(t, int64(1), metrics.nullCounts[6])
 	require.Equal(t, int64(1), metrics.nanCounts[4])
+	require.Nil(t, decodeDeleteMetricValue(api.IcebergType{Kind: api.TypeDecimal}, []byte{1}))
 	require.Equal(t, int64(-3), decodeDeleteMetricValue(api.IcebergType{Kind: api.TypeInt}, metrics.lowerBounds[2]))
 	require.Equal(t, int64(20), decodeDeleteMetricValue(api.IcebergType{Kind: api.TypeInt}, metrics.upperBounds[2]))
 	require.Equal(t, int64(100), decodeDeleteMetricValue(api.IcebergType{Kind: api.TypeLong}, metrics.lowerBounds[3]))
@@ -354,18 +356,18 @@ func TestDeleteBoundHelpersCoverUnsupportedAndComparison(t *testing.T) {
 		encoded, cmp, err := encodeDeleteBound(ctx, tt.typ, tt.value)
 		require.NoError(t, err)
 		require.NotEmpty(t, encoded)
-		require.Equal(t, 0, compareDeleteMetricValue(cmp, decodeDeleteMetricValue(tt.typ, encoded)))
+		require.Equal(t, 0, icebergwrite.CompareMetricValues(cmp, decodeDeleteMetricValue(tt.typ, encoded)))
 	}
 	_, _, err := encodeDeleteBound(ctx, api.IcebergType{Kind: api.TypeUUID}, "uuid")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported")
-	require.Equal(t, -1, compareDeleteMetricValue(false, true))
-	require.Equal(t, 1, compareDeleteMetricValue(int64(3), int64(2)))
-	require.Equal(t, -1, compareDeleteMetricValue(float64(1), float64(2)))
-	require.Equal(t, 1, compareDeleteMetricValue("z", "a"))
-	require.True(t, isDeleteNaN(float32(math.NaN())))
-	require.True(t, isDeleteNaN(math.NaN()))
-	require.False(t, isDeleteNaN("nan"))
+	require.Equal(t, -1, icebergwrite.CompareMetricValues(false, true))
+	require.Equal(t, 1, icebergwrite.CompareMetricValues(int64(3), int64(2)))
+	require.Equal(t, -1, icebergwrite.CompareMetricValues(float64(1), float64(2)))
+	require.Equal(t, 1, icebergwrite.CompareMetricValues("z", "a"))
+	require.True(t, icebergwrite.IsMetricNaN(float32(math.NaN())))
+	require.True(t, icebergwrite.IsMetricNaN(math.NaN()))
+	require.False(t, icebergwrite.IsMetricNaN("nan"))
 }
 
 func readDeleteRows(t *testing.T, data []byte, count int) []parquet.Row {

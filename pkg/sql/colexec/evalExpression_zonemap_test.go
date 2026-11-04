@@ -1199,7 +1199,7 @@ func TestEvaluateFilterByZoneMapConstantDiagnostics(t *testing.T) {
 	proc.WarningSink = sink
 	addTime := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 29, Scale: 6}, Expr: &plan.Expr_F{F: &plan.Function{
 		Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.ADDTIME, 9), ObjName: "addtime"},
-		Args: []*plan.Expr{plan2.MakePlan2StringConstExprWithType("838:59:59"), plan2.MakePlan2StringConstExprWithType("00:00:01")},
+		Args: []*plan.Expr{plan2.MakePlan2StringConstExprWithType("9999-12-31 23:59:59.999999"), plan2.MakePlan2StringConstExprWithType("00:00:00.000001")},
 	}}}
 	expr := bindZoneMapFunction(t, proc, "=", addTime, plan2.MakePlan2StringConstExprWithType("other"))
 	func() {

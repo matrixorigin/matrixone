@@ -395,11 +395,7 @@ func (a *MinioSDK) ReadObjectWithIdentity(
 		r.Close()
 		return nil, mapMinioConditionalReadError(err)
 	}
-	r = mapReadCloserErrors(r, mapMinioConditionalReadError)
-	if max == nil {
-		return r, nil
-	}
-	return &readCloser{r: io.LimitReader(r, *max-*min), closeFunc: r.Close}, nil
+	return mapReadCloserErrors(r, mapMinioConditionalReadError), nil
 }
 
 func mapMinioConditionalReadError(err error) error {
@@ -418,22 +414,7 @@ func (a *MinioSDK) Exists(
 	error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-
-	_, err := a.statObject(
-		ctx,
-		key,
-	)
-	if err != nil {
-		if a.is404(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	return true, nil
+	return objectExists(ctx, key, a.statObject, a.is404)
 }
 
 func (a *MinioSDK) Write(
@@ -509,25 +490,6 @@ func (a *MinioSDK) Read(
 		}
 	}()
 
-	if max == nil {
-		// read to end
-		r, err := a.getObject(
-			ctx,
-			key,
-			min,
-			nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		// eager read to expose file not found error
-		_, err = r.Read(nil)
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
-	}
-
 	r, err = a.getObject(
 		ctx,
 		key,
@@ -540,12 +502,10 @@ func (a *MinioSDK) Read(
 	// eager read to expose file not found error
 	_, err = r.Read(nil)
 	if err != nil {
+		r.Close()
 		return nil, err
 	}
-	return &readCloser{
-		r:         io.LimitReader(r, int64(*max-*min)),
-		closeFunc: r.Close,
-	}, nil
+	return r, nil
 }
 
 func (a *MinioSDK) Delete(
@@ -555,22 +515,7 @@ func (a *MinioSDK) Delete(
 	err error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	if len(keys) == 0 {
-		return nil
-	}
-	if len(keys) == 1 {
-		return a.deleteSingle(ctx, keys[0])
-	}
-
-	if _, err := a.deleteObjects(ctx, keys...); err != nil {
-		return err
-	}
-
-	return nil
+	return deleteObjectKeys(ctx, keys, 0, a.deleteSingle, a.deleteObjects)
 }
 
 func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {
@@ -687,8 +632,16 @@ func (a *MinioSDK) getObjectWithOptions(
 	if min == nil {
 		min = ptrTo[int64](0)
 	}
+	if max != nil && *max <= *min {
+		return nil, moerr.NewEmptyRangeNoCtx(key)
+	}
 	r, err := newRetryableReader(
 		func(offset int64) (io.ReadCloser, error) {
+			if max != nil {
+				if err := options.SetRange(offset, *max-1); err != nil {
+					return nil, err
+				}
+			}
 			obj, err := DoWithRetryContext(
 				ctx,
 				"s3 get object",
@@ -704,8 +657,14 @@ func (a *MinioSDK) getObjectWithOptions(
 			if err != nil {
 				return nil, err
 			}
+			if max != nil {
+				// Seek would replace the bounded Range with an open-ended one.
+				// Close the bounded response directly, without draining unread data.
+				return obj, nil
+			}
 			if offset > 0 {
 				if _, err := obj.Seek(offset, 0); err != nil {
+					obj.Close()
 					return nil, err
 				}
 			}
@@ -723,6 +682,9 @@ func (a *MinioSDK) getObjectWithOptions(
 	)
 	if err != nil {
 		return nil, err
+	}
+	if max != nil {
+		return &readCloser{r: io.LimitReader(r, *max-*min), closeFunc: r.Close}, nil
 	}
 	return r, nil
 }
