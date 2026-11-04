@@ -57,7 +57,7 @@ func (ses *Session) hasUnreplayableMigrationUserVars() bool {
 
 func hasMigrationRuntimeSideEffect(name string) bool {
 	switch canonicalSystemVariableName(name) {
-	case "optimizer_hints", "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
+	case "runtime_filter_limit_in", "runtime_filter_limit_bloom_filter":
 		return true
 	default:
 		return false
@@ -320,7 +320,9 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 		var runtimeValue any
 		runtimeValuePresent := item.RuntimeValue != nil
 		if runtimeValuePresent {
-			if !hasMigrationRuntimeSideEffect(name) {
+			// Older sources may send optimizer_hints in RuntimeValue. Decode it
+			// for compatibility, but migration never applies it to CN runtime.
+			if name != "optimizer_hints" && !hasMigrationRuntimeSideEffect(name) {
 				return nil, moerr.NewInternalErrorf(ctx,
 					"runtime side effect is invalid for session system variable %q", name)
 			}
