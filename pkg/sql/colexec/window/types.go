@@ -102,13 +102,24 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr := &window.ctr
 
 	ctr.resetParam()
+	if ctr.rBat != nil {
+		// The result wrapper borrows input vectors and ctr.vec. Detach aliases;
+		// their owners below release the backing after the consumer finishes.
+		clear(ctr.rBat.Vecs)
+		ctr.rBat.SetRowCount(0)
+	}
 	ctr.resetVectors()
 	// Release aggregators here too: on an error exit from Call the normal
 	// freeAggFun() at the end of the eval loop is skipped, so batAggs would
 	// otherwise keep their accumulated state (e.g. json payloads, distinct
 	// hashes) in the mpool until the next reuse.
 	ctr.freeAggFun()
-	if ctr.bat != nil {
+	if ctr.hasAccountedBufferedData() {
+		// Accounted backing belongs to this execution, including copies that
+		// inherited a child's selection. It cannot survive prepared Reset.
+		ctr.freeBatch(proc.Mp())
+		ctr.freeVector(proc.Mp())
+	} else if ctr.bat != nil {
 		ctr.bat.CleanOnlyData()
 	}
 	// It needs to free, because the result of agg eval is not reuse the vector
@@ -128,6 +139,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())
+	ctr.rBat = nil
 }
 
 func (window *Window) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -183,22 +195,46 @@ func (ctr *container) freeExes() {
 
 func (ctr *container) freeVector(mp *mpool.MPool) {
 	for _, e := range ctr.orderVecs {
-		for _, vec := range e.Vec {
+		for j, vec := range e.Vec {
 			if vec != nil {
 				vec.Free(mp)
+				e.Vec[j] = nil
 			}
 		}
 	}
 
 	for _, e := range ctr.aggVecs {
-		for _, vec := range e.Vec {
+		for j, vec := range e.Vec {
 			if vec != nil {
 				vec.Free(mp)
+				e.Vec[j] = nil
 			}
 		}
 	}
 
 	if ctr.vec != nil {
 		ctr.vec.Free(mp)
+		ctr.vec = nil
 	}
+}
+
+func (ctr *container) hasAccountedBufferedData() bool {
+	if ctr.bat.HasAllocationAccount() {
+		return true
+	}
+	for _, e := range ctr.orderVecs {
+		for _, vec := range e.Vec {
+			if vec != nil && vec.AllocationAccountSelection() != nil {
+				return true
+			}
+		}
+	}
+	for _, e := range ctr.aggVecs {
+		for _, vec := range e.Vec {
+			if vec != nil && vec.AllocationAccountSelection() != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
