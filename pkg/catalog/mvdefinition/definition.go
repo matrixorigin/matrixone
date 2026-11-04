@@ -28,15 +28,11 @@ import (
 )
 
 const (
-	Format = 1
-	// MV jobs use a dedicated protocol fence.  Do not reuse an older
-	// capability number: older CNs can otherwise accept the catalog definition
-	// and later misinterpret the MV job as an index job.
-	RequiredCapability = defines.MORPCVersion135
-	Property           = "mv_definition"
-	OwnerProperty      = "mv_owner"
-	StatePrefix        = "__mo_mv_state_"
-	MaxSources         = 16
+	Format        = 1
+	Property      = "mv_definition"
+	OwnerProperty = "mv_owner"
+	StatePrefix   = "__mo_mv_state_"
+	MaxSources    = 16
 	// Bounds catalog decoding before allocation; SQL statements already have a
 	// finite admission size. This does not cap persistent source/result rows.
 	MaxDefinitionBytes = 1 << 20
@@ -56,19 +52,18 @@ type Source struct {
 }
 
 type Definition struct {
-	Format             int       `json:"format"`
-	RequiredCapability int64     `json:"required_capability"`
-	AccountID          uint32    `json:"account_id"`
-	Target             Relation  `json:"target"`
-	Generation         uint64    `json:"generation"`
-	CreateSQL          string    `json:"create_sql"`
-	RefreshSQL         string    `json:"refresh_sql"`
-	Method             string    `json:"method"`
-	Timing             string    `json:"timing"`
-	Columns            []string  `json:"columns"`
-	Sources            []Source  `json:"sources"`
-	Incremental        string    `json:"incremental,omitempty"`
-	State              *Relation `json:"state,omitempty"`
+	Format      int       `json:"format"`
+	AccountID   uint32    `json:"account_id"`
+	Target      Relation  `json:"target"`
+	Generation  uint64    `json:"generation"`
+	CreateSQL   string    `json:"create_sql"`
+	RefreshSQL  string    `json:"refresh_sql"`
+	Method      string    `json:"method"`
+	Timing      string    `json:"timing"`
+	Columns     []string  `json:"columns"`
+	Sources     []Source  `json:"sources"`
+	Incremental string    `json:"incremental,omitempty"`
+	State       *Relation `json:"state,omitempty"`
 }
 
 // Reference is the only authoritative MV payload in an ISCP job. SQL and state
@@ -98,8 +93,8 @@ func Invalid(format string, args ...any) error {
 }
 
 func (d *Definition) Validate(final bool) error {
-	if d == nil || d.Format != Format || d.RequiredCapability != RequiredCapability {
-		return Invalid("unsupported definition format or capability")
+	if d == nil || d.Format != Format {
+		return Invalid("unsupported definition format")
 	}
 	if d.Generation == 0 || d.Target.Database == "" || d.Target.Name == "" || d.CreateSQL == "" || d.RefreshSQL == "" || len(d.Columns) == 0 {
 		return Invalid("incomplete target definition")
@@ -297,8 +292,8 @@ func CanWrite(ctx context.Context, def *plan.TableDef) bool {
 	return false
 }
 
-// PlannerKind leaves the durable view-kind barrier in the catalog while new
-// binaries use the physical relation. Old binaries keep ViewSql and reject it.
+// PlannerKind projects an authenticated catalog view as a physical relation for
+// planning. The durable view kind still prevents ordinary writes.
 func PlannerKind(def *plan.TableDef) {
 	if def == nil || def.TableType != "v" || def.ViewSql == nil {
 		return

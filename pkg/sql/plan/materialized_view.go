@@ -195,7 +195,7 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 		return err
 	}
 	target := createView.TableDef
-	d := &mvdefinition.Definition{Format: mvdefinition.Format, RequiredCapability: mvdefinition.RequiredCapability, AccountID: accountID,
+	d := &mvdefinition.Definition{Format: mvdefinition.Format, AccountID: accountID,
 		Target: mvdefinition.Relation{Database: createView.Database, Name: target.Name}, Generation: 1,
 		CreateSQL: tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()), RefreshSQL: materializedViewRefreshSQL(stmt.AsSource),
 		Method: materializedViewRefreshMethodName(stmt.RefreshMethod), Timing: materializedViewRefreshTimingName(stmt.RefreshTiming)}

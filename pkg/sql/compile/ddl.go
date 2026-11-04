@@ -3146,12 +3146,6 @@ func (s *Scope) CreateView(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateView()
-	if plan2.IsMaterializedViewTableDef(qry.GetTableDef()) {
-		if err := requireMaterializedViewCapability(c); err != nil {
-			return err
-		}
-	}
-
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := engine.PlanColsToExeCols(planCols)

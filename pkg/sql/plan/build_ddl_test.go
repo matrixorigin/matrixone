@@ -8886,7 +8886,7 @@ func TestValidateIdentifierEncoding(t *testing.T) {
 func testMaterializedViewTable(t *testing.T, name string) (*plan.TableDef, *mvdefinition.Definition) {
 	t.Helper()
 	version := uint32(0)
-	d := &mvdefinition.Definition{Format: 1, RequiredCapability: mvdefinition.RequiredCapability, Target: mvdefinition.Relation{Database: "tpch", Name: name, DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view " + name + " as select * from nation", RefreshSQL: "select * from nation", Method: "complete", Timing: "demand", Columns: []string{"service"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "tpch", Name: "nation", DatabaseID: 1, ID: 11}, Version: &version}}}
+	d := &mvdefinition.Definition{Format: 1, Target: mvdefinition.Relation{Database: "tpch", Name: name, DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view " + name + " as select * from nation", RefreshSQL: "select * from nation", Method: "complete", Timing: "demand", Columns: []string{"service"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "tpch", Name: "nation", DatabaseID: 1, ID: 11}, Version: &version}}}
 	encoded, err := mvdefinition.Encode(d)
 	require.NoError(t, err)
 	return &plan.TableDef{Name: name, DbName: "tpch", TblId: 100, DbId: 1, TableType: "m", Props: []*plan.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}}, d

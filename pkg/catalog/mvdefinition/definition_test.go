@@ -27,16 +27,10 @@ import (
 func definitionFixture(t *testing.T) (*Definition, *plan.TableDef) {
 	t.Helper()
 	v := uint32(0)
-	d := &Definition{Format: Format, RequiredCapability: RequiredCapability, Target: Relation{Database: "db", Name: "mv", DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view mv as select k,count(*) c from src group by k", RefreshSQL: "select k,count(*) c from src group by k", Method: "complete", Timing: "demand", Columns: []string{"k", "c"}, Sources: []Source{{Relation: Relation{Database: "db", Name: "src", DatabaseID: 1, ID: 11}, Version: &v}}}
+	d := &Definition{Format: Format, Target: Relation{Database: "db", Name: "mv", DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view mv as select k,count(*) c from src group by k", RefreshSQL: "select k,count(*) c from src group by k", Method: "complete", Timing: "demand", Columns: []string{"k", "c"}, Sources: []Source{{Relation: Relation{Database: "db", Name: "src", DatabaseID: 1, ID: 11}, Version: &v}}}
 	encoded, err := Encode(d)
 	require.NoError(t, err)
 	return d, &plan.TableDef{DbName: "db", Name: "mv", DbId: 1, TblId: 100, TableType: "m", Props: []*plan.PropertyDef{{Key: Property, Value: encoded}}}
-}
-
-func TestRequiredCapabilityIsNewerThanPredecessorProtocol(t *testing.T) {
-	require.Equal(t, defines.MORPCVersion135, RequiredCapability)
-	require.Equal(t, RequiredCapability, defines.MORPCLatestVersion)
-	require.Less(t, defines.MORPCVersion123, RequiredCapability)
 }
 
 func TestDefinitionIdentityAndAuthority(t *testing.T) {
@@ -76,7 +70,7 @@ func TestDefinitionIdentityAndAuthority(t *testing.T) {
 	require.False(t, CanWrite(ctx, state))
 }
 func TestDefinitionRejectsUnknownOrIncompleteCatalog(t *testing.T) {
-	for _, change := range []func(*Definition){func(d *Definition) { d.Format++ }, func(d *Definition) { d.RequiredCapability-- }, func(d *Definition) { d.Sources[0].Version = nil }, func(d *Definition) { d.Sources = append(d.Sources, d.Sources[0]) }, func(d *Definition) { d.Target.ID = 0 }, func(d *Definition) { d.Method = "fast" }} {
+	for _, change := range []func(*Definition){func(d *Definition) { d.Format++ }, func(d *Definition) { d.Sources[0].Version = nil }, func(d *Definition) { d.Sources = append(d.Sources, d.Sources[0]) }, func(d *Definition) { d.Target.ID = 0 }, func(d *Definition) { d.Method = "fast" }} {
 		d, _ := definitionFixture(t)
 		change(d)
 		encoded, err := Encode(d)

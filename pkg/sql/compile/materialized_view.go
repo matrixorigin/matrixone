@@ -20,7 +20,6 @@ import (
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
@@ -188,15 +187,6 @@ func (c *Compile) validateMaterializedViewReads() error {
 		if _, err = iscp.LoadMaterializedViewDefinition(c.proc.Ctx, c.e, c.proc.GetService(), c.proc.GetTxnOperator(), info, false); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func requireMaterializedViewCapability(c *Compile) error {
-	if !supportsMultiSourceISCP(c.proc.GetService()) {
-		return moerr.NewNotSupportedf(c.proc.Ctx,
-			"materialized view creation requires protocol %d on all services",
-			mvdefinition.RequiredCapability)
 	}
 	return nil
 }

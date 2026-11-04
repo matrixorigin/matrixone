@@ -1,7 +1,7 @@
 # Materialized views: implemented contract (D2)
 
 Status: implementation contract for this PR. The persisted definition is format
-1 and requires the dedicated protocol 135 capability. This document describes
+1. This document describes
 the implemented aggregate and UNION ALL variants; it does not specify a future
 operator-graph format.
 
@@ -9,7 +9,7 @@ operator-graph format.
 
 - Owning issue: [matrixorigin/matrixone#24553](https://github.com/matrixorigin/matrixone/issues/24553)
 - Implementation PR: [matrixorigin/matrixone#27615](https://github.com/matrixorigin/matrixone/pull/27615)
-- Independent approval: misuxi, for design revision efa026ea9f500572a60e6904ba18ea8075500013 (manual approval recorded on [PR #27615](https://github.com/matrixorigin/matrixone/pull/27615)).
+- Independent approval: misuxi, for design revision efa026ea9f500572a60e6904ba18ea8075500013 (manual approval recorded on [PR #27615](https://github.com/matrixorigin/matrixone/pull/27615)). The upgrade section now follows the repository's shutdown-upgrade contract; the other approved decisions are unchanged.
 - Approval decision: approved
 
 ## SQL and refresh policy
@@ -47,7 +47,7 @@ aligned before admitting incremental maintenance.
 `pkg/catalog/mvdefinition` owns the shared codec and identity checks. A target's
 catalog-owned `mv_definition` envelope contains:
 
-- Format and capability, tenant, target database/table IDs and names, generation.
+- Format, tenant, target database/table IDs and names, generation.
 - Canonical CREATE and refresh SQL, refresh method/timing and visible columns.
 - Deduplicated source database/table IDs, names and present schema versions.
 - Optional incremental description and exact auxiliary relation identity.
@@ -134,27 +134,14 @@ individually so unrelated log replay can continue.
 
 ## Upgrade and rollback
 
-All creation, including ON DEMAND, requires protocol 135. Admission is a rollout
-check; safety also relies on representations understood by predecessor readers.
-On disk, the job uses the existing IndexSync discriminator with an empty index
-selector and an additive MVReference. A predecessor's writer registry rejects
-that selector before constructing a consumer or executing SQL. New decoding
-validates the reference and restores the in-memory MV consumer discriminator.
-
-Targets and auxiliary relations retain physical view kind and a MATERIALIZED
-CREATE syntax barrier. Current catalog readers project authenticated metadata as
-physical target/state relations. Predecessors retain the view definition and
-reject its syntax for reads and its view kind for DML. This also covers ON DEMAND
-objects, which have no background job.
-
-Mixed-version MV availability is unsupported. Protocols below 135 are
-predecessors without the MV consumer; none may create, claim, refresh, or
-recover MV jobs. Use capable binaries for reads,
-refresh and cleanup, and drop materialized views before a binary rollback.
-Pre-envelope metadata from earlier revisions of this unreleased PR requires
-recreation. Component compatibility tests exercise the actual predecessor's
-job decode/consumer construction and syntax parser; they do not claim a supported
-whole-cluster downgrade or an automatic migration of those earlier revisions.
+The supported upgrade stops all services before replacing binaries. MV creation
+does not use an RPC protocol gate: all services in the running cluster use the
+same binary. A persisted job uses the MV consumer type and a reference to its
+catalog definition; the definition format, source and target identities, and
+job reference are validated when read. Existing backups from supported releases
+contain no MV definitions and continue through the established restore path.
+An older binary is not supported on data written by a newer one. Pre-envelope
+definitions from earlier revisions of this unreleased PR require recreation.
 
 ## Validation and performance gates
 

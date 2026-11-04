@@ -1,13 +1,13 @@
 # 物化视图：当前实现契约（D2）
 
-本文对应本 PR 实现的聚合与 UNION ALL 维护方案。目录定义格式为 1，创建要求专用协议 135；本文不把尚未实现的算子图格式列为当前契约。
+本文对应本 PR 实现的聚合与 UNION ALL 维护方案。目录定义格式为 1；本文不把尚未实现的算子图格式列为当前契约。
 
 ## 设计追踪与批准记录
 
 - 所属 issue：[matrixorigin/matrixone#24553](https://github.com/matrixorigin/matrixone/issues/24553)
 - 实现 PR：[matrixorigin/matrixone#27615](https://github.com/matrixorigin/matrixone/pull/27615)
 - 已批准 revision：efa026ea9f500572a60e6904ba18ea8075500013。
-- 独立批准人：misuxi，已在 [PR #27615](https://github.com/matrixorigin/matrixone/pull/27615) 手动批准该设计 revision。
+- 独立批准人：misuxi，已在 [PR #27615](https://github.com/matrixorigin/matrixone/pull/27615) 手动批准该设计 revision。升级章节现遵循仓库的停机升级契约，其他已批准的设计决策未变。
 - 批准决定：已批准。
 
 所有刷新模式在绑定前拒绝子查询、CTE、会话变量/参数和非确定性或时间相关函数，
@@ -38,7 +38,7 @@ FAST 要求所有被增量表达式引用的字符串源列都采用原始字节
 ## 唯一权威定义与对象身份
 
 `pkg/catalog/mvdefinition` 统一编解码和身份检查。目标表的目录属性
-`mv_definition` 保存格式、能力、租户、目标库表 ID 和名称、generation、规范 CREATE
+`mv_definition` 保存格式、租户、目标库表 ID 和名称、generation、规范 CREATE
 及刷新 SQL、刷新策略、可见列、去重后的来源库表 ID/名称/显式 schema version，以及
 可选增量描述与辅助表身份。
 
@@ -99,19 +99,11 @@ DROP 先按目标 ID 注销所有活跃任务 generation，再删除拥有的关
 
 ## 升级与回退
 
-所有创建（包括 ON DEMAND）要求协议 135。除准入检查外，旧执行器也会在既有边界拒绝
-新对象：任务落盘使用已有 IndexSync 枚举、空 index selector 和新增 MVReference；
-旧 writer registry 在消费者构造及 SQL 执行之前拒绝空 selector。新解码器验证引用后
-恢复内存中的 MV 类型。
-
-目标和辅助表持久化为 view kind，并保存 MATERIALIZED CREATE 语法屏障。当前目录
-读取器依据内部元数据投影成可扫描的物理目标/状态；旧版本保留 view 定义，查询无法
-解析该语法，DML 则被 view kind 拒绝。这也覆盖没有后台任务的 ON DEMAND 对象。
-
-不支持混合版本下的 MV 可用性。读取、刷新和清理使用具备能力的版本，二进制回退前先
-删除物化视图。本未发布 PR 早期版本的无 envelope 元数据需要重建。组件兼容测试运行
-真实前驱版本的任务解码/消费者构造及 SQL 解析路径，不声称支持整集群降级或自动迁移
-早期分支目录。
+受支持的升级流程先停止所有服务，再替换二进制；运行中的集群使用同一版本，MV 创建
+不依赖 RPC 协议门槛。持久化任务使用 MV 消费者类型及目录定义引用；读取时校验
+定义格式、来源及目标身份和任务引用。受支持旧版本的备份不含 MV 定义，继续使用已有
+恢复流程。旧二进制不能在新版本写入的数据上
+运行。本未发布 PR 早期的无 envelope 目录定义需要重建。
 
 ## 验证与性能准入
 

@@ -47,14 +47,16 @@ func MarshalJobSpec(jobSpec *JobSpec) (string, error) {
 		if err := jobSpec.MVReference.Validate(); err != nil {
 			return "", err
 		}
-		// Old binaries reject this supported discriminator with no index selector
-		// before constructing a writer. They never see the new in-memory enum.
+		if jobSpec.IndexName != "" {
+			return "", mvdefinition.Invalid("MV job has index selector")
+		}
+		// The catalog definition is the only authority for refresh SQL and state.
 		wire := *jobSpec
-		wire.ConsumerType = int8(ConsumerType_IndexSync)
-		wire.IndexName = ""
 		wire.RefreshSQL, wire.SourceSQL, wire.IncrementalSpec, wire.RefreshMethod = "", "", "", ""
 		wire.Columns = nil
 		jobSpec = &wire
+	} else if jobSpec.MVReference != nil {
+		return "", mvdefinition.Invalid("MV reference on non-MV job")
 	}
 
 	var buf bytes.Buffer
@@ -78,13 +80,12 @@ func UnmarshalJobSpec(jsonByte []byte) (*JobSpec, error) {
 		return nil, err
 	}
 	if spec.MVReference != nil {
-		if spec.ConsumerType != int8(ConsumerType_IndexSync) || spec.IndexName != "" {
+		if spec.ConsumerType != int8(ConsumerType_MaterializedView) || spec.IndexName != "" {
 			return &spec, mvdefinition.Invalid("unsupported MV job envelope")
 		}
 		if err := spec.MVReference.Validate(); err != nil {
 			return &spec, err
 		}
-		spec.ConsumerType = int8(ConsumerType_MaterializedView)
 	} else if spec.ConsumerType != int8(ConsumerType_IndexSync) && spec.ConsumerType != int8(ConsumerType_CNConsumer) {
 		return &spec, mvdefinition.Invalid("unsupported consumer type %d", spec.ConsumerType)
 	}

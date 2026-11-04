@@ -49,8 +49,7 @@ func TestMaterializedViewWireReferenceAndReplayIsolation(t *testing.T) {
 	require.NoError(t, err)
 	var wire map[string]any
 	require.NoError(t, json.Unmarshal([]byte(raw), &wire))
-	require.Equal(t, float64(ConsumerType_IndexSync), wire["ConsumerType"])
-	require.Equal(t, "", wire["IndexName"])
+	require.Equal(t, float64(ConsumerType_MaterializedView), wire["ConsumerType"])
 	require.Equal(t, "", wire["RefreshSQL"])
 	require.Equal(t, "", wire["IncrementalSpec"])
 	stored := encodeJSONRows(t, []string{raw})[0]
@@ -63,6 +62,10 @@ func TestMaterializedViewWireReferenceAndReplayIsolation(t *testing.T) {
 	invalidRaw = strings.ReplaceAll(invalidRaw, `"TableID":11`, `"TableID":999`)
 	invalid := encodeJSONRows(t, []string{invalidRaw})[0]
 	_, err = UnmarshalJobSpec(invalid)
+	require.Error(t, err)
+	wrongType := strings.Replace(raw, `"ConsumerType":2`, `"ConsumerType":0`, 1)
+	require.NotEqual(t, raw, wrongType)
+	_, err = UnmarshalJobSpec(encodeJSONRows(t, []string{wrongType})[0])
 	require.Error(t, err)
 	exec := newRuntimeTestExecutor()
 	status := encodeJSONRows(t, []string{mustMarshalJobStatus(t, 1, JobStage_Running)})[0]
