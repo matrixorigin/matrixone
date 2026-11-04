@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // IsFileExternalTableDef reports whether tableDef is a plain file-backed
@@ -79,4 +80,32 @@ func RejectFileExternalTruncate(ctx context.Context, tableDef *TableDef, table s
 	}
 	return moerr.NewNotSupportedf(ctx,
 		"truncate read-only external table '%v'; its files are not managed by the table", table)
+}
+
+// AlterAddsIndexOrConstraint reports whether any option of the ALTER
+// statement creates an index or a table constraint (ADD UNIQUE / ADD
+// [FULLTEXT] INDEX / ADD PRIMARY KEY, including inline column index
+// attributes). The read-only file ALTER guard keeps rejecting such
+// statements itself but delegates them to the established index type
+// rejection so the dedicated cannot-create-index diagnostic is preserved
+// (CI compatibility for the pre-existing external-table suites).
+func AlterAddsIndexOrConstraint(stmt *tree.AlterTable) bool {
+	for _, opt := range stmt.Options {
+		switch option := opt.(type) {
+		case *tree.AlterOptionAdd:
+			switch option.Def.(type) {
+			case *tree.PrimaryKeyIndex, *tree.Index, *tree.UniqueIndex, *tree.FullTextIndex:
+				return true
+			case *tree.ColumnTableDef:
+				if columnDefHasIndexAttribute(option.Def.(*tree.ColumnTableDef)) {
+					return true
+				}
+			}
+		case *tree.AlterAddCol:
+			if columnDefHasIndexAttribute(option.Column) {
+				return true
+			}
+		}
+	}
+	return false
 }

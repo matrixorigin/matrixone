@@ -306,3 +306,43 @@ func TestBuildAlterKafkaExternalTableKeepsExistingError(t *testing.T) {
 	require.Contains(t, err.Error(),
 		"ALTER TABLE on a kafka external table; drop and recreate the external table to change its schema")
 }
+
+// TestBuildAlterReadOnlyFileExternalDelegatesIndexSubactions keeps the
+// read-only file front guard failing closed while constraint/index ALTER
+// sub-actions keep the established cannot-create-index diagnostic instead of
+// falling through to the data-copy route rejection (issue #31920).
+func TestBuildAlterReadOnlyFileExternalDelegatesIndexSubactions(t *testing.T) {
+	for _, shape := range durableReadOnlyFileShapes(t) {
+		run := func(sql string, wantIndexErr bool, moErrCode uint16, fragment string) {
+			name := shape.name + "/" + sql
+			t.Run(name, func(t *testing.T) {
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+
+				ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+				ctx.objects[shape.tableName] = &ObjectRef{SchemaName: "tpch", ObjName: shape.tableName}
+				def := externalTableDef(shape.tableName, shape.createSQL)
+				ctx.tables[shape.tableName] = def
+
+				_, err = BuildPlan(ctx, stmt, false)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moErrCode), "%v", err)
+				require.Contains(t, err.Error(), fragment)
+				require.Same(t, def, ctx.tables[shape.tableName])
+			})
+		}
+		for _, sql := range []string{
+			"alter table " + shape.tableName + " add constraint primary key (id)",
+			"alter table " + shape.tableName + " add unique (id)",
+			"alter table " + shape.tableName + " add index idx_x (id)",
+			"alter table " + shape.tableName + " add column extra2 int primary key",
+			"alter table " + shape.tableName + " add column extra3 int unique",
+			"alter table " + shape.tableName + " add column extra4 int primary key, rename column id to id4",
+		} {
+			run(sql, true, moerr.ErrInvalidInput, "cannot create index on external table")
+		}
+		run("alter table "+shape.tableName+" rename column id to idx", false,
+			moerr.ErrNotSupported, "ALTER TABLE on a read-only external table")
+	}
+}
