@@ -57,7 +57,7 @@ func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-		Data: data,
+		Keys: testutil.RuntimeKeyPayload(t, data),
 	}, mb)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 		{Tag: tag, UseMembershipFilter: true},
@@ -92,7 +92,7 @@ func setupVarcharKeyFilter(t *testing.T, n int, mustApply bool) *sqlexec.SqlProc
 	message.SendMessage(message.RuntimeFilterMessage{
 		Tag:  tag,
 		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-		Data: data,
+		Keys: testutil.RuntimeKeyPayload(t, data),
 	}, mb)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 		{Tag: tag, UseMembershipFilter: true, MustApply: mustApply},
@@ -116,17 +116,22 @@ func runGetBloomFilter(t *testing.T, sqlproc *sqlexec.SqlProcess) {
 
 // Larger-than-threshold integer key set -> builds an exact doc_id pushdown filter.
 func TestGetBloomFilter_DocFilter(t *testing.T) {
-	sqlproc := setupKeyFilter(t, exactPkFilterThreshold+50)
-	runGetBloomFilter(t, sqlproc)
+	for _, rows := range []int{exactPkFilterThreshold + 50, 8193} {
+		t.Run(fmt.Sprint(rows), func(t *testing.T) {
+			sqlproc := setupKeyFilter(t, rows)
+			runGetBloomFilter(t, sqlproc)
 
-	require.NotEmpty(t, sqlproc.IvfMembershipFilter)
-	require.Empty(t, sqlproc.ExactPkFilter)
+			require.NotEmpty(t, sqlproc.IvfMembershipFilter)
+			require.Empty(t, sqlproc.ExactPkFilter)
 
-	// The payload reconstructs into a usable membership filter.
-	f, err := docfilter.New(sqlproc.IvfMembershipFilter)
-	require.NoError(t, err)
-	require.True(t, f.Valid())
-	f.Free()
+			// The payload reconstructs into a usable membership filter.
+			f, err := docfilter.New(sqlproc.IvfMembershipFilter)
+			require.NoError(t, err)
+			require.True(t, f.Valid())
+			require.True(t, f.Test(types.EncodeFixed(int64(rows))), "last chunk must participate")
+			f.Free()
+		})
+	}
 }
 
 // A required membership filter cannot use the approximate non-integer Bloom
@@ -134,27 +139,37 @@ func TestGetBloomFilter_DocFilter(t *testing.T) {
 // removed only after the limit. It must therefore remain an exact PK predicate
 // even when the key set is larger than the optional small-list threshold.
 func TestGetBloomFilter_RequiredVarcharUsesExactPkAboveThreshold(t *testing.T) {
-	sqlproc := setupVarcharKeyFilter(t, exactPkFilterThreshold+1, true)
-	runGetBloomFilter(t, sqlproc)
+	for _, rows := range []int{exactPkFilterThreshold + 1, 8193} {
+		t.Run(fmt.Sprint(rows), func(t *testing.T) {
+			sqlproc := setupVarcharKeyFilter(t, rows, true)
+			runGetBloomFilter(t, sqlproc)
 
-	require.NotEmpty(t, sqlproc.ExactPkFilter)
-	require.Empty(t, sqlproc.IvfMembershipFilter)
-	require.Contains(t, sqlproc.ExactPkFilter, "'key-000001'")
-	require.Contains(t, sqlproc.ExactPkFilter, "'key-000101'")
+			require.NotEmpty(t, sqlproc.ExactPkFilter)
+			require.Empty(t, sqlproc.IvfMembershipFilter)
+			require.Contains(t, sqlproc.ExactPkFilter, "'key-000001'")
+			require.Contains(t, sqlproc.ExactPkFilter, "'key-000101'")
+			require.Contains(t, sqlproc.ExactPkFilter, fmt.Sprintf("'key-%06d'", rows))
+		})
+	}
 }
 
 // Optional non-integer membership filters retain the approximate Bloom path so
 // the correctness-only exact fallback does not regress ordinary performance.
 func TestGetBloomFilter_OptionalVarcharUsesBloomAboveThreshold(t *testing.T) {
-	sqlproc := setupVarcharKeyFilter(t, exactPkFilterThreshold+1, false)
-	runGetBloomFilter(t, sqlproc)
+	for _, rows := range []int{exactPkFilterThreshold + 1, 8193} {
+		t.Run(fmt.Sprint(rows), func(t *testing.T) {
+			sqlproc := setupVarcharKeyFilter(t, rows, false)
+			runGetBloomFilter(t, sqlproc)
 
-	require.Empty(t, sqlproc.ExactPkFilter)
-	require.NotEmpty(t, sqlproc.IvfMembershipFilter)
-	f, err := docfilter.New(sqlproc.IvfMembershipFilter)
-	require.NoError(t, err)
-	require.False(t, f.Exact())
-	f.Free()
+			require.Empty(t, sqlproc.ExactPkFilter)
+			require.NotEmpty(t, sqlproc.IvfMembershipFilter)
+			f, err := docfilter.New(sqlproc.IvfMembershipFilter)
+			require.NoError(t, err)
+			require.False(t, f.Exact())
+			require.True(t, f.Test([]byte(fmt.Sprintf("key-%06d", rows))), "last chunk must participate")
+			f.Free()
+		})
+	}
 }
 
 // Small key set -> emits an exact "pk IN (...)" SQL filter instead.

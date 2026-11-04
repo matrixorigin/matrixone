@@ -53,7 +53,7 @@ type HashmapBuilder struct {
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	Batches            colexec.Batches
 	executors          []colexec.ExpressionExecutor
-	UniqueJoinKeys     []*vector.Vector
+	uniqueKeys         uniqueKeyBatches
 	uniqueKeySlots     []bool
 	uniqueSels         []int64
 	cachedIntIterator  hashmap.Iterator
@@ -85,6 +85,8 @@ type HashmapBuilder struct {
 	// that point, Batches are no longer equivalent to the original ingress and
 	// must not be retried or re-spilled.
 	runtimeFilterCollectionFallback bool
+	runtimeFilterKeysRequired       bool
+	uniqueKeyRowsHint               int
 	retainedBatchRecoverySafe       bool
 	mapAllocationAccount            *mpool.AllocationAccount
 	mapAllocation                   *hashtable.AllocationAccountSelection
@@ -102,11 +104,21 @@ func (hb *HashmapBuilder) GetSize() int64 {
 		sz += hb.StrHashMap.Size()
 	}
 	sz += hb.Sels.Size()
-	for _, v := range hb.UniqueJoinKeys {
-		if v != nil {
-			sz += int64(v.Allocated())
+	if len(hb.uniqueKeys.first.vecs) != 0 {
+		_ = hb.uniqueKeys.visit(func(vecs []*vector.Vector) error {
+			for _, v := range vecs {
+				if v != nil {
+					sz += int64(v.Allocated())
+				}
+			}
+			return nil
+		})
+		sz += int64(hb.uniqueKeys.first.metadata.Capacity())
+		for i := range hb.uniqueKeys.rest {
+			sz += int64(hb.uniqueKeys.rest[i].metadata.Capacity())
 		}
 	}
+	sz += int64(hb.uniqueKeys.directory.Capacity())
 	if hb.IgnoreRows != nil {
 		sz += int64(hb.IgnoreRows.Size())
 	}
@@ -245,13 +257,10 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 	hb.StrHashMap = nil
 	hb.freeIgnoreRows(proc.Mp())
 	hb.freeDelRows(proc.Mp())
-	for i := range hb.UniqueJoinKeys {
-		if hb.UniqueJoinKeys[i] != nil {
-			hb.UniqueJoinKeys[i].Free(proc.Mp())
-		}
-	}
-	hb.UniqueJoinKeys = nil
+	hb.uniqueKeys.free(proc.Mp())
 	hb.uniqueKeySlots = nil
+	hb.runtimeFilterKeysRequired = false
+	hb.uniqueKeyRowsHint = 0
 	// Function executors retain result-vector capacity across ResetForNextQuery.
 	// Destroy them here; immutable allocation selections remain installed until
 	// the statement lifecycle calls ClearAllocationAccount.
@@ -273,14 +282,11 @@ func (hb *HashmapBuilder) Free(proc *process.Process) {
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.FreeExecutors()
-	for i := range hb.UniqueJoinKeys {
-		if hb.UniqueJoinKeys[i] != nil {
-			hb.UniqueJoinKeys[i].Free(proc.Mp())
-		}
-	}
-	hb.UniqueJoinKeys = nil
+	hb.uniqueKeys.free(proc.Mp())
 	hb.uniqueKeySlots = nil
 	hb.runtimeFilterCollectionFallback = false
+	hb.runtimeFilterKeysRequired = false
+	hb.uniqueKeyRowsHint = 0
 	hb.retainedBatchRecoverySafe = false
 }
 
@@ -404,9 +410,36 @@ func (hb *HashmapBuilder) hasGroupingKey() bool {
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
+	return hb.buildHashmapWithRuntimeFilterLimit(
+		hashOnPK, needAllocateSels, needUniqueVec, -1, proc)
+}
+
+// buildHashmapWithRuntimeFilterLimit bounds optional exact-runtime-filter key
+// retention independently of the mandatory JoinMap. A negative limit disables
+// the planner cardinality cutoff; chunk and wire-format limits still apply.
+// Exceeding the bound fails only the optional filter open; the
+// complete JoinMap continues to build.
+func (hb *HashmapBuilder) buildHashmapWithRuntimeFilterLimit(
+	hashOnPK bool,
+	needAllocateSels bool,
+	needUniqueVec bool,
+	runtimeFilterLimit int32,
+	proc *process.Process,
+) (retErr error) {
 	hb.runtimeFilterCollectionFallback = false
 	hb.retainedBatchRecoverySafe = true
-	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc)
+	hb.uniqueKeyRowsHint = 0
+	if hashOnPK && needUniqueVec && (runtimeFilterLimit < 0 || hb.InputBatchRowCount <= int(runtimeFilterLimit)) {
+		hb.uniqueKeyRowsHint = min(8192, hb.InputBatchRowCount)
+	}
+	return hb.buildHashmap(
+		hashOnPK,
+		needAllocateSels,
+		needUniqueVec,
+		runtimeFilterLimit,
+		hb.DedupBuildKeepLast,
+		proc,
+	)
 }
 
 func (hb *HashmapBuilder) runtimeFilterFallbackState() (bool, bool) {
@@ -418,6 +451,16 @@ func (hb *HashmapBuilder) collectUniqueKeySlot(slot int) bool {
 	return len(hb.uniqueKeySlots) == 0 ||
 		(slot >= 0 && slot < len(hb.uniqueKeySlots) &&
 			hb.uniqueKeySlots[slot])
+}
+
+func (hb *HashmapBuilder) optionalRuntimeFilterKeysExceedLimit(limit int32) bool {
+	if limit < 0 {
+		return false
+	}
+	if hb.GetGroupCount() > uint64(limit) {
+		return true
+	}
+	return hb.uniqueKeys.count() > int(limit)
 }
 
 // RetainedBatchRecoverySafe reports whether the batches retained by this
@@ -434,6 +477,7 @@ func (hb *HashmapBuilder) buildHashmap(
 	hashOnPK bool,
 	needAllocateSels bool,
 	needUniqueVec bool,
+	runtimeFilterLimit int32,
 	dedupBuildKeepLast bool,
 	proc *process.Process,
 ) (retErr error) {
@@ -785,57 +829,19 @@ buildUnits:
 			}
 		}
 
-		if needUniqueVec {
-			if len(hb.UniqueJoinKeys) == 0 {
-				if hb.uniqueKeyAllocation == nil {
-					return mpool.ErrAllocationAccountInvalid
-				}
-				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executors))
-				for j, vec := range hb.curVecs {
-					if !hb.collectUniqueKeySlot(j) {
-						continue
-					}
-					hb.UniqueJoinKeys[j], err = vector.NewOffHeapVecWithTypeAndAllocation(
-						*vec.GetType(),
-						hb.uniqueKeyAllocation,
-					)
-					if err != nil {
-						cause := err
-						if mpool.IsRetryableAllocationCapacity(err) {
-							cause = runtimefilter.MarkOptionalAllocationError(err)
-						}
-						if fatalErr := hb.fallbackOptionalRuntimeFilterCollection(
-							proc,
-							cause,
-						); fatalErr != nil {
-							return fatalErr
-						}
-						needUniqueVec = false
-						continue buildUnits
-					}
-				}
+		if needUniqueVec && runtimeFilterLimit >= 0 &&
+			(hashOnPK && hb.InputBatchRowCount > int(runtimeFilterLimit) ||
+				hb.optionalRuntimeFilterKeysExceedLimit(runtimeFilterLimit)) {
+			if err := hb.abandonOptionalRuntimeFilterKeys(proc); err != nil {
+				return err
 			}
+			needUniqueVec = false
+			continue buildUnits
+		}
 
+		if needUniqueVec {
 			if hashOnPK {
-				for j, vec := range hb.curVecs {
-					if !hb.collectUniqueKeySlot(j) {
-						continue
-					}
-					err = hb.UniqueJoinKeys[j].UnionBatch(vec, int64(vecIdx2), n, nil, proc.Mp())
-					if err != nil {
-						allocationErr := err
-						if mpool.IsRetryableAllocationCapacity(err) {
-							allocationErr = runtimefilter.MarkOptionalAllocationError(err)
-						}
-						if fatalErr :=
-							hb.fallbackOptionalRuntimeFilterCollection(
-								proc, allocationErr); fatalErr != nil {
-							return fatalErr
-						}
-						needUniqueVec = false
-						break
-					}
-				}
+				err = hb.appendUniqueKeys(proc, vecIdx2, n, nil)
 			} else {
 				if hb.uniqueSels == nil {
 					hb.uniqueSels = make([]int64, 0, hashmap.UnitLimit)
@@ -848,26 +854,17 @@ buildUnits:
 					}
 				}
 				hb.uniqueSels = newSels
-
-				for j, vec := range hb.curVecs {
-					if !hb.collectUniqueKeySlot(j) {
-						continue
-					}
-					err = hb.UniqueJoinKeys[j].Union(vec, newSels, proc.Mp())
-					if err != nil {
-						allocationErr := err
-						if mpool.IsRetryableAllocationCapacity(err) {
-							allocationErr = runtimefilter.MarkOptionalAllocationError(err)
-						}
-						if fatalErr :=
-							hb.fallbackOptionalRuntimeFilterCollection(
-								proc, allocationErr); fatalErr != nil {
-							return fatalErr
-						}
-						needUniqueVec = false
-						break
-					}
+				err = hb.appendUniqueKeys(proc, 0, len(newSels), newSels)
+			}
+			if err != nil {
+				cause := err
+				if mpool.IsRetryableAllocationCapacity(err) {
+					cause = runtimefilter.MarkOptionalAllocationError(err)
 				}
+				if fatalErr := hb.fallbackOptionalRuntimeFilterCollection(proc, cause); fatalErr != nil {
+					return fatalErr
+				}
+				needUniqueVec = false
 			}
 		}
 	}
@@ -899,7 +896,7 @@ buildUnits:
 		if err != nil {
 			return err
 		}
-		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc); err != nil {
+		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, runtimeFilterLimit, false, proc); err != nil {
 			return err
 		}
 		hb.InputBatchRowCount = totalRowCount
@@ -929,7 +926,7 @@ buildUnits:
 		if err != nil {
 			return err
 		}
-		return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc)
+		return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, runtimeFilterLimit, false, proc)
 	}
 
 	if hb.delColIdx != -1 {
@@ -1045,12 +1042,7 @@ func (hb *HashmapBuilder) resetHashStateForRebuild(proc *process.Process) {
 		hb.StrHashMap = nil
 	}
 	hb.Sels.Free(proc.Mp())
-	for i := range hb.UniqueJoinKeys {
-		if hb.UniqueJoinKeys[i] != nil {
-			hb.UniqueJoinKeys[i].Free(proc.Mp())
-		}
-	}
-	hb.UniqueJoinKeys = nil
+	hb.uniqueKeys.free(proc.Mp())
 	hb.FreeTemporaryVectors(proc)
 	for i := range hb.executors {
 		if hb.executors[i] != nil {

@@ -15,13 +15,13 @@
 package table_function
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -68,9 +67,9 @@ type ivfSearchState struct {
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
 
-	// Raw runtime-filter payload from the hash build side (optional).
+	// Owned reference to the complete build-side runtime-filter keys (optional).
 	// IVF code converts it into an exact-pk filter or entries membership filter.
-	runtimeFilterData []byte
+	runtimeFilterData *keycodec.KeyPayload
 	indexReaderParam  *plan.IndexReaderParam
 }
 
@@ -115,8 +114,9 @@ func (u *ivfSearchState) reset(tf *TableFunction, proc *process.Process) {
 	u.includeNulls = nil
 	u.cursor = nil
 	u.emittedCandidates = 0
-	// Note: runtimeFilterData is kept across resets as it's only set once during initialization
-	// It will be cleared in free() method
+	u.runtimeFilterData.Release()
+	u.runtimeFilterData = nil
+	u.inited = false
 }
 
 func (u *ivfSearchState) call(tf *TableFunction, proc *process.Process) (vm.CallResult, error) {
@@ -207,7 +207,7 @@ func (u *ivfSearchState) free(tf *TableFunction, proc *process.Process, pipeline
 	if u.batch != nil {
 		u.batch.Clean(proc.Mp())
 	}
-	// Clear runtime-filter bytes to release memory
+	u.runtimeFilterData.Release()
 	u.runtimeFilterData = nil
 	u.keys = nil
 	u.distances = nil
@@ -216,69 +216,12 @@ func (u *ivfSearchState) free(tf *TableFunction, proc *process.Process, pipeline
 	u.cursor = nil
 }
 
-// waitRuntimeFilterDataForTableFunction blocks until it receives a membership runtime
-// filter that matches tf.RuntimeFilterSpecs (if any). It is used when ivf_search
-// acts as probe side in a join and the build side produces a runtime filter.
-// We keep the raw serialized unique-join-key payload here and let IVF search
-// decide whether to build an exact-pk predicate or an entries membership filter.
-func waitRuntimeFilterDataForTableFunction(tf *TableFunction, proc *process.Process) ([]byte, error) {
-	if len(tf.RuntimeFilterSpecs) == 0 {
-		return nil, nil
-	}
-	spec := tf.RuntimeFilterSpecs[0]
-	if !spec.UseMembershipFilter {
-		return nil, nil
-	}
-
-	msgReceiver := message.NewMessageReceiver(
-		[]int32{spec.Tag},
-		message.AddrBroadCastOnCurrentCN(),
-		proc.GetMessageBoard(),
-	)
-	msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, proc.Ctx)
-	if err != nil {
-		return nil, err
-	}
-	if ctxDone {
-		if spec.MustApply {
-			if cause := context.Cause(proc.Ctx); cause != nil {
-				return nil, cause
-			}
-			return nil, moerr.NewInternalErrorf(
-				proc.Ctx, "required runtime filter %d wait was canceled", spec.Tag)
-		}
-		return nil, nil
-	}
-
-	for i := range msgs {
-		m, ok := msgs[i].(message.RuntimeFilterMessage)
-		if !ok {
-			continue
-		}
-		switch m.Typ {
-		case message.RuntimeFilter_PASS:
-			if spec.MustApply {
-				return nil, moerr.NewInternalErrorf(
-					proc.Ctx, "required runtime filter %d is unavailable: producer returned PASS", spec.Tag)
-			}
-		case message.RuntimeFilter_DROP:
-			// The build side is empty. The enclosing join will produce no rows,
-			// so IVF does not need an exact payload to preserve semantics.
-			return nil, nil
-		case message.RuntimeFilter_UNIQUEJOINKEYS:
-			if spec.MustApply && len(m.Data) == 0 {
-				return nil, moerr.NewInternalErrorf(
-					proc.Ctx, "required runtime filter %d has an empty key payload", spec.Tag)
-			}
-			return m.Data, nil
-		}
-	}
-
-	if spec.MustApply {
-		return nil, moerr.NewInternalErrorf(
-			proc.Ctx, "required runtime filter %d did not provide an exact payload", spec.Tag)
-	}
-	return nil, nil
+// waitRuntimeFilterDataForTableFunction retains the complete membership key set.
+// The state owns it across searches and releases it when reset or freed.
+func waitRuntimeFilterDataForTableFunction(tf *TableFunction, proc *process.Process) (*keycodec.KeyPayload, error) {
+	sqlProc := sqlexec.NewSqlProcess(proc)
+	sqlProc.RuntimeFilterSpecs = tf.RuntimeFilterSpecs
+	return sqlexec.WaitUniqueJoinKeys(sqlProc)
 }
 
 func ivfSearchPrepare(proc *process.Process, arg *TableFunction) (tvfState, error) {
@@ -452,7 +395,9 @@ func (u *ivfSearchState) start(tf *TableFunction, proc *process.Process, nthRow 
 			}
 		}
 
-		u.batch = tf.createResultBatch()
+		if u.batch == nil {
+			u.batch = tf.createResultBatch()
+		}
 		u.includeColumns = requestedIvfIncludeColumns(tf.Attrs)
 		if u.limit == 0 && (!u.multiRoundEnabled || len(u.includeColumns) == 0) {
 			u.limit = 1

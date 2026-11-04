@@ -18,6 +18,7 @@ import (
 	"runtime"
 
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	usearch "github.com/unum-cloud/usearch/golang"
@@ -287,9 +288,9 @@ type RuntimeConfig struct {
 	// million-row stream boxes nothing.
 	Emit func(out *SearchOutput) error
 
-	// Optional raw runtime-filter payload from the build side. IVF search turns
-	// this into either an exact-pk filter or a membership filter for entries.
-	RuntimeFilterData []byte
+	// Borrowed complete build-side keys; the caller retains a reference through
+	// Search. IVF builds one exact-pk predicate or entries membership filter.
+	RuntimeFilterData *keycodec.KeyPayload
 	NThreads          uint // Brute Force Index
 
 	// Query-scoped IVF search state. These fields must not be cached on the

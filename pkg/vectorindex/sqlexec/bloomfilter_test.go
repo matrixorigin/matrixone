@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -61,6 +62,19 @@ func (m mockMessage) DebugString() string {
 func (m mockMessage) Destroy() {
 }
 
+func makeWaitRuntimeKeys(t *testing.T, values []byte) *keycodec.KeyPayload {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	v := vector.NewVec(types.T_uint8.ToType())
+	defer v.Free(mp)
+	for _, value := range values {
+		require.NoError(t, vector.AppendFixed(v, value, false, mp))
+	}
+	data, err := v.MarshalBinary()
+	require.NoError(t, err)
+	return testutil.RuntimeKeyPayload(t, data)
+}
+
 func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 	t.Run("return nil when RuntimeFilterSpecs is empty", func(t *testing.T) {
 		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
@@ -99,12 +113,12 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		sqlproc := NewSqlProcess(proc)
 
 		tag := int32(100)
-		expectedData := []byte{1, 2, 3, 4, 5}
+		expectedData := makeWaitRuntimeKeys(t, []byte{1, 2, 3, 4, 5})
 
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-			Data: expectedData,
+			Keys: expectedData,
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -116,7 +130,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -126,7 +140,8 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		<-done
 
 		require.NoError(t, err)
-		require.Equal(t, expectedData, result)
+		require.Same(t, expectedData, result)
+		result.Release()
 	})
 
 	t.Run("return nil when no matching message found", func(t *testing.T) {
@@ -161,7 +176,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}()
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -182,7 +197,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		sqlproc := NewSqlProcess(proc)
 
 		tag := int32(300)
-		expectedData := []byte{6, 7, 8, 9, 10}
+		expectedData := makeWaitRuntimeKeys(t, []byte{6, 7, 8, 9, 10})
 
 		// Send a mock message (not RuntimeFilterMessage)
 		mockMsg := mockMessage{tag: tag}
@@ -192,7 +207,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-			Data: expectedData,
+			Keys: expectedData,
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -204,7 +219,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -215,7 +230,8 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 
 		// Should skip the mock message and return the BLOOMFILTER data
 		require.NoError(t, err)
-		require.Equal(t, expectedData, result)
+		require.Same(t, expectedData, result)
+		result.Release()
 	})
 
 	t.Run("skip non-BLOOMFILTER runtime filter types", func(t *testing.T) {
@@ -225,7 +241,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		sqlproc := NewSqlProcess(proc)
 
 		tag := int32(700)
-		expectedData := []byte{11, 12, 13}
+		expectedData := makeWaitRuntimeKeys(t, []byte{11, 12, 13})
 
 		// Send a PASS type message first (should be skipped)
 		passMsg := message.RuntimeFilterMessage{
@@ -238,7 +254,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		rtMsg := message.RuntimeFilterMessage{
 			Tag:  tag,
 			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
-			Data: expectedData,
+			Keys: expectedData,
 		}
 		message.SendMessage(rtMsg, mb)
 
@@ -250,7 +266,7 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 		}
 
 		done := make(chan bool)
-		var result []byte
+		var result *keycodec.KeyPayload
 		var err error
 		go func() {
 			result, err = WaitUniqueJoinKeys(sqlproc)
@@ -261,8 +277,38 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 
 		// Should skip the PASS message and return the BLOOMFILTER data
 		require.NoError(t, err)
-		require.Equal(t, expectedData, result)
+		require.Same(t, expectedData, result)
+		result.Release()
 	})
+}
+
+func TestBuildExactPkFilterKeysGlobalLimit(t *testing.T) {
+	mp := mpool.MustNewZero()
+	var chunks [][]byte
+	for _, value := range []string{"first-key-xxxxxxxx", "last-key-xxxxxxxx"} {
+		v := testutil.MakeVarcharVector([]string{value}, nil, mp)
+		func() {
+			defer v.Free(mp)
+			data, err := v.MarshalBinary()
+			require.NoError(t, err)
+			chunks = append(chunks, data)
+		}()
+	}
+	keys, err := keycodec.NewKeyPayload(context.Background(), chunks, 0, nil)
+	require.NoError(t, err)
+	defer keys.Release()
+	want := "'first-key-xxxxxxxx','last-key-xxxxxxxx'"
+	for _, limit := range []int{0, len(want), len(want) - 1} {
+		got, err := BuildExactPkFilterKeys(context.Background(), keys, limit)
+		if limit == len(want)-1 {
+			require.Error(t, err)
+			require.Empty(t, got, "never publish the first chunk as a partial predicate")
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+		}
+	}
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestBuildExactPkFilter(t *testing.T) {
