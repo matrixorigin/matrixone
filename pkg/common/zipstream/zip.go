@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package crt
+package zipstream
 
 import (
 	"bufio"
@@ -78,9 +78,9 @@ func (h *zipLocalHeader) loadable() bool {
 	return !strings.HasSuffix(h.name, "/") && !strings.HasPrefix(path.Base(h.name), ".")
 }
 
-// getZipReader returns the decompressed bytes of the archive's first loadable
+// NewReader returns the decompressed bytes of the archive's first loadable
 // entry and the function that releases its decoder.
-func getZipReader(ctx context.Context, r io.Reader) (io.Reader, func() error, error) {
+func NewReader(ctx context.Context, r io.Reader) (io.Reader, func() error, error) {
 	// bufio.Reader is an io.ByteReader, so flate consumes exactly the
 	// compressed bytes and the data descriptor after them stays readable.
 	br := bufio.NewReaderSize(r, 64<<10)
