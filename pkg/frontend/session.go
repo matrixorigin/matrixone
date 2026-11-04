@@ -1360,6 +1360,13 @@ func (ses *Session) GetTenantName() string {
 
 func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt *PrepareStmt) error {
 	name = strings.ToLower(name)
+	if prepareStmt != nil {
+		value, err := ses.GetSessionSysVar("optimizer_hints")
+		if err != nil {
+			return err
+		}
+		prepareStmt.optimizerHints, _ = value.(string)
+	}
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if stmt, ok := ses.prepareStmts[name]; !ok {
