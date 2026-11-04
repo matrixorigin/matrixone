@@ -115,6 +115,36 @@ def test_to_blocked_layout():
     assert int(blocked[offset]) == int(scales[r, c])
 
 
+# MatrixOne's cells for CAST('[2^-149]' AS vecf4(1)), CAST('[1.5*2^-140,6*2^-140]' AS vecf4(2)),
+# CAST('[3.0e38]' AS vecf8(1)) and CAST('[3.4028234663852886e38]' AS vecf4(1)).
+VECF4_SUBNORMAL_CELL = bytes.fromhex("0102000001000000010000002307")
+VECF4_SUBNORMAL_PAIR_CELL = bytes.fromhex("0102000002000000010000007E73")
+VECF8_NEAR_MAX_CELL = bytes.fromhex("01010000010000000000803FF776")
+VECF4_MAX_CELL = bytes.fromhex("0102000001000000300CC3797E07")
+
+
+def test_decode_subnormal_block_scale():
+    tiny = math.ldexp(1.0, -149)
+    assert vecblock.quantize(f32([[tiny]]), "vecf4").to_cells() == [VECF4_SUBNORMAL_CELL]
+    assert vecblock.from_cells([VECF4_SUBNORMAL_CELL]).to_float().tolist() == [[tiny]]
+    # elements 1.5 and 6 under a subnormal global * blockScale keep their 1:4 ratio
+    b = vecblock.quantize(f32([[1.5 * 2**-140, 6 * 2**-140]]), "vecf4")
+    assert b.to_cells() == [VECF4_SUBNORMAL_PAIR_CELL]
+    dec = b.to_float()[0].double()
+    assert dec[1] / dec[0] == 4
+
+
+def test_quantize_rejects_infinite_decode():
+    fmax = torch.finfo(torch.float32).max
+    for v in (fmax, -fmax, 3.3e38):
+        with pytest.raises(ValueError, match="decodes to an infinite value"):
+            vecblock.quantize(f32([[v, 1.0]]), "vecf8")
+    assert vecblock.quantize(f32([[3.0e38]]), "vecf8").to_cells() == [VECF8_NEAR_MAX_CELL]
+    b = vecblock.quantize(f32([[fmax]]), "vecf4")
+    assert b.to_cells() == [VECF4_MAX_CELL]
+    assert torch.isfinite(b.to_float()).all()
+
+
 def _scaled_mm_available():
     if not torch.cuda.is_available():
         return False

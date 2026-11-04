@@ -45,6 +45,8 @@ FORMAT_CODES = {"vecf8": 1, "vecf4": 2}
 BLOCK_SIZES = {"vecf8": 32, "vecf4": 16}
 E4M3_MAX = 448.0
 E2M1_MAX = 6.0
+# 2^-126; a block scale below it is applied in float64 when decoding
+SMALLEST_NORMAL_FLOAT32 = math.ldexp(1.0, -126)
 # E2M1 code -> value, codes 0-15 (bit 3 is the sign)
 E2M1_VALUES = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0)
 
@@ -148,9 +150,17 @@ class VecBlockBatch:
             lo = lut[(self.elements & 0xF).long()]
             hi = lut[(self.elements >> 4).long()]
             vals = torch.stack([lo, hi], dim=2).reshape(len(self), -1)[:, : self.dim]
-        # MatrixOne's order: element * (global * scale), each product rounded to float32
-        scales = self.scale_tensor().to(torch.float32) * self.global_scale[:, None]
-        out = vals * scales.repeat_interleave(BLOCK_SIZES[self.fmt], dim=1)[:, : self.dim]
+        # MatrixOne's order: element * (global * blockScale), each product rounded to float32. Where
+        # global * blockScale is below the smallest normal float32, the product is element *
+        # blockScale * global in float64, rounded once to float32.
+        block = BLOCK_SIZES[self.fmt]
+        block_scale = self.scale_tensor().to(torch.float32).repeat_interleave(block, dim=1)[:, : self.dim]
+        scale = block_scale * self.global_scale[:, None]
+        out = vals * scale
+        small = scale < SMALLEST_NORMAL_FLOAT32
+        if small.any():
+            wide = (vals.double() * block_scale.double() * self.global_scale.double()[:, None]).float()
+            out = torch.where(small, wide, out)
         return out.to(dtype)
 
     def blocked_scales(self):
@@ -237,7 +247,7 @@ def quantize(x, fmt: str) -> VecBlockBatch:
         q = (blocks / div[:, :, None]).to(torch.float32).to(torch.float8_e4m3fn).view(torch.uint8)
         q = torch.where((q & 0x7F) == 0, torch.zeros_like(q), q)
         elems = q.reshape(n, -1)[:, :dim].contiguous()
-        return VecBlockBatch(fmt, dim, elems, codes.contiguous(), glob)
+        return _finite(VecBlockBatch(fmt, dim, elems, codes.contiguous(), glob), x)
 
     vmax = xd.abs().amax(dim=1)
     glob64 = vmax / (E2M1_MAX * E4M3_MAX)
@@ -267,7 +277,20 @@ def quantize(x, fmt: str) -> VecBlockBatch:
     if dim % 2:
         code = torch.cat([code, torch.zeros((n, 1), dtype=torch.uint8, device=x.device)], dim=1)
     elems = (code[:, 0::2] | (code[:, 1::2] << 4)).contiguous()
-    return VecBlockBatch(fmt, dim, elems, c.contiguous(), glob)
+    return _finite(VecBlockBatch(fmt, dim, elems, c.contiguous(), glob), x)
+
+
+def _finite(batch: VecBlockBatch, x) -> VecBlockBatch:
+    """``batch``, or ValueError if an element decodes to an infinite value, as MatrixOne rejects it."""
+    torch = _torch()
+    bad = (~torch.isfinite(batch.to_float())).nonzero()
+    if len(bad):
+        r, i = (int(v) for v in bad[0])
+        raise ValueError(
+            f"{batch.fmt} row {r} element {i} value {float(x[r, i])!r} is out of range: "
+            "it decodes to an infinite value"
+        )
+    return batch
 
 
 def scaled_mm(rows: VecBlockBatch, queries: VecBlockBatch):
