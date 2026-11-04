@@ -11039,13 +11039,13 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 
 // shuffleWithSortedProof gathers into independent storage while preserving an
 // existing ordering proof only when the selection is nondecreasing.
-func shuffleWithSortedProof[T types.FixedSizeT](src, dst []T, sels []int64, sorted bool) bool {
+func shuffleWithSortedProof[T types.FixedSizeT](src, dst []T, sels []int64, sorted bool) (bool, bool) {
 	if !sorted {
 		shuffle.FixedLengthShuffle(src, dst, sels)
-		return false
+		return false, false
 	}
 	if len(sels) == 0 {
-		return true
+		return true, true
 	}
 	start := sels[0]
 	k := 1
@@ -11057,10 +11057,10 @@ func shuffleWithSortedProof[T types.FixedSizeT](src, dst []T, sels []int64, sort
 		dst[i] = src[sels[i]]
 		if sels[i] < sels[i-1] {
 			shuffle.FixedLengthShuffle(src, dst[i+1:], sels[i+1:])
-			return false
+			return false, false
 		}
 	}
-	return true
+	return true, k == len(sels) && start == 0
 }
 
 // shuffleFixedNoTypeCheck is always used after type check. and we can use ToSliceNoTypeCheck here.
@@ -11076,7 +11076,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	}
 	ws := util.UnsafeSliceCastToLength[T](data, ns)
 
-	preserved := shuffleWithSortedProof(vs, ws, sels, v.sorted)
+	preserved, _ := shuffleWithSortedProof(vs, ws, sels, v.sorted)
 	if err := v.remapShuffleBitmaps(sels, mp); err != nil {
 		mp.Free(data)
 		return err
@@ -11185,8 +11185,10 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 	ToFixedColNoTypeCheck(v, &vs)
 	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
 
-	preserved := shuffleWithSortedProof(vs, ws, sels, v.sorted)
-	copy(v.data[:needed], *buf)
+	preserved, identityProven := shuffleWithSortedProof(vs, ws, sels, v.sorted)
+	if !identityProven || byteSlicesOverlap(v.data[:needed], *buf) {
+		copy(v.data[:needed], *buf)
+	}
 	nulls.Filter(&v.gsp, sels, false)
 	nulls.Filter(&v.nsp, sels, false)
 	v.length = ns
