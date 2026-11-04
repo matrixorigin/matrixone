@@ -318,6 +318,9 @@ func (e *decimalChainExecutor) Eval(p *process.Process, b []*batch.Batch, select
 			if i == len(e.nodes)-1 {
 				dest, offset = out, start
 			}
+			if count >= 256 && function.TryDecimalArithmeticSIMD(node.op, x, y, dest, xi, yi, offset, count) {
+				continue
+			}
 			if err = function.DecimalArithmeticChunk(node.op, x, y, dest, xi, yi, offset, count); err != nil {
 				return nil, err
 			}
