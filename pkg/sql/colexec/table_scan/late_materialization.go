@@ -49,7 +49,9 @@ func isLateMaterializationCandidate(typ plan.Type) bool {
 		types.T_array_bf16,
 		types.T_array_float16,
 		types.T_array_int8,
-		types.T_array_uint8:
+		types.T_array_uint8,
+		types.T_array_float8,
+		types.T_array_float4:
 		return true
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary:
 		return typ.Width > 0 &&

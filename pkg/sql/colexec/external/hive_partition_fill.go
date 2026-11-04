@@ -365,7 +365,8 @@ func fillConstantVector(
 
 	case types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16,
-		types.T_array_int8, types.T_array_uint8:
+		types.T_array_int8, types.T_array_uint8,
+		types.T_array_float8, types.T_array_float4:
 		return moerr.NewNotSupportedf(proc.Ctx,
 			"unsupported partition column type VECTOR for col=%s, path=%s", col.Name, filePath)
 
