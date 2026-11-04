@@ -1021,6 +1021,15 @@ func bindWindowSpec(
 		if len(w.OrderBy) == 0 {
 			break
 		}
+		if types.T(w.OrderBy[0].Expr.Typ.Id).IsLowPrecisionFloat() && isNRange(ws.Frame) {
+			// bf16/float16/float8/float4 order and offset as float32, which holds them exactly
+			f32 := plan.Type{Id: int32(types.T_float32)}
+			expr, err := appendCastBeforeExpr(b.GetContext(), w.OrderBy[0].Expr, f32)
+			if err != nil {
+				return nil, err
+			}
+			w.OrderBy[0].Expr = expr
+		}
 		typ = rangeFrameBoundType(w.OrderBy[0].Expr.Typ)
 		t := types.Type{Oid: types.T(typ.Id)}
 		if consumerSpecific && !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
@@ -1164,6 +1173,16 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
 		if f := windowFunc.GetF(); f != nil {
 			f.Func.Obj = int64(uint64(f.Func.Obj) | function.Distinct)
+		}
+	}
+	if function.GetFunctionIsWinIndicatorFunByName(funcName) || isLocalSlidingRankWindowFunction(funcName) {
+		// bf16/float16/float8/float4 values reach the kernels as float32, which holds them exactly
+		if f := windowFunc.GetF(); f != nil && len(f.Args) > 0 && types.T(f.Args[0].Typ.Id).IsLowPrecisionFloat() {
+			arg, err := appendCastBeforeExpr(b.GetContext(), f.Args[0], plan.Type{Id: int32(types.T_float32)})
+			if err != nil {
+				return nil, err
+			}
+			f.Args[0] = arg
 		}
 	}
 	if function.GetFunctionIsWinIndicatorFunByName(funcName) {
@@ -2003,8 +2022,9 @@ func validateEwmWindowCallSignatures(
 				switch types.T(w.OrderBy[0].Expr.Typ.Id) {
 				case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 					types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-					types.T_float32, types.T_float64, types.T_decimal64,
-					types.T_decimal128, types.T_decimal256,
+					types.T_float32, types.T_float64,
+					types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
+					types.T_decimal64, types.T_decimal128, types.T_decimal256,
 					types.T_timestamp, types.T_datetime, types.T_date:
 				default:
 					return moerr.NewInvalidInput(ctx,
@@ -2021,6 +2041,7 @@ func validateEwmWindowCallSignatures(
 // parameter, folded expression or decimal-typed literal has no literal
 // value here and keeps the execution-boundary verdict.
 func ewmLiteralNumericValue(expr *plan.Expr, lit *plan.Literal) (float64, bool) {
+	// typeswitch:partial plan.Literal carries no bf16/float16/float8/float4 value; such constants stay unfolded
 	switch types.T(expr.Typ.Id) {
 	case types.T_float64:
 		return lit.GetDval(), true
@@ -2073,6 +2094,7 @@ func validateEwmLiteralDecayValues(ctx context.Context, f *plan.Function, valueA
 	decay := f.Args[valueArgs]
 	lit, ok := constant(decay)
 	if ok {
+		// typeswitch:partial plan.Literal carries no bf16/float16/float8/float4 value; such constants stay unfolded
 		switch types.T(decay.Typ.Id) {
 		case types.T_varchar, types.T_char, types.T_text:
 			if lit.GetSval() != NameEwmHalfLifeTag {
