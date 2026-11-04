@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -743,7 +744,16 @@ func TestReplacementPreExtendFailureAfterTransfer(t *testing.T) {
 			err = s.trySpill(context.Background())
 			require.Error(t, err)
 			require.Len(t, pool.fetched, 2)
-			require.Contains(t, pool.returned, pool.fetched[1])
+			returns := func(bat *batch.Batch) int {
+				count := 0
+				for _, returned := range pool.returned {
+					if returned == bat {
+						count++
+					}
+				}
+				return count
+			}
+			require.Equal(t, 1, returns(pool.fetched[1]))
 			if pipeline {
 				workerBatch := <-entered
 				require.Same(t, pool.fetched[0], workerBatch)
@@ -752,7 +762,7 @@ func TestReplacementPreExtendFailureAfterTransfer(t *testing.T) {
 				require.NoError(t, s.drainPipeline())
 				require.Equal(t, int32(7), <-observed)
 			} else {
-				require.Contains(t, pool.returned, pool.fetched[0])
+				require.Equal(t, 1, returns(pool.fetched[0]))
 			}
 			mp.Free(pool.reserve)
 			pool.reserve = nil
@@ -811,4 +821,132 @@ func TestRealSinkerReadbackReset(t *testing.T) {
 	}
 	require.NoError(t, s.Close())
 	require.Equal(t, before, proc.Mp().CurrNB())
+}
+
+// corruptOnReplacement injects a malformed non-key input only after the
+// replacement was fetched. Its PreExtend must still succeed before UnionOne.
+type corruptOnReplacement struct {
+	containers.IBatchBuffer
+	armed             bool
+	fetched, returned []*batch.Batch
+	priorReturns      []int
+	corrupt           func()
+}
+
+func (b *corruptOnReplacement) FetchWithSchema(attrs []string, typs []types.Type) *batch.Batch {
+	bat := b.IBatchBuffer.FetchWithSchema(attrs, typs)
+	if b.armed {
+		b.fetched = append(b.fetched, bat)
+		prior := 0
+		for _, returned := range b.returned {
+			if returned == bat {
+				prior++
+			}
+		}
+		b.priorReturns = append(b.priorReturns, prior)
+		if len(b.fetched) == 2 {
+			b.corrupt()
+		}
+	}
+	return bat
+}
+func (b *corruptOnReplacement) Putback(bat *batch.Batch, mp *mpool.MPool) {
+	if b.armed {
+		b.returned = append(b.returned, bat)
+	}
+	b.IBatchBuffer.Putback(bat, mp)
+}
+
+func TestReplacementMergePanicOwnershipAndReset(t *testing.T) {
+	for _, pipeline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pipeline=%t", pipeline), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			mp := proc.Mp()
+			before := mp.CurrNB()
+			attrs, typs, _ := mockSchema(3, 2)
+			pool := &corruptOnReplacement{IBatchBuffer: containers.NewOneSchemaBatchBuffer(mpool.MB, attrs, typs, true)}
+			entered, release, observed := make(chan *batch.Batch, 1), make(chan struct{}), make(chan int32, 2)
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			var factories atomic.Int32
+			opts := []SinkerOption{WithMemorySizeThreshold(100 * mpool.MB), WithBuffer(pool, true)}
+			if pipeline {
+				opts = append(opts, WithPipelineFlush())
+			} else {
+				opts = append(opts, WithDedupAll())
+			}
+			s := NewSinker(2, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker {
+				if pipeline && factories.Add(1) == 1 {
+					return &generationSink{entered: entered, release: release, observed: observed}
+				}
+				return &generationSink{observed: observed}
+			}, mp, nil, opts...)
+			t.Cleanup(func() {
+				unblock()
+				if s.buf.buffers != nil {
+					_ = s.Close()
+				}
+			})
+			n := 2 * int(objectio.BlockMaxRows)
+			source := containers.MockBatch(typs, n, 2, nil)
+			defer source.Close()
+			input := containers.ToCNBatch(source)
+			for col := range input.Vecs {
+				values := vector.MustFixedColNoTypeCheck[int32](input.Vecs[col])
+				for i := range values {
+					values[i] = int32(i)
+				}
+			}
+			require.NoError(t, s.Write(context.Background(), input))
+			pool.corrupt = func() { s.staged.inMemory[1].Vecs[0].Free(mp) }
+			pool.armed = true
+			if pipeline {
+				s.staged.memorySizeThreshold = 1
+			}
+			var panicStack []byte
+			func() {
+				defer func() {
+					if recover() != nil {
+						panicStack = debug.Stack()
+					}
+				}()
+				_ = s.trySpill(context.Background())
+			}()
+			require.Contains(t, string(panicStack), "vector.(*Vector).UnionOne")
+			require.Len(t, pool.fetched, 2)
+			count := func(bat *batch.Batch) int {
+				n := 0
+				for _, b := range pool.returned {
+					if b == bat {
+						n++
+					}
+				}
+				return n
+			}
+			require.Equal(t, 1, count(pool.fetched[1])-pool.priorReturns[1], "active replacement must return exactly once")
+			if pipeline {
+				worker := <-entered
+				require.Same(t, pool.fetched[0], worker)
+				require.Zero(t, count(worker)-pool.priorReturns[0], "worker owns submitted output")
+				unblock()
+				require.NoError(t, s.drainPipeline())
+				require.Equal(t, int32(0), <-observed)
+			} else {
+				require.Equal(t, 1, count(pool.fetched[0])-pool.priorReturns[0])
+			}
+			pool.armed = false
+			s.Reset()
+			for col := range input.Vecs {
+				values := vector.MustFixedColNoTypeCheck[int32](input.Vecs[col])
+				for i := range values {
+					values[i] = int32(i + 19)
+				}
+			}
+			require.NoError(t, s.Write(context.Background(), input))
+			require.NoError(t, s.Sync(context.Background()))
+			require.Equal(t, int32(19), <-observed)
+			require.NoError(t, s.Close())
+			require.Equal(t, before, mp.CurrNB())
+		})
+	}
 }
