@@ -22,4 +22,9 @@ select count(*) from docs where match(body) against('hello');
 set session optimizer_hints = '';
 -- @session
 select count(*) from docs where match(body) against('hello');
+
+-- A stored-procedure local with the same name must not shadow the session sysvar.
+create procedure ft_local_hint() 'begin declare optimizer_hints varchar(64) default ''applyIndices=1''; select count(*) from docs where match(body) against(''hello''); end';
+call ft_local_hint();
+drop procedure ft_local_hint;
 drop database fulltext_optimizer_hints_scope;
