@@ -19,6 +19,7 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -107,6 +109,106 @@ func TestCNS3DataWriterMemoryThresholdAndSyncAndFillBlockInfoBat(t *testing.T) {
 		}
 		require.Equal(t, len(ids), rows)
 	})
+}
+
+func TestCNSTombstoneWriterBoundsVariableLengthRuns(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	fs, err := fileservice.Get[fileservice.FileService](proc.Base.FileService, defines.SharedFileServiceName)
+	require.NoError(t, err)
+
+	input, pkType, typs, want := newVarlenTombstoneInput(t, proc.Mp())
+	defer input.Clean(proc.Mp())
+
+	const threshold = 400
+	writer := NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, threshold)
+	defer func() { require.NoError(t, writer.Close()) }()
+	require.NoError(t, writer.Write(proc.Ctx, input))
+	stats, err := writer.Sync(proc.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(stats), "the threshold crossing must start a new tombstone object")
+	blockInfoBat, err := writer.FillBlockInfoBat()
+	require.NoError(t, err)
+	require.Equal(t, len(stats), blockInfoBat.RowCount(), "every tombstone object must reach the caller")
+
+	seen := make(map[types.Rowid]bool, len(want))
+	for _, stat := range stats {
+		objectio.ForeachBlkInObjStatsList(false, nil, func(info objectio.BlockInfo, _ objectio.BlockObject) bool {
+			loc := objectio.Location(info.MetaLoc[:])
+			reader, err := ioutil.NewObjectReader(fs, loc)
+			require.NoError(t, err)
+			got, release, err := reader.LoadColumns(proc.Ctx, []uint16{0, 1}, typs, loc.ID(), proc.Mp())
+			require.NoError(t, err)
+			defer release()
+			rowIDs := vector.MustFixedColNoTypeCheck[types.Rowid](got.Vecs[objectio.TombstoneAttr_Rowid_Idx])
+			for i, rowID := range rowIDs {
+				require.Equal(t, want[rowID], string(got.Vecs[objectio.TombstoneAttr_PK_Idx].GetBytesAt(i)))
+				require.False(t, seen[rowID])
+				seen[rowID] = true
+			}
+			return true
+		}, stat)
+	}
+	require.Len(t, seen, len(want))
+}
+
+func TestCNSTombstoneWriterCleansEarlierRunOnFailure(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	base := testutil.NewSharedFS()
+	defer base.Close(context.Background())
+	writeErr := errors.New("injected second tombstone object failure")
+	fs := &cnTombstoneFailureFS{FileService: base, failAt: 2, writeErr: writeErr}
+
+	input, pkType, _, _ := newVarlenTombstoneInput(t, proc.Mp())
+	defer input.Clean(proc.Mp())
+
+	writer := NewCNS3TombstoneWriter(proc.Mp(), fs, pkType, 400)
+	defer func() { require.NoError(t, writer.Close()) }()
+	require.NoError(t, writer.Write(proc.Ctx, input))
+	_, err := writer.Sync(proc.Ctx)
+	require.ErrorIs(t, err, writeErr)
+
+	files, err := fileservice.SortedList(base.List(context.Background(), ""))
+	require.NoError(t, err)
+	require.Empty(t, files, "a failed second run must remove the earlier unpublished object")
+}
+
+type cnTombstoneFailureFS struct {
+	fileservice.FileService
+	writes   atomic.Int32
+	failAt   int32
+	writeErr error
+}
+
+func (fs *cnTombstoneFailureFS) Write(ctx context.Context, vec fileservice.IOVector) error {
+	if fs.writes.Add(1) == fs.failAt {
+		return fs.writeErr
+	}
+	return fs.FileService.Write(ctx, vec)
+}
+
+func newVarlenTombstoneInput(
+	t *testing.T,
+	mp *mpool.MPool,
+) (*batch.Batch, types.Type, []types.Type, map[types.Rowid]string) {
+	t.Helper()
+	pkType := types.T_varchar.ToType()
+	attrs, typs := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
+	input := batch.NewWithSchema(false, attrs, typs)
+	blockID := types.BuildTestBlockid(1, 2)
+	want := make(map[types.Rowid]string, 3)
+	for i := uint32(0); i < 3; i++ {
+		rowID := types.NewRowid(&blockID, i)
+		value := string(rune('a'+i)) + strings.Repeat("x", 128)
+		require.NoError(t, vector.AppendFixed(input.Vecs[objectio.TombstoneAttr_Rowid_Idx], rowID, false, mp))
+		require.NoError(t, vector.AppendBytes(input.Vecs[objectio.TombstoneAttr_PK_Idx], []byte(value), false, mp))
+		want[rowID] = value
+	}
+	input.SetRowCount(len(want))
+	return input, pkType, typs, want
 }
 
 func testCNS3WriterTableDef() *plan.TableDef {

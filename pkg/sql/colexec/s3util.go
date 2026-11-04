@@ -91,6 +91,7 @@ func NewCNS3TombstoneWriter(
 		memoryThreshold = WriteS3Threshold
 	}
 
+	opts = append(opts, ioutil.WithByteBoundedRuns(), ioutil.WithUnpublishedRunCleanup())
 	opts = append(opts, ioutil.WithMemorySizeThreshold(memoryThreshold))
 	opts = append(opts, ioutil.WithTailSizeCap(0))
 
