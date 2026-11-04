@@ -150,7 +150,7 @@ func (s Storage) checkF32(vec []float32) error {
 			return moerr.NewIndexVectorOutOfRangeNoCtx(fmt.Sprintf("vector element %v cannot be stored as %s", f, quantizer.SQLTypeName(s.Entry)))
 		}
 		if scaled {
-			if q := float32(f*fmul) + fadd; math.IsInf(float64(q), 0) {
+			if q := float32(f*fmul) + fadd; q != q || math.IsInf(float64(q), 0) {
 				return moerr.NewIndexVectorOutOfRangeNoCtx(fmt.Sprintf("vector element %v cannot be stored as %s", f, quantizer.SQLTypeName(s.Entry)))
 			}
 		}

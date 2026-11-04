@@ -70,18 +70,35 @@ func (c *Compile) productL2Ignored(node *plan.Node) (*productl2.Ignored, error) 
 	if cfg.IgnoredTable != "" {
 		ig.Db, ig.Table, ig.Limit = cfg.DbName, cfg.IgnoredTable, cfg.MaxBadRecords
 	}
-	for _, expr := range node.ProjectList {
-		col := expr.GetCol()
-		if col == nil || col.RelPos != 0 {
-			continue
-		}
-		name := col.Name[strings.LastIndexByte(col.Name, '.')+1:]
-		if name == cfg.PKey || name == catalog.SystemSI_IVFFLAT_TblCol_Entries_pk {
-			ig.Pk = col.ColPos
-			break
-		}
-	}
+	ig.Pk = probePkPos(node.ProjectList, cfg.PKey, catalog.SystemSI_IVFFLAT_TblCol_Entries_pk)
 	return ig, nil
+}
+
+// probePkPos returns the position of the probe column named one of names, or named one of them
+// under one table qualifier, or -1. A name may itself hold dots, so an exact name wins.
+func probePkPos(list []*plan.Expr, names ...string) int32 {
+	match := func(qualified bool) int32 {
+		for _, expr := range list {
+			col := expr.GetCol()
+			if col == nil || col.RelPos != 0 {
+				continue
+			}
+			for _, name := range names {
+				if col.Name == name {
+					return col.ColPos
+				}
+				if qualified && strings.HasSuffix(col.Name, "."+name) &&
+					!strings.Contains(col.Name[:len(col.Name)-len(name)-1], ".") {
+					return col.ColPos
+				}
+			}
+		}
+		return -1
+	}
+	if pos := match(false); pos >= 0 {
+		return pos
+	}
+	return match(true)
 }
 
 // quantizeBounds reads the trained int8/uint8 bounds from the IVF-FLAT metadata table.

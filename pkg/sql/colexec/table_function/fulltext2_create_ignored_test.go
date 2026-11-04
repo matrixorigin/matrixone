@@ -54,6 +54,7 @@ func TestFulltext2CreateLeavesOutInvalidJSON(t *testing.T) {
 	cfg := ft2IgnoredCfg(t, "__ign", 1, "id")
 	st := &fulltext2CreateState{}
 	tf, _ := ft2CreateArgVecs(t, mp, cfg, 3, "{bad")
+	t.Cleanup(func() { st.free(tf, proc, false, nil) })
 	require.NoError(t, st.start(tf, proc, 0, nil))
 	require.Equal(t, int64(1), st.ignored.spill.Len())
 
@@ -83,6 +84,7 @@ func TestFulltext2CreateLeaveOutCompositeKey(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{PKey: catalog.CPrimaryKeyColName}, ignored: newIgnoredBuild(st0Cfg(), "")}
+	t.Cleanup(st.ignored.close)
 	pk := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(pk, []byte{0x01, 0xff}, false, mp))
 	tf := newFT2TF([]string{"status"}, ft2StatusRets())
@@ -90,7 +92,6 @@ func TestFulltext2CreateLeaveOutCompositeKey(t *testing.T) {
 	require.NoError(t, st.leaveOut(tf, proc, 0, moerr.NewIndexInvalidJSONNoCtx("x")))
 	require.Equal(t, "X'01ff'", st.ignored.firstPk)
 	require.ErrorContains(t, st.leaveOut(tf, proc, 0, moerr.NewInternalErrorNoCtx("io")), "io", "not a reason a row cannot be stored")
-	st.ignored.close()
 }
 
 func st0Cfg() vectorindex.IndexTableConfig {

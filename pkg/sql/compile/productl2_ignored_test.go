@@ -62,6 +62,23 @@ func TestProductL2Ignored(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(0), ig.Pk, "the sync names it after the entries column")
 
+	// a quoted key name may hold dots
+	cfg.PKey = "a.id"
+	for _, tc := range []struct {
+		names []string
+		pk    int32
+	}{
+		{[]string{"v", "a.id"}, 1},
+		{[]string{"src.v", "src.b.a.id", "src.a.id"}, 2},
+		{[]string{"b.a.id", "a.id"}, 1},
+		{[]string{"src.b.a.id"}, -1},
+	} {
+		ig, err = c.productL2Ignored(l2Node(t, cfg, `{}`, tc.names...))
+		require.NoError(t, err)
+		require.Equal(t, tc.pk, ig.Pk, "%v", tc.names)
+	}
+	cfg.PKey = "id"
+
 	cfg.PKey, cfg.IgnoredTable = catalog.CPrimaryKeyColName, ""
 	ig, err = c.productL2Ignored(l2Node(t, cfg, `{}`, "src."+catalog.CPrimaryKeyColName))
 	require.NoError(t, err)

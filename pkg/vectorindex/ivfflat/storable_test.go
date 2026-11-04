@@ -79,13 +79,18 @@ func TestStorageCheck(t *testing.T) {
 // The int8 rule rejects exactly the elements whose entry map, as the entry SQL computes it,
 // is not finite.
 func TestStorageCheckMatchesInt8Map(t *testing.T) {
-	mul, add := quantizer.Int8Params(0, 1e-37)
-	s := NewStorage(types.T_array_float32, "int8", 0, 1e-37, true)
-	for _, x := range []float32{0, 1, 1e-30, 1e10, 1e20, 1e30, -1e30} {
-		q := float32(x*float32(mul)) + float32(add)
-		finite := !math.IsInf(float64(q), 0)
-		err := s.Check(types.ArrayToBytes([]float32{x}))
-		require.Equal(t, finite, err == nil, "x=%v q=%v err=%v", x, q, err)
+	for _, q := range []string{"int8", "uint8"} {
+		mul, add := quantizer.Int8Params(0, 1e-37)
+		if q == "uint8" {
+			mul, add = quantizer.Uint8Params(0, 1e-37)
+		}
+		s := NewStorage(types.T_array_float32, q, 0, 1e-37, true)
+		for _, x := range []float32{0, 1, 1e-30, 1e10, 1e20, 1e30, -1e30} {
+			code := float32(x*float32(mul)) + float32(add)
+			finite := !math.IsInf(float64(code), 0) && !math.IsNaN(float64(code))
+			err := s.Check(types.ArrayToBytes([]float32{x}))
+			require.Equal(t, finite, err == nil, "%s x=%v code=%v err=%v", q, x, code, err)
+		}
 	}
 }
 
