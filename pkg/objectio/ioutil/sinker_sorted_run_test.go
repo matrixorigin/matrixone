@@ -1213,8 +1213,15 @@ func TestCloseCleansAfterAsynchronousWorkerFailure(t *testing.T) {
 	input.SetRowCount(8)
 	sink := NewSinker(0, attrs, typs, NewFSinkerImplFactory([]uint16{0, 1}, 0, true, false, 0), mp, fs,
 		WithMemorySizeThreshold(256), WithByteBoundedRuns(), WithUnpublishedRunCleanup(), WithPipelineFlush(), WithTailSizeCap(0))
+	defer func() {
+		if gate != nil {
+			close(gate)
+		}
+		_ = sink.Close()
+	}()
 	require.NoError(t, sink.Write(ctx, input))
 	close(gate)
+	gate = nil
 	require.Same(t, fs.writeErr, sink.drainPipeline())
 	require.False(t, sink.staged.aborted)
 	require.Same(t, fs.writeErr, sink.Close(), "cleanup must not replace the pipeline error")
