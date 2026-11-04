@@ -36,14 +36,18 @@ import (
 func TestOptionalIndexBudgetFallback(t *testing.T) {
 	for _, tc := range []struct {
 		name                                string
-		cap                                 int64
+		cap, threshold                      int64
+		pattern                             string
 		hash, optional, indexed, expression bool
 	}{
-		{"batch only", 2 << 20, false, false, false, false},
-		{"optional constrained", 2 << 20, true, true, false, false},
-		{"required constrained", 2 << 20, true, false, false, false},
-		{"optional admitted", 32 << 20, true, true, true, false},
-		{"unknown expression bound", 32 << 20, true, true, false, true},
+		{name: "batch only", cap: 2 << 20},
+		{name: "optional constrained", cap: 2 << 20, hash: true, optional: true},
+		{name: "required constrained", cap: 2 << 20, hash: true},
+		{name: "optional admitted", cap: 32 << 20, hash: true, optional: true, indexed: true},
+		{name: "unknown expression bound", cap: 32 << 20, hash: true, optional: true, expression: true},
+		{name: "soft budget", cap: 32 << 20, threshold: 1 << 20, hash: true, optional: true},
+		{name: "distinct prefix then duplicates", cap: 2 << 20, pattern: "distinct prefix", hash: true, optional: true, indexed: true},
+		{name: "duplicates then distinct suffix", cap: 2 << 20, pattern: "repeated prefix", hash: true, optional: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			key := newExpr(0, types.T_int32.ToType())
@@ -61,10 +65,14 @@ func TestOptionalIndexBudgetFallback(t *testing.T) {
 			values := make([]int32, 100000)
 			for i := range values {
 				values[i] = int32(i)
+				if tc.pattern == "distinct prefix" && i >= 8192 || tc.pattern == "repeated prefix" && i < 8192 {
+					values[i] = 0
+				}
 			}
 			bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, sourceMP)
 			bat.SetRowCount(len(values))
 			b := &HashBuild{NeedHashMap: tc.hash, NeedBatches: true, OptionalIndex: tc.optional, Conditions: []*plan.Expr{key}, JoinMapTag: 173, JoinMapRefCnt: 1}
+			b.SpillThreshold = tc.threshold
 			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 			b.AppendChild(child)
 			t.Cleanup(func() {
@@ -83,7 +91,17 @@ func TestOptionalIndexBudgetFallback(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			t.Logf("retained bytes=%d cap=%d indexed=%v", mp.CurrNB(), tc.cap, tc.indexed)
+			t.Logf("retained bytes=%d peak=%d cap=%d indexed=%v", mp.CurrNB(), mp.Stats().HighWaterMark.Load(), tc.cap, tc.indexed)
+			if tc.optional && !tc.expression {
+				limit := tc.cap
+				if tc.threshold > 0 {
+					limit = min(limit, tc.threshold)
+				}
+				require.LessOrEqual(t, mp.Stats().HighWaterMark.Load(), limit, "reject BEFORE an over-budget allocation, including resize overlap")
+				if !tc.indexed {
+					require.Greater(t, mp.Stats().HighWaterMark.Load(), int64(400000+16384), "fallback follows incremental index growth, not a whole-input rejection")
+				}
+			}
 			jm, err := message.ReceiveJoinMap(173, false, 0, proc.GetMessageBoard(), proc.Ctx)
 			require.NoError(t, err)
 			require.NotNil(t, jm)
@@ -92,7 +110,7 @@ func TestOptionalIndexBudgetFallback(t *testing.T) {
 			rows := 0
 			for _, b := range jm.GetBatches() {
 				for _, v := range vector.MustFixedColNoTypeCheck[int32](b.Vecs[0]) {
-					require.Equal(t, int32(rows), v)
+					require.Equal(t, values[rows], v)
 					rows++
 				}
 			}
@@ -121,6 +139,46 @@ func TestOptionalIndexBudgetFallback(t *testing.T) {
 	}
 }
 
+type cancelBudgetScanContext struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (c *cancelBudgetScanContext) Err() error {
+	c.checks++
+	if c.checks == 2 {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestOptionalIndexVarlenBudgetScanCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	var hb HashmapBuilder
+	t.Cleanup(func() { hb.Free(proc); proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	key := newExpr(0, types.T_varchar.ToType())
+	require.NoError(t, hb.Prepare([]*plan.Expr{key}, -1, -1, nil, proc))
+	bat := batch.NewWithSize(1)
+	values := make([]string, hashmap.UnitLimit*3)
+	for i := range values {
+		values[i] = "variable length key"
+	}
+	bat.Vecs[0] = testutil.MakeVarcharVector(values, nil, proc.Mp())
+	bat.SetRowCount(len(values))
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	require.NoError(t, hb.Batches.CopyIntoBatches(bat, proc))
+	hb.InputBatchRowCount = len(values)
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	defer cancel()
+	scan := &cancelBudgetScanContext{Context: ctx, cancel: cancel}
+	_, known := hb.buildMemoryBound(scan, []*plan.Expr{key}, false, false, 0)
+	require.False(t, known)
+	require.Equal(t, 2, scan.checks, "stop at the second key window, not after the entire scan")
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.Nil(t, hb.StrHashMap)
+}
+
 type reviewEvalHook struct {
 	colexec.ExpressionExecutor
 	hook func() error
@@ -134,9 +192,13 @@ func (e reviewEvalHook) Eval(p *process.Process, b []*batch.Batch, s []bool) (*v
 }
 
 func TestOptionalIndexPartialFailure(t *testing.T) {
-	for _, mode := range []string{"oom", "pool limit", "error", "cancel"} {
+	for _, mode := range []string{"oom", "pool limit", "headroom loss", "error", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
-			mp, err := mpool.NewMPool("optional failure", 32<<20, mpool.NoFixed)
+			limit := int64(32 << 20)
+			if mode == "headroom loss" {
+				limit = 2 << 20
+			}
+			mp, err := mpool.NewMPool("optional failure", limit, mpool.NoFixed)
 			require.NoError(t, err)
 			proc := testutil.NewProcessWithMPool(t, "", mp)
 			proc.SetMessageBoard(message.NewMessageBoard())
@@ -144,12 +206,23 @@ func TestOptionalIndexPartialFailure(t *testing.T) {
 			proc.Ctx = ctx
 			defer cancel()
 			bat := batch.NewWithSize(1)
-			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
-			bat.SetRowCount(2)
+			values := []int32{1, 2}
+			if mode == "headroom loss" {
+				values = make([]int32, hashmap.UnitLimit*2)
+				for i := range values {
+					values[i] = int32(i)
+				}
+			}
+			bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+			bat.SetRowCount(len(values))
+			var reserved []byte
 			b := &HashBuild{NeedHashMap: true, NeedBatches: true, OptionalIndex: true, Conditions: []*plan.Expr{newExpr(0, types.T_int32.ToType())}, JoinMapTag: 175, JoinMapRefCnt: 1}
 			b.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat}))
 			t.Cleanup(func() {
 				b.Free(proc, true, nil)
+				if reserved != nil {
+					mp.Free(reserved)
+				}
 				bat.Clean(proc.Mp())
 				proc.GetMessageBoard().Reset()
 				proc.Free()
@@ -171,15 +244,21 @@ func TestOptionalIndexPartialFailure(t *testing.T) {
 					require.Error(t, err)
 					return err
 				}
+				if mode == "headroom loss" {
+					var err error
+					reserved, err = mp.Alloc(int(mp.Cap()-mp.CurrNB()-16384), true)
+					require.NoError(t, err)
+					return nil
+				}
 				return sentinel
 			}}
 			_, err = b.Call(proc)
-			if mode == "oom" || mode == "pool limit" {
+			if mode == "oom" || mode == "pool limit" || mode == "headroom loss" {
 				require.NoError(t, err)
 				jm, e := message.ReceiveJoinMap(175, false, 0, proc.GetMessageBoard(), proc.Ctx)
 				require.NoError(t, e)
 				require.Nil(t, jm.NewIterator())
-				require.Equal(t, int64(2), jm.GetRowCount())
+				require.Equal(t, int64(len(values)), jm.GetRowCount())
 				jm.Free()
 			} else {
 				if mode == "cancel" {

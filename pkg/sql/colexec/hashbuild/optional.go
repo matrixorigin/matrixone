@@ -15,34 +15,71 @@
 package hashbuild
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (b *HashBuild) buildOptionalIndex(proc *process.Process) error {
-	hb := &b.ctr.hashmapBuilder
-	bound, known := hb.BuildMemoryBound(b.Conditions, false, false)
+var errOptionalIndexBudget = errors.New("optional membership index budget exceeded")
+
+// overhead bounds key/executor scratch independently of distinct-key count.
+// limit is the initial incremental budget; admit also checks current headroom.
+// This state is local to one build and is never published with the JoinMap.
+type optionalIndexBudget struct {
+	overhead, limit int64
+}
+
+func (b *optionalIndexBudget) admit(hb *HashmapBuilder, proc *process.Process, rows uint64) error {
 	if err := proc.Ctx.Err(); err != nil {
 		return err
 	}
-	// The bound includes reallocation overlap and key-executor scratch. Unknown
-	// expressions or insufficient headroom retain the original loop evaluator.
+	_, peak, ok := hashtable.BuildMemoryBound(rows, hb.UsesStringKeys())
+	if !ok || b.overhead > b.limit || peak > b.limit-b.overhead {
+		return errOptionalIndexBudget
+	}
+	var retained int64
+	if hb.IntHashMap != nil {
+		retained = hb.IntHashMap.Size()
+	}
+	if hb.StrHashMap != nil {
+		retained = hb.StrHashMap.Size()
+	}
+	// The peak includes the old allocation during growth. Credit only the
+	// table already owned by this build, not another operator's allocations.
+	remaining := min(proc.Mp().Cap()-proc.Mp().CurrNB(), mpool.GlobalCap()-mpool.GlobalStats().NumCurrBytes.Load())
+	if peak-retained+b.overhead > remaining {
+		return errOptionalIndexBudget
+	}
+	return nil
+}
+
+func (b *HashBuild) buildOptionalIndex(proc *process.Process) error {
+	hb := &b.ctr.hashmapBuilder
+	bound, known := hb.buildMemoryBound(proc.Ctx, b.Conditions, false, false, 0)
+	if err := proc.Ctx.Err(); err != nil {
+		return err
+	}
+	// Prove key/executor scratch once. Table capacity is instead admitted
+	// incrementally, so duplicate input rows do not count as distinct keys.
 	available := min(proc.Mp().Cap()-proc.Mp().CurrNB(), mpool.GlobalCap()-mpool.GlobalStats().NumCurrBytes.Load())
 	if b.ctr.spillThreshold > 100000 {
 		available = min(available, b.ctr.spillThreshold-hb.Batches.Allocated())
 	}
-	if !known || bound > available {
+	_, initialPeak, ok := hashtable.BuildMemoryBound(0, hb.UsesStringKeys())
+	if !known || !ok || bound < initialPeak {
 		hb.discardOptionalIndex(proc)
 		return nil
 	}
-	err := hb.BuildHashmap(false, false, false, proc)
+	budget := &optionalIndexBudget{overhead: bound - initialPeak, limit: available}
+	err := hb.buildHashmap(false, false, false, false, proc, budget)
 	if canceled := proc.Ctx.Err(); canceled != nil {
 		return canceled
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrOOM) ||
+	if errors.Is(err, errOptionalIndexBudget) || moerr.IsMoErrCode(err, moerr.ErrOOM) ||
 		(moerr.IsMoErrCode(err, moerr.ErrInternal) && strings.HasPrefix(err.Error(), "internal error: mpool out of space, alloc ")) {
 		// Admission is not an exclusive reservation: another operator may consume
 		// memory meanwhile. Retire partial index state, but keep all RHS batches.

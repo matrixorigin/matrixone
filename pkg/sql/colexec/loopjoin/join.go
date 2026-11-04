@@ -87,6 +87,9 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	var err error
 	for {
+		if err := proc.Ctx.Err(); err != nil {
+			return result, err
+		}
 		switch ctr.state {
 		case Build:
 			if err = loopJoin.build(proc, analyzer); err != nil {
@@ -105,6 +108,9 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.inBat == nil {
 				input, err = vm.ChildrenCall(loopJoin.GetChildren(0), proc, analyzer)
 				if err != nil {
+					return result, err
+				}
+				if err := proc.Ctx.Err(); err != nil {
 					return result, err
 				}
 				if input.Batch == nil {
@@ -209,6 +215,9 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 
 	rowCountIncrease := 0
 	for i := ctr.probeIdx; i < count; i++ {
+		if err := proc.Ctx.Err(); err != nil {
+			return err
+		}
 		if ap.JoinType == plan.Node_MARK && ctr.expr != nil {
 			if rowCountIncrease >= colexec.DefaultBatchSize {
 				result.Batch = ctr.resBat
@@ -221,6 +230,9 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			hasTrue := false
 			hasNull := false
 			for idx := 0; idx < len(mpbat); idx++ {
+				if err := proc.Ctx.Err(); err != nil {
+					return err
+				}
 				bat := mpbat[idx]
 				if err := colexec.SetJoinBatchValues(ctr.joinBat, inbat, int64(i),
 					bat.RowCount(), ctr.cfs); err != nil {
@@ -229,6 +241,9 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 
 				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat}, nil)
 				if err != nil {
+					return err
+				}
+				if err := proc.Ctx.Err(); err != nil {
 					return err
 				}
 
@@ -286,6 +301,9 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 			matched = true
 		}
 		for idx := ctr.batIdx; idx < len(mpbat); idx++ {
+			if err := proc.Ctx.Err(); err != nil {
+				return err
+			}
 			if rowCountIncrease >= colexec.DefaultBatchSize {
 				result.Batch = ctr.resBat
 				ctr.resBat.SetRowCount(rowCountIncrease)
@@ -304,6 +322,9 @@ func (ctr *container) probe(ap *LoopJoin, proc *process.Process, result *vm.Call
 
 				vec, err := ctr.expr.Eval(proc, []*batch.Batch{ctr.joinBat, bat}, nil)
 				if err != nil {
+					return err
+				}
+				if err := proc.Ctx.Err(); err != nil {
 					return err
 				}
 

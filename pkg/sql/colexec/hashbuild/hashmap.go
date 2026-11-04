@@ -270,7 +270,7 @@ func (hb *HashmapBuilder) evalBatch(batchIdx int, proc *process.Process) error {
 }
 
 func (hb *HashmapBuilder) BuildHashmap(hashOnPK bool, needAllocateSels bool, needUniqueVec bool, proc *process.Process) (retErr error) {
-	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc)
+	return hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, hb.DedupBuildKeepLast, proc, nil)
 }
 
 func (hb *HashmapBuilder) buildHashmap(
@@ -279,6 +279,7 @@ func (hb *HashmapBuilder) buildHashmap(
 	needUniqueVec bool,
 	dedupBuildKeepLast bool,
 	proc *process.Process,
+	budget *optionalIndexBudget,
 ) (retErr error) {
 	if err := proc.Ctx.Err(); err != nil {
 		return err
@@ -286,6 +287,11 @@ func (hb *HashmapBuilder) buildHashmap(
 	hb.hasNullKey = false
 	if hb.InputBatchRowCount == 0 {
 		return nil
+	}
+	if budget != nil {
+		if err := budget.admit(hb, proc, uint64(min(hb.InputBatchRowCount, hashmap.UnitLimit))); err != nil {
+			return err
+		}
 	}
 	dedupBuildKeepLast = dedupBuildKeepLast && hb.IsDedup && hb.OnDuplicateAction == plan.Node_FAIL
 	defer func() {
@@ -382,7 +388,7 @@ func (hb *HashmapBuilder) buildHashmap(
 
 		// if not hash on primary key, estimate the hashmap size after 8192 rows
 		//preAlloc to improve performance and reduce memory reAlloc
-		if !hashOnPK && !hb.IsDedup && hb.InputBatchRowCount > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
+		if budget == nil && !hashOnPK && !hb.IsDedup && hb.InputBatchRowCount > hashmap.HashMapSizeThreshHold && i == hashmap.HashMapSizeEstimate {
 			if hb.keyWidth <= 8 {
 				groupCount := hb.IntHashMap.GroupCount()
 				rate := float64(groupCount) / float64(i)
@@ -406,6 +412,19 @@ func (hb *HashmapBuilder) buildHashmap(
 			}
 		}
 
+		if budget != nil {
+			var groups uint64
+			if hb.IntHashMap != nil {
+				groups = hb.IntHashMap.GroupCount()
+			} else {
+				groups = hb.StrHashMap.GroupCount()
+			}
+			// At most n new keys can arrive, including an adversarial change in
+			// cardinality after an arbitrarily long duplicate prefix.
+			if err := budget.admit(hb, proc, groups+uint64(n)); err != nil {
+				return err
+			}
+		}
 		vecIdx1 := i / colexec.DefaultBatchSize
 		vecIdx2 := i % colexec.DefaultBatchSize
 		if vecIdx1 != lastBatch {
@@ -539,7 +558,7 @@ func (hb *HashmapBuilder) buildHashmap(
 			hb.InputBatchRowCount = totalRowCount
 		}
 		hb.resetHashStateForRebuild(proc)
-		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc); err != nil {
+		if err := hb.buildHashmap(hashOnPK, needAllocateSels, needUniqueVec, false, proc, nil); err != nil {
 			return err
 		}
 		hb.InputBatchRowCount = totalRowCount

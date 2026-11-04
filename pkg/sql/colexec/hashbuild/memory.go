@@ -15,6 +15,7 @@
 package hashbuild
 
 import (
+	"context"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -99,14 +100,24 @@ func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64
 // imports must spill in that case; ordinary joins may retain their legacy
 // expression path. A known bound is reserved before either path allocates.
 func (hb *HashmapBuilder) BuildMemoryBound(conditions []*plan.Expr, needSels, needUnique bool) (int64, bool) {
+	return hb.buildMemoryBound(context.Background(), conditions, needSels, needUnique, uint64(hb.InputBatchRowCount))
+}
+
+// indexRows separates table growth from the retained input/key scratch bound.
+// Optional indexes use this to admit each insertion window, not all input rows
+// as distinct keys. Cancellation is checked even while scanning varlen payloads.
+func (hb *HashmapBuilder) buildMemoryBound(ctx context.Context, conditions []*plan.Expr, needSels, needUnique bool, indexRows uint64) (int64, bool) {
 	keyMax, keyTotal := int64(0), int64(0)
 	for _, condition := range conditions {
 		if condition == nil || condition.GetCol() == nil {
-			return hb.expressionBuildMemoryBound(conditions, needSels, needUnique)
+			return hb.expressionBuildMemoryBound(ctx, conditions, needSels, needUnique, indexRows)
 		}
 	}
 	for _, bat := range hb.Batches.Buf {
 		for start := 0; start < bat.RowCount(); start += hashmap.UnitLimit {
+			if ctx.Err() != nil {
+				return 0, false
+			}
 			end := min(start+hashmap.UnitLimit, bat.RowCount())
 			window := int64(0)
 			for _, condition := range conditions {
@@ -150,7 +161,7 @@ func (hb *HashmapBuilder) BuildMemoryBound(conditions []*plan.Expr, needSels, ne
 			keyMax = max(keyMax, window)
 		}
 	}
-	bound, ok := hashmap.BuildMemoryBound(uint64(hb.InputBatchRowCount), hb.keyWidth > 8, keyMax, needSels)
+	bound, ok := hashmap.BuildMemoryBound(indexRows, hb.keyWidth > 8, keyMax, needSels)
 	if !ok {
 		return 0, false
 	}
@@ -211,10 +222,13 @@ func (hb *HashmapBuilder) UsesStringKeys() bool { return hb.keyWidth > 8 }
 
 // Expression contracts include all intermediate executor results and the
 // duplicate root vectors retained by evalBatch, before any expression is run.
-func (hb *HashmapBuilder) expressionBuildMemoryBound(conditions []*plan.Expr, needSels, needUnique bool) (int64, bool) {
+func (hb *HashmapBuilder) expressionBuildMemoryBound(ctx context.Context, conditions []*plan.Expr, needSels, needUnique bool, indexRows uint64) (int64, bool) {
 	input := int64(0)
 	for _, bat := range hb.Batches.Buf {
 		for _, vec := range bat.Vecs {
+			if ctx.Err() != nil {
+				return 0, false
+			}
 			var ok bool
 			input, ok = keySum(input, vec.WindowSize(0, bat.RowCount()))
 			if !ok {
@@ -229,7 +243,7 @@ func (hb *HashmapBuilder) expressionBuildMemoryBound(conditions []*plan.Expr, ne
 	if !ok {
 		return 0, false
 	}
-	bound, ok := hashmap.BuildMemoryBound(uint64(hb.InputBatchRowCount), keys.StringKeys, keys.EncodedUnit, needSels)
+	bound, ok := hashmap.BuildMemoryBound(indexRows, keys.StringKeys, keys.EncodedUnit, needSels)
 	if !ok {
 		return 0, false
 	}
