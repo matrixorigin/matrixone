@@ -17,6 +17,7 @@ package function
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -63,19 +64,36 @@ func TestUnzipFile(t *testing.T) {
 		{info: "row paths", typ: types.T_varchar, paths: []string{docs, empty}, want: []string{"hello zip", ""}, nulls: []bool{false, true}},
 		{info: "datalink", typ: types.T_datalink, paths: []string{"file://" + docs}, want: []string{"hello zip"}},
 		{info: "not a zip archive", typ: types.T_varchar, paths: []string{plain}, errStr: "not a zip archive"},
+		{info: "constant NULL", typ: types.T_varchar, paths: []string{""}, con: true, want: []string{""}, nulls: []bool{true}},
+		{info: "NULL row", typ: types.T_varchar, paths: []string{docs, ""}, want: []string{"hello zip", ""}, nulls: []bool{false, true}},
+		{info: "missing file", typ: types.T_varchar, paths: []string{filepath.Join(dir, "missing.zip")}, errStr: "missing"},
+		{info: "invalid datalink", typ: types.T_datalink, paths: []string{"ftp://x/a.zip"}, errStr: "unsupported"},
 	}
 	for _, tc := range testCases {
 		open := openUnzipFilePath
 		if tc.typ == types.T_datalink {
 			open = openUnzipFileDatalink
 		}
-		input := NewFunctionTestInput(tc.typ.ToType(), tc.paths, nil)
+		input := NewFunctionTestInput(tc.typ.ToType(), tc.paths, tc.nulls)
 		if tc.con {
-			input = NewFunctionTestConstInput(tc.typ.ToType(), tc.paths, nil)
+			input = NewFunctionTestConstInput(tc.typ.ToType(), tc.paths, tc.nulls)
 		}
 		expect := NewFunctionTestResult(types.T_blob.ToType(), tc.errStr != "", tc.want, tc.nulls)
 		fcTC := NewFunctionTestCase(proc, []FunctionTestInput{input}, expect, unzipFile(open))
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// unzip_file resolves for a path of either string type and for a datalink, returning a BLOB.
+func TestUnzipFileOverloads(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_datalink} {
+		resolved, err := GetFunctionByName(context.Background(), "unzip_file", []types.Type{typ.ToType()})
+		require.NoError(t, err, typ.String())
+		require.Equal(t, types.T_blob, resolved.GetReturnType().Oid)
+		ov, err := GetFunctionById(context.Background(), resolved.GetEncodedOverloadID())
+		require.NoError(t, err)
+		exec, _, _, _ := ov.GetExecuteMethod()
+		require.NotNil(t, exec, typ.String())
 	}
 }

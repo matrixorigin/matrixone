@@ -93,3 +93,11 @@ func TestDescFile(t *testing.T) {
 	require.ErrorContains(t, s2.start(tf, proc, 0, nil), "owner is not supported by desc_file()")
 	s2.free(tf, proc, false, nil)
 }
+
+func TestTableFunctionPrepareDescFile(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tf := newStubTableFunction("desc_file")
+	require.NoError(t, tf.Prepare(proc))
+	require.IsType(t, &descFileState{}, tf.ctr.state)
+	tf.ctr.state.free(tf, proc, false, nil)
+}
