@@ -57,6 +57,7 @@ func NewStorage(base types.T, q string, min, max float64, bounded bool) Storage 
 	}
 	s.F32 = base != types.T_array_float64 || quantized
 	if bounded {
+		// typeswitch:partial only the integer entry types have trained bounds
 		switch s.Entry {
 		case types.T_array_int8:
 			s.Mul, s.Add = quantizer.Int8Params(min, max)
@@ -69,6 +70,7 @@ func NewStorage(base types.T, q string, min, max float64, bounded bool) Storage 
 
 // Check returns the reason the index cannot store vec, the bytes of a base vector, or nil.
 func (s Storage) Check(vec []byte) error {
+	// typeswitch:partial int8/uint8 bases need no check; vecf8/vecf4 cannot carry a vector index (rejected at DDL)
 	switch s.Base {
 	case types.T_array_float64:
 		return s.checkF64(types.BytesToArray[float64](vec))
@@ -129,6 +131,7 @@ func (s Storage) checkF32(vec []float32) error {
 		return moerr.NewIndexVectorDimensionNoCtx("the vector is empty")
 	}
 	limit := float32(math.Inf(1))
+	// typeswitch:partial only the low-precision float entry types have a finite limit below float32
 	switch s.Entry {
 	case types.T_array_float16:
 		limit = vectorindex.Float16Overflow
@@ -136,6 +139,7 @@ func (s Storage) checkF32(vec []float32) error {
 		limit = bf16Overflow
 	}
 	fmul, fadd := float32(s.Mul), float32(s.Add)
+	// typeswitch:partial only the integer entry types are scaled
 	scaled := s.Entry == types.T_array_int8 || s.Entry == types.T_array_uint8
 	var sum float64
 	for _, f := range vec {
