@@ -4433,10 +4433,22 @@ func bitToStr(
 	}
 
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
+		// Explicit CAST(BIT AS BINARY)/(BINARY(n)) must carry the source's
+		// declared width as ceil(width/8) big-endian bytes (issue #32122:
+		// BIT(64) 258 is 0000000000000102, not the little-endian minimal
+		// 0201) before the BINARY(n) truncation/right-padding rules.
+		byteWidth := int(from.GetType().Width+7) / 8
+		if byteWidth < 1 {
+			byteWidth = 1
+		}
+		if byteWidth > 8 {
+			byteWidth = 8
+		}
+		var buf [8]byte
 		for i := 0; i < length; i++ {
 			v, null := from.GetValue(uint64(i))
-			b := uint64ToBytes(v)
-			if err := explicitCastToBinary(toType, b, null, to); err != nil {
+			binary.BigEndian.PutUint64(buf[:], v)
+			if err := explicitCastToBinary(toType, buf[8-byteWidth:], null, to); err != nil {
 				return err
 			}
 		}
