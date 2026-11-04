@@ -1241,27 +1241,63 @@ func TestConstructLocalDispatchFromScopesRejectsRemoteTarget(t *testing.T) {
 	require.Empty(t, remoteTarget.RemoteReceivRegInfos)
 }
 
-func TestNewMergeScopeLimitsLoadReceiverChannelBuffer(t *testing.T) {
-	testCompile := NewMockCompile(t)
-	testCompile.anal = &AnalyzeModule{qry: &plan.Query{}}
-
-	normalScope := &Scope{
-		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
-		Proc:     testCompile.proc.NewNoContextChildProc(0),
+func TestNewMergeScopeReceiverConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		workers      int
+		remote, load bool
+	}{{"empty", -1, false, false}, {"zero_workers", 0, false, false}, {"local", 1, false, false}, {"parallel", 8, false, false}, {"remote", 8, true, false}, {"load", 8, false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "cn1:6001"
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			var inputs []*Scope
+			if tc.workers >= 0 {
+				addr := c.addr
+				if tc.remote {
+					addr = "cn2:6001"
+				}
+				c.proc.Base.LoadTag = tc.load
+				input := newScope(Normal)
+				input.NodeInfo = engine.Node{Addr: addr, Mcpu: tc.workers}
+				input.Proc = c.proc.NewNoContextChildProc(0)
+				inputs = []*Scope{input}
+			}
+			s := c.newMergeScope(inputs)
+			t.Cleanup(func() { ReleaseScopes([]*Scope{s}) })
+			require.Equal(t, inputs, s.PreScopes)
+			require.True(t, c.hasMergeOp)
+			if len(inputs) == 0 {
+				require.Nil(t, s.Proc.Reg.MergeReceivers)
+				return
+			}
+			require.Len(t, s.Proc.Reg.MergeReceivers, 1)
+			reg := s.Proc.Reg.MergeReceivers[0]
+			require.Same(t, reg, inputs[0].RootOp.(*connector.Connector).Reg)
+			length, capacity := process.WaitRegisterChannelState(reg)
+			require.Zero(t, length)
+			wantCapacity := max(1, tc.workers)
+			if tc.load {
+				wantCapacity = loadMergeReceiverChannelBufferSize
+			}
+			require.Equal(t, wantCapacity, capacity)
+			wantEnds := tc.workers
+			if tc.remote {
+				wantEnds = 1
+			}
+			require.Equal(t, wantEnds, reg.NilBatchCnt)
+			select {
+			case <-reg.Done():
+				t.Fatal("fresh edge is terminal")
+			default:
+			}
+			select {
+			case <-reg.Aborted():
+				t.Fatal("fresh edge is aborted")
+			default:
+			}
+		})
 	}
-	normalMerge := testCompile.newMergeScope([]*Scope{normalScope})
-	_, normalCap := process.WaitRegisterChannelState(normalMerge.Proc.Reg.MergeReceivers[0])
-	require.Equal(t, 8, normalCap)
-
-	loadProc := testCompile.proc.NewNoContextChildProc(0)
-	loadProc.Base.LoadTag = true
-	loadScope := &Scope{
-		NodeInfo: engine.Node{Addr: "cn1:6001", Mcpu: 8},
-		Proc:     loadProc,
-	}
-	loadMerge := testCompile.newMergeScope([]*Scope{loadScope})
-	_, loadCap := process.WaitRegisterChannelState(loadMerge.Proc.Reg.MergeReceivers[0])
-	require.Equal(t, loadMergeReceiverChannelBufferSize, loadCap)
 }
 
 func TestConstructLocalDispatchFromScopesRejectsInvalidInputs(t *testing.T) {

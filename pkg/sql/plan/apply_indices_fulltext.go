@@ -1752,7 +1752,8 @@ func (builder *QueryBuilder) resolveProjectMatchesOverJoin(projNode *plan.Node, 
 
 // scanHasMatchedFullTextFilter reports whether this scan's filters will be rewritten by the
 // fulltext path. Two guards depend on it: applyIndicesForFilters leaves such a scan to that
-// path, and removeSimpleProjections keeps the PROJECT above it as a rewrite boundary.
+// path, and removeSimpleProjections keeps the PROJECT above it as a rewrite boundary unless a
+// PROJECT above that one takes over (canRemoveProject).
 //
 // It must therefore cover everything the rewrite now drives from, wrapped MATCHes included --
 // a scan filtered only by `match(...) > 0.5` is just as much a fulltext scan as one filtered
