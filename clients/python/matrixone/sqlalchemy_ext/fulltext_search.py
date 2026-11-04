@@ -906,7 +906,7 @@ class FulltextFilter(ColumnElement):
         return self
 
     def set_natural_query(self, query: str) -> "FulltextFilter":
-        """Set natural language query string (used for NATURAL_LANGUAGE mode)."""
+        """Set query text for natural language and query expansion modes."""
         self._natural_query = query
         return self
 
@@ -945,8 +945,11 @@ class FulltextFilter(ColumnElement):
 
         columns_str = _match_columns(self.columns)
 
-        # For natural language mode, use the stored natural query if available
-        if self.mode == FulltextSearchMode.NATURAL_LANGUAGE and self._natural_query:
+        # Query expansion also searches the stored natural-language text.
+        if (
+            self.mode in (FulltextSearchMode.NATURAL_LANGUAGE, FulltextSearchMode.QUERY_EXPANSION)
+            and self._natural_query
+        ):
             query_string = self._natural_query
         else:
             query_string = self.query_builder.build()
