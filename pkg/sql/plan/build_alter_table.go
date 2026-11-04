@@ -1480,6 +1480,17 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 			"ALTER TABLE on a kafka external table; drop and recreate the external table to change its schema")
 	}
 
+	// A read-only file mapping (CSV/JSONLINE/Parquet) cannot take the
+	// copy-based ALTER route: the data-copy step fails only later with the
+	// generic insert/update/delete error, which misreports an unsupported
+	// ALTER as a DML problem (issue #31920). Reject it here so the diagnostic
+	// names the ALTER itself; writable file mappings keep their own
+	// INSERT/LOAD contract, and their ALTER behavior is unchanged here.
+	if IsFileExternalTableDef(tableDef) && !IsWritableFileExternalTableDef(tableDef) {
+		return nil, moerr.NewNotSupported(ctx.GetContext(),
+			"ALTER TABLE on a read-only external table; drop and recreate the external table to change its schema")
+	}
+
 	if tableDef.IsTemporary {
 		// Keep unsupported temporary-table DDL (e.g. foreign keys and partitions) closed.
 		if !allowTempTableAlter(stmt) {
