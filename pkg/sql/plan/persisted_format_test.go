@@ -175,7 +175,7 @@ func TestPersistedFormatLegacyPrecisionDomains(t *testing.T) {
 			require.False(t, features.IntegerParameterCoercion)
 			require.False(t, features.FormatNumericArguments)
 			def := loaded.Cols[0].Default
-			rebuilt, err := buildCTASDefaultFromOrigin(ctx, loaded.Cols[0].Typ, true, def.OriginString)
+			rebuilt, err := buildCTASDefaultFromOrigin(ctx, loaded.Cols[0].Typ, true, def.OriginString, "col")
 			require.NoError(t, err)
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 			col.Attributes = append(col.Attributes, tree.NewAttributeOnUpdate(col.Attributes[0].(*tree.AttributeDefault).Expr))
@@ -247,7 +247,7 @@ func TestPersistedFormatDefaultCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	update, err := buildOnUpdate(proc.Ctx, col, typ, proc)
 	require.NoError(t, err)
-	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false, newPlanTestProcess(t)), typ, true, "format(2.5, 0)")
+	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false, newPlanTestProcess(t)), typ, true, "format(2.5, 0)", "col")
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name string

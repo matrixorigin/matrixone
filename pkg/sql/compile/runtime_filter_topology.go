@@ -244,7 +244,7 @@ func validateLocalRuntimeFilterTopology(qry *plan.Query, compiledNodeIDs []int32
 		_, scalar := scalarTags[tag]
 		if err := localRuntimeFilterTopologyError(tag, topology, scalar); err != nil {
 			if scalar {
-				disableScalarRuntimeFilter(tag, topology)
+				disableOptionalRuntimeFilter(tag, topology)
 				continue
 			}
 			return err
@@ -330,10 +330,10 @@ func perCNLocalRuntimeFilterTopologyError(
 	return nil
 }
 
-func disableScalarRuntimeFilter(tag int32, topology runtimeFilterTopology) {
-	// Scalar predicate filters are optional. If physical scheduling cannot prove
-	// current-CN delivery, remove both endpoints before any pipeline starts and
-	// execute the unchanged FILTER + SINGLE plan without this optimization.
+func disableOptionalRuntimeFilter(tag int32, topology runtimeFilterTopology) {
+	// Optional filters may be disabled only as a pair before pipelines start.
+	// Preserve the logical plan for reuse, but prevent physical initialization
+	// from restoring a consumer whose publisher is no longer present.
 	for _, consumer := range topology.consumers[tag] {
 		if consumer == nil || consumer.DataSource == nil {
 			continue
@@ -346,6 +346,19 @@ func disableScalarRuntimeFilter(tag int32, topology runtimeFilterTopology) {
 			}
 		}
 		consumer.DataSource.RuntimeFilterSpecs = kept
+		if node := consumer.DataSource.node; node != nil {
+			// Datasource initialization, scan clones and remote serialization
+			// read this node again. Keep a per-source copy so they cannot
+			// resurrect the disabled consumer, without mutating a reusable plan.
+			private := *node
+			private.RuntimeFilterProbeList = make([]*plan.RuntimeFilterSpec, 0, len(node.RuntimeFilterProbeList))
+			for _, spec := range node.RuntimeFilterProbeList {
+				if spec == nil || spec.Tag != tag {
+					private.RuntimeFilterProbeList = append(private.RuntimeFilterProbeList, spec)
+				}
+			}
+			consumer.DataSource.node = &private
+		}
 	}
 
 	seen := make(map[*Scope]struct{})
@@ -358,10 +371,15 @@ func disableScalarRuntimeFilter(tag int32, topology runtimeFilterTopology) {
 		}
 		seen[producer] = struct{}{}
 		_ = vm.HandleAllOp(producer.RootOp, func(_ vm.Operator, op vm.Operator) error {
-			build, ok := op.(*hashbuild.HashBuild)
-			if ok && build.RuntimeFilterSpec != nil &&
-				build.RuntimeFilterSpec.Tag == tag {
-				build.RuntimeFilterSpec = nil
+			switch build := op.(type) {
+			case *hashbuild.HashBuild:
+				if build.RuntimeFilterSpec != nil && build.RuntimeFilterSpec.Tag == tag {
+					build.RuntimeFilterSpec = nil
+				}
+			case *indexbuild.IndexBuild:
+				if build.RuntimeFilterSpec != nil && build.RuntimeFilterSpec.Tag == tag {
+					build.RuntimeFilterSpec = nil
+				}
 			}
 			return nil
 		})

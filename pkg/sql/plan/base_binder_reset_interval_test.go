@@ -84,7 +84,7 @@ func makeVarcharConst(s string) *plan.Expr {
 }
 
 // Helper function to create a NULL literal expression
-func makeNullConst() *plan.Expr {
+func makeNullConst(oid types.T, scale int32) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &plan.Literal{
@@ -92,25 +92,24 @@ func makeNullConst() *plan.Expr {
 			},
 		},
 		Typ: plan.Type{
-			Id:          int32(types.T_float64),
+			Id:          int32(oid),
 			NotNullable: false,
+			Scale:       scale,
 		},
 	}
 }
 
-// Helper to extract int64 value from expression
-func extractInt64FromExpr(expr *plan.Expr) int64 {
-	if lit, ok := expr.Expr.(*plan.Expr_Lit); ok {
-		if i64val, ok := lit.Lit.Value.(*plan.Literal_I64Val); ok {
-			return i64val.I64Val
-		}
-	} else if funcExpr, ok := expr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil {
-		// For cast functions, try to extract from the first argument
-		if len(funcExpr.F.Args) > 0 {
-			return extractInt64FromExpr(funcExpr.F.Args[0])
-		}
+// extractInt64FromExpr checks an int64 literal, optionally wrapped in casts.
+func extractInt64FromExpr(t *testing.T, expr *plan.Expr) int64 {
+	t.Helper()
+	require.NotNil(t, expr)
+	if fn := expr.GetF(); fn != nil {
+		require.NotNil(t, fn.Func)
+		require.Equal(t, "cast", fn.Func.ObjName)
+		require.NotEmpty(t, fn.Args)
+		return extractInt64FromExpr(t, fn.Args[0])
 	}
-	return 0
+	return extractInt64ValueFromExpr(t, expr)
 }
 
 // TestResetIntervalFunctionArgsComprehensive tests resetIntervalFunctionArgs with comprehensive test cases
@@ -123,6 +122,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		intervalUnit         string
 		expectedIntervalVal  int64
 		expectedIntervalType types.IntervalType
+		wantCast             bool
 		expectError          bool
 		errorContains        string
 	}{
@@ -145,7 +145,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 			name:                 "INTERVAL 'invalid' SECOND (varchar, invalid string)",
 			intervalValueExpr:    makeVarcharConst("invalid"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  0, // Invalid string returns MaxInt64
+			expectedIntervalVal:  0, // Invalid string produces NULL
 			expectedIntervalType: types.Second,
 		},
 		// Test float64 time units
@@ -232,6 +232,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		// Test int64 (no conversion for time units, goes through cast path)
 		{
 			name:                 "INTERVAL 1 SECOND (int64)",
+			wantCast:             true,
 			intervalValueExpr:    makeInt64Const(1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1,
@@ -239,6 +240,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		},
 		{
 			name:                 "INTERVAL 2 MINUTE (int64)",
+			wantCast:             true,
 			intervalValueExpr:    makeInt64Const(2),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  2,
@@ -249,6 +251,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		// So we just verify the structure and type
 		{
 			name:                 "INTERVAL 1.5 MONTH (float64, non-time unit)",
+			wantCast:             true,
 			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "MONTH",
 			expectedIntervalVal:  0, // Returns cast expression, not direct value
@@ -256,6 +259,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		},
 		{
 			name:                 "INTERVAL 1.5 YEAR (float64, non-time unit)",
+			wantCast:             true,
 			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "YEAR",
 			expectedIntervalVal:  0, // Returns cast expression, not direct value
@@ -263,6 +267,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		},
 		{
 			name:                 "INTERVAL 1.5 WEEK (float64, non-time unit)",
+			wantCast:             true,
 			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "WEEK",
 			expectedIntervalVal:  0, // Returns cast expression, not direct value
@@ -271,45 +276,35 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		// Test NULL value with time unit and decimal/float type (should not convert, hasValue=false)
 		{
 			name:                 "INTERVAL NULL SECOND (null float64 literal)",
-			intervalValueExpr:    makeNullConst(),
+			wantCast:             true,
+			intervalValueExpr:    makeNullConst(types.T_float64, 0),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0, // NULL will be handled at execution time, goes through cast path
 			expectedIntervalType: types.Second,
 		},
 		// Test NULL float32 with time unit
 		{
-			name: "INTERVAL NULL SECOND (null float32 literal)",
-			intervalValueExpr: func() *plan.Expr {
-				expr := makeNullConst()
-				expr.Typ.Id = int32(types.T_float32)
-				return expr
-			}(),
+			name:                 "INTERVAL NULL SECOND (null float32 literal)",
+			wantCast:             true,
+			intervalValueExpr:    makeNullConst(types.T_float32, 0),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0,
 			expectedIntervalType: types.Second,
 		},
 		// Test NULL decimal64 with time unit
 		{
-			name: "INTERVAL NULL SECOND (null decimal64 literal)",
-			intervalValueExpr: func() *plan.Expr {
-				expr := makeNullConst()
-				expr.Typ.Id = int32(types.T_decimal64)
-				expr.Typ.Scale = 1
-				return expr
-			}(),
+			name:                 "INTERVAL NULL SECOND (null decimal64 literal)",
+			wantCast:             true,
+			intervalValueExpr:    makeNullConst(types.T_decimal64, 1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0,
 			expectedIntervalType: types.Second,
 		},
 		// Test NULL decimal128 with time unit
 		{
-			name: "INTERVAL NULL SECOND (null decimal128 literal)",
-			intervalValueExpr: func() *plan.Expr {
-				expr := makeNullConst()
-				expr.Typ.Id = int32(types.T_decimal128)
-				expr.Typ.Scale = 1
-				return expr
-			}(),
+			name:                 "INTERVAL NULL SECOND (null decimal128 literal)",
+			wantCast:             true,
+			intervalValueExpr:    makeNullConst(types.T_decimal128, 1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0,
 			expectedIntervalType: types.Second,
@@ -358,27 +353,25 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 			require.NotNil(t, args)
 			require.Len(t, args, 2, "resetIntervalFunctionArgs should return 2 expressions")
 
-			// Invalid interval syntax is NULL, distinct from a numeric overflow.
-			if tc.name == "INTERVAL 'invalid' SECOND (varchar, invalid string)" {
-				require.True(t, args[0].GetLit().Isnull)
-			}
-
-			// Verify the interval value
-			intervalValue := extractInt64FromExpr(args[0])
-			// For non-time units with float64, the function returns a cast expression
-			// So we only check the value if it's not a cast expression
-			if tc.expectedIntervalVal != 0 || intervalValue != 0 {
-				// Only verify if we expect a non-zero value or got a non-zero value
-				if _, isCast := args[0].Expr.(*plan.Expr_F); !isCast {
-					require.Equal(t, tc.expectedIntervalVal, intervalValue,
-						"Interval value mismatch for %s", tc.name)
+			if tc.wantCast {
+				fn := args[0].GetF()
+				require.NotNil(t, fn)
+				require.NotNil(t, fn.Func)
+				require.Equal(t, "cast", fn.Func.ObjName)
+				require.Len(t, fn.Args, 2)
+				require.Equal(t, tc.intervalValueExpr, fn.Args[0])
+			} else {
+				lit := args[0].GetLit()
+				require.NotNil(t, lit)
+				if tc.name == "INTERVAL 'invalid' SECOND (varchar, invalid string)" {
+					require.True(t, lit.Isnull)
+				} else {
+					require.False(t, lit.Isnull)
+					require.Equal(t, tc.expectedIntervalVal, extractInt64ValueFromExpr(t, args[0]))
 				}
 			}
 
-			// Verify the interval type
-			intervalType := extractInt64FromExpr(args[1])
-			require.Equal(t, int64(tc.expectedIntervalType), intervalType,
-				"Interval type mismatch for %s", tc.name)
+			require.Equal(t, int64(tc.expectedIntervalType), extractInt64ValueFromExpr(t, args[1]))
 		})
 	}
 }
@@ -388,8 +381,7 @@ func TestResetIntervalFunctionArgsNullHandling(t *testing.T) {
 	ctx := context.Background()
 
 	// Test NULL float64 with time unit (should not convert, goes through cast path)
-	nullFloatExpr := makeNullConst()
-	nullFloatExpr.Typ.Id = int32(types.T_float64)
+	nullFloatExpr := makeNullConst(types.T_float64, 0)
 	intervalExpr := makeIntervalExpr(nullFloatExpr, "SECOND")
 
 	args, err := resetIntervalFunctionArgs(ctx, intervalExpr)
@@ -494,7 +486,7 @@ func TestResetIntervalFunctionArgsNonLiteral(t *testing.T) {
 	require.NotNil(t, normalizeExpr.Func)
 	require.Equal(t, "to_interval_microsecond", normalizeExpr.Func.GetObjName())
 	require.Equal(t, colRefVarcharExpr, normalizeExpr.Args[0])
-	require.Equal(t, int64(types.Second), extractInt64FromExpr(normalizeExpr.Args[1]))
+	require.Equal(t, int64(types.Second), extractInt64FromExpr(t, normalizeExpr.Args[1]))
 }
 
 // TestResetIntervalFunction tests the wrapper function resetIntervalFunction
@@ -539,29 +531,9 @@ func TestResetIntervalFunction(t *testing.T) {
 			args2, err2 := resetIntervalFunctionArgs(ctx, intervalExpr)
 			require.NoError(t, err2)
 			require.Equal(t, len(args), len(args2))
-			require.Equal(t, extractInt64FromExpr(args[0]), extractInt64FromExpr(args2[0]))
-			require.Equal(t, extractInt64FromExpr(args[1]), extractInt64FromExpr(args2[1]))
+			require.Equal(t, extractInt64FromExpr(t, args[0]), extractInt64FromExpr(t, args2[0]))
+			require.Equal(t, extractInt64FromExpr(t, args[1]), extractInt64FromExpr(t, args2[1]))
 		})
-	}
-}
-
-// Helper function to create a datetime constant expression
-func makeDatetimeConstForResetDate(dtStr string) *plan.Expr {
-	dt, _ := types.ParseDatetime(dtStr, 6)
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Datetimeval{
-					Datetimeval: int64(dt),
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_datetime),
-			NotNullable: true,
-			Scale:       6,
-		},
 	}
 }
 
@@ -584,24 +556,6 @@ func makeDateConstForResetDate(dateStr string) *plan.Expr {
 	}
 }
 
-// Helper function to create an int64 constant expression
-func makeInt64ConstForResetDate(val int64) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_I64Val{
-					I64Val: val,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int64),
-			NotNullable: true,
-		},
-	}
-}
-
 // TestResetDateFunction tests resetDateFunction with various scenarios
 func TestResetDateFunction(t *testing.T) {
 	ctx := context.Background()
@@ -616,7 +570,7 @@ func TestResetDateFunction(t *testing.T) {
 	}{
 		{
 			name:     "NULL interval - should return syntax error",
-			dateExpr: makeDatetimeConstForResetDate("2000-01-01 00:00:00"),
+			dateExpr: makeDatetimeConst("2000-01-01 00:00:00"),
 			intervalExpr: &plan.Expr{
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{
@@ -632,8 +586,8 @@ func TestResetDateFunction(t *testing.T) {
 		},
 		{
 			name:         "Expr_List interval - should call resetDateFunctionArgs directly",
-			dateExpr:     makeDatetimeConstForResetDate("2000-01-01 00:00:00"),
-			intervalExpr: makeIntervalExpr(makeInt64ConstForResetDate(1), "SECOND"),
+			dateExpr:     makeDatetimeConst("2000-01-01 00:00:00"),
+			intervalExpr: makeIntervalExpr(makeInt64Const(1), "SECOND"),
 			expectError:  false,
 			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
 				require.NoError(t, err)
@@ -643,17 +597,17 @@ func TestResetDateFunction(t *testing.T) {
 				require.NotNil(t, args[2])
 				// For int64 interval value, it doesn't get converted to microseconds
 				// The value remains 1, and the type is Second
-				intervalVal := extractInt64FromExpr(args[1])
+				intervalVal := extractInt64FromExpr(t, args[1])
 				require.Equal(t, int64(1), intervalVal)
 				// Verify interval type is Second
-				intervalType := extractInt64FromExpr(args[2])
+				intervalType := extractInt64FromExpr(t, args[2])
 				require.Equal(t, int64(types.Second), intervalType)
 			},
 		},
 		{
 			name:         "Non-Expr_List interval - should create default 'day' interval",
-			dateExpr:     makeDatetimeConstForResetDate("2000-01-01 00:00:00"),
-			intervalExpr: makeInt64ConstForResetDate(5),
+			dateExpr:     makeDatetimeConst("2000-01-01 00:00:00"),
+			intervalExpr: makeInt64Const(5),
 			expectError:  false,
 			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
 				require.NoError(t, err)
@@ -662,17 +616,17 @@ func TestResetDateFunction(t *testing.T) {
 				require.NotNil(t, args[1])
 				require.NotNil(t, args[2])
 				// Verify interval value is 5 days
-				intervalVal := extractInt64FromExpr(args[1])
+				intervalVal := extractInt64FromExpr(t, args[1])
 				require.Equal(t, int64(5), intervalVal)
 				// Verify interval type is Day (default)
-				intervalType := extractInt64FromExpr(args[2])
+				intervalType := extractInt64FromExpr(t, args[2])
 				require.Equal(t, int64(types.Day), intervalType)
 			},
 		},
 		{
 			name:         "DATE type with Expr_List interval - should handle date type conversion",
 			dateExpr:     makeDateConstForResetDate("2000-01-01"),
-			intervalExpr: makeIntervalExpr(makeInt64ConstForResetDate(1), "HOUR"),
+			intervalExpr: makeIntervalExpr(makeInt64Const(1), "HOUR"),
 			expectError:  false,
 			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
 				require.NoError(t, err)
@@ -681,17 +635,17 @@ func TestResetDateFunction(t *testing.T) {
 				require.NotNil(t, args[0])
 				// For int64 interval value, it doesn't get converted to microseconds
 				// The value remains 1, and the type is Hour
-				intervalVal := extractInt64FromExpr(args[1])
+				intervalVal := extractInt64FromExpr(t, args[1])
 				require.Equal(t, int64(1), intervalVal)
 				// Verify interval type is Hour
-				intervalType := extractInt64FromExpr(args[2])
+				intervalType := extractInt64FromExpr(t, args[2])
 				require.Equal(t, int64(types.Hour), intervalType)
 			},
 		},
 		{
 			name:         "DATE type with DAY interval - should not convert to DATETIME",
 			dateExpr:     makeDateConstForResetDate("2000-01-01"),
-			intervalExpr: makeIntervalExpr(makeInt64ConstForResetDate(1), "DAY"),
+			intervalExpr: makeIntervalExpr(makeInt64Const(1), "DAY"),
 			expectError:  false,
 			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
 				require.NoError(t, err)
@@ -699,10 +653,10 @@ func TestResetDateFunction(t *testing.T) {
 				// DATE with DAY interval should remain DATE
 				require.NotNil(t, args[0])
 				// Verify interval value is 1 day
-				intervalVal := extractInt64FromExpr(args[1])
+				intervalVal := extractInt64FromExpr(t, args[1])
 				require.Equal(t, int64(1), intervalVal)
 				// Verify interval type is Day
-				intervalType := extractInt64FromExpr(args[2])
+				intervalType := extractInt64FromExpr(t, args[2])
 				require.Equal(t, int64(types.Day), intervalType)
 			},
 		},

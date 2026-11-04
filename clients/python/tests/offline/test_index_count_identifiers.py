@@ -13,7 +13,8 @@
 # limitations under the License.
 
 """Index count verification must preserve literal table identifiers."""
-from unittest.mock import Mock, AsyncMock
+
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import create_engine
@@ -31,10 +32,13 @@ def seed(connection, main, index, mismatch):
 
 @pytest.mark.parametrize('main,index', [('plain', 'idx'), ('a`b', 'idx'), ('plain', 'i`x')])
 @pytest.mark.parametrize('mismatch', [False, True])
-def test_sync_verify_identifiers(main, index, mismatch):
+def test_sync_verify_identifiers(main, index, mismatch, monkeypatch):
     client = Client(logger=Mock())
     client._engine = create_engine('sqlite:///:memory:')
-    client.get_secondary_index_tables = Mock(return_value=[index])
+    monkeypatch.setattr(
+        'matrixone.index_utils.read_index_metadata',
+        lambda connection, table: ('main', main, [(1, 'ix', index, 'MULTIPLE', 'id', 1, '', '')]),
+    )
     try:
         with client._engine.begin() as conn:
             seed(conn, main, index, mismatch)
@@ -50,10 +54,13 @@ def test_sync_verify_identifiers(main, index, mismatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize('main,index', [('plain', 'idx'), ('a`b', 'idx'), ('plain', 'i`x')])
 @pytest.mark.parametrize('mismatch', [False, True])
-async def test_async_verify_identifiers(main, index, mismatch):
+async def test_async_verify_identifiers(main, index, mismatch, monkeypatch):
     client = AsyncClient(logger=Mock())
     client._engine = create_async_engine('sqlite+aiosqlite:///:memory:')
-    client.get_secondary_index_tables = AsyncMock(return_value=[index])
+    monkeypatch.setattr(
+        'matrixone.index_utils.read_index_metadata',
+        lambda connection, table: ('main', main, [(1, 'ix', index, 'MULTIPLE', 'id', 1, '', '')]),
+    )
     try:
         async with client._engine.begin() as conn:
             await conn.run_sync(lambda sync: seed(sync, main, index, mismatch))

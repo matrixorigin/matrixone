@@ -164,4 +164,16 @@ limit 10;
 ➤ id[4,32,0]  𝄀
 1  𝄀
 2
+create table text_casts (id int primary key, c char(2), v varchar(3));
+insert into text_casts values
+(1, 'ab', 'ac'), (2, '中', '文'), (3, null, 'x'), (4, 'yy', 'yy');
+select id, count(*)
+from text_casts
+where cast(c as varchar(4)) <> cast(v as varchar(4))
+group by id
+order by id
+limit 10;
+➤ id[4,32,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
 drop database pk_group_limit_bvt;

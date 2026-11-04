@@ -89,7 +89,6 @@ type s3WriterDelegate struct {
 	segmentMap    map[string]int32
 
 	action             actionType
-	isRemote           bool
 	rejectZeroTemporal bool
 
 	updateCtxs     []*MultiUpdateCtx
@@ -148,7 +147,6 @@ func newS3Writer(
 		insertBlockRowCount: make([]uint64, tableCount),
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
-		isRemote:            update.IsRemote,
 		rejectZeroTemporal:  update.RejectZeroTemporal,
 		addAffectedRows:     update.addAffectedRowsFunc,
 		takeAffectedRows:    update.takeS3AffectedRowsFunc,
@@ -363,7 +361,10 @@ func (writer *s3WriterDelegate) append(
 					return
 				}
 				nulls := checked.Vecs[mainTablePkProjectIdx].GetNulls().GetBitmap().Clone()
-				checked.ShrinkByMask(nulls, true, 0)
+				if err = checked.ShrinkByMask(nulls, true, 0, mp); err != nil {
+					checked.Clean(mp)
+					return
+				}
 				if err = checkMainTableNotNull(proc, updateCtx, checked); err != nil {
 					checked.Clean(mp)
 					return
@@ -409,7 +410,10 @@ func (writer *s3WriterDelegate) append(
 				nullIdx = mainTablePkProjectIdx
 			}
 			nulls := filtered.Vecs[nullIdx].GetNulls().GetBitmap().Clone()
-			filtered.ShrinkByMask(nulls, true, 0)
+			if err = filtered.ShrinkByMask(nulls, true, 0, mp); err != nil {
+				filtered.Clean(mp)
+				return
+			}
 			if filtered.RowCount() > 0 {
 				if tableType == UpdateMainTable {
 					if err = checkZeroTemporalInStrictMode(writer.rejectZeroTemporal, proc, filtered); err != nil {

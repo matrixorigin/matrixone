@@ -159,7 +159,8 @@ select id from two where match(body) against('hello') > 0.5 or id = 4;
 select id from two where not match(body) against('hello');
 select id from two where id = 4 or match(body) against('hello') > 0.5;
 
--- `score < c` is true for a non-matching document too, so it cannot drive either
+-- `score < c` is true for a non-matching document too, so it cannot drive either: the
+-- score stream is LEFT-attached and id 4 (relevance 0) qualifies (#31604)
 select id from two where match(body) against('hello') < 0.015 order by id;
 
 -- ...but with a bare MATCH already restricting the rows, membership is implied and every
@@ -168,7 +169,8 @@ select id from two where match(body) against('hello') and match(body) against('h
 select id from two where match(body) against('hello') and (match(body) against('hello') < 0.015 or id = 3) order by id;
 select id from two where match(body) against('hello') and not (match(body) against('hello') > 0.015) order by id;
 
--- a negative or zero threshold is not membership-implying: relevance 0 satisfies both
+-- a negative or zero threshold is not membership-implying: relevance 0 satisfies both,
+-- so every document qualifies (#31604)
 select id from two where match(body) against('hello') >= 0 order by id;
 
 -- ---------------- wrapped MATCH on a join child ----------------------------------
@@ -187,7 +189,8 @@ select t.id from two t join jb on t.id=jb.id
 -- IN subqueries are flattened to SEMI joins and take the same path
 select id from two where match(body) against('hello') > 0.015 and id in (select id from jb) order by id;
 
--- and the membership rule holds here too: `< c` cannot drive a join child either
+-- and the membership rule holds here too: `< c` cannot drive a join child either, and is
+-- answered from the LEFT-attached score (#31604)
 select t.id from two t join jb on t.id=jb.id
  where match(t.body) against('hello') < 0.015 order by t.id;
 

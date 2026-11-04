@@ -672,7 +672,7 @@ func distinctArgumentRowHash(
 		case types.T_char:
 			value = keycodec.CanonicalCharValue(vec.GetRawBytesAt(row))
 		case types.T_json, types.T_array_float32, types.T_array_float64,
-			types.T_array_bf16, types.T_array_float16:
+			types.T_array_bf16, types.T_array_float16, types.T_array_float8, types.T_array_float4:
 			scratch = keycodec.AppendCanonicalValue(
 				scratch[:0], typ, vec.GetRawBytesAt(row))
 			value = scratch

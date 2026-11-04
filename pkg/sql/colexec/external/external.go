@@ -272,7 +272,8 @@ func (external *External) Prepare(proc *process.Process) error {
 		for i, attr := range param.Attrs {
 			colIndex := int(attr.ColIndex)
 			colType := &param.Cols[colIndex].Typ
-			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)))
+			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)) ||
+				loadAttributedDecimalTextInput(param, colType))
 			if external.OutputAllocation != nil {
 				vec, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, external.OutputAllocation)
 				if err != nil {
@@ -456,129 +457,19 @@ func (external *External) finishCurrentFile(param *ExternalParam) {
 }
 
 func isFileLevelColumn(node *plan.Node, col *plan.ColRef) bool {
-	if node == nil || node.TableDef == nil || node.ExternScan == nil || col == nil {
-		return false
-	}
-
-	colPos := int(col.ColPos)
-	if colPos < 0 || colPos >= len(node.TableDef.Cols) || colPos != len(node.TableDef.Cols)-1 {
-		return false
-	}
-	// Two hidden trailing columns exist: __mo_filepath on ordinary external
-	// tables and __mo_query on ESQL/SQL foreign tables. Either one is the
-	// "file-level" column of its scan (the query text plays the file-name
-	// role for foreign tables).
-	switch node.TableDef.Cols[colPos].Name {
-	case catalog.ExternalFilePath:
-		return node.TableDef.Cols[colPos].ColId == catalog.ExternalFilePathColId
-	case catalog.ExternalQuery:
-		return node.TableDef.Cols[colPos].ColId == catalog.ExternalQueryColId
-	}
-	return false
+	return colexec.FileLevelExecution.IsFileLevelColumn(node, col)
 }
 
 func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
-	if ref == nil {
-		return false
-	}
-	overload, exists := function.GetFunctionByIdWithoutError(ref.Obj)
-	if !exists {
-		return false
-	}
-	// last_kafka_message_id is realTimeRelated (never constant-folded into a
-	// cached plan) but is deterministic WITHIN one compile on the session CN —
-	// it reads session state. Allowing it here is what makes server-side
-	// gap-free chaining work:
-	//   where __mo_read_start_id = last_kafka_message_id()
-	functionID, _ := function.DecodeOverloadID(ref.Obj)
-	if functionID == function.LAST_KAFKA_MESSAGE_ID {
-		return true
-	}
-	if overload.IsRealTimeRelated() {
-		return false
-	}
-	if !overload.CannotFold() {
-		return true
-	}
-
-	// mo_log_date is marked volatile to prevent ordinary constant folding, but
-	// it is a deterministic transform of __mo_filepath and is the established
-	// file-pruning primitive. Other volatile functions (for example rand) are
-	// row-dependent and must remain at row level.
-	return functionID == function.MO_LOG_DATE
+	return colexec.FileLevelExecution.IsSafeFileLevelFunction(ref)
 }
 
-func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (hasFileLevelColumn, hasUnsupportedColumn bool) {
-	if expr == nil {
-		return false, false
-	}
-
-	switch typedExpr := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		if typedExpr.Col == nil {
-			return false, true
-		}
-		if isFileLevelColumn(node, typedExpr.Col) {
-			return true, false
-		}
-		return false, true
-	case *plan.Expr_F:
-		if typedExpr.F == nil || typedExpr.F.Func == nil {
-			return false, true
-		}
-		if !isSafeFileLevelFunction(typedExpr.F.Func) {
-			return false, true
-		}
-		for _, arg := range typedExpr.F.Args {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, arg)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_List:
-		if typedExpr.List == nil {
-			return false, false
-		}
-		for _, item := range typedExpr.List.List {
-			hasFileLevel, hasUnsupported := classifyFileLevelColumns(node, item)
-			hasFileLevelColumn = hasFileLevelColumn || hasFileLevel
-			hasUnsupportedColumn = hasUnsupportedColumn || hasUnsupported
-		}
-		return hasFileLevelColumn, hasUnsupportedColumn
-	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_T,
-		*plan.Expr_Max, *plan.Expr_Vec, *plan.Expr_Fold:
-		return false, false
-	default:
-		return false, true
-	}
+func classifyFileLevelColumns(node *plan.Node, expr *plan.Expr) (bool, bool) {
+	return colexec.FileLevelExecution.ClassifyFileLevelColumns(node, expr)
 }
 
 func isFileLevelFilter(node *plan.Node, expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-
-	functionExpr, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || functionExpr.F == nil || functionExpr.F.Func == nil {
-		return false
-	}
-	if !isSafeFileLevelFunction(functionExpr.F.Func) {
-		return false
-	}
-	if functionExpr.F.Func.ObjName == "or" {
-		if len(functionExpr.F.Args) == 0 {
-			return false
-		}
-		for _, arg := range functionExpr.F.Args {
-			if !isFileLevelFilter(node, arg) {
-				return false
-			}
-		}
-		return true
-	}
-
-	hasFileLevelColumn, hasUnsupportedColumn := classifyFileLevelColumns(node, expr)
-	return hasFileLevelColumn && !hasUnsupportedColumn
+	return colexec.FileLevelExecution.IsFileLevelFilter(node, expr)
 }
 
 func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) (bat *batch.Batch, err error) {
@@ -1415,6 +1306,10 @@ func isLegalLineWithContext(ctx context.Context, param *tree.ExternParam, cols [
 					return false
 				}
 			}
+		case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+			if _, err := strconv.ParseFloat(field.Val, 32); err != nil {
+				return false
+			}
 		case types.T_float64:
 			// origin float64 data type
 			if col.Typ.Scale < 0 || col.Typ.Width == 0 {
@@ -1439,6 +1334,11 @@ func isLegalLineWithContext(ctx context.Context, param *tree.ExternParam, cols [
 		case types.T_array_float64:
 			_, err := types.StringToArrayToBytesWithContext[float64](ctx, field.Val)
 			if err != nil {
+				return false
+			}
+		case types.T_array_float8, types.T_array_float4:
+			f, _ := id.BlockScaledFormat()
+			if _, err := types.StringToBlockScaled(f, field.Val); err != nil {
 				return false
 			}
 		case types.T_array_bf16:
@@ -1777,6 +1677,7 @@ func isLoadNumericZeroFillType(id types.T) bool {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
@@ -1789,6 +1690,7 @@ func isLoadNumericAdjustedValueType(id types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
+		types.T_bf16, types.T_float16, types.T_float8, types.T_float4,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
@@ -1872,6 +1774,8 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 		return vector.AppendFixed(vec, uint64(0), false, mp)
 	case types.T_float32:
 		return vector.AppendFixed(vec, float32(0), false, mp)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		return appendLowPrecFloatFromFloat32(vec, 0, mp)
 	case types.T_float64:
 		return vector.AppendFixed(vec, float64(0), false, mp)
 	case types.T_decimal64:
@@ -1883,6 +1787,22 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 	default:
 		return moerr.NewInternalErrorNoCtxf("unsupported type %v for empty numeric LOAD DATA zero-fill", id)
 	}
+}
+
+// appendLowPrecFloatFromFloat32 rounds v to the low-precision float type of vec
+// (bf16/float16/float8/float4) and appends it. Used by the CSV/LOAD field parser.
+func appendLowPrecFloatFromFloat32(vec *vector.Vector, v float32, mp *mpool.MPool) error {
+	switch vec.GetType().Oid {
+	case types.T_bf16:
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.BF16FromFloat32(v)), false, mp)
+	case types.T_float16:
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float16FromFloat32(v)), false, mp)
+	case types.T_float8:
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float8FromFloat32(v)), false, mp)
+	case types.T_float4:
+		return vector.AppendFixed(vec, types.CanonicalLowPrecFloat(types.Float4FromFloat32(v)), false, mp)
+	}
+	return moerr.NewInternalErrorNoCtxf("not a low-precision float: %v", vec.GetType().Oid)
 }
 
 // resolveExternalErrorMode decides, once per scan, whether the error-mode
@@ -2116,6 +2036,27 @@ func loadTimeTextInput(param *ExternalParam, id types.T) bool {
 		param.Extern.Format != tree.PARQUET && param.Extern.Format != tree.ARROW
 }
 
+// isAttributedDecimalStagingTarget reports a decimal target carrying the
+// unsigned attribute mask — the type contract the text-staging decisions
+// read at allocation, field decoding and mapper rendering.
+func isAttributedDecimalStagingTarget(typ *plan.Type) bool {
+	return typ != nil && types.T(typ.Id).IsDecimal() &&
+		typ.NumericAttributes&types.NumericAttributeUnsigned != 0
+}
+
+// loadAttributedDecimalTextInput is the attributed DECIMAL text staging
+// predicate: the shared admission boundary classifies raw field text
+// (CSV/JSONLINE) or mapper-rendered text (Parquet/Arrow) for LOAD targets
+// carrying the unsigned attribute. Unlike TIME's textual input, this covers
+// every physical format.
+func loadAttributedDecimalTextInput(param *ExternalParam, typ *plan.Type) bool {
+	if param == nil || param.Extern == nil ||
+		param.Extern.ExternType != int32(plan.ExternType_LOAD) {
+		return false
+	}
+	return isAttributedDecimalStagingTarget(typ)
+}
+
 // parseCSVInt preserves the integer fast path and LOAD conversion policy. Only
 // unquoted external CSV decimal text uses exact assignment rounding.
 // An initial integer overflow can precede an exponent that scales into range;
@@ -2213,7 +2154,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 	if loadDataNonStrictAdjustments {
 		switch {
 		case isLoadNumericAdjustedValueType(id) && !isSet:
-			if !field.HasStringQuote {
+			// Attributed DECIMAL targets stage raw trimmed field bytes
+			// unmodified (raw-field preservation boundary): the source sign and
+			// every truncation/invalid-input diagnostic belong to the shared
+			// admission boundary. Unattributed types keep today's rewrite.
+			if !field.HasStringQuote && !isAttributedDecimalStagingTarget(&col.Typ) {
 				field.Val = loadDataNonStrictNumericPrefix(field.Val)
 			}
 		case id == types.T_date || id == types.T_datetime || id == types.T_timestamp:
@@ -2232,7 +2177,8 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		return moerr.NewInternalErrorf(param.Ctx, "Data too long for column '%s' at row %d", colName, rowIdx+1)
 	}
 
-	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) {
+	if (param.ParallelLoad && !isDirectParallelLoadType(id)) || loadTimeTextInput(param, id) ||
+		loadAttributedDecimalTextInput(param, &col.Typ) {
 		err := vector.AppendBytes(vec, []byte(field.Val), false, mp)
 		if err != nil {
 			return err
@@ -2477,6 +2423,21 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 				return err
 			}
 		}
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		// Low-precision floats: parse as float32 then round to the target format.
+		// Reject NaN/Inf and out-of-range values (strict, like the narrow-vector
+		// element parser) instead of silently saturating.
+		d, d64, err := types.Float32RoundToOddString(field.Val)
+		if err != nil {
+			logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+			return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is not %s type for column %d", field.Val, vec.GetType().Oid, colIdx)
+		}
+		if err := types.RejectNarrowFloatInput(d, vec.GetType().Oid, d64, field.Val); err != nil {
+			return err
+		}
+		if err := appendLowPrecFloatFromFloat32(vec, d, mp); err != nil {
+			return err
+		}
 	case types.T_float64:
 		// origin float64 data type
 		if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
@@ -2523,6 +2484,19 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), len(arr))
 		}
 		if err = vector.AppendBytes(vec, types.ArrayToBytes[float64](arr), false, mp); err != nil {
+			return err
+		}
+	case types.T_array_float8, types.T_array_float4:
+		// "[...]" is quantized; the exact form (a JSON object) is the cell as written
+		f, _ := vec.GetType().Oid.BlockScaledFormat()
+		cell, err := types.StringToBlockScaled(f, field.Val)
+		if err != nil {
+			return err
+		}
+		if dim := types.BlockScaledDim(cell); int(vec.GetType().Width) != types.MaxArrayDimension && int(vec.GetType().Width) != dim {
+			return moerr.NewArrayDefMismatchNoCtx(int(vec.GetType().Width), dim)
+		}
+		if err = vector.AppendBytes(vec, cell, false, mp); err != nil {
 			return err
 		}
 	case types.T_array_bf16:

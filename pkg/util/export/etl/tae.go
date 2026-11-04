@@ -309,7 +309,6 @@ func getOneRowData(ctx context.Context, bat *batch.Batch, Line []table.ColumnFie
 type TAEReader struct {
 	ctx      context.Context
 	filepath string
-	filesize int64
 	fs       fileservice.FileService
 	mp       *mpool.MPool
 	typs     []types.Type
@@ -317,7 +316,6 @@ type TAEReader struct {
 
 	blockReader *ioutil.BlockReader
 
-	bs       []objectio.BlockObject
 	batchs   []*batch.Batch
 	batchIdx int
 	rowIdx   int
@@ -325,14 +323,13 @@ type TAEReader struct {
 	release func()
 }
 
-// NewTaeReader returns a TAEReader.
+// NewTaeReader returns a TAEReader. The file size argument is retained for compatibility.
 // Deprecated
-func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesize int64, fs fileservice.FileService, mp *mpool.MPool) (*TAEReader, error) {
+func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, _ int64, fs fileservice.FileService, mp *mpool.MPool) (*TAEReader, error) {
 	var err error
 	r := &TAEReader{
 		ctx:      ctx,
 		filepath: filePath,
-		filesize: filesize,
 		fs:       fs,
 		mp:       mp,
 	}

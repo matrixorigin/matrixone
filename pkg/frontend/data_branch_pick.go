@@ -292,8 +292,8 @@ func appendPickedBatchRows(
 			if userConflictOpt != nil {
 				switch userConflictOpt.Opt {
 				case tree.CONFLICT_FAIL:
-					return moerr.NewInternalErrorNoCtxf(
-						"conflict: %s %s and %s %s on pk(%v) with different values",
+					return moerr.NewDataBranchConflictNoCtxf(
+						"%s %s and %s %s on pk(%v) with different values",
 						tblStuff.tarRel.GetTableName(), diffInsert,
 						tblStuff.baseRel.GetTableName(), diffInsert,
 						pkKey,
@@ -384,6 +384,7 @@ func extractPKAsString(
 
 // extractPKVal extracts the Go value from a vector at the given row index.
 func extractPKVal(vec *vector.Vector, rowIdx int) any {
+	// typeswitch:partial vecf8/vecf4 cannot be primary key columns (rejected at DDL)
 	switch vec.GetType().Oid {
 	case types.T_json:
 		return types.DecodeJson(vec.GetBytesAt(rowIdx))
@@ -544,7 +545,10 @@ func materializeValuesUnified(
 	}
 
 	// Sort for segment construction (and deterministic hashmap ordering).
-	vec.InplaceSort()
+	if err := vec.InplaceSort(mp); err != nil {
+		vec.Free(mp)
+		return nil, err
+	}
 
 	// Put all PK values into the hashmap.  keyCols=[0] because the Vec has
 	// exactly one column (the PK).
@@ -625,7 +629,9 @@ func materializeCompositeValuesUnified(
 	*encodedVec.GetType() = pkType
 
 	// Sort the encoded vector (lexicographic order preserves composite key ordering).
-	encodedVec.InplaceSort()
+	if err := encodedVec.InplaceSort(mp); err != nil {
+		return nil, err
+	}
 
 	// Put into hashmap.
 	if err = pickKeyHashmap.PutByVectors([]*vector.Vector{encodedVec}, []int{0}); err != nil {

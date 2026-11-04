@@ -139,7 +139,7 @@ where `id``key` = 1 and `parent``id` = 1;
 ➤ count(*)[-5,64,0]  𝄀
 1
 drop table parent_t;
-internal error: can not drop table 'parent_t' referenced by some foreign key constraint
+Cannot drop table 'parent_t' referenced by a foreign key constraint 'fk_child_parent' on table 'child_t'.
 drop table composite_child_t;
 drop table self_child_t;
 drop table invalid_child_t;

@@ -24,6 +24,15 @@ type anonymousUnlinkError struct{ cause error }
 func (e *anonymousUnlinkError) Error() string { return e.cause.Error() }
 func (e *anonymousUnlinkError) Unwrap() error { return e.cause }
 
+func unlinkAnonymousLocalFile(file *os.File) error {
+	if err := unlinkLocalFile(file); err != nil {
+		// Keep the unlink phase visible through the shared helper's close-error
+		// aggregation so the spill-root owner can fence further admission.
+		return &anonymousUnlinkError{cause: err}
+	}
+	return nil
+}
+
 // Publication requires successful unlink. On failure the caller receives no
 // descriptor and the spill-root wrapper fences further creation. The operation
 // arguments keep fault injection local, without mutable global test hooks.

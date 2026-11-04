@@ -1,0 +1,34 @@
+-- @bvt:parallel
+
+-- Constant temporal casts clamp at the final DECIMAL precision and scale.
+select cast(cast('2024-01-02 03:04:05' as datetime) as decimal(12,2)) as datetime_clamped,
+       cast(cast('2024-01-02' as date) as decimal(6,2)) as date_clamped,
+       cast(cast('12:34:56' as time) as decimal(5,1)) as time_clamped;
+select cast(cast('-12:34:56' as time) as decimal(5,1)) as negative_time_clamped,
+       cast(cast('12:34:56' as time) as decimal(6,2)) as time_final_scale_clamped,
+       cast(cast('12:34:56.123456' as time(6)) as decimal(8,2)) as time_final_scale_fits;
+select cast(cast('00:00:09.999999' as time(6)) as decimal(3,2)) as rounded_time_clamped,
+       cast(cast('-00:00:09.999999' as time(6)) as decimal(3,2)) as rounded_negative_time_clamped,
+       cast(cast('00:00:09.990000' as time(6)) as decimal(3,2)) as time_boundary;
+select cast(cast('2024-01-02 03:04:05.123456' as datetime(6)) as decimal(20,2)) as datetime_wide,
+       cast(cast('-12:34:56.123456' as time(6)) as decimal(20,6)) as negative_time_wide;
+
+-- Column inputs exercise both DECIMAL64 and DECIMAL128, including NULLs.
+set @temporal_decimal_saved_time_zone = @@session.time_zone;
+set time_zone = '+00:00';
+drop table if exists temporal_decimal_cast_range_t;
+create table temporal_decimal_cast_range_t(id int, d date, dt datetime(6), tm time(6), ts timestamp(6));
+insert into temporal_decimal_cast_range_t values
+    (1, '2024-01-02', '2024-01-02 03:04:05.123456', '-12:34:56.123456', '2024-01-02 03:04:05.123456'),
+    (2, null, null, null, null);
+select id, cast(d as decimal(6,2)) as d64, cast(dt as decimal(12,2)) as dt64,
+       cast(tm as decimal(5,1)) as tm64, cast(ts as decimal(12,2)) as ts64
+from temporal_decimal_cast_range_t order by id;
+select id, cast(d as decimal(20,16)) as d128, cast(dt as decimal(20,16)) as dt128,
+       cast(tm as decimal(20,16)) as tm128, cast(ts as decimal(20,16)) as ts128
+from temporal_decimal_cast_range_t order by id;
+set time_zone = '+08:00';
+select cast(ts as decimal(20,6)) as timestamp_session_zone
+from temporal_decimal_cast_range_t where id = 1;
+drop table temporal_decimal_cast_range_t;
+set time_zone = @temporal_decimal_saved_time_zone;

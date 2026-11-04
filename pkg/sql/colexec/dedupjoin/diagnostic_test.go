@@ -57,6 +57,7 @@ func TestDedupLogicalDiagnostic(t *testing.T) {
 					require.NoError(t, err)
 					t.Cleanup(generation.Close)
 					require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+					proc.Base.Lim.SpillSize = 64 << 20
 					op := mock_frontend.NewMockTxnOperator(ctrl)
 					op.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode}).AnyTimes()
 					proc.Base.TxnOperator = op

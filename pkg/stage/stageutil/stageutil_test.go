@@ -16,6 +16,7 @@ package stageutil
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"os"
 	"path"
@@ -26,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -75,10 +77,10 @@ func TestStageCache(t *testing.T) {
 func TestStageFail(t *testing.T) {
 
 	proc := testutil.NewProcess(t)
-	_, err := UrlToStageDef("stage:///path", proc)
+	_, err := UrlToStageDef("stage:///", proc)
 	require.NotNil(t, err)
 
-	u, err := url.Parse("stage:///path")
+	u, err := url.Parse("stage:///")
 	require.Nil(t, err)
 	s := stage.StageDef{Id: 1, Name: "rsstage", Url: u}
 	_, err = ExpandSubStage(s, proc)
@@ -370,4 +372,74 @@ func TestStagePatternsAuthorizeBeforeExpansion(t *testing.T) {
 	require.Equal(t, 2, n)
 	_, err = os.Stat(filepath.Join(dir, "part_c3.txt"))
 	require.NoError(t, err)
+}
+
+func TestLogicalStageNameResolutionAndExport(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	base, err := url.Parse("file:///tmp/base")
+	require.NoError(t, err)
+	for _, name := range []string{"two words", "o'connor{v1}", "part/name", "literal%2F"} {
+		proc.GetStageCache().Set(tree.NewCStr(name, 1).Compare(), stage.StageDef{Name: tree.NewCStr(name, 1).Compare(), Url: base})
+		uri := "stage:///" + url.PathEscape(name) + "/child.csv?offset=1"
+		resolved, err := UrlToStageDef(uri, proc)
+		require.NoError(t, err)
+		require.Equal(t, "file:///tmp/base/child.csv?offset=1", resolved.Url.String())
+		output, err := UrlToStageDefForExport("stage:///"+url.PathEscape(name)+"/part-%05d.csv?size=2", proc)
+		require.NoError(t, err)
+		require.Equal(t, "/tmp/base/part-%05d.csv", output.Url.Path)
+		require.Equal(t, "size=2", output.Url.RawQuery)
+		nested, err := url.Parse("stage:///" + url.PathEscape(name) + "/nested")
+		require.NoError(t, err)
+		proc.GetStageCache().Set("nested", stage.StageDef{Name: "nested", Url: nested})
+		resolved, err = UrlToStageDef("stage://nested/leaf.csv", proc)
+		require.NoError(t, err)
+		require.Equal(t, "/tmp/base/nested/leaf.csv", resolved.Url.Path)
+	}
+	for _, uri := range []string{"", "not-stage", "stage:///", "stage:///%2e%2e/file"} {
+		_, err := UrlToStageDefForExport(uri, proc)
+		require.Error(t, err)
+	}
+}
+
+func TestLegacyStageExportPreservesEncodedQuery(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	base, err := url.Parse("file:///tmp/base")
+	require.NoError(t, err)
+	proc.GetStageCache().Set("plain", stage.StageDef{Name: "plain", Url: base})
+	result, err := UrlToStageDefForExport("stage://plain/part-%05d.csv?q=%2F", proc)
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/base/part-%05d.csv", result.Url.Path)
+	require.Equal(t, "q=%2F", result.Url.RawQuery)
+}
+
+func TestStageCatalogLookupMatchesStageSQLIdentity(t *testing.T) {
+	for _, lower := range []int64{0, 1} {
+		t.Run(fmt.Sprint(lower), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+				t.Fatal("Stage identity must not read table-name policy")
+				return lower, nil
+			})
+			root, err := url.Parse("file:///tmp/canonical")
+			require.NoError(t, err)
+			proc.GetStageCache().Set("école%2f", stage.StageDef{Name: "école%2f", Url: root})
+			resolved, err := UrlToStageDef("stage:///%C3%89COLE%252F/data.csv", proc)
+			require.NoError(t, err)
+			require.Equal(t, "/tmp/canonical/data.csv", resolved.Url.Path)
+			proc.SetResolveVariableFunc(nil)
+			resolved, err = UrlToStageDef("stage:///%C3%89COLE%252F/data.csv", proc)
+			require.NoError(t, err)
+			require.Equal(t, "/tmp/canonical/data.csv", resolved.Url.Path)
+		})
+	}
+}
+
+func TestPathFormStageRoot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	root, err := url.Parse("file:///tmp/root")
+	require.NoError(t, err)
+	proc.GetStageCache().Set("path", stage.StageDef{Name: "path", Url: root})
+	result, err := UrlToStageDef("stage:///path", proc)
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/root", result.Url.Path)
 }
