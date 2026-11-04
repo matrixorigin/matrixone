@@ -2172,6 +2172,57 @@ select * from prepared_result order by id;
 ➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  null
+set @p1=11;
+set @p2=22;
+set @p3=33;
+prepare ctas_all_pruned from 'create table pruned_all as select a from (select 1 as a,cast(? as int) as b) s';
+execute ctas_all_pruned;
+invalid input: Incorrect arguments to EXECUTE
+execute ctas_all_pruned using @p1,@p2;
+invalid input: Incorrect arguments to EXECUTE
+execute ctas_all_pruned using @p1;
+select * from pruned_all;
+➤ a[-5,64,0]  𝄀
+1
+drop table pruned_all;
+set @p1=44;
+execute ctas_all_pruned using @p1;
+select * from pruned_all;
+➤ a[-5,64,0]  𝄀
+1
+deallocate prepare ctas_all_pruned;
+set @p1=11;
+prepare ctas_leading_pruned from 'create table pruned_leading as select a from (select cast(? as int) as b,cast(? as int) as a) s';
+execute ctas_leading_pruned using @p1,@p2;
+select * from pruned_leading;
+➤ a[4,32,0]  𝄀
+22
+deallocate prepare ctas_leading_pruned;
+prepare ctas_middle_pruned from 'create table pruned_middle as select a,c from (select cast(? as int) as a,cast(? as int) as b,cast(? as int) as c) s';
+execute ctas_middle_pruned using @p1,@p2,@p3;
+select * from pruned_middle;
+➤ a[4,32,0]  ¦  c[4,32,0]  𝄀
+11  ¦  33
+deallocate prepare ctas_middle_pruned;
+prepare ctas_trailing_pruned from 'create table pruned_trailing as select a from (select cast(? as int) as a,cast(? as int) as b) s';
+execute ctas_trailing_pruned using @p1,@p2;
+select * from pruned_trailing;
+➤ a[4,32,0]  𝄀
+11
+deallocate prepare ctas_trailing_pruned;
+prepare ctas_cte_pruned from 'create table pruned_cte as with s as (select 1 as a,cast(? as int) as b) select a from s';
+execute ctas_cte_pruned using @p1;
+select * from pruned_cte;
+➤ a[-5,64,0]  𝄀
+1
+deallocate prepare ctas_cte_pruned;
+prepare ctas_pruned_join from 'create table prepared_pruned_join as select l.id,r.v from l left join (select id,v,cast(? as int) as unused from r) r on l.id=r.id where l.id>?';
+execute ctas_pruned_join using @p1,@lower_id;
+select * from prepared_pruned_join order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  null
+deallocate prepare ctas_pruned_join;
 create table source_default as select v from r;
 show create table source_default;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀

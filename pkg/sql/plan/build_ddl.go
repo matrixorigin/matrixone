@@ -303,6 +303,14 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 			},
 		}
 	}
+	// PREPARE must see every placeholder, including unused projections that
+	// optimization can prune. Keep its complete binding graph independently.
+	var prepareQuery *Query
+	if isPrepareStmt {
+		prepareQuery = DeepCopyQuery(builder.qry)
+		// DeepCopyQuery shares Steps; createQuery rewrites these root IDs.
+		prepareQuery.Steps = slices.Clone(builder.qry.Steps)
+	}
 	// Capture source defaults and special types before optimization remaps the
 	// bindings, but derive constraints from the final materialized output.
 	query, err := builder.createQuery()
@@ -316,6 +324,9 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool)
 		ctasNullable := cols[i].Typ.NotNullable && cols[i].Default.NullAbility
 		cols[i].Typ.NotNullable = expr.Typ.NotNullable
 		cols[i].Default.NullAbility = ctasNullable || ctasExprCanBeNull(expr)
+	}
+	if prepareQuery != nil {
+		query = prepareQuery
 	}
 	return cols, query, nil
 }

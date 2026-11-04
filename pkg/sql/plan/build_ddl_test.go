@@ -1456,6 +1456,43 @@ func TestPrepareCreateTableAsSelectWithParams(t *testing.T) {
 	require.ErrorContains(t, err, "only prepare statement can use ? expr")
 }
 
+func TestPrepareCreateTableAsSelectPreservesPrunedParams(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		count int
+	}{
+		{"all pruned", "select a from (select 1 as a,cast(? as int) as b) s", 1},
+		{"multiple pruned", "select a from (select 1 as a,cast(? as int) as b,cast(? as varchar(10)) as c) s", 2},
+		{"leading pruned", "select a from (select cast(? as int) as b,cast(? as int) as a) s", 2},
+		{"middle pruned", "select a,c from (select cast(? as int) as a,cast(? as int) as b,cast(? as int) as c) s", 3},
+		{"trailing pruned", "select a from (select cast(? as int) as a,cast(? as int) as b) s", 2},
+		{"cte projection", "with s as (select 1 as a,cast(? as int) as b) select a from s", 1},
+		{"count prunes input", "select count(*) as c from (select cast(? as int) as b) s", 1},
+		{"null extension with live filter", "select n.n_nationkey as l,r.r_regionkey as r from nation n left join (select r_regionkey,cast(? as int) as unused from region) r on n.n_regionkey=r.r_regionkey where n.n_nationkey>?", 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			p, err := runOneStmt(mock, t, "prepare ctas_params from 'create table ctas_param_result as "+test.query+"'")
+			require.NoError(t, err)
+			prepare := p.GetDcl().GetPrepare()
+			require.Len(t, prepare.ParamTypes, test.count)
+			queryPlan := &Plan{Plan: &plan.Plan_Query{Query: prepare.Plan.GetDdl().GetQuery()}}
+			params := collectUniquePlanParamTypes(t, queryPlan)
+			require.Len(t, params, test.count)
+			for i := range test.count {
+				require.Contains(t, params, int32(i), "preserve original placeholder order")
+			}
+			if test.name == "null extension with live filter" {
+				cols := prepare.Plan.GetDdl().GetCreateTable().TableDef.Cols
+				require.False(t, cols[0].Default.NullAbility)
+				require.True(t, cols[1].Default.NullAbility)
+			}
+		})
+	}
+}
+
 func TestCreateTableAsSelectQuotesIdentifiers(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	tests := []struct {
