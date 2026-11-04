@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -72,6 +74,35 @@ func TestCNS3DataWriterMemoryThresholdAndSyncAndFillBlockInfoBat(t *testing.T) {
 		writer := NewCNS3DataWriter(proc.Mp(), fs, tableDef, -1, true)
 		defer writer.Close()
 		require.Equal(t, math.MaxInt, writer.MemorySizeThreshold())
+	})
+
+	t.Run("large input is split into readable objects", func(t *testing.T) {
+		writer := NewCNS3DataWriter(proc.Mp(), fs, tableDef, 128, false)
+		defer writer.Close()
+		ids := []int64{7, 6, 5, 4, 3, 2, 1, 0}
+		values := make([]string, len(ids))
+		for i := range values {
+			values[i] = strings.Repeat("x", 64)
+		}
+		bat := &batch.Batch{
+			Attrs: []string{"a", "b"},
+			Vecs: []*vector.Vector{
+				testutil.MakeInt64Vector(ids, nil, proc.Mp()),
+				testutil.MakeVarcharVector(values, nil, proc.Mp()),
+			},
+		}
+		bat.SetRowCount(len(ids))
+		defer bat.Clean(proc.Mp())
+		require.NoError(t, writer.Write(proc.Ctx, bat))
+		infos, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+		require.NoError(t, err)
+		require.Greater(t, infos.RowCount(), 1)
+		rows := 0
+		for i := 0; i < infos.Vecs[0].Length(); i++ {
+			info := objectio.DecodeBlockInfo(infos.Vecs[0].GetBytesAt(i))
+			rows += int(objectio.Location(info.MetaLoc[:]).Rows())
+		}
+		require.Equal(t, len(ids), rows)
 	})
 }
 

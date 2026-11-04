@@ -42,6 +42,9 @@ const (
 	// trigger write s3
 	WriteS3Threshold         = 128 * mpool.MB
 	FaultInjectedS3Threshold = 512 * mpool.KB
+	// Keep a sorted CN spill run within the same soft target used by TN
+	// large-block merges. A single large row may exceed the target.
+	maxCNSortedRunBytes = 192 * mpool.MB
 )
 
 type CNS3Writer struct {
@@ -190,6 +193,8 @@ func NewCNS3DataWriter(
 	if flushOnSync {
 		// do not flush on sync, so the threshold is the max int
 		memoryThreshold = math.MaxInt
+	} else {
+		sinkerOpts = append(sinkerOpts, ioutil.WithMaxSortedRunBytes(maxCNSortedRunBytes), ioutil.WithUnpublishedRunCleanup())
 	}
 	writer.memorySizeThreshold = memoryThreshold
 

@@ -1,0 +1,106 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ioutil
+
+import (
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
+
+func addRunBytes(a, b int) int {
+	if b > math.MaxInt-a {
+		return math.MaxInt
+	}
+	return a + b
+}
+
+func multiplyRunBytes(a, b int) int {
+	if a > 0 && b > math.MaxInt/a {
+		return math.MaxInt
+	}
+	return a * b
+}
+
+// materializedBatchSize bounds both the staged area and the size after merge
+// expands shared values. Use a per-vector maximum: different columns may have
+// dead area and shared descriptors, respectively. The bound travels with the
+// staged batch, including when sorting clears its disjointness flag.
+func materializedBatchSize(bat *batch.Batch) int {
+	size := 0
+	for _, vec := range bat.Vecs {
+		rows := vec.Length()
+		size = addRunBytes(size, multiplyRunBytes(rows, vec.GetType().TypeSize()))
+		if !vec.GetType().IsVarlen() || len(vec.GetArea()) == 0 {
+			continue
+		}
+		if vec.VarlenaAreaIsDisjoint() {
+			size = addRunBytes(size, len(vec.GetArea()))
+			continue
+		}
+		payload := 0
+		if vec.IsConstNull() {
+			size = addRunBytes(size, len(vec.GetArea()))
+			continue
+		}
+		values, _ := vector.MustVarlenaRawData(vec)
+		if vec.IsConst() {
+			if !values[0].IsSmall() {
+				_, n := values[0].OffsetLen()
+				payload = multiplyRunBytes(rows, int(n))
+			}
+		} else {
+			hasNull := !vec.GetNulls().EmptyByFlag()
+			for i := 0; i < rows; i++ {
+				if hasNull && vec.GetNulls().Contains(uint64(i)) {
+					continue
+				}
+				if !values[i].IsSmall() {
+					_, n := values[i].OffsetLen()
+					payload = addRunBytes(payload, int(n))
+				}
+			}
+		}
+		size = addRunBytes(size, max(len(vec.GetArea()), payload))
+	}
+	return size
+}
+
+// boundedRunRows selects through the first row reaching the remaining budget.
+// A row cannot be split, so the returned window always contains at least one.
+func boundedRunRows(data *batch.Batch, offset, rows, remaining int) (int, int) {
+	size := 0
+	for row := offset; row < offset+rows; row++ {
+		for _, vec := range data.Vecs {
+			size = addRunBytes(size, vec.GetType().TypeSize())
+			if !vec.GetType().IsVarlen() || len(vec.GetArea()) == 0 || vec.IsConstNull() {
+				continue
+			}
+			if !vec.IsConst() && vec.GetNulls().Contains(uint64(row)) {
+				continue
+			}
+			n := len(vec.GetBytesAt(row))
+			if n > types.VarlenaInlineSize {
+				size = addRunBytes(size, n)
+			}
+		}
+		if size >= remaining {
+			return row - offset + 1, size
+		}
+	}
+	return rows, size
+}
