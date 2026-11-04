@@ -17,27 +17,35 @@ insert into size_db.t values (1), (2), (3), (4);
 
 -- A single non-sys account uses the existing forced per-table path.
 -- @ignore:2,5,6,7,8
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
 show accounts like 'mts_size_a';
 -- @ignore:2,5,6,7,8
+-- @regex("(?m)^mts_size_b  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size b(  𝄀)?$",true)
 show accounts like 'mts_size_b';
 
 -- Multiple accounts use the aggregate path.
 -- @sortkey:0
 -- @ignore:2,5,6,7,8
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
+-- @regex("(?m)^mts_size_b  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size b(  𝄀)?$",true)
 show accounts like 'mts_size_%';
 
 -- A tenant sees only itself, and still gets a freshly calculated size.
 -- @session:id=1&user=mts_size_a:admin&password=111
 -- @ignore:2,5,6,7,8
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
 show accounts;
 drop table size_db.t;
 -- @session}
 
 -- Both paths must continue to work after a catalog deletion.
 -- @ignore:2,5,6,7,8
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
 show accounts like 'mts_size_a';
 -- @sortkey:0
 -- @ignore:2,5,6,7,8
+-- @regex("(?m)^mts_size_a  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size a(  𝄀)?$",true)
+-- @regex("(?m)^mts_size_b  ¦  admin  ¦  .*  ¦  open  ¦  null  ¦  [0-9]+  ¦  [0-9]+  ¦  (0[.][0-9]*[1-9][0-9]*|[1-9][0-9]?[0-9]?[0-9]?[0-9]?([.][0-9]+)?)  ¦  [0-9]+([.][0-9]+)?  ¦  storage size b(  𝄀)?$",true)
 show accounts like 'mts_size_%';
 
 drop account mts_size_a;

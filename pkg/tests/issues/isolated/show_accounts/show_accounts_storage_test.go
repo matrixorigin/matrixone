@@ -42,32 +42,55 @@ type showAccountStorage struct {
 	snapshot  float64
 }
 
+// A failed cluster close retains ownership until the next test invocation can
+// retry it. In particular, it must not replace the process-global TMP service.
+var pendingStorageFixture *storageFixture
+
+type storageFixture struct {
+	root    string
+	cluster embed.Cluster
+	tmpFS   *fileservice.TmpFileService
+}
+
+func (f *storageFixture) close() error {
+	if f.cluster != nil {
+		if err := f.cluster.Close(); err != nil {
+			return err
+		}
+		f.cluster = nil
+	}
+	if f.tmpFS != nil {
+		f.tmpFS.Close(context.Background())
+		f.tmpFS = nil
+	}
+	return os.RemoveAll(f.root)
+}
+
 func TestShowAccountsStorageAggregation(t *testing.T) {
-	// Own the parent directory even if cluster startup fails and rolls back.
+	if pendingStorageFixture != nil {
+		require.NoError(t, pendingStorageFixture.close(), "retry retained fixture cleanup")
+		pendingStorageFixture = nil
+	}
+	// Own the parent directory even if cluster startup fails and rolls back,
+	// without changing the shared port lease namespace in TMPDIR.
 	root, err := os.MkdirTemp("", "show-accounts-test-")
 	require.NoError(t, err)
-	t.Setenv("TMPDIR", root)
-	var c embed.Cluster
-	var tmpFS *fileservice.TmpFileService
+	fixture := &storageFixture{root: root}
 	t.Cleanup(func() {
-		if c != nil {
-			if err := c.Close(); err != nil {
-				t.Errorf("close test cluster: %v", err)
-				return
-			}
+		if err := fixture.close(); err != nil {
+			pendingStorageFixture = fixture
+			t.Errorf("close test fixture (retained at %s): %v", root, err)
 		}
-		if tmpFS != nil {
-			tmpFS.Close(context.Background())
-		}
-		assert.NoError(t, os.RemoveAll(root))
 	})
+	clusterPath := filepath.Join(root, "cluster")
+	require.NoError(t, os.Mkdir(clusterPath, 0755))
 	// The TMP service is process-global; give every test run a fresh instance.
-	tmpFS, err = fileservice.NewTestTmpFileService(defines.TmpFileServiceName, filepath.Join(root, "tmp"), fileservice.TmpFileGCInterval)
+	fixture.tmpFS, err = fileservice.NewTestTmpFileService(defines.TmpFileServiceName, filepath.Join(root, "tmp"), fileservice.TmpFileGCInterval)
 	require.NoError(t, err)
 
 	// Disable periodic and correction work before startup so the forced and
 	// aggregate reads use the same statistics.
-	c, err = embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(s embed.ServiceOperator) {
+	fixture.cluster, err = embed.StartTestCluster(embed.WithDataPath(clusterPath), embed.WithCNCount(2), embed.WithPreStart(func(s embed.ServiceOperator) {
 		s.Adjust(func(cfg *embed.ServiceConfig) {
 			// Keep the test cluster's TMP file service in its owned directory.
 			for i := range cfg.FileServices {
@@ -84,20 +107,25 @@ func TestShowAccountsStorageAggregation(t *testing.T) {
 		})
 	}))
 	require.NoError(t, err)
+	c := fixture.cluster
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
-	cn, err := c.GetCNService(0)
-	require.NoError(t, err)
-	port := cn.GetServiceConfig().CN.Frontend.Port
-	sys, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
-	require.NoError(t, err)
-	defer sys.Close()
-
-	// Enabling reads does not enable the disabled periodic task.
-	control := cn.RawService().(cnservice.Service).GetEngine().(interface{ HandleMoTableStatsCtl(string) string })
-	require.Contains(t, control.HandleMoTableStatsCtl("echo_current_setting:true"), "move_on(false)")
-	control.HandleMoTableStatsCtl("use_old_impl:false")
-	require.Contains(t, control.HandleMoTableStatsCtl("echo_current_setting:true"), "use_old_impl(false), force_update(false)")
+	cns := make([]embed.ServiceOperator, 2)
+	systems := make([]*sql.DB, 2)
+	for i := range cns {
+		cns[i], err = c.GetCNService(i)
+		require.NoError(t, err)
+		// Enabling reads does not enable the disabled periodic task.
+		control := cns[i].RawService().(cnservice.Service).GetEngine().(interface{ HandleMoTableStatsCtl(string) string })
+		require.Contains(t, control.HandleMoTableStatsCtl("echo_current_setting:true"), "move_on(false)")
+		control.HandleMoTableStatsCtl("use_old_impl:false")
+		require.Contains(t, control.HandleMoTableStatsCtl("echo_current_setting:true"), "use_old_impl(false), force_update(false)")
+		port := cns[i].GetServiceConfig().CN.Frontend.Port
+		systems[i], err = sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer systems[i].Close()
+	}
+	sys := systems[0]
 
 	read := func(db *sql.DB, query string) map[string]showAccountStorage {
 		t.Helper()
@@ -144,7 +172,7 @@ func TestShowAccountsStorageAggregation(t *testing.T) {
 	}
 
 	const a, b = "acc31388a", "acc31388b"
-	tenants := make(map[string]*sql.DB)
+	tenants := make(map[string][]*sql.DB)
 	for _, name := range []string{a, b} {
 		exec(sys, "drop account if exists "+name)
 		defer func(name string) {
@@ -154,14 +182,18 @@ func TestShowAccountsStorageAggregation(t *testing.T) {
 			assert.NoError(t, err)
 		}(name)
 		exec(sys, fmt.Sprintf("create account %s admin_name 'admin' identified by '111'", name))
-		tenant, err := sql.Open("mysql", fmt.Sprintf("%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", name, port))
-		require.NoError(t, err)
-		defer tenant.Close()
-		tenants[name] = tenant
-		exec(tenant, "create database size_db")
-		exec(tenant, "create table size_db.t(v int)")
-		exec(tenant, "insert into size_db.t values (1), (2)")
+		for _, cn := range cns {
+			port := cn.GetServiceConfig().CN.Frontend.Port
+			tenant, err := sql.Open("mysql", fmt.Sprintf("%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", name, port))
+			require.NoError(t, err)
+			defer tenant.Close()
+			tenants[name] = append(tenants[name], tenant)
+		}
+		exec(tenants[name][0], "create database size_db")
+		exec(tenants[name][0], "create table size_db.t(v int)")
+		exec(tenants[name][0], "insert into size_db.t values (1), (2)")
 	}
+	exec(tenants[b][0], "insert into size_db.t select result from generate_series(3, 4096) g")
 
 	forcedA := read(sys, "show accounts like '"+a+"'")
 	forcedB := read(sys, "show accounts like '"+b+"'")
@@ -169,8 +201,22 @@ func TestShowAccountsStorageAggregation(t *testing.T) {
 	require.Len(t, forcedB, 1)
 	require.Positive(t, forcedA[a].size)
 	require.Positive(t, forcedB[b].size)
+	require.NotEqual(t, forcedA[a].size, forcedB[b].size, "tenant data must be distinguishable")
+	require.Zero(t, forcedA[a].snapshot)
+	require.Zero(t, forcedB[b].snapshot)
 	combined := read(sys, "show accounts like 'acc31388%'")
 	require.Equal(t, map[string]showAccountStorage{a: forcedA[a], b: forcedB[b]}, combined)
+	checkCNs := func(want map[string]showAccountStorage) {
+		t.Helper()
+		for i, db := range systems {
+			for _, name := range []string{a, b} {
+				require.Equal(t, map[string]showAccountStorage{name: want[name]}, read(db, "show accounts like '"+name+"'"), "CN %d forced", i)
+				require.Equal(t, map[string]showAccountStorage{name: want[name]}, read(tenants[name][i], "show accounts"), "CN %d tenant %s", i, name)
+			}
+			require.Equal(t, want, read(db, "show accounts like 'acc31388%'"), "CN %d aggregate", i)
+		}
+	}
+	checkCNs(map[string]showAccountStorage{a: forcedA[a], b: forcedB[b]})
 
 	// Check the aggregate independently against the public result.
 	ids := make(map[string]uint64)
@@ -187,7 +233,7 @@ func TestShowAccountsStorageAggregation(t *testing.T) {
 		require.NoError(t, rows.Err())
 	}()
 	require.Len(t, ids, 2)
-	reader := cn.RawService().(cnservice.Service).GetEngine().(interface {
+	reader := cns[0].RawService().(cnservice.Service).GetEngine().(interface {
 		QueryAccountTableSizes(context.Context, []uint64, bool) (map[uint64]uint64, bool, error)
 	})
 	sizes, ok, err := reader.QueryAccountTableSizes(ctx, []uint64{ids[a], ids[b]}, false)
@@ -199,11 +245,15 @@ func TestShowAccountsStorageAggregation(t *testing.T) {
 		require.Equal(t, math.Round(float64(size)/1048576*1e6)/1e6, combined[name].size)
 	}
 
-	tenantView := read(tenants[a], "show accounts")
-	require.Equal(t, map[string]showAccountStorage{a: forcedA[a]}, tenantView)
-	exec(tenants[a], "drop table size_db.t")
+	exec(tenants[a][0], "create snapshot snap31388 for account "+a)
+	defer func() {
+		cleanup, done := context.WithTimeout(context.Background(), 30*time.Second)
+		defer done()
+		_, err := tenants[a][0].ExecContext(cleanup, "drop snapshot if exists snap31388")
+		assert.NoError(t, err)
+	}()
+	exec(tenants[a][0], "drop table size_db.t")
 	afterDrop := read(sys, "show accounts like '"+a+"'")
 	require.Equal(t, forcedA[a].tables-1, afterDrop[a].tables)
-	combined = read(sys, "show accounts like 'acc31388%'")
-	require.Equal(t, map[string]showAccountStorage{a: afterDrop[a], b: forcedB[b]}, combined)
+	checkCNs(map[string]showAccountStorage{a: afterDrop[a], b: forcedB[b]})
 }

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -130,6 +131,34 @@ func TestWithHAKeeperHeartbeatTimeout(t *testing.T) {
 			require.NotNil(t, cfg.TN_please_use_getTNServiceConfig)
 			require.Equal(t, timeout, cfg.TN_please_use_getTNServiceConfig.HAKeeper.HeatbeatTimeout.Duration)
 		}
+	}
+}
+
+func TestWithDataPath(t *testing.T) {
+	for _, failInit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail-init=%t", failInit), func(t *testing.T) {
+			path := t.TempDir()
+			marker := filepath.Join(path, "caller-owned")
+			require.NoError(t, os.WriteFile(marker, []byte("keep"), 0600))
+			opts := []Option{WithDataPath(path)}
+			if failInit {
+				opts = append(opts, WithConfigs([]string{filepath.Join(path, "missing.toml")}))
+			}
+			c, err := NewCluster(opts...)
+			if c != nil {
+				t.Cleanup(func() { assert.NoError(t, c.Close()) })
+			}
+			if failInit {
+				require.Error(t, err)
+				require.Nil(t, c)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, path, c.(*cluster).options.dataPath)
+				require.FileExists(t, filepath.Join(path, "cn-0.toml"))
+				require.NoError(t, c.Close())
+			}
+			require.FileExists(t, marker, "cluster must not remove caller-owned data")
+		})
 	}
 }
 
