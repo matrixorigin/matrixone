@@ -16,6 +16,7 @@ update inventory set epoch=epoch+1 where account_id=0 and database_id=42 and epo
 commit;
 -- @session:id=1{
 -- A statement advance must validate the preceding write even before COMMIT.
+-- @regex("^w-w conflict: tableID: [0-9]+, optimistic RC snapshot advance$", true)
 select epoch from inventory;
 rollback;
 -- @session}

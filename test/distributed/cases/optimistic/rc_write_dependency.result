@@ -11,6 +11,7 @@ set session transaction isolation level read committed;
 begin;
 update inventory set epoch=epoch+1 where account_id=0 and database_id=42 and epoch=1;
 commit;
+-- @regex("^w-w conflict: tableID: [0-9]+, optimistic RC snapshot advance$", true)
 select epoch from inventory;
 w-w conflict
 rollback;
