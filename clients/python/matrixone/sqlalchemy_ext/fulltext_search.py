@@ -79,6 +79,7 @@ Both are optional (don't filter documents) but affect ranking differently.
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 
 from .._sql_literals import string_grammar_token
 from typing import TYPE_CHECKING, Any, List, Optional
@@ -382,12 +383,22 @@ class FulltextQueryBuilder:
         query.encourage(group().medium("tutorial", "guide"))   # (tutorial guide)
         query.must_not(group().medium("spam", "junk"))         # -(spam junk)
 
+    Groups are copied when added; later changes to a source group do not change the query.
+
     Note: Group-level operators (+, -, ~) applied to entire groups. Element-level operators (>, <)
     applied within groups using high(), low()
     """
 
     def __init__(self):
         self.main_group = FulltextGroup("and")  # Main group with AND semantics
+
+    def _add_group(self, source: FulltextGroup, group_type: str, is_tilde: bool = False):
+        # Each occurrence owns its operator and nested terms. Reusing a group in
+        # another query must not change the meaning of an existing predicate.
+        owned = deepcopy(source)
+        owned.group_type = group_type
+        owned.is_tilde = is_tilde
+        self.main_group.add_group(owned)
 
     def must(self, *items) -> "FulltextQueryBuilder":
         """Add required terms or groups (+ operator at group level).
@@ -426,8 +437,7 @@ class FulltextQueryBuilder:
         for item in items:
             # Validate parameter types and provide friendly error messages
             if isinstance(item, FulltextGroup):
-                item.group_type = "and"  # Force group to be required
-                self.main_group.add_group(item)
+                self._add_group(item, "and")
             else:
                 self.main_group.must(item)
         return self
@@ -469,8 +479,7 @@ class FulltextQueryBuilder:
         for item in items:
             # Validate parameter types and provide friendly error messages
             if isinstance(item, FulltextGroup):
-                item.group_type = "not"  # Force group to be excluded
-                self.main_group.add_group(item)
+                self._add_group(item, "not")
             else:
                 self.main_group.must_not(item)
         return self
@@ -516,8 +525,7 @@ class FulltextQueryBuilder:
         for item in items:
             # Validate parameter types and provide friendly error messages
             if isinstance(item, FulltextGroup):
-                item.group_type = "or"  # Force group to be optional
-                self.main_group.add_group(item)
+                self._add_group(item, "or")
             else:
                 self.main_group.encourage(item)
         return self
@@ -572,7 +580,7 @@ class FulltextQueryBuilder:
             # Validate parameter types and provide friendly error messages
             if isinstance(item, FulltextGroup):
                 # Apply tilde to the entire group
-                self.main_group.add_tilde_group(item)
+                self._add_group(item, "or", is_tilde=True)
             else:
                 # Apply tilde to individual term
                 self.main_group.elements.append(FulltextElement(item, "", "~"))
