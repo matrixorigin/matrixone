@@ -253,6 +253,67 @@ func TestPreparedJSONComparisonCoercion(t *testing.T) {
 		}
 	})
 
+	t.Run("FLOAT numeric operators across domains", func(t *testing.T) {
+		jsonValues := makeJSON(t, []any{float64(1), 1e100, -1e100, float64(16777217), nil, nil}, 5)
+		const length = 6
+		direct, err := vector.NewConstFixed(types.T_float32.ToType(), float32(1), length, proc.Mp())
+		require.NoError(t, err)
+		t.Cleanup(func() { direct.Free(proc.Mp()) })
+		prepared, err := vector.NewConstBytes(types.T_json.ToType(), encode(t, float64(1)), length, proc.Mp())
+		require.NoError(t, err)
+		t.Cleanup(func() { prepared.Free(proc.Mp()) })
+		prepared.SetPreparedJSONComparisonParam()
+		prepared.SetPrepareParamKind(vector.PrepareParamFloat)
+		for _, mode := range []string{"direct", "prepared concrete", "prepared legacy"} {
+			numeric := direct
+			if mode != "direct" {
+				numeric = prepared
+				prepared.SetPrepareParamType(types.T_float32)
+				if mode == "prepared legacy" {
+					prepared.SetPrepareParamType(types.T_any)
+				}
+			}
+			for _, reversed := range []bool{false, true} {
+				args := []*vector.Vector{jsonValues, numeric}
+				if reversed {
+					args[0], args[1] = args[1], args[0]
+				}
+				for _, op := range []struct {
+					name     string
+					fn       executeLogicOfOverload
+					test     func(int) bool
+					nullSafe bool
+				}{
+					{"=", equalFn, func(c int) bool { return c == 0 }, false},
+					{"!=", notEqualFn, func(c int) bool { return c != 0 }, false},
+					{"<=>", nullSafeEqualFn, func(c int) bool { return c == 0 }, true},
+					{"<", lessThanFn, func(c int) bool { return c < 0 }, false},
+					{"<=", lessEqualFn, func(c int) bool { return c <= 0 }, false},
+					{">", greatThanFn, func(c int) bool { return c > 0 }, false},
+					{">=", greatEqualFn, func(c int) bool { return c >= 0 }, false},
+				} {
+					t.Run(fmt.Sprintf("%s/%s/reversed=%t", mode, op.name, reversed), func(t *testing.T) {
+						result := makeResult(t, length)
+						require.NoError(t, op.fn(args, result, proc, length, nil))
+						got := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+						for row, sign := range []int{0, 1, -1, 1, 0, 0} {
+							if row >= 4 {
+								require.Equal(t, !op.nullSafe, result.GetResultVector().IsNull(uint64(row)))
+								require.False(t, got[row])
+								continue
+							}
+							if reversed {
+								sign = -sign
+							}
+							require.False(t, result.GetResultVector().IsNull(uint64(row)))
+							require.Equal(t, op.test(sign), got[row], "row %d", row)
+						}
+					})
+				}
+			}
+		}
+	})
+
 	t.Run("mixed numeric selection nulls empty and result reuse", func(t *testing.T) {
 		jsonValues := makeJSON(t, []any{int64(1), uint64(math.MaxUint64), nil})
 		numbers := vector.NewVec(types.T_int64.ToType())

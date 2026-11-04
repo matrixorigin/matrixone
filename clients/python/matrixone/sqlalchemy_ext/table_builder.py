@@ -65,6 +65,7 @@ def simplified_table(name, columns, primary_key=None, **kwargs):
     if any(key not in columns for key in keys):
         raise ValueError('primary_key must name existing columns')
     definitions = []
+    dtype: TypeEngine
     for column_name, definition in columns.items():
         options = {}
         inline_primary = False
@@ -121,13 +122,14 @@ def simplified_table(name, columns, primary_key=None, **kwargs):
                         dtype = constructor(fsp=precision)
                 else:
                     dtype = constructor(*(int(arg) for arg in args), **type_options)
-        elif isinstance(definition, TypeEngine) or (
-            isinstance(definition, type) and issubclass(definition, TypeEngine)
-        ):
+        elif isinstance(definition, TypeEngine):
             dtype = definition
+        elif isinstance(definition, type) and issubclass(definition, TypeEngine):
+            dtype = definition()
         else:
             raise TypeError('Column types must be strings or SQLAlchemy types')
-        definitions.append(Column(column_name, dtype, primary_key=column_name in keys or inline_primary, **options))
+        is_primary = column_name in keys or inline_primary
+        definitions.append(Column(column_name, dtype, primary_key=is_primary, **options))
     metadata = kwargs.pop('metadata', None) or MetaData()
     return Table(name, metadata, *definitions, **kwargs)
 

@@ -1155,9 +1155,12 @@ func TestLocalDisttaeDataSource_getBlockZMs_ColumnNameExtraction(t *testing.T) {
 
 type filteredPrefetchFS struct {
 	fileservice.FileService
-	calls atomic.Int32
-	done  chan struct{}
+	calls   atomic.Int32
+	done    chan struct{}
+	evicted bool
 }
+
+func (fs *filteredPrefetchFS) WholeObjectPreloadSkipped(string, uint64) bool { return fs.evicted }
 
 func (fs *filteredPrefetchFS) PrefetchFile(context.Context, string) error {
 	fs.calls.Add(1)
@@ -1169,8 +1172,20 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 	table := &txnTable{db: &txnDatabase{}}
 	table.proc.Store(proc)
 	for _, count := range []int{3, 4} {
-		for _, skip := range []bool{false, true} {
-			t.Run(fmt.Sprintf("blocks=%d/skip=%v", count, skip), func(t *testing.T) {
+		for _, tc := range []struct {
+			name           string
+			skip           bool // the read policy skips whole-object preloads
+			narrow         bool // the read is narrow
+			evicted        bool // the disk cache reports the table thrashing
+			wantPrefetches bool
+		}{
+			{name: "scan", wantPrefetches: true},
+			{name: "skip", skip: true},
+			{name: "narrow-kept", narrow: true, wantPrefetches: true},
+			{name: "narrow-evicted", narrow: true, evicted: true},
+			{name: "scan-evicted", evicted: true, wantPrefetches: true},
+		} {
+			t.Run(fmt.Sprintf("blocks=%d/%s", count, tc.name), func(t *testing.T) {
 				data := readutil.NewBlockListRelationData(0)
 				for i := 0; i < count; i++ {
 					loc := objectio.NewRandomLocation(uint16(i), 1)
@@ -1178,17 +1193,21 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 					block := objectio.BlockInfo{BlockID: types.NewBlockidWithObjectID(&oid, uint16(i)), MetaLoc: objectio.ObjectLocation(loc)}
 					data.AppendBlockInfo(&block)
 				}
-				fs := &filteredPrefetchFS{done: make(chan struct{}, 4)}
+				fs := &filteredPrefetchFS{done: make(chan struct{}, 4), evicted: tc.evicted}
 				ls := &LocalDisttaeDataSource{table: table, fs: fs, rangeSlice: data.GetBlockInfoSlice(), iteratePhase: engine.Persisted, memPKFilter: &readutil.MemPKFilter{}}
 				ls.rc.prefetchDisabled = count < 4
 				ctx := proc.Ctx
-				if skip {
+				if tc.skip {
 					ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipFullFilePreloads)
 				}
+				if tc.narrow {
+					ctx = fileservice.WithFileServicePolicy(ctx, fileservice.NarrowRead)
+				}
+				prefetches := count >= 4 && tc.wantPrefetches
 				rt.SetupServiceBasedRuntime(t.Name(), rt.DefaultRuntime())
 				proc.Base.LockService = &prefetchTestLockService{id: t.Name()}
 				t.Cleanup(func() { proc.Base.LockService = nil })
-				if !skip {
+				if prefetches {
 					ioutil.Start(proc.GetService())
 					t.Cleanup(func() { ioutil.Stop(proc.GetService()) })
 				}
@@ -1198,7 +1217,7 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 					require.Equal(t, engine.Persisted, state)
 					require.Equal(t, data.GetBlockInfo(i).BlockID, blk.BlockID)
 				}
-				if count >= 4 && !skip {
+				if prefetches {
 					for i := 0; i < count; i++ {
 						select {
 						case <-fs.done:
@@ -1206,16 +1225,14 @@ func TestLocalDataSourceFilteredPrefetch(t *testing.T) {
 							t.Fatal("data prefetch did not execute")
 						}
 					}
-				}
-				if !skip {
 					ioutil.Stop(proc.GetService())
 				}
 				expected := int32(0)
-				if count >= 4 && !skip {
+				if prefetches {
 					expected = int32(count)
 				}
 				require.Equal(t, expected, fs.calls.Load())
-				if !skip && count >= 4 {
+				if count >= 4 {
 					require.Equal(t, count, ls.rc.batchPrefetchCursor)
 				} else {
 					require.Zero(t, ls.rc.batchPrefetchCursor)
