@@ -18,11 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -381,5 +384,233 @@ func TestPipelineRejectedSubmissionReleasesBatches(t *testing.T) {
 	sinker.cleanupInMemoryStaged()
 	sinker.Reset()
 	require.NoError(t, sinker.Close())
+	require.Equal(t, before, proc.Mp().CurrNB())
+}
+
+type contentCheckingSink struct {
+	calls   int
+	failAt  int
+	panicAt int
+	rows    [][]int32
+}
+
+func (s *contentCheckingSink) Sink(_ context.Context, b *batch.Batch) error {
+	s.calls++
+	for i := 0; i < b.RowCount(); i++ {
+		row := make([]int32, len(b.Vecs))
+		for col := range b.Vecs {
+			row[col] = vector.MustFixedColNoTypeCheck[int32](b.Vecs[col])[i]
+		}
+		s.rows = append(s.rows, row)
+	}
+	if s.calls == s.panicAt {
+		panic(spillInjectedError)
+	}
+	if s.calls == s.failAt {
+		return spillInjectedError
+	}
+	return nil
+}
+func (*contentCheckingSink) Sync(context.Context) (*objectio.ObjectStats, error) {
+	return &objectio.ObjectStats{}, nil
+}
+func (*contentCheckingSink) Reset()       {}
+func (*contentCheckingSink) Close() error { return nil }
+
+func TestStreamingMultiBlockContentAndReset(t *testing.T) {
+	for _, offHeap := range []bool{false, true} {
+		for _, mode := range []string{"success", "error", "panic"} {
+			for _, at := range []int{1, 2, 3} {
+				if mode == "success" && at != 1 {
+					continue
+				}
+				t.Run(fmt.Sprintf("offheap=%t/%s/%d", offHeap, mode, at), func(t *testing.T) {
+					proc := testutil.NewProc(t)
+					attrs, typs, _ := mockSchema(3, 2)
+					pool := &ownershipBuffer{IBatchBuffer: containers.NewOneSchemaBatchBuffer(mpool.MB, attrs, typs, offHeap), active: make(map[*batch.Batch]bool), t: t}
+					file := &contentCheckingSink{}
+					if mode == "error" {
+						file.failAt = at
+					}
+					if mode == "panic" {
+						file.panicAt = at
+					}
+					s := NewSinker(2, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, proc.Mp(), nil, WithMemorySizeThreshold(100*mpool.MB), WithBuffer(pool, true))
+					t.Cleanup(func() {
+						if s.buf.buffers != nil {
+							_ = s.Close()
+						}
+					})
+					before := proc.Mp().CurrNB()
+					n := 2*int(objectio.BlockMaxRows) + 1
+					source := containers.MockBatch(typs, n, 2, nil)
+					defer source.Close()
+					input := containers.ToCNBatch(source)
+					for col := range input.Vecs {
+						values := vector.MustFixedColNoTypeCheck[int32](input.Vecs[col])
+						for i := range values {
+							values[i] = int32((n-1-i)*10 + col)
+						}
+					}
+					for generation := 0; generation < 2; generation++ {
+						if generation == 1 {
+							s.Reset()
+							file.rows = nil
+							file.calls = 0
+							file.failAt = 0
+							file.panicAt = 0
+						}
+						require.NoError(t, s.Write(context.Background(), input))
+						var err error
+						var gotPanic any
+						func() { defer func() { gotPanic = recover() }(); err = s.trySpill(context.Background()) }()
+						blocks := 3
+						if generation == 0 && mode != "success" {
+							blocks = at
+						}
+						if generation == 0 && mode == "error" {
+							require.ErrorIs(t, err, spillInjectedError)
+						} else {
+							require.NoError(t, err)
+						}
+						if generation == 0 && mode == "panic" {
+							require.Equal(t, spillInjectedError, gotPanic)
+						} else {
+							require.Nil(t, gotPanic)
+						}
+						require.Equal(t, blocks, file.calls)
+						count := blocks * int(objectio.BlockMaxRows)
+						if count > n {
+							count = n
+						}
+						require.Len(t, file.rows, count)
+						for i, row := range file.rows {
+							for col, value := range row {
+								require.Equal(t, int32(i*10+col), value)
+							}
+						}
+						require.Empty(t, pool.active)
+					}
+					require.NoError(t, s.Close())
+					require.Equal(t, before, proc.Mp().CurrNB())
+				})
+			}
+		}
+	}
+}
+
+type compressRejectSink struct{ arena *objectio.WriteArena }
+
+func (s *compressRejectSink) Sink(context.Context, *batch.Batch) error {
+	s.arena.CompressBuf(int(mpool.MaxAllocationSize()) + 1)
+	return nil
+}
+func (*compressRejectSink) Sync(context.Context) (*objectio.ObjectStats, error) {
+	return &objectio.ObjectStats{}, nil
+}
+func (*compressRejectSink) Reset()         {}
+func (s *compressRejectSink) Close() error { s.arena.FreeBuffers(); return nil }
+
+func TestStreamingRealCompressBufRejection(t *testing.T) {
+	proc := testutil.NewProc(t)
+	attrs, typs, _ := mockSchema(3, 2)
+	file := &compressRejectSink{arena: objectio.NewArena(0)}
+	pool := &ownershipBuffer{IBatchBuffer: containers.NewOneSchemaBatchBuffer(mpool.MB, attrs, typs, true), active: make(map[*batch.Batch]bool), t: t}
+	s := NewSinker(2, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker { return file }, proc.Mp(), nil, WithMemorySizeThreshold(1), WithBuffer(pool, true))
+	t.Cleanup(func() {
+		if s.buf.buffers != nil {
+			_ = s.Close()
+		}
+	})
+	before := proc.Mp().CurrNB()
+	source := containers.MockBatch(typs, int(objectio.BlockMaxRows), 2, nil)
+	defer source.Close()
+	require.Panics(t, func() { _ = s.Write(context.Background(), containers.ToCNBatch(source)) })
+	require.Empty(t, pool.active)
+	require.NoError(t, s.Close())
+	require.Equal(t, before, proc.Mp().CurrNB())
+}
+
+type generationSink struct {
+	entered  chan *batch.Batch
+	release  chan struct{}
+	fail     bool
+	observed chan int32
+}
+
+func (s *generationSink) Sink(_ context.Context, b *batch.Batch) error {
+	if s.entered != nil {
+		s.entered <- b
+		<-s.release
+	}
+	s.observed <- vector.MustFixedColNoTypeCheck[int32](b.Vecs[2])[0]
+	if s.fail {
+		return spillInjectedError
+	}
+	return nil
+}
+func (*generationSink) Sync(context.Context) (*objectio.ObjectStats, error) {
+	return &objectio.ObjectStats{}, nil
+}
+func (*generationSink) Reset()       {}
+func (*generationSink) Close() error { return nil }
+
+func TestPipelineAcceptedFailureResetGeneration(t *testing.T) {
+	proc := testutil.NewProc(t)
+	attrs, typs, _ := mockSchema(3, 2)
+	entered := make(chan *batch.Batch, 1)
+	release := make(chan struct{})
+	observed := make(chan int32, 2)
+	var factories atomic.Int32
+	s := NewSinker(2, attrs, typs, func(*mpool.MPool, fileservice.FileService) FileSinker {
+		if factories.Add(1) == 1 {
+			return &generationSink{entered: entered, release: release, fail: true, observed: observed}
+		}
+		return &generationSink{observed: observed}
+	}, proc.Mp(), nil, WithMemorySizeThreshold(100*mpool.MB), WithOffHeap(), WithPipelineFlush())
+	t.Cleanup(func() {
+		if s.buf.buffers != nil {
+			_ = s.Close()
+		}
+	})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	before := proc.Mp().CurrNB()
+	source := containers.MockBatch(typs, int(objectio.BlockMaxRows), 2, nil)
+	defer source.Close()
+	input := containers.ToCNBatch(source)
+	for i := range vector.MustFixedColNoTypeCheck[int32](input.Vecs[2]) {
+		vector.MustFixedColNoTypeCheck[int32](input.Vecs[2])[i] = 7
+	}
+	require.NoError(t, s.Write(context.Background(), input))
+	require.NoError(t, s.trySpill(context.Background()))
+	old := <-entered
+	oldResult := s.pipe.result
+	resetStarted, resetDone := make(chan struct{}), make(chan struct{})
+	go func() { close(resetStarted); s.Reset(); close(resetDone) }()
+	<-resetStarted
+	early := false
+	select {
+	case <-resetDone:
+		early = true
+	default:
+	}
+	unblock()
+	<-resetDone
+	require.False(t, early, "Reset returned before accepted job finished")
+	require.Equal(t, int32(7), <-observed)
+	require.ErrorIs(t, oldResult.getError(), spillInjectedError)
+	require.Nil(t, s.pipe.result)
+	for i := range vector.MustFixedColNoTypeCheck[int32](input.Vecs[2]) {
+		vector.MustFixedColNoTypeCheck[int32](input.Vecs[2])[i] = 19
+	}
+	require.NoError(t, s.Write(context.Background(), input))
+	require.NoError(t, s.trySpill(context.Background()))
+	require.NotSame(t, oldResult, s.pipe.result)
+	require.NoError(t, s.drainPipeline())
+	require.Equal(t, int32(19), <-observed)
+	require.NotNil(t, old) // worker held this batch until its first generation finished
+	require.NoError(t, s.Close())
 	require.Equal(t, before, proc.Mp().CurrNB())
 }
