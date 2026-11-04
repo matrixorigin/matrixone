@@ -1898,7 +1898,7 @@ var supportedOperators = []FuncNew{
 	// return a / b if b was not zero. return null if any of a and b is null.
 	{
 		functionId: DIV,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE | plan.Function_PRODUCE_NULL,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -1972,7 +1972,7 @@ var supportedOperators = []FuncNew{
 	// return null if any of parameters was null.
 	{
 		functionId: INTEGER_DIV,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE | plan.Function_PRODUCE_NULL,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
@@ -2005,7 +2005,7 @@ var supportedOperators = []FuncNew{
 	// operator `mod`
 	{
 		functionId: MOD,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_PRODUCE_NULL,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {

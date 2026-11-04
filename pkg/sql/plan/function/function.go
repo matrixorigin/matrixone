@@ -255,8 +255,15 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // we can deduce that c1+1, cast c3 and c1=c3 is notNullable, abs(c2) is nullable.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 	fid, _ := DecodeOverloadID(overloadID)
-	if allSupportedFunctions[fid].testFlag(plan.Function_PRODUCE_NO_NULL) {
+	fn := &allSupportedFunctions[fid]
+	if fn.testFlag(plan.Function_PRODUCE_NO_NULL) {
 		return true
+	}
+	// Strictness only guarantees NULL propagation, not its converse. Some
+	// functions produce NULL from non-NULL arguments, and aggregates can see
+	// an empty input (including an empty window frame).
+	if fn.testFlag(plan.Function_PRODUCE_NULL) || fn.testFlag(plan.Function_AGG) {
+		return false
 	}
 
 	for _, arg := range args {

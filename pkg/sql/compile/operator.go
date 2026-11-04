@@ -1886,6 +1886,13 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 		ret.NeedBatches = true
 		ret.NeedAllocateSels = true
 		ret.JoinMapTag = arg.JoinMapTag
+		if keys := loopjoin.MarkHashKeys(arg.NonEqCond); arg.JoinType == plan.Node_MARK && keys != nil {
+			// Build once and share the immutable membership index across all
+			// broadcast probe scopes. MARK needs no per-key build row lists.
+			ret.NeedHashMap = true
+			ret.NeedAllocateSels = false
+			ret.Conditions = rewriteJoinExprToHashBuildExpr(keys[1:])
+		}
 
 	case vm.DedupJoin:
 		arg := op.(*dedupjoin.DedupJoin)

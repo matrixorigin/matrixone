@@ -1483,4 +1483,50 @@ select v from ifnull_nullable_result order by v;
 select table_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('coalesce_nullable_result','ifnull_nullable_result') and column_name='v' order by table_name;
 select coalesce(x,0) as v, count(*) as c from nullable_fallback group by coalesce(x,0) order by v;
 select ifnull(x,0) as v, count(*) as c from nullable_fallback group by ifnull(x,0) order by v;
+
+-- Functions can introduce NULL independently of their input column constraints.
+select 1/y as v, count(*) as c from nullable_fallback group by 1/y order by v;
+select distinct 1/y as v from nullable_fallback order by v;
+create table division_result as select 1/y as v, 1 div y as q, 1 % y as r from nullable_fallback;
+select * from division_result order by v;
+create table empty_source (v int not null);
+create table empty_aggregate_result as select min(v) as lo, max(v) as hi, sum(v) as total, avg(v) as mean, count(*) as c from empty_source;
+select * from empty_aggregate_result;
+create table window_result as select y, lag(y) over(order by y) as prev, lead(y) over(order by y) as next from nullable_fallback;
+select * from window_result order by y;
+select table_name, column_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('division_result','empty_aggregate_result','window_result') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
+
+-- Nullable scalar MARK must preserve TRUE/FALSE/UNKNOWN and empty-set behavior.
+create table mark_probe (id int);
+create table mark_rhs (id int not null);
+create table mark_extra (id int);
+insert into mark_probe values (null),(1),(2),(3);
+insert into mark_rhs values (1);
+select p.id, cast(p.id as bigint) in (select id from mark_rhs union all select id from mark_extra) as hit from mark_probe p order by p.id;
+select p.id, p.id in (select id from mark_rhs union all select id from mark_extra) as hit, p.id not in (select id from mark_rhs union all select id from mark_extra) as miss from mark_probe p order by p.id;
+select count(*) from mark_probe where id not in (select id from mark_rhs union all select id from mark_extra);
+insert into mark_extra values (1),(null);
+select p.id, p.id in (select id from mark_rhs union all select id from mark_extra) as hit, p.id not in (select id from mark_rhs union all select id from mark_extra) as miss from mark_probe p order by p.id;
+select count(*) from mark_probe where id not in (select id from mark_rhs union all select id from mark_extra);
+truncate table mark_rhs;
+truncate table mark_extra;
+select p.id, p.id in (select id from mark_rhs union all select id from mark_extra) as hit, p.id not in (select id from mark_rhs union all select id from mark_extra) as miss from mark_probe p order by p.id;
+select count(*) from mark_probe where id not in (select id from mark_rhs union all select id from mark_extra);
+-- A nonempty, all-NULL build has zero hash groups but is not an empty set.
+insert into mark_extra values (null);
+select p.id, p.id in (select id from mark_rhs union all select id from mark_extra) as hit, p.id not in (select id from mark_rhs union all select id from mark_extra) as miss from mark_probe p order by p.id;
+select count(*) from mark_probe where id not in (select id from mark_rhs union all select id from mark_extra);
+truncate table mark_extra;
+-- Correlated/residual predicates retain the evaluator.
+insert into mark_extra values (1),(null);
+select count(*) from mark_probe p where p.id not in (select x.id from mark_extra x where x.id < p.id);
+create table mark_string_probe (v varchar(20));
+create table mark_string_rhs (v varchar(20));
+insert into mark_string_probe values ('a'),('b'),('中'),(null);
+insert into mark_string_rhs values ('a'),('中'),(null);
+select p.v, p.v in (select v from mark_string_rhs) as hit, p.v not in (select v from mark_string_rhs) as miss from mark_string_probe p order by p.v;
+select (2,4) in (select 1,cast(null as int)) as hit, (2,4) not in (select 1,cast(null as int)) as miss;
+create table mark_float (v double);
+insert into mark_float values (cast('-0' as double)),(null);
+select cast('0' as double) in (select v from mark_float) as hit, cast('0' as double) not in (select v from mark_float) as miss;
 drop database ctas_output_nullability;

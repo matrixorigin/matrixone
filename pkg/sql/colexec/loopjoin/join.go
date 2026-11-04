@@ -64,6 +64,12 @@ func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 		loopJoin.OpAnalyzer.Reset()
 	}
 
+	if loopJoin.JoinType == plan.Node_MARK && loopJoin.ctr.markHash == nil {
+		loopJoin.ctr.markHash, err = newMarkHash(proc, loopJoin.NonEqCond)
+		if err != nil {
+			return err
+		}
+	}
 	if loopJoin.NonEqCond != nil && loopJoin.ctr.expr == nil {
 		loopJoin.ctr.expr, err = colexec.NewExpressionExecutor(proc, loopJoin.NonEqCond)
 		if err != nil {
@@ -128,6 +134,8 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 			if ctr.mp == nil {
 				err = ctr.emptyProbe(loopJoin, proc, &result)
+			} else if ctr.markHash != nil && ctr.markHash.iter != nil {
+				err = ctr.probeMarkHash(loopJoin, proc, &result)
 			} else {
 				err = ctr.probe(loopJoin, proc, &result)
 			}
@@ -158,6 +166,9 @@ func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer
 	start := time.Now()
 	defer analyzer.WaitStop(start)
 	loopJoin.ctr.mp, err = message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
+	if err == nil && loopJoin.ctr.mp != nil && loopJoin.ctr.markHash != nil {
+		err = loopJoin.ctr.markHash.build(proc, loopJoin.ctr.mp)
+	}
 	return err
 }
 

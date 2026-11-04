@@ -238,9 +238,11 @@ func (jm *JoinMap) GetSels(k uint64) []int32 {
 func (jm *JoinMap) NewIterator() hashmap.Iterator {
 	if jm.shm != nil {
 		return jm.shm.NewIterator()
-	} else {
+	}
+	if jm.ihm != nil {
 		return jm.ihm.NewIterator()
 	}
+	return nil // Loop builds retain batches without a membership index.
 }
 
 func (jm *JoinMap) IncRef(cnt int32) {

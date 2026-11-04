@@ -1925,7 +1925,7 @@ drop table if exists agg01;
 create table agg01 as select avg(col1) as avgCol, sum(col2) as sumcol, count(col3) as countCol, max(col4) as maxCol, min(col4) as minCol from math01;
 show create table agg01;
 Table    Create Table
-agg01    CREATE TABLE `agg01` (\n  `avgcol` double DEFAULT NULL,\n  `sumcol` decimal(38,0) DEFAULT NULL,\n  `countcol` bigint NOT NULL,\n  `maxcol` double NOT NULL,\n  `mincol` double NOT NULL\n)
+agg01    CREATE TABLE `agg01` (\n  `avgcol` double DEFAULT NULL,\n  `sumcol` decimal(38,0) DEFAULT NULL,\n  `countcol` bigint NOT NULL,\n  `maxcol` double DEFAULT NULL,\n  `mincol` double DEFAULT NULL\n)
 select * from agg01;
 avgcol    sumcol    countcol    maxcol    mincol
 7571.333333333333    10424    3    10.0    -9392032.0
@@ -2064,4 +2064,114 @@ select coalesce(x,0) as v, count(*) as c from nullable_fallback group by coalesc
 select ifnull(x,0) as v, count(*) as c from nullable_fallback group by ifnull(x,0) order by v;
 ➤ v[-5,64,0]  ¦  c[-5,64,0]  𝄀
 0  ¦  2
+select 1/y as v, count(*) as c from nullable_fallback group by 1/y order by v;
+➤ v[8,54,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  1  𝄀
+1.0  ¦  1
+select distinct 1/y as v from nullable_fallback order by v;
+➤ v[8,54,0]  𝄀
+null  𝄀
+1.0
+create table division_result as select 1/y as v, 1 div y as q, 1 % y as r from nullable_fallback;
+select * from division_result order by v;
+➤ v[8,54,0]  ¦  q[-5,64,0]  ¦  r[-5,64,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1.0  ¦  1  ¦  0
+create table empty_source (v int not null);
+create table empty_aggregate_result as select min(v) as lo, max(v) as hi, sum(v) as total, avg(v) as mean, count(*) as c from empty_source;
+select * from empty_aggregate_result;
+➤ lo[4,32,0]  ¦  hi[4,32,0]  ¦  total[-5,64,0]  ¦  mean[8,54,0]  ¦  c[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  0
+create table window_result as select y, lag(y) over(order by y) as prev, lead(y) over(order by y) as next from nullable_fallback;
+select * from window_result order by y;
+➤ y[4,32,0]  ¦  prev[4,32,0]  ¦  next[4,32,0]  𝄀
+0  ¦  null  ¦  1  𝄀
+1  ¦  0  ¦  null
+select table_name, column_name, is_nullable from information_schema.columns where table_schema='ctas_output_nullability' and table_name in ('division_result','empty_aggregate_result','window_result') and column_name <> '__mo_fake_pk_col' order by table_name, ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+division_result  ¦  v  ¦  YES  𝄀
+division_result  ¦  q  ¦  YES  𝄀
+division_result  ¦  r  ¦  YES  𝄀
+empty_aggregate_result  ¦  lo  ¦  YES  𝄀
+empty_aggregate_result  ¦  hi  ¦  YES  𝄀
+empty_aggregate_result  ¦  total  ¦  YES  𝄀
+empty_aggregate_result  ¦  mean  ¦  YES  𝄀
+empty_aggregate_result  ¦  c  ¦  NO  𝄀
+window_result  ¦  y  ¦  NO  𝄀
+window_result  ¦  prev  ¦  YES  𝄀
+window_result  ¦  next  ¦  YES
+create table mark_probe (id int);
+create table mark_rhs (id int not null);
+create table mark_extra (id int);
+insert into mark_probe values (null),(1),(2),(3);
+insert into mark_rhs values (1);
+select p.id, cast(p.id as bigint) in (select id from mark_rhs union all select id from mark_extra) as hit from mark_probe p order by p.id;
+➤ id[4,32,0]  ¦  hit[-7,1,0]  𝄀
+null  ¦  null  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+select p.id, p.id in (select id from mark_rhs union all select id from mark_extra) as hit, p.id not in (select id from mark_rhs union all select id from mark_extra) as miss from mark_probe p order by p.id;
+➤ id[4,32,0]  ¦  hit[-7,1,0]  ¦  miss[-7,1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  0  ¦  1
+select count(*) from mark_probe where id not in (select id from mark_rhs union all select id from mark_extra);
+➤ count(*)[-5,64,0]  𝄀
+2
+insert into mark_extra values (1),(null);
+select p.id, p.id in (select id from mark_rhs union all select id from mark_extra) as hit, p.id not in (select id from mark_rhs union all select id from mark_extra) as miss from mark_probe p order by p.id;
+➤ id[4,32,0]  ¦  hit[-7,1,0]  ¦  miss[-7,1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1  ¦  1  ¦  0  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null
+select count(*) from mark_probe where id not in (select id from mark_rhs union all select id from mark_extra);
+➤ count(*)[-5,64,0]  𝄀
+0
+truncate table mark_rhs;
+truncate table mark_extra;
+select p.id, p.id in (select id from mark_rhs union all select id from mark_extra) as hit, p.id not in (select id from mark_rhs union all select id from mark_extra) as miss from mark_probe p order by p.id;
+➤ id[4,32,0]  ¦  hit[-7,1,0]  ¦  miss[-7,1,0]  𝄀
+null  ¦  0  ¦  1  𝄀
+1  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  0  ¦  1
+select count(*) from mark_probe where id not in (select id from mark_rhs union all select id from mark_extra);
+➤ count(*)[-5,64,0]  𝄀
+4
+insert into mark_extra values (null);
+select p.id, p.id in (select id from mark_rhs union all select id from mark_extra) as hit, p.id not in (select id from mark_rhs union all select id from mark_extra) as miss from mark_probe p order by p.id;
+➤ id[4,32,0]  ¦  hit[-7,1,0]  ¦  miss[-7,1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null
+select count(*) from mark_probe where id not in (select id from mark_rhs union all select id from mark_extra);
+➤ count(*)[-5,64,0]  𝄀
+0
+truncate table mark_extra;
+insert into mark_extra values (1),(null);
+select count(*) from mark_probe p where p.id not in (select x.id from mark_extra x where x.id < p.id);
+➤ count(*)[-5,64,0]  𝄀
+4
+create table mark_string_probe (v varchar(20));
+create table mark_string_rhs (v varchar(20));
+insert into mark_string_probe values ('a'),('b'),('中'),(null);
+insert into mark_string_rhs values ('a'),('中'),(null);
+select p.v, p.v in (select v from mark_string_rhs) as hit, p.v not in (select v from mark_string_rhs) as miss from mark_string_probe p order by p.v;
+➤ v[12,-1,0]  ¦  hit[-7,1,0]  ¦  miss[-7,1,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+a  ¦  1  ¦  0  𝄀
+b  ¦  null  ¦  null  𝄀
+中  ¦  1  ¦  0
+select (2,4) in (select 1,cast(null as int)) as hit, (2,4) not in (select 1,cast(null as int)) as miss;
+➤ hit[-7,1,0]  ¦  miss[-7,1,0]  𝄀
+0  ¦  1
+create table mark_float (v double);
+insert into mark_float values (cast('-0' as double)),(null);
+select cast('0' as double) in (select v from mark_float) as hit, cast('0' as double) not in (select v from mark_float) as miss;
+➤ hit[-7,1,0]  ¦  miss[-7,1,0]  𝄀
+1  ¦  0
 drop database ctas_output_nullability;

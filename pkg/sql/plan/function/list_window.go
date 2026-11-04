@@ -158,7 +158,7 @@ var supportedWindowInNewFramework = []FuncNew{
 	// LAG window function
 	{
 		functionId: LAG,
-		class:      plan.Function_WIN_VALUE,
+		class:      plan.Function_WIN_VALUE | plan.Function_PRODUCE_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			// LAG(expr) or LAG(expr, offset) or LAG(expr, offset, default)
@@ -188,7 +188,7 @@ var supportedWindowInNewFramework = []FuncNew{
 	// LEAD window function
 	{
 		functionId: LEAD,
-		class:      plan.Function_WIN_VALUE,
+		class:      plan.Function_WIN_VALUE | plan.Function_PRODUCE_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			// LEAD(expr) or LEAD(expr, offset) or LEAD(expr, offset, default)
@@ -218,7 +218,7 @@ var supportedWindowInNewFramework = []FuncNew{
 	// FIRST_VALUE window function
 	{
 		functionId: FIRST_VALUE,
-		class:      plan.Function_WIN_VALUE,
+		class:      plan.Function_WIN_VALUE | plan.Function_PRODUCE_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
@@ -246,7 +246,7 @@ var supportedWindowInNewFramework = []FuncNew{
 	// LAST_VALUE window function
 	{
 		functionId: LAST_VALUE,
-		class:      plan.Function_WIN_VALUE,
+		class:      plan.Function_WIN_VALUE | plan.Function_PRODUCE_NULL,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
