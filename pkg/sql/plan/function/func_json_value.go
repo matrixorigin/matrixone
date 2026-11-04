@@ -157,6 +157,7 @@ func jsonValueContract(
 	onEmpty := jsonValueResponseMode(ivecs[3])
 	onError := jsonValueResponseMode(ivecs[5])
 
+	// typeswitch:partial JSON_VALUE supports FLOAT/DOUBLE, not low-precision float targets.
 	switch target.Oid {
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob:

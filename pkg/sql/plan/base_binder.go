@@ -3705,6 +3705,7 @@ func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Ex
 		// FLOAT/DOUBLE omit a display width when no precision is written. The
 		// parser records that omission as -1; keep the plan metadata's neutral
 		// zero width instead of exposing a sentinel through protocol/CTAS.
+		// typeswitch:partial JSON_VALUE supports FLOAT/DOUBLE, not low-precision float targets.
 		if (target.Oid == types.T_float32 || target.Oid == types.T_float64) && target.Width < 0 {
 			target.Width = 0
 		}
@@ -3819,6 +3820,7 @@ func validateJSONValueDefaultLiteral(ctx context.Context, expr tree.Expr, target
 	if err != nil {
 		return err
 	}
+	// typeswitch:partial JSON_VALUE defaults support FLOAT/DOUBLE, not low-precision floats.
 	switch target.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		if target.Width > 0 && utf8.RuneCountInString(value) > int(target.Width) {
@@ -4019,6 +4021,7 @@ func jsonValueDefaultLiteralText(expr tree.Expr) (string, error) {
 }
 
 func validateJSONValueTarget(ctx context.Context, target types.Type) error {
+	// typeswitch:partial JSON_VALUE RETURNING supports FLOAT/DOUBLE, not low-precision floats.
 	switch target.Oid {
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob,
