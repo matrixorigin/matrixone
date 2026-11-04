@@ -161,12 +161,14 @@ func newSnapshotAdvanceHarness(t *testing.T, mode snapshotAdvanceTombstoneMode, 
 	case snapshotAdvancePersistedTombstone:
 		h.writePersistedDeletes(uncommittedDeletes)
 	case snapshotAdvanceMixedTombstones:
+		// Delete can materialize a window's borrowed data using the transaction pool.
+		mp := h.rel.GetProcess().(*process.Process).Mp()
 		inMemory, err := uncommittedDeletes.Window(0, rowCount/4)
 		require.NoError(t, err)
-		defer inMemory.Clean(nil)
+		defer inMemory.Clean(mp)
 		persisted, err := uncommittedDeletes.Window(rowCount/4, rowCount/2)
 		require.NoError(t, err)
-		defer persisted.Clean(nil)
+		defer persisted.Clean(mp)
 		require.NoError(t, testutil.WriteToRelation(ctx, h.txn, h.rel, inMemory, true, true))
 		h.writePersistedDeletes(persisted)
 	default:

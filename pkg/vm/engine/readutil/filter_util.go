@@ -131,6 +131,7 @@ func visitEncodedPrimaryKeyVector(vec *vector.Vector, packer *types.Packer, visi
 		repeats = max(1, vec.Length())
 	}
 
+	// typeswitch:partial bf16/float16/float8/float4 and VECTOR columns cannot be in a primary key (rejected at DDL)
 	switch vec.GetType().Oid {
 
 	case types.T_bool:

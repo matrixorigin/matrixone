@@ -480,8 +480,15 @@ func (s *S3FS) OpenReadWithIdentity(
 	return storage.ReadObjectWithIdentity(ctx, s.pathToKey(path.File), &min, max, expected)
 }
 
-func (s *S3FS) fullFilePreloadsThrashing() bool {
-	return s.diskCache != nil && s.diskCache.preloads.isThrashing()
+func (s *S3FS) WholeObjectPreloadSkipped(filePath string, group uint64) bool {
+	if s.diskCache == nil {
+		return false
+	}
+	path, err := parseFilePathAtService(filePath, s.name)
+	if err != nil {
+		return false
+	}
+	return s.diskCache.preloads.narrowRead(s.diskCache.pathForFile(path.File), group)
 }
 
 func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
@@ -681,7 +688,8 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 }
 
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
-	if vector.Policy.Any(NarrowRead) && s.fullFilePreloadsThrashing() {
+	if vector.Policy.Any(NarrowRead) && !vector.Policy.Any(SkipFullFilePreloads) &&
+		s.WholeObjectPreloadSkipped(vector.FilePath, GetPreloadGroup(ctx)) {
 		vector.Policy |= SkipFullFilePreloads
 	}
 	var finishDecode func()
@@ -1106,7 +1114,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 	}
 
 	min, max, readFullObject := vector.readRange()
-	if readFullObject && forceMinimalRangeRead {
+	// The full-object policy is a disk-cache fill optimization, not a request
+	// to download unused bytes when no disk cache can retain them.
+	if readFullObject && (forceMinimalRangeRead || s.diskCache == nil) {
 		min, max = vector.readMinimalRange()
 		readFullObject = false
 	}

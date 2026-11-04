@@ -565,7 +565,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %nonassoc <str> VARBINARY
 %token <str> NCHAR LONG
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT DATALINK
-%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64 VECBF16 VECF16 VECINT8 VECUINT8
+%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID VECF32 VECF64 VECBF16 VECF16 VECINT8 VECUINT8 VECF8 VECF4
+%token <str> BF16 FLOAT16 FLOAT8 FLOAT4
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> GEOMETRY32 GEOGRAPHY GEOGRAPHY32 POINT32 LINESTRING32 POLYGON32 GEOMETRYCOLLECTION32 MULTIPOINT32 MULTILINESTRING32 MULTIPOLYGON32
 %token <str> INT1 INT2 INT3 INT4 INT8 S3OPTION STAGEOPTION
@@ -985,8 +986,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
 %type <comparisonOp> comparison_operator and_or_some
-%type <createOption> create_option database_default_option
-%type <createOptions> create_option_list_opt create_option_list database_default_options
+%type <createOption> create_option database_default_option database_safe_default_option
+%type <createOptions> create_option_list_opt create_option_list database_default_options database_safe_default_options
 %type <ifNotExists> not_exists_opt
 %type <defaultOptional> default_opt
 %type <sourceOptional> replace_opt
@@ -4636,16 +4637,16 @@ alter_option:
         opt.Collate = $7
         $$ = opt
     }
-|   CONVERT TO CHARACTER SET charset_name
+|   CONVERT TO charset_keyword charset_name
     {
-        opt := tree.NewTableOptionCharset($5)
+        opt := tree.NewTableOptionCharset($4)
         opt.Convert = true
         $$ = opt
     }
-|   CONVERT TO CHARACTER SET charset_name COLLATE equal_opt charset_name
+|   CONVERT TO charset_keyword charset_name COLLATE equal_opt charset_name
     {
-        opt := tree.NewTableOptionCharset($5)
-        opt.Collate = $8
+        opt := tree.NewTableOptionCharset($4)
+        opt.Collate = $7
         opt.Convert = true
         $$ = opt
     }
@@ -4890,7 +4891,7 @@ alter_database_defaults_stmt:
     {
         $$ = &tree.AlterDatabase{Name: tree.Identifier($3), Options: $4}
     }
-|   ALTER database_or_schema database_default_options
+|   ALTER database_or_schema database_safe_default_options
     {
         $$ = &tree.AlterDatabase{Options: $3}
     }
@@ -4906,13 +4907,41 @@ database_default_options:
     }
 
 database_default_option:
+    charset_keyword equal_opt charset_name
+    {
+        $$ = tree.NewCreateOptionCharset(false, $3)
+    }
+|   DEFAULT charset_keyword equal_opt charset_name
+    {
+        $$ = tree.NewCreateOptionCharset(true, $4)
+    }
+|   COLLATE equal_opt collate_name
+    {
+        $$ = tree.NewCreateOptionCollate(false, $3)
+    }
+|   DEFAULT COLLATE equal_opt collate_name
+    {
+        $$ = tree.NewCreateOptionCollate(true, $4)
+    }
+
+database_safe_default_options:
+    database_safe_default_option
+    {
+        $$ = []tree.CreateOption{$1}
+    }
+|   database_safe_default_options database_default_option
+    {
+        $$ = append($1, $2)
+    }
+
+database_safe_default_option:
     CHARACTER SET equal_opt charset_name
     {
         $$ = tree.NewCreateOptionCharset(false, $4)
     }
-|   DEFAULT CHARACTER SET equal_opt charset_name
+|   DEFAULT charset_keyword equal_opt charset_name
     {
-        $$ = tree.NewCreateOptionCharset(true, $5)
+        $$ = tree.NewCreateOptionCharset(true, $4)
     }
 |   COLLATE equal_opt collate_name
     {
@@ -12853,7 +12882,11 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeVisable(false)
     }
-|   default_opt CHARACTER SET equal_opt charset_name
+|   charset_keyword equal_opt charset_name
+    {
+		$$ = tree.NewAttributeCharset($3)
+    }
+|   DEFAULT CHARACTER SET equal_opt charset_name
     {
 		$$ = tree.NewAttributeCharset($5)
     }
@@ -13325,9 +13358,9 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   CAST '(' expression AS CHAR length_option_opt CHARACTER SET charset_name ')'
+|   CAST '(' expression AS CHAR length_option_opt charset_keyword charset_name ')'
     {
-        $$ = tree.NewCastExpr($3, makeCharsetCastCharType($6, $9))
+        $$ = tree.NewCastExpr($3, makeCharsetCastCharType($6, $8))
     }
 |   SERIAL_EXTRACT '(' expression ',' expression AS mo_cast_type ')'
     {
@@ -13915,9 +13948,9 @@ mysql_cast_type:
             },
         }
     }
-|   CHAR length_option_opt CHARACTER SET charset_name
+|   CHAR length_option_opt charset_keyword charset_name
     {
-        $$ = makeCharsetCastCharType($2, $5)
+        $$ = makeCharsetCastCharType($2, $4)
     }
 |   DATE
     {
@@ -16333,6 +16366,84 @@ char_type:
             },
         }
     }
+|   VECF8 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   VECF4 length_option_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.ArrayFamily,
+                Locale: &locale,
+                FamilyString: $1,
+                DisplayWith: $2,
+                Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
+            },
+        }
+    }
+|   BF16
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 16,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
+|   FLOAT16
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 16,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
+|   FLOAT8
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 8,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
+|   FLOAT4
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+                Family: tree.FloatFamily,
+                FamilyString: $1,
+                Width: 4,
+                Locale: &locale,
+                Oid: uint32(defines.MYSQL_TYPE_FLOAT),
+            },
+        }
+    }
 | ENUM '(' enum_values ')'
     {
         locale := ""
@@ -16918,6 +17029,12 @@ non_reserved_keyword:
 |   VECF16
 |   VECINT8
 |   VECUINT8
+|   VECF8
+|   VECF4
+|   BF16
+|   FLOAT16
+|   FLOAT8
+|   FLOAT4
 |   KEY_BLOCK_SIZE
 |   LISTS
 |   OP_TYPE

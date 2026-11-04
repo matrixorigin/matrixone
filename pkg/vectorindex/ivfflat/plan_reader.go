@@ -756,6 +756,7 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if tableDef == nil {
 		return res, moerr.NewInvalidStateNoCtxf("ivfflat hidden relation %s.%s has no table definition", req.Schema, req.Table)
 	}
+	ctx = fileservice.WithPreloadGroup(ctx, tableDef.TblId)
 	var statsStart time.Time
 	if s.executionStats != nil {
 		statsStart = time.Now()
@@ -1032,28 +1033,32 @@ func filterRelationBatchRows(
 			sels = append(sels, int64(row))
 		}
 	}
-	return selectRelationBatchRows(bat, sels, loadedColumns), nil
+	return selectRelationBatchRows(bat, sels, loadedColumns, proc.Mp())
 }
 
 // selectRelationBatchRows preserves unloaded slots when columns were materialized
 // selectively. A nil column list denotes a fully materialized batch.
-func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int) engine.ReaderFilterResult {
+func selectRelationBatchRows(bat *batch.Batch, sels []int64, loadedColumns []int, mp *mpool.MPool) (engine.ReaderFilterResult, error) {
 	if len(sels) == bat.RowCount() {
-		return engine.ReaderFilterResult{All: true}
+		return engine.ReaderFilterResult{All: true}, nil
 	}
 	if len(sels) == 0 {
 		bat.CleanOnlyData()
-		return engine.ReaderFilterResult{Sels: sels}
+		return engine.ReaderFilterResult{Sels: sels}, nil
 	}
 	if loadedColumns == nil {
-		bat.Shrink(sels, false)
+		if err := bat.Shrink(sels, false, mp); err != nil {
+			return engine.ReaderFilterResult{}, err
+		}
 	} else {
 		for _, pos := range loadedColumns {
-			bat.Vecs[pos].Shrink(sels, false)
+			if err := bat.Vecs[pos].Shrink(sels, false, mp); err != nil {
+				return engine.ReaderFilterResult{}, err
+			}
 		}
 		bat.SetRowCount(len(sels))
 	}
-	return engine.ReaderFilterResult{Sels: sels}
+	return engine.ReaderFilterResult{Sels: sels}, nil
 }
 
 // relationFilterEarlyColumns returns the output positions that must be loaded
