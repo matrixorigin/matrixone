@@ -952,6 +952,19 @@ const (
 	defaultExprForPersistedLegacyZero
 )
 
+// buildDefaultExprWithColumnsObserved binds one default through the purpose's
+// owning chain, and first discriminates the two producers of a persisted
+// parenthesized signed plain-decimal origin into CHAR/VARCHAR: an older tree
+// admitted the expression default and stored its historical fold (DEFAULT
+// (-0.25) into VARCHAR(1) stores '0'; that expression owner keeps admitting
+// it), while this tree authored the bare literal whose origin formatter
+// parenthesized the stored text ('-1.25' -> '(-1.25)')). The stored value is
+// the producer's witness and the caller compares against it, so the
+// historical expression binding is reproduced first; only its inner
+// conversion failure (bad value / out of range, raised at any stage of the
+// chain, including constant folding) falls back to this tree's numeric-domain
+// literal rebinding. A mismatched stored payload keeps failing the caller's
+// comparison either way.
 func buildDefaultExprWithColumnsObserved(
 	bindCtx context.Context,
 	col *tree.ColumnTableDef,
@@ -960,6 +973,47 @@ func buildDefaultExprWithColumnsObserved(
 	columns []*ColDef,
 	purpose defaultExprBindingPurpose,
 	observe func(source, assigned *plan.Expr),
+) (*plan.Default, error) {
+	if purpose != defaultExprForDDL {
+		var originExpr tree.Expr
+		for _, attr := range col.Attributes {
+			if attrDefault, ok := attr.(*tree.AttributeDefault); ok {
+				originExpr = attrDefault.Expr
+				break
+			}
+		}
+		if _, isParenthesized := originExpr.(*tree.ParenExpr); isParenthesized &&
+			bareSignedDecimalCharFamilyDefault(typ, unwrapParenExpr(originExpr)) {
+			legacy, legacyErr := buildDefaultExprWithColumnsForceDomain(
+				bindCtx, col, typ, proc, columns, purpose, observe, false)
+			if legacyErr == nil {
+				return legacy, nil
+			}
+			if moerr.IsMoErrCode(legacyErr, moerr.ErrInvalidArg) ||
+				moerr.IsMoErrCode(legacyErr, moerr.ErrOutOfRange) {
+				return buildDefaultExprWithColumnsForceDomain(
+					bindCtx, col, typ, proc, columns, purpose, observe, true)
+			}
+			return nil, legacyErr
+		}
+	}
+	return buildDefaultExprWithColumnsForceDomain(bindCtx, col, typ, proc, columns, purpose, observe, false)
+}
+
+// buildDefaultExprWithColumnsForceDomain is the single-chain binder behind
+// buildDefaultExprWithColumnsObserved. With signedDecimalLiteralDomain the
+// bare signed-decimal shape takes the numeric literal domain regardless of the
+// parenthesized expression form; every other purpose keeps the chain that the
+// existing owner verdicts already describe.
+func buildDefaultExprWithColumnsForceDomain(
+	bindCtx context.Context,
+	col *tree.ColumnTableDef,
+	typ plan.Type,
+	proc *process.Process,
+	columns []*ColDef,
+	purpose defaultExprBindingPurpose,
+	observe func(source, assigned *plan.Expr),
+	signedDecimalLiteralDomain bool,
 ) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
@@ -1024,13 +1078,19 @@ func buildDefaultExprWithColumnsObserved(
 	// cast and the new-DDL width admission below judge the converted value.
 	// Only the bare literal authored as new DDL is rebound: a parenthesized
 	// DEFAULT (-1.25) is an expression default whose existing owner and raw
-	// error classification stay untouched (E1). Persisted readings reparse
-	// the stored origin text, and the origin formatter parenthesizes the
-	// signed literal, so persisted purposes must accept that parenthesized
-	// rendering of the bare authored literal; only this corrected tree can
-	// have stored it, because every older tree rejected the expression form.
+	// error classification stay untouched (E1). For a persisted
+	// parenthesized origin the wrapper above owns the producer
+	// discrimination: this chain binds exactly the semantics it is asked
+	// for — the historical expression owner with no suppression, or the
+	// forced numeric-domain literal rebinding — because the historical
+	// expression chain can fail late, during constant folding.
+	suppressSignedDecimalLiteralDomain := bareSignedDecimalCharFamilyDefault(typ, semanticExpr) &&
+		(purpose != defaultExprForDDL || !isExpressionDefault)
 	if bareSignedDecimalCharFamilyDefault(typ, semanticExpr) &&
-		(purpose != defaultExprForDDL || !isExpressionDefault) {
+		purpose != defaultExprForDDL && isExpressionDefault {
+		suppressSignedDecimalLiteralDomain = signedDecimalLiteralDomain
+	}
+	if suppressSignedDecimalLiteralDomain {
 		binder.baseBinder.suppressDefaultValueBindType = true
 	}
 	planExpr, err := binder.bindPersistedExpr(semanticExpr, 0, false)

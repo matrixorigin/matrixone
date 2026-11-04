@@ -429,3 +429,70 @@ func TestTableDumpVerifiesNewSignedDecimalLiteralDefault(t *testing.T) {
 	_, err = AnalyzeTableDumpBindings(compiler, forged, forged)
 	require.ErrorContains(t, err, "cannot verify bound default expression")
 }
+
+// Reviewer regression (#5764078751): an admitted parenthesized expression
+// default must keep its historical producer end to end. DDL folds (-0.25)
+// into VARCHAR(1) through the destination-cast owner and stores '0'; the
+// persisted dump verification must reconstruct that exact stored value
+// instead of rebinding the parenthesized origin in the numeric literal
+// domain. The stored value distinguishes the two producers: a bare authored
+// signed decimal keeps its own literal reconstruction in the tests above,
+// and a mismatched stored payload keeps failing verification.
+func TestTableDumpVerifiesAdmittedParenthesizedSignedDecimalExpressionDefault(t *testing.T) {
+	// The authoring zone keeps the historical expression owner and its
+	// folded value: the destination cast truncates the magnitude to '0'
+	// before the unary minus, so the parenthesized form stays admitted.
+	proc := testutil.NewProcess(t)
+	value, err := buildDDLColumnDefault(t, proc, "v varchar(1) default (-0.25)")
+	require.NoError(t, err, "the parenthesized expression default keeps its historical admission")
+	require.Equal(t, "0", value.Expr.GetLit().GetSval())
+
+	// The complete CREATE plan stores the same catalog state and must keep
+	// verifying through the real dump consumer unchanged.
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t (v varchar(1) default (-0.25))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	source := built.GetDdl().GetCreateTable().GetTableDef()
+	require.NotNil(t, source)
+
+	var col *plan.ColDef
+	for _, c := range source.Cols {
+		if c.Name == "v" {
+			col = c
+		}
+	}
+	require.NotNil(t, col, "the CREATE plan must carry the v column")
+	require.Equal(t, "0", col.Default.Expr.GetLit().GetSval(), "the stored default is the historical folded value")
+	require.Equal(t, "(-0.25)", col.Default.OriginString, "origin text keeps the parenthesized expression form")
+
+	snapshot := proto.Clone(source)
+	_, err = AnalyzeTableDumpBindings(compiler, source, source)
+	require.NoError(t, err, "the admitted expression default must keep verifying through the dump consumer: %v", err)
+	require.True(t, proto.Equal(snapshot, source), "dump verification must not mutate the persisted payload")
+
+	// The persisted reading zone re-binds the same origin without the new
+	// width admission and must reconstruct the identical stored value.
+	proc = testutil.NewProcess(t)
+	colDef := parseDDLDefaultColumn(t, "v varchar(1) default (-0.25)")
+	typ, err := getTypeFromAst(context.Background(), colDef.Type)
+	require.NoError(t, err)
+	reading, err := buildDefaultExprWithColumnsObserved(proc.Ctx, colDef, typ, proc, nil, defaultExprForPersistedVerification, nil)
+	require.NoError(t, err, "persisted verification must rebuild the admitted expression default")
+	require.Equal(t, "0", reading.Expr.GetLit().GetSval())
+
+	// A forged stored payload must not verify.
+	forged := proto.Clone(source).(*plan.TableDef)
+	for _, c := range forged.Cols {
+		if c.Name == "v" {
+			c.Default.Expr = &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_varchar), Width: 1},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "7"}}},
+			}
+		}
+	}
+	_, err = AnalyzeTableDumpBindings(compiler, forged, forged)
+	require.ErrorContains(t, err, "cannot verify bound default expression")
+}
