@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-Example 35: PyTorch Load - Load vecf8 / vecf4 Columns into Tensors
+Example 36: PyTorch Load - Load vecf8 / vecf4 Columns into Tensors
 
 MatrixOne PyTorch Integration Example
 

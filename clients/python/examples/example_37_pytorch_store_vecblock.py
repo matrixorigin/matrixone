@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-Example 36: PyTorch Store - Store Tensors as vecf8 / vecf4 Cells
+Example 37: PyTorch Store - Store Tensors as vecf8 / vecf4 Cells
 
 MatrixOne PyTorch Integration Example
 

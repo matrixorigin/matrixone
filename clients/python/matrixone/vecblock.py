@@ -274,7 +274,9 @@ def scaled_mm(rows: VecBlockBatch, queries: VecBlockBatch):
     """``rows @ queries.T`` ``[len(rows), len(queries)]`` float32 with ``torch._scaled_mm``.
 
     Needs a CUDA device with block-scaled tensor cores (Blackwell) and both batches on it.
-    The global scales are applied after the GEMM, as MatrixOne's engine does.
+    The global scales are applied after the GEMM as MatrixOne's engine applies them: the
+    float32 GEMM output times the row and query global scales in float64, rounded once to
+    float32.
     """
     torch = _torch()
     if rows.fmt != queries.fmt or rows.dim != queries.dim:
@@ -289,4 +291,5 @@ def scaled_mm(rows: VecBlockBatch, queries: VecBlockBatch):
         scale_b=queries.blocked_scales(),
         out_dtype=torch.float32,
     )
-    return out * (rows.global_scale[:, None] * queries.global_scale[None, :])
+    out = out.double() * rows.global_scale.double()[:, None] * queries.global_scale.double()[None, :]
+    return out.float()

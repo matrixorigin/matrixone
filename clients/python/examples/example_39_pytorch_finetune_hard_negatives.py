@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-Example 38: PyTorch Fine-Tuning - Hard Negatives Mined in MatrixOne
+Example 39: PyTorch Fine-Tuning - Hard Negatives Mined in MatrixOne
 
 MatrixOne PyTorch Integration Example
 

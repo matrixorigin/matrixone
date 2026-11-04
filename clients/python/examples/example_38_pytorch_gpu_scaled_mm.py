@@ -15,7 +15,7 @@
 # limitations under the License.
 
 """
-Example 37: PyTorch GPU - Score vecf8 / vecf4 Cells with torch._scaled_mm
+Example 38: PyTorch GPU - Score vecf8 / vecf4 Cells with torch._scaled_mm
 
 MatrixOne PyTorch Integration Example
 
@@ -25,7 +25,8 @@ This example demonstrates how to multiply MatrixOne cells on the GPU in PyTorch:
 - The same top-k from vector_matmul in MatrixOne, with the queries passed as cells in a user
   variable ('{"query_format":"vecblock"}')
 - With MatrixOne scoring on the GPU (gpu_mode = 1), the distances are bit-identical: both run
-  cuBLASLt's block-scaled GEMM
+  cuBLASLt's block-scaled GEMM and apply the vecf4 global scales in float64 after it; another
+  GEMM shape or cuBLASLt version can select another algorithm and float32 summation order
 
 Requires PyTorch 2.9 or later with a CUDA GPU that has block-scaled tensor cores (Blackwell).
 """

@@ -155,3 +155,19 @@ def test_scaled_mm_matches_decoded_product():
         got = vecblock.scaled_mm(r.to("cuda"), q.to("cuda")).cpu().double()
         want = r.to_float().double() @ q.to_float().double().T
         assert ((got - want).abs().max() / want.abs().max()).item() < 1e-5, fmt
+
+
+@pytest.mark.skipif(not _scaled_mm_available(), reason="needs a GPU with block-scaled torch._scaled_mm")
+def test_scaled_mm_applies_global_scales_in_double():
+    gen = torch.Generator().manual_seed(5)
+    r = vecblock.quantize(torch.randn(128, 64, generator=gen), "vecf4")
+    q = vecblock.quantize(torch.randn(128, 64, generator=gen), "vecf4")
+    ones = torch.ones(128, dtype=torch.float32)
+    unit_r = vecblock.VecBlockBatch(r.fmt, r.dim, r.elements, r.scales, ones)
+    unit_q = vecblock.VecBlockBatch(q.fmt, q.dim, q.elements, q.scales, ones)
+    acc = vecblock.scaled_mm(unit_r.to("cuda"), unit_q.to("cuda")).cpu()
+    want = (acc.double() * r.global_scale.double()[:, None] * q.global_scale.double()[None, :]).float()
+    in_float32 = acc * (r.global_scale[:, None] * q.global_scale[None, :])
+    assert not torch.equal(in_float32, want)
+    got = vecblock.scaled_mm(r.to("cuda"), q.to("cuda")).cpu()
+    assert torch.equal(got, want)
