@@ -14,12 +14,18 @@ package vector
 import (
 	"bytes"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func areaPointer(area []byte) *byte {
+	if cap(area) == 0 {
+		return nil
+	}
+	return &area[:1][0]
+}
 
 func sameAreaOwnership(before, after []byte) bool {
 	if (before == nil) != (after == nil) || cap(before) != cap(after) {
@@ -28,7 +34,7 @@ func sameAreaOwnership(before, after []byte) bool {
 	if cap(before) == 0 {
 		return true
 	}
-	return unsafe.SliceData(before) == unsafe.SliceData(after)
+	return areaPointer(before) == areaPointer(after)
 }
 
 // This is a contract test, not a test which expects the leak. Only the
@@ -105,8 +111,8 @@ func TestAreaGrowthAdmissionPreservesCleanup(t *testing.T) {
 				if !sameAreaOwnership(oldArea, dst.GetArea()) {
 					areaLost = true
 					t.Errorf("rejected growth discarded owned area: before=(nil=%t,len=%d,cap=%d,ptr=%p) after=(nil=%t,len=%d,cap=%d,ptr=%p)",
-						oldArea == nil, len(oldArea), cap(oldArea), unsafe.SliceData(oldArea),
-						dst.GetArea() == nil, len(dst.GetArea()), cap(dst.GetArea()), unsafe.SliceData(dst.GetArea()))
+						oldArea == nil, len(oldArea), cap(oldArea), areaPointer(oldArea),
+						dst.GetArea() == nil, len(dst.GetArea()), cap(dst.GetArea()), areaPointer(dst.GetArea()))
 				}
 				if !bytes.Equal(oldBytes, dst.GetArea()) {
 					t.Errorf("rejected growth changed owned bytes: before=%d after=%d", len(oldArea), len(dst.GetArea()))

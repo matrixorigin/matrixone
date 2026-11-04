@@ -14,7 +14,6 @@ package hashjoin
 import (
 	"bytes"
 	"testing"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -29,6 +28,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func areaPointer(area []byte) *byte {
+	if cap(area) == 0 {
+		return nil
+	}
+	return &area[:1][0]
+}
+
 func sameAreaOwnership(before, after []byte) bool {
 	if (before == nil) != (after == nil) || cap(before) != cap(after) {
 		return false
@@ -36,7 +42,7 @@ func sameAreaOwnership(before, after []byte) bool {
 	if cap(before) == 0 {
 		return true
 	}
-	return unsafe.SliceData(before) == unsafe.SliceData(after)
+	return areaPointer(before) == areaPointer(after)
 }
 
 // Exercise public Call -> emptyProbe -> UnionBatch -> Reset/Free with a real
@@ -112,8 +118,8 @@ func TestHashJoinAreaAdmissionTerminalCleanup(t *testing.T) {
 				if !sameAreaOwnership(oldArea, currentArea) {
 					areaLost = true
 					t.Errorf("rejected result growth discarded owned area: before=(nil=%t,len=%d,cap=%d,ptr=%p) after=(nil=%t,len=%d,cap=%d,ptr=%p)",
-						oldArea == nil, len(oldArea), cap(oldArea), unsafe.SliceData(oldArea),
-						currentArea == nil, len(currentArea), cap(currentArea), unsafe.SliceData(currentArea))
+						oldArea == nil, len(oldArea), cap(oldArea), areaPointer(oldArea),
+						currentArea == nil, len(currentArea), cap(currentArea), areaPointer(currentArea))
 				}
 			} else {
 				require.NoError(t, callErr)
