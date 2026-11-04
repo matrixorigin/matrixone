@@ -14713,6 +14713,22 @@ function_call_generic:
             Exprs: $3,
         }
     }
+|   SERIAL '(' expression_list_opt ')'
+    {
+        // `serial` is a keyword (SERIAL column-alias type, see column_def) but
+        // the serial(...)/serial_extract(serial(...))/composite-index consumers
+        // use it as an ordinary generic function. Keep the generic-call shape
+        // of the ID arm above so the write/spellings, nesting and arity are
+        // byte-identical to what `serial` parsed as before the keyword was
+        // introduced (#31748).
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
+            Exprs: $3,
+        }
+    }
 |   INTERVAL '(' bit_expr ',' expression_list ')'
     {
         name := tree.NewUnresolvedColName($1)
