@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -483,14 +484,37 @@ func (v *Vector) MakeAppendCheckpoint() AppendCheckpoint {
 	}
 }
 
-// RollbackAppend restores the logical state captured before an attempted
-// append. attemptedRows is needed because grouping bits can be published
-// before a varlen copy fails and advances length.
-func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) {
-	if checkpoint.length < 0 || checkpoint.length > v.length ||
+// JoinAppendRollbackError preserves a successful rollback's original error
+// identity, including direct MO errors used at protocol boundaries.
+func JoinAppendRollbackError(cause, rollbackErr error) error {
+	if rollbackErr == nil {
+		return cause
+	}
+	return errors.Join(cause, rollbackErr)
+}
+
+// RollbackAppend restores an append checkpoint, retaining owned capacity.
+// Invalid checkpoints return a terminal invariant error before any mutation.
+// attemptedRows includes metadata published before a payload append failed.
+func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) error {
+	invalid := func(message string) error {
+		return errors.Join(mpool.ErrAllocationAccountInvariant, moerr.NewInternalErrorNoCtx(message))
+	}
+	if v == nil || checkpoint.length < 0 || checkpoint.length > v.length ||
 		checkpoint.areaLength < 0 || checkpoint.areaLength > len(v.area) ||
-		attemptedRows < 0 {
-		panic("invalid vector append checkpoint")
+		attemptedRows < 0 || attemptedRows > math.MaxInt-checkpoint.length {
+		return invalid("invalid vector append checkpoint")
+	}
+	// Validate the complete restoration before changing lengths or metadata.
+	if checkpoint.hadPrepareParamKinds && len(v.prepareParamKinds) < checkpoint.length {
+		return invalid("prepared parameter sidecar lost during append rollback")
+	}
+	metadataLength := v.physicalMetadataRowCountForLength(checkpoint.length)
+	if checkpoint.hadStringSources && len(v.stringSources) < metadataLength {
+		return invalid("string source sidecar lost during append rollback")
+	}
+	if checkpoint.hadBinaryStringRows && !(!v.binaryStringRowsActive && checkpoint.binaryStringRowsUniform) && (v.binaryStringRows == nil || !v.binaryStringRowsActive) {
+		return invalid("binary-string sidecar lost during append rollback")
 	}
 	end := max(v.length, checkpoint.length+attemptedRows)
 	nulls.RemoveRange(&v.nsp, uint64(checkpoint.length), uint64(end))
@@ -502,9 +526,6 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.areaDisjoint = checkpoint.areaDisjoint && v.areaDisjoint
 	v.sorted = checkpoint.sorted
 	if checkpoint.hadPrepareParamKinds {
-		if len(v.prepareParamKinds) < checkpoint.length {
-			panic("prepared parameter sidecar lost during append rollback")
-		}
 		clear(v.prepareParamKinds[checkpoint.length:])
 		v.prepareParamKinds = v.prepareParamKinds[:checkpoint.length]
 	} else {
@@ -514,9 +535,6 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	v.prepareParamKindSeen = checkpoint.prepareParamKindSeen
 	if checkpoint.hadStringSources {
 		metadataLength := v.physicalMetadataRowCountForLength(checkpoint.length)
-		if len(v.stringSources) < metadataLength {
-			panic("string source sidecar lost during append rollback")
-		}
 		clear(v.stringSources[metadataLength:])
 		v.stringSources = v.stringSources[:metadataLength]
 	} else {
@@ -526,8 +544,6 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	if checkpoint.hadBinaryStringRows {
 		if !v.binaryStringRowsActive && checkpoint.binaryStringRowsUniform {
 			v.setBinaryStringScalar(checkpoint.binaryString)
-		} else if v.binaryStringRows == nil || !v.binaryStringRowsActive {
-			panic("binary-string sidecar lost during append rollback")
 		} else {
 			v.binaryStringRows.RemoveRange(uint64(checkpoint.length), uint64(end))
 			v.textStringRows.RemoveRange(uint64(checkpoint.length), uint64(end))
@@ -536,6 +552,7 @@ func (v *Vector) RollbackAppend(checkpoint AppendCheckpoint, attemptedRows int) 
 	} else {
 		v.setBinaryStringScalar(checkpoint.binaryString)
 	}
+	return nil
 }
 
 // Size of data, I think this function is inherently broken.  This
@@ -6575,18 +6592,6 @@ func (v *Vector) remapPrepareParamKindsAfterShuffle(
 	v.normalizePrepareParamKinds()
 }
 
-// preserveSortedAfterShuffle retains the ordering proof only for a stable selection.
-func (v *Vector) preserveSortedAfterShuffle(sels []int64) {
-	if v.sorted {
-		for i := 1; i < len(sels); i++ {
-			if sels[i] < sels[i-1] {
-				v.sorted = false
-				return
-			}
-		}
-	}
-}
-
 // Shuffle use to shrink vectors, sels can be disordered
 func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 	if v.IsConst() {
@@ -6694,7 +6699,6 @@ func (v *Vector) Shuffle(sels []int64, mp *mpool.MPool) (err error) {
 		}
 		return err
 	}
-	v.preserveSortedAfterShuffle(sels)
 	v.remapPrepareParamKindsAfterShuffle(oldKinds, sels, preparedKinds, preparedOwner)
 	v.publishRemappedStringSources(remappedSources, remappedSourcesOwner)
 	releaseRemappedSources = false
@@ -6838,7 +6842,6 @@ func (v *Vector) shuffleWithBufData(sels []int64, buf *[]byte) (err error) {
 	}
 
 	if err == nil {
-		v.preserveSortedAfterShuffle(sels)
 		if v.typ.IsVarlen() {
 			v.areaDisjoint = false
 		}
@@ -10156,7 +10159,7 @@ func AppendFixedWithStringSource[T any](vec *Vector, val T, isNull bool, source 
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, 1)
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 		}
 	}()
 	return appendOneFixedWithSource(vec, val, isNull, &source, mp)
@@ -10216,7 +10219,7 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, 1)
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 		}
 	}()
 	if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
@@ -10287,8 +10290,9 @@ func AppendByteJsonEncoded(
 	wasNull := vec.nsp.Contains(uint64(vec.length))
 	defer func() {
 		if retErr != nil {
-			vec.RollbackAppend(checkpoint, 1)
-			if wasNull {
+			rollbackErr := vec.RollbackAppend(checkpoint, 1)
+			retErr = JoinAppendRollbackError(retErr, rollbackErr)
+			if wasNull && rollbackErr == nil {
 				vec.nsp.Add(uint64(checkpoint.length))
 			}
 		}
@@ -10467,7 +10471,7 @@ func appendOneBytesWithSource(vec *Vector, val []byte, isNull bool, source *type
 		checkpoint := vec.MakeAppendCheckpoint()
 		defer func() {
 			if err != nil {
-				vec.RollbackAppend(checkpoint, 1)
+				err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 			}
 		}()
 		if err = vec.prepareSingleAppendMetadata(false, source, mp); err != nil {
@@ -10501,7 +10505,7 @@ func appendOneByteJson(vec *Vector, bj bytejson.ByteJson, isNull bool, mp *mpool
 		checkpoint := vec.MakeAppendCheckpoint()
 		defer func() {
 			if err != nil {
-				vec.RollbackAppend(checkpoint, 1)
+				err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 			}
 		}()
 		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
@@ -10536,7 +10540,7 @@ func appendOneArray[T types.ArrayElement](vec *Vector, val []T, isNull bool, mp 
 		checkpoint := vec.MakeAppendCheckpoint()
 		defer func() {
 			if err != nil {
-				vec.RollbackAppend(checkpoint, 1)
+				err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, 1))
 			}
 		}()
 		if err = vec.prepareOrdinaryAppendMetadata(1, mp); err != nil {
@@ -10614,7 +10618,7 @@ func appendMultiBytes(vec *Vector, val []byte, isNull bool, cnt int, mp *mpool.M
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, cnt)
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, cnt))
 		}
 	}()
 	vec.areaDisjoint = false
@@ -10733,7 +10737,7 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, len(vals))
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(vals)))
 		}
 	}()
 	pregrow := len(vals) >= 16 && canPregrowRawByteList(vec, isNulls)
@@ -10823,7 +10827,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, len(vals))
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(vals)))
 		}
 	}()
 	pregrow := len(vals) >= 16 && canPregrowRawByteList(vec, isNulls)
@@ -10935,7 +10939,7 @@ func appendArrayList[T types.ArrayElement](vec *Vector, vals [][]T, isNulls []bo
 	checkpoint := vec.MakeAppendCheckpoint()
 	defer func() {
 		if err != nil {
-			vec.RollbackAppend(checkpoint, len(vals))
+			err = JoinAppendRollbackError(err, vec.RollbackAppend(checkpoint, len(vals)))
 		}
 	}()
 	disjoint := vec.areaDisjoint
@@ -11051,6 +11055,32 @@ func shrinkFixedByMask[T types.FixedSizeT](v *Vector, sels *bitmap.Bitmap, negat
 	}
 }
 
+// shuffleWithSortedProof gathers into independent storage while preserving an
+// existing ordering proof only when the selection is nondecreasing.
+func shuffleWithSortedProof[T types.FixedSizeT](src, dst []T, sels []int64, sorted bool) (bool, bool) {
+	if !sorted {
+		shuffle.FixedLengthShuffle(src, dst, sels)
+		return false, false
+	}
+	if len(sels) == 0 {
+		return true, true
+	}
+	start := sels[0]
+	k := 1
+	for k < len(sels) && sels[k] == sels[k-1]+1 {
+		k++
+	}
+	copy(dst[:k], src[start:start+int64(k)])
+	for i := k; i < len(sels); i++ {
+		dst[i] = src[sels[i]]
+		if sels[i] < sels[i-1] {
+			shuffle.FixedLengthShuffle(src, dst[i+1:], sels[i+1:])
+			return false, false
+		}
+	}
+	return true, k == len(sels) && start == 0
+}
+
 // shuffleFixedNoTypeCheck is always used after type check. and we can use ToSliceNoTypeCheck here.
 func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mpool.MPool) error {
 	sz := v.typ.TypeSize()
@@ -11064,7 +11094,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	}
 	ws := util.UnsafeSliceCastToLength[T](data, ns)
 
-	shuffle.FixedLengthShuffle(vs, ws, sels)
+	preserved, _ := shuffleWithSortedProof(vs, ws, sels, v.sorted)
 	if err := v.remapShuffleBitmaps(sels, mp); err != nil {
 		mp.Free(data)
 		return err
@@ -11079,6 +11109,7 @@ func shuffleFixedNoTypeCheck[T types.FixedSizeT](v *Vector, sels []int64, mp *mp
 	}
 	v.data = data
 	v.length = ns
+	v.sorted = preserved
 	return nil
 }
 
@@ -11172,11 +11203,14 @@ func shuffleFixedNoTypeCheckWithBuf[T types.FixedSizeT](v *Vector, sels []int64,
 	ToFixedColNoTypeCheck(v, &vs)
 	ws := util.UnsafeSliceCastToLength[T](*buf, ns)
 
-	shuffle.FixedLengthShuffle(vs, ws, sels)
-	copy(v.data[:needed], *buf)
+	preserved, identityProven := shuffleWithSortedProof(vs, ws, sels, v.sorted)
+	if !identityProven || byteSlicesOverlap(v.data[:needed], *buf) {
+		copy(v.data[:needed], *buf)
+	}
 	nulls.Filter(&v.gsp, sels, false)
 	nulls.Filter(&v.nsp, sels, false)
 	v.length = ns
+	v.sorted = preserved
 	return nil
 }
 
