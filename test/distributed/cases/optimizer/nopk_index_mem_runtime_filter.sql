@@ -13,6 +13,16 @@ insert into t values (1,7,'a'),(2,7,'b'),(3,8,'c'),(4,null,'n'),(5,9,'x');
 select id,k,payload from t force index(idx_k) where k in (7,8) order by id;
 select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
 
+-- 子查询的重复键不放大外表结果，NULL 不产生匹配。
+create table members (k int);
+insert into members values (7),(7),(8),(null);
+select id,k,payload from t where k in (select k from members where k < 9) order by id;
+select id,k,payload from t ignore index(idx_k) where k in (select k from members where k < 9) order by id;
+select id,k,payload from t force index(idx_k) where k in (select k from members where k < 9) order by id;
+select t.id,t.k,t.payload from t join (select distinct k from members where k < 9) m on t.k=m.k order by t.id;
+select id,k,payload from t where k in (select k from members) order by id;
+select id,k,payload from t where k in (select k from members where k > 9) order by id;
+
 prepare idx_points from 'select id,k,payload from t force index(idx_k) where k in (?, ?) order by id';
 set @k1='7';
 set @k2='8';
@@ -29,5 +39,10 @@ select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
 select mo_ctl('dn', 'flush', 'nopk_index_mem_runtime_filter.t');
 select id,k,payload from t force index(idx_k) where k in (7,8) order by id;
 select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
+
+-- 同一半连接在持久化数据和残余谓词上保持结果等价。
+select id,k,payload from t where k in (select k from members where k < 9) and payload = 'updated' order by id;
+select id,k,payload from t ignore index(idx_k) where k in (select k from members where k < 9) and payload = 'updated' order by id;
+select id,k,payload from t force index(idx_k) where k in (select k from members where k < 9) and payload = 'updated' order by id;
 
 drop database nopk_index_mem_runtime_filter;

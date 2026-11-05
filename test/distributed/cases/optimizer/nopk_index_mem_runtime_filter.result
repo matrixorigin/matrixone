@@ -13,6 +13,35 @@ select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
 1  ¦  7  ¦  a  𝄀
 2  ¦  7  ¦  b  𝄀
 3  ¦  8  ¦  c
+create table members (k int);
+insert into members values (7),(7),(8),(null);
+select id,k,payload from t where k in (select k from members where k < 9) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select id,k,payload from t ignore index(idx_k) where k in (select k from members where k < 9) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select id,k,payload from t force index(idx_k) where k in (select k from members where k < 9) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select t.id,t.k,t.payload from t join (select distinct k from members where k < 9) m on t.k=m.k order by t.id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select id,k,payload from t where k in (select k from members) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  b  𝄀
+3  ¦  8  ¦  c
+select id,k,payload from t where k in (select k from members where k > 9) order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]
 prepare idx_points from 'select id,k,payload from t force index(idx_k) where k in (?, ?) order by id';
 set @k1='7';
 set @k2='8';
@@ -55,5 +84,14 @@ select id,k,payload from t force index(idx_k) where k in (7,8) order by id;
 select id,k,payload from t ignore index(idx_k) where k in (7,8) order by id;
 ➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
 1  ¦  7  ¦  a  𝄀
+2  ¦  7  ¦  updated
+select id,k,payload from t where k in (select k from members where k < 9) and payload = 'updated' order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+2  ¦  7  ¦  updated
+select id,k,payload from t ignore index(idx_k) where k in (select k from members where k < 9) and payload = 'updated' order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
+2  ¦  7  ¦  updated
+select id,k,payload from t force index(idx_k) where k in (select k from members where k < 9) and payload = 'updated' order by id;
+➤ id[4,32,0]  ¦  k[4,32,0]  ¦  payload[12,16,0]  𝄀
 2  ¦  7  ¦  updated
 drop database nopk_index_mem_runtime_filter;
