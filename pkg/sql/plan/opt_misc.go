@@ -20,7 +20,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -2480,14 +2479,16 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 			handleOptimizerHints(kvs[i], builder)
 		}
 	}
-	if v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints"); ok {
+	// The session value includes the global default captured when the connection was
+	// created. CN runtime variables are shared by unrelated sessions and tenants.
+	if v, err := builder.compCtx.ResolveVariable("optimizer_hints", true, false); err == nil {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
 	}
 	// Per-statement optimizer_hints (same key=value format as the global variable) carried on the
 	// execution context by the internal SQL executor (StatementOption.WithOptimizerHints). Applied
-	// AFTER the global so a statement can override it -- e.g. the fulltext2 json probe's fallback/
+	// AFTER the session so a statement can override it -- e.g. the fulltext2 json probe's fallback/
 	// tail SQL passes applyIndices=1 so its base-table scan does not re-trigger the probe rewrite.
 	if v := builder.compCtx.GetContext().Value(defines.OptimizerHints{}); v != nil {
 		if str, ok := v.(string); ok {

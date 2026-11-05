@@ -7862,7 +7862,7 @@ func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
-func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
 	shaTypes := vector.GenerateFunctionFixedTypeParameter[int64](args[1])
@@ -7875,6 +7875,12 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(proc.Ctx, strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		shaType, isnull2 := shaTypes.GetValue(i)
 
 		if isnull1 || isnull2 {
@@ -7905,7 +7911,7 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 // as '256tail' selects SHA-256 while a non-numeric value becomes zero. The
 // string wrapper preserves binary bytes and avoids the lossy implicit cast to
 // VARCHAR that would otherwise happen before execution.
-func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	res := vector.MustFunctionResult[types.Varlena](result)
 	strs := vector.GenerateFunctionStrParameter(args[0])
 	shaLengths := vector.GenerateFunctionStrParameter(args[1])
@@ -7928,6 +7934,12 @@ func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(proc.Ctx, strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		var isnull2 bool
 		var shaType int64
 		if lengthIsConst {

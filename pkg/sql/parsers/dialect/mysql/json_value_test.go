@@ -73,7 +73,8 @@ func TestJSONValueReturningTypesParse(t *testing.T) {
 	for _, returning := range []string{
 		"signed", "unsigned", "decimal(10,2)", "float", "double", "date",
 		"time(3)", "datetime(6)", "year", "char", "char(12)",
-		"char character set utf8mb4", "char(12) character set utf8mb4", "binary(12)", "json",
+		"char character set utf8mb4", "char(12) character set utf8mb4",
+		"char charset utf8mb4", "char(12) charset utf8mb4", "binary(12)", "json",
 	} {
 		t.Run(returning, func(t *testing.T) {
 			stmt, err := ParseOne(context.Background(),
@@ -87,10 +88,35 @@ func TestJSONValueReturningTypesParse(t *testing.T) {
 			require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, tree.WithQuoteString(true)))
 			before := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
 			after := reparsed.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
-			if returning == "char" || returning == "char character set utf8mb4" || returning == "char(12)" || returning == "char(12) character set utf8mb4" {
+			if returning == "char" || returning == "char character set utf8mb4" || returning == "char charset utf8mb4" ||
+				returning == "char(12)" || returning == "char(12) character set utf8mb4" || returning == "char(12) charset utf8mb4" {
 				require.Equal(t, before.JsonValue.Returning, after.JsonValue.Returning)
 			}
 		})
+	}
+}
+
+func TestJSONValueAndConvertCharsetSynonyms(t *testing.T) {
+	var canonical string
+	for _, keyword := range []string{"character set", "charset"} {
+		sql := "select convert('a', char(5) " + keyword + " utf8mb4), " +
+			"json_value(doc, '$.a' returning char(12) " + keyword + " utf8mb4 error on error)"
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		defer stmt.Free()
+		exprs := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs
+		jsonValue := exprs[1].Expr.(*tree.FuncExpr)
+		require.Equal(t, "utf8mb4", jsonValue.JsonValue.Returning.Charset)
+		formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteString(true))
+		if canonical == "" {
+			canonical = formatted
+		} else {
+			require.Equal(t, canonical, formatted)
+		}
+		reparsed, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		defer reparsed.Free()
+		require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, tree.WithQuoteString(true)))
 	}
 }
 
