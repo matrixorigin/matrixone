@@ -851,16 +851,33 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			}
 			args[idx] = expr
 		}
-		args[len(args)-1] = &Expr{
+		// Keep correlation depth on the wrapped reference so an outer
+		// ENUM/SET column resolves through the outer scope instead of
+		// leaking a plain column reference into the subquery scope (#31568).
+		refRelPos, refColPos := relPos, colPos
+		if aggRelPos, aggColPos, ok := b.correlatedFullGroupByAggregateRef(relPos, colPos, col, typ); ok {
+			refRelPos, refColPos = aggRelPos, aggColPos
+		}
+		ref := &Expr{
 			Typ: *typ,
-			Expr: &plan.Expr_Col{
+			Expr: &plan.Expr_Corr{
+				Corr: &plan.CorrColRef{
+					RelPos: refRelPos,
+					ColPos: refColPos,
+					Depth:  depth,
+				},
+			},
+		}
+		if depth == 0 {
+			ref.Expr = &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: relPos,
 					ColPos: colPos,
 					Name:   col,
 				},
-			},
+			}
 		}
+		args[len(args)-1] = ref
 		if virtualRead != nil {
 			args[len(args)-1] = virtualRead
 		}
