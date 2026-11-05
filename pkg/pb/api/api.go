@@ -62,6 +62,10 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 	if info == nil {
 		return nil
 	}
+	var evolution *M0EvolutionContract
+	if info.M0Evolution != nil {
+		evolution = proto.Clone(info.M0Evolution).(*M0EvolutionContract)
+	}
 	checks := make([]*plan.CheckDef, len(info.Checks))
 	for i, check := range info.Checks {
 		if check != nil {
@@ -83,6 +87,7 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		FeatureFlag:       info.FeatureFlag,
 		IndexTables:       append([]uint64{}, info.IndexTables...),
 		ParentTableID:     info.ParentTableID,
+		FromPublication:   info.FromPublication,
 		AutoIncrOffset:    info.AutoIncrOffset,
 		AutoIncrEpoch:     info.AutoIncrEpoch,
 		AutoIdCache:       info.AutoIdCache,
@@ -91,6 +96,7 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		KeyFormat:         info.KeyFormat,
 		XXX_unrecognized:  append([]byte(nil), info.XXX_unrecognized...),
 		Checks:            checks,
+		M0Evolution:       evolution,
 	}
 }
 
