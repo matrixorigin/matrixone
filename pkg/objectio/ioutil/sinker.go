@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -77,6 +78,12 @@ func WithMemorySizeThreshold(size int) SinkerOption {
 	return func(sinker *Sinker) {
 		sinker.staged.memorySizeThreshold = size
 	}
+}
+
+// WithBoundedRuns limits the materialized size of an ordinary spill run.
+// The factory must expose active object names for commit-ambiguous writes.
+func WithBoundedRuns() SinkerOption {
+	return func(sinker *Sinker) { sinker.config.boundedRuns = true }
 }
 
 func WithOffHeap() SinkerOption {
@@ -414,10 +421,13 @@ type Sinker struct {
 		dedupAll            bool
 		tailSizeCap         int
 		offHeap             bool
+		boundedRuns         bool
 		chunkedColumnPolicy objectio.ChunkedColumnPolicy
 		// capacityHook gates each object right before it persists; nil
 		// in every caller without an engine capacity ledger.
 		capacityHook UncommittedCapacityHook
+		// The workspace, rather than the sinker, owns unpublished cleanup.
+		workspaceOwnedCleanup bool
 	}
 	fSinker struct {
 		executor FileSinker
@@ -426,10 +436,12 @@ type Sinker struct {
 	staged struct {
 		inMemStats          sinkerStats
 		inMemory            []*batch.Batch
+		inMemoryBounds      []int
 		persisted           []objectio.ObjectStats
 		unpublished         []string
 		inMemorySize        int
 		memorySizeThreshold int
+		aborted             bool
 	}
 	result struct {
 		persisted []objectio.ObjectStats
@@ -494,6 +506,13 @@ func (sinker *Sinker) fillDefaults() {
 	}
 }
 
+func (sinker *Sinker) runSizeLimit() int {
+	if !sinker.config.boundedRuns || sinker.config.allMergeSorted || sinker.config.dedupAll {
+		return 0
+	}
+	return sinker.staged.memorySizeThreshold
+}
+
 func (sinker *Sinker) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 	return sinker.result.persisted, sinker.result.tail
 }
@@ -521,6 +540,17 @@ func DeleteUnpublishedObjects(
 	fs fileservice.FileService,
 	files ...string,
 ) (int, error) {
+	return deleteUnpublishedObjects(ctx, fs, false, files...)
+}
+
+// A bounded writer may stop between requests; other callers retain the
+// existing contract of passing even an expired context to the file service.
+func deleteUnpublishedObjects(
+	ctx context.Context,
+	fs fileservice.FileService,
+	stopOnCancel bool,
+	files ...string,
+) (int, error) {
 	seen := make(map[string]struct{}, len(files))
 	unique := make([]string, 0, len(files))
 	for _, file := range files {
@@ -534,11 +564,44 @@ func DeleteUnpublishedObjects(
 		unique = append(unique, file)
 	}
 	for start := 0; start < len(unique); start += unpublishedObjectDeleteBatchSize {
+		if stopOnCancel {
+			if err := context.Cause(ctx); err != nil {
+				return len(unique), err
+			}
+		}
 		end := min(start+unpublishedObjectDeleteBatchSize, len(unique))
 		deleteCtx, cancel := context.WithTimeoutCause(
 			ctx, unpublishedObjectDeleteTimeout, moerr.CauseCleanUpUselessFiles,
 		)
 		err := fs.Delete(deleteCtx, unique[start:end]...)
+		if stopOnCancel && moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			if cause := context.Cause(deleteCtx); cause != nil {
+				cancel()
+				return len(unique), cause
+			}
+		}
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) && end-start > 1 {
+			// The file service may stop at the first missing name, leaving the
+			// rest untouched. Confirm every member before releasing ownership.
+			for _, file := range unique[start:end] {
+				if stopOnCancel {
+					if cause := context.Cause(deleteCtx); cause != nil {
+						cancel()
+						return len(unique), cause
+					}
+				}
+				err = fs.Delete(deleteCtx, file)
+				if stopOnCancel && moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					if cause := context.Cause(deleteCtx); cause != nil {
+						cancel()
+						return len(unique), cause
+					}
+				}
+				if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+					break
+				}
+			}
+		}
 		cancel()
 		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return len(unique), errors.Join(
@@ -565,6 +628,33 @@ func DeleteUnpublishedObjects(
 // DeletePersisted's callers have always done after taking the snapshot.
 func (sinker *Sinker) PersistedNames() []string {
 	return sinker.persistedSnapshot()
+}
+
+// CancelPending stops an abandoned generation without waiting for its workers.
+// Owners of several sinkers cancel all of them before waiting for any one.
+func (sinker *Sinker) CancelPending() {
+	if sinker.pipe.result != nil {
+		sinker.pipe.result.cancel()
+	}
+	if sinker.runSizeLimit() > 0 {
+		sinker.staged.aborted = true
+	}
+}
+
+// AbandonAndRetainableNames stops abandoned work before taking a snapshot.
+// A workspace owner receives all names. For an unbound writer, pending runs
+// remain under local cleanup and only handed-off results can be retained.
+func (sinker *Sinker) AbandonAndRetainableNames() []string {
+	sinker.CancelPending()
+	files := sinker.persistedSnapshot()
+	if sinker.config.workspaceOwnedCleanup {
+		return files
+	}
+	files = files[:0]
+	for i := range sinker.result.persisted {
+		files = append(files, sinker.result.persisted[i].ObjectName().String())
+	}
+	return normalizeUnpublishedObjectNames(files)
 }
 
 // persistedSnapshot assembles the persisted/possibly-persisted name
@@ -603,6 +693,9 @@ func (sinker *Sinker) persistedSnapshot() []string {
 // success and failure. The tracked references are retained when deletion fails
 // so the caller may retry or hand them off before closing the sinker.
 func (sinker *Sinker) DeletePersisted(ctx context.Context) ([]string, error) {
+	if sinker.config.workspaceOwnedCleanup {
+		return nil, moerr.NewInternalErrorNoCtx("workspace owns unpublished spill cleanup")
+	}
 	files := sinker.persistedSnapshot()
 	_, err := DeleteUnpublishedObjects(ctx, sinker.fs, files...)
 	if err != nil {
@@ -619,6 +712,106 @@ func (sinker *Sinker) DeletePersisted(ctx context.Context) ([]string, error) {
 		sinker.pipe.result.mu.Unlock()
 	}
 	return files, nil
+}
+
+// PendingUnpublishedRuns snapshots the objects that have not crossed Sync's
+// result handoff. In-flight pipeline jobs can add names until they are drained.
+func (sinker *Sinker) PendingUnpublishedRuns() []string {
+	files := append([]string(nil), sinker.staged.unpublished...)
+	appendStats := func(stats []objectio.ObjectStats) {
+		for i := range stats {
+			files = append(files, stats[i].ObjectName().String())
+		}
+	}
+	appendStats(sinker.staged.persisted)
+	if sinker.pipe.result != nil {
+		sinker.pipe.result.mu.RLock()
+		appendStats(sinker.pipe.result.persisted)
+		files = append(files, sinker.pipe.result.unpublished...)
+		sinker.pipe.result.mu.RUnlock()
+	}
+	return normalizeUnpublishedObjectNames(files)
+}
+
+// hasPendingUnpublishedRuns is used after pipeline drain, when the owner only
+// needs to decide whether Reset may discard the generation.
+func (sinker *Sinker) hasPendingUnpublishedRuns() bool {
+	if len(sinker.staged.persisted) != 0 || len(sinker.staged.unpublished) != 0 {
+		return true
+	}
+	if r := sinker.pipe.result; r != nil {
+		r.mu.RLock()
+		pending := len(r.persisted) != 0 || len(r.unpublished) != 0
+		r.mu.RUnlock()
+		return pending
+	}
+	return false
+}
+
+// RetryUnpublishedRuns stops the current generation and deletes only its
+// pre-handoff objects. On failure their names remain available for retry.
+func (sinker *Sinker) RetryUnpublishedRuns(ctx context.Context) ([]string, error) {
+	if sinker.config.workspaceOwnedCleanup {
+		return nil, moerr.NewInternalErrorNoCtx("workspace owns unpublished spill cleanup")
+	}
+	if sinker.runSizeLimit() == 0 {
+		return nil, nil
+	}
+	sinker.staged.aborted = true
+	if sinker.pipe.result != nil {
+		sinker.pipe.result.cancel()
+		_ = sinker.drainPipeline()
+	}
+	sinker.cleanupInMemoryStaged()
+	files := sinker.PendingUnpublishedRuns()
+	if _, err := deleteUnpublishedObjects(ctx, sinker.fs, true, files...); err != nil {
+		return files, err
+	}
+	sinker.staged.persisted = sinker.staged.persisted[:0]
+	sinker.staged.unpublished = sinker.staged.unpublished[:0]
+	if sinker.pipe.result != nil {
+		sinker.pipe.result.mu.Lock()
+		sinker.pipe.result.persisted = sinker.pipe.result.persisted[:0]
+		sinker.pipe.result.unpublished = sinker.pipe.result.unpublished[:0]
+		sinker.pipe.result.mu.Unlock()
+	}
+	return files, nil
+}
+
+func (sinker *Sinker) cleanupRunOnFailure(ctx context.Context, operationErr *error) {
+	if *operationErr == nil || sinker.staged.aborted {
+		return
+	}
+	if r := sinker.pipe.result; r != nil {
+		// Select the first terminal cause under the same lock used by workers
+		// and context callbacks. In particular, a later cancellation must not
+		// mask a worker error already selected before this operation failed.
+		r.mu.Lock()
+		if r.err != nil {
+			*operationErr = r.err
+		} else {
+			r.err = *operationErr
+		}
+		r.mu.Unlock()
+		r.cancel()
+	}
+	if sinker.config.workspaceOwnedCleanup {
+		// The transaction owns the reservations and must take the names.
+		// Never delete or call back into it from a possibly lock-held write.
+		sinker.staged.aborted = true
+		if sinker.pipe.result != nil {
+			_ = sinker.drainPipeline()
+		}
+		sinker.cleanupInMemoryStaged()
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	files, cleanupErr := sinker.RetryUnpublishedRuns(cleanupCtx)
+	if cleanupErr != nil {
+		logutil.Error("failed to clean up unpublished CN spill objects",
+			zap.Strings("objects", files), zap.Error(cleanupErr))
+	}
 }
 
 func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
@@ -641,6 +834,10 @@ func (sinker *Sinker) fetchBuffer() (*batch.Batch, error) {
 }
 
 func (sinker *Sinker) putBackBuffer(bat *batch.Batch) {
+	if limit := sinker.runSizeLimit(); limit > 0 && bat.Allocated() > limit {
+		bat.Clean(sinker.mp)
+		return
+	}
 	x := sinker.buf.buffers.Len()
 	sinker.buf.buffers.Putback(bat, sinker.mp)
 	y := sinker.buf.buffers.Len()
@@ -654,37 +851,53 @@ func (sinker *Sinker) putBackBuffer(bat *batch.Batch) {
 func (sinker *Sinker) putBackOneInMemory(idx int) {
 	bat := sinker.staged.inMemory[idx]
 	sinker.staged.inMemory[idx] = nil
-	sinker.staged.inMemorySize -= bat.Size()
+	if sinker.runSizeLimit() > 0 {
+		sinker.staged.inMemorySize -= sinker.staged.inMemoryBounds[idx]
+		sinker.staged.inMemoryBounds[idx] = 0
+	} else {
+		sinker.staged.inMemorySize -= bat.Size()
+	}
 	sinker.staged.inMemStats.updateCount(-1)
 	sinker.staged.inMemStats.updateBytes(-bat.Size())
 	sinker.putBackBuffer(bat)
 }
 
-func (sinker *Sinker) popStaged() *batch.Batch {
+func (sinker *Sinker) popStaged() (*batch.Batch, int) {
 	if len(sinker.staged.inMemory) == 0 {
-		return nil
+		return nil, 0
 	}
 
 	ret := sinker.staged.inMemory[len(sinker.staged.inMemory)-1]
 	sinker.staged.inMemory = sinker.staged.inMemory[:len(sinker.staged.inMemory)-1]
-	sinker.staged.inMemorySize -= ret.Size()
+	bound := ret.Size()
+	if sinker.runSizeLimit() > 0 {
+		last := len(sinker.staged.inMemoryBounds) - 1
+		bound = sinker.staged.inMemoryBounds[last]
+		sinker.staged.inMemoryBounds = sinker.staged.inMemoryBounds[:last]
+	}
+	sinker.staged.inMemorySize -= bound
 
 	sinker.staged.inMemStats.updateCount(-1)
 	sinker.staged.inMemStats.updateBytes(-ret.Size())
 
-	return ret
+	return ret, bound
 }
 
 // pushStaged take the ownership of the bat
 func (sinker *Sinker) pushStaged(
-	ctx context.Context, bat *batch.Batch,
+	ctx context.Context, bat *batch.Batch, bound int,
 ) error {
 
 	sinker.staged.inMemStats.updateCount(1)
 	sinker.staged.inMemStats.updateBytes(bat.Size())
 
 	sinker.staged.inMemory = append(sinker.staged.inMemory, bat)
-	sinker.staged.inMemorySize += bat.Size()
+	if sinker.runSizeLimit() > 0 {
+		sinker.staged.inMemoryBounds = append(sinker.staged.inMemoryBounds, bound)
+		sinker.staged.inMemorySize += bound
+	} else {
+		sinker.staged.inMemorySize += bat.Size()
+	}
 	if sinker.staged.inMemorySize >= sinker.staged.memorySizeThreshold {
 		return sinker.trySpill(ctx)
 	}
@@ -693,6 +906,7 @@ func (sinker *Sinker) pushStaged(
 
 func (sinker *Sinker) clearInMemoryStaged() {
 	sinker.staged.inMemory = sinker.staged.inMemory[:0]
+	sinker.staged.inMemoryBounds = sinker.staged.inMemoryBounds[:0]
 	sinker.staged.inMemorySize = 0
 }
 
@@ -704,6 +918,7 @@ func (sinker *Sinker) cleanupInMemoryStaged() {
 		}
 	}
 	sinker.staged.inMemory = sinker.staged.inMemory[:0]
+	sinker.staged.inMemoryBounds = sinker.staged.inMemoryBounds[:0]
 	sinker.staged.inMemorySize = 0
 }
 
@@ -714,6 +929,11 @@ func (sinker *Sinker) trySortInMemoryStaged(ctx context.Context) error {
 	var idxBuf []int64
 	var shuffleBuf []byte
 	for _, bat := range sinker.staged.inMemory {
+		if sinker.runSizeLimit() > 0 {
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+		}
 		if err := mergeutil.SortColumnsByIndexWithBuf(
 			bat.Vecs,
 			sinker.schema.sortKeyIdx,
@@ -742,16 +962,44 @@ func (sinker *Sinker) pipelineSubmit(ctx context.Context, data []*batch.Batch) e
 			cancel: cancel,
 		}
 	}
+	r := sinker.pipe.result
+	var stop func() bool
+	active := true // protected by r.mu
+	if sinker.runSizeLimit() > 0 {
+		stop = context.AfterFunc(ctx, func() {
+			r.mu.Lock()
+			if active && r.err == nil {
+				r.err = context.Cause(ctx)
+				r.cancel()
+			}
+			r.mu.Unlock()
+		})
+	}
 	waitStart := time.Now()
 	err := GetDefaultSinkPool().Submit(&poolSinkJob{
 		data:         data,
 		factory:      sinker.fSinker.factory,
 		mp:           sinker.mp,
 		fs:           sinker.fs,
-		result:       sinker.pipe.result,
+		result:       r,
 		capacityHook: sinker.config.capacityHook,
 	})
 	atomic.AddInt64(&sinker.timing.waitNs, int64(time.Since(waitStart)))
+	if stop != nil {
+		r.mu.Lock()
+		if r.err == nil {
+			if cause := context.Cause(ctx); cause != nil {
+				r.err = cause
+				r.cancel()
+			}
+		}
+		active = false
+		if r.err != nil {
+			err = r.err
+		}
+		r.mu.Unlock()
+		stop()
+	}
 	return err
 }
 
@@ -777,7 +1025,6 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 	if err := sinker.trySortInMemoryStaged(ctx); err != nil {
 		return err
 	}
-
 	defer sinker.cleanupInMemoryStaged()
 
 	// merge sort
@@ -823,6 +1070,7 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 			sinker.staged.inMemory[i] = nil
 		}
 		sinker.staged.inMemory = sinker.staged.inMemory[:0]
+		sinker.staged.inMemoryBounds = sinker.staged.inMemoryBounds[:0]
 		sinker.staged.inMemorySize = 0
 		return sinker.pipelineSubmit(ctx, jobData)
 	}
@@ -852,6 +1100,21 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 // a refusal stops the spilling writer with no partially-persisted
 // object behind it (issue #25590 round-18 review).
 type UncommittedCapacityHook func(name string) error
+
+// WithWorkspaceOwnedCleanup leaves unpublished names for the transaction's
+// existing cleanup owner instead of deleting them during a sinker operation.
+func WithWorkspaceOwnedCleanup() SinkerOption {
+	return func(sinker *Sinker) { sinker.config.workspaceOwnedCleanup = true }
+}
+
+func (sinker *Sinker) WorkspaceOwnsCleanup() bool {
+	return sinker != nil && sinker.config.workspaceOwnedCleanup
+}
+
+// ClearWorkspaceOwnedCleanup removes the binding after the owner took the names.
+func (sinker *Sinker) ClearWorkspaceOwnedCleanup() {
+	sinker.config.workspaceOwnedCleanup = false
+}
 
 // WithUncommittedCapacityHook installs the capacity hook consulted
 // before each object persists. It is nil in production unless the
@@ -1131,52 +1394,162 @@ func (sinker *Sinker) GetMPool() *mpool.MPool {
 	return sinker.mp
 }
 
-// Write always copy the data
-func (sinker *Sinker) Write(
-	ctx context.Context,
-	data *batch.Batch,
-) (err error) {
+// Write copies data into staged spill runs; the caller retains ownership.
+func (sinker *Sinker) Write(ctx context.Context, data *batch.Batch) (err error) {
+	if sinker.runSizeLimit() > 0 {
+		if sinker.staged.aborted {
+			return moerr.NewInternalErrorNoCtx("cannot write an aborted spill run")
+		}
+		err = sinker.write(ctx, data)
+		if err != nil {
+			sinker.cleanupRunOnFailure(ctx, &err)
+		}
+		return err
+	}
+	return sinker.write(ctx, data)
+}
+
+func (sinker *Sinker) write(ctx context.Context, data *batch.Batch) (err error) {
 	var curr *batch.Batch
+	currBound := 0
+	limit := sinker.runSizeLimit()
+	inputSize := 0
+	wholeInputFits := false
+	fastAdmission := false
+	if limit > 0 {
+		if err = context.Cause(ctx); err != nil {
+			return err
+		}
+		if data == nil {
+			return moerr.NewInvalidInput(ctx, "Sinker.Write requires a batch")
+		}
+		if data.RowCount() == 0 {
+			return nil
+		}
+		for i, vec := range data.Vecs {
+			if vec == nil || !vec.CoversLogicalRows(0, data.RowCount()) {
+				return moerr.NewInvalidInputf(ctx, "invalid spill vector at column %d", i)
+			}
+		}
+		var fits bool
+		inputSize, fits, fastAdmission = fastBatchAdmission(data, limit-sinker.staged.inMemorySize)
+		if !fits {
+			inputSize = materializedBatchSize(data)
+			fastAdmission = false
+		}
+		wholeInputFits = inputSize != math.MaxInt && sinker.staged.inMemorySize <= limit &&
+			inputSize <= limit-sinker.staged.inMemorySize
+	}
 	defer func() {
-		if err != nil && curr != nil {
+		if curr != nil {
 			sinker.putBackBuffer(curr)
 		}
 	}()
-	offset := 0
-	left := data.RowCount()
+	offset, left := 0, data.RowCount()
 	for left > 0 {
+		if limit > 0 && offset > 0 {
+			if err = context.Cause(ctx); err != nil {
+				return err
+			}
+		}
 		if curr == nil {
-			curr = sinker.popStaged()
+			curr, currBound = sinker.popStaged()
 			if curr == nil {
 				if curr, err = sinker.fetchBuffer(); err != nil {
-					return
+					return err
 				}
 			} else if curr.RowCount() == objectio.BlockMaxRows {
 				staged := curr
-				curr = nil // pushStaged takes ownership even if it returns an error.
-				if err = sinker.pushStaged(ctx, staged); err != nil {
-					return
+				curr = nil // pushStaged owns the batch even if spilling fails.
+				if err = sinker.pushStaged(ctx, staged, currBound); err != nil {
+					return err
 				}
+				currBound = 0
 				if curr, err = sinker.fetchBuffer(); err != nil {
-					return
+					return err
 				}
 			}
 		}
-
-		toAdd := left
-		currPos := curr.RowCount()
-		if currPos+toAdd > objectio.BlockMaxRows {
-			toAdd = objectio.BlockMaxRows - currPos
+		toAdd := min(left, objectio.BlockMaxRows-curr.RowCount())
+		useOne, measureAppend := false, false
+		addedBound := 0
+		if limit > 0 {
+			remaining := limit - sinker.staged.inMemorySize - currBound
+			if wholeInputFits {
+				if offset == 0 && toAdd == data.RowCount() && !fastAdmission {
+					addedBound = inputSize
+				} else {
+					measureAppend = true
+				}
+			} else {
+				toAdd, addedBound = boundedRunRows(data, offset, toAdd, remaining)
+				if toAdd == 0 {
+					if curr.RowCount() > 0 || len(sinker.staged.inMemory) > 0 {
+						if curr.RowCount() > 0 {
+							staged := curr
+							curr = nil
+							if err = sinker.pushStaged(ctx, staged, currBound); err != nil {
+								return err
+							}
+							currBound = 0
+						}
+						if len(sinker.staged.inMemory) > 0 {
+							if err = sinker.trySpill(ctx); err != nil {
+								return err
+							}
+						}
+						if err = context.Cause(ctx); err != nil {
+							return err
+						}
+						continue
+					}
+					toAdd = 1 // one indivisible oversized row makes progress alone
+					_, addedBound = boundedRunRows(data, offset, 1, math.MaxInt)
+					useOne = true
+				}
+				// A whole disjoint input can include dead area. Copy a proper
+				// window, or a single row, to avoid retaining that dead area.
+				if offset == 0 && toAdd == data.RowCount() && inputSize > addedBound {
+					if inputSize <= remaining {
+						addedBound = inputSize
+					} else if toAdd == 1 {
+						useOne = true
+					} else {
+						toAdd--
+						_, addedBound = boundedRunRows(data, offset, toAdd, remaining)
+					}
+				}
+			}
+			if addedBound == math.MaxInt || currBound > math.MaxInt-addedBound ||
+				sinker.staged.inMemorySize > math.MaxInt-currBound-addedBound {
+				return moerr.NewInternalErrorNoCtx("spill size exceeds supported range")
+			}
 		}
-		if err = curr.UnionWindow(data, offset, toAdd, sinker.mp); err != nil {
-			return
+		if measureAppend {
+			addedBound, err = sinker.copyAndMeasureRun(curr, data, offset, toAdd)
+		} else if useOne {
+			err = curr.UnionOne(data, int64(offset), sinker.mp)
+		} else {
+			err = curr.UnionWindow(data, offset, toAdd, sinker.mp)
 		}
-		if curr.RowCount() == objectio.BlockMaxRows {
+		if err != nil {
+			return err
+		}
+		if measureAppend {
+			if currBound > math.MaxInt-addedBound ||
+				sinker.staged.inMemorySize > math.MaxInt-currBound-addedBound {
+				return moerr.NewInternalErrorNoCtx("spill size exceeds supported range")
+			}
+		}
+		currBound += addedBound
+		if curr.RowCount() == objectio.BlockMaxRows ||
+			(limit > 0 && currBound >= limit-sinker.staged.inMemorySize) {
 			staged := curr
 			curr = nil
-			if err = sinker.pushStaged(ctx, staged); err != nil {
-				return
+			if err = sinker.pushStaged(ctx, staged, currBound); err != nil {
+				return err
 			}
+			currBound = 0
 		}
 		left -= toAdd
 		offset += toAdd
@@ -1184,54 +1557,92 @@ func (sinker *Sinker) Write(
 	if curr != nil && curr.RowCount() > 0 {
 		staged := curr
 		curr = nil
-		if err = sinker.pushStaged(ctx, staged); err != nil {
-			return
+		if err = sinker.pushStaged(ctx, staged, currBound); err != nil {
+			return err
 		}
 	}
-	return
+	return nil
 }
 
-// WriteOwned stages a full-block batch directly without copying. The caller
-// transfers ownership: the sinker will clean the batch later.
-// When owned is true, the caller must release its reference even if err is non-nil.
-// If the batch is not exactly BlockMaxRows or there is a partially-filled
-// staged buffer, falls back to Write (which copies).
-func (sinker *Sinker) WriteOwned(
-	ctx context.Context,
-	data *batch.Batch,
-) (owned bool, err error) {
+func (sinker *Sinker) copyAndMeasureRun(dst, src *batch.Batch, offset, rows int) (int, error) {
+	var storage [128]int
+	var oldAreas []int
+	if len(dst.Vecs) <= len(storage) {
+		oldAreas = storage[:len(dst.Vecs)]
+	} else {
+		oldAreas = make([]int, len(dst.Vecs))
+	}
+	for i, vec := range dst.Vecs {
+		oldAreas[i] = len(vec.GetArea())
+	}
+	if err := dst.UnionWindow(src, offset, rows, sinker.mp); err != nil {
+		return 0, err
+	}
+	bound, ok := copiedRunBytes(dst, src, oldAreas, rows)
+	if !ok {
+		return 0, moerr.NewInternalErrorNoCtx("spill size exceeds supported range")
+	}
+	return bound, nil
+}
+
+// WriteOwned transfers a unique, full-block batch when it fits; otherwise it copies.
+// A true ownership result applies even if spilling returns an error.
+func (sinker *Sinker) WriteOwned(ctx context.Context, data *batch.Batch) (owned bool, err error) {
+	limit := sinker.runSizeLimit()
+	if limit > 0 {
+		if sinker.staged.aborted {
+			return false, moerr.NewInternalErrorNoCtx("cannot write an aborted spill run")
+		}
+		defer sinker.cleanupRunOnFailure(ctx, &err)
+		if err = context.Cause(ctx); err != nil {
+			return false, err
+		}
+	}
 	if data == nil {
 		return false, moerr.NewInvalidInput(ctx, "Sinker.WriteOwned requires a batch")
 	}
-	for index, vec := range data.Vecs {
+	copyRequired := data.RowCount() != objectio.BlockMaxRows
+	for i, vec := range data.Vecs {
 		if vec == nil {
-			return false, moerr.NewInvalidInputf(ctx,
-				"Sinker.WriteOwned batch has a nil vector at column %d", index)
+			return false, moerr.NewInvalidInputf(ctx, "Sinker.WriteOwned batch has a nil vector at column %d", i)
 		}
 		if vec.HasBorrowedBacking() || vec.NeedDup() {
-			return false, moerr.NewInvalidInputf(ctx,
-				"Sinker.WriteOwned requires unique-owned vector backing at column %d", index)
+			return false, moerr.NewInvalidInputf(ctx, "Sinker.WriteOwned requires unique-owned vector backing at column %d", i)
+		}
+		if limit > 0 {
+			if !vec.CoversLogicalRows(0, data.RowCount()) {
+				return false, moerr.NewInvalidInputf(ctx, "spill column %d has %d rows, batch has %d", i, vec.Length(), data.RowCount())
+			}
+			copyRequired = copyRequired || vec.IsConst() || vec.Length() != data.RowCount()
 		}
 	}
-	if data.RowCount() != objectio.BlockMaxRows {
-		return false, sinker.Write(ctx, data)
+	if n := len(sinker.staged.inMemory); n > 0 && sinker.staged.inMemory[n-1].RowCount() < objectio.BlockMaxRows {
+		copyRequired = true
 	}
-	// Check if the last staged batch is partial (not full).
-	last := sinker.popStaged()
-	if last != nil {
-		if err = sinker.pushStaged(ctx, last); err != nil {
-			return false, err
-		}
-		if last.RowCount() < objectio.BlockMaxRows {
-			// Partial staged buffer exists; must copy to fill it.
-			return false, sinker.Write(ctx, data)
+	if copyRequired {
+		return false, sinker.write(ctx, data)
+	}
+	bound := 0
+	if limit > 0 {
+		bound = materializedBatchSize(data)
+		if bound == math.MaxInt || bound > limit-sinker.staged.inMemorySize {
+			return false, sinker.write(ctx, data)
 		}
 	}
-	// No partial buffer; stage the batch directly.
-	return true, sinker.pushStaged(ctx, data)
+	return true, sinker.pushStaged(ctx, data, bound)
 }
 
-func (sinker *Sinker) Sync(ctx context.Context) error {
+func (sinker *Sinker) Sync(ctx context.Context) (err error) {
+	if sinker.runSizeLimit() > 0 {
+		if sinker.staged.aborted {
+			return moerr.NewInternalErrorNoCtx("cannot sync an aborted spill run")
+		}
+		defer sinker.cleanupRunOnFailure(ctx, &err)
+	}
+	return sinker.sync(ctx)
+}
+
+func (sinker *Sinker) sync(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return context.Cause(ctx)
@@ -1271,13 +1682,23 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 
 	// drain pipeline and collect results
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
-		if err := sinker.drainPipeline(); err != nil {
+		if sinker.runSizeLimit() > 0 {
+			if err := sinker.collectPipeline(ctx); err != nil {
+				return err
+			}
+		} else {
+			if err := sinker.drainPipeline(); err != nil {
+				return err
+			}
+			sinker.pipe.result.mu.Lock()
+			sinker.staged.persisted = append(sinker.staged.persisted, sinker.pipe.result.persisted...)
+			sinker.pipe.result.persisted = nil
+			sinker.pipe.result.mu.Unlock()
+		}
+	} else if sinker.runSizeLimit() > 0 {
+		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		sinker.pipe.result.mu.Lock()
-		sinker.staged.persisted = append(sinker.staged.persisted, sinker.pipe.result.persisted...)
-		sinker.pipe.result.persisted = nil
-		sinker.pipe.result.mu.Unlock()
 	}
 
 	defer func() {
@@ -1316,6 +1737,38 @@ func (sinker *Sinker) Sync(ctx context.Context) error {
 	panic("not implemented")
 }
 
+// collectPipeline selects cancellation, the first worker error, or success
+// under the same lock before handing completed results to Sync.
+func (sinker *Sinker) collectPipeline(ctx context.Context) error {
+	r := sinker.pipe.result
+	active := true // protected by r.mu
+	stop := context.AfterFunc(ctx, func() {
+		r.mu.Lock()
+		if active && r.err == nil {
+			r.err = context.Cause(ctx)
+			r.cancel()
+		}
+		r.mu.Unlock()
+	})
+	r.pending.Wait()
+	r.mu.Lock()
+	if r.err == nil {
+		if cause := context.Cause(ctx); cause != nil {
+			r.err = cause
+			r.cancel()
+		}
+	}
+	active = false
+	err := r.err
+	if err == nil {
+		sinker.staged.persisted = append(sinker.staged.persisted, r.persisted...)
+		r.persisted = nil
+	}
+	r.mu.Unlock()
+	stop()
+	return err
+}
+
 func (sinker *Sinker) GetInMemoryThreshold() int {
 	return sinker.staged.memorySizeThreshold
 }
@@ -1338,6 +1791,7 @@ func (sinker *Sinker) SyncAndTakeResults(ctx context.Context) ([]objectio.Object
 func (sinker *Sinker) TakeStagedBatches() []*batch.Batch {
 	bats := sinker.staged.inMemory
 	sinker.staged.inMemory = nil
+	sinker.staged.inMemoryBounds = nil
 	sinker.staged.inMemorySize = 0
 	return bats
 }
@@ -1350,6 +1804,9 @@ func (sinker *Sinker) StagedSize() int {
 func (sinker *Sinker) Close() error {
 	var drainErr error
 	if sinker.pipe.enabled && sinker.pipe.result != nil {
+		if sinker.runSizeLimit() > 0 {
+			sinker.pipe.result.cancel()
+		}
 		drainErr = sinker.drainPipeline()
 		// No more jobs will use this context after Close. Release its
 		// registration with the parent even when every job succeeded.
@@ -1395,14 +1852,25 @@ func (sinker *Sinker) Reset() {
 	// ensures the next Write/Sync cycle gets a fresh pipelineResult and
 	// doesn't inherit stale errors or persisted stats.
 	if sinker.pipe.result != nil {
+		if sinker.runSizeLimit() > 0 {
+			sinker.pipe.result.cancel()
+		}
 		sinker.drainPipeline()
 		sinker.pipe.result.cancel()
-		sinker.pipe.result = nil
 	}
 
 	sinker.cleanupInMemoryStaged()
-	sinker.staged.persisted = sinker.staged.persisted[:0]
-	sinker.staged.unpublished = nil
+	// Workspace callers transfer names before Reset; unbound callers must retain
+	// an unsuccessful local cleanup generation until it can be retried.
+	pending := sinker.runSizeLimit() > 0 && !sinker.config.workspaceOwnedCleanup && sinker.hasPendingUnpublishedRuns()
+	if pending {
+		sinker.staged.aborted = true
+	} else {
+		sinker.pipe.result = nil
+		sinker.staged.aborted = false
+		sinker.staged.persisted = sinker.staged.persisted[:0]
+		sinker.staged.unpublished = nil
+	}
 
 	for i := range sinker.result.tail {
 		if sinker.result.tail[i] != nil {

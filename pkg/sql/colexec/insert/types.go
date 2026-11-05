@@ -130,11 +130,21 @@ type InsertCtx struct {
 // despite the bounded ledger. Safe to call repeatedly: the retainer
 // filters recorded names and the caller nils the writer after closing.
 func (insert *Insert) retainUnrecordedSinkObjects(proc *process.Process) {
-	writer := insert.ctr.s3Writer
-	if writer == nil {
-		return
+	// All writers can share one worker pool. Cancel every generation before
+	// waiting for any snapshot so one writer cannot block another's cleanup.
+	insert.ctr.s3Writer.CancelPending()
+	for _, writer := range insert.ctr.partitionS3Writers {
+		writer.CancelPending()
 	}
-	names := writer.PersistedNames()
+	var names []string
+	if writer := insert.ctr.s3Writer; writer != nil {
+		names = append(names, writer.AbandonAndRetainableNames()...)
+	}
+	for _, writer := range insert.ctr.partitionS3Writers {
+		if writer != nil {
+			names = append(names, writer.AbandonAndRetainableNames()...)
+		}
+	}
 	if len(names) == 0 {
 		return
 	}
@@ -156,15 +166,17 @@ func (insert *Insert) retainUnrecordedSinkObjects(proc *process.Process) {
 
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	//@todo need add Reset method for s3Writer
+	insert.retainUnrecordedSinkObjects(proc)
 	if insert.ctr.s3Writer != nil {
-		insert.retainUnrecordedSinkObjects(proc)
-		insert.ctr.s3Writer.Close()
+		_ = insert.ctr.s3Writer.CloseWithCleanup(proc.Ctx, err)
 		insert.ctr.s3Writer = nil
 	}
 	insert.releaseS3MemGrant()
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Close()
+			if writer != nil {
+				_ = writer.CloseWithCleanup(proc.Ctx, err)
+			}
 		}
 		insert.ctr.partitionS3Writers = nil
 	}
@@ -185,9 +197,9 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
+	insert.retainUnrecordedSinkObjects(proc)
 	if insert.ctr.s3Writer != nil {
-		insert.retainUnrecordedSinkObjects(proc)
-		insert.ctr.s3Writer.Close()
+		_ = insert.ctr.s3Writer.CloseWithCleanup(proc.Ctx, err)
 		insert.ctr.s3Writer = nil
 	}
 	insert.releaseS3MemGrant()
@@ -195,7 +207,9 @@ func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error
 	// Free the partition table S3writer object resources
 	if insert.ctr.partitionS3Writers != nil {
 		for _, writer := range insert.ctr.partitionS3Writers {
-			writer.Close()
+			if writer != nil {
+				_ = writer.CloseWithCleanup(proc.Ctx, err)
+			}
 		}
 		insert.ctr.partitionS3Writers = nil
 	}

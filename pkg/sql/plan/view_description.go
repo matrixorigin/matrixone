@@ -181,20 +181,20 @@ func describeViewForMetadata(
 // View column snapshot, and no generated definition is written back.
 func viewDescriptionRelation(
 	ctx CompilerContext, def *TableDef, obj *ObjectRef, accountID uint32, databaseName, viewName string,
-) (string, []*ObjectRef, bool, error) {
+) (string, []*ColDef, []*ObjectRef, bool, error) {
 	cols, dependencies, dependsOnUdf, err := describeViewForMetadata(ctx, def, obj, accountID)
 	if err != nil {
-		return "", nil, false, err
+		return "", nil, nil, false, err
 	}
 	rows := make([]string, 0, len(cols))
 	for i, col := range cols {
 		if err := ctx.GetContext().Err(); err != nil {
-			return "", nil, false, err
+			return "", nil, nil, false, err
 		}
 		typ := MakeTypeByPlan2Type(col.Typ)
 		typeBytes, err := types.Encode(&typ)
 		if err != nil {
-			return "", nil, false, err
+			return "", nil, nil, false, err
 		}
 		defaultDef := col.Default
 		if defaultDef == nil {
@@ -202,7 +202,7 @@ func viewDescriptionRelation(
 		}
 		defaultBytes, err := types.Encode(defaultDef)
 		if err != nil {
-			return "", nil, false, err
+			return "", nil, nil, false, err
 		}
 		notNull := 0
 		if col.Typ.NotNullable {
@@ -216,5 +216,5 @@ func viewDescriptionRelation(
 	}
 	return "(select * from (values " + strings.Join(rows, ",") + ") as view_columns(" +
 		"account_id,att_relname_id,att_database,att_relname,attname,attnum,atttyp,attr_enum,attnotnull," +
-		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", dependencies, dependsOnUdf, nil
+		"att_default,att_is_hidden,att_is_auto_increment,attr_has_generated,attr_generated,att_comment))", cols, dependencies, dependsOnUdf, nil
 }
