@@ -506,6 +506,51 @@ func (r *resultMaterialization) columnNotNull(n *plan.Node, col *plan.ColRef) bo
 	return false
 }
 
+// Declaration non-nullability applies only before any nullable join extension.
+// Derived/output slots without a direct scan owner remain unproven here.
+func (r *resultMaterialization) rangeFieldNotNull(e *plan.Expr) bool {
+	if len(r.scopes) == 0 {
+		return false
+	}
+	column := resultRangeColumn(e)
+	ref := column.GetCol()
+	if ref == nil {
+		return false
+	}
+	for _, node := range r.query.Nodes {
+		if node == nil || node.NodeType != plan.Node_JOIN {
+			continue
+		}
+		side := r.keyJoinRoute(node, column).childIdx
+		if side < 0 {
+			continue
+		}
+		switch node.JoinType {
+		case plan.Node_OUTER:
+			return false
+		case plan.Node_LEFT, plan.Node_ASOF_LEFT, plan.Node_SINGLE:
+			if side == 1 {
+				return false
+			}
+		case plan.Node_RIGHT:
+			if side == 0 {
+				return false
+			}
+		}
+	}
+	for _, node := range r.query.Nodes {
+		if node == nil || node.NodeType != plan.Node_TABLE_SCAN {
+			continue
+		}
+		for _, tag := range node.BindingTags {
+			if tag == ref.RelPos {
+				return r.columnNotNull(node, ref)
+			}
+		}
+	}
+	return false
+}
+
 func (r *resultMaterialization) knownNonNull(e *plan.Expr) bool {
 	if lit := e.GetLit(); lit != nil {
 		return !lit.Isnull
@@ -551,7 +596,7 @@ func (r *resultMaterialization) elided(root int32, expr *plan.Expr) bool {
 // that (COALESCE is STRICT too). Keep non-propagating/unknown functions closed.
 func resultFunctionPropagatesNull(name string) bool {
 	switch name {
-	case "cast", "+", "-", "*", "/", "%", "abs", "sign", "unary_minus", "unary_plus",
+	case "cast", "+", "-", "*", "/", "%", "abs", "sign", "sin", "ceil", "ceiling", "unary_minus", "unary_plus",
 		"length", "length_utf8", "char_length", "character_length", "octet_length", "bit_length", "lower", "upper",
 		"=", "!=", "<>", "<", ">", "<=", ">=", "not":
 		return true
@@ -926,7 +971,8 @@ func resultPredicateNegation(e *plan.Expr, negate bool) *plan.Expr {
 			}}}}
 		}
 		if negate && len(fn.Args) == 1 {
-			inverse := map[string]string{"isnull": "isnotnull", "is_null": "is_not_null", "isnotnull": "isnull", "is_not_null": "is_null"}[name]
+			inverse := map[string]string{"isnull": "isnotnull", "is_null": "is_not_null", "isnotnull": "isnull", "is_not_null": "is_null",
+				"istrue": "isnottrue", "isnottrue": "istrue", "isfalse": "isnotfalse", "isnotfalse": "isfalse"}[name]
 			if inverse != "" {
 				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: inverse}, Args: fn.Args}}}
 			}
@@ -975,6 +1021,18 @@ func resultPredicateAtoms(filters []*plan.Expr) []*plan.Expr {
 	var collect func(*plan.Expr)
 	collect = func(e *plan.Expr) {
 		e = normalize(e)
+		if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "istrue" && len(fn.Args) == 1 {
+			if comparison := fn.Args[0].GetF(); comparison != nil && comparison.Func != nil {
+				switch comparison.Func.ObjName {
+				case "=", "!=", "<>", "<", ">", "<=", ">=":
+					// WHERE comparison and WHERE comparison IS TRUE reject the
+					// same FALSE/UNKNOWN values. BETWEEN keeps its own optimizer
+					// consumer; do not expose its indexed/native folding here.
+					collect(fn.Args[0])
+					return
+				}
+			}
+		}
 		if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "and" {
 			for _, arg := range fn.Args {
 				collect(arg)
@@ -989,9 +1047,14 @@ func resultPredicateAtoms(filters []*plan.Expr) []*plan.Expr {
 	return atoms
 }
 
+type resultRangeBounds struct {
+	nativeInteger bool
+	runtimeFloat  bool
+}
+
 func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
 	proofs := make([]*plan.Expr, len(filters))
-	nativeIntegerBounds := make(map[*plan.Expr]bool)
+	boundSources := make(map[*plan.Expr]resultRangeBounds)
 	var predicate func(*plan.Expr) *plan.Expr
 	predicate = func(e *plan.Expr) *plan.Expr {
 		if origin := r.rangeOrigins[e]; origin != nil {
@@ -1006,9 +1069,20 @@ func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
 		copyFn := *fn
 		copyFn.Args = append([]*plan.Expr(nil), fn.Args...)
 		switch fn.Func.ObjName {
-		case "and", "or", "not":
+		case "and", "or", "not", "istrue", "isnottrue", "isfalse", "isnotfalse":
 			for i, arg := range copyFn.Args {
 				copyFn.Args[i] = predicate(arg)
+			}
+			if fn.Func.ObjName == "isnotfalse" && len(copyFn.Args) == 1 {
+				if comparison := copyFn.Args[0].GetF(); comparison != nil && comparison.Func != nil && len(comparison.Args) == 2 {
+					switch comparison.Func.ObjName {
+					case "=", "!=", "<>", "<", ">", "<=", ">=":
+						if (r.knownNonNull(comparison.Args[0]) || r.rangeFieldNotNull(comparison.Args[0])) &&
+							(r.knownNonNull(comparison.Args[1]) || r.rangeFieldNotNull(comparison.Args[1])) {
+							copyFn.Func = &plan.ObjectRef{ObjName: "istrue"}
+						}
+					}
+				}
 			}
 		case "between", "=", "<=", ">=", "<", ">":
 			double := false
@@ -1031,8 +1105,14 @@ func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
 		}
 		copyExpr := *e
 		copyExpr.Expr = &plan.Expr_F{F: &copyFn}
-		if nativeInteger {
-			nativeIntegerBounds[&copyExpr] = true
+		if fn.Func.ObjName == "between" && len(fn.Args) == 3 {
+			source := resultRangeBounds{nativeInteger: nativeInteger}
+			for _, bound := range fn.Args[1:] {
+				_, parameter := implicitPreparedParamPosition(bound)
+				parameter = parameter || bound.GetP() != nil
+				source.runtimeFloat = source.runtimeFloat || parameter && r.rangeUsesDouble(bound)
+			}
+			boundSources[&copyExpr] = source
 		}
 		return &copyExpr
 	}
@@ -1040,7 +1120,7 @@ func (r *resultMaterialization) filtersRejectAll(filters []*plan.Expr) bool {
 		proofs[i] = predicate(filter)
 	}
 	return resultFiltersRejectAll(proofs, len(r.scopes) > 0, r.rangeAccess,
-		func(e *plan.Expr) bool { return nativeIntegerBounds[e] })
+		func(e *plan.Expr) resultRangeBounds { return boundSources[e] })
 }
 
 // An admitted floating operand makes the numeric comparison DOUBLE. String
@@ -1339,6 +1419,24 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 				}
 			}
 		}
+		if types.T(source.Typ.Id).IsFloat() && types.T(e.Typ.Id).IsDecimal() {
+			precision := e.Typ.Width
+			capacity := types.T(e.Typ.Id).ToType().Width
+			if precision == 0 {
+				precision = capacity
+			}
+			if number, ok := resultExactRangeNumber(source); ok && precision > 0 && precision <= capacity && e.Typ.Scale >= 0 && e.Typ.Scale <= precision {
+				converted, err := types.ParseDecimal256(number.FloatString(int(e.Typ.Scale)), precision, e.Typ.Scale)
+				if err == nil {
+					after, ok := new(big.Rat).SetString(converted.Format(e.Typ.Scale))
+					if ok && after.Cmp(number) == 0 {
+						if decimal, ok := resultRangeDecimalText(converted.Format(e.Typ.Scale), false); ok {
+							return decimal
+						}
+					}
+				}
+			}
+		}
 		if lit := source.GetLit(); lit != nil {
 			if lit.Isnull {
 				return &plan.Expr{Typ: e.Typ, Expr: &plan.Expr_Lit{Lit: lit}}
@@ -1363,7 +1461,7 @@ func (r *resultMaterialization) rangeValue(e *plan.Expr) *plan.Expr {
 	return e
 }
 
-func resultFiltersRejectAll(filters []*plan.Expr, foldDomain bool, access, nativeBounds func(*plan.Expr) bool) bool {
+func resultFiltersRejectAll(filters []*plan.Expr, foldDomain bool, access func(*plan.Expr) bool, sources func(*plan.Expr) resultRangeBounds) bool {
 	rangeEligible := func(e *plan.Expr) bool { return access != nil && access(e) }
 	// Compare ordinary predicates in MySQL's folded field domain, not by raw
 	// mathematical emptiness. BETWEEN keeps a separate binding-time syntax
@@ -1417,7 +1515,10 @@ func resultFiltersRejectAll(filters []*plan.Expr, foldDomain bool, access, nativ
 		if ref == nil || !exact {
 			continue
 		}
-		low, high, integerField := resultIntegerFieldLimits(columnExpr, operand, value)
+		// MySQL folds a single comparison in the declared integer field
+		// domain (including REAL constants converted to decimal). This is
+		// distinct from an injective floating range/index proof below.
+		low, high, integerField := resultIntegerFieldLimits(columnExpr)
 		// Only binding owns comparison syntax. A later physical traversal has
 		// lost BETWEEN witnesses and cannot revive a rejected domain proof.
 		integerField = integerField && foldDomain
@@ -1482,6 +1583,22 @@ func resultFiltersRejectAll(filters []*plan.Expr, foldDomain bool, access, nativ
 			return true
 		}
 		if fn := filter.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "between" && len(fn.Args) == 3 {
+			column := resultRangeColumn(fn.Args[0])
+			lo, loKnown := resultExactRangeNumber(fn.Args[1])
+			hi, hiKnown := resultExactRangeNumber(fn.Args[2])
+			source := resultRangeBounds{}
+			if sources != nil {
+				source = sources(filter)
+			}
+			if column != nil && source.runtimeFloat && loKnown && hiKnown && lo.IsInt() && hi.IsInt() {
+				if low, _, ok := resultIntegerFieldLimits(column); ok && lo.Cmp(low) < 0 && hi.Cmp(low) < 0 {
+					// Integer-valued floating parameters below the field minimum
+					// do not acquire MySQL's indexed/native BETWEEN omission,
+					// even when equal or reversed. Fractional endpoints and SQL
+					// literals have different optimizer admission contracts.
+					continue
+				}
+			}
 			indexed := rangeEligible(fn.Args[0])
 			if indexed {
 				for _, arg := range fn.Args {
@@ -1493,15 +1610,12 @@ func resultFiltersRejectAll(filters []*plan.Expr, foldDomain bool, access, nativ
 					return true
 				}
 			}
-			column := resultRangeColumn(fn.Args[0])
 			if column == nil {
 				continue
 			}
-			lo, loKnown := resultExactRangeNumber(fn.Args[1])
-			hi, hiKnown := resultExactRangeNumber(fn.Args[2])
 			low, high, integerField := resultIntegerFieldLimits(column, fn.Args...)
 			if integerField && loKnown && hiKnown {
-				nativeInteger := nativeBounds != nil && nativeBounds(filter)
+				nativeInteger := source.nativeInteger
 				// Equal integral endpoints outside the field domain fold like
 				// equality even without an index. Fractional equality and an
 				// integer-valued lower endpoint above max belong to the indexed range

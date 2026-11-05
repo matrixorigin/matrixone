@@ -44,6 +44,7 @@ func TestEnumSetResultPresentation(t *testing.T) {
 		"window min max":            pb.MySQLSpecialResultType_PREPARE_ONLY,
 		"distinct rollup":           pb.MySQLSpecialResultType_PREPARE_ONLY,
 		"derived rollup":            pb.MySQLSpecialResultType_VARCHAR_LABEL,
+		"derived scalar":            pb.MySQLSpecialResultType_VARCHAR_LABEL,
 		"rollup user union":         pb.MySQLSpecialResultType_CHAR_LABEL,
 		"derived window":            pb.MySQLSpecialResultType_VARCHAR_LABEL,
 		"widthonly aggregate":       pb.MySQLSpecialResultType_VARCHAR_LABEL,
@@ -92,7 +93,7 @@ func TestEnumSetResultPresentation(t *testing.T) {
 		{"aggregate subquery input", "select min((select b.e from enum_order_t b where b.id=a.id)), max(s) from enum_order_t a", []types.T{types.T_enum, types.T_uint64}},
 		{"derived aggregate", "select e, s from (select min(e) e, max(s) s from enum_order_t) d", []types.T{types.T_enum, types.T_uint64}},
 		{"derived grouped column", "select e, s from (select e, s from enum_order_t group by id) d", []types.T{types.T_enum, types.T_uint64}},
-		{"derived scalar", "select e, s from (select (select e from enum_order_t limit 1) e, (select s from enum_order_t limit 1) s) d", []types.T{types.T_any, types.T_any}},
+		{"derived scalar", "select e, s from (select (select e from enum_order_t limit 1) e, (select s from enum_order_t limit 1) s) d", []types.T{types.T_enum, types.T_uint64}},
 		{"aggregate expressions", "select min(concat(e)), concat(max(s)) from enum_order_t", []types.T{types.T_any, types.T_any}},
 		{"window min max", "select min(e) over (), max(s) over () from enum_order_t", []types.T{types.T_enum, types.T_uint64}},
 		{"aggregate union", "select min(e), max(s) from enum_order_t union all select min(e), max(s) from enum_order_t", []types.T{types.T_any, types.T_any}},
@@ -188,6 +189,12 @@ func TestEnumSetWindowMaterializationPlan(t *testing.T) {
 		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on a.id=b.id where a.id=coalesce(b.id,2) and sign(b.id)>0", true},
 		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on true where a.id=sign(b.id)+1", true},
 		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join (select id from enum_order_t where id=1)b on true where a.id=sign(b.id is null)+1", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join(select id from enum_order_t where id=1)b on a.id=b.id where sin(b.id)>0", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join(select id from enum_order_t where id=1)b on true where a.id=ceil(b.id)", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join(select id from enum_order_t where id=1)b on a.id=b.id where not(b.id is not true)", true},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join(select id from enum_order_t where id=1)b on a.id=b.id where b.id is not false", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join(select id from enum_order_t where id=1)b on true where a.id=ceil(b.id is null)+1", false},
+		{"select min(a.e)over(),max(a.s)over() from enum_order_t a left join(select id from enum_order_t where id=1)b on a.id=b.id where (b.id>=9223372036854775808) is not false", false},
 		{"select min(e)over(),max(s)over() from enum_order_t where id>=1.2 and id<=1.1", false},
 		{"select min(e)over(),max(s)over() from enum_order_t where id between 1.2 and 1.1", true},
 		{"select min(e)over(),max(s)over() from enum_order_t where 1.2<=id and 1.1>=id", false},
@@ -407,6 +414,9 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 		{"sql_string_unadmitted_prefix", []any{ParamValue{Value: "2x", HasSourceType: true, SourceType: types.T_varchar.ToType()}, ParamValue{Value: "1x", HasSourceType: true, SourceType: types.T_varchar.ToType()}}, false},
 		{"binary_long64", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_int64.ToType(), IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int64.ToType(), IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamInteger}}, true},
 		{"binary_double", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}}, true},
+		{"binary_double_below_equal", []any{ParamValue{Value: float64(-1e30), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamFloat}, ParamValue{Value: float64(-1e30), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true, PrepareParamKind: vector.PrepareParamFloat}}, false},
+		{"binary_double_below_reversed", []any{ParamValue{Value: float64(-1e30), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}, ParamValue{Value: float64(-2e30), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}}, false},
+		{"binary_double_below_fractional_equal", []any{ParamValue{Value: float64(-2147483648.25), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}, ParamValue{Value: float64(-2147483648.25), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}}, true},
 		{"binary_double_native", []any{ParamValue{Value: float64(1.2), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}, ParamValue{Value: float64(1.1), HasRuntimeType: true, RuntimeType: types.T_float64.ToType(), IsBinaryProtocol: true}}, true},
 		{"sql_integer_transport", []any{ParamValue{Value: int64(2)}, ParamValue{Value: int64(1)}}, true},
 		{"binary_integer_text", []any{ParamValue{Value: "2", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}, ParamValue{Value: "1", HasRuntimeType: true, RuntimeType: types.T_int32.ToType(), IsBinaryProtocol: true}}, true},
@@ -455,7 +465,7 @@ func TestEnumSetBoundRangeMaterialization(t *testing.T) {
 			}
 			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, tc.values)
 			require.NoError(t, err)
-			if tc.empty {
+			if tc.empty || strings.HasPrefix(tc.name, "binary_double_below") {
 				require.True(t, bound.ValueDependent, "a bound-only rejection cannot enter the type-only plan cache")
 			}
 			snapshot := proto.Clone(bound.Plan)
@@ -473,6 +483,10 @@ func TestEnumSetCharLabelProvenance(t *testing.T) {
 	for _, sql := range []string{
 		set,
 		"select min(e),max(s) from (" + set + ")d",
+		"select min(e),max(s) from (" + set + ")d union all select null,null",
+		"select min(e)over(),max(s)over() from (" + set + ")d union all select null,null",
+		"select(select min(e)from(" + set + ")d),(select max(s)from(" + set + ")d) union all select null,null",
+		"select min(e),max(s) from(select e,s from enum_order_t group by e,s with rollup union all select e,s from enum_order_t)d union all select null,null",
 		"select e,s from(select min(e)e,max(s)s from (" + set + ")d)a",
 		"select e,s from(select e,s from(select min(e)e,max(s)s from (" + set + ")d)a)b",
 		"select min(e)over(),max(s)over() from (" + set + ")d",
@@ -544,6 +558,9 @@ func TestEnumSetRangeWideColumnDomains(t *testing.T) {
 		{types.T_uint64, "id=-1", false, true},
 		{types.T_int8, "id=1.2", false, true},
 		{types.T_int64, "id=1.2", false, true},
+		{types.T_int64, "id>=1e30", true, true},
+		{types.T_int64, "id>=9.223372036854776e18", true, true},
+		{types.T_int64, "id<=-1e30", false, true},
 		{types.T_uint64, "id=1.2", false, true},
 	} {
 		t.Run(tc.oid.String()+"/"+tc.predicate, func(t *testing.T) {
@@ -668,6 +685,14 @@ func TestEnumSetRangeIndexAccess(t *testing.T) {
 		{"primary_above_between", "id between 2147483648 and 2147483649", []string{"id"}, true, true},
 		{"primary_below_between_control", "id between -2147483650 and -2147483649", []string{"id"}, true, false},
 		{"primary_above_lower", "id>=2147483648", []string{"id"}, true, true},
+		{"primary_above_truth", "(id>=2147483648) is true", []string{"id"}, true, true},
+		{"primary_above_not_false", "(id>=2147483648) is not false", []string{"id"}, true, true},
+		{"nullable_above_not_false", "(id>=2147483648) is not false", nil, false, false},
+		{"primary_above_truth_negation", "not((id>=2147483648) is not true)", []string{"id"}, true, true},
+		{"unindexed_between_truth_control", "(id between 2147483648 and 2147483648) is true", nil, false, false},
+		{"indexed_between_truth_control", "(id between 2 and 1) is true", []string{"id"}, true, false},
+		{"endpoint_scientific_decimal_cast", "id between cast(2.5e0 as decimal(10,1)) and cast(1.5e0 as decimal(10,1))", []string{"id"}, true, true},
+		{"field_cast_control", "cast(id as signed) between 2.5 and 1.5", []string{"id"}, true, false},
 		{"primary_below_upper", "id< -2147483648", []string{"id"}, true, true},
 		{"primary_fractional_above", "id>=2147483647.2", []string{"id"}, true, true},
 		{"primary_fractional_equal_between", "id between 1.2 and 1.2", []string{"id"}, true, true},

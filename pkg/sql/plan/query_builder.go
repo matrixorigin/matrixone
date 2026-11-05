@@ -5283,7 +5283,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				widthOnly = widthOnly || result.Kind == plan.MySQLSpecialResultType_VARCHAR_LABEL
 				candidate = result
 			}
-			if compatible && candidate != nil && (shareGroupingInput || hasRollup || widthOnly) {
+			if compatible && candidate != nil && (shareGroupingInput || hasRollup || widthOnly || labelOnly) {
 				// A user UNION normally clears ENUM/SET identity. An already
 				// rolled-up CHAR item is not an ENUM/SET field, however, and
 				// retains CHAR when the other non-NULL label domains agree.
@@ -14695,12 +14695,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 					result = DeepCopyMySQLSpecialResultType(result)
 					result.Kind = plan.MySQLSpecialResultType_COLUMN
 					outputColumnProvenance[i].MySQLSpecialResultType = result
-				case plan.MySQLSpecialResultType_ROLLUP, plan.MySQLSpecialResultType_PREPARE_ONLY:
+				case plan.MySQLSpecialResultType_ROLLUP, plan.MySQLSpecialResultType_PREPARE_ONLY, plan.MySQLSpecialResultType_SCALAR_SUBQUERY:
 					result = DeepCopyMySQLSpecialResultType(result)
 					result.Kind = plan.MySQLSpecialResultType_VARCHAR_LABEL
 					outputColumnProvenance[i].MySQLSpecialResultType = result
-				case plan.MySQLSpecialResultType_SCALAR_SUBQUERY:
-					outputColumnProvenance[i].MySQLSpecialResultType = nil
 				}
 			}
 			if id := outputColumnProvenance[i].IntegerPrecisionID; id != 0 && builder.integerPrecision != nil {

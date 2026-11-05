@@ -62,11 +62,16 @@ public final class EnumSetMetadataProbe {
 
     private static void query(Connection connection, String mode, String sql, int type, int prepareType,
                               boolean declared, List<List<String>> expectedRows, int... columnCount) throws Exception {
+        query(connection,mode,sql,type,prepareType,declared,expectedRows,false,columnCount);
+    }
+
+    private static void query(Connection connection,String mode,String sql,int type,int prepareType,
+                              boolean declared,List<List<String>> expectedRows,boolean widths,int... columnCount) throws Exception {
         if (mode.equals("statement")) {
             try (Statement statement = connection.createStatement()) {
                 statement.setQueryTimeout(30);
                 try (ResultSet result = statement.executeQuery(sql)) {
-                    if (type != prepareType) labelWidths(result.getMetaData());
+                    if (widths || type != prepareType) labelWidths(result.getMetaData());
                     rows(result, type, declared, expectedRows, mode + ": " + sql, columnCount);
                 }
             }
@@ -78,11 +83,12 @@ public final class EnumSetMetadataProbe {
                             "server prepare silently fell back");
                 }
                 if (mode.equals("cursor")) statement.setFetchSize(1);
+                if (widths) labelWidths(statement.getMetaData());
                 metadata(statement.getMetaData(), mode.equals("server-prepared") || mode.equals("cursor") ? prepareType : type,
                         declared, mode + " prepare: " + sql, columnCount);
                 for (int i = 0; i < 2; i++) {
                     try (ResultSet result = statement.executeQuery()) {
-                        if (type != prepareType) labelWidths(result.getMetaData());
+                        if (widths || type != prepareType) labelWidths(result.getMetaData());
                         rows(result, type, declared, expectedRows, mode + " execute: " + sql, columnCount);
                     }
                 }
@@ -188,6 +194,18 @@ public final class EnumSetMetadataProbe {
         }
         check(statement.getMetaData().getColumnType(1)==type1 && statement.getMetaData().getColumnType(2)==type2,"binary SET changed prepare type");
         check(statement.getMetaData().getPrecision(1)==16383 && statement.getMetaData().getPrecision(2)==16383,"binary SET changed prepare width");
+    }
+
+    private static void doubleDomainExecution(PreparedStatement ps,double[] values,boolean elided,boolean matches,boolean cursor) throws Exception {
+        for(int i=0;i<2;i++)ps.setDouble(i+1,values[i]);
+        metadata(ps.getMetaData(),Types.CHAR,false,"Double-domain PREPARE cache");
+        try(ResultSet result=ps.executeQuery()) {
+            rows(result,cursor || !elided ? Types.VARCHAR : Types.CHAR,false,matches
+                    ? Arrays.asList(Arrays.asList("","x,yy"),Arrays.asList("","x,yy"))
+                    : Collections.<List<String>>emptyList(),"Double-domain "+Arrays.toString(values));
+            labelWidths(result.getMetaData());
+        }
+        metadata(ps.getMetaData(),Types.CHAR,false,"Double-domain immutable PREPARE cache");
     }
 
     public static void main(String[] args) throws Exception {
@@ -581,6 +599,45 @@ public final class EnumSetMetadataProbe {
                             } finally { setup.execute("ALTER TABLE t DROP INDEX wide_n"); }
                         } finally { setup.execute("ALTER TABLE t MODIFY n INT"); }
                     }
+                    query(connection,mode,"SELECT MIN(e),MAX(s) FROM(SELECT e,s FROM t GROUP BY e,s WITH ROLLUP UNION ALL SELECT e,s FROM t)d UNION ALL SELECT NULL,NULL",
+                            Types.CHAR,false,Arrays.asList(Arrays.asList("","x,yy"),Arrays.asList(null,null)));
+                    String labelSource="SELECT e,s FROM t GROUP BY e,s WITH ROLLUP UNION ALL SELECT e,s FROM t";
+                    List<List<String>> labelWindowRows=new ArrayList<>();
+                    for(int i=0;i<rollup.size()+3;i++)labelWindowRows.add(Arrays.asList("","x,yy"));
+                    labelWindowRows.add(Arrays.asList(null,null));
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM("+labelSource+")d UNION ALL SELECT NULL,NULL",
+                            Types.CHAR,false,labelWindowRows);
+                    query(connection,mode,"SELECT(SELECT MIN(e)FROM("+labelSource+")d),(SELECT MAX(s)FROM("+labelSource+")d) UNION ALL SELECT NULL,NULL",
+                            Types.CHAR,false,Arrays.asList(Arrays.asList("","x,yy"),Arrays.asList(null,null)));
+                    query(connection,mode,"SELECT e,s FROM(SELECT(SELECT e FROM t WHERE id=1)e,(SELECT s FROM t WHERE id=1)s)d",
+                            Types.VARCHAR,Types.VARCHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")),true);
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN CAST(2.5e0 AS DECIMAL(10,1)) AND CAST(1.5e0 AS DECIMAL(10,1))",
+                            constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE(id>=2147483648) IS TRUE",
+                            constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE(id>=2147483648) IS NOT FALSE",
+                            constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE(n>=2147483648) IS NOT FALSE",
+                            Types.VARCHAR,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN(SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE(b.id>=2147483648) IS NOT FALSE",
+                            Types.VARCHAR,Types.CHAR,false,Arrays.asList(Arrays.asList("",""),Arrays.asList("","")));
+                    query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE(n BETWEEN 2147483648 AND 2147483648) IS TRUE",
+                            Types.VARCHAR,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    for(String predicate:new String[]{"SIN(b.id)>0","NOT(b.id IS NOT TRUE)"}) {
+                        query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN(SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE "+predicate,
+                                constantWindowType,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
+                    }
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN(SELECT id FROM t WHERE id=1)b ON TRUE WHERE a.id=CEIL(b.id)",
+                            constantWindowType,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN(SELECT id FROM t WHERE id=1)b ON a.id=b.id WHERE b.id IS NOT FALSE",
+                            Types.VARCHAR,Types.CHAR,false,Arrays.asList(Arrays.asList("","x,yy"),Arrays.asList("","x,yy"),Arrays.asList("","x,yy")));
+                    query(connection,mode,"SELECT MIN(a.e)OVER(),MAX(a.s)OVER() FROM t a LEFT JOIN(SELECT id FROM t WHERE id=1)b ON TRUE WHERE a.id=CEIL(b.id IS NULL)+1",
+                            Types.VARCHAR,Types.CHAR,false,Collections.singletonList(Arrays.asList("a","x,yy")));
+                    setup.execute("ALTER TABLE t MODIFY n BIGINT");
+                    try {
+                        query(connection,mode,"SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE n>=1e30",
+                                constantWindowType,Types.CHAR,false,Collections.<List<String>>emptyList());
+                    } finally { setup.execute("ALTER TABLE t MODIFY n INT"); }
                     String unindexedRange="SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE n BETWEEN 2 AND 1";
                     query(connection,mode,unindexedRange,Types.VARCHAR,Types.CHAR,false,Collections.<List<String>>emptyList());
                     setup.execute("ALTER TABLE t ADD INDEX range_n(n)");
@@ -598,6 +655,18 @@ public final class EnumSetMetadataProbe {
                     query(connection,mode,unindexedRange,Types.VARCHAR,Types.CHAR,false,Collections.<List<String>>emptyList());
                     if (mode.equals("statement")) sqlDecimalRanges(connection);
                     if (mode.equals("server-prepared") || mode.equals("cursor")) {
+                        String doubleSql="SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN ? AND ?";
+                        double[][] domainValues={{-1e30,-1e30},{1,2},{-1e30,-1e30},{2,1},{1e30,1e30},{-2147483649d,-2147483649d},{-2147483648.25,-2147483648.25},{-1e30,-2e30}};
+                        boolean[] domainElided={false,false,false,true,true,false,true,false};
+                        for(int i=0;i<domainValues.length;i++)try(PreparedStatement fresh=connection.prepareStatement(doubleSql)) {
+                            fresh.setQueryTimeout(30);if(mode.equals("cursor"))fresh.setFetchSize(1);
+                            check(fresh.getClass().getName().equals("com.mysql.cj.jdbc.ServerPreparedStatement"),"Double-domain fallback");
+                            for(int repeat=0;repeat<2;repeat++)doubleDomainExecution(fresh,domainValues[i],domainElided[i],i==1,mode.equals("cursor"));
+                        }
+                        try(PreparedStatement repeated=connection.prepareStatement(doubleSql)) {
+                            repeated.setQueryTimeout(30);if(mode.equals("cursor"))repeated.setFetchSize(1);
+                            for(int i=0;i<domainValues.length;i++)doubleDomainExecution(repeated,domainValues[i],domainElided[i],i==1,mode.equals("cursor"));
+                        }
                         String numericSql="SELECT MIN(e)OVER(),MAX(s)OVER() FROM t WHERE id BETWEEN ? AND ?";
                         String[][] numericRanges={{"2","1"},{"1","2"},{"1.2","1.1"},{null,"1"},{"1",null},{"1","2"},{"2.5","1.5"},{"1","2"}};
                         for (boolean strings:new boolean[]{true,false}) {
