@@ -324,9 +324,9 @@ func TestIndexFileCacheHoldDefersRemoval(t *testing.T) {
 	written, err := c.Put(ctx, "deleted", indexCacheEntry(replacement))
 	require.NoError(t, err)
 	require.True(t, written, "a held entry deleted as invalid is replaced")
-	release1()
-	release1()
-	release2()
+	release1.Release()
+	release1.Release()
+	release2.Release()
 	files, err = c.Open(ctx, "deleted", "data")
 	require.NoError(t, err)
 	require.Equal(t, replacement, readAllFile(t, files[0]), "releasing the old holds keeps the replacement")
@@ -345,7 +345,7 @@ func TestIndexFileCacheHoldDefersRemoval(t *testing.T) {
 	require.NoError(t, err)
 	requireEntryDir(t, c, "held", true)
 	require.True(t, c.disk.cache.Contains(heldPath), "a held entry is not evicted")
-	release()
+	release.Release()
 	requireEntryDir(t, c, "held", true)
 	require.True(t, c.disk.cache.Contains(heldPath), "a released entry stays")
 
@@ -371,7 +371,7 @@ func TestIndexFileCacheHoldWinsOverChosenEviction(t *testing.T) {
 	require.NoError(t, err)
 
 	lru := c.disk.cache.(*lrucache.Cache[string, struct{}])
-	var release func()
+	var release *IndexFileHold
 	lru.SetEvictable(func(path string) bool {
 		if c.disk.dirHeld(path) {
 			return false
@@ -396,7 +396,7 @@ func TestIndexFileCacheHoldWinsOverChosenEviction(t *testing.T) {
 	closeFiles(files)
 
 	lru.SetEvictable(func(path string) bool { return !c.disk.dirHeld(path) })
-	release()
+	release.Release()
 	for _, name := range []string{"d", "e", "f"} {
 		_, err := c.Put(ctx, name, indexCacheEntry(data))
 		require.NoError(t, err)
@@ -446,13 +446,72 @@ func TestIndexFileCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	put("e")
 	cached("c", "d", "e")
 
-	release()
+	release.Release()
 	put("f")
 	cached("c", "e", "f")
 	require.LessOrEqual(t, c.disk.cache.Used(), 3*entrySize+10)
 
 	_, err = c.Hold("../e")
 	require.Error(t, err)
+}
+
+// Releasing a hold counts as a use: the entry becomes the most recently used and its last use
+// moves to now. Releasing the hold of a superseded entry leaves both where they were.
+func TestIndexFileCacheReleaseSuperseded(t *testing.T) {
+	ctx := context.Background()
+	data := bytes.Repeat([]byte("p"), 64<<10)
+	entrySize := measuredEntrySize(t, data)
+	for _, superseded := range []bool{false, true} {
+		c := newTestIndexFileCache(t, t.TempDir(), 3*entrySize+10)
+		put := func(name string) {
+			t.Helper()
+			written, err := c.Put(ctx, name, indexCacheEntry(data))
+			require.NoError(t, err)
+			require.True(t, written, name)
+		}
+		put("a")
+		hold, err := c.Hold("a")
+		require.NoError(t, err)
+		files, err := c.Open(ctx, "a", "data")
+		require.NoError(t, err)
+		closeFiles(files)
+		put("b")
+		put("c")
+		if superseded {
+			hold.ReleaseSuperseded()
+		} else {
+			hold.Release()
+		}
+		hold.Release()
+		put("d")
+		requireEntryDir(t, c, "a", !superseded)
+		requireEntryDir(t, c, "b", superseded)
+	}
+
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", IndexFileRebuildPolicyDefault, time.Hour)
+	require.NoError(t, err)
+	<-c.disk.load.done
+	t.Cleanup(func() { c.Close(context.Background()) })
+	for _, n := range []string{"released", "superseded"} {
+		_, err := c.Put(ctx, n, indexCacheEntry([]byte(n)))
+		require.NoError(t, err)
+		ageEntry(t, c, n, 2*time.Hour)
+	}
+	used, err := c.Hold("released")
+	require.NoError(t, err)
+	used.Release()
+	replaced, err := c.Hold("superseded")
+	require.NoError(t, err)
+	replaced.ReleaseSuperseded()
+	n, err := c.collectIdle(ctx, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	requireEntryDir(t, c, "superseded", false)
+	requireEntryDir(t, c, "released", true)
+
+	var none *IndexFileHold
+	none.Release()
+	none.ReleaseSuperseded()
 }
 
 // After a restart the cache evicts the entries reloaded from disk least recently used
@@ -573,7 +632,7 @@ func TestIndexFileCacheRelievesDiskPressure(t *testing.T) {
 	}
 	release, err := c.Hold("e0")
 	require.NoError(t, err)
-	defer release()
+	defer release.Release()
 
 	var stat diskCacheFilesystemStat
 	ok := true
@@ -643,7 +702,7 @@ func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
 	require.NoError(t, err)
 	releaseUsed, err := c.Hold("released")
 	require.NoError(t, err)
-	releaseUsed()
+	releaseUsed.Release()
 
 	n, err := c.collectIdle(ctx, time.Now())
 	require.NoError(t, err)
@@ -661,7 +720,7 @@ func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, n, "a held entry is never collected")
 	requireEntryDir(t, c, "held", true)
-	releaseHeld()
+	releaseHeld.Release()
 	n, err = c.collectIdle(ctx, time.Now().Add(2*time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 1, n)
@@ -860,7 +919,7 @@ func TestIndexFileCacheConcurrentOperations(t *testing.T) {
 					assert.NoError(t, err)
 					files, err := c.Open(ctx, name, "data", "manifest")
 					if err != nil {
-						release()
+						release.Release()
 						assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
 						continue
 					}
@@ -871,14 +930,14 @@ func TestIndexFileCacheConcurrentOperations(t *testing.T) {
 					assert.Equal(t, payload(name), data)
 					assert.Equal(t, []byte(fmt.Sprintf("len=%d", len(payload(name)))), manifest)
 					closeFiles(files)
-					release()
+					release.Release()
 				case 3:
 					assert.NoError(t, c.Delete(ctx, name))
 				case 4:
 					release, err := c.Hold(name)
 					assert.NoError(t, err)
 					assert.NoError(t, c.Delete(ctx, name))
-					release()
+					release.Release()
 				case 5:
 					_, err := c.collectIdle(ctx, time.Now().Add(time.Hour))
 					assert.NoError(t, err)

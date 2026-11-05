@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/indexfile"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -55,6 +56,10 @@ type HnswSync[T types.ArrayElement] struct {
 	// model-creating helpers below have no SqlProcess in scope, and this type is what
 	// pkg/iscp drives the CDC sync through.
 	tmpDir string
+
+	// files is the storage engine and index-file cache the model files are read and written
+	// through, as an ISCP sync supplies them; nil takes them from sqlproc's process.
+	files *indexfile.Files
 
 	// buildTS is the data version the synced generations reflect, supplied by the ISCP
 	// consumer from the iteration it is applying. 0 means unknown.
@@ -160,7 +165,8 @@ func NewHnswSync[T types.ArrayElement](sqlproc *sqlexec.SqlProcess,
 	idxdefs []*plan.IndexDef,
 	vectype int32,
 	dimension int32,
-	spillDir string) (*HnswSync[T], error) {
+	spillDir string,
+	files *indexfile.Files) (*HnswSync[T], error) {
 	var err error
 
 	var idxtblcfg vectorindex.IndexTableConfig
@@ -287,7 +293,7 @@ func NewHnswSync[T types.ArrayElement](sqlproc *sqlexec.SqlProcess,
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
 	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, idxname: idxname,
-		tmpDir: syncSpillDir(sqlproc, spillDir), baseBounds: BaseBounds(vectype), bounds: bounds}
+		tmpDir: syncSpillDir(sqlproc, spillDir), files: files, baseBounds: BaseBounds(vectype), bounds: bounds}
 	// Monotonic metadata timestamp (the cross-CN cache-freshness generation) — strictly greater
 	// than every existing model row, not a bare wall-clock value. See nextTimestamp. (Save
 	// recomputes it just before writing; this initial value keeps the uid:ts model id unique.)
@@ -321,6 +327,7 @@ func (s *HnswSync[T]) DownloadAll(sqlproc *sqlexec.SqlProcess) (err error) {
 		// view=false spills land there -- reclaimable by HostSpillDir.sweepOnce -- instead of
 		// os.TempDir(), which hnswSpillDir falls back to when the SqlContext has no Process.
 		m.TmpDir = s.tmpDir
+		m.files = s.files
 		err = m.LoadIndex(sqlproc, s.idxcfg, s.tblcfg, s.tblcfg.ThreadsBuild, false)
 		if err != nil {
 			return
@@ -741,8 +748,9 @@ func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	}
 	err := runTxn(sqlproc, func(exec executor.TxnExecutor) error {
 		stmt := sqlproc.StatementOption()
-		writer, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, s.tblcfg.DbName, s.tblcfg.IndexTable, 2000)
-		if err != nil {
+		run := func(sql string) error {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
 			return err
 		}
 		metas := make([]string, 0, len(dirty))
@@ -753,13 +761,11 @@ func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 				return err
 			}
 			for _, sql := range deletes {
-				res, err := exec.Exec(sql, stmt)
-				res.Close()
-				if err != nil {
+				if err := run(sql); err != nil {
 					return err
 				}
 			}
-			if err := idx.PersistChunks(writer); err != nil {
+			if err := idx.WriteIndexFile(sqlproc, s.files, s.tblcfg, exec.Txn(), run); err != nil {
 				return err
 			}
 			if idx.FileSize == 0 {
@@ -769,23 +775,19 @@ func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 			ts++
 		}
 		if s.newBounds {
-			res, err := exec.Exec(DictBoundsSql(s.tblcfg.DbName, s.tblcfg.DictTable, s.bounds), stmt)
-			res.Close()
-			if err != nil {
+			if err := run(DictBoundsSql(s.tblcfg.DbName, s.tblcfg.DictTable, s.bounds)); err != nil {
 				return err
 			}
 		}
 		if len(metas) > 0 {
-			res, err := exec.Exec(catalog.IndexMetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, metas), stmt)
-			res.Close()
-			return err
+			return run(catalog.IndexMetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, metas))
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	veccache.Cache.Remove(s.tblcfg.IndexTable)
+	veccache.Cache.RemoveWithReason(s.tblcfg.IndexTable, veccache.ReasonGenerationChanged)
 	return nil
 }
 

@@ -20,12 +20,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var scanColumns = []string{
@@ -63,6 +65,16 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 	if err != nil {
 		return err
 	}
+	proc := env.Proc
+	if proc == nil {
+		mp, err := mpool.NewMPool("index_file_scan", 0, mpool.NoFixed)
+		if err != nil {
+			return err
+		}
+		defer mpool.DeleteMPool(mp)
+		proc = process.NewTopProcess(ctx, mp, nil, env.Txn, nil, nil, nil, nil, nil, nil, nil)
+		defer proc.Free()
+	}
 	txnOffset := workspaceOffset(env)
 	relData, err := rel.Ranges(ctx, engine.RangesParam{
 		BlockFilters: []*plan.Expr{filter},
@@ -72,7 +84,7 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 	if err != nil {
 		return err
 	}
-	readers, err := rel.BuildReaders(ctx, env.Proc, filter, relData, 1, txnOffset, false,
+	readers, err := rel.BuildReaders(ctx, proc, filter, relData, 1, txnOffset, false,
 		engine.Policy_CheckAll, engine.FilterHint{})
 	if err != nil {
 		return err
@@ -85,7 +97,7 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 		}
 	}()
 
-	mp := env.Proc.Mp()
+	mp := proc.Mp()
 	for _, r := range readers {
 		for {
 			bat, err := newScanBatch(tableDef)
@@ -109,11 +121,11 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 }
 
 // workspaceOffset is the workspace position a SQL SELECT on env.Proc would read to: the
-// whole workspace for borrowed SQL that opens no statement, otherwise the statement
-// boundary.
+// whole workspace for borrowed SQL that opens no statement, and for a background job,
+// otherwise the statement boundary.
 func workspaceOffset(env *Env) int {
 	ws := env.Txn.GetWorkspace()
-	if env.Proc.IncrStatementDisabled() {
+	if env.Proc == nil || env.Proc.IncrStatementDisabled() {
 		return int(ws.WriteOffset())
 	}
 	return ws.GetSnapshotWriteOffset()

@@ -129,6 +129,9 @@ all once the rows are flushed to storage objects.
 - A read takes a file name and the caller's transaction, which may be pinned to a
   snapshot; the layer has no snapshot logic of its own. It returns the local file from
   the disk cache when present.
+- A background job without a query process, such as a CDC sync, reads the same way, in the
+  transaction and as the account of its SQL context, with the storage engine and cache it is
+  given.
 - On a miss, the layer rebuilds the file from its chunk rows through the storage engine's
   relation readers, under the caller's transaction and snapshot (no SQL), verifies it,
   places it in the disk cache, and returns it. It sees exactly the rows a SQL `SELECT` in
@@ -245,6 +248,11 @@ own eviction.
   read through the layer holds its file, so the release of the last hold, recorded on disk
   with the publication, keeps the order across a restart. Files found on disk after a
   restart rank behind every file used since.
+- A hold on a file that a newer version has replaced is released without counting as a use
+  (decision, @cpegeric, 2026-11-05): the file keeps its last use, so it is evicted and
+  collected ahead of files used since. The holder knows the file was replaced, as an HNSW
+  search does when a sync changed the index; an index unloaded while still current releases
+  its holds as a use, since it may be loaded again.
 - A held file is passed over, so a file in use is never evicted. A newly written file is
   the most recently used and is evicted only after every older file that is not held.
 - When the disk is full, the cache removes files the same way, a tenth of its capacity at
@@ -358,11 +366,27 @@ Decided by @cpegeric, 2026-10-28.
 - A tail with frames that have no metadata row, written before every frame had one, is read
   entirely from its chunk rows. A MERGE or REINDEX rewrites it with a row for every frame.
 
+## HNSW files
+
+- Each model is one file, named by the MD5 its metadata row records (see "File names").
+- CREATE, REINDEX and every CDC sync write each model they create or change through the layer,
+  so the writing CN has the new version cached.
+- A search reads each model through the layer and holds its file while the model is loaded.
+- After a sync the cache holds two versions of each changed model: the one a loaded search
+  still maps and holds, and the current one. With no search holding the old version, it is the
+  older of the two and is evicted first. While a search holds it, the new version is the only
+  one eviction can remove, so operators size the index-file capacity to at least twice the
+  largest model the CN serves loaded, plus its other index files; below that, the next search
+  rebuilds the new version from its rows.
+- A CDC sync reads the models it updates through the layer, so it reads the version the previous
+  sync on the CN wrote from the cache. It copies each model into memory and holds nothing; a CN
+  without an index-file cache reads them through SQL, as a sync reloads a model more than once.
+
 ## Scope and non-goals
 
 - In scope: the logical file layer (naming, whole-file write and read, the index-file disk
   cache, the internal table function the write path uses) and its contract.
-- Not in scope: adopting the layer in any index other than FULLTEXT2. Each algorithm
+- Not in scope: adopting the layer in any index other than FULLTEXT2 and HNSW. Each algorithm
   adopts it in its own change, which decides how its files map onto the layer (for example how a CDC tail is
   split into files). When cached files are deleted is the
   layer's (see "Holds and idle collection").
@@ -401,7 +425,7 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - a file evicted while open stays readable through the open handle and through the path to
   the handle, and the next open is a miss that rebuilds it;
 - files are evicted least recently used first: a new file is never the victim while an
-  older file is not held, a file published again becomes the most recently used, an opened or released file counts as used, a held file is never
+  older file is not held, a file published again becomes the most recently used, an opened or released file counts as used, a released superseded file keeps its last use and is evicted and collected first, a held file is never
   evicted and stays in the cache's accounting, and after a restart the files reloaded from
   disk are evicted in their order of last use before it and before any file published
   or opened while they load, which skip files removed meanwhile; a hold kept past the reader's
@@ -437,4 +461,13 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   into the caller's temporary directory;
 - FULLTEXT2 writes one-chunk tail frames as batched chunk rows and larger frames as files,
   every frame with its metadata row, and reads one-chunk frames back in bounded scans;
+- a background job reads a file through the layer in its SQL context's transaction and
+  account, rebuilt once from the rows and then served from the cache;
+- HNSW writes each model file under its id with its MD5, from CREATE and from a CDC sync; a
+  search maps a model through the layer without checking its MD5 again and keeps the hold until
+  the model is destroyed, and a load that fails keeps none; a CDC sync loads a model through the
+  files it is given only with a cache, and keeps no hold;
+- on one CN, CREATE caches the HNSW model it writes, a CDC sync loads that model from the cache
+  and caches the version it writes, and a search loads that version from the cache, none of
+  them reading the chunk rows;
 - a table-data disk cache never treats a directory as a cache entry.

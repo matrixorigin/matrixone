@@ -502,17 +502,44 @@ func (c *IndexFileCache) Open(ctx context.Context, name string, files ...string)
 	return c.disk.openDir(ctx, name, diskPath, files)
 }
 
-// Hold keeps entry name on disk until release is called: evicting or collecting the
-// entry is deferred until its last hold is released. Take the hold before Open. release
-// must be called once.
-func (c *IndexFileCache) Hold(name string) (release func(), err error) {
+// IndexFileHold keeps a cache entry on disk until it is released. Only the first release
+// takes effect; a nil hold holds nothing.
+type IndexFileHold struct {
+	once    sync.Once
+	release func(used bool)
+}
+
+// Release drops the hold. The release of an entry's last hold is its last use.
+func (h *IndexFileHold) Release() {
+	if h != nil {
+		h.once.Do(func() { h.release(true) })
+	}
+}
+
+// ReleaseSuperseded drops the hold of an entry a newer version has replaced, without
+// counting it as a use: the entry keeps its last use and is evicted ahead of entries used
+// since.
+func (h *IndexFileHold) ReleaseSuperseded() {
+	if h != nil {
+		h.once.Do(func() { h.release(false) })
+	}
+}
+
+// NewIndexFileHold returns a hold that calls release once, with whether the release counts
+// as a use, for holds kept by something other than the cache.
+func NewIndexFileHold(release func(used bool)) *IndexFileHold {
+	return &IndexFileHold{release: release}
+}
+
+// Hold keeps entry name on disk until the hold is released: evicting or collecting the
+// entry is deferred until its last hold is released. Take the hold before Open.
+func (c *IndexFileCache) Hold(name string) (*IndexFileHold, error) {
 	diskPath, err := c.disk.pathForDir(name)
 	if err != nil {
 		return nil, err
 	}
 	c.disk.holdDir(diskPath)
-	var once sync.Once
-	return func() { once.Do(func() { c.disk.releaseDir(diskPath) }) }, nil
+	return &IndexFileHold{release: func(used bool) { c.disk.releaseDir(diskPath, used) }}, nil
 }
 
 // Delete removes entry name at once, held or not; files already open stay readable.
@@ -579,19 +606,23 @@ func (d *DiskCache) holdDir(path string) {
 	d.held.m[path]++
 }
 
-// releaseDir drops a hold; the release of the last one is the entry's last use.
-func (d *DiskCache) releaseDir(path string) {
+// releaseDir drops a hold; with used, the release of the last one is the entry's last use.
+func (d *DiskCache) releaseDir(path string, used bool) {
 	d.held.mu.Lock()
 	d.held.m[path]--
 	if d.held.m[path] > 0 {
 		d.held.mu.Unlock()
 		return
 	}
-	now := time.Now()
-	_ = os.Chtimes(path, now, now)
+	if used {
+		now := time.Now()
+		_ = os.Chtimes(path, now, now)
+	}
 	delete(d.held.m, path)
 	d.held.mu.Unlock()
-	_, _ = d.cache.Get(context.Background(), path)
+	if used {
+		_, _ = d.cache.Get(context.Background(), path)
+	}
 }
 
 // removeEvictedDir removes an evicted entry directory, or puts it back in the cache with

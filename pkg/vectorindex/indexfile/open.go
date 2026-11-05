@@ -37,9 +37,11 @@ import (
 // (nil when the CN has none).
 type Env struct {
 	Engine engine.Engine
-	Proc   *process.Process
-	Txn    client.TxnOperator
-	Cache  *fileservice.IndexFileCache
+	// Proc is the caller's process; nil for a background job, whose reads then run on a
+	// process of their own.
+	Proc  *process.Process
+	Txn   client.TxnOperator
+	Cache *fileservice.IndexFileCache
 	// TempDir holds the files written or rebuilt outside the cache; empty means the system
 	// temp directory.
 	TempDir string
@@ -47,9 +49,9 @@ type Env struct {
 
 // File is an open index file. The caller closes it.
 type File struct {
-	f       *os.File
-	size    int64
-	release func()
+	f    *os.File
+	size int64
+	hold *fileservice.IndexFileHold
 }
 
 // File returns the open file. It stays readable until Close, even if the cache evicts it.
@@ -66,23 +68,18 @@ func (f *File) Size() int64 { return f.size }
 func (f *File) FDPath() string { return fmt.Sprintf("/dev/fd/%d", f.f.Fd()) }
 
 // Keep hands the File's hold on its cache entry to the caller: the entry stays on disk
-// after Close until release is called, once. A File not served from the cache holds
-// nothing.
-func (f *File) Keep() (release func()) {
-	release = f.release
-	f.release = nil
-	if release == nil {
-		return func() {}
-	}
-	return release
+// after Close until the hold is released. A File not served from the cache holds nothing:
+// its hold is nil, which releasing ignores.
+func (f *File) Keep() *fileservice.IndexFileHold {
+	hold := f.hold
+	f.hold = nil
+	return hold
 }
 
 // Close closes the file and releases its hold on its cache entry, unless Keep took it.
 func (f *File) Close() error {
-	if f.release != nil {
-		f.release()
-		f.release = nil
-	}
+	f.hold.Release()
+	f.hold = nil
 	return f.f.Close()
 }
 
@@ -155,13 +152,13 @@ func (v *verifiedSet) remove(key string) {
 // since the process started. A missing, invalid or unreadable entry is a miss (nil, nil);
 // an invalid entry is deleted. Only cancellation is an error.
 func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name string, ref *Ref, full bool) (*File, error) {
-	release, err := cache.Hold(name)
+	hold, err := cache.Hold(name)
 	if err != nil {
 		return nil, err
 	}
 	files, err := cache.Open(ctx, name, dataFile, manifestFile)
 	if err != nil {
-		release()
+		hold.Release()
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
@@ -175,7 +172,7 @@ func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name str
 	key := cache.Path() + "\x00" + name
 	if err := checkCached(data, manifest, ref, key, full); err != nil {
 		_ = data.Close()
-		release()
+		hold.Release()
 		verified.remove(key)
 		logutil.Warn("index file cache entry invalid, rebuilding", zap.String("entry", name), zap.Error(err))
 		if delErr := cache.Delete(ctx, name); delErr != nil {
@@ -185,7 +182,7 @@ func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name str
 		}
 		return nil, nil
 	}
-	return &File{f: data, size: ref.Size, release: release}, nil
+	return &File{f: data, size: ref.Size, hold: hold}, nil
 }
 
 func checkCached(data, manifest *os.File, ref *Ref, key string, full bool) error {

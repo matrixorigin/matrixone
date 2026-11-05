@@ -216,6 +216,9 @@ type VectorIndexSearchIf interface {
 	Destroy()
 }
 
+// ReasonGenerationChanged is the eviction reason of an index a newer generation replaced.
+const ReasonGenerationChanged = "generation_changed"
+
 // cacheInvalidationAware is an optional lifecycle hook. It is intentionally
 // not part of VectorIndexSearchIf so existing vector algorithms keep their
 // contract unchanged; FULLTEXT2 uses it to classify the next load miss.
@@ -1131,7 +1134,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 		}
 		reason := "ttl_expired"
 		if entry.algo.stale.Load() {
-			reason = "generation_changed"
+			reason = ReasonGenerationChanged
 		}
 		if c.evictEntry(entry.key, entry.algo, reason) {
 			logutil.Debugf("[veccache] evicted index %s from cache (reason=%s)", entry.key, reason)
